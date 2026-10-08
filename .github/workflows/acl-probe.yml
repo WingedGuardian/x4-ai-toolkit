@@ -14,3 +14,6 @@ jobs:
       - name: Compare Git Bash probes with isolated child privileges
         working-directory: tools/x4validate
         run: uv run --frozen python ../../scripts/probe-refguard-gitbash-privileges.py
+      - name: Verify every reference-guard behavior and unprotected control
+        working-directory: tools/x4validate
+        run: uv run --frozen pytest tests/test_x4refguard_behaviour.py -q -rs
