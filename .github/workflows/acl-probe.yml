@@ -1,0 +1,16 @@
+name: Scratch ACL privilege diagnostic
+on:
+  push:
+    branches: ['ci/acl-probe']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.13
+      - name: Compare Git Bash probes with isolated child privileges
+        working-directory: tools/x4validate
+        run: uv run --frozen python ../../scripts/probe-refguard-gitbash-privileges.py
