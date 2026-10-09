@@ -288,8 +288,8 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
   > locked file does not touch it, so this only comes up when something you locked
   > has genuinely changed upstream.
 - **Reference lock (Layer 2)** — `python scripts/x4refguard.py status [--json] [--full] | apply | remove`
-  protects the unpacked `reference/` tree at the OS level, so it holds against every
-  process, hooks or no hooks. **`apply` and `remove` show the target folder and count the
+  protects the unpacked `reference/` tree at the OS level against ordinary processes,
+  independently of hooks, with the privileged-access exceptions below. **`apply` and `remove` show the target folder and count the
   files under it (with progress), then ask you to confirm**; `--yes` confirms up front, and
   without a terminal to ask on they refuse rather than act (`--yes` is how an agent runs it
   once you have agreed). It is not instant: about 8 s per 100,000 files was measured on
@@ -316,7 +316,10 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
     what it does not. It never reports "protected" for something it could not confirm.
   - **What it does not stop:** renaming the `reference/` folder itself (its parent allows
     that, and `status` then reports the root missing); you lifting it on purpose; an
-    Administrator or root.
+    Administrator or root. Measured on elevated hosted Windows: Git Bash changed
+    protected scratch trees in three of three probes when backup/restore privileges
+    were available; the same three probes were blocked when disposable children
+    removed both privileges. Disabled privileges can still be available to a process.
   - **To re-unpack after a game update**, lift it first. Each step is yours to take; an agent should not take it on its own:
     1. `python scripts/x4refguard.py remove` (it asks you to confirm; `--yes` skips the question)
     2. root moved since? `python scripts/x4refguard.py remove --path <old root>` (only

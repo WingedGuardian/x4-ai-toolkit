@@ -9644,8 +9644,8 @@ fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 
 ## F264 — Elevated Git Bash bypasses the ACL probe's assumption · **DEFECT (measured)** · confidence 99% · ✅ FIXED 2026-10-08
 
-MEASURED: hosted run 37829869175 at 204842f resolved the previous 34 Windows
-failures/setup errors. It had 4,945 passed, 54 skipped, three failures and zero
+MEASURED: hosted run 37829869175 at 204842f passed 31 of the previous 34 Windows
+failed/error cases; three setup-error cases reached assertions and failed. It had 4,945 passed, 54 skipped, three failures and zero
 setup errors. Previously unreachable `test_the_deny_STOPS` cases `bash_redirect`,
 `rm_f`, and `rm_rf_tree` reached their assertions and changed protected scratch
 trees. No new skip or skip-ceiling waiver was introduced.
@@ -9674,7 +9674,12 @@ MEASURED: all 38 behavior/control tests passed locally (zero skips), then all 38
 passed with zero skips on elevated hosted Windows, run 37845999821 at e4dba1f.
 The fixture source tested there is byte-identical to this checkout's helper and
 behavior module. Those diagnostic workflow/script files remain on a separate
-throwaway branch; they are not part of this repair. Full final CI remains pending.
+throwaway branch; they are not part of this repair.
+MEASURED final full CI: [run 37846813450](https://github.com/WingedGuardian/x4-claude-toolkit/actions/runs/37846813450)
+executed a38e3cf and all three jobs succeeded. Windows: 4,948 passed, 54 skipped;
+Ubuntu main and fresh cold clone: each 4,776 passed, 204 skipped. All suites had
+zero failures/setup errors; the identifier job also passed. This execution SHA
+precedes the documentation-only update recording these results.
 
 Primary API semantics (removed privileges cannot be re-enabled):
 https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-adjusttokenprivileges
@@ -9711,16 +9716,17 @@ then collected 409 cases across reference-guard, behaviour, doctor, unpack
 and toolkit-binding modules: 406 passed, three real POSIX-chmod exclusions,
 zero failures or session errors. Changed/unreviewed modules remained exclusive;
 four was the requested worker maximum, not four simultaneous test processes.
-Follow-up MEASURED: run 37829869175 resolved all 34 preceding failed/error cases.
-Three newly reachable Git Bash behavior probes exposed the separate F264
-administrator-context assumption. A complete final CI run remains required.
+Follow-up MEASURED: run 37829869175 passed 31 of the 34 preceding failed/error
+cases; three former setup errors reached assertions and exposed the separate F264
+administrator-context assumption. Final run 37846813450 at a38e3cf passed all
+4,948 Windows cases, with 54 accounted skips and zero failures/setup errors.
 
 RE-DERIVED BY: `tests/test_x4refguard.py`
 `test_OWNERSHIP_repair_preserves_the_inherited_deny`,
 `test_OWNERSHIP_fixture_takes_the_root_when_it_can`, and
 `tests/test_x4doctor.py` doctor-hint tests.
 
-## F262 — Cold-checkout metadata and sandbox mismatch · **DEFECT (measured)** · confidence 95% · ✅ FIXED 2026-10-08
+## F262 — Cold-checkout metadata and sandbox mismatch · **DEFECT (measured)** · confidence 99% · ✅ FIXED 2026-10-08
 
 MEASURED: Ubuntu CI run 37802022931 at 5567db7 passed its main suite
 (4,773 passed, 203 skipped, zero failures). Its separate cold suite failed:
@@ -9739,9 +9745,14 @@ MEASURED locally: 51 focused tests passed, zero skipped. The regression runs
 real Git and Bash with a uv seam: selected older tag, ignore/export queries,
 private-config exclusion, neutral location, warm refusal before pytest,
 and unknown-ref refusal. The uncorrected script failed that checkout probe.
-Residual: the seam does not run the full cold suite or prove hosted Linux
-behavior; the next complete CI run must establish those outcomes. This is a
-fresh Git-checkout check, not an assertion about an exported release bundle.
+MEASURED hosted proof: final run 37846813450 at a38e3cf passed the full Linux
+cold suite: 4,776 passed, 204 skipped, zero failures/setup errors. Compared with
+the old cold run, 36 Git-metadata checks resumed, 21 failed/error cases passed,
+and three new cold tests passed: 60 additional passes. Seven newly discovered
+PowerShell parser cases and one new Windows-native case add eight accounted
+skips, giving 232 - 36 + 8 = 204. Comparison is per file/reason group, not
+parameter node ID. This proves a fresh Git checkout; an exported release bundle
+remains outside this evidence's scope.
 
 RE-DERIVED BY: `tests/test_verify_cold_checkout.py` and
 `tests/test_cli_enumerations_agree.py`.
