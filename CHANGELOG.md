@@ -155,6 +155,13 @@ confusing messages and six cosmetic ones. All are fixed:
   ambiguous, as the game skips it. **Rebuild the effective store and x4eff** to pick this up.
 - **Effective tree: `if=` guards:** an `if=` that evaluates to NaN (e.g. `number(@missing)`)
   now counts as false, as it does in XPath; it used to apply the op.
+- **Builders over a missing or empty reference (#10):** `x4effective build`, `x4xref build` and
+  `tools/basex/build-effective.py` now refuse with exit 2, naming the reference folder and how to
+  set it, when that folder does not exist or holds no base-game XML. Each used to build an empty
+  store, index or tree, replacing the previous one, and exit 0. The refusal comes before anything
+  is written, so an existing store or index is left as it was. `build-corpus.sh` and
+  `build-effective.sh` run the same check first, before Java and before dropping `x4raw` or
+  deleting the previous x4eff tree; `build-corpus.sh` used to drop `x4raw` before noticing.
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
   resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
   (BLIND-SPOTS F265-F268).

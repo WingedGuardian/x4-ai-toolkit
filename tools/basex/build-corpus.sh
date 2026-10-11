@@ -36,9 +36,6 @@ if ! command -v uv >/dev/null 2>&1; then
   echo "       Install it from https://docs.astral.sh/uv/" >&2
   exit 2
 fi
-echo "== preflight =="
-(cd "$X4VALIDATE" && uv run python "$HERE/preflight.py" --need java jar disk)
-
 resolve_path() {  # $1 = env var name, $2 = _paths function
   local v="${!1:-}"
   if [ -z "$v" ]; then
@@ -55,6 +52,23 @@ resolve_path() {  # $1 = env var name, $2 = _paths function
 REFERENCE="$(resolve_path X4_REFERENCE reference)"
 EXTENSIONS="$(resolve_path X4_EXTENSIONS game_extensions)"
 DB=x4raw
+
+# THE REFERENCE MUST HOLD THE GAME, checked BEFORE preflight (which runs java) and
+# before the DROP DB below (issue #10). A missing reference used to be refused only by
+# BaseX's "not found" AFTER x4raw had been dropped; an EMPTY one beside installed mods
+# would index the mods with no base game (READ from coverage.py, not run). rc 2 =
+# configuration.
+echo "== reference =="
+REF_RC=0
+(cd "$X4VALIDATE" && uv run python "$HERE/reference_check.py" --reference "$REFERENCE" \
+    --what "build the $DB corpus") || REF_RC=$?
+if [ "$REF_RC" -ne 0 ]; then
+  echo "       Nothing was dropped, deleted or indexed; the previous $DB is untouched." >&2
+  exit "$REF_RC"
+fi
+
+echo "== preflight =="
+(cd "$X4VALIDATE" && uv run python "$HERE/preflight.py" --need java jar disk)
 
 # Java is a native Windows process and does not understand Git Bash's /c/... form:
 # passing it verbatim made BaseX look for "C:/c/Users/..." and report the resource
