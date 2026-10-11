@@ -47,6 +47,18 @@ Baseline rates carry a matcher fingerprint. A different matcher must re-measure
 the SAME historical population; --record accepts a new period and is not a fix
 for old history. Never compare old regex rates against grammar-aware counts.
 
+RE-MEASURING after a matcher change (the gate refuses with rc 2 until you do; there
+is no tool for it, only these steps). 1. Copy the old baseline JSON aside: it is
+the only record of the old rates and its `commands` count N. 2. Copy the transcript
+files that existed when it was recorded into a scratch DIR, and run
+`--transcripts DIR` WITHOUT --record: the printed Bash command count must equal N.
+Any other count is a different population (a transcript that grew since, or one
+deleted), so it cannot stand in for the old one: go to step 4. 3. Count equal: run
+`--record --transcripts DIR`, which re-baselines that SAME population under the new
+matcher; later runs then compare the calls after it incrementally. 4. Otherwise
+`--record` over the whole corpus accepts a NEW period, and the old history is not
+compared: say so wherever the change is recorded.
+
 Exit: 0 clean (or recorded) - 1 a shape got worse or appeared - 2 cannot run, or
       nothing got worse but some transcript input was UNREADABLE (a clean verdict over
       a denominator with a hole in it is not clean; AUDIT-2026-09-24 GT-6). A finding
@@ -398,7 +410,7 @@ def main() -> int:
         print("REFUSING: the baseline used a different or unrecorded matcher; raw-regex "
               "rates cannot be compared with shell-grammar counts. Re-measure the "
               "SAME baseline population before comparing, or explicitly accept a new "
-              "period with --record.", file=sys.stderr)
+              "period with --record (the steps are in this gate's docstring).", file=sys.stderr)
         return 2
 
     # INCREMENTAL, not cumulative. The corpus is append-only, so a lifetime average's
