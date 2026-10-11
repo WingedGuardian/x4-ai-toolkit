@@ -120,7 +120,27 @@ confusing messages and six cosmetic ones. All are fixed:
 
 ### Fixed before release: the final review (2026-10-10)
 
-- FX-H1: issues #4-#7 <!-- PLACEHOLDER: the orchestrator fills this from lane FX-H1's report -->
+- **`ask.py` / `coverage.py` (#7):** BaseX queries now travel UTF-8 both ways — the query is
+  passed to BaseX as a file. Non-ASCII results no longer crash, error text is no longer mangled,
+  and a literal outside Windows-1252 (e.g. `"火"`) no longer silently becomes `?`, which used to
+  make a zero result describe a query nobody wrote (BLIND-SPOTS F271).
+- **`ask.py refs` (#5):** now also searches `bullet/@class`, `add_blueprints/@wares` and
+  `@macros` lists, and the `macro.X` / `ware.X` spellings, and states the exact forms searched in
+  `--help`, `QUERIES.md` and every result. `$variable` expressions and other expression
+  attributes are not searched, and it says so (F272).
+- **x4eff (#6):** a path that two mods spell with different letter case is one document, as it is
+  to the game; this fixes the 11,302-vs-11,301 coverage refusal. On a case-sensitive filesystem a
+  loose overlay is now found regardless of case, and a folder holding two spellings of one file is
+  refused with a reason instead of one being picked (F273; Linux behaviour inferred, not measured).
+- **x4compat (#4):** a duplicate-add HARD row names only the mods that add that key (an unrelated
+  co-adder is no longer named, or "winning"), every duplicated key is reported, and the parent's
+  SOFT "coexist" row is always kept. Which duplicate the game keeps is not engine-measured, and
+  the row says so (F274).
+- **x4compat wildcard icons:** an icon like `icon#ship_*` that two mods declare is compared by its
+  expanded IDs (one per texture file, loose or packed; `.gz` answers `*.tga`), both for diff adds
+  and for complete `icons.xml` files. A row appears only for an ID both expansions hold; a texture
+  set that can't be listed is a counted NOT CHECKED. On the maintainer's modlist this removed 5
+  false rows (F276).
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
   resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
   (BLIND-SPOTS F265-F268).
