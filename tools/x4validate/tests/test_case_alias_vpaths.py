@@ -167,3 +167,81 @@ def test_6_TWIN_windows_never_consults_the_folded_index(monkeypatch, tmp_path):
 
 def test_6_the_gate_is_the_OS():
     assert _merge._loose_case_sensitive() is (os.name != "nt")
+
+
+# --- M-b (v4.0.0 delta review): x4compat routes the case refusal into its channel ------
+#
+# `overlay_root` RAISES the two-spellings refusal when no `skipped` list is passed (NO
+# CHANNEL, NO SWALLOW). x4compat passes none at two sites and caught only LxmlError, so on
+# Linux the refusal escaped as a traceback. Both sites have a channel; route it there.
+
+def _compat_mods(tmp_path, b_body="<diff><replace sel=\"/r/a/b/@v\">3</replace></diff>"):
+    ref = tmp_path / "ref"
+    _w(ref / "libraries" / "x.xml", "<r><a><b v='1'/></a></r>")
+    ext = tmp_path / "ext"
+    for folder, body in (("a_first", "<diff><replace sel=\"/r/a/b/@v\">2</replace></diff>"),
+                         ("b_later", b_body)):
+        _w(ext / folder / "content.xml", f'<content id="{folder}" version="1" name="{folder}"/>')
+        _w(ext / folder / "libraries" / "x.xml", body)
+    paths = {"a_first": ext / "a_first", "b_later": ext / "b_later"}
+    return _merge.Config(reference=ref, include_packed_dlc=False), paths
+
+
+def _two_spellings_in(monkeypatch, folder_name):
+    """Simulate a case-sensitive filesystem where `folder_name` holds X.xml AND x.xml."""
+    monkeypatch.setattr(_merge, "_loose_case_sensitive", lambda: True)
+    monkeypatch.setattr(_merge, "_folded_loose", lambda s: (
+        {"libraries/x.xml": ("libraries/X.xml", "libraries/x.xml")}
+        if Path(s).name == folder_name else {}))
+
+
+def test_Mb_compat_routes_a_case_ambiguous_overlay_to_report_skip(monkeypatch, tmp_path):
+    from x4validate import _compat
+    cfg, paths = _compat_mods(tmp_path)
+    _two_spellings_in(monkeypatch, "b_later")
+    with pytest.raises(ValueError):                       # control: the raise is real
+        _merge.overlay_root(paths["b_later"], "libraries/x.xml")
+    report = _compat.CompatReport()
+    _compat._analyze_vpath("libraries/x.xml", ["a_first", "b_later"], paths,
+                           {"a_first": 0, "b_later": 1}, cfg, report=report)
+    hits = [s for s in report.skipped if "b_later" in s.what]
+    assert len(hits) == 1 and "differ only by case" in hits[0].why, report.skipped
+
+
+def test_Mb_TWIN_an_unreadable_overlay_OSError_is_routed_too(monkeypatch, tmp_path):
+    """Clause twin: the handler takes OSError as well (a mod folder moved between is_file and
+    the read, a truncated .dat member) -- the same refusal family, the same escape."""
+    from x4validate import _compat
+    cfg, paths = _compat_mods(tmp_path)
+    real = _merge.parse_file
+
+    def flaky(p, *a, **k):
+        if "b_later" in str(p):
+            raise PermissionError(13, "simulated", str(p))
+        return real(p, *a, **k)
+    monkeypatch.setattr(_merge, "parse_file", flaky)
+    report = _compat.CompatReport()
+    _compat._analyze_vpath("libraries/x.xml", ["a_first", "b_later"], paths,
+                           {"a_first": 0, "b_later": 1}, cfg, report=report)
+    hits = [s for s in report.skipped if "b_later" in s.what]
+    assert len(hits) == 1 and "could not be read" in hits[0].why, report.skipped
+
+
+def test_Mb_TWIN_no_ambiguity_means_no_skip(monkeypatch, tmp_path):
+    from x4validate import _compat
+    cfg, paths = _compat_mods(tmp_path)
+    _two_spellings_in(monkeypatch, "nobody")
+    report = _compat.CompatReport()
+    _compat._analyze_vpath("libraries/x.xml", ["a_first", "b_later"], paths,
+                           {"a_first": 0, "b_later": 1}, cfg, report=report)
+    assert report.skipped == [], report.skipped
+
+
+def test_Mb_the_no_base_REASON_names_a_case_ambiguous_owner_file(monkeypatch, tmp_path):
+    """The second site: `_no_base_reason` explains a nested path whose owner ships the base.
+    A case-ambiguous owner file must give a reason, not escape through it."""
+    from x4validate import _compat
+    cfg, paths = _compat_mods(tmp_path)
+    _two_spellings_in(monkeypatch, "a_first")
+    why = _compat._no_base_reason("extensions/a_first/libraries/x.xml", paths, cfg)
+    assert "differ only by case" in why, why

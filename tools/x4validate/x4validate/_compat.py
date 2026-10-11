@@ -371,6 +371,11 @@ def _no_base_reason(vpath: str, folder_to_path: dict[str, Path],
         oroot = _merge.overlay_root(owner_dir, rel)
     except etree.LxmlError as exc:
         return f"'{owner}' ships {rel} but it is malformed XML: {exc}"
+    except (OSError, ValueError) as exc:
+        # M-b (v4.0.0 delta review): overlay_root's OTHER refusals -- two loose spellings of
+        # one file on a case-sensitive filesystem (ValueError), an unreadable archive member
+        # (OSError / ValueError) -- are reasons too, never a traceback through this caller.
+        return f"'{owner}' ships {rel} but it could not be read: {exc}"
     if oroot is None:
         return f"'{owner}' does not ship {rel}, or it could not be parsed"
     if oroot.tag == "diff":
@@ -436,6 +441,16 @@ def _analyze_vpath(
             if report is not None:
                 report.skip(f"{folder} at {mod_vpath}",
                             f"malformed XML, so this mod took no part in the "
+                            f"comparison: {exc}")
+            continue
+        except (OSError, ValueError) as exc:
+            # M-b (v4.0.0 delta review): the same channel for overlay_root's other refusals
+            # -- two loose spellings of one file on a case-sensitive filesystem (Linux,
+            # issue #6), or an unreadable archive member. Uncaught, they ended the run with
+            # a traceback; counted here, the clean-looking report is visibly incomplete.
+            if report is not None:
+                report.skip(f"{folder} at {mod_vpath}",
+                            f"could not be read, so this mod took no part in the "
                             f"comparison: {exc}")
             continue
         if root is None:
