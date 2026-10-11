@@ -112,3 +112,71 @@ def test_skip_ceiling_is_global_not_per_batch():
     assert not batch.skip_ceiling_errors(tests,{},"2")
     assert batch.skip_ceiling_errors(tests,{"module":"missing"},"2")
     assert batch.skip_ceiling_errors(tests,{},"")
+
+
+# --- FX-H2 / reviewer M-1: a partial or pending release run is not a pass ------------------
+rrg=load("run_release_gates_h2",ROOT/"scripts/run-release-gates.py")
+
+
+def _fake_release_run(tmp_path,monkeypatch,stage_scripts):
+    """Run the REAL main() over fake stages: (name, python source) pairs. A source receives the
+    stage's output directory as argv[1]."""
+    import sys
+    out=tmp_path/"gates-out"
+    def stages(o,workers):
+        rows=[]
+        for name,src in stage_scripts:
+            f=tmp_path/(name+".py");f.write_text(src,encoding="utf-8")
+            rows.append((name,tmp_path,[sys.executable,str(f),str(o/(name+"-dir"))]))
+        return rows
+    monkeypatch.setattr(rrg,"stages",stages)
+    monkeypatch.setattr(rrg,"identity",lambda workers:{"fixed":workers})
+    monkeypatch.setattr(rrg,"wait_dispatch",lambda:None)
+    monkeypatch.setenv("RB_PRESSURE_FILE",str(tmp_path/"pressure.json"))
+    def run(*extra):
+        monkeypatch.setattr("sys.argv",["run-release-gates.py","--out",str(out),*extra])
+        return rrg.main()
+    return run,out
+
+
+_PASS="import sys; sys.exit(0)\n"
+_FAIL="import sys; sys.exit(1)\n"
+_PENDING=("import json, pathlib, sys\n"
+          "d=pathlib.Path(sys.argv[1]); d.mkdir(parents=True, exist_ok=True)\n"
+          "t={'tests/test_deploy_parity.py::test_the_real_trees':{'call':{'outcome':'failed'}}}\n"
+          "(d/'results.json').write_text(json.dumps({'tests':t}), encoding='utf-8')\n"
+          "sys.exit(1)\n")
+
+
+def test_every_stage_passed_is_the_only_exit_0(tmp_path,monkeypatch):
+    run,_=_fake_release_run(tmp_path,monkeypatch,[("gen",_PASS),("vht",_PASS),("pytest",_PASS)])
+    assert run()==0
+
+
+def test_a_PENDING_stage_exits_3_and_resume_cannot_launder_it(tmp_path,monkeypatch):
+    run,out=_fake_release_run(tmp_path,monkeypatch,[("gen",_PASS),("vht",_PASS),("pytest",_PENDING)])
+    assert run()==3
+    state=json.loads((out/"checkpoint.json").read_text(encoding="utf-8"))
+    assert state["stages"]["pytest"]["status"]=="pending deployment parity"
+    assert run("--resume")==3          # every stage reused; the verdict still reads the state
+
+
+def test_stopping_early_with_through_exits_3_until_the_rest_runs(tmp_path,monkeypatch):
+    run,_=_fake_release_run(tmp_path,monkeypatch,[("gen",_PASS),("vht",_PASS),("pytest",_PASS)])
+    assert run("--through","vht")==3
+    assert run("--resume","--through","vht")==3
+    assert run("--resume")==0          # twin: once pytest really passes, the run is whole
+
+
+def test_TWIN_a_failed_stage_is_still_1_not_3(tmp_path,monkeypatch):
+    run,_=_fake_release_run(tmp_path,monkeypatch,[("gen",_FAIL),("vht",_PASS),("pytest",_PASS)])
+    assert run()==1
+
+
+def test_verdict_reads_only_recorded_state():
+    names=["a","b"]
+    ok={"accepted":True,"status":"passed"}
+    assert rrg.verdict({"stages":{"a":ok,"b":ok}},names)==0
+    assert rrg.verdict({"stages":{"a":ok}},names)==3                                  # not run
+    assert rrg.verdict({"stages":{"a":ok,"b":{"accepted":True,"status":"pending x"}}},names)==3
+    assert rrg.verdict({"stages":{"a":{"accepted":False,"status":"failed"},"b":ok}},names)==1
