@@ -146,6 +146,15 @@ confusing messages and six cosmetic ones. All are fixed:
   and for complete `icons.xml` files. A row appears only for an ID both expansions hold; a texture
   set that can't be listed is a counted NOT CHECKED. On the maintainer's modlist this removed 5
   false rows (F276).
+- **Effective tree: wildcard icons (#9):** same-named wildcard icons in `libraries/icons.xml`
+  (`upgrade_*`, `ship_*`, `module_*`, `*`) are all kept, each with its own texture folder;
+  each layer used to replace the previous one's. On base + 8 DLC the effective file kept 17 of
+  38 wildcard declarations and now keeps all 38. `x4effective show` names each same-named row
+  by class and origin. Plain icon names and other files still let the later declaration win.
+  A patch that selects such an icon by name alone now matches several and is reported as
+  ambiguous, as the game skips it. **Rebuild the effective store and x4eff** to pick this up.
+- **Effective tree: `if=` guards:** an `if=` that evaluates to NaN (e.g. `number(@missing)`)
+  now counts as false, as it does in XPath; it used to apply the op.
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
   resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
   (BLIND-SPOTS F265-F268).
