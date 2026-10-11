@@ -130,6 +130,6 @@ def test_TWIN_valid_reference_passes_the_check_and_reaches_java(world, script):
     p = _run(world, script, ref)
     out = p.stdout + p.stderr
     assert p.returncode != 0, "the stub java must stop the script"
-    assert "base+DLC XML document(s)" in out, out
+    assert "DLC XML document(s)" in out and "reference: 1 base" in out, out
     assert log.exists(), f"the script never reached java (preflight)\n{out}"
     assert _snapshot(basex) == before, "preflight must still precede any deletion"
