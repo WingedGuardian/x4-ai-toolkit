@@ -1106,7 +1106,8 @@ def test_7_the_query_travels_as_a_utf8_file_never_as_an_argument(monkeypatch, tm
     seen = {}
 
     def fake(argv, **kw):
-        path = argv[-1]
+        from pathlib import Path
+        path = Path(kw["cwd"]) / argv[-1]               # M-c: a bare name, resolved in cwd
         seen["argv"] = argv
         seen["bytes"] = open(path, "rb").read()
         return _Proc(0, b"r\r\n")
@@ -1118,6 +1119,57 @@ def test_7_the_query_travels_as_a_utf8_file_never_as_an_argument(monkeypatch, tm
     assert seen["bytes"] == q.encode("utf-8")
     assert "-Dstderr.encoding=UTF-8" in seen["argv"] and "-Dstdout.encoding=UTF-8" in seen["argv"]
     assert list(tmp_path.iterdir()) == [], "the temporary query file was left behind"
+
+
+def test_Mc_a_NON_ASCII_basex_folder_never_crosses_argv(monkeypatch, tmp_path):
+    """M-c (v4.0.0 delta review): the query file went to java as an ABSOLUTE path, so a
+    toolkit installed under a non-cp1252 folder name sent that name through the argv channel
+    the JVM decodes in the platform charset. The file is named relative to cwd instead."""
+    import basex_run
+    from pathlib import Path
+    bx = tmp_path / ("bx_" + chr(0x706B))               # U+706B: not in cp1252
+    bx.mkdir()
+    seen = {}
+
+    def fake(argv, **kw):
+        seen["argv"], seen["cwd"] = argv, kw.get("cwd")
+        seen["exists"] = (Path(kw["cwd"]) / argv[-1]).is_file()
+        return _Proc(0, b"r\n")
+    monkeypatch.setattr(basex_run.subprocess, "run", fake)
+    assert basex_run.run_query("1", bx) == (0, "r\n", "")
+    assert all(a.isascii() for a in seen["argv"]), seen["argv"]
+    last = seen["argv"][-1]
+    assert Path(last).name == last and last.endswith(".xq"), last     # a bare name
+    assert Path(seen["cwd"]) == bx and seen["exists"]                  # ...that resolves in cwd
+
+
+def test_Md_an_UNWRITABLE_basex_folder_is_a_RuntimeError_refusal(monkeypatch, tmp_path):
+    """M-d (v4.0.0 delta review): mkstemp's PermissionError escaped every caller as a
+    traceback. It is now the RuntimeError ask.py/coverage.py report as a refusal."""
+    import basex_run
+
+    def denied(*a, **k):
+        raise PermissionError(13, "Access is denied", str(tmp_path))
+    monkeypatch.setattr(basex_run.tempfile, "mkstemp", denied)
+    ran = []
+    monkeypatch.setattr(basex_run.subprocess, "run", lambda *a, **k: ran.append(a))
+    with pytest.raises(RuntimeError, match="cannot write the temporary query file") as e:
+        basex_run.run_query("1", tmp_path)
+    assert str(tmp_path) in str(e.value) and "PermissionError" in str(e.value)
+    assert ran == [], "no query may run when its file could not be written"
+
+
+def test_Md_ask_REPORTS_the_unwritable_folder_as_a_refusal_rc2(monkeypatch, tmp_path, capsys):
+    import basex_run
+
+    def denied(*a, **k):
+        raise PermissionError(13, "Access is denied", str(tmp_path))
+    monkeypatch.setattr(basex_run.tempfile, "mkstemp", denied)
+    monkeypatch.setattr(ask, "BASEX_DIR", tmp_path)
+    monkeypatch.setattr(ask.preflight, "check", lambda *a, **k: [])
+    rc = ask.main(["xq", "1", "--db", "x4eff"])
+    err = capsys.readouterr().err
+    assert rc == 2 and "cannot write the temporary query file" in err, (rc, err)
 
 
 def test_7_no_hand_rolled_basex_runner_outside_basex_run():
