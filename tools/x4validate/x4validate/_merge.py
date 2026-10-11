@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import os
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 
 from lxml import etree
@@ -257,6 +258,32 @@ def parse_bytes(data: bytes) -> etree._Element:
     return etree.fromstring(data, _PARSER)
 
 
+def _loose_case_sensitive() -> bool:
+    """True where a loose lookup by path is case-SENSITIVE and needs the folded index.
+
+    Windows (`nt`) answers `is_file()` case-insensitively already, so it never builds or
+    consults the index: Windows behaviour is unchanged by issue #6. Elsewhere the index is
+    used; on a case-insensitive macOS volume it only ever confirms what `is_file()` found.
+    """
+    return os.name != "nt"
+
+
+@lru_cache(maxsize=256)
+def _folded_loose(odir_str: str) -> dict[str, tuple[str, ...]]:
+    """Case-folded index of an overlay's LOOSE files: folded vpath -> on-disk spellings.
+
+    Built once per overlay per process -- the same lifetime as `_cat._folded_vfs`, the
+    packed half's index -- because a miss is the NORMAL outcome of `overlay_root`."""
+    odir = Path(odir_str)
+    index: dict[str, list[str]] = {}
+    # An OVERLAY's loose half only; its packed half is `_cat.read_path`, already folded.
+    for p in sorted(odir.rglob("*")):
+        if p.is_file():
+            rel = p.relative_to(odir).as_posix()
+            index.setdefault(rel.lower(), []).append(rel)
+    return {k: tuple(v) for k, v in index.items()}
+
+
 def overlay_root(odir: Path, vpath: str,
                  skipped: list[str] | None = None) -> etree._Element | None:
     """Resolve *vpath* within an overlay dir to a parsed root, or None if absent.
@@ -275,6 +302,20 @@ def overlay_root(odir: Path, vpath: str,
     """
     loose = odir / vpath
     try:
+        if _loose_case_sensitive():
+            # Linux parity (issue #6). The engine reads virtual paths case-insensitively;
+            # `is_file()` here does not, so a loose `md/CaseProbe.xml` asked for as
+            # `md/caseprobe.xml` would be silently absent. Fold case -- and REFUSE a
+            # folder holding two spellings of one file: which one the engine loads is
+            # not measured, so neither is picked. (Behaviour on Linux is INFERRED from
+            # the lookup, not observed in a running Linux game.)
+            spellings = _folded_loose(str(odir)).get(vpath.replace("\\", "/").lower(), ())
+            if len(spellings) > 1:
+                raise ValueError(f"{len(spellings)} loose files differ only by case "
+                                 f"({', '.join(spellings)}); the engine reads them as one "
+                                 f"file and which one it loads is not measured")
+            if not loose.is_file() and spellings:
+                loose = odir / spellings[0]
         if loose.is_file():
             return parse_file(loose)
         data = _cat.read_path(odir, vpath)

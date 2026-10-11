@@ -55,14 +55,20 @@ def overlay_vpaths(config, overlays: list[Path], failures: list[str] | None = No
     appended to *failures* -- the build reports it -- because a narrowing step must say so
     (AUDIT-2026-09-24 BX-6).
 
-    Behaviour is otherwise byte-for-byte what `build-effective.py` did, including counting
-    each overlay's own `content.xml` as contested; changing what x4eff indexes is not what
-    moving this function is for.
+    Behaviour is otherwise what `build-effective.py` did, including counting each overlay's
+    own `content.xml` as contested -- except that, since issue #6, paths differing only by
+    case are ONE contested vpath (see below).
     """
     from x4validate import _effective  # deferred: _effective imports _compat imports this
 
     base = _effective.base_vpaths(config, "*.xml")
-    contested: set[str] = set()
+    # ONE contested vpath per CASE-FOLDED path (issue #6). The engine reads virtual paths
+    # case-insensitively (MEASURED: debug.txt I/O paths are lowercase), so two spellings
+    # are one file. A set of original spellings made the x4eff build merge and write that
+    # document twice: on Windows the second write landed on the first and the counted
+    # total exceeded the files on disk. Spelling: the base tree's if it has one, else the
+    # first spelling in LOAD ORDER (sorted within one overlay, so it is deterministic).
+    chosen: dict[str, str] = {}
     for d in overlays:
         vps = {p.relative_to(d).as_posix() for p in d.rglob("*.xml")}
         try:
@@ -73,8 +79,9 @@ def overlay_vpaths(config, overlays: list[Path], failures: list[str] | None = No
             if failures is not None:
                 failures.append(f"{d.name}: catalog unreadable ({type(exc).__name__}: "
                                 f"{exc}) -- only its LOOSE files were enumerated")
-        for v in vps:
+        for v in sorted(vps):
             # Prefer the base tree's casing so both sides agree on one spelling.
-            contested.add(base.get(v.lower(), v))
+            chosen.setdefault(v.lower(), base.get(v.lower(), v))
+    contested = set(chosen.values())
     untouched = {v for low, v in base.items() if v not in contested}
     return contested, untouched, base
