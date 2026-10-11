@@ -630,8 +630,41 @@ def test_TWIN_a_separate_install_that_LOST_its_CLAUDE_md_reports_it(tmp_path, mo
     assert _in(x4lock.missing(), tk, "CLAUDE.md")
 
 
+def _git_commit_all(root):
+    """Make `root` a git repo whose HEAD tracks every file in it (agent/ included if present)."""
+    import subprocess
+    for argv in (["init", "-q"], ["add", "-A"],
+                 ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                  "commit", "-q", "-m", "fixture"]):
+        r = subprocess.run(["git", "-C", str(root), *argv], capture_output=True, text=True)
+        assert r.returncode == 0, (argv, r.stderr)
+    return root
+
+
+def test_an_IN_PLACE_install_of_the_release_zip_IS_locked(tmp_path, monkeypatch):
+    """FX-H2 / F269, user decision 2026-10-10: the README's default install extracts the release
+    zip (agent/ present, NO .git) and installs in place. Keyed on agent/, x4lock took it for a
+    source checkout and locked none of its guards. agent/ alone is not a checkout."""
+    tk = _installed_tk(tmp_path, monkeypatch, source=True)
+    _game(tmp_path, monkeypatch, claude=False)
+    got = x4lock.manifest()
+    for rel in (".claude/hooks/a.sh", ".claude/settings.json", "CLAUDE.md"):
+        assert _in(got, tk, rel), rel
+
+
+def test_TWIN_an_install_inside_ANOTHER_repo_is_still_locked(tmp_path, monkeypatch):
+    """Clause: the HEAD must track agent/. A repo that does not (a game root under git) does
+    not make the toolkit inside it a checkout."""
+    tk = _installed_tk(tmp_path, monkeypatch)
+    _git_commit_all(tk)                       # a repo at the root, HEAD without agent/
+    _game(tmp_path, monkeypatch, claude=False)
+    assert _in(x4lock.manifest(), tk, ".claude/hooks/a.sh")
+
+
 def test_TWIN_a_SOURCE_checkout_is_never_locked_as_an_agent_root(tmp_path, monkeypatch):
     tk = _installed_tk(tmp_path, monkeypatch, source=True)
+    (tk / "agent" / "core.md").write_text("#\n", encoding="utf-8")
+    _git_commit_all(tk)                       # the toolkit's own checkout: .git, HEAD tracks agent/
     game = _game(tmp_path, monkeypatch, claude=False)
     got = x4lock.manifest()
     assert not _in(got, tk, ".claude/hooks/a.sh")

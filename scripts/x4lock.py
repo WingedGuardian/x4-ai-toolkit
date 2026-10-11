@@ -364,12 +364,28 @@ def _candidates() -> list[Path]:
     return out
 
 
+def _toolkit_layout():
+    """scripts/toolkit_layout.py, loaded from THIS file's folder (never `_HERE`, which tests
+    repoint): the one answer to "source checkout or install?" shared with x4doctor."""
+    import importlib.util
+    path = Path(__file__).resolve().parent / "toolkit_layout.py"
+    spec = importlib.util.spec_from_file_location("x4lock_toolkit_layout", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_LAYOUT = _toolkit_layout()
+
+
 def _is_installed_toolkit(root: Path) -> bool:
-    """An INSTALLED toolkit: the runtime the installers copy, and no agent/ source. A source
-    checkout's .claude/ etc. are GENERATED, and a read-only bit there would break
-    gen-agent-trees.py and `git checkout` -- so a checkout is never an agent root here."""
+    """An INSTALLED toolkit: the runtime the installers copy, and not this toolkit's own SOURCE
+    CHECKOUT. A checkout's .claude/ etc. are GENERATED, and a read-only bit there would break
+    gen-agent-trees.py and `git checkout` -- so a checkout is never an agent root here.
+    FX-H2 / F269: a checkout is a root .git whose HEAD tracks agent/ (toolkit_layout.py), not
+    "has agent/": the release zip HAS agent/, and installed in place its guards went unlocked."""
     return ((root / "tools" / "x4validate" / "x4validate" / "_paths.py").is_file()
-            and not (root / "agent").is_dir())
+            and not _LAYOUT.is_source_checkout(root))
 
 
 def _agent_roots(game: Path | None) -> list[Path]:

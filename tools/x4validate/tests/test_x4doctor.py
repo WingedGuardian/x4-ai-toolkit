@@ -566,12 +566,36 @@ def test_an_installed_root_with_X4_TOOLKIT_UNSET_is_NA_too(tmp_path, monkeypatch
     assert r.status == doc.NA and "deploy" in r.detail, r
 
 
-def test_TWIN_a_toolkit_root_WITH_an_agent_source_is_still_checked(tmp_path, monkeypatch):
-    """A source checkout (agent/ + the generator) keeps the gen-agent-trees --check path:
-    without its venv that is UNKNOWN, never the installed root's N/A."""
-    files = dict(_CLAUDE, **_RUNTIME, **{"agent/core.md": "#\n",
-                                         "tools/x4validate/scripts/gen-agent-trees.py": "#\n"})
+def _git_commit_all(root):
+    import subprocess
+    for argv in (["init", "-q"], ["add", "-A"],
+                 ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                  "commit", "-q", "-m", "fixture"]):
+        r = subprocess.run(["git", "-C", str(root), *argv], capture_output=True, text=True)
+        assert r.returncode == 0, (argv, r.stderr)
+    return root
+
+
+_SOURCE = {"agent/core.md": "#\n", "tools/x4validate/scripts/gen-agent-trees.py": "#\n"}
+
+
+def test_an_IN_PLACE_install_of_the_release_zip_is_the_INSTALLED_layout(tmp_path, monkeypatch):
+    """FX-H2 / F269, user decision 2026-10-10: the release zip carries agent/ and the generator
+    but no .git, and the README installs it IN PLACE. That is an installed toolkit (N/A), not a
+    source checkout whose generator must be run."""
+    files = dict(_CLAUDE, **_RUNTIME, **_SOURCE)
     ctx = _pair(tmp_path, monkeypatch, files, files)
+    monkeypatch.setenv("X4_TOOLKIT", str(ctx.root))
+    r = _prow(doc.Ctx(root=ctx.root, toolkit=ctx.root), "parity.claude")
+    assert r.status == doc.NA and "deploy" in r.detail, r
+
+
+def test_TWIN_a_toolkit_root_WITH_an_agent_source_is_still_checked(tmp_path, monkeypatch):
+    """A source CHECKOUT (a .git whose HEAD tracks agent/, + the generator) keeps the
+    gen-agent-trees --check path: without its venv that is UNKNOWN, never the installed N/A."""
+    files = dict(_CLAUDE, **_RUNTIME, **_SOURCE)
+    ctx = _pair(tmp_path, monkeypatch, files, files)
+    _git_commit_all(ctx.root)
     monkeypatch.setenv("X4_TOOLKIT", str(ctx.root))
     r = _prow(doc.Ctx(root=ctx.root, toolkit=ctx.root), "parity.claude")
     assert r.status == doc.UNKNOWN and "venv" in r.detail, r
@@ -1173,7 +1197,8 @@ def _as_in_game_install(sandbox):
     for name, text in (("CLAUDE.md", "# c\n"), ("KNOWLEDGEBASE.md", "# kb\n")):
         (sandbox.root / name).write_text(text, encoding="utf-8")
     (sandbox.root / "scripts").mkdir(exist_ok=True)
-    shutil.copy2(REPO / "scripts" / "x4lock.py", sandbox.root / "scripts" / "x4lock.py")
+    for name in ("x4lock.py", "toolkit_layout.py"):      # scripts/ ships whole; x4lock loads the helper
+        shutil.copy2(REPO / "scripts" / name, sandbox.root / "scripts" / name)
     shutil.copytree(REPO / "tools" / "x4validate" / "x4validate",
                     sandbox.root / "tools" / "x4validate" / "x4validate",
                     ignore=shutil.ignore_patterns("__pycache__"), dirs_exist_ok=True)
@@ -1452,7 +1477,8 @@ def test_B2_INCIDENT_a_second_installed_copy_never_compares_against_the_first(tm
                                                 "agent/core.md": "#\n"}))
     b = _tree(tmp_path / "B", dict(_CLAUDE, **{"tools/x4validate/x4validate/_paths.py": "#\n"}))
     (b / "scripts").mkdir()
-    shutil.copy2(REPO / "scripts" / "x4doctor.py", b / "scripts" / "x4doctor.py")
+    for name in ("x4doctor.py", "toolkit_layout.py"):    # scripts/ ships whole; the doctor loads the helper
+        shutil.copy2(REPO / "scripts" / name, b / "scripts" / name)
     env = {k: v for k, v in os.environ.items() if k not in _LEAKY}
     env.update(X4_TOOLKIT=str(a), X4_CONFIG="", X4_REFERENCE="", PYTHONDONTWRITEBYTECODE="1")
     r = subprocess.run([sys.executable, str(b / "scripts" / "x4doctor.py"), "--root", str(b),

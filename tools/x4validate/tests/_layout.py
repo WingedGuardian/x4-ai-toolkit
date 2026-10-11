@@ -48,22 +48,22 @@ def installed_layout(root: Path = ROOT) -> bool:
     machine's is. Neither installer copies `.git` (the copy sets name `.gitignore` and
     `.gitattributes` only), so a `.git` at an install root is always SOMEONE ELSE's repo;
     asking it whether its HEAD tracks `agent/` tells the two apart."""
-    root = Path(root)
-    if not (root / ".git").exists():
-        return True
-    return not _head_tracks_agent(str(root))
+    return not _TL.is_source_checkout(root)
 
 
-@functools.lru_cache(maxsize=None)
-def _head_tracks_agent(root: str) -> bool:
-    """Does the git repo AT `root` have `agent/` in its HEAD tree? False when git cannot answer
-    (no git on PATH, no commit yet): then nothing proves this is the toolkit's checkout."""
-    try:
-        r = subprocess.run(["git", "-C", root, "cat-file", "-e", "HEAD:agent"],
-                           capture_output=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return r.returncode == 0
+def _load_toolkit_layout():
+    """scripts/toolkit_layout.py -- the ONE answer, shared with x4lock and x4doctor."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("tests_toolkit_layout",
+                                                  ROOT / "scripts" / "toolkit_layout.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_TL = _load_toolkit_layout()
+#: kept under its old name: tests clear its cache when they stub git out
+_head_tracks_agent = _TL._head_tracks_agent
 
 
 def own_checkout(root: Path = ROOT) -> bool:
