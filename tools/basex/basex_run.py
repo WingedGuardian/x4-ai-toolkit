@@ -52,13 +52,28 @@ def run_query(xquery: str, cwd: Path) -> tuple[int, str, str]:
     UnicodeDecodeError rather than reaching a caller as altered text. stderr is
     diagnostic only, so it is decoded with replacement and never raises.
     """
-    fd, name = tempfile.mkstemp(prefix="ask-", suffix=".xq", dir=cwd)
+    try:
+        fd, name = tempfile.mkstemp(prefix="ask-", suffix=".xq", dir=cwd)
+    except OSError as exc:
+        # M-d (v4.0.0 delta review): a BaseX folder this user cannot write (an install under
+        # Program Files, a read-only share) made mkstemp raise PermissionError through every
+        # caller as a traceback. RuntimeError is what ask.py and coverage.py already report
+        # as a refusal (rc 2, with a reason).
+        raise RuntimeError(
+            f"cannot write the temporary query file into the BaseX folder {cwd} "
+            f"({type(exc).__name__}: {exc}). The query travels as a UTF-8 file in that "
+            f"folder (issue #7), so it must be writable by this user; no query was run"
+        ) from exc
     path = Path(name)
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(xquery.encode("utf-8"))
+        # M-c (v4.0.0 delta review): the file by its NAME, never its absolute path. cwd IS
+        # its folder, and the JVM decodes argv in the platform charset (the channel issue #7
+        # moved the QUERY off) -- an absolute path would carry a non-ASCII install folder
+        # through it. mkstemp's own name is ASCII (prefix, suffix, and [a-z0-9_]).
         out = subprocess.run(["java", *JVM_PROPS, "-cp", "BaseX.jar", "org.basex.BaseX",
-                              str(path)],
+                              path.name],
                              cwd=cwd, capture_output=True, check=False)
     finally:
         try:

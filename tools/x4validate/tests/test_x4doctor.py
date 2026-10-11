@@ -1490,6 +1490,37 @@ def test_B2_INCIDENT_a_second_installed_copy_never_compares_against_the_first(tm
     assert str(a) in got.get("toolkit_note", "") and str(b) in got.get("toolkit_note", ""), got.get("toolkit_note")
 
 
+# --- M-a (v4.0.0 delta review): a .git git cannot answer for is UNKNOWN, never N/A -------- #
+
+@pytest.mark.parametrize("commit,want", [(False, "UNKNOWN"), (True, "N/A")])
+def test_Ma_parity_on_a_root_whose_git_cannot_answer_is_UNKNOWN(tmp_path, commit, want):
+    """An installed-looking root WITH the generator and a .git: git failing (no commit yet) is
+    UNKNOWN, not "this root IS an installed toolkit". TWIN: a repo git CAN read, whose HEAD has
+    no agent/ (an in-game install inside a game repo), stays N/A."""
+    b = _tree(tmp_path / "B", dict(_CLAUDE, **{"tools/x4validate/x4validate/_paths.py": "#\n",
+                                                "tools/x4validate/scripts/gen-agent-trees.py": "#\n"}))
+    (b / "scripts").mkdir()
+    for name in ("x4doctor.py", "toolkit_layout.py"):
+        shutil.copy2(REPO / "scripts" / name, b / "scripts" / name)
+    subprocess.run(["git", "init", "-q", str(b)], check=True, capture_output=True)
+    if commit:
+        (b / "readme.txt").write_text("x", encoding="utf-8")
+        subprocess.run(["git", "-C", str(b), "add", "readme.txt"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(b), "-c", "user.name=t", "-c", "user.email=t@t",
+                        "-c", "commit.gpgsign=false", "commit", "-q", "-m", "i"],
+                       check=True, capture_output=True)
+    env = {k: v for k, v in os.environ.items() if k not in _LEAKY}
+    env.update(X4_CONFIG="", X4_REFERENCE="", PYTHONDONTWRITEBYTECODE="1")
+    env.pop("X4_TOOLKIT", None)
+    r = subprocess.run([sys.executable, str(b / "scripts" / "x4doctor.py"), "--root", str(b),
+                        "--agent", "claude", "--json"], capture_output=True, text=True, env=env,
+                       timeout=300)
+    row = {c["id"]: c for c in json.loads(r.stdout)["checks"]}["parity.claude"]
+    assert row["status"] == want, row
+    if want == "UNKNOWN":
+        assert "git could not read" in row["detail"], row
+
+
 # --- cosmetic (install red-team 2026-10-04): the targets line of a claude+codex install ---- #
 
 def test_targets_line_does_not_list_generic_for_a_codex_install(tmp_path):

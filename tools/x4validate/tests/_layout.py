@@ -51,6 +51,14 @@ def installed_layout(root: Path = ROOT) -> bool:
     return not _TL.is_source_checkout(root)
 
 
+def layout_caveat(root: Path = ROOT) -> str:
+    """"" for a settled answer; when a `.git` is at the root but git could not answer (M-a),
+    the reason -- so a skip that rests on "unknown, so installed" SAYS so instead of reading
+    like a measured install."""
+    state, why = _TL.checkout_status(root)
+    return "" if state != "unknown" else (" [layout UNKNOWN, treated as installed: %s]" % why)
+
+
 def _load_toolkit_layout():
     """scripts/toolkit_layout.py -- the ONE answer, shared with x4lock and x4doctor."""
     import importlib.util
@@ -71,8 +79,8 @@ def own_checkout(root: Path = ROOT) -> bool:
     precedent in test_cli_reference.) False in a release-zip extract, an install, or a tree
     nested inside SOMEONE ELSE's repo, where git would answer for the wrong tree."""
     try:
-        r = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-                           capture_output=True, text=True, timeout=60)
+        r = subprocess.run(_TL.git_argv(root, "rev-parse", "--show-toplevel"),
+                           capture_output=True, text=True, timeout=60, env=_TL.clean_git_env())
     except (OSError, subprocess.SubprocessError):
         return False
     return r.returncode == 0 and Path(r.stdout.strip()).resolve() == Path(root).resolve()
@@ -154,7 +162,8 @@ def reference_skip_reason(root: Path = ROOT) -> str | None:
         return NEEDS_REFERENCE + (": no reference tree is configured (only the "
                                   "<X4_TOOLKIT>/reference default, and it is not unpacked)")
     if installed_layout(root):
-        return NEEDS_REFERENCE + ": configured but not unpacked yet (installed toolkit)"
+        return (NEEDS_REFERENCE + ": configured but not unpacked yet (installed toolkit)"
+                + layout_caveat(root))
     return None
 
 
@@ -175,6 +184,6 @@ def require_repo(*rel: str, why: str = "", module_level: bool = False, root: Pat
     missing = [r for r in rel if not (Path(root) / r).exists()]
     if not missing:
         return
-    reason = "%s: needs %s, which an install does not ship%s" % (
-        REASON, ", ".join(missing), (" -- " + why) if why else "")
+    reason = "%s: needs %s, which an install does not ship%s%s" % (
+        REASON, ", ".join(missing), (" -- " + why) if why else "", layout_caveat(root))
     pytest.skip(reason, allow_module_level=module_level)

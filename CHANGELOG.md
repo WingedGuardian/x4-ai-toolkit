@@ -123,7 +123,10 @@ confusing messages and six cosmetic ones. All are fixed:
 - **`ask.py` / `coverage.py` (#7):** BaseX queries now travel UTF-8 both ways — the query is
   passed to BaseX as a file. Non-ASCII results no longer crash, error text is no longer mangled,
   and a literal outside Windows-1252 (e.g. `"火"`) no longer silently becomes `?`, which used to
-  make a zero result describe a query nobody wrote (BLIND-SPOTS F271).
+  make a zero result describe a query nobody wrote (BLIND-SPOTS F271). The query file is passed
+  by its name, so a toolkit installed under a non-ASCII folder no longer sends that folder name
+  through the same lossy channel, and a BaseX folder you cannot write to is refused with a
+  message naming it instead of a traceback.
 - **`ask.py refs` (#5):** now also searches `bullet/@class`, `add_blueprints/@wares` and
   `@macros` lists, and the `macro.X` / `ware.X` spellings, and states the exact forms searched in
   `--help`, `QUERIES.md` and every result. `$variable` expressions and other expression
@@ -132,6 +135,8 @@ confusing messages and six cosmetic ones. All are fixed:
   to the game; this fixes the 11,302-vs-11,301 coverage refusal. On a case-sensitive filesystem a
   loose overlay is now found regardless of case, and a folder holding two spellings of one file is
   refused with a reason instead of one being picked (F273; Linux behaviour inferred, not measured).
+  `x4compat` reports that refusal (and an unreadable overlay file) as a counted skip naming the
+  mod; it ended the run with a traceback.
 - **x4compat (#4):** a duplicate-add HARD row names only the mods that add that key (an unrelated
   co-adder is no longer named, or "winning"), every duplicated key is reported, and the parent's
   SOFT "coexist" row is always kept. Which duplicate the game keeps is not engine-measured, and
@@ -737,7 +742,8 @@ confusing messages and six cosmetic ones. All are fixed:
   (BLIND-SPOTS F267).
 - `scripts/verify-cold.sh --archive` runs the cold suite over a `git archive` extract with no
   repository visible (`GIT_CEILING_DIRECTORIES`, refused otherwise): the release zip's
-  population, which F262's move to a clone had dropped. CI runs both legs (BLIND-SPOTS F269).
+  population, which F262's move to a clone had dropped. The CI workflow runs both legs, on
+  Linux (BLIND-SPOTS F269).
 - **The suite an in-place install of the release zip runs (SETUP_PROMPT) no longer fails on a
   fresh install**: the test layout check took the zip's `agent/` folder for a source checkout,
   so 26 "not unpacked / not set up yet" cases failed instead of skipping, and three tests needed
@@ -749,7 +755,10 @@ confusing messages and six cosmetic ones. All are fixed:
   guards unlocked (MEASURED: 1 file locked, now 131 including the 14 hook files) and `x4doctor`
   ran its source-checkout parity check instead of N/A. A source checkout is now a `.git` whose
   HEAD carries `agent/`, decided in one place (`scripts/toolkit_layout.py`); a real checkout
-  behaves as before (BLIND-SPOTS F269).
+  behaves as before (BLIND-SPOTS F269). That decision asks Git about the folder itself, whatever
+  `GIT_DIR` and similar variables say and whoever owns the folder: either one made a real
+  checkout read as an install. When Git cannot answer at all, `x4lock` still locks but says why,
+  and `x4doctor` reports parity UNKNOWN rather than N/A (F277).
 - `run-gates.sh` expands its possibly-empty arrays as `${a[@]+"${a[@]}"}`, which bash before
   4.4 (macOS's 3.2) requires under `set -u` (READ, not reproduced; BLIND-SPOTS F268).
 - `gates/edge_sweep.py` says what its "unconfigured" cells are: every path variable blank and an

@@ -349,12 +349,13 @@ memory or from another session -- a remembered id was stale within a day here.
 | F268 | `run-gates.sh` expanded possibly-empty arrays bare under `set -u` (bash < 4.4 aborts) | **DEFECT (read)** — not reproducible on any bash here (all >= 4.4) | 3 of 3 `name=()` arrays | ✅ **FIXED 2026-10-10** — `${a[@]+"${a[@]}"}`; class-rule test with a twin |
 | F269 | The release zip's population -- `git archive`, no `.git`, installed IN PLACE as the README says -- was never measured; F262 moved the cold leg to a clone, and `installed_layout()` read an in-place install (it has `agent/`) as a checkout | **DEFECT (measured)** | 238 of 239 test files run in an in-place install at 5063aec: 4,543 passed, 54 skipped, 37 failed/errors, all attributed (3 Git metadata, 26 layout, 7 my sandboxed HOME, 1 my TEMP placement); `test_install_over_existing.py` (361 tests) cut off at ~222 by the resource watchdog, unmeasured | ✅ **FIXED 2026-10-11** — one helper (`scripts/toolkit_layout.py`: a root `.git` tracking agent/) for the tests, x4lock and x4doctor; Git tests ask the shipped rules git-free; `verify-cold.sh --archive`; re-verified: all 16 affected files pass on a fresh in-place install of 647b591 |
 | F270 | `edge_sweep`'s "unconfigured" cells are an EMPTY config, not NO config; the docstring called them the new user's state | **SCOPE (read)** | all unconfigured cells (one fixture) | 📝 **DOCUMENTED 2026-10-10** — the no-config state is `verify-cold.sh`'s |
-| F271 | BaseX queries reached Java as a command-line ARGUMENT, decoded in the Windows codepage: a literal outside Windows-1252 arrived as `?`, and a zero was certified for a query nobody wrote; stdout was decoded with the locale and stderr is cp1252 | **DEFECT (measured)** | codepoint 63 arrived where 28779 was sent; every ask/coverage query containing such a character | ✅ **CLOSED 2026-10-11** (`4b7c5f7`) — query passed as a UTF-8 file via the single runner `tools/basex/basex_run.py`; stdout strict UTF-8; stderr forced UTF-8 |
-| F272 | `refs` matched exact values of five attributes while its zero carried a complete DOCUMENT count; a document count says nothing about which reference forms were searched | **DEFECT (measured)** | the issue's worked example missed 18% of references | ✅ **CLOSED 2026-10-11** (`3cf199b`) — also searches bullet/@class, add_blueprints/@wares\|@macros lists, `macro.`/`ware.` spellings, and declares its scope; `$variable` and expression attributes remain out of scope, declared |
-| F273 | Contested paths were a SET OF SPELLINGS, so one case alias was written twice; on a case-sensitive filesystem a differently spelled loose overlay would be silently dropped | **DEFECT (measured)** on Windows; case-sensitive effect **INFERRED** (no Linux machine) | 1 of 11,301 documents on the maintainer's install | ✅ **CLOSED 2026-10-11** (`d825d15`) — one entry per case-folded path; off Windows a case-folded loose lookup that refuses a folder holding two spellings |
+| F271 | BaseX queries reached Java as a command-line ARGUMENT, decoded in the Windows codepage: a literal outside Windows-1252 arrived as `?`, and a zero was certified for a query nobody wrote; stdout was decoded with the locale and stderr is cp1252 | **DEFECT (measured)** | codepoint 63 arrived where 28779 was sent; every ask/coverage query containing such a character | ✅ **CLOSED 2026-10-11** (`4b7c5f7`) — query passed as a UTF-8 file via the single runner `tools/basex/basex_run.py`; stdout strict UTF-8; stderr forced UTF-8. **Residuals closed 2026-10-11 (delta review M-c/M-d, `011db2b`):** the file's ABSOLUTE path still crossed argv (a non-ASCII install folder) -- now its bare name in cwd; an unwritable BaseX folder raised PermissionError as a traceback -- now a RuntimeError refusal (rc 2) |
+| F272 | `refs` matched exact values of five attributes while its zero carried a complete DOCUMENT count; a document count says nothing about which reference forms were searched | **DEFECT (measured)** | the issue's worked example missed 18% of references | ✅ **CLOSED 2026-10-11** (`3cf199b`) — also searches bullet/@class, add_blueprints/@wares\|@macros lists, `macro.`/`ware.` spellings, and declares its scope; `$variable` and expression attributes remain out of scope, declared. **Residual closed 2026-10-11 (delta review M-e, `1d55568` + `3630ee3`):** the dev-only `audit/install_verify.py` native control still counted the five-attribute form -- now `count()` over `ask.q_refs` itself |
+| F273 | Contested paths were a SET OF SPELLINGS, so one case alias was written twice; on a case-sensitive filesystem a differently spelled loose overlay would be silently dropped | **DEFECT (measured)** on Windows; case-sensitive effect **INFERRED** (no Linux machine) | 1 of 11,301 documents on the maintainer's install | ✅ **CLOSED 2026-10-11** (`d825d15`) — one entry per case-folded path; off Windows a case-folded loose lookup that refuses a folder holding two spellings. **Residual closed (delta review M-b):** x4compat's two `overlay_root` call sites caught only LxmlError, so that refusal escaped as a traceback -- now a counted `report.skip` / a reason |
 | F274 | The same-parent duplicate check reported only the first duplicated key, attributed it to every co-adder, and dropped the parent SOFT row; 2 duplicated keys were never reported | **DEFECT (measured)** | 2 to 40 mods named where 2 or 3 provided the key; 6 rows on the maintainer's live modlist | ✅ **CLOSED 2026-10-11** (`65e2a10`) — one row per duplicated key naming its providers only; parent SOFT row kept; the survivor of a duplicate id is NOT engine-measured and the rows say so |
 | F275 | Open lead from F274's live run: wildcard icon keys (`icon#ship_*`, `icon#upgrade_*`, `icon#module_*`) reported as duplicate HARD rows, while the engine log showed duplicates only where wildcard EXPANSIONS overlap | **LEAD (measured)** | see F276 | ✅ **CLOSED 2026-10-11** — superseded by F276 |
 | F276 | x4compat reported a duplicate for every wildcard icon key two mods declare (HARD for same-parent diff adds, UNION-KEY for full icons.xml files); the engine compares EXPANDED ids | **DEFECT (measured)**; `.dds` alias and no-subfolder search **INFERRED** | live: 3 of 3 wildcard HARD rows and 2 of 2 wildcard UNION-KEY rows false (0 overlapping ids across all installed extensions: 178 exact / 769 with aliases) | ✅ **CLOSED 2026-10-11** (`d49fdae`, `373308c`) — compared by expansion; **residuals stay OPEN** (bare texture paths, diff-vs-full-file wildcards, wildcard vs explicit id, base/DLC as providers) |
+| F277 | `toolkit_layout` asked `git -C <root>` whether HEAD tracks agent/, but an exported `GIT_DIR` (or WORK_TREE/INDEX_FILE/COMMON_DIR) answered for ANOTHER repo and dubious ownership refused the call; both read a real checkout as an install, and "git failed" was indistinguishable from "not a checkout" | **DEFECT (measured)** | reproduced on a fixture checkout: GIT_DIR -> False, GIT_TEST_ASSUME_DIFFERENT_OWNER -> False (both True after); consumers x4lock, x4doctor, tests/_layout | ✅ **CLOSED 2026-10-11** (`8452913`) — git runs with every `--local-env-vars` variable removed and `-c safe.directory=<root>`; tri-state checkout|install|unknown with a reason; unknown: x4lock locks and says why, x4doctor parity UNKNOWN, test skips carry the caveat |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -9654,6 +9655,34 @@ an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
 
+## F277 — The checkout-or-install question was answered by whatever repo the environment named · **DEFECT (measured)** · confidence 92% · ✅ CLOSED 2026-10-11
+
+MEASURED (v4.0.0 delta review, reviewer N; reproduced by FX-H4 on two fixture repos against
+the pre-fix `scripts/toolkit_layout.py`): `is_source_checkout` ran `git -C <root> cat-file -e
+HEAD:agent` with the caller's environment. With `GIT_DIR` exported to a repo without agent/,
+a real checkout returned False; with `GIT_TEST_ASSUME_DIFFERENT_OWNER=1` (git's own stand-in
+for a folder owned by another account) git refused with "dubious ownership", rc 128, and the
+checkout again returned False. A False here means: x4lock locks the checkout's GENERATED
+trees, x4doctor reports parity N/A, and the suite skips its repo-only tests. Git failing
+(no git on PATH, no commit) also returned the same False as "HEAD has no agent/", so no
+consumer could say which it was.
+
+Fix `8452913`: git runs with every `git rev-parse --local-env-vars` variable removed and with
+`-c safe.directory=<root>`; `git ls-tree HEAD -- agent` separates rc!=0 ("unknown", with
+git's first stderr line) from an empty answer ("install"). Consumer policy for "unknown":
+x4lock still LOCKS (an unlocked guard is the failure it exists to prevent) but prints why;
+x4doctor parity is UNKNOWN where the generator exists; test skips resting on it say
+"[layout UNKNOWN, treated as installed: ...]". Not covered: variables outside
+`--local-env-vars` (e.g. `GIT_CEILING_DIRECTORIES`, irrelevant with `.git` at the root);
+the list is git 2.48's and is not re-derived on a git upgrade.
+
+RE-DERIVED BY: `tests/test_layout_repo_only.py` `test_an_exported_GIT_DIR_*`,
+`test_a_worktree_with_an_exported_GIT_DIR_is_still_a_checkout`,
+`test_DUBIOUS_OWNERSHIP_does_not_turn_a_checkout_into_an_install`,
+`test_NO_GIT_on_PATH_is_UNKNOWN_*`, `test_a_repo_git_CANNOT_read_is_UNKNOWN_not_install`;
+`tests/test_x4lock.py` `test_Ma_*`; `tests/test_x4doctor.py` `test_Ma_*`. Five clause
+mutants of toolkit_layout (env scrub, safe.directory, rc-fail, OSError, .git check) each killed.
+
 ## F276 — x4compat reported a duplicate for every shared wildcard icon key · **DEFECT (measured)** · confidence 92% · ✅ CLOSED 2026-10-11 (residuals OPEN)
 
 MEASURED: x4compat reported a duplicate for every wildcard icon key (`icon#ship_*` and the
@@ -9706,6 +9735,14 @@ path; off Windows a case-folded loose lookup that refuses a folder holding two s
 RE-DERIVED BY: `tests/test_case_alias_vpaths.py` `test_6_two_spellings_are_ONE_contested_vpath`,
 `test_6_overlay_root_REFUSES_two_spellings_in_one_folder`.
 
+RESIDUAL CLOSED 2026-10-11 (v4.0.0 delta review, M-b; FX-H4). x4compat's two
+`overlay_root` call sites pass no `skipped` list, so the refusal RAISES (NO CHANNEL, NO
+SWALLOW), and they caught only LxmlError: on a case-sensitive filesystem the two-spellings
+ValueError (and an unreadable member's OSError) ended the run with a traceback. Both are now
+routed: `_analyze_vpath` to a counted `report.skip` naming the mod, `_no_base_reason` to a
+reason string. MEASURED on a simulated case-sensitive filesystem (RED 2 of 2 before).
+RE-DERIVED BY: `tests/test_case_alias_vpaths.py` `test_Mb_*`.
+
 ## F272 — `refs` zero carried a document count, not the forms searched · **DEFECT (measured)** · confidence 90% · ✅ CLOSED 2026-10-11
 
 MEASURED: `refs` matched exact values of five attributes while its zero carried a complete
@@ -9716,6 +9753,16 @@ add_blueprints/@wares|@macros lists and `macro.`/`ware.` spellings, and declares
 
 RE-DERIVED BY: `tools/basex/test_ask.py` `test_5_a_refs_ZERO_names_the_forms_searched_and_what_is_not`;
 `tools/basex/test_ask_e2e.py` `test_5_refs_finds_each_reference_form`.
+
+RESIDUAL CLOSED 2026-10-11 (v4.0.0 delta review, M-e; FX-H4; `1d55568` + `3630ee3`). The dev-only audit
+`audit/install_verify.py` compared ask's `refs` total with a NATIVE count still written in the
+old five-attribute form, so the two counted different questions. The control is now
+`count()` over `ask.q_refs` verbatim. MEASURED by real BaseX on an inline
+five-form fixture: the old control counts 1, the derived one 5. The check's first run also
+caught a defect in the fix itself (ask loaded without a `sys.modules` entry crashed inside
+dataclasses), fixed in `3630ee3`. (A whitespace-collapsing first draft would have
+broken the add_blueprints tokenizer's three-space `translate` literal; caught before running.)
+RE-DERIVED BY: a scratch check only -- the audit has no test suite.
 
 ## F271 — BaseX queries were decoded in the Windows codepage · **DEFECT (measured)** · confidence 92% · ✅ CLOSED 2026-10-11
 
@@ -9728,6 +9775,19 @@ such a character. Fix `4b7c5f7`: the query is a UTF-8 file passed through the si
 
 RE-DERIVED BY: `tools/basex/test_ask.py` `test_7_the_query_travels_as_a_utf8_file_never_as_an_argument`;
 `tools/basex/test_ask_e2e.py` `test_7_non_cp1252_LITERAL_reaches_basex_intact`.
+
+RESIDUALS CLOSED 2026-10-11 (v4.0.0 delta review, M-c and M-d; FX-H4; `011db2b`). MEASURED with
+the real JVM on a folder named `bx_` + U+706B: the pre-fix runner failed (BaseX could not open the
+mangled absolute path and parsed it as a query: XPST0003); the fixed runner returned `2` for `1+1`.
+The three new tests fail against the pre-fix runner (8cb6185) and pass after. M-c: the query file
+still reached Java as an ABSOLUTE path, so a toolkit installed under a folder name outside
+Windows-1252 sent that name through the same argv channel; it is now passed by its bare name
+(cwd is its folder). M-d: the file is written into the BaseX folder, so an unwritable folder
+made `tempfile.mkstemp` raise PermissionError through every caller as a traceback; it is now a
+RuntimeError naming the folder, which ask.py and coverage.py report as a refusal (rc 2).
+RE-DERIVED BY: `tools/basex/test_ask.py` `test_Mc_a_NON_ASCII_basex_folder_never_crosses_argv`,
+`test_Md_an_UNWRITABLE_basex_folder_is_a_RuntimeError_refusal`,
+`test_Md_ask_REPORTS_the_unwritable_folder_as_a_refusal_rc2`.
 
 ## F270 — Edge sweep's "unconfigured" is an EMPTY config, not NO config · **SCOPE (read)** · confidence 95% · 📝 DOCUMENTED 2026-10-10
 
@@ -9809,8 +9869,9 @@ profile; `test_x4conformance_engine` 65 of 65 outside TEMP. Still UNMEASURED in 
 
 Fixed so far: `scripts/verify-cold.sh --archive` restores the archive population as a second
 cold leg, with the ceiling and a refusal so it cannot pass vacuously (twins: no ceiling ->
-refusal rc 2; neither -> the stub sees a repository, rc 6); CI runs it on Linux. It is EXPECTED
-to fail until the git-metadata tests are fixed, which is the point.
+refusal rc 2; neither -> the stub sees a repository, rc 6); the CI workflow runs it on Linux.
+The git-metadata tests it was built to catch were fixed in `4748f8c`; the archive leg's first
+CI run is still pending, so its green is not yet MEASURED.
 
 Also seen: `scripts/run-pytest-batches.py` cannot run in an extract (`source_fingerprint` calls
 `git ls-files` with `check=True`); a maintainer-only tool, recorded, not fixed.

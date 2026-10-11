@@ -1554,7 +1554,14 @@ def check_parity(ctx: Ctx) -> list[Check]:
                                Path(__file__).resolve().parent / "toolkit_layout.py")
                 # FX-H2 / F269: a source checkout is a root .git whose HEAD tracks agent/; the
                 # release zip installed in place HAS agent/ and the generator, and is an install.
-                if not layout.is_source_checkout(src) or not gen.is_file():
+                # M-a (v4.0.0 delta review): a .git git could not answer for is UNKNOWN, never
+                # N/A -- calling it an install would hide a checkout parity never compared.
+                state, why = layout.checkout_status(src)
+                if state == "unknown" and gen.is_file():
+                    return UNKNOWN, ("cannot tell whether this root is a source checkout or an "
+                                     "install: %s. Parity runs the generator only in a checkout"
+                                     % why)
+                if state != "checkout" or not gen.is_file():
                     return NA, ("this root IS an installed toolkit (not a source checkout, i.e. no .git tracking agent/: runtime-only), "
                                 "so no deploy relationship exists here -- parity checks a tree "
                                 "deploy-claude-dir.py copied from a source checkout. The installed "

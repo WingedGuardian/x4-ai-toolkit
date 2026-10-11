@@ -671,6 +671,40 @@ def test_TWIN_a_SOURCE_checkout_is_never_locked_as_an_agent_root(tmp_path, monke
     assert _in(x4lock.missing(), game, "CLAUDE.md"), "the pre-4.0 fallback demand must stand"
 
 
+def test_Ma_an_exported_GIT_DIR_does_not_lock_a_SOURCE_checkout(tmp_path, monkeypatch):
+    """M-a (v4.0.0 delta review, MEASURED): `git -C <root>` with GIT_DIR exported answered for
+    the OTHER repo, so the checkout read as an install and its generated trees were locked."""
+    tk = _installed_tk(tmp_path, monkeypatch, source=True)
+    (tk / "agent" / "core.md").write_text("#\n", encoding="utf-8")
+    _git_commit_all(tk)
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "r.txt").write_text("x", encoding="utf-8")
+    _git_commit_all(other)
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    _game(tmp_path, monkeypatch, claude=False)
+    assert not _in(x4lock.manifest(), tk, ".claude/hooks/a.sh")
+
+
+def test_Ma_a_dot_git_git_cannot_answer_for_is_LOCKED_and_SAYS_why(tmp_path, monkeypatch, capsys):
+    import subprocess
+    tk = _installed_tk(tmp_path, monkeypatch, source=True)
+    r = subprocess.run(["git", "init", "-q", str(tk)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr                 # a .git with no commit: git cannot answer
+    _game(tmp_path, monkeypatch, claude=False)
+    assert _in(x4lock.manifest(), tk, ".claude/hooks/a.sh")
+    err = capsys.readouterr().err
+    assert "cannot tell whether" in err and "INSTALL" in err, err
+
+
+def test_Ma_TWIN_a_SETTLED_install_prints_no_layout_note(tmp_path, monkeypatch, capsys):
+    tk = _installed_tk(tmp_path, monkeypatch)
+    _git_commit_all(tk)                                # git CAN answer: HEAD without agent/
+    _game(tmp_path, monkeypatch, claude=False)
+    assert _in(x4lock.manifest(), tk, ".claude/hooks/a.sh")
+    assert "cannot tell whether" not in capsys.readouterr().err
+
+
 def test_a_FRESH_install_with_no_registry_yet_does_not_report_it_missing(tmp_path, monkeypatch):
     """The registry is created by the first x4modlist run. Before that its folder does not
     exist either, and its absence is not a loss (MEASURED: every fresh install read MISSING)."""

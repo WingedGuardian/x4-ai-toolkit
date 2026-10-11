@@ -14,6 +14,30 @@ import extra
 import fix_verify
 
 
+def native_refs_count_query(db, ident, basex_dir):
+    """The native BaseX control for `ask.py refs <ident>`: `count(...)` over ask's OWN refs
+    query. M-e (v4.0.0 delta review): this was a hand-written five-attribute
+    form (@ref/@macro/@name/@ware/@component = id) after issue #5 widened `refs` to the
+    macro./ware. prefixes, bullet/@class and add_blueprints lists -- so the two counts
+    compared different questions, and any corpus hit in a widened form failed the check.
+    Derived from `ask.q_refs`, so the control can never drift from the forms ask searches."""
+    import importlib.util
+    import sys
+    basex_dir = str(basex_dir)
+    if basex_dir not in sys.path:
+        sys.path.insert(0, basex_dir)       # ask imports its siblings (basex_run, preflight)
+    spec = importlib.util.spec_from_file_location('install_verify_ask', Path(basex_dir) / 'ask.py')
+    ask = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: ask defines dataclasses, and dataclasses looks its module up
+    # in sys.modules (unregistered, the import died with AttributeError -- MEASURED).
+    sys.modules[spec.name] = ask
+    spec.loader.exec_module(ask)
+    # Verbatim, never whitespace-collapsed: the add_blueprints tokenizer is
+    # translate(@wares, '[],', '   ') -- three spaces -- and collapsing them to one makes
+    # translate DELETE ']' and ',' instead, gluing list tokens together.
+    return 'count(' + ask.q_refs(db, ident) + ')'
+
+
 def main():
     original = D.SOURCE
     D.PKG = original/'tools/x4validate'
@@ -54,8 +78,7 @@ def main():
         result = D.run('installed-basex-positive-'+db,
             [D.PYTHON, D.BASEX/'ask.py', 'refs', 'ore', '--db', db, '--limit', '3'],
             (0,3), cwd=D.BASEX, env=env)
-        count_query = (f"count(collection('{db}')//*[@ref='ore' or @macro='ore' "
-                       "or @name='ore' or @ware='ore' or @component='ore'])")
+        count_query = native_refs_count_query(db, 'ore', D.BASEX)
         native = D.run('installed-basex-native-count-'+db,
             ['java', '-cp', 'BaseX.jar', 'org.basex.BaseX', '-q', count_query],
             cwd=D.BASEX/'basex', env=launcher_env)
