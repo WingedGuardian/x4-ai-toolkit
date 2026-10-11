@@ -31,11 +31,11 @@ def main(argv=None) -> int:
     try:
         config = (_merge.Config(reference=Path(args.reference)) if args.reference
                   else _merge.Config())
-        n = _effective.require_base_documents(config, args.what)
+        n_base, n_dlc = _effective.require_base_documents(config, args.what)
     except (_effective.EmptyReference, _paths.Unconfigured) as exc:
         print(f"REFUSING: {exc}", file=sys.stderr)
         return 2
-    print(f"reference: {n} base+DLC XML document(s) under {config.reference}")
+    print(f"reference: {n_base} base + {n_dlc} DLC XML document(s) under {config.reference}")
     return 0
 
 

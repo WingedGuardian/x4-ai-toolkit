@@ -243,18 +243,22 @@ class EmptyReference(ValueError):
     """
 
 
-def require_base_documents(config: _merge.Config, what: str) -> int:
-    """Refuse unless *config*'s reference root exists AND base enumeration finds XML.
+def require_base_documents(config: _merge.Config, what: str) -> tuple[int, int]:
+    """Refuse unless *config*'s reference root exists AND holds BASE-GAME XML.
 
     Issue #10. `base_vpaths` is an rglob, and an rglob over a missing or empty root
     returns nothing without complaint, so a build over the wrong path (a second
     worktree resolving the reference relative to itself, a typo) merged zero files,
     wrote an EMPTY artifact over the good one and exited 0. Call this BEFORE writing
-    anything. Returns the document count so a caller can report its denominator.
+    anything. Returns ``(base, dlc)`` document counts so a caller can report its
+    denominator.
 
-    Two conditions, because either alone can pass: a missing CONFIGURED reference can
-    still enumerate the packed DLC from the game install, and an existing directory
-    can be empty.
+    Two conditions, because either alone can pass: the root must exist, and at least
+    one document must lie OUTSIDE ``extensions/`` (compared case-insensitively). DLC
+    documents never count: for the CONFIGURED reference `Config.dlc_dirs()` adds every
+    DLC the install holds packed, so an existing-but-empty reference on a machine with
+    a real game enumerated those DLC and passed (release review, MEASURED: empty
+    reference + one packed DLC -> n=1, not refused).
     """
     ref = config.reference
     how = ("Set $X4_REFERENCE (or x4-paths.env) to the unpacked base-game tree, or "
@@ -263,13 +267,16 @@ def require_base_documents(config: _merge.Config, what: str) -> int:
         raise EmptyReference(
             f"refusing to {what}: the reference tree {ref} does not exist, so it would "
             f"model a game with no base content and report success. {how}")
-    n = len(base_vpaths(config, "*.xml"))
-    if n == 0:
+    # Keys of base_vpaths are already lower-cased, so the prefix test is case-insensitive.
+    found = base_vpaths(config, "*.xml")
+    n_dlc = sum(1 for low in found if low.startswith("extensions/"))
+    n_base = len(found) - n_dlc
+    if n_base == 0:
         raise EmptyReference(
             f"refusing to {what}: the reference tree {ref} exists but contains no "
-            f"base-game XML documents (0 enumerated), so the result would be empty. "
-            f"{how}")
-    return n
+            f"base-game XML documents (0 outside extensions/; {n_dlc} DLC document(s) "
+            f"do not count), so the result would model no base game. {how}")
+    return n_base, n_dlc
 
 
 def base_has(config: _merge.Config, vpath: str, owner: str | None = None) -> bool:
@@ -825,8 +832,8 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
         "set X4_EFFECTIVE_DB or X4_MODS (or X4_REGISTRY), or pass --db")
     # Issue #10: BEFORE anything is merged or written, so a refused build leaves the
     # existing store exactly as it was.
-    n_base = require_base_documents(config, "build the effective store")
-    progress(f"reference: {n_base} base+DLC XML document(s) enumerated")
+    n_base, n_dlc = require_base_documents(config, "build the effective store")
+    progress(f"reference: {n_base} base + {n_dlc} DLC XML document(s) enumerated")
     not_loaded: list[str] = []
     mods = active_mods(dirs, not_loaded, config)
     for msg in not_loaded:
