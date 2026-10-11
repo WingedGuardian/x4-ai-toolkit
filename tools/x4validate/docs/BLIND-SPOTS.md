@@ -347,7 +347,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F266 | `run-release-gates.py` exited 0 with a stage pending (deployment parity), after `--through vht`, and again on `--resume` | **DEFECT (measured)** | 3 of 3 partial shapes exited 0 through the real `main()` | ✅ **FIXED 2026-10-10** — exit read from the checkpoint: 0 all passed, 1 failed, 3 pending/not run; 4 clause mutants caught |
 | F267 | Gate report directories were checked against EXPORTED roots only; a root named only in `x4-paths.env` was not protected | **DEFECT (measured)** | 1 of 1 config-only reference root allowed as a report destination | ✅ **FIXED 2026-10-10** — roots resolved through `x4validate._paths`, required by `external_output`; a resolver that raises refuses |
 | F268 | `run-gates.sh` expanded possibly-empty arrays bare under `set -u` (bash < 4.4 aborts) | **DEFECT (read)** — not reproducible on any bash here (all >= 4.4) | 3 of 3 `name=()` arrays | ✅ **FIXED 2026-10-10** — `${a[@]+"${a[@]}"}`; class-rule test with a twin |
-| F269 | The release zip's population -- `git archive`, no `.git`, installed IN PLACE as the README says -- was never measured; F262 moved the cold leg to a clone, and `installed_layout()` read an in-place install (it has `agent/`) as a checkout | **DEFECT (measured)** | 238 of 239 test files run in an in-place install at 5063aec: 4,543 passed, 54 skipped, 37 failed/errors, all attributed (3 Git metadata, 26 layout, 7 my sandboxed HOME, 1 my TEMP placement); `test_install_over_existing.py` (361 tests) cut off at ~222 by the resource watchdog, unmeasured | ⏳ **FIXED, VERIFICATION PENDING 2026-10-11** — `installed_layout()` keyed on a root `.git` tracking agent/; Git tests ask the shipped rules git-free; `verify-cold.sh --archive`; the post-fix re-run was stopped by system memory pressure |
+| F269 | The release zip's population -- `git archive`, no `.git`, installed IN PLACE as the README says -- was never measured; F262 moved the cold leg to a clone, and `installed_layout()` read an in-place install (it has `agent/`) as a checkout | **DEFECT (measured)** | 238 of 239 test files run in an in-place install at 5063aec: 4,543 passed, 54 skipped, 37 failed/errors, all attributed (3 Git metadata, 26 layout, 7 my sandboxed HOME, 1 my TEMP placement); `test_install_over_existing.py` (361 tests) cut off at ~222 by the resource watchdog, unmeasured | ✅ **FIXED 2026-10-11** — one helper (`scripts/toolkit_layout.py`: a root `.git` tracking agent/) for the tests, x4lock and x4doctor; Git tests ask the shipped rules git-free; `verify-cold.sh --archive`; re-verified: all 16 affected files pass on a fresh in-place install of 647b591 |
 | F270 | `edge_sweep`'s "unconfigured" cells are an EMPTY config, not NO config; the docstring called them the new user's state | **SCOPE (read)** | all unconfigured cells (one fixture) | 📝 **DOCUMENTED 2026-10-10** — the no-config state is `verify-cold.sh`'s |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
@@ -9662,7 +9662,7 @@ every CLI. No cell changed; nothing was measured beyond reading both scripts.
 
 RE-DERIVED BY: `gates/edge_sweep.py` docstring; `scripts/verify-cold.sh` precondition.
 
-## F269 — The release zip, installed in place, was never measured · **DEFECT (measured)** · confidence 90% · ⏳ FIXED, VERIFICATION PENDING 2026-10-11
+## F269 — The release zip, installed in place, was never measured · **DEFECT (measured)** · confidence 95% · ✅ FIXED 2026-10-11
 
 The README's default install extracts the release zip (`git archive`: `agent/` present, no
 `.git`) and runs the installer IN PLACE; SETUP_PROMPT then has the agent run the suite there.
@@ -9716,8 +9716,15 @@ an in-place install (zip extract, no repo visible) -- `x4lock lock` locked 1 fil
 (the file mode read independently, then `unlock --all`); x4doctor `parity.claude` and
 `parity.codex` OK -> N/A, its `x4lock` row UNKNOWN -> OK. A real checkout (a clone) at each
 commit: `x4lock status` byte-identical, x4doctor 32 of 32 row statuses identical.
-NOT YET VERIFIED: the post-fix re-run of the 13 failing files in a fresh extract was stopped
-by system memory pressure before it started.
+VERIFIED 2026-10-11 (MEASURED): a fresh `git archive` of 647b591, extracted OUTSIDE TEMP with no
+repository visible, installed in place with the same installer sandbox, then the 13 previously
+failing files plus `test_layout_repo_only`, `test_x4lock` and `test_x4doctor` run serially with
+the user's REAL HOME (as SETUP_PROMPT runs them): 16 of 16 files exit 0, 0 failed. Remaining
+skips name a zip's real absences (no repository, no tags). This also settles the #202
+attribution: `test_codex_conformance` passes 22 of 22 with the real HOME, so it was the
+sandboxed HOME (MEASURED, no longer inferred); `test_codex_wrapper` 46 of 46 with the real
+profile; `test_x4conformance_engine` 65 of 65 outside TEMP. Still UNMEASURED in this population:
+`test_install_over_existing.py` (361 tests), cut off by the resource watchdog in the first run.
 
 Fixed so far: `scripts/verify-cold.sh --archive` restores the archive population as a second
 cold leg, with the ceiling and a refusal so it cannot pass vacuously (twins: no ceiling ->
