@@ -35,6 +35,18 @@ if ! command -v uv >/dev/null 2>&1; then
   echo "       Install it from https://docs.astral.sh/uv/" >&2
   exit 2
 fi
+# THE REFERENCE MUST HOLD THE GAME, checked BEFORE preflight (which runs java) and
+# before the `rm -rf` of the previous tree below (issue #10): build-effective.py builds
+# from the CONFIGURED reference, which is what this checks. rc 2 = configuration.
+echo "== reference =="
+REF_RC=0
+(cd "$X4VALIDATE" && uv run python "$HERE/reference_check.py" \
+    --what "serialize the effective tree for $DB") || REF_RC=$?
+if [ "$REF_RC" -ne 0 ]; then
+  echo "       Nothing was deleted or indexed; the previous tree and $DB are untouched." >&2
+  exit "$REF_RC"
+fi
+
 echo "== preflight =="
 (cd "$X4VALIDATE" && uv run python "$HERE/preflight.py" --need java jar disk)
 
