@@ -30,8 +30,14 @@ def load():
     return m
 
 
+#: Tests that need no agent/ source: they ask the SHIPPED git rules (FX-H2 / I-1).
+_NO_AGENT_SOURCE = {"test_hooks_json_is_not_a_generated_file"}
+
+
 @pytest.fixture(autouse=True)
-def _source_checkout():
+def _source_checkout(request):
+    if request.function.__name__ in _NO_AGENT_SOURCE:
+        return
     if not (REPO / "agent").is_dir():
         pytest.skip("not a source checkout (no agent/) -- Codex generation NOT checked here")
 
@@ -115,8 +121,18 @@ def test_TWIN_ghost_in_codex_hooks_is_reported(tmp_path):
     assert g.problems(exp, tmp_path) == ["GHOST    .codex/hooks/stray.sh"]
 
 
-def test_hooks_json_is_not_a_generated_file():
-    """It holds an absolute path (per install): rendered by deploy/installers, never committed."""
-    assert ".codex/hooks.json" not in load().generate(REPO)
-    r = subprocess.run(["git", "-C", str(REPO), "check-ignore", "-q", ".codex/hooks.json"])
-    assert r.returncode == 0, ".codex/hooks.json must be git-ignored"
+def test_hooks_json_is_not_a_generated_file(tmp_path):
+    """It holds an absolute path (per install): rendered by deploy/installers, never committed.
+
+    FX-H2 / I-1: three halves, each where it can be answered. Generation needs agent/; the
+    SHIPPED rule is asked git-free in a scratch repo, so a release zip (no .git) still checks
+    it; this tree's own repository is asked only when it IS this toolkit's checkout."""
+    from _layout import own_checkout, shipped_rules_repo
+    if (REPO / "agent").is_dir():
+        assert ".codex/hooks.json" not in load().generate(REPO)
+    rules = shipped_rules_repo(tmp_path, REPO)
+    r = subprocess.run(["git", "-C", str(rules), "check-ignore", "-q", "--no-index", ".codex/hooks.json"])
+    assert r.returncode == 0, "the shipped .gitignore must ignore .codex/hooks.json (rc %d)" % r.returncode
+    if own_checkout(REPO):
+        r = subprocess.run(["git", "-C", str(REPO), "check-ignore", "-q", ".codex/hooks.json"])
+        assert r.returncode == 0, ".codex/hooks.json must be git-ignored"

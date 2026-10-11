@@ -8,9 +8,8 @@ copied (README, "An installed toolkit is runtime-only").
 
 A test that needs repo-only content calls `require_repo(...)`. It SKIPS -- counted, with a
 reason naming what is absent -- only when BOTH hold:
-  * the tree is an installed layout: no `agent/` directory at the toolkit root (every
-    checkout and every release zip carries it; no installer copies it) and the root is not
-    this toolkit's own git checkout (see `installed_layout`), and
+  * the tree is an installed layout: the root is not this toolkit's own git checkout (see
+    `installed_layout`; an in-place install of the release zip HAS `agent/`), and
   * the content the test needs is actually absent.
 In a checkout a missing file is NOT skipped: the test then fails, as it should, because a
 checkout that lost `agent/rules/codex-rules.yaml` is broken, not "installed".
@@ -31,8 +30,13 @@ REASON = "REPO-ONLY (installed toolkit, not a checkout)"
 
 
 def installed_layout(root: Path = ROOT) -> bool:
-    """True for an installed toolkit: no `agent/` source directory at the root, AND the root is
-    not this toolkit's own git checkout.
+    """True for an installed toolkit: the root is not this toolkit's own git checkout -- a `.git`
+    (a directory, or the FILE a worktree uses) whose HEAD tracks `agent/`.
+
+    FX-H2 / I-1 (F269, MEASURED 2026-10-10): `agent/` alone is NOT a checkout. The README's
+    default install extracts the release zip (`git archive`: agent/ present, no .git) and runs
+    the installer IN PLACE; keyed on agent/, that read as a checkout, and the suite SETUP_PROMPT
+    has the user run failed or errored in every "configured but not present yet" case.
 
     v4.0.0 delta review: keyed on `agent/` alone, a CHECKOUT that lost `agent/` read as
     "installed" and every repo-only test SKIPPED instead of failing. So a root with `.git`
@@ -45,8 +49,6 @@ def installed_layout(root: Path = ROOT) -> bool:
     `.gitattributes` only), so a `.git` at an install root is always SOMEONE ELSE's repo;
     asking it whether its HEAD tracks `agent/` tells the two apart."""
     root = Path(root)
-    if (root / "agent").is_dir():
-        return False
     if not (root / ".git").exists():
         return True
     return not _head_tracks_agent(str(root))
@@ -62,6 +64,51 @@ def _head_tracks_agent(root: str) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return r.returncode == 0
+
+
+def own_checkout(root: Path = ROOT) -> bool:
+    """Is `root` the top of its own git work tree? (`rev-parse --show-toplevel == root`, the
+    precedent in test_cli_reference.) False in a release-zip extract, an install, or a tree
+    nested inside SOMEONE ELSE's repo, where git would answer for the wrong tree."""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and Path(r.stdout.strip()).resolve() == Path(root).resolve()
+
+
+#: Directories never searched for shipped rule files (bulk or generated, never shipped rules).
+_RULES_PRUNE = {".git", ".venv", ".test-sandbox", "__pycache__", "node_modules", "reference"}
+
+
+def shipped_rules_repo(tmp: Path, root: Path = ROOT) -> Path:
+    """A scratch git repo holding ONLY this tree's `.gitignore` / `.gitattributes` files, at
+    their relative paths, so a test can ask git what the SHIPPED RULES say -- `check-ignore
+    --no-index`, `check-attr` -- without this tree's own Git metadata (FX-H2 / I-1: a release
+    zip has none). The copy is refused when no root `.gitignore` is found: an empty rule set
+    would answer "not ignored" for everything."""
+    import os
+    import shutil
+    repo = Path(tmp) / "shipped-rules"
+    repo.mkdir(parents=True)
+    root = Path(root)
+    copied = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _RULES_PRUNE]
+        for f in filenames:
+            if f in (".gitignore", ".gitattributes"):
+                src = Path(dirpath) / f
+                dst = repo / src.relative_to(root)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dst)
+                copied.append(dst)
+    if not (repo / ".gitignore").is_file():
+        raise AssertionError("no root .gitignore under %s: the shipped rules cannot be asked" % root)
+    r = subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise AssertionError("git init failed: %s" % r.stderr)
+    return repo
 
 
 def reference_unpacked() -> bool:
