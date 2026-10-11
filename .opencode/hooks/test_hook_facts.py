@@ -4794,6 +4794,62 @@ class TestE7EveryAclLiftAsks(unittest.TestCase):
         self.assertEqual(H._icacls_paths('icacls "C:/a" /grant "' + REF + ':F"'), ["C:/a"])
 
 
+class TestH2IcaclsSwitchSpellings(unittest.TestCase):
+    """FX-H2 / reviewer L: Git Bash users double a switch's slash (`//reset`) so MSYS does not
+    rewrite it as a path; icacls receives `/reset`. `//reset` was read as a PATH, so
+    `icacls <ref> //reset //T` was allowed. And icacls takes ANY switch that starts with
+    `/inheritance` (MEASURED 2026-10-10 on a scratch file: `/inheritancezzz:r` removed 4 of 4
+    inherited ACEs; `/inheritanc:r` and `/inh:r` were rejected as invalid parameters), so
+    `/inheritancelevel` was one spelling of an open class, not the only alternative."""
+
+    def test_a_doubled_slash_switch_is_the_switch(self):
+        for c in ('icacls "' + REF + '" //reset //T //C',
+                  'icacls "' + REF + '/libraries" //grant:r user:F',
+                  'icacls "' + REF + '" //REMOVE:d *S-1-5-21-1',
+                  'icacls "' + REF + '/libraries" //inheritance:r',
+                  'icacls "' + REF + '" //setowner someone',
+                  'icacls "' + TOOLKIT + '" //restore acl.txt',
+                  'icacls "' + REF + '" //substitute S-1-1-0 S-1-5-32-545'):
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["lifts_reference_deny"], c)
+
+    def test_a_doubled_T_walks_from_an_ancestor(self):
+        """Clause: `//T` must count as /T, or an ancestor reset is not a walk."""
+        self.assertTrue(F('icacls "C:/Users/tester/Desktop" //reset //T //C')["lifts_reference_deny"])
+        self.assertFalse(F('icacls "C:/Users/tester/Desktop" //reset //C')["lifts_reference_deny"])
+
+    def test_every_inheritance_spelling_icacls_accepts_lifts(self):
+        for sw in ("/inheritance:r", "/inheritancelevel:r", "/inheritancezzz:r", "/INHERITANCEx:d",
+                   "//inheritancelevel:e"):
+            c = 'icacls "' + REF + '/libraries" ' + sw
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["lifts_reference_deny"], c)
+                self.assertEqual(H._icacls_paths(c), [REF + "/libraries"])
+
+    # --- one falsification twin per clause ---
+    def test_TWIN_a_UNC_path_is_not_a_doubled_switch(self):
+        """`//server/share` cannot fully match `//<letters>`: it stays the NAME operand."""
+        self.assertEqual(H._icacls_paths("icacls //server/share /reset"), ["//server/share"])
+        self.assertEqual(H._icacls_paths("icacls //reset/x /reset"), ["//reset/x"])
+
+    def test_TWIN_a_prefix_icacls_rejects_is_not_inheritance(self):
+        """MEASURED: `/inheritanc:r` and `/inh:r` are invalid parameters to icacls."""
+        for sw in ("/inheritanc:r", "/inh:r"):
+            self.assertFalse(F('icacls "' + REF + '/libraries" ' + sw)["lifts_reference_deny"], sw)
+
+    def test_TWIN_doubled_non_lift_switches_stay_non_lifts(self):
+        for c in ('icacls "' + REF + '" //deny "*S-1-1-0:(OI)(CI)(DE,DC)"',
+                  'icacls "' + REF + '" //save acl.txt //T'):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["lifts_reference_deny"], c)
+        self.assertEqual(H._icacls_paths('icacls "C:/a" //grant "' + REF + ':F"'), ["C:/a"])
+
+    def test_findsid_value_is_not_a_path_and_findsid_is_not_a_lift(self):
+        self.assertEqual(H._icacls_paths('icacls "C:/a" /findsid "' + REF + '" /T'), ["C:/a"])
+        self.assertFalse(F('icacls "' + REF + '" /findsid *S-1-1-0 /T')["lifts_reference_deny"])
+        self.assertFalse(F('icacls "C:/a" /findsid "' + REF + '" /T')["lifts_reference_deny"])
+
+
 class TestAShellWriteToAgentSettingsIsRefused(unittest.TestCase):
     """User decision 2026-10-05 ("Block X4_GUARD there"): a settings `env` block reaches every
     hook, and a shell write's resulting content cannot be seen -- so every shell WRITE to a

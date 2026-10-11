@@ -2203,12 +2203,30 @@ def _refguard_action(args: list) -> str:
 
 #: icacls switches that change an ACL in a way that can lift a deny (E7), and those that take
 #: a VALUE -- a trustee:perm spec or a file -- which is not a path the ACL is applied to.
-_ICACLS_LIFTS = ("/remove", "/reset", "/grant", "/inheritance", "/inheritancelevel", "/restore", "/setowner",
+_ICACLS_LIFTS = ("/remove", "/reset", "/grant", "/inheritance", "/restore", "/setowner",
                  "/substitute")
 _ICACLS_VALUED = ("/grant", "/deny", "/remove", "/setowner", "/restore", "/save",
                   "/setintegritylevel", "/substitute", "/findsid")
 _ICACLS_SWITCHES = frozenset(_ICACLS_LIFTS + _ICACLS_VALUED
                             + ("/t", "/c", "/l", "/q", "/verify", "/?"))
+
+
+def _icacls_switch(o: str) -> str:
+    """The switch icacls itself would see for operand *o*, lower-cased, modifier dropped.
+
+    FX-H2 / reviewer L: Git Bash users double a switch's slash so MSYS does not rewrite it
+    as a path, and icacls receives `/reset` for `//reset`. Only a token that is ENTIRELY
+    `//<letters>` is one: a UNC `//server/share` has a second slash and stays a path.
+    icacls also accepts ANY switch that begins with `/inheritance` (MEASURED 2026-10-10:
+    `/inheritancezzz:r` removed every inherited ACE of a scratch file, while `/inheritanc:r`
+    and `/inh:r` were invalid parameters), so that whole class is `/inheritance`.
+    """
+    lo = o.lower().split(":", 1)[0]
+    if re.fullmatch(r"//[a-z?]+", lo):
+        lo = lo[1:]
+    if lo.startswith("/inheritance"):
+        lo = "/inheritance"
+    return lo
 
 
 def _icacls_parts(seg: str) -> tuple:
@@ -2225,7 +2243,7 @@ def _icacls_parts(seg: str) -> tuple:
         if take:
             take -= 1
             continue
-        lo = o.lower().split(":", 1)[0]
+        lo = _icacls_switch(o)
         # icacls NAME is the first operand. In Git Bash /c is the C drive;
         # a later /C remains the continue-on-error switch. Do not discard NAME.
         if lo in _ICACLS_SWITCHES and out:

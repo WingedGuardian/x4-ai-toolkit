@@ -108,6 +108,9 @@ probe allow  "cat-dat-reference"    'XRCatTool -in 01.cat -out ref'
 need "$X4_MODS" "rm-in-modding" X4_MODS && probe advise "rm-in-modding"        "rm -rf \"$X4_MODS/dev/foo\""
 # Lifting the OS deny on reference/ is the USER's step (Plan 2 D8/#16): an agent's lift ASKS.
 need "$X4_REFERENCE" "icacls-reset-reference" X4_REFERENCE && probe ask "icacls-reset-reference" "icacls \"$X4_REFERENCE\" /reset /T /C"
+# FX-H2 / reviewer L: Git Bash's doubled-slash switch, and icacls's /inheritance* prefix class.
+need "$X4_REFERENCE" "icacls-dblslash-reset" X4_REFERENCE && probe ask "icacls-dblslash-reset" "icacls \"$X4_REFERENCE\" //reset //T //C"
+need "$X4_REFERENCE" "icacls-inherit-prefix" X4_REFERENCE && probe ask "icacls-inherit-prefix" "icacls \"$X4_REFERENCE\" /inheritancezzz:r"
 probe ask   "x4refguard-remove"    'python scripts/x4refguard.py remove'
 
 # --- runtime rules: the harness caps a foreground call at 600000 ms ---------
@@ -134,6 +137,8 @@ probe allow "append-durable"      'cat x >> KNOWLEDGEBASE.md'
 probe allow "plain-ls"            'ls -la'
 probe allow "x4refguard-status"   'python scripts/x4refguard.py status'
 need "$X4_REFERENCE" "icacls-read-reference" X4_REFERENCE && probe allow "icacls-read-reference" "icacls \"$X4_REFERENCE\""
+need "$X4_REFERENCE" "icacls-dblslash-save" X4_REFERENCE && probe allow "icacls-dblslash-save" "icacls \"$X4_REFERENCE\" //save acl.txt //T"
+need "$X4_REFERENCE" "icacls-inh-rejected" X4_REFERENCE && probe allow "icacls-inh-rejected" "icacls \"$X4_REFERENCE\" /inheritanc:r"
 probe allow "pytest"              'cd tools/x4validate && uv run python -m pytest -q'
 probe allow "git-status"          'git status --porcelain'
 probe allow "empty-command"       ''
