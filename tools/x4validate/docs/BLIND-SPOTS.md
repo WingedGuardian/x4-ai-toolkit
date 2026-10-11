@@ -9699,7 +9699,9 @@ case); a diff-added wildcard is not compared with a full-file wildcard of the sa
 a wildcard expansion vs an explicit icon id is not compared; base/DLC never take part as
 providers. INFERRED, not measured: the `.dds` alias and the absence of a subfolder search.
 Related: GitHub issue #9 (`_merge._union_children` replaces same-named wildcard
-declarations; FX-H3 reads per-mod files, so is unaffected) -- not fixed in this release.
+declarations; FX-H3 reads per-mod files, so is unaffected) -- the `_merge` half is fixed
+in this release (FX-H6: wildcard `<icon>`s in `libraries/icons.xml` are appended, not
+deduped; base + 8 DLC 17 -> 38 of 38 declarations kept).
 
 RE-DERIVED BY: `tests/test_compat.py` `test_F276_TWIN_disjoint_expansions_are_SOFT_only`,
 `test_F276_overlapping_expansions_are_one_HARD_row_per_shared_ID`,
