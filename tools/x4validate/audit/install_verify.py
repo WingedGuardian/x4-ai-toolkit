@@ -28,6 +28,9 @@ def native_refs_count_query(db, ident, basex_dir):
         sys.path.insert(0, basex_dir)       # ask imports its siblings (basex_run, preflight)
     spec = importlib.util.spec_from_file_location('install_verify_ask', Path(basex_dir) / 'ask.py')
     ask = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: ask defines dataclasses, and dataclasses looks its module up
+    # in sys.modules (unregistered, the import died with AttributeError -- MEASURED).
+    sys.modules[spec.name] = ask
     spec.loader.exec_module(ask)
     # Verbatim, never whitespace-collapsed: the add_blueprints tokenizer is
     # translate(@wares, '[],', '   ') -- three spaces -- and collapsing them to one makes
