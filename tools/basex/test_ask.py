@@ -1085,3 +1085,55 @@ def test_the_stdlib_QName_check_AGREES_with_lxml(name):
     except ValueError:
         want = False
     assert is_qname(name) is want, (name, want)
+
+
+# --- #7: basex_run is the one BaseX runner (no JVM: subprocess is faked) --------------
+class _Proc:
+    def __init__(self, rc, out, err=b""):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+def test_7_undecodable_output_is_refused_not_mangled(monkeypatch, tmp_path):
+    import basex_run
+    monkeypatch.setattr(ask, "BASEX_DIR", tmp_path)
+    monkeypatch.setattr(basex_run.subprocess, "run", lambda *a, **k: _Proc(0, b"ok \xff"))
+    with pytest.raises(RuntimeError, match="not valid UTF-8"):
+        ask.run_xq("1")
+
+
+def test_7_the_query_travels_as_a_utf8_file_never_as_an_argument(monkeypatch, tmp_path):
+    import basex_run
+    seen = {}
+
+    def fake(argv, **kw):
+        path = argv[-1]
+        seen["argv"] = argv
+        seen["bytes"] = open(path, "rb").read()
+        return _Proc(0, b"r\r\n")
+    monkeypatch.setattr(basex_run.subprocess, "run", fake)
+    monkeypatch.setattr(ask, "BASEX_DIR", tmp_path)
+    q = 'string-to-codepoints("' + chr(0x706B) + '")'
+    assert ask.run_xq(q) == "r"
+    assert "-q" not in seen["argv"] and q not in seen["argv"]
+    assert seen["bytes"] == q.encode("utf-8")
+    assert "-Dstderr.encoding=UTF-8" in seen["argv"] and "-Dstdout.encoding=UTF-8" in seen["argv"]
+    assert list(tmp_path.iterdir()) == [], "the temporary query file was left behind"
+
+
+def test_7_no_hand_rolled_basex_runner_outside_basex_run():
+    """Every Python caller of the jar goes through basex_run; a new `-q` argv call would
+    reintroduce the cp1252 argument channel. Matched on an exact AST string constant, so
+    prose in docstrings (preflight names the class in sentences) does not count."""
+    import ast
+    from pathlib import Path
+    here = Path(ask.__file__).resolve().parent
+    offenders = []
+    for py in sorted(here.glob("*.py")):
+        if py.name.startswith("test_") or py.name == "basex_run.py":
+            continue
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        if any(isinstance(n, ast.Constant) and n.value == "org.basex.BaseX" for n in ast.walk(tree)):
+            offenders.append(py.name)
+    assert offenders == []
+    assert any(isinstance(n, ast.Constant) and n.value == "org.basex.BaseX"
+               for n in ast.walk(ast.parse((here / "basex_run.py").read_text(encoding="utf-8"))))

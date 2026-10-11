@@ -68,11 +68,11 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import basex_run
 import preflight
 from content_query import certification_issue, is_qname
 
@@ -82,11 +82,11 @@ BASEX_DIR = HERE / "basex"
 
 
 def run_xq(xquery: str) -> str:
-    out = subprocess.run(["java", "-cp", "BaseX.jar", "org.basex.BaseX", "-q", xquery],
-                         cwd=BASEX_DIR, capture_output=True, text=True, check=False)
-    if out.returncode != 0:
-        raise RuntimeError(out.stderr.strip()[:500])
-    return out.stdout.rstrip("\n")
+    # UTF-8 both ways, the query passed as a file: see basex_run (issue #7).
+    rc, stdout, stderr = basex_run.run_query(xquery, BASEX_DIR)
+    if rc != 0:
+        raise RuntimeError(stderr.strip()[:500])
+    return stdout.rstrip("\n")
 
 
 #: Separates the item count from the payload in a wrapped query. Printable on
@@ -571,7 +571,19 @@ return $v || ' : ' || $n
 """
 
 
+def _lossless_streams() -> None:
+    """A piped stdout on Windows is cp1252: printing a corpus value outside it raised
+    UnicodeEncodeError after the query had succeeded (issue #7). backslashreplace keeps
+    the encoding the reader expects and writes an exact, visible `\\u706b` instead."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv=None) -> int:
+    _lossless_streams()
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("mode", choices=["refs", "attr", "xq"])

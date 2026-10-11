@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -43,13 +42,22 @@ return string-join((
 """
 
 
+def _basex_run():
+    """`basex_run` by FILE: tests load this module by path from tools/x4validate, where
+    tools/basex is not on sys.path (and `coverage` itself shadows a PyPI package)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("basex_run_for_coverage", HERE / "basex_run.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def basex_query(db: str, xquery: str) -> str:
-    out = subprocess.run(
-        ["java", "-cp", "BaseX.jar", "org.basex.BaseX", "-q", xquery],
-        cwd=BASEX_DIR, capture_output=True, text=True, check=False)
-    if out.returncode != 0:
-        raise RuntimeError(f"BaseX query failed: {out.stderr.strip()[:400]}")
-    return out.stdout
+    # UTF-8 both ways, the query passed as a file: see basex_run (issue #7).
+    rc, stdout, stderr = _basex_run().run_query(xquery, BASEX_DIR)
+    if rc != 0:
+        raise RuntimeError(f"BaseX query failed: {stderr.strip()[:400]}")
+    return stdout
 
 
 def count_disk_xml(root: Path) -> int:
