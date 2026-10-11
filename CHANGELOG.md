@@ -162,6 +162,18 @@ confusing messages and six cosmetic ones. All are fixed:
   is written, so an existing store or index is left as it was. `build-corpus.sh` and
   `build-effective.sh` run the same check first, before Java and before dropping `x4raw` or
   deleting the previous x4eff tree; `build-corpus.sh` used to drop `x4raw` before noticing.
+- **x4compat (#8):** an op guarded by `if=` is judged by its guard, read the way the merge
+  model applies it: on the file as it stands when that mod loads (base game, DLC, every earlier
+  mod, and the op's own file up to that point). An op whose guard is false there changes nothing,
+  so it is no longer reported as a HARD, duplicate, SOFT, SUBTREE or removal collision, and is
+  never named the winner; it is listed in a new GUARDED OFF section (`guarded_off` in `--json`,
+  counted in the summary). A row involving a true guard says the result depends on this load
+  order. A guard that cannot be evaluated (invalid XPath) keeps its row, labelled, and is
+  reported as not analysed. Two related cases are fixed too: a guarded add with a true guard now
+  takes part in the duplicate-registry-entry check (it used to be skipped), and a macro defined
+  by a guarded `<diff>` counts for NAME-CLASH only when its guard is true. On the maintainer's
+  modlist this removed 12 false rows (6 HARD, 6 SUBTREE) and listed 23 guarded-off ops; a full
+  check runs about 9% longer (55 s to 61 s).
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
   resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
   (BLIND-SPOTS F265-F268).

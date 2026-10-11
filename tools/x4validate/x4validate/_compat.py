@@ -19,6 +19,12 @@ actual merge semantics:
   enumerated is announced as NOT CHECKED (F276). Full union files declaring one wildcard
   are compared the same way, as one UNION-KEY row per shared expanded ID.
 - Two non-diff full files at the same non-union path FULL-OVERRIDE (later clobbers).
+- An op guarded by ``if=`` is judged by its guard as `_merge.apply_diff` evaluates it: on
+  the file as it stands when that op applies (base+DLC, every earlier mod, the earlier ops
+  of its own file). FALSE there: the op changes nothing, joins no row of any kind, and is
+  listed in `CompatReport.guarded_off` instead (issue #8). TRUE: it takes part, and its rows
+  say the answer depends on this load order. UNEVALUATED (e.g. invalid XPath): it is kept,
+  labelled, and counted as a skip -- never silently treated as false.
 
 Load order (who wins): the engine's MEASURED order -- case-insensitive folder order,
 dependencies loaded in repeated passes (see `_loadorder.compute_load_order` and
@@ -27,6 +33,7 @@ dependencies loaded in repeated passes (see `_loadorder.compute_load_order` and
 
 from __future__ import annotations
 
+import copy
 import re
 
 from collections import defaultdict
@@ -157,6 +164,27 @@ class RemovedFirst:
 
 
 @dataclass
+class GuardedOff:
+    """A `<diff>` op whose `if=` guard is FALSE when its mod loads (issue #8).
+
+    `_merge.apply_diff` -- the merge model every other tool trusts -- evaluates `if=`
+    against the tree as it stands when the op applies (base+DLC, every earlier mod, the
+    earlier ops of the same file) and SKIPS the op when it is false. Such an op changes
+    nothing, so it takes no part in any collision row; it is listed here instead, so the
+    narrowing is ANNOUNCED rather than silent. Not a degraded run: the op was evaluated,
+    and the answer is that it does nothing in this load order.
+    """
+    vpath: str
+    mod: str
+    line: int
+    sel: str
+    guard: str        # as written (`if=...`, plus ` silent` when set)
+    #: Other mods whose live ops on this file target the same node / key (or a node
+    #: inside or around it): the rows this op WOULD have joined had its guard been true.
+    shared_with: list[str] = field(default_factory=list)
+
+
+@dataclass
 class CompatReport:
     collisions: list[Collision] = field(default_factory=list)
     mods_scanned: int = 0
@@ -182,6 +210,8 @@ class CompatReport:
     order_misses: list[OrderMiss] = field(default_factory=list)
     #: Ops inside a node an EARLIER mod removed -- see `RemovedFirst`.
     removed_first: list[RemovedFirst] = field(default_factory=list)
+    #: Ops whose `if=` guard is false at their load position -- see `GuardedOff`.
+    guarded_off: list[GuardedOff] = field(default_factory=list)
     #: WHICH roots were scanned, in words -- "" means every configured extensions root
     #: (the set the engine loads). An --ext-dir run scans that folder ONLY and says so
     #: here, because a mod in another root is then absent with nothing else to show it.
@@ -425,8 +455,10 @@ def _analyze_vpath(
     unmatched: dict[str, list[etree._Element]] = defaultdict(list)  # AN-10 candidates
     ops_at: dict[str, dict[str, list[etree._Element]]] = defaultdict(
         lambda: defaultdict(list))                    # folder -> {cid: [ops]} (AN-5)
+    ordered = sorted(mod_folders, key=lambda f: rank[f])
 
-    for folder in sorted(mod_folders, key=lambda f: rank[f]):
+    read: list[tuple[str, etree._Element]] = []
+    for folder in ordered:
         mod_vpath = at.get(folder, vpath)
         # `overlay_root` RAISES on a malformed document for a caller that passes no
         # `skipped` list -- its "NO CHANNEL, NO SWALLOW" rule, which its
@@ -460,6 +492,31 @@ def _analyze_vpath(
                     "the mod lists this file but it could not be read or parsed, so "
                     "this mod took no part in the comparison")
             continue
+        read.append((folder, root))
+
+    # Issue #8: an `if=` guard is evaluated where the engine evaluates it -- on the tree
+    # as it stands when the op applies. FALSE: the op does nothing, so it joins no row
+    # (it is announced in `guarded_off` instead). TRUE: it participates, and every row
+    # it joins says the answer depends on this load order. UNEVALUATED: it is KEPT,
+    # labelled, and announced -- an unevaluable guard is never read as false.
+    full: dict[str, etree._Element | None] = {}
+
+    def full_tree() -> etree._Element | None:
+        """The finished tree over every mod on this file -- built ONCE and shared by
+        the guard pass and the AN-10 pass, which both self-check against it."""
+        if "t" not in full:
+            full["t"] = _prefix_tree(vpath, ordered, folder_to_path, config)
+        return full["t"]
+
+    outcomes: dict[tuple[str, int], tuple[str, str]] = {}
+    if base_tree is not None:
+        outcomes = _guard_outcomes(vpath, ordered,
+                                   {f: r for f, r in read if r.tag == "diff"},
+                                   folder_to_path, config, full_tree=full_tree)
+    notes: dict[tuple[str, str], list[str]] = defaultdict(list)  # (folder, cid|key)
+    off: list[tuple[str, etree._Element, list[str], list[str]]] = []  # guarded off
+
+    for folder, root in read:
         if root.tag == "diff":
             if base_tree is None:
                 if report is not None and folder not in no_base_reported:
@@ -474,17 +531,40 @@ def _analyze_vpath(
             node_map: dict[str, list[str]] = defaultdict(list)
             child_map: dict[str, list[str]] = defaultdict(list)
             doc_keys: set[str] = set()
-            for op in root:
-                if not isinstance(op.tag, str) or op.tag not in _OPS:
+            for idx, op in enumerate(_op_list(root)):
+                if op.tag not in _OPS:
                     continue
+                sel = op.get("sel", "")
+                state, why = ((outcomes.get((folder, idx))
+                               or (_G_UNEVAL, "the guard was not evaluated"))
+                              if op.get("if") else ("", ""))
+                if state == _G_FALSE:
+                    # The engine skips it before ever reading sel=, so an invalid sel=
+                    # here is not a NOT CHECKED op either. It stays an AN-10 candidate:
+                    # when its target is one only a LATER mod adds, the order-miss
+                    # disclosure still names that mod (marked guarded, as before).
+                    cids = _resolve_op_targets(base_tree, sel)
+                    if cids == []:
+                        unmatched[folder].append(op)
+                    off.append((folder, op, cids or [],
+                                _added_child_keys(op) if op.tag == "add" else []))
+                    continue
+                note = _guard_note(folder, op, state, why) if state else ""
+                if state == _G_UNEVAL and report is not None:
+                    report.skip(f"{folder} at {vpath}:{op.sourceline or 0}",
+                                _guard_skip_why(op, why))
                 # Document-wide registry keys (F12): the engine's uniqueness is
                 # per-DOCUMENT (WareDB/GroupDB import), but the same-anchor check
                 # below only compares adds under one parent cid — two mods adding
-                # the same ware anchored at DIFFERENT siblings never met. Guarded
-                # adds are designed conditionals and contribute nothing.
-                if op.tag == "add" and not op.get("if"):
-                    doc_keys.update(_added_child_keys(op))
-                sel = op.get("sel", "")
+                # the same ware anchored at DIFFERENT siblings never met. A guarded
+                # add takes part exactly when its guard does not switch it off
+                # (issue #8: it used to be excluded outright, so a TRUE guard was a
+                # false negative).
+                if op.tag == "add":
+                    for k in _added_child_keys(op):
+                        doc_keys.add(k)
+                        if note:
+                            notes[(folder, k)].append(note)
                 # xpath resolution is read-only; resolve against the shared base tree
                 # (no copy) so positional node ids are comparable across mods.
                 cids = _resolve_op_targets(base_tree, sel)
@@ -499,6 +579,8 @@ def _analyze_vpath(
                 for cid in cids:
                     node_map[cid].append(op.tag)
                     ops_at[folder][cid].append(op)
+                    if note:
+                        notes[(folder, cid)].append(note)
                     if op.tag == "add":
                         child_map[cid].extend(_added_child_keys(op))
             if node_map:
@@ -538,6 +620,13 @@ def _analyze_vpath(
     def winner(fs: list[str]) -> str:
         return max(fs, key=lambda f: rank[f])
 
+    def gnote(pairs) -> str:
+        """The guard clauses (issue #8) of the ops behind a row, each once."""
+        out: list[str] = []
+        for pair in pairs:
+            out += [n for n in notes.get(pair, ()) if n not in out]
+        return ("; " + "; ".join(out)) if out else ""
+
     # 1. diff-target node collisions
     node_to_mods: dict[str, dict[str, list[str]]] = defaultdict(dict)
     for folder, nmap in diff_targets.items():
@@ -576,7 +665,7 @@ def _analyze_vpath(
                             vpath, "HARD", cid, holders, last,
                             f"{len(holders)} mods' wildcard {dup} expand to icon ID "
                             f"'{icon_id}' (duplicate); '{last}' loads last -- survivor "
-                            "not engine-measured"))
+                            "not engine-measured" + gnote((f, cid) for f in holders)))
                     if unchecked and (cand_folder is None or cand_folder in providers):
                         unchecked_wild.append(
                             f"{dup} of {', '.join(f for f, _ in unchecked)}")
@@ -593,12 +682,13 @@ def _analyze_vpath(
                 collisions.append(Collision(
                     vpath, "HARD", cid, providers, last,
                     f"{len(providers)} mods add {dup} under the same parent (duplicate); "
-                    f"'{last}' loads last -- survivor not engine-measured"))
+                    f"'{last}' loads last -- survivor not engine-measured"
+                    + gnote((f, cid) for f in providers)))
             collisions.append(Collision(
                 vpath, "SOFT", cid, fs, winner(fs),
                 "multiple mods <add> under the same node (usually coexist)"
                 + (f"; NOT CHECKED: wildcard expansion of {'; '.join(unchecked_wild)}"
-                   if unchecked_wild else "")))
+                   if unchecked_wild else "") + gnote((f, cid) for f in fs)))
         else:
             ops_desc = "; ".join(f"{f}:{'/'.join(per_mod[f])}" for f in fs)
             # AN EARLIER <remove> CAN END THE CONTEST (AUDIT-2026-09-24 AN-5): once a
@@ -610,7 +700,8 @@ def _analyze_vpath(
                 continue
             collisions.append(Collision(
                 vpath, "HARD", cid, fs, winner(fs),
-                f"{ops_desc} — '{winner(fs)}' loads last and wins"))
+                f"{ops_desc} — '{winner(fs)}' loads last and wins"
+                + gnote((f, cid) for f in fs)))
 
     # 2. union-key collisions (two mods define the same registry entry).
     # Since 2026-08-02 diff-ADDED keys participate too (document-wide, any
@@ -657,7 +748,8 @@ def _analyze_vpath(
             continue
         collisions.append(Collision(
             vpath, "UNION-KEY", k, fs, winner(fs),
-            f"same registry entry {k} defined by {len(fs)} mods — '{winner(fs)}' wins"))
+            f"same registry entry {k} defined by {len(fs)} mods — '{winner(fs)}' wins"
+            + gnote((f, k) for f in fs)))
 
     # 3. full-file override collisions
     if len(overriders) >= 2:
@@ -697,7 +789,8 @@ def _analyze_vpath(
                     f"'{a}' loads after '{b}' and replace/removes {w0}, wiping "
                     f"{len(hits)} of '{b}'s change(s) inside it (e.g. {cb0}) — "
                     "load order is the engine's measured order; advisory where this "
-                    "run's load-order notes name an UNMEASURED assumption",
+                    "run's load-order notes name an UNMEASURED assumption"
+                    + gnote([(a, w0)] + [(b, cb) for _w, cb in hits]),
                     wiped_by=a))
 
     # 5. REMOVALS, decided per op at its own load position (AUDIT-2026-09-24 AN-5 and
@@ -713,7 +806,6 @@ def _analyze_vpath(
                 if b != a and rank[b] > rank[a]:
                     inside += [(a, b, cb) for cb in bmap if cb.startswith(w + "/")]
     if (contested or inside) and base_tree is not None:
-        ordered = sorted(mod_folders, key=lambda f: rank[f])
         queries = ([(f, op) for cid, fs, _d, _t in contested for f in fs
                     for op in ops_at[f][cid]]
                    + [(b, op) for _a, b, cb in inside for op in ops_at[b][cb]])
@@ -728,7 +820,8 @@ def _analyze_vpath(
                     vpath, "HARD", cid, fs, w,
                     f"{ops_desc} — '{w}' REMOVES this node, and the later op(s) from "
                     f"{', '.join(repr(f) for f in dead) or 'no mod'} match nothing when "
-                    "they load, so the engine skips them: the removal is what is live",
+                    "they load, so the engine skips them: the removal is what is live"
+                    + gnote((f, cid) for f in fs),
                     removed_by=w))
             else:
                 gone = [f for f in fs if rank[f] < rank[w] and "remove" in tags[f]]
@@ -738,7 +831,7 @@ def _analyze_vpath(
                     f"but it exists again when '{w}' loads (another mod re-supplies it), "
                     f"so '{w}' applies and wins"
                     + (f"; later op(s) from {', '.join(repr(f) for f in dead)} match "
-                       "nothing" if dead else "")))
+                       "nothing" if dead else "") + gnote((f, cid) for f in fs)))
         if report is not None:
             seen: set[tuple[str, int]] = set()
             for a, b, cb in inside:
@@ -749,11 +842,38 @@ def _analyze_vpath(
                     report.removed_first.append(RemovedFirst(
                         vpath, b, op.sourceline or 0, op.get("sel", ""), a, _guard(op)))
 
+    if report is not None:
+        for folder, op, cids, keys in off:
+            report.guarded_off.append(GuardedOff(
+                vpath, folder, op.sourceline or 0, op.get("sel", ""), _guard(op),
+                _would_share(folder, op.tag, cids, keys, diff_targets, key_to_mods, rank)))
+
     if report is not None and unmatched and base_tree is not None:
         report.order_misses.extend(_order_misses(
-            vpath, sorted(mod_folders, key=lambda f: rank[f]), unmatched,
-            folder_to_path, config, only=cand_folder))
+            vpath, ordered, unmatched, folder_to_path, config, only=cand_folder,
+            full_tree=full_tree))
     return collisions
+
+
+def _would_share(folder: str, tag: str, cids: list[str], keys: list[str],
+                 diff_targets: dict[str, dict[str, list[str]]],
+                 key_to_mods: dict[str, list[str]], rank: dict[str, int]) -> list[str]:
+    """The other mods a guarded-off op WOULD have met (issue #8), in load order: a live
+    op on the same node; for a replace/remove also one inside or around it (SUBTREE);
+    for an add, a mod defining one of its child keys (the document-wide pass). An add's
+    anchor is compared by equality only -- every op in a file sits inside its root."""
+    near = set()
+    for f, nmap in diff_targets.items():
+        if f == folder:
+            continue
+        for c in cids:
+            if c in nmap or (tag != "add" and any(
+                    n.startswith(c + "/") or c.startswith(n + "/") for n in nmap)):
+                near.add(f)
+                break
+    for k in keys:
+        near.update(f for f in key_to_mods.get(k, ()) if f != folder)
+    return sorted(near, key=lambda f: rank[f])
 
 
 def _matches(tree: etree._Element | None, sel: str) -> bool:
@@ -776,6 +896,125 @@ def _guard(op: etree._Element) -> str:
     return " ".join(parts)
 
 
+# --- issue #8: `if=` guards, evaluated where the engine evaluates them ----------------
+
+_G_TRUE, _G_FALSE, _G_UNEVAL = "TRUE", "FALSE", "UNEVALUATED"
+
+
+def _op_list(root: etree._Element) -> list[etree._Element]:
+    """The children `_merge.apply_diff` returns one verdict for, in order: every element
+    (comments and PIs are skipped there without a verdict, so they are skipped here)."""
+    return [o for o in root if isinstance(o.tag, str)]
+
+
+def _verdicts(ops: list[etree._Element],
+              applied: list) -> dict[int, tuple[str, str]] | None:
+    """`{op index: (state, reason)}` for every op carrying `if=`, read off
+    `_merge.apply_diff`'s verdicts; **None** when the two lists cannot be paired (the
+    caller must then treat every guard as UNEVALUATED, never as false)."""
+    if len(applied) != len(ops):
+        return None
+    out: dict[int, tuple[str, str]] = {}
+    for i, (op, a) in enumerate(zip(ops, applied)):
+        if not op.get("if"):
+            continue
+        if a.skipped_if:
+            out[i] = (_G_FALSE, "")
+        elif a.detail.startswith("invalid if="):
+            out[i] = (_G_UNEVAL, "the if= is not valid XPath ("
+                      + a.detail.split(": ", 1)[-1] + ")")
+        else:
+            out[i] = (_G_TRUE, "")
+    return out
+
+
+def _verdicts_at(vpath: str, folder: str, root: etree._Element, earlier: list[str],
+                 folder_to_path: dict[str, Path],
+                 config: _merge.Config) -> dict[int, tuple[str, str]]:
+    """The REBUILD form: apply *root* to a copy of the tree built from base+DLC and the
+    *earlier* mods, exactly as Tier B pairs `apply_diff` verdicts with ops. Every guard it
+    cannot answer comes back UNEVALUATED with the reason -- never silently false."""
+    guarded = [i for i, o in enumerate(_op_list(root)) if o.get("if")]
+    tree = _prefix_tree(vpath, earlier, folder_to_path, config)
+    if tree is None:
+        why = "no tree could be built at its load position to evaluate the guard against"
+        return {i: (_G_UNEVAL, why) for i in guarded}
+    ops = _op_list(root)
+    got = _verdicts(ops, _merge.apply_diff(copy.deepcopy(tree), root, source=folder))
+    if got is None:
+        why = f"the merge model's verdicts could not be paired with the {len(ops)} ops"
+        return {i: (_G_UNEVAL, why) for i in guarded}
+    return got
+
+
+def _guard_outcomes(vpath: str, ordered: list[str], roots: dict[str, etree._Element],
+                    folder_to_path: dict[str, Path], config: _merge.Config,
+                    full_tree=None) -> dict[tuple[str, int], tuple[str, str]]:
+    """`{(folder, op index): (state, reason)}` for every `if=`-guarded op in *roots*
+    (folder -> its `<diff>` root on *vpath*), each evaluated by `_merge.apply_diff` on
+    the tree as it stands when that op applies: base+DLC, every mod loading earlier,
+    and the earlier ops of its own file.
+
+    Costs nothing when no op carries `if=`. Otherwise ONE incremental pass
+    (`_walk_positions`, which applies each `<diff>` with `apply_diff` directly -- what
+    `apply_overlay` does for a diff on an existing tree -- and is CHECKED against
+    `build_effective`); a nested (mod-owned) vpath, a failed self-check or a file the
+    pass did not apply falls back to rebuilding the tree at each guarded mod's position.
+    Keyed by op INDEX, never `id(op)`: the pass parses its own copy of each file.
+    *full_tree* (a zero-argument callable) supplies the self-check's finished tree
+    when the caller already has, or will need, one.
+    """
+    want = {f for f, r in roots.items() if any(o.get("if") for o in _op_list(r))}
+    if not want:
+        return {}
+    got: dict[tuple[str, int], tuple[str, str]] = {}
+    seen: set[str] = set()
+
+    def on_applied(pos, oroot, applied):
+        folder = ordered[pos]
+        if folder not in want:
+            return
+        v = _verdicts(_op_list(oroot), applied)
+        # Unpaired, or not the op list the rows are built from: this folder is
+        # left out of `seen`, so the rebuild below answers it instead.
+        if v is None or len(_op_list(oroot)) != len(_op_list(roots[folder])):
+            return
+        seen.add(folder)
+        got.update({(folder, i): sv for i, sv in v.items()})
+
+    want_tree = None
+    if full_tree is not None and not (config.overlays or _merge._nested_target(
+            vpath, config.packed_dlc_names()) is not None):
+        want_tree = full_tree()         # the walk refuses those two shapes unbuilt
+    if not _walk_positions(vpath, ordered, folder_to_path, config,
+                           lambda *_a: None, want=want_tree, on_applied=on_applied):
+        got.clear()
+        seen.clear()
+    for folder in sorted(want - seen, key=ordered.index):
+        v = _verdicts_at(vpath, folder, roots[folder], ordered[:ordered.index(folder)],
+                         folder_to_path, config)
+        got.update({(folder, i): sv for i, sv in v.items()})
+    return got
+
+
+def _guard_note(folder: str, op: etree._Element, state: str, why: str) -> str:
+    """The row-detail clause a TRUE or UNEVALUATED guard adds (issue #8)."""
+    g = _guard(op)
+    if state == _G_TRUE:
+        return (f"({folder}'s op guarded `{g}`: TRUE at its load position -- depends on "
+                "this run's load order)")
+    tail = ("the merge model skips an invalid if=, engine behaviour UNMEASURED"
+            if why.startswith("the if= is not valid") else
+            "kept in the comparison as if it applies")
+    return f"({folder}'s op guarded `{g}`: guard UNEVALUATED: {why}; {tail})"
+
+
+def _guard_skip_why(op: etree._Element, why: str) -> str:
+    return (f"its guard `{_guard(op)}` could not be evaluated ({why}), so the op was KEPT "
+            "in the comparison as if it applies; the merge model skips an invalid if=, "
+            "and what the engine does is UNMEASURED")
+
+
 def _xp_hit(tree: etree._Element | None, sel: str,
             cache: dict[str, "etree.XPath | None"]) -> bool:
     """Does *sel* select at least one node of *tree*? Compiled once per selector."""
@@ -796,7 +1035,7 @@ def _xp_hit(tree: etree._Element | None, sel: str,
 
 def _walk_positions(vpath: str, ordered: list[str], folder_to_path: dict[str, Path],
                     config: _merge.Config, visit,
-                    want: etree._Element | None = None) -> bool:
+                    want: etree._Element | None = None, on_applied=None) -> bool:
     """ONE INCREMENTAL PASS over the mods on one file, calling
     ``visit(pos, tree, applied)`` with the tree as it stands BEFORE (applied=False) and
     AFTER (applied=True) ``ordered[pos]`` loads. N applies, not a rebuild per question.
@@ -808,6 +1047,11 @@ def _walk_positions(vpath: str, ordered: list[str], folder_to_path: dict[str, Pa
     as `build_effective` over the same mods (*want*, built here if not given). False --
     unsupported shape (a nested, mod-owned vpath), unbuildable, or a drifted pass --
     means every answer `visit` saw must be discarded and re-derived by rebuilding.
+
+    *on_applied* (issue #8): when given, a `<diff>` on an existing tree is applied with
+    `_merge.apply_diff` directly -- exactly what `apply_overlay` does for that case -- and
+    ``on_applied(pos, oroot, verdicts)`` receives its per-op verdicts. The self-check
+    covers this path too; a False return discards the verdicts as well.
     """
     if (config.overlays
             or _merge._nested_target(vpath, config.packed_dlc_names()) is not None):
@@ -823,9 +1067,14 @@ def _walk_positions(vpath: str, ordered: list[str], folder_to_path: dict[str, Pa
         odir = folder_to_path[folder]
         oroot = _merge.overlay_root(odir, vpath, [])
         if oroot is not None and not (oroot.tag == "diff" and not from_game):
-            tree, mode = _merge.apply_overlay(tree, oroot, vpath, odir.name)
-            if mode in ("union", "full"):
-                owners.append(odir.name)
+            # (`tree` is never None here: a diff only reaches this line over a
+            # game base, which `build_effective` returned as a tree.)
+            if on_applied is not None and oroot.tag == "diff":
+                on_applied(pos, oroot, _merge.apply_diff(tree, oroot, source=odir.name))
+            else:
+                tree, mode = _merge.apply_overlay(tree, oroot, vpath, odir.name)
+                if mode in ("union", "full"):
+                    owners.append(odir.name)
         for owner in owners:
             if odir.name.lower() == owner.lower():
                 continue
@@ -885,8 +1134,10 @@ def _order_misses(vpath: str, ordered: list[str],
                   unmatched: dict[str, list[etree._Element]],
                   folder_to_path: dict[str, Path],
                   config: _merge.Config,
-                  only: str | None = None) -> list[OrderMiss]:
+                  only: str | None = None, full_tree=None) -> list[OrderMiss]:
     """Ops that match nothing in base but WOULD match once a LATER mod has loaded.
+
+    *full_tree*: as `_guard_outcomes` -- the finished tree, shared rather than rebuilt.
 
     Answered in ONE incremental pass per file (`_walk_positions`). The rebuild form,
     `_order_misses_rebuild`, re-merged the whole prefix for every probe: MEASURED on
@@ -922,7 +1173,8 @@ def _order_misses(vpath: str, ordered: list[str],
         pending += [(i, op) for op in ops]
     if not pending:
         return []
-    want = _prefix_tree(vpath, ordered, folder_to_path, config)
+    want = (full_tree() if full_tree is not None
+            else _prefix_tree(vpath, ordered, folder_to_path, config))
     if want is None or config.overlays or _merge._nested_target(
             vpath, config.packed_dlc_names()) is not None:
         return _order_misses_rebuild(vpath, ordered, unmatched, folder_to_path,
@@ -1164,7 +1416,8 @@ def _wildcard_icon_overlaps(
 
 
 def _macro_defs(mod_path: Path) -> dict[str, str]:
-    """`{macro_name_lower: vpath}` for macros this mod DEFINES (not diffs).
+    """`{macro_name_lower: vpath}` for macros this mod DEFINES (not diffs) -- whatever
+    their `if=` guards say (`_name_clashes` evaluates those; see `_macro_def_entries`).
 
     Narrowed to files under a `macros/` directory — the engine-wide convention
     (`assets/.../macros/<name>_macro.xml`) that every observed case follows.
@@ -1172,6 +1425,18 @@ def _macro_defs(mod_path: Path) -> dict[str, str]:
     definitions that do not live there.
     """
     out: dict[str, str] = {}
+    for name, vpath, _root, _idx in _macro_def_entries(mod_path):
+        out.setdefault(name, vpath)
+    return out
+
+
+def _macro_def_entries(
+        mod_path: Path) -> list[tuple[str, str, etree._Element | None, int]]:
+    """Every macro definition of this mod as ``(name_lower, vpath, diff_root, op_index)``
+    in file order. *diff_root* is set only for a definition supplied by an `if=`-GUARDED
+    `<diff>` op (issue #8) -- the caller decides at the mod's load position whether the
+    guard lets it through; for every other definition it is None and *op_index* -1."""
+    out: list[tuple[str, str, etree._Element | None, int]] = []
     for vpath, root in _scan.iter_mod_xml(
             mod_path, lambda v: "/macros/" in v.replace("\\", "/").lower(), None):
         if root.tag == "diff":
@@ -1182,18 +1447,20 @@ def _macro_defs(mod_path: Path) -> dict[str, str]:
             # where VRO's definition arrives exactly that way. Only count a macro
             # the op actually SUPPLIES; a bare `<replace sel=".../@attr">` tweak
             # names no macro and defines nothing.
-            for op in root:
-                if not isinstance(op.tag, str) or op.tag not in ("add", "replace"):
+            for idx, op in enumerate(_op_list(root)):
+                if op.tag not in ("add", "replace"):
                     continue
+                guarded = bool(op.get("if"))
                 for m in op.iter("macro"):
                     name = m.get("name")
                     if name:
-                        out.setdefault(name.lower(), vpath)
+                        out.append((name.lower(), vpath, root if guarded else None,
+                                    idx if guarded else -1))
             continue
         for m in root.iter("macro"):
             name = m.get("name")
             if name:
-                out.setdefault(name.lower(), vpath)
+                out.append((name.lower(), vpath, None, -1))
     return out
 
 
@@ -1212,7 +1479,9 @@ def _strip_nesting(vpath: str) -> str:
 
 
 def _name_clashes(mods: list[dict], rank: dict[str, int],
-                  cand_folder: str | None) -> list[Collision]:
+                  cand_folder: str | None,
+                  config: _merge.Config | None = None,
+                  report: CompatReport | None = None) -> list[Collision]:
     """Macro NAMES defined by 2+ mods in DIFFERENT files.
 
     A collision class the per-vpath scan structurally cannot see: the two mods
@@ -1232,26 +1501,73 @@ def _name_clashes(mods: list[dict], rank: dict[str, int],
     that file is itself patchable. So `winner` is left empty and the detail says
     to resolve it with `x4effective dump index/macros.xml`. Naming a load-order
     winner here would be a confident wrong answer.
+
+    A definition supplied by an `if=`-guarded `<diff>` op (issue #8) counts only when
+    its guard is not FALSE on the file as it stands when its mod loads; a guarded-off
+    one is announced in *report*.guarded_off when it alone kept a clash from showing.
     """
-    defs: dict[str, dict[str, str]] = defaultdict(dict)
+    defs: dict[str, dict[str, list[tuple[str, etree._Element | None, int]]]] = \
+        defaultdict(lambda: defaultdict(list))
+    folder_to_path = {m["folder"]: Path(m["path"]) for m in mods}
     for m in mods:
         folder = m["folder"]
         if folder.lower().startswith("ego_dlc_"):
             continue
-        for name, vpath in _macro_defs(Path(m["path"])).items():
-            defs[name][folder] = vpath
+        for name, vpath, root, idx in _macro_def_entries(Path(m["path"])):
+            defs[name][folder].append((vpath, root, idx))
+
+    ordered = sorted(folder_to_path, key=lambda f: rank.get(f, len(rank)))
+    verdicts: dict[tuple[str, str], dict[int, tuple[str, str]]] = {}
+
+    def verdict(folder, vpath, root, idx) -> tuple[str, str]:
+        if (folder, vpath) not in verdicts:
+            cfg = _owner_aware_config(vpath, folder_to_path, config or _merge.Config())
+            verdicts[(folder, vpath)] = _verdicts_at(
+                vpath, folder, root, ordered[:ordered.index(folder)], folder_to_path, cfg)
+        return verdicts[(folder, vpath)].get(idx, (_G_UNEVAL, "the guard was not evaluated"))
 
     out: list[Collision] = []
-    for name, per_mod in sorted(defs.items()):
-        if len(per_mod) < 2:
+    for name, entries in sorted(defs.items()):
+        if len(entries) < 2:
             continue
         # Compare LOGICAL files. `extensions/<owner>/<rel>` is the nested
         # cross-mod patch form of `<rel>` — the engine merges it INTO the owner's
         # file, so it is the same file, not a rival definition. Without this
         # every cross-mod patch pair looked like a name clash (measured: 57 rows,
         # of which 35 were this).
-        if len({_strip_nesting(v) for v in per_mod.values()}) < 2:
+        if len({_strip_nesting(v) for es in entries.values() for v, _r, _i in es}) < 2:
             continue          # same logical file -> already a file-level collision
+        per_mod: dict[str, str] = {}
+        gnotes: list[str] = []
+        dropped: list[tuple[str, str, etree._Element]] = []
+        for folder, es in entries.items():
+            for vpath, root, idx in es:
+                if root is None:
+                    per_mod.setdefault(folder, vpath)
+                    continue
+                op = _op_list(root)[idx]
+                state, why = verdict(folder, vpath, root, idx)
+                if state == _G_FALSE:
+                    dropped.append((folder, vpath, op))
+                    continue
+                per_mod.setdefault(folder, vpath)
+                note = _guard_note(folder, op, state, why)
+                if note not in gnotes:
+                    gnotes.append(note)
+                if state == _G_UNEVAL and report is not None:
+                    report.skip(f"{folder} at {vpath}:{op.sourceline or 0}",
+                                _guard_skip_why(op, why))
+        # (Two logical files imply two mods: `per_mod` holds one file per mod.)
+        live = len({_strip_nesting(v) for v in per_mod.values()}) >= 2
+        if report is not None:
+            for folder, vpath, op in dropped:
+                if folder in per_mod:
+                    continue      # the mod still defines it elsewhere: nothing narrowed
+                report.guarded_off.append(GuardedOff(
+                    vpath, folder, op.sourceline or 0, op.get("sel", ""), _guard(op),
+                    [f for f in ordered if f in per_mod and f != folder]))
+        if not live:
+            continue
         if cand_folder is not None and cand_folder not in per_mod:
             continue
         folders = sorted(per_mod, key=lambda f: rank.get(f, len(rank)))
@@ -1260,7 +1576,8 @@ def _name_clashes(mods: list[dict], rank: dict[str, int],
             kind="NAME-CLASH", target=name, mods=folders, winner="",
             detail=("same macro name defined in DIFFERENT files; X4 loads only the one "
                     "index/macros.xml points at, so the others are dead. Resolve with "
-                    "`x4effective dump index/macros.xml` — load order does NOT decide this."),
+                    "`x4effective dump index/macros.xml` — load order does NOT decide this."
+                    + ("; " + "; ".join(gnotes) if gnotes else "")),
         ))
     return out
 
@@ -1377,7 +1694,18 @@ def analyze(
 
     # Entity-level pass: same macro NAME, different files. Structurally invisible
     # to the loop above, which keys on vpath.
-    report.collisions.extend(_name_clashes(mods, rank, cand_folder))
+    report.collisions.extend(_name_clashes(mods, rank, cand_folder, config, report))
+    # One record per op (a guarded macro definition can be met by both passes), and in
+    # candidate mode only the ops the candidate takes part in.
+    seen_off: set[tuple[str, str, int]] = set()
+    kept_off: list[GuardedOff] = []
+    for g in report.guarded_off:
+        if (g.vpath, g.mod, g.line) in seen_off:
+            continue
+        seen_off.add((g.vpath, g.mod, g.line))
+        if cand_folder is None or cand_folder == g.mod or cand_folder in g.shared_with:
+            kept_off.append(g)
+    report.guarded_off = kept_off
     return report
 
 
@@ -1462,6 +1790,23 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
                              "the skip is intended")
             lines.append(f"     needs    : {m.added_by}, which loads after it")
         lines.append("")
+    if report.guarded_off:
+        met = [g for g in report.guarded_off if g.shared_with]
+        lines.append(f"=== GUARDED OFF: if= FALSE AT ITS LOAD POSITION  "
+                     f"({len(report.guarded_off)}, {len(met)} would have met another "
+                     "mod) ===")
+        lines.append("  Not a collision: when these ops' mod loads, their if= guard is "
+                     "false, so the")
+        lines.append("  engine skips them and they take part in no row above. Listed: "
+                     "the ones that")
+        lines.append("  would have shared a target with another mod (a different load "
+                     "order can flip a guard).")
+        for g in sorted(met, key=lambda x: (x.vpath, x.mod, x.line)):
+            lines.append(f"  {g.vpath}")
+            lines.append(f"     mod      : {g.mod} (line {g.line})  sel={g.sel}")
+            lines.append(f"     guarded  : {g.guard}")
+            lines.append(f"     would meet: {', '.join(g.shared_with)}")
+        lines.append("")
     hard = report.hard
     if not hard and not shown_any:
         lines.append("No HARD / FULL-OVERRIDE / SUBTREE / UNION-KEY collisions found."
@@ -1487,6 +1832,7 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
                  f"{len(report.by_kind('SOFT'))} soft, "
                  f"{len(report.order_misses)} op(s) needing a later mod, "
                  f"{len(report.removed_first)} op(s) inside an earlier removal, "
+                 f"{len(report.guarded_off)} op(s) guarded off (if= false), "
                  f"{len(report.degraded)} file(s) not analysed.")
     if report.degraded:
         lines.append("DEGRADED: some files yielded no comparison — see NOT ANALYSED "
@@ -1601,6 +1947,9 @@ def main(argv: list[str] | None = None) -> int:
             "skipped": [dataclasses.asdict(s) for s in report.skipped],
             "order_misses": [dataclasses.asdict(m) for m in report.order_misses],
             "removed_first": [dataclasses.asdict(m) for m in report.removed_first],
+            # Issue #8: ops whose if= guard is false at their load position -- they take
+            # part in no collision row, and this says so rather than dropping them quietly.
+            "guarded_off": [dataclasses.asdict(g) for g in report.guarded_off],
             # NOT CHECKED (the text render's own section, above): an op whose sel=
             # could not be evaluated contributed no target and cannot participate in
             # collision detection -- omitting it here made a JSON consumer read
