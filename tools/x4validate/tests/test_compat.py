@@ -1333,3 +1333,89 @@ def test_F276_a_candidate_focus_skips_unchecked_rows_it_is_not_part_of(tmp_path)
     assert not [s for s in rep.skipped if "icon#ship_*" in s.what], rep.skipped
     rep2 = _compat.analyze(ext, candidate=ext / "b_mod", config=cfg)
     assert len(_unchecked(rep2, "b_mod")) == 1, rep2.skipped
+
+
+# F276 (2): the same rule for FULL-FILE shippers -- the UNION-KEY pass.
+
+def _full_icon_mod(ext, folder, textures=(), name="ship_*", texture=None, extra=""):
+    texture = texture if texture is not None else (
+        "extensions\\" + folder + "\\" + _TEX.replace("/", "\\") + "\\*.tga")
+    root = _mod(ext, folder, {"libraries/icons.xml":
+                f'<icons><icon name="{name}" texture="{texture}"/>{extra}</icons>'})
+    for t in textures:
+        p = root / _TEX / t
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"tex")
+    return root
+
+
+def _uk(rep):
+    return sorted((c.target, c.mods, c.winner) for c in rep.by_kind("UNION-KEY"))
+
+
+def test_F276_full_file_overlap_is_a_UNION_KEY_row_per_shared_ID(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _full_icon_mod(ext, "a_mod", ["ship_x_macro.tga", "ship_a_macro.tga"])
+    _full_icon_mod(ext, "b_mod", ["ship_x_macro.gz"])
+    _full_icon_mod(ext, "c_mod", ["ship_c_macro.tga"])
+    rep = _compat.analyze(ext, config=cfg)
+    assert _uk(rep) == [("icon#ship_ship_x_macro", ["a_mod", "b_mod"], "b_mod")], rep.collisions
+    row = rep.by_kind("UNION-KEY")[0]
+    assert "icon#ship_*" in row.detail and rep.skipped == []
+
+
+def test_F276_TWIN_full_file_disjoint_expansions_have_no_row(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _full_icon_mod(ext, "a_mod", ["ship_a_macro.tga"])
+    _full_icon_mod(ext, "b_mod", ["ship_b_macro.tga"])
+    rep = _compat.analyze(ext, config=cfg)
+    assert _uk(rep) == [] and rep.skipped == []
+
+
+def test_F276_full_file_un_enumerable_set_is_announced(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _full_icon_mod(ext, "a_mod", ["ship_x_macro.tga"])
+    _full_icon_mod(ext, "b_mod", [], texture=_TEX.replace("/", "\\") + "\\*.tga")   # bare
+    rep = _compat.analyze(ext, config=cfg)
+    assert _uk(rep) == []
+    un = _unchecked(rep, "b_mod")
+    assert len(un) == 1 and "bare" in un[0].why and not rep.degraded, rep.skipped
+    assert not _unchecked(rep, "a_mod")
+
+
+def test_F276_TWIN_full_file_overlap_still_reports_beside_an_unchecked_shipper(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _full_icon_mod(ext, "a_mod", ["ship_x_macro.tga"])
+    _full_icon_mod(ext, "b_mod", [])
+    _full_icon_mod(ext, "c_mod", ["ship_x_macro.tga"])
+    rep = _compat.analyze(ext, config=cfg)
+    assert _uk(rep) == [("icon#ship_ship_x_macro", ["a_mod", "c_mod"], "c_mod")]
+    assert len(_unchecked(rep, "b_mod")) == 1
+
+
+def test_F276_TWIN_full_file_plain_and_non_icon_keys_keep_their_UNION_KEY_row(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    for f in ("a_mod", "b_mod"):
+        _mod(ext, f, {"libraries/icons.xml":
+             '<icons><icon name="ship_plain" texture="x.tga"/>'
+             '<other name="thing_*"/></icons>'})
+    rep = _compat.analyze(ext, config=cfg)
+    assert [t for t, _, _ in _uk(rep)] == ["icon#ship_plain", "other#thing_*"], rep.collisions
+
+
+def test_F276_full_file_candidate_focus_announces_only_its_own_rows(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _full_icon_mod(ext, "a_mod", ["ship_x_macro.tga"])
+    _full_icon_mod(ext, "b_mod", [])
+    _mod(ext, "c_cand", {"libraries/icons.xml":
+         '<icons><icon name="ship_c" texture="c.tga"/></icons>'})
+    rep = _compat.analyze(ext, candidate=ext / "c_cand", config=cfg)
+    assert not [s for s in rep.skipped if "icon#ship_*" in s.what], rep.skipped
+    rep2 = _compat.analyze(ext, candidate=ext / "b_mod", config=cfg)
+    assert len(_unchecked(rep2, "b_mod")) == 1, rep2.skipped

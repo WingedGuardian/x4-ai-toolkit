@@ -16,7 +16,8 @@ actual merge semantics:
   duplicate survives is not engine-measured). A wildcard icon key (``icon#ship_*``) is
   compared by its EXPANSION instead -- one ID per matching texture file, loose and
   packed -- so only an ID two expansions share is HARD; a texture set that cannot be
-  enumerated is announced as NOT CHECKED (F276).
+  enumerated is announced as NOT CHECKED (F276). Full union files declaring one wildcard
+  are compared the same way, as one UNION-KEY row per shared expanded ID.
 - Two non-diff full files at the same non-union path FULL-OVERRIDE (later clobbers).
 
 Load order (who wins): the engine's MEASURED order -- case-insensitive folder order,
@@ -412,6 +413,7 @@ def _analyze_vpath(
     diff_targets: dict[str, dict[str, list[str]]] = {}   # folder -> {node_id: [tags]}
     add_child_keys: dict[str, dict[str, list[str]]] = {}  # folder -> {parent_id: [childkeys]}
     union_keys: dict[str, set[str]] = {}
+    union_roots: dict[str, etree._Element] = {}   # folder -> its full union file (F276)
     diff_add_doc_keys: dict[str, set[str]] = {}  # folder -> doc-wide added keys (F12)
     overriders: list[str] = []
     no_base_reported: set[str] = set()  # one skip per mod, not one per op
@@ -506,6 +508,7 @@ def _analyze_vpath(
                     if "*" not in k and not _TEXTREF_KEY.search(k)}
         elif is_union and base_tree is not None and root.tag == base_tree.tag:
             union_keys[folder] = _child_keys(root)
+            union_roots[folder] = root
         elif vpath.lower() not in _PER_EXTENSION_FILES:
             overriders.append(folder)
 
@@ -546,7 +549,10 @@ def _analyze_vpath(
                     # logs a duplicate only where two expansions share an ID -- so the
                     # comparison is per expanded ID, never per declared key.
                     shared, unchecked = _wildcard_icon_overlaps(
-                        dup, cid, providers, ops_at, folder_to_path)
+                        dup, {f: _icon_decls([op for op in ops_at.get(f, {}).get(cid, [])
+                                              if op.tag == "add"], dup.split("#", 1)[1])
+                              for f in providers},
+                        folder_to_path)
                     # Not entered in hard_dup_keys: an expanded ID is not a declared key,
                     # so no UNION-KEY row is the same fact as this one.
                     for icon_id, holders in shared:
@@ -613,6 +619,27 @@ def _analyze_vpath(
         if len(fs_) < 2 or set(fs_) <= hard_dup_keys.get(k, set()):
             continue
         fs = sorted(fs_, key=lambda f: rank[f])
+        if _is_wildcard_icon(k):
+            # F276, full-file shippers: as for same-parent adds, the engine compares the
+            # EXPANDED IDs, so a row is due only for an ID two expansions share. Wildcard
+            # keys reach here only from full union files (the diff-add doc keys drop them).
+            name = k.split("#", 1)[1]
+            shared, unchecked = _wildcard_icon_overlaps(
+                k, {f: (_icon_decls([union_roots[f]], name) if f in union_roots else [None])
+                    for f in fs},
+                folder_to_path)
+            for icon_id, holders in shared:
+                collisions.append(Collision(
+                    vpath, "UNION-KEY", f"icon#{icon_id}", holders, winner(holders),
+                    f"same icon ID '{icon_id}' from wildcard {k} of {len(holders)} mods "
+                    f"— '{winner(holders)}' wins"))
+            if report is not None and (cand_folder is None or cand_folder in fs):
+                for f, why in unchecked:
+                    report.skip(
+                        f"{f}: wildcard {k} at {vpath}",
+                        f"its texture set could not be enumerated ({why}), so whether its "
+                        f"expansion duplicates another mod's {k} expansion is NOT CHECKED")
+            continue
         collisions.append(Collision(
             vpath, "UNION-KEY", k, fs, winner(fs),
             f"same registry entry {k} defined by {len(fs)} mods — '{winner(fs)}' wins"))
@@ -1082,25 +1109,30 @@ def _wildcard_icon_ids(name: str, texture: str,
     return ids, ""
 
 
+def _icon_decls(parents, name: str) -> list[str | None]:
+    """``texture=`` of every ``<icon>`` keyed *name* among the children of *parents*
+    (the ``<add>`` ops of a diff, or a full file's root); ``None`` where it is absent."""
+    return [child.get("texture") for parent in parents for child in parent
+            if isinstance(child.tag, str) and child.tag == "icon"
+            and (child.get("id") or child.get("name")) == name]
+
+
 def _wildcard_icon_overlaps(
-        key: str, parent_id: str, providers: list[str],
-        ops_at: dict[str, dict[str, list[etree._Element]]],
+        key: str, decls: dict[str, list[str | None]],
         folder_to_path: dict[str, Path],
 ) -> tuple[list[tuple[str, list[str]]], list[tuple[str, str]]]:
     """F276: compare the providers of a duplicated wildcard icon *key* by EXPANSION.
 
-    Returns ``(shared, unchecked)``: ``shared`` = ``[(icon_id, holders in load order)]`` for
-    every expanded ID two or more providers' expansions contain; ``unchecked`` =
-    ``[(provider, reason)]`` for each declaration whose texture set could not be enumerated
-    (its IDs, if another declaration of the same provider expanded, still take part)."""
+    *decls* maps each provider, IN LOAD ORDER, to the ``texture=`` of its declarations
+    of *key* (see :func:`_icon_decls`). Returns ``(shared, unchecked)``: ``shared`` =
+    ``[(icon_id, holders in load order)]`` for every expanded ID two or more providers'
+    expansions contain; ``unchecked`` = ``[(provider, reason)]`` for each declaration
+    whose texture set could not be enumerated (its IDs, if another declaration of the
+    same provider expanded, still take part)."""
     name = key.split("#", 1)[1]
     holders: dict[str, list[str]] = {}
     unchecked: list[tuple[str, str]] = []
-    for f in providers:                             # load order, kept in `holders`
-        textures = [child.get("texture") for op in ops_at.get(f, {}).get(parent_id, [])
-                    if op.tag == "add" for child in op
-                    if isinstance(child.tag, str) and child.tag == "icon"
-                    and (child.get("id") or child.get("name")) == name]
+    for f, textures in decls.items():               # load order, kept in `holders`
         for tex in textures:
             if tex is None:
                 unchecked.append((f, "the declaration has no texture= attribute"))
