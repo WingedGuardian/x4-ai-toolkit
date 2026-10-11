@@ -418,23 +418,43 @@ def test_same_anchor_duplicate_stays_hard_only(tmp_path):
     assert not [c for c in rep.by_kind("UNION-KEY") if "dupware" in c.target]
 
 
-def test_wildcard_and_guarded_adds_do_not_join_the_docwide_pass(tmp_path):
-    """icon#upgrade_* style wildcard entries are the generic-icon idiom (32 of
-    37 measured document-wide duplicates, zero engine complaints), and an
-    if=-guarded add is a designed conditional."""
+def _docwide_guard_world(tmp_path, guard):
     cfg = _setup_ref(tmp_path)
     ext = tmp_path / "extensions"
     _mod(ext, "a_mod", {"libraries/wares.xml":
          '<diff><add sel="/wares"><ware id="upgrade_*"/></add>'
-         '<add sel="//ware[@id=\'ore\']" pos="after" if="not(//ware[@id=\'g\'])">'
+         f'<add sel="//ware[@id=\'ore\']" pos="after" if="{guard}">'
          '<ware id="guarded_ware"/></add></diff>'})
     _mod(ext, "b_mod", {"libraries/wares.xml":
          '<diff><add sel="//ware[@id=\'ice\']" pos="after"><ware id="upgrade_*"/></add>'
-         '<add sel="/wares" if="not(//ware[@id=\'g\'])">'
+         f'<add sel="/wares" if="{guard}">'
          '<ware id="guarded_ware"/></add></diff>'})
-    rep = _compat.analyze(ext, config=cfg)
+    return _compat.analyze(ext, config=cfg)
+
+
+def test_wildcard_adds_do_not_join_the_docwide_pass_and_guarded_ones_follow_their_guard(
+        tmp_path):
+    """icon#upgrade_* style wildcard entries are the generic-icon idiom (32 of
+    37 measured document-wide duplicates, zero engine complaints).
+
+    CHANGED for issue #8 (user-approved fold-in): an if=-guarded add used to be
+    excluded outright as "a designed conditional", so two mods whose guards were both
+    TRUE -- here `not(//ware[@id='g'])`, true at both positions -- adding the same
+    ware were a false negative: both adds apply and the engine sees the duplicate. A
+    guarded add now joins exactly when its guard is not FALSE at its load position,
+    and the row says the answer depends on this load order. The FALSE twin is below."""
+    rep = _docwide_guard_world(tmp_path, "not(//ware[@id='g'])")
+    assert not [c for c in rep.by_kind("UNION-KEY") if "upgrade" in c.target]
+    uk = [c for c in rep.by_kind("UNION-KEY") if c.target == "ware#guarded_ware"]
+    assert len(uk) == 1 and uk[0].mods == ["a_mod", "b_mod"], rep.collisions
+    assert "TRUE at its load position" in uk[0].detail
+
+
+def test_TWIN_guarded_adds_whose_guard_is_FALSE_stay_out_of_the_docwide_pass(tmp_path):
+    rep = _docwide_guard_world(tmp_path, "//ware[@id='g']")
     assert not [c for c in rep.by_kind("UNION-KEY")
-                if "upgrade" in c.target or "guarded" in c.target]
+                if "upgrade" in c.target or "guarded" in c.target], rep.collisions
+    assert sorted(g.mod for g in rep.guarded_off) == ["a_mod", "b_mod"]
 
 
 # --------------------------------------------------------------------------
@@ -1419,3 +1439,343 @@ def test_F276_full_file_candidate_focus_announces_only_its_own_rows(tmp_path):
     assert not [s for s in rep.skipped if "icon#ship_*" in s.what], rep.skipped
     rep2 = _compat.analyze(ext, candidate=ext / "b_mod", config=cfg)
     assert len(_unchecked(rep2, "b_mod")) == 1, rep2.skipped
+
+
+# --- issue #8: an op whose `if=` guard is FALSE at its load position does nothing ----
+#
+# `_merge.apply_diff` evaluates `if=` against the tree as it stands when the op applies
+# (base+DLC, every earlier mod, earlier ops of the same file) and skips the op when it is
+# false. x4compat resolved every op's sel= against the base alone and never looked at the
+# guard, so a guarded-off op was reported as colliding -- and could be named the winner.
+
+_ORE_AVG = "//ware[@id='ore']/price/@average"
+
+
+def _rep(tmp_path, *mods, candidate=None):
+    """*mods* = (folder, diff-body) pairs on libraries/wares.xml."""
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    for folder, body in mods:
+        _mod(ext, folder, {"libraries/wares.xml": f"<diff>{body}</diff>"})
+    return _compat.analyze(ext, candidate=(ext / candidate) if candidate else None,
+                           config=cfg)
+
+
+def _set(v, guard=None, sel=_ORE_AVG):
+    g = f' if="{guard}"' if guard is not None else ""
+    return f'<replace sel="{sel}"{g}>{v}</replace>'
+
+
+def _off(rep):
+    return [(g.mod, g.guard) for g in rep.guarded_off]
+
+
+def test_8_issue_fixture_a_guarded_off_op_is_not_a_HARD_collision(tmp_path):
+    rep = _rep(tmp_path, ("aaa_setter", _set(100)), ("bbb_guarded", _set(999, "false()")))
+    assert rep.by_kind("HARD") == [], rep.collisions
+    assert _off(rep) == [("bbb_guarded", "if=false()")]
+    assert rep.guarded_off[0].shared_with == ["aaa_setter"]
+
+
+def test_8_TWIN_the_unguarded_control_is_HARD_won_by_ccc(tmp_path):
+    rep = _rep(tmp_path, ("aaa_setter", _set(100)), ("ccc_unguarded", _set(999)))
+    hard = rep.by_kind("HARD")
+    assert len(hard) == 1 and hard[0].winner == "ccc_unguarded", rep.collisions
+    assert rep.guarded_off == []
+
+
+def test_8_a_guard_false_on_the_EARLIER_mod_removes_it_too(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1, "false()")), ("b_mod", _set(2)))
+    assert rep.by_kind("HARD") == [], rep.collisions
+    assert _off(rep) == [("a_mod", "if=false()")]
+
+
+def test_8_a_TRUE_guard_keeps_the_row_and_says_it_depends_on_load_order(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1)), ("b_mod", _set(2, "true()")))
+    hard = rep.by_kind("HARD")
+    assert len(hard) == 1 and hard[0].winner == "b_mod", rep.collisions
+    assert "b_mod's op guarded `if=true()`: TRUE at its load position" in hard[0].detail
+    assert "depends on this run's load order" in hard[0].detail
+    assert rep.guarded_off == []
+
+
+def test_8_the_guard_is_read_at_the_LOAD_POSITION_not_against_the_base(tmp_path):
+    """True against the base (average=100), false once a_mod (loading first) set 200."""
+    rep = _rep(tmp_path, ("a_mod", _set(200)),
+               ("b_mod", _set(2, "//ware[@id='ore']/price[@average='100']")))
+    assert rep.by_kind("HARD") == [], rep.collisions
+    assert [g.mod for g in rep.guarded_off] == ["b_mod"]
+
+
+def test_8_TWIN_the_load_position_guard_TRUE_only_after_the_earlier_mod(tmp_path):
+    """False against the base, true once a_mod set 200: participates."""
+    rep = _rep(tmp_path, ("a_mod", _set(200)),
+               ("b_mod", _set(2, "//ware[@id='ore']/price[@average='200']")))
+    hard = rep.by_kind("HARD")
+    assert len(hard) == 1 and hard[0].winner == "b_mod", rep.collisions
+    assert "TRUE at its load position" in hard[0].detail
+
+
+def test_8_an_earlier_op_in_the_SAME_file_is_seen_by_the_guard(tmp_path):
+    """b_mod's own first op sets @average=300; its guarded second op (on the SAME node)
+    requires average=100, which the base has -- false once its own first op ran."""
+    rep = _rep(tmp_path, ("a_mod", _set(1, sel="//ware[@id='ore']/price/@min")),
+               ("b_mod", _set(300)
+                + _set(2, "//ware[@id='ore']/price[@average='100']",
+                       sel="//ware[@id='ore']/price/@min")))
+    assert rep.by_kind("HARD") == [], rep.collisions
+    assert [g.mod for g in rep.guarded_off] == ["b_mod"]
+
+
+_ADD_DUP = '<add sel="/wares"{g}><ware id="dupware"/></add>'
+
+
+def test_8_a_guarded_off_duplicate_add_is_neither_HARD_nor_SOFT(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _ADD_DUP.format(g="")),
+               ("b_mod", _ADD_DUP.format(g=' if="false()"')))
+    assert [c.kind for c in rep.collisions] == [], rep.collisions
+    assert _off(rep) == [("b_mod", "if=false()")]
+
+
+def test_8_TWIN_a_TRUE_guarded_duplicate_add_stays_HARD_and_SOFT(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _ADD_DUP.format(g="")),
+               ("b_mod", _ADD_DUP.format(g=' if="true()"')))
+    hard = rep.by_kind("HARD")
+    assert len(hard) == 1 and "dupware" in hard[0].detail, rep.collisions
+    assert "TRUE at its load position" in hard[0].detail
+    assert len(rep.by_kind("SOFT")) == 1
+
+
+_WIPE = '<replace sel="//ware[@id=\'ore\']/price"{g}><price average="5"/></replace>'
+
+
+def test_8_a_guarded_off_WIPER_is_no_SUBTREE(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1)), ("b_mod", _WIPE.format(g=' if="false()"')))
+    assert rep.by_kind("SUBTREE") == [], rep.collisions
+    assert _off(rep) == [("b_mod", "if=false()")]
+    assert rep.guarded_off[0].shared_with == ["a_mod"]
+
+
+def test_8_TWIN_a_TRUE_guarded_WIPER_is_SUBTREE(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1)), ("b_mod", _WIPE.format(g=' if="true()"')))
+    st = rep.by_kind("SUBTREE")
+    assert len(st) == 1 and st[0].wiped_by == "b_mod", rep.collisions
+    assert "TRUE at its load position" in st[0].detail
+
+
+def test_8_a_guarded_off_VICTIM_is_no_SUBTREE(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1, "false()")), ("b_mod", _WIPE.format(g="")))
+    assert rep.by_kind("SUBTREE") == [], rep.collisions
+    assert _off(rep) == [("a_mod", "if=false()")]
+
+
+def test_8_TWIN_a_TRUE_guarded_VICTIM_is_SUBTREE(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1, "true()")), ("b_mod", _WIPE.format(g="")))
+    assert len(rep.by_kind("SUBTREE")) == 1, rep.collisions
+
+
+_RM_PRICE = '<remove sel="//ware[@id=\'ore\']/price"{g}/>'
+_REPL_PRICE = '<replace sel="//ware[@id=\'ore\']/price"{g}><price average="2"/></replace>'
+
+
+def test_8_AN5_a_guarded_off_REMOVE_does_not_end_the_contest(tmp_path):
+    """The remove never happens, so no row claims the node was removed."""
+    rep = _rep(tmp_path, ("a_mod", _RM_PRICE.format(g=' if="false()"')),
+               ("b_mod", _REPL_PRICE.format(g="")))
+    assert rep.by_kind("HARD") == [], rep.collisions
+    assert _off(rep) == [("a_mod", "if=false()")]
+
+
+def test_8_AN5_TWIN_a_TRUE_guarded_REMOVE_is_what_is_live(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _RM_PRICE.format(g=' if="true()"')),
+               ("b_mod", _REPL_PRICE.format(g="")))
+    hard = rep.by_kind("HARD")
+    assert len(hard) == 1 and hard[0].removed_by == "a_mod", rep.collisions
+
+
+def test_8_AN5_a_guarded_off_LATER_writer_is_never_the_winner(tmp_path):
+    """a removes ore, b re-adds it, c replaces it, d's replace is guarded off: the live
+    writer is c. Before the fix d matched at its position and was named winner."""
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_rm", {"libraries/wares.xml": _RM_ORE})
+    _mod(ext, "b_readd", {"libraries/wares.xml": _READD_ORE})
+    _mod(ext, "c_replace", {"libraries/wares.xml": _REPLACE_ORE})
+    _mod(ext, "d_guarded", {"libraries/wares.xml": _REPLACE_ORE.replace(
+        "<replace sel", '<replace if="false()" sel')})
+    hard = [c for c in _compat.analyze(ext, config=cfg).by_kind("HARD")
+            if "a_rm" in c.mods]
+    assert len(hard) == 1, hard
+    assert hard[0].winner == "c_replace" and "d_guarded" not in hard[0].mods, hard[0]
+
+
+def test_8_an_UNEVALUABLE_guard_keeps_the_row_labelled_and_announced(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1)), ("b_mod", _set(2, "//[")))
+    hard = rep.by_kind("HARD")
+    assert len(hard) == 1 and hard[0].winner == "b_mod", rep.collisions
+    assert "guard UNEVALUATED" in hard[0].detail
+    assert "engine behaviour UNMEASURED" in hard[0].detail
+    assert [s for s in rep.skipped if "b_mod" in s.what and "if=" in s.why], rep.skipped
+    assert rep.guarded_off == []
+
+
+def test_8_TWIN_an_evaluable_guard_is_not_announced_as_unevaluated(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1)), ("b_mod", _set(2, "true()")))
+    assert rep.skipped == [] and "UNEVALUATED" not in rep.by_kind("HARD")[0].detail
+
+
+def _nested_world(tmp_path, guard):
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _mod(ext, "owner", {"md/thing.xml": '<mdscript name="t"><cues><cue name="c" x="0"/>'
+                                         '</cues></mdscript>'})
+    rel = "extensions/owner/md/thing.xml"
+    _mod(ext, "p_one", {rel: '<diff><replace sel="//cue/@x">1</replace></diff>'})
+    _mod(ext, "q_two", {rel: f'<diff><replace sel="//cue/@x" if="{guard}">2</replace></diff>'})
+    return _compat.analyze(ext, config=cfg)
+
+
+def test_8_a_NESTED_vpath_evaluates_guards_through_the_rebuild(tmp_path):
+    rep = _nested_world(tmp_path, "false()")
+    assert [c for c in rep.by_kind("HARD") if "q_two" in c.mods] == [], rep.collisions
+    assert _off(rep) == [("q_two", "if=false()")]
+
+
+def test_8_TWIN_a_NESTED_vpath_TRUE_guard_still_collides(tmp_path):
+    hard = [c for c in _nested_world(tmp_path, "true()").by_kind("HARD")
+            if "q_two" in c.mods]
+    assert len(hard) == 1 and hard[0].winner == "q_two", hard
+
+
+def _three_guards(tmp_path):
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    for f, body in (("a_mod", _set(200)),
+                    ("b_mod", _set(2, "//ware[@id='ore']/price[@average='100']")),
+                    ("c_mod", _set(3, "//ware[@id='ore']/price[@average='200']"))):
+        _mod(ext, f, {"libraries/wares.xml": f"<diff>{body}</diff>"})
+    return cfg, ext
+
+
+def test_8_a_drifted_walk_falls_back_and_gives_the_same_answer(tmp_path, monkeypatch):
+    """The incremental pass is CHECKED: a walk whose tree drifts (apply_diff returning
+    the right verdicts without mutating) fails the self-check, its verdicts are
+    discarded, and the per-position rebuild answers -- with the same answer."""
+    import copy
+    import types
+    cfg, ext = _three_guards(tmp_path)
+    built = []
+    real_prefix = _compat._prefix_tree
+    monkeypatch.setattr(_compat, "_prefix_tree",
+                        lambda *a, **k: built.append(1) or real_prefix(*a, **k))
+    drifted = types.SimpleNamespace(**{k: getattr(_merge, k) for k in dir(_merge)
+                                       if not k.startswith("__")})
+    drifted.apply_diff = lambda tree, root, *a, **k: _merge.apply_diff(
+        copy.deepcopy(tree), root, *a, **k)
+    monkeypatch.setattr(_compat, "_merge", drifted)
+    rep = _compat.analyze(ext, config=cfg)
+    assert built, "the drifted walk was trusted: the self-check never fired"
+    assert [g.mod for g in rep.guarded_off] == ["b_mod"]
+    hard = rep.by_kind("HARD")
+    assert len(hard) == 1 and hard[0].mods == ["a_mod", "c_mod"], rep.collisions
+
+
+def test_8_TWIN_an_agreeing_walk_needs_no_rebuild(tmp_path, monkeypatch):
+    cfg, ext = _three_guards(tmp_path)
+    monkeypatch.setattr(_compat, "_prefix_tree",
+                        lambda *a, **k: pytest.fail("rebuilt on an agreeing walk"))
+    rep = _compat.analyze(ext, config=cfg)
+    assert [g.mod for g in rep.guarded_off] == ["b_mod"]
+    assert [c.mods for c in rep.by_kind("HARD")] == [["a_mod", "c_mod"]]
+
+
+def test_8_guarded_off_is_rendered_counted_and_in_JSON(tmp_path, capsys):
+    import json
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _mod(ext, "aaa_setter", {"libraries/wares.xml": f"<diff>{_set(100)}</diff>"})
+    _mod(ext, "bbb_guarded", {"libraries/wares.xml":
+                              f"<diff>{_set(999, 'false()')}</diff>"})
+    args = ["check", "--ext-dir", str(ext), "--reference", str(cfg.reference)]
+    assert _compat.main(args) == 0
+    out = capsys.readouterr().out
+    assert "GUARDED OFF" in out and "bbb_guarded" in out, out
+    assert "1 op(s) guarded off" in out, out
+    assert _compat.main(args + ["--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [g["mod"] for g in payload["guarded_off"]] == ["bbb_guarded"], payload
+
+
+def test_8_TWIN_the_unguarded_control_exits_1(tmp_path, capsys):
+    import json
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _mod(ext, "aaa_setter", {"libraries/wares.xml": f"<diff>{_set(100)}</diff>"})
+    _mod(ext, "ccc_unguarded", {"libraries/wares.xml": f"<diff>{_set(999)}</diff>"})
+    args = ["check", "--ext-dir", str(ext), "--reference", str(cfg.reference), "--json"]
+    assert _compat.main(args) == 1
+    assert json.loads(capsys.readouterr().out)["guarded_off"] == []
+
+
+def test_8_a_candidate_run_keeps_only_guarded_off_ops_it_is_part_of(tmp_path):
+    ice = "//ware[@id='ice']/price/@average"
+    mods = (("a_mod", _set(1)), ("b_mod", _set(2, "false()")),
+            ("c_mod", _set(5, "false()", sel=ice)), ("d_mod", _set(6, sel=ice)))
+    assert [g.mod for g in _rep(tmp_path / "1", *mods, candidate="a_mod").guarded_off] \
+        == ["b_mod"]
+    assert [g.mod for g in _rep(tmp_path / "2", *mods, candidate="d_mod").guarded_off] \
+        == ["c_mod"]
+
+
+_DOCWIDE_A = '<add sel="/wares"><ware id="kware"/></add>'
+_DOCWIDE_B = '<add sel="//ware[@id=\'ore\']" pos="after"{g}><ware id="kware"/></add>'
+
+
+def test_8_UNION_KEY_a_TRUE_guarded_add_joins_the_docwide_pass(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _DOCWIDE_A),
+               ("b_mod", _DOCWIDE_B.format(g=' if="true()"')))
+    uk = [c for c in rep.by_kind("UNION-KEY") if c.target == "ware#kware"]
+    assert len(uk) == 1 and uk[0].mods == ["a_mod", "b_mod"], rep.collisions
+    assert "TRUE at its load position" in uk[0].detail
+
+
+def test_8_UNION_KEY_TWIN_a_FALSE_guarded_add_stays_out(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _DOCWIDE_A),
+               ("b_mod", _DOCWIDE_B.format(g=' if="false()"')))
+    assert not [c for c in rep.by_kind("UNION-KEY") if "kware" in c.target], rep.collisions
+    assert _off(rep) == [("b_mod", "if=false()")]
+    assert rep.guarded_off[0].shared_with == ["a_mod"]
+
+
+def test_8_UNION_KEY_TWIN_an_unevaluable_guarded_add_joins_labelled(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _DOCWIDE_A), ("b_mod", _DOCWIDE_B.format(g=' if="//["')))
+    uk = [c for c in rep.by_kind("UNION-KEY") if c.target == "ware#kware"]
+    assert len(uk) == 1 and "guard UNEVALUATED" in uk[0].detail, rep.collisions
+
+
+def _name_clash_world(tmp_path, guard):
+    cfg = _setup_ref(tmp_path)
+    _w(cfg.reference / "assets/y/macros/m2_macro.xml", '<macros><macro name="m2"/></macros>')
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_mod", {"assets/x/macros/ship_probe_macro.xml": _MACROS})
+    _mod(ext, "b_mod", {"assets/y/macros/m2_macro.xml":
+                        f'<diff><replace sel="//macros" if="{guard}">{_MACROS}</replace></diff>'})
+    return _compat.analyze(ext, config=cfg)
+
+
+def test_8_NAME_CLASH_a_guarded_off_definition_defines_nothing(tmp_path):
+    rep = _name_clash_world(tmp_path, "false()")
+    assert _clashes(rep) == [], rep.collisions
+    assert _off(rep) == [("b_mod", "if=false()")]
+
+
+def test_8_NAME_CLASH_TWIN_a_TRUE_guarded_definition_still_clashes(tmp_path):
+    cl = _clashes(_name_clash_world(tmp_path, "true()"))
+    assert len(cl) == 1 and cl[0].target == "ship_probe_macro", cl
+    assert "TRUE at its load position" in cl[0].detail
+
+
+def test_8_NAME_CLASH_the_guard_is_evaluated_against_the_file(tmp_path):
+    """A guard testing the patched file's content: true and false variants."""
+    assert len(_clashes(_name_clash_world(tmp_path / "t", "//macro[@name='m2']"))) == 1
+    assert _clashes(_name_clash_world(tmp_path / "f", "//macro[@name='zz']")) == []
