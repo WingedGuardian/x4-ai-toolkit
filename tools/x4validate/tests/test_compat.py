@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from x4validate import _compat, _merge
@@ -1095,3 +1097,239 @@ def test_4_TWIN_one_mod_adding_a_key_twice_is_not_a_cross_mod_duplicate(tmp_path
     _adds(ext, "b_mod", "other")
     rep = _compat.analyze(ext, config=cfg)
     assert rep.by_kind("HARD") == [] and len(rep.by_kind("SOFT")) == 1
+
+
+# --- F276: a duplicated WILDCARD icon is compared by its EXPANSION ------------------------
+# The engine expands <icon name="ship_*" texture="extensions\m\dir\*.tga"> into one ID per
+# matching texture file (name's '*' -> the text the texture '*' matched) and logs a
+# duplicate only where two mods' EXPANSIONS overlap (READ, 2026-10-08 engine log:
+# 'ship_ship_arg_xl_battleship_lc4_02_macro' for wildcard 'ship_*' with texture path
+# 'extensions\vro\...\ships/ship_arg_xl_battleship_lc4_02_macro.tga'). Every vanilla and
+# DLC wildcard declares `*.tga` while shipping `.gz` files, so `.gz` is an accepted alias.
+
+_TEX = "assets/fx/gui/textures/ships"
+
+
+def _icons_cfg(tmp_path):
+    ref = tmp_path / "reference"
+    _w(ref / "libraries" / "icons.xml", "<icons/>")
+    return _merge.Config(reference=ref)
+
+
+def _icon_mod(ext, folder, textures=(), name="ship_*", texture=None, packed=False,
+              extra_icons=""):
+    """A mod adding one wildcard icon under /icons, shipping *textures* (file names) in
+    _TEX -- loose by default, or inside an ext_01.cat when *packed*."""
+    texture = texture if texture is not None else (
+        "extensions\\" + folder + "\\" + _TEX.replace("/", "\\") + "\\*.tga")
+    icons = (f'<diff><add sel="/icons"><icon name="{name}" texture="{texture}" '
+             f'height="256" width="256"/>{extra_icons}</add></diff>')
+    if not packed:
+        root = _mod(ext, folder, {"libraries/icons.xml": icons})
+        for t in textures:
+            p = root / _TEX / t
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"tex")
+        return root
+    import hashlib
+    root = ext / folder
+    _w(root / "content.xml", f'<content id="{folder}" name="{folder}" version="1"/>')
+    members = [("libraries/icons.xml", icons.encode("utf-8"))]
+    members += [(f"{_TEX}/{t}", b"tex") for t in textures]
+    lines, blob = [], bytearray()
+    for vpath, data in members:
+        lines.append(f"{vpath} {len(data)} 1700000000 {hashlib.md5(data).hexdigest()}")
+        blob += data
+    (root / "ext_01.cat").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (root / "ext_01.dat").write_bytes(bytes(blob))
+    return root
+
+
+def _wild_hard(rep):
+    return sorted((c.detail, c.mods, c.winner) for c in rep.by_kind("HARD"))
+
+
+def test_F276_overlapping_expansions_are_one_HARD_row_per_shared_ID(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_x_macro.tga", "ship_a_only_macro.tga"])
+    _icon_mod(ext, "b_mod", ["ship_x_macro.tga", "ship_b_only_macro.tga"])
+    rep = _compat.analyze(ext, config=cfg)
+    hard = rep.by_kind("HARD")
+    assert [(c.mods, c.winner) for c in hard] == [(["a_mod", "b_mod"], "b_mod")], hard
+    assert "'ship_ship_x_macro'" in hard[0].detail and "icon#ship_*" in hard[0].detail
+    assert len(rep.by_kind("SOFT")) == 1 and rep.skipped == []
+
+
+def test_F276_TWIN_disjoint_expansions_are_SOFT_only(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_a_macro.tga"])
+    _icon_mod(ext, "b_mod", ["ship_b_macro.tga"])
+    rep = _compat.analyze(ext, config=cfg)
+    assert rep.by_kind("HARD") == [], rep.by_kind("HARD")
+    soft = rep.by_kind("SOFT")
+    assert [c.mods for c in soft] == [["a_mod", "b_mod"]]
+    assert "NOT CHECKED" not in soft[0].detail and rep.skipped == []
+
+
+def test_F276_providers_are_the_mods_whose_expansion_holds_the_ID(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_x_macro.tga"])
+    _icon_mod(ext, "b_mod", ["ship_y_macro.tga"])
+    _icon_mod(ext, "c_mod", ["ship_x_macro.tga"])
+    rep = _compat.analyze(ext, config=cfg)
+    assert [(c.mods, c.winner) for c in rep.by_kind("HARD")] == [(["a_mod", "c_mod"], "c_mod")]
+    assert [c.mods for c in rep.by_kind("SOFT")] == [["a_mod", "b_mod", "c_mod"]]
+
+
+def test_F276_packed_textures_are_enumerated_against_loose_ones(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_packed", ["ship_x_macro.tga"], packed=True)
+    _icon_mod(ext, "b_loose", ["ship_x_macro.tga"])
+    rep = _compat.analyze(ext, config=cfg)
+    assert [c.mods for c in rep.by_kind("HARD")] == [["a_packed", "b_loose"]], rep.skipped
+    assert rep.skipped == []
+
+
+def test_F276_TWIN_packed_disjoint_is_SOFT_only(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_packed", ["ship_a_macro.tga"], packed=True)
+    _icon_mod(ext, "b_packed", ["ship_b_macro.tga"], packed=True)
+    rep = _compat.analyze(ext, config=cfg)
+    assert rep.by_kind("HARD") == [] and rep.skipped == []
+
+
+def test_F276_a_gz_texture_answers_a_tga_pattern(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_x_macro.gz"])
+    _icon_mod(ext, "b_mod", ["ship_x_macro.tga"])
+    rep = _compat.analyze(ext, config=cfg)
+    assert [c.mods for c in rep.by_kind("HARD")] == [["a_mod", "b_mod"]]
+
+
+def test_F276_TWIN_an_unrelated_extension_does_not_answer_a_tga_pattern(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_x_macro.png", "ship_a_macro.tga"])
+    _icon_mod(ext, "b_mod", ["ship_x_macro.tga"])
+    rep = _compat.analyze(ext, config=cfg)
+    assert rep.by_kind("HARD") == []
+
+
+def test_F276_the_ID_substitutes_the_matched_text_not_the_file_stem(tmp_path):
+    """loading_* over screen_*.tga: screen_a.tga is ID loading_a, which collides with a
+    plain *.tga pattern's a.tga -- and NOT with a file literally named loading_a."""
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["screen_a.tga"], name="loading_*",
+              texture="extensions\\a_mod\\" + _TEX.replace("/", "\\") + "\\screen_*.tga")
+    _icon_mod(ext, "b_mod", ["a.tga"], name="loading_*")
+    rep = _compat.analyze(ext, config=cfg)
+    hard = rep.by_kind("HARD")
+    assert [c.mods for c in hard] == [["a_mod", "b_mod"]] and "'loading_a'" in hard[0].detail
+
+
+def _unchecked(rep, folder):
+    return [s for s in rep.skipped if s.what.startswith(folder) and "icon#ship_*" in s.what]
+
+
+def test_F276_a_missing_texture_directory_is_announced_never_HARD(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_x_macro.tga"])
+    _icon_mod(ext, "b_mod", [])                     # declares the path, ships nothing
+    rep = _compat.analyze(ext, config=cfg)
+    assert rep.by_kind("HARD") == []
+    assert len(_unchecked(rep, "b_mod")) == 1 and not _unchecked(rep, "a_mod"), rep.skipped
+    assert not rep.degraded
+    soft = rep.by_kind("SOFT")
+    assert len(soft) == 1 and "NOT CHECKED" in soft[0].detail and "b_mod" in soft[0].detail
+
+
+def test_F276_a_bare_texture_path_is_announced(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_x_macro.tga"])
+    _icon_mod(ext, "b_mod", ["ship_x_macro.tga"],
+              texture=_TEX.replace("/", "\\") + "\\*.tga")
+    rep = _compat.analyze(ext, config=cfg)
+    assert rep.by_kind("HARD") == []
+    assert len(_unchecked(rep, "b_mod")) == 1 and "bare" in _unchecked(rep, "b_mod")[0].why
+
+
+def test_F276_a_texture_owner_that_is_not_active_is_announced(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_x_macro.tga"])
+    _icon_mod(ext, "b_mod", [], texture="extensions\\gone\\" + _TEX.replace("/", "\\")
+              + "\\*.tga")
+    rep = _compat.analyze(ext, config=cfg)
+    assert rep.by_kind("HARD") == [] and len(_unchecked(rep, "b_mod")) == 1
+
+
+def test_F276_an_unreadable_catalog_is_announced(tmp_path, monkeypatch):
+    from x4validate import _cat
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_x_macro.tga"])
+    _icon_mod(ext, "b_packed", ["ship_x_macro.tga"], packed=True)
+    real = _cat.mod_vfs
+
+    def boom(mod_dir, xml_only=True, packed_only=False):
+        if not xml_only and Path(mod_dir).name == "b_packed":
+            raise OSError("simulated unreadable catalog")
+        return real(mod_dir, xml_only, packed_only)
+
+    monkeypatch.setattr(_cat, "mod_vfs", boom)
+    rep = _compat.analyze(ext, config=cfg)
+    assert rep.by_kind("HARD") == []
+    un = _unchecked(rep, "b_packed")
+    assert len(un) == 1 and "simulated unreadable catalog" in un[0].why, rep.skipped
+
+
+def test_F276_TWIN_an_enumerable_overlap_still_reports_beside_an_unchecked_provider(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_x_macro.tga"])
+    _icon_mod(ext, "b_mod", [])
+    _icon_mod(ext, "c_mod", ["ship_x_macro.tga"])
+    rep = _compat.analyze(ext, config=cfg)
+    assert [c.mods for c in rep.by_kind("HARD")] == [["a_mod", "c_mod"]]
+    assert len(_unchecked(rep, "b_mod")) == 1
+
+
+def test_F276_TWIN_a_wildcard_key_that_is_not_an_icon_stays_a_key_level_HARD(tmp_path):
+    cfg = _wares_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _adds(ext, "a_mod", "upgrade_*")
+    _adds(ext, "b_mod", "upgrade_*")
+    hard = _compat.analyze(ext, config=cfg).by_kind("HARD")
+    assert [c.mods for c in hard] == [["a_mod", "b_mod"]] and "ware#upgrade_*" in hard[0].detail
+
+
+def test_F276_TWIN_a_plain_icon_key_stays_a_key_level_HARD(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    for f in ("a_mod", "b_mod"):
+        _mod(ext, f, {"libraries/icons.xml":
+             '<diff><add sel="/icons"><icon name="ship_plain" texture="x.tga"/></add></diff>'})
+    hard = _compat.analyze(ext, config=cfg).by_kind("HARD")
+    assert [c.mods for c in hard] == [["a_mod", "b_mod"]] and "icon#ship_plain" in hard[0].detail
+
+
+def test_F276_a_candidate_focus_skips_unchecked_rows_it_is_not_part_of(tmp_path):
+    cfg = _icons_cfg(tmp_path)
+    ext = tmp_path / "extensions"
+    _icon_mod(ext, "a_mod", ["ship_x_macro.tga"])
+    _icon_mod(ext, "b_mod", [])
+    _mod(ext, "c_cand", {"libraries/icons.xml":
+         '<diff><add sel="/icons"><icon name="ship_c" texture="c.tga"/></add></diff>'})
+    rep = _compat.analyze(ext, candidate=ext / "c_cand", config=cfg)
+    assert not [s for s in rep.skipped if "icon#ship_*" in s.what], rep.skipped
+    rep2 = _compat.analyze(ext, candidate=ext / "b_mod", config=cfg)
+    assert len(_unchecked(rep2, "b_mod")) == 1, rep2.skipped

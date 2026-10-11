@@ -13,7 +13,10 @@ actual merge semantics:
   collision (later wins, the earlier effect is lost or compounded). Two mods only
   ``<add>``-ing under the same parent is SOFT (they coexist); each child KEY two of
   them add there is additionally a HARD row naming only that key's providers (which
-  duplicate survives is not engine-measured).
+  duplicate survives is not engine-measured). A wildcard icon key (``icon#ship_*``) is
+  compared by its EXPANSION instead -- one ID per matching texture file, loose and
+  packed -- so only an ID two expansions share is HARD; a texture set that cannot be
+  enumerated is announced as NOT CHECKED (F276).
 - Two non-diff full files at the same non-union path FULL-OVERRIDE (later clobbers).
 
 Load order (who wins): the engine's MEASURED order -- case-insensitive folder order,
@@ -536,7 +539,34 @@ def _analyze_vpath(
             # the SOFT row disappeared). The engine logs `Duplicate definition of '<id>'`
             # (MEASURED); which definition survives is NOT measured, so the detail says
             # so and `winner` is the last-loading provider by the usual convention.
+            unchecked_wild: list[str] = []
             for dup, providers in _dup_add_keys(cid, fs, add_child_keys).items():
+                if _is_wildcard_icon(dup):
+                    # F276: the engine EXPANDS a wildcard icon per texture file and
+                    # logs a duplicate only where two expansions share an ID -- so the
+                    # comparison is per expanded ID, never per declared key.
+                    shared, unchecked = _wildcard_icon_overlaps(
+                        dup, cid, providers, ops_at, folder_to_path)
+                    # Not entered in hard_dup_keys: an expanded ID is not a declared key,
+                    # so no UNION-KEY row is the same fact as this one.
+                    for icon_id, holders in shared:
+                        last = winner(holders)
+                        collisions.append(Collision(
+                            vpath, "HARD", cid, holders, last,
+                            f"{len(holders)} mods' wildcard {dup} expand to icon ID "
+                            f"'{icon_id}' (duplicate); '{last}' loads last -- survivor "
+                            "not engine-measured"))
+                    if unchecked and (cand_folder is None or cand_folder in providers):
+                        unchecked_wild.append(
+                            f"{dup} of {', '.join(f for f, _ in unchecked)}")
+                        for f, why in unchecked:
+                            if report is not None:
+                                report.skip(
+                                    f"{f}: wildcard {dup} at {vpath}",
+                                    f"its texture set could not be enumerated ({why}), so "
+                                    f"whether its expansion duplicates another mod's {dup} "
+                                    "expansion is NOT CHECKED")
+                    continue
                 hard_dup_keys.setdefault(dup, set()).update(providers)
                 last = winner(providers)
                 collisions.append(Collision(
@@ -545,7 +575,9 @@ def _analyze_vpath(
                     f"'{last}' loads last -- survivor not engine-measured"))
             collisions.append(Collision(
                 vpath, "SOFT", cid, fs, winner(fs),
-                "multiple mods <add> under the same node (usually coexist)"))
+                "multiple mods <add> under the same node (usually coexist)"
+                + (f"; NOT CHECKED: wildcard expansion of {'; '.join(unchecked_wild)}"
+                   if unchecked_wild else "")))
         else:
             ops_desc = "; ".join(f"{f}:{'/'.join(per_mod[f])}" for f in fs)
             # AN EARLIER <remove> CAN END THE CONTEST (AUDIT-2026-09-24 AN-5): once a
@@ -981,6 +1013,107 @@ def _dup_add_keys(parent_id: str, folders: list[str],
             if f not in providers.setdefault(k, []):
                 providers[k].append(f)
     return {k: fs for k, fs in sorted(providers.items()) if len(fs) > 1}
+
+
+#: Texture files the engine accepts for a declared texture extension, besides the
+#: declared one. `.gz` is MEASURED 2026-10-10: every vanilla and DLC wildcard icon declares
+#: `*.tga` while every file in those directories is `.gz` (vanilla `ui/ships` 166 of 166;
+#: boron/split/terran DLC 68 of 68) -- the shipped icons only exist if `.gz` answers the
+#: pattern. `.dds` is INFERRED from the engine's texture-substitution convention, unmeasured.
+_TEXTURE_ALIASES = (".gz", ".dds")
+_EXT_QUALIFIED = re.compile(r"extensions/([^/]+)/(.+)", re.IGNORECASE)
+
+
+def _is_wildcard_icon(key: str) -> bool:
+    return key.startswith("icon#") and "*" in key
+
+
+def _wildcard_icon_ids(name: str, texture: str,
+                       folder_to_path: dict[str, Path]) -> tuple[set[str] | None, str]:
+    """Expand one wildcard icon declaration the way the engine does, or say why not.
+
+    ``<icon name="ship_*" texture="extensions\\m\\dir\\*.tga">`` defines one ID per file in
+    mod ``m``'s ``dir`` (loose AND packed) matching the pattern: the name's ``*`` replaced by
+    the text the texture's ``*`` matched. READ, engine log 2026-10-08: wildcard 'ship_*' with
+    texture path 'extensions\\vro\\...\\ships/ship_arg_xl_battleship_lc4_02_macro.tga' is ID
+    'ship_ship_arg_xl_battleship_lc4_02_macro'. IDs are lowercased (X4 paths are
+    case-insensitive). Returns ``(None, reason)`` -- never an empty set standing in for an
+    answer -- when the set cannot be enumerated: a bare (not ``extensions\\<mod>\\``) path,
+    whose resolution is not measured; an owner that is not an active mod; an unsupported
+    pattern; an unreadable directory or catalog; or no matching file at all."""
+    t = texture.replace("\\", "/").strip().lstrip("/")
+    m = _EXT_QUALIFIED.fullmatch(t)
+    if m is None:
+        return None, (f"bare texture path {texture!r} -- how the engine resolves a path "
+                      "that is not extensions\\<mod>\\... is not measured")
+    owner = m.group(1).lower()
+    owner_dir = next((p for f, p in folder_to_path.items() if f.lower() == owner), None)
+    if owner_dir is None:
+        return None, f"texture owner '{m.group(1)}' is not an active mod"
+    d, _, pat = m.group(2).rpartition("/")
+    if (name.count("*") != 1 or pat.count("*") != 1 or "*" in d or not d
+            or "." not in pat.split("*", 1)[1]):
+        return None, f"unsupported wildcard pattern name={name!r} texture={texture!r}"
+    pre, post = pat.split("*", 1)
+    stem_post = post.rsplit(".", 1)[0]
+    pats = [re.compile(re.escape(pre) + "(.*)" + re.escape(p), re.IGNORECASE)
+            for p in (post, *(stem_post + a for a in _TEXTURE_ALIASES))]
+    dl = d.lower() + "/"
+    files: set[str] = set()
+    try:
+        for k in _cat.mod_vfs(owner_dir, xml_only=False, packed_only=True):
+            rest = k[len(dl):]
+            if k.lower().startswith(dl) and rest and "/" not in rest:
+                files.add(rest)
+        loose = owner_dir / d
+        if loose.is_dir():
+            files.update(p.name for p in loose.iterdir() if p.is_file())
+    except OSError as exc:
+        return None, f"could not read {m.group(1)}'s textures: {exc}"
+    ids: set[str] = set()
+    for fname in files:
+        for rx in pats:
+            hit = rx.fullmatch(fname)
+            if hit:
+                ids.add(name.replace("*", hit.group(1)).lower())
+                break
+    if not ids:
+        return None, f"no texture file under {m.group(1)}/{d} matches {pat!r} (loose or packed)"
+    return ids, ""
+
+
+def _wildcard_icon_overlaps(
+        key: str, parent_id: str, providers: list[str],
+        ops_at: dict[str, dict[str, list[etree._Element]]],
+        folder_to_path: dict[str, Path],
+) -> tuple[list[tuple[str, list[str]]], list[tuple[str, str]]]:
+    """F276: compare the providers of a duplicated wildcard icon *key* by EXPANSION.
+
+    Returns ``(shared, unchecked)``: ``shared`` = ``[(icon_id, holders in load order)]`` for
+    every expanded ID two or more providers' expansions contain; ``unchecked`` =
+    ``[(provider, reason)]`` for each declaration whose texture set could not be enumerated
+    (its IDs, if another declaration of the same provider expanded, still take part)."""
+    name = key.split("#", 1)[1]
+    holders: dict[str, list[str]] = {}
+    unchecked: list[tuple[str, str]] = []
+    for f in providers:                             # load order, kept in `holders`
+        textures = [child.get("texture") for op in ops_at.get(f, {}).get(parent_id, [])
+                    if op.tag == "add" for child in op
+                    if isinstance(child.tag, str) and child.tag == "icon"
+                    and (child.get("id") or child.get("name")) == name]
+        for tex in textures:
+            if tex is None:
+                unchecked.append((f, "the declaration has no texture= attribute"))
+                continue
+            ids, why = _wildcard_icon_ids(name, tex, folder_to_path)
+            if ids is None:
+                unchecked.append((f, why))
+                continue
+            for i in ids:
+                if f not in holders.setdefault(i, []):
+                    holders[i].append(f)
+    shared = [(i, fs) for i, fs in sorted(holders.items()) if len(fs) > 1]
+    return shared, unchecked
 
 
 def _macro_defs(mod_path: Path) -> dict[str, str]:
