@@ -1779,3 +1779,152 @@ def test_8_NAME_CLASH_the_guard_is_evaluated_against_the_file(tmp_path):
     """A guard testing the patched file's content: true and false variants."""
     assert len(_clashes(_name_clash_world(tmp_path / "t", "//macro[@name='m2']"))) == 1
     assert _clashes(_name_clash_world(tmp_path / "f", "//macro[@name='zz']")) == []
+
+
+# --- issue #8: one falsification twin per clause of the conditions the fix added -------
+
+def test_8_shared_with_an_ADD_compares_its_anchor_by_equality_only(tmp_path):
+    """Every op in the file sits inside /wares; a guarded-off add anchored there must
+    not be reported as meeting a mod that merely edits inside a ware."""
+    rep = _rep(tmp_path, ("a_mod", _set(1)),
+               ("b_mod", '<add sel="/wares" if="false()"><ware id="new"/></add>'))
+    assert [(g.mod, g.shared_with) for g in rep.guarded_off] == [("b_mod", [])]
+
+
+def test_8_TWIN_shared_with_an_ADD_on_the_same_anchor_is_named(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", '<add sel="/wares"><ware id="x1"/></add>'),
+               ("b_mod", '<add sel="/wares" if="false()"><ware id="x2"/></add>'))
+    assert [(g.mod, g.shared_with) for g in rep.guarded_off] == [("b_mod", ["a_mod"])]
+
+
+def test_8_shared_with_a_guarded_off_VICTIM_names_the_wiper_around_it(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1, "false()")), ("b_mod", _WIPE.format(g="")))
+    assert [(g.mod, g.shared_with) for g in rep.guarded_off] == [("a_mod", ["b_mod"])]
+
+
+def test_8_a_candidate_run_keeps_the_guarded_off_op_OF_the_candidate(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1)), ("b_mod", _set(2, "false()")),
+               candidate="b_mod")
+    assert [g.mod for g in rep.guarded_off] == ["b_mod"]
+
+
+def test_8_a_guarded_off_op_with_an_INVALID_sel_is_not_NOT_CHECKED(tmp_path):
+    """The engine skips a false-guarded op before it ever reads sel=."""
+    rep = _rep(tmp_path, ("a_mod", _set(1)),
+               ("b_mod", _set(2, "false()", sel="//ware[@id=")))
+    assert rep.unresolvable == [] and [g.mod for g in rep.guarded_off] == ["b_mod"]
+
+
+def test_8_TWIN_a_TRUE_guarded_op_with_an_INVALID_sel_is_NOT_CHECKED(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1)),
+               ("b_mod", _set(2, "true()", sel="//ware[@id=")))
+    assert len(rep.unresolvable) == 1 and rep.guarded_off == []
+
+
+def _drifted(monkeypatch, **overrides):
+    import types
+    drifted = types.SimpleNamespace(**{k: getattr(_merge, k) for k in dir(_merge)
+                                       if not k.startswith("__")})
+    for k, v in overrides.items():
+        setattr(drifted, k, v)
+    monkeypatch.setattr(_compat, "_merge", drifted)
+
+
+def test_8_UNPAIRED_verdicts_make_the_guard_UNEVALUATED_never_false(tmp_path, monkeypatch):
+    """apply_diff returning one verdict too few cannot be paired with the ops -- in the
+    walk or in the rebuild -- so the guard is UNEVALUATED: kept, labelled, announced."""
+    _drifted(monkeypatch,
+             apply_diff=lambda tree, root, *a, **k: _merge.apply_diff(tree, root, *a, **k)[:-1])
+    rep = _rep(tmp_path, ("a_mod", _set(1)), ("b_mod", _set(2, "false()")))
+    hard = rep.by_kind("HARD")
+    assert len(hard) == 1 and "guard UNEVALUATED" in hard[0].detail, rep.collisions
+    assert "could not be paired" in hard[0].detail
+    assert rep.guarded_off == [] and [s for s in rep.skipped if "b_mod" in s.what]
+
+
+def test_8_a_walk_that_read_a_DIFFERENT_op_list_is_not_trusted(tmp_path, monkeypatch):
+    """The pass parses its own copy of each file; if its op count differs from the copy
+    the rows are built from, its verdicts are discarded for the rebuild's."""
+    from lxml import etree
+    real = _merge.overlay_root
+
+    def walk_sees_an_extra_op(odir, vpath, *rest):
+        root = real(odir, vpath, *rest)
+        if rest and root is not None and root.tag == "diff":      # the walk's call
+            # matches nothing, so the walk's TREE stays right and its self-check
+            # passes: only the op INDICES are off by one
+            root.insert(0, etree.fromstring('<remove sel="//nothing"/>'))
+        return root
+
+    built = []
+    real_prefix = _compat._prefix_tree
+    monkeypatch.setattr(_compat, "_prefix_tree",
+                        lambda *a, **k: built.append(1) or real_prefix(*a, **k))
+    _drifted(monkeypatch, overlay_root=walk_sees_an_extra_op)
+    rep = _rep(tmp_path, ("a_mod", _set(1)), ("b_mod", _set(2, "false()")))
+    assert built, "verdicts from a mismatched op list were trusted"
+    assert rep.by_kind("HARD") == [] and [g.mod for g in rep.guarded_off] == ["b_mod"]
+
+
+def test_8_a_UNION_file_in_the_walk_is_still_unioned_not_diffed(tmp_path, monkeypatch):
+    """Only a <diff> takes the apply_diff route; a full union file must still go through
+    apply_overlay, or the self-check fails and every guard pays for a rebuild."""
+    monkeypatch.setattr(_compat, "_prefix_tree",
+                        lambda *a, **k: pytest.fail("rebuilt: the walk mishandled a union"))
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_full", {"libraries/wares.xml": '<wares><ware id="u1"/></wares>'})
+    _mod(ext, "b_mod", {"libraries/wares.xml": f"<diff>{_set(1)}</diff>"})
+    _mod(ext, "c_mod", {"libraries/wares.xml":
+                        f"<diff>{_set(2, 'not(//ware[@id=' + chr(39) + 'u1' + chr(39) + '])')}"
+                        "</diff>"})
+    rep = _compat.analyze(ext, config=cfg)
+    assert [g.mod for g in rep.guarded_off] == ["c_mod"], rep.collisions
+
+
+def test_8_one_guarded_off_op_is_announced_ONCE_across_both_passes(tmp_path):
+    """A guarded macro definition in a file two mods patch is met by the per-file pass
+    AND the NAME-CLASH pass; it is one op, so one record."""
+    cfg = _setup_ref(tmp_path)
+    _w(cfg.reference / "assets/y/macros/m2_macro.xml", '<macros><macro name="m2"/></macros>')
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_mod", {"assets/x/macros/ship_probe_macro.xml": _MACROS})
+    _mod(ext, "b_mod", {"assets/y/macros/m2_macro.xml":
+                        f'<diff><replace sel="//macros" if="false()">{_MACROS}</replace></diff>'})
+    _mod(ext, "c_mod", {"assets/y/macros/m2_macro.xml":
+                        '<diff><replace sel="//macro/@name">m3</replace></diff>'})
+    rep = _compat.analyze(ext, config=cfg)
+    assert [g.mod for g in rep.guarded_off] == ["b_mod"], rep.guarded_off
+
+
+def test_8_NAME_CLASH_a_mod_defining_the_name_ELSEWHERE_too_is_not_narrowed(tmp_path):
+    cfg = _setup_ref(tmp_path)
+    _w(cfg.reference / "assets/y/macros/m2_macro.xml", '<macros><macro name="m2"/></macros>')
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_mod", {"assets/x/macros/ship_probe_macro.xml": _MACROS})
+    _mod(ext, "b_mod", {"assets/y/macros/m2_macro.xml":
+                        f'<diff><replace sel="//macros" if="false()">{_MACROS}</replace></diff>',
+                        "assets/z/macros/ship_probe_macro.xml": _MACROS})
+    rep = _compat.analyze(ext, config=cfg)
+    assert len(_clashes(rep)) == 1 and rep.guarded_off == [], rep.guarded_off
+
+
+def test_8_NAME_CLASH_two_live_definers_in_ONE_logical_file_are_no_clash(tmp_path):
+    """Before the guard, three definers over two files; after it, two in one file."""
+    cfg = _setup_ref(tmp_path)
+    _w(cfg.reference / "assets/y/macros/m2_macro.xml", '<macros><macro name="m2"/></macros>')
+    ext = tmp_path / "extensions"
+    same = "assets/x/macros/ship_probe_macro.xml"
+    _mod(ext, "a_mod", {same: _MACROS})
+    _mod(ext, "b_mod", {same: _MACROS})
+    _mod(ext, "c_mod", {"assets/y/macros/m2_macro.xml":
+                        f'<diff><replace sel="//macros" if="false()">{_MACROS}</replace></diff>'})
+    rep = _compat.analyze(ext, config=cfg)
+    assert _clashes(rep) == [] and [g.mod for g in rep.guarded_off] == ["c_mod"]
+
+
+def test_8_NAME_CLASH_an_UNEVALUABLE_guard_keeps_the_clash_labelled(tmp_path):
+    rep = _name_clash_world(tmp_path, "//[")
+    cl = _clashes(rep)
+    assert len(cl) == 1 and "guard UNEVALUATED" in cl[0].detail, cl
+    assert [s for s in rep.skipped if "b_mod" in s.what], rep.skipped

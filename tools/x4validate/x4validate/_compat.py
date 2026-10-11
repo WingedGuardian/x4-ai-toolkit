@@ -901,7 +901,7 @@ def _verdicts(ops: list[etree._Element],
         return None
     out: dict[int, tuple[str, str]] = {}
     for i, (op, a) in enumerate(zip(ops, applied)):
-        if not op.get("if") or op.tag not in _OPS:
+        if not op.get("if"):
             continue
         if a.skipped_if:
             out[i] = (_G_FALSE, "")
@@ -919,7 +919,7 @@ def _verdicts_at(vpath: str, folder: str, root: etree._Element, earlier: list[st
     """The REBUILD form: apply *root* to a copy of the tree built from base+DLC and the
     *earlier* mods, exactly as Tier B pairs `apply_diff` verdicts with ops. Every guard it
     cannot answer comes back UNEVALUATED with the reason -- never silently false."""
-    guarded = [i for i, o in enumerate(_op_list(root)) if o.get("if") and o.tag in _OPS]
+    guarded = [i for i, o in enumerate(_op_list(root)) if o.get("if")]
     tree = _prefix_tree(vpath, earlier, folder_to_path, config)
     if tree is None:
         why = "no tree could be built at its load position to evaluate the guard against"
@@ -947,27 +947,26 @@ def _guard_outcomes(vpath: str, ordered: list[str], roots: dict[str, etree._Elem
     pass did not apply falls back to rebuilding the tree at each guarded mod's position.
     Keyed by op INDEX, never `id(op)`: the pass parses its own copy of each file.
     """
-    want = {f for f, r in roots.items()
-            if any(o.get("if") and o.tag in _OPS for o in _op_list(r))}
+    want = {f for f, r in roots.items() if any(o.get("if") for o in _op_list(r))}
     if not want:
         return {}
     got: dict[tuple[str, int], tuple[str, str]] = {}
     seen: set[str] = set()
-    paired = [True]
 
     def on_applied(pos, oroot, applied):
         folder = ordered[pos]
         if folder not in want:
             return
         v = _verdicts(_op_list(oroot), applied)
+        # Unpaired, or not the op list the rows are built from: this folder is
+        # left out of `seen`, so the rebuild below answers it instead.
         if v is None or len(_op_list(oroot)) != len(_op_list(roots[folder])):
-            paired[0] = False
             return
         seen.add(folder)
         got.update({(folder, i): sv for i, sv in v.items()})
 
-    if not (_walk_positions(vpath, ordered, folder_to_path, config,
-                            lambda *_a: None, on_applied=on_applied) and paired[0]):
+    if not _walk_positions(vpath, ordered, folder_to_path, config,
+                           lambda *_a: None, on_applied=on_applied):
         got.clear()
         seen.clear()
     for folder in sorted(want - seen, key=ordered.index):
@@ -1047,7 +1046,9 @@ def _walk_positions(vpath: str, ordered: list[str], folder_to_path: dict[str, Pa
         odir = folder_to_path[folder]
         oroot = _merge.overlay_root(odir, vpath, [])
         if oroot is not None and not (oroot.tag == "diff" and not from_game):
-            if on_applied is not None and oroot.tag == "diff" and tree is not None:
+            # (`tree` is never None here: a diff only reaches this line over a
+            # game base, which `build_effective` returned as a tree.)
+            if on_applied is not None and oroot.tag == "diff":
                 on_applied(pos, oroot, _merge.apply_diff(tree, oroot, source=odir.name))
             else:
                 tree, mode = _merge.apply_overlay(tree, oroot, vpath, odir.name)
@@ -1532,17 +1533,15 @@ def _name_clashes(mods: list[dict], rank: dict[str, int],
                 if state == _G_UNEVAL and report is not None:
                     report.skip(f"{folder} at {vpath}:{op.sourceline or 0}",
                                 _guard_skip_why(op, why))
-        live = (len(per_mod) >= 2
-                and len({_strip_nesting(v) for v in per_mod.values()}) >= 2)
+        # (Two logical files imply two mods: `per_mod` holds one file per mod.)
+        live = len({_strip_nesting(v) for v in per_mod.values()}) >= 2
         if report is not None:
             for folder, vpath, op in dropped:
                 if folder in per_mod:
                     continue      # the mod still defines it elsewhere: nothing narrowed
-                others = [f for f in ordered if f in per_mod and f != folder]
-                if others:
-                    report.guarded_off.append(GuardedOff(
-                        vpath, folder, op.sourceline or 0, op.get("sel", ""), _guard(op),
-                        others))
+                report.guarded_off.append(GuardedOff(
+                    vpath, folder, op.sourceline or 0, op.get("sel", ""), _guard(op),
+                    [f for f in ordered if f in per_mod and f != folder]))
         if not live:
             continue
         if cand_folder is not None and cand_folder not in per_mod:
