@@ -117,6 +117,15 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
 
     config = _merge.Config(reference=Path(args.reference)) if args.reference else _merge.Config()
+    # Issue #10 shape: BEFORE the rmtree below. A missing or empty reference used to
+    # wipe the previous tree, write 0 documents plus a manifest, and exit 0 -- which
+    # build-effective.sh then indexed into x4eff as a successful build. rc 2 is a
+    # "died before writing a manifest" refusal to that script, so it stops.
+    try:
+        _effective.require_base_documents(config, "serialize the effective tree")
+    except _effective.EmptyReference as exc:
+        print(f"REFUSING: {exc}", file=sys.stderr)
+        return 2
     overlays = installed_in_load_order(config)
     config = _merge.Config(reference=config.reference, overlays=tuple(overlays))
 
