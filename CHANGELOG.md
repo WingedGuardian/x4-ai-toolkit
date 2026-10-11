@@ -159,7 +159,9 @@ confusing messages and six cosmetic ones. All are fixed:
   `tools/basex/build-effective.py` now refuse with exit 2, naming the reference folder and how to
   set it, when that folder does not exist or holds no base-game XML. Each used to build an empty
   store, index or tree, replacing the previous one, and exit 0. The refusal comes before anything
-  is written, so an existing store or index is left as it was.
+  is written, so an existing store or index is left as it was. `build-corpus.sh` and
+  `build-effective.sh` run the same check first, before Java and before dropping `x4raw` or
+  deleting the previous x4eff tree; `build-corpus.sh` used to drop `x4raw` before noticing.
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
   resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
   (BLIND-SPOTS F265-F268).
