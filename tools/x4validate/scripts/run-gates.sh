@@ -50,11 +50,11 @@ done
 [ ${#all_gates[@]} -eq 0 ] && { echo "no gates found under gates/" >&2; exit 2; }
 
 if [ "$mode" = "list" ]; then
-  printf '%s\n' "${all_gates[@]}"; exit 0
+  printf '%s\n' ${all_gates[@]+"${all_gates[@]}"}; exit 0
 fi
 
 run=(); skip_slow=(); skip_mut=()
-for g in "${all_gates[@]}"; do
+for g in ${all_gates[@]+"${all_gates[@]}"}; do
   if [[ " $MUTATING " == *" $g "* ]]; then skip_mut+=("$g"); continue; fi
   if [ "$mode" = "quick" ] && [[ " $SLOW " == *" $g "* ]]; then skip_slow+=("$g"); continue; fi
   run+=("$g")
@@ -136,14 +136,14 @@ echo "GATE RUN — mode=$mode — ${#all_gates[@]} gate(s) known"
 echo "GATE LOGS: $logdir"
 echo "=================================================================="
 pass=(); fail=(); cannot=()
-for g in "${run[@]}"; do
+for g in ${run[@]+"${run[@]}"}; do
   # The replay gate otherwise defaults to 14 workers on this machine. Keep this
   # managed sweep within the user's eight-worker policy; other arguments stay intact.
   gate_args=()
   [ "$g" = "hook_false_positives" ] && gate_args+=(--workers=8)
   # PYTHONDONTWRITEBYTECODE: a gate run must not leave a .pyc that a later run
   # could reuse against a same-second, same-size edit (see test_no_stale_bytecode).
-  PYTHONDONTWRITEBYTECODE=1 uv run python "gates/$g.py" "${gate_args[@]}" > "$logdir/$g.log" 2>&1; rc=$?
+  PYTHONDONTWRITEBYTECODE=1 uv run python "gates/$g.py" ${gate_args[@]+"${gate_args[@]}"} > "$logdir/$g.log" 2>&1; rc=$?
   out=$(cat "$logdir/$g.log")
   case $rc in
     0) pass+=("$g");   printf '  ok      %-26s\n' "$g" ;;

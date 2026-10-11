@@ -219,3 +219,37 @@ def test_FXB2_a_log_dir_reached_through_a_LINK_into_the_game_REFUSES(tmp_path):
     rc, out, err = _run(tmp_path, root, X4_GAME=str(protected), X4_GATE_LOG_DIR=str(link / "logs"))
     assert rc == 2 and "REFUSING" in err, (rc, out, err)
     assert not (protected / "logs").exists()
+
+
+# --- FX-H2 / reviewer M-3: an empty array under `set -u` on bash < 4.4 ----------------------
+#: `name=()` declares an array that may stay EMPTY; `name+=(...)` may never run.
+_EMPTY_DECL = re.compile(r"^\s*(?:local\s+)?([A-Za-z_][A-Za-z0-9_]*)=\(\)", re.M)
+
+
+def _unguarded_empty_array_expansions(text: str) -> list[str]:
+    """Arrays declared `name=()` that are expanded bare as `"${name[@]}"`.
+
+    Under `set -u`, bash before 4.4 (macOS ships 3.2) treats `"${name[@]}"` of an EMPTY array
+    as an unbound variable and aborts. The portable spelling is `${name[@]+"${name[@]}"}`.
+    READ, not reproduced: every bash this suite can reach (Git Bash 5.2, Ubuntu CI) is >= 4.4.
+    """
+    names = set(_EMPTY_DECL.findall(text))
+    bad = []
+    for n in sorted(names):
+        guarded = '${%s[@]+"${%s[@]}"}' % (n, n)
+        bare = '"${%s[@]}"' % n
+        if text.replace(guarded, "").count(bare):
+            bad.append(n)
+    return bad
+
+
+def test_no_possibly_empty_array_is_expanded_bare_under_set_u():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "set -uo pipefail" in text, "fixture assumption: run-gates.sh runs under set -u"
+    assert _unguarded_empty_array_expansions(text) == []
+
+
+def test_TWIN_the_empty_array_rule_can_fail_and_spares_the_guarded_form():
+    assert _unguarded_empty_array_expansions('a=()\ncmd "${a[@]}"\n') == ["a"]
+    assert _unguarded_empty_array_expansions('a=()\ncmd ${a[@]+"${a[@]}"}\n') == []
+    assert _unguarded_empty_array_expansions('a=(x)\ncmd "${a[@]}"\n') == []      # never empty
