@@ -120,3 +120,130 @@ def test_a_page_of_ATTRIBUTE_nodes_is_counted_not_refused(real_db, capsys):
     assert rc == 0, (out.out, out.err)
     assert 'cannot safely count' not in out.err
     assert 'ore' in out.out
+
+
+# --- #7: the BaseX subprocess channel is UTF-8 in BOTH directions -------------------
+# MEASURED 2026-10-10 (BaseX 12.4, Java 24, cp1252 Windows host): BaseX writes its result
+# as UTF-8 bytes, its error text through System.err in the platform charset, and the JVM
+# decodes a `-q` ARGUMENT in the platform charset -- U+706B arrived as `?` (63), so a query
+# for it matched a literal `?` and a zero described a query that never ran.
+FIRE = chr(0x706B)
+
+
+@pytest.fixture
+def unicode_db(monkeypatch, real_db, basex_home):
+    """x4eff in the same disposable home: one ware named FIRE, one named '?'."""
+    if not (basex_home / 'data' / 'x4eff').is_dir():
+        q = (f"db:create('x4eff', (<r><ware id='fire' name='{FIRE}'/></r>, "
+             "<r><ware id='qmark' name='?'/></r>), ('u.xml', 'q.xml'))")
+        ask.run_xq(q)
+    return basex_home
+
+
+def test_7_non_ascii_RESULT_is_exact_text(real_db):
+    assert ask.run_xq('codepoints-to-string(28779)') == FIRE
+
+
+def test_7_non_cp1252_LITERAL_reaches_basex_intact(real_db):
+    # The control (63) is what the argv channel delivered: `?`.
+    assert ask.run_xq(f'string-to-codepoints("{FIRE}")') == '28779'
+    assert ask.run_xq(f'"{FIRE}" = codepoints-to-string(28779)') == 'true'
+    assert ask.run_xq(f'"{FIRE}" = "?"') == 'false'
+
+
+def test_7_non_ascii_ERROR_text_is_shown_not_a_traceback(real_db):
+    with pytest.raises(RuntimeError) as exc:
+        ask.run_xq(f"error(xs:QName('err:ASK'), 'boom {FIRE} e" + chr(0xE9) + "')")
+    assert f'boom {FIRE} e' + chr(0xE9) in str(exc.value)
+
+
+def test_7_output_lines_carry_no_carriage_return(real_db):
+    out = ask.run_xq('(1, 2, 3)')
+    assert '\r' not in out and out.split('\n') == ['1', '2', '3']
+
+
+def test_7_a_query_for_FIRE_does_not_match_a_question_mark(unicode_db, capsys):
+    assert ask.main(['xq', f"collection('x4eff')//ware[@name='{FIRE}']", '--db', 'x4eff']) == 0
+    out = capsys.readouterr().out
+    assert "id=\"fire\"" in out and 'qmark' not in out and '1 item(s)' in out
+
+
+def test_7_a_zero_for_an_absent_non_cp1252_literal_is_a_real_zero(unicode_db, capsys):
+    absent = chr(0x6C34)  # U+6C34, absent from the DB; via argv it became `?` and matched qmark
+    assert ask.main(['xq', f"collection('x4eff')//ware[@name='{absent}']", '--db', 'x4eff']) == 0
+    out = capsys.readouterr().out
+    assert 'qmark' not in out and 'NEGATIVE CONFIRMED' in out
+
+
+def test_7_refs_for_a_non_ascii_id(unicode_db, capsys):
+    assert ask.main(['refs', FIRE, '--db', 'x4eff']) == 0
+    out = capsys.readouterr().out
+    assert 'u.xml' in out and 'q.xml' not in out
+
+
+def test_7_main_survives_a_cp1252_stdout(unicode_db, monkeypatch):
+    """A piped stdout on Windows is cp1252; printing U+706B there raised UnicodeEncodeError."""
+    import io
+    import sys
+    buf = io.BytesIO()
+    stream = io.TextIOWrapper(buf, encoding='cp1252', errors='strict')
+    monkeypatch.setattr(sys, 'stdout', stream)
+    rc = ask.main(['xq', f"collection('x4eff')//ware[@name='{FIRE}']/string(@name)", '--db', 'x4eff'])
+    stream.flush()
+    assert rc == 0
+    assert b'\\u706b' in buf.getvalue()
+
+
+def test_7_coverage_basex_query_is_utf8_both_ways(monkeypatch, basex_home):
+    import coverage
+    monkeypatch.setattr(coverage, 'BASEX_DIR', basex_home)
+    assert coverage.basex_query('x4raw', f'string-to-codepoints("{FIRE}")').strip() == '28779'
+    with pytest.raises(RuntimeError) as exc:
+        coverage.basex_query('x4raw', f"error(xs:QName('err:C'), '{FIRE}')")
+    assert FIRE in str(exc.value)
+
+
+# --- #5: refs searches the reference FORMS X4 actually uses, and only those ----------
+# Evaluated by the real BaseX engine over one in-memory document (no database), the
+# issue's own reproduction shape: the generator is what is under test.
+def _refs_count(ident, xml):
+    q = ask.q_refs('x4eff', ident).replace("collection('x4eff')", "parse-xml('" + xml + "')")
+    assert "parse-xml" in q
+    return ask.run_counted(q)[1]
+
+
+@pytest.mark.parametrize('xml,expected', [
+    ('<r><macro ref="fx_m"/></r>', 1),                                   # control: @ref
+    ('<r><x name="fx_m"/><y component="fx_m"/></r>', 2),                 # control: @name, @component
+    ('<r><x macro="fx_m"/></r>', 1),
+    ('<r><set_value macro="macro.fx_m"/></r>', 1),                       # @macro = macro.X
+    ('<r><x ware="ware.fx_m"/></r>', 1),                                 # @ware = ware.X
+    ('<r><bullet class="fx_m"/></r>', 1),                                # bullet/@class
+    ('<r><add_blueprints wares="ware.fx_m"/></r>', 1),
+    ('<r><add_blueprints wares="[ware.other, ware.fx_m]"/></r>', 1),     # a list
+    ('<r><add_blueprints wares="fx_m"/></r>', 1),                        # bare token
+    ('<r><add_blueprints macros="macro.fx_m"/></r>', 1),
+    ('<r><add_blueprints macros="[macro.a,macro.fx_m]"/></r>', 1),
+])
+def test_5_refs_finds_each_reference_form(real_db, xml, expected):
+    assert _refs_count('fx_m', xml) == expected
+
+
+@pytest.mark.parametrize('xml', [
+    '<r><component class="fx_m"/></r>',                  # @class is a reference on bullet ONLY
+    '<r><x class="fx_m"/></r>',
+    '<r><add_blueprints wares="ware.fx_m_extra"/></r>',  # whole token, not a substring
+    '<r><add_blueprints wares="$fx_m"/></r>',            # a variable is not resolved
+    '<r><add_blueprints macros="ware.fx_m"/></r>',       # each attribute strips its OWN prefix
+    '<r><x macro="ware.fx_m"/></r>',
+    '<r><x ware="macro.fx_m"/></r>',
+    '<r><x exact="macro.fx_m"/></r>',                     # expression attributes: out of scope
+    '<r><x wares="ware.fx_m"/></r>',                      # @wares is a reference on add_blueprints ONLY
+    '<r><x macros="macro.fx_m"/></r>',
+])
+def test_5_TWIN_refs_does_not_match_lookalikes(real_db, xml):
+    assert _refs_count('fx_m', xml) == 0
+
+
+def test_5_TWIN_player_class_is_not_a_reference(real_db):
+    assert _refs_count('player', '<r><component class="player"/></r>') == 0

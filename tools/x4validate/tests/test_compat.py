@@ -995,3 +995,103 @@ def test_bare_name_lookup_is_still_case_insensitive(tmp_path):
     _mod(ext, "m_cand", {"libraries/wares.xml": "<diff/>"})
     resolved = _compat._resolve_candidate("M_CAND", ext)
     assert resolved.resolve() == (ext / "m_cand").resolve(), resolved
+
+
+# --- issue #4: a duplicate-add row names the KEY's providers, not every co-adder ------
+
+def _wares_ref(tmp_path):
+    ref = tmp_path / "reference"
+    _w(ref / "libraries" / "wares.xml", "<wares/>")
+    return _merge.Config(reference=ref)
+
+
+def _adds(ext, folder, *keys):
+    body = "".join(f'<ware id="{k}"/>' for k in keys)
+    return _mod(ext, folder, {"libraries/wares.xml":
+                f'<diff><add sel="/wares">{body}</add></diff>'})
+
+
+def _issue4(tmp_path):
+    cfg = _wares_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _adds(ext, "a_duplicate", "test_shared")
+    _adds(ext, "b_duplicate", "test_shared")
+    _adds(ext, "c_unrelated", "test_unique")
+    return cfg, ext
+
+
+def test_4_duplicate_row_names_only_the_keys_providers(tmp_path):
+    cfg, ext = _issue4(tmp_path)
+    hard = _compat.analyze(ext, config=cfg).by_kind("HARD")
+    assert len(hard) == 1, hard
+    assert hard[0].mods == ["a_duplicate", "b_duplicate"]
+    assert hard[0].winner == "b_duplicate"
+    assert "ware#test_shared" in hard[0].detail
+    assert "survivor not engine-measured" in hard[0].detail
+
+
+def test_4_the_parent_SOFT_row_still_names_every_adder(tmp_path):
+    cfg, ext = _issue4(tmp_path)
+    soft = _compat.analyze(ext, config=cfg).by_kind("SOFT")
+    assert [c.mods for c in soft] == [["a_duplicate", "b_duplicate", "c_unrelated"]]
+
+
+def test_4_a_candidate_focus_on_the_UNRELATED_adder_keeps_no_HARD_row(tmp_path):
+    cfg, ext = _issue4(tmp_path)
+    rep = _compat.analyze(ext, candidate=ext / "c_unrelated", config=cfg)
+    assert rep.by_kind("HARD") == []
+    assert len(rep.by_kind("SOFT")) == 1
+
+
+def test_4_TWIN_a_candidate_focus_on_a_PROVIDER_keeps_the_HARD_row(tmp_path):
+    cfg, ext = _issue4(tmp_path)
+    rep = _compat.analyze(ext, candidate=ext / "a_duplicate", config=cfg)
+    assert [c.mods for c in rep.by_kind("HARD")] == [["a_duplicate", "b_duplicate"]]
+
+
+def test_4_every_duplicated_key_gets_its_own_row(tmp_path):
+    cfg = _wares_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _adds(ext, "a_mod", "k1", "k2")
+    _adds(ext, "b_mod", "k1")
+    _adds(ext, "c_mod", "k2")
+    hard = _compat.analyze(ext, config=cfg).by_kind("HARD")
+    rows = sorted((c.detail.split(" add ")[1].split()[0], c.mods, c.winner) for c in hard)
+    assert rows == [("ware#k1", ["a_mod", "b_mod"], "b_mod"),
+                    ("ware#k2", ["a_mod", "c_mod"], "c_mod")], [c.detail for c in hard]
+
+
+def test_4_TWIN_no_union_key_row_repeats_a_hard_duplicate(tmp_path):
+    cfg, ext = _issue4(tmp_path)
+    rep = _compat.analyze(ext, config=cfg)
+    assert [c for c in rep.by_kind("UNION-KEY") if "test_shared" in c.target] == []
+
+
+def test_4_TWIN_a_definer_the_hard_row_does_not_name_still_gets_a_union_key_row(tmp_path):
+    """hard_dup_keys must hold the key's PROVIDERS, not every co-adder. e_both adds an
+    unrelated ware under /wares (so it IS a co-adder there) and defines ware#test_shared
+    at a DIFFERENT anchor. The per-document UNION-KEY row naming it must survive: folding
+    it into the /wares HARD row, which does not name e_both, would lose its definition."""
+    ref = tmp_path / "reference"
+    _w(ref / "libraries" / "wares.xml", '<wares><ware id="base_w"/></wares>')
+    cfg = _merge.Config(reference=ref)
+    ext = tmp_path / "extensions"
+    _adds(ext, "a_duplicate", "test_shared")
+    _adds(ext, "b_duplicate", "test_shared")
+    _mod(ext, "e_both", {"libraries/wares.xml":
+         '<diff><add sel="/wares"><ware id="e_other"/></add>'
+         """<add sel="//ware[@id='base_w']" pos="after"><ware id="test_shared"/></add></diff>"""})
+    rep = _compat.analyze(ext, config=cfg)
+    hard = [c.mods for c in rep.by_kind("HARD") if "test_shared" in c.detail]
+    assert hard == [["a_duplicate", "b_duplicate"]], rep.collisions
+    uk = [c for c in rep.by_kind("UNION-KEY") if "test_shared" in c.target]
+    assert [c.mods for c in uk] == [["a_duplicate", "b_duplicate", "e_both"]], rep.collisions
+
+
+def test_4_TWIN_one_mod_adding_a_key_twice_is_not_a_cross_mod_duplicate(tmp_path):
+    cfg = _wares_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _adds(ext, "a_mod", "same", "same")
+    _adds(ext, "b_mod", "other")
+    rep = _compat.analyze(ext, config=cfg)
+    assert rep.by_kind("HARD") == [] and len(rep.by_kind("SOFT")) == 1

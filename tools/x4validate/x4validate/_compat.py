@@ -11,7 +11,9 @@ actual merge semantics:
 - Everywhere else, a mod's ``<diff>`` ops resolve to concrete nodes; two mods
   resolving to the same node where at least one replaces/removes it is a HARD
   collision (later wins, the earlier effect is lost or compounded). Two mods only
-  ``<add>``-ing under the same parent is SOFT (they coexist).
+  ``<add>``-ing under the same parent is SOFT (they coexist); each child KEY two of
+  them add there is additionally a HARD row naming only that key's providers (which
+  duplicate survives is not engine-measured).
 - Two non-diff full files at the same non-union path FULL-OVERRIDE (later clobbers).
 
 Load order (who wins): the engine's MEASURED order -- case-insensitive folder order,
@@ -526,17 +528,24 @@ def _analyze_vpath(
         all_tags = {t for tags in per_mod.values() for t in tags}
         fs = sorted(per_mod, key=lambda f: rank[f])
         if all_tags == {"add"}:
-            # Same-parent adds: SOFT, unless two mods add a child with the same key.
-            dup = _dup_add_key(cid, fs, add_child_keys)
-            if dup:
-                hard_dup_keys.setdefault(dup, set()).update(fs)
+            # Same-parent adds coexist: one SOFT row naming EVERY adder. Each child key
+            # two or more of them add is ALSO a HARD row -- naming only THAT key's
+            # providers (issue #4: the whole parent-adder list used to be named, so an
+            # unrelated co-adder became the duplicate's "winner" and kept the HARD row in
+            # its own candidate report; only the first duplicated key was reported, and
+            # the SOFT row disappeared). The engine logs `Duplicate definition of '<id>'`
+            # (MEASURED); which definition survives is NOT measured, so the detail says
+            # so and `winner` is the last-loading provider by the usual convention.
+            for dup, providers in _dup_add_keys(cid, fs, add_child_keys).items():
+                hard_dup_keys.setdefault(dup, set()).update(providers)
+                last = winner(providers)
                 collisions.append(Collision(
-                    vpath, "HARD", cid, fs, winner(fs),
-                    f"both add {dup} under the same parent (duplicate)"))
-            else:
-                collisions.append(Collision(
-                    vpath, "SOFT", cid, fs, winner(fs),
-                    "multiple mods <add> under the same node (usually coexist)"))
+                    vpath, "HARD", cid, providers, last,
+                    f"{len(providers)} mods add {dup} under the same parent (duplicate); "
+                    f"'{last}' loads last -- survivor not engine-measured"))
+            collisions.append(Collision(
+                vpath, "SOFT", cid, fs, winner(fs),
+                "multiple mods <add> under the same node (usually coexist)"))
         else:
             ops_desc = "; ".join(f"{f}:{'/'.join(per_mod[f])}" for f in fs)
             # AN EARLIER <remove> CAN END THE CONTEST (AUDIT-2026-09-24 AN-5): once a
@@ -959,16 +968,19 @@ def _order_misses_rebuild(vpath: str, ordered: list[str],
     return out
 
 
-def _dup_add_key(parent_id: str, folders: list[str],
-                 add_child_keys: dict[str, dict[str, list[str]]]) -> str | None:
-    """If two mods add a child with the same key under *parent_id*, return that key."""
-    seen: dict[str, str] = {}
+def _dup_add_keys(parent_id: str, folders: list[str],
+                  add_child_keys: dict[str, dict[str, list[str]]]) -> dict[str, list[str]]:
+    """Every child key two or more mods add under *parent_id* -> its providers.
+
+    Providers keep the order of *folders* (the caller passes load order); keys are
+    returned sorted, so the report is deterministic. A key one mod adds twice is not a
+    cross-mod duplicate and is not returned."""
+    providers: dict[str, list[str]] = {}
     for f in folders:
         for k in add_child_keys.get(f, {}).get(parent_id, []):
-            if k in seen and seen[k] != f:
-                return k
-            seen[k] = f
-    return None
+            if f not in providers.setdefault(k, []):
+                providers[k].append(f)
+    return {k: fs for k, fs in sorted(providers.items()) if len(fs) > 1}
 
 
 def _macro_defs(mod_path: Path) -> dict[str, str]:
