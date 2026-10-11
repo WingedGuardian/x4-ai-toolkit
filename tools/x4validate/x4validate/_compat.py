@@ -19,6 +19,12 @@ actual merge semantics:
   enumerated is announced as NOT CHECKED (F276). Full union files declaring one wildcard
   are compared the same way, as one UNION-KEY row per shared expanded ID.
 - Two non-diff full files at the same non-union path FULL-OVERRIDE (later clobbers).
+- An op guarded by ``if=`` is judged by its guard as `_merge.apply_diff` evaluates it: on
+  the file as it stands when that op applies (base+DLC, every earlier mod, the earlier ops
+  of its own file). FALSE there: the op changes nothing, joins no row of any kind, and is
+  listed in `CompatReport.guarded_off` instead (issue #8). TRUE: it takes part, and its rows
+  say the answer depends on this load order. UNEVALUATED (e.g. invalid XPath): it is kept,
+  labelled, and counted as a skip -- never silently treated as false.
 
 Load order (who wins): the engine's MEASURED order -- case-insensitive folder order,
 dependencies loaded in repeated passes (see `_loadorder.compute_load_order` and
