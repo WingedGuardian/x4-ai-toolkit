@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
@@ -820,25 +821,53 @@ def _child_key(el: etree._Element) -> tuple[str, str] | None:
     return None
 
 
+#: The owner-relative, lowercased vpath whose wildcard icons COEXIST (issue #9).
+_ICONS_KIND = "libraries/icons.xml"
+
+
+def _icon_wildcard(el: etree._Element) -> bool:
+    """An `<icon>` whose name is a texture-folder WILDCARD (`upgrade_*`, `*`).
+
+    These are not id-keyed entries: each declares an expansion over its OWN texture
+    folder, and several layers legitimately ship the same wildcard name. MEASURED
+    2026-10-11 on base + 8 DLC: 38 wildcard declarations in, only 17 survived the
+    last-wins dedupe (upgrade_* 8->1, ship_* 8->1, module_* 7->1, `*` 2->1). They
+    are appended instead. Plain icon names keep last-wins: UNMEASURED either way."""
+    return el.tag == "icon" and "*" in (el.get("name") or "")
+
+
 def _union_children(tree: etree._Element, overlay: etree._Element,
-                    recorder: Recorder | None = None, source: str = "") -> None:
+                    recorder: Recorder | None = None, source: str = "",
+                    coexists: Callable[[etree._Element], bool] | None = None) -> None:
     """Merge *overlay*'s direct children into *tree* in place.
 
     Dedupe by _child_key with later-overlay-wins (same id/name -> overlay's element
     replaces the base's); keyless children (e.g. <defaults>, comments) are appended.
     Correct for BOTH additive registries (distinct ids coexist) and a same-vpath
-    single-file override (same id/name -> replaced)."""
+    single-file override (same id/name -> replaced).
+
+    *coexists*: children it accepts are ALWAYS appended (origin "union-add") and
+    never enter the dedupe index, on either side -- so a same-key pair inside one
+    overlay file survives too. apply_overlay passes `_icon_wildcard` for
+    `libraries/icons.xml` only."""
     index: dict[tuple[str, str], etree._Element] = {}
     for child in tree:
         if isinstance(child.tag, str):
+            if coexists is not None and coexists(child):
+                continue
             key = _child_key(child)
             if key is not None:
                 index[key] = child
     for child in overlay:
         if not isinstance(child.tag, str):  # comments / PIs
             continue
-        key = _child_key(child)
         new = copy.deepcopy(child)
+        if coexists is not None and coexists(child):
+            tree.append(new)
+            if recorder is not None:
+                recorder.elem_created(new, Origin(source, "union-add"))
+            continue
+        key = _child_key(child)
         if key is not None and key in index:
             old = index[key]
             tree.replace(old, new)
@@ -913,7 +942,8 @@ def apply_overlay(
     _kind = _registry_rel(vpath).lower()
     if (tree is not None and oroot.tag == tree.tag
             and _kind.startswith(_ADDITIVE_DIRS)):
-        _union_children(tree, oroot, recorder=recorder, source=source)
+        _union_children(tree, oroot, recorder=recorder, source=source,
+                        coexists=_icon_wildcard if _kind == _ICONS_KIND else None)
         return tree, "union"
     if tree is not None and _kind.startswith(_SCRIPT_REGISTRY_DIRS):
         # F27 — the engine registers MD scripts by FILENAME, and a duplicate
