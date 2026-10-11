@@ -9654,7 +9654,7 @@ an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
 
-## F276 — x4compat reported a duplicate for every shared wildcard icon key · **DEFECT (measured)** · confidence 90% · ✅ CLOSED 2026-10-11 (residuals OPEN)
+## F276 — x4compat reported a duplicate for every shared wildcard icon key · **DEFECT (measured)** · confidence 92% · ✅ CLOSED 2026-10-11 (residuals OPEN)
 
 MEASURED: x4compat reported a duplicate for every wildcard icon key (`icon#ship_*` and the
 like) that two mods declare -- HARD for same-parent diff adds, UNION-KEY for full
@@ -9684,7 +9684,7 @@ which holds the measurement, the fix and the residuals.
 
 RE-DERIVED BY: `tests/test_compat.py` `test_F276_TWIN_disjoint_expansions_are_SOFT_only`.
 
-## F274 — The same-parent duplicate check named the wrong mods and lost keys · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-11
+## F274 — The same-parent duplicate check named the wrong mods and lost keys · **DEFECT (measured)** · confidence 92% · ✅ CLOSED 2026-10-11
 
 MEASURED: the check reported only the first duplicated key, attributed it to every co-adder
 (2 to 40 mods named where 2 or 3 provided the key; 6 rows on the maintainer's live modlist),
@@ -9696,7 +9696,7 @@ RE-DERIVED BY: `tests/test_compat.py` `test_4_duplicate_row_names_only_the_keys_
 `test_4_every_duplicated_key_gets_its_own_row`,
 `test_4_the_parent_SOFT_row_still_names_every_adder`.
 
-## F273 — Contested paths were a set of spellings · **DEFECT (measured)** · confidence 90% · ✅ CLOSED 2026-10-11
+## F273 — Contested paths were a set of spellings · **DEFECT (measured)** · confidence 90% (Windows; 75% Linux, inferred) · ✅ CLOSED 2026-10-11
 
 MEASURED: one case alias was written twice (1 of 11,301 documents on the maintainer's
 install). INFERRED, no Linux machine: on a case-sensitive filesystem a differently spelled
@@ -9706,7 +9706,7 @@ path; off Windows a case-folded loose lookup that refuses a folder holding two s
 RE-DERIVED BY: `tests/test_case_alias_vpaths.py` `test_6_two_spellings_are_ONE_contested_vpath`,
 `test_6_overlay_root_REFUSES_two_spellings_in_one_folder`.
 
-## F272 — `refs` zero carried a document count, not the forms searched · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-11
+## F272 — `refs` zero carried a document count, not the forms searched · **DEFECT (measured)** · confidence 90% · ✅ CLOSED 2026-10-11
 
 MEASURED: `refs` matched exact values of five attributes while its zero carried a complete
 document count; a document count says nothing about which reference forms were searched.
@@ -9717,7 +9717,7 @@ add_blueprints/@wares|@macros lists and `macro.`/`ware.` spellings, and declares
 RE-DERIVED BY: `tools/basex/test_ask.py` `test_5_a_refs_ZERO_names_the_forms_searched_and_what_is_not`;
 `tools/basex/test_ask_e2e.py` `test_5_refs_finds_each_reference_form`.
 
-## F271 — BaseX queries were decoded in the Windows codepage · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-11
+## F271 — BaseX queries were decoded in the Windows codepage · **DEFECT (measured)** · confidence 92% · ✅ CLOSED 2026-10-11
 
 MEASURED: the query was passed to Java as a command-line argument, which Java decodes in
 the Windows codepage, so a literal outside Windows-1252 arrived as `?` (codepoint 63 instead
