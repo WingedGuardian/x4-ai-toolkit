@@ -18,6 +18,7 @@ for any mod patching a base entry.
 from __future__ import annotations
 
 import copy
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -398,6 +399,30 @@ def _scalar_kind(value) -> str:
     return type(value).__name__
 
 
+def _xpath_boolean(value) -> bool:
+    """XPath 1.0 `boolean()` of an lxml `xpath()` result -- the verdict of an `if=`.
+
+    Python truthiness agrees with it for every type lxml returns EXCEPT a NaN
+    number: `bool(float('nan'))` is True, but XPath 1.0 section 4.3 makes a number
+    true iff it is neither +/-0 nor NaN. `if="number(@missing)"` is therefore
+    CLOSED, and modelling it as open applied an op the engine skips.
+
+    bool -> itself; float -> nonzero and not NaN (infinity is true); str -> non-empty;
+    list (a node-set, whatever its members) -> non-empty. Anything else is REFUSED
+    with TypeError, which apply_diff reports as an invalid `if=` rather than
+    guessing a verdict."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return value != 0.0 and not math.isnan(value)
+    if isinstance(value, str):
+        return value != ""
+    if isinstance(value, list):
+        return len(value) > 0
+    raise TypeError(f"if= evaluated to {type(value).__name__}, which is not an XPath "
+                    f"boolean, number, string or node-set; its verdict is not predicted")
+
+
 def _id_key(node) -> tuple | None:
     """(tag, @id) of the nearest ancestor-or-self carrying an id, or None.
 
@@ -456,11 +481,11 @@ def apply_diff(tree: etree._Element, diff_root: etree._Element,
         cond = op.get("if")
         if cond:
             try:
-                if not tree.xpath(cond):
+                if not _xpath_boolean(tree.xpath(cond)):
                     applied.append(AppliedOp(op.tag, sel, line, True, "if= false: skipped",
                                              silent, skipped_if=True))
                     continue
-            except etree.XPathEvalError as exc:
+            except (etree.XPathEvalError, TypeError) as exc:
                 applied.append(AppliedOp(op.tag, sel, line, False, f"invalid if=: {exc}", silent))
                 continue
 
