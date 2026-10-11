@@ -349,6 +349,12 @@ memory or from another session -- a remembered id was stale within a day here.
 | F268 | `run-gates.sh` expanded possibly-empty arrays bare under `set -u` (bash < 4.4 aborts) | **DEFECT (read)** — not reproducible on any bash here (all >= 4.4) | 3 of 3 `name=()` arrays | ✅ **FIXED 2026-10-10** — `${a[@]+"${a[@]}"}`; class-rule test with a twin |
 | F269 | The release zip's population -- `git archive`, no `.git`, installed IN PLACE as the README says -- was never measured; F262 moved the cold leg to a clone, and `installed_layout()` read an in-place install (it has `agent/`) as a checkout | **DEFECT (measured)** | 238 of 239 test files run in an in-place install at 5063aec: 4,543 passed, 54 skipped, 37 failed/errors, all attributed (3 Git metadata, 26 layout, 7 my sandboxed HOME, 1 my TEMP placement); `test_install_over_existing.py` (361 tests) cut off at ~222 by the resource watchdog, unmeasured | ✅ **FIXED 2026-10-11** — one helper (`scripts/toolkit_layout.py`: a root `.git` tracking agent/) for the tests, x4lock and x4doctor; Git tests ask the shipped rules git-free; `verify-cold.sh --archive`; re-verified: all 16 affected files pass on a fresh in-place install of 647b591 |
 | F270 | `edge_sweep`'s "unconfigured" cells are an EMPTY config, not NO config; the docstring called them the new user's state | **SCOPE (read)** | all unconfigured cells (one fixture) | 📝 **DOCUMENTED 2026-10-10** — the no-config state is `verify-cold.sh`'s |
+| F271 | BaseX queries reached Java as a command-line ARGUMENT, decoded in the Windows codepage: a literal outside Windows-1252 arrived as `?`, and a zero was certified for a query nobody wrote; stdout was decoded with the locale and stderr is cp1252 | **DEFECT (measured)** | codepoint 63 arrived where 28779 was sent; every ask/coverage query containing such a character | ✅ **CLOSED 2026-10-11** (`4b7c5f7`) — query passed as a UTF-8 file via the single runner `tools/basex/basex_run.py`; stdout strict UTF-8; stderr forced UTF-8 |
+| F272 | `refs` matched exact values of five attributes while its zero carried a complete DOCUMENT count; a document count says nothing about which reference forms were searched | **DEFECT (measured)** | the issue's worked example missed 18% of references | ✅ **CLOSED 2026-10-11** (`3cf199b`) — also searches bullet/@class, add_blueprints/@wares\|@macros lists, `macro.`/`ware.` spellings, and declares its scope; `$variable` and expression attributes remain out of scope, declared |
+| F273 | Contested paths were a SET OF SPELLINGS, so one case alias was written twice; on a case-sensitive filesystem a differently spelled loose overlay would be silently dropped | **DEFECT (measured)** on Windows; case-sensitive effect **INFERRED** (no Linux machine) | 1 of 11,301 documents on the maintainer's install | ✅ **CLOSED 2026-10-11** (`d825d15`) — one entry per case-folded path; off Windows a case-folded loose lookup that refuses a folder holding two spellings |
+| F274 | The same-parent duplicate check reported only the first duplicated key, attributed it to every co-adder, and dropped the parent SOFT row; 2 duplicated keys were never reported | **DEFECT (measured)** | 2 to 40 mods named where 2 or 3 provided the key; 6 rows on the maintainer's live modlist | ✅ **CLOSED 2026-10-11** (`65e2a10`) — one row per duplicated key naming its providers only; parent SOFT row kept; the survivor of a duplicate id is NOT engine-measured and the rows say so |
+| F275 | Open lead from F274's live run: wildcard icon keys (`icon#ship_*`, `icon#upgrade_*`, `icon#module_*`) reported as duplicate HARD rows, while the engine log showed duplicates only where wildcard EXPANSIONS overlap | **LEAD (measured)** | see F276 | ✅ **CLOSED 2026-10-11** — superseded by F276 |
+| F276 | x4compat reported a duplicate for every wildcard icon key two mods declare (HARD for same-parent diff adds, UNION-KEY for full icons.xml files); the engine compares EXPANDED ids | **DEFECT (measured)**; `.dds` alias and no-subfolder search **INFERRED** | live: 3 of 3 wildcard HARD rows and 2 of 2 wildcard UNION-KEY rows false (0 overlapping ids across all installed extensions: 178 exact / 769 with aliases) | ✅ **CLOSED 2026-10-11** (`d49fdae`, `373308c`) — compared by expansion; **residuals stay OPEN** (bare texture paths, diff-vs-full-file wildcards, wildcard vs explicit id, base/DLC as providers) |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -9648,6 +9654,81 @@ an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
 
+## F276 — x4compat reported a duplicate for every shared wildcard icon key · **DEFECT (measured)** · confidence 90% · ✅ CLOSED 2026-10-11 (residuals OPEN)
+
+MEASURED: x4compat reported a duplicate for every wildcard icon key (`icon#ship_*` and the
+like) that two mods declare -- HARD for same-parent diff adds, UNION-KEY for full
+`icons.xml` files. The engine compares the EXPANDED ids, not the wildcard keys. On the
+maintainer's live modlist 3 of 3 wildcard HARD rows and 2 of 2 wildcard UNION-KEY rows were
+false: 0 overlapping ids among the expansions of all installed extensions (178 exact, 769
+with aliases). The engine log's 2 wildcard duplicates came from two mods no longer installed.
+Fix: `d49fdae` (same-parent diff adds) and `373308c` (full-file UNION-KEY rows) compare the
+expansions and report one row per shared id.
+
+STILL OPEN within F276 (declared, not fixed): bare texture paths are NOT CHECKED (1 live
+case); a diff-added wildcard is not compared with a full-file wildcard of the same key;
+a wildcard expansion vs an explicit icon id is not compared; base/DLC never take part as
+providers. INFERRED, not measured: the `.dds` alias and the absence of a subfolder search.
+Related: GitHub issue #9 (`_merge._union_children` replaces same-named wildcard
+declarations; FX-H3 reads per-mod files, so is unaffected) -- not fixed in this release.
+
+RE-DERIVED BY: `tests/test_compat.py` `test_F276_TWIN_disjoint_expansions_are_SOFT_only`,
+`test_F276_overlapping_expansions_are_one_HARD_row_per_shared_ID`,
+`test_F276_full_file_overlap_is_a_UNION_KEY_row_per_shared_ID`.
+
+## F275 — Wildcard icon keys reported as duplicates (open lead) · **LEAD (measured)** · confidence 90% · ✅ CLOSED 2026-10-11 by F276
+
+F274's live run surfaced wildcard icon keys reported as duplicate HARD rows, while the
+engine log showed duplicates only where wildcard EXPANSIONS overlap. Superseded by F276,
+which holds the measurement, the fix and the residuals.
+
+RE-DERIVED BY: `tests/test_compat.py` `test_F276_TWIN_disjoint_expansions_are_SOFT_only`.
+
+## F274 — The same-parent duplicate check named the wrong mods and lost keys · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-11
+
+MEASURED: the check reported only the first duplicated key, attributed it to every co-adder
+(2 to 40 mods named where 2 or 3 provided the key; 6 rows on the maintainer's live modlist),
+and dropped the parent SOFT row; 2 duplicated keys were never reported. Fix `65e2a10`: one
+row per duplicated key naming that key's providers only, parent SOFT row kept. The survivor
+of a duplicate id is NOT engine-measured; the rows say so.
+
+RE-DERIVED BY: `tests/test_compat.py` `test_4_duplicate_row_names_only_the_keys_providers`,
+`test_4_every_duplicated_key_gets_its_own_row`,
+`test_4_the_parent_SOFT_row_still_names_every_adder`.
+
+## F273 — Contested paths were a set of spellings · **DEFECT (measured)** · confidence 90% · ✅ CLOSED 2026-10-11
+
+MEASURED: one case alias was written twice (1 of 11,301 documents on the maintainer's
+install). INFERRED, no Linux machine: on a case-sensitive filesystem a differently spelled
+loose overlay would have been silently dropped. Fix `d825d15`: one entry per case-folded
+path; off Windows a case-folded loose lookup that refuses a folder holding two spellings.
+
+RE-DERIVED BY: `tests/test_case_alias_vpaths.py` `test_6_two_spellings_are_ONE_contested_vpath`,
+`test_6_overlay_root_REFUSES_two_spellings_in_one_folder`.
+
+## F272 — `refs` zero carried a document count, not the forms searched · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-11
+
+MEASURED: `refs` matched exact values of five attributes while its zero carried a complete
+document count; a document count says nothing about which reference forms were searched.
+The issue's worked example missed 18% of references. Fix `3cf199b`: searches bullet/@class,
+add_blueprints/@wares|@macros lists and `macro.`/`ware.` spellings, and declares its scope.
+`$variable` and expression attributes remain out of scope, declared.
+
+RE-DERIVED BY: `tools/basex/test_ask.py` `test_5_a_refs_ZERO_names_the_forms_searched_and_what_is_not`;
+`tools/basex/test_ask_e2e.py` `test_5_refs_finds_each_reference_form`.
+
+## F271 — BaseX queries were decoded in the Windows codepage · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-11
+
+MEASURED: the query was passed to Java as a command-line argument, which Java decodes in
+the Windows codepage, so a literal outside Windows-1252 arrived as `?` (codepoint 63 instead
+of 28779) and a zero was certified for a query nobody wrote. stdout was decoded with the
+locale (crash on 0x81); stderr is cp1252. Population: every ask/coverage query containing
+such a character. Fix `4b7c5f7`: the query is a UTF-8 file passed through the single runner
+`tools/basex/basex_run.py`; stdout strict UTF-8; stderr forced UTF-8.
+
+RE-DERIVED BY: `tools/basex/test_ask.py` `test_7_the_query_travels_as_a_utf8_file_never_as_an_argument`;
+`tools/basex/test_ask_e2e.py` `test_7_non_cp1252_LITERAL_reaches_basex_intact`.
+
 ## F270 — Edge sweep's "unconfigured" is an EMPTY config, not NO config · **SCOPE (read)** · confidence 95% · 📝 DOCUMENTED 2026-10-10
 
 READ (reviewer M-4): since F254, every unconfigured `edge_sweep` cell blanks all path
@@ -9815,7 +9896,7 @@ doubled non-lift switches (`//deny`, `//save`), `/findsid`'s value. Five named m
 Residual (UNMEASURED): whether other icacls switches accept prefixes on other Windows builds;
 the measurement is one build (this machine's).
 
-RE-DERIVED BY: `agent/guards/claude-hooks/test_hook_facts.py` `TestH2IcaclsSwitchSpellings`;
+RE-DERIVED BY: `.claude/hooks/test_hook_facts.py` (source `agent/guards/claude-hooks/test_hook_facts.py`) `TestH2IcaclsSwitchSpellings`;
 `test-protect-bash.sh` probes `icacls-dblslash-reset`, `icacls-inherit-prefix` and twins.
 
 ## F264 — Elevated Git Bash bypasses the ACL probe's assumption · **DEFECT (measured)** · confidence 99% · ✅ FIXED 2026-10-08
