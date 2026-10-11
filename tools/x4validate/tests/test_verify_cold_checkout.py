@@ -64,6 +64,18 @@ case "$*" in
     if [ "${COLD_WARM_TEST:-}" = 1 ]; then echo 'warm|None|None'; else echo 'None|None|None'; fi
     ;;
   *"pytest"*)
+    if [ "${COLD_ARCHIVE:-}" = 1 ]; then
+      # The release-zip population: NO repository may be visible, not even the parent one.
+      if git rev-parse --git-dir >/dev/null 2>&1; then echo 'archive leg sees a repository' >&2; exit 6; fi
+      root=$(cd ../.. && pwd)
+      test -f "$root/tools/x4validate/scripts/verify-cold.sh" || { echo 'extract is empty' >&2; exit 6; }
+      test ! -e "$root/later.txt" || { echo 'wrong archived revision' >&2; exit 6; }
+      test ! -e "$root/x4-paths.env" || { echo 'private config travelled' >&2; exit 6; }
+      case "$root" in /tmp/*|/var/tmp/*) exit 8;; esac
+      printf '%s
+' "$root" > "$COLD_TEST_TRACE"
+      exit 0
+    fi
     root=$(git rev-parse --show-toplevel)
     test "$(git rev-parse HEAD)" = "$COLD_EXPECT_SHA" || { echo 'wrong cloned commit' >&2; exit 6; }
     test ! -e "$root/x4-paths.env" || { echo 'private config travelled' >&2; exit 6; }
@@ -112,4 +124,33 @@ def test_a_warm_clone_stops_before_pytest(checkout_probe):
 def test_an_unknown_revision_stops_before_pytest(checkout_probe):
     r = run_probe(checkout_probe, "missing-cold-fixture")
     assert r.returncode == 2, r.stdout + r.stderr
+    assert not Path(checkout_probe.env["COLD_TEST_TRACE"]).exists()
+
+
+def run_archive_probe(probe, ref="cold-fixture"):
+    probe.env["COLD_ARCHIVE"] = "1"
+    return subprocess.run([probe.bash, str(probe.script), "--archive", ref], cwd=probe.root,
+                          env=probe.env, capture_output=True, text=True, timeout=90)
+
+
+def test_the_archive_leg_sees_no_repository_and_the_right_revision(checkout_probe):
+    """FX-H2 / I-1: the release zip has no .git. The extract sits inside the probe's own repo,
+    so this passes only if GIT_CEILING_DIRECTORIES really hides it (the stub exits 6 if not)."""
+    r = run_archive_probe(checkout_probe)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "COLD RUN CLEAN (archive)" in r.stdout
+    assert "no repository visible" in r.stdout
+    assert Path(checkout_probe.env["COLD_TEST_TRACE"]).is_file()
+
+
+def test_the_archive_leg_stops_on_an_unknown_revision(checkout_probe):
+    r = run_archive_probe(checkout_probe, "missing-cold-fixture")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert not Path(checkout_probe.env["COLD_TEST_TRACE"]).exists()
+
+
+def test_the_archive_leg_keeps_the_cold_precondition(checkout_probe):
+    checkout_probe.env["COLD_WARM_TEST"] = "1"
+    r = run_archive_probe(checkout_probe)
+    assert r.returncode == 3, r.stdout + r.stderr
     assert not Path(checkout_probe.env["COLD_TEST_TRACE"]).exists()
