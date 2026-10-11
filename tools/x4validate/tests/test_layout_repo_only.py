@@ -323,3 +323,109 @@ def test_own_checkout_is_the_work_tree_TOP_not_any_repo_above(tmp_path):
     nested.mkdir()
     assert _layout.own_checkout(nested) is False             # inside a repo, not its top
     assert _layout.own_checkout(tmp_path / "nowhere") is False
+
+
+# --- the git question is asked of the repo AT the root, whatever the caller's env (M-a) --
+#
+# v4.0.0 delta review (reviewer N, MEASURED): an exported GIT_DIR made `git -C <root>` answer
+# for SOME OTHER repo, so a real checkout read as an install (x4lock would lock its generated
+# trees; the suite would skip its repo-only tests). Dubious ownership did the same. One twin
+# per environment the question must survive, and the tri-state keeps "git failed" apart from
+# "git answered: not a checkout".
+
+def _status(root):
+    _layout._TL._git_answer.cache_clear()
+    try:
+        return _layout._TL.checkout_status(root)
+    finally:
+        _layout._TL._git_answer.cache_clear()
+
+
+def test_an_exported_GIT_DIR_does_not_turn_a_checkout_into_an_install(tmp_path, monkeypatch):
+    tk = _repo(tmp_path / "tk", track_agent=True)
+    other = _repo(tmp_path / "other", track_agent=False)
+    for k, v in (("GIT_DIR", other / ".git"), ("GIT_WORK_TREE", other),
+                 ("GIT_INDEX_FILE", other / ".git" / "index"),
+                 ("GIT_COMMON_DIR", other / ".git")):
+        monkeypatch.setenv(k, str(v))
+    assert _status(tk)[0] == "checkout"
+
+
+def test_TWIN_an_exported_GIT_DIR_does_not_turn_an_install_into_a_checkout(tmp_path, monkeypatch):
+    game = _repo(tmp_path / "game", track_agent=False)
+    tk = _repo(tmp_path / "tk", track_agent=True)
+    monkeypatch.setenv("GIT_DIR", str(tk / ".git"))           # points at a repo that HAS agent/
+    assert _status(game)[0] == "install"
+
+
+def test_a_worktree_with_an_exported_GIT_DIR_is_still_a_checkout(tmp_path, monkeypatch):
+    main = _repo(tmp_path / "main", track_agent=True)
+    wt = tmp_path / "wt"
+    _git("worktree", "add", "-q", str(wt), cwd=main)
+    assert (wt / ".git").is_file()
+    monkeypatch.setenv("GIT_DIR", str(_repo(tmp_path / "other", track_agent=False) / ".git"))
+    assert _status(wt)[0] == "checkout"
+
+
+def test_DUBIOUS_OWNERSHIP_does_not_turn_a_checkout_into_an_install(tmp_path, monkeypatch):
+    """git's own knob simulates a repo owned by someone else (it refuses with rc 128 unless the
+    root is a safe.directory) -- the shape of a checkout copied from another account."""
+    tk = _repo(tmp_path / "tk", track_agent=True)
+    monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+    import subprocess
+    probe = subprocess.run(["git", "-C", str(tk), "cat-file", "-e", "HEAD:agent"],
+                           capture_output=True, text=True)
+    assert probe.returncode != 0 and "dubious" in probe.stderr     # control: the knob bites
+    assert _status(tk)[0] == "checkout"
+
+
+def test_NO_GIT_on_PATH_is_UNKNOWN_with_a_reason_and_never_a_checkout(tmp_path, monkeypatch):
+    import subprocess
+    tk = _repo(tmp_path / "tk", track_agent=True)
+
+    def no_git(*a, **k):
+        raise FileNotFoundError("git")
+    monkeypatch.setattr(subprocess, "run", no_git)
+    state, why = _status(tk)
+    assert state == "unknown" and "git" in why
+    _layout._TL._git_answer.cache_clear()
+    try:
+        assert _layout._TL.is_source_checkout(tk) is False      # the documented policy
+    finally:
+        _layout._TL._git_answer.cache_clear()
+
+
+def test_a_repo_git_CANNOT_read_is_UNKNOWN_not_install(tmp_path):
+    """No commit yet: git fails, which proves nothing either way -- unlike a HEAD without agent/."""
+    root = tmp_path / "empty"
+    root.mkdir()
+    _git("init", "-q", cwd=root)
+    state, why = _status(root)
+    assert state == "unknown" and why
+
+
+def test_TWIN_no_dot_git_at_the_root_is_INSTALL_without_asking_git(tmp_path, monkeypatch):
+    import subprocess
+
+    def boom(*a, **k):
+        raise AssertionError("git must not be asked")
+    monkeypatch.setattr(subprocess, "run", boom)
+    root = tmp_path / "zip"
+    (root / "agent").mkdir(parents=True)
+    assert _status(root)[0] == "install"
+
+
+def test_a_skip_resting_on_UNKNOWN_says_so_in_its_reason(tmp_path):
+    root = tmp_path / "empty"
+    root.mkdir()
+    _git("init", "-q", cwd=root)                     # a .git git cannot answer for: no commit
+    with pytest.raises(pytest.skip.Exception) as e:
+        _layout.require_repo("agent/rules/codex-rules.yaml", root=root)
+    assert "layout UNKNOWN" in str(e.value)
+
+
+def test_TWIN_a_skip_on_a_SETTLED_install_carries_no_caveat(tmp_path):
+    root = _repo(tmp_path / "game", track_agent=False)
+    with pytest.raises(pytest.skip.Exception) as e:
+        _layout.require_repo("agent/rules/codex-rules.yaml", root=root)
+    assert "UNKNOWN" not in str(e.value)

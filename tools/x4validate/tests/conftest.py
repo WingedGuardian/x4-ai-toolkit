@@ -318,7 +318,8 @@ def _environment_unresolvable_reason(root: Path | None = None) -> str | None:
     import _layout
     if _layout.installed_layout(_layout.ROOT if root is None else root):
         return ("configured but not present yet (an installed toolkit before setup/unpack): "
-                + ", ".join(missing))
+                + ", ".join(missing)
+                + _layout.layout_caveat(_layout.ROOT if root is None else root))
     return None
 
 

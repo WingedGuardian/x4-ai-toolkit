@@ -383,9 +383,23 @@ def _is_installed_toolkit(root: Path) -> bool:
     CHECKOUT. A checkout's .claude/ etc. are GENERATED, and a read-only bit there would break
     gen-agent-trees.py and `git checkout` -- so a checkout is never an agent root here.
     FX-H2 / F269: a checkout is a root .git whose HEAD tracks agent/ (toolkit_layout.py), not
-    "has agent/": the release zip HAS agent/, and installed in place its guards went unlocked."""
-    return ((root / "tools" / "x4validate" / "x4validate" / "_paths.py").is_file()
-            and not _LAYOUT.is_source_checkout(root))
+    "has agent/": the release zip HAS agent/, and installed in place its guards went unlocked.
+    M-a (v4.0.0 delta review): a .git git cannot answer for ("unknown") is treated as an
+    INSTALL -- an unlocked guard is the failure this tool exists to prevent, a read-only bit
+    on a checkout is visible and undone by `unlock` -- and the reason is printed, never silent."""
+    if not (root / "tools" / "x4validate" / "x4validate" / "_paths.py").is_file():
+        return False
+    state, why = _LAYOUT.checkout_status(root)
+    if state == "unknown" and str(root) not in _UNKNOWN_SAID:
+        _UNKNOWN_SAID.add(str(root))
+        print("NOTE: cannot tell whether %s is a source checkout or an install (%s); "
+              "treating it as an INSTALL, so its guards are locked. If it is a checkout, "
+              "fix git and run `unlock`." % (root, why), file=sys.stderr)
+    return state != "checkout"
+
+
+#: roots whose "unknown" layout has already been reported this run
+_UNKNOWN_SAID: set[str] = set()
 
 
 def _agent_roots(game: Path | None) -> list[Path]:
