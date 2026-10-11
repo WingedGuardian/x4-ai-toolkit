@@ -1947,3 +1947,89 @@ def test_8_the_guard_pass_and_the_AN10_pass_share_ONE_finished_tree(tmp_path, mo
     assert [(m.mod, m.added_by) for m in rep.order_misses] == [("a_patcher", "z_adder")]
     assert len(rep.by_kind("HARD")) == 1
     assert full == ["libraries/wares.xml"], full
+
+
+# --- release review of #8: an op that is BOTH guarded off and an order miss ----------
+#
+# A guard can be false precisely because its target is not there yet, so the op stays in
+# both lists -- but it is ONE op: the render says so, the summary does not count it as
+# two, the order-miss text does not blame load order alone, and its `shared_with` names
+# the later mod that adds the target (or says None = unknown, never an empty list).
+
+_GUARD_ZWARE = ('<replace sel="//ware[@id=\'zware\']/price/@average" '
+                'if="//ware[@id=\'zware\']">5</replace>')
+
+
+def _both_world(tmp_path, body=_GUARD_ZWARE):
+    return _rep(tmp_path, ("a_patcher", body), ("z_adder", _ADDS_ZWARE[6:-7]))
+
+
+def test_8R_a_guarded_off_order_miss_is_ONE_op_in_both_lists(tmp_path):
+    rep = _both_world(tmp_path)
+    assert [(m.mod, m.added_by, m.guard_false) for m in rep.order_misses] == \
+        [("a_patcher", "z_adder", True)]
+    assert [(g.mod, g.shared_with, g.also_order_miss) for g in rep.guarded_off] == \
+        [("a_patcher", ["z_adder"], True)]
+    out = _compat.render(rep)
+    assert "its sel= and its guard both fail at its load position" in out, out
+    assert "also listed under GUARDED OFF" in out, out
+    assert "1 op(s) guarded off (if= false; 1 of them also an order miss)" in out, out
+    assert "load order is" in out and "not necessarily the only reason" in out, out
+
+
+def test_8R_TWIN_a_TRUE_or_silent_guarded_order_miss_is_not_marked(tmp_path):
+    rep = _both_world(tmp_path, _GUARD_ZWARE.replace('if="//ware[@id=\'zware\']"',
+                                                    'silent="true"'))
+    assert [(m.mod, m.guard_false) for m in rep.order_misses] == [("a_patcher", False)]
+    assert rep.guarded_off == []
+    out = _compat.render(rep)
+    assert "both fail" not in out and "also listed under GUARDED OFF" not in out, out
+    assert "not necessarily the only reason" not in out, out
+    assert "0 op(s) guarded off (if= false)," in out, out
+
+
+def test_8R_a_guarded_off_op_whose_target_NOBODY_supplies_is_unknown_not_empty(tmp_path):
+    rep = _rep(tmp_path, ("a_mod", _set(1)),
+               ("b_mod", _set(2, "false()", sel="//ware[@id='nope']/@x")))
+    assert [(g.mod, g.shared_with, g.also_order_miss) for g in rep.guarded_off] == \
+        [("b_mod", None, False)]
+    assert "would meet: unknown" in _compat.render(rep)
+
+
+def test_8R_TWIN_a_guarded_off_op_on_a_BASE_node_alone_is_an_empty_list(tmp_path):
+    """Its target exists in the base and no other mod touches it: genuinely nobody."""
+    rep = _rep(tmp_path, ("a_mod", _set(1)),
+               ("b_mod", _set(2, "false()", sel="//ware[@id='ice']/price/@average")))
+    assert [(g.mod, g.shared_with) for g in rep.guarded_off] == [("b_mod", [])]
+
+
+def test_8R_JSON_carries_guard_false_and_also_order_miss(tmp_path, capsys):
+    import json
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_patcher", {"libraries/wares.xml": f"<diff>{_GUARD_ZWARE}</diff>"})
+    _mod(ext, "z_adder", {"libraries/wares.xml": _ADDS_ZWARE})
+    _compat.main(["check", "--ext-dir", str(ext), "--reference", str(cfg.reference),
+                  "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert [m["guard_false"] for m in payload["order_misses"]] == [True]
+    assert [(g["shared_with"], g["also_order_miss"]) for g in payload["guarded_off"]] == \
+        [(["z_adder"], True)]
+
+
+def test_8R_a_candidate_run_on_the_ADDER_keeps_the_shared_guarded_off_op(tmp_path):
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_patcher", {"libraries/wares.xml": f"<diff>{_GUARD_ZWARE}</diff>"})
+    _mod(ext, "z_adder", {"libraries/wares.xml": _ADDS_ZWARE})
+    rep = _compat.analyze(ext, candidate=ext / "z_adder", config=cfg)
+    assert [g.mod for g in rep.guarded_off] == ["a_patcher"]
+
+
+def test_8R_an_absent_target_ADD_whose_child_key_another_mod_defines_is_named(tmp_path):
+    """No base node, but the document-wide key pass knows who else defines the key: that
+    is known, not 'unknown'."""
+    rep = _rep(tmp_path, ("a_mod", _DOCWIDE_A),
+               ("b_mod", '<add sel="//ware[@id=\'gone\']" pos="after" if="false()">'
+                         '<ware id="kware"/></add>'))
+    assert [(g.mod, g.shared_with) for g in rep.guarded_off] == [("b_mod", ["a_mod"])]
