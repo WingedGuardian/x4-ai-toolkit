@@ -493,11 +493,20 @@ def _analyze_vpath(
     # (it is announced in `guarded_off` instead). TRUE: it participates, and every row
     # it joins says the answer depends on this load order. UNEVALUATED: it is KEPT,
     # labelled, and announced -- an unevaluable guard is never read as false.
+    full: dict[str, etree._Element | None] = {}
+
+    def full_tree() -> etree._Element | None:
+        """The finished tree over every mod on this file -- built ONCE and shared by
+        the guard pass and the AN-10 pass, which both self-check against it."""
+        if "t" not in full:
+            full["t"] = _prefix_tree(vpath, ordered, folder_to_path, config)
+        return full["t"]
+
     outcomes: dict[tuple[str, int], tuple[str, str]] = {}
     if base_tree is not None:
         outcomes = _guard_outcomes(vpath, ordered,
                                    {f: r for f, r in read if r.tag == "diff"},
-                                   folder_to_path, config)
+                                   folder_to_path, config, full_tree=full_tree)
     notes: dict[tuple[str, str], list[str]] = defaultdict(list)  # (folder, cid|key)
     off: list[tuple[str, etree._Element, list[str], list[str]]] = []  # guarded off
 
@@ -835,8 +844,8 @@ def _analyze_vpath(
 
     if report is not None and unmatched and base_tree is not None:
         report.order_misses.extend(_order_misses(
-            vpath, sorted(mod_folders, key=lambda f: rank[f]), unmatched,
-            folder_to_path, config, only=cand_folder))
+            vpath, ordered, unmatched, folder_to_path, config, only=cand_folder,
+            full_tree=full_tree))
     return collisions
 
 
@@ -933,8 +942,8 @@ def _verdicts_at(vpath: str, folder: str, root: etree._Element, earlier: list[st
 
 
 def _guard_outcomes(vpath: str, ordered: list[str], roots: dict[str, etree._Element],
-                    folder_to_path: dict[str, Path],
-                    config: _merge.Config) -> dict[tuple[str, int], tuple[str, str]]:
+                    folder_to_path: dict[str, Path], config: _merge.Config,
+                    full_tree=None) -> dict[tuple[str, int], tuple[str, str]]:
     """`{(folder, op index): (state, reason)}` for every `if=`-guarded op in *roots*
     (folder -> its `<diff>` root on *vpath*), each evaluated by `_merge.apply_diff` on
     the tree as it stands when that op applies: base+DLC, every mod loading earlier,
@@ -946,6 +955,8 @@ def _guard_outcomes(vpath: str, ordered: list[str], roots: dict[str, etree._Elem
     `build_effective`); a nested (mod-owned) vpath, a failed self-check or a file the
     pass did not apply falls back to rebuilding the tree at each guarded mod's position.
     Keyed by op INDEX, never `id(op)`: the pass parses its own copy of each file.
+    *full_tree* (a zero-argument callable) supplies the self-check's finished tree
+    when the caller already has, or will need, one.
     """
     want = {f for f, r in roots.items() if any(o.get("if") for o in _op_list(r))}
     if not want:
@@ -965,8 +976,12 @@ def _guard_outcomes(vpath: str, ordered: list[str], roots: dict[str, etree._Elem
         seen.add(folder)
         got.update({(folder, i): sv for i, sv in v.items()})
 
+    want_tree = None
+    if full_tree is not None and not (config.overlays or _merge._nested_target(
+            vpath, config.packed_dlc_names()) is not None):
+        want_tree = full_tree()         # the walk refuses those two shapes unbuilt
     if not _walk_positions(vpath, ordered, folder_to_path, config,
-                           lambda *_a: None, on_applied=on_applied):
+                           lambda *_a: None, want=want_tree, on_applied=on_applied):
         got.clear()
         seen.clear()
     for folder in sorted(want - seen, key=ordered.index):
@@ -1113,8 +1128,10 @@ def _order_misses(vpath: str, ordered: list[str],
                   unmatched: dict[str, list[etree._Element]],
                   folder_to_path: dict[str, Path],
                   config: _merge.Config,
-                  only: str | None = None) -> list[OrderMiss]:
+                  only: str | None = None, full_tree=None) -> list[OrderMiss]:
     """Ops that match nothing in base but WOULD match once a LATER mod has loaded.
+
+    *full_tree*: as `_guard_outcomes` -- the finished tree, shared rather than rebuilt.
 
     Answered in ONE incremental pass per file (`_walk_positions`). The rebuild form,
     `_order_misses_rebuild`, re-merged the whole prefix for every probe: MEASURED on
@@ -1150,7 +1167,8 @@ def _order_misses(vpath: str, ordered: list[str],
         pending += [(i, op) for op in ops]
     if not pending:
         return []
-    want = _prefix_tree(vpath, ordered, folder_to_path, config)
+    want = (full_tree() if full_tree is not None
+            else _prefix_tree(vpath, ordered, folder_to_path, config))
     if want is None or config.overlays or _merge._nested_target(
             vpath, config.packed_dlc_names()) is not None:
         return _order_misses_rebuild(vpath, ordered, unmatched, folder_to_path,

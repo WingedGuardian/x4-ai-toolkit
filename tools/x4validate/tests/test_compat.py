@@ -1665,9 +1665,9 @@ def test_8_a_drifted_walk_falls_back_and_gives_the_same_answer(tmp_path, monkeyp
     import types
     cfg, ext = _three_guards(tmp_path)
     built = []
-    real_prefix = _compat._prefix_tree
-    monkeypatch.setattr(_compat, "_prefix_tree",
-                        lambda *a, **k: built.append(1) or real_prefix(*a, **k))
+    real_rebuild = _compat._verdicts_at
+    monkeypatch.setattr(_compat, "_verdicts_at",
+                        lambda *a, **k: built.append(1) or real_rebuild(*a, **k))
     drifted = types.SimpleNamespace(**{k: getattr(_merge, k) for k in dir(_merge)
                                        if not k.startswith("__")})
     drifted.apply_diff = lambda tree, root, *a, **k: _merge.apply_diff(
@@ -1682,7 +1682,7 @@ def test_8_a_drifted_walk_falls_back_and_gives_the_same_answer(tmp_path, monkeyp
 
 def test_8_TWIN_an_agreeing_walk_needs_no_rebuild(tmp_path, monkeypatch):
     cfg, ext = _three_guards(tmp_path)
-    monkeypatch.setattr(_compat, "_prefix_tree",
+    monkeypatch.setattr(_compat, "_verdicts_at",
                         lambda *a, **k: pytest.fail("rebuilt on an agreeing walk"))
     rep = _compat.analyze(ext, config=cfg)
     assert [g.mod for g in rep.guarded_off] == ["b_mod"]
@@ -1857,9 +1857,9 @@ def test_8_a_walk_that_read_a_DIFFERENT_op_list_is_not_trusted(tmp_path, monkeyp
         return root
 
     built = []
-    real_prefix = _compat._prefix_tree
-    monkeypatch.setattr(_compat, "_prefix_tree",
-                        lambda *a, **k: built.append(1) or real_prefix(*a, **k))
+    real_rebuild = _compat._verdicts_at
+    monkeypatch.setattr(_compat, "_verdicts_at",
+                        lambda *a, **k: built.append(1) or real_rebuild(*a, **k))
     _drifted(monkeypatch, overlay_root=walk_sees_an_extra_op)
     rep = _rep(tmp_path, ("a_mod", _set(1)), ("b_mod", _set(2, "false()")))
     assert built, "verdicts from a mismatched op list were trusted"
@@ -1869,7 +1869,7 @@ def test_8_a_walk_that_read_a_DIFFERENT_op_list_is_not_trusted(tmp_path, monkeyp
 def test_8_a_UNION_file_in_the_walk_is_still_unioned_not_diffed(tmp_path, monkeypatch):
     """Only a <diff> takes the apply_diff route; a full union file must still go through
     apply_overlay, or the self-check fails and every guard pays for a rebuild."""
-    monkeypatch.setattr(_compat, "_prefix_tree",
+    monkeypatch.setattr(_compat, "_verdicts_at",
                         lambda *a, **k: pytest.fail("rebuilt: the walk mishandled a union"))
     cfg = _setup_ref(tmp_path)
     ext = tmp_path / "extensions"
@@ -1928,3 +1928,22 @@ def test_8_NAME_CLASH_an_UNEVALUABLE_guard_keeps_the_clash_labelled(tmp_path):
     cl = _clashes(rep)
     assert len(cl) == 1 and "guard UNEVALUATED" in cl[0].detail, cl
     assert [s for s in rep.skipped if "b_mod" in s.what], rep.skipped
+
+
+def test_8_the_guard_pass_and_the_AN10_pass_share_ONE_finished_tree(tmp_path, monkeypatch):
+    """Both passes self-check against the merged tree over every mod on the file; it is
+    the costliest thing either builds (MEASURED, libraries/wares.xml on the live install),
+    so it is built once per file -- and both answers still come out."""
+    full = []
+
+    def counting(vpath, config, extra_overlays=None, *a, **k):
+        if extra_overlays is not None and len(extra_overlays) == 2:
+            full.append(vpath)
+        return _merge.build_effective(vpath, config, extra_overlays, *a, **k)
+
+    _drifted(monkeypatch, build_effective=counting)
+    rep = _rep(tmp_path, ("a_patcher", _PATCHES_ZWARE[6:-7] + _set(1, "true()")),
+               ("z_adder", _ADDS_ZWARE[6:-7] + _set(2)))
+    assert [(m.mod, m.added_by) for m in rep.order_misses] == [("a_patcher", "z_adder")]
+    assert len(rep.by_kind("HARD")) == 1
+    assert full == ["libraries/wares.xml"], full
