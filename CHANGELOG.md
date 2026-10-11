@@ -724,6 +724,12 @@ confusing messages and six cosmetic ones. All are fixed:
   a Git repository the zip does not have (MEASURED: 29 failed, 8 errors over 238 of 239 test
   files). A checkout is now a `.git` whose HEAD carries `agent/`; the three ask the shipped
   `.gitignore`/`.gitattributes` without Git metadata (BLIND-SPOTS F269).
+- **An in-place install's guards are locked by `x4lock`, and `x4doctor` reports it as an install.**
+  Both took the zip's `agent/` folder for a source checkout: `x4lock lock` left the toolkit's own
+  guards unlocked (MEASURED: 1 file locked, now 131 including the 14 hook files) and `x4doctor`
+  ran its source-checkout parity check instead of N/A. A source checkout is now a `.git` whose
+  HEAD carries `agent/`, decided in one place (`scripts/toolkit_layout.py`); a real checkout
+  behaves as before (BLIND-SPOTS F269).
 - `run-gates.sh` expands its possibly-empty arrays as `${a[@]+"${a[@]}"}`, which bash before
   4.4 (macOS's 3.2) requires under `set -u` (READ, not reproduced; BLIND-SPOTS F268).
 - `gates/edge_sweep.py` says what its "unconfigured" cells are: every path variable blank and an

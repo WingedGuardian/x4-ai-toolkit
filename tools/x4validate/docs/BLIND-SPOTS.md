@@ -9708,9 +9708,14 @@ serially (the job was killed first); none of the 37 is attributed to parallelism
 Fixed (FX-H2, I-1 a/b): `installed_layout()` -- a checkout is a `.git` AT the root whose HEAD
 tracks agent/, anything else is installed; the three Git tests ask the SHIPPED
 `.gitignore`/`.gitattributes` in a scratch repo (git-free) and their repository only when
-`own_checkout(root)`. READ leads, not changed (a behaviour change, for the maintainer):
-`scripts/x4lock.py` `_is_installed_toolkit` and `scripts/x4doctor.py`'s parity row also key on
-agent/, so an in-place `separate` install's guards are not in x4lock's agent roots.
+`own_checkout(root)`. `scripts/x4lock.py` `_is_installed_toolkit` and `scripts/x4doctor.py`'s parity row keyed on agent/
+too (maintainer's decision 2026-10-10: fix them the same way). One helper now answers for all
+three, `scripts/toolkit_layout.py`. MEASURED 2026-10-11 on scratch trees, OLD 5063aec vs NEW:
+an in-place install (zip extract, no repo visible) -- `x4lock lock` locked 1 file OLD, 131 NEW
+(14 under `.claude/hooks`), and `.claude/hooks/protect-bash.sh` was read-only on disk only NEW
+(the file mode read independently, then `unlock --all`); x4doctor `parity.claude` and
+`parity.codex` OK -> N/A, its `x4lock` row UNKNOWN -> OK. A real checkout (a clone) at each
+commit: `x4lock status` byte-identical, x4doctor 32 of 32 row statuses identical.
 NOT YET VERIFIED: the post-fix re-run of the 13 failing files in a fresh extract was stopped
 by system memory pressure before it started.
 
