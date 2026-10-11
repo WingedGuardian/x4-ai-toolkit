@@ -356,6 +356,9 @@ memory or from another session -- a remembered id was stale within a day here.
 | F275 | Open lead from F274's live run: wildcard icon keys (`icon#ship_*`, `icon#upgrade_*`, `icon#module_*`) reported as duplicate HARD rows, while the engine log showed duplicates only where wildcard EXPANSIONS overlap | **LEAD (measured)** | see F276 | ✅ **CLOSED 2026-10-11** — superseded by F276 |
 | F276 | x4compat reported a duplicate for every wildcard icon key two mods declare (HARD for same-parent diff adds, UNION-KEY for full icons.xml files); the engine compares EXPANDED ids | **DEFECT (measured)**; `.dds` alias and no-subfolder search **INFERRED** | live: 3 of 3 wildcard HARD rows and 2 of 2 wildcard UNION-KEY rows false (0 overlapping ids across all installed extensions: 178 exact / 769 with aliases) | ✅ **CLOSED 2026-10-11** (`d49fdae`, `373308c`) — compared by expansion; **residuals stay OPEN** (bare texture paths, diff-vs-full-file wildcards, wildcard vs explicit id, base/DLC as providers) |
 | F277 | `toolkit_layout` asked `git -C <root>` whether HEAD tracks agent/, but an exported `GIT_DIR` (or WORK_TREE/INDEX_FILE/COMMON_DIR) answered for ANOTHER repo and dubious ownership refused the call; both read a real checkout as an install, and "git failed" was indistinguishable from "not a checkout" | **DEFECT (measured)** | reproduced on a fixture checkout: GIT_DIR -> False, GIT_TEST_ASSUME_DIFFERENT_OWNER -> False (both True after); consumers x4lock, x4doctor, tests/_layout | ✅ **CLOSED 2026-10-11** (`8452913`) — git runs with every `--local-env-vars` variable removed and `-c safe.directory=<root>`; tri-state checkout / install / unknown with a reason; unknown: x4lock locks and says why, x4doctor parity UNKNOWN, test skips carry the caveat |
+| F278 | x4compat resolved each diff op's sel= against the base tree and never evaluated `if=`, so ops the merge skips (guard false at their load position) became HARD, duplicate, SOFT, SUBTREE or removal rows, could be named winner, and guarded TRUE adds were left out of the UNION-KEY pass | **DEFECT (measured)** | 149 mods / 486 shared files: 12 of 336 rows (6 HARD + 6 SUBTREE) were guarded-off ops; 23 guarded-off ops listed; 0 rows added, no winner changed | ✅ **CLOSED 2026-10-11** (`296b9c3`, lane `80c30bb`..`d99f32f`) - guards evaluated with `_merge.apply_diff` at each op's load position; GUARDED OFF section; invalid guard stays UNEVALUATED; the engine evaluating `if=` as `_merge` models it is ASSUMED |
+| F279 | `_merge._union_children` deduped same-named wildcard `<icon>`s in `libraries/icons.xml` later-wins (base's own included); `apply_diff` took Python truthiness for `if=`, so a NaN guard applied the op | **DEFECT (measured)** | base + 8 DLC: 38 wildcard declarations in, 17 effective (21 dropped), now 38 of 38; live modlist store +27 entities, 0 removed | ✅ **CLOSED 2026-10-11** (`bf2e9dc`; `6c25d34`, `d339a32`, `f3967b5`) - wildcard icons appended not deduped; `_xpath_boolean` for `if=`; **residuals OPEN** (plain-name duplicates, other libraries/ files, packed mods, in-game confirmation) |
+| F280 | Builders over a missing or empty reference wrote an EMPTY artifact over the good one and exited 0 (`Config` refuses only an UNRESOLVED reference; `base_vpaths` returns nothing for a missing or empty root) | **DEFECT (measured)** | on `bf2e9dc` x4effective build, x4xref build and basex/build-effective.py, both shapes: rc 0 with 0 entities/rows/documents | ✅ **CLOSED 2026-10-11** (`172c05f`) - shared `require_base_documents` raises `EmptyReference`, rc 2 before any write; shell builders check first; `_ffinames` (x4live) and `stage.py` not measured |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -9655,6 +9658,68 @@ an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
 
+## F280 — Builders over a missing or empty reference wrote an empty artifact and exited 0 · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-11
+
+MEASURED on `bf2e9dc`: x4effective build, x4xref build and basex/build-effective.py, both
+shapes (missing and empty reference), exited rc 0 with 0 entities/rows/documents, overwriting
+the good artifact. `Config` refuses only an UNRESOLVED reference; `base_vpaths` is an rglob
+that returns nothing for a missing or empty root. READ: build-corpus.sh dropped x4raw before
+its check; build-effective.sh rm -rf'd the old tree first. Found because a build run from a
+second git worktree resolved its reference relative to that worktree.
+
+Fix `172c05f` (FX-H7): shared `_effective.require_base_documents` raises `EmptyReference`
+(a ValueError), rc 2 before any write; `tools/basex/reference_check.py` runs it first in both
+shell builders (before java, DROP DB, rm -rf). Twins: missing, empty, valid, store-untouched;
+fake-java tests prove java never runs. Census (MEASURED): x4validate Tier A/B and x4compat
+already refused. Readers over a 0-entity store refuse rc 2 except `coverage`/`sql`, which
+claim nothing. NOT MEASURED: `_ffinames` (x4live), `stage.py`.
+
+RE-DERIVED BY: `tests/test_effective_refuses_empty_reference.py`.
+
+## F279 — Wildcard icons deduped later-wins in the merge, and a NaN `if=` applied · **DEFECT (measured)** · confidence 90% · ✅ CLOSED 2026-10-11 (residuals OPEN)
+
+MEASURED (base + 8 DLC): `_merge._union_children` deduped same-named wildcard `<icon>`s in
+`libraries/icons.xml` later-wins, so each DLC/mod `upgrade_*`/`ship_*`/`module_*`/`*`
+replaced the previous layer's, base's own included: 38 wildcard declarations in, 17
+effective (21 dropped). After the fix 38 of 38, whole file +21, 0 removed. On the live
+modlist (same content fingerprint, old vs new code): store +27 entities, all wildcard icons,
+0 removed. This is the `_merge` half of GitHub issue #9 (x4compat half: F276).
+
+Also: `apply_diff` used Python truthiness for `if=`; a NaN result applied the op (XPath
+boolean(NaN) is false). Now `_xpath_boolean`; other result types are refused as an invalid
+`if=`. Fix merged as `bf2e9dc` (`6c25d34`, `d339a32`, `f3967b5`). A diff selecting a
+wildcard icon by name alone is now reported as ambiguous (the engine skips it).
+
+STILL OPEN within F279 (UNMEASURED): which of two same-named PLAIN icon declarations the
+engine keeps (still last-wins); same-name duplicates in `index/` and other `libraries/`
+files; packed mods' icons.xml (fixture-tested only); in-game confirmation of coexistence
+(INFERRED, 90-95%); corpus frequency of NaN guards.
+
+RE-DERIVED BY: `tests/test_icon_wildcards_coexist.py`, `tests/test_if_xpath_boolean.py`
+(`test_a_NaN_guard_is_FALSE_and_the_op_is_skipped`).
+
+## F278 — x4compat never evaluated `if=` guards · **DEFECT (measured)** · confidence 90% · ✅ CLOSED 2026-10-11 (residuals OPEN)
+
+MEASURED (149 mods / 486 shared files): x4compat resolved each `<diff>` op's sel= against
+the base tree and never evaluated `if=`, while `_merge.apply_diff` skips an op whose guard is
+false on the tree at its load position. Guarded-off ops became HARD, duplicate, SOFT, SUBTREE
+or removal rows, could be named winner, and guarded TRUE adds were excluded from the
+document-wide UNION-KEY pass; NAME-CLASH counted guarded macro diffs regardless. 12 of 336
+rows (6 HARD + 6 SUBTREE) were guarded-off ops (all one overlay vs one mod on six ship
+macros); 0 rows added, no winner changed; 23 guarded-off ops listed. cross_tool SUBTREE 9/15
+clean on master, 9/9 on the fix; runtime 55 s to 61 s (+9%).
+
+Fix (issue #8, FX-H5, merged `296b9c3`, lane commits `80c30bb`..`d99f32f`) in `_compat.py`:
+guards evaluated with `_merge.apply_diff` at each op's load position; GUARDED OFF section /
+`guarded_off` in JSON; a TRUE guard is noted; an invalid guard is kept as UNEVALUATED and
+counted as a skip.
+
+STILL OPEN within F278: an invalid `if=` stays UNEVALUATED (engine behaviour UNMEASURED); a
+guarded macro diff with no base file stays UNEVALUATED; that the engine evaluates `if=`
+exactly as `_merge` models it is ASSUMED, not engine-measured.
+
+RE-DERIVED BY: `tests/test_compat.py` (`test_8_*`, incl. the `test_8_TWIN_*` controls).
+
 ## F277 — The checkout-or-install question was answered by whatever repo the environment named · **DEFECT (measured)** · confidence 92% · ✅ CLOSED 2026-10-11
 
 MEASURED (v4.0.0 delta review, reviewer N; reproduced by FX-H4 on two fixture repos against
@@ -9700,7 +9765,7 @@ a wildcard expansion vs an explicit icon id is not compared; base/DLC never take
 providers. INFERRED, not measured: the `.dds` alias and the absence of a subfolder search.
 Related: GitHub issue #9 (`_merge._union_children` replaces same-named wildcard
 declarations; FX-H3 reads per-mod files, so is unaffected) -- the `_merge` half is fixed
-in this release (FX-H6: wildcard `<icon>`s in `libraries/icons.xml` are appended, not
+in this release (F279, FX-H6: wildcard `<icon>`s in `libraries/icons.xml` are appended, not
 deduped; base + 8 DLC 17 -> 38 of 38 declarations kept).
 
 RE-DERIVED BY: `tests/test_compat.py` `test_F276_TWIN_disjoint_expansions_are_SOFT_only`,
