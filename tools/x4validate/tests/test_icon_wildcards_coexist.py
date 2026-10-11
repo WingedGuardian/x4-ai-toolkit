@@ -171,3 +171,60 @@ def test_a_diff_selecting_a_now_duplicated_wildcard_is_reported_ambiguous(tmp_pa
                                                     include_packed_dlc=False))
     assert [t for _, t in _decls(r.tree, "upgrade_*")] == [
         "ui\\base\\*.tga", "ui\\ego_dlc_boron\\*.tga", "ui\\ego_dlc_split\\*.tga"]
+
+
+# --------------------------------------------------------------------------- #
+# x4effective: one icon entity PER declaration, and `show` tells them apart
+# --------------------------------------------------------------------------- #
+
+def _icon_store(tmp_path, monkeypatch):
+    import sqlite3
+    from x4validate import _effective
+    ref = _ref_with_dlc(tmp_path)
+    ext = tmp_path / "extensions"
+    mod = ext / "icon_mod"
+    _w(mod / "content.xml", '<content id="icon_mod" name="icon_mod" version="1"/>')
+    _w(mod / ICONS, '<diff><add sel="/icons"><icon name="upgrade_*" '
+                    'texture="ui\\icon_mod\\*.tga"/></add></diff>')
+    monkeypatch.setattr(_effective._registry, "ingest_content_xml", lambda *a, **k: [])
+    db = tmp_path / "eff.sqlite"
+    _effective.build(_merge.Config(reference=ref, include_packed_dlc=False), db,
+                     dirs=[ext], kinds=("icon",))
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    return db, con
+
+
+def test_the_effective_store_holds_one_icon_entity_per_wildcard_declaration(
+        tmp_path, monkeypatch):
+    _, con = _icon_store(tmp_path, monkeypatch)
+    rows = con.execute("SELECT klass, origin FROM entities WHERE kind='icon' AND "
+                       "name='upgrade_*' ORDER BY id").fetchall()
+    assert [(r["klass"], r["origin"]) for r in rows] == [
+        ("ui\\base\\*.tga", "base"),
+        ("ui\\ego_dlc_boron\\*.tga", "ego_dlc_boron"),
+        ("ui\\ego_dlc_split\\*.tga", "ego_dlc_split"),
+        ("ui\\icon_mod\\*.tga", "icon_mod"),
+    ]
+    # the plain icon is still exactly one entity
+    assert con.execute("SELECT count(*) FROM entities WHERE kind='icon' AND "
+                       "name='plain'").fetchone()[0] == 1
+
+
+def test_x4effective_show_names_each_same_named_row_by_class_and_origin(
+        tmp_path, monkeypatch, capsys):
+    """All four rows share one vpath, so a NOTE listing `id=N  libraries/icons.xml`
+    per row gives the reader no way to tell them apart."""
+    from x4validate import _effectivecli
+    db, _ = _icon_store(tmp_path, monkeypatch)
+    rc = _effectivecli.main(["--db", str(db), "show", "icon", "upgrade_*"])
+    out, err = capsys.readouterr()
+    assert rc == 0, err
+    assert "NOTE: 4 entities share (icon, 'upgrade_*')" in err
+    for tex, origin in (("ui\\base\\*.tga", "base"),
+                        ("ui\\ego_dlc_boron\\*.tga", "ego_dlc_boron"),
+                        ("ui\\ego_dlc_split\\*.tga", "ego_dlc_split"),
+                        ("ui\\icon_mod\\*.tga", "icon_mod")):
+        line = [ln for ln in err.splitlines() if tex in ln]
+        assert len(line) == 1 and origin in line[0], (tex, err)
+    assert "ui\\base\\*.tga" in out   # the lowest id is the one shown

@@ -591,9 +591,16 @@ def _one_entity(con, kind: str, name: str):
     if len(rows) > 1:
         print(f"NOTE: {len(rows)} entities share ({kind}, {name!r}); showing the "
               f"lowest id. They are NOT interchangeable:", file=sys.stderr)
+        # vpath ALONE cannot tell rows apart when they share a file: since issue #9
+        # every same-named wildcard <icon> (`upgrade_*`: 8 on base + 8 DLC) is its own
+        # entity in libraries/icons.xml. The class (an icon's texture) and the origin
+        # are what distinguish them.
+        keys = rows[0].keys()
         for r in rows:
-            vp = r["vpath"] if "vpath" in r.keys() else "?"
-            print(f"      id={r['id']}  {vp}", file=sys.stderr)
+            vp = r["vpath"] if "vpath" in keys else "?"
+            klass = f"  class={r['klass']}" if "klass" in keys and r["klass"] else ""
+            origin = f"  origin={r['origin']}" if "origin" in keys else ""
+            print(f"      id={r['id']}  {vp}{klass}{origin}", file=sys.stderr)
     return rows[0]
 
 
