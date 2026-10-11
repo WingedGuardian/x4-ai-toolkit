@@ -32,7 +32,7 @@ from pathlib import Path
 
 from lxml import etree
 
-from x4validate import _paths, _cat, _merge, _mutation, _registry, _scan, _freshness
+from x4validate import _paths, _cat, _effective, _merge, _mutation, _registry, _scan, _freshness
 from x4validate import __version__
 
 # Excluded from the `action` index: structural containers, control flow, and
@@ -463,6 +463,15 @@ def main(argv: list[str] | None = None) -> int:
                   "silently exclude every installed mod.", file=sys.stderr)
             print("  Set X4_GAME (or X4_EXTENSIONS), or pass --ext-dir.",
                   file=sys.stderr)
+            return 2
+        # Issue #10 shape: the REFERENCE is the other half of the population, and a
+        # missing or empty one indexed 0 rows, overwrote the index and returned 0.
+        # Refused BEFORE anything is written, so an existing index survives.
+        try:
+            _effective.require_base_documents(_merge.Config(reference=ref),
+                                              "build the md/aiscript xref index")
+        except _effective.EmptyReference as exc:
+            print(f"REFUSING: {exc}", file=sys.stderr)
             return 2
         rows = build_index(ref, ext, unreadable)
         write_tsv(rows, out)
