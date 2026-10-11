@@ -4,7 +4,15 @@
 Smoke tests prove the happy path. This proves the tools FAIL WELL: a clear
 message and a sane exit code, never a traceback and never a confident wrong
 answer. Covers empty mods, malformed manifests, missing args, absent paths, and
-an unconfigured environment (the state a new user is actually in).
+an unconfigured environment.
+
+WHAT "UNCONFIGURED" MEANS HERE (reviewer M-4): every path variable blanked AND an
+explicitly selected, EMPTY `X4_CONFIG` file (F254: without it, code in this toolkit
+discovered its own private config from any CWD). That is an empty configuration,
+not the new user's NO configuration: the discovery path that finds no x4-paths.env
+anywhere is not exercised by this sweep on a configured machine. That state is
+covered by `scripts/verify-cold.sh`, which refuses to run until all three roots
+resolve to None and then runs every CLI against it.
 
 Every cell carries the exit codes that count as FAILING WELL for it
 (AUDIT-2026-09-24 GT-4). Judging only tracebacks scored `x4validate <missing dir>`

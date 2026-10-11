@@ -204,11 +204,26 @@ def planted_verifier(tmp_path):
     return v, str(r), "HEAD"
 
 
-def test_the_internal_audit_harness_is_NOT_in_the_bundle():
+def test_the_internal_audit_harness_is_NOT_in_the_bundle(tmp_path):
     """v4.0.0 review R5-12: tools/x4validate/audit/ is a maintainer's audit harness (its own
     README: "a local audit instrument, not a shipped CLI") and shipped in every install.
-    `export-ignore` keeps it in the repo and out of `git archive`, like release/."""
-    _audit_export_ignore(Path(__file__).resolve().parents[3])
+    `export-ignore` keeps it in the repo and out of `git archive`, like release/.
+
+    FX-H2 / I-1: the SHIPPED .gitattributes is asked git-free first, so a release zip (no .git)
+    still checks the rule; the repository itself only when this is the toolkit's checkout."""
+    import subprocess
+    from _layout import own_checkout, shipped_rules_repo
+    root = Path(__file__).resolve().parents[3]
+    rules = shipped_rules_repo(tmp_path, root)
+    r = subprocess.run(["git", "-C", str(rules), "check-attr", "export-ignore", "--",
+                        "tools/x4validate/audit/driver.py", "tools/x4validate/x4validate/_paths.py"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    got = dict(line.split(": export-ignore: ") for line in r.stdout.strip().splitlines())
+    assert got["tools/x4validate/audit/driver.py"] == "set", got
+    assert got["tools/x4validate/x4validate/_paths.py"] == "unspecified", got   # twin
+    if own_checkout(root):
+        _audit_export_ignore(root)
 
 
 def _audit_export_ignore(root: Path) -> None:

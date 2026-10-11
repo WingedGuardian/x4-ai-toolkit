@@ -38,8 +38,12 @@ fingerprints, relevant private configuration hashes, resource policy and deploye
 hook bytes still match. Evidence file hashes must also match. Secret values are
 not persisted. This runs the ten preliminary gates, hook mutation coverage and
 pytest, stopping on the first unexpected failure. It does not deploy or run steps
-2–5. The single real deployment-parity failure can be recorded as **pending**,
-with its nonzero exit retained; it is never reported as a clean pass.
+2–5. The single real deployment-parity failure can be recorded as **pending**;
+it is never reported as a clean pass. The exit code is read from the checkpoint,
+never from the invocation: **0** only when every stage is recorded passed, **1** a
+stage failed, **3** a stage is pending or was not run (`--through vht`). Until
+v4.0.0's last fix round a pending stage or an early `--through` stop exited 0, and
+`--resume` reused a pending row the same way (reviewer M-1).
 
 Hook verification defaults to serial. `verify-hook-tests.py --workers N --report FILE`
 gives each mutation/predicate trial its own copy and full hook-suite execution.

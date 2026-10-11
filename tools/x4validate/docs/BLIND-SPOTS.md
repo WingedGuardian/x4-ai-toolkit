@@ -340,9 +340,15 @@ memory or from another session -- a remembered id was stale within a day here.
 | F259 | Native short-name test assumed TEMP had no aliases | **DEFECT (measured)** | Windows CI expected RUNNER~1 while actual expansion returned runneradmin; local reproduction | ✅ **FIXED 2026-10-08** — Canonical native fixture independent of the guard; no-op expansion still fails |
 | F260 | Short-name roots and target stems used different canonical forms | **DEFECT (measured)** | Four native audit failures reproduced; 741 unit and 73 audit tests passed | ✅ **FIXED 2026-10-08** — Shared lexical/native comparison; 202 mutants caught; 24,593 historical verdicts unchanged |
 | F261 | Ubuntu skip ceiling described an older test population | **DEFECT (measured)** | 4,773 passed, 203 skipped; all 64 added skips attributed against earlier CI | ✅ **FIXED 2026-10-08** — Measured Ubuntu floor plus existing three-test margin; Windows unchanged |
-| F262 | Cold verification stripped Git metadata and placed conformance under shared /tmp | **DEFECT (measured)** in checkout setup | CI cold suite: four failures and 17 setup errors; main suite passed | ✅ **FIXED 2026-10-08** — Isolated committed-object clone under the test sandbox; cold precondition retained; focused regression controls |
+| F262 | Cold verification stripped Git metadata and placed conformance under shared /tmp | **DEFECT (measured)**: the /tmp sandbox was setup; the three Git-metadata failures were TESTS that assume a repository, which the fix sidestepped by changing the population (see F269) | CI cold suite: four failures and 17 setup errors; main suite passed | ✅ **FIXED 2026-10-08** — Isolated committed-object clone under the test sandbox; cold precondition retained; focused regression controls |
 | F263 | Windows ownership fixtures invalidated inherited protection or skipped its precondition | **DEFECT (measured)** in test setup | CI: 31 partial-protection failures/errors and three foreign-owner hint failures; native reproduction | ✅ **FIXED 2026-10-08** — Normalise fresh scratch ACLs before a root-only grant; owned doctor-hint fixtures; product guard unchanged |
 | F264 | Git Bash ACL probes ran with administrator backup/restore bypass rights | **DEFECT (measured)** in test context and scope claim | Three newly reachable probes bypassed the deny; removal of both child privileges blocked all three, six controls worked | ✅ **FIXED 2026-10-08** — Disposable child strips only the two bypass privileges; full behavior suite 38/38 on hosted Windows; administrator gap documented |
+| F265 | icacls switches spelled `//reset` (Git Bash) were read as PATHS, and icacls accepts every switch that begins with `/inheritance` (`/inheritancezzz:r` strips inherited ACEs), so both lifts of the reference deny were allowed | **DEFECT (measured)** | 12 unit failures across 3 tests; 2 of 2 new must-fire protect-bash probes allowed by the old hooks; real icacls.exe: 1 of 1 `/inheritance*` spelling applied, 14 of 14 other altered or shortened spellings rejected (`/inheritanc:r`, `/inh:r`, `/resetx`, `/res`, ...) | ✅ **FIXED 2026-10-10** — `_icacls_switch` normalises `//x` and the `/inheritance*` class; 432-row corpus 0 weaker; twins per clause; 1 equivalent mutant recorded |
+| F266 | `run-release-gates.py` exited 0 with a stage pending (deployment parity), after `--through vht`, and again on `--resume` | **DEFECT (measured)** | 3 of 3 partial shapes exited 0 through the real `main()` | ✅ **FIXED 2026-10-10** — exit read from the checkpoint: 0 all passed, 1 failed, 3 pending/not run; 4 clause mutants caught |
+| F267 | Gate report directories were checked against EXPORTED roots only; a root named only in `x4-paths.env` was not protected | **DEFECT (measured)** | 1 of 1 config-only reference root allowed as a report destination | ✅ **FIXED 2026-10-10** — roots resolved through `x4validate._paths`, required by `external_output`; a resolver that raises refuses |
+| F268 | `run-gates.sh` expanded possibly-empty arrays bare under `set -u` (bash < 4.4 aborts) | **DEFECT (read)** — not reproducible on any bash here (all >= 4.4) | 3 of 3 `name=()` arrays | ✅ **FIXED 2026-10-10** — `${a[@]+"${a[@]}"}`; class-rule test with a twin |
+| F269 | The release zip's population -- `git archive`, no `.git`, installed IN PLACE as the README says -- was never measured; F262 moved the cold leg to a clone, and `installed_layout()` read an in-place install (it has `agent/`) as a checkout | **DEFECT (measured)** | 238 of 239 test files run in an in-place install at 5063aec: 4,543 passed, 54 skipped, 37 failed/errors, all attributed (3 Git metadata, 26 layout, 7 my sandboxed HOME, 1 my TEMP placement); `test_install_over_existing.py` (361 tests) cut off at ~222 by the resource watchdog, unmeasured | ✅ **FIXED 2026-10-11** — one helper (`scripts/toolkit_layout.py`: a root `.git` tracking agent/) for the tests, x4lock and x4doctor; Git tests ask the shipped rules git-free; `verify-cold.sh --archive`; re-verified: all 16 affected files pass on a fresh in-place install of 647b591 |
+| F270 | `edge_sweep`'s "unconfigured" cells are an EMPTY config, not NO config; the docstring called them the new user's state | **SCOPE (read)** | all unconfigured cells (one fixture) | 📝 **DOCUMENTED 2026-10-10** — the no-config state is `verify-cold.sh`'s |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -9642,6 +9648,176 @@ an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
 
+## F270 — Edge sweep's "unconfigured" is an EMPTY config, not NO config · **SCOPE (read)** · confidence 95% · 📝 DOCUMENTED 2026-10-10
+
+READ (reviewer M-4): since F254, every unconfigured `edge_sweep` cell blanks all path
+variables AND selects an explicit, empty `X4_CONFIG` file, because blanking alone let the
+toolkit discover its own private config from any CWD. That is an empty configuration. The
+state a new user is in -- no `x4-paths.env` anywhere, `X4_CONFIG` unset -- reaches a
+different branch of discovery, which the sweep cannot exercise on a configured machine.
+The docstring said "the state a new user is actually in". It now says what the cells are
+and names `scripts/verify-cold.sh` as the check for the no-config state: it refuses to run
+until registry, game extensions and reference all resolve to None, then runs the suite and
+every CLI. No cell changed; nothing was measured beyond reading both scripts.
+
+RE-DERIVED BY: `gates/edge_sweep.py` docstring; `scripts/verify-cold.sh` precondition.
+
+## F269 — The release zip, installed in place, was never measured · **DEFECT (measured)** · confidence 95% · ✅ FIXED 2026-10-11
+
+The README's default install extracts the release zip (`git archive`: `agent/` present, no
+`.git`) and runs the installer IN PLACE; SETUP_PROMPT then has the agent run the suite there.
+F262 replaced the cold `git archive` leg with a clone when three tests failed for want of Git
+metadata -- it fixed the setup by changing the POPULATION, so the failing population left the
+evidence instead of the tests being fixed. F262's own text said so ("an exported release
+bundle remains outside this evidence's scope"); nothing measured it afterwards.
+
+MEASURED 2026-10-10 (FX-H2), at 5063aec: `git archive HEAD` extracted outside any repository
+(`GIT_CEILING_DIRECTORIES` set; `git -C <extract> rev-parse` failed, the precondition), then
+`install.sh --method separate` in place with the installer tests' sandbox (scratch HOME,
+USERPROFILE, CODEX_HOME, CLAUDE_CONFIG_DIR, a test registry key, `--no-env`, every X4 root in
+scratch, `X4_TOOLKIT` unset): install rc 0, no `--over-existing` needed, the test key was not
+created. SETUP_PROMPT's `uv run pytest -q` then ran SERIALLY for about an hour and was stopped
+at 37% with 3 failures (names not yet read: `-q` prints them only in the final summary). A
+per-file re-run was stopped before it started: the machine fell below its resource floors (C:
+141 GB free against 150, commit 50.6 of 52.9 GB), none of it this lane's load. So the failure
+list, its attribution, and whether `installed_layout()` (an in-place install HAS `agent/`, so
+it reads as a checkout and repo-only tests run instead of skipping) must change are UNMEASURED.
+
+MEASURED 2026-10-11, the population re-run one test FILE per pytest session (4 at a time,
+same sandbox, the extract under TEMP): 238 of 239 files completed -- 4,543 passed, 54 skipped,
+29 failed, 8 errors. Every one of the 37 attributed, buckets summing to 37:
+  *  3  Git metadata (the plan's three): `test_build_release`, `test_gen_codex_tree`,
+        `test_opencode_config` -- `git check-ignore`/`check-attr` exit 128 with no repository.
+  * 26  `installed_layout()` read the install as a CHECKOUT (agent/ present), so every
+        "configured but not present yet" skip became a failure: `import_gate` re-raised a
+        gate's SystemExit 2 (`test_qa_coverage` 9, `test_qa_sweep_newest_groundtruth` 3,
+        `test_corpus_sweep_crash_detection` 8 errors), the freshness root twin (1), and the
+        reference-dependent `test_dump_accepts_physical_mod_vpath` 1,
+        `test_fast_script_pass_runs_by_default` 3, `test_script_files_disclose_unvalidated` 1.
+  *  7  MY SANDBOX, not the product: `test_codex_wrapper` 6 -- the wrapper's `python3` is the
+        WindowsApps alias, which fails (adapter exit 101) under a redirected USERPROFILE;
+        MEASURED: the same test passes with the real profile and fails with the sandboxed one.
+        `test_codex_conformance` 1 (#202, `~/.config/EgoSoft/X4` with HOME redirected) --
+        INFERRED to be the same cause, unconfirmed.
+  *  1  MY PLACEMENT: `test_x4conformance_engine` refuses a run dir under system TEMP, and the
+        extract was under TEMP.
+`test_install_over_existing.py` (361 tests) was killed at about 222 by the resource watchdog
+(commit floor) with its log unwritten: UNMEASURED. The parallel failures were not re-run
+serially (the job was killed first); none of the 37 is attributed to parallelism.
+
+Fixed (FX-H2, I-1 a/b): `installed_layout()` -- a checkout is a `.git` AT the root whose HEAD
+tracks agent/, anything else is installed; the three Git tests ask the SHIPPED
+`.gitignore`/`.gitattributes` in a scratch repo (git-free) and their repository only when
+`own_checkout(root)`. `scripts/x4lock.py` `_is_installed_toolkit` and `scripts/x4doctor.py`'s parity row keyed on agent/
+too (maintainer's decision 2026-10-10: fix them the same way). One helper now answers for all
+three, `scripts/toolkit_layout.py`. MEASURED 2026-10-11 on scratch trees, OLD 5063aec vs NEW:
+an in-place install (zip extract, no repo visible) -- `x4lock lock` locked 1 file OLD, 131 NEW
+(14 under `.claude/hooks`), and `.claude/hooks/protect-bash.sh` was read-only on disk only NEW
+(the file mode read independently, then `unlock --all`); x4doctor `parity.claude` and
+`parity.codex` OK -> N/A, its `x4lock` row UNKNOWN -> OK. A real checkout (a clone) at each
+commit: `x4lock status` byte-identical, x4doctor 32 of 32 row statuses identical.
+VERIFIED 2026-10-11 (MEASURED): a fresh `git archive` of 647b591, extracted OUTSIDE TEMP with no
+repository visible, installed in place with the same installer sandbox, then the 13 previously
+failing files plus `test_layout_repo_only`, `test_x4lock` and `test_x4doctor` run serially with
+the user's REAL HOME (as SETUP_PROMPT runs them): 16 of 16 files exit 0, 0 failed. Remaining
+skips name a zip's real absences (no repository, no tags). This also settles the #202
+attribution: `test_codex_conformance` passes 22 of 22 with the real HOME, so it was the
+sandboxed HOME (MEASURED, no longer inferred); `test_codex_wrapper` 46 of 46 with the real
+profile; `test_x4conformance_engine` 65 of 65 outside TEMP. Still UNMEASURED in this population:
+`test_install_over_existing.py` (361 tests), cut off by the resource watchdog in the first run.
+
+Fixed so far: `scripts/verify-cold.sh --archive` restores the archive population as a second
+cold leg, with the ceiling and a refusal so it cannot pass vacuously (twins: no ceiling ->
+refusal rc 2; neither -> the stub sees a repository, rc 6); CI runs it on Linux. It is EXPECTED
+to fail until the git-metadata tests are fixed, which is the point.
+
+Also seen: `scripts/run-pytest-batches.py` cannot run in an extract (`source_fingerprint` calls
+`git ls-files` with `check=True`); a maintainer-only tool, recorded, not fixed.
+
+RE-DERIVED BY: `tests/test_verify_cold_checkout.py` (archive-leg tests); the measurement
+scripts are scratch (not shipped).
+
+## F268 — `run-gates.sh` expanded possibly-empty arrays bare under `set -u` · **DEFECT (read)** · confidence 90% · ✅ FIXED 2026-10-10
+
+READ (reviewer M-3): `gate_args` is empty for every gate but `hook_false_positives`, and
+`"${gate_args[@]}"` of an empty array under `set -u` aborts with "unbound variable" in bash
+before 4.4 -- macOS ships 3.2. NOT REPRODUCED: every bash this toolkit's suite reaches
+(Git Bash 5.2, Ubuntu CI) is >= 4.4, so this is a READ finding with no measured failure.
+The new class rule found three such arrays (`gate_args`, `run`, `all_gates`); `all_gates`
+is provably non-empty (an exit guards it) and `run` is empty only for a degenerate gate
+set, but all three now use `${a[@]+"${a[@]}"}`. The rule: any array declared `name=()`
+and expanded bare fails; a twin shows it can fail and spares the guarded and never-empty
+forms. Denominator: 3 of 3 `name=()` arrays in the script.
+
+RE-DERIVED BY: `tests/test_run_gates_logs.py`
+`test_no_possibly_empty_array_is_expanded_bare_under_set_u` and its TWIN.
+
+## F267 — Gate report directories checked only the EXPORTED roots · **DEFECT (measured)** · confidence 99% · ✅ FIXED 2026-10-10
+
+MEASURED (reviewer M-2): with `X4_REFERENCE` named only in an `X4_CONFIG` file and not
+exported, the tools resolved the reference root, and `gate_support.external_output()`
+ALLOWED a report directory inside it: it read `X4_GAME`, `X4_REFERENCE`, `X4_PROFILE` from
+the environment only. `run-gates.sh`'s log-dir check had already been moved to the tools'
+resolver for this reason (R4-7/R6-10); these two runners had not.
+`protected_roots()` now resolves game, reference and profile through `x4validate._paths`
+(environment, then config) and refuses when a resolver raises; an unconfigured root is
+None and protects nothing. `external_output()` REQUIRES the resolved roots, so no caller
+can fall back to the environment alone; both callers (`run-release-gates.py`,
+`run-pytest-batches.py`) pass them. Tests: config-only root refused, outside twin allowed;
+a raising resolver refuses; omitting the roots is a TypeError. Each clause mutated
+(config roots dropped, resolver error swallowed, roots optional) turned one test red.
+
+RE-DERIVED BY: `tests/test_parallel_runners.py`
+`test_a_root_named_only_in_the_config_file_is_protected`,
+`test_a_resolver_that_cannot_run_refuses`, `test_external_output_requires_the_resolved_roots`.
+
+## F266 — A pending or partial release-gate run exited 0 · **DEFECT (measured)** · confidence 99% · ✅ FIXED 2026-10-10
+
+MEASURED (reviewer M-1), with the real `main()` over fake stages: a pytest stage recorded
+"pending deployment parity" exited 0, `--through vht` (pytest never run) exited 0, and
+`--resume` over a pending checkpoint reused the row and exited 0 again. HEADROOM-GATES.md
+said the pending stage's "nonzero exit [was] retained"; the stage's rc was stored in the
+checkpoint, but the process exit was 0, which is what a caller tests.
+`verdict(state, names)` now computes the exit from the CHECKPOINT: 0 only when every stage
+is recorded passed, 1 a stage failed, 3 pending or not run -- so a reused row is judged like
+a fresh one and `--resume` cannot launder it. RED: 3 of the 5 new tests. Twins: a failed
+stage stays 1; resuming until the remaining stage passes gives 0. Four mutants (failed
+clause, `status == passed`, the `--through` break, the verdict's use) each turned a test red.
+
+RE-DERIVED BY: `tests/test_parallel_runners.py`
+`test_a_PENDING_stage_exits_3_and_resume_cannot_launder_it`,
+`test_stopping_early_with_through_exits_3_until_the_rest_runs`,
+`test_every_stage_passed_is_the_only_exit_0`, `test_verdict_reads_only_recorded_state`.
+
+## F265 — icacls switches spelled `//switch`, and the `/inheritance*` prefix class · **DEFECT (measured)** · confidence 97% · ✅ FIXED 2026-10-10
+
+MEASURED (reviewer L, and beyond it): Git Bash users double a switch's slash (`//reset`) so
+MSYS does not rewrite it as a path; icacls receives `/reset`. `_icacls_parts` looked the
+token up as typed, so `//reset` was a PATH operand and `icacls <reference> //reset //T //C`
+was ALLOWED (also `//grant:r`, `//remove:d`, `//inheritance:r`, `//setowner`, `//restore` on
+an ancestor, `//substitute`). Beyond the plan, MEASURED 2026-10-10 on a scratch file with
+the real `icacls.exe`: it accepts ANY switch that begins with `/inheritance` --
+`/inheritancezzz:r` removed 4 of 4 inherited ACEs, while `/inheritanc:r` and `/inh:r` were
+rejected as invalid parameters, and the other lift switches (`/resetx`, `/grantx`,
+`/removex`, `/setownerx`, `/restorex`, `/substitutex`, `/res`, `/gra`, `/rem`) were all
+rejected too. So `/inheritancelevel` was one spelling of an open class, not dead and not
+complete: `/inheritancezzz:r` on a reference child was allowed. A reviewer mutant that
+dropped `/inheritancelevel` survived only because no test named it.
+Fix (`_icacls_switch`): a token that is ENTIRELY `//<letters>` is the switch (a UNC
+`//server/share` has a second slash and stays a path), and every `/inheritance*` spelling
+is `/inheritance`; the separate `/inheritancelevel` entry is subsumed. RED: 12 unit failures
+across 3 tests; on the OLD deployed hooks `test-protect-bash.sh` failed exactly the two new
+must-fire probes (`//reset //T //C`, `/inheritancezzz:r`) while both twins stayed allow.
+GREEN: `test_hook_facts.py` 748 OK; protect-bash 0 failures. Twins: UNC, a rejected prefix,
+doubled non-lift switches (`//deny`, `//save`), `/findsid`'s value. Five named mutants in
+`verify-hook-tests.py` (E7 re-anchored). One mutant is EQUIVALENT and recorded, not tested:
+`startswith("//")` for the `fullmatch`, because the stripped token must still equal a switch.
+Residual (UNMEASURED): whether other icacls switches accept prefixes on other Windows builds;
+the measurement is one build (this machine's).
+
+RE-DERIVED BY: `agent/guards/claude-hooks/test_hook_facts.py` `TestH2IcaclsSwitchSpellings`;
+`test-protect-bash.sh` probes `icacls-dblslash-reset`, `icacls-inherit-prefix` and twins.
+
 ## F264 — Elevated Git Bash bypasses the ACL probe's assumption · **DEFECT (measured)** · confidence 99% · ✅ FIXED 2026-10-08
 
 MEASURED: hosted run 37829869175 at 204842f passed 31 of the previous 34 Windows
@@ -9753,6 +9929,12 @@ PowerShell parser cases and one new Windows-native case add eight accounted
 skips, giving 232 - 36 + 8 = 204. Comparison is per file/reason group, not
 parameter node ID. This proves a fresh Git checkout; an exported release bundle
 remains outside this evidence's scope.
+
+RECLASSIFIED 2026-10-10 (FX-H2, reviewer M): only the 17 setup errors (the /tmp sandbox) and
+the neutral-location assertion were checkout SETUP. The three Git-metadata failures were
+tests that assume a repository, and the release zip a user installs has none: switching the
+leg to a clone made them pass by removing that population from the evidence. It is restored
+as `verify-cold.sh --archive` and tracked as F269 (OPEN).
 
 RE-DERIVED BY: `tests/test_verify_cold_checkout.py` and
 `tests/test_cli_enumerations_agree.py`.

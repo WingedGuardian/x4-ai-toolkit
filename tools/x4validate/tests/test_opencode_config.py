@@ -295,9 +295,16 @@ def test_the_python_matcher_agrees_with_opencodes_own(box, tmp_path):
     assert diff == [] and len(theirs) == len(cases) and any(theirs) and not all(theirs)
 
 
-def test_the_rendered_config_is_never_committed():
-    """It names this machine's absolute roots: rendered at install, git-ignored."""
-    from _layout import require_repo
-    require_repo(".git", why="git-ignore is a property of the repository")
-    r = subprocess.run(["git", "-C", str(REPO), "check-ignore", "-q", ".opencode/opencode.jsonc"])
-    assert r.returncode == 0, ".opencode/opencode.jsonc must be git-ignored"
+def test_the_rendered_config_is_never_committed(tmp_path):
+    """It names this machine's absolute roots: rendered at install, git-ignored.
+
+    FX-H2 / I-1: the SHIPPED rule is asked git-free (a release zip has no .git); this tree's
+    own repository only when it IS this toolkit's checkout."""
+    from _layout import own_checkout, shipped_rules_repo
+    rules = shipped_rules_repo(tmp_path, REPO)
+    r = subprocess.run(["git", "-C", str(rules), "check-ignore", "-q", "--no-index",
+                        ".opencode/opencode.jsonc"])
+    assert r.returncode == 0, "the shipped .gitignore must ignore .opencode/opencode.jsonc (rc %d)" % r.returncode
+    if own_checkout(REPO):
+        r = subprocess.run(["git", "-C", str(REPO), "check-ignore", "-q", ".opencode/opencode.jsonc"])
+        assert r.returncode == 0, ".opencode/opencode.jsonc must be git-ignored"

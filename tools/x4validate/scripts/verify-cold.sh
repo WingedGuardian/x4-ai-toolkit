@@ -26,6 +26,16 @@
 # false confidence it was written to prevent.
 set -uo pipefail
 
+# TWO LEGS, ONE PER POPULATION (FX-H2 / I-1). The default leg CLONES committed objects: the
+# contributor's population, with Git metadata. `--archive` EXTRACTS `git archive`: the
+# release zip's population, which has no .git at all, and is what a user installs IN PLACE.
+# F262 replaced the archive leg with the clone when three tests failed for want of Git
+# metadata -- which removed the failing population instead of fixing the tests, so the
+# release zip went unmeasured. Both legs now run in CI.
+MODE=clone
+if [ "${1:-}" = "--archive" ]; then MODE=archive; shift; fi
+REV="${1:-HEAD}"
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG="$(cd "$HERE/.." && pwd)"
 # ASK git for the root rather than counting "../.." -- the package sits at the repo
@@ -43,13 +53,27 @@ RUN_DIR="$(mktemp -d "$REPO/.test-sandbox/cold.XXXXXX")" || exit 2
 trap 'rm -rf "$RUN_DIR"' EXIT
 WORK="$RUN_DIR/checkout"
 
-echo "== cloning a fresh checkout =="
-# Tests query Git's ignore/export rules and historical tags. An archive has no
-# metadata and cannot answer those questions. Clone committed objects only,
-# without shared object hardlinks; ignored config/venvs never travel with it.
-git clone --quiet --no-local --no-checkout "$REPO" "$WORK" || exit 2
-git -C "$WORK" checkout --quiet --detach "${1:-HEAD}" || exit 2
-echo "   $(git -C "$WORK" ls-files | wc -l) tracked files -> $WORK"
+if [ "$MODE" = archive ]; then
+  echo "== extracting git archive $REV (the release zip's population: no .git) =="
+  mkdir -p "$WORK" || exit 2
+  git -C "$REPO" archive "$REV" | tar -x -C "$WORK" || exit 2
+  # THE LOAD-BEARING LINE OF THIS LEG. $RUN_DIR sits inside THIS repository (.test-sandbox),
+  # so without a ceiling git in the extract walks up and answers every metadata question
+  # from this checkout: the leg would pass vacuously. Prove it cannot before running anything.
+  export GIT_CEILING_DIRECTORIES="$RUN_DIR"
+  if git -C "$WORK" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "REFUSING: git still finds a repository above the extract ($WORK)." >&2
+    exit 2
+  fi
+  echo "   $(find "$WORK" -type f | wc -l) files, no repository visible -> $WORK"
+else
+  echo "== cloning a fresh checkout =="
+  # Tests query Git's ignore/export rules and historical tags. Clone committed objects
+  # only, without shared object hardlinks; ignored config/venvs never travel with it.
+  git clone --quiet --no-local --no-checkout "$REPO" "$WORK" || exit 2
+  git -C "$WORK" checkout --quiet --detach "$REV" || exit 2
+  echo "   $(git -C "$WORK" ls-files | wc -l) tracked files -> $WORK"
+fi
 
 # Clear EVERY X4_* var, not a hand-picked few. The one that bites is X4_TOOLKIT.
 UNSET=()
@@ -172,9 +196,9 @@ fi
 
 echo
 if [ "$rc" -eq 0 ]; then
-  echo "COLD RUN CLEAN — suite and every CLI behave on a machine with no X4 installed."
+  echo "COLD RUN CLEAN ($MODE) — suite and every CLI behave on a machine with no X4 installed."
 else
-  echo "COLD RUN FAILED (exit $rc)."
+  echo "COLD RUN FAILED ($MODE, exit $rc)."
   echo "  exit 3 = INTERNALERROR, usually a gates/ module imported at test-module"
   echo "           scope: see tests/conftest.py::import_gate."
 fi

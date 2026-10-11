@@ -4,21 +4,57 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 
 
-def external_output(path, root):
-    """Reports must not mutate the source being fingerprinted or protected data."""
+#: The X4 roots a report directory must never land in, as `x4validate._paths` names them.
+PROTECTED_ROOTS = ("game_root", "reference", "profile")
+
+
+def protected_roots(pkg):
+    """The protected X4 roots as the TOOLS resolve them: environment, then the path config.
+
+    Reviewer M-2: only the exported variables were checked, so a root named only in
+    x4-paths.env was not seen (the run-gates.sh log-dir check had the same hole, R4-7/R6-10).
+    A resolver that cannot run REFUSES: an output directory that cannot be checked is not
+    one that passed. An unconfigured root (None) protects nothing and is skipped.
+    """
+    pkg = str(pkg)
+    if pkg not in sys.path:
+        sys.path.insert(0, pkg)
+    try:
+        from x4validate import _paths
+    except Exception as exc:
+        raise RuntimeError(f"cannot import x4validate._paths ({exc}); refusing to choose an "
+                           "output directory that cannot be checked") from exc
+    roots = {}
+    for name in PROTECTED_ROOTS:
+        try:
+            value = getattr(_paths, name)()
+        except Exception as exc:
+            raise RuntimeError(f"cannot resolve the {name} root ({exc}); refusing to choose an "
+                               "output directory that cannot be checked") from exc
+        if value is not None:
+            roots[name] = Path(value)
+    return roots
+
+
+def external_output(path, root, protected):
+    """Reports must not mutate the source being fingerprinted or protected data.
+
+    *protected* is `protected_roots(...)`: required, so no caller can fall back to checking
+    the environment alone. The exported variables are still checked as well."""
     path, root = Path(path).resolve(), Path(root).resolve()
     if path == root or root in path.parents:
         raise ValueError("output must be outside the toolkit source tree")
     # The reports are write artifacts; reject known game/reference/profile roots.
-    for name in ("X4_GAME", "X4_REFERENCE", "X4_PROFILE"):
-        value = os.environ.get(name)
-        if value:
-            protected = Path(value).resolve()
-            if path == protected or protected in path.parents:
-                raise ValueError("output overlaps a protected X4 root")
+    named = [Path(v) for v in dict(protected).values()]
+    named += [Path(os.environ[n]) for n in ("X4_GAME", "X4_REFERENCE", "X4_PROFILE") if os.environ.get(n)]
+    for value in named:
+        guarded = value.resolve()
+        if path == guarded or guarded in path.parents:
+            raise ValueError("output overlaps a protected X4 root")
     return path
 
 

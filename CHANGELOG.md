@@ -118,6 +118,13 @@ confusing messages and six cosmetic ones. All are fixed:
   is". The Git Bash installer prints its source as a Windows path, and `install.ps1` prints
   one path separator in its summary.
 
+### Fixed before release: the final review (2026-10-10)
+
+- FX-H1: issues #4-#7 <!-- PLACEHOLDER: the orchestrator fills this from lane FX-H1's report -->
+- The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
+  resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
+  (BLIND-SPOTS F265-F268).
+
 ### Every agent: one source, per-agent files
 
 - **Agent-facing files are generated from one neutral source tree, `agent/`**, by
@@ -153,7 +160,8 @@ confusing messages and six cosmetic ones. All are fixed:
   and the agent never saturates the machine -- before a heavy job (full test suites, corpus
   builds, load tests, parallel workers) it measures what is already running and keeps CPU, RAM,
   free disk on each drive it writes to and GPU at or under 80% of the total, or waits, shrinks
-  the job or tells you before starting. **The guards judge a move to the Trash exactly as `rm`
+  the job or tells you before starting; it uses at most eight test workers and never terminates
+  another session's processes. **The guards judge a move to the Trash exactly as `rm`
   of the same paths** (`gio trash`, `trash-put`, `gvfs-trash`, `kioclient` move to `trash:/`, a
   Finder delete through `osascript`): before, `gio trash <game>` or a trashed file in
   `reference/` was allowed (16 of 24 probes wrong; BLIND-SPOTS F189). The Windows Recycle Bin
@@ -489,7 +497,10 @@ confusing messages and six cosmetic ones. All are fixed:
   "$X4_GAME"` gets the game hard block instead of an advisory (BLIND-SPOTS F184).
 - **Windows path aliases are the file they open**: trailing dots or spaces, NTFS stream suffixes
   (`::$DATA`, `:alt`) and 8.3 short names (`PROGRA~2`) reached `x4-paths.env`, `reference/` and
-  the game folder past the guards (19 of 28 probes; now 0; BLIND-SPOTS F185).
+  the game folder past the guards (19 of 28 probes; now 0; BLIND-SPOTS F185). An 8.3 alias is
+  also expanded the same way on BOTH sides of a comparison: a write target qualified by a
+  provider (`FileSystem::`), an unresolved write stem or a pipeline target kept its short form
+  while the configured root was expanded, and missed the protected folder (BLIND-SPOTS F260).
 - A command substitution inside arithmetic (`$(( $(rm -rf <game>) + 0 ))`) now meets the hard
   block (F186), and an abbreviated git option (`git stash --a`, `git clean --fo -X`, `--har`) is
   the option it abbreviates (F187).
@@ -500,7 +511,12 @@ confusing messages and six cosmetic ones. All are fixed:
 - `git --work-tree`/`GIT_WORK_TREE`, `--git-dir`/`GIT_DIR` and `-c clean.requireForce=false` name
   or force a git wipe; `icacls /grant`, `/inheritance`, `/restore`, `/setowner` and `/substitute`
   on the reference tree, and an x4refguard action passed through `xargs` or a variable, ask
-  like `/remove` (BLIND-SPOTS F192).
+  like `/remove` (BLIND-SPOTS F192). The folder may be spelled as an absolute POSIX or Git Bash
+  path (`/home/<you>/toolkit/reference`, `/c/...`): every token starting with `/` used to be dropped as
+  a switch, so `icacls /c/.../reference /reset /T` was allowed (BLIND-SPOTS F257). Git Bash's
+  doubled-slash switches (`//reset //T`, which icacls receives as `/reset /T`) and every
+  `/inheritance` spelling icacls accepts (it takes any switch that begins with `/inheritance`,
+  e.g. `/inheritancezzz:r`, MEASURED) ask the same way (BLIND-SPOTS F265).
 - A path-config line holding non-ASCII whitespace (a no-break space) is refused by both loaders;
   it used to configure the tools while the guards ignored it (BLIND-SPOTS F190).
 - The Windows Codex wrapper refuses an array-valued decision, as the bash wrapper already did
@@ -552,6 +568,9 @@ confusing messages and six cosmetic ones. All are fixed:
   choose the folder; one inside `X4_GAME` or `X4_REFERENCE` is refused, also when reached
   through a symlink or junction (BLIND-SPOTS F181).
 - CI checks that `uv.lock` matches `pyproject.toml`.
+- `x4debug triage` no longer calls a session a save load just because the log has no
+  galaxy-generation marker: a menu-only startup has none either. Such a session is now
+  "UNKNOWN (menu or save load)"; a confirmed new game keeps its label (BLIND-SPOTS F258).
 - The `cross-file-impact` subagent names the real `x4-balance` and `x4-mod-interaction` skills
   instead of an advisor that does not exist; both subagents run on `sonnet`. `x4-scaffold` treats
   `content.xml` edits as advisory, matching `CLAUDE.md`. `.gitignore` no longer swallows a skill's
@@ -615,7 +634,9 @@ confusing messages and six cosmetic ones. All are fixed:
   needs rebuilding.
 - Gates: `run-gates.sh` checks `X4_GATE_LOG_DIR` against the roots the tools resolve,
   including roots named only in the config, and no longer needs `realpath` (missing on
-  macOS). `edge_sweep` clears `X4_CONFIG`; `hook_false_positives` hashes the `X4_CONFIG`
+  macOS). `edge_sweep`'s unconfigured cells blank every path variable and select an explicit,
+  EMPTY `X4_CONFIG` (blanking alone still found the toolkit's own config, BLIND-SPOTS F254); the
+  state with no config file at all is `verify-cold.sh`'s. `hook_false_positives` hashes the `X4_CONFIG`
   file, under labels that name each file's location. The internal audit harness
   (`tools/x4validate/audit/`) is left out of the release zip. `scan-identifiers.py` also
   catches a bare X4 profile id. The ids come from the machine it runs on and are never
@@ -674,13 +695,47 @@ confusing messages and six cosmetic ones. All are fixed:
   file; `X4_CONFIG`, `X4_GAME`, `X4_PYTHON` or `PATH` in a settings `env` block, which moves every
   root or the guards' interpreter; a write through a directory junction to `.claude`; and replacing
   `.claude` from the shell (`mv`, `cp -r`, `ln -s`). The OS-level `reference/` protection, once
-  applied, still blocks a delete inside it whatever the guards do (BLIND-SPOTS F221).
+  applied, still blocks a delete inside it from an ordinary (unelevated) process, whatever the
+  guards do; it does not stop an Administrator (next item; BLIND-SPOTS F221).
+- **The `reference/` protection does not stop an Administrator or root.** Measured on elevated
+  hosted Windows: Git Bash changed protected scratch trees in three of three probes while the
+  backup and restore privileges were available to the process; the same three probes were
+  blocked once both privileges were removed from it. A disabled privilege can still be available
+  to a process. Run your agent unelevated (BLIND-SPOTS F264).
 - Two false refusals fail closed: a `..` in a not-yet-existing part of a path given to the unpack,
   and an `X4_REFERENCE` ending in a dot, can read as a different tree; the refusal prints both
   paths (BLIND-SPOTS F229).
 
 ### Maintainers
 
+- `scripts/run-release-gates.py` exits **3** while any stage is pending (deployment parity) or
+  was not run (`--through vht`), computed from the checkpoint so `--resume` cannot turn a
+  pending stage into a pass; 0 means every stage is recorded passed (it exited 0 in both cases;
+  BLIND-SPOTS F266). Its report directory, and `run-pytest-batches.py`'s, is refused inside the
+  game, reference or profile root as the tools resolve them (environment, then `x4-paths.env`);
+  only the exported variables were checked, and a root that cannot be resolved now refuses
+  (BLIND-SPOTS F267).
+- `scripts/verify-cold.sh --archive` runs the cold suite over a `git archive` extract with no
+  repository visible (`GIT_CEILING_DIRECTORIES`, refused otherwise): the release zip's
+  population, which F262's move to a clone had dropped. CI runs both legs (BLIND-SPOTS F269).
+- **The suite an in-place install of the release zip runs (SETUP_PROMPT) no longer fails on a
+  fresh install**: the test layout check took the zip's `agent/` folder for a source checkout,
+  so 26 "not unpacked / not set up yet" cases failed instead of skipping, and three tests needed
+  a Git repository the zip does not have (MEASURED: 29 failed, 8 errors over 238 of 239 test
+  files). A checkout is now a `.git` whose HEAD carries `agent/`; the three ask the shipped
+  `.gitignore`/`.gitattributes` without Git metadata (BLIND-SPOTS F269).
+- **An in-place install's guards are locked by `x4lock`, and `x4doctor` reports it as an install.**
+  Both took the zip's `agent/` folder for a source checkout: `x4lock lock` left the toolkit's own
+  guards unlocked (MEASURED: 1 file locked, now 131 including the 14 hook files) and `x4doctor`
+  ran its source-checkout parity check instead of N/A. A source checkout is now a `.git` whose
+  HEAD carries `agent/`, decided in one place (`scripts/toolkit_layout.py`); a real checkout
+  behaves as before (BLIND-SPOTS F269).
+- `run-gates.sh` expands its possibly-empty arrays as `${a[@]+"${a[@]}"}`, which bash before
+  4.4 (macOS's 3.2) requires under `set -u` (READ, not reproduced; BLIND-SPOTS F268).
+- `gates/edge_sweep.py` says what its "unconfigured" cells are: every path variable blank and an
+  explicit EMPTY config, not the no-config state, which `verify-cold.sh` covers.
+  `gates/instrument_hygiene.py` documents how to re-measure the SAME baseline population after a
+  matcher change (it refuses until then; no new tool).
 - `verify-hook-tests.py`'s silent? column keys test sources by `Class.method`, so two classes
   sharing a test name no longer pool their sources (BLIND-SPOTS F238).
 - After tagging a release, run `tools/x4validate/scripts/gen-shipped-hashes.py --write` and commit

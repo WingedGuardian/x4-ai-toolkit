@@ -698,7 +698,11 @@ jobs:
           # toolkit binding +1, unpack path spellings +4, doctor +9
           # (streams +3, WSL stubs +6), NTFS guard +3. Other changes only
           # clarify existing skip reasons. Preserve the established +3 margin.
-          # Windows remains 56 until its own per-job measurement says otherwise.
+          # READ 2026-10-10 (reviewer M-5) off run 37846813450 at a38e3cf, per job:
+          # windows 54 skipped, ubuntu 204 (the cold clone also 204). So windows sits at
+          # 54 + 2 = 56, ubuntu at 204 + 2 = 206: each leg has 2 of headroom, not 3.
+          # Maintainer's decision 2026-10-10: leave both until the next CI run, then set
+          # each to that run's per-job measured count + 3 and itemise the change here.
           X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '206' || '56' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
@@ -729,6 +733,16 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: bash tools/x4validate/scripts/verify-cold.sh
+
+      # THE RELEASE ZIP'S POPULATION (FX-H2 / I-1): `git archive`, no .git -- what a user
+      # extracts and installs in place. F262 swapped this leg for the clone above when three
+      # tests needed Git metadata, which hid the failing population instead of fixing it.
+      # The extract sits inside this checkout, so the script sets GIT_CEILING_DIRECTORIES and
+      # REFUSES unless git can no longer see any repository (else this passes vacuously).
+      - name: Cold-archive verification (the release zip, no Git metadata)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tools/x4validate/scripts/verify-cold.sh --archive
 
   scrub:
     name: no personal data in tracked files

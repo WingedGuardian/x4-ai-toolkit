@@ -15,8 +15,9 @@ def _installed(tmp_path):
 
 
 def _checkout(tmp_path):
-    (tmp_path / "agent").mkdir(parents=True)
-    return tmp_path
+    """The toolkit's own checkout: a git repo whose HEAD tracks agent/ (FX-H2: agent/ alone is
+    also what an in-place install of the release zip has)."""
+    return _repo(tmp_path, track_agent=True)
 
 
 def test_installed_layout_and_ABSENT_content_SKIPS_with_a_counted_named_reason(tmp_path):
@@ -38,9 +39,20 @@ def test_TWIN_an_installed_layout_WITH_the_content_does_NOT_skip(tmp_path):
     _layout.require_repo("docs", root=root)
 
 
-def test_installed_layout_is_keyed_on_the_agent_source_dir(tmp_path):
-    assert _layout.installed_layout(_installed(tmp_path)) is True
-    assert _layout.installed_layout(_checkout(tmp_path)) is False
+def test_installed_layout_is_keyed_on_the_toolkit_s_own_git_checkout(tmp_path):
+    assert _layout.installed_layout(_installed(tmp_path / "i")) is True
+    assert _layout.installed_layout(_checkout(tmp_path / "c")) is False
+
+
+def test_a_RELEASE_ZIP_installed_IN_PLACE_is_INSTALLED_although_it_has_agent(tmp_path):
+    """FX-H2 / I-1 (F269), MEASURED: the README's default install extracts the release zip
+    (`git archive`: agent/ present, no .git) and installs IN PLACE. Keyed on agent/, that read
+    as a checkout, so every "configured but not present yet" skip (gates, the needs-a-reference
+    markers, the freshness root) turned into a failure or an error for that user."""
+    root = tmp_path / "zip"
+    (root / "agent").mkdir(parents=True)
+    (root / "tools").mkdir()
+    assert _layout.installed_layout(root) is True
 
 
 # --- a checkout that LOST agent/ is broken, not installed (v4.0.0 delta review) ----------
@@ -269,3 +281,45 @@ def test_the_DERIVED_reference_default_with_nothing_unpacked_skips_even_in_a_CHE
     _ref(monkeypatch, ref, explicit=False)
     why = _layout.reference_skip_reason(root=_checkout(tmp_path / "co"))
     assert why and "default" in why, why
+
+
+def test_TWIN_an_extract_INSIDE_a_toolkit_checkout_is_still_installed(tmp_path):
+    """Clause: the `.git` must be AT the root. Asked of git alone, an extract nested in a
+    checkout (the cold archive leg's .test-sandbox) would borrow the PARENT's HEAD."""
+    parent = _repo(tmp_path / "tk", track_agent=True)
+    root = parent / ".test-sandbox" / "zip"
+    (root / "agent").mkdir(parents=True)
+    assert _layout.installed_layout(root) is True
+
+
+# --- the SHIPPED git rules, asked without this tree's metadata (FX-H2 / I-1) -------------
+
+def _ask_ignore(repo, rel):
+    import subprocess
+    return subprocess.run(["git", "-C", str(repo), "check-ignore", "-q", "--no-index", rel]).returncode
+
+
+def test_shipped_rules_repo_answers_from_the_copied_rules_only(tmp_path):
+    root = tmp_path / "zip"
+    (root / "sub").mkdir(parents=True)
+    (root / ".gitignore").write_text("/rendered.json\n", encoding="utf-8")
+    (root / "sub" / ".gitignore").write_text("local.txt\n", encoding="utf-8")
+    repo = _layout.shipped_rules_repo(tmp_path / "s", root)
+    assert _ask_ignore(repo, "rendered.json") == 0
+    assert _ask_ignore(repo, "sub/local.txt") == 0           # a nested rule file travels too
+    assert _ask_ignore(repo, "other.json") == 1              # twin: an unruled path is NOT ignored
+
+
+def test_TWIN_shipped_rules_repo_refuses_a_tree_with_no_rules(tmp_path):
+    (tmp_path / "zip").mkdir()
+    with pytest.raises(AssertionError, match="no root .gitignore"):
+        _layout.shipped_rules_repo(tmp_path / "s", tmp_path / "zip")
+
+
+def test_own_checkout_is_the_work_tree_TOP_not_any_repo_above(tmp_path):
+    tk = _repo(tmp_path / "tk", track_agent=True)
+    assert _layout.own_checkout(tk) is True
+    nested = tk / "nested"
+    nested.mkdir()
+    assert _layout.own_checkout(nested) is False             # inside a repo, not its top
+    assert _layout.own_checkout(tmp_path / "nowhere") is False

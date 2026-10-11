@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Step-1 release checks only. Resume completed stages on identical declared inputs.
 
+Exit 0 only when every stage is recorded passed; 1 a stage failed; 3 a stage is pending
+(deployment parity) or was not run (`--through vht`), however many times it is resumed.
+
 Run using the toolkit Python through rb.py. Never deploys, pushes or publishes.
 """
 import argparse
@@ -11,7 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from gate_support import save, source_fingerprint, wait_dispatch, external_output, evidence_digest, evidence_intact, gate_environment
+from gate_support import save, source_fingerprint, wait_dispatch, external_output, protected_roots, evidence_digest, evidence_intact, gate_environment
 
 ROOT=Path(__file__).resolve().parents[1]
 PKG=ROOT/"tools"/"x4validate"
@@ -67,6 +70,19 @@ def pytest_pending_only(path):
     return not data.get("session_errors") and failed=={"tests/test_deploy_parity.py::test_the_real_trees"}
 
 
+def verdict(state,names):
+    """The run's exit code, read ONLY from the recorded checkpoint state (reviewer M-1).
+
+    0 every stage is recorded `passed`; 1 a stage is recorded as failed; 3 anything else -- a
+    stage still pending (deployment parity) or never run (`--through` stopped early). Reading
+    the STATE rather than this invocation's own path is what stops `--resume` laundering a
+    pending stage into a pass: a reused row is judged exactly like a fresh one."""
+    rows=[state["stages"].get(n) for n in names]
+    if any(r is not None and not r["accepted"] for r in rows):return 1
+    if all(r is not None and r["status"]=="passed" for r in rows):return 0
+    return 3
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--out",type=Path,required=True)
@@ -76,7 +92,7 @@ def main():
                    help="stop at a stage boundary; vht leaves pytest explicitly pending")
     args=p.parse_args()
     if not os.environ.get("RB_PRESSURE_FILE"):p.error("run through rb.py")
-    out=external_output(args.out,ROOT);out.mkdir(parents=True,exist_ok=True)
+    out=external_output(args.out,ROOT,protected_roots(PKG));out.mkdir(parents=True,exist_ok=True)
     checkpoint=out/"checkpoint.json"
     ident=identity(args.workers)
     state={"identity":ident,"stages":{}}
@@ -84,10 +100,11 @@ def main():
         state=json.loads(checkpoint.read_text(encoding="utf-8"))
         if state["identity"]!=ident:p.error("checkpoint inputs changed; use a new output directory")
     elif checkpoint.exists():p.error("checkpoint already exists; use --resume or a new output directory")
-    for name,cwd,cmd in stages(out,args.workers):
+    rows=stages(out,args.workers)
+    for name,cwd,cmd in rows:
         if name=="pytest" and args.through=="vht":
             print("PARTIAL step 1: hook verification complete; pytest not run. Resume without --through vht.")
-            return 0
+            break
         prior=state["stages"].get(name)
         if prior and prior["accepted"]:
             if evidence_intact(out,prior):
@@ -115,8 +132,11 @@ def main():
         save(checkpoint,state)
         print(f"{name}: {status}, rc={rc}, {state['stages'][name]['seconds']:.1f}s",flush=True)
         if not accepted:return 1
-    print("STEP 1 complete; deployment parity is pending if named above. No later release steps ran.")
-    return 0
+    rc=verdict(state,[n for n,_,_ in rows])
+    if rc==0:print("STEP 1 complete: every stage passed. No later release steps ran.")
+    else:print("STEP 1 NOT complete (exit %d): pending or not run: %s. No later release steps ran."
+               %(rc,", ".join(n for n,_,_ in rows if (state["stages"].get(n) or {}).get("status")!="passed")))
+    return rc
 
 
 if __name__=="__main__":raise SystemExit(main())
