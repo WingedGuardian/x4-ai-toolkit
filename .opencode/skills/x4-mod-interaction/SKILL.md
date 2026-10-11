@@ -27,7 +27,10 @@ Run tools via uv from the tool dir:
    bare NAME means the copy in the extensions dir; the output's `Candidate analysed:` line
    names which. A separate section, PATCHES A NODE ONLY A LATER MOD ADDS, lists `<diff>` ops
    whose target exists only once a mod loading AFTER them has run -- the engine skips those
-   ops, so the mod silently changes less than it says. **Zero hard
+   ops, so the mod silently changes less than it says. An op whose `if=` guard is false at its
+   load position changes nothing, so it is not a collision: it is listed under GUARDED OFF
+   (`guarded_off` in `--json`). A row involving a TRUE guard says the result depends on this
+   load order; an invalid guard keeps its row, labelled UNEVALUATED. **Zero hard
    collisions is common and means "no structural clash" — NOT "no interaction" (see step 2).**
 
 2. **Behavioral — `x4xref`** (build once with `x4xref build`, then query). The conflicts that
