@@ -717,8 +717,13 @@ confusing messages and six cosmetic ones. All are fixed:
   (BLIND-SPOTS F267).
 - `scripts/verify-cold.sh --archive` runs the cold suite over a `git archive` extract with no
   repository visible (`GIT_CEILING_DIRECTORIES`, refused otherwise): the release zip's
-  population, which F262's move to a clone had dropped. CI runs both legs (BLIND-SPOTS F269,
-  open: the in-place install's own failures are not yet fixed).
+  population, which F262's move to a clone had dropped. CI runs both legs (BLIND-SPOTS F269).
+- **The suite an in-place install of the release zip runs (SETUP_PROMPT) no longer fails on a
+  fresh install**: the test layout check took the zip's `agent/` folder for a source checkout,
+  so 26 "not unpacked / not set up yet" cases failed instead of skipping, and three tests needed
+  a Git repository the zip does not have (MEASURED: 29 failed, 8 errors over 238 of 239 test
+  files). A checkout is now a `.git` whose HEAD carries `agent/`; the three ask the shipped
+  `.gitignore`/`.gitattributes` without Git metadata (BLIND-SPOTS F269).
 - `run-gates.sh` expands its possibly-empty arrays as `${a[@]+"${a[@]}"}`, which bash before
   4.4 (macOS's 3.2) requires under `set -u` (READ, not reproduced; BLIND-SPOTS F268).
 - `gates/edge_sweep.py` says what its "unconfigured" cells are: every path variable blank and an
