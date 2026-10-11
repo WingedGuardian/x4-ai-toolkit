@@ -147,6 +147,10 @@ class OrderMiss:
     #: compat idiom -- apply if the other mod is there, stay quiet if not -- so its
     #: skip is intentional, not a mistake; it is still disclosed (review of AN-10).
     guard: str = ""
+    #: True when the op's `if=` guard is ALSO false at its load position (issue #8): the
+    #: same op is then listed in `CompatReport.guarded_off` too, and load order is not
+    #: necessarily the only reason it is skipped -- its sel= and its guard both fail.
+    guard_false: bool = False
 
 
 @dataclass
@@ -181,7 +185,12 @@ class GuardedOff:
     guard: str        # as written (`if=...`, plus ` silent` when set)
     #: Other mods whose live ops on this file target the same node / key (or a node
     #: inside or around it): the rows this op WOULD have joined had its guard been true.
-    shared_with: list[str] = field(default_factory=list)
+    #: For an op whose target is ABSENT from the base tree, the later mod the order-miss
+    #: pass names as adding it. **None = UNKNOWN** -- the target is not in the base and no
+    #: mod was named as supplying it -- which is NOT the same as `[]` (nobody else).
+    shared_with: list[str] | None = field(default_factory=list)
+    #: True when the same op is also in `CompatReport.order_misses` (one op, two lists).
+    also_order_miss: bool = False
 
 
 @dataclass
@@ -842,16 +851,32 @@ def _analyze_vpath(
                     report.removed_first.append(RemovedFirst(
                         vpath, b, op.sourceline or 0, op.get("sel", ""), a, _guard(op)))
 
-    if report is not None:
-        for folder, op, cids, keys in off:
-            report.guarded_off.append(GuardedOff(
-                vpath, folder, op.sourceline or 0, op.get("sel", ""), _guard(op),
-                _would_share(folder, op.tag, cids, keys, diff_targets, key_to_mods, rank)))
+    offs: list[GuardedOff] = []
+    for folder, op, cids, keys in off:
+        near: list[str] | None = _would_share(folder, op.tag, cids, keys, diff_targets,
+                                               key_to_mods, rank)
+        if not cids and not near:
+            near = None   # target absent from the base: unknown until the AN-10 pass
+        offs.append(GuardedOff(vpath, folder, op.sourceline or 0, op.get("sel", ""),
+                               _guard(op), near))
 
+    misses: list[OrderMiss] = []
     if report is not None and unmatched and base_tree is not None:
-        report.order_misses.extend(_order_misses(
-            vpath, ordered, unmatched, folder_to_path, config, only=cand_folder,
-            full_tree=full_tree))
+        misses = _order_misses(vpath, ordered, unmatched, folder_to_path, config,
+                               only=cand_folder, full_tree=full_tree)
+    # One op, two lists (release review of #8): a guard can be false precisely because
+    # its target is not there yet. Each side says so, and the later mod that adds the
+    # target is what the guarded-off op would have met.
+    by_op = {(g.mod, g.line, g.sel): g for g in offs}
+    for m in misses:
+        g = by_op.get((m.mod, m.line, m.sel))
+        if g is not None:
+            m.guard_false = g.also_order_miss = True
+            g.shared_with = sorted(set(g.shared_with or ()) | {m.added_by},
+                                   key=lambda f: rank[f])
+    if report is not None:
+        report.guarded_off.extend(offs)
+        report.order_misses.extend(misses)
     return collisions
 
 
@@ -1703,7 +1728,8 @@ def analyze(
         if (g.vpath, g.mod, g.line) in seen_off:
             continue
         seen_off.add((g.vpath, g.mod, g.line))
-        if cand_folder is None or cand_folder == g.mod or cand_folder in g.shared_with:
+        if (cand_folder is None or cand_folder == g.mod
+                or cand_folder in (g.shared_with or ())):
             kept_off.append(g)
     report.guarded_off = kept_off
     return report
@@ -1782,16 +1808,25 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
                      "because the node")
         lines.append("  they target is added by a mod that loads AFTER it. The engine "
                      "skips them.")
+        if any(m.guard_false for m in report.order_misses):
+            lines.append("  Ops marked 'both fail' also have an if= guard that is false "
+                         "there, so load order is")
+            lines.append("  not necessarily the only reason they are skipped.")
         for m in sorted(report.order_misses, key=lambda x: (x.vpath, x.mod, x.line)):
             lines.append(f"  {m.vpath}")
             lines.append(f"     mod      : {m.mod} (line {m.line})  sel={m.sel}")
+            if m.guard_false:
+                lines.append(f"     guarded  : {m.guard} -- its sel= and its guard both fail "
+                             "at its load position; also listed under GUARDED OFF")
+                lines.append(f"     target   : added by {m.added_by}, which loads after it")
+                continue
             if m.guard:
                 lines.append(f"     guarded  : {m.guard} -- optional compat by design, "
                              "the skip is intended")
             lines.append(f"     needs    : {m.added_by}, which loads after it")
         lines.append("")
     if report.guarded_off:
-        met = [g for g in report.guarded_off if g.shared_with]
+        met = [g for g in report.guarded_off if g.shared_with is None or g.shared_with]
         lines.append(f"=== GUARDED OFF: if= FALSE AT ITS LOAD POSITION  "
                      f"({len(report.guarded_off)}, {len(met)} would have met another "
                      "mod) ===")
@@ -1805,7 +1840,10 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
             lines.append(f"  {g.vpath}")
             lines.append(f"     mod      : {g.mod} (line {g.line})  sel={g.sel}")
             lines.append(f"     guarded  : {g.guard}")
-            lines.append(f"     would meet: {', '.join(g.shared_with)}")
+            lines.append("     would meet: " + (
+                "unknown -- its target is not in the base and no mod was named as "
+                "adding it" if g.shared_with is None else ", ".join(g.shared_with))
+                + ("  (also an order miss, above)" if g.also_order_miss else ""))
         lines.append("")
     hard = report.hard
     if not hard and not shown_any:
@@ -1832,7 +1870,10 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
                  f"{len(report.by_kind('SOFT'))} soft, "
                  f"{len(report.order_misses)} op(s) needing a later mod, "
                  f"{len(report.removed_first)} op(s) inside an earlier removal, "
-                 f"{len(report.guarded_off)} op(s) guarded off (if= false), "
+                 f"{len(report.guarded_off)} op(s) guarded off (if= false"
+                 + (f"; {k} of them also an order miss"
+                    if (k := sum(g.also_order_miss for g in report.guarded_off)) else "")
+                 + "), "
                  f"{len(report.degraded)} file(s) not analysed.")
     if report.degraded:
         lines.append("DEGRADED: some files yielded no comparison — see NOT ANALYSED "
@@ -1949,6 +1990,9 @@ def main(argv: list[str] | None = None) -> int:
             "removed_first": [dataclasses.asdict(m) for m in report.removed_first],
             # Issue #8: ops whose if= guard is false at their load position -- they take
             # part in no collision row, and this says so rather than dropping them quietly.
+            # Each row: vpath, mod, line, sel, guard, shared_with (a list of mods; null =
+            # UNKNOWN, never the same as [] = nobody), also_order_miss (the same op is in
+            # order_misses too, whose rows carry guard_false -- one op, not two).
             "guarded_off": [dataclasses.asdict(g) for g in report.guarded_off],
             # NOT CHECKED (the text render's own section, above): an op whose sel=
             # could not be evaluated contributed no target and cannot participate in

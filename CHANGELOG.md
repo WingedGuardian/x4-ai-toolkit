@@ -173,7 +173,10 @@ confusing messages and six cosmetic ones. All are fixed:
   takes part in the duplicate-registry-entry check (it used to be skipped), and a macro defined
   by a guarded `<diff>` counts for NAME-CLASH only when its guard is true. On the maintainer's
   modlist this removed 12 false rows (6 HARD, 6 SUBTREE) and listed 23 guarded-off ops; a full
-  check runs about 9% longer (55 s to 61 s) (F278).
+  check runs about 9% longer (55 s to 61 s). An op whose guard is false *and* whose target only a
+  later mod adds is listed in both places, marked as the same op (`guard_false` /
+  `also_order_miss` in `--json`) and counted once in the summary; when no mod can be named as
+  meeting it, `shared_with` is `null` (unknown), not an empty list (F278).
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
   resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
   (BLIND-SPOTS F265-F268).
