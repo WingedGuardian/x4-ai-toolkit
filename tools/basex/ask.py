@@ -46,6 +46,9 @@ Prefer x4eff for a claim about what is live; x4raw for provenance/authorship.
 Usage
 -----
   uv run python ask.py refs <macro_or_ware_id> [--db x4eff]
+      exact forms: @ref/@name/@component = id; @macro = id|macro.id; @ware = id|ware.id;
+      bullet/@class = id; add_blueprints/@wares|@macros list tokens. $variable expressions
+      and other expression attributes (@exact, @value) are NOT searched.
   uv run python ask.py attr <attribute-name>
   uv run python ask.py xq   '<raw xquery>'
   uv run python ask.py xq   --file <query.xq>
@@ -551,11 +554,32 @@ def _git_bash_argv_state() -> tuple[str | None, bool]:
     return msystem, off
 
 
+#: What `refs` searches, stated wherever it answers (issue #5). Each form is EXPLICIT --
+#: never a global regex and never a global @class, which also names AI classes and
+#: component kinds (`class="player"`).
+REFS_SCOPE = (
+    "refs searches exactly: @ref, @name, @component = <id>; @macro = <id> or macro.<id>; "
+    "@ware = <id> or ware.<id>; bullet/@class = <id>; add_blueprints/@wares and @macros "
+    "as a [list, ...] of tokens, each <id> or its ware./macro. form. NOT searched: "
+    "$variable expressions (never resolved) and other expression attributes "
+    "(@exact, @value, ...), so a zero is over these forms only.")
+
+#: Tokenise an add_blueprints list: `[ware.a, ware.b]`, `ware.a`, `macro.a,macro.b`.
+_REFS_TOKENS = "tokenize(normalize-space(translate({attr}, '[],', '   ')), ' ')"
+
+
 def q_refs(db: str, ident: str) -> str:
     lit = _xq_literal(ident)
+    mlit = _xq_literal("macro." + ident)
+    wlit = _xq_literal("ware." + ident)
+    wares = _REFS_TOKENS.format(attr="@wares")
+    macros = _REFS_TOKENS.format(attr="@macros")
     return f"""
-for $n in collection('{db}')//*[@ref = {lit} or @macro = {lit} or @name = {lit}
-                              or @ware = {lit} or @component = {lit}]
+for $n in collection('{db}')//*[@ref = {lit} or @name = {lit} or @component = {lit}
+                              or @macro = ({lit}, {mlit}) or @ware = ({lit}, {wlit})
+                              or (self::bullet and @class = {lit})
+                              or (self::add_blueprints and ({wares} = ({lit}, {wlit})
+                                                            or {macros} = ({lit}, {mlit})))]
 let $u := substring-after(document-uri(root($n)), '/{db}/')
 order by $u
 return $u || '  <' || name($n) || '>'
@@ -588,7 +612,8 @@ def main(argv=None) -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("mode", choices=["refs", "attr", "xq"])
     p.add_argument("arg", nargs="?",
-                   help="the id (refs), the attribute name (attr) or the XQuery text (xq)")
+                   help="the id (refs), the attribute name (attr) or the XQuery text (xq). "
+                        + REFS_SCOPE.replace("%", "%%"))
     p.add_argument("--file", default=None,
                    help="xq only: read the query from this file. Git Bash rewrites path-like parts "
                         "of command-line arguments (`//` becomes `/`) before Python sees them; a "
@@ -834,6 +859,8 @@ def main(argv=None) -> int:
             print("  Git Bash rewrites path-like parts of arguments (`//` becomes `/`); if that is "
                   "not what you typed, "
                   "re-run with --file.")
+        if args.mode == "refs":
+            print(f"  {REFS_SCOPE}")
         if db_defaulted and args.mode in ("refs", "attr"):
             print("  searched x4raw, the default: the files AS WRITTEN. For what the game "
                   "actually loads, add --db x4eff.")
@@ -852,6 +879,10 @@ def main(argv=None) -> int:
 
     # --- the zero-result path: this is where a denominator is mandatory -------
     print(f"0 items in {args.db}.")
+    if args.mode == "refs":
+        # The coverage denominator counts DOCUMENTS; it says nothing about which
+        # reference FORMS were searched in them (issue #5), so the zero names them.
+        print(f"  {REFS_SCOPE}")
 
     # Prior to every other refusal: they all judge the RESULT of a query, and this one says
     # the query that ran may not be the query that was typed (see argv_under_git_bash).

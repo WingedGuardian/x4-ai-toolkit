@@ -1137,3 +1137,28 @@ def test_7_no_hand_rolled_basex_runner_outside_basex_run():
     assert offenders == []
     assert any(isinstance(n, ast.Constant) and n.value == "org.basex.BaseX"
                for n in ast.walk(ast.parse((here / "basex_run.py").read_text(encoding="utf-8"))))
+
+
+# --- #5: a refs result states the forms it searched ----------------------------------
+def test_5_a_refs_ZERO_names_the_forms_searched_and_what_is_not(monkeypatch, capsys):
+    _complete_zero(monkeypatch)
+    rc = ask.main(["refs", "zz_no_such_id", "--db", "x4eff"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "NEGATIVE CONFIRMED" in out
+    for form in ("bullet/@class", "add_blueprints/@wares", "macro.", "ware.", "$variable"):
+        assert form in out, (form, out)
+
+
+def test_5_TWIN_an_xq_zero_carries_no_refs_scope_line(monkeypatch, capsys):
+    _complete_zero(monkeypatch)
+    ask.main(["xq", "collection('x4eff')//ware[@id='zz']", "--db", "x4eff"])
+    assert "bullet/@class" not in capsys.readouterr().out
+
+
+def test_5_refs_help_declares_its_scope(capsys):
+    with pytest.raises(SystemExit):
+        ask.main(["--help"])
+    out = capsys.readouterr().out
+    assert "bullet/@class" in out and "$variable" in out
+    # The full statement, not just its keywords: the module docstring names them too.
+    assert " ".join(ask.REFS_SCOPE.split()) in " ".join(out.split())

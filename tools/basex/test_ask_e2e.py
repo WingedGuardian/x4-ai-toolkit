@@ -201,3 +201,49 @@ def test_7_coverage_basex_query_is_utf8_both_ways(monkeypatch, basex_home):
     with pytest.raises(RuntimeError) as exc:
         coverage.basex_query('x4raw', f"error(xs:QName('err:C'), '{FIRE}')")
     assert FIRE in str(exc.value)
+
+
+# --- #5: refs searches the reference FORMS X4 actually uses, and only those ----------
+# Evaluated by the real BaseX engine over one in-memory document (no database), the
+# issue's own reproduction shape: the generator is what is under test.
+def _refs_count(ident, xml):
+    q = ask.q_refs('x4eff', ident).replace("collection('x4eff')", "parse-xml('" + xml + "')")
+    assert "parse-xml" in q
+    return ask.run_counted(q)[1]
+
+
+@pytest.mark.parametrize('xml,expected', [
+    ('<r><macro ref="fx_m"/></r>', 1),                                   # control: @ref
+    ('<r><x name="fx_m"/><y component="fx_m"/></r>', 2),                 # control: @name, @component
+    ('<r><x macro="fx_m"/></r>', 1),
+    ('<r><set_value macro="macro.fx_m"/></r>', 1),                       # @macro = macro.X
+    ('<r><x ware="ware.fx_m"/></r>', 1),                                 # @ware = ware.X
+    ('<r><bullet class="fx_m"/></r>', 1),                                # bullet/@class
+    ('<r><add_blueprints wares="ware.fx_m"/></r>', 1),
+    ('<r><add_blueprints wares="[ware.other, ware.fx_m]"/></r>', 1),     # a list
+    ('<r><add_blueprints wares="fx_m"/></r>', 1),                        # bare token
+    ('<r><add_blueprints macros="macro.fx_m"/></r>', 1),
+    ('<r><add_blueprints macros="[macro.a,macro.fx_m]"/></r>', 1),
+])
+def test_5_refs_finds_each_reference_form(real_db, xml, expected):
+    assert _refs_count('fx_m', xml) == expected
+
+
+@pytest.mark.parametrize('xml', [
+    '<r><component class="fx_m"/></r>',                  # @class is a reference on bullet ONLY
+    '<r><x class="fx_m"/></r>',
+    '<r><add_blueprints wares="ware.fx_m_extra"/></r>',  # whole token, not a substring
+    '<r><add_blueprints wares="$fx_m"/></r>',            # a variable is not resolved
+    '<r><add_blueprints macros="ware.fx_m"/></r>',       # each attribute strips its OWN prefix
+    '<r><x macro="ware.fx_m"/></r>',
+    '<r><x ware="macro.fx_m"/></r>',
+    '<r><x exact="macro.fx_m"/></r>',                     # expression attributes: out of scope
+    '<r><x wares="ware.fx_m"/></r>',                      # @wares is a reference on add_blueprints ONLY
+    '<r><x macros="macro.fx_m"/></r>',
+])
+def test_5_TWIN_refs_does_not_match_lookalikes(real_db, xml):
+    assert _refs_count('fx_m', xml) == 0
+
+
+def test_5_TWIN_player_class_is_not_a_reference(real_db):
+    assert _refs_count('player', '<r><component class="player"/></r>') == 0

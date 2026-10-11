@@ -163,6 +163,19 @@ evidence that it is.**
 ```bash
 uv run python ../basex/ask.py refs turret_xen_m_beam_02_mk1_macro
 ```
+**What `refs` searches -- exactly these forms, and its zero is over these only** (issue #5):
+
+| form | matches |
+|---|---|
+| `@ref`, `@name`, `@component` | `<id>` |
+| `@macro` | `<id>` or `macro.<id>` |
+| `@ware` | `<id>` or `ware.<id>` |
+| `bullet/@class` (projectile macros; never a global `@class`, which also holds `player`-style classes) | `<id>` |
+| `add_blueprints/@wares`, `add_blueprints/@macros` | any token of `[a, b]` / `a,b` / `a` that is `<id>` or its `ware.`/`macro.` form |
+
+**Not searched:** `$variable` expressions (never resolved -- `wares="$BlueprintWare"` names no
+ware a query can read) and other expression attributes such as `@exact` and `@value`. For those,
+write an `xq` query; its zero is not certified unless it fits the restricted grammar above.
 When first run (2026-07-27) this returned hits overwhelmingly inside PACKED mods -- every
 one invisible before staging -- where the KB had said only "six other mods reference it".
 The count depends on the installed modlist, so it is not quoted; run it for today's.
