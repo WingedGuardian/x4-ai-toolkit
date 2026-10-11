@@ -18,7 +18,7 @@ import tempfile
 PACKAGE=Path(__file__).resolve().parents[1]
 REPO=PACKAGE.parents[1]
 sys.path.insert(0,str(REPO/"scripts"))
-from gate_support import wait_dispatch, save, source_fingerprint, external_output, gate_environment
+from gate_support import wait_dispatch, save, source_fingerprint, external_output, protected_roots, gate_environment
 
 
 def classify(path):
@@ -119,7 +119,7 @@ def main():
         print(json.dumps({f.name:classify(f) for f in files},indent=2));return 0
     if not args.out:
         p.error("--out is required")
-    out=external_output(args.out,REPO)
+    out=external_output(args.out,REPO,protected_roots(PACKAGE))
     if out.exists():
         p.error("--out must be a new directory (preserve earlier evidence)")
     out.mkdir(parents=True)

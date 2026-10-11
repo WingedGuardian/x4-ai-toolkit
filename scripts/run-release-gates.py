@@ -14,7 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from gate_support import save, source_fingerprint, wait_dispatch, external_output, evidence_digest, evidence_intact, gate_environment
+from gate_support import save, source_fingerprint, wait_dispatch, external_output, protected_roots, evidence_digest, evidence_intact, gate_environment
 
 ROOT=Path(__file__).resolve().parents[1]
 PKG=ROOT/"tools"/"x4validate"
@@ -92,7 +92,7 @@ def main():
                    help="stop at a stage boundary; vht leaves pytest explicitly pending")
     args=p.parse_args()
     if not os.environ.get("RB_PRESSURE_FILE"):p.error("run through rb.py")
-    out=external_output(args.out,ROOT);out.mkdir(parents=True,exist_ok=True)
+    out=external_output(args.out,ROOT,protected_roots(PKG));out.mkdir(parents=True,exist_ok=True)
     checkpoint=out/"checkpoint.json"
     ident=identity(args.workers)
     state={"identity":ident,"stages":{}}

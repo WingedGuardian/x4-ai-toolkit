@@ -103,7 +103,7 @@ def test_checkpoint_reuse_requires_every_evidence_file(tmp_path):
 
 def test_reports_cannot_change_the_fingerprinted_tree(tmp_path):
     from gate_support import external_output
-    with pytest.raises(ValueError):external_output(tmp_path/"reports",tmp_path)
+    with pytest.raises(ValueError):external_output(tmp_path/"reports",tmp_path,{})
 
 
 def test_skip_ceiling_is_global_not_per_batch():
@@ -180,3 +180,45 @@ def test_verdict_reads_only_recorded_state():
     assert rrg.verdict({"stages":{"a":ok}},names)==3                                  # not run
     assert rrg.verdict({"stages":{"a":ok,"b":{"accepted":True,"status":"pending x"}}},names)==3
     assert rrg.verdict({"stages":{"a":{"accepted":False,"status":"failed"},"b":ok}},names)==1
+
+
+# --- FX-H2 / reviewer M-2: protected roots as the TOOLS resolve them (env AND config) --------
+_ROOT_VARS=("X4_TOOLKIT","X4_GAME","X4_GAME_ROOT","X4_REFERENCE","X4_PROFILE","X4_EXTENSIONS",
+            "X4_GAME_EXTENSIONS","X4_MODS","X4_CONFIG")
+
+
+@pytest.fixture
+def config_only_reference(tmp_path,monkeypatch):
+    """A reference root named ONLY in the path config, never in the environment."""
+    from x4validate import _paths
+    for v in _ROOT_VARS:monkeypatch.delenv(v,raising=False)
+    ref=tmp_path/"cfg-reference";ref.mkdir()
+    cfg=tmp_path/"x4-paths.env";cfg.write_text('X4_REFERENCE="%s"\n'%ref.as_posix(),encoding="utf-8")
+    monkeypatch.setenv("X4_CONFIG",str(cfg))
+    _paths.reload()
+    yield ref
+    monkeypatch.undo();_paths.reload()
+
+
+def test_a_root_named_only_in_the_config_file_is_protected(tmp_path,config_only_reference):
+    from gate_support import external_output, protected_roots
+    roots=protected_roots(ROOT/"tools"/"x4validate")
+    assert Path(roots["reference"]).resolve()==config_only_reference.resolve()
+    with pytest.raises(ValueError,match="protected"):
+        external_output(config_only_reference/"reports",tmp_path/"src",roots)
+    # twin: the same resolution lets a directory OUTSIDE every root through
+    assert external_output(tmp_path/"elsewhere",tmp_path/"src",roots)==(tmp_path/"elsewhere").resolve()
+
+
+def test_a_resolver_that_cannot_run_refuses(monkeypatch):
+    from gate_support import protected_roots
+    from x4validate import _paths
+    def boom():raise RuntimeError("config unreadable")
+    monkeypatch.setattr(_paths,"reference",boom)
+    with pytest.raises(RuntimeError,match="refusing"):protected_roots(ROOT/"tools"/"x4validate")
+
+
+def test_external_output_requires_the_resolved_roots(tmp_path):
+    """No caller may fall back to environment-only checking by omitting the roots."""
+    from gate_support import external_output
+    with pytest.raises(TypeError):external_output(tmp_path/"r",tmp_path/"src")
