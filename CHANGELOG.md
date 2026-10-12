@@ -184,7 +184,7 @@ confusing messages and six cosmetic ones. All are fixed:
   includes the owning mod. The gate built that tree without the owner, so every such row was
   "unresolved"; on the maintainer's modlist 9 of 50 checkable HARD rows, over the gate's 10%
   limit, so the gate reported CANNOT (exit 3) instead of an answer. Now all 50 are compared. The
-  bug predates 3.3.1. Closing issue #3 depended on this fix.
+  bug predates 3.3.1. Closing issue #3 depended on this fix. (F281)
 - **Gate `load_order_oracle` (maintainers):** a DLC folder the engine signature-checked
   (`.\extensions\ego_dlc_*\...`) no longer counts as a "logged folder that is not installed
   now". DLC are not mods, so they were never in the installed set, and one Terran texture line
@@ -192,7 +192,7 @@ confusing messages and six cosmetic ones. All are fixed:
   DLC set (`Config().dlc_dirs()`), not from a name prefix, and DLC entries are left out of the
   sequences before scoring. On the maintainer's log the compared pairs are unchanged (8,299, 0
   inverted), because the DLC was never in the computed order. A removed mod folder, or a folder
-  that is neither a configured DLC nor installed, still makes the gate refuse.
+  that is neither a configured DLC nor installed, still makes the gate refuse. (F282)
 - **Gates `oracle` and `oracle_reverse` (maintainers):** both now refuse (exit 2) a debug log
   that does not describe the current modlist, using the same check as `load_order_oracle`
   (now one shared helper, `_env.modlist_staleness`). The check covers a manifest or the
@@ -200,7 +200,7 @@ confusing messages and six cosmetic ones. All are fixed:
   mod the log shows was not loaded. Before this, against a 2026-09-06 log both gates
   reported FAIL (exit 1), comparing that launch's errors with today's mods. `oracle` checks
   manifests only for the mods it judges and the mods loading before them. `oracle_reverse`
-  checks the whole modlist. `load_order_oracle`'s output is unchanged.
+  checks the whole modlist. `load_order_oracle`'s output is unchanged. (F283)
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
   resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
   (BLIND-SPOTS F265-F268).

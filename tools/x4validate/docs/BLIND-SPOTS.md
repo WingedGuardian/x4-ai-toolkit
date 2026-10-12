@@ -359,6 +359,9 @@ memory or from another session -- a remembered id was stale within a day here.
 | F278 | x4compat resolved each diff op's sel= against the base tree and never evaluated `if=`, so ops the merge skips (guard false at their load position) became HARD, duplicate, SOFT, SUBTREE or removal rows, could be named winner, and guarded TRUE adds were left out of the UNION-KEY pass | **DEFECT (measured)** | 149 mods / 486 shared files: 12 of 336 rows (6 HARD + 6 SUBTREE) were guarded-off ops; 23 guarded-off ops listed; 0 rows added, no winner changed | ✅ **CLOSED 2026-10-11** (`296b9c3`, lane `80c30bb`..`d99f32f`) - guards evaluated with `_merge.apply_diff` at each op's load position; GUARDED OFF section; invalid guard stays UNEVALUATED; the engine evaluating `if=` as `_merge` models it is ASSUMED |
 | F279 | `_merge._union_children` deduped same-named wildcard `<icon>`s in `libraries/icons.xml` later-wins (base's own included); `apply_diff` took Python truthiness for `if=`, so a NaN guard applied the op | **DEFECT (measured)** | base + 8 DLC: 38 wildcard declarations in, 17 effective (21 dropped), now 38 of 38; live modlist store +27 entities, 0 removed | ✅ **CLOSED 2026-10-11** (`bf2e9dc`; `6c25d34`, `d339a32`, `f3967b5`) - wildcard icons appended not deduped; `_xpath_boolean` for `if=`; **residuals OPEN** (plain-name duplicates, other libraries/ files, packed mods, in-game confirmation) |
 | F280 | Builders over a missing or empty reference wrote an EMPTY artifact over the good one and exited 0 (`Config` refuses only an UNRESOLVED reference; `base_vpaths` returns nothing for a missing or empty root) | **DEFECT (measured)** | on `bf2e9dc` x4effective build, x4xref build and basex/build-effective.py, both shapes: rc 0 with 0 entities/rows/documents | ✅ **CLOSED 2026-10-11** (`172c05f`) - shared `require_base_documents` raises `EmptyReference`, rc 2 before any write; shell builders check first; `_ffinames` (x4live) and `stage.py` not measured |
+| F281 | `gates/cross_tool.py` resolved positional HARD targets in a tree built from a bare `_merge.Config()`; for a nested `extensions/<owner>/<rel>` vpath the owner mod is never in `config.overlays`, so the tree was None and the row UNRESOLVED | **DEFECT (measured)**; exposure by newly installed mods **INFERRED** | live modlist: 9 of 50 mappable HARD rows (18%, over the 10% floor) in one owner mod's shield macros, gate said CANNOT (rc 3); after: 50 of 50 checked, all agree, the 41 earlier verdicts unchanged per row | ✅ **CLOSED 2026-10-12** (`7872a4e`; follow-up `845f2c2`) - one shared `_compat.base_tree_for` used by `_analyze_vpath` and the gate; follow-up adds the active-set exclusion disclosure (F139); an inactive owner, or a target matching other than one node, stays UNRESOLVED and counts against the floor |
+| F282 | `load_order_oracle` treated any folder in the engine's signature-check sequences that is not an installed mod as logged but not installed now, and refused; DLC folders are never in the mod lists | **DEFECT (measured)** | debug-2026-10-12T1155: 1 of 28,039 signature lines names a packed DLC file directly (`ego_dlc_terran`, error 13); the other 1,214 DLC mentions are mod-nested paths credited to the mod; pairs 8,299 compared, 0 inverted, before and after | ✅ **CLOSED 2026-10-12** (`42da66d`) - DLC names from `Config().dlc_dirs()` (never a prefix) are dropped from the sequences with a printed count; with no reference configured nothing is exempted and the gate refuses |
+| F283 | `oracle` and `oracle_reverse` gave verdicts on an engine log that predates the modlist; neither checked whether the log came from the current modlist | **DEFECT (measured)**; `oracle.py` scope rule not tested on a real stale log | against debug-2026-09-06 both exited 1 (oracle 4 false OK, oracle_reverse 1 disagreement) while `load_order_oracle` refused the same log; on the fresh 2026-10-12 log 226 of 226 agree, 0 disagreements | ✅ **CLOSED 2026-10-12** (`2227bf3`) - one shared `_env.modlist_staleness` / `log_staleness` (moved from `load_order_oracle`, output byte-identical) runs before any verdict, exit 2; `oracle.py` scopes the manifest and unlogged checks to the mods it judges plus their patch-time overlays (scope rule 85%); `oracle_reverse` checks the whole active modlist; manifest mtimes survive a copy-in so the never-logged check is the backstop; a mod shipping only packed files is never held against the log |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -9657,6 +9660,59 @@ after including the parser and translator, all four changes void the reading, an
 an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
+
+## F283 — oracle and oracle_reverse gave verdicts on a log that predates the modlist (FX-H9b) · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-12
+
+Neither gate checked whether its captured engine log came from the current modlist. MEASURED:
+against debug-2026-09-06 both exited 1 (FAIL: oracle 4 "false OK", oracle_reverse 1
+disagreement) while load_order_oracle refused the same log. On the fresh 2026-10-12 log the
+same gates showed 226/226 agree and 0 disagreements, so those FAILs came from the stale log.
+
+Fix `2227bf3`: one shared `_env.modlist_staleness` / `log_staleness` (moved from
+load_order_oracle, its output byte-identical) runs before any verdict, exit 2. oracle.py
+scopes the manifest and unlogged checks to the mods it judges plus their patch-time overlays
+(scope rule 85%, not tested on a real stale log); oracle_reverse checks the whole active
+modlist. Remaining limit: manifest mtimes survive a copy-in, so the "never logged" evidence
+check is the backstop; a mod shipping only packed files is never held against the log.
+
+RE-DERIVED BY: `tests/test_oracle_log_staleness.py`
+`test_oracle_a_STALE_judged_mod_refuses_not_fails` and
+`test_reverse_a_STALE_log_with_a_disagreement_refuses_not_fails`.
+
+## F282 — load_order_oracle counted a DLC folder as a removed mod (FX-H9) · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-12
+
+The gate treated any folder in the engine's signature-check sequences that is not an installed
+mod as "logged but not installed now", and refused. DLC folders are never in the mod lists.
+MEASURED on debug-2026-10-12T1155: exactly one of 28,039 signature lines names a packed DLC
+file directly (`ego_dlc_terran`, error 13); the other 1,214 DLC mentions are mod-nested paths
+credited to the mod.
+
+Fix `42da66d`: DLC names from `Config().dlc_dirs()` (never a prefix) are dropped from the
+sequences, with a printed count; with no reference configured nothing is exempted and the gate
+refuses. Pairs unchanged: 8,299 compared, 0 inverted, before and after.
+
+RE-DERIVED BY: `tests/test_load_order_oracle.py`
+`test_a_DLC_folder_in_a_sequence_is_not_a_removed_folder` and
+`test_an_unconfigured_reference_exempts_no_DLC_and_says_so`.
+
+## F281 — cross_tool HARD mapping used a bare-Config base tree (FX-H8) · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-12
+
+`gates/cross_tool.py` resolved positional HARD targets in a tree built from a bare
+`_merge.Config()`. For a nested `extensions/<owner>/<rel>` vpath the owner mod is never in
+`config.overlays`, so the tree was None and the row UNRESOLVED. MEASURED 2026-10-12 on the live
+modlist: 9 of 50 mappable HARD rows (18%, over the 10% floor), all in one owner mod's shield
+macros, so the gate said CANNOT (rc 3). Pre-arc (fe8065bb / a9c31c5f, before v3.3.1); likely
+exposed by newly installed mods (INFERRED).
+
+Fix `7872a4e`: one shared `_compat.base_tree_for` used by both `_analyze_vpath` and the gate.
+After: 50/50 checked, all agree; the 41 earlier verdicts unchanged (per row). Follow-up
+`845f2c2` adds the active-set exclusion disclosure (F139). Remaining limit (by design): an
+inactive owner, or a target matching other than one node, is still UNRESOLVED and counts
+against the floor.
+
+RE-DERIVED BY: `tests/test_cross_tool_semantics.py`
+`test_FXH8_a_NESTED_HARD_row_maps_through_the_owners_base_tree` and
+`test_FXH8_TWIN_an_INACTIVE_owner_and_a_0_node_target_stay_UNRESOLVED`.
 
 ## F280 — Builders over a missing or empty reference wrote an empty artifact and exited 0 · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-11
 
