@@ -179,6 +179,12 @@ confusing messages and six cosmetic ones. All are fixed:
   later mod adds is listed in both places, marked as the same op (`guard_false` /
   `also_order_miss` in `--json`) and counted once in the summary; when no mod can be named as
   meeting it, `shared_with` is `null` (unknown), not an empty list (F278).
+- **Gate `cross_tool` (maintainers):** a HARD collision on a mod-on-mod patch
+  (`extensions/<owner>/<rel>`) is now checked in the same base tree x4compat uses, which
+  includes the owning mod. The gate built that tree without the owner, so every such row was
+  "unresolved"; on the maintainer's modlist 9 of 50 checkable HARD rows, over the gate's 10%
+  limit, so the gate reported CANNOT (exit 3) instead of an answer. Now all 50 are compared. The
+  bug predates 3.3.1. Closing issue #3 depended on this fix.
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
   resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
   (BLIND-SPOTS F265-F268).
