@@ -387,6 +387,21 @@ def _owner_aware_config(vpath: str, folder_to_path: dict[str, Path],
     return _merge.replace(config, overlays=tuple(config.overlays) + (owner_dir,))
 
 
+def base_tree_for(vpath: str, folder_to_path: dict[str, Path],
+                  config: _merge.Config):
+    """THE base tree x4compat's targets index into: base+DLC plus, for a nested
+    `extensions/<owner>/<rel>`, the OWNER mod (`_owner_aware_config`) -- never the
+    other patchers, and never a later merged tree. None = no base exists.
+
+    The single definition: `_analyze_vpath` and `gates/cross_tool.py` both call it, so
+    the positional targets x4compat emits are always resolved by the gate in the tree
+    they were computed against. The gate used to build a bare `Config()` tree, which is
+    None for every nested vpath -- MEASURED 2026-10-12: 9 of 50 mappable HARD rows
+    UNRESOLVED, over its 10% floor (FX-H8)."""
+    return _merge.build_effective(
+        vpath, _owner_aware_config(vpath, folder_to_path, config)).tree
+
+
 def _no_base_reason(vpath: str, folder_to_path: dict[str, Path],
                     config: _merge.Config) -> str:
     """Say WHY no base tree exists, computed — never guessed.
@@ -448,8 +463,8 @@ def _analyze_vpath(
 
     *report* receives the files that could not be analysed at all.
     """
-    config = _owner_aware_config(vpath, folder_to_path, config)
-    base_tree = _merge.build_effective(vpath, config).tree
+    config = _owner_aware_config(vpath, folder_to_path, config)   # idempotent
+    base_tree = base_tree_for(vpath, folder_to_path, config)
     is_union = vpath.lower().startswith(UNION_DIRS)
     at = per_mod_vpath or {}
 
