@@ -139,11 +139,13 @@ import os  # noqa: E402
 
 
 def _world(tmp_path, monkeypatch, *, active, excluded=(), log_lines, files=None,
-           log_age=+1000, profile_age=None, dropped=()):
+           log_age=+1000, profile_age=None, dropped=(), dlc=()):
     """active/excluded: installed game-root folders; only *active* are in the active set.
     files: {folder: [relative paths it ships]} (each mod always ships content.xml).
     log_age: log mtime relative to the manifests (+ newer, - older).
-    profile_age: profile content.xml mtime relative to the LOG (None = no profile)."""
+    profile_age: profile content.xml mtime relative to the LOG (None = no profile).
+    dlc: the DLC folder names the configuration knows (pinned; never the real install)."""
+    monkeypatch.setattr(g, "_dlc_folders", lambda: frozenset(dlc), raising=False)
     files = files or {}
     mods = {}
     for f in [*active, *excluded]:
@@ -251,3 +253,58 @@ def test_an_excluded_mod_in_a_STALE_log_is_not_convicted(tmp_path, monkeypatch, 
     _world(tmp_path, monkeypatch, active=["a", "b"], excluded=["e"],
            log_lines=[*_AGREE, _line("e", "x.xml")], log_age=-1000)
     assert g.main() == 2
+
+
+# FX-H9 (2026-10-12): a DLC folder in a sequence is not a removed mod. MEASURED on a
+# fresh 2026-10-12 log: one signature line names `.\extensions\ego_dlc_terran\...`
+# (a texture, error 13), DLC are never in `_registry.mods(...)`, so the gate listed
+# ego_dlc_terran as "not installed now" and refused a log of the current modlist.
+def test_a_DLC_folder_in_a_sequence_is_not_a_removed_folder(tmp_path, monkeypatch, capsys):
+    _world(tmp_path, monkeypatch, active=["a", "b"], files={"a": ["x.xml"], "b": ["x.xml"]},
+           log_lines=[*_AGREE, _line("ego_dlc_terran", "t.gz"),
+                      _line("ego_dlc_terran", "x.xml")],
+           dlc=["ego_dlc_terran"])
+    assert g.main() == 0, _rc(capsys)
+
+
+def test_a_DLC_folder_does_not_change_the_pairs_compared(tmp_path, monkeypatch, capsys):
+    """The DLC sits BETWEEN a and b in the class; the score is a's and b's pair alone."""
+    _world(tmp_path, monkeypatch, active=["a", "b"], files={"a": ["x.xml"], "b": ["x.xml"]},
+           log_lines=[_line("a", "x.xml"), _line("ego_dlc_terran", "x.xml"),
+                      _line("b", "x.xml")],
+           dlc=["ego_dlc_terran"])
+    assert g.main() == 0
+    out = _rc(capsys)
+    assert "ordered pairs: 1 " in out and "inverted by compute_load_order: 0" in out, out
+    assert "not in the active set" in out and "+0 logged" in out, out
+
+
+def test_a_removed_MOD_folder_still_refuses_beside_a_DLC(tmp_path, monkeypatch, capsys):
+    """Twin: the DLC exemption must not swallow a genuinely removed mod."""
+    _world(tmp_path, monkeypatch, active=["a", "b"], files={"a": ["x.xml"], "b": ["x.xml"]},
+           log_lines=[*_AGREE, _line("ego_dlc_terran", "t.gz"), _line("removed_probe", "x.xml")],
+           dlc=["ego_dlc_terran"])
+    assert g.main() == 2
+    out = _rc(capsys)
+    assert "1 logged folder(s) are not installed now: removed_probe" in out, out
+
+
+def test_an_ego_dlc_NAMED_folder_the_config_does_not_know_still_refuses(
+        tmp_path, monkeypatch, capsys):
+    """Twin: the exemption is the CONFIGURED DLC set, not a name prefix. A folder that is
+    neither a known DLC nor installed is gone, whatever it is called."""
+    _world(tmp_path, monkeypatch, active=["a", "b"], files={"a": ["x.xml"], "b": ["x.xml"]},
+           log_lines=[*_AGREE, _line("ego_dlc_terran", "t.gz")], dlc=["ego_dlc_split"])
+    assert g.main() == 2
+    assert "not installed now: ego_dlc_terran" in _rc(capsys)
+
+
+def test_an_unconfigured_reference_exempts_no_DLC_and_says_so(monkeypatch, capsys):
+    """The refusal path, run against a REAL wrong configuration (no reference): the DLC
+    set is empty, so a DLC line counts as not installed and the gate refuses."""
+    from x4validate import _paths
+    monkeypatch.setattr(g._merge, "REFERENCE", None)
+    with pytest.raises(_paths.Unconfigured):
+        g._merge.Config()
+    assert g._dlc_folders() == frozenset()
+    assert "no DLC set to exempt" in _rc(capsys)
