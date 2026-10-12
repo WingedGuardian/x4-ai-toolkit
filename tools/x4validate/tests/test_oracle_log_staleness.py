@@ -39,27 +39,53 @@ T_RESOLVES = '<language id="44"><page id="1001"><t id="42">x</t></page></languag
 IDX = '<index><entry name="something_else" value="v"/></index>'
 
 
-def _modlist(tmp_path, monkeypatch, folders, *, log_text, stale=(), log_age=+1000):
-    """Installed game-root mods *folders*; *stale* ones get a manifest NEWER than the
-    log, the rest older. Registry, profile and DLC set pinned -- never the real install."""
+def _modlist(tmp_path, monkeypatch, folders, *, log_text, stale=(), log_age=+1000,
+             inactive=(), files=None, root_rank=None, dlc=(), profile_age=None):
+    """Installed mods *folders*; *stale* ones get a manifest NEWER than the log, the rest
+    older. *inactive*: installed but not in the active set. *files*: {folder: [rel]}.
+    *root_rank*: {folder: rank} (default 0, the game root). *dlc*: the pinned DLC set.
+    *profile_age*: profile content.xml mtime relative to the log (None = no profile).
+    Registry, profile and DLC set pinned -- never the real install."""
     ext = tmp_path / "ext"
+    files, root_rank = files or {}, root_rank or {}
     mods = []
     for f in folders:
         d = ext / f
         d.mkdir(parents=True)
         (d / "content.xml").write_text(f'<content id="{f}" version="1"/>', encoding="utf-8")
-        mods.append({"folder": f, "path": str(d), "root_rank": 0, "id": f})
+        for rel in files.get(f, []):
+            (d / rel).parent.mkdir(parents=True, exist_ok=True)
+            (d / rel).write_text("<x/>", encoding="utf-8")
+        mods.append({"folder": f, "path": str(d), "root_rank": root_rank.get(f, 0), "id": f})
     log = tmp_path / "debug.txt"
     log.write_text(log_text, encoding="utf-8")
     t_log = os.stat(log).st_mtime
     for m in mods:
         t = t_log + (1000 if m["folder"] in stale else -log_age)
         os.utime(Path(m["path"]) / "content.xml", (t, t))
-    monkeypatch.setattr(_registry, "mods",
-                        lambda scope, *a, **k: _registry.ModList(list(mods)))
-    monkeypatch.setattr(_paths, "profile_content", lambda: None)
-    monkeypatch.setattr(_env, "dlc_folders", lambda: frozenset(), raising=False)
+    prof = None
+    if profile_age is not None:
+        prof = tmp_path / "profile_content.xml"
+        prof.write_text("<content/>", encoding="utf-8")
+        os.utime(prof, (t_log + profile_age, t_log + profile_age))
+
+    def fake_mods(scope, *a, **k):
+        if scope == "active":
+            return _registry.ModList([m for m in mods if m["folder"] not in inactive])
+        return _registry.ModList(list(mods))
+    monkeypatch.setattr(_registry, "mods", fake_mods)
+    monkeypatch.setattr(_paths, "profile_content", lambda: prof)
+    monkeypatch.setattr(_env, "dlc_folders", lambda: frozenset(dlc), raising=False)
     return ext, log
+
+
+_B = chr(92)
+
+
+def _sig(folder: str, rel: str = "md/x.xml") -> str:
+    """One engine signature-check line naming `.\\extensions\\<folder>\\<rel>`."""
+    return ("[FileIO ] 0.00 File I/O: Failed to verify the file signature for file '."
+            + _B + "extensions" + _B + folder + _B + rel.replace("/", _B) + "' (error: 14)\n")
 
 
 # --------------------------------------------------------------------- oracle_reverse
@@ -149,3 +175,134 @@ def test_oracle_a_stale_mod_in_a_judged_mods_overlays_DOES_block_it(tmp_path, mo
     ext, log = _modlist(tmp_path, monkeypatch, ["a", "z"], log_text="", stale=["z"])
     assert _oracle(monkeypatch, ext, log, overlays=["z"], agree=True) == 2
     assert "(z)" in capsys.readouterr().err
+
+
+# ------------------------------------------------- release review P, finding 1 (MEDIUM)
+# A mod the log names that is still INSTALLED but no longer ACTIVE (its own manifest
+# disables it, or a dependency changed) was never age-checked: `newest_manifest` ran
+# over the active set only. MEASURED by the reviewer: reasons() == [], oracle_reverse
+# rc 0, oracle rc 0 -- a verdict on a log of a modlist that has since changed.
+_E_LOG = _sig("a") + _sig("e")
+
+
+def test_P1_an_INACTIVE_logged_mod_edited_after_the_log_is_a_reason(tmp_path, monkeypatch):
+    _modlist(tmp_path, monkeypatch, ["a", "e"], log_text=_E_LOG, stale=["e"], inactive=["e"])
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == [
+        "a manifest changed after the log was written (e)"]
+
+
+def test_P1_twin_the_same_inactive_mod_edited_BEFORE_the_log_is_not(tmp_path, monkeypatch):
+    _modlist(tmp_path, monkeypatch, ["a", "e"], log_text=_E_LOG, inactive=["e"])
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == []
+
+
+def test_P1_twin_an_inactive_mod_the_log_never_names_does_not_count(tmp_path, monkeypatch):
+    """Not logged, not active: the launch never had it and neither does today."""
+    _modlist(tmp_path, monkeypatch, ["a", "e"], log_text=_sig("a"), stale=["e"],
+             inactive=["e"])
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == []
+
+
+def test_P1_reverse_refuses_on_an_inactive_logged_mod_edited_after(tmp_path, monkeypatch):
+    _, log = _modlist(tmp_path, monkeypatch, ["a", "e"], log_text=_E_LOG + LOG_REV,
+                      stale=["e"], inactive=["e"])
+    assert _reverse(monkeypatch, log, T_WITH_PAGE) == 2
+
+
+def test_P1_reverse_twin_edited_before_keeps_its_verdict(tmp_path, monkeypatch):
+    _, log = _modlist(tmp_path, monkeypatch, ["a", "e"], log_text=_E_LOG + LOG_REV,
+                      inactive=["e"])
+    assert _reverse(monkeypatch, log, T_WITH_PAGE) == 0
+
+
+def test_P1_oracle_refuses_when_the_JUDGED_mod_is_inactive_and_edited_after(
+        tmp_path, monkeypatch):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a", "e"], log_text=_E_LOG, stale=["e"],
+                        inactive=["e"])
+    assert _oracle(monkeypatch, ext, log, judged="e", agree=True) == 2
+
+
+def test_P1_oracle_twin_edited_before_keeps_its_verdict(tmp_path, monkeypatch):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a", "e"], log_text=_E_LOG, inactive=["e"])
+    assert _oracle(monkeypatch, ext, log, judged="e", agree=True) == 0
+
+
+# ------------------------------------------------- release review P, finding 2
+# Each reason THROUGH `modlist_staleness`, each with a twin.
+def test_P2_a_logged_folder_that_is_not_installed_is_gone(tmp_path, monkeypatch):
+    _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a") + _sig("ghost"))
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == [
+        "1 logged folder(s) are not installed now: ghost"]
+
+
+def test_P2_twin_a_logged_INSTALLED_folder_is_not_gone(tmp_path, monkeypatch):
+    _modlist(tmp_path, monkeypatch, ["a", "b"], log_text=_sig("a") + _sig("b"))
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == []
+
+
+def test_P2_a_DLC_signature_line_is_not_gone(tmp_path, monkeypatch):
+    """Fails if `drop_dlc(seqs, dlc_folders())` is removed from modlist_staleness."""
+    _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a") + _sig("ego_dlc_terran"),
+             dlc=["ego_dlc_terran"])
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == []
+
+
+def test_P2_twin_the_same_line_with_no_DLC_configured_is_gone(tmp_path, monkeypatch):
+    _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a") + _sig("ego_dlc_terran"))
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == [
+        "1 logged folder(s) are not installed now: ego_dlc_terran"]
+
+
+def test_P2_an_active_mod_shipping_a_logged_class_never_logged_for_it(tmp_path, monkeypatch):
+    _modlist(tmp_path, monkeypatch, ["a", "b"], log_text=_sig("a", "md/x.xml"),
+             files={"b": ["md/x.xml"]})
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == [
+        "1 active mod(s) ship a file the engine checked for other mods but never for "
+        "them: b (md/x.xml)"]
+
+
+def test_P2_twin_an_active_mod_shipping_only_unlogged_classes(tmp_path, monkeypatch):
+    _modlist(tmp_path, monkeypatch, ["a", "b"], log_text=_sig("a", "md/x.xml"),
+             files={"b": ["md/y.xml"]})
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == []
+
+
+def test_P2_root_rank_an_unlogged_mod_outside_the_game_root_is_not_evidence(
+        tmp_path, monkeypatch):
+    """The signature line names game-root folders only, so a profile-root mod's absence
+    from it is no evidence (twin of the case above, root_rank 1)."""
+    _modlist(tmp_path, monkeypatch, ["a", "b"], log_text=_sig("a", "md/x.xml"),
+             files={"b": ["md/x.xml"]}, root_rank={"b": 1})
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == []
+
+
+def test_P2_a_profile_content_xml_newer_than_the_log(tmp_path, monkeypatch):
+    _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a"), profile_age=+1000)
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == [
+        "the profile content.xml (the enable/disable decisions) changed after the log "
+        "was written"]
+
+
+def test_P2_twin_a_profile_content_xml_older_than_the_log(tmp_path, monkeypatch):
+    _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a"), profile_age=-1000)
+    assert _env.modlist_staleness(tmp_path / "debug.txt").reasons() == []
+
+
+# ------------------------------------------------- release review P, finding 3
+def _cfg_with_dlc(monkeypatch, names):
+    monkeypatch.setattr(_merge, "Config", lambda **k: SimpleNamespace(
+        dlc_dirs=lambda: [Path("x") / n for n in names]))
+
+
+def test_P3_an_EMPTY_resolved_DLC_set_is_announced(monkeypatch, capsys):
+    """A reference that is missing or holds no ego_dlc_* resolves to nothing; every DLC
+    signature line then reads as gone, so the empty set must say so."""
+    _cfg_with_dlc(monkeypatch, [])
+    assert _env.dlc_folders() == frozenset()
+    assert "no DLC set to exempt" in capsys.readouterr().err
+
+
+def test_P3_twin_a_non_empty_DLC_set_is_silent(monkeypatch, capsys):
+    _cfg_with_dlc(monkeypatch, ["ego_dlc_terran"])
+    assert _env.dlc_folders() == frozenset({"ego_dlc_terran"})
+    assert "no DLC set to exempt" not in capsys.readouterr().err

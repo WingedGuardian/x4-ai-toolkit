@@ -139,12 +139,13 @@ import os  # noqa: E402
 
 
 def _world(tmp_path, monkeypatch, *, active, excluded=(), log_lines, files=None,
-           log_age=+1000, profile_age=None, dropped=(), dlc=()):
+           log_age=+1000, profile_age=None, dropped=(), dlc=(), newer=()):
     """active/excluded: installed game-root folders; only *active* are in the active set.
     files: {folder: [relative paths it ships]} (each mod always ships content.xml).
     log_age: log mtime relative to the manifests (+ newer, - older).
     profile_age: profile content.xml mtime relative to the LOG (None = no profile).
-    dlc: the DLC folder names the configuration knows (pinned; never the real install)."""
+    dlc: the DLC folder names the configuration knows (pinned; never the real install).
+    newer: folders whose manifest is then set NEWER than the log."""
     monkeypatch.setattr(g, "_dlc_folders", lambda: frozenset(dlc), raising=False)
     files = files or {}
     mods = {}
@@ -162,6 +163,8 @@ def _world(tmp_path, monkeypatch, *, active, excluded=(), log_lines, files=None,
     log.write_text("".join(log_lines), encoding="utf-8")
     t_log = t_manifest + log_age
     os.utime(log, (t_log, t_log))
+    for f in newer:
+        os.utime(mods[f]["path"] + "/content.xml", (t_log + 1000, t_log + 1000))
     prof = None
     if profile_age is not None:
         prof = tmp_path / "content.xml"
@@ -308,3 +311,16 @@ def test_an_unconfigured_reference_exempts_no_DLC_and_says_so(monkeypatch, capsy
         _merge.Config()
     assert g._dlc_folders() == frozenset()
     assert "no DLC set to exempt" in _rc(capsys)
+
+
+def test_P1_an_EXCLUDED_logged_mod_edited_after_the_log_refuses_not_convicts(
+        tmp_path, monkeypatch, capsys):
+    """Release review P finding 1 (pre-arc twin): e is installed, logged, excluded by our
+    active rule -- and its manifest changed AFTER the log (e.g. it was disabled since).
+    The exclusion may postdate the launch, so this is CANNOT JUDGE (rc 2), not a finding.
+    Twin: test_a_mod_we_EXCLUDE_that_the_engine_LOGGED_is_a_finding (manifest older, rc 1)."""
+    _world(tmp_path, monkeypatch, active=["a", "b"], excluded=["e"],
+           log_lines=[*_AGREE, _line("e", "x.xml")], newer=["e"],
+           dropped=["e: NOT LOADED by the engine -- disabled by its manifest"])
+    assert g.main() == 2
+    assert "a manifest changed after the log was written (e)" in _rc(capsys)
