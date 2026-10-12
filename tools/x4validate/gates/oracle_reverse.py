@@ -24,7 +24,8 @@ captured log ($X4_ORACLE_LOG, or the live profile log passed explicitly).
 
 Run:  uv run python gates/oracle_reverse.py [path/to/debug.txt]
 Exit: 0 we agree with the engine, 1 any disagreement, 2 a NON-ANSWER -- no log,
-      a log with no checkable complaint, or our own side not examined at all.
+      a log with no checkable complaint, our own side not examined at all, or a
+      log that does not describe the current modlist (`_env.modlist_staleness`).
 """
 from __future__ import annotations
 
@@ -81,6 +82,15 @@ def log_path() -> Path:
 
 def main() -> int:
     log = log_path()
+    # DOES THE LOG DESCRIBE THE CURRENT MODLIST? Asked FIRST (FX-H10): every answer below
+    # comes from the merged tree of what is installed NOW, so a complaint in a log of a
+    # different modlist may be the drift, not our tree -- it can neither convict nor
+    # clear. Whole modlist, because the tree this gate reads merges every active mod.
+    stale = _env.modlist_staleness(log).reasons()
+    if stale:
+        print(f"REFUSING: {log.name} does not describe the current modlist -- "
+              + "; ".join(stale) + ". " + _env.STALE_ADVICE, file=sys.stderr)
+        return 2
     text = log.read_text(encoding="utf-8", errors="replace")
     print(f"REVERSE ORACLE — {log.name} ({len(text)//1024} KB)")
     print("=" * 88)

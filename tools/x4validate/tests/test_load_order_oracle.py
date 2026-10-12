@@ -302,9 +302,9 @@ def test_an_ego_dlc_NAMED_folder_the_config_does_not_know_still_refuses(
 def test_an_unconfigured_reference_exempts_no_DLC_and_says_so(monkeypatch, capsys):
     """The refusal path, run against a REAL wrong configuration (no reference): the DLC
     set is empty, so a DLC line counts as not installed and the gate refuses."""
-    from x4validate import _paths
-    monkeypatch.setattr(g._merge, "REFERENCE", None)
+    from x4validate import _merge, _paths
+    monkeypatch.setattr(_merge, "REFERENCE", None)
     with pytest.raises(_paths.Unconfigured):
-        g._merge.Config()
+        _merge.Config()
     assert g._dlc_folders() == frozenset()
     assert "no DLC set to exempt" in _rc(capsys)
