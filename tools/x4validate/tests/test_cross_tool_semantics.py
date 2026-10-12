@@ -402,3 +402,119 @@ def test_a_USABLE_store_lets_the_sql_hardening_section_pass(monkeypatch, capsys,
     assert not cross_tool.cannot and not cross_tool.failures, (cross_tool.cannot,
                                                                 cross_tool.failures)
     capsys.readouterr()
+
+
+# --- FX-H8: a NESTED vpath's base tree is the OWNER's file (as x4compat builds it) ---
+#
+# MEASURED 2026-10-12 on the live modlist: 9 of 50 mappable HARD rows, all at
+# `extensions/cpsdo_zb_modpack/assets/props/surfaceelements/macros/`, were UNRESOLVED
+# because the gate built the base tree with a bare `_merge.Config()`, whose overlays
+# never contain the owner mod -- so the tree was None. x4compat builds the same file
+# owner-aware; the gate now asks x4compat's own helper for that tree.
+
+_OWNED_REL = "assets/props/surfaceelements/macros/shield_t_macro.xml"
+_OWNED_BASE = ('<macros><macro name="shield_t_macro" class="shieldgenerator"><properties>'
+               '<recharge max="1" rate="1" delay="1"/></properties></macro></macros>')
+
+
+def _owned_world(tmp_path, monkeypatch, store_origin, owner="owner_mod"):
+    """owner_mod ships <rel>; a_patch and z_patch both replace its recharge/@rate via
+    the nested path extensions/<owner>/<rel> (z_patch loads last and wins). The store
+    records the live recharge.rate with origin *store_origin*."""
+    import sqlite3
+
+    from x4validate import _merge
+    ref = tmp_path / "reference"
+    ref.mkdir()
+    ext = tmp_path / "extensions"
+    mods = {"owner_mod": {_OWNED_REL: _OWNED_BASE}}
+    for p in ("a_patch", "z_patch"):
+        mods[p] = {f"extensions/{owner}/{_OWNED_REL}":
+                   f'<diff><replace sel="/macros/macro/properties/recharge/@rate">{p}'
+                   '</replace></diff>'}
+    for folder, files in mods.items():
+        root = ext / folder
+        root.mkdir(parents=True)
+        (root / "content.xml").write_text(
+            f'<content id="{folder}" name="{folder}" version="1"/>', encoding="utf-8")
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text, encoding="utf-8")
+    db = tmp_path / "e.sqlite"
+    con = sqlite3.connect(db)
+    con.execute("create table entities (id integer primary key, kind, name, klass, vpath, origin)")
+    con.execute("create table attrs (entity_id, prop, value, origin)")
+    con.execute("create table removed (vpath, node_path, source, op_line)")
+    con.execute("insert into entities values (1,'macro','shield_t_macro','shieldgenerator',?,"
+                "'owner_mod')", (_OWNED_REL,))
+    con.execute("insert into attrs values (1,'recharge.rate','x',?)", (store_origin,))
+    con.commit()
+    con.close()
+    cfg = _merge.Config(reference=ref, include_packed_dlc=False)
+    ct = import_gate("cross_tool", module_level=False)
+    monkeypatch.setattr(ct, "failures", [])
+    monkeypatch.setattr(ct, "cannot", [])
+    monkeypatch.setattr(ct._env, "effective_db", lambda: db)
+    monkeypatch.setattr(ct._env, "extensions", lambda: ext)
+    monkeypatch.setattr(ct._env, "stale_store_refusal", lambda db, who: None)
+    monkeypatch.setattr(ct._merge, "Config", lambda *a, **k: cfg)
+    return ct
+
+
+def _run_with(ct, monkeypatch, collisions):
+    import types
+    monkeypatch.setattr(ct._compat, "analyze",
+                        lambda *a, **k: types.SimpleNamespace(collisions=collisions))
+    ct.check_cross_tool_agreement()
+    return ct
+
+
+def _real_hard(ct):
+    rows = [c for c in ct._compat.analyze(ct._env.extensions(), config=ct._merge.Config())
+            .collisions if c.kind == "HARD"]
+    assert len(rows) == 1 and rows[0].winner == "z_patch", rows
+    assert rows[0].vpath.lower().startswith("extensions/owner_mod/"), rows[0].vpath
+    return rows
+
+
+def test_FXH8_a_NESTED_HARD_row_maps_through_the_owners_base_tree(
+        tmp_path, monkeypatch, capsys):
+    """RED on the bare-Config tree_for: the row was UNRESOLVED (1 of 1 unmapped, the
+    floor tripped, CANNOT). GREEN: it maps to recharge.rate and agrees."""
+    ct = _owned_world(tmp_path, monkeypatch, store_origin="z_patch")
+    ct.check_cross_tool_agreement()                 # the REAL analyze, end to end
+    out = capsys.readouterr().out
+    assert not ct.failures and not ct.cannot, (ct.failures, ct.cannot, out)
+    assert "checked 1 of 1 mappable" in out and "0 unmapped by the checker" in out, out
+
+
+def test_FXH8_TWIN_the_LOSING_mod_as_store_origin_is_a_FAILURE(tmp_path, monkeypatch, capsys):
+    """Same owned fixture; the store says a_patch (the loser) owns the live value. Now
+    that the row maps, that is a DISAGREEMENT -- a FAIL, never CANNOT or ok."""
+    ct = _owned_world(tmp_path, monkeypatch, store_origin="a_patch")
+    ct.check_cross_tool_agreement()
+    out = capsys.readouterr().out
+    assert any(x.startswith("HARD:") for x in ct.failures), (ct.failures, ct.cannot, out)
+    assert not any(x.startswith("HARD:") for x in ct.cannot), (ct.cannot, out)
+
+
+def test_FXH8_TWIN_an_INACTIVE_owner_and_a_0_node_target_stay_UNRESOLVED(
+        tmp_path, monkeypatch, capsys):
+    """The fallback survives: an owner that is not an active mod has no base tree, and
+    a target matching 0 nodes in the owned tree resolves to nothing -- both UNRESOLVED,
+    so the coverage floor can still trip (CANNOT)."""
+    from x4validate import _compat
+    ct = _owned_world(tmp_path, monkeypatch, store_origin="z_patch")
+    real = _real_hard(ct)[0]
+    ghost = _compat.Collision(vpath=f"extensions/ghost_mod/{_OWNED_REL}", kind="HARD",
+                              target=real.target, mods=["a_patch", "z_patch"],
+                              winner="z_patch")
+    nothere = _compat.Collision(vpath=real.vpath, kind="HARD",
+                                target="/macros/macro/properties/nothere/@rate",
+                                mods=["a_patch", "z_patch"], winner="z_patch")
+    _run_with(ct, monkeypatch, [real, ghost, nothere])
+    out = capsys.readouterr().out
+    assert f"HARD not compared x2 [CHECKER]: {ct.UNRESOLVED}" in out, out
+    assert "checked 1 of 3 mappable" in out, out
+    assert any(x.startswith("HARD:") for x in ct.cannot), (ct.cannot, out)
+    assert not ct.failures, ct.failures
