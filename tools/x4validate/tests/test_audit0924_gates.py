@@ -248,7 +248,14 @@ def test_bx2_a_config_FAILURE_refuses_instead_of_guessing(monkeypatch, tmp_path,
 @pytest.mark.parametrize("script", ["build-corpus.sh", "build-effective.sh"])
 def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script):
     text = (BASEX / script).read_text(encoding="utf-8")
-    drop = text.find("DROP DB")
+    # The first DROP DB on a line that is not a COMMENT: issue #10 added a comment naming
+    # "the DROP DB below" above the revoke, and a bare text.find() anchored there.
+    drop, pos = -1, 0
+    for line in text.splitlines(keepends=True):
+        if "DROP DB" in line and not line.lstrip().startswith("#"):
+            drop = pos + line.index("DROP DB")
+            break
+        pos += len(line)
     assert drop > 0, f"{script}: no DROP DB found -- the fixture premise moved"
     revoke = re.search(r"rm -f[^\n]*coverage-", text[:drop])
     assert revoke, (f"{script}: nothing removes coverage-$DB.json before DROP DB; an "

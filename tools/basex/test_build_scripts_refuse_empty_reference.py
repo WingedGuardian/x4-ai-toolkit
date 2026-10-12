@@ -82,7 +82,7 @@ def _snapshot(basex: Path) -> dict:
 
 def _run(world, script: str, ref: Path):
     tmp, basex, stubs, log, ext, cfg = world
-    env = {k: v for k, v in os.environ.items() if not k.startswith("X4_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("X4_")}  # env-ok: copies the environment to build a child process env, reads no config
     env.update({
         "X4_CONFIG": str(cfg), "X4_REFERENCE": str(ref), "X4_EXTENSIONS": str(ext),
         "X4_GAME": str(tmp / "nogame"), "X4_MODS": str(tmp / "mods"),
