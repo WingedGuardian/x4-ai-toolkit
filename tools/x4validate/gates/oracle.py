@@ -8,6 +8,7 @@ Lines for mods that are not installed are counted and named separately
 (`absent_lines`), never absorbed into the ratio.
 """
 from collections import Counter, defaultdict
+from pathlib import Path
 
 import sys
 
@@ -26,6 +27,7 @@ print(f"cardinality failures in log: {len(entries)} across {len(by_mod)} mod(s)\
 
 tot = Counter()
 rows = []
+scope: set[str] = set()   # judged mods + every mod loading before one (FX-H10)
 for folder in sorted(by_mod, key=lambda f: -len(by_mod[f])):
     mod_dir = EXT / folder
     if not mod_dir.is_dir():
@@ -62,6 +64,8 @@ for folder in sorted(by_mod, key=lambda f: -len(by_mod[f])):
         engine[(vpath, e.sel)] = e.cardinality
 
     overlays, _notes = _check.tier_b_overlays(mod_dir)
+    scope.add(folder.lower())
+    scope.update(Path(o).name.lower() for o in overlays)
     cfg = _merge.Config(overlays=tuple(overlays))
     ours = {}
     for vpath, diff_root in _check.iter_diff_files(mod_dir):
@@ -101,6 +105,18 @@ for r in rows:
 print("-" * 78)
 print(f"{'TOTAL':<32}{tot['lines']:>6}{tot['ops']:>6}{tot['agree']:>7}"
       f"{tot['false_ok']:>10}{tot['unseen']:>8}")
+# DOES THE LOG DESCRIBE THE CURRENT MODLIST? Decided before any verdict (FX-H10): each
+# op is replayed on the tree of what is installed NOW, so a rejection logged by a launch
+# of a different modlist can neither convict nor clear it. SCOPED to the mods judged
+# above plus their patch-time overlays (every mod loading before one of them): a newer
+# manifest anywhere else changes no tree replayed here. The profile and removed-folder
+# signals stay global -- neither can be placed in the load order.
+_stale = _env.modlist_staleness(LOG, scope).reasons()
+if _stale:
+    print(f"\nREFUSING: {LOG.name} does not describe the current modlist -- "
+          + "; ".join(_stale) + ". " + _env.STALE_ADVICE, file=sys.stderr)
+    raise SystemExit(2)
+
 # A VERDICT, not just a table. This script computed `false_ok`, printed it with a
 # `<==` marker beside the offending row, and ended -- and `run-gates.sh` judges a gate
 # purely on its exit code, so it printed `ok oracle` whatever the oracle found. The

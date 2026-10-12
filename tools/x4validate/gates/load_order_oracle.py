@@ -44,46 +44,20 @@ comparable, or a log that does not describe the current modlist).
 """
 from __future__ import annotations
 
-import collections
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import _env  # noqa: F401  (puts the package on sys.path)
+import _env  # also puts the package on sys.path
 
-from x4validate import _loadorder, _merge, _paths, _registry
+from x4validate import _loadorder, _paths, _registry
 
-BS = "\\"
-MARKER = "Failed to verify the file signature for file"
-PREFIX = "." + BS + "extensions" + BS
-
-
-def parse_sequences(lines) -> dict[str, list[str]]:
-    r"""{relative path (lowercase, '/') : [folder (lowercase), in first-checked order]}.
-
-    Nested paths (`extensions\a\extensions\b\...`) are a mod patching another mod's
-    file; the folder that OWNS the checked copy is `a`, and the class key keeps the
-    nested remainder, so they never mix with the plain class of the same name.
-    """
-    seqs: dict[str, list[str]] = collections.defaultdict(list)
-    for line in lines:
-        if MARKER not in line:
-            continue
-        a = line.find(PREFIX)
-        if a < 0:
-            continue
-        rest = line[a + len(PREFIX):]
-        q = rest.find("'")
-        if q >= 0:
-            rest = rest[:q]
-        folder, sep, rel = rest.partition(BS)
-        if not sep or not folder or not rel:
-            continue
-        folder = folder.lower()
-        rel = rel.lower().replace(BS, "/")
-        if folder not in seqs[rel]:
-            seqs[rel].append(folder)
-    return dict(seqs)
+# The log parsing and the does-this-log-describe-the-modlist decision live in
+# `_env` (FX-H10), shared with `oracle.py` and `oracle_reverse.py`. The names below
+# are kept so tests and callers can pin them on this module.
+MARKER = _env.SIG_MARKER
+PREFIX = _env.SIG_PREFIX
+parse_sequences = _env.parse_signature_sequences
 
 
 @dataclass
@@ -120,37 +94,11 @@ def score(order: list[str], seqs: dict[str, list[str]]) -> Score:
 
 
 def _dlc_folders() -> frozenset[str]:
-    r"""Lowercased folder names of the configured DLC (`_merge.Config().dlc_dirs()`:
-    unpacked in the reference tree, plus packed-only in the live install).
-
-    A DLC is base-game content, never a mod: it is in no `_registry.mods(...)` scope and
-    in no computed order. The engine still signature-checks the odd file under
-    `.\extensions\ego_dlc_*\` (MEASURED 2026-10-12: 1 such line of 28,039, a Terran
-    texture, error 13), which without this read as a REMOVED folder and refused a
-    current log. Unconfigured reference -> empty set: a DLC line then counts as not
-    installed and the gate REFUSES (fails closed), and it says why."""
-    try:
-        return frozenset(p.name.lower() for p in _merge.Config().dlc_dirs())
-    except _paths.Unconfigured as exc:
-        print(f"note: no DLC set to exempt ({exc})", file=sys.stderr)
-        return frozenset()
+    """The configured DLC folders -- see `_env.dlc_folders`."""
+    return _env.dlc_folders()
 
 
-def _drop_dlc(seqs: dict[str, list[str]], dlc: frozenset[str]) -> int:
-    """Remove DLC folders from every sequence IN PLACE; return the entries removed.
-
-    Dropped, not kept as fixed-position entries: `score` compares only folders in the
-    computed order, which never holds a DLC, so a DLC entry contributes no pair either
-    way -- its only effects were the staleness check and the unknown-folder count."""
-    n = 0
-    for rel in list(seqs):
-        kept = [f for f in seqs[rel] if f not in dlc]
-        n += len(seqs[rel]) - len(kept)
-        if kept:
-            seqs[rel] = kept
-        else:
-            del seqs[rel]
-    return n
+_drop_dlc = _env.drop_dlc
 
 
 def _log_path() -> Path | None:
@@ -160,62 +108,9 @@ def _log_path() -> Path | None:
     return _paths.debug_log()
 
 
-def _newest_manifest(mods: list[dict]) -> tuple[float, str]:
-    newest, who = 0.0, ""
-    for m in mods:
-        cx = Path(m["path"]) / "content.xml"
-        try:
-            t = cx.stat().st_mtime
-        except OSError:
-            # FAIL CLOSED: a manifest whose age cannot be read cannot be shown to predate
-            # the log, so treat it as newer -- the gate then refuses to convict the code.
-            return float("inf"), f"{m['folder']} (manifest unreadable)"
-        if t > newest:
-            newest, who = t, m["folder"]
-    return newest, who
-
-
 def _profile_content() -> Path | None:
     """The profile content.xml -- the enable/disable decisions -- or None."""
     return _paths.profile_content()
-
-
-def _mtime(p: Path | None) -> float | None:
-    try:
-        return p.stat().st_mtime if p is not None else None
-    except OSError:
-        # silent-ok: no profile content.xml (none configured, or absent) = no profile
-        # signal; the other three modlist signals still decide, and the header names the log.
-        return None
-
-
-def _evidence_unlogged(mods: list[dict], logged: set[str],
-                       classes: set[str]) -> dict[str, str]:
-    """{folder: one file class it ships} for every GAME-ROOT active mod the log never
-    names although it ships a file the log shows the engine checking for other mods.
-
-    That is EVIDENCE the logged launch did not have this mod (the engine checks every
-    copy of a file class it reads), as opposed to plain absence: a mod shipping no
-    logged class is never checked, so its absence says nothing. Game root only: the
-    signature line names the folder under PREFIX, the game root; a mod in another
-    extensions root is not read out of it here, so it is not held against the log.
-    """
-    out: dict[str, str] = {}
-    for m in mods:
-        folder = m["folder"].lower()
-        if folder in logged or m.get("root_rank", 0) != 0 or not m.get("path"):
-            continue
-        root = Path(m["path"])
-        # reference-scope-ok: a MOD folder, not the reference tree, and loose-only on purpose:
-        # this collects EVIDENCE against the log, so a class the mod ships only packed is
-        # simply not counted -- a packed-only mod is never held against the log (conservative).
-        for p in root.rglob("*"):
-            if p.is_file():
-                rel = p.relative_to(root).as_posix().lower()
-                if rel in classes:
-                    out[folder] = rel
-                    break
-    return out
 
 
 def main() -> int:
@@ -259,30 +154,15 @@ def main() -> int:
     # manifest mtime is preserved when a mod is copied in; the profile's enable/disable
     # decisions live in its own content.xml; a removed folder shows only as a logged
     # name; an added one only as a class it ships that the engine never checked for it.
-    t_log = log.stat().st_mtime
-    logged = {f for seq in seqs.values() for f in seq}
     active = {f.lower() for f in order}
     installed = {m["folder"].lower(): m for m in _registry.mods("installed")
                  if m.get("root_rank", 0) == 0}
-    newest, who = _newest_manifest(mods)
-    t_prof = _mtime(_profile_content())
+    st = _env.log_staleness(log.stat().st_mtime, seqs, scope=mods,
+                            known=active | set(installed),
+                            t_profile=_env.mtime_or_none(_profile_content()))
+    logged, aged, gone = st.logged, st.aged, st.gone
     excluded = sorted(f for f in logged - active if f in installed)
-    gone = sorted(f for f in logged - active if f not in installed)
-    unlogged = _evidence_unlogged(mods, logged, set(seqs))
-    aged = []
-    if newest > t_log:
-        aged.append(f"a manifest changed after the log was written ({who})")
-    if t_prof is not None and t_prof > t_log:
-        aged.append("the profile content.xml (the enable/disable decisions) changed after "
-                    "the log was written")
-    mismatch = list(aged)
-    if gone:
-        mismatch.append(f"{len(gone)} logged folder(s) are not installed now: "
-                        f"{', '.join(gone)}")
-    if unlogged:
-        mismatch.append(f"{len(unlogged)} active mod(s) ship a file the engine checked for "
-                        "other mods but never for them: "
-                        + ", ".join(f"{f} ({rel})" for f, rel in sorted(unlogged.items())))
+    mismatch = st.reasons()
 
     # A mod WE exclude that the engine LOGGED is our active rule disagreeing with the
     # engine -- a FINDING (rc 1), distinct from a folder that is simply gone. It needs a
