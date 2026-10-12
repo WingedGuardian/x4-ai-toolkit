@@ -362,6 +362,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F281 | `gates/cross_tool.py` resolved positional HARD targets in a tree built from a bare `_merge.Config()`; for a nested `extensions/<owner>/<rel>` vpath the owner mod is never in `config.overlays`, so the tree was None and the row UNRESOLVED | **DEFECT (measured)**; exposure by newly installed mods **INFERRED** | live modlist: 9 of 50 mappable HARD rows (18%, over the 10% floor) in one owner mod's shield macros, gate said CANNOT (rc 3); after: 50 of 50 checked, all agree, the 41 earlier verdicts unchanged per row | ✅ **CLOSED 2026-10-12** (`7872a4e`; follow-up `845f2c2`) - one shared `_compat.base_tree_for` used by `_analyze_vpath` and the gate; follow-up adds the active-set exclusion disclosure (F139); an inactive owner, or a target matching other than one node, stays UNRESOLVED and counts against the floor |
 | F282 | `load_order_oracle` treated any folder in the engine's signature-check sequences that is not an installed mod as logged but not installed now, and refused; DLC folders are never in the mod lists | **DEFECT (measured)** | debug-2026-10-12T1155: 1 of 28,039 signature lines names a packed DLC file directly (`ego_dlc_terran`, error 13); the other 1,214 DLC mentions are mod-nested paths credited to the mod; pairs 8,299 compared, 0 inverted, before and after | ✅ **CLOSED 2026-10-12** (`42da66d`) - DLC names from `Config().dlc_dirs()` (never a prefix) are dropped from the sequences with a printed count; with no reference configured nothing is exempted and the gate refuses |
 | F283 | `oracle` and `oracle_reverse` gave verdicts on an engine log that predates the modlist; neither checked whether the log came from the current modlist | **DEFECT (measured)**; `oracle.py` scope rule not tested on a real stale log | against debug-2026-09-06 both exited 1 (oracle 4 false OK, oracle_reverse 1 disagreement) while `load_order_oracle` refused the same log; on the fresh 2026-10-12 log 226 of 226 agree, 0 disagreements | ✅ **CLOSED 2026-10-12** (`2227bf3`) - one shared `_env.modlist_staleness` / `log_staleness` (moved from `load_order_oracle`, output byte-identical) runs before any verdict, exit 2; `oracle.py` scopes the manifest and unlogged checks to the mods it judges plus their patch-time overlays (scope rule 85%); `oracle_reverse` checks the whole active modlist; manifest mtimes survive a copy-in so the never-logged check is the backstop; a mod shipping only packed files is never held against the log |
+| F284 | DLC folder names are matched case-sensitively: `_merge.Config.dlc_dirs` uses `p.name.startswith("ego_dlc_")` | **OPEN LIMIT (measured)**; fails closed; a non-standard reference casing only | release review P (2026-10-12): a reference folder `EGO_DLC_Terran` is not exempted by load_order_oracle, lowercase `ego_dlc_terran` is | **OPEN, NOT FIXED** - pre-arc root cause in `_merge.py`, an engine source, so a fix forces a store rebuild; deliberately not changed for 4.0 |
+| F285 | the oracle staleness check cannot see a diff file edited after the log; a removed PROFILE-root mod gets no signature line | **OPEN LIMIT (read)**; advisory, not gating | release review P (READ): `_env.modlist_staleness` checks manifest age, profile age, removed folders and unlogged mods only | **OPEN, NOT FIXED** - a diff XML edited after the log with content.xml untouched fires nothing, and oracle.py replays the new ops against the old verdicts; a removed profile-root mod shows only as a NOT INSTALLED row (LOW) |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -9660,6 +9662,32 @@ after including the parser and translator, all four changes void the reading, an
 an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
+
+## F285 — the oracle staleness check cannot see a diff file edited after the log · **OPEN LIMIT (read)** · confidence 85% · ⚠ OPEN 2026-10-12, advisory, NOT FIXED
+
+`_env.modlist_staleness` checks manifest age, profile age, removed folders and unlogged
+mods. READ (release review P): if a mod's diff XML is edited after the log and its
+content.xml is not touched, none of those fire, and oracle.py replays the new ops against
+the engine's verdicts on the old ones. Related, LOW (READ): a removed PROFILE-root mod never
+gets a signature line, so oracle.py shows it only as a NOT INSTALLED row and does not
+refuse. Advisory; not gating. Status: open limit, not fixed.
+
+RE-DERIVED BY (closest, partial): `tests/test_oracle_log_staleness.py`. It covers the
+manifest, profile, gone and unlogged reasons; it does NOT cover file-content edits.
+
+## F284 — DLC folder names are matched case-sensitively · **OPEN LIMIT (measured)** · confidence 95% · ⚠ OPEN 2026-10-12, NOT FIXED
+
+`_merge.Config.dlc_dirs` uses `p.name.startswith("ego_dlc_")`. MEASURED by release review P
+(2026-10-12): a reference folder named `EGO_DLC_Terran` is not exempted by
+load_order_oracle's DLC exemption; lowercase `ego_dlc_terran` is. The log side is
+lowercased, so this bites only on a non-standard reference casing, and it FAILS CLOSED (the
+DLC is reported as a logged folder not installed now, giving CANNOT). The root cause is
+pre-arc, in `_merge.py`, an engine source, so the fix forces a store rebuild; deliberately
+not changed for 4.0. Status: open limit, not fixed.
+
+RE-DERIVED BY (closest, partial): `tests/test_load_order_oracle.py`
+`test_a_DLC_folder_in_a_sequence_is_not_a_removed_folder`. It uses lowercase only and does
+NOT cover a mixed-case folder name.
 
 ## F283 — oracle and oracle_reverse gave verdicts on a log that predates the modlist (FX-H9b) · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-12
 
