@@ -1,14 +1,16 @@
 r"""The ONE way this toolkit runs an XQuery through the vendored BaseX jar.
 
 Why this exists (issue #7, MEASURED 2026-10-10 on a cp1252 Windows host, BaseX 12.4,
-Java 24, raw bytes per channel):
+Java 24, raw bytes per channel; the console props re-MEASURED 2026-10-12 on Temurin
+17.0.20.1 AND Java 24.0.1 -- see JVM_PROPS):
 
   * stdout  BaseX serializes its RESULT as UTF-8 bytes. `text=True` decoded them as
             cp1252: U+706B (bytes E7 81 AB) hit the undefined byte 0x81, the reader
             thread died, `stdout` came back None and the caller raised AttributeError.
             A result whose bytes all happen to be valid cp1252 was silently MANGLED.
   * stderr  BaseX's error text goes through System.err in the PLATFORM charset unless
-            `-Dstderr.encoding=UTF-8` is set: `e` + U+00E9 arrived as one byte 0xE9.
+            the console props in JVM_PROPS are set: `e` + U+00E9 arrived as one byte
+            0xE9, U+706B as `?`.
   * input   a `-q` ARGUMENT is decoded by the JVM in the platform charset: U+706B
             arrived as `?` (string-to-codepoints gave 63, not 28779). So a query for a
             non-cp1252 literal ran as a query for `?`, matched a literal `?`, and a zero
@@ -35,8 +37,20 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-#: JVM properties pinning BaseX's own console streams to UTF-8 (Java 18+ honours both).
-JVM_PROPS = ("-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
+#: JVM properties pinning BaseX's own console streams (System.out/System.err) to UTF-8.
+#: MEASURED 2026-10-12, BaseX 12.4, cp1252 host, raw bytes, on Temurin 17.0.20.1 and 24.0.1:
+#:   * `stdout/stderr.encoding` are the JEP 400 props (Java 19+). Java 17 IGNORES them: an
+#:     error naming U+706B still arrived as `?` (CI run 38287706366, windows-latest).
+#:   * `sun.stdout/sun.stderr.encoding` are what Java 17 honours; Java 24 honours them too.
+#:     Without the stdout one, Java 17 also mangled BaseX's own System.out text (`-V` info).
+#:   * NOT needed on either version: the query FILE already decodes as UTF-8 and the RESULT
+#:     is written as raw UTF-8 bytes with no prop at all. `-Dfile.encoding=UTF-8` was
+#:     rejected: it fixed stderr on 17 but NOT on 24, and it changes the JVM-wide default
+#:     charset rather than just the two console streams.
+#: All four stay: the `sun.*` pair is undocumented JDK-internal, so the documented pair is
+#: kept for when a later JDK drops it. A structural test holds the argv to this set.
+JVM_PROPS = ("-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+             "-Dsun.stdout.encoding=UTF-8", "-Dsun.stderr.encoding=UTF-8")
 
 
 def _text(raw: bytes, errors: str) -> str:

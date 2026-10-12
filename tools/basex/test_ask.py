@@ -1121,6 +1121,43 @@ def test_7_the_query_travels_as_a_utf8_file_never_as_an_argument(monkeypatch, tm
     assert list(tmp_path.iterdir()) == [], "the temporary query file was left behind"
 
 
+#: Every console-encoding prop a supported JVM needs. MEASURED 2026-10-12 (BaseX 12.4,
+#: cp1252 host): Java 17 ignores `stdout/stderr.encoding` (JEP 400 props, Java 19+) and
+#: honours only `sun.std*.encoding`; without `sun.stderr.encoding` an error naming U+706B
+#: reached us as `?` (CI run 38287706366, windows-latest, Temurin 17.0.20).
+_CONSOLE_PROPS = ("-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+                  "-Dsun.stdout.encoding=UTF-8", "-Dsun.stderr.encoding=UTF-8")
+
+
+def _argv_of_one_run(monkeypatch, tmp_path):
+    import basex_run
+    seen = {}
+
+    def fake(argv, **kw):
+        seen["argv"] = argv
+        return _Proc(0, b"r\n")
+    monkeypatch.setattr(basex_run.subprocess, "run", fake)
+    basex_run.run_query("1", tmp_path)
+    return seen["argv"]
+
+
+def test_7_java17_and_java19_console_props_reach_the_java_argv(monkeypatch, tmp_path):
+    argv = _argv_of_one_run(monkeypatch, tmp_path)
+    missing = [p for p in _CONSOLE_PROPS if p not in argv]
+    assert missing == [], f"java argv lacks {missing}: Java 17 would print BaseX errors as `?`"
+    assert argv.index("-cp") > max(argv.index(p) for p in _CONSOLE_PROPS), "props after -cp are not JVM props"
+
+
+def test_7_TWIN_the_console_props_check_goes_red_when_a_java17_prop_is_dropped(monkeypatch, tmp_path):
+    """Falsification twin: the check above reads the argv actually built, so dropping a
+    `sun.*` prop from JVM_PROPS must surface as missing -- one twin per Java-17 prop."""
+    import basex_run
+    for dropped in ("-Dsun.stdout.encoding=UTF-8", "-Dsun.stderr.encoding=UTF-8"):
+        monkeypatch.setattr(basex_run, "JVM_PROPS", tuple(p for p in _CONSOLE_PROPS if p != dropped))
+        argv = _argv_of_one_run(monkeypatch, tmp_path)
+        assert [p for p in _CONSOLE_PROPS if p not in argv] == [dropped]
+
+
 def test_Mc_a_NON_ASCII_basex_folder_never_crosses_argv(monkeypatch, tmp_path):
     """M-c (v4.0.0 delta review): the query file went to java as an ABSOLUTE path, so a
     toolkit installed under a non-cp1252 folder name sent that name through the argv channel

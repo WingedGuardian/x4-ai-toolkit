@@ -367,6 +367,19 @@ def test_a_worktree_with_an_exported_GIT_DIR_is_still_a_checkout(tmp_path, monke
     assert _status(wt)[0] == "checkout"
 
 
+def _skip_unless_the_dubious_knob_bites(probe):
+    """The control for the test below. GIT_TEST_ASSUME_DIFFERENT_OWNER is a git TEST knob, and
+    a runner's git need not honour it: on CI ubuntu-latest git answered rc 0 with it set. Where
+    the knob cannot produce dubious ownership, the subject assertion would prove nothing, so it
+    is a COUNTED skip naming what was observed -- never a fail, never a bare return."""
+    if probe.returncode == 0 or "dubious" not in probe.stderr:
+        pytest.skip(
+            "dubious-ownership control NOT produced on this platform: with "
+            f"GIT_TEST_ASSUME_DIFFERENT_OWNER=1, `git cat-file -e HEAD:agent` returned "
+            f"rc={probe.returncode} (wanted non-zero) and stderr {probe.stderr.strip()[:200]!r} "
+            "(wanted 'dubious'); the checkout-vs-install assertion was NOT run")
+
+
 def test_DUBIOUS_OWNERSHIP_does_not_turn_a_checkout_into_an_install(tmp_path, monkeypatch):
     """git's own knob simulates a repo owned by someone else (it refuses with rc 128 unless the
     root is a safe.directory) -- the shape of a checkout copied from another account."""
@@ -375,8 +388,28 @@ def test_DUBIOUS_OWNERSHIP_does_not_turn_a_checkout_into_an_install(tmp_path, mo
     import subprocess
     probe = subprocess.run(["git", "-C", str(tk), "cat-file", "-e", "HEAD:agent"],
                            capture_output=True, text=True)
-    assert probe.returncode != 0 and "dubious" in probe.stderr     # control: the knob bites
+    _skip_unless_the_dubious_knob_bites(probe)                      # control: the knob bites
     assert _status(tk)[0] == "checkout"
+
+
+class _Probe:
+    def __init__(self, rc, stderr):
+        self.returncode, self.stderr = rc, stderr
+
+
+def test_TWIN_where_the_dubious_knob_BITES_the_control_lets_the_test_proceed():
+    _skip_unless_the_dubious_knob_bites(_Probe(128, "fatal: detected dubious ownership in repository"))
+
+
+@pytest.mark.parametrize("rc,stderr", [
+    (0, ""),                                      # clause 1: git did not refuse (CI ubuntu)
+    (128, "fatal: not a git repository"),         # clause 2: refused, but not for ownership
+])
+def test_TWIN_where_the_dubious_knob_does_NOT_bite_it_is_a_counted_skip_naming_the_observation(rc, stderr):
+    with pytest.raises(pytest.skip.Exception) as e:
+        _skip_unless_the_dubious_knob_bites(_Probe(rc, stderr))
+    msg = str(e.value)
+    assert f"rc={rc}" in msg and repr(stderr) in msg and "NOT run" in msg, msg
 
 
 def test_NO_GIT_on_PATH_is_UNKNOWN_with_a_reason_and_never_a_checkout(tmp_path, monkeypatch):

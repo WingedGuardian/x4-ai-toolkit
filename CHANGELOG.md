@@ -126,7 +126,10 @@ confusing messages and six cosmetic ones. All are fixed:
   make a zero result describe a query nobody wrote (BLIND-SPOTS F271). The query file is passed
   by its name, so a toolkit installed under a non-ASCII folder no longer sends that folder name
   through the same lossy channel, and a BaseX folder you cannot write to is refused with a
-  message naming it instead of a traceback.
+  message naming it instead of a traceback. BaseX's error text is now UTF-8 on **Java 17** as
+  well as on Java 19+: Java 17 ignores the newer `stdout.encoding`/`stderr.encoding` settings,
+  so an error naming `火` still arrived as `?` there; the older `sun.stdout.encoding`/
+  `sun.stderr.encoding` settings are now passed too (measured on Temurin 17.0.20 and Java 24).
 - **`ask.py refs` (#5):** now also searches `bullet/@class`, `add_blueprints/@wares` and
   `@macros` lists, and the `macro.X` / `ware.X` spellings, and states the exact forms searched in
   `--help`, `QUERIES.md` and every result. `$variable` expressions and other expression
