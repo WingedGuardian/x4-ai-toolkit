@@ -48,7 +48,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _env  # noqa: E402
-from x4validate import _compat, _merge  # noqa: E402
+from x4validate import _compat, _merge, _registry  # noqa: E402
 
 # NOTE: `EXT = _env.extensions()` used to live here, resolved at IMPORT.
 # `_env` reports "no install" by raising SystemExit, so importing this module
@@ -503,14 +503,20 @@ def check_cross_tool_agreement() -> None:
 
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     config = _merge.Config()
+    # The mod set `_compat.analyze` reads, built by the same call: a nested
+    # `extensions/<owner>/<rel>` has its base in the OWNER mod, found by folder here.
+    folder_to_path = {m["folder"]: Path(m["path"]) for m in _registry.mods(
+        "active", _compat._scan_dirs(_env.extensions()), dlc_config=config)}
     trees: dict[str, object] = {}
 
     def tree_for(vpath: str):
-        """The effective base tree x4compat's positional targets index into, built
-        once per vpath and only when a target has no name predicate."""
+        """The base tree x4compat's positional targets index into -- x4compat's OWN
+        `base_tree_for`, so a nested vpath gets its owner mod exactly as in
+        `_analyze_vpath` (FX-H8: a bare-Config tree was None for every nested vpath,
+        9 of 50 mappable HARD rows UNRESOLVED). Built once per vpath."""
         if vpath not in trees:
             try:
-                trees[vpath] = _merge.build_effective(vpath, config).tree
+                trees[vpath] = _compat.base_tree_for(vpath, folder_to_path, config)
             except Exception as exc:                    # counted unmapped, and said
                 print(f"          (could not build {vpath}: {exc!r})")
                 trees[vpath] = None

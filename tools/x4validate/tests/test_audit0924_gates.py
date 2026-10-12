@@ -612,6 +612,8 @@ def test_gt5_cross_tool_hard_winner_is_checked_on_the_collided_attr(tmp_path, mo
                             b'<hull max="1"/></properties></macro></macros>')
     monkeypatch.setattr(ct._merge, "build_effective",
                         lambda vp, cfg: types.SimpleNamespace(tree=tree))
+    monkeypatch.setattr(ct._registry, "mods", lambda *a, **k: [])          # FX-H8
+    monkeypatch.setattr(ct._compat, "base_tree_for", lambda vp, f2p, cfg: tree)
     ct.check_cross_tool_agreement()
     assert ct.failures, ("modA is the live winner on ship_a_macro hull.max, the store says modB "
                          "owns it, and the check agreed because modA owns SOMETHING in the file:\n"
@@ -647,6 +649,10 @@ def _cross_tool_with(monkeypatch, tmp_path, db, collisions, tree=None):
     monkeypatch.setattr(ct._merge, "Config", lambda *a, **k: None)
     monkeypatch.setattr(ct._merge, "build_effective",
                         lambda vp, cfg: types.SimpleNamespace(tree=tree))
+    # The gate now builds its base tree through x4compat's own helper over the active
+    # mod set (FX-H8); this harness hands it *tree* directly, as before.
+    monkeypatch.setattr(ct._registry, "mods", lambda *a, **k: [])
+    monkeypatch.setattr(ct._compat, "base_tree_for", lambda vp, f2p, cfg: tree)
     monkeypatch.setattr(ct._compat, "analyze",
                         lambda *a, **k: types.SimpleNamespace(collisions=collisions))
     ct.check_cross_tool_agreement()
