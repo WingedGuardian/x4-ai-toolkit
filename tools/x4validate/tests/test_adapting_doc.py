@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -165,7 +166,15 @@ def test_TWIN_a_missing_toy_adapter_FAILS_in_a_checkout(monkeypatch, tmp_path):
     real = _layout.require_repo
     monkeypatch.setattr(_layout, "require_repo",
                         lambda *rel, **k: real(*rel, **{**k, "root": tmp_path}))
-    (tmp_path / "agent").mkdir()                                   # a checkout
+    # A REAL checkout: since FX-H2 an `agent/` directory alone is an in-place install, and
+    # this twin then skipped instead of testing anything (CI run 38287706366, both legs).
+    (tmp_path / "agent").mkdir()
+    (tmp_path / "agent" / "README.md").write_text("x", encoding="utf-8")
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+           "-c", f"safe.directory={tmp_path.as_posix()}"]
+    for argv in (["init", "-q"], ["add", "agent"], ["commit", "-q", "-m", "agent"]):
+        subprocess.run(git + argv, check=True, capture_output=True, env=_layout._TL.clean_git_env())
+    assert not _layout.installed_layout(tmp_path), "control: the fixture must read as a checkout"
     with pytest.raises(pytest.fail.Exception, match="is missing"):
         _toy_numbers_or_refuse()
 
