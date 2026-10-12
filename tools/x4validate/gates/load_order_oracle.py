@@ -27,7 +27,8 @@ SCOPE, stated so a pass is not read as more than it is:
     one is decided BEFORE any verdict, so a stale log can neither convict nor clear the
     code: the gate refuses (rc 2, naming the cause) when a mod manifest or the profile
     content.xml changed after the log was written, when a logged folder is no longer
-    installed (e.g. a removed probe mod), or when an active game-root mod ships a file
+    installed (e.g. a removed probe mod; a configured DLC folder is base game, never a
+    mod, and is left out of the sequences first), or when an active game-root mod ships a file
     class the engine logged for other mods but never for it (it was not in that launch).
   * A mod that IS installed but that our active rule EXCLUDES, yet the engine logged, is
     a FINDING (rc 1): our model of what loads disagrees with the engine. It is judged
@@ -50,7 +51,7 @@ from pathlib import Path
 
 import _env  # noqa: F401  (puts the package on sys.path)
 
-from x4validate import _loadorder, _paths, _registry
+from x4validate import _loadorder, _merge, _paths, _registry
 
 BS = "\\"
 MARKER = "Failed to verify the file signature for file"
@@ -116,6 +117,40 @@ def score(order: list[str], seqs: dict[str, list[str]]) -> Score:
             s.bad.append((rel, len(known), inv, known))
     s.bad.sort(key=lambda b: -b[2])
     return s
+
+
+def _dlc_folders() -> frozenset[str]:
+    r"""Lowercased folder names of the configured DLC (`_merge.Config().dlc_dirs()`:
+    unpacked in the reference tree, plus packed-only in the live install).
+
+    A DLC is base-game content, never a mod: it is in no `_registry.mods(...)` scope and
+    in no computed order. The engine still signature-checks the odd file under
+    `.\extensions\ego_dlc_*\` (MEASURED 2026-10-12: 1 such line of 28,039, a Terran
+    texture, error 13), which without this read as a REMOVED folder and refused a
+    current log. Unconfigured reference -> empty set: a DLC line then counts as not
+    installed and the gate REFUSES (fails closed), and it says why."""
+    try:
+        return frozenset(p.name.lower() for p in _merge.Config().dlc_dirs())
+    except _paths.Unconfigured as exc:
+        print(f"note: no DLC set to exempt ({exc})", file=sys.stderr)
+        return frozenset()
+
+
+def _drop_dlc(seqs: dict[str, list[str]], dlc: frozenset[str]) -> int:
+    """Remove DLC folders from every sequence IN PLACE; return the entries removed.
+
+    Dropped, not kept as fixed-position entries: `score` compares only folders in the
+    computed order, which never holds a DLC, so a DLC entry contributes no pair either
+    way -- its only effects were the staleness check and the unknown-folder count."""
+    n = 0
+    for rel in list(seqs):
+        kept = [f for f in seqs[rel] if f not in dlc]
+        n += len(seqs[rel]) - len(kept)
+        if kept:
+            seqs[rel] = kept
+        else:
+            del seqs[rel]
+    return n
 
 
 def _log_path() -> Path | None:
@@ -203,9 +238,12 @@ def main() -> int:
     order = _loadorder.compute_load_order(mods)
     with log.open(encoding="utf-8", errors="replace") as fh:
         seqs = parse_sequences(fh)
+    n_dlc = _drop_dlc(seqs, _dlc_folders())
     s = score(order, seqs)
 
     print(f"log: {log}")
+    if n_dlc:
+        print(f"DLC entries left out of the sequences (base game, never a mod): {n_dlc}")
     print(f"active mods: {len(order)}   in the log: {len(s.mods_covered)} compared "
           f"(+{len(s.unknown_folders)} logged folder(s) not in the active set)")
     print(f"file classes compared: {s.classes}   ordered pairs: {s.pairs}   "

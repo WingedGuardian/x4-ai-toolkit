@@ -185,6 +185,14 @@ confusing messages and six cosmetic ones. All are fixed:
   "unresolved"; on the maintainer's modlist 9 of 50 checkable HARD rows, over the gate's 10%
   limit, so the gate reported CANNOT (exit 3) instead of an answer. Now all 50 are compared. The
   bug predates 3.3.1. Closing issue #3 depended on this fix.
+- **Gate `load_order_oracle` (maintainers):** a DLC folder the engine signature-checked
+  (`.\extensions\ego_dlc_*\...`) no longer counts as a "logged folder that is not installed
+  now". DLC are not mods, so they were never in the installed set, and one Terran texture line
+  made the gate refuse (exit 2) a log of the current modlist. DLC names come from the configured
+  DLC set (`Config().dlc_dirs()`), not from a name prefix, and DLC entries are left out of the
+  sequences before scoring. On the maintainer's log the compared pairs are unchanged (8,299, 0
+  inverted), because the DLC was never in the computed order. A removed mod folder, or a folder
+  that is neither a configured DLC nor installed, still makes the gate refuse.
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
   resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
   (BLIND-SPOTS F265-F268).
