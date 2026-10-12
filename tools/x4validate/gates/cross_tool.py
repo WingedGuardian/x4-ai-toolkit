@@ -505,8 +505,12 @@ def check_cross_tool_agreement() -> None:
     config = _merge.Config()
     # The mod set `_compat.analyze` reads, built by the same call: a nested
     # `extensions/<owner>/<rel>` has its base in the OWNER mod, found by folder here.
-    folder_to_path = {m["folder"]: Path(m["path"]) for m in _registry.mods(
-        "active", _compat._scan_dirs(_env.extensions()), dlc_config=config)}
+    active = _registry.mods("active", _compat._scan_dirs(_env.extensions()), dlc_config=config)
+    left_out = _registry.dropped_note(active)
+    if left_out:
+        # Disclosed (F139): a mod the engine leaves out is in no tree built here.
+        print(f"          note: the owner lookup covers the active set; NOT in it: {left_out}")
+    folder_to_path = {m["folder"]: Path(m["path"]) for m in active}
     trees: dict[str, object] = {}
 
     def tree_for(vpath: str):
