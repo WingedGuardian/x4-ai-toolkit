@@ -47,7 +47,7 @@ def _kit(root: Path, ref_name: str | None) -> Path:
     shutil.copytree(PKG, root / "tools" / "x4validate" / "x4validate",
                     ignore=shutil.ignore_patterns("__pycache__"))
     (root / "scripts").mkdir(parents=True)
-    for s in ("x4refguard.py", "x4config.py", "x4lock.py"):
+    for s in ("x4refguard.py", "x4config.py", "x4lock.py", "toolkit_layout.py"):
         shutil.copy2(REPO / "scripts" / s, root / "scripts" / s)
     if ref_name is not None:
         ref = root / ref_name
