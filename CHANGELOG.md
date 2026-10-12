@@ -200,7 +200,11 @@ confusing messages and six cosmetic ones. All are fixed:
   mod the log shows was not loaded. Before this, against a 2026-09-06 log both gates
   reported FAIL (exit 1), comparing that launch's errors with today's mods. `oracle` checks
   manifests only for the mods it judges and the mods loading before them. `oracle_reverse`
-  checks the whole modlist. `load_order_oracle`'s output is unchanged. (F283)
+  checks the whole modlist. The manifest check also covers an installed mod the log names
+  that is no longer active (for example, disabled since). Before this, `load_order_oracle`
+  reported that case as a finding (exit 1); now all three gates refuse. An empty DLC set is
+  now announced, the same as an unconfigured one. `load_order_oracle`'s output on a current
+  log is unchanged. (F283)
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
   resource rule are listed under *Safety*, *Maintainers* and *Every agent* below
   (BLIND-SPOTS F265-F268).
