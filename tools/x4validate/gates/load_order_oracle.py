@@ -157,9 +157,15 @@ def main() -> int:
     active = {f.lower() for f in order}
     installed = {m["folder"].lower(): m for m in _registry.mods("installed")
                  if m.get("root_rank", 0) == 0}
+    # An installed mod the log names that our rule now excludes counts for manifest
+    # age too: if it changed since the launch, the exclusion may postdate the log, so
+    # it cannot be convicted below (release review P, finding 1).
+    named = {f for seq in seqs.values() for f in seq}
     st = _env.log_staleness(log.stat().st_mtime, seqs, scope=mods,
                             known=active | set(installed),
-                            t_profile=_env.mtime_or_none(_profile_content()))
+                            t_profile=_env.mtime_or_none(_profile_content()),
+                            also_aged=[installed[f] for f in sorted(named)
+                                       if f in installed and f not in active])
     logged, aged, gone = st.logged, st.aged, st.gone
     excluded = sorted(f for f in logged - active if f in installed)
     mismatch = st.reasons()

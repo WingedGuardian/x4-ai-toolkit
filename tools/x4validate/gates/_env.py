@@ -257,10 +257,17 @@ def dlc_folders() -> frozenset[str]:
     installed and the gate REFUSES (fails closed), and it says why."""
     from x4validate import _merge
     try:
-        return frozenset(p.name.lower() for p in _merge.Config().dlc_dirs())
+        names = frozenset(p.name.lower() for p in _merge.Config().dlc_dirs())
     except _paths.Unconfigured as exc:
         print(f"note: no DLC set to exempt ({exc})", file=sys.stderr)
         return frozenset()
+    if not names:
+        # Same consequence as unconfigured, so the same disclosure (release review P,
+        # finding 3): a reference that is missing or holds no ego_dlc_* resolves to
+        # nothing, and every DLC signature line then reads as a removed folder.
+        print("note: no DLC set to exempt (the configured reference and the install "
+              "resolve to no DLC folder)", file=sys.stderr)
+    return names
 
 
 def drop_dlc(seqs: dict[str, list[str]], dlc: frozenset[str]) -> int:
@@ -359,16 +366,20 @@ STALE_ADVICE = ("Launch the game once with the current modlist (or point $X4_ORA
 
 
 def log_staleness(t_log: float, seqs: dict[str, list[str]], *, scope: list[dict],
-                  known: set[str], t_profile: float | None) -> Staleness:
+                  known: set[str], t_profile: float | None,
+                  also_aged: list[dict] = ()) -> Staleness:
     """The core decision, from inputs the caller has already gathered.
 
     *seqs*: signature sequences with DLC already dropped. *scope*: the mods whose
     manifest age and unlogged evidence count (a gate judging a subset passes that
     subset). *known*: every folder a logged name may legitimately be (active or
     installed, lowercased) -- anything else is 'gone'. *t_profile*: the profile
-    content.xml mtime, or None."""
+    content.xml mtime, or None. *also_aged*: further mods whose manifest age counts but
+    which are not in *scope* -- an installed mod the log names that is no longer active
+    (its manifest disabled it, a dependency changed): it was in that launch, so its
+    manifest changing since is the modlist changing (release review P, finding 1)."""
     st = Staleness(logged={f for seq in seqs.values() for f in seq})
-    newest, who = newest_manifest(scope)
+    newest, who = newest_manifest([*scope, *also_aged])
     if newest > t_log:
         st.aged.append(f"a manifest changed after the log was written ({who})")
     if t_profile is not None and t_profile > t_log:
@@ -398,10 +409,18 @@ def modlist_staleness(log: Path, scope: set[str] | None = None) -> Staleness:
         print(f"note: the modlist check covers the active set; NOT in it: {left_out}",
               file=sys.stderr)
     active = list(active)
-    installed = {m["folder"].lower() for m in _registry.mods("installed")
+    installed = {m["folder"].lower(): m for m in _registry.mods("installed")
                  if m.get("root_rank", 0) == 0}
-    known = {m["folder"].lower() for m in active} | installed
+    act = {m["folder"].lower() for m in active}
+    known = act | set(installed)
     in_scope = active if scope is None else [m for m in active
                                              if m["folder"].lower() in scope]
+    # Installed-but-inactive mods whose manifest age still counts: every one the log
+    # names (it was in that launch), and -- for a scoped caller -- every one it judges.
+    logged = {f for seq in seqs.values() for f in seq}
+    also = [m for f, m in sorted(installed.items()) if f not in act
+            and (f in logged or (scope is not None and f in scope))
+            and (scope is None or f in scope)]
     return log_staleness(log.stat().st_mtime, seqs, scope=in_scope, known=known,
-                         t_profile=mtime_or_none(_paths.profile_content()))
+                         t_profile=mtime_or_none(_paths.profile_content()),
+                         also_aged=also)
