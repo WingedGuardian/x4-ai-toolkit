@@ -30,6 +30,16 @@ Every rule below exists to prevent that.
    one at a time.
 5. **A fix to an author-tested area makes that testing stale.** Say so each time, and name the re-test.
 
+## When to run it
+
+**Every release, before it is published.** The author chooses when:
+- **before their final in-game test pass.** Approved fixes then get tested by that pass. This is
+  usually the better choice: nothing changes after the author's sign-off.
+- **after their testing.** Any fix approved then makes that area's testing stale (rule 5).
+- **both.** A full review before the final pass, then a short re-check of only what changed since.
+
+Recommend running it before the final pass, and ask which the author wants.
+
 ## Two kinds of finding
 
 | Kind | Means | Examples |
@@ -125,7 +135,13 @@ release changes that code.
 - Smallest change that does it. Re-run `x4validate`. Diff against the backup and **confirm that only
   the intended nodes moved.**
 - **The fix is itself new, unreviewed change.** Review it before it ships.
-- Tell the author which tested area it touched and what to re-test, including a fresh `debug.txt`.
+- **Verify the fix yourself first, and save the author's time for what you cannot check.** In order:
+  static checks (`x4validate`, `x4diff`, `x4effective`), then a `debug.txt` from a load the author
+  already ran, then the running game over `x4live` if the author offers it (follow the `x4-live`
+  skill).
+- Whatever only the author can confirm in game goes on **one re-test list, run as a single session
+  at the end**, not one game launch per fix. Include a fresh `debug.txt` from that session, and tell
+  the author which tested area each fix touched.
 
 ## Phase 6 — publish gate and the next baseline
 
