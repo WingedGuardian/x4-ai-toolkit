@@ -2702,7 +2702,8 @@ def test_J_the_REAL_codex_skills_get_the_token_rendered_for_THIS_os(installer, t
     got = {p.relative_to(dest).as_posix(): p.read_bytes().decode("utf-8")
            for p in (dest / skills_dir / "skills").rglob("*") if p.is_file()}
     assert not [k for k, t in got.items() if "{{TOOLKIT}}" in t]
-    assert sum("%s/tools/x4validate" % want in t for k, t in got.items()
+    # Any toolkit path, not only tools/x4validate: x4-mod-release-review cites <toolkit>/docs/.
+    assert sum("%s/" % want in t for k, t in got.items()
                if k.endswith("/SKILL.md")) == n_src, sorted(got)
     if os.name == "nt":   # the bash spelling expands to EMPTY in PowerShell
         assert not [k for k, t in got.items() if re.search(r"(?<!env:)\$X4_TOOLKIT\b", t)]
