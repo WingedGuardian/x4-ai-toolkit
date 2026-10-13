@@ -1745,6 +1745,17 @@ down first** (`scratchpad/f33-prediction.md`) so the result could contradict the
 stability is itself the finding — these are **vanilla/DLC-inherent, not modlist-dependent**, so the
 problem does not grow as mods are added and the `_F33_ENTITY_GROUPS = 63` tripwire still holds.
 
+> **SUPERSEDED 2026-10-13 (MEASURED):** "vanilla/DLC-inherent, not modlist-dependent" is
+> REFUTED. Of an archived 2026-10-02 store's 63 groups, 33 involve a mod; of today's 65, 35 do.
+> The 63 -> 65 move is modlist drift, not code: a scratch store built with v3.3.1's code on the
+> same 159-mod list has the IDENTICAL group set (0 differ). +5 groups from mods added since
+> (an otas_shippack turret component, `icon/module_*`, three yaki_prometheus_traders_v4 vs
+> ebi_pirate_chaos_conflict ship/shipgroup ids); -3 from mods removed (a yak_destroyer shipgroup,
+> two lc4hunter battleship wares). Extra rows 90 -> 126: +27 are issue #9's coexisting wildcard
+> icons (`6c25d34`, F279) inside four groups that already existed, the rest from mods. 16 of the
+> 19 cpsdo groups are a mod shipping a full `<macros>` file at a misspelt path (`assets/prop/`
+> beside the owner's `assets/props/`), which stands as a second definition. Re-pinned at 65.
+
 | question | measured | predicted |
 |---|---|---|
 | cross-vpath groups the **index** can arbitrate | **37 of 37** — 34 macros via `index/macros.xml` (5,327 names), **3 components via `index/components.xml`** (4,428) | ">=30 of 37" — **exceeded** |

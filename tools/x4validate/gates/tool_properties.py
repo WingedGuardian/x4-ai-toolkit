@@ -565,7 +565,11 @@ def check_script_registry_scope() -> None:
 #:                `index/macros.xml` decides which one the engine uses, NOT load order
 #:                (gotcha #18). A positional suffix would be an answer to a question
 #:                nobody asked.
-_F33_ENTITY_GROUPS = 63     # duplicate (kind, name)      -- 23 of them DISAGREE. OPEN.
+#: RE-PINNED 2026-10-13 at 65 (was 63, MEASURED 2026-08-22): the group SET is identical under
+#: v3.3.1 and master code on the same 159-mod list, so the +2 is modlist drift (+5 groups from
+#: mods added since, -3 from mods removed); itemised in BLIND-SPOTS F33. Not vanilla-only:
+#: 35 of the 65 involve a mod, so this count moves with the modlist.
+_F33_ENTITY_GROUPS = 65     # duplicate (kind, name)      -- 23 of them DISAGREE. OPEN.
 _F33_ATTR_GROUPS = 0        # duplicate (entity_id, prop) -- FIXED, pinned at zero.
 
 
