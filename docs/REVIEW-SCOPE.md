@@ -2,9 +2,15 @@
 
 ## Why this file exists
 
-The release rule in the maintainer's global instructions reads: *"Not a review of the
-last change, or of the risky-looking part. The whole release surface: every commit since
-the previous release, and every file the bundle ships."*
+The release rule in the maintainer's global instructions ORIGINALLY read: *"Not a review of
+the last change, or of the risky-looking part. The whole release surface: every commit since
+the previous release, and every file the bundle ships."* It now reads "every file that range
+adds or modifies" and says to scope to what the release changes, not to everything the bundle
+ships: the correction this file argues for. The quote is kept as the history of why.
+
+This file covers releases of the TOOLKIT. Publishing an X4 mod you made uses the
+`x4-mod-release-review` skill: the same diff scoping, but the review changes nothing and every
+finding goes to the mod's author before any fix, because the mod's correctness is judged in game.
 
 Applied literally, that turns every release review into a **whole-repository audit**.
 MEASURED on the v3.0.0 round-6 review, which was aimed at "the 9,163 lines earlier

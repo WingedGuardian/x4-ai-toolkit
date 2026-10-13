@@ -73,8 +73,9 @@ def test_agent_frontmatter_matches_the_claude_contract():
 def test_every_skill_and_settings_is_generated():
     out = load().generate(REPO)
     skills = sorted(p for p in out if p.startswith(".claude/skills/") and p.endswith("/SKILL.md"))
-    assert len(skills) == 11, skills
+    assert len(skills) == 12, skills
     assert ".claude/skills/x4-toolkit-dev/SKILL.md" in skills
+    assert ".claude/skills/x4-mod-release-review/SKILL.md" in skills
     assert ".claude/settings.json" in out
     assert sum(p.startswith(".claude/skills/x4-cli-reference/reference/") for p in out) == 11
 
@@ -762,7 +763,7 @@ def test_codex_skills_mirror_the_claude_skills_one_to_one():
     out = load().generate(REPO)
     cl = sorted(p[len(".claude/skills/"):] for p in out if p.startswith(".claude/skills/"))
     cx = sorted(p[len(".agents/skills/"):] for p in out if p.startswith(".agents/skills/"))
-    assert cl == cx and len(cx) >= 22          # 11 SKILL.md + 11 cli reference files
+    assert cl == cx and len(cx) >= 23          # 12 SKILL.md + 11 cli reference files
 
 
 def test_codex_skills_KEEP_the_toolkit_token_for_the_installer():
