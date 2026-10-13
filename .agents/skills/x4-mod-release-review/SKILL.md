@@ -19,7 +19,7 @@ Every rule below exists to prevent that.
 
 1. **Read-only review.** While reviewing, change nothing in the mod, the game install, the user
    profile or the package. Unpacked copies and reports go to the scratchpad. Reviewer subagents carry
-   the sandbox block from `docs/SUBAGENT-BRIEF.md` and are told not to edit.
+   the sandbox block from `{{TOOLKIT}}/docs/SUBAGENT-BRIEF.md` and are told not to edit.
 2. **Every finding goes to the author, including definite ones.** No silent fixes. No finding is
    dropped because the agent judged it minor.
 3. **What the author saw in game outranks the agent's reading of the files — for what they actually
@@ -85,7 +85,7 @@ Read every changed or added file **in full**, for context. **Findings are scoped
 nodes and what they affect.** Do not hunt through unchanged files. Something wrong in unchanged
 files that you notice anyway is reported as **PRE-EXISTING**, listed separately, and does not block
 the release: players already have it, so holding the release does not fix it. **Exception (from
-`docs/REVIEW-SCOPE.md`, the third bucket):** an old defect that this release makes players REACH —
+`{{TOOLKIT}}/docs/REVIEW-SCOPE.md`, the third bucket):** an old defect that this release makes players REACH —
 through a new feature, a new default or a new instruction in the description — is treated as in-diff.
 
 ## Phase 3 — X4 checklist (check the rows the diff touches)
@@ -100,7 +100,7 @@ through a new feature, a new default or a new instruction in the description —
 | Did the author's testing exercise THIS mod's change? | on the author's mod list, does another mod win the same value? `x4effective who-sets` / `x4compat check`. If so, their test ran the other mod's value |
 | Package contents | unpack the `.cat` to a scratch folder and compare with the dev folder: nothing missing, no dev leftovers (test cues, debug logging, backup files), paths mirror the game paths exactly |
 | Text | t-files are merged across every mod, so page ids must not collide with vanilla or other mods. **The engine opens only the active language's t-file, so the author's test cannot reveal a broken t-file in any other language.** Check each shipped language file statically |
-| Version-specific API | `x4validate <mod> --update` if the game version changed since the last release (migration, exprlint) |
+| Version-specific API | `x4validate <mod> --update` if the game version changed since the last release (the XSD pass and migration notes; exprlint runs on every x4validate run) |
 | Claims | version, changelog and the Nexus/Workshop description match the files; every number re-derived |
 | Permissions and credits | every asset or script from another author: permission status and credit line |
 

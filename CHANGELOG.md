@@ -234,10 +234,11 @@ confusing messages and six cosmetic ones. All are fixed:
   to the mod author before any fix; an approved fix is verified first by static checks, an
   existing debug.txt, then x4live if available, and author-only checks are batched into one
   session. `docs/REVIEW-SCOPE.md` points to it.
-- **`x4-update-mod`: an exprlint flag is a SUSPECTED break, not a proven one.** Each flag is
-  brought to the user before any change and only approved ones are fixed; the port counts as
-  clean once the error and migration passes are clean and every flag is fixed or left by
-  decision. Required-attribute XSD errors stay automatic fixes (definite breaks).
+- **`x4-update-mod`: exprlint flags and migration (dead-API) notes are SUSPECTED breaks, not
+  proven ones** (both are heuristics). Each is brought to the user before any change and only
+  approved ones are fixed; the port counts as clean once the error class is clean and every
+  flag and note is fixed or left by decision. Required-attribute XSD errors stay automatic
+  fixes (definite breaks).
 - **The 12 skills are installed for every agent**: `.claude/skills/` (Claude Code),
   `.agents/skills/` (Codex and generic agents), `.opencode/skills/` (OpenCode). Outside Claude
   Code they name the toolkit `{{TOOLKIT}}`, which the installer renders as `$env:X4_TOOLKIT` on

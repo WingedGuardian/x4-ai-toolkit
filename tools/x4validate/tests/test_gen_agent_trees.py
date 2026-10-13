@@ -776,7 +776,8 @@ def test_codex_skills_KEEP_the_toolkit_token_for_the_installer():
     assert not any("CLAUDE_PROJECT_DIR" in t for t in cx.values())
     assert not any("$X4_TOOLKIT" in t for t in cx.values()), \
         [p for p, t in cx.items() if "$X4_TOOLKIT" in t]
-    assert sum("{{TOOLKIT}}/tools/x4validate" in t for t in cx.values()) == _token_skills()
+    # Any toolkit path, not only tools/x4validate: x4-mod-release-review cites {{TOOLKIT}}/docs/.
+    assert sum("{{TOOLKIT}}/" in t for t in cx.values()) == _token_skills()
     # the only placeholder a Codex skill may carry is the one the installers render
     assert {m for t in cx.values() for m in re.findall(r"\{\{[A-Z_]+\}\}", t)} == {"{{TOOLKIT}}"}
 
@@ -784,7 +785,7 @@ def test_codex_skills_KEEP_the_toolkit_token_for_the_installer():
 def test_claude_skills_are_unchanged_by_the_codex_target():
     # the claude rendering keeps $CLAUDE_PROJECT_DIR until phase 7 (spec section 4)
     out = load().generate(REPO)
-    assert sum("$CLAUDE_PROJECT_DIR/tools/x4validate" in t for p, t in out.items()
+    assert sum("$CLAUDE_PROJECT_DIR/" in t for p, t in out.items()
                if p.startswith(".claude/skills/")) == _token_skills()
     assert not any("$X4_TOOLKIT/tools" in t for p, t in out.items() if p.startswith(".claude/skills/"))
 
