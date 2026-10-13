@@ -241,6 +241,9 @@ tiers behind each answer.
   count or a zero correctly (the traps a live enumeration hides).
 - `/x4-mod-interaction` — analyze how a mod interacts with your installed set: collisions,
   shared event/action hooks, advisory balance fit, and same-ship redundancy.
+- `/x4-mod-release-review` — before publishing a new version of your own mod: review only what
+  changed since the last published version, change nothing while reviewing, and bring every finding
+  to you, one suspected finding at a time, before any fix.
 - `/x4-modlist-review` — triage your mod registry against the Nexus API.
 - `/x4-probe` — build a temporary in-game instrument (a test harness or diagnostic mod), and
   work out which of "did not load / never fired / logic failed" produced a silent result.
