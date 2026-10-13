@@ -410,12 +410,24 @@ from x4validate import _check, _merge
 # attribute add missing its `type="@..."`). The old merge dropped a text-only add, so the
 # schema never saw the text; AUDIT-2026-09-24 MG-2 models it, and the schema pass now
 # reports a real authoring defect. Pairs, errors, suppressed and NOT-checked unchanged.
+#
+# RE-BASELINED 2026-10-13 (v4.0 final gate run, master 46238fc): pairs 178 -> 219, gating
+# 77 -> 78, advisory 74 -> 80, mods flagged 42 -> 50; suppressed and NOT-checked unchanged.
+# ATTRIBUTED IN FULL, per mod, to the MODLIST (no code change): 40 mods added (+47 pairs,
+# +4 gating: re_expansion_pirate 3, otas_shippack 1; +7 advisory: Basestar_hades-class,
+# ice_headhunter, ice_mission_commander, ice_mk4_ship_mods, print_extension_list,
+# shield_visuals_rework, x4_ors; 9 of them flagged); 5 removed (-6 pairs, -1 advisory and
+# -1 flagged: lc4hunter_argon_titan); and ONE in-place move, ship_variation_expansion gating
+# 3 -> 0: the mod was updated v212 -> v221 (2026-10-08; every file rewritten while the
+# folder mtime stayed 2026-08-03) and fixed its own three libraries/jobs.xml errors. MEASURED:
+# current code on the v212 backup gives 3/27/3 (= the old row), and baseline-era code
+# (adb0be0) on v221 gives 0/27/3 (= the new row), so the code did not move it.
 # ---------------------------------------------------------------------------
-EXPECT_PAIRS = 178
-EXPECT_ERR = 77
-EXPECT_INFO = 74
+EXPECT_PAIRS = 219
+EXPECT_ERR = 78
+EXPECT_INFO = 80
 EXPECT_SUPPRESSED = 3
-EXPECT_MODS_FLAGGED = 42
+EXPECT_MODS_FLAGGED = 50
 #: Files this sweep could NOT schema-check. Pinned from 2026-08-01, because the
 #: gate previously froze only what WAS checked — so 31 documents skipped with a
 #: false reason never moved a single number here. A rise means coverage was lost
