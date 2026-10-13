@@ -228,7 +228,17 @@ confusing messages and six cosmetic ones. All are fixed:
 - **`AGENTS.md` carries the full shared instructions**, built from the same agent-neutral core as
   `CLAUDE.md` plus a per-agent addendum. Maintainer-only guidance moved verbatim into a new
   **`x4-toolkit-dev`** skill.
-- **The 11 skills are installed for every agent**: `.claude/skills/` (Claude Code),
+- **New skill `x4-mod-release-review`**: the review before publishing a new version of an X4
+  MOD (not this toolkit, which uses its own release review). It covers only what changed
+  since the last published version, changes nothing while reviewing, and brings every finding
+  to the mod author before any fix; an approved fix is verified first by static checks, an
+  existing debug.txt, then x4live if available, and author-only checks are batched into one
+  session. `docs/REVIEW-SCOPE.md` points to it.
+- **`x4-update-mod`: an exprlint flag is a SUSPECTED break, not a proven one.** Each flag is
+  brought to the user before any change and only approved ones are fixed; the port counts as
+  clean once the error and migration passes are clean and every flag is fixed or left by
+  decision. Required-attribute XSD errors stay automatic fixes (definite breaks).
+- **The 12 skills are installed for every agent**: `.claude/skills/` (Claude Code),
   `.agents/skills/` (Codex and generic agents), `.opencode/skills/` (OpenCode). Outside Claude
   Code they name the toolkit `{{TOOLKIT}}`, which the installer renders as `$env:X4_TOOLKIT` on
   Windows (Codex runs PowerShell there) and `$X4_TOOLKIT` elsewhere.

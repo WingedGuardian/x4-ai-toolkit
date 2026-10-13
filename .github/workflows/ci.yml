@@ -711,7 +711,10 @@ jobs:
           # an install, so it skipped instead of testing; fixed (real git checkout), -1
           # each. FX-H10 adds +1 on ubuntu (git there ignores dubious ownership, so that
           # control cannot bite). Expected next run: windows 56, ubuntu 205; ceilings +3.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '208' || '59' }}
+          # MEASURED run 38306816644 at 46238fc: ubuntu 205 (as expected); windows 57, not
+          # 56 -- the FX-H10 ownership control also cannot bite on the windows runner (+1),
+          # every other row as itemised above. Windows ceiling set to 57 + 3 = 60.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '208' || '60' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         run: uv run --frozen python -m pytest -q -rs
