@@ -15,6 +15,17 @@ policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
 
 
+def test_neutral_private_state_is_ignored_but_runtime_sources_are_trackable(tmp_path):
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, capture_output=True)
+    shutil.copy2(REPO / ".gitignore", tmp_path / ".gitignore")
+    names = [".modding-agent-harness/coverage.sqlite3", ".modding-agent-harness/backups/saves/private.ess",
+             ".modding-agent-harness/upgrades/private/plan.json", "tools/modding_harness/upgrade.py"]
+    result = subprocess.run(["git", "-C", str(tmp_path), "check-ignore", "-z", "--stdin"],
+                            input=b"\0".join(name.encode() for name in names), capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split(b"\0")[:-1] == [name.encode() for name in names[:-1]]
+
+
 @pytest.fixture
 def install(tmp_path):
     import shutil

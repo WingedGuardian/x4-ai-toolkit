@@ -2,6 +2,9 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Unknown-tool warnings use the current installed runtime even when X4_TOOLKIT
+  is unset or names another toolkit. No game configuration is needed to report
+  an unsupported surface as warn-and-allow.
 - Release verification compares every archive member with its committed Git
   object and refuses duplicate members. Only text conversion declared by the
   committed attributes is accepted; machine-local attributes cannot certify it.

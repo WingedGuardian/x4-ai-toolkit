@@ -129,3 +129,5 @@ release/nexus/
 /.opencode/opencode.jsonc
 /KNOWLEDGEBASE.local.md
 /KNOWLEDGEBASE.pre-4.0-*.md
+# Private neutral runtime state: telemetry, permanent saves and upgrade journals.
+.modding-agent-harness/

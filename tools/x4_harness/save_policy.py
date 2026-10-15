@@ -223,7 +223,11 @@ def read_roots(deadline):
 def batch(payload, calls, judge, deadline, host, preview=False, helper=False):
     """The named adapters call this once, before ANY mutation is permitted."""
     if not calls:
-        root = native(os.environ.get("X4_TOOLKIT") or str(Path(__file__).resolve().parents[1]))
+        import x4guard
+        # Every generated host folder and tools/x4_harness has the same depth.
+        # Unknown tools need neither game roots nor another install's package.
+        root = native(str(Path(__file__).resolve().parents[2]) if x4guard._deployed() else
+                      os.environ.get("X4_TOOLKIT") or str(Path(__file__).resolve().parents[1]))
     else:
         roots = read_roots(deadline)
         root = native(roots["toolkit"])

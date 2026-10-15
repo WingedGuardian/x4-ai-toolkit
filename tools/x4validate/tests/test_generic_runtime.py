@@ -10,6 +10,31 @@ import pytest
 from codex_testlib import REPO
 
 
+@pytest.mark.parametrize("environment_root", ["unset", "different-install"])
+@pytest.mark.parametrize("surface", ["other", "mcp", "nested"])
+def test_unknown_tools_use_own_runtime_without_game_configuration(tmp_path, environment_root, surface):
+    root = tmp_path / "toolkit"
+    for rel in ("tools/x4_harness", "tools/modding_harness"):
+        shutil.copytree(REPO / rel, root / rel, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(REPO / "tools/agent-harness.py", root / "tools/agent-harness.py")
+    foreign = tmp_path / "another-install"
+    foreign.mkdir()
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("X4_")}
+    if environment_root != "unset":
+        environment["X4_TOOLKIT"] = str(foreign)
+    action = {"api_version": 1, "host": "future-coder", "tool": "unknown_tool", "surface": surface,
+              "cwd": str(root), "session_id": "unknown-fixture", "tool_call_id": "one"}
+    result = subprocess.run([sys.executable, "-B", str(root / "tools/agent-harness.py"), "check"],
+                            input=json.dumps(action).encode(), capture_output=True, env=environment, timeout=20)
+    assert result.returncode == 0, result.stderr
+    reply = json.loads(result.stdout)
+    assert reply["result"]["decision"] == "allow" and reply["result"]["evaluation"] == "unguarded", reply
+    assert any("WARN AND ALLOW" in warning for warning in reply["result"]["warnings"])
+    assert (root / ".modding-agent-harness").is_dir()
+    assert not list(foreign.iterdir())
+    assert not any((root / folder).exists() for folder in (".claude", ".codex", ".opencode", ".agents"))
+
+
 @pytest.mark.parametrize('brackets', [False, True])
 def test_generic_runtime_works_without_any_named_agent_folder(tmp_path, brackets):
     root = tmp_path / "toolkit"
