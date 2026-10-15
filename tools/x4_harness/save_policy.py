@@ -125,7 +125,7 @@ def resolve(root, roots, evidence, deadline=None):
             problems.append("permanent save store is protected")
         if op in ("move", "delete") and any(preservation.contains(path, folder) for folder in save_roots):
             problems.append("whole save-folder move/delete is refused")
-        pattern = glob.has_magic(str(path))
+        pattern = row.get("literal") is not True and glob.has_magic(str(path))
         candidates = []
         for candidate in glob.iglob(str(path)) if pattern else [str(path)]:
             if deadline is not None and time.monotonic() >= deadline:
@@ -234,7 +234,7 @@ def batch(payload, calls, judge, deadline, host, preview=False, helper=False):
             evidence += shell_evidence({"tool_name": "PowerShell" if shell == "powershell" else "Bash",
                                         "tool_input": {"command": command}, "cwd": os.getcwd()}, roots)
         else:
-            evidence.append({"path": str(path), "operation": kind})
+            evidence.append({"path": str(path), "operation": kind, "literal": True})
     ti = payload.get("tool_input", payload.get("args", {}))
     action = contracts.Action(host, str(payload.get("tool_name", payload.get("tool", ""))),
                               "native" if calls else "unknown", cwd=os.getcwd(),
@@ -331,7 +331,7 @@ def main(argv=None):
                 if not action.cwd or not os.path.isabs(action.cwd):
                     raise ValueError("relative file request has no absolute cwd")
                 path = os.path.join(action.cwd, path)
-            evidence = [{"path": path, "operation": "write"}]
+            evidence = [{"path": path, "operation": "write", "literal": True}]
 
         def backend(save_only):
             bash, why = x4guard.resolve_bash()

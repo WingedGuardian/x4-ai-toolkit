@@ -10,7 +10,8 @@ import pytest
 from codex_testlib import REPO
 
 
-def test_generic_runtime_works_without_any_named_agent_folder(tmp_path):
+@pytest.mark.parametrize('brackets', [False, True])
+def test_generic_runtime_works_without_any_named_agent_folder(tmp_path, brackets):
     root = tmp_path / "toolkit"
     for rel in ("tools/x4_harness", "tools/modding_harness"):
         shutil.copytree(REPO / rel, root / rel, ignore=shutil.ignore_patterns("__pycache__"))
@@ -18,9 +19,9 @@ def test_generic_runtime_works_without_any_named_agent_folder(tmp_path):
     config = root / ".modding-agent-harness/config.json"
     config.parent.mkdir()
     config.write_text(json.dumps({"save_reserve_bytes": 0}))
-    saves = tmp_path / "profile/save"
+    saves = tmp_path / ('profile [one]' if brackets else 'profile') / 'save'
     saves.mkdir(parents=True)
-    save = saves / "progress.xml"
+    save = saves / ('progress[1].xml' if brackets else 'progress.xml')
     save.write_bytes(b"fixture save")
     env = dict(os.environ, X4_TOOLKIT=str(root), X4_PROFILE=str(saves.parent), X4_SAVES=str(saves),
                X4_CONFIG="/nonexistent", X4_GAME=str(tmp_path / "game"), X4_REFERENCE=str(tmp_path / "reference"))

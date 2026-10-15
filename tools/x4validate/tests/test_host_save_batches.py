@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from codex_testlib import REPO, make_sandbox, native, run_adapter
 from test_opencode_adapter import call as open_call, run as open_run
 
@@ -71,3 +73,26 @@ def test_a_backend_denial_never_preserves_or_gets_overruled(tmp_path):
     payload = native("apply_patch_multi", root, command=patch([files[0], root / "reference/libraries/wares.xml"]))
     assert run_adapter(env, payload)[0] == "deny"
     assert not transactions(root)
+
+
+@pytest.mark.parametrize('host', ['codex', 'opencode'])
+def test_named_adapter_file_paths_are_literal_with_bracketed_parents_and_names(tmp_path, host):
+    tmp, root, env, _files = prepare(tmp_path)
+    profile = tmp / 'profile [one]'
+    folder = profile / 'save'
+    folder.mkdir(parents=True)
+    file = folder / 'Save[1].xml.gz'
+    file.write_bytes(b'opaque literal path fixture')
+    env.update(X4_PROFILE=str(profile), X4_SAVES=str(folder))
+    if host == 'codex':
+        payload = native('apply_patch_multi', root, command=patch([file]))
+        assert run_adapter(env, payload)[0] in ('allow', 'advise')
+    else:
+        payload = open_call(root, 'edit', {'filePath': str(file), 'oldString': 'old', 'newString': 'new'})
+        result = open_run(env, payload)
+        assert result['decision'] in ('allow', 'advise'), result
+    records = transactions(root)
+    assert len(records) == 1
+    record = json.loads(records[0].read_text())
+    assert [Path(m['path']).name for g in record['groups'] for m in g['members']] == [file.name]
+    assert file.read_bytes() == b'opaque literal path fixture'

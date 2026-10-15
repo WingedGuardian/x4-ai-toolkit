@@ -234,6 +234,24 @@ def test_real_file_hook_preserves_before_permission_and_preview_is_readonly(inst
     assert files[0].read_bytes() == files[0].name.encode()
 
 
+def test_native_file_hook_treats_bracketed_save_paths_as_literal(install, tmp_path):
+    root, roots, _files = install
+    profile = tmp_path / 'profile [one]'
+    folder = profile / 'save'
+    folder.mkdir(parents=True)
+    target = folder / 'Save[1].xml.gz'
+    target.write_bytes(b'opaque save fixture')
+    roots.update(profile=str(profile), saves=str(folder))
+    result = invoke_hook((root, roots, [target]), 'Write', {'file_path': str(target), 'content': 'changed'})
+    assert result['hookSpecificOutput'].get('permissionDecision') is None, result
+    assert 'backup verified' in result['hookSpecificOutput']['additionalContext']
+    records = list((root / '.modding-agent-harness/backups/saves/transactions').glob('*.json'))
+    assert len(records) == 1
+    record = json.loads(records[0].read_text())
+    assert [Path(m['path']).name for g in record['groups'] for m in g['members']] == [target.name]
+    assert target.read_bytes() == b'opaque save fixture'
+
+
 def test_real_shell_hook_batches_saves_and_retains_other_denials(install):
     root, roots, files = install
     result = invoke_hook(install, "Bash", {"command": 'rm -- "' + str(files[0]) + '"'})
