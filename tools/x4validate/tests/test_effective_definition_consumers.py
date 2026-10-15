@@ -49,6 +49,40 @@ def test_nested_removal_and_full_override_do_not_leave_source_names(tmp_path):
     assert _check.EntityDefs(config).all_names() == {"new_macro"}
 
 
+def test_surviving_index_registration_cannot_resurrect_a_removed_definition(tmp_path):
+    ref, mod = tmp_path / "reference", tmp_path / "overlay"
+    put(ref / "index/macros.xml", '<index><entry name="old_macro" value="assets/a"/></index>')
+    put(ref / "assets/a.xml", '<macros><macro name="old_macro"/></macros>')
+    put(mod / "assets/a.xml", '<diff><remove sel="/macros/macro"/></diff>')
+    config = _merge.Config(reference=ref, overlays=(mod,), include_packed_dlc=False)
+    defs = _check.EntityDefs(config)
+    assert "old_macro" not in defs
+    assert "old_macro" not in defs.all_names()
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
+def test_nonascii_and_entity_encoded_definition_candidates_are_not_dropped(tmp_path, encoding):
+    ref = tmp_path / "reference"
+    file = ref / "assets/a.xml"
+    file.parent.mkdir(parents=True)
+    file.write_bytes(('<?xml version="1.0" encoding="' + encoding + '"?>'
+                     '<macros><macro name="雪_macro"/><macro name="snow_&#38634;"/></macros>').encode(encoding))
+    defs = _check.EntityDefs(_merge.Config(reference=ref, include_packed_dlc=False))
+    assert "雪_macro" in defs and "snow_雪" in defs
+    assert {"雪_macro", "snow_雪"} <= defs.all_names()
+
+
+def test_registered_packed_definition_uses_targeted_document_not_corpus(tmp_path):
+    ref, mod = tmp_path / "reference", tmp_path / "owner"
+    put(ref / "index/macros.xml", '<index/>')
+    _write_cat(mod, "ext_01.cat", [
+        ("index/macros.xml", b'<index><entry name="packed_macro" value="assets/m"/></index>'),
+        ("assets/m.xml", b'<macros><macro name="packed_macro"/></macros>')])
+    defs = _check.EntityDefs(_merge.Config(reference=ref, overlays=(mod,), include_packed_dlc=False))
+    assert "packed_macro" in defs
+    assert not defs.corpus_scanned
+
+
 def test_save_check_uses_effective_set_and_missing_reference_is_nonanswer(tmp_path, monkeypatch):
     ref, mod = tmp_path / "reference", tmp_path / "overlay"
     put(ref / "assets/a.xml", '<macros><macro name="old_macro"/></macros>')

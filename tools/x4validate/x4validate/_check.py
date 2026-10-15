@@ -162,7 +162,7 @@ LIBRARY_DEFS = ("libraries/character_macros.xml", "libraries/character_component
 
 
 class EntityDefs:
-    """Effective registrations and definitions, unioning both namespaces.
+    """Effective macro/component definitions, unioning both namespaces.
 
     Corpus candidates are selected from source bytes, but existence is always
     checked on the final merged document. A source hit is not a live definition.
@@ -172,29 +172,15 @@ class EntityDefs:
     `libraries/wares.xml` but a COMPONENT inside a macro file (gotcha #11), and
     in a `<diff>` carrying `<replace sel="//component">` at an asset path,
     element ancestry cannot classify it at all — only the selector target can.
-    Four mis-classifications in one measurement session came from trying. Testing
-    membership against the UNION of both namespaces sidesteps every one of those
-    traps and still yields exactly the 3 genuine dangling references over the
-    2,300 present across 114 installed mods. Cross-namespace confusion (a macro
-    name used where a component is required) is given up knowingly — it has never
-    been the failing class, and a wrong ORACLE is far more expensive than a
-    narrow one.
+    Registrations locate candidate documents; a surviving index entry cannot
+    resurrect a definition removed from its file. Targeted lookups merge only
+    that document's actual touchers and cache its verified names. Unindexed
+    definitions use byte-prefiltered corpus discovery, followed by the same merge.
+    `all_names()` scans candidates in bulk, never one corpus pass per reference.
 
-    **Lazy by design.** The index half costs 0.3s and resolves 2,293 of those
-    2,300 references; the corpus half — a full parse of base + DLC + every
-    overlay — is built only when a name misses, which measured 7 distinct names
-    across ~5 mods. A clean mod therefore never pays for it.
-
-    That corpus half costs **~13s** (13,579 files) and is what takes a VRO
-    validate from 12.3s to 26.3s. Restricting it to path segments that can hold a
-    definition was measured and REJECTED: `assets/` is simultaneously 63% of the
-    files and where 8,425 of the 11,126 definitions live, so the filter saves 9%.
-    The price buys 4 false positives removed corpus-wide, and `check_references`
-    prints `(+ corpus scan)` so the cost is announced rather than hidden.
-
-    Behaves as a set for the only two operations `_refs` performs on it
-    (`in` and `len`); `len` reports the EAGER half and says so, so a coverage
-    note can never imply the corpus was scanned when it was not.
+    Namespace confusion (a macro used where a component is required) remains
+    outside this union oracle's scope. `len` counts only verified names in the
+    documents examined so far; it is not a full-corpus coverage denominator.
     """
 
     def __init__(self, config: _merge.Config, extra_overlays=None,
@@ -212,11 +198,25 @@ class EntityDefs:
         #: whole claim is that this stays near zero; a test asserts it.
         self.corpus_parses = 0
         self._index: set[str] = set()
+        self._registered: dict[str, list[str]] = {}
+        self._document_names: dict[str, set[str]] = {}
+        self._touch: dict[str, set[Path]] | None = None
+        self._unreadable_touchers: set[Path] = set()
+        owners = {p.name.lower() for p in list(config.overlays) + self._extra}
         for rel in (MACRO_INDEX, _resolve.COMPONENT_INDEX):
-            merged = _merge.build_effective(rel, config, extra_overlays=self._extra)
+            recorder = _merge.Recorder()
+            merged = _merge.build_effective(rel, config, extra_overlays=self._extra, recorder=recorder)
             note_dropped_overlays(merged, f"entity definitions ({rel})", self._report)
             if merged.tree is not None:
-                self._index |= _refs.macro_names(merged.tree)
+                for entry in merged.tree.xpath("//entry[@name][@value]"):
+                    value = entry.get("value").replace("\\", "/").lstrip("/")
+                    if not value.lower().endswith(".xml"):
+                        value += ".xml"
+                    source = recorder.winner(entry, "value").source
+                    if not value.lower().startswith("extensions/") and (source.lower() in owners or
+                            source.lower().startswith("ego_dlc_")):
+                        value = "extensions/" + source + "/" + value
+                    self._registered.setdefault(entry.get("name"), []).append(value)
         for rel in LIBRARY_DEFS:
             merged = _merge.build_effective(rel, config, extra_overlays=self._extra)
             note_dropped_overlays(merged, f"entity definitions ({rel})", self._report)
@@ -225,11 +225,14 @@ class EntityDefs:
                 self._index |= set(merged.tree.xpath("//component/@name"))
 
     def __len__(self) -> int:
-        return len(self._index)
+        return len(set(self._index).union(*self._document_names.values()))
 
     def __contains__(self, name: object) -> bool:
         if name in self._index:
             return True
+        for vpath in self._registered.get(name, ()):
+            if name in self._names_for_document(vpath):
+                return True
         # Cheap middle tier: the mod under test is ONE small directory, and its
         # own unindexed content is the common miss (MEASURED: 753 macro names
         # corpus-wide are defined in asset files but never registered). Trying it
@@ -286,9 +289,11 @@ class EntityDefs:
             unreadable = []
             try:
                 for vpath, data in _scan.iter_mod_xml_bytes(src, unreadable=unreadable):
-                    if needle is not None and needle not in data and b"&" not in data:
+                    # UTF-16 XML and numeric character references cannot be
+                    # rejected by a UTF-8 byte needle; parse those candidates.
+                    if needle is not None and needle not in data and b"&" not in data and b"\0" not in data:
                         continue
-                    if needle is None and not re.search(rb"<(?:macro|component)\b", data):
+                    if needle is None and not re.search(rb"<(?:macro|component)\b", data) and b"\0" not in data:
                         continue
                     if src.resolve() in dlc:
                         vpath = "extensions/" + src.name + "/" + vpath
@@ -304,7 +309,8 @@ class EntityDefs:
     def _effective_definition_tree(self, vpath):
         self.corpus_parses += 1
         try:
-            merged = _merge.build_effective(vpath, self._config, extra_overlays=self._extra)
+            config, extras = self._document_config(vpath)
+            merged = _merge.build_effective(vpath, config, extra_overlays=extras)
             note_dropped_overlays(merged, "effective entity definitions ({})".format(vpath), self._report)
             return merged.tree
         except (OSError, ValueError, etree.XMLSyntaxError) as exc:
@@ -340,6 +346,34 @@ class EntityDefs:
             self._all = set(self._index) | self._scan(sources, "corpus")
         return self._all
 
+    def _names_for_document(self, vpath):
+        key = vpath.lower()
+        if key not in self._document_names:
+            root = self._effective_definition_tree(vpath)
+            self._document_names[key] = (set(root.xpath("//macro/@name | //component/@name"))
+                                         if root is not None else set())
+        return self._document_names[key]
+
+    def _document_config(self, vpath):
+        """Merge only actual touchers, retaining the same order and nested owners."""
+        overlays = list(self._config.overlays) + self._extra
+        owners = {p.name.lower() for p in overlays}
+        if self._touch is None:
+            self._touch = {}
+            for source in overlays:
+                try:
+                    for path in _modfiles.mod_xml_paths(source).values():
+                        key = _modfiles.logical_vpath(path, owners).lower()
+                        self._touch.setdefault(key, set()).add(source)
+                except (OSError, ValueError) as exc:
+                    self._unreadable_touchers.add(source)
+                    if self._report is not None:
+                        self._report.skip("definition overlay enumeration", str(exc), degraded=True)
+        key = _modfiles.logical_vpath(vpath, owners).lower()
+        wanted = self._touch.get(key, set()) | self._unreadable_touchers
+        return (replace(self._config, overlays=tuple(p for p in self._config.overlays if p in wanted)),
+                [p for p in self._extra if p in wanted])
+
     def _scan(self, sources, tier: str) -> set[str]:
         """Every `<macro name>` / `<component name>` defined in *sources*.
 
@@ -349,10 +383,7 @@ class EntityDefs:
         """
         names: set[str] = set()
         for vpath in self._candidate_documents(sources):
-            root = self._effective_definition_tree(vpath)
-            if root is not None:
-                names |= set(root.xpath("//macro/@name"))
-                names |= set(root.xpath("//component/@name"))
+            names |= self._names_for_document(vpath)
         return names
 
 
@@ -1497,7 +1528,7 @@ def check_references(mod_dir: Path, config: _merge.Config, report: Report) -> No
         f"reference defs: {len(ware_def_set)} wares, {len(text_def_set)} text strings, "
         + (f"{len(macro_def_set)} indexed macros" if macro_def_set is not None
            else "macros NOT CHECKED (index unreadable)")
-        + f", {len(entity_defs)} macro/component names"
+        + f", {len(entity_defs)} verified macro/component names in examined documents"
         + (" (+ corpus scan)" if entity_defs.corpus_scanned else "")
         + f"; scanned {diff_files} diff + {full_files} full file(s)"
         + (f"; skipped {len(expressions)} script expression(s) in @ware" if expressions else "")

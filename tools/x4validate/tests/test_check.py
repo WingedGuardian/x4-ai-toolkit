@@ -417,6 +417,7 @@ def _completeness_tree(tmp_path, *, define_macro=True, register_in_index=False):
            '</language>')
     _write(ref / "index/macros.xml",
            '<index><entry name="vanilla_macro" value="a/b"/></index>')
+    _write(ref / "a/b.xml", '<macros><macro name="vanilla_macro"/></macros>')
 
     mod = tmp_path / "mod"
     if register_in_index:

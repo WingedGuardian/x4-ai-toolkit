@@ -130,6 +130,9 @@ def _game(tmp_path):
         b'<index><entry name="ship_known_macro" value="assets\\ship_known_macro"/></index>')
     (ref / "index" / "components.xml").write_bytes(
         b'<index><entry name="ship_known" value="assets\\ship_known"/></index>')
+    (ref / "assets").mkdir()
+    (ref / "assets/ship_known_macro.xml").write_bytes(b'<macros><macro name="ship_known_macro"/></macros>')
+    (ref / "assets/ship_known.xml").write_bytes(b'<components><component name="ship_known"/></components>')
     (ref / "libraries").mkdir(parents=True, exist_ok=True)
     (ref / "libraries" / "wares.xml").write_bytes(b'<wares><ware id="ore"/></wares>')
     _t_file(ref / "t" / "0001-l044.xml", "1", "1")
