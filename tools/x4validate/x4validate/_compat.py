@@ -87,6 +87,7 @@ class Collision:
     target_path: str = ""
     target_tree: str = "base"  # base | final | removed | unavailable
     removal_path: str = ""
+    winner_qualified: bool = True
 
     def live_value_owner(self) -> str | None:
         """The mod whose value is live, or ``None`` when that is unknowable here.
@@ -114,7 +115,7 @@ class Collision:
         wrong. It was not: the two answer different questions. This method is the
         one place that distinction lives. See CLAUDE.md gotcha #18.
         """
-        if self.kind in ("SUBTREE", "NAME-CLASH", "SOFT") or self.target_tree == "unavailable":
+        if self.kind in ("SUBTREE", "NAME-CLASH", "SOFT") or self.target_tree == "unavailable" or not self.winner_qualified:
             return None
         return self.winner or None
 
@@ -209,6 +210,9 @@ class CompatReport:
     #: For a conflict detector, silently contributing nothing is the worst
     #: failure mode there is: it renders as "these mods do not collide".
     unresolvable: list[str] = field(default_factory=list)
+    #: Known operations that the sequential merge did not apply. A no-op never
+    #: becomes a live winner merely because its selector matched the old base.
+    unapplied: list[str] = field(default_factory=list)
     #: Files that produced no comparison at all. Until 2026-08-01 `_analyze_vpath`
     #: simply `continue`d past every mod when the base tree could not be built,
     #: so 140 of 523 examined files contributed zero collisions and rendered
@@ -553,6 +557,8 @@ def _analyze_vpath(
                         "node collision analysis is unavailable", degraded=True)
         return []
     actual_ops: dict[tuple[str, int], bool] = {}
+    removals = [(rank[folder], index, identity)
+                for (folder, index), record in traced.items() for identity, _path in record.removed_paths]
 
     for folder, root in read:
         if folder_to_path[folder] in base_owners:
@@ -600,25 +606,32 @@ def _analyze_vpath(
                 # add takes part exactly when its guard does not switch it off
                 # (issue #8: it used to be excluded outright, so a TRUE guard was a
                 # false negative).
-                if op.tag == "add":
+                tracked = traced[(folder, idx)]
+                if op.tag == "add" and (tracked.applied or state == _G_UNEVAL):
                     for k in _added_child_keys(op):
                         doc_keys.add(k)
                         if note:
                             notes[(folder, k)].append(note)
-                tracked = traced[(folder, idx)]
                 actual_ops[(folder, id(op))] = tracked.applied
                 cids = None if tracked.targets is None else list(tracked.targets)
                 if cids is None:
                     if unresolvable is not None:
                         unresolvable.append(
                             f"{folder}/{vpath}:{op.sourceline or 0}: sel={sel!r} is not "
-                            "valid XPath — this op was excluded from collision detection")
+                            "trackable node XPath — this op was excluded from collision detection")
                     continue
                 if not cids:
                     unmatched[folder].append(op)
                     # Keep the old base target solely to disclose an attempted edit
                     # after removal. It never becomes an applied op or a live winner.
-                    cids = _resolve_op_targets(base_tree, sel) or []
+                    old = _resolve_op_targets(base_tree, sel) or []
+                    cids = [cid for cid in old if state == _G_UNEVAL or any(
+                        (r, i) < (rank[folder], idx) and (cid == removed or cid.startswith(removed + "/"))
+                        for r, i, removed in removals)]
+                if not tracked.applied and state != _G_UNEVAL and report is not None and cand_folder in (None, folder):
+                    report.unapplied.append(f"{folder}/{vpath}:{op.sourceline or 0}: sel={sel!r} "
+                                            f"was not applied: {tracked.detail}" +
+                                            (f" ({_guard(op)})" if _guard(op) else ""))
                 for cid in cids:
                     node_map[cid].append(op.tag)
                     ops_at[folder][cid].append(op)
@@ -920,19 +933,29 @@ def _analyze_vpath(
         report.guarded_off.extend(offs)
         report.order_misses.extend(misses)
     for collision in collisions:
+        if "guard UNEVALUATED" in collision.detail:
+            collision.winner_qualified = False
         if collision.target in final_paths:
             collision.target_path = final_paths[collision.target]
             collision.target_tree = "final"
         elif collision.kind in ("HARD", "SUBTREE", "SOFT"):
-            removed = [path for (folder, _i), record in traced.items()
-                       if folder == collision.removed_by
+            removed = [(rank[folder], index, folder, path) for (folder, index), record in traced.items()
+                       if folder in collision.mods
                        for identity, path in record.removed_paths if identity == collision.target]
             if removed:
-                collision.removal_path = removed[-1]
+                _rank, _index, remover, collision.removal_path = max(removed)
                 collision.target_tree = "removed"
+                if collision.kind == "HARD":
+                    collision.removed_by = remover
+                    if collision.winner_qualified:
+                        collision.winner = remover
             else:
                 collision.target_tree = "unavailable"
+                collision.winner_qualified = False
                 collision.detail += "; this former node has no single surviving value scope"
+        if not collision.winner_qualified:
+            collision.detail = collision.detail.replace("loads last and wins", "loads last among potential contenders")
+            collision.detail += "; no qualified live winner is claimed"
     return collisions
 
 
@@ -1835,6 +1858,8 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
             elif c.removed_by:
                 lines.append(f"     removed  : by {c.removed_by}, first -- the node is "
                              f"ABSENT; later ops on it match nothing")
+            elif not c.winner_qualified:
+                lines.append(f"     potential: {c.winner or '(unavailable)'}  (live winner not qualified)")
             else:
                 lines.append(f"     winner   : {c.winner}")
             if c.detail:
@@ -1921,6 +1946,10 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
         lines.append("  detection. A conflict involving them would NOT appear above.")
         for u in report.unresolvable:
             lines.append(f"  !! {u}")
+    if report.unapplied:
+        lines.append(f"\n=== NOT APPLIED BY THE SEQUENTIAL MERGE ({len(report.unapplied)}) ===")
+        lines.append("  These ops changed nothing at their actual position; they cannot supply a live winner.")
+        lines.extend("  " + item for item in report.unapplied)
     lines.append(f"\nSummary: {len(report.hard)} hard-ish "
                  f"(HARD+FULL-OVERRIDE+SUBTREE), {len(report.by_kind('UNION-KEY'))} union-key, "
                  f"{len(report.by_kind('SOFT'))} soft, "
@@ -2055,6 +2084,7 @@ def main(argv: list[str] | None = None) -> int:
             # collision detection -- omitting it here made a JSON consumer read
             # "clean" when the run had silently checked less than it claims.
             "unresolvable": report.unresolvable,
+            "unapplied": report.unapplied,
             "candidate_path": report.candidate_path,
             "excluded_copies": report.excluded_copies,
             "scope_note": report.scope_note,

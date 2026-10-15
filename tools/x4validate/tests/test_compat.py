@@ -91,6 +91,19 @@ def test_sequential_instrument_disagreement_is_a_degraded_nonanswer(tmp_path, mo
     assert not rep.collisions and any(s.degraded for s in rep.skipped)
 
 
+def test_selector_invalidated_by_an_earlier_rename_is_not_a_live_winner(tmp_path):
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    vpath = "assets/props/mat.xml"
+    _mod(ext, "a", {vpath: '<diff><replace sel="//m[@id=\'a\']"><m id="renamed" value="1"/></replace></diff>'})
+    _mod(ext, "b", {vpath: '<diff><replace sel="//m[@id=\'a\']"><m id="wrong" value="2"/></replace></diff>'})
+    live = _merge.build_effective(vpath, _merge.replace(cfg, overlays=(ext / "a", ext / "b"))).tree
+    assert live.xpath("//m/@id") == ["renamed"]
+    report = _compat.analyze(ext, config=cfg)
+    assert not report.by_kind("HARD"), report.collisions
+    assert any("b" in item and "sel=" in item for item in report.unapplied)
+
+
 def test_soft_two_mods_add_under_same_parent(tmp_path):
     cfg = _setup_ref(tmp_path)
     ext = tmp_path / "extensions"
@@ -240,7 +253,7 @@ def test_two_nested_patches_on_one_target_still_collide(tmp_path, case_insensiti
                   '<mdscript name="Thing"><cues><cue name="C"/></cues></mdscript>'})
     for p in ("y_patch", "z_patch"):
         _mod(ext, p, {"extensions/target_mod/md/thing.xml":
-             '<diff><replace sel="//cue[@name=\'C\']/@name">' + p + '</replace></diff>'})
+             '<diff><replace sel="//cue/@name">' + p + '</replace></diff>'})
     cfg = _merge.replace(cfg, overlays=[target])
     rep = _compat.analyze(ext, config=cfg)
     hard = rep.by_kind("HARD")
@@ -278,7 +291,7 @@ def test_nested_patch_collides_without_a_manually_staged_owner(tmp_path, case_in
          '<mdscript name="Thing"><cues><cue name="C"/></cues></mdscript>'})
     for p in ("y_patch", "z_patch"):
         _mod(ext, p, {"extensions/target_mod/md/thing.xml":
-             '<diff><replace sel="//cue[@name=\'C\']/@name">' + p + '</replace></diff>'})
+             '<diff><replace sel="//cue/@name">' + p + '</replace></diff>'})
 
     rep = _compat.analyze(ext, config=cfg)          # <- no overlays= staging
 
@@ -1656,6 +1669,7 @@ def test_8_an_UNEVALUABLE_guard_keeps_the_row_labelled_and_announced(tmp_path):
     assert len(hard) == 1 and hard[0].winner == "b_mod", rep.collisions
     assert "guard UNEVALUATED" in hard[0].detail
     assert "engine behaviour UNMEASURED" in hard[0].detail
+    assert hard[0].winner_qualified is False and hard[0].live_value_owner() is None
     assert [s for s in rep.skipped if "b_mod" in s.what and "if=" in s.why], rep.skipped
     assert rep.guarded_off == []
 

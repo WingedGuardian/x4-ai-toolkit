@@ -138,7 +138,8 @@ def trace(vpath, base, roots, expected=None):
             nodes.split = len([c for c in op if isinstance(c.tag, str)]) > 1
             try:
                 selected = tree.xpath(op.get("sel", ""))
-                ids = tuple(k for item in selected for k in [nodes.target_id(item)] if k is not None) if isinstance(selected, list) else ()
+                candidates = tuple(nodes.target_id(item) for item in selected) if isinstance(selected, list) else (None,)
+                ids = None if any(k is None for k in candidates) else candidates
                 removed = tuple((nodes.target_id(item), _merge._path_of(item)) for item in selected
                                 if nodes.target_id(item) is not None) if op.tag == "remove" and isinstance(selected, list) else ()
             except etree.XPathEvalError:
