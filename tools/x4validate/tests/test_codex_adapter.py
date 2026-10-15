@@ -352,6 +352,27 @@ def test_post_tool_use_unparseable_patch_says_validation_did_not_run(sandbox):
     assert kind == "advise" and ctx.startswith("X4 VALIDATION DID NOT RUN")
 
 
+def test_shell_carried_patch_keeps_its_cd_and_reaches_post_validation(sandbox):
+    tmp, tk, env = sandbox
+    env = fake_validator(tmp, env, tk)
+    (tk / "dev/mymod/a.xml").write_text("<diff/>\n", encoding="utf-8")
+    command = (f"cd '{tk.as_posix()}'; apply_patch <<'PATCH'\n"
+               "*** Begin Patch\n*** Add File: dev/mymod/a.xml\n+<diff/>\n*** End Patch\nPATCH")
+    payload = native("post_tool_use_bash", tmp, command=command)
+    kind, context = run(env, payload, event="post_tool_use")
+    assert kind == "advise" and FAKE_FINDING in (context or ""), (kind, context)
+    payload["tool_input"]["command"] = "echo hello"
+    assert run(env, payload, event="post_tool_use")[0] == "allow"
+
+
+def test_malformed_shell_carried_patch_discloses_missing_validation(sandbox):
+    tmp, tk, env = sandbox
+    command = "apply_patch <<'PATCH'\n*** Begin Patch\n*** Nope: a.xml\n*** End Patch\nPATCH"
+    payload = native("post_tool_use_bash", tk, command=command)
+    kind, context = run(env, payload, event="post_tool_use")
+    assert kind == "advise" and "VALIDATION DID NOT RUN" in context
+
+
 def test_session_start_banner(sandbox):
     tmp, _, env = sandbox
     d = json.loads((FIX / "session_start.json").read_text(encoding="utf-8").replace("<CWD>", "x"))

@@ -33,10 +33,7 @@ def summaries(store):
     rows, unreadable = [], []
     for path in sorted((store.root / "transactions").glob("*.json")):
         try:
-            data = json.loads(path.read_text(encoding="ascii"))
-            if (data.get("v") != 1 or data.get("id") != path.stem or data.get("complete") is not True
-                    or not isinstance(data.get("groups"), list) or not data["groups"]):
-                raise ValueError("incomplete transaction")
+            data = store.inspect(path.stem)
             rows.append(data)
         except (OSError, ValueError, AttributeError):
             unreadable.append(path.name)

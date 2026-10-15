@@ -329,7 +329,7 @@ def pre_tool_use(payload: dict, shell: str, deadline: float) -> dict:
     return verdict
 
 
-def _ops_for_backup(payload: dict):
+def _ops_for_backup(payload: dict, strict=False):
     ti = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
     try:
         if payload.get("tool_name") in PATCH_TOOLS:
@@ -340,23 +340,25 @@ def _ops_for_backup(payload: dict):
                 body, cd = found
                 return patch_paths.parse_patch(body), (_abspath(cd, os.getcwd()) if cd else os.getcwd())
     except patch_paths.PatchParseError:
+        if strict:
+            raise
         return None
     return None
 
 
 def post_tool_use(payload: dict, deadline: float) -> dict:
-    ti = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
-    if payload.get("tool_name") not in PATCH_TOOLS:
-        return {"decision": "allow"}
     try:
-        ops = patch_paths.parse_patch(_patch_text(ti))
+        affected = _ops_for_backup(payload, strict=True)
     except patch_paths.PatchParseError as e:
         return {"decision": "advise", "context": f"X4 VALIDATION DID NOT RUN: the patch could not be read ({e})."}
+    if affected is None:
+        return {"decision": "allow"}
+    ops, base = affected
     notes = []
     for op, p in ops:
         if op not in VALIDATE_OPS:
             continue
-        ap = _abspath(p, os.getcwd())
+        ap = _abspath(p, base)
         out, err = _run_hook("x4validate-on-edit.sh",
                              {"hook_event_name": "PostToolUse", "tool_name": "Write",
                               "tool_input": {"file_path": ap, "content": ""}},

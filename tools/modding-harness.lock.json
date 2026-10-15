@@ -1,7 +1,7 @@
 {
   "v": 1,
   "project": "modding-agent-harness",
-  "revision": "b29bddeca8aa852e01268661cea801ff95f47860",
+  "revision": "aa23b76ab0ba76ebe036e5fde88e0a18d6c52cd4",
   "api_version": 1,
   "files": {
     "tools/modding_harness/LICENSE": "07a5c5e4aac6c4eda67565a716c8f4967dc318abe03098e5dee6a8fa7672d619",
@@ -11,8 +11,8 @@
     "tools/modding_harness/discovery.py": "05e335477d7ea707436606bde533c1197f43608ff1fdd1bd52ecd936b488ae4e",
     "tools/modding_harness/durable.py": "784349d4079bab8cca5f936cd6faab7ac0bbaf4c97f6216535ba912ca8897109",
     "tools/modding_harness/locking.py": "42c8d3322567e6225cf74429aeb0b8b5361edf92986f3e488a8fb2433f9e476a",
-    "tools/modding_harness/preservation.py": "b2dbd68cad0fe1fd2263b51fae5e692f75109bf7d57d4424f60efa42ac851d9b",
+    "tools/modding_harness/preservation.py": "9425f7e2ab8ed6864f87c02eb65eda24131ed15b22e4277ead048014af382741",
     "tools/modding_harness/profiles.py": "4b2cd89e0468a24eba1eeac22318cb86f84f1d4fb06cdac5ccb8e6688a2e33a0",
-    "tools/modding_harness/workspace.py": "c7f1c3ce9e455b6fc700d86a4f130c650e1deef6a64f2d6526cbbe4062484b2f"
+    "tools/modding_harness/workspace.py": "e805bcd9191a27ff97b38333effd7271bf096013637d85419779b8811097d6fe"
   }
 }
