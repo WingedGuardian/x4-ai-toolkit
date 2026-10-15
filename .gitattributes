@@ -80,3 +80,8 @@ docs/handoffs/ export-ignore
 # Maintainer-only: the isolated tool-audit harness (its README: "a local audit instrument,
 # not a shipped CLI"). Tracked for maintainers; excluded from the bundle (v4.0.0 review R5-12).
 tools/x4validate/audit/** export-ignore
+
+# The vendored core's lock hashes checkout bytes, including its extensionless
+# licence notice. Keep the same bytes in Windows, POSIX and archive installs.
+tools/modding_harness/** text eol=lf
+tools/modding-harness.lock.json text eol=lf
