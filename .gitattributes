@@ -85,3 +85,4 @@ tools/x4validate/audit/** export-ignore
 # licence notice. Keep the same bytes in Windows, POSIX and archive installs.
 tools/modding_harness/** text eol=lf
 tools/modding-harness.lock.json text eol=lf
+tools/x4_harness/** text eol=lf

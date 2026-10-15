@@ -143,7 +143,8 @@ def test_missing_cwd_is_inert_deny(sandbox):
 def test_unknown_tool_allowed_and_recorded(sandbox):
     tmp, _, env = sandbox
     d = native("spawn_agent", tmp)
-    assert run(env, d) == ("allow", None)
+    decision, context = run(env, d)
+    assert decision == "advise" and "WARN AND ALLOW" in context
     log = tmp / "unknown-tools.log"
     assert log.is_file() and "collaborationspawn_agent" in log.read_text(encoding="utf-8")
 

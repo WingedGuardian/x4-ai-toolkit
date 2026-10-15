@@ -155,8 +155,6 @@ def pre(p: dict) -> dict:
         return _inert(str(e))
     except patch_paths.PatchParseError as e:
         return _inert(f"the patch could not be read ({e}), so its paths were never checked")
-    if not calls:
-        return _out("allow")
     if core.budget_s() < 1:
         return _inert("the adapter's time budget (X4_CODEX_BUDGET_S) is under one second")
     if cwd is not None:
@@ -164,7 +162,11 @@ def pre(p: dict) -> dict:
             os.chdir(cwd)              # the shell guard reads the CALLER's cwd for relative operands
         except OSError as e:
             return _inert(f"the bash workdir cannot be entered ({type(e).__name__})")
-    v = core.aggregate(core.judge(calls, deadline))
+    try:
+        v = core.save_policy.batch(p, calls,
+            lambda qualified: core.aggregate(core.judge(calls, deadline, qualified)), deadline, "opencode")
+    except (OSError, ValueError, TimeoutError) as exc:
+        return _inert("save dispatcher could not complete: " + type(exc).__name__)
     if v["decision"] in ("allow", "advise") and ops:
         b = core.run_backups(ops, p["directory"], deadline)
         if b is not None:

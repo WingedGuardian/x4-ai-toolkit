@@ -38,6 +38,8 @@ SANDBOX_KEYS = ("X4_TOOLKIT", "X4_GAME", "X4_REFERENCE", "X4_PROFILE", "X4_MODS"
 
 def make_sandbox(tmp_path: Path):
     tk, game = tmp_path / "toolkit", tmp_path / "X4 Foundations"
+    shutil.copytree(REPO / "tools/modding_harness", tk / "tools/modding_harness",
+                    ignore=shutil.ignore_patterns("__pycache__"))
     for d in (tk / "dev" / "mymod", tk / "reference" / "libraries", game / "extensions",
               tmp_path / "profile" / "save", tmp_path / "mods", tmp_path / "docs", tmp_path / "backups"):
         d.mkdir(parents=True)

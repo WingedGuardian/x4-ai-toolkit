@@ -190,7 +190,7 @@ prove host enforcement.
 ## Edit `agent/`, never the generated files
 
 These paths are **generated** from `agent/` (the generator renders this list from its own
-`OWNED` tuple, so it cannot drift): `CLAUDE.md`, `AGENTS.md`, `.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, `.claude/hooks/`, `.agents/skills/`, `.codex/hooks/`, `.codex/rules/`, `.opencode/hooks/`, `.opencode/plugins/x4guard.js`, `.opencode/skills/`, `.opencode/X4-OPENCODE.md`. Not generated, and never written
+`OWNED` tuple, so it cannot drift): `CLAUDE.md`, `AGENTS.md`, `.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, `.claude/hooks/`, `.agents/skills/`, `.codex/hooks/`, `.codex/rules/`, `tools/x4_harness/`, `tools/agent-harness.py`, `.opencode/hooks/`, `.opencode/plugins/x4guard.js`, `.opencode/skills/`, `.opencode/X4-OPENCODE.md`. Not generated, and never written
 by the generator: the per-machine path config `x4-paths.env` (at the toolkit root since 4.0;
 the 3.x location is still read, with a notice),
 `settings.local.json`, the `backups/` folder, and the Codex `hooks.json` (the installers and

@@ -189,7 +189,7 @@ def test_tools_that_write_nothing_are_allowed_without_a_guard_run(sandbox, tool)
     tmp, tk, env = sandbox
     # X4_BASH pointing nowhere: any guard run would be an inert deny, so an allow proves none ran
     v = run(dict(env, X4_BASH=str(tmp / "no-bash.exe")), call(tk, tool, {"filePath": str(tk / "reference" / "x")}))
-    assert v["decision"] == "allow" and not v["inert"], v
+    assert v["decision"] == "advise" and "WARN AND ALLOW" in v["context"] and not v["inert"], v
 
 
 def test_TWIN_a_judged_tool_with_no_bash_is_inert(sandbox):

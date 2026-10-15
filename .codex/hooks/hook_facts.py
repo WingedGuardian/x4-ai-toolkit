@@ -269,6 +269,17 @@ def join_cwd(cwd: str, p: str) -> str:
     return norm(norm(cwd) + "/" + p)
 
 
+def physical_join(cwd: str, path: str) -> str:
+    """Keep case for file I/O; never reuse a case-folded comparison path."""
+    if not path:
+        return cwd
+    if is_abs(path):
+        return path
+    if not cwd or not is_abs(cwd):
+        return ""
+    return posixpath.normpath(cwd.replace(chr(92), "/") + "/" + path.replace(chr(92), "/"))
+
+
 # ---------------------------------------------------------------- tokenising
 _OPERATORS = ("&&", "||", ";", "|", "&", "\n")
 
@@ -3044,7 +3055,7 @@ def cwd_track(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
 _MAX_CD_LANES = 16
 
 
-def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None = None) -> list:
+def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None = None, *, physical=False) -> list:
     """[(segment, [every directory that may be in force FOR it])], in command order --
     cwd_track()'s model with one LANE per possible directory (FX-G7, corpus #397).
 
@@ -3097,7 +3108,9 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
                     # went deny -> allow under that rule, because the sticky join keeps
                     # the operand under the root we last knew about. Leaving the join
                     # alone makes this change a pure tightening.
-                    cwd = join_cwd(cwd, tgt)
+                    # Comparison paths deliberately fold case. Preservation needs
+                    # the spelling the command actually opens, especially on POSIX.
+                    cwd = physical_join(cwd, tgt) if physical else join_cwd(cwd, tgt)
         elif v == "popd" and stack:
             cwd, from_seed = stack.pop()
         return (cwd, from_seed, stack)
@@ -4765,7 +4778,7 @@ def _as_ms(v) -> float:
 _AGENT_SETTINGS = re.compile(r"(^|/)\.claude/settings[^/]*\.json$")
 
 
-def facts(payload: dict, roots: dict) -> dict:
+def facts(payload: dict, roots: dict, *, evidence: list | None = None) -> dict:
     inp = payload.get("tool_input") or {}
     cmd = inp.get("command") or ""
     timeout = inp.get("timeout", 0)
@@ -4850,7 +4863,7 @@ def facts(payload: dict, roots: dict) -> dict:
     # resolve_verb runs HERE, once per segment, with the assignment table already
     # computed above: a command name arriving through a variable (`RM=rm; $RM -rf ...`)
     # otherwise reaches no verb-keyed rule at all, hard blocks included.
-    seg_cwd, seg_prev, unseeded = [], [], []
+    seg_cwd, seg_prev, unseeded, physical_dirs = [], [], [], []
     base = session_cwd(payload)
     # A carried command (bash -c, a heredoc fed to a shell, $(...)) is walked on its own,
     # so it cannot see a `cd` made around it. When nothing anywhere changes directory it
@@ -4866,15 +4879,19 @@ def facts(payload: dict, roots: dict) -> dict:
         # Lane j of one walk is lane j of the other (cwd_lanes splits per VALUE, not per
         # directory), so a segment is judged once per (seeded, unseeded) lane pair (FX-G7).
         bare = cwd_lanes(c, roots=roots)
+        physical = cwd_lanes(c, base if (top or not moves) else "", seeded=True,
+                             roots=roots, physical=True) if evidence is not None else []
         for k, (s, ds) in enumerate(tracked):
             uds = bare[k][1] if k < len(bare) else [""]
             rs = resolve_verb(s, assigns)
             # The segment BEFORE each one in the same carried command: what feeds an xargs.
             prev = tracked[k - 1][0] if k else None
-            for d, ud in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds))):
+            pds = physical[k][1] if physical else [""] * len(ds)
+            for d, ud, pd in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds)):
                 seg_cwd.append((rs, d))
                 seg_prev.append(prev)
                 unseeded.append(ud)
+                physical_dirs.append(pd)
     # A SUBSTITUTED COMMAND NAME REACHES NO RULE AT ALL. An unknown OPERAND still
     # reaches the conservative branch; an unknown VERB reaches nothing, so it takes
     # all three hard blocks with it. MEASURED 2026-09-08 against the live hook:
@@ -4948,7 +4965,7 @@ def facts(payload: dict, roots: dict) -> dict:
     segs = [s for s, _ in seg_cwd]
     cwd = seg_cwd[-1][1] if seg_cwd else ""
 
-    def prep(paths, c_cwd, c_old, expand=True):
+    def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file"):
         """(path resolved where it runs, unresolvable?, the token as written). A whole
         array reference -- a for-loop variable, `"${A[@]}"` -- yields one entry PER
         element (resolve_all).
@@ -4988,6 +5005,12 @@ def facts(payload: dict, roots: dict) -> dict:
                 d = c_old if (_DEBRIS.search(r) or _DEVICE.match(r)) else c_cwd
                 # An 8.3 short name is its long name (FX-G2 item 3; see long_name).
                 out.append((r if unres else long_name(join_cwd(d, r)), unres, r))
+                if evidence is not None and operation:
+                    physical = physical_join(physical_cwd, r)
+                    evidence.append({"operation": operation, "path": physical,
+                                     "raw": r, "unresolved": unres or not physical or has_unresolved(physical)
+                                     or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical)),
+                                     "scope": scope})
         return out
 
     rm_t, copy_t, redir_t, mv_src = [], [], [], []
@@ -4995,18 +5018,18 @@ def facts(payload: dict, roots: dict) -> dict:
     gitwipe_t, gitdiscard_t, gitwipe_pairs = [], [], []
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
     search_seg, git_all = False, False
-    for (s, c_cwd), prev, c_old in zip(seg_cwd, seg_prev, unseeded):
-        rm_t += prep(rm_paths(s), c_cwd, c_old)
-        rm_t += prep(xargs_feed(s, prev), c_cwd, c_old)
-        rm_t += prep(rsync_deletes(s), c_cwd, c_old)
+    for (s, c_cwd), prev, c_old, physical_cwd in zip(seg_cwd, seg_prev, unseeded, physical_dirs):
+        rm_t += prep(rm_paths(s), c_cwd, c_old, operation="delete")
+        rm_t += prep(xargs_feed(s, prev), c_cwd, c_old, operation="delete")
+        rm_t += prep(rsync_deletes(s), c_cwd, c_old, operation="delete", scope="tree")
         robo_copy, robo_del, robo_mv = robocopy_effects(s)
-        copy_t += prep(robo_copy, c_cwd, c_old)
-        rm_t += prep(robo_del, c_cwd, c_old)
-        mv_src += prep(robo_mv, c_cwd, c_old)
-        mod_t += prep(modify_targets(s), c_cwd, c_old)
+        copy_t += prep(robo_copy, c_cwd, c_old, operation="write", scope="tree")
+        rm_t += prep(robo_del, c_cwd, c_old, operation="delete", scope="tree")
+        mv_src += prep(robo_mv, c_cwd, c_old, operation="move", scope="tree")
+        mod_t += prep(modify_targets(s), c_cwd, c_old, operation="write")
         # A FILTERED find-delete removes entries INSIDE its tree: it feeds every in-tree
         # delete rule, and never the whole-install hard block (see find_scoped_deletes).
-        scoped_rm_t += prep(find_scoped_deletes(s), c_cwd, c_old)
+        scoped_rm_t += prep(find_scoped_deletes(s), c_cwd, c_old, operation="delete", scope="filtered-tree")
         # A command name that arrives by substitution MAY be rm: its operands feed the X4
         # directory delete ADVISORY (FX-G4 / BLIND-SPOTS F183, MEASURED: `$(echo rm) -rf
         # <game>/libraries` was a plain allow where `rm -rf` advises). Advisory only; an
@@ -5017,11 +5040,11 @@ def facts(payload: dict, roots: dict) -> dict:
             # parse fragment of a substitution whose debris joined the session cwd (the game).
             subst_rm_t += prep(_operands(s), c_old, c_old)
         # truncate / dd of=are truncating writes, judged as `>` is (see clobber_targets).
-        redir_t += [("truncate",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False)]
-        mv_src += prep(move_sources(s), c_cwd, c_old)
-        copy_t += prep(copy_dests(s), c_cwd, c_old)
-        sed_t += prep(sed_in_place_targets(s), c_cwd, c_old)
-        out_t += prep(output_targets(s), c_cwd, c_old, False)
+        redir_t += [("truncate",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False, operation="write")]
+        mv_src += prep(move_sources(s), c_cwd, c_old, operation="move")
+        copy_t += prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination")
+        sed_t += prep(sed_in_place_targets(s), c_cwd, c_old, operation="write")
+        out_t += prep(output_targets(s), c_cwd, c_old, False, operation="write")
         search_files += prep(search_paths(s, require_recursive=False), c_cwd, c_old)
         # UNSEEDED, deliberately (lane F). `git clean -f` / `reset --hard` name no path, so
         # with the session seed EVERY one run from the game or toolkit root becomes an ASK
@@ -5046,11 +5069,11 @@ def facts(payload: dict, roots: dict) -> dict:
         # named by ANOTHER segment cannot excuse this one -- see git_wipe_from_session_dir.
         gitwipe_pairs.append((prep(git_wipes_worktree_targets(s), c_old, c_old),
                               prep(git_wipes_ignored_targets(s), c_cwd, c_old)))
-        gitdiscard_t += prep(git_discards_named_files(s), c_cwd, c_old)
+        gitdiscard_t += prep(git_discards_named_files(s), c_cwd, c_old, operation="write")
         search_seg = search_seg or searches(s)
         git_all = git_all or git_adds_everything(s)
         for mode, tgt in redirects(s):
-            redir_t += [(mode,) + o for o in prep([tgt], c_cwd, c_old, False)]
+            redir_t += [(mode,) + o for o in prep([tgt], c_cwd, c_old, False, operation="write")]
 
     def hit(ops, key, conservative=False):
         """`conservative` is the delete-only rule (user decision 2026-09-01): an

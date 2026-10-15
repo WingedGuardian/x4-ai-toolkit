@@ -49,6 +49,7 @@ for _p in (HERE, HERE.parent / "claude-hooks"):         # rendered tree, then th
 
 import x4guard                     # noqa: E402  (sibling module; path set above)
 import patch_paths                 # noqa: E402
+import save_policy                 # noqa: E402
 
 BANNER = "X4 GUARDS LIVE (codex hooks v1) — shell commands and apply_patch are checked (input typed into a running shell is not)."
 EVENTS = {"session_start": "SessionStart", "pre_tool_use": "PreToolUse", "post_tool_use": "PostToolUse"}
@@ -170,20 +171,23 @@ def record_unknown(tool) -> None:
 PARALLEL = 4
 
 
-def _one(call: tuple, deadline: float | None = None) -> dict:
+def _one(call: tuple, deadline: float | None = None, save_qualified=None) -> dict:
     kind, sh, cmd, path, label, *extra = call     # extra: verdict_for options (FX-G6 / K I5, M1)
     # ONE deadline for the whole batch (MEASURED after merging lanes B+E: 400 deletes under a 45 s
     # budget ran past 180 s, because each check started its own fresh x4guard deadline). x4guard
     # refuses to START a guard once it has passed, and bounds one already running.
     try:
-        v = dict(x4guard.verdict_for(kind, sh, cmd, path, deadline=deadline, **(extra[0] if extra else {})))
+        options = dict(extra[0] if extra else {})
+        if save_qualified is not None:
+            options["save_qualified"] = save_qualified
+        v = dict(x4guard.verdict_for(kind, sh, cmd, path, deadline=deadline, **options))
     except Exception as e:                # a guard that raised checked nothing
         v = inert(f"the guard raised {type(e).__name__}: {e}", label)
     v["label"] = label
     return v
 
 
-def judge(calls: list[tuple], deadline: float) -> list[dict]:
+def judge(calls: list[tuple], deadline: float, save_qualified=None) -> list[dict]:
     """Verdicts in call order. The shell check (if any) runs first; a real deny there ends it.
     Every guard shares ONE deadline: it is passed into each x4guard check (see _one)."""
     from concurrent.futures import ThreadPoolExecutor
@@ -196,10 +200,10 @@ def judge(calls: list[tuple], deadline: float) -> list[dict]:
             out += [inert("the adapter's time budget ran out before this check", c[4]) for c in batch]
             continue
         if len(batch) == 1:
-            got = [_one(batch[0], deadline)]
+            got = [_one(batch[0], deadline, save_qualified)]
         else:
             with ThreadPoolExecutor(min(PARALLEL, len(batch))) as ex:
-                got = list(ex.map(lambda c: _one(c, deadline), batch))
+                got = list(ex.map(lambda c: _one(c, deadline, save_qualified), batch))
         out += got
         if any(v["decision"] == "deny" and not v.get("inert") for v in got):
             break                         # the call is refused; later checks cannot change that
@@ -319,7 +323,8 @@ def pre_tool_use(payload: dict, shell: str, deadline: float) -> dict:
         calls = translate(payload, "pre_tool_use", shell=shell)
     except patch_paths.PatchParseError as e:
         return aggregate([inert(f"the patch could not be read ({e}), so its paths were never checked")])
-    verdict = aggregate(judge(calls, deadline))
+    verdict = save_policy.batch(payload, calls,
+        lambda qualified: aggregate(judge(calls, deadline, qualified)), deadline, "codex")
     if verdict["decision"] in ("allow", "advise"):
         ops = _ops_for_backup(payload)
         if ops:

@@ -336,7 +336,8 @@ def _deployed() -> bool:
     """A deployed copy (.claude/hooks for Claude Code, .codex/hooks for Codex, .opencode/hooks
     for OpenCode) finds its roots through _x4-env.sh (HOOK_DIR/../..); any other copy needs
     X4_TOOLKIT."""
-    return HERE.name == "hooks" and HERE.parent.name in (".claude", ".codex", ".opencode")
+    return (HERE.name == "hooks" and HERE.parent.name in (".claude", ".codex", ".opencode")
+            or HERE.name == "x4_harness" and HERE.parent.name == "tools")
 
 
 #: Which budget a timeout message names (lane J, Plan 3): x4guard's own, or the CALLER's (the
@@ -349,7 +350,7 @@ def _own_budget() -> str:
 
 
 def run_guard(script: str, payload: dict, deadline: float | None = None,
-              budget: str | None = None) -> dict:
+              budget: str | None = None, *, save_qualified=None) -> dict:
     """One guard, one verdict dict. Anything that keeps it from producing a real verdict is inert.
     `deadline` (a _clock() value) is the CHECK's deadline: a second guard gets only what is left.
     `budget` names whose deadline it is in a timeout message (default: x4guard's own)."""
@@ -373,7 +374,10 @@ def run_guard(script: str, payload: dict, deadline: float | None = None,
     try:
         # X4_GUARD_CHECK=1: the guards' internal check protocol. Every "checked nothing" path exits
         # 2 instead of asking (a no-op for Claude Code's hooks, where the variable is unset).
-        rc, out, err = _run_bounded([bash, str(target)], json.dumps(payload).encode("utf-8"),
+        argv = [bash, str(target)]
+        if save_qualified is not None:
+            argv += ["--harness-policy-backend"] + (["--save-qualified"] if save_qualified else [])
+        rc, out, err = _run_bounded(argv, json.dumps(payload).encode("utf-8"),
                                     dict(os.environ, X4_GUARD_CHECK="1"), remaining)
     except OSError as e:
         return _inert(f"{script} could not start: {e}", guards)
@@ -401,12 +405,12 @@ GUARDS_OFF_NOTE = ("X4 GUARDS OFF (X4_GUARD=off at launch): every guard verdict 
 
 def verdict_for(kind: str, shell: str | None, command: str | None, path: str | None,
                 deadline: float | None = None, content: str | None = None,
-                edit: dict | None = None, patch: bool = False) -> dict:
+                edit: dict | None = None, patch: bool = False, save_qualified=None) -> dict:
     """The verdict, plus spec 5.7's escape hatch: with X4_GUARD exactly "off" the guards turn a
     deny/ask into an advisory naming what it would have been (they read the variable
     themselves), and this says GUARDS OFF on every verdict -- a would-be allow included. An inert
     verdict stays an inert deny: a guard that could not run judged nothing to relax."""
-    v = _verdict(kind, shell, command, path, deadline, content, edit, patch)
+    v = _verdict(kind, shell, command, path, deadline, content, edit, patch, save_qualified)
     if os.environ.get("X4_GUARD") != "off" or v["inert"]:
         return v
     v = dict(v)
@@ -418,7 +422,7 @@ def verdict_for(kind: str, shell: str | None, command: str | None, path: str | N
 
 def _verdict(kind: str, shell: str | None, command: str | None, path: str | None,
              deadline: float | None = None, content: str | None = None,
-             edit: dict | None = None, patch: bool = False) -> dict:
+             edit: dict | None = None, patch: bool = False, save_qualified=None) -> dict:
     """A relative path is resolved from the CALLER's working directory (Codex apply_patch paths
     are relative). A delete is judged as the stricter of a write and an `rm -rf --` of that path:
     recursive, because the path may be a directory. No protect-bash rule distinguishes it from
@@ -429,15 +433,18 @@ def _verdict(kind: str, shell: str | None, command: str | None, path: str | None
     budget = None if deadline is None else CALLER_BUDGET
     if deadline is None:
         deadline = _clock() + TIMEOUT_S if TIMEOUT_S else None
+    def check(script, payload, deadline, budget):
+        options = {} if save_qualified is None else {"save_qualified": save_qualified}
+        return run_guard(script, payload, deadline, budget, **options)
     if kind == "shell":
-        return run_guard("protect-bash.sh", guard_payload(kind, shell, command, None), deadline, budget)
+        return check("protect-bash.sh", guard_payload(kind, shell, command, None), deadline, budget)
     path = os.path.abspath(path)
-    parts = [run_guard("protect-files.sh", guard_payload("write", None, command, path, content, edit, patch),
+    parts = [check("protect-files.sh", guard_payload("write", None, command, path, content, edit, patch),
                        deadline, budget)]
-    if kind == "delete":
+    if kind in ("delete", "move"):
         quoted = path.replace("\\", "/").replace("'", "'\"'\"'")    # close, "'", reopen
         rm = "rm -rf -- '" + quoted + "'"
-        parts.append(run_guard("protect-bash.sh", guard_payload("shell", "bash", rm, None), deadline, budget))
+        parts.append(check("protect-bash.sh", guard_payload("shell", "bash", rm, None), deadline, budget))
     worst = max(parts, key=lambda v: (v["inert"], RANK[v["decision"]]))
     worst = dict(worst)
     worst["guards"] = [g for v in parts for g in v["guards"]]

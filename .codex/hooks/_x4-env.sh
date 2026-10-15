@@ -920,3 +920,26 @@ x4_require_input() {
   x4_guard_check_inert
   exit 0
 }
+
+# Protection-root packet shared with the synchronous save dispatcher. Values
+# travel on stdin: MSYS rewrites path-looking environment values for native Python.
+x4_emit_guard_roots() {
+  local profile="${X4_PROFILE:-}" candidate
+  if [ -z "$profile" ]; then
+    for candidate in "${X4_DOCUMENTS:+$X4_DOCUMENTS/Egosoft/X4}" "${HOME:+$HOME/.config/EgoSoft/X4}"; do
+      [ -n "$candidate" ] && [ -d "$candidate" ] && { profile="$candidate"; break; }
+    done
+  fi
+  printf 'game\t%s\nprofile\t%s\nreference\t%s\nconfig\t%s\ntoolkit\t%s\nmods\t%s\ndocuments\t%s\nsaves\t%s\n--X4-ROOTS-END--' \
+    "$X4_GAME" "$profile" "$X4_REFERENCE" "${X4_CONFIG:-}" "$X4_TOOLKIT" "$X4_MODS" "${X4_DOCUMENTS:-}" "${X4_SAVES:-}"
+}
+
+x4_save_dispatch() {
+  local answer rc
+  answer=$( { x4_emit_guard_roots; printf '%s' "$INPUT"; } | "$PY" "$HOOK_DIR/save_policy.py" "$1" "$0")
+  rc=$?
+  case "$rc:$answer" in
+    '0:X4SAVE '*) printf '%s' "${answer#X4SAVE }" ;;
+    *) printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"X4 save dispatcher did not return a complete decision; this call was not allowed."}}' ;;
+  esac
+}

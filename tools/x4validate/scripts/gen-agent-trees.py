@@ -418,6 +418,7 @@ def render_hooks(src: Path) -> dict[str, str]:
 #: absolute project root (Codex substitutes no project variable, and the root is part of the
 #: trust hash), so deploy and the installers render it with render_codex_hooks_json(root).
 OWNED += (".codex/hooks/", ".codex/rules/")
+OWNED += ("tools/x4_harness/", "tools/agent-harness.py")
 CODEX_ADAPTERS: dict[str, str] = {
     "codex.py": "codex_adapter.py", "patch_paths.py": "patch_paths.py", "codex_trust.py": "codex_trust.py",
     "codex-entry.ps1": "codex-entry.ps1", "codex-entry.sh": "codex-entry.sh",
@@ -560,6 +561,9 @@ def generate(repo: Path) -> dict[str, str]:
     out.update(render_hooks(src))
     out.update(render_codex_tree(src))
     out.update(render_opencode_tree(src))
+    out.update({"tools/x4_harness/" + rel[len(".claude/hooks/"):]: text
+                for rel, text in render_hooks(src).items() if not Path(rel).name.startswith(("test_", "test-"))})
+    out["tools/agent-harness.py"] = _read(src / "guards/adapters/generic.py")
     out[".claude/settings.json"] = _read(src / "targets" / "claude" / "settings.json")
     return dict(sorted(out.items()))
 

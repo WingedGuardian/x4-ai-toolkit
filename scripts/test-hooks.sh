@@ -65,6 +65,12 @@ no(){ fail=$((fail+1)); printf '  FAIL %s\n' "$1"; }
 # decide <expected> <hook> <json> <label>
 decide(){
   local exp="$1" hook="$2" json="$3" label="$4" out got rc errf="$SBX_TMP/decide.stderr"
+  case "${X4_TOOLKIT:-}" in "$SBX_TMP"/*)
+    if [ ! -f "$X4_TOOLKIT/tools/modding_harness/__init__.py" ]; then
+      mkdir -p "$X4_TOOLKIT/tools"
+      cp -R "$REPO/tools/modding_harness" "$X4_TOOLKIT/tools/"
+    fi ;;
+  esac
   if ! printf '%s' "$json" | jq -e . >/dev/null 2>&1; then
     no "$label -- MALFORMED PROBE PAYLOAD: not valid JSON, so this probe exercises the
         parser-contract guard rather than its own rule"
@@ -154,7 +160,7 @@ run_layout(){ # run_layout <name> <toolkit> <game>
   # Saves, game settings and everything else under Documents (user request
   # 2026-08-30). MEASURED first: over 11,133 historical commands this fires on 7
   # MORE than the existing profile rules already did, and on zero more edits.
-  decide ask   protect-files.sh "$(fj "$SBX_TMP/profile/save/save_001.xml.gz")"  "a save game"
+  decide allow protect-files.sh "$(fj "$SBX_TMP/profile/save/save_001.xml.gz")"  "a new save game needs no preservation"
   decide advise protect-files.sh "$(fj "$SBX_TMP/docs/My Games/SomeGame/x.ini")"  "under My Games"
   # `.dat` is a GENERIC extension. The X4-archive rule denied another game's save
   # outright until it was scoped to X4 locations -- a guard blocking a file that was
@@ -318,7 +324,7 @@ decide allow protect-bash.sh "$(cj "python - <<'PY'
 guard = 'grep -qiE content.xml against \$X4_PROFILE'
 PY")"   "a manifest search described inside a heredoc body is data"
 decide deny  protect-bash.sh "$(cj "rm -rf '$X4_REFERENCE'")" "rm reference/"
-decide ask   protect-bash.sh "$(cj "rm -f '$SBX_TMP/profile/save/save_001.xml.gz'")" "deleting a save game"
+decide advise protect-bash.sh "$(cj "rm -f '$SBX_TMP/profile/save/save_001.xml.gz'")" "deleting an absent named save needs no preservation"
 decide advise protect-bash.sh "$(cj "echo x > '$SBX_TMP/docs/notes.txt'")"            "writing into Documents"
 # ...but only when Documents is the TARGET. MEASURED 2026-08-30: 193 of 196 hits
 # were a command that merely NAMED a path there -- `(rm|mv|cp|tee|>) anywhere` AND
@@ -986,7 +992,7 @@ fi
 # Uses the SUITE fixture root, not a real profile path: run_layout exports
 # X4_SAVES at a sandbox location, so a real path reaches no rule here and the
 # probe would refuse (correctly) instead of exercising the bound.
-_savep="${X4_SAVES:-$SBX_TMP/profile/save}/$(printf 'bbbbbbbbbb/%.0s' $(seq 1 900))x.xml.gz"
+_savep="${X4_PROFILE:-$SBX_TMP/profile}/$(printf 'bbbbbbbbbb/%.0s' $(seq 1 900))config.ini"
 _vr="$(printf '{"tool_name":"Bash","tool_input":{"command":%s}}' "$(printf 'rm -f %s' "$_savep" | jq -Rs .)" \
        | bash "$HOOKS/protect-bash.sh" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')"
 if [ "${#_vr}" -lt 200 ]; then
@@ -1144,12 +1150,12 @@ decide ask protect-bash.sh "$(cj 'echo "unterminated')"   "guards off: a command
 decide ask protect-bash.sh "$(cj "\$(echo rm) -rf '$X4_GAME'")"     "guards off: a command name built by substitution still ASKS"
 _psj='{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item x"}}'
 export X4_PWSH="$SBX_TMP/no-such-pwsh"
-decide ask protect-bash.sh "$_psj" "guards off: PowerShell that could not be translated still ASKS"
+decide deny protect-bash.sh "$_psj" "guards off: a failed PowerShell scope evaluation still REFUSES"
 unset X4_PWSH
 _pf_out="$(printf '%s' '{"tool_name":"Edit","tool_input":' | JQ=no-such-jq bash "$HOOKS/protect-files.sh" 2>/dev/null)"
 case "$_pf_out" in
-  *'"permissionDecision":"ask"'*|*'"permissionDecision": "ask"'*) ok "guards off: protect-files with an unreadable payload still ASKS" ;;
-  *) no "guards off: protect-files with an unreadable payload did not ask: ${_pf_out:0:200}" ;;
+  *'"permissionDecision":"deny"'*|*'"permissionDecision": "deny"'*) ok "guards off: protect-files with an unreadable payload still REFUSES" ;;
+  *) no "guards off: protect-files with an unreadable payload did not refuse: ${_pf_out:0:200}" ;;
 esac
 # TWIN: an ordinary rule's deny IS relaxed -- the switch still works for verdicts.
 decide advise protect-bash.sh "$(cj "rm -rf '$X4_GAME'")" "TWIN: guards off: a rule's deny is still an advisory"
@@ -1199,7 +1205,8 @@ echo; echo "=== protect-bash.sh: the X4 profile with X4_PROFILE unset ==="
 _pp_prof="${X4_PROFILE-}"; _pp_docs="${X4_DOCUMENTS-}"; _pp_saves="${X4_SAVES-}"; _pp_home="$HOME"
 unset X4_PROFILE X4_SAVES
 export X4_DOCUMENTS="$SBX_TMP/pdocs"; mkdir -p "$X4_DOCUMENTS/Egosoft/X4/123/save" "$X4_DOCUMENTS/Other Game"
-decide ask    protect-bash.sh "$(cj "rm -f '$X4_DOCUMENTS/Egosoft/X4/123/save/s1.xml.gz'")" "X4_PROFILE unset: deleting a save in Documents/Egosoft/X4 still ASKS"
+printf 'save fixture' > "$X4_DOCUMENTS/Egosoft/X4/123/save/s1.xml.gz"
+decide advise protect-bash.sh "$(cj "rm -f '$X4_DOCUMENTS/Egosoft/X4/123/save/s1.xml.gz'")" "X4_PROFILE unset: a named save is preserved before allowance"
 decide ask    protect-bash.sh "$(cj "echo x > '$X4_DOCUMENTS/Egosoft/X4/123/content.xml'")" "X4_PROFILE unset: writing the profile content.xml still ASKS"
 decide advise protect-bash.sh "$(cj "rm -f '$X4_DOCUMENTS/Other Game/a.txt'")"            "TWIN: another game's file in Documents is only advised"
 export X4_DOCUMENTS="$SBX_TMP/no-docs-here" HOME="$SBX_TMP/phome"; mkdir -p "$HOME/.config/EgoSoft/X4/123"

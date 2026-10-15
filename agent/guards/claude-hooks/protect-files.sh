@@ -23,6 +23,13 @@ x4_require_input "$INPUT" "X4 GUARD INERT: this hook received NO INPUT, so it ch
 # F79. protect-bash.sh gained this fallback in bccffc1; this file never did.
 x4_resolve_python; PY="$X4_PY"   # shared: refuses a misconfigured X4_PYTHON
 
+_harness_save_qualified=0
+if [ -n "$PY" ] && [ "${1:-}" != --harness-policy-backend ]; then
+  x4_save_dispatch files
+  exit 0
+fi
+[ "${2:-}" = --save-qualified ] && _harness_save_qualified=1
+
 emit() {   # emit <deny|ask|advise> <reason>
   # X4_GUARD=off (spec 5.7): a deny or an ask becomes an advisory that names what it would
   # have been, and is logged -- except an INABILITY (_X4_UNRELAXED), which still asks
@@ -307,12 +314,12 @@ esac
 # even for a manifest inside dev/ or X4_MODS.)
 
 # === CONFIRMATION — user profile files (saves, config, active mod list) ===
-x4_under "$FILE_PATH" "$X4_PROFILE" && ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"
+x4_under "$FILE_PATH" "$X4_PROFILE" && [ "$_harness_save_qualified" != 1 ] && ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"
 # Saves first: the message must name what is actually at risk.
-x4_under "$FILE_PATH" "${X4_SAVES:-}" && ask "EDITING A SAVE GAME: $FILE_PATH -- saves are not reproducible and there is no undo. Confirm?"
+x4_under "$FILE_PATH" "${X4_SAVES:-}" && [ "$_harness_save_qualified" != 1 ] && ask "EDITING A SAVE GAME: $FILE_PATH -- saves are not reproducible and there is no undo. Confirm?"
 # A profile path the X4_PROFILE variable does not name still confirms -- BEFORE the
 # Documents advisory below, or it would only be advised (the profile lives in Documents).
-echo "$FILE_PATH" | grep -qiE 'Egosoft[/\\]X4[/\\]' && ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"
+echo "$FILE_PATH" | grep -qiE 'Egosoft[/\\]X4[/\\]' && [ "$_harness_save_qualified" != 1 ] && ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"
 # ...and the rest of Documents: game settings, other games, personal files. ADVISORY since
 # 2026-10-02 (user: an ask that is always approved protects nothing). advise() accumulates
 # and never exits, so every rule below still applies.
