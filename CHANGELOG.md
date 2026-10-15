@@ -2,6 +2,9 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Both installers preflight destination links along the exact copy set, refusing
+  junctions or symbolic links that redirect writes before changing instructions
+  or copying files. Unrelated local links remain usable.
 - Upgrade review preparation renders skill commands for their declared shells and
   generates destination-specific Codex definitions from the frozen template.
   Both native settings files retain unrelated content; complete pre-tool groups

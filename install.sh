@@ -1382,15 +1382,30 @@ write_codex_doc_max_bytes() {   # DEST -- after the dispatch
 #: read-only attribute. One installer destroyed what the lock protected and the
 #: other left a mess, and nothing decided which was correct. Refusing before
 #: either writes anything is the only answer that is right for both.
-_locked_targets() {   # _locked_targets DEST  -> prints blocked destination paths
-  local dest="$1" item rel f junk skip
+_destination_problem() {   # DEST REL locked|redirected -> prints a problematic path
+  local dest="$1" rel="$2" mode="$3" path="$1" part
+  if [ "$mode" = locked ]; then
+    path="$dest/$rel"
+    if [ -e "$path" ] && [ ! -w "$path" ]; then printf '%s\n' "$path"; fi
+    return 0
+  fi
+  while [ -n "$rel" ]; do
+    part="${rel%%/*}"
+    path="$path/$part"
+    if [ -L "$path" ]; then printf '%s\n' "$path"; return 0; fi
+    case "$rel" in */*) rel="${rel#*/}" ;; *) break ;; esac
+  done
+  return 0
+}
+
+_locked_targets() {   # DEST [locked|redirected], using the same copy set for both
+  local dest="$1" mode="${2:-locked}" item rel f junk skip
   # THE SAME SET THE COPY WRITES. From a git checkout that is the tracked set; a
   # locked destination file standing where an UNTRACKED source file sits is never
   # written, and refusing over it would block an install for nothing.
   if _tracked_copy_set; then
     for rel in "${X4_TRACKED[@]}"; do
-      f="$dest/$rel"
-      if [ -e "$f" ] && [ ! -w "$f" ]; then printf '%s\n' "$f"; fi
+      _destination_problem "$dest" "$rel" "$mode"
     done
     return 0
   fi
@@ -1404,12 +1419,10 @@ _locked_targets() {   # _locked_targets DEST  -> prints blocked destination path
           case "$item/$rel" in "$junk"|"$junk"/*) skip=1 ;; esac
         done
         [ "$skip" = 1 ] && continue
-        f="$dest/$item/$rel"
-        [ -e "$f" ] && [ ! -w "$f" ] && printf '%s\n' "$f"
+        _destination_problem "$dest" "$item/$rel" "$mode"
       done
     else
-      f="$dest/$item"
-      [ -e "$f" ] && [ ! -w "$f" ] && printf '%s\n' "$f"
+      _destination_problem "$dest" "$item" "$mode"
     fi
   done
   return 0
@@ -1418,6 +1431,13 @@ _locked_targets() {   # _locked_targets DEST  -> prints blocked destination path
 #: PRECONDITION over the whole copy set, before anything is written, dry run too.
 precheck_locked_targets() {   # precheck_locked_targets DEST
   local dest="$1" blocked n
+  blocked="$(_locked_targets "$dest" redirected)"
+  if [ -n "$blocked" ]; then
+    echo 'REFUSING: destination links redirect toolkit writes. Nothing has been changed.' >&2
+    printf '%s\n' "$blocked" | LC_ALL=C sort -u | head -8 >&2
+    echo 'Review the linked paths and select an independent destination before installing.' >&2
+    exit 1
+  fi
   blocked="$(_locked_targets "$dest")"
   [ -z "$blocked" ] && return 0
   n="$(printf '%s\n' "$blocked" | grep -c .)"

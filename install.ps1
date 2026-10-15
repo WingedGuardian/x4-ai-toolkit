@@ -1190,16 +1190,29 @@ function Write-OpenCodeConfig($dest) {
 #: success. install.sh died mid-copy instead. Opposite verdicts on one input, and
 #: nothing decided which was right; refusing before either writes is the only
 #: answer correct for both.
-function Get-LockedTargets($dest) {
+function Get-DestinationProblem($dest, $rel, $problem) {
+  if ($problem -eq 'locked') {
+    $target = Join-Path $dest $rel
+    $entry = Get-Item -Force -LiteralPath $target -ErrorAction SilentlyContinue
+    if ($entry -and $entry.IsReadOnly) { return $target }
+    return
+  }
+  $path = $dest
+  foreach ($part in ($rel -split '[/\\]')) {
+    $path = Join-Path $path $part
+    $entry = Get-Item -Force -LiteralPath $path -ErrorAction SilentlyContinue
+    if ($entry -and ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $path }
+  }
+}
+
+function Get-LockedTargets($dest, $problem = 'locked') {
   $blocked = @()
   # THE SAME SET THE COPY WRITES. From a git checkout that is the tracked set; a
   # locked destination file where an UNTRACKED source file sits is never written.
   if (Get-TrackedCopySet) {
     foreach ($rel in $script:X4Tracked) {
-      $t = Join-Path $dest $rel
-      if (Test-Path -LiteralPath $t) {
-        try { if ((Get-Item -LiteralPath $t -Force).IsReadOnly) { $blocked += $t } } catch { }
-      }
+      $issue = Get-DestinationProblem $dest $rel $problem
+      if ($issue) { $blocked += $issue }
     }
     return ,$blocked
   }
@@ -1215,22 +1228,24 @@ function Get-LockedTargets($dest) {
           if ($probe -ieq $junk -or $probe -like ($junk + [char]92 + '*')) { $skip = $true }
         }
         if ($skip) { continue }
-        $t = Join-Path $dest (Join-Path $item $rel)
-        if (Test-Path -LiteralPath $t) {
-          try { if ((Get-Item -LiteralPath $t -Force).IsReadOnly) { $blocked += $t } } catch { }
-        }
+        $issue = Get-DestinationProblem $dest (Join-Path $item $rel) $problem
+        if ($issue) { $blocked += $issue }
       }
     } else {
-      $t = Join-Path $dest $item
-      if (Test-Path -LiteralPath $t) {
-        try { if ((Get-Item -LiteralPath $t -Force).IsReadOnly) { $blocked += $t } } catch { }
-      }
+      $issue = Get-DestinationProblem $dest $item $problem
+      if ($issue) { $blocked += $issue }
     }
   }
   return ,$blocked
 }
 
 function Test-LockedTargetsPrecheck($dest) {
+  $redirected = Get-LockedTargets $dest 'redirected'
+  if ($redirected -and $redirected.Count -gt 0) {
+    Write-Host 'REFUSING: destination links redirect toolkit writes. Nothing has been changed.'
+    foreach ($path in ($redirected | Sort-Object -Unique | Select-Object -First 8)) { Write-Host $path }
+    throw 'Review the linked paths and select an independent destination before installing.'
+  }
   $blocked = Get-LockedTargets $dest
   if (-not $blocked -or $blocked.Count -eq 0) { return }
   Write-Host ''
