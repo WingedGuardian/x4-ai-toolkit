@@ -42,12 +42,12 @@ options:
 usage: x4modlist search [-h] [--limit 1..100] [--json] name
 
 positional arguments:
-  name
+  name            mod name or search text to look up on Nexus
 
 options:
   -h, --help      show this help message and exit
-  --limit 1..100
-  --json
+  --limit 1..100  maximum search candidates to return (default: 15)
+  --json          print structured provider status and candidate version/date metadata
 ```
 
 ## `x4modlist ingest`

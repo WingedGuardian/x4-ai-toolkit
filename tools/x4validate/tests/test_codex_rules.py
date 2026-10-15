@@ -25,7 +25,7 @@ GUARD = REPO / ".codex" / "hooks" / "x4guard.py"
 CODEX = shutil.which("codex")
 #: A verdict CALL: `deny "..."`, `on <fact> && ask "..."`, `  && advise "..."` (never the
 #: `deny() {` definitions, which have no space-quote after the name).
-SITE = re.compile(r'^\s*(?:on\s+(\w+)\s+)?(?:&&\s*)?(deny|ask|advise)\s+"')
+SITE = re.compile(r'^\s*(?:on\s+(\w+)\s+)?(?:&&\s*)?(?:\[[^\]\r\n]*\]\s*&&\s*)*(deny|ask|advise)\s+"')
 RANK = {"allow": 0, "advise": 1, "ask": 2, "deny": 3}
 RULE_ROWS = [r for r in ROWS if r["bucket"] != "hook_only"]
 
@@ -37,6 +37,8 @@ def guard_rule_sites():
 
 def test_TWIN_the_site_pattern_finds_and_skips():
     assert SITE.match('on git_add_all && deny "X"') and SITE.match('  ask "X"') and SITE.match('  && advise "X"')
+    assert SITE.match('on rm_saves && [ "$_harness_save_qualified" != 1 ] && ask "X"').group(2) == 'ask'
+    assert SITE.match('on fact && [ -e x ] && [ "$x" != 1 ] && deny "X"').group(1) == 'fact'
     assert not SITE.match('deny() { VERDICT=deny; emit deny "$1"; exit 0; }')
     assert not SITE.match('# deny "commented"')
 

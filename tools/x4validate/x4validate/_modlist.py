@@ -1052,9 +1052,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     ps = sub.add_parser("search", help="discover Nexus candidates with version/date/status; does not change the registry")
-    ps.add_argument("name")
-    ps.add_argument("--limit", type=int, choices=range(1, 101), default=15, metavar="1..100")
-    ps.add_argument("--json", action="store_true")
+    ps.add_argument("name", help="mod name or search text to look up on Nexus")
+    ps.add_argument("--limit", type=int, choices=range(1, 101), default=15, metavar="1..100",
+                    help="maximum search candidates to return (default: %(default)s)")
+    ps.add_argument("--json", action="store_true", help="print structured provider status and candidate version/date metadata")
     ps.set_defaults(func=cmd_search)
 
     pi = sub.add_parser("ingest", help="scan installed extension folders (PRIMARY) into the "
