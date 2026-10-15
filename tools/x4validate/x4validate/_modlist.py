@@ -6,6 +6,7 @@ API-FIRST: all Nexus access is via the API (never scrape). See _nexus.py.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from datetime import date, datetime, timezone
@@ -1015,6 +1016,28 @@ def cmd_mark(args) -> int:
     return 0
 
 
+def cmd_search(args) -> int:
+    try:
+        result = _nexus.discover(args.name, args.limit)
+    except (_nexus.NexusError, RuntimeError) as exc:
+        # Do not echo raw transport bodies or request headers into agent context.
+        result = {"v": 1, "provider": "nexus", "game": "x4foundations",
+                  "state": "unavailable", "candidates": [], "total": None,
+                  "installed_evidence": "not_checked", "reasons": [type(exc).__name__]}
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print(f"Nexus discovery: {result['state']} — {len(result['candidates'])} of "
+              f"{result['total'] if result['total'] is not None else '?'} search matches")
+        for row in result["candidates"]:
+            print(f"  [{row['mod_id']}] {row['name']}  v{row['version'] or '?'}  "
+                  f"updated {row['updated_at'] or '?'}  status={row['status'] or '?'}\n    {row['url']}")
+        print("Search candidates; installation and local identity were not checked.")
+        for reason in result["reasons"]:
+            print("  " + reason)
+    return 2 if result["state"] == "unavailable" else 0
+
+
 @_paths.refuses_unconfigured
 def main(argv: list[str] | None = None) -> int:
     try:
@@ -1027,6 +1050,12 @@ def main(argv: list[str] | None = None) -> int:
                    version=f"%(prog)s {__version__}")
     p.add_argument("--registry", help="path to modlist.yaml (default: dev\\_registry\\modlist.yaml)")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    ps = sub.add_parser("search", help="discover Nexus candidates with version/date/status; does not change the registry")
+    ps.add_argument("name")
+    ps.add_argument("--limit", type=int, choices=range(1, 101), default=15, metavar="1..100")
+    ps.add_argument("--json", action="store_true")
+    ps.set_defaults(func=cmd_search)
 
     pi = sub.add_parser("ingest", help="scan installed extension folders (PRIMARY) into the "
                         "registry, cross-checked against the profile content.xml")

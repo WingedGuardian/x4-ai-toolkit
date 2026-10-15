@@ -348,23 +348,44 @@ def fetch_file(nexus_id: int, file_id: int) -> FileMeta:
 
 
 def search_mods(name: str, count: int = 5) -> list[tuple[int, str]]:
-    """v2 GraphQL name search (nameStemmed, X4). Returns [(mod_id, name), ...] best-first."""
+    """Legacy identity-search bridge. Bad pages raise; only a real empty page is []."""
+    if type(count) is not int or not 1 <= count <= 100:
+        raise ValueError("search count must be from 1 to 100")
     safe = json.dumps(name)  # JSON-quoted+escaped GraphQL string literal
     query = ('query { mods(filter: {gameId: [{value: "%s"}], nameStemmed: [{value: %s}]}, '
              'count: %d) { nodes { modId name } } }' % (X4_GAMEID, safe, count))
     res = _mapped(f"search_mods({name!r})", _post_json, NEXUS_GQL, {"query": query},
                   {"apikey": nexus_key(), **_APP})
-    nodes = (((res or {}).get("data") or {}).get("mods") or {}).get("nodes") or []
+    data = res.get("data") if isinstance(res, dict) else None
+    page = data.get("mods") if isinstance(data, dict) else None
+    if not isinstance(page, dict) or not isinstance(page.get("nodes"), list) or res.get("errors"):
+        raise NexusError("search_mods: GraphQL did not return a complete usable search page")
+    nodes = page["nodes"]
     out = []
     for n in nodes:
         try:
-            out.append((int(n["modId"]), n.get("name", "")))
+            raw_id = n["modId"]
+            title = n["name"]
+            if isinstance(raw_id, bool) or not str(raw_id).isdigit() or int(raw_id) < 1 or not isinstance(title, str) or not title.strip():
+                raise ValueError("invalid candidate")
+            out.append((int(raw_id), title))
         except (KeyError, TypeError, ValueError):
-            # silent-ok: one malformed node in a GraphQL search result. The result
-            # is a ranked suggestion list, not a denominator — a dropped candidate
-            # cannot turn into a false negative about the local modlist.
-            continue
+            raise NexusError("search_mods: malformed candidate; identity resolution is unavailable")
     return out
+
+
+def discover(name: str, count: int = 15) -> dict:
+    """Candidate discovery with version/date/status and explicit page coverage.
+
+    Preserve X4's credential/rate/error mapping; the optional shared layer owns
+    only the game-parameterized query and response contract.
+    """
+    from . import _harness
+    provider = _harness.module("discovery")
+    body = provider.request("x4foundations", name, count)
+    payload = _mapped("discover", _post_json, NEXUS_GQL, body,
+                      {"apikey": nexus_key(), **_APP})
+    return provider.parse(payload, "x4foundations", name, count)
 
 
 def steam_title(ws_number: str) -> tuple[str, str] | None:

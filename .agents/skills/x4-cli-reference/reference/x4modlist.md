@@ -4,12 +4,14 @@
 
 ```text
 usage: x4modlist [-h] [--version] [--registry REGISTRY]
-                 {ingest,refresh,dashboard,needs-review,resolve,source,verify,tracked,ignore,mark,changed,snapshot} ...
+                 {search,ingest,refresh,dashboard,needs-review,resolve,source,verify,tracked,ignore,mark,changed,snapshot} ...
 
 X4 mod-registry triage tool (API-first).
 
 positional arguments:
-  {ingest,refresh,dashboard,needs-review,resolve,source,verify,tracked,ignore,mark,changed,snapshot}
+  {search,ingest,refresh,dashboard,needs-review,resolve,source,verify,tracked,ignore,mark,changed,snapshot}
+    search              discover Nexus candidates with version/date/status; does not change the
+                        registry
     ingest              scan installed extension folders (PRIMARY) into the registry, cross-
                         checked against the profile content.xml
     refresh             refresh upstream metadata via Nexus/Steam API, and say which mods have an
@@ -32,6 +34,20 @@ options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
   --registry REGISTRY   path to modlist.yaml (default: dev\_registry\modlist.yaml)
+```
+
+## `x4modlist search`
+
+```text
+usage: x4modlist search [-h] [--limit 1..100] [--json] name
+
+positional arguments:
+  name
+
+options:
+  -h, --help      show this help message and exit
+  --limit 1..100
+  --json
 ```
 
 ## `x4modlist ingest`

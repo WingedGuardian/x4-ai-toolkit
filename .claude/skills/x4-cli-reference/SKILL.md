@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `$CLAUDE_PROJECT_DIR/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-11 CLIs, 47 subcommands.
+11 CLIs, 48 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -48,6 +48,7 @@ Run a CLI from `$CLAUDE_PROJECT_DIR/tools/x4validate` as `uv run <cli> ...`. The
 | | `groundtruth` | harvest the engine's DERIVED values live and WRITE THEM DOWN (the fixture any future traversal must reproduce) |
 | | `ramp` | MEASURE the message-size cap. An over-long message does NOT truncate -- it TEARS THE PIPE DOWN, costing the whole connection (F74, corrected 2026-08-29). Bounded below at 64,000 bytes; the ceiling above that is unmeasured |
 | **`x4modlist`** | | X4 mod-registry triage tool (API-first). |
+| | `search` | discover Nexus candidates with version/date/status; does not change the registry |
 | | `ingest` | scan installed extension folders (PRIMARY) into the registry, cross-checked against the profile content.xml |
 | | `refresh` | refresh upstream metadata via Nexus/Steam API, and say which mods have an update: upstream's newest MAIN file uploaded more than 3 days after the installed manifest's date (both dates printed); an upload within that window reads same-release?, not available |
 | | `dashboard` | regenerate WORKLIST.md from the registry |

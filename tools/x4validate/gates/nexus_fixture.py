@@ -352,9 +352,13 @@ def replay() -> int:
                [(n["modId"], n["name"])
                 for n in fx["graphql"]["example"]["data"]["mods"]["nodes"]], failures)
         _check("search_mods empty result", _nexus.search_mods("nomatch"), [], failures)
-        # the documented silent-ok: one bad node must not lose the good one
-        _check("search_mods survives a malformed node",
-               _nexus.search_mods("malformed"), [(1001, "ok")], failures)
+        # A malformed page cannot be used as a complete identity search. The
+        # richer discovery command can retain good candidates labelled partial.
+        try:
+            _nexus.search_mods("malformed")
+            failures.append("malformed search page was accepted for identity resolution")
+        except _nexus.NexusError:
+            print("    ok   malformed search page -> explicit non-answer")
 
         # classification is what refresh actually DOES with the metadata
         today = date(2026, 8, 9)
