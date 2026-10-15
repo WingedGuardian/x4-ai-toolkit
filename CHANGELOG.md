@@ -2,6 +2,8 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Neutral recovery uses one total deadline for root resolution, verification,
+  current-save preservation and publication, including new-directory restores.
 - Named file copies/moves into existing save directories preserve the actual
   destination filenames first, including PowerShell and cp target-directory
   options. Bulk scope stays together and approvals bind the command. Directory

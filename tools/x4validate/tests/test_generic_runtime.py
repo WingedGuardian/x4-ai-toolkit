@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from codex_testlib import REPO
 
 
@@ -89,6 +91,48 @@ def test_generic_upgrade_staging_preserves_install_and_fails_nonzero_if_reused(t
     assert (installed / "AGENTS.md").read_bytes() == b"private instructions"
     assert (bundle / "rollback/AGENTS.md").read_bytes() == b"private instructions"
     assert subprocess.run(args, capture_output=True, timeout=45).returncode == 2
+
+
+@pytest.mark.parametrize("in_place", [False, True])
+def test_neutral_restore_carries_one_deadline_through_every_copy(tmp_path, monkeypatch, capsys, in_place):
+    import importlib.util
+    root = tmp_path / "toolkit"
+    for rel in ("tools/x4_harness", "tools/modding_harness"):
+        shutil.copytree(REPO / rel, root / rel, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(REPO / "tools/agent-harness.py", root / "tools/agent-harness.py")
+    config = root / ".modding-agent-harness/config.json"
+    config.parent.mkdir()
+    config.write_text(json.dumps({"save_reserve_bytes": 0}))
+    saves = tmp_path / "profile/save"
+    saves.mkdir(parents=True)
+    member = saves / "A.xml"
+    member.write_bytes(b"original")
+    # Isolate the rendered CLI's imports from other fixture roots in this process.
+    monkeypatch.syspath_prepend(str(root / "tools/x4_harness"))
+    for name in ("save_policy", "x4guard"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    spec = importlib.util.spec_from_file_location("deadline_generic_cli", root / "tools/agent-harness.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    roots = {"toolkit": str(root), "profile": str(saves.parent), "saves": str(saves)}
+    monkeypatch.setattr(cli.save_policy, "read_roots", lambda deadline: roots)
+    monkeypatch.setattr(cli, "judge", lambda *args: {"decision": "allow", "inert": False, "reason": None, "context": None})
+    profile = cli.save_policy.resolve(root, roots, [])[0]
+    store = cli.save_policy.core(root, "workspace").save_store(root, profile)
+    transaction = store.backup([[member]])["id"]
+    member.write_bytes(b"current")
+    durable = cli.save_policy.core(root, "durable")
+    real, seen = durable.copy_verified, []
+    def observe(source, target, deadline=None):
+        seen.append(deadline)
+        return real(source, target, deadline)
+    monkeypatch.setattr(durable, "copy_verified", observe)
+    args = ["save-restore", transaction, *(('--in-place',) if in_place else ('--to', str(tmp_path / 'out')))]
+    assert cli.main(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["published"]
+    assert seen and all(deadline is not None for deadline in seen)
+    assert len(set(seen)) == 1, "pre-preservation and restore must share one total budget"
 
 
 def test_bulk_in_place_restore_binds_human_scope_command_count_and_host(tmp_path):

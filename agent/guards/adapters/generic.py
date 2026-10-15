@@ -98,8 +98,9 @@ def main(argv=None):
         elif args.command == "coverage":
             output = save_policy.core(ROOT, "telemetry").Telemetry(ROOT).report(args.session_id)
         elif args.command in ("save-list", "save-restore"):
-            roots = save_policy.read_roots(time.monotonic() + 20)
-            profile = save_policy.resolve(ROOT, roots, [])[0]
+            deadline = time.monotonic() + 40
+            roots = save_policy.read_roots(deadline)
+            profile = save_policy.resolve(ROOT, roots, [], deadline)[0]
             workspace = save_policy.core(ROOT, "workspace")
             store = workspace.save_store(ROOT, profile)
             if args.command == "save-list":
@@ -108,7 +109,7 @@ def main(argv=None):
                           "blob_verification": "runs for selected saves on restore", "destination": str(store.root)}
             else:
                 if not args.in_place:
-                    output = store.restore(args.transaction, args.to, args.path)
+                    output = store.restore(args.transaction, args.to, args.path, deadline=deadline)
                 else:
                     canonical = save_policy.core(ROOT, "profiles").canonical
                     selected = {canonical(path) for path in args.path}
@@ -123,9 +124,8 @@ def main(argv=None):
                             or not any(member["path"].lower().endswith(ext) for ext in profile.extensions)
                             for member in members):
                         raise ValueError("in-place recovery is limited to this profile's configured save files")
-                    store.verify(groups)
+                    store.verify(groups, deadline)
                     calls = [("write", None, None, member["path"], member["path"]) for member in members]
-                    deadline = time.monotonic() + 40
                     payload = {"tool_name": "save-restore", "session_id": args.session_id,
                                "transcript_path": args.transcript,
                                "tool_input": {"command": json.dumps(sys.argv[1:] if argv is None else argv)}}
@@ -134,7 +134,7 @@ def main(argv=None):
                     if checked["decision"] in ("deny", "ask"):
                         output = checked
                     else:
-                        output = store.restore(args.transaction, selected=args.path, in_place=True)
+                        output = store.restore(args.transaction, selected=args.path, in_place=True, deadline=deadline)
                         output["pre_restore_transactions"] = checked["transactions"]
         else:
             action = save_policy.core(ROOT, "generic").parse(sys.stdin.buffer.read(1024 * 1024 + 1))
