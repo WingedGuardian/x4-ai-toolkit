@@ -2,6 +2,9 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Release verification compares every archive member with its committed Git
+  object and refuses duplicate members. Only text conversion declared by the
+  committed attributes is accepted; machine-local attributes cannot certify it.
 - Both installers preflight destination links along the exact copy set, refusing
   junctions or symbolic links that redirect writes before changing instructions
   or copying files. Unrelated local links remain usable.

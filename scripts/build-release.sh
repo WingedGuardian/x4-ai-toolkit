@@ -29,6 +29,8 @@
 # Exit: 0 built and verified · 1 the archive does not match the ref · 2 cannot build
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
+export GIT_ATTR_NOSYSTEM=1
+git() { command git -c core.attributesFile=/dev/null -c core.autocrlf=false -c core.eol=lf "$@"; }
 
 NAME_PREFIX="X4.Foundations.AI.Assistant.Toolkit"
 V300_SHA="273d242c168b4cff5d0679a9251c9e230506c540fd22ff5c39f66edd03fd4de6"
@@ -62,16 +64,29 @@ verify() {
   local zip="$1" ref="$2"
   "$PY" - "$zip" "$ref" <<'PY'
 import subprocess, sys, zipfile
+import hashlib, os
+os.environ["GIT_ATTR_NOSYSTEM"] = "1"
+GIT = ["git", "-c", "core.attributesFile=" + os.devnull, "-c", "core.autocrlf=false", "-c", "core.eol=lf"]
 zip_path, ref = sys.argv[1], sys.argv[2]
 z = zipfile.ZipFile(zip_path)
-members = {i.filename for i in z.infolist() if not i.is_dir()}
+entries = [i for i in z.infolist() if not i.is_dir()]
+members = set()
+for entry in entries:
+    if entry.filename in members:
+        print("  DUPLICATE MEMBER: " + entry.filename, file=sys.stderr)
+        sys.exit(1)
+    members.add(entry.filename)
+info = subprocess.check_output([*GIT, "rev-parse", "--git-path", "info/attributes"]).decode().strip()
+if os.path.isfile(info) and os.path.getsize(info):
+    print("  REFUSING: machine-local info/attributes can alter the archive", file=sys.stderr)
+    sys.exit(1)
 # -z: NUL-separated. `.split()` splits on WHITESPACE, so `docs/my notes.md`
 # became two "missing" entries and the real path became an "extra" one -- a
 # FALSE REFUSAL on a correct bundle. Fails safe (refuses rather than ships) and
 # measured 0 of 270 paths affected today, so it is latent: one file with a space
 # in its name makes a correct release unshippable. `-z` also stops git C-quoting
 # non-ASCII, which `--name-only` alone does.
-out = subprocess.run(["git", "ls-tree", "-r", "-z", "--name-only", ref],
+out = subprocess.run([*GIT, "ls-tree", "-r", "-z", "--name-only", ref],
                      capture_output=True, check=True).stdout
 tracked = {p.decode("utf-8", "surrogateescape") for p in out.split(b"\x00") if p}
 
@@ -95,7 +110,7 @@ tracked = {p.decode("utf-8", "surrogateescape") for p in out.split(b"\x00") if p
 # tag is verified (v3.0.0 predates this very rule). If git is too old for --source,
 # REFUSE: guessing with the wrong attributes gives a false verdict in either
 # direction, and an unverified bundle is not shippable.
-probe = subprocess.run(["git", "check-attr", "--source", ref, "export-ignore", "--",
+probe = subprocess.run([*GIT, "check-attr", "--source", ref, "export-ignore", "--",
                         ".gitattributes"], capture_output=True)
 if probe.returncode != 0:
     print("  REFUSING: this git cannot do `check-attr --source`, so which paths "
@@ -114,7 +129,7 @@ ignored = set()
 queries = sorted({q for t in tracked for q in _ancestors(t)})
 if queries:
     payload = b"\x00".join(q.encode("utf-8", "surrogateescape") for q in queries)
-    ca = subprocess.run(["git", "check-attr", "--source", ref, "-z", "--stdin",
+    ca = subprocess.run([*GIT, "check-attr", "--source", ref, "-z", "--stdin",
                          "export-ignore"], input=payload,
                         capture_output=True, check=True).stdout
     f = ca.split(b"\x00")
@@ -138,6 +153,37 @@ if not members:
     print("  REFUSING: the bundle is empty", file=sys.stderr)
     sys.exit(1)
 print("  member set matches the ref exactly")
+# Compare against committed Git objects, independently of git archive. Text
+# conversion is accepted only for paths declared text by the ref's attributes.
+objects = {}
+tree = subprocess.check_output([*GIT, "ls-tree", "-r", "-z", ref])
+for row in tree.split(b"\0"):
+    if row:
+        metadata, name = row.split(b"\t", 1)
+        objects[name.decode("utf-8", "surrogateescape")] = metadata.split()[2].decode("ascii")
+raw = subprocess.run([*GIT, "check-attr", "--source", ref, "-z", "--stdin", "text", "eol"],
+                     input=b"\0".join(p.encode("utf-8", "surrogateescape") for p in sorted(members)),
+                     capture_output=True, check=True).stdout.split(b"\0")
+attributes = {}
+for index in range(0, len(raw) - 2, 3):
+    attributes.setdefault(raw[index].decode("utf-8", "surrogateescape"), {})[raw[index + 1]] = raw[index + 2]
+for entry in entries:
+    data = z.read(entry)
+    oid = objects[entry.filename]
+    algorithm = hashlib.sha1 if len(oid) == 40 else hashlib.sha256
+    actual = algorithm(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+    if actual == oid:
+        continue
+    attrs = attributes.get(entry.filename, {})
+    text = (attrs.get(b"text") != b"unset" and
+            (attrs.get(b"text") in (b"set", b"auto") or attrs.get(b"eol") in (b"lf", b"crlf")))
+    original = subprocess.check_output([*GIT, "cat-file", "blob", oid]) if text else None
+    if (original is not None and b"\0" not in data and b"\0" not in original and
+            data.replace(b"\r\n", b"\n") == original.replace(b"\r\n", b"\n")):
+        continue
+    print("  CONTENT DIFFERS FROM THE REF: " + entry.filename, file=sys.stderr)
+    sys.exit(1)
+print("  member bytes match committed objects (declared text line endings normalized)")
 PY
 }
 
@@ -154,8 +200,9 @@ if [ "${1:-}" = "--selftest" ]; then
   # a zip member's DOS timestamp is LOCAL time (built in US Eastern; TZ=UTC gives other
   # bytes at the same size), and `* text=auto` writes the NATIVE line ending (built on
   # Windows: CRLF in 37 members; an LF build is 1,887 B smaller). EST5EDT is a POSIX TZ
-  # string both glibc and the Windows CRT read. Only the control is pinned: a real build
-  # below still inherits both, which is why a rebuild elsewhere can differ.
+  # string both glibc and the Windows CRT read. The control overrides the normal LF
+  # default to preserve that historical asset. Real builds honor committed eol rules,
+  # default to LF, and still inherit TZ for the ZIP timestamps.
   TZ=EST5EDT git -c core.eol=crlf -c core.autocrlf=false archive --format=zip v3.0.0 -o "$tmp/x.zip" \
     || die "git archive failed"
   got_sha="$(sha_of "$tmp/x.zip")"; got_size="$(wc -c < "$tmp/x.zip" | tr -d ' ')"

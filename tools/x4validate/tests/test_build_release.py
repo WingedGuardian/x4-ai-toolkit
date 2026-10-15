@@ -163,6 +163,59 @@ def test_an_EXTRA_file_in_the_bundle_is_REFUSED_too(planted_verifier):
     assert "IN THE BUNDLE, NOT IN THE REF" in r.stderr, r.stderr
 
 
+@pytest.mark.parametrize("defect", ["content", "duplicate"])
+def test_same_member_names_do_not_certify_changed_or_duplicate_content(planted_verifier, defect):
+    verify, repo, ref = planted_verifier
+    archive = Path(repo) / "candidate.zip"
+    subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C", repo,
+                    "archive", "--format=zip", ref, "-o", str(archive)], check=True)
+    with zipfile.ZipFile(archive) as bundle:
+        records = [(entry, bundle.read(entry)) for entry in bundle.infolist()]
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for entry, data in records:
+            bundle.writestr(entry, b"changed unreviewed implementation\n" if defect == "content" and entry.filename == "a.txt" else data)
+        if defect == "duplicate":
+            with pytest.warns(UserWarning, match="Duplicate name"):
+                bundle.writestr("a.txt", b"x\n")
+    result = subprocess.run([sys.executable, str(verify), str(archive), ref], cwd=repo,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert ("CONTENT DIFFERS" if defect == "content" else "DUPLICATE MEMBER") in result.stderr
+
+
+@pytest.mark.parametrize("case", ["declared_text", "binary", "undeclared_text", "global_text", "local_info"])
+def test_only_committed_text_attributes_can_allow_line_ending_conversion(planted_verifier, case):
+    import os
+    verify, repo, ref = planted_verifier
+    root = Path(repo)
+    if case in ("declared_text", "binary"):
+        (root / ".gitattributes").write_text("a.txt " + ("text eol=crlf" if case == "declared_text" else "binary") + "\n")
+        subprocess.run(["git", "-C", repo, "add", "--", ".gitattributes"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", repo, "commit", "-qm", "attributes"], check=True, capture_output=True)
+    archive = root / "candidate.zip"
+    subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C", repo,
+                    "archive", "--format=zip", ref, "-o", str(archive)], check=True)
+    with zipfile.ZipFile(archive) as bundle:
+        records = [(entry, bundle.read(entry)) for entry in bundle.infolist()]
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for entry, data in records:
+            bundle.writestr(entry, b"x\r\n" if entry.filename == "a.txt" else data)
+    environment = dict(os.environ)
+    if case == "global_text":
+        attrs = root.parent / "global-attributes"
+        attrs.write_text("* text\n")
+        config = root.parent / "global-config"
+        config.write_text('[core]\nattributesFile = "' + attrs.as_posix() + '"\n')
+        environment["GIT_CONFIG_GLOBAL"] = str(config)
+    elif case == "local_info":
+        (root / ".git/info/attributes").write_text("* text\n")
+    result = subprocess.run([sys.executable, str(verify), str(archive), ref], cwd=repo, env=environment,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == (0 if case == "declared_text" else 1), result.stdout + result.stderr
+    if case != "declared_text":
+        assert ("info/attributes" if case == "local_info" else "CONTENT DIFFERS") in result.stderr
+
+
 def test_the_bundle_is_named_for_the_v4_product(tmp_path):
     """v4.0 renamed the product (Plan 3 DECISIONS, Wave 2): the asset is
     `X4.Foundations.AI.Assistant.Toolkit-<tag>.zip`. Run the REAL script on a tiny tagged repo
