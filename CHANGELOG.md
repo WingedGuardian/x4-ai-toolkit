@@ -2,6 +2,10 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Both installers refuse customized project settings before copying or moving
+  user instructions. `--over-existing` no longer discards permissions or custom
+  hooks. Exact released defaults remain recognized through the shared history
+  manifest; customized settings use the reviewed upgrade workflow.
 - Neutral recovery uses one total deadline for root resolution, verification,
   current-save preservation and publication, including new-directory restores.
 - Named file copies/moves into existing save directories preserve the actual

@@ -388,6 +388,7 @@ copy_item() {   # copy_item REL DEST
 
 copy_toolkit() {
   refuse_if_dry_run "copying the toolkit into" "$1"  # copy_toolkit DEST  — copy tracked toolkit files (never game data / local config)
+  precheck_project_settings "$1"
   local dest="$1"; mkdir -p "$dest/.claude"
   if [ -f "$dest/KNOWLEDGEBASE.md" ] && ! cmp -s "$dest/KNOWLEDGEBASE.md" "$SRC/KNOWLEDGEBASE.md"; then
     if ! _oc_python; then
@@ -835,6 +836,23 @@ _h_is_shipped() {   # DEST NAME
   h="$(_h_canonical_sha256 "$1/$2")" || return 1
   if s="$(_h_canonical_sha256 "$SRC/$2")" && [ "$h" = "$s" ]; then return 0; fi
   _h_known_hash "$h" "$2"
+}
+
+# A blanket --over-existing does not establish ownership of personal policies,
+# permissions or post hooks. Refuse before moving instructions or copying bytes.
+precheck_project_settings() {   # DEST (copy branch only)
+  _item_selected .claude || return 0
+  local dest="$1" file="$1/.claude/settings.json"
+  if [ -L "$dest/.claude" ] || [ -L "$file" ]; then
+    echo "REFUSING: project settings traverse a link; review this destination separately. Nothing has been changed." >&2
+    return 1
+  fi
+  [ -e "$file" ] || return 0
+  if [ -f "$file" ] && _h_is_shipped "$dest" .claude/settings.json; then return 0; fi
+  echo "REFUSING: custom project settings need a reviewed upgrade; --over-existing cannot replace them." >&2
+  echo "  Use tools/agent-harness.py upgrade-stage to retain and review your settings, handlers and permissions." >&2
+  echo "  Nothing has been changed." >&2
+  return 1
 }
 
 #: The first free name BASE.md / BASE.<stamp>.md / BASE.<stamp>-N.md in DEST.
@@ -2327,6 +2345,7 @@ case "$METHOD" in
     precheck_opencode_config "$TOOLKIT"    # likewise
     precheck_codex_doc_max_bytes "$TOOLKIT"
     if ! same_dir "$SRC" "$TOOLKIT"; then
+      precheck_project_settings "$TOOLKIT"
       precheck_locked_targets "$TOOLKIT"
       announce_copy_plan "$TOOLKIT"
       preserve_user_agents_md "$TOOLKIT"   # after every precheck, before the copy
@@ -2371,6 +2390,7 @@ case "$METHOD" in
     precheck_opencode_config "$TOOLKIT"    # likewise
     precheck_codex_doc_max_bytes "$TOOLKIT"
     if ! same_dir "$SRC" "$TOOLKIT"; then
+      precheck_project_settings "$TOOLKIT"
       precheck_locked_targets "$TOOLKIT"
       announce_copy_plan "$TOOLKIT"
       preserve_user_agents_md "$TOOLKIT"   # after every precheck, before the copy

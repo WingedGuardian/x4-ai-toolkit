@@ -721,6 +721,24 @@ function Test-HIsShipped($dest, $name) {
   return ((Test-HKnownHash $h $name) -eq 'yes')
 }
 
+# -OverExisting does not confer ownership of personal hooks or permissions.
+function Test-ProjectSettingsPrecheck($dest) {
+  if (-not (Test-ItemSelected '.claude')) { return }
+  $dir = Join-Path $dest '.claude'
+  $file = Join-Path $dir 'settings.json'
+  foreach ($path in @($dir, $file)) {
+    $entry = Get-Item -Force -LiteralPath $path -ErrorAction SilentlyContinue
+    if ($entry -and ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw 'Project settings traverse a link; review this destination separately. Nothing has been changed.'
+    }
+  }
+  if (-not (Test-Path -LiteralPath $file)) { return }
+  if ((Test-Path -LiteralPath $file -PathType Leaf) -and (Test-HIsShipped $dest '.claude/settings.json')) { return }
+  Write-Host 'REFUSING: custom project settings need a reviewed upgrade; -OverExisting cannot replace them.' -ForegroundColor Red
+  Write-Host '  Use tools/agent-harness.py upgrade-stage to retain and review your settings, handlers and permissions.'
+  throw 'Custom project settings were retained. Nothing has been changed.'
+}
+
 #: The first free name $base.md / $base.<stamp>.md / $base.<stamp>-N.md in $dest.
 function Get-HAsideName($dest, $base) {
   $n = "$base.md"
@@ -1367,6 +1385,7 @@ function Get-X4RawSha256($path) {
 
 function Copy-Toolkit($dest) {
   Refuse-IfDryRun 'copying the toolkit into' $dest
+  Test-ProjectSettingsPrecheck $dest
   New-Item -ItemType Directory -Force -Path (Join-Path $dest '.claude') | Out-Null
   $notes = Join-Path $dest 'KNOWLEDGEBASE.md'
   $reference = Join-Path $SRC 'KNOWLEDGEBASE.md'
@@ -2395,6 +2414,7 @@ switch ($Method) {
     Test-OpenCodeConfigPrecheck $Toolkit   # likewise
     Test-HCodexDocCapPrecheck $Toolkit
     if (-not (Test-SameDir $SRC $Toolkit)) {
+      Test-ProjectSettingsPrecheck $Toolkit
       Test-LockedTargetsPrecheck $Toolkit
       Show-CopyPlan $Toolkit
       Save-UserAgentsMd $Toolkit        # after every precheck, before the copy
@@ -2430,6 +2450,7 @@ switch ($Method) {
     Test-OpenCodeConfigPrecheck $Toolkit   # likewise
     Test-HCodexDocCapPrecheck $Toolkit
     if (-not (Test-SameDir $SRC $Toolkit)) {
+      Test-ProjectSettingsPrecheck $Toolkit
       Test-LockedTargetsPrecheck $Toolkit
       Show-CopyPlan $Toolkit
       Save-UserAgentsMd $Toolkit        # after every precheck, before the copy

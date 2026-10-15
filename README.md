@@ -579,9 +579,9 @@ possible and overridable (`--game`, `--profile`, `--toolkit`, `--mods`, `--refer
 
 > **Upgrading an existing install needs `--over-existing`** (`-OverExisting` on PowerShell).
 > Without it the installer refuses, names what it found, and tells you what to type. Installing
-> over a toolkit REPLACES `KNOWLEDGEBASE.md`, the skills and the agents — so if you have edited
-> any of those, they are what you would lose. `x4-paths.env` and
-> `.claude/settings.local.json` are preserved (backed up, and kept in place).
+> over a toolkit replaces shipped reference files, skills and agents. A changed
+> `KNOWLEDGEBASE.md` is independently retained before replacement; local notes,
+> `x4-paths.env` and `.claude/settings.local.json` stay in place.
 >
 > **Upgrading from 3.x: an edited `CLAUDE.md` is kept on disk, but no longer loaded.** If your
 > `CLAUDE.md` is not one the toolkit ever shipped (it is compared, by hash, with the `CLAUDE.md`
@@ -594,6 +594,16 @@ possible and overridable (`--game`, `--profile`, `--toolkit`, `--mods`, `--refer
 >
 > `--yes` will also refuse an **auto-detected** destination: nothing named it and nobody is
 > watching, so name it with `--game` or `--toolkit`.
+
+Personal `.claude/settings.json` edits need a reviewed upgrade. Both installers
+refuse before copying or moving instructions if that file differs from the
+current source and every verified shipped version. This protects permissions,
+custom hooks and changed matcher/timeout settings. Use the private
+`upgrade-stage` / `upgrade-apply` workflow in [ADAPTING.md](ADAPTING.md), which
+prepares merged settings and independent rollback bytes. Unresolved custom
+pre-tool policies still require ordered integration. Generic-only installs
+leave Claude settings alone.
+
 The chosen paths are written to `<toolkit>/x4-paths.env`.
 
 | Method | What it does | When to use |
