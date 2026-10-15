@@ -2530,15 +2530,59 @@ def copy_dests(seg: str) -> list[str]:
         return []
     toks = tokens(seg)
     for i, (t, quoted) in enumerate(toks):
-        if not quoted and t in ("-t", "--target-directory"):
+        if t == "--":
+            break
+        if t in ("-t", "--target-directory"):
             if i + 1 < len(toks):
                 return [toks[i + 1][0]]
-        if not quoted and t.startswith("--target-directory="):
+        if t.startswith("--target-directory="):
             return [t.split("=", 1)[1]]
     ops = _operands(seg)
     if not ops:
         return []
     return ops if v == "tee" else [ops[-1]]
+
+
+def exact_copy_sources(seg: str) -> list[str] | None:
+    """Literal cp/mv source operands for directory destination expansion only.
+
+    Sources must later qualify as individual regular files; directory trees,
+    aliasing, backup-suffix and unfamiliar options remain unqualified.
+    This does not change the Bash rule facts or execute the requested copy.
+    """
+    if verb(seg) not in ("cp", "mv"):
+        return None
+    toks = tokens(seg)
+    operands, directory = [], None
+    after_verb, options, skip = False, True, False
+    for token, quoted in toks:
+        if not after_verb:
+            if token == _verb_token(seg):
+                after_verb = True
+            continue
+        if skip:
+            directory, skip = token, False
+            continue
+        if options and token == "--":
+            options = False
+            continue
+        if options and token in ("-t", "--target-directory"):
+            skip = True
+            continue
+        if options and token.startswith("--target-directory="):
+            directory = token.split("=", 1)[1]
+            continue
+        if options and token.startswith("-"):
+            if token not in ("-f", "--force", "-i", "--interactive", "-n", "--no-clobber", "-v", "--verbose",
+                              "-r", "-R", "--recursive"):
+                return None
+            continue
+        if not quoted and (token.startswith(("<", ">")) or token in ("|", "&")):
+            return None
+        operands.append(token)
+    if skip or not operands:
+        return None
+    return operands if directory is not None else operands[:-1] if len(operands) >= 2 else None
 
 
 DELETE_VERBS = {"rm", "rmdir", "unlink", "shred"}
@@ -4965,7 +5009,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None) -> dict:
     segs = [s for s, _ in seg_cwd]
     cwd = seg_cwd[-1][1] if seg_cwd else ""
 
-    def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file"):
+    def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file", copy_sources=None):
         """(path resolved where it runs, unresolvable?, the token as written). A whole
         array reference -- a for-loop variable, `"${A[@]}"` -- yields one entry PER
         element (resolve_all).
@@ -5007,10 +5051,20 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None) -> dict:
                 out.append((r if unres else long_name(join_cwd(d, r)), unres, r))
                 if evidence is not None and operation:
                     physical = physical_join(physical_cwd, r)
-                    evidence.append({"operation": operation, "path": physical,
+                    row = {"operation": operation, "path": physical,
                                      "raw": r, "unresolved": unres or not physical or has_unresolved(physical)
                                      or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical)),
-                                     "scope": scope})
+                                     "scope": scope}
+                    if copy_sources is not None:
+                        sources = []
+                        for source in copy_sources:
+                            for resolved in resolve_all(source, assigns):
+                                resolved = subst_root_var(resolved, roots)
+                                placed = physical_join(physical_cwd, resolved)
+                                sources.append({"path": placed, "unresolved": not placed or has_unresolved(resolved)
+                                                or has_unresolved(placed) or bool(_DEBRIS.search(resolved))})
+                        row["copy_sources"] = sources
+                    evidence.append(row)
         return out
 
     rm_t, copy_t, redir_t, mv_src = [], [], [], []
@@ -5042,7 +5096,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None) -> dict:
         # truncate / dd of=are truncating writes, judged as `>` is (see clobber_targets).
         redir_t += [("truncate",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False, operation="write")]
         mv_src += prep(move_sources(s), c_cwd, c_old, operation="move")
-        copy_t += prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination")
+        copy_t += prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination",
+                       copy_sources=exact_copy_sources(s))
         sed_t += prep(sed_in_place_targets(s), c_cwd, c_old, operation="write")
         out_t += prep(output_targets(s), c_cwd, c_old, False, operation="write")
         search_files += prep(search_paths(s, require_recursive=False), c_cwd, c_old)

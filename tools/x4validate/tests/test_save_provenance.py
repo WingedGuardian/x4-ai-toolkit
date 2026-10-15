@@ -46,3 +46,11 @@ def test_unknown_directory_and_filtered_tree_are_not_exact_file_evidence():
     assert all(r["unresolved"] for r in records if r["operation"] == "delete")
     records = evidence('find "/Fixture/Saves" -name "*.xml.gz" -delete')
     assert any(r["scope"] == "filtered-tree" for r in records)
+
+
+def test_directory_copy_source_spellings_follow_the_same_cwd_and_assignment_lane():
+    records = evidence('SRC="Input/Case.xml.gz"; cd "Work"; cp -- "$SRC" "$X4_SAVES/"',
+                       roots={"saves": "/Fixture/Saves"})
+    row = next(r for r in records if r["scope"] == "copy-destination")
+    assert row["copy_sources"] == [{"path": "/Fixture/Workspace/Work/Input/Case.xml.gz", "unresolved": False}]
+    assert row["path"] == "/Fixture/Saves/"

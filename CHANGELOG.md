@@ -2,6 +2,11 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Named file copies/moves into existing save directories preserve the actual
+  destination filenames first, including PowerShell and cp target-directory
+  options. Bulk scope stays together and approvals bind the command. Directory
+  trees, unresolved/glob sources and aliasing options remain refused.
+
 - Local knowledge and preferences survive upgrades. Both installers retain a
   verified independent legacy knowledgebase before replacement, preserve existing
   local notes, and refuse if preservation fails. Claude, Codex and OpenCode use

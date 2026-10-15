@@ -60,6 +60,87 @@ def test_bulk_is_not_split_into_individual_allow_calls(install):
     assert not outcome.transactions
 
 
+def test_copy_to_existing_save_directory_preserves_resulting_filename(install, tmp_path):
+    root, roots, files = install
+    source = tmp_path / files[0].name
+    source.write_bytes(b"incoming replacement")
+    result = invoke_hook(install, "Bash", {"command": 'cp -- "' + str(source) + '" "' + roots["saves"] + '/"'})
+    assert result["hookSpecificOutput"].get("permissionDecision") is None, result
+    assert "backup verified" in result["hookSpecificOutput"]["additionalContext"]
+    records = list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+    assert len(records) == 1
+    manifest = json.loads(records[0].read_text())
+    assert [Path(m["path"]).name for g in manifest["groups"] for m in g["members"]] == [files[0].name]
+    assert files[0].read_bytes() == files[0].name.encode()
+
+
+@pytest.mark.parametrize("syntax", ["plain", "target-option", "long-target", "move"])
+def test_directory_copy_batches_two_and_bulk_needs_one_command_bound_grant(install, tmp_path, syntax):
+    root, roots, files = install
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    for file in files:
+        (incoming / file.name).write_bytes(b"replacement")
+    sources = ['"' + str(incoming / file.name) + '"' for file in files]
+    dest = '"' + roots["saves"] + '"'
+    def command(count):
+        args = ' '.join(sources[:count])
+        if syntax == "target-option":
+            return 'cp -t ' + dest + ' -- ' + args
+        if syntax == "long-target":
+            return 'cp --target-directory=' + dest + ' -- ' + args
+        return ('mv' if syntax == "move" else 'cp') + ' -- ' + args + ' ' + dest
+    first = invoke_hook(install, "Bash", {"command": command(2)})
+    assert first["hookSpecificOutput"].get("permissionDecision") is None, first
+    records = list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+    assert len(records) == 1 and len(json.loads(records[0].read_text())["groups"]) == 2
+    bulk = invoke_hook(install, "Bash", {"command": command(3)})
+    assert bulk["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = bulk["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "SAVE_ACCESS_APPROVAL" in reason and "command_sha256" in reason
+    assert len(list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))) == 1
+
+
+@pytest.mark.parametrize("shape", ["recursive", "symlink", "backup-suffix", "glob", "unknown", "directory"])
+def test_unqualified_directory_copy_never_authorizes_a_save_mutation(install, tmp_path, shape):
+    root, roots, files = install
+    source = tmp_path / files[0].name
+    source.write_bytes(b"replacement")
+    operand, option = '"' + str(source) + '"', ''
+    if shape == "recursive":
+        option = '-r '
+        source.unlink()
+        source.mkdir()
+    elif shape == "symlink":
+        option = '-s '
+    elif shape == "backup-suffix":
+        option = '--backup '
+    elif shape == "glob":
+        operand = '"' + str(tmp_path) + '/"*.xml.gz'
+    elif shape == "unknown":
+        operand = '"$UNKNOWN_SOURCE"'
+    else:
+        source.unlink()
+        source.mkdir()
+    command = 'cp ' + option + operand + ' "' + roots["saves"] + '"'
+    result = invoke_hook(install, "Bash", {"command": command})
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny", result
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+def test_directory_resolution_recheck_detects_a_source_changed_to_a_directory(install, tmp_path):
+    root, roots, files = install
+    source = tmp_path / files[0].name
+    source.write_bytes(b"replacement")
+    evidence = [{"path": roots["saves"], "operation": "write", "scope": "copy-destination",
+                 "copy_sources": [{"path": str(source), "unresolved": False}]}]
+    _profile, plan, _affected, save_only = policy.resolve(root, roots, evidence)
+    assert save_only and plan.helper and plan.recheck() == plan.mutations
+    source.unlink()
+    source.mkdir()
+    assert plan.recheck() != plan.mutations
+
+
 def test_other_profile_file_retains_backend_confirmation_and_preview_has_no_backup(install):
     root, roots, saves = install
     config = Path(roots["profile"]) / "config.xml"
@@ -122,10 +203,22 @@ def invoke_hook(install, tool, ti, preview=False):
     if preview:
         env["X4_GUARD_CHECK"] = "1"
     payload = {"tool_name": tool, "tool_input": ti, "cwd": str(root), "session_id": "s"}
-    result = subprocess.run([bash, str(hooks / ("protect-bash.sh" if tool == "Bash" else "protect-files.sh"))],
+    result = subprocess.run([bash, str(hooks / ("protect-bash.sh" if tool in ("Bash", "PowerShell") else "protect-files.sh"))],
                             input=json.dumps(payload).encode(), capture_output=True, env=env, timeout=40)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout) if result.stdout.strip() else {}
+
+
+@pytest.mark.parametrize("verb", ["Copy-Item", "Move-Item"])
+def test_powershell_file_to_save_directory_preserves_destination_first(install, tmp_path, verb):
+    root, roots, files = install
+    source = tmp_path / files[0].name
+    source.write_bytes(b"incoming")
+    command = verb + " -LiteralPath '" + str(source) + "' -Destination '" + roots["saves"] + "'"
+    result = invoke_hook(install, "PowerShell", {"command": command})
+    assert result["hookSpecificOutput"].get("permissionDecision") is None, result
+    assert "backup verified" in result["hookSpecificOutput"]["additionalContext"]
+    assert len(list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))) == 1
 
 
 def test_real_file_hook_preserves_before_permission_and_preview_is_readonly(install):

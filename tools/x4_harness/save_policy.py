@@ -87,7 +87,26 @@ def resolve(root, roots, evidence, deadline=None):
     mutations, affected, problems = [], [], []
     wildcard = False
     profile_targets, save_targets = 0, 0
+    expanded = []
+    directory_copy = False
     for row in evidence:
+        raw = row.get("path", "")
+        if (raw and not row.get("unresolved") and row.get("scope") == "copy-destination"
+                and native(raw).is_dir() and any(preservation.contains(folder, native(raw)) for folder in save_roots)):
+            directory_copy = True
+            sources = row.get("copy_sources")
+            if not isinstance(sources, list) or not sources:
+                problems.append("copy into a save folder must identify its resulting filenames")
+                continue
+            for source in sources:
+                if (source.get("unresolved") or not source.get("path") or glob.has_magic(source["path"])
+                        or not native(source["path"]).is_file() or native(source["path"]).is_symlink()):
+                    problems.append("copy source filename or file kind is not qualified")
+                    continue
+                expanded.append({**row, "path": str(native(raw) / native(source["path"]).name), "scope": "file"})
+        else:
+            expanded.append(row)
+    for row in expanded:
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError("save scope resolution deadline expired")
         raw = row.get("path", "") or row.get("raw", "")
@@ -144,8 +163,9 @@ def resolve(root, roots, evidence, deadline=None):
             wildcard = True
     mutations = tuple(sorted(set(mutations), key=lambda row: (row.path, row.operation)))
     # Resolve again after preservation; any changed wildcard set invalidates authority.
-    recheck = (lambda: resolve(root, roots, evidence, deadline)[1].mutations) if wildcard else None
-    plan = dispatch.SavePlan(mutations, wildcard, unresolved="; ".join(dict.fromkeys(problems)), recheck=recheck)
+    recheck = (lambda: resolve(root, roots, evidence, deadline)[1].mutations) if wildcard or directory_copy else None
+    plan = dispatch.SavePlan(mutations, wildcard, helper=directory_copy,
+                             unresolved="; ".join(dict.fromkeys(problems)), recheck=recheck)
     return profile, plan, tuple(dict.fromkeys(affected)), profile_targets > 0 and profile_targets == save_targets
 
 
