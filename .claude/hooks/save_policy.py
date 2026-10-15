@@ -312,6 +312,7 @@ def _hook_json(result):
 def main(argv=None):
     import x4guard
     args = list(sys.argv[1:] if argv is None else argv)
+    failed = False
     try:
         kind, script = args
         roots, payload = packet(sys.stdin.buffer.read().decode("utf-8"))
@@ -353,14 +354,18 @@ def main(argv=None):
         outcome = enforce(root, roots, evidence, action, backend,
                           transcript=str(payload.get("transcript_path", "")),
                           preview=os.environ.get("X4_GUARD_CHECK") == "1", deadline=deadline)
+        failed = outcome.result.evaluation == "failed"
         text = _hook_json(outcome.result)
     except BaseException as exc:
+        failed = True
         # No raw shell/payload/exception text (which may include private data).
         text = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                           "permissionDecisionReason": "X4 save dispatcher failed: " + type(exc).__name__ +
                           "; this call was not allowed."}})
     sys.stdout.buffer.write(("X4SAVE " + text + "\n").encode("ascii"))
-    return 0
+    # Native hooks still return an explicit refusal with exit zero. The private
+    # read-only check protocol must retain its separate "checked nothing" code.
+    return 2 if failed and os.environ.get("X4_GUARD_CHECK") == "1" else 0
 
 
 if __name__ == "__main__":

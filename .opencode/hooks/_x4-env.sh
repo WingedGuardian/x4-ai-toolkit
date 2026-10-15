@@ -940,6 +940,8 @@ x4_save_dispatch() {
   rc=$?
   case "$rc:$answer" in
     '0:X4SAVE '*) printf '%s' "${answer#X4SAVE }" ;;
-    *) printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"X4 save dispatcher did not return a complete decision; this call was not allowed."}}' ;;
+    *) printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"X4 save dispatcher did not return a complete decision; this call was not allowed."}}'
+       x4_guard_check_inert
+       return 0 ;;
   esac
 }

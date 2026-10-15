@@ -2,12 +2,96 @@
 import importlib.util
 import json
 import sys
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from codex_testlib import REPO, make_sandbox, native, run_adapter
 from test_opencode_adapter import call as open_call, run as open_run
+
+
+@pytest.mark.parametrize('shape', ['bash-syntax', 'guards-off-syntax', 'powershell-syntax'])
+def test_claude_check_protocol_distinguishes_failed_evaluation_from_a_policy_verdict(tmp_path, shape):
+    tmp, root, env = make_sandbox(tmp_path)
+    if shape == 'powershell-syntax' and not (shutil.which('pwsh') or shutil.which('powershell')):
+        pytest.skip('PowerShell unavailable; native malformed-command check not qualified')
+    command = "Write-Output 'unterminated" if shape == 'powershell-syntax' else "echo 'unterminated"
+    payload = {'tool_name': 'PowerShell' if shape == 'powershell-syntax' else 'Bash',
+               'tool_input': {'command': command}, 'cwd': str(root)}
+    env.pop('X4_GUARD_CHECK', None)
+    if shape == 'guards-off-syntax':
+        env['X4_GUARD'] = 'off'
+    else:
+        env.pop('X4_GUARD', None)
+    def run(values):
+        return subprocess.run([shutil.which('bash'), str(REPO / '.claude/hooks/protect-bash.sh')],
+                  input=json.dumps(payload).encode(), capture_output=True, env=values, timeout=35)
+    native_result = run(env)
+    assert native_result.returncode == 0
+    assert json.loads(native_result.stdout)['hookSpecificOutput']['permissionDecision'] in ('deny', 'ask')
+    checked = run(dict(env, X4_GUARD_CHECK='1'))
+    assert checked.returncode == 2, checked.stdout
+    assert not list((root / '.modding-agent-harness/backups/saves/transactions').glob('*.json'))
+
+
+def test_claude_check_protocol_keeps_an_evaluated_protection_denial_as_a_verdict(tmp_path):
+    _tmp, root, env = make_sandbox(tmp_path)
+    env.update(X4_GUARD_CHECK='1')
+    env.pop('X4_GUARD', None)
+    payload = {'tool_name': 'Bash', 'tool_input': {'command': 'rm -rf "' + (root / 'reference').as_posix() + '"'}, 'cwd': str(root)}
+    result = subprocess.run([shutil.which('bash'), str(REPO / '.claude/hooks/protect-bash.sh')],
+              input=json.dumps(payload).encode(), capture_output=True, env=env, timeout=35)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'] == 'deny'
+
+
+@pytest.mark.parametrize('checking', [False, True])
+def test_nonzero_worker_output_never_becomes_an_allow_and_preserves_check_failure(tmp_path, checking):
+    _tmp, root, env = make_sandbox(tmp_path)
+    worker = tmp_path / 'worker'
+    worker.mkdir()
+    (worker / 'save_policy.py').write_text("print('X4SAVE {}')\nraise SystemExit(3)\n")
+    if checking:
+        env['X4_GUARD_CHECK'] = '1'
+    else:
+        env.pop('X4_GUARD_CHECK', None)
+    result = subprocess.run([shutil.which('bash'), '-c',
+        '. "$3"; PY="$1"; HOOK_DIR="$2"; INPUT="{}"; x4_save_dispatch shell', '--',
+        sys.executable, str(worker), str(REPO / '.claude/hooks/_x4-env.sh')],
+        capture_output=True, env=env, timeout=20)
+    assert result.returncode == (2 if checking else 0), result.stdout
+    assert json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'] == 'deny'
+
+
+@pytest.mark.parametrize('defect', ['python-status', 'shell-propagation'])
+def test_check_protocol_regressions_are_killed_in_an_owned_rendered_copy(tmp_path, defect):
+    _tmp, root, env = make_sandbox(tmp_path)
+    tree = root / '.claude/hooks'
+    shutil.copytree(REPO / '.claude/hooks', tree, ignore=shutil.ignore_patterns('__pycache__'))
+    env.update(X4_GUARD_CHECK='1', PYTHONDONTWRITEBYTECODE='1')
+    env.pop('X4_GUARD', None)
+    payload = {'tool_name':'Bash', 'tool_input':{'command':"echo 'unterminated"}, 'cwd':str(root)}
+    def run():
+        return subprocess.run([shutil.which('bash'), str(tree / 'protect-bash.sh')],
+                  input=json.dumps(payload).encode(), capture_output=True, env=env, timeout=35)
+    assert run().returncode == 2
+    if defect == 'python-status':
+        path = tree / 'save_policy.py'
+        before = '    return 2 if failed and os.environ.get("X4_GUARD_CHECK") == "1" else 0'
+        after = '    return 0'
+    else:
+        path = tree / '_x4-env.sh'
+        before = '       x4_guard_check_inert\n       return 0 ;;'
+        after = '       return 0 ;;'
+    text = path.read_text()
+    assert text.count(before) == 1
+    path.write_text(text.replace(before, after))
+    mutated = run()
+    assert mutated.returncode == 0, mutated.stderr
+    assert json.loads(mutated.stdout)['hookSpecificOutput']['permissionDecision'] == 'deny'
 
 
 def prepare(tmp_path):
