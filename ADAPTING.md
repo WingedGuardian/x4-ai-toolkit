@@ -55,6 +55,25 @@ code, file named), **INFERRED** (reasoned, not run). Write your own findings the
   It changes no installed files or host trust. The bundle contains private data;
   keep it outside release artifacts. Exit 2 means staging refused or incomplete.
 
+  After reviewing the bundle, `upgrade-apply --installed-root DIR --bundle DIR
+  --review-sha256 SHA256 --choices FILE --quiescent` applies its selected files.
+  SHA256 is the hash of the exact `complete.json` reviewed. The choices file is a
+  JSON object mapping every collision path to `keep` or `candidate`; project
+  `.claude/settings.json` can instead select `merged_settings`. Omit `--choices`
+  only when no collision needs a choice. Custom pre-tool handlers must first be
+  integrated into the ordered dispatcher and reviewed; an unresolved handler
+  refuses application. Local policy or configuration changes invalidate review.
+  Stop host/editor writers before using `--quiescent`: the flag asserts that
+  condition and does not stop them. The upgrade lock coordinates upgraders only;
+  replacing existing files cannot exclude arbitrary foreign writers atomically.
+  The receipt gives an operation ID and permanent rollback journal. Exit 2 is a
+  refusal; exit 1 reports a partial failure with its journal and published paths.
+  Inspect that evidence before recovery. `upgrade-rollback ID --installed-root
+  DIR --quiescent` restores previous files only when the upgrade's published
+  bytes and identity still match, retaining new files in the journal. Local notes
+  remain preserved. Installation and rollback both require separate host hook
+  review before claiming enforcement.
+
   `preferences` renders only the explicit `## My preferences` section from
   `KNOWLEDGEBASE.local.md`, using the same bounded parser as Skyrim. Existing
   Claude/Codex session hooks and the OpenCode system transform reinject it;
