@@ -2,7 +2,7 @@ r"""x4compat: detect how the ACTIVE (enabled) mods collide over the effective XM
 
 Unlike a naive file-overlap check (which flags every mod that touches, say,
 ``t/0001-l007.xml`` — 15 of them, all harmlessly union-merged), this resolves each
-mod's intent against the real base+DLC effective tree and dispatches by the engine's
+mod's intent against the tree at each operation's actual position and dispatches by the engine's
 actual merge semantics:
 
 - ``libraries/`` ``index/`` ``t/`` are additively UNIONED by ``@id``/``@name`` — two
@@ -43,7 +43,7 @@ from pathlib import Path
 from lxml import etree
 
 from x4validate import (_paths, _cat, _merge, _registry, _scan, _xpath, _input,
-                        _loadorder, _modfiles)
+                        _loadorder, _modfiles, _compat_state)
 from x4validate import __version__
 
 #: `{page,text}` localized reference - display text, never a registry identity.
@@ -82,6 +82,11 @@ class Collision:
     #: the live state is the node's ABSENCE -- which a consumer comparing against
     #: stored values must look for among removals, not among surviving values.
     removed_by: str = ""
+    #: Stable identities are not XPath positions. Consumers use this path only
+    #: against the qualified final tree; removed base identities retain base scope.
+    target_path: str = ""
+    target_tree: str = "base"  # base | final | removed | unavailable
+    removal_path: str = ""
 
     def live_value_owner(self) -> str | None:
         """The mod whose value is live, or ``None`` when that is unknowable here.
@@ -109,7 +114,7 @@ class Collision:
         wrong. It was not: the two answer different questions. This method is the
         one place that distinction lives. See CLAUDE.md gotcha #18.
         """
-        if self.kind in ("SUBTREE", "NAME-CLASH", "SOFT"):
+        if self.kind in ("SUBTREE", "NAME-CLASH", "SOFT") or self.target_tree == "unavailable":
             return None
         return self.winner or None
 
@@ -539,8 +544,19 @@ def _analyze_vpath(
                                    folder_to_path, config, full_tree=full_tree)
     notes: dict[tuple[str, str], list[str]] = defaultdict(list)  # (folder, cid|key)
     off: list[tuple[str, etree._Element, list[str], list[str]]] = []  # guarded off
+    base_owners = set(config.overlays)
+    traced, final_paths, qualified = _compat_state.trace(vpath, base_tree,
+        [(f, r) for f, r in read if folder_to_path[f] not in base_owners], full_tree())
+    if base_tree is not None and not qualified:
+        if report is not None:
+            report.skip(vpath, "sequential selector instrument disagreed with the normal merge; "
+                        "node collision analysis is unavailable", degraded=True)
+        return []
+    actual_ops: dict[tuple[str, int], bool] = {}
 
     for folder, root in read:
+        if folder_to_path[folder] in base_owners:
+            continue  # already supplies the owner-aware base, never apply twice
         if root.tag == "diff":
             if base_tree is None:
                 if report is not None and folder not in no_base_reported:
@@ -567,7 +583,7 @@ def _analyze_vpath(
                     # here is not a NOT CHECKED op either. It stays an AN-10 candidate:
                     # when its target is one only a LATER mod adds, the order-miss
                     # disclosure still names that mod (marked guarded, as before).
-                    cids = _resolve_op_targets(base_tree, sel)
+                    cids = list(traced[(folder, idx)].potential or ())
                     if cids == []:
                         unmatched[folder].append(op)
                     off.append((folder, op, cids or [],
@@ -589,9 +605,9 @@ def _analyze_vpath(
                         doc_keys.add(k)
                         if note:
                             notes[(folder, k)].append(note)
-                # xpath resolution is read-only; resolve against the shared base tree
-                # (no copy) so positional node ids are comparable across mods.
-                cids = _resolve_op_targets(base_tree, sel)
+                tracked = traced[(folder, idx)]
+                actual_ops[(folder, id(op))] = tracked.applied
+                cids = None if tracked.targets is None else list(tracked.targets)
                 if cids is None:
                     if unresolvable is not None:
                         unresolvable.append(
@@ -600,6 +616,9 @@ def _analyze_vpath(
                     continue
                 if not cids:
                     unmatched[folder].append(op)
+                    # Keep the old base target solely to disclose an attempted edit
+                    # after removal. It never becomes an applied op or a live winner.
+                    cids = _resolve_op_targets(base_tree, sel) or []
                 for cid in cids:
                     node_map[cid].append(op.tag)
                     ops_at[folder][cid].append(op)
@@ -607,6 +626,12 @@ def _analyze_vpath(
                         notes[(folder, cid)].append(note)
                     if op.tag == "add":
                         child_map[cid].extend(_added_child_keys(op))
+                for cid in tracked.created:
+                    if cid not in cids:
+                        node_map[cid].append("supply")
+                        ops_at[folder][cid].append(op)
+                        if note:
+                            notes[(folder, cid)].append(note)
             if node_map:
                 diff_targets[folder] = dict(node_map)
             if child_map:
@@ -659,6 +684,8 @@ def _analyze_vpath(
     for cid, per_mod in node_to_mods.items():
         if len(per_mod) < 2:
             continue
+        if all(tags == ["supply"] for tags in per_mod.values()):
+            continue  # descendant bookkeeping of an already contested replacement
         all_tags = {t for tags in per_mod.values() for t in tags}
         fs = sorted(per_mod, key=lambda f: rank[f])
         if all_tags == {"add"}:
@@ -800,7 +827,8 @@ def _analyze_vpath(
         for b, bmap in diff_targets.items():
             if b == a or rank[a] < rank[b]:
                 continue
-            hits = [(w, cb) for w in wipes for cb in bmap if cb.startswith(w + "/")]
+            hits = [(w, cb) for w in wipes for cb in bmap if cb.startswith(w + "/")
+                    and not (bmap[cb] == ["supply"] and w in bmap)]
             if hits:
                 w0, cb0 = hits[0]
                 # winner is deliberately EMPTY, exactly as NAME-CLASH is: for a
@@ -833,8 +861,7 @@ def _analyze_vpath(
         queries = ([(f, op) for cid, fs, _d, _t in contested for f in fs
                     for op in ops_at[f][cid]]
                    + [(b, op) for _a, b, cb in inside for op in ops_at[b][cb]])
-        live = _matches_at_positions(vpath, ordered, queries, folder_to_path, config)
-        at_pos = {(f, id(op)): ok for (f, op), ok in zip(queries, live)}
+        at_pos = {(f, id(op)): actual_ops.get((f, id(op)), False) for f, op in queries}
         for cid, fs, ops_desc, tags in contested:
             alive = [f for f in fs if any(at_pos[(f, id(op))] for op in ops_at[f][cid])]
             w = alive[-1] if alive else next(f for f in fs if "remove" in tags[f])
@@ -892,6 +919,20 @@ def _analyze_vpath(
     if report is not None:
         report.guarded_off.extend(offs)
         report.order_misses.extend(misses)
+    for collision in collisions:
+        if collision.target in final_paths:
+            collision.target_path = final_paths[collision.target]
+            collision.target_tree = "final"
+        elif collision.kind in ("HARD", "SUBTREE", "SOFT"):
+            removed = [path for (folder, _i), record in traced.items()
+                       if folder == collision.removed_by
+                       for identity, path in record.removed_paths if identity == collision.target]
+            if removed:
+                collision.removal_path = removed[-1]
+                collision.target_tree = "removed"
+            else:
+                collision.target_tree = "unavailable"
+                collision.detail += "; this former node has no single surviving value scope"
     return collisions
 
 

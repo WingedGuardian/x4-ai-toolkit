@@ -498,6 +498,18 @@ def test_FXH8_TWIN_the_LOSING_mod_as_store_origin_is_a_FAILURE(tmp_path, monkeyp
     assert not any(x.startswith("HARD:") for x in ct.cannot), (ct.cannot, out)
 
 
+def test_sequential_identity_maps_via_its_qualified_final_path(tmp_path, monkeypatch, capsys):
+    ct = _owned_world(tmp_path, monkeypatch, store_origin="z_patch")
+    row = _real_hard(ct)[0]
+    row.target = "/generated/identity~a_patch:0:1/@rate"
+    row.target_path = "/macros/macro/properties/recharge/@rate"
+    row.target_tree = "final"
+    _run_with(ct, monkeypatch, [row])
+    out = capsys.readouterr().out
+    assert not ct.failures and not ct.cannot, (ct.failures, ct.cannot, out)
+    assert "checked 1 of 1 mappable" in out
+
+
 def test_FXH8_TWIN_an_INACTIVE_owner_and_a_0_node_target_stay_UNRESOLVED(
         tmp_path, monkeypatch, capsys):
     """The fallback survives: an owner that is not an active mod has no base tree, and

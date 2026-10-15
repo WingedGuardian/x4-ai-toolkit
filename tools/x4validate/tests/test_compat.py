@@ -50,6 +50,47 @@ def test_hard_two_mods_replace_same_node(tmp_path):
     assert hard[0].winner == "b_mod"  # loads last alphabetically
 
 
+def test_sequential_replacement_only_contests_the_actual_new_contribution(tmp_path):
+    cfg = _setup_ref(tmp_path)
+    vpath = "md/missions.xml"
+    _w(cfg.reference / vpath,
+       '<root><actions><set_value name="$MissionCount" exact="1"/></actions></root>')
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_feature", {vpath: '''<diff>
+      <replace sel="(//set_value[@name='$MissionCount'])[1]">
+        <set_value name="reset" exact="0"/>
+        <set_value name="$MissionCount" exact="0"/>
+        <do_if value="true"><set_value name="$MissionCount" exact="10"/></do_if>
+      </replace></diff>'''})
+    _mod(ext, "b_patch", {vpath: '''<diff>
+      <replace sel="(//set_value[@name='$MissionCount'])[1]">
+        <set_value name="$MissionCount" exact="7"/>
+      </replace></diff>'''})
+    rep = _compat.analyze(ext, config=cfg)
+    assert not rep.skipped
+    hard = rep.by_kind("HARD")
+    assert len(hard) == 1, hard
+    row = hard[0]
+    assert row.mods == ["a_feature", "b_patch"] and row.winner == "b_patch"
+    assert row.target_tree == "final" and row.target_path == "/root/actions/set_value[2]"
+    assert not rep.by_kind("SUBTREE")
+    live = _merge.build_effective(vpath, _merge.replace(
+        cfg, overlays=(ext / "a_feature", ext / "b_patch"))).tree
+    assert live.xpath(row.target_path + "/@exact") == ["7"]
+    assert live.xpath("//do_if/set_value/@exact") == ["10"]
+
+
+def test_sequential_instrument_disagreement_is_a_degraded_nonanswer(tmp_path, monkeypatch):
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    for name in ("a", "b"):
+        _mod(ext, name, {"libraries/wares.xml":
+             '<diff><replace sel="//price/@average">2</replace></diff>'})
+    monkeypatch.setattr(_compat._compat_state, "trace", lambda *a: ({}, {}, False))
+    rep = _compat.analyze(ext, config=cfg)
+    assert not rep.collisions and any(s.degraded for s in rep.skipped)
+
+
 def test_soft_two_mods_add_under_same_parent(tmp_path):
     cfg = _setup_ref(tmp_path)
     ext = tmp_path / "extensions"

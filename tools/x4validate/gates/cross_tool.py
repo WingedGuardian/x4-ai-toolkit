@@ -395,7 +395,7 @@ def _hard_scope(con, c, tree_for) -> tuple[str, str, str | None, str | None] | s
         "SELECT 1 FROM entities WHERE lower(vpath) = ? LIMIT 1", (f,)).fetchone()), None)
     if form is None:
         return UNTRACKED_FILE
-    target, attr = c.target, None
+    target, attr = (getattr(c, "target_path", "") or c.target), None
     head, sep, last = target.rpartition("/")
     if sep and last.startswith("@"):
         target, attr = head, last[1:]
@@ -526,6 +526,15 @@ def check_cross_tool_agreement() -> None:
                 trees[vpath] = None
         return trees[vpath]
 
+    final_trees = {}
+
+    def final_tree_for(vpath: str):
+        if vpath not in final_trees:
+            final_trees[vpath] = _compat._prefix_tree(
+                vpath, getattr(report, "load_order", list(folder_to_path)), folder_to_path,
+                _compat._owner_aware_config(vpath, folder_to_path, config))
+        return final_trees[vpath]
+
     # --- kinds where the winner supplies the live value ----------------------
     for kind, column in (("FULL-OVERRIDE", "entities"),
                          ("UNION-KEY", "entities"),
@@ -558,7 +567,9 @@ def check_cross_tool_agreement() -> None:
                     absent += 1
                     why[UNTRACKED_FILE] = why.get(UNTRACKED_FILE, 0) + 1
                     continue
-                origins = _replayed_removers(con, c.vpath, tree_for(c.vpath), c.target)
+                origins = (_removal_sources(con, c.vpath, c.removal_path)
+                           if getattr(c, "removal_path", "") else
+                           _replayed_removers(con, c.vpath, tree_for(c.vpath), c.target))
                 if origins is None:                     # target unresolved in the base
                     origins = _removal_sources(con, c.vpath, c.target)
                 where = f" (removal of {c.target})"
@@ -573,7 +584,8 @@ def check_cross_tool_agreement() -> None:
                 # The COLLIDED node's origin, never "any origin in the file": the
                 # winner owning SOMETHING else in the document is not agreement
                 # (AUDIT-2026-09-24 GT-5).
-                scope = _hard_scope(con, c, tree_for)
+                scope = _hard_scope(con, c, final_tree_for if getattr(
+                    c, "target_tree", "base") == "final" else tree_for)
                 if scope == ENTITY_REMOVED:
                     # The entity is in the base tree and gone from the store: the merge
                     # REMOVED it, so compat's live owner must be the mod that removed it
