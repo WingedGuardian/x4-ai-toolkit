@@ -232,8 +232,9 @@ def test_F139_x4save_check_discloses(env, monkeypatch, tmp_path):
     from x4validate import _savecli
     monkeypatch.setattr(_savecli._merge, "Config",
                         lambda **k: types.SimpleNamespace(overlays=[], dlc_dirs=lambda: []))
+    monkeypatch.setattr(_savecli._effective, "require_base_documents", lambda *a: (1, 0))
     monkeypatch.setattr(_savecli._check, "EntityDefs",
-                        lambda cfg: types.SimpleNamespace(all_names=lambda: {"a_macro"}))
+                        lambda cfg, **k: types.SimpleNamespace(all_names=lambda: {"a_macro"}))
     save = tmp_path / "s.xml.gz"
     with gzip.open(save, "wb") as fh:
         fh.write(b'<savegame><universe><component macro="a_macro"/></universe></savegame>')

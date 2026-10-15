@@ -35,8 +35,9 @@ def _defs(monkeypatch, names):
     monkeypatch.setattr(_savecli._effective, "ordered_overlays", lambda mods: [])
     monkeypatch.setattr(_savecli._merge, "Config",
                         lambda **k: types.SimpleNamespace(overlays=[], dlc_dirs=lambda: []))
+    monkeypatch.setattr(_savecli._effective, "require_base_documents", lambda *a: (1, 0))
     monkeypatch.setattr(_savecli._check, "EntityDefs",
-                        lambda cfg: types.SimpleNamespace(all_names=lambda: set(names)))
+                        lambda cfg, **k: types.SimpleNamespace(all_names=lambda: set(names)))
 
 
 def test_save_check_folds_case_on_the_REFERENCE_side_too(tmp_path, monkeypatch):

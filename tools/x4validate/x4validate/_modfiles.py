@@ -26,6 +26,19 @@ from pathlib import Path
 from x4validate import _cat
 
 
+def logical_vpath(vpath: str, owner_folders: set[str]) -> str:
+    """Map a single-level mod-on-mod patch to the owner's logical document.
+
+    DLC paths and double nesting retain their identity; transitive nesting is
+    not engine-qualified. Shared by provenance enumeration and definition lookup.
+    """
+    parts = vpath.replace("\\", "/").split("/")
+    if (len(parts) >= 3 and parts[0].lower() == "extensions"
+            and parts[1].lower() in owner_folders and parts[2].lower() != "extensions"):
+        return "/".join(parts[2:])
+    return vpath
+
+
 def mod_xml_paths(mod_path: Path) -> dict[str, str]:
     """Return ``{lowercased_vpath: real_vpath}`` for a mod's XML (packed + loose)."""
     out: dict[str, str] = {}

@@ -10,7 +10,7 @@ from pathlib import Path
 from lxml import etree
 
 from . import (_cat, _compat, _debuglog, _effective, _exprlint, _loadorder, _merge,
-               _migration, _refs, _registry, _resolve, _scan, _xref, _xsd)
+               _migration, _refs, _registry, _resolve, _scan, _xref, _xsd, _modfiles)
 
 # A ship variant macro file: <base>_<a|b|c|...>_macro.xml
 VARIANT_RE = re.compile(r"^(?P<base>.+)_(?P<v>[a-z0-9])_macro\.xml$")
@@ -162,7 +162,11 @@ LIBRARY_DEFS = ("libraries/character_macros.xml", "libraries/character_component
 
 
 class EntityDefs:
-    """Every macro OR component name defined anywhere — index UNION corpus.
+    """Effective registrations and definitions, unioning both namespaces.
+
+    Corpus candidates are selected from source bytes, but existence is always
+    checked on the final merged document. A source hit is not a live definition.
+    Caches are analysis-instance-local; no persisted un-fingerprinted set is reused.
 
     **Namespace-agnostic on purpose.** `<component ref>` names a MACRO inside
     `libraries/wares.xml` but a COMPONENT inside a macro file (gotcha #11), and
@@ -266,29 +270,47 @@ class EntityDefs:
         xq = _refs._xq(name)
         sources = ([self._config.reference] + self._config.dlc_dirs()
                    + list(self._config.overlays) + self._extra)
-        for src in sources:
-            try:
-                blobs = _scan.iter_mod_xml_bytes(src)
-            except OSError as exc:
-                if self._report is not None:
-                    self._report.skip(
-                        "entity-definition search",
-                        f"{src.name}: could not be enumerated ({exc}) — names it "
-                        "defines are missing from the definition set", degraded=True)
-                continue
-            for _vpath, data in blobs:
-                if needle not in data:
-                    continue
-                self.corpus_parses += 1
-                try:
-                    root = _merge.parse_bytes(data)
-                except etree.XMLSyntaxError:
-                    continue  # silent-ok: unparseable files are reported once by
-                    # check_readability; here they simply cannot confirm the name,
-                    # and a miss surfaces as a finding rather than vanishing.
-                if root.xpath(f"//macro[@name={xq}] | //component[@name={xq}]"):
-                    return True
+        candidates = self._candidate_documents(sources, needle)
+        for vpath in candidates:
+            root = self._effective_definition_tree(vpath)
+            if root is not None and root.xpath(f"//macro[@name={xq}] | //component[@name={xq}]"):
+                return True
         return False
+
+    def _candidate_documents(self, sources, needle=None):
+        """Read loose AND packed input, then deduplicate logical merge targets."""
+        owners = {p.name.lower() for p in list(self._config.overlays) + self._extra}
+        dlc = {p.resolve() for p in self._config.dlc_dirs()}
+        candidates = {}
+        for src in sources:
+            unreadable = []
+            try:
+                for vpath, data in _scan.iter_mod_xml_bytes(src, unreadable=unreadable):
+                    if needle is not None and needle not in data and b"&" not in data:
+                        continue
+                    if needle is None and not re.search(rb"<(?:macro|component)\b", data):
+                        continue
+                    if src.resolve() in dlc:
+                        vpath = "extensions/" + src.name + "/" + vpath
+                    vpath = _modfiles.logical_vpath(vpath, owners)
+                    candidates.setdefault(vpath.lower(), vpath)
+            except (OSError, ValueError) as exc:
+                unreadable.append(_scan.Unreadable(str(src), str(exc)))
+            for failure in unreadable:
+                if self._report is not None:
+                    self._report.skip("effective entity-definition inputs", str(failure), degraded=True)
+        return list(candidates.values())
+
+    def _effective_definition_tree(self, vpath):
+        self.corpus_parses += 1
+        try:
+            merged = _merge.build_effective(vpath, self._config, extra_overlays=self._extra)
+            note_dropped_overlays(merged, "effective entity definitions ({})".format(vpath), self._report)
+            return merged.tree
+        except (OSError, ValueError, etree.XMLSyntaxError) as exc:
+            if self._report is not None:
+                self._report.skip("effective entity definitions ({})".format(vpath), str(exc), degraded=True)
+            return None
 
     def all_names(self) -> set[str]:
         """Every macro/component name defined anywhere — built ONCE, not per name.
@@ -326,17 +348,11 @@ class EntityDefs:
         7 sampled "missing" references were real entities living in a library.
         """
         names: set[str] = set()
-        for src in sources:
-            try:
-                for _vpath, root in _scan.iter_mod_xml(src):
-                    names |= set(root.xpath("//macro/@name"))
-                    names |= set(root.xpath("//component/@name"))
-            except OSError as exc:
-                if self._report is not None:
-                    self._report.skip(
-                        f"entity-definition scan ({tier})",
-                        f"{src.name}: could not be enumerated ({exc}) — names it "
-                        "defines are missing from the definition set", degraded=True)
+        for vpath in self._candidate_documents(sources):
+            root = self._effective_definition_tree(vpath)
+            if root is not None:
+                names |= set(root.xpath("//macro/@name"))
+                names |= set(root.xpath("//component/@name"))
         return names
 
 

@@ -47,6 +47,7 @@ import gzip
 import re
 import sys
 import zlib
+from xml.parsers import expat
 from collections import Counter
 from pathlib import Path
 
@@ -93,27 +94,34 @@ def read_header(path: Path, limit: int = 4_000_000) -> str:
 
 
 def extract_refs(path: Path) -> Counter:
-    """Every macro reference in the save, by name, scoped to _REF_ELEMENTS."""
+    """Bounded streaming XML scan of the six semantic reference elements.
+
+    Expat retains parser state rather than a document tree. Comments cannot add
+    references, XML quoting is handled by the parser, and truncation is a non-answer.
+    DTD/entity declarations are unsupported and refused explicitly.
+    """
     found: Counter = Counter()
-    tail = b""
+    parser = expat.ParserCreate()
+
+    def start(name, attrs):
+        if name in _REF_ELEMENTS and attrs.get("macro"):
+            found[attrs["macro"]] += 1
+
+    def doctype(*args):
+        raise SaveUnreadable(f"{path}: DTD/entity declarations are not supported in save XML")
+
+    parser.StartElementHandler = start
+    parser.StartDoctypeDeclHandler = doctype
     try:
         with gzip.open(path, "rb") as fh:
             while True:
                 chunk = fh.read(_CHUNK)
                 if not chunk:
                     break
-                buf = tail + chunk
-                for m in _REF_RE.finditer(buf):
-                    # A match that ENDS inside the carried tail lay wholly in the
-                    # previous buffer and was counted there; only a match reaching
-                    # into the new chunk is new. Without this every reference in
-                    # the last _TAIL bytes of a chunk was counted twice (RT-3).
-                    if m.end() <= len(tail):
-                        continue
-                    found[m.group(2).decode("utf-8", "replace")] += 1
-                tail = buf[-_TAIL:]
-    except (OSError, EOFError, gzip.BadGzipFile, zlib.error) as exc:
-        raise SaveUnreadable(f"{path}: decompression failed ({exc})") from exc
+                parser.Parse(chunk, False)
+            parser.Parse(b"", True)
+    except (OSError, EOFError, gzip.BadGzipFile, zlib.error, expat.ExpatError) as exc:
+        raise SaveUnreadable(f"{path}: decompression/XML parse failed ({exc})") from exc
     return found
 
 
@@ -218,7 +226,8 @@ def cmd_check(path: Path, limit: int = 40, out=None) -> int:
     # for the engine, and NAMED here so it is not mistaken for a missing mod (F139).
     _check.note_not_loaded(mods, "definition set: a mod the engine does not load", report)
     cfg = _merge.Config(overlays=[p for _, p in _effective.ordered_overlays(mods)])
-    defs = _check.EntityDefs(cfg)
+    _effective.require_base_documents(cfg, "check save references")
+    defs = _check.EntityDefs(cfg, report=report)
     print(f"building the definition set over base + {len(cfg.dlc_dirs())} DLC + "
           f"{len(cfg.overlays)} active mods (~20s)...", file=sys.stderr)
     names = defs.all_names()
@@ -305,7 +314,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "info":
             return cmd_info(path)
         return cmd_check(path, limit=args.limit)
-    except SaveUnreadable as exc:
+    except (SaveUnreadable, _effective.EmptyReference) as exc:
         # rc 2, never 0: a save that could not be read is a NON-ANSWER.
         print(f"error: {exc}", file=sys.stderr)
         return 2

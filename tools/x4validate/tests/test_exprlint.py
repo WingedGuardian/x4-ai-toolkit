@@ -23,6 +23,13 @@ def test_fmt_missing_dot_flagged_not_valid_interp():
     assert "fmt_missing_dot" not in _ids("<a text=\"'NPC %s'.[this.name, $x]\"/>")  # dot present
 
 
+def test_literals_cannot_cross_format_boundaries():
+    assert "fmt_missing_dot" not in _ids("<a text=\"'first'.[$a] + 'second'.[$b]\"/>")
+    assert "fmt_missing_dot" in _ids("<a text=\"'first'.[$a] + 'second'[$b]\"/>")
+    assert "fmt_missing_dot" not in _ids("<a text=\"'first'.[$a] + '[second]'.[$b]\"/>")
+    assert _ids("<a text=\"'random(1,2) $t.keys.list.count'\"/>") == set()
+
+
 def test_list_literal_braces_only_on_in_attr():
     assert "list_literal_in_braces" in _ids('<do_for_each in="{entityrole.marine, entityrole.service}"/>')
     assert "list_literal_in_braces" not in _ids('<do_for_each in="[entityrole.marine, entityrole.service]"/>')

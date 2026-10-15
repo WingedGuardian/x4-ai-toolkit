@@ -31,7 +31,7 @@ from pathlib import Path, PurePosixPath
 
 from lxml import etree
 
-from x4validate import _cat, _compat, _merge, _mutation, _paths, _registry, _freshness, _resolve, _scan
+from x4validate import _cat, _compat, _merge, _mutation, _paths, _registry, _freshness, _resolve, _scan, _modfiles
 from x4validate._provenance import BASE, Origin, Recorder
 from x4validate import __version__
 
@@ -128,7 +128,7 @@ def build_touch_map(ordered: list[tuple[dict, Path]]) -> dict[str, list[tuple[st
                     # direct DLC patch and the double-nested form) and flipped six
                     # entity origins. Unproven == keep the old behavior.
                     and parts[2] != "extensions"):
-                low = "/".join(parts[2:])
+                low = _modfiles.logical_vpath(low, folders)
             touch.setdefault(low, []).append((mod["folder"], real))
     return touch
 

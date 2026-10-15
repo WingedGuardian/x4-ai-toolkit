@@ -64,6 +64,33 @@ class ExprFinding:
     severity: str
 
 
+def _literal_tokens(value: str):
+    """(code with literals masked, missing-format-dot) without crossing literals."""
+    code = list(value)
+    missing_dot = False
+    index = 0
+    while index < len(value):
+        if value[index] not in ("'", '"'):
+            index += 1
+            continue
+        quote, start = value[index], index
+        index += 1
+        while index < len(value):
+            if value[index] == "\\":
+                index += 2
+                continue
+            if value[index] == quote:
+                index += 1
+                following = index
+                while following < len(value) and value[following].isspace():
+                    following += 1
+                missing_dot |= following < len(value) and value[following] == "["
+                break
+            index += 1
+        code[start:min(index, len(value))] = " " * (min(index, len(value)) - start)
+    return "".join(code), missing_dot
+
+
 def scan_tree(root, vpath: str) -> list[ExprFinding]:
     """Apply every rule to every attribute value in one parsed script tree.
 
@@ -79,10 +106,12 @@ def scan_tree(root, vpath: str) -> list[ExprFinding]:
         for attr, val in el.attrib.items():
             if attr in _SKIP_ATTRS:  # diff XPath selector, not a script expression
                 continue
+            code, missing_dot = _literal_tokens(val)
             for rule in RULES:
                 if rule.attr is not None and rule.attr != attr:
                     continue
-                if rule.pattern.search(val):
+                matches = missing_dot if rule.rule_id == "fmt_missing_dot" else rule.pattern.search(code)
+                if matches:
                     out.append(ExprFinding(vpath, line, rule.rule_id, rule.note,
                                            val.strip()[:120], rule.severity))
     return out
