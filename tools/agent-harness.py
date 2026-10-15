@@ -70,7 +70,10 @@ def main(argv=None):
             output = {"context": save_policy.core(ROOT, "preferences").render(ROOT),
                       "scope": "explicit My preferences section only; unclassified notes remain notes"}
         elif args.command in upgrade_cli.COMMANDS:
-            output = upgrade_cli.handle(args, ROOT)
+            import x4_upgrade_render
+            output = upgrade_cli.handle(args, ROOT, local_files=("x4-paths.env", ".claude/x4-paths.env"),
+                candidate_preparer=x4_upgrade_render.prepare, candidate_validator=x4_upgrade_render.validate,
+                generated_paths=(".codex/hooks.json",))
         elif args.command == "coverage":
             output = save_policy.core(ROOT, "telemetry").Telemetry(ROOT).report(args.session_id)
         elif args.command in ("save-list", "save-restore"):

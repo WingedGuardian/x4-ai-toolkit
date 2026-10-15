@@ -426,7 +426,6 @@ CODEX_ADAPTERS: dict[str, str] = {
 CODEX_HOOKS_TEMPLATE = Path("targets") / "codex" / "hooks.json.tmpl"
 #: cmd.exe runs every Codex hook on Windows (`%COMSPEC% /C`, READ): it expands %VAR% even
 #: inside quotes, and a quote or a newline would end the argument. Such a root is refused.
-_UNSAFE_ROOT_CHARS = ('"', "\n", "\r", "%")
 
 
 def render_codex_hooks(src: Path) -> dict[str, str]:
@@ -445,19 +444,16 @@ def render_codex_hooks_json(root: Path, src: Path | None = None) -> str:
     """The project's .codex/hooks.json from the FROZEN template, for an install at `root`.
     `{{ROOT}}` gets the forward-slash form (POSIX `command`), `{{ROOT_WIN}}` the backslash form
     (`commandWindows`), each JSON-escaped. Refuses a root cmd.exe would mangle."""
-    import json as _json
-    root_s = str(root)
-    bad = [c for c in _UNSAFE_ROOT_CHARS if c in root_s]
-    if bad:
-        raise GenerationError(f"refusing a Codex hook root containing {bad!r}: {root_s!r}")
+    import importlib.util
+    renderer = Path(__file__).resolve().parents[3] / "agent/guards/claude-hooks/x4_upgrade_render.py"
+    spec = importlib.util.spec_from_file_location("x4_upgrade_renderer_for_generation", renderer)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     tmpl = _read((src or REPO / "agent") / CODEX_HOOKS_TEMPLATE)
-    posix = _json.dumps(root_s.replace("\\", "/"))[1:-1]
-    win = _json.dumps(root_s.replace("/", "\\"))[1:-1]
-    text = tmpl.replace("{{ROOT_WIN}}", win).replace("{{ROOT}}", posix)
-    if "{{" in text:
-        raise GenerationError("hooks.json template has an unrendered token")
-    _json.loads(text)                      # a template that renders to invalid JSON never ships
-    return text
+    try:
+        return module.render_codex(tmpl, root)
+    except ValueError as exc:
+        raise GenerationError(str(exc)) from exc
 
 
 CODEX_RULES_SOURCE = Path("rules") / "codex-rules.yaml"
@@ -564,6 +560,7 @@ def generate(repo: Path) -> dict[str, str]:
     out.update({"tools/x4_harness/" + rel[len(".claude/hooks/"):]: text
                 for rel, text in render_hooks(src).items() if not Path(rel).name.startswith(("test_", "test-"))})
     out["tools/agent-harness.py"] = _read(src / "guards/adapters/generic.py")
+    out["tools/x4_harness/codex-hooks.json.tmpl"] = _read(src / CODEX_HOOKS_TEMPLATE)
     out[".claude/settings.json"] = _read(src / "targets" / "claude" / "settings.json")
     return dict(sorted(out.items()))
 

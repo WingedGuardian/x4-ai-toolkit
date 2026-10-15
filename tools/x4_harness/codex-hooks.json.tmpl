@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 30,
+            "command": "bash \"{{ROOT}}/.codex/hooks/codex-entry.sh\" session_start",
+            "commandWindows": "pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ROOT_WIN}}\\.codex\\hooks\\codex-entry.ps1\" session_start || powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ROOT_WIN}}\\.codex\\hooks\\codex-entry.ps1\" session_start"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 60,
+            "command": "bash \"{{ROOT}}/.codex/hooks/codex-entry.sh\" pre_tool_use",
+            "commandWindows": "pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ROOT_WIN}}\\.codex\\hooks\\codex-entry.ps1\" pre_tool_use || powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ROOT_WIN}}\\.codex\\hooks\\codex-entry.ps1\" pre_tool_use"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 60,
+            "command": "bash \"{{ROOT}}/.codex/hooks/codex-entry.sh\" post_tool_use",
+            "commandWindows": "pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ROOT_WIN}}\\.codex\\hooks\\codex-entry.ps1\" post_tool_use || powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ROOT_WIN}}\\.codex\\hooks\\codex-entry.ps1\" post_tool_use"
+          }
+        ]
+      }
+    ]
+  }
+}

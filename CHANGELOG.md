@@ -2,6 +2,14 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Upgrade review preparation renders skill commands for their declared shells and
+  generates destination-specific Codex definitions from the frozen template.
+  Both native settings files retain unrelated content; complete pre-tool groups
+  establish ownership, and unknown policies require ordered integration. Shared
+  metadata staging completes short writes and verifies readback before publication.
+- The ordinary installers retain customized Codex definitions and semantically
+  unchanged read-only definitions, including JSON formatting differences. Codex
+  root spellings that shell expansion would alter refuse before installation.
 - Both installers refuse customized project settings before copying or moving
   user instructions. `--over-existing` no longer discards permissions or custom
   hooks. Exact released defaults remain recognized through the shared history

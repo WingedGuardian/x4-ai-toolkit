@@ -905,7 +905,7 @@ function Get-CodexHooksJsonPath($dest) { return (Join-Path (Join-Path $dest '.co
 #: an installer cannot import the generator. $null when it cannot be rendered.
 function Get-CodexHooksJson($dest) {
   try { $root = (Resolve-Path -LiteralPath $dest -ErrorAction Stop).ProviderPath } catch { return $null }
-  if ($root.Contains('"') -or $root.Contains("`n") -or $root.Contains("`r")) { return $null }
+  if (-not (Test-CodexRootSafe $root)) { return $null }
   $bs = [string][char]92
   $root = $root.TrimEnd([char]92, [char]47)
   $posix = $root.Replace($bs, '/')
@@ -915,6 +915,27 @@ function Get-CodexHooksJson($dest) {
   $t = $t.Replace('{{ROOT_WIN}}', $win.Replace($bs, $bs + $bs)).Replace('{{ROOT}}', $posix.Replace($bs, $bs + $bs))
   if ($t.Contains('{{ROOT')) { return $null }
   return $t
+}
+
+function Test-CodexRootSafe($root) {
+  foreach ($c in @('"', [string][char]10, [string][char]13, '%', '!', '$', [string][char]96)) {
+    if ($root.Contains($c)) { return $false }
+  }
+  return $true
+}
+
+function Test-CodexMatchesTemplate($dest, $expected) {
+  $f = Get-CodexHooksJsonPath $dest
+  if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { return $false }
+  if ((Get-NormText $f) -ceq $expected) { return $true }
+  $helper = Join-Path $SRC 'tools/x4_harness/x4_upgrade_render.py'
+  if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { return $false }
+  $py = Find-OcPython
+  if (-not $py) { return $false }
+  $extra = @($py | Select-Object -Skip 1)
+  $checked = Invoke-X4Native $py[0] (@($extra) + @('-B', $helper, 'check-codex', '--root', $dest,
+                                                '--template', (Get-CodexTemplatePath)))
+  return ($checked.Rc -eq 0)
 }
 
 #: PRECONDITION before any write: a READ-ONLY hooks.json this install would CHANGE.
@@ -938,15 +959,22 @@ function Write-HX4LockSteps($d, $file, [switch]$Red) {
 
 function Test-CodexHooksPrecheck($dest) {
   if (-not (Test-CodexSelected)) { return }
+  if (-not (Test-CodexRootSafe $dest)) {
+    throw 'Codex hooks cannot safely quote this destination. Choose a root without shell expansion characters, quotes or line breaks. Nothing has been changed.'
+  }
   $f = Get-CodexHooksJsonPath $dest
   if (-not (Test-Path -LiteralPath $f)) { return }
   $ro = $false
   try { $ro = (Get-Item -LiteralPath $f -Force).IsReadOnly } catch { $ro = $false }
-  if (-not $ro) { return }
   if (-not (Test-Path -LiteralPath (Get-CodexTemplatePath))) { return }
   $new = Get-CodexHooksJson $dest
   if ($null -eq $new) { return }
-  if ((Get-NormText $f) -ceq $new) { return }
+  if (Test-CodexMatchesTemplate $dest $new) { return }
+  if (-not $ro) {
+    Write-Host 'REFUSING: custom Codex hook definitions need a reviewed upgrade; -OverExisting cannot replace them.' -ForegroundColor Red
+    Write-Host '  Use tools/agent-harness.py upgrade-stage. Nothing has been changed.'
+    exit 1
+  }
   Write-Host ''
   Write-Host 'REFUSING: the Codex hook definitions must change, and the file is READ-ONLY.'
   Write-Host "      $f"
@@ -968,7 +996,7 @@ function Write-CodexHooksJson($dest) {
     $script:failed += ('.codex/hooks.json (could not render it for ' + $dest + ': a path containing a quote or a newline cannot be written into it)')
     return
   }
-  if ((Test-Path -LiteralPath $f) -and ((Get-NormText $f) -ceq $new)) {
+  if (Test-CodexMatchesTemplate $dest $new) {
     Write-Host "  [note] $f already matches; left untouched, so its Codex review still holds"
     return
   }

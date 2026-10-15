@@ -604,6 +604,12 @@ prepares merged settings and independent rollback bytes. Unresolved custom
 pre-tool policies still require ordered integration. Generic-only installs
 leave Claude settings alone.
 
+Customized `.codex/hooks.json` also uses reviewed migration. An unchanged JSON
+definition stays byte-exact, including formatting and read-only protection.
+Codex installs require a root without `%`, `!`, `$`, backticks, quotes or line
+breaks, which its shell command definitions cannot safely carry. Generic-only
+installs do not acquire that Codex restriction.
+
 The chosen paths are written to `<toolkit>/x4-paths.env`.
 
 | Method | What it does | When to use |

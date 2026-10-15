@@ -87,5 +87,8 @@ tools/modding_harness/** text eol=lf
 tools/modding-harness.lock.json text eol=lf
 tools/x4_harness/** text eol=lf
 agent/targets/opencode/*.js text eol=lf
+# The source and runtime Codex templates enter reviewed candidate provenance.
+agent/targets/codex/hooks.json.tmpl text eol=lf
+tools/x4_harness/codex-hooks.json.tmpl text eol=lf
 .opencode/plugins/x4guard.js text eol=lf
 KNOWLEDGEBASE.local.md.example text eol=lf

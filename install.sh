@@ -1072,8 +1072,7 @@ render_codex_hooks_json() {   # DEST -> stdout (no trailing newline)
   local root win t bs
   bs="$(printf '%b' '\134')"
   root="$(_abs_dir "$1")" || return 1
-  case "$root" in *'"'*|*"$CR"*|*'
-'*) return 1 ;; esac
+  _codex_root_safe "$root" || return 1
   t="$(tr -d '\r' < "$SRC/$X4_CODEX_HOOKS_TMPL")" || return 1
   win="$(_replace_all "$root" / "$bs")"
   root="$(_replace_all "$root" "$bs" "$bs$bs")"
@@ -1085,6 +1084,21 @@ render_codex_hooks_json() {   # DEST -> stdout (no trailing newline)
 }
 
 _codex_selected() { _item_selected .codex && [ -d "$SRC/.codex" ]; }
+
+_codex_root_safe() {
+  case "$1" in *'"'*|*"$CR"*|*$'\n'*|*'%'*|*'!'*|*'$'*|*'`'*) return 1 ;; esac
+  return 0
+}
+
+_codex_matches_template() {   # DEST EXPECTED TEXT
+  local f="$1/.codex/hooks.json"
+  [ -f "$f" ] || return 1
+  [ "$(tr -d '\r' < "$f")" = "$2" ] && return 0
+  [ -f "$SRC/tools/x4_harness/x4_upgrade_render.py" ] || return 1
+  _oc_python || return 1
+  "${X4_OC_PY[@]}" -B "$SRC/tools/x4_harness/x4_upgrade_render.py" check-codex \
+    --root "$1" --template "$SRC/$X4_CODEX_HOOKS_TMPL" >/dev/null 2>&1
+}
 
 #: _x4lock_steps DEST [FILE] -- the "unlock, re-run, lock" steps, aimed at the DESTINATION's own
 #: x4lock (FX-B2, delta review). They named `scripts/x4lock.py` relative to the cwd -- the SOURCE's
@@ -1110,14 +1124,23 @@ _x4lock_steps() {
 precheck_codex_hooks_json() {   # DEST
   local dest="$1" f="$1/.codex/hooks.json" new
   _codex_selected || return 0
+  if ! _codex_root_safe "$dest"; then
+    echo "REFUSING: Codex hooks cannot safely quote this destination. Choose a root without shell expansion characters, quotes or line breaks. Nothing has been changed." >&2
+    exit 1
+  fi
   [ -e "$f" ] || return 0
-  [ -w "$f" ] && return 0
   [ -f "$SRC/$X4_CODEX_HOOKS_TMPL" ] || return 0     # the writer reports INCOMPLETE
   new="$(render_codex_hooks_json "$dest")" || return 0
-  [ "$(tr -d '\r' < "$f")" = "$new" ] && return 0
+  _codex_matches_template "$dest" "$new" && return 0
+  if [ -w "$f" ]; then
+    echo "REFUSING: custom Codex hook definitions need a reviewed upgrade; --over-existing cannot replace them." >&2
+    echo "  Use tools/agent-harness.py upgrade-stage. Nothing has been changed." >&2
+    exit 1
+  fi
   echo                                                                          >&2
   echo "REFUSING: the Codex hook definitions must change, and the file is READ-ONLY." >&2
   echo "      $f"                                                               >&2
+  echo "  Review custom Codex hook definitions with upgrade-stage before unlocking or replacing them." >&2
   echo "  This is x4lock doing its job. Nothing has been changed. Unlock, re-run, lock:" >&2
   _x4lock_steps "$dest" "$f"
   exit 1
@@ -1257,7 +1280,7 @@ write_codex_hooks_json() {   # DEST
     add_failed ".codex/hooks.json (could not render it for $dest: a path containing a quote or a newline cannot be written into it)"
     return 0
   fi
-  if [ -f "$f" ] && [ "$(tr -d '\r' < "$f")" = "$new" ]; then
+  if _codex_matches_template "$dest" "$new"; then
     echo "  [note] $f already matches; left untouched, so its Codex review still holds"
     return 0
   fi

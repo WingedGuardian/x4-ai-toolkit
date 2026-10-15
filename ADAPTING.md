@@ -52,17 +52,37 @@ code, file named), **INFERRED** (reasoned, not run). Write your own findings the
   prepares independent candidate/rollback copies, merged project settings and
   local-setting review. Optional `--previous FILE`, `--owned-command COMMAND` and
   `--local-file PATH` supply verified prior ownership and personal policy files.
+  Exact current pre-tool groups and unchanged previous settings qualify without
+  guessing by command name. Other pre-tool references use `--owned-pre-groups FILE`
+  with `{"v":1,"files":{".claude/settings.json":[...]}}` (or `.codex/hooks.json`)
+  from verified complete prior definitions. Changed matcher/timeout/Windows/async
+  fields remain custom; `--owned-command` alone cannot retire them.
   It changes no installed files or host trust. The bundle contains private data;
   keep it outside release artifacts. Exit 2 means staging refused or incomplete.
+
+  `--render-config FILE` renders selected skill commands and prepares Codex
+  definitions before the review is hashed. Use a version 1 JSON object with
+  `agent_shell` and `opencode_shell`, each `"bash"` or `"powershell"`; generic
+  adapters can declare their actual shell instead of inheriting an agent name.
+  A candidate containing Codex runtime files must include the generated
+  `tools/x4_harness/codex-hooks.json.tmpl`, copied from the canonical frozen
+  source. The destination supplies the hook root. Generated `.codex/hooks.json`
+  follows the same collision and rollback rules as copied files. Unresolved
+  placeholders, oversized agent instructions and unsafe Codex root spellings
+  refuse before installed writes. This renders the explicit inventory, not a
+  complete installation or host trust configuration.
 
   After reviewing the bundle, `upgrade-apply --installed-root DIR --bundle DIR
   --review-sha256 SHA256 --choices FILE --quiescent` applies its selected files.
   SHA256 is the hash of the exact `complete.json` reviewed. The choices file is a
   JSON object mapping every collision path to `keep` or `candidate`; project
-  `.claude/settings.json` can instead select `merged_settings`. Omit `--choices`
+  `.claude/settings.json` and `.codex/hooks.json` use `merged_settings` when
+  replacing existing definitions. Omit `--choices`
   only when no collision needs a choice. Custom pre-tool handlers must first be
   integrated into the ordered dispatcher and reviewed; an unresolved handler
-  refuses application. Local policy or configuration changes invalidate review.
+  in either native configuration refuses application, even if its file is kept.
+  Local policy or configuration changes invalidate review. Restage older bundles
+  that lack the combined native-settings observations.
   Stop host/editor writers before using `--quiescent`: the flag asserts that
   condition and does not stop them. The upgrade lock coordinates upgraders only;
   replacing existing files cannot exclude arbitrary foreign writers atomically.

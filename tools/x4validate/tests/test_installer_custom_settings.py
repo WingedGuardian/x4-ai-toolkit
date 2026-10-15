@@ -61,3 +61,45 @@ def test_generic_install_does_not_adopt_or_replace_claude_custom_settings(tmp_pa
     result = _install(installer, tmp_path, dest, "--agent", "generic")
     assert result.returncode == 0, _ok(result)
     assert target.read_bytes() == b'{"permissions":{"deny":["personal"]}}'
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1", "ps51"])
+@pytest.mark.parametrize("customization", ["windows_command", "pre_handler", "post_handler"])
+def test_custom_codex_definitions_refuse_before_any_destination_write(tmp_path, installer, customization):
+    from test_gen_agent_trees import load
+    dest = _fresh(tmp_path)
+    settings = json.loads(load().render_codex_hooks_json(dest))
+    if customization == "windows_command":
+        settings["hooks"]["PreToolUse"][0]["hooks"][0]["commandWindows"] = "personal windows policy"
+    else:
+        event = "PreToolUse" if customization == "pre_handler" else "PostToolUse"
+        settings["hooks"].setdefault(event, []).append(
+            {"hooks": [{"type": "command", "command": "personal policy"}]})
+    target = dest / ".codex/hooks.json"
+    target.parent.mkdir()
+    target.write_text(json.dumps(settings))
+    (dest / "AGENTS.md").write_bytes(b"private instructions before upgrade")
+    before = {p.relative_to(dest).as_posix(): p.read_bytes() for p in dest.rglob("*") if p.is_file()}
+    result = _install(installer, tmp_path, dest, "--agent", "codex")
+    assert result.returncode != 0, _ok(result)
+    assert "custom codex hook definitions" in (result.stdout + result.stderr).lower(), _ok(result)
+    assert {p.relative_to(dest).as_posix(): p.read_bytes() for p in dest.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1", "ps51"])
+def test_semantically_unchanged_codex_definitions_remain_byte_exact_and_readonly(tmp_path, installer):
+    from test_gen_agent_trees import load
+    dest = _fresh(tmp_path)
+    settings = json.loads(load().render_codex_hooks_json(dest))
+    target = dest / ".codex/hooks.json"
+    target.parent.mkdir()
+    raw = (json.dumps(settings, sort_keys=True) + "\n").encode("utf-8")
+    target.write_bytes(raw)
+    target.chmod(0o444)
+    mode = target.stat().st_mode
+    try:
+        result = _install(installer, tmp_path, dest, "--agent", "codex")
+        assert result.returncode == 0, _ok(result)
+        assert target.read_bytes() == raw and target.stat().st_mode == mode
+    finally:
+        target.chmod(0o644)

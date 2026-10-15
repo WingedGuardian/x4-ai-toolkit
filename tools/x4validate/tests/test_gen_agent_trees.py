@@ -81,13 +81,25 @@ def test_every_skill_and_settings_is_generated():
 
 
 def test_tokens_are_rendered_everywhere():
-    # ONE exemption (Plan 3 lane J): `{{TOOLKIT}}` in `.agents/skills/` (and OpenCode's
+    # Runtime carriers: `{{TOOLKIT}}` in `.agents/skills/` (and OpenCode's
     # `.opencode/skills/`, which render identically) is left for the
     # INSTALLER to render per OS. Anything else with `{{` -- any other token, or that token
-    # anywhere else -- is a leak.
-    leaks = [rel for rel, text in load().generate(REPO).items()
-             if "{{" in (text.replace("{{TOOLKIT}}", "") if rel.startswith((".agents/skills/", ".opencode/skills/")) else text)]
+    # anywhere else -- is a leak. The frozen runtime Codex template deliberately
+    # retains exactly its two root slots; the next test binds it to the source.
+    def residue(rel, text):
+        if rel.startswith((".agents/skills/", ".opencode/skills/")):
+            return text.replace("{{TOOLKIT}}", "")
+        if rel == "tools/x4_harness/codex-hooks.json.tmpl":
+            return text.replace("{{ROOT}}", "").replace("{{ROOT_WIN}}", "")
+        return text
+    leaks = [rel for rel, text in load().generate(REPO).items() if "{{" in residue(rel, text)]
     assert leaks == []
+
+
+def test_runtime_codex_template_is_the_complete_frozen_source():
+    template = (REPO / "agent/targets/codex/hooks.json.tmpl").read_text(encoding="utf-8")
+    actual = load().generate(REPO)["tools/x4_harness/codex-hooks.json.tmpl"]
+    assert actual == template and "{{ROOT}}" in actual and "{{ROOT_WIN}}" in actual
 
 
 def test_no_double_banner_on_the_cli_reference():
