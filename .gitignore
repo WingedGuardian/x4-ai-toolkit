@@ -127,3 +127,5 @@ release/nexus/
 # OpenCode (Plan 3 lane L): the permission deny rules name this machine's absolute roots,
 # so the installers render them per install (.opencode/hooks/opencode_config.py write).
 /.opencode/opencode.jsonc
+/KNOWLEDGEBASE.local.md
+/KNOWLEDGEBASE.pre-4.0-*.md

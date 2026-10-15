@@ -42,6 +42,21 @@ code, file named), **INFERRED** (reasoned, not run). Write your own findings the
   first and applies the same bulk approval policy. A bulk helper needs canonical
   paths, logical count and command hash from a qualified human reader; an unknown
   host cannot grant that approval. Both commands use the configured save store.
+
+  `upgrade-preview --candidate FILE [--previous FILE]` compares version 1 hash
+  inventories (`{"v":1,"files":{"relative/path":"sha256"}}`) without writing
+  anything. Unknown or modified installed bytes remain preserved collisions;
+  only exact bytes from a verified previous inventory qualify as owned.
+
+  `preferences` renders only the explicit `## My preferences` section from
+  `KNOWLEDGEBASE.local.md`, using the same bounded parser as Skyrim. Existing
+  Claude/Codex session hooks and the OpenCode system transform reinject it;
+  other hosts can read it themselves. The example file starts with an empty
+  preference section. The installers retain an independently verified
+  `KNOWLEDGEBASE.pre-4.0-<sha256>.md` before replacing a differing legacy
+  knowledgebase; existing local notes are never edited or guessed into policy.
+  Failed preservation refuses the copy. `notes-preserve --destination DIR
+  --reference FILE` exposes that operation (exit 0 succeeds, exit 2 refuses).
 - `x4guard conformance` (section 5) needs more than `check` does: the toolkit's `scripts/`
   folder, a **`.claude/hooks/`** folder at the toolkit root (the reference guards it replays
   against, and what `{HOOKS}` names in a profile), Git Bash (on Windows) and `jq`. So run it from

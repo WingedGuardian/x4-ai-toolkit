@@ -6,6 +6,10 @@ Guidance for the AI coding agent working in an X4: Foundations modding environme
 This file is loaded automatically every session.
 An agent this toolkit has no adapter for: read `ADAPTING.md` before relying on any guard.
 
+Keep your learned facts in `KNOWLEDGEBASE.local.md`; toolkit updates preserve it.
+Read it each session, including its `## My preferences` section. Imported legacy
+notes remain evidence to review; do not turn unclassified notes into standing orders.
+
 ## What This Is
 
 An AI-assisted X4 (v7.x–v9.x) modding workspace. The goal is coordinated multi-file XML

@@ -56,6 +56,14 @@ def test_generic_runtime_works_without_any_named_agent_folder(tmp_path):
     unknown = run("check", dict(action, tool="future-code-mode", surface="nested", paths=[], operations=[]))
     assert unknown["result"]["decision"] == "allow" and unknown["result"]["evaluation"] == "unguarded"
     assert run("check", dict(action, operations=[]))["result"]["decision"] == "deny"
+    note = root / "notes.txt"
+    note.write_bytes(b"unclassified personal notes")
+    candidate = root / "candidate.json"
+    candidate.write_text(json.dumps({"v": 1, "files": {"notes.txt": "a" * 64}}))
+    plan = run("upgrade-preview", None, "--candidate", str(candidate))
+    assert plan["mode"] == "read-only preview" and plan["collisions"] == 1
+    assert plan["files"][0]["action"] == "preserve_collision"
+    assert note.read_bytes() == b"unclassified personal notes"
     assert not any((root / folder).exists() for folder in (".claude", ".codex", ".opencode", ".agents"))
 
 
@@ -103,7 +111,6 @@ def test_bulk_in_place_restore_binds_human_scope_command_count_and_host(tmp_path
     human(approval.example("s", "write", members))
     assert run(args)["decision"] == "deny"
     human(grant)
-    changed = args + ["--path", str(members[0])]
     # Single-save helpers follow the normal one/two-save rule; use changed bulk
     # argument order to retain three saves while changing the bound command.
     changed = [*args[:2], "--host", "claude", "--in-place", *args[5:]]

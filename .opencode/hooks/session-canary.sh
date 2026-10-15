@@ -26,6 +26,16 @@
 case "$0" in */*|*\\*) HOOK_DIR="${0%[/\\]*}" ;; *) HOOK_DIR=. ;; esac
 . "$HOOK_DIR/_x4-env.sh"
 
+# Anchor personal notes to THIS hook tree, independently of inherited tool roots.
+if [ -f "$HOOK_DIR/../../KNOWLEDGEBASE.local.md" ]; then
+  x4_resolve_python
+  if [ -n "$X4_PY" ]; then
+    "$X4_PY" "$HOOK_DIR/preferences.py" 2>/dev/null || echo "PREFERENCES: NOT INJECTED -- read KNOWLEDGEBASE.local.md yourself."
+  else
+    echo "PREFERENCES: NOT INJECTED -- Python is unavailable; read KNOWLEDGEBASE.local.md yourself."
+  fi
+fi
+
 # X4_GUARD=off (spec 5.7): FIRST, before the canary, because a session whose guards are off
 # must be unmissable -- and the preview keeps the head.
 if x4_guards_off; then

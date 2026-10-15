@@ -33,6 +33,13 @@ def main(argv=None):
     check.add_argument("--preview", action="store_true")
     check.add_argument("--transcript", default="")
     sub.add_parser("capabilities")
+    sub.add_parser("preferences")
+    notes = sub.add_parser("notes-preserve")
+    notes.add_argument("--destination", required=True, type=Path)
+    notes.add_argument("--reference", required=True, type=Path)
+    upgrade = sub.add_parser("upgrade-preview")
+    upgrade.add_argument("--candidate", required=True, type=Path)
+    upgrade.add_argument("--previous", type=Path)
     coverage = sub.add_parser("coverage")
     coverage.add_argument("--session-id", required=True)
     sub.add_parser("save-list")
@@ -47,6 +54,7 @@ def main(argv=None):
     restore.add_argument("--transcript", default="")
     args = parser.parse_args(argv)
     contracts = save_policy.core(ROOT, "contracts")
+    exit_status = 0
     try:
         if args.command == "capabilities":
             output = {"api_version": 1, "profile": "x4", "unknown_policy": "warn and allow",
@@ -55,6 +63,20 @@ def main(argv=None):
                       "host_enforcement": "unmeasured; qualify the actual host transport and review hooks",
                       "post_validation": "not run by this pre-operation entry",
                       "save_restore": "new directory by default; guarded in-place replacement preserves current saves"}
+        elif args.command == "notes-preserve":
+            deadline = time.monotonic() + 40
+            digest = save_policy.core(ROOT, "durable").digest(args.reference, deadline)
+            output = save_policy.core(ROOT, "upgrade").preserve_notes(args.destination, digest, deadline=deadline)
+        elif args.command == "preferences":
+            output = {"context": save_policy.core(ROOT, "preferences").render(ROOT),
+                      "scope": "explicit My preferences section only; unclassified notes remain notes"}
+        elif args.command == "upgrade-preview":
+            load = save_policy.core(ROOT, "transport").load
+            def read_manifest(path):
+                with path.open("rb") as stream:
+                    return load(stream.read(1024 * 1024 + 1))
+            output = save_policy.core(ROOT, "upgrade").preview(ROOT, read_manifest(args.candidate),
+                     read_manifest(args.previous) if args.previous else None, deadline=time.monotonic() + 20)
         elif args.command == "coverage":
             output = save_policy.core(ROOT, "telemetry").Telemetry(ROOT).report(args.session_id)
         elif args.command in ("save-list", "save-restore"):
@@ -116,10 +138,12 @@ def main(argv=None):
             output = save_policy.batch(payload, calls, lambda qualified: judge(calls, qualified, deadline),
                                        deadline, action.host, args.preview)
     except (OSError, ValueError, RecursionError, UnicodeError, TimeoutError) as exc:
+        if args.command == "notes-preserve":
+            exit_status = 2  # An installer must refuse its copy when preservation failed.
         output = {"api_version": 1, "result": contracts.Result("deny", "failed", reason=
                   "generic X4 entry failed: " + type(exc).__name__).as_dict(), "transactions": []}
     sys.stdout.buffer.write((json.dumps(output, ensure_ascii=True) + "\n").encode("ascii"))
-    return 0
+    return exit_status
 
 
 if __name__ == "__main__":

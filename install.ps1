@@ -467,7 +467,7 @@ function Get-OwnedEnvLinesFromFile($f) {
 #: locked-target precheck below is a third caller.
 #:
 #: COMMON to every agent target; each agent's own files live in $X4AgentItems only.
-$X4CopyItems = @('tools','bin','scripts','mods','KNOWLEDGEBASE.md','README.md',
+$X4CopyItems = @('tools','bin','scripts','mods','KNOWLEDGEBASE.md','KNOWLEDGEBASE.local.md.example','README.md',
                  'CHANGELOG.md','LICENSE','setup.sh','install.sh','install.ps1','SETUP_PROMPT.txt','ADAPTING.md',
                  '.gitignore','.gitattributes','x4-paths.env.example')
 
@@ -1358,9 +1358,28 @@ function Copy-Excluding([string]$rel, [string]$dest) {
   }
 }
 
+function Get-X4RawSha256($path) {
+  $stream = [IO.File]::OpenRead($path)
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+  finally { $sha.Dispose(); $stream.Dispose() }
+}
+
 function Copy-Toolkit($dest) {
   Refuse-IfDryRun 'copying the toolkit into' $dest
   New-Item -ItemType Directory -Force -Path (Join-Path $dest '.claude') | Out-Null
+  $notes = Join-Path $dest 'KNOWLEDGEBASE.md'
+  $reference = Join-Path $SRC 'KNOWLEDGEBASE.md'
+  if ((Test-Path -LiteralPath $notes -PathType Leaf) -and
+      (Get-X4RawSha256 $notes) -ne (Get-X4RawSha256 $reference)) {
+    $py = Find-OcPython
+    if (-not $py) { throw 'Preserving the existing knowledgebase needs Python >= 3.10; no toolkit files were copied.' }
+    $extra = @($py | Select-Object -Skip 1)
+    $saved = Invoke-X4Native $py[0] (@($extra) + @((Join-Path $SRC 'tools/agent-harness.py'), 'notes-preserve',
+                                                 '--destination', $dest, '--reference', $reference))
+    if ($saved.Rc -ne 0) { throw 'Legacy notes preservation failed; no toolkit files were copied.' }
+    Write-Host $saved.Out
+  }
 
   # BACK UP BEFORE THE COPY, and that ordering IS the fix. The Copy-Item loop below
   # overwrites .claude wholesale, so anything saved afterwards is the SOURCE machine's

@@ -313,6 +313,25 @@ def test_the_harness_can_install_at_all(installer, tmp_path):
     assert (dest / "scripts").is_dir(), "the installer reported success and copied no scripts/"
 
 
+@pytest.mark.parametrize("installer", ["sh", "ps1", "ps51"])
+def test_upgrade_retains_legacy_knowledge_and_existing_local_preferences(installer, tmp_path):
+    dest = _fresh(tmp_path)
+    legacy = b"# Existing knowledge\nA private learned fact.\n## My preferences\nOld unclassified text.\n"
+    local = b"## My preferences\nKeep these actual preferences.\n"
+    (dest / "KNOWLEDGEBASE.md").write_bytes(legacy)
+    (dest / "KNOWLEDGEBASE.local.md").write_bytes(local)
+    result = _install(installer, tmp_path, dest, "--agent", "generic")
+    assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
+    snapshots = list(dest.glob("KNOWLEDGEBASE.pre-4.0-*.md"))
+    assert len(snapshots) == 1 and snapshots[0].read_bytes() == legacy
+    assert (dest / "KNOWLEDGEBASE.local.md").read_bytes() == local
+    assert (dest / "KNOWLEDGEBASE.md").read_bytes() == (ROOT / "KNOWLEDGEBASE.md").read_bytes()
+    again = _install(installer, tmp_path, dest, "--agent", "generic")
+    assert again.returncode == 0, again.stderr
+    assert list(dest.glob("KNOWLEDGEBASE.pre-4.0-*.md")) == snapshots
+    assert (dest / "KNOWLEDGEBASE.local.md").read_bytes() == local
+
+
 def test_the_harness_NEVER_lets_an_installer_reach_the_real_user_env(tmp_path, monkeypatch):
     """Every installer run gets a sandboxed registry key, HOME, ZDOTDIR, SHELL and detect
     PATH, and --no-env unless the test asks for the env write. A test that forgot cannot

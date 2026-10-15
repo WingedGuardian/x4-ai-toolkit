@@ -49,7 +49,7 @@ except ImportError:                # source tree: agent/guards/adapters/codex.py
     import codex as core           # noqa: E402
 import patch_paths                 # noqa: E402
 
-EVENTS = ("pre", "post")
+EVENTS = ("pre", "post", "session")
 SHELLS = ("bash", "powershell")
 SHELL_TOOL = "bash"
 FILE_TOOLS = ("edit", "write")
@@ -226,6 +226,12 @@ def handle(event: str, raw: bytes) -> dict:
         p = _payload(raw)
     except Unreadable as e:
         return _inert(str(e)) if event == "pre" else _out("advise", context=f"X4 VALIDATION DID NOT RUN: {e}.")
+    if event == "session":
+        try:
+            text = core.save_policy.core(Path(p["directory"]), "preferences").render(p["directory"])
+            return _out("advise" if text else "allow", context=text or None)
+        except (OSError, ValueError, ImportError):
+            return _out("advise", context="PREFERENCES: NOT INJECTED -- read KNOWLEDGEBASE.local.md yourself.")
     if event == "pre":
         return pre(p)
     answer = post(p)
@@ -237,7 +243,7 @@ def handle(event: str, raw: bytes) -> dict:
                                   (SHELL_TOOL, *FILE_TOOLS, PATCH_TOOL) else "unknown",
                                   cwd=p["directory"], session_id=p.get("session_id", ""),
                                   tool_call_id=p.get("call_id", ""), host_version=p.get("host_version", "unknown"))
-        result = contracts.Result(validation="not-run")
+        result = contracts.Result(validation="not_run")
         core.save_policy.core(root, "telemetry").Telemetry(root).record(
             action, "post", result, source="OpenCode V1 adapter; validator details remain in tool output")
     except (OSError, ValueError, ImportError):

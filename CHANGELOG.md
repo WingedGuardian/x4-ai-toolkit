@@ -2,6 +2,12 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Local knowledge and preferences survive upgrades. Both installers retain a
+  verified independent legacy knowledgebase before replacement, preserve existing
+  local notes, and refuse if preservation fails. Claude, Codex and OpenCode use
+  Skyrim's shared bounded preference parser; unclassified notes are not injected
+  as standing instructions. Ownership previews preserve modified/unowned files.
+
 - Shared pinned OpenCode V1 transport with bounded discovery/cleanup, sparse
   unknown-tool warnings, and private pre/post correlation receipts. Running-host
   enforcement remains unmeasured. Generic recovery now supports guarded in-place

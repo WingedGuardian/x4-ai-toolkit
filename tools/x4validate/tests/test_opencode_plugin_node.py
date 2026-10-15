@@ -145,6 +145,17 @@ def test_unknown_adapter_failure_warns_without_inventing_a_receipt(oc, tmp_path)
     assert not (tk / ".modding-agent-harness/coverage.sqlite3").exists()
 
 
+def test_preferences_are_reinjected_on_each_system_transform(oc):
+    tk, env = oc
+    (tk / "KNOWLEDGEBASE.local.md").write_text("## My preferences\nKeep my notes.\n## Other\nUnclassified evidence.")
+    step = {"hook": "experimental.chat.system.transform", "input": {}, "output": {"system": []}}
+    result = drive(tk, env, [step, step])
+    for row in result["steps"]:
+        assert not row["threw"]
+        context = "\n".join(row["output"]["system"])
+        assert "Keep my notes." in context and "Unclassified evidence." not in context
+
+
 def test_no_python_THROWS_inert(oc, tmp_path):
     tk, env = oc
     env = dict(env, X4_PYTHON=str(tmp_path / "no-python.exe"), X4_NO_PYTHON_FALLBACK="1")
