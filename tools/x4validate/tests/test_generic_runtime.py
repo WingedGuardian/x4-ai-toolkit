@@ -67,6 +67,30 @@ def test_generic_runtime_works_without_any_named_agent_folder(tmp_path):
     assert not any((root / folder).exists() for folder in (".claude", ".codex", ".opencode", ".agents"))
 
 
+def test_generic_upgrade_staging_preserves_install_and_fails_nonzero_if_reused(tmp_path):
+    import hashlib
+    root = tmp_path / "toolkit"
+    for rel in ("tools/x4_harness", "tools/modding_harness"):
+        shutil.copytree(REPO / rel, root / rel, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(REPO / "tools/agent-harness.py", root / "tools/agent-harness.py")
+    installed, source, bundle = tmp_path / "installed", tmp_path / "source", tmp_path / "review"
+    installed.mkdir()
+    source.mkdir()
+    (installed / "AGENTS.md").write_bytes(b"private instructions")
+    (source / "AGENTS.md").write_bytes(b"candidate instructions")
+    inventory = tmp_path / "candidate.json"
+    inventory.write_text(json.dumps({"v": 1, "files": {"AGENTS.md": hashlib.sha256(b"candidate instructions").hexdigest()}}))
+    args = [sys.executable, "-B", str(root / "tools/agent-harness.py"), "upgrade-stage", "--installed-root", str(installed),
+            "--source", str(source), "--candidate", str(inventory), "--destination", str(bundle)]
+    first = subprocess.run(args, capture_output=True, timeout=45)
+    assert first.returncode == 0, first.stderr
+    result = json.loads(first.stdout)
+    assert result["complete"] and not result["application_authorized"] and result["collisions"] == 1
+    assert (installed / "AGENTS.md").read_bytes() == b"private instructions"
+    assert (bundle / "rollback/AGENTS.md").read_bytes() == b"private instructions"
+    assert subprocess.run(args, capture_output=True, timeout=45).returncode == 2
+
+
 def test_bulk_in_place_restore_binds_human_scope_command_count_and_host(tmp_path):
     root = tmp_path / "toolkit"
     for rel in ("tools/x4_harness", "tools/modding_harness"):

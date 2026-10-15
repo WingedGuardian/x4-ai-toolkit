@@ -48,6 +48,13 @@ code, file named), **INFERRED** (reasoned, not run). Write your own findings the
   anything. Unknown or modified installed bytes remain preserved collisions;
   only exact bytes from a verified previous inventory qualify as owned.
 
+  `upgrade-stage --installed-root DIR --source DIR --candidate FILE --destination DIR`
+  prepares independent candidate/rollback copies, merged project settings and
+  local-setting review. Optional `--previous FILE`, `--owned-command COMMAND` and
+  `--local-file PATH` supply verified prior ownership and personal policy files.
+  It changes no installed files or host trust. The bundle contains private data;
+  keep it outside release artifacts. Exit 2 means staging refused or incomplete.
+
   `preferences` renders only the explicit `## My preferences` section from
   `KNOWLEDGEBASE.local.md`, using the same bounded parser as Skyrim. Existing
   Claude/Codex session hooks and the OpenCode system transform reinject it;

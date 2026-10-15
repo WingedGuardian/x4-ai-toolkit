@@ -40,6 +40,15 @@ def main(argv=None):
     upgrade = sub.add_parser("upgrade-preview")
     upgrade.add_argument("--candidate", required=True, type=Path)
     upgrade.add_argument("--previous", type=Path)
+    upgrade.add_argument("--installed-root", type=Path)
+    stage = sub.add_parser("upgrade-stage")
+    stage.add_argument("--candidate", required=True, type=Path)
+    stage.add_argument("--previous", type=Path)
+    stage.add_argument("--installed-root", type=Path)
+    stage.add_argument("--source", required=True, type=Path)
+    stage.add_argument("--destination", required=True, type=Path)
+    stage.add_argument("--owned-command", action="append", default=[])
+    stage.add_argument("--local-file", action="append", default=[])
     coverage = sub.add_parser("coverage")
     coverage.add_argument("--session-id", required=True)
     sub.add_parser("save-list")
@@ -70,13 +79,22 @@ def main(argv=None):
         elif args.command == "preferences":
             output = {"context": save_policy.core(ROOT, "preferences").render(ROOT),
                       "scope": "explicit My preferences section only; unclassified notes remain notes"}
-        elif args.command == "upgrade-preview":
+        elif args.command in ("upgrade-preview", "upgrade-stage"):
             load = save_policy.core(ROOT, "transport").load
             def read_manifest(path):
                 with path.open("rb") as stream:
                     return load(stream.read(1024 * 1024 + 1))
-            output = save_policy.core(ROOT, "upgrade").preview(ROOT, read_manifest(args.candidate),
-                     read_manifest(args.previous) if args.previous else None, deadline=time.monotonic() + 20)
+            candidate = read_manifest(args.candidate)
+            previous = read_manifest(args.previous) if args.previous else None
+            upgrade = save_policy.core(ROOT, "upgrade")
+            if args.command == "upgrade-preview":
+                output = upgrade.preview(args.installed_root or ROOT, candidate, previous, deadline=time.monotonic() + 20)
+            else:
+                bundle = upgrade.stage_review_bundle(args.installed_root or ROOT, args.source, args.destination,
+                    candidate, previous, owned_commands=args.owned_command, local_files=args.local_file)
+                output = {"bundle": str(args.destination.resolve()), "complete": True,
+                          "collisions": bundle["plan"]["collisions"], "application_authorized": False,
+                          "ordered_dispatch_review_required": bundle["ordered_dispatch_review_required"]}
         elif args.command == "coverage":
             output = save_policy.core(ROOT, "telemetry").Telemetry(ROOT).report(args.session_id)
         elif args.command in ("save-list", "save-restore"):
@@ -138,7 +156,7 @@ def main(argv=None):
             output = save_policy.batch(payload, calls, lambda qualified: judge(calls, qualified, deadline),
                                        deadline, action.host, args.preview)
     except (OSError, ValueError, RecursionError, UnicodeError, TimeoutError) as exc:
-        if args.command == "notes-preserve":
+        if args.command in ("notes-preserve", "upgrade-stage"):
             exit_status = 2  # An installer must refuse its copy when preservation failed.
         output = {"api_version": 1, "result": contracts.Result("deny", "failed", reason=
                   "generic X4 entry failed: " + type(exc).__name__).as_dict(), "transactions": []}
