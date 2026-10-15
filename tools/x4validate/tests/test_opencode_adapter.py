@@ -275,7 +275,9 @@ def test_the_plugin_judges_every_built_in_tool_that_writes():
     from _layout import require_repo
     require_repo("agent/targets/opencode/x4guard.js", "docs/superpowers",
                  why="the plugin SOURCE and the measurement record")
-    js = (REPO / "agent" / "targets" / "opencode" / "x4guard.js").read_text(encoding="utf-8")
+    wrapper = (REPO / "agent/targets/opencode/x4guard.js").read_text(encoding="utf-8")
+    assert '../../tools/modding_harness/opencode_plugin.mjs' in wrapper
+    js = (REPO / "tools/modding_harness/opencode_plugin.mjs").read_text(encoding="utf-8")
     judged = set(re.findall(r'"(\w+)"', re.search(r"const JUDGED = new Set\(\[([^\]]*)\]\)", js).group(1)))
     assert judged == {"bash", "edit", "write", "apply_patch"}, judged
     doc = (REPO / "docs" / "superpowers" / "measurements" / "2026-10-02-opencode-read.md").read_text(encoding="utf-8")

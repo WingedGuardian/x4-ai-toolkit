@@ -110,11 +110,39 @@ def test_a_bash_delete_of_reference_THROWS(oc):
     assert r["steps"][0]["threw"], r
 
 
-def test_a_read_tool_never_spawns_python(oc, tmp_path):
+def test_unknown_tools_still_allow_when_receipts_are_unavailable(oc, tmp_path):
     tk, env = oc
     env = dict(env, X4_PYTHON=str(tmp_path / "no-python.exe"), X4_NO_PYTHON_FALLBACK="1")
     r = drive(tk, env, [before(t, {"filePath": str(tk / "reference" / "x")}) for t in ("read", "glob", "grep", "webfetch")])
     assert not any(s["threw"] for s in r["steps"]), r
+
+
+def test_unknown_occurrences_reach_receipts_and_sparse_output(oc):
+    tk, env = oc
+    steps = []
+    for number in range(5):
+        steps += [before("future-mcp", {}, str(number)), after("future-mcp", {}, str(number))]
+    result = drive(tk, env, steps)
+    assert not any(step["threw"] for step in result["steps"]), result
+    notes = [step["output"]["output"] for step in result["steps"][1::2]]
+    assert ["WARN AND ALLOW" in note for note in notes] == [True, True, False, True, False]
+    sys.path.insert(0, str(tk / "tools"))
+    try:
+        from modding_harness.telemetry import Telemetry
+        coverage = Telemetry(tk).report("s")
+    finally:
+        sys.path.pop(0)
+    assert coverage["unknown_occurrences"] == {"opencode:future-mcp": 5}, coverage
+    assert coverage["correlated_calls"] == 5, coverage
+
+
+def test_unknown_adapter_failure_warns_without_inventing_a_receipt(oc, tmp_path):
+    tk, env = oc
+    env = dict(env, X4_PYTHON=str(tmp_path / "no-python.exe"), X4_NO_PYTHON_FALLBACK="1")
+    result = drive(tk, env, [before("future-mcp", {}), after("future-mcp", {})])
+    assert not any(step["threw"] for step in result["steps"]), result
+    assert "coverage receipt unavailable" in result["steps"][1]["output"]["output"]
+    assert not (tk / ".modding-agent-harness/coverage.sqlite3").exists()
 
 
 def test_no_python_THROWS_inert(oc, tmp_path):

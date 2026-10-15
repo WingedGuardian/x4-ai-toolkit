@@ -30,7 +30,18 @@ code, file named), **INFERRED** (reasoned, not run). Write your own findings the
   the same guards and an `x4guard.py` whose `check` answers), from an install that included
   Claude Code, Codex or OpenCode (`--agent all` includes all three), from the release zip, or
   from a git clone. An install made with `--agent generic` ships no guard tree at all (READ:
-  `install.sh`, `X4_AGENT_ITEMS_generic`).
+  `install.sh`, `X4_AGENT_ITEMS_generic`). The 4.0 neutral runtime is in
+  `tools/x4_harness/` and `tools/modding_harness/`; it needs none of the named
+  agent directories. `python tools/agent-harness.py capabilities` describes its
+  contract, `check` accepts Action v1 JSON on stdin, and `coverage --session-id ID`
+  reports private process receipts. An integrating host must honor refusals before
+  execution; these commands do not establish interception or host trust.
+
+  `save-list` lists permanent neutral transactions. `save-restore ID --to DIR`
+  restores to a new directory by default; `--in-place` preserves the current save
+  first and applies the same bulk approval policy. A bulk helper needs canonical
+  paths, logical count and command hash from a qualified human reader; an unknown
+  host cannot grant that approval. Both commands use the configured save store.
 - `x4guard conformance` (section 5) needs more than `check` does: the toolkit's `scripts/`
   folder, a **`.claude/hooks/`** folder at the toolkit root (the reference guards it replays
   against, and what `{HOOKS}` names in a profile), Git Bash (on Windows) and `jq`. So run it from

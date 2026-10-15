@@ -2,6 +2,11 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Shared pinned OpenCode V1 transport with bounded discovery/cleanup, sparse
+  unknown-tool warnings, and private pre/post correlation receipts. Running-host
+  enforcement remains unmeasured. Generic recovery now supports guarded in-place
+  replacement with verified current-save preservation and command-bound bulk grants.
+
 **The toolkit is now the "X4 AI Assistant Toolkit"** and works with more than one coding agent:
 **Claude Code and OpenAI Codex** are first-class, **OpenCode** is best effort (CLI only, built from
 its docs and source, not measured), and any other agent can be connected through `ADAPTING.md`.

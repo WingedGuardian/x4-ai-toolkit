@@ -150,12 +150,15 @@ def resolve(root, roots, evidence, deadline=None):
 
 
 def enforce(root, roots, evidence, action, backend, *, transcript="", preview=False, deadline=None,
-            local_restrictions=()):
+            local_restrictions=(), helper=False):
     """backend(save_only) returns a v1 Result after all Bash/local rules ran."""
     contracts = core(root, "contracts")
     dispatch = core(root, "dispatch")
     try:
         profile, plan, affected, save_only = resolve(root, roots, evidence, deadline)
+        if helper:
+            plan = replace(plan, helper=True, recheck=plan.recheck or
+                           (lambda: resolve(root, roots, evidence, deadline)[1].mutations))
         action = replace(action, paths=tuple(path for path, _op in affected),
                          operations=tuple(op for _path, op in affected))
         def evaluate(request):
@@ -197,7 +200,7 @@ def read_roots(deadline):
     return packet(result.stdout.decode("utf-8") + "{}")[0]
 
 
-def batch(payload, calls, judge, deadline, host, preview=False):
+def batch(payload, calls, judge, deadline, host, preview=False, helper=False):
     """The named adapters call this once, before ANY mutation is permitted."""
     if not calls:
         root = native(os.environ.get("X4_TOOLKIT") or str(Path(__file__).resolve().parents[1]))
@@ -243,7 +246,7 @@ def batch(payload, calls, judge, deadline, host, preview=False):
                                 reason=verdict.get("reason") or "",
                                 warnings=(verdict["context"],) if verdict.get("context") else ())
     outcome = enforce(root, roots, evidence, action, backend, deadline=deadline,
-                      transcript=str(payload.get("transcript_path", "")), preview=preview)
+                      transcript=str(payload.get("transcript_path", "")), preview=preview, helper=helper)
     result = outcome.result
     if result.decision in ("deny", "ask"):
         return {"decision": result.decision, "inert": result.evaluation == "failed",

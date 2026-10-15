@@ -16,19 +16,35 @@ import save_policy
 import x4guard
 
 
+def judge(calls, qualified, deadline):
+    verdicts = [x4guard.verdict_for(kind, shell, command, path, deadline=deadline, save_qualified=qualified)
+                for kind, shell, command, path, _label in calls]
+    worst = dict(max(verdicts, key=lambda verdict: (bool(verdict.get("inert")), x4guard.RANK[verdict["decision"]])))
+    notes = [verdict["context"] for verdict in verdicts if verdict.get("context")]
+    if notes:
+        worst["context"] = "\n".join(dict.fromkeys(notes))
+    return worst
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check")
     check.add_argument("--preview", action="store_true")
+    check.add_argument("--transcript", default="")
     sub.add_parser("capabilities")
     coverage = sub.add_parser("coverage")
     coverage.add_argument("--session-id", required=True)
     sub.add_parser("save-list")
     restore = sub.add_parser("save-restore")
     restore.add_argument("transaction")
-    restore.add_argument("--to", type=Path)
+    destination = restore.add_mutually_exclusive_group()
+    destination.add_argument("--to", type=Path)
+    destination.add_argument("--in-place", action="store_true")
     restore.add_argument("--path", action="append", default=[])
+    restore.add_argument("--host", default="generic")
+    restore.add_argument("--session-id", default="")
+    restore.add_argument("--transcript", default="")
     args = parser.parse_args(argv)
     contracts = save_policy.core(ROOT, "contracts")
     try:
@@ -38,7 +54,7 @@ def main(argv=None):
                                    "mcp": "unguarded", "nested_code_mode": "unguarded"},
                       "host_enforcement": "unmeasured; qualify the actual host transport and review hooks",
                       "post_validation": "not run by this pre-operation entry",
-                      "save_restore": "new directory; live in-place restore is not exposed by this entry"}
+                      "save_restore": "new directory by default; guarded in-place replacement preserves current saves"}
         elif args.command == "coverage":
             output = save_policy.core(ROOT, "telemetry").Telemetry(ROOT).report(args.session_id)
         elif args.command in ("save-list", "save-restore"):
@@ -51,7 +67,35 @@ def main(argv=None):
                 output = {"transactions": rows, "unreadable": unreadable,
                           "blob_verification": "runs for selected saves on restore", "destination": str(store.root)}
             else:
-                output = store.restore(args.transaction, args.to, args.path)
+                if not args.in_place:
+                    output = store.restore(args.transaction, args.to, args.path)
+                else:
+                    canonical = save_policy.core(ROOT, "profiles").canonical
+                    selected = {canonical(path) for path in args.path}
+                    manifest = store.inspect(args.transaction)
+                    groups = [group for group in manifest["groups"] if not selected or
+                              any(member["canonical"] in selected for member in group["members"])]
+                    members = [member for group in groups for member in group["members"]]
+                    if selected - {member["canonical"] for member in members}:
+                        raise ValueError("selected path is not in this transaction")
+                    if any(len(group["members"]) != 1 for group in groups) or any(
+                            canonical(Path(member["path"]).parent) not in {canonical(root) for root in profile.save_roots}
+                            or not any(member["path"].lower().endswith(ext) for ext in profile.extensions)
+                            for member in members):
+                        raise ValueError("in-place recovery is limited to this profile's configured save files")
+                    store.verify(groups)
+                    calls = [("write", None, None, member["path"], member["path"]) for member in members]
+                    deadline = time.monotonic() + 40
+                    payload = {"tool_name": "save-restore", "session_id": args.session_id,
+                               "transcript_path": args.transcript,
+                               "tool_input": {"command": json.dumps(sys.argv[1:] if argv is None else argv)}}
+                    checked = save_policy.batch(payload, calls, lambda qualified: judge(calls, qualified, deadline),
+                                                deadline, args.host, helper=True)
+                    if checked["decision"] in ("deny", "ask"):
+                        output = checked
+                    else:
+                        output = store.restore(args.transaction, selected=args.path, in_place=True)
+                        output["pre_restore_transactions"] = checked["transactions"]
         else:
             action = save_policy.core(ROOT, "generic").parse(sys.stdin.buffer.read(1024 * 1024 + 1))
             if action.surface == "shell":
@@ -66,13 +110,11 @@ def main(argv=None):
             if action.cwd:
                 os.chdir(action.cwd)
             payload = {"tool_name": action.tool, "session_id": action.session_id, "tool_use_id": action.tool_call_id,
-                       "host_version": action.host_version, "tool_input": {"command": action.command}}
+                       "host_version": action.host_version, "tool_input": {"command": action.command},
+                       "transcript_path": args.transcript}
             deadline = time.monotonic() + 40
-            def judge(qualified):
-                verdicts = [x4guard.verdict_for(kind, shell, command, path, deadline=deadline, save_qualified=qualified)
-                            for kind, shell, command, path, _label in calls]
-                return max(verdicts, key=lambda verdict: (bool(verdict.get("inert")), x4guard.RANK[verdict["decision"]]))
-            output = save_policy.batch(payload, calls, judge, deadline, action.host, args.preview)
+            output = save_policy.batch(payload, calls, lambda qualified: judge(calls, qualified, deadline),
+                                       deadline, action.host, args.preview)
     except (OSError, ValueError, RecursionError, UnicodeError, TimeoutError) as exc:
         output = {"api_version": 1, "result": contracts.Result("deny", "failed", reason=
                   "generic X4 entry failed: " + type(exc).__name__).as_dict(), "transactions": []}

@@ -226,7 +226,23 @@ def handle(event: str, raw: bytes) -> dict:
         p = _payload(raw)
     except Unreadable as e:
         return _inert(str(e)) if event == "pre" else _out("advise", context=f"X4 VALIDATION DID NOT RUN: {e}.")
-    return pre(p) if event == "pre" else post(p)
+    if event == "pre":
+        return pre(p)
+    answer = post(p)
+    # Receipt correlation is independent of validator success and host trust.
+    try:
+        root = core.save_policy.native(os.environ.get("X4_TOOLKIT") or str(HERE.parents[1]))
+        contracts = core.save_policy.core(root, "contracts")
+        action = contracts.Action("opencode", p["tool"], "native" if p["tool"] in
+                                  (SHELL_TOOL, *FILE_TOOLS, PATCH_TOOL) else "unknown",
+                                  cwd=p["directory"], session_id=p.get("session_id", ""),
+                                  tool_call_id=p.get("call_id", ""), host_version=p.get("host_version", "unknown"))
+        result = contracts.Result(validation="not-run")
+        core.save_policy.core(root, "telemetry").Telemetry(root).record(
+            action, "post", result, source="OpenCode V1 adapter; validator details remain in tool output")
+    except (OSError, ValueError, ImportError):
+        pass  # Telemetry never changes the tool's result.
+    return answer
 
 
 def main(argv=None) -> int:

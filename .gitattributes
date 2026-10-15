@@ -86,3 +86,5 @@ tools/x4validate/audit/** export-ignore
 tools/modding_harness/** text eol=lf
 tools/modding-harness.lock.json text eol=lf
 tools/x4_harness/** text eol=lf
+agent/targets/opencode/*.js text eol=lf
+.opencode/plugins/x4guard.js text eol=lf

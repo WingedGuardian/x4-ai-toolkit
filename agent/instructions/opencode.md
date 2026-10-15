@@ -36,3 +36,11 @@ write or delete.
 
 Skills live in `.opencode/skills/<name>/SKILL.md`; open the one AGENTS.md names before the task.
 Never `git add -A` / `git add .`: stage explicit paths.
+
+The plugin imports the pinned transport in `tools/modding_harness/`. Unknown
+tools warn and allow; every observed call gets a coverage receipt when Python is
+available, with warnings at counts 1, 2, 4, 8 and so on. If receipts cannot be
+written, the warning says so. `python tools/agent-harness.py coverage --session-id ID`
+reports pre/post correlation; a receipt or banner does not prove host blocking.
+The default 60-second transport budget includes Python discovery and cleanup.
+Post receipts alone do not mean validation passed. Desktop and V2 are unqualified.
