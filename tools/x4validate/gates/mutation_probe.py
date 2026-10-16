@@ -25,7 +25,7 @@ and it is why `.mutation-probe-active` exists and why you should tell anyone
 sharing the tree before starting.
 
 Run:  uv run python gates/mutation_probe.py [--verbose] [--recover]
-Exit: 0 every mutant killed · 1 survivors or hangs · 2 cannot run (see --recover)
+Exit: 0 every mutant killed · 1 survivors, hangs or unmeasured · 2 cannot run
 """
 from __future__ import annotations
 
@@ -35,6 +35,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,12 +68,10 @@ PRISTINE = ROOT / ".mutation-probe-pristine"
 #: all. Found by the v3.1.0 release sweep, where it was the one gate of 29 left.
 TEST_TIMEOUT = 120
 
-#: The WHOLE suite is a different population from a targeted run and needs its own
-#: budget. Derived from the measurement above (665.52s) with ~2.7x headroom for a
-#: slower machine and for the `.mutation-probe-active` marker being present.
-#: Deliberately NOT shared with TEST_TIMEOUT: a hanging MUTANT must still be caught
-#: in 120s, and one number serving two populations is what broke this gate.
-FULL_SUITE_TIMEOUT = 1800
+#: Separate whole-suite budget: the current 5,693-test ordinary suite measured
+#: 4,632.6s on 2026-10-16. A marked run may differ; a timeout is a non-answer.
+#: Full escalation is lazy, so targeted kills do not require a full-suite baseline.
+FULL_SUITE_TIMEOUT = 7200
 
 #: target filename -> the tests that should notice it breaking.
 #: Scoped for speed; a survivor is re-checked against the FULL suite before being
@@ -80,12 +80,14 @@ TARGETS: dict[str, list[str]] = {
     "_merge.py": ["tests/test_merge.py", "tests/test_check.py", "tests/test_provenance.py"],
     "_registry.py": ["tests/test_registries.py", "tests/test_registry_unconfigured.py",
                      "tests/test_mod_scope_is_explicit.py",
-                     "tests/test_profile_is_a_decision_log.py"],
+                     "tests/test_profile_is_a_decision_log.py",
+                     "tests/test_active_scope_engine_rules.py"],
     "_compat.py": ["tests/test_compat.py", "tests/test_compat_dropped.py"],
     "_check.py": ["tests/test_check.py", "tests/test_tierb.py",
                   "tests/test_reference_scope.py"],
     "_effective.py": ["tests/test_effective.py", "tests/test_prop_depth.py",
-                      "tests/test_effective_scope.py", "tests/test_provenance.py"],
+                      "tests/test_effective_scope.py", "tests/test_provenance.py",
+                      "tests/test_mutation_probe_detectors.py"],
     "_scan.py": ["tests/test_scan.py", "tests/test_corpus_scan.py",
                  "tests/test_no_packed_only_scan.py"],
     #: The ORACLE. Everything else here proves the toolkit self-consistent; these
@@ -93,7 +95,8 @@ TARGETS: dict[str, list[str]] = {
     #: a silently-passing guard here is worse than elsewhere -- it would turn the
     #: one external check into a rubber stamp.
     "_livedump.py": ["tests/test_livedump.py"],
-    "_livecli.py": ["tests/test_livecli.py", "tests/test_livearchive.py"],
+    "_livecli.py": ["tests/test_livecli.py", "tests/test_livearchive.py",
+                    "tests/test_mutation_probe_detectors.py"],
     "_livepipe.py": ["tests/test_livepipe.py"],
 }
 
@@ -450,9 +453,9 @@ def recover() -> int:
     return 0
 
 
-#: Verdicts that make the GATE fail. `fail` is absent on purpose: it means the
-#: MUTANT died, which is the outcome this gate exists to confirm.
-FAILING_VERDICTS = frozenset({"pass", "hang", "noscope"})
+#: Non-kill statuses make the gate fail. A measured 'fail' becomes a kill only
+#: after main subtracts the pristine marked baseline for that exact scope.
+FAILING_VERDICTS = frozenset({"pass", "hang", "noscope", "error"})
 
 
 #: The environment every mutant run must use, plus a cache purge to go with it.
@@ -478,7 +481,11 @@ def _no_bytecode_env() -> dict:
     # env-ok: PYTHONDONTWRITEBYTECODE is an interpreter switch for the CHILD
     # process, not toolkit configuration -- there is no config-file layer for it
     # and _paths would have nothing to say about it.
-    return dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    # env-ok: pytest's caller options must not stop the child after its first
+    # failure or change the declared scope. Project addopts are overridden too.
+    env.pop("PYTEST_ADDOPTS", None)
+    return env
 
 
 def _purge_bytecode() -> None:
@@ -486,37 +493,95 @@ def _purge_bytecode() -> None:
         shutil.rmtree(pyc, ignore_errors=True)
 
 
-def run_tests(tests: list[str], deselect: tuple[str, ...] = ()) -> str:
-    """'pass' = mutant survived | 'fail' = killed | 'hang' = did not finish
-    | 'noscope' = there were no tests to run, which is a NON-ANSWER.
+@dataclass(frozen=True)
+class TestRun:
+    """An executed assertion failure is evidence; an execution error is not."""
+    status: str
+    failures: frozenset[str] = frozenset()
 
-    A missing path is filtered out rather than handed to pytest, which is the
-    right thing to DO and was the wrong thing to do SILENTLY (F62): the public
-    copy of this gate ran 3 of the 4 `_registry` test files -- the fourth was
-    never ported -- and printed the same `killed` line as a full scope.
-    """
-    present = [t for t in tests if (ROOT / t).exists()]
-    missing = [t for t in tests if t not in present]
-    if missing:
-        print(f"    scope narrowed: {len(present)} of {len(tests)} test file(s) "
-              f"present; MISSING {', '.join(missing)}")
-    if not present:
-        # NOT "hang". Reporting an absence as a timeout asserts a measurement
-        # that was never taken -- and the caller then re-runs it as though it
-        # were confirming a hang, which cannot resolve a file that is not there.
-        return "noscope"
+
+def _read_result(report: Path, returncode: int) -> TestRun:
+    if returncode == 5:
+        return TestRun("noscope")
+    if returncode not in (0, 1):
+        return TestRun("error")
     try:
-        args = ["uv", "run", "--project", str(ROOT), "pytest", "-q", *present]
-        for d in deselect:
-            args += ["--deselect", d]
-        _purge_bytecode()
-        p = subprocess.run(args,
-                           cwd=str(ROOT), capture_output=True, text=True,
-                           encoding="utf-8", errors="replace",
-                           timeout=TEST_TIMEOUT, env=_no_bytecode_env())
-    except subprocess.TimeoutExpired:
-        return "hang"
-    return "pass" if p.returncode == 0 else "fail"
+        root = ET.parse(report).getroot()
+        suites = [root] if root.tag == "testsuite" else list(root)
+        if root.tag not in ("testsuite", "testsuites") or not suites:
+            return TestRun("error")
+        identities, failures = set(), set()
+        executed = 0
+        for suite in suites:
+            if suite.tag != "testsuite":
+                return TestRun("error")
+            cases = suite.findall("testcase")
+            counts = {key: int(suite.attrib[key]) for key in
+                      ("tests", "failures", "errors", "skipped")}
+            if counts != {"tests": len(cases),
+                          "failures": sum(len(c.findall("failure")) for c in cases),
+                          "errors": sum(len(c.findall("error")) for c in cases),
+                          "skipped": sum(len(c.findall("skipped")) for c in cases)}:
+                return TestRun("error")
+            if counts["errors"] or suite.find("error") is not None:
+                return TestRun("error")
+            for case in cases:
+                fields = [case.get(key, "") for key in ("file", "classname", "name")]
+                if not all(fields):
+                    return TestRun("error")
+                identity = json.dumps(fields, ensure_ascii=True, separators=(",", ":"))
+                if identity in identities:
+                    return TestRun("error")
+                identities.add(identity)
+                outcomes = sum(len(case.findall(key)) for key in ("failure", "error", "skipped"))
+                if outcomes > 1:
+                    return TestRun("error")
+                if case.find("skipped") is None:
+                    executed += 1
+                if case.find("failure") is not None:
+                    failures.add(identity)
+        if not executed:
+            return TestRun("noscope")
+        if (returncode == 1) != bool(failures):
+            return TestRun("error")
+        return TestRun("fail" if failures else "pass", frozenset(failures))
+    except (OSError, ET.ParseError, KeyError, ValueError):
+        # silent-ok: error is an explicit unqualified result, never an empty
+        # failure set or a kill. Missing/malformed reports cannot prove execution.
+        return TestRun("error")
+
+
+def measure_tests(tests: list[str], deselect: tuple[str, ...] = (),
+                  *, timeout: int = TEST_TIMEOUT) -> TestRun:
+    missing = [t for t in tests if not (ROOT / t).exists()]
+    if missing:
+        print("    scope incomplete: MISSING " + ", ".join(missing))
+        return TestRun("noscope")
+    if not tests:
+        return TestRun("noscope")
+    with tempfile.TemporaryDirectory(prefix="x4-mutation-result-") as folder:
+        report = Path(folder) / "result.xml"
+        args = [sys.executable, "-B", "-m", "pytest", "-q", *tests,
+                "-p", "no:cacheprovider", "--tb=no", "-rf", "--maxfail=0",
+                "-o", "addopts=", "-o", "junit_family=legacy", "--junitxml", str(report)]
+        for item in deselect:
+            args += ["--deselect", item]
+        try:
+            _purge_bytecode()
+            process = subprocess.run(args, cwd=str(ROOT), capture_output=True, text=True,
+                                     encoding="utf-8", errors="replace", timeout=timeout,
+                                     env=_no_bytecode_env())
+        except subprocess.TimeoutExpired:
+            return TestRun("hang")
+        except OSError:
+            # silent-ok: an unavailable interpreter is an explicit non-answer.
+            return TestRun("error")
+        return _read_result(report, process.returncode)
+
+
+def run_tests(tests: list[str], deselect: tuple[str, ...] = ()) -> str:
+    """Legacy status wrapper; 'fail' alone never establishes a mutant kill."""
+    return measure_tests(tests, deselect).status
 
 
 #: Tests that assert a property of the PRISTINE tree, and therefore fail for EVERY
@@ -525,8 +590,8 @@ def run_tests(tests: list[str], deselect: tuple[str, ...] = ()) -> str:
 #: every survivor into a "kill".
 #:
 #: MEASURED 2026-09-02, and it had disabled this gate's entire purpose. `full_suite()`
-#: is only reached when the SCOPED tests PASS -- i.e. only for a genuine survivor --
-#: and it returned "fail" for every one of them, so each was printed `killed`. TWO
+#: was only reached when the SCOPED tests PASSED, and it returned "fail" for every
+#: one of them, so each was printed `killed`. TWO
 #: independent causes, either sufficient on its own:
 #:   1. `test_every_anchor_is_unique_in_its_real_target` reads the real source and
 #:      asserts each anchor appears exactly once; with a mutant applied that mutant's
@@ -541,48 +606,15 @@ FULL_SUITE_DESELECT = (
 
 
 def full_suite() -> str:
-    return run_tests(["tests"], FULL_SUITE_DESELECT)
+    return measure_tests(["tests"], FULL_SUITE_DESELECT,
+                         timeout=FULL_SUITE_TIMEOUT).status
 
 
-def full_suite_failures() -> set | None:
-    """The SET of failing test ids across the whole suite, or None if it could not run.
-
-    A BOOLEAN is not enough here, and that is the third cause of the false kill.
-    `x4validate/_mutation.py` makes every artifact-writing path REFUSE while
-    `.mutation-probe-active` exists -- deliberately, so a poisoned artifact cannot
-    outlive the window -- so 5 tests in tests/test_effective.py fail for the whole
-    probe run. MEASURED 2026-09-02: 5 failed / 1178 passed with the marker present,
-    1183 passed without it. `full_suite()` was therefore red for every mutant, and
-    every survivor was printed `killed`.
-
-    So the escalation compares failure SETS: a mutant is caught only if it makes a
-    test fail that was NOT already failing. That is the specific consequence, rather
-    than "something changed" -- and it needs no exception list to rot.
-    """
-    args = ["uv", "run", "--project", str(ROOT), "pytest", "-q", "tests",
-            "--tb=no", "-rf"]
-    for d in FULL_SUITE_DESELECT:
-        args += ["--deselect", d]
-    try:
-        _purge_bytecode()
-        p = subprocess.run(args, cwd=str(ROOT), capture_output=True, text=True,
-                           encoding="utf-8", errors="replace",
-                           timeout=FULL_SUITE_TIMEOUT, env=_no_bytecode_env())
-    except subprocess.TimeoutExpired:
-        # silent-ok: None IS this function's non-answer channel, not a swallow. The
-        # caller REFUSES on None (rc 2) rather than treating it as "nothing failed",
-        # which is the distinction this rule exists to enforce.
-        return None
-    out = set()
-    for line in p.stdout.splitlines():
-        for tag in ("FAILED ", "ERROR "):
-            if line.startswith(tag):
-                out.add(line[len(tag):].split(" ")[0])
-    if p.returncode not in (0, 1):
-        # 2 = interrupted, 3 = internal error, 4 = usage. None of those is a
-        # measurement, and an empty set from one would read as "nothing failed".
-        return None
-    return out
+def full_suite_failures() -> set[str] | None:
+    """Complete assertion failure identities, or an explicit non-answer."""
+    result = measure_tests(["tests"], FULL_SUITE_DESELECT,
+                           timeout=FULL_SUITE_TIMEOUT)
+    return set(result.failures) if result.status in ("pass", "fail") else None
 
 
 def main() -> int:
@@ -597,120 +629,99 @@ def main() -> int:
         print("      uv run python gates/mutation_probe.py --recover", file=sys.stderr)
         return 2
 
-    baseline = run_tests(sorted({t for ts in TARGETS.values() for t in ts}))
-    if baseline == "noscope":
-        print("BASELINE has NO TEST FILES in scope - every path in TARGETS is "
-              "missing, so this gate cannot measure anything.", file=sys.stderr)
-        return 2
-    if baseline == "hang":
-        print(f"BASELINE did not finish within {TEST_TIMEOUT}s - fix that first.",
+    baseline = measure_tests(sorted({t for ts in TARGETS.values() for t in ts}))
+    if baseline.status != "pass":
+        print(f"BASELINE {baseline.status.upper()}: the unmarked scope must run green.",
               file=sys.stderr)
-        return 2
-    if baseline == "fail":
-        print("BASELINE IS RED - fix the suite before measuring mutants.", file=sys.stderr)
-        return 1
+        return 1 if baseline.status == "fail" else 2
 
-    by_target: dict[str, list] = {}
-    for m in MUTANTS:
-        by_target.setdefault(m.target, []).append(m)
+    by_target: dict[str, list[Mutant]] = {}
+    for mutant in MUTANTS:
+        by_target.setdefault(mutant.target, []).append(mutant)
     print(f"MUTATION PROBE - {len(MUTANTS)} mutants across {len(by_target)} file(s)")
-    print("=" * 88)
-
-    survivors, hangs, noscopes = [], [], []
+    survivors, hangs, unmeasured = [], [], []
+    full_baseline: set[str] | None = None
     take_pristine()
-    # AFTER take_pristine, deliberately: the marker is now on disk, so this baseline
-    # includes the tests that refuse BECAUSE of it. Taking it before would compare two
-    # different worlds and call every mutant a kill -- which is exactly what happened.
-    baseline_failures = full_suite_failures()
-    if baseline_failures is None:
-        restore_all()
-        clear_marker()
-        print("REFUSING: the full suite could not be run on the pristine tree, so no "
-              "escalation below could distinguish a survivor from a kill.",
-              file=sys.stderr)
-        return 2
-    if baseline_failures:
-        print(f"note: {len(baseline_failures)} test(s) already fail with the mutation "
-              f"marker present; a mutant counts as caught only if it adds to them.")
     try:
         for target, group in by_target.items():
             path = PKG / target
-            # BYTES, not text. read_text/write_text round-trip through universal
-            # newlines, and Python text mode on Windows re-writes every line ending as
-            # CRLF -- so mutating an LF-pinned file rewrote the WHOLE file (measured:
-            # 790 CRLF in _merge.py). That turned the line-ending gate red for every
-            # mutant, which made every survivor read as a kill.
             original_bytes = path.read_bytes()
             original = original_bytes.decode("utf-8")
-            print(f"\n  {target}")
-            for m in group:
-                n = original.count(m.old)
-                if n != 1:
-                    print(f"    SKIP   {m.name:<44} anchor appears {n}x (need exactly 1)")
-                    survivors.append((m, f"anchor not unique ({n}) - probe cannot aim"))
+            # Same marker AND same scope: marker-induced failures are not kills.
+            marked = measure_tests(TARGETS[target])
+            if marked.status not in ("pass", "fail"):
+                print(f"REFUSING: marked baseline {target}: {marked.status.upper()}",
+                      file=sys.stderr)
+                return 2
+            print(f"\n  {target} ({len(marked.failures)} marked baseline failures)")
+            for mutant in group:
+                count = original.count(mutant.old)
+                if count != 1:
+                    unmeasured.append((mutant, f"anchor appears {count}x"))
+                    print(f"    UNMEASURED {mutant.name}: anchor appears {count}x")
                     continue
-                path.write_bytes(original.replace(m.old, m.new, 1).encode("utf-8"))
-                verdict = run_tests(TARGETS[target])
-                if verdict == "hang":
-                    # Confirm before reporting. `subprocess.run(timeout=)` counts
-                    # WALL CLOCK, so a machine suspend fires it while no CPU time
-                    # passed -- MEASURED 2026-08-26 in corpus_sweep, which reported
-                    # a 20-minute HANG for a mod that re-ran in 13s. On this machine
-                    # the sleep timer counts USER inactivity, and neither the agent's
-                    # commands nor CPU load reset it, so any long unattended run can
-                    # be interrupted. Same rule as perf_guard (F50) and now
-                    # corpus_sweep: a timing that spans a suspend is a NON-ANSWER.
-                    verdict = run_tests(TARGETS[target])
-                if verdict == "pass":
-                    # Scoped tests missed it. Before calling it a survivor, ask the
-                    # WHOLE suite - scoping must never manufacture a false survivor.
-                    # Same shape as perf_guard's confirm-before-reporting (F50).
-                    #
-                    # NEW failures only. The baseline already contains the tests that
-                    # refuse because the marker exists; counting those as a kill is
-                    # what turned every survivor into one.
-                    now = full_suite_failures()
-                    if now is None:
-                        verdict = "hang"
-                    else:
-                        new = now - baseline_failures
-                        verdict = "fail" if new else "pass"
+                mutated = original.replace(mutant.old, mutant.new, 1)
+                try:
+                    compile(mutated, str(path), "exec")
+                except SyntaxError:
+                    # silent-ok: compilation failure explicitly makes the mutant
+                    # unmeasured; syntax errors cannot qualify detector coverage.
+                    unmeasured.append((mutant, "invalid Python"))
+                    print(f"    UNMEASURED {mutant.name}: invalid Python")
+                    continue
+                mutated_bytes = mutated.encode("utf-8")
+                path.write_bytes(mutated_bytes)
+                result = measure_tests(TARGETS[target])
+                if result.status == "hang":
+                    result = measure_tests(TARGETS[target])
+                new_failures = result.failures - marked.failures
+                verdict = result.status
+                if verdict in ("pass", "fail"):
+                    verdict = "fail" if new_failures else "pass"
+                    if verdict == "pass":
+                        if full_baseline is None:
+                            # Never baseline the active mutant. Keep the marker,
+                            # restore ALL targets, then reapply these exact bytes.
+                            restore_all()
+                            full_baseline = full_suite_failures()
+                            if full_baseline is None:
+                                print("REFUSING: pristine marked full baseline unqualified",
+                                      file=sys.stderr)
+                                return 2
+                            path.write_bytes(mutated_bytes)
+                        current = full_suite_failures()
+                        if current is None:
+                            verdict = "error"
+                        else:
+                            new_failures = current - full_baseline
+                            verdict = "fail" if new_failures else "pass"
                 path.write_bytes(original_bytes)
-                if verdict == "noscope":
-                    # Never challenged, so not a kill. F62 in one line: the public
-                    # copy of this gate ran 3 of 4 _registry test files and still
-                    # printed `killed`.
-                    print(f"    NOSCOPE {m.name:<43} no test file in scope exists")
-                    noscopes.append((m, "no test file in this target's scope exists"))
-                elif verdict == "hang":
-                    print(f"    HUNG   {m.name:<44} exceeded {TEST_TIMEOUT}s")
-                    hangs.append((m, f"tests did not finish within {TEST_TIMEOUT}s"))
+                if verdict == "fail":
+                    print(f"    killed {mutant.name}")
+                    if VERBOSE:
+                        for identity in sorted(new_failures):
+                            print(f"      NEW {identity}")
                 elif verdict == "pass":
-                    print(f"    LIVED  {m.name:<44} {m.why[:40]}")
-                    survivors.append((m, m.why))
+                    survivors.append((mutant, mutant.why))
+                    print(f"    LIVED {mutant.name}")
+                elif verdict == "hang":
+                    hangs.append((mutant, "targeted timeout confirmed twice"))
+                    print(f"    HUNG {mutant.name}")
                 else:
-                    print(f"    killed {m.name:<44}")
+                    unmeasured.append((mutant, verdict))
+                    print(f"    {verdict.upper()} {mutant.name}: execution unqualified")
     finally:
         restore_all()
         clear_marker()
 
-    killed = len(MUTANTS) - len(survivors) - len(hangs) - len(noscopes)
-    print("\n" + "=" * 88)
-    print(f"killed {killed}/{len(MUTANTS)}   survivors: {len(survivors)}   "
-          f"hangs: {len(hangs)}   unmeasured: {len(noscopes)}")
-    for m, why in survivors:
-        print(f"\n  SURVIVOR: {m.target} - {m.name}")
-        print(f"    edit:  {m.old[:66]}")
-        print(f"      ->   {m.new[:66]}")
-        print(f"    means: {why}")
-    for m, why in hangs:
-        print(f"\n  HUNG: {m.target} - {m.name}")
-        print(f"    means: {why} (a mutant that hangs is a finding, not a pass)")
-    for m, why in noscopes:
-        print(f"    UNMEASURED: {m.target} - {m.name}")
-        print(f"    means: {why}. Nothing was asked of this mutant, so nothing "
-              f"was learned - 'could not check' is never 'nothing wrong'.")
-    return 1 if (survivors or hangs or noscopes) else 0
+    killed = len(MUTANTS) - len(survivors) - len(hangs) - len(unmeasured)
+    print(f"\nkilled {killed}/{len(MUTANTS)}   survivors: {len(survivors)}   "
+          f"hangs: {len(hangs)}   unmeasured: {len(unmeasured)}")
+    for kind, findings in (("SURVIVOR", survivors), ("HUNG", hangs),
+                           ("UNMEASURED", unmeasured)):
+        for mutant, reason in findings:
+            print(f"  {kind}: {mutant.target} - {mutant.name}: {reason}")
+    return 1 if (survivors or hangs or unmeasured) else 0
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ import ast
 import json
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -40,15 +41,25 @@ def test_a_timeout_is_HANG_not_a_pass(monkeypatch, tmp_path):
     assert mp.run_tests(["tests"]) == "hang"
 
 
-def test_a_nonzero_exit_is_a_KILL(monkeypatch):
-    monkeypatch.setattr(mp.subprocess, "run",
-                        lambda *a, **k: subprocess.CompletedProcess(a, 1, "", ""))
+def junit_child(returncode=0, *, failure=False):
+    """A protocol fixture: write the report the actual child was asked to produce."""
+    def run(args, **kwargs):
+        suite = ET.Element("testsuite", tests="1", failures=str(int(failure)), errors="0", skipped="0")
+        case = ET.SubElement(suite, "testcase", file="tests/test_owned.py", classname="test_owned", name="test_one")
+        if failure:
+            ET.SubElement(case, "failure")
+        ET.ElementTree(suite).write(args[args.index("--junitxml") + 1], encoding="utf-8")
+        return subprocess.CompletedProcess(args, returncode, "", "")
+    return run
+
+
+def test_an_assertion_failure_is_measured(monkeypatch):
+    monkeypatch.setattr(mp.subprocess, "run", junit_child(1, failure=True))
     assert mp.run_tests(["tests"]) == "fail"
 
 
-def test_a_zero_exit_means_the_mutant_SURVIVED(monkeypatch):
-    monkeypatch.setattr(mp.subprocess, "run",
-                        lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+def test_a_zero_exit_with_a_real_executed_test_is_pass(monkeypatch):
+    monkeypatch.setattr(mp.subprocess, "run", junit_child())
     assert mp.run_tests(["tests"]) == "pass"
 
 
@@ -66,46 +77,21 @@ def test_the_timeout_is_not_the_old_half_hour():
         "widening this gate unaffordable")
 
 
-def _timeout_arg_of(func_name):
-    """The NAME passed as `timeout=` to subprocess.run inside `func_name`.
-
-    Read off the AST rather than the text: a substring check is satisfied by a
-    comment that merely mentions the constant, which is the shape that let a
-    deleted mechanism keep a green test (#37).
-    """
-    tree = ast.parse(Path(mp.__file__).read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == func_name:
-            for call in ast.walk(node):
-                if not isinstance(call, ast.Call):
-                    continue
-                for kw in call.keywords:
-                    if kw.arg == "timeout" and isinstance(kw.value, ast.Name):
-                        return kw.value.id
-    return None
-
-
-def test_the_two_timeouts_stay_on_their_OWN_populations():
-    """The ceiling above guards the VALUE; this guards which call site uses which.
-
-    Splitting them is the fix for a gate that could not run at all -- the whole
-    suite is 1,649 tests in 665s and shared the 120s targeted budget, so it timed
-    out and the gate refused with rc 2. But FULL_SUITE_TIMEOUT is 1800, exactly
-    the number `test_the_timeout_is_not_the_old_half_hour` forbids, so if it ever
-    migrates to the MUTANT call site the old half-hour-per-hanging-mutant problem
-    returns while that ceiling test still passes.
-
-    One number serving two populations is what broke this gate; this is what stops
-    it silently re-merging.
-    """
-    assert _timeout_arg_of("run_tests") == "TEST_TIMEOUT", (
-        "the targeted/mutant run must keep the SHORT budget -- a hanging mutant "
-        "must not cost 30 minutes")
-    assert _timeout_arg_of("full_suite_failures") == "FULL_SUITE_TIMEOUT", (
-        "the whole-suite run must use its own budget -- sharing the 120s targeted "
-        "one is what made this gate unable to report")
-    assert mp.FULL_SUITE_TIMEOUT >= 1000, (
-        "must clear the measured 665.52s full-suite runtime with real headroom")
+def test_the_two_timeouts_stay_on_their_OWN_populations(monkeypatch):
+    observed = []
+    child = junit_child()
+    def run(args, **kwargs):
+        observed.append(kwargs["timeout"])
+        assert args[:4] == [sys.executable, "-B", "-m", "pytest"]
+        assert "--maxfail=0" in args and "PYTEST_ADDOPTS" not in kwargs["env"]
+        return child(args, **kwargs)
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--maxfail=1")
+    monkeypatch.setattr(mp.subprocess, "run", run)
+    assert mp.run_tests(["tests"]) == "pass"
+    assert mp.full_suite_failures() == set()
+    assert mp.full_suite() == "pass"
+    assert observed == [mp.TEST_TIMEOUT, mp.FULL_SUITE_TIMEOUT, mp.FULL_SUITE_TIMEOUT]
+    assert mp.FULL_SUITE_TIMEOUT >= 6000  # measured ordinary suite: 4632.6s
 
 
 # --- crash safety ------------------------------------------------------------
@@ -114,7 +100,7 @@ def test_the_two_timeouts_stay_on_their_OWN_populations():
 def fake_tree(tmp_path, monkeypatch):
     """A miniature package with one target, wired into the probe's constants."""
     pkg = tmp_path / "x4validate"; pkg.mkdir()
-    (pkg / "_merge.py").write_text("GOOD\n", encoding="utf-8")
+    (pkg / "_merge.py").write_bytes(b"GOOD\n")
     monkeypatch.setattr(mp, "PKG", pkg)
     monkeypatch.setattr(mp, "MARKER", tmp_path / ".mutation-probe-active")
     monkeypatch.setattr(mp, "PRISTINE", tmp_path / ".mutation-probe-pristine")
@@ -249,9 +235,9 @@ def mp_scope_gaps(root: Path, targets: dict) -> dict:
 def test_every_target_has_tests_that_exist():
     """ALL of them, not `any` of them -- see test_the_scope_check_can_actually_fail.
 
-    `run_tests` drops a missing path from the scope, so a test file that was never
-    ported does not error, it just quietly stops being run. This is the only thing
-    standing between that and a gate reporting 11/11 over a partial scope.
+    The static check names every missing path. The runtime also refuses an
+    incomplete scope; neither an unported file nor a later deletion may narrow
+    the measurement while retaining a full-scope verdict.
     """
     root = Path(__file__).resolve().parent.parent
     for target in mp.TARGETS:
@@ -281,26 +267,23 @@ def test_a_hang_is_re_run_before_being_reported(fake_tree, monkeypatch):
     calls = []
 
     def flaky(tests, deselect=()):
-        # call 1 is the SCOPED baseline (must pass), call 2 is the mutant (hangs),
-        # call 3 is the re-run that decides it. The full-suite baseline is taken by
-        # full_suite_failures(), which fake_tree stubs, so it is not in this count.
+        # Unmarked baseline, marked baseline, mutant hang, confirmed new failure.
         calls.append(tests)
-        return {1: "pass", 2: "hang"}.get(len(calls), "fail")
+        return mp.TestRun({1: "pass", 2: "pass", 3: "hang"}.get(len(calls), "fail"),
+                          frozenset({"new"}) if len(calls) >= 4 else frozenset())
 
-    monkeypatch.setattr(mp, "run_tests", flaky)
+    monkeypatch.setattr(mp, "measure_tests", flaky)
     monkeypatch.setattr(mp, "RECOVER", False)
     rc = mp.main()
-    assert len(calls) >= 3, "baseline + first attempt + a re-run after the hang"
+    assert len(calls) == 4, "two baselines + first attempt + re-run"
     assert rc == 0, "a hang that does not reproduce must not be reported as a finding"
 
 
 # --- a narrowed scope must announce itself (F62) ------------------------------
 #
-# `run_tests` filters missing paths out of its scope before invoking pytest. That
-# is the right thing to DO and the wrong thing to do SILENTLY: the public copy of
-# this gate ran 3 of the 4 `_registry` test files -- because the fourth was never
-# ported -- and printed the identical "killed" line. A step that narrows the data
-# must announce it, and an empty scope is a non-answer, not a timeout.
+# Historically run_tests filtered missing paths and the public copy ran3of4
+# registry files while printing an identical kill. Current measurement names
+# missing files and refuses incomplete scope; an empty scope is not a timeout.
 
 def test_a_PARTIALLY_missing_scope_says_which_files_it_skipped(monkeypatch, capsys, tmp_path):
     (tmp_path / "tests").mkdir()
@@ -316,6 +299,7 @@ def test_a_PARTIALLY_missing_scope_says_which_files_it_skipped(monkeypatch, caps
         "a silently narrowed scope is the defect this test exists for; "
         f"nothing named the missing file. Got: {out!r}")
     assert "test_real.py" not in out, "only the MISSING files are news"
+    assert mp.run_tests(["tests/test_real.py", "tests/test_vanished.py"]) == "noscope"
 
 
 def test_an_EMPTY_scope_is_its_own_verdict_not_a_hang(monkeypatch, tmp_path):
@@ -339,10 +323,10 @@ def test_main_reports_an_empty_scope_SEPARATELY_and_fails(fake_tree, monkeypatch
     calls = []
 
     def scoped(tests, deselect=()):
-        calls.append(tests)          # call 1 is the BASELINE and must pass
-        return "pass" if len(calls) == 1 else "noscope"
+        calls.append(tests)          # both pristine baselines pass; mutant has no scope
+        return mp.TestRun("pass" if len(calls) <= 2 else "noscope")
 
-    monkeypatch.setattr(mp, "run_tests", scoped)
+    monkeypatch.setattr(mp, "measure_tests", scoped)
     monkeypatch.setattr(mp, "RECOVER", False)
     rc = mp.main()
     out = capsys.readouterr().out
@@ -354,7 +338,7 @@ def test_main_reports_an_empty_scope_SEPARATELY_and_fails(fake_tree, monkeypatch
 
 def test_main_REFUSES_when_the_BASELINE_scope_is_empty(fake_tree, monkeypatch, capsys):
     """rc 2 = could not run, never rc 1 = has findings. The F39/F47 distinction."""
-    monkeypatch.setattr(mp, "run_tests", lambda tests, deselect=(): "noscope")
+    monkeypatch.setattr(mp, "measure_tests", lambda tests, deselect=(): mp.TestRun("noscope"))
     monkeypatch.setattr(mp, "RECOVER", False)
     assert mp.main() == 2
 
@@ -382,8 +366,8 @@ def test_the_scope_check_can_actually_fail(tmp_path):
 
 # --- the false-kill: every survivor was reported `killed` (2026-09-02) --------
 #
-# `full_suite()` is reached ONLY when the scoped tests PASS -- that is, only for a
-# genuine survivor -- and it returned "fail" for every one of them, so each was
+# Historically full_suite() ran when scoped tests passed and returned "fail" for
+# every one of them, so each was
 # printed `killed`. The gate's entire purpose was inverted, and it reported success.
 # TWO independent causes, either sufficient alone; fixing one leaves it broken.
 #   1. `test_every_anchor_is_unique_in_its_real_target` reads the REAL source and
@@ -401,7 +385,7 @@ def test_the_mutation_window_does_not_rewrite_line_endings(tmp_path, monkeypatch
     reads the bytes from inside the stubbed test run."""
     pkg = tmp_path / "x4validate"; pkg.mkdir()
     target = pkg / "_merge.py"
-    body = b"line one" + bytes([13, 10]) + b"GOOD" + bytes([13, 10])
+    body = b"# line one" + bytes([13, 10]) + b"GOOD" + bytes([13, 10])
     target.write_bytes(body)
     monkeypatch.setattr(mp, "PKG", pkg)
     monkeypatch.setattr(mp, "MARKER", tmp_path / ".mutation-probe-active")
@@ -415,9 +399,9 @@ def test_the_mutation_window_does_not_rewrite_line_endings(tmp_path, monkeypatch
 
     def spy(tests, deselect=()):
         seen.append(target.read_bytes())
-        return "pass" if len(seen) <= 1 else "fail"   # baseline, then the mutant
+        return mp.TestRun("fail", frozenset({"new"})) if b"BROKEN" in seen[-1] else mp.TestRun("pass")
 
-    monkeypatch.setattr(mp, "run_tests", spy)
+    monkeypatch.setattr(mp, "measure_tests", spy)
     mp.main()
 
     assert len(seen) >= 2, seen
@@ -436,7 +420,7 @@ def test_a_target_with_LF_endings_keeps_them_through_the_window(tmp_path, monkey
     """The twin, in the direction the real repo actually uses: LF must stay LF."""
     pkg = tmp_path / "x4validate"; pkg.mkdir()
     target = pkg / "_merge.py"
-    body = b"line one" + bytes([10]) + b"GOOD" + bytes([10])
+    body = b"# line one" + bytes([10]) + b"GOOD" + bytes([10])
     target.write_bytes(body)
     monkeypatch.setattr(mp, "PKG", pkg)
     monkeypatch.setattr(mp, "MARKER", tmp_path / ".mutation-probe-active")
@@ -449,9 +433,9 @@ def test_a_target_with_LF_endings_keeps_them_through_the_window(tmp_path, monkey
 
     def spy(tests, deselect=()):
         seen.append(target.read_bytes())
-        return "pass" if len(seen) <= 1 else "fail"
+        return mp.TestRun("fail", frozenset({"new"})) if b"BROKEN" in seen[-1] else mp.TestRun("pass")
 
-    monkeypatch.setattr(mp, "run_tests", spy)
+    monkeypatch.setattr(mp, "measure_tests", spy)
     mp.main()
     during = seen[-1]
     assert b"BROKEN" in during
@@ -499,7 +483,7 @@ def test_the_deselect_actually_reaches_pytest(tmp_path, monkeypatch):
 def test_main_REFUSES_when_the_FULL_SUITE_CANNOT_BE_RUN(fake_tree, monkeypatch, capsys):
     """Without a baseline there is nothing to subtract, so no escalation below could
     tell a survivor from a kill. That is a refusal (rc 2), not a clean sweep."""
-    monkeypatch.setattr(mp, "run_tests", lambda tests, deselect=(): "pass")
+    monkeypatch.setattr(mp, "measure_tests", lambda tests, deselect=(): mp.TestRun("pass"))
     monkeypatch.setattr(mp, "full_suite_failures", lambda: None)
     monkeypatch.setattr(mp, "RECOVER", False)
     assert mp.main() == 2, "an unrunnable full suite must refuse, not report kills"
@@ -514,7 +498,7 @@ def test_a_mutant_that_adds_NO_new_failure_is_a_SURVIVOR(fake_tree, monkeypatch,
     boolean therefore said "fail" for every mutant, and every survivor was printed
     `killed`. Only a NEW failure is a kill."""
     already = {"tests/test_effective.py::test_build_and_provenance"}
-    monkeypatch.setattr(mp, "run_tests", lambda tests, deselect=(): "pass")
+    monkeypatch.setattr(mp, "measure_tests", lambda tests, deselect=(): mp.TestRun("pass"))
     monkeypatch.setattr(mp, "full_suite_failures", lambda: set(already))
     monkeypatch.setattr(mp, "RECOVER", False)
     rc = mp.main()
@@ -533,10 +517,137 @@ def test_a_mutant_that_ADDS_a_failure_is_a_KILL(fake_tree, monkeypatch, capsys):
         base = {"tests/test_effective.py::test_build_and_provenance"}
         return base if len(seen) == 1 else base | {"tests/test_merge.py::test_new"}
 
-    monkeypatch.setattr(mp, "run_tests", lambda tests, deselect=(): "pass")
+    monkeypatch.setattr(mp, "measure_tests", lambda tests, deselect=(): mp.TestRun("pass"))
     monkeypatch.setattr(mp, "full_suite_failures", failures)
     monkeypatch.setattr(mp, "RECOVER", False)
     rc = mp.main()
     out = capsys.readouterr().out
     assert "killed" in out and "LIVED" not in out, out
     assert rc == 0
+
+
+@pytest.mark.parametrize("code", [2, 3, 4, 6, -1])
+def test_execution_errors_never_become_kills(monkeypatch, code):
+    monkeypatch.setattr(mp.subprocess, "run", junit_child(code, failure=True))
+    assert mp.measure_tests(["tests"]).status == "error"
+
+
+@pytest.mark.parametrize("kind", ["missing", "malformed", "empty", "all-skipped", "duplicate",
+    "count-mismatch", "error-only", "failure-and-error", "zero-with-error", "zero-with-failure", "one-without-failure"])
+def test_unqualified_reports_are_nonanswers(tmp_path, kind):
+    report = tmp_path / "result.xml"
+    if kind == "missing":
+        assert mp._read_result(report, 0).status == "error"
+        return
+    if kind == "malformed":
+        report.write_text("<testsuite", encoding="utf-8")
+        assert mp._read_result(report, 0).status == "error"
+        return
+    suite = ET.Element("testsuite", tests="1", failures="0", errors="0", skipped="0")
+    case = ET.SubElement(suite, "testcase", file="tests/test_owned.py", classname="test_owned", name="test one [a b]")
+    code = 0
+    if kind == "empty":
+        suite.remove(case); suite.set("tests", "0")
+    elif kind == "all-skipped":
+        ET.SubElement(case, "skipped"); suite.set("skipped", "1")
+    elif kind == "duplicate":
+        ET.SubElement(suite, "testcase", **case.attrib); suite.set("tests", "2")
+    elif kind == "count-mismatch":
+        suite.set("tests", "2")
+    elif kind in ("error-only", "failure-and-error", "zero-with-error"):
+        ET.SubElement(case, "error"); suite.set("errors", "1"); code = 0 if kind == "zero-with-error" else 1
+        if kind == "failure-and-error":
+            ET.SubElement(case, "failure"); suite.set("failures", "1")
+    elif kind == "zero-with-failure":
+        ET.SubElement(case, "failure"); suite.set("failures", "1")
+    elif kind == "one-without-failure":
+        code = 1
+    ET.ElementTree(suite).write(report, encoding="utf-8")
+    assert mp._read_result(report, code).status == ("noscope" if kind in ("empty", "all-skipped") else "error")
+
+
+def test_failure_identity_preserves_spaces_and_parameter_suffixes(tmp_path):
+    report = tmp_path / "result.xml"
+    suite = ET.Element("testsuite", tests="2", failures="2", errors="0", skipped="0")
+    for name in ("test one[a b]", "test one[a c]"):
+        ET.SubElement(ET.SubElement(suite, "testcase", file="a.py", classname="a", name=name), "failure")
+    ET.ElementTree(suite).write(report, encoding="utf-8")
+    result = mp._read_result(report, 1)
+    assert result.status == "fail" and len(result.failures) == 2
+    assert {json.loads(identity)[2] for identity in result.failures} == {"test one[a b]", "test one[a c]"}
+
+
+@pytest.mark.parametrize("new_failure", [False, True])
+def test_marked_target_baseline_is_subtracted(fake_tree, monkeypatch, capsys, new_failure):
+    _, pkg = fake_tree
+    calls = []
+    def measure(tests, deselect=()):
+        calls.append(1)
+        if not mp.MARKER.exists():
+            return mp.TestRun("pass")
+        failures = {"marker failure"}
+        if new_failure and b"BROKEN" in (pkg / "_merge.py").read_bytes():
+            failures.add("actual detector")
+        return mp.TestRun("fail", frozenset(failures))
+    full_calls = []
+    def full():
+        assert not new_failure, "a targeted kill must not pay for a full baseline"
+        full_calls.append(1)
+        assert mp.MARKER.is_file()
+        assert (b"BROKEN" not in (pkg / "_merge.py").read_bytes()) == (len(full_calls) == 1)
+        return {"marker failure"}
+    monkeypatch.setattr(mp, "measure_tests", measure)
+    monkeypatch.setattr(mp, "full_suite_failures", full)
+    monkeypatch.setattr(mp, "RECOVER", False)
+    assert mp.main() == (0 if new_failure else 1)
+    out = capsys.readouterr().out
+    assert ("killed 1/1" if new_failure else "killed 0/1") in out
+    assert len(calls) == 3
+    assert len(full_calls) == (0 if new_failure else 2)
+    assert (pkg / "_merge.py").read_bytes() == b"GOOD\n"
+    assert not mp.MARKER.exists()
+
+
+@pytest.mark.parametrize("stage", ["marked-baseline", "mutant"])
+def test_execution_error_refuses_or_marks_unmeasured_and_restores(fake_tree, monkeypatch, capsys, stage):
+    _, pkg = fake_tree
+    def measure(tests, deselect=()):
+        if mp.MARKER.exists() and (stage == "marked-baseline" or b"BROKEN" in (pkg / "_merge.py").read_bytes()):
+            return mp.TestRun("error")
+        return mp.TestRun("pass")
+    monkeypatch.setattr(mp, "measure_tests", measure)
+    monkeypatch.setattr(mp, "RECOVER", False)
+    assert mp.main() == (2 if stage == "marked-baseline" else 1)
+    out = capsys.readouterr().out
+    assert "killed 1/1" not in out
+    assert (pkg / "_merge.py").read_bytes() == b"GOOD\n"
+    assert not mp.MARKER.exists()
+
+
+def test_real_child_distinguishes_marker_only_noop_and_semantic_mutant(tmp_path, monkeypatch, capsys):
+    """Actual tiny pytest children, including lazy full escalation; no real suite."""
+    pkg = tmp_path / "ownedpkg"; pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    target = pkg / "value.py"
+    original = b"value = 1\n"
+    target.write_bytes(original)
+    tests = tmp_path / "tests"; tests.mkdir()
+    (tests / "test_owned.py").write_text(
+        'from pathlib import Path\nfrom ownedpkg.value import value\n'
+        'def test_marker():\n    assert not Path(".mutation-probe-active").exists()\n'
+        'def test_value():\n    assert value == 1\n', encoding="utf-8")
+    monkeypatch.setattr(mp, "ROOT", tmp_path)
+    monkeypatch.setattr(mp, "PKG", pkg)
+    monkeypatch.setattr(mp, "MARKER", tmp_path / ".mutation-probe-active")
+    monkeypatch.setattr(mp, "PRISTINE", tmp_path / ".mutation-probe-pristine")
+    monkeypatch.setattr(mp, "TARGETS", {"value.py": ["tests/test_owned.py"]})
+    monkeypatch.setattr(mp, "MUTANTS", [
+        mp.Mutant("value.py", "noop", "value = 1", "value = 1 # noop", "not a detector"),
+        mp.Mutant("value.py", "semantic", "value = 1", "value = 2", "value must be checked")])
+    monkeypatch.setattr(mp, "RECOVER", False)
+    monkeypatch.setattr(mp, "FULL_SUITE_DESELECT", ())
+    assert mp.main() == 1
+    out = capsys.readouterr().out
+    assert "LIVED noop" in out and "killed semantic" in out and "killed 1/2" in out
+    assert target.read_bytes() == original
+    assert not mp.MARKER.exists() and not mp.PRISTINE.exists()
