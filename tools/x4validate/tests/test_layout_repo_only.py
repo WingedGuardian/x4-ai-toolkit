@@ -45,6 +45,24 @@ def test_missing_all_runtime_carriers_or_instructions_cannot_skip(tmp_path):
         _layout.runtime_instructions(tmp_path)
 
 
+@pytest.mark.parametrize("checkout,present,adapter", [(False,False,False), (False,True,False),
+    (False,True,True), (True,False,False), (True,True,False), (True,True,True)])
+def test_only_an_unselected_installed_codex_transport_can_skip(tmp_path, monkeypatch, checkout, present, adapter):
+    monkeypatch.setattr(_layout, "installed_layout", lambda root: not checkout)
+    if present:
+        (tmp_path / ".codex/hooks").mkdir(parents=True)
+    if adapter:
+        (tmp_path / ".codex/hooks/codex_adapter.py").write_text("owned", encoding="utf-8")
+    if not checkout and not present:
+        with pytest.raises(pytest.skip.Exception, match="not selected"):
+            _layout.require_native_codex(tmp_path)
+    elif not adapter:
+        with pytest.raises(AssertionError, match="selected Codex adapter is missing"):
+            _layout.require_native_codex(tmp_path)
+    else:
+        _layout.require_native_codex(tmp_path)
+
+
 def _installed(tmp_path):
     (tmp_path / "tools").mkdir(parents=True)     # an install: no agent/
     return tmp_path

@@ -217,3 +217,11 @@ def common_hook_dir(root: Path = ROOT) -> Path:
             assert not missing, "incomplete common runtime at " + str(carrier) + ": " + ", ".join(missing)
             return carrier
     raise AssertionError("no common hook runtime carrier was examined")
+
+
+def require_native_codex(root: Path = ROOT) -> None:
+    """Only the unselected native transport may skip; selected or checkout damage fails."""
+    root = Path(root)
+    if not (root / ".codex").exists() and installed_layout(root):
+        pytest.skip("Codex native runtime was not selected; this control exercises its adapter")
+    assert (root / ".codex/hooks/codex_adapter.py").is_file(), "selected Codex adapter is missing"

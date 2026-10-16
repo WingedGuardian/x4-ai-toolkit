@@ -5,6 +5,8 @@
 - Installed-layout checks examine the selected instruction files and common
   runtime carrier. Workflow-source checks explicitly skip when that source
   is not shipped; common backup and validator behavior still runs for every agent.
+  Configuration precedence and note-file protections use that same carrier;
+  only native Codex controls skip when its runtime was not selected.
 - Targeted hook replay rechecks runtime bytes and resolved paths before
   reporting its delta, using the same final stability check as full replay.
 - New-host adapter guidance leads with complete Action v1 pre-operation checks,

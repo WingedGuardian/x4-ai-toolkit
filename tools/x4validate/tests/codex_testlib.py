@@ -151,6 +151,9 @@ def parse_output(stdout: bytes):
 
 
 def run_adapter(env, payload, event="pre_tool_use", shell="powershell", adapter=ADAPTER, raw: bytes | None = None):
+    if Path(adapter) == ADAPTER:
+        from _layout import require_native_codex
+        require_native_codex(REPO)
     data = raw if raw is not None else json.dumps(payload).encode("utf-8")
     r = subprocess.run([sys.executable, str(adapter), event], input=data, capture_output=True,
                        env=dict(env, X4_CODEX_SHELL=shell), timeout=180)

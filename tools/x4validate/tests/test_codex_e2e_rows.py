@@ -30,10 +30,9 @@ def e2e():
 
 @pytest.fixture
 def codex_payload():
-    from _layout import installed_layout
+    from _layout import require_native_codex
+    require_native_codex(REPO)
     hooks, rules = REPO / ".codex/hooks", REPO / ".codex/rules"
-    if not hooks.exists() and not rules.exists() and installed_layout():
-        pytest.skip("Codex runtime was not selected; live Codex decoy construction requires its hooks and rules")
     assert hooks.is_dir() and rules.is_dir(), "selected Codex runtime is incomplete"
 
 

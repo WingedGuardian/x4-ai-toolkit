@@ -33,10 +33,14 @@ from codex_testlib import copy_shared_runtime, make_sandbox, native, run_adapter
 
 PKG = Path(__file__).resolve().parents[1]
 REPO = PKG.parents[1]
-CLAUDE_HOOK = REPO / ".claude" / "hooks" / "protect-files.sh"
-X4GUARD = REPO / ".claude" / "hooks" / "x4guard.py"
+from _layout import common_hook_dir
+COMMON_HOOKS = common_hook_dir(REPO)
+CLAUDE_HOOK = COMMON_HOOKS / "protect-files.sh"
+X4GUARD = COMMON_HOOKS / "x4guard.py"
 X4LOCK = REPO / "scripts" / "x4lock.py"
-BASH = shutil.which("bash")
+sys.path.insert(0, str(REPO / "scripts"))
+from gitbash import find_bash
+BASH = find_bash()
 
 pytestmark = pytest.mark.skipif(not BASH, reason="no bash -- the guards cannot run, NOTHING here was checked")
 

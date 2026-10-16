@@ -30,7 +30,8 @@ import tempfile
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
-ENV_SH = ROOT / ".claude" / "hooks" / "_x4-env.sh"
+from _layout import common_hook_dir, runtime_instructions
+ENV_SH = common_hook_dir(ROOT) / "_x4-env.sh"
 CLAUDE_MD = ROOT / "CLAUDE.md"
 
 
@@ -75,8 +76,7 @@ def test_the_documented_order_still_says_the_environment_wins():
     """If someone changes the promise, this test is where they find out that two
     implementations are pinned to it."""
     # Plan 2: AGENTS.md carries the same shared core, so it makes the same promise.
-    docs = [p for p in (CLAUDE_MD, ROOT / "AGENTS.md") if p.is_file()]
-    assert CLAUDE_MD in docs, "no CLAUDE.md at the repo root"
+    docs = runtime_instructions(ROOT)
     for doc in docs:
         text = doc.read_text(encoding="utf-8", errors="replace")
         assert "env var > `x4-paths.env` > default" in text, (
@@ -86,8 +86,7 @@ def test_the_documented_order_still_says_the_environment_wins():
 
 def test_the_instructions_name_the_ROOT_config_and_not_the_3x_one():
     """Plan 3 lane I: every agent's instructions name `x4-paths.env` at the toolkit root."""
-    docs = [p for p in (CLAUDE_MD, ROOT / "AGENTS.md") if p.is_file()]
-    assert CLAUDE_MD in docs
+    docs = runtime_instructions(ROOT)
     for doc in docs:
         text = doc.read_text(encoding="utf-8", errors="replace")
         assert "x4-paths.env" in text, doc.name
