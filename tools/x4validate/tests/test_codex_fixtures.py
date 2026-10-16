@@ -92,5 +92,7 @@ def test_the_output_key_contract_is_codexs_own_schema():
     from _layout import require_repo
     require_repo("agent/guards/adapters/codex-entry.ps1", why="the wrapper SOURCE")
     ps = (REPO / "agent" / "guards" / "adapters" / "codex-entry.ps1").read_text(encoding="utf-8")
-    allowed = set(re.findall(r"'(\w+)'", re.search(r"\$allowed = @\(([^)]*)\)", ps).group(1)))
+    # The strict raw JSON grammar keeps quoted key spellings. Both the base
+    # event keys and the PreToolUse-only additions must match the capture.
+    allowed = set(re.findall(r"'\"(\w+)\"'", " ".join(re.findall(r"\$allowed (?:=|\+=) @\(([^)]*)\)", ps))))
     assert allowed and allowed <= ALLOWED_HSO, allowed - ALLOWED_HSO

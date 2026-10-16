@@ -159,8 +159,8 @@ MUTANTS = [
 
     # --- _compat.py: collision semantics (CLAUDE.md #18, F25) -----------------
     Mutant("_compat.py", "live_value_owner names a winner it cannot know",
-           'if self.kind in ("SUBTREE", "NAME-CLASH", "SOFT"):',
-           'if self.kind in ("SOFT",):',
+           'if self.kind in ("SUBTREE", "NAME-CLASH", "SOFT") or self.target_tree == "unavailable" or not self.winner_qualified:',
+           'if self.kind in ("SOFT",) or self.target_tree == "unavailable" or not self.winner_qualified:',
            "SUBTREE names the WIPER as owner and NAME-CLASH invents one — the "
            "exact conflation CLAUDE.md #18 exists to prevent"),
     Mutant("_compat.py", "NAME-CLASH claims a load-order winner",

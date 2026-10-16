@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_testlib import make_sandbox, native, run_adapter
+from codex_testlib import copy_shared_runtime, make_sandbox, native, run_adapter
 
 PKG = Path(__file__).resolve().parents[1]
 REPO = PKG.parents[1]
@@ -125,6 +125,7 @@ def test_N1_the_toolkit_root_anchors_when_the_game_root_is_not_configured(sandbo
     """In-game layout with X4_GAME unset: the toolkit IS the game folder and only the
     `X4 Foundations/` name backstop protects it. The toolkit root is then the project root."""
     tmp, _, game, env = sandbox
+    copy_shared_runtime(game)
     env = dict(env, X4_TOOLKIT=str(game), X4_REFERENCE=str(game / "reference"))
     env.pop("X4_GAME")
     assert both(env, game / "X4-NOTES.md") == "allow"

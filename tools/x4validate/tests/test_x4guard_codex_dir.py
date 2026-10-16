@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from _layout import require_repo  # noqa: E402  (R2-B1: repo-only content skips, counted)
+from codex_testlib import copy_shared_runtime
 
 PKG = Path(__file__).resolve().parents[1]
 REPO = PKG.parents[1]
@@ -21,6 +22,7 @@ require_repo("agent/guards/claude-hooks", module_level=True,
 
 @pytest.fixture
 def env_without_toolkit(tmp_path):
+    copy_shared_runtime(tmp_path / "root")
     env = {k: v for k, v in os.environ.items() if k != "X4_TOOLKIT"}
     env.update(X4_CONFIG="/nonexistent", X4_REFERENCE=str(tmp_path / "ref"), X4_GAME=str(tmp_path / "game"))
     env.pop("X4_BASH", None)

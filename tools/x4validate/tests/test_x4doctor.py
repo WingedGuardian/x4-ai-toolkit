@@ -216,6 +216,8 @@ def sandbox(tmp_path, monkeypatch):
     shutil.copytree(REPO / ".claude" / "hooks", root / ".claude" / "hooks",
                     ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
     shutil.copy2(REPO / ".claude" / "settings.json", root / ".claude" / "settings.json")
+    from codex_testlib import copy_shared_runtime
+    copy_shared_runtime(root)
     _env_file(root / "x4-paths.env", X4_TOOLKIT=root, X4_GAME=game, X4_REFERENCE=ref)
     codex_home = tmp_path / "codex-home"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -1303,6 +1305,8 @@ def oc_root(tmp_path, monkeypatch):
     for name in _LEAKY:
         monkeypatch.delenv(name, raising=False)
     root = tmp_path / "root"
+    from codex_testlib import copy_shared_runtime
+    copy_shared_runtime(root)
     game = tmp_path / "game"
     ref = root / "reference"
     for d in (game / "extensions", ref / "libraries"):

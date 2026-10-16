@@ -38,8 +38,7 @@ SANDBOX_KEYS = ("X4_TOOLKIT", "X4_GAME", "X4_REFERENCE", "X4_PROFILE", "X4_MODS"
 
 def make_sandbox(tmp_path: Path):
     tk, game = tmp_path / "toolkit", tmp_path / "X4 Foundations"
-    shutil.copytree(REPO / "tools/modding_harness", tk / "tools/modding_harness",
-                    ignore=shutil.ignore_patterns("__pycache__"))
+    copy_shared_runtime(tk)
     for d in (tk / "dev" / "mymod", tk / "reference" / "libraries", game / "extensions",
               tmp_path / "profile" / "save", tmp_path / "mods", tmp_path / "docs", tmp_path / "backups"):
         d.mkdir(parents=True)
@@ -52,6 +51,13 @@ def make_sandbox(tmp_path: Path):
     env.pop("X4_BASH", None)
     env.pop("X4_CODEX_SHELL", None)
     return tmp_path, tk, env
+
+
+def copy_shared_runtime(root: Path):
+    """Populate an owned fixture with the same pinned offline runtime as a real installation."""
+    shutil.copytree(REPO / "tools/modding_harness", root / "tools/modding_harness",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(REPO / "tools/modding-harness.lock.json", root / "tools/modding-harness.lock.json")
 
 
 FAKE_FINDING = "FAKE-VALIDATOR-FINDING"
@@ -78,6 +84,9 @@ def native(name: str, cwd, **tool_input) -> dict:
     text = (FIX / f"{name}.json").read_text(encoding="utf-8")
     d = json.loads(text.replace("<CWD>", json.dumps(str(cwd))[1:-1]))
     d["cwd"] = str(cwd)
+    # Warning receipts are per session/tool, so separate fixture roots must not
+    # inherit the captured session's already-announced unknown-tool receipt.
+    d["session_id"] = "fixture:" + str(cwd)
     if "tool_input" in d:
         d["tool_input"].update(tool_input)
     return d

@@ -46,6 +46,8 @@ def keep_by_class(path: str) -> bool:
 
 #: Line-level KEEP: (path or basename rule, exact text the line must contain, why).
 KEEP_LINES = [
+    ("tools/modding_harness/opencode_plugin.mjs", 'const label = options.label || "Modding toolkit"',
+     "pinned shared runtime's agent-neutral fallback; the X4 wrapper supplies its product label"),
     ("README.md", "skyrimvr-claude-toolkit", "a different product (the sibling project)"),
     ("README.md", 'Until v4.0 this was the "X4 Foundations Claude Code Modding Toolkit"',
      "the rename note: the old name, said as history"),

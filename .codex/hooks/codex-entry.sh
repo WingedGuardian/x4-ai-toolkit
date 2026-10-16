@@ -85,18 +85,33 @@ BODY="${OUT#X4OK}"; BODY="${BODY#"${BODY%%[![:space:]]*}"}"
 # The shape check needs a JSON parser; the adapter just ran on this Python, so use it.
 BAD="$(printf '%s' "$BODY" | "${PY[@]}" -c '
 import json, sys
+def unique(pairs):
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError("duplicate key")
+        out[key] = value
+    return out
 try:
-    o = json.loads(sys.stdin.read())
+    o = json.loads(sys.stdin.read(), object_pairs_hook=unique)
 except Exception:
     print("adapter output is not JSON"); sys.exit()
 if not isinstance(o, dict) or list(o) != ["hookSpecificOutput"] or not isinstance(o["hookSpecificOutput"], dict):
     print("adapter output has keys other than hookSpecificOutput"); sys.exit()
 h = o["hookSpecificOutput"]
-if set(h) - {"hookEventName", "permissionDecision", "permissionDecisionReason", "additionalContext"}:
+event = {"session_start": "SessionStart", "post_tool_use": "PostToolUse"}.get(sys.argv[1], "PreToolUse")
+allowed = {"hookEventName", "additionalContext"}
+if event == "PreToolUse":
+    allowed |= {"permissionDecision", "permissionDecisionReason"}
+if set(h) - allowed:
     print("hookSpecificOutput has an unknown key"); sys.exit()
+if h.get("hookEventName") != event:
+    print("adapter output names no matching event"); sys.exit()
+if any(not isinstance(value, str) or any(0xD800 <= ord(c) <= 0xDFFF for c in value) for value in h.values()):
+    print("adapter output has a nonstring or invalid Unicode field"); sys.exit()
 if "permissionDecision" in h and h["permissionDecision"] != "deny":
     print("adapter answered a permissionDecision other than deny")
-' 2>/dev/null)" || BAD="the output shape check could not run"
+' "$EV" 2>/dev/null)" || BAD="the output shape check could not run"
 [ -z "$BAD" ] || { fail "$BAD"; exit 0; }
 emit "$BODY"
 exit 0

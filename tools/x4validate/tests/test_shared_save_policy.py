@@ -7,9 +7,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from _layout import require_repo
 
 
 REPO = Path(__file__).resolve().parents[3]
+require_repo("agent/guards/claude-hooks/save_policy.py", module_level=True,
+             why="this module loads the canonical save policy source")
 spec = importlib.util.spec_from_file_location("profile_save_policy", REPO / "agent/guards/claude-hooks/save_policy.py")
 policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
@@ -196,7 +199,7 @@ def test_wildcard_has_exact_command_bound_grant_and_membership_recheck(install):
     assert outcome.result.decision == "deny" and not outcome.transactions
 
 
-def invoke_hook(install, tool, ti, preview=False):
+def invoke_hook(install, tool, ti, preview=False, omit_cwd=False):
     root, roots, _files = install
     hooks = root / ".claude/hooks"
     shutil.copytree(REPO / "agent/guards/claude-hooks", hooks, dirs_exist_ok=True,
@@ -214,10 +217,27 @@ def invoke_hook(install, tool, ti, preview=False):
     if preview:
         env["X4_GUARD_CHECK"] = "1"
     payload = {"tool_name": tool, "tool_input": ti, "cwd": str(root), "session_id": "s"}
+    if omit_cwd:
+        payload.pop("cwd")
     result = subprocess.run([bash, str(hooks / ("protect-bash.sh" if tool in ("Bash", "PowerShell") else "protect-files.sh"))],
                             input=json.dumps(payload).encode(), capture_output=True, env=env, timeout=40)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout) if result.stdout.strip() else {}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Git Bash drive mounts are Windows-specific")
+def test_native_file_hook_resolves_msys_save_path_without_cwd(install):
+    root, roots, files = install
+    path = files[0].as_posix()
+    path = "/" + path[0].lower() + path[2:]
+    result = invoke_hook(install, "Write", {"file_path": path}, omit_cwd=True)
+    assert result["hookSpecificOutput"].get("permissionDecision") is None, result
+    assert "backup verified" in result["hookSpecificOutput"]["additionalContext"]
+    records = list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+    assert len(records) == 1
+    record = json.loads(records[0].read_text())
+    assert [Path(m["path"]) for g in record["groups"] for m in g["members"]] == [files[0]]
+    assert files[0].read_bytes() == files[0].name.encode()
 
 
 @pytest.mark.parametrize("verb", ["Copy-Item", "Move-Item"])

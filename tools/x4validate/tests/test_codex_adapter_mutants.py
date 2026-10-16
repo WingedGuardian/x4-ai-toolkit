@@ -7,6 +7,7 @@ A mutant that stays green means a missing probe: add the probe, never weaken the
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -18,7 +19,7 @@ import pytest
 from codex_testlib import HOOKS, make_sandbox, native, parse_output
 
 PWSH = shutil.which("pwsh") or shutil.which("powershell")
-pytestmark = pytest.mark.skipif(not PWSH, reason="no PowerShell -- the Windows entry chain is NOT checked here")
+pytestmark = pytest.mark.skipif(not PWSH or os.name != "nt", reason="the native Windows entry chain is NOT checked here")
 
 
 def chain(tree: Path, payload: dict, env: dict, shell: str | None = "bash", event: str = "pre_tool_use"):

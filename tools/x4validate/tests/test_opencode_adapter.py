@@ -37,7 +37,8 @@ def run(env, payload=None, event="pre", raw: bytes | None = None, cwd=None):
 
 
 def call(tk, tool, args, shell="bash", directory=None):
-    return {"v": 1, "tool": tool, "args": args, "directory": str(directory or tk), "shell": shell}
+    return {"v": 1, "tool": tool, "args": args, "directory": str(directory or tk), "shell": shell,
+            "session_id": "fixture:" + str(tk)}
 
 
 def test_rendered_adapter_exists():

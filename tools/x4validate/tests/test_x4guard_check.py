@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 import pytest
+from codex_testlib import copy_shared_runtime
 
 PKG = Path(__file__).resolve().parents[1]
 REPO = PKG.parents[1]
@@ -24,6 +25,7 @@ HAS_PWSH = bool(shutil.which("pwsh") or shutil.which("powershell"))
 @pytest.fixture
 def sandbox(tmp_path):
     tk, game = tmp_path / "toolkit", tmp_path / "X4 Foundations"
+    copy_shared_runtime(tk)
     for d in (tk / "dev" / "mymod", tk / "reference" / "libraries", game / "extensions",
               tmp_path / "profile" / "save", tmp_path / "mods", tmp_path / "docs", tmp_path / "backups"):
         d.mkdir(parents=True)
@@ -205,6 +207,7 @@ def test_I2_TWIN_a_deployed_claude_hooks_copy_is_not_refused_for_location(tmp_pa
     Git Bash spells the tree /tmp/..., the payload spells C:/.../Temp/..., and they never match
     (MEASURED 2026-10-01), so a tmp tree cannot show a real install's verdict."""
     root = tmp_path / "tk2"
+    copy_shared_runtime(root)
     script = _hooks_copy(root / ".claude" / "hooks")
     env = {k: v for k, v in os.environ.items() if not k.startswith("X4_") and k != "CLAUDE_PROJECT_DIR"}
     env["X4_CONFIG"] = "/nonexistent"
@@ -217,7 +220,8 @@ def test_I3_a_guard_that_checked_nothing_is_inert_not_a_plain_ask(sandbox):
     env = dict(env, X4_PWSH=str(tk / "no-such-pwsh.exe"))
     v = _check_in(env, tk, "--kind", "shell", "--shell", "powershell", "--command",
                   f"Remove-Item -Force '{tk / 'reference' / 'libraries' / 'wares.xml'}'")
-    assert v["decision"] == "deny" and v["inert"] and "could not be analysed" in v["reason"], v
+    assert v["decision"] == "deny" and v["inert"] and "NOTHING was checked" in v["reason"], v
+    assert "X4 save dispatcher" in v["reason"], v
 
 
 def test_I4_a_delete_is_at_least_as_strict_as_rm(sandbox):
@@ -251,8 +255,8 @@ def test_I5_a_guard_that_fails_is_an_inert_deny(sandbox, tmp_path, body):
 @pytest.mark.skipif(not HAS_PWSH, reason="no PowerShell -- the untranslatable path is NOT checked here")
 def test_guard_signals_not_checked_with_exit_2_only_under_X4_GUARD_CHECK(sandbox):
     """Structured 'could not evaluate' signal (ported from the Codex audit session's game-root
-    edit): with X4_GUARD_CHECK=1 a not-checked state exits 2; without it the hook ASKS exactly
-    as before, so Claude Code's behaviour does not change."""
+    edit): with X4_GUARD_CHECK=1 a not-checked state exits 2; the native hook instead
+    emits an explicit deny with exit0, preserving the native hard-block protocol."""
     _, tk, env = sandbox
     env = dict(env, X4_PWSH=str(tk / "no-such-pwsh.exe"))
     payload = json.dumps({"tool_name": "PowerShell", "tool_input": {"command":
@@ -262,7 +266,8 @@ def test_guard_signals_not_checked_with_exit_2_only_under_X4_GUARD_CHECK(sandbox
     plain = subprocess.run([bash, hook], input=payload, capture_output=True, env=env, timeout=120)
     check = subprocess.run([bash, hook], input=payload, capture_output=True, timeout=120,
                            env=dict(env, X4_GUARD_CHECK="1"))
-    assert plain.returncode == 0 and b'"ask"' in plain.stdout.replace(b" ", b"")
+    assert plain.returncode == 0 and b'"deny"' in plain.stdout.replace(b" ", b"")
+    assert b"X4 save dispatcher" in plain.stdout
     assert check.returncode == 2
 
 

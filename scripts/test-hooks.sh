@@ -26,6 +26,9 @@ command -v jq >/dev/null 2>&1 || { echo "jq is required"; exit 2; }
 _SBX="${X4_TEST_SANDBOX:-$REPO/.test-sandbox}"
 mkdir -p "$_SBX" || { echo "cannot create sandbox base $_SBX"; exit 2; }
 SBX_TMP="$(mktemp -d "$_SBX/hooks.XXXXXX")"
+# Test writes must never follow a caller's configured backup store. Individual
+# backup-failure probes below override this only with their own fixture paths.
+unset X4_BACKUPS
 # The sandbox itself is removed too, not just its child. Leaving it behind made the
 # hygiene check at the end of this file report the suite's OWN sandbox as a stray.
 trap 'rm -rf "$SBX_TMP"; rmdir "$_SBX" 2>/dev/null' EXIT
@@ -440,7 +443,7 @@ else
 fi
 # Must stay anchored to the toolkit even with CLAUDE_PROJECT_DIR unset.
 mkdir -p "$SBX_TMP/elsewhere"
-( unset CLAUDE_PROJECT_DIR X4_TOOLKIT; cd "$SBX_TMP/elsewhere" \
+( unset CLAUDE_PROJECT_DIR X4_TOOLKIT; export X4_BACKUPS="$TK/.claude/backups"; cd "$SBX_TMP/elsewhere" \
   && printf '%s' "$(fj "$SUBJ")" | bash "$HOOKS/backup-before-edit.sh" >/dev/null 2>&1 )
 [ -d "$SBX_TMP/elsewhere/.claude/backups" ] \
   && no "backups scattered into the cwd when CLAUDE_PROJECT_DIR is unset" \

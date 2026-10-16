@@ -1,9 +1,12 @@
 """Preservation receives physical spellings; rule comparisons retain their old form."""
 import importlib.util
 from pathlib import Path
+from _layout import require_repo
 
 
 SOURCE = Path(__file__).resolve().parents[3] / "agent/guards/claude-hooks/hook_facts.py"
+require_repo("agent/guards/claude-hooks/hook_facts.py", module_level=True,
+             why="physical-path evidence is exercised against the canonical parser source")
 spec = importlib.util.spec_from_file_location("save_provenance_hook_facts", SOURCE)
 facts = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(facts)

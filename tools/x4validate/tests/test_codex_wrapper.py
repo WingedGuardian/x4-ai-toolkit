@@ -9,13 +9,17 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from codex_testlib import HOOKS
 
-PWSH = shutil.which("pwsh") or shutil.which("powershell")
+POWERSHELLS = list(dict.fromkeys(p for p in (shutil.which("pwsh"), shutil.which("powershell"))
+                               if p and sys.platform == "win32"))
+PWSH = POWERSHELLS[0] if POWERSHELLS else None
 BASH = os.environ.get("X4_BASH") or shutil.which("bash")
 FAULTS = {
     "crash": "import sys; sys.exit(3)",
@@ -35,6 +39,13 @@ FAULTS = {
     # falsy, so an array-valued decision passed the .ps1 check that the .sh one rejects.
     "array_decision": "print('X4OK {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":[\"deny\"],\"permissionDecisionReason\":\"r\"}}')",
     "object_decision": "print('X4OK {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":{\"deny\":1},\"permissionDecisionReason\":\"r\"}}')",
+    "missing_event": "print('X4OK {\"hookSpecificOutput\":{\"permissionDecision\":\"deny\"}}')",
+    "wrong_event": "print('X4OK {\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"permissionDecision\":\"deny\"}}')",
+    "nonstring_event": "print('X4OK {\"hookSpecificOutput\":{\"hookEventName\":7,\"permissionDecision\":\"deny\"}}')",
+    "object_reason": "print('X4OK {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":{}}}')",
+    "array_context": "print('X4OK {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"additionalContext\":[]}}')",
+    "duplicate_event": "print('X4OK {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"}}')",
+    "unpaired_unicode": "print('X4OK {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"\\\\ud800\"}}')",
     "hang": "import time; time.sleep(600)",
     "raise_after_partial": "import sys; sys.stdout.write('X4O'); raise SystemExit(0)",
 }
@@ -42,8 +53,8 @@ FAULTS = {
 
 def wrappers():
     out = []
-    if PWSH:
-        out.append(("ps1", [PWSH, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]))
+    for powershell in POWERSHELLS:
+        out.append(("ps1", [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]))
     if BASH and "system32" not in BASH.lower():
         out.append(("sh", [BASH]))
     return out
@@ -113,6 +124,15 @@ def test_control_a_real_deny_passes_through_verbatim(tree, kind, launcher):
 
 
 @pytest.mark.parametrize("kind,launcher", WRAPPERS)
+def test_control_valid_unicode_reason_passes_through(tree, kind, launcher):
+    body = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                              "permissionDecisionReason": "reason \U0001f642"}})
+    (tree / "codex_adapter.py").write_text(f"print('X4OK ' + {body!r})", encoding="utf-8")
+    result = _run(launcher, tree / ("codex-entry.ps1" if kind == "ps1" else "codex-entry.sh"), "pre_tool_use", b"{}")
+    assert result.returncode == 0 and json.loads(result.stdout) == json.loads(body)
+
+
+@pytest.mark.parametrize("kind,launcher", WRAPPERS)
 def test_payload_reaches_the_adapter_byte_for_byte(tree, kind, launcher, tmp_path):
     seen = tmp_path / "seen.bin"
     (tree / "codex_adapter.py").write_text(
@@ -121,3 +141,42 @@ def test_payload_reaches_the_adapter_byte_for_byte(tree, kind, launcher, tmp_pat
     script = tree / ("codex-entry.ps1" if kind == "ps1" else "codex-entry.sh")
     r = _run(launcher, script, "pre_tool_use", payload)
     assert r.returncode == 0 and seen.read_bytes() == payload
+
+
+@pytest.mark.parametrize("powershell", POWERSHELLS or [pytest.param(None, marks=pytest.mark.skip(
+    reason="Windows wrapper deadline requires native Windows PowerShell"))])
+@pytest.mark.parametrize("failure", ["inherited-pipes", "unread-stdin"])
+def test_powershell_deadline_includes_input_and_descendant_output(tree, failure, powershell):
+    child_pid = tree / "owned-child-pid.txt"
+    body = ("import subprocess,sys; child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(6)'], "
+            "stdout=sys.stdout,stderr=sys.stderr,close_fds=False); "
+            f"open({str(child_pid)!r},'w').write(str(child.pid)); "
+            "print('X4OK {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\","
+            "\"permissionDecisionReason\":\"adapter result\"}}')") if failure == "inherited-pipes" else (
+                "import time; time.sleep(6)")
+    (tree / "codex_adapter.py").write_text(body, encoding="utf-8")
+    start = time.monotonic()
+    result = _run([powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"],
+                  tree / "codex-entry.ps1", "pre_tool_use", b"x" * (2 << 20) if failure == "unread-stdin" else b"{}",
+                  dict(os.environ, X4_PYTHON=sys.executable, X4_NO_PYTHON_FALLBACK="1", X4_WRAPPER_TIMEOUT_S="1"))
+    elapsed = time.monotonic() - start
+    assert result.returncode == 0
+    reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "X4 GUARD INERT" in reason
+    assert elapsed < 3.5, (failure, elapsed)
+    if failure == "inherited-pipes":
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = kernel.OpenProcess(0x1000, False, int(child_pid.read_text()))
+        if handle:
+            try:
+                exit_code = wintypes.DWORD()
+                assert kernel.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                assert exit_code.value != 259, "owned pipe-holder remains alive after timeout"
+            finally:
+                kernel.CloseHandle(handle)

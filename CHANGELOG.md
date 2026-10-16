@@ -2,6 +2,14 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Native Codex entry wrappers validate the complete event output schema. On
+  Windows the adapter process uses an explicit standard-handle list and an
+  owned job, bounding stdin, execution and output drain by one deadline.
+- File hooks normalize Git Bash absolute paths before native Python 3.13's
+  absolute-path check; save preservation and ordinary policy receive the same
+  physical target. Hook smoke fixtures cannot use a caller's backup store.
+- The offline shared harness is pinned to 50ac29f, including exclusive absent
+  restore, typed settings migration and known DevBench fallback policy fixes.
 - Unknown-tool warnings use the current installed runtime even when X4_TOOLKIT
   is unset or names another toolkit. No game configuration is needed to report
   an unsupported surface as warn-and-allow.

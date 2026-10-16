@@ -332,10 +332,14 @@ def main(argv=None):
             path = ti.get("file_path") or ti.get("notebook_path")
             if not isinstance(path, str) or not path:
                 raise ValueError("file request has no path")
-            if not os.path.isabs(path):
-                if not action.cwd or not os.path.isabs(action.cwd):
+            # Git Bash payloads retain /c/... even though native Python 3.13
+            # no longer treats a single leading slash as a Windows absolute
+            # path. Resolve that mount before deciding that a cwd is needed.
+            if not (os.path.isabs(path) or (os.name == "nt" and path.startswith("/"))):
+                if not action.cwd:
                     raise ValueError("relative file request has no absolute cwd")
-                path = os.path.join(action.cwd, path)
+                path = os.path.join(str(native(action.cwd)), path)
+            path = str(native(path))
             evidence = [{"path": path, "operation": "write", "literal": True}]
 
         def backend(save_only):
