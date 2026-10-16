@@ -284,7 +284,10 @@ def archive(log: Path, dest_dir: Path, config=None) -> Path:
     except Exception as exc:  # noqa: BLE001 - the copy must survive ANY meta failure
         meta["degraded"] = True
         meta["degraded_reason"] = repr(exc)
-    _meta_path(out).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    # A companion can predate this raw-file reservation or appear meanwhile.
+    # Refuse that collision, retaining both the captured bytes and foreign meta.
+    with _meta_path(out).open("x", encoding="utf-8") as companion:
+        json.dump(meta, companion, indent=2)
     return out
 
 

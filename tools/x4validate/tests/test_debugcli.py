@@ -175,6 +175,32 @@ def test_archive_keeps_distinct_captures_with_the_same_source_mtime(tmp_path, re
     assert _debugcli.read_archive_meta(second)["total_errors"] == 1
 
 
+@pytest.mark.parametrize("late", [False, True], ids=["orphan", "late-companion"])
+def test_archive_never_replaces_independent_metadata(tmp_path, resolved_extensions, monkeypatch, late):
+    from types import SimpleNamespace
+    log = _write(tmp_path)
+    dest = tmp_path / "archive"
+    dest.mkdir()
+    token = "a" * 32
+    stamp = _debugcli.datetime.fromtimestamp(log.stat().st_mtime).strftime("%Y-%m-%dT%H%M")
+    raw = dest / f"debug-{stamp}-{token}.txt"
+    companion = _debugcli._meta_path(raw)
+    foreign = b"independent metadata evidence"
+    monkeypatch.setattr(_debugcli.uuid, "uuid4", lambda: SimpleNamespace(hex=token))
+    real_parse = _debugcli._debuglog.parse_log_text
+    def parse(text):
+        companion.write_bytes(foreign)
+        return real_parse(text)
+    if late:
+        monkeypatch.setattr(_debugcli._debuglog, "parse_log_text", parse)
+    else:
+        companion.write_bytes(foreign)
+    with pytest.raises(FileExistsError):
+        _debugcli.archive(log, dest)
+    assert companion.read_bytes() == foreign
+    assert raw.read_bytes() == log.read_bytes()
+
+
 class _F:
     def __init__(self, category, message, vpath=""):
         self.category, self.message, self.vpath = category, message, vpath
