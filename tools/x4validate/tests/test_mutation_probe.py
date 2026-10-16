@@ -538,32 +538,31 @@ def test_unqualified_reports_are_nonanswers(tmp_path, kind):
     report = tmp_path / "result.xml"
     if kind == "missing":
         assert mp._read_result(report, 0).status == "error"
-        return
-    if kind == "malformed":
+    elif kind == "malformed":
         report.write_text("<testsuite", encoding="utf-8")
         assert mp._read_result(report, 0).status == "error"
-        return
-    suite = ET.Element("testsuite", tests="1", failures="0", errors="0", skipped="0")
-    case = ET.SubElement(suite, "testcase", file="tests/test_owned.py", classname="test_owned", name="test one [a b]")
-    code = 0
-    if kind == "empty":
-        suite.remove(case); suite.set("tests", "0")
-    elif kind == "all-skipped":
-        ET.SubElement(case, "skipped"); suite.set("skipped", "1")
-    elif kind == "duplicate":
-        ET.SubElement(suite, "testcase", **case.attrib); suite.set("tests", "2")
-    elif kind == "count-mismatch":
-        suite.set("tests", "2")
-    elif kind in ("error-only", "failure-and-error", "zero-with-error"):
-        ET.SubElement(case, "error"); suite.set("errors", "1"); code = 0 if kind == "zero-with-error" else 1
-        if kind == "failure-and-error":
+    else:
+        suite = ET.Element("testsuite", tests="1", failures="0", errors="0", skipped="0")
+        case = ET.SubElement(suite, "testcase", file="tests/test_owned.py", classname="test_owned", name="test one [a b]")
+        code = 0
+        if kind == "empty":
+            suite.remove(case); suite.set("tests", "0")
+        elif kind == "all-skipped":
+            ET.SubElement(case, "skipped"); suite.set("skipped", "1")
+        elif kind == "duplicate":
+            ET.SubElement(suite, "testcase", **case.attrib); suite.set("tests", "2")
+        elif kind == "count-mismatch":
+            suite.set("tests", "2")
+        elif kind in ("error-only", "failure-and-error", "zero-with-error"):
+            ET.SubElement(case, "error"); suite.set("errors", "1"); code = 0 if kind == "zero-with-error" else 1
+            if kind == "failure-and-error":
+                ET.SubElement(case, "failure"); suite.set("failures", "1")
+        elif kind == "zero-with-failure":
             ET.SubElement(case, "failure"); suite.set("failures", "1")
-    elif kind == "zero-with-failure":
-        ET.SubElement(case, "failure"); suite.set("failures", "1")
-    elif kind == "one-without-failure":
-        code = 1
-    ET.ElementTree(suite).write(report, encoding="utf-8")
-    assert mp._read_result(report, code).status == ("noscope" if kind in ("empty", "all-skipped") else "error")
+        elif kind == "one-without-failure":
+            code = 1
+        ET.ElementTree(suite).write(report, encoding="utf-8")
+        assert mp._read_result(report, code).status == ("noscope" if kind in ("empty", "all-skipped") else "error")
 
 
 def test_failure_identity_preserves_spaces_and_parameter_suffixes(tmp_path):
