@@ -223,7 +223,7 @@ def archive(log: Path, dest_dir: Path, config=None) -> Path:
             target = out.open("xb")
             break
         except FileExistsError:
-            continue
+            continue  # silent-ok: exclusive reservation lost; retry without overwriting evidence
     with target, log.open("rb") as source:
         shutil.copyfileobj(source, target)
     shutil.copystat(log, out)

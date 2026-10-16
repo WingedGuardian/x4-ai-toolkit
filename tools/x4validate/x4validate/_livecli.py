@@ -1593,7 +1593,7 @@ def _verified_archive(directory: Path, sha: str) -> Path | None:
             if _dump_sha(str(candidate)) == sha:
                 return candidate
     except OSError:
-        pass
+        pass  # silent-ok: None means no VERIFIED archive; callers warn or exclusively capture
     return None
 
 
@@ -1611,7 +1611,7 @@ def _archive_hint(path: str | None, out) -> None:
         return
     if _verified_archive(d, sha) is not None:
         return
-    print(f"\nnote: this dump ({sha[:8]}) is not archived. X4 OVERWRITES uidata.xml on exit "
+    print(f"\nnote: no verified archive found for this dump ({sha[:8]}). X4 OVERWRITES uidata.xml on exit "
           f"-- `x4live archive` keeps it.", file=out)
 
 
@@ -1679,7 +1679,7 @@ def cmd_archive(path: str | None, out_dir: str | None = None, out=None) -> int:
             target = tmp.open("xb")
             break
         except FileExistsError:
-            continue
+            continue  # silent-ok: exclusive stage reservation lost; retry without replacing evidence
     try:
         with target:
             target.write(data)

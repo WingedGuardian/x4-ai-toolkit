@@ -203,8 +203,8 @@ MUTANTS = [
            "if False:  # mutant",
            "X4 truncates uidata.xml while running; the 61-byte stub would report '0 extensions'"),
     Mutant("_livedump.py", "variable-absent refusal downgraded",
-           'raise LiveDumpUnavailable(\n            f"the variable {var!r} is not assigned in this uidata.xml - the probe "',
-           'return ""  # mutant\n            f"the variable {var!r} is not assigned in this uidata.xml - the probe "',
+           'raise LiveDumpUnavailable(\n            f"the variable {var!r} is not assigned in this uidata.xml - the probe "\n            f"did not run, or its ui.xml does not declare the savedvariable")',
+           'return ""  # mutant: missing probe becomes an empty payload',
            "'the probe never ran' becomes indistinguishable from a malformed dump"),
     Mutant("_livedump.py", "HDR guard removed",
            "if not rows or rows[0][0] != HDR:",
@@ -260,7 +260,7 @@ MUTANTS = [
            "    if False:  # mutant",
            "a truncated read archives cleanly and becomes what a future session quotes"),
     Mutant("_livecli.py", "archive stops being content-addressed",
-           "    if existing:",
+           "    if existing is not None:",
            "    if False:  # mutant",
            "every run accumulates a near-duplicate; no row can be quoted with confidence"),
     # --- _livecli.py: the WRITE verbs. Each mutant removes one clause of the contract
@@ -303,7 +303,7 @@ MUTANTS = [
            '\n    if False:  # mutant',
            "the harvested fixture can be written short and reported as complete"),
     Mutant("_livecli.py", "the archive hint never stops firing",
-           '    if d.is_dir() and any(d.glob(f"livedump-*-{sha}.uidata.xml")):',
+           '    if _verified_archive(d, sha) is not None:',
            "    if False:  # mutant",
            "a reminder that always fires trains you to ignore the channel it shares"),
 

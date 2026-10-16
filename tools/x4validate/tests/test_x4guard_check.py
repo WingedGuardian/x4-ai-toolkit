@@ -266,8 +266,17 @@ def test_guard_signals_not_checked_with_exit_2_only_under_X4_GUARD_CHECK(sandbox
     check = subprocess.run([bash, hook], input=payload, capture_output=True, timeout=120,
                            env=dict(env, X4_GUARD_CHECK="1"))
     assert plain.returncode == 0 and b'"deny"' in plain.stdout.replace(b" ", b"")
-    assert b"X4 save dispatcher" in plain.stdout
+    expected = {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse", "permissionDecision": "deny",
+        "permissionDecisionReason": "Shell scope could not be completely evaluated; use literal "
+                                    "targets and an available parser. This call was not allowed."}}
+    assert json.loads(plain.stdout) == expected
     assert check.returncode == 2
+    # The shell transport turns the dispatcher's nonzero check result into its
+    # own structured refusal; exit2 still distinguishes it from a native verdict.
+    expected["hookSpecificOutput"]["permissionDecisionReason"] = (
+        "X4 save dispatcher did not return a complete decision; this call was not allowed.")
+    assert json.loads(check.stdout) == expected
 
 
 # ---------------------------------------------------------------- lane E (Plan 2) helpers

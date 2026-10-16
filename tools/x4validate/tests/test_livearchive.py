@@ -118,7 +118,7 @@ def test_a_matching_filename_without_matching_payload_is_not_an_archive(src, tmp
     previous = old.read_bytes()
     hint = io.StringIO()
     C._archive_hint(str(src), hint)
-    assert "not archived" in hint.getvalue()
+    assert "no verified archive found" in hint.getvalue()
     rc, output = run(src, d)
     assert rc == 0 and "already archived" not in output
     assert old.read_bytes() == previous
@@ -225,7 +225,7 @@ def test_the_hint_FIRES_when_the_dump_is_not_archived(src, tmp_path, monkeypatch
     monkeypatch.setattr(C._paths, "mods", lambda: tmp_path)
     buf = io.StringIO()
     C._archive_hint(str(src), buf)
-    assert "not archived" in buf.getvalue()
+    assert "no verified archive found" in buf.getvalue()
     assert "OVERWRITES" in buf.getvalue()
 
 
@@ -301,4 +301,4 @@ def test_a_failed_write_does_not_silence_the_reminder(src, tmp_path, monkeypatch
     buf = io.StringIO()
     monkeypatch.setattr(C._paths, "mods", lambda: tmp_path)
     C._archive_hint(str(src), buf)
-    assert "not archived" in buf.getvalue(), "the reminder went quiet after a FAILED archive"
+    assert "no verified archive found" in buf.getvalue(), "the reminder went quiet after a FAILED archive"

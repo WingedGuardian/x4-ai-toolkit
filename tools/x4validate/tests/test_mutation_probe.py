@@ -185,6 +185,53 @@ def test_every_anchor_is_unique_in_its_real_target():
         assert text.count(m.old) == 1, f"{m.target} :: {m.name} anchor is not unique"
 
 
+def mutant_syntax_failures(mutants, package):
+    """Compile complete replacements; a syntax-only kill measures no detector."""
+    failures = []
+    for m in mutants:
+        source = (package / m.target).read_text(encoding="utf-8")
+        count = source.count(m.old)
+        if count != 1:
+            failures.append(f"{m.target} :: {m.name}: anchor appears {count}x")
+            continue
+        try:
+            compile(source.replace(m.old, m.new, 1), m.target, "exec")
+        except SyntaxError as exc:
+            failures.append(f"{m.target} :: {m.name}: {type(exc).__name__}: {exc}")
+    return failures
+
+
+def test_every_mutant_is_valid_python():
+    # During the live mutation gate, validate against its complete pristine copies.
+    # Compiling against the active mutant would lose that row's original anchor.
+    package = mp.PRISTINE if mp.MARKER.is_file() else mp.PKG
+    assert not mutant_syntax_failures(mp.MUTANTS, package)
+
+
+def test_mutant_syntax_check_rejects_a_compile_only_kill(tmp_path):
+    (tmp_path / "_fake.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    good = mp.Mutant("_fake.py", "semantic", "return 1", "return 2", "test")
+    bad = mp.Mutant("_fake.py", "syntax", "return 1", "return (", "test")
+    missing = mp.Mutant("_fake.py", "missing", "no such anchor", "return 2", "test")
+    assert mutant_syntax_failures([good], tmp_path) == []
+    failures = mutant_syntax_failures([good, bad, missing], tmp_path)
+    assert len(failures) == 2
+    assert "syntax: SyntaxError" in failures[0]
+    assert "missing: anchor appears 0x" in failures[1]
+
+
+def test_mutant_syntax_check_uses_pristine_during_mutation(fake_tree, monkeypatch):
+    _, package = fake_tree
+    (package / "_merge.py").write_text("value = 1\n", encoding="utf-8")
+    monkeypatch.setattr(mp, "MUTANTS", [mp.Mutant("_merge.py", "one", "1", "2", "test")])
+    mp.take_pristine()
+    (package / "_merge.py").write_text("value = 2\n", encoding="utf-8")
+    test_every_mutant_is_valid_python()
+    (mp.PRISTINE / "_merge.py").write_text("value = 2\n", encoding="utf-8")
+    with pytest.raises(AssertionError):
+        test_every_mutant_is_valid_python()
+
+
 def mp_scope_gaps(root: Path, targets: dict) -> dict:
     """{target: [scoped test paths that do not exist]}, omitting complete targets.
 
