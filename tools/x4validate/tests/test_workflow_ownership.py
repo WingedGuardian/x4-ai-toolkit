@@ -4,6 +4,8 @@ from pathlib import Path
 
 def test_workflow_actions_are_pinned_and_jobs_bounded():
     root = Path(__file__).resolve().parents[3]
+    from _layout import require_repo
+    require_repo(".github/workflows", why="workflow source is not copied into installed runtimes", root=root)
     workflows = sorted((root / ".github/workflows").glob("*.yml"))
     assert workflows, "no workflow source set was examined"
     jobs = 0

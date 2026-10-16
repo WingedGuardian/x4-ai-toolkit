@@ -18,7 +18,10 @@ import pytest
 from ruamel.yaml import YAML
 
 REPO = Path(__file__).resolve().parents[3]
-HOOKS = REPO / ".claude" / "hooks"
+from _layout import common_hook_dir
+HOOKS = common_hook_dir(REPO)
+sys.path.insert(0, str(REPO / "scripts"))
+from gitbash import find_bash
 
 
 @pytest.fixture
@@ -31,7 +34,8 @@ def hook_env(tmp_path):
 
 
 def run_hook(name, target, env):
-    bash = shutil.which("bash.exe") or shutil.which("bash")
+    bash = find_bash()
+    assert bash, "the shared Git Bash resolver found no usable shell"
     return subprocess.run([bash, str(HOOKS / name)],
                           input=json.dumps({"tool_name": "Edit", "tool_input": {"file_path": str(target)}}),
                           capture_output=True, text=True, env=env, timeout=60)

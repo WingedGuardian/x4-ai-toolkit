@@ -9,6 +9,42 @@ import pytest
 import _layout
 
 
+@pytest.mark.parametrize("marker,names", [(".claude/hooks", ["CLAUDE.md"]),
+    (".codex/hooks", ["AGENTS.md"]), (".agents/skills", ["AGENTS.md"]),
+    (".opencode/hooks", ["AGENTS.md"]), (".claude/hooks", ["CLAUDE.md", "AGENTS.md"])])
+def test_runtime_instruction_population_matches_selected_and_present_targets(tmp_path, marker, names):
+    (tmp_path / marker).mkdir(parents=True)
+    for name in names:
+        (tmp_path / name).write_text("selected instruction", encoding="utf-8")
+    assert {p.name for p in _layout.runtime_instructions(tmp_path)} == set(names)
+
+
+@pytest.mark.parametrize("marker", [".claude/hooks", ".codex/hooks", ".agents", ".opencode"])
+def test_missing_selected_runtime_instruction_cannot_skip(tmp_path, marker):
+    (tmp_path / marker).mkdir(parents=True)
+    with pytest.raises(AssertionError, match="instructions are missing"):
+        _layout.runtime_instructions(tmp_path)
+
+
+@pytest.mark.parametrize("relative", [".claude/hooks", ".codex/hooks", ".opencode/hooks", "tools/x4_harness"])
+def test_each_common_runtime_carrier_is_examined_and_partial_payload_refuses(tmp_path, relative):
+    carrier = tmp_path / relative
+    carrier.mkdir(parents=True)
+    for name in ("backup-before-edit.sh", "x4validate-on-edit.sh"):
+        (carrier / name).write_text("owned", encoding="utf-8")
+    assert _layout.common_hook_dir(tmp_path) == carrier
+    (carrier / "backup-before-edit.sh").unlink()
+    with pytest.raises(AssertionError, match="incomplete common runtime"):
+        _layout.common_hook_dir(tmp_path)
+
+
+def test_missing_all_runtime_carriers_or_instructions_cannot_skip(tmp_path):
+    with pytest.raises(AssertionError, match="no common hook runtime"):
+        _layout.common_hook_dir(tmp_path)
+    with pytest.raises(AssertionError, match="no selected runtime instruction"):
+        _layout.runtime_instructions(tmp_path)
+
+
 def _installed(tmp_path):
     (tmp_path / "tools").mkdir(parents=True)     # an install: no agent/
     return tmp_path

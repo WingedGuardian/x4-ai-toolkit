@@ -187,3 +187,33 @@ def require_repo(*rel: str, why: str = "", module_level: bool = False, root: Pat
     reason = "%s: needs %s, which an install does not ship%s%s" % (
         REASON, ", ".join(missing), (" -- " + why) if why else "", layout_caveat(root))
     pytest.skip(reason, allow_module_level=module_level)
+
+
+def runtime_instructions(root: Path = ROOT) -> list[Path]:
+    """All present instructions, plus every instruction required by the selected runtime."""
+    root = Path(root)
+    required = set()
+    if not installed_layout(root):
+        required.update(("CLAUDE.md", "AGENTS.md"))
+    else:
+        if (root / ".claude/settings.json").exists() or (root / ".claude/hooks").exists():
+            required.add("CLAUDE.md")
+        if any((root / name).exists() for name in (".codex", ".agents", ".opencode")):
+            required.add("AGENTS.md")
+    required.update(name for name in ("CLAUDE.md", "AGENTS.md") if (root / name).is_file())
+    assert required, "no selected runtime instruction payload was examined"
+    missing = [name for name in sorted(required) if not (root / name).is_file()]
+    assert not missing, "selected runtime instructions are missing: " + ", ".join(missing)
+    return [root / name for name in sorted(required)]
+
+
+def common_hook_dir(root: Path = ROOT) -> Path:
+    """Select an installed common carrier; a partial selected carrier is a failure."""
+    for relative in (".claude/hooks", ".codex/hooks", ".opencode/hooks", "tools/x4_harness"):
+        carrier = Path(root) / relative
+        if carrier.exists():
+            missing = [name for name in ("backup-before-edit.sh", "x4validate-on-edit.sh")
+                       if not (carrier / name).is_file()]
+            assert not missing, "incomplete common runtime at " + str(carrier) + ": " + ", ".join(missing)
+            return carrier
+    raise AssertionError("no common hook runtime carrier was examined")

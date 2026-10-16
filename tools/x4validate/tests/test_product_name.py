@@ -143,7 +143,6 @@ def test_the_classifier_can_go_red_and_each_keep_clause_is_needed(path, line, wa
     ("install.ps1", "%s installer" % NEW),
     (".github/workflows/ci.yml", NEW),
     ("agent/instructions/claude.md", "(%s)" % NEW),
-    ("CLAUDE.md", "(%s)" % NEW),
     ("SETUP_PROMPT.txt", NEW),
 ])
 def test_each_current_surface_carries_the_new_name(path, needle):
@@ -156,3 +155,9 @@ def test_each_current_surface_carries_the_new_name(path, needle):
 def test_the_repo_url_is_the_new_slug():
     text = (REPO / "README.md").read_text(encoding="utf-8")
     assert "github.com/WingedGuardian/x4-ai-toolkit" in text
+
+
+def test_each_selected_runtime_instruction_carries_the_new_name():
+    from _layout import runtime_instructions
+    for path in runtime_instructions(REPO):
+        assert NEW in path.read_text(encoding="utf-8"), path

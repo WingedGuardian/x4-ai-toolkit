@@ -117,7 +117,8 @@ def test_the_shipped_AGENTS_md_is_in_the_population():
 
 def test_TWIN_an_AGENTS_md_missing_a_row_turns_the_gate_red(tmp_path, monkeypatch, capsys):
     """Twin of the live run: CLAUDE.md fully routed, AGENTS.md lacking x4live -> rc 1 naming it."""
-    full = (rc_.REPO_ROOT / "CLAUDE.md").read_bytes()
+    from _layout import runtime_instructions
+    full = runtime_instructions(rc_.REPO_ROOT)[0].read_bytes()
     good = tmp_path / "CLAUDE.md"
     good.write_bytes(full)
     bad = tmp_path / "AGENTS.md"
