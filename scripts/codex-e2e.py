@@ -48,6 +48,7 @@ def load_renderer():
 
 
 def build_decoy(out: Path, hooks: bool = True) -> tuple[Path, dict]:
+    out = Path(out).resolve()
     root = out / "X4 E2E root"
     # Exclusive creation preserves previous evidence and foreign data, including failed setups.
     root.mkdir(parents=True, exist_ok=False)

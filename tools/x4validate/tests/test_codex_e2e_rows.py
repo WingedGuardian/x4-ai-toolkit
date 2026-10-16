@@ -137,8 +137,12 @@ def test_constructor_uses_only_shipped_runtime_rendering(e2e, tmp_path, monkeypa
 
 @pytest.mark.parametrize("target,decision", [("reference/libraries/wares.xml", "deny"),
                                                ("dev/mymod/libraries/wares.xml", "allow")])
-def test_constructed_decoy_runs_evaluated_policy_without_a_host(e2e, tmp_path, target, decision, codex_payload):
-    root, env = e2e.build_decoy(tmp_path)
+@pytest.mark.parametrize("relative", [False, True])
+def test_constructed_decoy_runs_evaluated_policy_without_a_host(e2e, tmp_path, target, decision, codex_payload,
+                                                              monkeypatch, relative):
+    monkeypatch.chdir(tmp_path)
+    root, env = e2e.build_decoy(Path("relative-out") if relative else tmp_path / "absolute-out")
+    assert root.is_absolute()
     result = subprocess.run([sys.executable, str(root / ".codex/hooks/x4guard.py"), "check",
                              "--kind", "write", "--path", str(root / target)],
                             cwd=root, env=env, capture_output=True, text=True, timeout=45)
