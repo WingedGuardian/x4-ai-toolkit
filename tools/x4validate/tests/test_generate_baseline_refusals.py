@@ -255,15 +255,16 @@ def test_a_debug_txt_WITH_errors_is_still_fingerprinted(isolated, tmp_path):
     assert "2 [=ERROR=] lines captured" in r.stdout, r.stdout[-300:]
 
 
-def test_the_script_reads_the_ROOT_config_through_the_shared_loader(tmp_path):
+@pytest.mark.parametrize("carrier", [".claude/hooks", "tools/x4_harness"])
+def test_the_script_reads_the_ROOT_config_through_the_shared_loader(tmp_path, carrier):
     """Plan 3 lane I: the script sourced `.claude/x4-paths.env` itself -- a THIRD loader,
     with the file winning over the environment. It now goes through _x4-env.sh, so the
     4.x root config is read: X4_GAME comes from it and the GAME_DIR refusal must not fire."""
     (tmp_path / "scripts").mkdir()
     shutil.copy2(SCRIPT, tmp_path / "scripts" / SCRIPT.name)
-    hooks = tmp_path / ".claude" / "hooks"
+    hooks = tmp_path / carrier
     hooks.mkdir(parents=True)
-    shutil.copy2(ROOT / ".claude" / "hooks" / "_x4-env.sh", hooks / "_x4-env.sh")
+    shutil.copy2(ROOT / "tools/x4_harness/_x4-env.sh", hooks / "_x4-env.sh")
     game = tmp_path / "fakegame"
     game.mkdir()
     (tmp_path / "x4-paths.env").write_text('X4_GAME="%s"\n' % game.as_posix(), encoding="utf-8")

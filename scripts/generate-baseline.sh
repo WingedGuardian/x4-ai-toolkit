@@ -18,7 +18,7 @@ set -euo pipefail
 # environment and the 4.x root config was never read. Now it sources _x4-env.sh from the
 # first guard copy installed beside it (any agent), and reads NOTHING when there is none.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-for _gd in "$_here/.claude/hooks" "$_here/.codex/hooks" "$_here/.opencode/hooks"; do
+for _gd in "$_here/.claude/hooks" "$_here/.codex/hooks" "$_here/.opencode/hooks" "$_here/tools/x4_harness"; do
   if [ -f "$_gd/_x4-env.sh" ]; then
     set +eu
     HOOK_DIR="$_gd"

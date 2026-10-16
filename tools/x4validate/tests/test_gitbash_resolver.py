@@ -32,6 +32,22 @@ def test_the_module_ships():
     assert _SRC.is_file(), "scripts/gitbash.py is missing: %s" % _SRC
 
 
+def test_generic_only_install_uses_its_neutral_bash_resolver(tmp_path):
+    import shutil
+    script = tmp_path / "scripts/gitbash.py"
+    script.parent.mkdir()
+    shutil.copy2(_SRC, script)
+    runtime = tmp_path / "tools/x4_harness"
+    runtime.mkdir(parents=True)
+    (runtime / "x4guard.py").write_text(
+        "def resolve_bash(): return ('fixture-bash', None)\n"
+        "def is_stub_bash(path): return False\n", encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("generic_gitbash_control", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.find_bash() == "fixture-bash"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="the stub only exists on Windows")
 def test_it_returns_None_rather_than_the_stub(monkeypatch):
     """The branch that matters: nothing but the stub is reachable."""

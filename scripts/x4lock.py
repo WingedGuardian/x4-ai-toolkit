@@ -124,6 +124,7 @@ _TARGET_DEMANDS = {
     # OpenCode (Plan 3 lane L, best effort): its guard copy is the marker, never a bare
     # .opencode/ -- OpenCode writes that folder itself and a user may keep plugins there.
     ".opencode/hooks": ("AGENTS.md", ".opencode/plugins/x4guard.js"),
+    "tools/x4_harness": ("AGENTS.md", "tools/x4_harness/x4guard.py", "tools/x4_harness/_x4-env.sh"),
 }
 
 #: The guards themselves. A protection that can silently disable itself is not one.
@@ -159,6 +160,12 @@ _GAME_GLOBS = (
     ".opencode/X4-OPENCODE.md",
     ".opencode/skills/*/SKILL.md",
     ".opencode/skills/*/reference/*.md",
+    "tools/x4_harness/*.py",
+    "tools/x4_harness/*.sh",
+    "tools/x4_harness/*.tmpl",
+    "tools/modding_harness/*.py",
+    "tools/modding_harness/*.mjs",
+    "tools/modding-harness.lock.json",
 )
 
 
@@ -416,7 +423,18 @@ def _agent_roots(game: Path | None) -> list[Path]:
 
 def _markers_in(root: Path) -> list[str]:
     """The agent-target markers present in `root` (none: an empty list)."""
-    return [m for m in _TARGET_DEMANDS if (root / m).is_dir()]
+    native = [m for m in _TARGET_DEMANDS if m != "tools/x4_harness" and (root / m).is_dir()]
+    # A remaining named definition still demands that native target; the
+    # neutral carrier must not hide a removed native guard directory.
+    for marker, signal in ((".codex/hooks", ".codex/hooks.json"),
+                           (".opencode/hooks", ".opencode/plugins/x4guard.js")):
+        if marker not in native and (root / signal).is_file():
+            native.append(marker)
+    if native:
+        return native
+    if (root / "tools/x4_harness").is_dir() and (root / ".agents").is_dir():
+        return ["tools/x4_harness"]
+    return []
 
 
 def _demanded_targets(game: Path) -> list[str]:
@@ -427,7 +445,7 @@ def _demanded_targets(game: Path) -> list[str]:
     reports CLAUDE.md MISSING rather than demanding nothing. A false MISSING is visible;
     a false waiver is silent.
     """
-    present = [m for m in _TARGET_DEMANDS if (game / m).is_dir()]
+    present = _markers_in(game)
     return present or [".claude/hooks"]
 
 

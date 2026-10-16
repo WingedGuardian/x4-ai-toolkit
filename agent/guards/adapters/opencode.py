@@ -184,6 +184,11 @@ def pre(p: dict) -> dict:
 
 def _written(p: dict) -> list[str]:
     tool, args, base = p["tool"], p["args"], p["directory"]
+    if tool == SHELL_TOOL:
+        # Reuse pre-tool attribution: shell workdir, then the patch's literal cd.
+        # A malformed/opaque patch becomes a visible NOT RUN in post().
+        _calls, ops, _cwd = translate(p)
+        return [path for op, path in (ops or []) if op in core.VALIDATE_OPS]
     if tool in FILE_TOOLS:
         return [core._abspath(_arg(args, "filePath", tool), base)]
     if tool == PATCH_TOOL:

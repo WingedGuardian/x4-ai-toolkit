@@ -65,8 +65,10 @@ elif [ -f "$HERE/../.codex/hooks/_x4-env.sh" ]; then
   . "$HERE/../.codex/hooks/_x4-env.sh"
 elif [ -f "$HERE/../.opencode/hooks/_x4-env.sh" ]; then
   . "$HERE/../.opencode/hooks/_x4-env.sh"
+elif [ -f "$HERE/../tools/x4_harness/_x4-env.sh" ]; then
+  . "$HERE/../tools/x4_harness/_x4-env.sh"
 else
-  echo "ERROR: no _x4-env.sh in .claude/hooks/, .codex/hooks/ or .opencode/hooks/ beside $HERE -- re-run the installer." >&2
+  echo "ERROR: no _x4-env.sh in .claude/hooks/, .codex/hooks/, .opencode/hooks/ or tools/x4_harness/ beside $HERE -- re-run the installer." >&2
   exit 2
 fi
 
@@ -136,7 +138,7 @@ if [ -n "$EXPLICIT_REF" ]; then
   X4_REFERENCE="$EXPLICIT_REF"; export X4_REFERENCE
 elif [ -n "$_X4_INHERITED_REF" ] && [ -n "${_x4_cfg:-}" ]; then
   _X4_LOADER=""
-  for _l in "$HERE/../.claude/hooks/_x4-env.sh" "$HERE/../.codex/hooks/_x4-env.sh" "$HERE/../.opencode/hooks/_x4-env.sh"; do
+  for _l in "$HERE/../.claude/hooks/_x4-env.sh" "$HERE/../.codex/hooks/_x4-env.sh" "$HERE/../.opencode/hooks/_x4-env.sh" "$HERE/../tools/x4_harness/_x4-env.sh"; do
     [ -f "$_l" ] && { _X4_LOADER="$_l"; break; }
   done
   _X4_CFG_REF="$(unset X4_REFERENCE; . "$_X4_LOADER" >/dev/null 2>&1; printf '%s' "${X4_REFERENCE:-}")"

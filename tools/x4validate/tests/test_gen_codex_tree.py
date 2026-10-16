@@ -6,6 +6,7 @@ Kept apart from test_gen_agent_trees.py so lanes A, B and E can change their own
 import hashlib
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -20,7 +21,7 @@ TEMPLATE = REPO / "agent" / "targets" / "codex" / "hooks.json.tmpl"
 #: re-review it (spike R5; Codex keys trust on the definition's hash). Changing this pin needs a
 #: CHANGELOG entry headed "Codex users must re-review hooks" carrying the new value
 #: (test_codex_disclosure.py checks that).
-TEMPLATE_SHA256 = "d6fef82e09d3f54afbda775d1646bd8968a02b2893de8c867476aca17eef4d19"
+TEMPLATE_SHA256 = "9e50f5517b2e895cc412ca1727d00e85a8e54ba910286b1c662870f321f00212"
 
 
 def load():
@@ -53,7 +54,9 @@ def test_rendered_hooks_json_is_valid_and_uses_wrappers(tmp_path):
     assert set(d["hooks"]) == {"SessionStart", "PreToolUse", "PostToolUse"}
     pre = d["hooks"]["PreToolUse"][0]
     assert pre["matcher"] == ".*" and pre["hooks"][0]["timeout"] == 60
-    assert d["hooks"]["PostToolUse"][0]["matcher"] == "apply_patch"
+    matcher = d["hooks"]["PostToolUse"][0]["matcher"]
+    assert all(re.fullmatch(matcher, name) for name in ("Bash", "apply_patch"))
+    assert not any(re.fullmatch(matcher, name) for name in ("Read", "write_stdin", "mcp__other__Bash"))
     for groups in d["hooks"].values():
         for h in groups[0]["hooks"]:
             win, posix = h["commandWindows"], h["command"]

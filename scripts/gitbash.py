@@ -35,6 +35,7 @@ _GUARD_COPIES = (
     _TOOLKIT / ".claude" / "hooks" / "x4guard.py",
     _TOOLKIT / ".codex" / "hooks" / "x4guard.py",
     _TOOLKIT / ".opencode" / "hooks" / "x4guard.py",
+    _TOOLKIT / "tools" / "x4_harness" / "x4guard.py",
 )
 
 _MOD = None

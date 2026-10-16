@@ -239,6 +239,28 @@ def test_post_on_an_unparseable_patch_says_validation_did_not_run(sandbox):
     assert v["decision"] == "advise" and v["context"].startswith("X4 VALIDATION DID NOT RUN"), v
 
 
+@pytest.mark.parametrize("base", ["workdir", "cd"])
+def test_shell_patch_post_validation_keeps_its_working_directory(sandbox, base):
+    tmp, tk, env = sandbox
+    env = fake_validator(tmp, env, tk)
+    (tk / "dev/mymod/a.xml").write_text("<diff/>\n", encoding="utf-8")
+    command = "apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: dev/mymod/a.xml\n+<diff/>\n*** End Patch\nPATCH"
+    args = {"command": command, "workdir": str(tk if base == "workdir" else tmp)}
+    if base == "cd":
+        args["command"] = f"cd '{tk.as_posix()}'; " + command
+    result = run(env, call(tk, "bash", args, directory=tmp), event="post")
+    assert result["decision"] == "advise" and FAKE_FINDING in (result["context"] or ""), result
+    args["command"] = "echo hello"
+    assert run(env, call(tk, "bash", args, directory=tmp), event="post")["decision"] == "allow"
+
+
+def test_malformed_shell_patch_post_discloses_missing_validation(sandbox):
+    tmp, tk, env = sandbox
+    command = "apply_patch <<'PATCH'\n*** Begin Patch\n*** Nope: a.xml\n*** End Patch\nPATCH"
+    result = run(env, call(tk, "bash", {"command": command}), event="post")
+    assert result["decision"] == "advise" and "VALIDATION DID NOT RUN" in (result["context"] or ""), result
+
+
 def test_post_never_denies_even_on_garbage(sandbox):
     tmp, tk, env = sandbox
     v = run(env, raw=b"garbage", event="post")

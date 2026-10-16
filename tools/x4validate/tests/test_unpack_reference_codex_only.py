@@ -54,7 +54,7 @@ def _unpack(root: Path, monkeypatch):
 
 
 @pytest.mark.parametrize("guards", [(".codex/hooks",), (".claude/hooks",), (".claude/hooks", ".codex/hooks"),
-                                    (".opencode/hooks",)])
+                                    (".opencode/hooks",), ("tools/x4_harness",)])
 def test_the_env_is_sourced_from_WHICHEVER_guard_copy_is_installed(guards, tmp_path, monkeypatch):
     r = _unpack(_root(tmp_path, guards), monkeypatch)
     assert r.returncode == 2 and "X4_GAME not set" in r.stderr, (r.returncode, r.stdout, r.stderr)

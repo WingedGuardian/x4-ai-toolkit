@@ -18,6 +18,40 @@ FIX = PKG / "tests" / "fixtures" / "codex" / "0.160.0"
 HAS_PWSH = bool(shutil.which("pwsh") or shutil.which("powershell"))
 
 
+def process_alive(pid: int) -> bool:
+    """A failed liveness read is unknown, never evidence that a child exited."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 87:  # ERROR_INVALID_PARAMETER: that PID no longer exists.
+                return False
+            raise ctypes.WinError(error)
+        try:
+            code = wintypes.DWORD()
+            if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return code.value == 259
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def schema_keys(event: str) -> tuple[set, set]:
     """(top-level keys, hookSpecificOutput keys) Codex 0.160.0 accepts in an `event` hook's output,
     read from the schema extracted from the binary (fixtures/codex/0.160.0/schemas/). R7-10: these

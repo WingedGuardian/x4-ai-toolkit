@@ -2,9 +2,17 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Generic installs use the neutral runtime for Bash discovery, unpacking and
+  baseline configuration. File-lock inventories recognize the generic carrier,
+  demand AGENTS.md and include the neutral and shared runtime files.
+- Codex users must re-review hooks: post-tool validation also receives the
+  captured native shell name `Bash`, covering shell-carried patches. OpenCode
+  shell patches retain workdir and literal cd attribution for post validation;
+  malformed patches disclose that validation did not run.
+  codex-hooks-template: 9e50f5517b2e895cc412ca1727d00e85a8e54ba910286b1c662870f321f00212
 - Native Codex entry wrappers validate the complete event output schema. On
   Windows the adapter process uses an explicit standard-handle list and an
-  owned job, bounding stdin, execution and output drain by one deadline.
+  owned job, bounding adapter stdin, execution and output drain by one deadline.
 - File hooks normalize Git Bash absolute paths before native Python 3.13's
   absolute-path check; save preservation and ordinary policy receive the same
   physical target. Hook smoke fixtures cannot use a caller's backup store.

@@ -2,7 +2,6 @@
 
 A guard that cannot run must never read as allow -- it is an inert deny with the cause named.
 """
-import ctypes
 import importlib.util
 import json
 import os
@@ -14,7 +13,7 @@ import time
 from pathlib import Path
 
 import pytest
-from codex_testlib import copy_shared_runtime
+from codex_testlib import copy_shared_runtime, process_alive
 
 PKG = Path(__file__).resolve().parents[1]
 REPO = PKG.parents[1]
@@ -275,22 +274,7 @@ def test_guard_signals_not_checked_with_exit_2_only_under_X4_GUARD_CHECK(sandbox
 
 def _alive(pid: int) -> bool:
     """Is this PID a live process? Windows: STILL_ACTIVE exit code. POSIX: kill(pid, 0)."""
-    if os.name == "nt":
-        k = ctypes.windll.kernel32
-        h = k.OpenProcess(0x1000, False, pid)            # PROCESS_QUERY_LIMITED_INFORMATION
-        if not h:
-            return False
-        code = ctypes.c_ulong()
-        k.GetExitCodeProcess(h, ctypes.byref(code))
-        k.CloseHandle(h)
-        return code.value == 259                           # STILL_ACTIVE
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return process_alive(pid)
 
 
 def _wait_dead(pid: int, within: float = 5.0) -> bool:

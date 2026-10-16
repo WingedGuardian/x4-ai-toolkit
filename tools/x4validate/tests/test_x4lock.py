@@ -495,6 +495,38 @@ def test_F9_a_present_AGENTS_md_is_in_the_manifest(tmp_path, monkeypatch):
     assert _in(x4lock.manifest(), game, "AGENTS.md")
 
 
+def test_generic_carrier_demands_agents_and_locks_the_neutral_runtime(tmp_path, monkeypatch):
+    game = _game(tmp_path, monkeypatch, claude=False)
+    (game / ".agents/skills").mkdir(parents=True)
+    runtime = game / "tools/x4_harness"
+    runtime.mkdir(parents=True)
+    for name in ("x4guard.py", "_x4-env.sh"):
+        (runtime / name).write_text("fixture")
+    core = game / "tools/modding_harness"
+    core.mkdir()
+    (core / "dispatch.py").write_text("fixture")
+    (core / "opencode_plugin.mjs").write_text("fixture")
+    (game / "tools/modding-harness.lock.json").write_text("{}")
+    missing = x4lock.missing()
+    assert _in(missing, game, "AGENTS.md") and not _in(missing, game, "CLAUDE.md")
+    held = x4lock.manifest()
+    assert all(_in(held, game, rel) for rel in (
+        "tools/x4_harness/x4guard.py", "tools/x4_harness/_x4-env.sh",
+        "tools/modding_harness/dispatch.py", "tools/modding_harness/opencode_plugin.mjs",
+        "tools/modding-harness.lock.json"))
+
+
+def test_neutral_runtime_does_not_replace_a_named_native_target(tmp_path, monkeypatch):
+    game = _game(tmp_path, monkeypatch, claude=False)
+    (game / ".agents").mkdir()
+    (game / "tools/x4_harness").mkdir(parents=True)
+    (game / ".codex/hooks").mkdir(parents=True)
+    assert x4lock._markers_in(game) == [".codex/hooks"]
+    (game / ".codex/hooks").rmdir()
+    (game / ".codex/hooks.json").write_text("{}")
+    assert x4lock._markers_in(game) == [".codex/hooks"]
+
+
 def test_F9_TWIN_a_claude_only_root_does_NOT_report_AGENTS_md_missing(tmp_path, monkeypatch):
     """The trap: _GAME_RELATIVE entries are demanded unconditionally. Every v3.x and
     Claude-only install would read as damaged."""
