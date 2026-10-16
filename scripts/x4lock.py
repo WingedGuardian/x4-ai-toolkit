@@ -421,6 +421,28 @@ def _agent_roots(game: Path | None) -> list[Path]:
     return roots
 
 
+def _claude_definition(path: Path) -> bool:
+    """A remaining toolkit hook definition, not an unrelated Claude env setting."""
+    import json
+    try:
+        with path.open("rb") as source:
+            raw = source.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            return True  # Unknown config cannot waive the older native demand.
+        hooks = json.loads(raw).get("hooks", {})
+        names = ("protect-bash.sh", "protect-files.sh", "x4guard.py", "x4validate-on-edit.sh",
+                 "session-canary.sh", "check-reference-version.sh", "backup-before-edit.sh")
+        for groups in hooks.values():
+            for group in groups:
+                for hook in group.get("hooks", []):
+                    command = hook.get("command", "")
+                    if isinstance(command, str) and any(name in command for name in names):
+                        return True
+        return False
+    except (OSError, ValueError, AttributeError, TypeError):
+        return True
+
+
 def _markers_in(root: Path) -> list[str]:
     """The agent-target markers present in `root` (none: an empty list)."""
     native = [m for m in _TARGET_DEMANDS if m != "tools/x4_harness" and (root / m).is_dir()]
@@ -430,6 +452,9 @@ def _markers_in(root: Path) -> list[str]:
                            (".opencode/hooks", ".opencode/plugins/x4guard.js")):
         if marker not in native and (root / signal).is_file():
             native.append(marker)
+    claude = root / ".claude/settings.json"
+    if ".claude/hooks" not in native and claude.is_file() and _claude_definition(claude):
+        native.append(".claude/hooks")
     if native:
         return native
     if (root / "tools/x4_harness").is_dir() and (root / ".agents").is_dir():

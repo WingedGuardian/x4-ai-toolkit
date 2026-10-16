@@ -527,6 +527,20 @@ def test_neutral_runtime_does_not_replace_a_named_native_target(tmp_path, monkey
     assert x4lock._markers_in(game) == [".codex/hooks"]
 
 
+@pytest.mark.parametrize("toolkit_hook", [False, True])
+def test_neutral_carrier_keeps_remaining_claude_toolkit_definition(tmp_path, monkeypatch, toolkit_hook):
+    import json
+    game = _game(tmp_path, monkeypatch, claude=False)
+    (game / ".agents").mkdir()
+    (game / "tools/x4_harness").mkdir(parents=True)
+    (game / ".claude").mkdir()
+    content = {"hooks": {"PreToolUse": [{"hooks": [{"command": "bash .claude/hooks/protect-bash.sh"}]}]}} if toolkit_hook else {"env": {"NOTES": "protect-bash.sh"}}
+    (game / ".claude/settings.json").write_text(json.dumps(content))
+    markers = x4lock._markers_in(game)
+    assert markers == ([".claude/hooks"] if toolkit_hook else ["tools/x4_harness"])
+    assert _in(x4lock.missing(), game, "CLAUDE.md") == toolkit_hook
+
+
 def test_F9_TWIN_a_claude_only_root_does_NOT_report_AGENTS_md_missing(tmp_path, monkeypatch):
     """The trap: _GAME_RELATIVE entries are demanded unconditionally. Every v3.x and
     Claude-only install would read as damaged."""
