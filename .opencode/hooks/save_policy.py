@@ -75,6 +75,21 @@ def folders(roots):
     return tuple(dict.fromkeys(result))
 
 
+def _has_magic(path):
+    # A Windows namespace '?' belongs to the drive, not the filename pattern.
+    return glob.has_magic(os.path.splitdrive(str(path))[1])
+
+
+def _scope_prefix(path):
+    """The fixed physical prefix before the first wildcard component."""
+    prefix = Path(path.anchor)
+    for part in path.parts[1:] if path.anchor else path.parts:
+        if glob.has_magic(part):
+            break
+        prefix /= part
+    return prefix
+
+
 def resolve(root, roots, evidence, deadline=None):
     dispatch = core(root, "dispatch")
     profiles = core(root, "profiles")
@@ -99,7 +114,7 @@ def resolve(root, roots, evidence, deadline=None):
                 problems.append("copy into a save folder must identify its resulting filenames")
                 continue
             for source in sources:
-                if (source.get("unresolved") or not source.get("path") or glob.has_magic(source["path"])
+                if (source.get("unresolved") or not source.get("path") or _has_magic(source["path"])
                         or not native(source["path"]).is_file() or native(source["path"]).is_symlink()):
                     problems.append("copy source filename or file kind is not qualified")
                     continue
@@ -119,27 +134,36 @@ def resolve(root, roots, evidence, deadline=None):
         path = native(raw)
         op = row["operation"]
         affected.append((str(path), op))
-        if preservation.protects(path, [Path(root) / ".modding-agent-harness"], ancestor=op in ("move", "delete")):
+        pattern = row.get("literal") is not True and _has_magic(path)
+        recursive_scope = row.get("scope") in ("tree", "filtered-tree") or pattern and "**" in str(path)
+        fixed = _scope_prefix(path) if pattern else path
+        protected_scope = fixed if recursive_scope else path
+        ancestor = op in ("move", "delete") or recursive_scope
+        if preservation.protects(protected_scope, [Path(root) / ".modding-agent-harness"], ancestor=ancestor):
             problems.append("neutral harness state is protected")
-        if preservation.protects(path, [store.root], ancestor=op in ("move", "delete")):
+        if preservation.protects(protected_scope, [store.root], ancestor=ancestor):
             problems.append("permanent save store is protected")
         if op in ("move", "delete") and any(preservation.contains(path, folder) for folder in save_roots):
             problems.append("whole save-folder move/delete is refused")
-        pattern = row.get("literal") is not True and glob.has_magic(str(path))
+        save_scope = any(preservation.contains(folder, fixed) or preservation.contains(fixed, folder)
+                         for folder in save_roots)
+        if pattern and recursive_scope and save_scope:
+            problems.append("recursive or filtered helper membership is not qualified")
+            continue
         candidates = []
         for candidate in glob.iglob(str(path)) if pattern else [str(path)]:
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError("save scope resolution deadline expired")
             candidates.append(candidate)
         candidates.sort()
-        if pattern and ("**" in str(path) or row.get("scope") in ("tree", "filtered-tree")):
-            problems.append("recursive or filtered helper membership is not qualified")
         if row.get("scope") in ("tree", "filtered-tree") and any(
                 preservation.contains(folder, path) or preservation.contains(path, folder) for folder in save_roots):
             problems.append("save helper does not identify its exact affected files")
         for candidate in candidates:
             candidate = native(candidate)
             affected.append((str(candidate), op))
+            if preservation.protects(candidate, [Path(root) / ".modding-agent-harness"], ancestor=op in ("move", "delete")):
+                problems.append("neutral harness state is protected")
             if preservation.protects(candidate, [store.root], ancestor=op in ("move", "delete")):
                 problems.append("permanent save store is protected")
             if op in ("move", "delete") and any(preservation.contains(candidate, folder) for folder in save_roots):
@@ -197,12 +221,21 @@ def enforce(root, roots, evidence, action, backend, *, transcript="", preview=Fa
         return dispatch.Outcome(contracts.Result("deny", "failed", "failed", reason=str(exc)))
 
 
+class ScopeError(ValueError):
+    """A static, safe diagnostic for a shell that could not be evaluated."""
+
+
 def shell_evidence(payload, roots):
     import hook_facts
     evidence = []
     facts = hook_facts.facts(payload, roots, evidence=evidence)
-    if facts.get("powershell_error") or facts.get("carrier_untranslated"):
-        raise ValueError("shell scope could not be completely evaluated")
+    error = facts.get("powershell_error")
+    if error and str(error).startswith(hook_facts.PS_PARSE_ERROR):
+        raise ScopeError("PowerShell command does not parse; correct its syntax before retrying. "
+                         "This call was not allowed.")
+    if error or facts.get("carrier_untranslated"):
+        raise ScopeError("Shell scope could not be completely evaluated; use literal targets and "
+                         "an available parser. This call was not allowed.")
     return evidence
 
 
@@ -364,7 +397,8 @@ def main(argv=None):
         failed = True
         # No raw shell/payload/exception text (which may include private data).
         text = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                          "permissionDecisionReason": "X4 save dispatcher failed: " + type(exc).__name__ +
+                          "permissionDecisionReason": str(exc) if isinstance(exc, ScopeError) else
+                          "X4 save dispatcher failed: " + type(exc).__name__ +
                           "; this call was not allowed."}})
     sys.stdout.buffer.write(("X4SAVE " + text + "\n").encode("ascii"))
     # Native hooks still return an explicit refusal with exit zero. The private

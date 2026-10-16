@@ -6,8 +6,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def comparison_key(resolved):
+    """Normalize a resolved identity, including persisted keys, without file I/O."""
+    if os.name == "nt" and resolved.startswith("\\\\?\\"):
+        # Normalize only the comparison key AFTER native resolution. Keep the
+        # caller's original extended spelling for all file I/O and manifests.
+        tail = resolved[4:]
+        if len(tail) >= 3 and tail[0] in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" and tail[1:3] == ":\\":
+            resolved = tail
+        elif tail[:4].casefold() == "unc\\":
+            resolved = "\\\\" + tail[4:]
+    return os.path.normcase(resolved)
+
+
 def canonical(path):
-    return os.path.normcase(str(Path(path).resolve()))
+    return comparison_key(str(Path(path).resolve()))
 
 
 @dataclass(frozen=True)

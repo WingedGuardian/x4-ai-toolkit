@@ -136,10 +136,15 @@ Search with **Glob** for file names and the **Grep** tool for contents (never `g
   own files
 
 ### Requires confirmation
-- Edits to user-profile files (`Documents\Egosoft\X4\`); a `content.xml` edit is only ADVISED
-- Deleting a save or anything else in the X4 profile; other deletes in an X4 directory get an
+- Changes to non-save user-profile files (`Documents\Egosoft\X4\`); a `content.xml` edit is only ADVISED
+- Deleting other files in the X4 profile; other deletes in an X4 directory get an
   advisory, not a prompt
 - `git -C "<X4 folder>" clean` / `reset --hard` (the folder named): it deletes untracked files
+
+Recognized mutations of one or two existing saves first preserve a permanent verified
+transaction automatically. Bulk save access requires qualified human approval bound to
+the complete canonical paths, logical count and command hash. Never split a batch to
+evade this policy. Missing preservation or evaluation is a refusal, not permission.
 
 ### General
 - One mod = one named folder, never a mega-file
@@ -434,7 +439,7 @@ say which regime a formula belongs to, and the packed-inclusive scoping rule.
 
 **A CLI banner saying UNKNOWN or STALE means the artifact may not describe your files: rebuild** (`uv run x4effective build` · `uv run x4xref build` · `cd tools/basex; bash build-corpus.sh; bash build-effective.sh`) before you trust a number from it. An absent fingerprint is UNKNOWN, never fresh.
 
-**Your own notes go in `X4-NOTES.md`** in the project root. Read it at session start if it exists. The toolkit never writes or overwrites it. Never edit `CLAUDE.md`, `AGENTS.md`, `.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, `.claude/hooks/`, `.agents/skills/`, `.codex/hooks/`, `.codex/rules/`, `tools/x4_harness/`, `tools/agent-harness.py`, `.opencode/hooks/`, `.opencode/plugins/x4guard.js`, `.opencode/skills/`, `.opencode/X4-OPENCODE.md`: they are regenerated and your edit is lost.
+**Learned facts and preferences go in `KNOWLEDGEBASE.local.md`** as above. Also read an existing `X4-NOTES.md`; it remains preserved legacy evidence. Never edit `CLAUDE.md`, `AGENTS.md`, `.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, `.claude/hooks/`, `.agents/skills/`, `.codex/hooks/`, `.codex/rules/`, `tools/x4_harness/`, `tools/agent-harness.py`, `.opencode/hooks/`, `.opencode/plugins/x4guard.js`, `.opencode/skills/`, `.opencode/X4-OPENCODE.md`: they are regenerated and your edit is lost.
 
 **`KNOWLEDGEBASE.md` and the other protected files are kept read-only by x4lock**, so a write to one fails until you unlock it: `python <toolkit>/scripts/x4lock.py unlock <file>`, edit, then `python <toolkit>/scripts/x4lock.py lock`. The guard prints the exact commands.
 

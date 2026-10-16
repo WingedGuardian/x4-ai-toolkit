@@ -156,7 +156,7 @@ def test_agents_md_is_core_plus_codex_addendum_within_the_byte_limit():
 
 def test_agents_md_carries_what_codex_cannot_get_from_hooks():
     text = load().generate(REPO)["AGENTS.md"]
-    for must in ("fail OPEN", "x4guard.py check", "--shell powershell", "inert: true", "reference",
+    for must in ("fail OPEN", "tools/agent-harness.py check", '"shell":"powershell"', "inert: true", "reference",
                  ".agents/skills", "git add -A", "$env:X4_TOOLKIT", "Codex only"):
         assert must in text, must
     for banned in ("NotebookEdit", "CLAUDE_PROJECT_DIR", "timed-out hook (30 s)"):
@@ -185,19 +185,47 @@ def test_agents_md_limit_is_BYTES_not_chars(tmp_path):
         g.generate(tmp_path)
 
 
-def test_every_x4guard_line_in_agents_md_parses_and_answers():
-    """The addendum quotes command lines; if the guard CLI changes its flags, this goes red."""
+def test_the_documented_preflight_command_checks_and_preserves_before_execution(tmp_path):
+    """Execute the exact generated command against owned ordinary/reference/save targets."""
     import json
-    import shlex
+    import os
     import sys
     text = load().generate(REPO)["AGENTS.md"]
-    lines = [l.strip() for l in text.splitlines() if "x4guard.py check" in l and l.strip().startswith("python ")]
-    assert len(lines) >= 3, lines
-    for l in lines:
-        argv = shlex.split(l.replace('"<cmd>"', '"echo hi"').replace('"<file>"', '"dev/probe/x.xml"'))[1:]
-        r = subprocess.run([sys.executable, str(REPO / argv[0]), *argv[1:]], capture_output=True,
-                           text=True, timeout=120, cwd=str(REPO))
-        assert json.loads(r.stdout)["decision"] in {"allow", "advise", "ask", "deny"}, (l, r.stdout, r.stderr)
+    commands = re.findall(r"`python (tools/agent-harness\.py) (check)`", text)
+    assert commands == [("tools/agent-harness.py", "check")]
+    root = tmp_path / "toolkit"
+    for relative in ("tools/x4_harness", "tools/modding_harness"):
+        shutil.copytree(REPO / relative, root / relative, ignore=shutil.ignore_patterns("__pycache__"))
+    for relative in ("tools/agent-harness.py", "tools/modding-harness.lock.json"):
+        shutil.copy2(REPO / relative, root / relative)
+    (root / ".modding-agent-harness").mkdir()
+    (root / ".modding-agent-harness/config.json").write_text(json.dumps({"v": 1, "save_reserve_bytes": 0}))
+    saves = root / "profile/save"
+    saves.mkdir(parents=True)
+    save = saves / "owned.xml.gz"
+    save.write_bytes(b"opaque owned preservation fixture")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("X4_")
+           and k not in ("CLAUDE_PROJECT_DIR", "HOOK_DIR", "PYTHONPATH")}
+    env.update(X4_TOOLKIT=str(root), X4_GAME=str(root / "game"), X4_PROFILE=str(saves.parent),
+               X4_SAVES=str(saves), X4_REFERENCE=str(root / "reference"), X4_MODS=str(root / "dev"),
+               X4_DOCUMENTS=str(root / "documents"), X4_BACKUPS=str(root / "backups"),
+               X4_CONFIG=str(root / "absent.env"), X4_PYTHON=sys.executable)
+    for label, path, decision in (("ordinary", root / "dev/probe.xml", "allow"),
+                                  ("reference", root / "reference/probe.xml", "deny"),
+                                  ("save", save, "allow")):
+        action = {"api_version": 1, "host": "codex", "tool": "edit", "surface": "files",
+                  "cwd": str(root), "session_id": "doc-fixture", "tool_call_id": label,
+                  "paths": [str(path)], "operations": ["write"]}
+        r = subprocess.run([sys.executable, "-B", str(root / commands[0][0]), commands[0][1]],
+                           input=json.dumps(action), capture_output=True, text=True, env=env,
+                           timeout=60, cwd=str(root))
+        assert r.returncode == 0, r.stderr
+        reply = json.loads(r.stdout)
+        assert reply["result"]["api_version"] == 1 and reply["result"]["evaluation"] == "evaluated", reply
+        assert reply["result"]["decision"] == decision, reply
+        if label == "save":
+            assert reply["result"]["preservation"] == "verified" and len(reply["transactions"]) == 1
+    assert save.read_bytes() == b"opaque owned preservation fixture", "a preflight executed the requested mutation"
 
 
 def test_the_repo_ships_no_second_agents_md():
@@ -816,12 +844,13 @@ def test_TWIN_a_hand_edited_codex_skill_is_STALE(fresh_copy):
     assert g.problems(exp, root) == ["STALE    .agents/skills/x4-debug/SKILL.md"]
 
 
-def test_J4_every_x4guard_path_agents_md_names_ships_with_the_codex_target():
-    """--agent codex installs AGENTS.md .codex .agents -- not .claude (test_F8 in
-    test_install_over_existing.py pins `.claude/hooks` ABSENT for --agent codex). A guard path
-    AGENTS.md tells Codex to run must be in that set."""
+def test_J4_the_primary_preflight_entry_ships_with_the_codex_target():
+    """The documented preflight entry belongs to tools/, copied for every selected agent.
+    test_F8 in test_install_over_existing.py separately pins native target selection."""
     text = load().generate(REPO)["AGENTS.md"]
-    cmds = [l.strip() for l in text.splitlines() if l.strip().startswith("python ") and "x4guard.py" in l]
-    assert len(cmds) >= 3, cmds
-    for l in cmds:
-        assert l.split()[1].startswith(".codex/hooks/"), l
+    commands = re.findall(r"`python (tools/agent-harness\.py) check`", text)
+    assert commands == ["tools/agent-harness.py"]
+    assert (REPO / commands[0]).is_file()
+    # tools/ belongs to the actual common copy set, regardless of native selection.
+    copyset = re.findall(r'^X4_COPY_ITEMS="([^"\n]*)"$', (REPO / "install.sh").read_text(encoding="utf-8"), re.M)
+    assert len(copyset) == 1 and "tools" in copyset[0].split()

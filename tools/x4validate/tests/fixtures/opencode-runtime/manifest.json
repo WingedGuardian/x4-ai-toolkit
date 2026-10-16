@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "files": {
+    "opencode_config.py": {
+      "source": ".opencode/hooks/opencode_config.py",
+      "sha256": "daea897100d75c0fb3c1804979082d750664d8e10b821e75b3d380b46b35bf7b"
+    },
+    "opencode_adapter.py": {
+      "source": ".opencode/hooks/opencode_adapter.py",
+      "sha256": "66f942ce9ddee589aa354bacd51b5ca0836f809c429ac411552a6f6eb5821322"
+    },
+    "codex_adapter.py": {
+      "source": ".opencode/hooks/codex_adapter.py",
+      "sha256": "d5aea27f45f406f84d3a8d070beb9296087ffc276bb3b6315d880f77b12e26eb"
+    },
+    "patch_paths.py": {
+      "source": ".opencode/hooks/patch_paths.py",
+      "sha256": "6913455d5b24633e937e4e195e024bb264b007e85c6cead84571b1ec01f0fd8f"
+    },
+    "x4guard.js": {
+      "source": ".opencode/plugins/x4guard.js",
+      "sha256": "17b9a192ab7527b6ea032479ae88c1e16027ae18f9b39818ee28dcce98d93a81"
+    }
+  }
+}

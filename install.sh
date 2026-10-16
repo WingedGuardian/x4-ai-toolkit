@@ -1470,11 +1470,21 @@ _i_differing_keys() {
     | sed 's/^export[[:space:]][[:space:]]*//' | LC_ALL=C sort -u | tr '\n' ' ' || true
 }
 
-#: _i_migrate_paths_env TOOLKIT -- MOVE a 3.x `.claude/x4-paths.env` to `<toolkit>/x4-paths.env`.
-#: A rename, never a copy: two copies drift apart on the first edit. A read-only (x4lock)
-#: file is renamed too and stays read-only (MEASURED, Plan 3 lane I M6), so no unlock is
-#: needed. Both present and AGREEING: the 3.x one becomes `.claude/x4-paths.env.bak-<stamp>`.
-#: Both present and DIFFERING never reaches here: precheck_config refused it before any write.
+_i_backup_file() {
+  # mktemp exclusively reserves this operation's file. Never copy over a
+  # timestamp-named predecessor, including two installs in the same second.
+  local src="$1" bak
+  bak="$(mktemp "$src.bak-$(date +%Y%m%d-%H%M%S).XXXXXX")" || return 1
+  if ! cp "$src" "$bak" || ! cmp -s "$src" "$bak"; then
+    rm -f -- "$bak"
+    return 1
+  fi
+  printf '%s\n' "$bak"
+}
+
+#: MOVE a lone 3.x config to the root, retaining its read-only attribute. When
+#: both configs agree, preserve a verified distinct backup and retire the old
+#: path. Differing copies are refused by precheck_config before any write.
 _i_migrate_paths_env() {
   local new="$1/x4-paths.env" old="$1/.claude/x4-paths.env" bak
   [ -f "$old" ] || return 0
@@ -1484,8 +1494,8 @@ _i_migrate_paths_env() {
     return 0
   fi
   if [ "$(_i_assign_lines "$new")" = "$(_i_assign_lines "$old")" ]; then
-    bak="$old.bak-$(date +%Y%m%d-%H%M%S)"
-    mv "$old" "$bak" || { echo "ERROR: could not rename the agreeing 3.x $old; it is still there." >&2; return 1; }
+    bak="$(_i_backup_file "$old")" || { echo "ERROR: could not preserve the agreeing 3.x $old; it is still there." >&2; return 1; }
+    rm -- "$old" || { echo "ERROR: preserved $old as $bak but could not retire the old path." >&2; return 1; }
     echo "  [migrated] the 3.x $old agreed with $new; renamed it to $bak (to undo: rename it back)"
     return 0
   fi
@@ -1585,17 +1595,17 @@ write_paths_env() {  # write_paths_env TOOLKIT_DIR
   # two were fixed by adding a backup at one call site each; putting it here means a
   # fourth caller cannot be added without one.
   if [ -f "$f" ]; then
-    local _stamp; _stamp="$(date +%Y%m%d-%H%M%S)"
-    if cp "$f" "$f.bak-$_stamp" 2>/dev/null; then
-      echo "  [note] kept your previous x4-paths.env as x4-paths.env.bak-$_stamp"
+    local _backup
+    if _backup="$(_i_backup_file "$f")"; then
+      echo "  [note] kept your previous x4-paths.env as $_backup"
     else
       # A backup that silently did not happen is worse than none, because the message
       # above would have said it did.
       # States what is TRUE NOW, not a prediction. This used to say "it is about to
       # be rewritten" and then the run died before rewriting anything -- a warning
       # that was false in the only case that printed it.
-      echo "  WARNING: could not back up $f. If this run goes on to replace it," >&2
-      echo "           the previous values will not be recoverable from a .bak." >&2
+      echo "ERROR: could not back up $f. Refusing to rewrite it." >&2
+      return 1
     fi
   fi
 
@@ -1844,7 +1854,7 @@ install_global_claude() {  # copy skills/agents to ~/.claude and write X4_* env 
   # carries hand-added keys (this machine's has many), and `/model` is documented as
   # dropping them, so an unbacked rewrite here is not recoverable from anywhere.
   if [ -f "$sj" ]; then
-    if ! cp "$sj" "$sj.bak-$(date +%Y%m%d-%H%M%S)" 2>/dev/null; then
+    if ! _i_backup_file "$sj" >/dev/null; then
       echo "ERROR: could not back up $sj. Refusing to rewrite it." >&2
       exit 1
     fi

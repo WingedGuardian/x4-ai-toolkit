@@ -261,7 +261,7 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
 
 ### Safety, built in
 - **Command + file guards** (as Claude Code runs them; Codex and OpenCode reach the same guards
-  through an adapter, see the agent table above) — block writes to `reference\` and direct `.cat`/`.dat` edits; confirm edits to profile files. A mod manifest is ADVISED rather than confirmed
+  through an adapter, see the agent table above) — block writes to `reference\` and direct `.cat`/`.dat` edits; confirm non-save profile changes. Recognized mutations of one or two saves first get permanent verified preservation; bulk save access needs bound human approval. A mod manifest is ADVISED rather than confirmed
   (a deliberate 2026-08-29 choice: the note is worth having, the interruption is not).
   They cover every tool that can change a file: Bash, **PowerShell** (parsed by PowerShell's
   own parser and judged by the same rules as Bash — it needs `pwsh` or Windows PowerShell,
@@ -382,8 +382,10 @@ never hides a defect, and a run that checked nothing never exits 0. It acts for 
 lives in (`--toolkit DIR` to choose another) and says so when `X4_TOOLKIT` names a different one.
 
 These hooks inspect known command forms; they do not sandbox arbitrary interpreter programs.
-The loss canary detects file loss, not historical guard evaluation health. Persistent guard
-telemetry and independent filesystem protection remain separate roadmap work.
+The loss canary detects file loss. Persistent process receipts are available through
+`python tools/agent-harness.py coverage --session-id ID`; they describe checks that reached
+the toolkit and do not prove host interception. Independent `reference/` filesystem
+protection is available through `x4refguard`, once explicitly applied and verified.
 
 > The rest of `scripts/` is maintainer tooling that ships because the bundle is the
 > repository: `fuzz-guard.py` and `verify-hook-tests.py` prove the guards can fail,
@@ -588,8 +590,9 @@ possible and overridable (`--game`, `--profile`, `--toolkit`, `--mods`, `--refer
 > of every release tag, listed in `scripts/shipped-instruction-hashes.txt`), it is moved to
 > `X4-NOTES.pre-4.0.md` (or a dated name, if that exists) before the 4.0 file is copied, and the
 > installer says so. **No agent reads that copy**: the 4.0 `CLAUDE.md` replaces it. To bring your
-> notes back, merge what you want into **`X4-NOTES.md`**, which every agent's instructions read
-> and the toolkit never writes. An unedited shipped copy (whatever its
+> notes back, review that copy and merge learned facts and explicit preferences into
+> **`KNOWLEDGEBASE.local.md`**. Existing `X4-NOTES.md` remains preserved and is also read.
+> Unclassified imported notes are evidence, not standing instructions. An unedited shipped copy (whatever its
 > line endings) is simply replaced. `--dry-run` names the move without making it.
 >
 > `--yes` will also refuse an **auto-detected** destination: nothing named it and nobody is
@@ -682,10 +685,16 @@ written; `all` and `auto` stand alone):
 | Deletes in `reference\` | blocked (hook; and the OS lock, once applied) | blocked when the hook is live; by the OS lock, once applied | blocked only by the OS lock, once applied |
 | Overwrites in `reference\` | blocked (hook; and the OS lock, once applied) | blocked when the hook is live; the OS lock, once applied, stops accidental ones | only the OS lock, once applied, stops accidental ones |
 | Destructive shell commands elsewhere | blocked or asked (hook) | blocked when the hook is live; the worst prefix cases by rules regardless | not blocked |
-| Ask before editing profile files | yes | **deny with instructions** (path-based; rules cannot express it) | no |
+| Non-save profile changes | asks (manifest edits advise) | **deny with instructions** when the hook is live | through a qualified adapter |
+| Recognized save mutations | 1–2 saves preserved first; bulk needs bound approval | same policy when the hook is live | same policy through the normal Action v1 entry |
 | A guard that crashes | asks | **denies** (our wrapper), unless the interpreter cannot start: then **Codex runs the command** | -- |
 | Hooks not reviewed or changed | n/a | **guards off, silently**: `x4doctor` and the session instructions flag it | -- |
 | Post-edit validator feedback | yes | yes (when the hook is live) | no |
+
+OpenCode's CLI plugin uses the same save policy and renders asks as refusals with
+approval instructions. Its runtime and matcher fixtures are tested; enforcement in a
+running OpenCode host remains unmeasured. For unknown hosts, Action v1 supplies policy
+and preservation, while the integrating host must honor the complete result before execution.
 
 **What the Codex hooks cannot see.** Each of these was measured on Codex 0.160 unless it says
 otherwise:

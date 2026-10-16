@@ -2,6 +2,26 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Filesystem-provider paths retain physical filename case for save preservation.
+  Recursive helper qualification applies where its scope intersects saves;
+  unrelated mod operations retain their existing policy, while neutral state
+  and permanent backup stores remain protected. Unresolved shell scope refuses
+  with static actionable diagnostics without exposing command or parser text.
+  Extended Windows drive paths retain their original I/O spelling; the namespace
+  question mark is not treated as a save filename wildcard.
+
+- Current guidance leads manual and unknown-host integration through normal
+  Action v1 preservation, distinguishes process receipts from host enforcement,
+  and documents the acting Python toolkit root and retained local notes.
+- Installed-layout installer fixtures use exact public native runtime inputs
+  independent of the selected host; workflow-source checks name absent sources.
+  Native audit fixtures carry the pinned shared policy and private writable roots.
+
+- Installer config and global-settings backups reserve distinct files and verify
+  their bytes before rewriting. Same-second captures retain earlier backups;
+  a failed config backup now refuses the rewrite. Retiring an agreeing legacy
+  config retains a distinct backup, including read-only legacy configurations.
+
 - Baseline capture reserves a fresh STAMP directory; repeat labels refuse without
   changing previous evidence. Debug captures retain distinct logs and metadata
   even when source timestamps match. Live-dump archives verify full payload

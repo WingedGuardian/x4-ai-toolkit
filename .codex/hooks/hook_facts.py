@@ -271,6 +271,13 @@ def join_cwd(cwd: str, p: str) -> str:
 
 def physical_join(cwd: str, path: str) -> str:
     """Keep case for file I/O; never reuse a case-folded comparison path."""
+    def provider_file(value):
+        if not value:
+            return value
+        folded = value.replace(chr(92), "/")
+        provider = _PROVIDER.match(folded.lower())
+        return folded[provider.end():] if provider else value
+    cwd, path = provider_file(cwd), provider_file(path)
     if not path:
         return cwd
     if is_abs(path):

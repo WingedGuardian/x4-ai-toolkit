@@ -1293,6 +1293,47 @@ function Get-IDifferingKeys($a, $b) {
   return ($names -join ' ')
 }
 
+function New-ConfigBackup([string]$source) {
+  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  while ($true) {
+    $backup = $source + '.bak-' + $stamp + '.' + [guid]::NewGuid().ToString('N')
+    try {
+      # CreateNew reserves atomically; a UUID alone does not prevent clobbering.
+      $output = [IO.File]::Open($backup, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+      break
+    } catch {
+      $cause = $_.Exception
+      while ($cause.InnerException) { $cause = $cause.InnerException }
+      if (($cause -is [IO.IOException]) -and
+          (($cause.HResult -band 65535) -in @(80,183)) -and (Test-Path -LiteralPath $backup)) { continue }
+      throw
+    }
+  }
+  try {
+    $inputStream = $null
+    try {
+      $inputStream = [IO.File]::OpenRead($source)
+      $inputStream.CopyTo($output)
+    } finally {
+      if ($inputStream) { $inputStream.Dispose() }
+      $output.Dispose()
+    }
+    # .NET is available in both 5.1 and 7; Get-FileHash need not be installed.
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+      $expected = [Convert]::ToBase64String($algorithm.ComputeHash([IO.File]::ReadAllBytes($source)))
+      $actual = [Convert]::ToBase64String($algorithm.ComputeHash([IO.File]::ReadAllBytes($backup)))
+    } finally { $algorithm.Dispose() }
+    if ($expected -ne $actual) {
+      throw 'backup read-back disagrees with the source'
+    }
+  } catch {
+    Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    throw
+  }
+  return $backup
+}
+
 function Test-IConfigsAgree($a, $b) {
   return (((Get-IAssignLines $a) -join "`n") -ceq ((Get-IAssignLines $b) -join "`n"))
 }
@@ -1315,8 +1356,22 @@ function Move-ILegacyPathsEnv($t) {
     return
   }
   if (Test-IConfigsAgree $new $old) {
-    $bak = $old + '.bak-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
-    try { Move-Item -LiteralPath $old -Destination $bak -ErrorAction Stop } catch {
+    try {
+      while ($true) {
+        $bak = $old + '.bak-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.' + [guid]::NewGuid().ToString('N')
+        try {
+          # The two-argument .NET move refuses replacement and retains a locked
+          # legacy file's attributes; copying then deleting cannot retire read-only files.
+          [IO.File]::Move($old, $bak)
+          break
+        } catch {
+          $cause = $_.Exception
+          while ($cause.InnerException) { $cause = $cause.InnerException }
+          if (($cause -is [IO.IOException]) -and (($cause.HResult -band 65535) -in @(80,183))) { continue }
+          throw
+        }
+      }
+    } catch {
       Write-Host ("ERROR: could not rename the agreeing 3.x " + $old + ": " + $_.Exception.Message) -ForegroundColor Red
       exit 1
     }
@@ -1642,13 +1697,13 @@ function Write-PathsEnv($t) {
   # A backup that silently did not happen is worse than none, because the message
   # would have claimed it did -- so a failure is reported, not swallowed.
   if (Test-Path -LiteralPath $f) {
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     try {
-      Copy-Item -LiteralPath $f -Destination ($f + '.bak-' + $stamp) -Force -ErrorAction Stop
-      Write-Host ('  [note] kept your previous x4-paths.env as x4-paths.env.bak-' + $stamp)
+      $backup = New-ConfigBackup $f
+      Write-Host ('  [note] kept your previous x4-paths.env as ' + $backup)
     } catch {
       Write-Host ('  [warn] could not back up x4-paths.env: ' + $_.Exception.Message)
-      Write-Host '         the existing values are about to be replaced'
+      Write-Host '         Refusing to replace it without a verified backup.'
+      exit 1
     }
   }
   $ref = if ($Reference) { $Reference } else { Join-Path $t 'reference' }
@@ -2345,12 +2400,11 @@ function Install-Global($t) {
   # BACK IT UP FIRST. Write-PathsEnv and Copy-Toolkit both do; this one did not, and
   # it rewrites the user's GLOBAL settings.json.
   if (Test-Path -LiteralPath $sj) {
-    $bak = "$sj.bak-" + (Get-Date -Format 'yyyyMMdd-HHmmss')
     # GUARDED, as install.sh guards this same backup with an explicit refusal. A
     # backup that silently did not happen is worse than none, because the message
     # on the next line would have said it did.
     try {
-      Copy-Item -LiteralPath $sj -Destination $bak -ErrorAction Stop
+      $bak = New-ConfigBackup $sj
     } catch {
       Write-Host ("ERROR: could not back up " + $sj + ": " + $_.Exception.Message) -ForegroundColor Red
       Write-Host "       Refusing to merge into it unbacked. Nothing has been changed." -ForegroundColor Red

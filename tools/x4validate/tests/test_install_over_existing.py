@@ -25,6 +25,7 @@ users paths would pass the first and be worse than the failure.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import pathlib
@@ -36,6 +37,7 @@ import sys
 import uuid
 
 import pytest
+from _layout import common_hook_dir, require_repo
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
 INSTALL_SH = ROOT / "install.sh"
@@ -283,6 +285,9 @@ def _install(installer: str, tmp_path: pathlib.Path, dest: pathlib.Path, *extra:
     env["CODEX_HOME"] = (tmp_path / "fake-codex-home").as_posix()
     env["HOME"] = tmp_path.as_posix()
     env["USERPROFILE"] = tmp_path.as_posix()
+    # With a synthetic USERPROFILE, Windows PowerShell may resolve its default
+    # module cache relative to the source cwd. Keep this automatic writer owned too.
+    env["PSModuleAnalysisCachePath"] = (tmp_path / "powershell-module-analysis.cache").as_posix()
     # THE USER ENVIRONMENT, sandboxed (see the docstring). The developer's own
     # X4_TOOLKIT is removed too: an inherited value is a NAMED destination to both
     # installers, and a "different existing value" to the env writer.
@@ -1733,11 +1738,26 @@ def _agent_source(tmp_path: pathlib.Path, *, codex: bool = True, template: bool 
     src = tmp_path / "src"
     src.mkdir()
     if opencode:
-        # The REAL generated OpenCode tree: the installer runs its config renderer, which
-        # sources the guards' own loader, so a stub would test nothing (lane L).
-        for sub in ("hooks", "plugins"):
-            shutil.copytree(ROOT / ".opencode" / sub, src / ".opencode" / sub,
-                            ignore=shutil.ignore_patterns("__pycache__"))
+        # An owned source fixture must not depend on which native agent was
+        # selected in this install. Common code comes from the neutral carrier;
+        # five exact native files travel as public fixtures, checked against
+        # generated production bytes by test_installer_runtime_fixture.py.
+        hooks = src / ".opencode" / "hooks"
+        shutil.copytree(ROOT / "tools" / "x4_harness", hooks,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        fixture = ROOT / "tools/x4validate/tests/fixtures/opencode-runtime"
+        manifest = json.loads((fixture / "manifest.json").read_text(encoding="utf-8"))
+        native = {name: ".opencode/hooks/" + name for name in
+                  ("opencode_config.py", "opencode_adapter.py", "codex_adapter.py", "patch_paths.py")}
+        native["x4guard.js"] = ".opencode/plugins/x4guard.js"
+        assert manifest["v"] == 1 and set(manifest["files"]) == set(native)
+        for name, row in manifest["files"].items():
+            assert row["source"] == native[name], "fixture destination escaped its declared native path"
+            data = (fixture / name).read_bytes()
+            assert hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest() == row["sha256"], name
+            target = src / row["source"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
         # a config IN the source never travels (KEEP_LOCAL): the destination's is rendered
         (src / ".opencode" / "opencode.jsonc").write_bytes(b"// SOURCE COPY -- must never be installed\n")
     for name in ("install.sh", "install.ps1"):
@@ -2832,16 +2852,26 @@ def test_two_DIFFERING_configs_refuse_before_anything_is_written(installer, tmp_
     assert pathlib.Path(m.group(1).strip()).resolve() == dest.resolve(), m.group(1)
 
 
-@pytest.mark.parametrize("installer", ["sh", "ps1"])
-def test_two_AGREEING_configs_retire_the_old_one_to_a_bak(installer, tmp_path):
+@pytest.mark.parametrize("installer", ["sh", "ps1", "ps51"])
+@pytest.mark.parametrize("readonly", [False, True])
+def test_two_AGREEING_configs_retire_the_old_one_to_a_bak(installer, tmp_path, readonly):
     dest = _fresh(tmp_path)
     assert _install(installer, tmp_path, dest).returncode == 0, "first install failed"
     new, old = dest / "x4-paths.env", dest / ".claude" / "x4-paths.env"
     old.write_bytes(new.read_bytes())
-    r = _install(installer, tmp_path, dest)
-    assert r.returncode == 0, (r.stdout + r.stderr)[-1500:]
-    assert not old.exists() and new.is_file()
-    assert len(list((dest / ".claude").glob("x4-paths.env.bak-*"))) == 1
+    before = old.read_bytes()
+    if readonly:
+        old.chmod(stat.S_IREAD)
+    try:
+        r = _install(installer, tmp_path, dest)
+        assert r.returncode == 0, (r.stdout + r.stderr)[-1500:]
+        assert not old.exists() and new.read_bytes() == before
+        backups = list((dest / ".claude").glob("x4-paths.env.bak-*"))
+        assert len(backups) == 1 and backups[0].read_bytes() == before
+    finally:
+        for p in [old, *(dest / ".claude").glob("x4-paths.env.bak-*")]:
+            if p.exists():
+                p.chmod(stat.S_IREAD | stat.S_IWRITE)
 
 
 @pytest.mark.parametrize("installer", ["sh", "ps1"])
@@ -3631,7 +3661,7 @@ def test_FXB2_6_setup_reads_the_config_with_the_SAME_grammar(tmp_path, loader, l
     shutil.copy2(ROOT / "setup.sh", root / "setup.sh")
     if loader:
         (root / ".claude" / "hooks").mkdir(parents=True)
-        shutil.copy2(ROOT / ".claude" / "hooks" / "_x4-env.sh", root / ".claude" / "hooks" / "_x4-env.sh")
+        shutil.copy2(common_hook_dir(ROOT) / "_x4-env.sh", root / ".claude" / "hooks" / "_x4-env.sh")
     (root / "x4-paths.env").write_text(line + "\n", encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("X4_")}
     env["CLAUDE_PROJECT_DIR"] = str(root)
@@ -3729,6 +3759,7 @@ def test_FXB3_every_CI_powershell_install_leg_is_ISOLATED():
     "different existing value"). The in-game and global legs ran on the default key with the
     inherited X4_TOOLKIT. Every step that runs install.ps1 must set its OWN test key under
     X4ToolkitTests and drop X4_TOOLKIT, before its first install.ps1 call."""
+    require_repo(".github/workflows/ci.yml", why="CI installer source is not installed")
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     # one block per step (no YAML library in the venv): split at each `- name:` item
     blocks = re.split(r"(?m)^\s*- name: ", text)[1:]
@@ -3754,6 +3785,7 @@ def test_FXB4_every_CI_BASH_install_leg_that_runs_on_Windows_is_ISOLATED_too():
     test seam, refused outside HKCU\\Software\\X4ToolkitTests\\), inherited from the leg. Every
     bash step not gated to Linux must export its OWN key, distinct from every other leg's
     (PowerShell legs included), and drop X4_TOOLKIT, before its first install.sh call."""
+    require_repo(".github/workflows/ci.yml", why="CI installer source is not installed")
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     blocks = re.split(r"(?m)^\s*- name: ", text)[1:]
     bash_steps = [b for b in blocks if "bash install.sh --method" in b and "shell: bash" in b

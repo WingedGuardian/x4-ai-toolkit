@@ -1,10 +1,9 @@
 """AUDIT-2026-09-24 Phase 1 -- hook-harness findings HK-5 and HK-6.
 
-Runnable with no dependencies:  python .claude/hooks/test_audit0924_hooks.py
+Run from a complete toolkit: python .claude/hooks/test_audit0924_hooks.py
 
-EVERY test here is decorated `unittest.expectedFailure`: each FAILS on the audited code for
-the reason named in its docstring, and turns into an "unexpected success" (a run failure) the
-moment a fix lands -- so the decorator must be removed together with the fix.
+These retained regressions exercise the corrected behavior. Native hook fixtures
+carry the pinned shared runtime; no game or save operation is executed.
 
 Conventions follow test_hook_facts.py: dangerous tokens are BUILT FROM PARTS and fixture
 paths are generic. The one test that runs a hook (sed -i) points every X4 path at a throwaway
@@ -12,16 +11,39 @@ temp directory and feeds the payload on stdin; the hook only DECIDES, it never e
 command it is shown.
 """
 import json
+import importlib.util
 import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 HOOKS = pathlib.Path(__file__).resolve().parent
-REPO = HOOKS.parent.parent
-BASH = shutil.which("bash") or r"C:/Program Files/Git/bin/bash.exe"
+REPO = next(p for p in HOOKS.parents if (p / "tools/modding-harness.lock.json").is_file())
+_spec = importlib.util.spec_from_file_location("audit_gitbash", REPO / "scripts/gitbash.py")
+_resolver = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_resolver)
+BASH = _resolver.find_bash()
+
+
+def _owned_env(tmp, **roots):
+    """Real policy dependencies and every writable root belong to this fixture."""
+    toolkit = pathlib.Path(roots.get("X4_TOOLKIT", tmp / "tk"))
+    (toolkit / "tools").mkdir(parents=True, exist_ok=True)
+    shutil.copytree(REPO / "tools/modding_harness", toolkit / "tools/modding_harness",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(REPO / "tools/modding-harness.lock.json", toolkit / "tools/modding-harness.lock.json")
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("X4_") and k not in ("CLAUDE_PROJECT_DIR", "HOOK_DIR", "PYTHONPATH")}
+    env.update(X4_TOOLKIT=str(toolkit), X4_GAME=str(tmp / "game"),
+               X4_PROFILE=str(tmp / "profile"),
+               X4_SAVES=str(pathlib.Path(roots.get("X4_PROFILE", tmp / "profile")) / "save"),
+               X4_DOCUMENTS=str(tmp / "documents"), X4_BACKUPS=str(tmp / "backups"),
+               X4_MODS=str(toolkit / "dev"), X4_PYTHON=sys.executable, X4_BASH=BASH or "")
+    env.update({k: str(v) for k, v in roots.items()})
+    return env
 
 #: Every tool that can change a file on disk, and so must reach a protect-* guard.
 FILE_CHANGING_TOOLS = ("Bash", "Edit", "Write", "NotebookEdit", "PowerShell")
@@ -96,7 +118,7 @@ class TestHK5ProductionReadPath(unittest.TestCase):
         try:
             ref = tmp / "ref"
             (ref / "libraries").mkdir(parents=True)
-            env = dict(os.environ, X4_GAME=str(tmp / "game"), X4_TOOLKIT=str(tmp / "tk"),
+            env = _owned_env(tmp, X4_GAME=str(tmp / "game"), X4_TOOLKIT=str(tmp / "tk"),
                        X4_REFERENCE=str(ref), X4_CONFIG=str(tmp / "none.env"))
             target = (ref / "libraries" / "wares.xml").as_posix()
             cases = [
@@ -157,7 +179,7 @@ class TestHK6Minor(unittest.TestCase):
         try:
             game = tmp / "game"
             (game / "libraries").mkdir(parents=True)
-            env = dict(os.environ, X4_GAME=str(game), X4_TOOLKIT=str(tmp / "tk"),
+            env = _owned_env(tmp, X4_GAME=str(game), X4_TOOLKIT=str(tmp / "tk"),
                        X4_REFERENCE=str(tmp / "ref"), X4_EXTENSIONS=str(game / "extensions"))
             target = str(game / "libraries" / "wares.xml").replace(chr(92), "/")
             cmd = "se" + "d -i s/a/b/ " + target
@@ -184,7 +206,7 @@ BS = chr(92)
 
 
 @unittest.skipUnless(_H._pwsh_exe(), "no PowerShell here: the front-end cannot be exercised "
-                                     "(without one it ASKS on every PowerShell command)")
+                                     "(without one normal dispatch refuses PowerShell commands)")
 class _PSE2E(unittest.TestCase):
     """Fixture roots in a throwaway directory, Windows-spelled (backslashes), because that is
     how a PowerShell user writes them."""
@@ -198,7 +220,7 @@ class _PSE2E(unittest.TestCase):
         cls.prof = cls.docs / "Egosoft" / "X4" / "123"
         for d in (cls.game / "libraries", cls.ref / "libraries", cls.tk, cls.prof / "save"):
             d.mkdir(parents=True)
-        cls.env = dict(os.environ, X4_GAME=str(cls.game), X4_REFERENCE=str(cls.ref),
+        cls.env = _owned_env(t, X4_GAME=str(cls.game), X4_REFERENCE=str(cls.ref),
                        X4_TOOLKIT=str(cls.tk), X4_PROFILE=str(cls.prof),
                        X4_DOCUMENTS=str(cls.docs), X4_MODS=str(cls.tk / "dev"),
                        X4_CONFIG=str(t / "none.env"))
@@ -213,17 +235,30 @@ class _PSE2E(unittest.TestCase):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def verdict(self, command, tool="PowerShell"):
+        return self.verdict_with(command, tool)[0]
+
+    def verdict_with(self, command, tool="PowerShell"):
         payload = json.dumps({"tool_name": tool, "tool_input": {"command": command}})
         p = subprocess.run([BASH, str(HOOKS / "protect-bash.sh")], input=payload,
                            capture_output=True, text=True, env=self.env, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr)
         if not p.stdout.strip():
-            return "allow"
-        return json.loads(p.stdout)["hookSpecificOutput"].get("permissionDecision", "advise")
+            return "allow", ""
+        h = json.loads(p.stdout)["hookSpecificOutput"]
+        return h.get("permissionDecision", "advise"), h.get("permissionDecisionReason", "")
+
+    def assert_scope_refusal(self, command, tool="PowerShell"):
+        verdict, reason = self.verdict_with(command, tool)
+        self.assertEqual(verdict, "deny", command)
+        self.assertIn("scope could not be completely evaluated", reason, command)
+        self.assertIn("use literal targets and an available parser", reason, command)
 
     def expect(self, cases, tool="PowerShell"):
         for want, command in cases:
-            self.assertEqual(self.verdict(command, tool), want, command)
+            if want == "scope-refusal":
+                self.assert_scope_refusal(command, tool)
+            else:
+                self.assertEqual(self.verdict(command, tool), want, command)
 
 
 class TestPS1Splatting(_PSE2E):
@@ -233,20 +268,20 @@ class TestPS1Splatting(_PSE2E):
     def test_a_literal_hashtable_splat_is_resolved(self):
         self.expect([
             ("deny", "$p=@{Path='" + self.R + BS + "libraries'; Recurse=$true}; Remove-Item @p"),
-            ("ask", "$p=@{LiteralPath='" + self.S + BS + "a.xml.gz'}; Remove-Item @p"),
+            ("advise", "$p=@{LiteralPath='" + self.S + BS + "a.xml.gz'}; Remove-Item @p"),
             ("deny", "$q=@{Path='" + self.R + BS + "a.xml'; Value='x'}; Set-Content @q"),
         ])
 
-    def test_an_unresolvable_splat_on_a_writing_cmdlet_asks(self):
-        self.expect([("ask", "Remove-Item @args"),
-                     ("ask", "$p = Get-Params; Remove-Item @p")])
+    def test_an_unresolvable_splat_on_a_writing_cmdlet_refuses(self):
+        self.expect([("scope-refusal", "Remove-Item @args"),
+                     ("scope-refusal", "$p = Get-Params; Remove-Item @p")])
 
-    def test_an_unresolvable_splat_BESIDE_a_given_path_still_asks(self):
+    def test_an_unresolvable_splat_BESIDE_a_given_path_still_refuses(self):
         """Re-review 2: with a path present, the "no target path" report cannot fire, so
         only the splat report stands between these and an allow -- the splat may carry
         -Destination (or -Path) pointing anywhere."""
-        self.expect([("ask", "$p = Get-Params; Move-Item ." + BS + "a @p"),
-                     ("ask", "Copy-Item ." + BS + "a @args")])
+        self.expect([("scope-refusal", "$p = Get-Params; Move-Item ." + BS + "a @p"),
+                     ("scope-refusal", "Copy-Item ." + BS + "a @args")])
 
     def test_TWIN_harmless_splats(self):
         self.expect([("allow", "$p=@{Path='.' + '" + BS + "x.txt'}; Remove-Item @p"),
@@ -279,12 +314,12 @@ class TestPS2MethodCalls(_PSE2E):
             ("deny", "[IO.File]::Encrypt('" + R + BS + "a.xml')"),
         ])
 
-    def test_an_unresolvable_target_asks(self):
+    def test_an_unresolvable_target_refuses(self):
         self.expect([
-            ("ask", "$f.Delete()"),
-            ("ask", "[IO.File]::WriteAllText($x, 'y')"),
-            ("ask", "$d.MoveTo('C:" + BS + "y')"),
-            ("ask", "Get-Things | % { $_.Delete() }"),
+            ("scope-refusal", "$f.Delete()"),
+            ("scope-refusal", "[IO.File]::WriteAllText($x, 'y')"),
+            ("scope-refusal", "$d.MoveTo('C:" + BS + "y')"),
+            ("scope-refusal", "Get-Things | % { $_.Delete() }"),
         ])
 
     def test_a_root_variable_target_still_denies(self):
@@ -310,16 +345,16 @@ class TestPS3InvokeExpression(_PSE2E):
     the command it runs reached no rule. Bash's `eval "$X"` is the model -- except that a
     carrier the walk could not open is reported, never passed."""
 
-    def test_computed_text_asks(self):
-        self.expect([("ask", "iex $cmd"),
-                     ("ask", "Invoke-Expression -Command (Get-Content .\\x.ps1 -Raw)"),
-                     ("ask", "$c = 'Remove-' + $n; iex $c")])
+    def test_computed_text_refuses(self):
+        self.expect([("scope-refusal", "iex $cmd"),
+                     ("scope-refusal", "Invoke-Expression -Command (Get-Content .\\x.ps1 -Raw)"),
+                     ("scope-refusal", "$c = 'Remove-' + $n; iex $c")])
 
-    def test_past_the_depth_limit_asks(self):
+    def test_past_the_depth_limit_refuses(self):
         inner = "Get-Date"
         for _ in range(6):
             inner = "iex '" + inner.replace("'", "''") + "'"
-        self.assertEqual(self.verdict(inner), "ask", inner)
+        self.assert_scope_refusal(inner)
 
     def test_resolvable_text_is_still_judged(self):
         self.expect([("deny", "iex 'Remove-Item -Recurse " + self.R + "'"),
@@ -345,7 +380,7 @@ class TestPS4ProviderAndPrefixedPaths(_PSE2E):
         for sp in self.spellings(self.G):
             cases.append(("deny", "Remove-Item -Recurse -Force '" + sp + "'"))
         for sp in self.spellings(self.S):
-            cases.append(("ask", "Remove-Item -LiteralPath '" + sp + BS + "a.xml.gz'"))
+            cases.append(("advise", "Remove-Item -LiteralPath '" + sp + BS + "a.xml.gz'"))
         self.expect(cases)
 
     def test_in_a_nested_bash_carrier_too(self):
@@ -366,7 +401,7 @@ class TestPS5CmdPercentVariables(_PSE2E):
         self.expect([
             ("deny", 'cmd //c rd /s /q "%X4_REFERENCE%"'),
             ("deny", 'cmd /c "rd /s /q %X4_REFERENCE%' + BS + 'libraries"'),
-            ("ask", 'cmd //c del /q "%X4_SAVES%' + BS + 'a.xml.gz"'),
+            ("advise", 'cmd //c del /q "%X4_SAVES%' + BS + 'a.xml.gz"'),
         ], tool="Bash")
 
     def test_TWIN_an_unknown_variable_is_an_unknown_operand(self):
@@ -401,10 +436,10 @@ class TestPS6OtherWritingCmdlets(_PSE2E):
             ("deny", "Start-Process git -RedirectStandardOutput '" + R + BS + "o.txt'"),
         ])
 
-    def test_an_unknown_mutating_cmdlet_on_a_protected_path_asks(self):
-        self.expect([("ask", "Frob-Thing '" + self.R + BS + "a.xml'"),
-                     ("ask", "Update-Widget -Target '" + self.S + BS + "x'"),
-                     ("ask", "Set-Item '" + self.G + BS + "libraries" + BS + "w.xml' -Value x")])
+    def test_an_unknown_mutating_cmdlet_on_a_protected_path_refuses(self):
+        self.expect([("scope-refusal", "Frob-Thing '" + self.R + BS + "a.xml'"),
+                     ("scope-refusal", "Update-Widget -Target '" + self.S + BS + "x'"),
+                     ("scope-refusal", "Set-Item '" + self.G + BS + "libraries" + BS + "w.xml' -Value x")])
 
     def test_TWIN_harmless(self):
         R = self.R
@@ -434,13 +469,13 @@ class TestPSEmptyTranslation(_PSE2E):
         h = json.loads(p.stdout)["hookSpecificOutput"]
         return h.get("permissionDecision", "advise"), h.get("permissionDecisionReason", "")
 
-    def test_empty_with_unresolved_parts_asks_with_a_real_reason(self):
+    def test_empty_with_unresolved_parts_refuses_with_a_real_reason(self):
         for cmd in ("iex $cmd", "Remove-Item @args"):
             v, r = self.reason(cmd)
-            self.assertEqual(v, "ask", cmd)
+            self.assertEqual(v, "deny", cmd)
             self.assertNotIn("__X4_COMMAND__", r, cmd)
             self.assertNotIn("carrier_untranslated" + chr(9), r, cmd)
-            self.assertIn("could not be analysed", r, cmd)
+            self.assertIn("scope could not be completely evaluated", r, cmd)
 
     def test_TWIN_empty_with_nothing_unresolved_allows(self):
         for cmd in ("# only a comment", "$x = 1"):
@@ -448,7 +483,9 @@ class TestPSEmptyTranslation(_PSE2E):
 
 
 class TestEmptyCommandSplit(unittest.TestCase):
-    """The same defect at the seam, with the analyser STUBBED so the fact stream is exact.
+    """Backend-only sentinel seam: the stub provides CLI TSV, not the normal facts() API.
+    Normal full-dispatch refusal and healthy controls remain in TestPSEmptyTranslation.
+    The same defect at the seam, with the analyser STUBBED so the fact stream is exact.
     hook_facts ends its output with `<NL>__X4_COMMAND__<NL><command>`; for an empty command
     `$(...)` strips the final newline, the split fails, and COMMAND became the fact dump --
     every rule that quotes the command then quoted the dump. Runnable without PowerShell."""
@@ -456,14 +493,15 @@ class TestEmptyCommandSplit(unittest.TestCase):
     def run_stub(self, facts):
         tmp = pathlib.Path(tempfile.mkdtemp(prefix="split_"))
         try:
-            for f in ("protect-bash.sh", "_x4-env.sh"):
-                shutil.copy(HOOKS / f, tmp / f)
+            for source in (REPO / "tools/x4_harness").iterdir():
+                if source.is_file():
+                    shutil.copy2(source, tmp / source.name)
             lines = "".join("%s%s%s%s" % (k, chr(9), v, chr(10)) for k, v in facts.items())
             (tmp / "hook_facts.py").write_text(
                 "import sys\nsys.stdin.read()\nsys.stdout.buffer.write(%r.encode())\n"
                 % (lines + "__X4_COMMAND__" + chr(10)), encoding="utf-8")
-            env = dict(os.environ, X4_CONFIG=str(tmp / "none.env"), X4_TOOLKIT=str(tmp))
-            p = subprocess.run([BASH, str(tmp / "protect-bash.sh")],
+            env = _owned_env(tmp, X4_CONFIG=str(tmp / "none.env"), X4_TOOLKIT=str(tmp))
+            p = subprocess.run([BASH, str(tmp / "protect-bash.sh"), "--harness-policy-backend"],
                                input='{"tool_name":"PowerShell","tool_input":{"command":"x"}}',
                                capture_output=True, text=True, env=env, timeout=60)
             if not p.stdout.strip():
@@ -500,7 +538,11 @@ class _RR(_PSE2E):
         """Every case is run and every mismatch reported, not just the first."""
         bad = []
         for want, command in cases:
-            got = self.verdict_with(command, tool)[0]
+            got, reason = self.verdict_with(command, tool)
+            if want == "scope-refusal":
+                if got != "deny" or "scope could not be completely evaluated" not in reason:
+                    bad.append("%s (want unresolved-scope refusal): %s" % (got, command))
+                continue
             if got != want:
                 bad.append("%s (want %s): %s" % (got, want, command))
         self.assertEqual(bad, [])
@@ -542,21 +584,21 @@ class TestRR1PipelineAndVariableTargets(_RR):
             ("deny", "$d = '" + R + "'; Copy-Item .\\a.xml -Destination $d"),
         ])
 
-    def test_resolvable_targets_inside_saves_ask(self):
+    def test_whole_save_folder_refuses_and_unqualified_children_still_ask(self):
         S = self.S
         self.expect([
-            ("ask", "$t = Resolve-Path '" + S + "'; Remove-Item $t -Recurse"),
+            ("deny", "$t = Resolve-Path '" + S + "'; Remove-Item $t -Recurse"),
             ("ask", "$items = Get-ChildItem '" + S + "'; $items | Remove-Item"),
         ])
 
-    def test_an_unresolvable_DELETE_target_asks(self):
+    def test_an_unresolvable_DELETE_target_refuses(self):
         self.expect([
-            ("ask", "$t = Get-Target; Remove-Item $t -Recurse"),
-            ("ask", "Get-Targets | Remove-Item -Recurse"),
-            ("ask", "$t | Remove-Item"),
-            ("ask", "Remove-Item (Get-Target) -Recurse"),
-            ("ask", "Get-Targets | Move-Item -Destination .\\x"),
-            ("ask", "Rename-Item $t -NewName x"),
+            ("scope-refusal", "$t = Get-Target; Remove-Item $t -Recurse"),
+            ("scope-refusal", "Get-Targets | Remove-Item -Recurse"),
+            ("scope-refusal", "$t | Remove-Item"),
+            ("scope-refusal", "Remove-Item (Get-Target) -Recurse"),
+            ("scope-refusal", "Get-Targets | Move-Item -Destination .\\x"),
+            ("scope-refusal", "Rename-Item $t -NewName x"),
         ])
 
     def test_an_unresolvable_WRITE_target_follows_the_bash_write_convention(self):
@@ -608,11 +650,11 @@ class TestRR2PowerShellHostForms(_RR):
             ("deny", "pwsh -NoProfile -Command - <<< \"" + rm + "\""),
         ], tool="Bash")
 
-    def test_an_unreadable_stdin_program_asks(self):
+    def test_an_unreadable_stdin_program_refuses(self):
         self.expect([
-            ("ask", "cat x.ps1 | pwsh -NoProfile"),
-            ("ask", "git show HEAD:x.ps1 | pwsh -NoProfile -Command -"),
-            ("ask", "pwsh -NoProfile -File - < x.ps1"),
+            ("scope-refusal", "cat x.ps1 | pwsh -NoProfile"),
+            ("scope-refusal", "git show HEAD:x.ps1 | pwsh -NoProfile -Command -"),
+            ("scope-refusal", "pwsh -NoProfile -File - < x.ps1"),
         ], tool="Bash")
 
     def test_TWIN_hosts_with_their_own_program(self):
@@ -685,11 +727,11 @@ class TestRR4DotNetWritersAndScriptBlocks(_RR):
              + G + "''')"),
         ])
 
-    def test_unreadable_text_or_target_asks(self):
+    def test_unreadable_text_or_target_refuses(self):
         self.expect([
-            ("ask", "[scriptblock]::Create($s).Invoke()"),
-            ("ask", "$ExecutionContext.InvokeCommand.InvokeScript($s)"),
-            ("ask", "[System.IO.Compression.ZipFile]::ExtractToDirectory('a.zip', '" + self.R + "')"),
+            ("scope-refusal", "[scriptblock]::Create($s).Invoke()"),
+            ("scope-refusal", "$ExecutionContext.InvokeCommand.InvokeScript($s)"),
+            ("scope-refusal", "[System.IO.Compression.ZipFile]::ExtractToDirectory('a.zip', '" + self.R + "')"),
         ])
 
     def test_TWIN_readers_and_harmless_calls(self):
@@ -758,11 +800,11 @@ class TestRR7UnparseablePowerShellDenies(_RR):
         self.assertEqual(v, "deny")
         self.assertIn("does not parse", r)
 
-    def test_TWIN_no_powershell_to_parse_with_still_asks(self):
+    def test_TWIN_no_powershell_to_parse_with_refuses(self):
         old = self.env
         self.env = dict(old, X4_PWSH=str(self.tmp / "no-such-pwsh.exe"))
         try:
-            self.assertEqual(self.verdict_with("Get-Date")[0], "ask")
+            self.assert_scope_refusal("Get-Date")
         finally:
             self.env = old
 
@@ -910,9 +952,7 @@ class TestLaneIConfigLocation(unittest.TestCase):
         self.tk = self.tmp / "tk"
         (self.tk / "reference" / "libraries").mkdir(parents=True)
         (self.tmp / "elsewhere" / "libraries").mkdir(parents=True)
-        self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith("X4_") and k not in ("CLAUDE_PROJECT_DIR", "HOOK_DIR")}
-        self.env["X4_TOOLKIT"] = str(self.tk)
+        self.env = _owned_env(self.tmp, X4_TOOLKIT=str(self.tk))
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)

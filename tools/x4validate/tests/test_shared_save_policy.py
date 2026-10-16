@@ -211,6 +211,9 @@ def invoke_hook(install, tool, ti, preview=False, omit_cwd=False):
     assert bash, why
     env = dict(os.environ, X4_TOOLKIT=str(root), X4_PROFILE=roots["profile"], X4_SAVES=roots["saves"],
                X4_GAME=str(root.parent / "game"), X4_REFERENCE=str(root / "reference"),
+               X4_CONFIG=str(root / "owned-missing.env"), X4_BACKUPS=str(root / "backups"),
+               X4_MODS=str(root / "dev"), X4_DOCUMENTS=str(root.parent / "documents"),
+               X4_EXTENSIONS=str(root.parent / "game/extensions"),
                X4_PYTHON=sys.executable)
     env.pop("X4_GUARD", None)
     env.pop("X4_GUARD_CHECK", None)
@@ -223,6 +226,40 @@ def invoke_hook(install, tool, ti, preview=False, omit_cwd=False):
                             input=json.dumps(payload).encode(), capture_output=True, env=env, timeout=40)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout) if result.stdout.strip() else {}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows filesystem-provider physical path preservation")
+@pytest.mark.parametrize("prefix", ["", "FileSystem::", "filesystem::", "Microsoft.PowerShell.Core\\FileSystem::",
+                                   "\\\\?\\", "\\\\.\\", "FileSystem::\\\\?\\"])
+def test_real_provider_save_request_preserves_exact_existing_bytes_before_permission(install, prefix):
+    root, _roots, files = install
+    original = files[0].read_bytes()
+    command = "Remove-Item -LiteralPath '" + prefix + str(files[0]) + "'"
+    result = invoke_hook(install, "PowerShell", {"command": command})
+    hso = result["hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None, result
+    assert "backup verified" in hso["additionalContext"], result
+    store = root / ".modding-agent-harness/backups/saves"
+    records = list((store / "transactions").glob("*.json"))
+    assert len(records) == 1
+    record = json.loads(records[0].read_text(encoding="utf-8"))
+    members = [m for group in record["groups"] for m in group["members"]]
+    assert len(members) == 1 and os.path.samefile(members[0]["path"], files[0])
+    if "\\\\?\\" in prefix:
+        assert members[0]["path"].startswith("\\\\?\\"), members
+    assert (store / "blobs" / members[0]["sha256"]).read_bytes() == original
+    assert files[0].read_bytes() == original
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended drive spelling")
+@pytest.mark.parametrize("prefix", ["\\\\?\\", "\\\\.\\"])
+def test_missing_save_under_native_drive_namespace_does_not_require_a_backup(install, prefix):
+    root, roots, _files = install
+    target = Path(roots["saves"]) / "Missing.xml.gz"
+    result = invoke_hook(install, "PowerShell", {"command": "Remove-Item -LiteralPath '" + prefix + str(target) + "'"})
+    assert result["hookSpecificOutput"].get("permissionDecision") is None, result
+    assert not target.exists()
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Git Bash drive mounts are Windows-specific")

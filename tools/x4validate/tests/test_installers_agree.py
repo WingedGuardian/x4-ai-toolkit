@@ -120,10 +120,10 @@ def test_both_installers_back_up_the_path_config_before_rewriting_it():
     # message stayed GREEN, which is precisely the failure the code's own comment
     # names: "a backup that silently did not happen is worse than none, because
     # the message above would have said it did".
-    assert 'cp "$f" "$f.bak-' in sh, (
+    assert '_backup="$(_i_backup_file "$f")"' in sh, (
         "install.sh no longer COPIES the path config to a .bak (a message saying "
         "it did is not the same thing)")
-    assert "Copy-Item -LiteralPath $f -Destination ($f + '.bak-'" in ps, (
+    assert "$backup = New-ConfigBackup $f" in ps, (
         "install.ps1 no longer COPIES the path config to a .bak")
 
 
