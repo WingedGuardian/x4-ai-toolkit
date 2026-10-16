@@ -180,3 +180,68 @@ def test_powershell_deadline_includes_input_and_descendant_output(tree, failure,
                 assert exit_code.value != 259, "owned pipe-holder remains alive after timeout"
             finally:
                 kernel.CloseHandle(handle)
+
+
+def _assert_wrapper_cancellation(tree, powershell):
+    import ctypes
+    from ctypes import wintypes
+    ready = tree / "owned-processes.json"
+    (tree / "codex_adapter.py").write_text(
+        "import json,os,subprocess,sys,time\n"
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)'])\n"
+        f"open({str(ready)!r},'w').write(json.dumps([os.getpid(),child.pid]))\n"
+        "time.sleep(20)\n", encoding="utf-8")
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handles = []
+    wrapper = subprocess.Popen([powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                "-File", str(tree / "codex-entry.ps1"), "pre_tool_use"],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               env=dict(os.environ, X4_PYTHON=sys.executable, X4_NO_PYTHON_FALLBACK="1"))
+    try:
+        wrapper.stdin.write(b"{}")
+        wrapper.stdin.close()
+        wrapper.stdin = None
+        deadline = time.monotonic() + 8
+        while not ready.is_file() and wrapper.poll() is None and time.monotonic() < deadline:
+            time.sleep(.025)
+        assert ready.is_file(), "owned adapter did not become ready"
+        for pid in json.loads(ready.read_text()):
+            handle = kernel.OpenProcess(0x100001, False, pid)  # synchronize + terminate
+            assert handle, "owned process vanished before the cancellation control"
+            handles.append(handle)
+        wrapper.kill()  # Only the wrapper this test just started; no tree kill.
+        wrapper.wait(timeout=3)
+        assert all(kernel.WaitForSingleObject(handle, 2500) == 0 for handle in handles), \
+            "owned adapter or descendant remains alive after wrapper cancellation"
+    finally:
+        # Handles identify our processes even if their numerical PIDs are reused.
+        for handle in handles:
+            if kernel.WaitForSingleObject(handle, 0) != 0:
+                kernel.TerminateProcess(handle, 1)
+            kernel.CloseHandle(handle)
+        if wrapper.poll() is None:
+            wrapper.kill()
+        wrapper.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("powershell", POWERSHELLS or [pytest.param(None, marks=pytest.mark.skip(
+    reason="wrapper cancellation requires native Windows PowerShell"))])
+def test_wrapper_cancellation_terminates_owned_adapter_and_descendant(tree, powershell):
+    _assert_wrapper_cancellation(tree, powershell)
+
+
+@pytest.mark.parametrize("powershell", POWERSHELLS or [pytest.param(None, marks=pytest.mark.skip(
+    reason="wrapper cancellation requires native Windows PowerShell"))])
+def test_mutation_without_kill_on_close_is_detected(tree, powershell):
+    script = tree / "codex-entry.ps1"
+    text = script.read_text(encoding="utf-8")
+    anchor = "limits.basic.flags=0x2000;"
+    assert text.count(anchor) == 1
+    script.write_text(text.replace(anchor, "limits.basic.flags=0;"), encoding="utf-8")
+    with pytest.raises(AssertionError, match="remains alive after wrapper cancellation"):
+        _assert_wrapper_cancellation(tree, powershell)

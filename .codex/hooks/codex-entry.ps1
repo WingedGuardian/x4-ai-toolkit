@@ -109,6 +109,18 @@ public sealed class X4GuardProcess : IDisposable {
     }
     [StructLayout(LayoutKind.Sequential)] struct SIX { public SI si; public IntPtr attrs; }
     [StructLayout(LayoutKind.Sequential)] struct PI { public IntPtr process, thread; public int pid, tid; }
+    [StructLayout(LayoutKind.Sequential)] struct JL {
+        public long processTime, jobTime; public uint flags;
+        public UIntPtr minimumWorkingSet, maximumWorkingSet; public uint activeProcesses;
+        public UIntPtr affinity; public uint priority, scheduling;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct IO {
+        public ulong readOps, writeOps, otherOps, readBytes, writeBytes, otherBytes;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct EL {
+        public JL basic; public IO io;
+        public UIntPtr processMemory, jobMemory, peakProcessMemory, peakJobMemory;
+    }
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref SA sa, int size);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetHandleInformation(IntPtr h, uint mask, uint flags);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool InitializeProcThreadAttributeList(IntPtr p, int n, int flags, ref IntPtr size);
@@ -117,6 +129,7 @@ public sealed class X4GuardProcess : IDisposable {
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateProcess(string exe, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string cwd, ref SIX si, out PI pi);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr sa, string name);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref EL info, uint size);
     [DllImport("kernel32.dll", SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job, uint code);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process, uint code);
@@ -151,6 +164,10 @@ public sealed class X4GuardProcess : IDisposable {
             SIX si=new SIX(); si.si.cb=Marshal.SizeOf(typeof(SIX)); si.si.flags=0x100;
             si.si.input=childIn; si.si.output=childOut; si.si.error=childErr; si.attrs=attrs;
             result.job=CreateJobObject(IntPtr.Zero, null); Check(result.job != IntPtr.Zero);
+            // Closing the wrapper's last job handle must also clean up when
+            // the host terminates this wrapper before finally can execute.
+            EL limits=new EL(); limits.basic.flags=0x2000;
+            Check(SetInformationJobObject(result.job, 9, ref limits, (uint)Marshal.SizeOf(typeof(EL))));
             Check(CreateProcess(exe, new StringBuilder("\"" + exe + "\" " + arguments), IntPtr.Zero, IntPtr.Zero, true,
                                 0x08080004, IntPtr.Zero, null, ref si, out pi));
             result.process=pi.process; pi.process=IntPtr.Zero; result.Id=pi.pid;
