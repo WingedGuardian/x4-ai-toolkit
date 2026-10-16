@@ -52,12 +52,14 @@ def isolated(tmp_path: Path) -> Path:
     return tmp_path / "scripts" / SCRIPT.name
 
 
-def _run(script: Path, game: str, profile: str):
+def _run(script: Path, game: str, profile: str, stamp=None):
     bash = _gitbash.find_bash()
     if not bash:
         pytest.skip("no real bash available to run a shell script")
     env = {"PATH": __import__("os").environ.get("PATH", ""),
            "GAME_DIR": game, "PROFILE_DIR": profile}
+    if stamp is not None:
+        env["STAMP"] = stamp
     return subprocess.run([bash, str(script)], capture_output=True, text=True, env=env,
                           timeout=120)
 
@@ -127,6 +129,32 @@ def _out(game, stamp="baseline"):
     the file) caught it. A negative assertion over a path nobody proved is a green
     that could not go red."""
     return game / ".claude" / "backups" / ("known-good-" + stamp)
+
+
+def test_repeated_capture_preserves_the_entire_existing_baseline(isolated, tmp_path):
+    game, prof = _tree(tmp_path, profile_files=("config.xml", "debug.txt"))
+    assert _run(isolated, str(game), str(prof)).returncode == 0
+    old = {p.name: p.read_bytes() for p in _out(game).iterdir()}
+    (prof / "config.xml").write_text("<changed/>", encoding="utf-8")
+    (prof / "debug.txt").unlink()
+    result = _run(isolated, str(game), str(prof))
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "existing baseline" in result.stderr
+    assert {p.name: p.read_bytes() for p in _out(game).iterdir()} == old
+    # A fresh label captures only this run's files, including labels with spaces.
+    fresh = _run(isolated, str(game), str(prof), "second capture")
+    assert fresh.returncode == 0, fresh.stdout + fresh.stderr
+    assert (_out(game, "second capture") / "config.xml").read_text() == "<changed/>"
+    assert not (_out(game, "second capture") / "debug.txt").exists()
+
+
+@pytest.mark.parametrize("stamp", ["../escape", "a/b", "a\\b"])
+def test_stamp_is_a_label_not_a_path(isolated, tmp_path, stamp):
+    game, prof = _tree(tmp_path)
+    result = _run(isolated, str(game), str(prof), stamp)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "STAMP" in result.stderr
+    assert not list((game / ".claude" / "backups").iterdir())
 
 
 def test_a_MISSING_extensions_dir_REFUSES_rather_than_recording_zero_mods(isolated,

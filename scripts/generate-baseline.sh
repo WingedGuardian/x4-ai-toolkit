@@ -42,6 +42,9 @@ if [ -z "$GAME_DIR" ] || [ ! -d "$GAME_DIR" ]; then
   exit 2
 fi
 STAMP="${STAMP:-baseline}"   # pass a date, e.g. STAMP=2026-06-23, to name the folder
+case "$STAMP" in
+  */*|*\\*) echo "ERROR: STAMP must be a label, not a path." >&2; exit 2;;
+esac
 OUT="$GAME_DIR/.claude/backups/known-good-${STAMP}"
 
 # Same condition as the GAME_DIR check above, so the same answer: rc 2, on stderr.
@@ -68,7 +71,12 @@ if [ ! -d "$EXT" ]; then
   exit 2
 fi
 
-mkdir -p "$OUT"
+mkdir -p "$(dirname "$OUT")"
+if ! mkdir "$OUT"; then
+  echo "ERROR: cannot reserve a new baseline; an existing baseline is never reused." >&2
+  echo "       Choose a fresh STAMP label. Nothing in $OUT was changed." >&2
+  exit 2
+fi
 echo "Game dir:    $GAME_DIR"
 echo "Profile dir: $PROFILE_DIR"
 echo "Output:      $OUT"

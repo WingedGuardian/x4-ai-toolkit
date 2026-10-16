@@ -39,6 +39,7 @@ import json
 import re
 import shutil
 import sys
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -210,12 +211,22 @@ def archive(log: Path, dest_dir: Path, config=None) -> Path:
     # local `captured` reads as two different launches to anyone diffing the
     # archive by name.
     stamp = datetime.fromtimestamp(log.stat().st_mtime).strftime("%Y-%m-%dT%H%M")
-    out = dest_dir / f"debug-{stamp}.txt"
     # BYTES FIRST, deliberately. This source is a file the GAME owns: X4 rewrites
     # `debug.txt` (and `{profile}/uidata.xml`) on exit, so the bytes are the one
     # thing that cannot be re-obtained without another play session. Losing them
     # to a metadata failure would be the expensive mistake.
-    shutil.copy2(log, out)
+    # Exclusive creation, even if captures share an mtime or another writer wins
+    # the proposed name. Retain the previous log AND its metadata.
+    while True:
+        out = dest_dir / f"debug-{stamp}-{uuid.uuid4().hex}.txt"
+        try:
+            target = out.open("xb")
+            break
+        except FileExistsError:
+            continue
+    with target, log.open("rb") as source:
+        shutil.copyfileobj(source, target)
+    shutil.copystat(log, out)
 
     # ...but copy-first left the other half open: if parsing or fingerprinting
     # raised, the archive kept a log with NO meta, and `read_archive_meta` threw on

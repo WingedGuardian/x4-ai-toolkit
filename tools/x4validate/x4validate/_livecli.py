@@ -40,6 +40,7 @@ import datetime
 import hashlib
 import os
 import sys
+import uuid
 from pathlib import Path
 
 from . import __version__, _livedump, _paths, _registry
@@ -1565,7 +1566,7 @@ def _archive_dir() -> Path | None:
 
 
 def _dump_sha(path: str | None) -> str | None:
-    """sha8 of the DUMP PAYLOAD in uidata.xml, or None if there isn't one.
+    """Full SHA256 of the DUMP PAYLOAD, or None if there isn't one.
 
     Identity is the payload, not the surrounding file: the same engine dump inside two
     slightly different `uidata.xml` files is one piece of evidence, not two.
@@ -1582,11 +1583,22 @@ def _dump_sha(path: str | None) -> str | None:
                                     _livedump.var_name())
     except Exception:  # silent-ok: advisory only; the real read reports its own errors
         return None
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _verified_archive(directory: Path, sha: str) -> Path | None:
+    """Names select candidates; only the complete payload digest proves identity."""
+    try:
+        for candidate in sorted(directory.glob(f"livedump-*-{sha[:8]}.uidata.xml")):
+            if _dump_sha(str(candidate)) == sha:
+                return candidate
+    except OSError:
+        pass
+    return None
 
 
 def _archive_hint(path: str | None, out) -> None:
-    """One line if this dump is not archived anywhere. Costs a directory listing.
+    """One line unless a candidate archive's complete payload has been verified.
 
     Exists because the ground truth WAS ALREADY LOST ONCE. The engine's resolved values
     lived only in `uidata.xml`; the probe was removed, X4 rewrote the file on exit, and
@@ -1597,9 +1609,9 @@ def _archive_hint(path: str | None, out) -> None:
     d, sha = _archive_dir(), _dump_sha(path)
     if d is None or sha is None:
         return
-    if d.is_dir() and any(d.glob(f"livedump-*-{sha}.uidata.xml")):
+    if _verified_archive(d, sha) is not None:
         return
-    print(f"\nnote: this dump ({sha}) is not archived. X4 OVERWRITES uidata.xml on exit "
+    print(f"\nnote: this dump ({sha[:8]}) is not archived. X4 OVERWRITES uidata.xml on exit "
           f"-- `x4live archive` keeps it.", file=out)
 
 
@@ -1635,20 +1647,22 @@ def cmd_archive(path: str | None, out_dir: str | None = None, out=None) -> int:
 
     # Parse BEFORE copying. Archiving a file we cannot decode would preserve bytes and
     # lose the only thing that makes them evidence -- and it would report success.
-    dump = _load(path)
-    sha = _dump_sha(path)
-    if sha is None:
-        raise _livedump.LiveDumpCorrupt(
-            "the dump parsed but its raw payload could not be re-extracted -- refusing "
-            "to archive something I cannot fingerprint")
+    # Parse, fingerprint and copy ONE snapshot: the game may replace the source
+    # between reads. Validating an earlier read cannot qualify later bytes.
+    data = src.read_bytes()
+    # Match the universal-newline semantics of the ordinary read_text reader,
+    # while retaining the original bytes for the archive itself (notably CRLF).
+    text = data.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    dump = _livedump.parse(text, _livedump.var_name())
+    raw = _livedump.extract_raw(text, _livedump.var_name())
+    sha = hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    existing = sorted(d.glob(f"livedump-*-{sha}.uidata.xml")) if d.is_dir() else []
-    if existing:
-        print(f"already archived, same payload: {existing[0].name}", file=out)
+    existing = _verified_archive(d, sha)
+    if existing is not None:
+        print(f"already archived, same payload: {existing.name}", file=out)
         print(f"  {len(dump.rows)} rows, sha {sha}. Nothing written.", file=out)
         return 0
 
-    data = src.read_bytes()
     if len(data) < 4096:
         raise _livedump.LiveDumpCorrupt(
             f"refusing to archive {len(data)} bytes -- a uidata.xml carrying a dump is "
@@ -1656,22 +1670,29 @@ def cmd_archive(path: str | None, out_dir: str | None = None, out=None) -> int:
 
     d.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    dest = d / f"livedump-{stamp}-{sha}.uidata.xml"
-
-    # WRITE ASIDE, VERIFY, THEN RENAME. A direct write that fails partway leaves a file
-    # whose NAME already satisfies the content-address glob -- so the next run would say
-    # "already archived" and the reminder would fall silent, both for a truncated file.
-    # A partial artifact that cannot say what it is is neither present nor absent, and
-    # it is worse than an absence because it reports success. `os.replace` is atomic on
-    # Windows and POSIX alike, so the final name only ever appears on a verified file.
-    tmp = dest.with_name(dest.name + ".partial")
+    # Reserve our stage exclusively. Publish a verified inode with a no-clobber
+    # hard link; unlike replace(), a racing/foreign final path is never overwritten.
+    while True:
+        dest = d / f"livedump-{stamp}-{uuid.uuid4().hex}-{sha[:8]}.uidata.xml"
+        tmp = dest.with_name(dest.name + ".partial")
+        try:
+            target = tmp.open("xb")
+            break
+        except FileExistsError:
+            continue
     try:
-        tmp.write_bytes(data)
+        with target:
+            target.write(data)
         back = tmp.read_bytes()     # re-read: "N written" is intent, not the file's state
         if back != data:
             raise _livedump.LiveDumpCorrupt(
                 f"wrote {len(data)} bytes to {tmp} but read back {len(back)} -- not archived")
-        os.replace(tmp, dest)
+        while True:
+            try:
+                os.link(tmp, dest)
+                break
+            except FileExistsError:
+                dest = d / f"livedump-{stamp}-{uuid.uuid4().hex}-{sha[:8]}.uidata.xml"
     finally:
         tmp.unlink(missing_ok=True)  # never leave a .partial behind to be puzzled over
 

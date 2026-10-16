@@ -107,6 +107,78 @@ def test_a_DIFFERENT_dump_archives_alongside_rather_than_overwriting(src, tmp_pa
     assert len(list(d.glob("livedump-*.uidata.xml"))) == 2
 
 
+@pytest.mark.parametrize("body", ["truncated", big_uidata(401)], ids=["truncated", "different-payload"])
+def test_a_matching_filename_without_matching_payload_is_not_an_archive(src, tmp_path, monkeypatch, body):
+    monkeypatch.setattr(C._paths, "mods", lambda: tmp_path)
+    d = tmp_path / "_reports"
+    d.mkdir()
+    sha = C._dump_sha(str(src))[:8]
+    old = d / f"livedump-previous-{sha}.uidata.xml"
+    old.write_text(body, encoding="utf-8")
+    previous = old.read_bytes()
+    hint = io.StringIO()
+    C._archive_hint(str(src), hint)
+    assert "not archived" in hint.getvalue()
+    rc, output = run(src, d)
+    assert rc == 0 and "already archived" not in output
+    assert old.read_bytes() == previous
+    assert len(list(d.glob("livedump-*.uidata.xml"))) == 2
+    hint = io.StringIO()
+    C._archive_hint(str(src), hint)
+    assert hint.getvalue() == ""
+
+
+def test_publication_collision_preserves_existing_file(src, tmp_path, monkeypatch):
+    d = tmp_path / "arch"
+    real_link = C.os.link
+    collided = []
+    def race(source, destination, *args, **kwargs):
+        if not collided:
+            C.Path(destination).write_bytes(b"independent capture")
+            collided.append(C.Path(destination))
+        return real_link(source, destination, *args, **kwargs)
+    monkeypatch.setattr(C.os, "link", race)
+    assert run(src, d)[0] == 0
+    assert collided and collided[0].read_bytes() == b"independent capture"
+    assert any(p.read_bytes() == src.read_bytes() for p in d.glob("livedump-*.uidata.xml"))
+    assert not list(d.glob("*.partial"))
+
+
+def test_archive_validates_and_preserves_one_source_snapshot(src, tmp_path, monkeypatch):
+    original = src.read_bytes()
+    real_bytes, real_text = C.Path.read_bytes, C.Path.read_text
+    reads = []
+    def snapshot(self):
+        if self == src:
+            reads.append("bytes")
+            return original if len(reads) == 1 else b"changed source"
+        return real_bytes(self)
+    def changing_text(self, *args, **kwargs):
+        if self == src:
+            reads.append("text")
+            return big_uidata(401)
+        return real_text(self, *args, **kwargs)
+    monkeypatch.setattr(C.Path, "read_bytes", snapshot)
+    monkeypatch.setattr(C.Path, "read_text", changing_text)
+    d = tmp_path / "arch"
+    assert run(src, d)[0] == 0
+    assert reads == ["bytes"]
+    archived = next(d.glob("livedump-*.uidata.xml"))
+    assert real_bytes(archived) == original
+    assert archived.name.endswith("-" + C._dump_sha(str(archived))[:8] + ".uidata.xml")
+
+
+def test_unsupported_exclusive_publication_refuses_without_a_false_archive(src, tmp_path, monkeypatch):
+    def unsupported(*args, **kwargs):
+        raise OSError("owned fixture: hard links unavailable")
+    monkeypatch.setattr(C.os, "link", unsupported)
+    d = tmp_path / "arch"
+    with pytest.raises(OSError, match="hard links unavailable"):
+        run(src, d)
+    assert not list(d.iterdir())
+    assert src.is_file()
+
+
 # --------------------------------------------------------------------------- #
 # the refusals — each its own twin
 # --------------------------------------------------------------------------- #

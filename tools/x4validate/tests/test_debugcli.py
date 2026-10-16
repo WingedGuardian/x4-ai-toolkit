@@ -158,6 +158,23 @@ def test_baseline_stamps_a_content_fingerprint_but_NOT_an_engine_one(
     assert meta["total_errors"] == 4
 
 
+def test_archive_keeps_distinct_captures_with_the_same_source_mtime(tmp_path, resolved_extensions):
+    import os
+    log = _write(tmp_path)
+    stamp = log.stat().st_mtime
+    first = _debugcli.archive(log, tmp_path / "archive")
+    first_bytes = first.read_bytes()
+    first_meta = _debugcli._meta_path(first).read_bytes()
+    log.write_text("[=ERROR=] 1.0 another capture\n", encoding="utf-8")
+    os.utime(log, (stamp, stamp))
+    second = _debugcli.archive(log, tmp_path / "archive")
+    assert second != first
+    assert first.read_bytes() == first_bytes
+    assert _debugcli._meta_path(first).read_bytes() == first_meta
+    assert second.read_bytes() == log.read_bytes()
+    assert _debugcli.read_archive_meta(second)["total_errors"] == 1
+
+
 class _F:
     def __init__(self, category, message, vpath=""):
         self.category, self.message, self.vpath = category, message, vpath

@@ -2,6 +2,11 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Baseline capture reserves a fresh STAMP directory; repeat labels refuse without
+  changing previous evidence. Debug captures retain distinct logs and metadata
+  even when source timestamps match. Live-dump archives verify full payload
+  digests in existing candidates and publish verified snapshots without replacement.
+
 - Both installers check rewritten path-config syntax without executing carried
   assignments. Command-like custom values are retained as data, matching the
   runtime loader's refusal to evaluate substitutions and shell operators.
