@@ -2,6 +2,8 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Targeted hook replay rechecks runtime bytes and resolved paths before
+  reporting its delta, using the same final stability check as full replay.
 - New-host adapter guidance leads with complete Action v1 pre-operation checks,
   distinguishes preview from permanent save preservation, and supplies current
   owned-runtime prerequisites for canaries.

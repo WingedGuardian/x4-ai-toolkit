@@ -549,6 +549,15 @@ def run(argv: list[str]) -> int:
         print("REFUSING:", exc, file=sys.stderr)
         return 2
 
+    def final_instrument_is_stable():
+        try:
+            assert_stable(sha_before, hash_hooks(hook_dir, paths_envs, toolkit=_tk))
+            assert_stable(resolved, resolve())
+        except UnstableInstrument as exc:
+            print("REFUSING:", exc, "-- the run mixed two rule sets and is void.", file=sys.stderr)
+            return False
+        return True
+
     try:
         pos, _ = decide('rm -rf "' + str(game) + '"')
         neg, _ = decide("ls -la")
@@ -588,6 +597,8 @@ def run(argv: list[str]) -> int:
         if bad:
             print(f"REFUSING: the hook produced no verdict on {len(bad)} command(s).",
                   file=sys.stderr)
+            return 2
+        if not final_instrument_is_stable():
             return 2
         now = {h: g for (h, _), g in zip(pairs, got)}
         tset, cset = set(targets), set(controls)
@@ -681,11 +692,7 @@ def run(argv: list[str]) -> int:
         for e in errors[:5]:
             print("   ", e, file=sys.stderr)
         return 2
-    try:
-        assert_stable(sha_before, hash_hooks(hook_dir, paths_envs, toolkit=_tk))
-        assert_stable(resolved, resolve())
-    except UnstableInstrument as e:
-        print("REFUSING:", e, "-- the run mixed two rule sets and is void.", file=sys.stderr)
+    if not final_instrument_is_stable():
         return 2
 
     s = summarize(verdicts, text=text)

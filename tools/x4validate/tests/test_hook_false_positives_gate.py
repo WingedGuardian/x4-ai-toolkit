@@ -334,6 +334,55 @@ def test_gate_refuses_missing_runtime_before_controls_or_corpus(tmp_path, monkey
     assert not (tmp_path / "unused.json").exists()
 
 
+@pytest.mark.parametrize("targeted", [False, True])
+@pytest.mark.parametrize("fault", ["unchanged", "core", "config", "resolved-path"])
+@pytest.mark.parametrize("moved_control", [False, True])
+def test_all_replay_modes_qualify_the_final_instrument_before_reporting_a_delta(
+        tmp_path, monkeypatch, capsys, targeted, fault, moved_control):
+    import json
+    import subprocess
+    from types import SimpleNamespace
+    _runtime_fixture(tmp_path)
+    monkeypatch.setattr(hfp._env, "extensions", lambda: tmp_path / "extensions")
+    target = {"command": "owned-target", "run_in_background": False, "timeout": 0}
+    control = dict(target, command="owned-control")
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"verdicts": {hfp.item_hash(target): ["deny", "owned-rule"],
+        hfp.item_hash(control): ["allow", ""]}, "replayed": 2, "distinct_total": 2}), encoding="utf-8")
+    monkeypatch.setattr(hfp, "BASELINE", baseline)
+    monkeypatch.setattr(hfp, "collect_corpus", lambda: [target, control])
+    replayed = []
+    def answer(argv, **kwargs):
+        if argv[1] == "-c":
+            reference = "changed" if fault == "resolved-path" and replayed else "original"
+            return SimpleNamespace(returncode=0, stderr="", stdout="X4_TOOLKIT=" + tmp_path.as_posix() +
+                                   "\nX4_REFERENCE=" + (tmp_path / reference).as_posix() + "\n")
+        command = json.loads(kwargs["input"])["tool_input"]["command"]
+        if command.startswith("owned-"):
+            replayed.append(command)
+            if command == "owned-target" and fault in ("core", "config"):
+                path = (tmp_path / "tools/modding_harness/contracts.py" if fault == "core"
+                        else tmp_path / "x4-paths.env")
+                path.write_text("changed", encoding="utf-8")
+        deny = command.startswith("rm -rf") or command == "owned-target" or (moved_control and command == "owned-control")
+        stdout = json.dumps({"hookSpecificOutput": {"permissionDecision": "deny",
+                            "permissionDecisionReason": "owned-rule"}}) if deny else ""
+        return SimpleNamespace(returncode=0, stderr="", stdout=stdout)
+    monkeypatch.setattr(hfp, "subprocess", SimpleNamespace(run=answer, TimeoutExpired=subprocess.TimeoutExpired))
+    artifact = tmp_path / "result.json"
+    argv = ["--workers=1", "--rule=owned-rule"] if targeted else ["--workers=1", "--out=" + str(artifact)]
+    result = hfp.run(argv)
+    captured = capsys.readouterr()
+    assert sorted(replayed) == ["owned-control", "owned-target"]
+    if fault != "unchanged":
+        assert result == 2 and "run mixed two rule sets and is void" in captured.err, captured
+        assert not artifact.exists()
+        assert "still fire" not in captured.out and "VERDICTS over" not in captured.out
+    else:
+        assert result == (1 if targeted and moved_control else 0), captured
+        assert artifact.exists() is (not targeted)
+
+
 @pytest.mark.parametrize("changed", ["protect-bash.sh", "_x4-env.sh",
                                      "hook_facts.py", "ps_translate.ps1"])
 def test_changing_each_verdict_dependency_voids_the_replay(tmp_path, changed):
