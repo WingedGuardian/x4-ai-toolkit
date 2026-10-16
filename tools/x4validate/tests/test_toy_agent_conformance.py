@@ -54,6 +54,63 @@ def _recorded_inert(xc, row):
     return bool(xc.NOT_CHECKED.search(hso.get("permissionDecisionReason") or ""))
 
 
+MUTANT_CASE_FLOORS = {"always_allow": 12, "ask_as_plain_deny": 12, "crash_exits_nonzero": 12,
+                     "powershell_as_bash": 5, "ignores_workdir": 1}
+
+
+def _checked_mutant_cases(xc, pool, pick, minimum):
+    """Select a full checked control set using the guards' live read-only check protocol."""
+    chosen = []
+    for row in pool:
+        if not pick(row) or _recorded_inert(xc, row) or not _replayable_here(xc, row):
+            continue
+        reference, why = xc.reference_verdict_detail(row, REPO)
+        assert reference not in ("error", "unreadable"), f"guard qualification failed: {why}"
+        if reference == "inert":
+            print("unchecked candidate excluded:", row.get("label") or row.get("id") or row.get("n"))
+            continue
+        chosen.append(row)
+        if len(chosen) == minimum:
+            return chosen
+    raise AssertionError(f"only {len(chosen)} checked cases can express this defect; "
+                         f"need {minimum}, never lower the floor or drop the mutant")
+
+
+def test_live_unchecked_candidate_is_replaced_while_retaining_twelve_checked_cases():
+    xc = _engine()
+    from types import SimpleNamespace
+    measured = SimpleNamespace(NOT_CHECKED=xc.NOT_CHECKED, WINDOWS_PATH_DIALECT=xc.WINDOWS_PATH_DIALECT,
+        reference_verdict_detail=lambda row, root: ("inert" if row["n"] == 0 else "ask", ""))
+    rows = [{"n": n, "kind": "shell-bash", "got": "ask"} for n in range(13)]
+    assert [r["n"] for r in _checked_mutant_cases(measured, rows, lambda row: True, 12)] == list(range(1, 13))
+    with pytest.raises(AssertionError, match="need 12"):
+        _checked_mutant_cases(measured, rows[:12], lambda row: True, 12)
+
+
+def test_live_guard_error_refuses_selection_instead_of_shrinking_the_sample():
+    xc = _engine()
+    from types import SimpleNamespace
+    measured = SimpleNamespace(NOT_CHECKED=xc.NOT_CHECKED, WINDOWS_PATH_DIALECT=xc.WINDOWS_PATH_DIALECT,
+        reference_verdict_detail=lambda row, root: ("error", "owned nonanswer"))
+    with pytest.raises(AssertionError, match="qualification failed"):
+        _checked_mutant_cases(measured, [{"kind": "shell-bash"}], lambda row: True, 12)
+
+
+@pytest.mark.parametrize("reason,inert", [
+    ("X4 save dispatcher failed: ValueError; this call was not allowed.", True),
+    ("X4 save dispatcher did not return a complete decision; this call was not allowed.", True),
+    ("X4 GUARD INERT: no runtime", True),
+    ("Permanent save deletion is not allowed.", False),
+    ("This operation needs approval.", False),
+])
+def test_recorded_dispatcher_nonanswers_are_excluded_without_lowering_the_floor(reason, inert):
+    xc = _engine()
+    row = {"out": json.dumps({"hookSpecificOutput": {
+        "permissionDecision": "deny", "permissionDecisionReason": reason}})}
+    assert _recorded_inert(xc, row) is inert
+    assert xc._hook_decision(row["out"]) == ("inert" if inert else "deny")
+
+
 def test_the_toy_adapter_passes_full_conformance(conformance_dump, tmp_path):
     rows, _ = conformance_dump
     r = conformance(_write(rows, tmp_path / "all.jsonl"), TOY / "toy_adapter.py")
@@ -86,17 +143,19 @@ def test_each_adapter_mutant_turns_conformance_red(name, conformance_dump, tmp_p
     edits, pick = MUTANTS[name]
     rows, _ = conformance_dump
     pool = rows + xc.extra_rows(REPO, rows)
-    # Only rows the GUARDS can check: a row whose recorded verdict is "could not check"
-    # (e.g. the guards-off untranslatable-PowerShell case) is inert by design, the engine
-    # rightly refuses to count it (R2-F3), and it cannot express any mutant. Judged with the
-    # engine's own NOT_CHECKED pattern, never a copy of it.
-    # And only rows REPLAYABLE on this platform. CI (ubuntu, 2026-10-05): one of the 12 picked
-    # rows spelled its path with backslashes, the engine bucketed it windows_path_dialect off
-    # Windows, 11 < --min-cases 12, and the CONTROL refused (rc 3) -- the floor, not the mutant,
-    # decided. The engine's own classifier picks them out, so the floor is what really runs.
-    chosen = [r for r in pool if pick(r) and not _recorded_inert(xc, r)
-              and _replayable_here(xc, r)][:12]
-    assert chosen, f"{name}: no case can express this defect -- add one, never drop the mutant"
+    if name == "powershell_as_bash":
+        # The historical fifth PS row was an unchecked dispatcher failure. Replace it with a distinct
+        # checked append operation; do not lower the original five-case floor or edit the cold adapter.
+        source = next(row for row in pool if row.get("id") == "powershell-set-content-into-reference")
+        replacement = json.loads(json.dumps(source))
+        replacement.update(id="powershell-add-content-literal-reference", label="mutant-control:PS literal append")
+        command = source["payload"]["tool_input"]["command"].replace("Set-Content -Path", "Add-Content -LiteralPath")
+        replacement["payload"]["tool_input"]["command"] = command
+        pool.append(replacement)
+    assert set(MUTANT_CASE_FLOORS) == set(MUTANTS)
+    # Recorded prose is a compatibility filter. The live check protocol qualifies the actual control set;
+    # unreadable guards fail selection, and unchecked rows require replacement before setting the floor.
+    chosen = _checked_mutant_cases(xc, pool, pick, MUTANT_CASE_FLOORS[name])
     cases = _write(chosen, tmp_path / "c.jsonl")
     src = (TOY / "toy_adapter.py").read_text(encoding="utf-8")
     mutated = src
@@ -104,7 +163,7 @@ def test_each_adapter_mutant_turns_conformance_red(name, conformance_dump, tmp_p
         assert src.count(old) == 1, f"{name}: anchor {old!r} matches {src.count(old)} times"
         mutated = mutated.replace(old, new)
     mutant = tmp_path / "toy_adapter.py"; mutant.write_text(mutated, encoding="utf-8")
-    floor = ("--no-extras", "--min-cases", str(len(chosen)))   # `chosen` already holds any extras it needs
+    floor = ("--no-extras", "--min-cases", str(MUTANT_CASE_FLOORS[name]))
     control = conformance(cases, TOY / "toy_adapter.py", *floor)
     assert control.returncode == 0, control.stdout[-3000:]          # control first
     red = conformance(cases, mutant, *floor)

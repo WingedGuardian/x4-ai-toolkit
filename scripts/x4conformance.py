@@ -66,7 +66,8 @@ RC_OK, RC_DISAGREE, RC_ERROR, RC_NOTHING = 0, 1, 2, 3
 DECISIONS = ("allow", "advise", "ask", "deny", "inert")
 TOKENS = ("COMMAND", "PATH", "CONTENT", "CWD")
 NOT_CHECKED = re.compile(r"X4 GUARD INERT|NO rule (?:below )?was evaluated|NEVER checked against any rule"
-                         r"|could not be translated|could not be analysed")
+                         r"|could not be translated|could not be analysed"
+                         r"|X4 save dispatcher (?:failed:|did not return a complete decision;)")
 _TOKEN = re.compile(r"\{\{([A-Za-z_]+)(?:\|([^{}]*))?\}\}")
 _MISSING = object()
 

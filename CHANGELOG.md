@@ -2,6 +2,10 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Standalone hook replay fingerprints the resolved save dispatcher, shared
+  Python runtime and lock, refusing incomplete or changing instruments.
+  Conformance recognizes dispatcher nonanswers as unchecked, preserving the
+  checked-case floor and all adapter mutation controls.
 - Reference-protection reports disclose enumeration failures as incomplete,
   including during full scans. An incomplete preflight count refuses changes;
   a later chmod traversal failure reports partial work and cannot pass.

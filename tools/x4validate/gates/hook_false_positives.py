@@ -85,7 +85,9 @@ PATH_VARS = ("X4_GAME", "X4_PROFILE", "X4_REFERENCE", "X4_MODS", "X4_TOOLKIT",
 # The shell delegates filesystem facts to hook_facts.py, including nested
 # PowerShell commands translated by ps_translate.ps1. A change in either can
 # change a Bash verdict without changing either shell file.
-HOOK_FILES = ("protect-bash.sh", "_x4-env.sh", "hook_facts.py", "ps_translate.ps1")
+HOOK_FILES = ("protect-bash.sh", "_x4-env.sh", "hook_facts.py", "ps_translate.ps1", "save_policy.py", "x4guard.py")
+CORE_FILES = ("__init__.py", "approval.py", "contracts.py", "dispatch.py", "durable.py", "locking.py",
+              "preservation.py", "profiles.py", "telemetry.py", "workspace.py")
 EXAMPLE_CAP = 25
 
 
@@ -326,17 +328,50 @@ def config_files_to_hash(toolkit: Path | None, environ) -> dict[str, Path]:
         out["x4-paths.env (4.x root)"] = Path(toolkit) / "x4-paths.env"
         out[".claude/x4-paths.env (3.x)"] = Path(toolkit) / ".claude" / "x4-paths.env"
     if environ.get("X4_CONFIG"):
-        out["X4_CONFIG"] = Path(environ["X4_CONFIG"])
+        out["X4_CONFIG"] = Path(_env._paths.native(environ["X4_CONFIG"]))
     return out
 
 
-def hash_hooks(hook_dir: Path, paths_envs: dict[str, Path] | None = None) -> dict[str, str]:
-    """The hook files plus each named config, `label -> sha | "absent"`. The labels come
-    from `config_files_to_hash`."""
-    out = {f: _sha((hook_dir / f).read_bytes()) for f in HOOK_FILES}
+def _file_fingerprint(path: Path) -> str:
+    try:
+        return _sha(path.read_bytes())
+    except FileNotFoundError:
+        return "absent"
+    except OSError as exc:
+        return "unreadable:" + type(exc).__name__
+
+
+def hash_hooks(hook_dir: Path, paths_envs: dict[str, Path] | None = None,
+               toolkit: Path | None = None) -> dict[str, str]:
+    """The actual hook, resolved save runtime and configs, including absent/unreadable states."""
+    hook_dir = Path(hook_dir).resolve()
+    toolkit = Path(toolkit).resolve() if toolkit is not None else hook_dir.parent.parent
+    out = {f: _file_fingerprint(hook_dir / f) for f in HOOK_FILES}
+    out["runtime:hook-directory"] = str(hook_dir)
+    out["runtime:toolkit"] = str(toolkit)
+    core = toolkit / "tools/modding_harness"
+    names = set(CORE_FILES)
+    if core.is_dir():
+        def failed(error):
+            raise UnstableInstrument("could not enumerate the shared runtime: " + type(error).__name__)
+        for directory, _, filenames in os.walk(core, onerror=failed):
+            names.update((Path(directory) / name).relative_to(core).as_posix()
+                         for name in filenames if name.endswith(".py"))
+    for name in sorted(names):
+        out["runtime:modding_harness/" + name] = _file_fingerprint(core / name)
+    out["runtime:modding-harness.lock.json"] = _file_fingerprint(toolkit / "tools/modding-harness.lock.json")
     for label, p in (paths_envs or {}).items():
-        out[label] = _sha(p.read_bytes()) if p.is_file() else "absent"
+        out[label] = _file_fingerprint(p)
     return out
+
+
+def assert_complete_runtime(fingerprints: dict[str, str]) -> None:
+    required = {*HOOK_FILES, "runtime:modding-harness.lock.json",
+                *("runtime:modding_harness/" + name for name in CORE_FILES),
+                *(key for key in fingerprints if key.startswith("runtime:modding_harness/"))}
+    bad = [key for key in required if not re.fullmatch(r"[0-9a-f]{64}", fingerprints.get(key, ""))]
+    if bad:
+        raise UnstableInstrument("missing or unreadable verdict dependencies: " + ", ".join(bad))
 
 
 #: Lines the transcript scan could not parse, and the files they came from.
@@ -503,9 +538,16 @@ def run(argv: list[str]) -> int:
 
     resolved = resolve()
     print("resolved:", ", ".join(f"{k}={'set' if v else 'EMPTY'}" for k, v in resolved.items()))
-    _tk = Path(resolved["X4_TOOLKIT"]) if resolved.get("X4_TOOLKIT") else None
+    _tk = Path(_env._paths.native(resolved["X4_TOOLKIT"])) if resolved.get("X4_TOOLKIT") else None
     paths_envs = config_files_to_hash(_tk, env)
-    sha_before = hash_hooks(hook_dir, paths_envs)
+    try:
+        if _tk is None:
+            raise UnstableInstrument("the hook did not resolve its shared runtime toolkit")
+        sha_before = hash_hooks(hook_dir, paths_envs, toolkit=_tk)
+        assert_complete_runtime(sha_before)
+    except UnstableInstrument as exc:
+        print("REFUSING:", exc, file=sys.stderr)
+        return 2
 
     try:
         pos, _ = decide('rm -rf "' + str(game) + '"')
@@ -640,7 +682,7 @@ def run(argv: list[str]) -> int:
             print("   ", e, file=sys.stderr)
         return 2
     try:
-        assert_stable(sha_before, hash_hooks(hook_dir, paths_envs))
+        assert_stable(sha_before, hash_hooks(hook_dir, paths_envs, toolkit=_tk))
         assert_stable(resolved, resolve())
     except UnstableInstrument as e:
         print("REFUSING:", e, "-- the run mixed two rule sets and is void.", file=sys.stderr)

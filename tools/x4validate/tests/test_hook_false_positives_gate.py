@@ -244,8 +244,94 @@ def _cfgs(tk):
 
 
 def _hook_fixture(root):
-    for name in ("protect-bash.sh", "_x4-env.sh", "hook_facts.py", "ps_translate.ps1"):
+    for name in ("protect-bash.sh", "_x4-env.sh", "hook_facts.py", "ps_translate.ps1", "save_policy.py", "x4guard.py"):
         (root / name).write_text("original", encoding="utf-8")
+
+
+_FINGERPRINT_CORE = ("__init__.py", "approval.py", "contracts.py", "dispatch.py", "durable.py", "locking.py",
+                     "preservation.py", "profiles.py", "telemetry.py", "workspace.py")
+
+
+def _runtime_fixture(root):
+    hooks = root / ".claude/hooks"
+    hooks.mkdir(parents=True)
+    _hook_fixture(hooks)
+    package = root / "tools/modding_harness"
+    package.mkdir(parents=True)
+    for name in _FINGERPRINT_CORE:
+        (package / name).write_text("original", encoding="utf-8")
+    (root / "tools/modding-harness.lock.json").write_text("owned-lock", encoding="utf-8")
+    return hooks
+
+
+@pytest.mark.parametrize("relative", [".claude/hooks/save_policy.py", ".claude/hooks/x4guard.py",
+    "tools/modding-harness.lock.json", *["tools/modding_harness/" + name for name in _FINGERPRINT_CORE]])
+@pytest.mark.parametrize("change", ["edit", "remove"])
+def test_save_runtime_dependency_changes_void_the_replay(tmp_path, relative, change):
+    hooks = _runtime_fixture(tmp_path)
+    before = hfp.hash_hooks(hooks)
+    target = tmp_path / relative
+    if change == "edit":
+        target.write_text("changed", encoding="utf-8")
+    else:
+        target.unlink()
+    with pytest.raises(hfp.UnstableInstrument):
+        hfp.assert_stable(before, hfp.hash_hooks(hooks))
+
+
+def test_an_added_runtime_module_voids_the_replay(tmp_path):
+    hooks = _runtime_fixture(tmp_path)
+    before = hfp.hash_hooks(hooks)
+    (tmp_path / "tools/modding_harness/new_dependency.py").write_text("new", encoding="utf-8")
+    with pytest.raises(hfp.UnstableInstrument):
+        hfp.assert_stable(before, hfp.hash_hooks(hooks))
+
+
+def test_resolved_foreign_toolkit_runtime_is_the_one_fingerprinted(tmp_path):
+    local, foreign = tmp_path / "local", tmp_path / "foreign"
+    hooks = _runtime_fixture(local)
+    _runtime_fixture(foreign)
+    before = hfp.hash_hooks(hooks, toolkit=foreign)
+    hfp.assert_complete_runtime(before)
+    (local / "tools/modding_harness/contracts.py").write_text("unused", encoding="utf-8")
+    hfp.assert_stable(before, hfp.hash_hooks(hooks, toolkit=foreign))
+    (foreign / "tools/modding_harness/contracts.py").write_text("used", encoding="utf-8")
+    with pytest.raises(hfp.UnstableInstrument):
+        hfp.assert_stable(before, hfp.hash_hooks(hooks, toolkit=foreign))
+
+
+@pytest.mark.parametrize("fault", ["missing", "unreadable"])
+def test_incomplete_runtime_fingerprint_refuses_qualification(tmp_path, monkeypatch, fault):
+    hooks = _runtime_fixture(tmp_path)
+    target = tmp_path / "tools/modding_harness/contracts.py"
+    if fault == "missing":
+        target.unlink()
+    else:
+        original = type(target).read_bytes
+        def read(path):
+            if path == target:
+                raise PermissionError("owned fingerprint fault")
+            return original(path)
+        monkeypatch.setattr(type(target), "read_bytes", read)
+    with pytest.raises(hfp.UnstableInstrument, match="contracts.py"):
+        hfp.assert_complete_runtime(hfp.hash_hooks(hooks))
+
+
+def test_gate_refuses_missing_runtime_before_controls_or_corpus(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    _runtime_fixture(tmp_path)
+    (tmp_path / "tools/modding_harness/contracts.py").unlink()
+    monkeypatch.setattr(hfp._env, "extensions", lambda: tmp_path / "extensions")
+    calls = []
+    def resolved_only(argv, **kwargs):
+        calls.append(argv)
+        assert argv[1] == "-c", "no control or corpus hook should run on an incomplete runtime"
+        return SimpleNamespace(stdout="X4_TOOLKIT=" + tmp_path.as_posix() + "\n")
+    monkeypatch.setattr(hfp.subprocess, "run", resolved_only)
+    monkeypatch.setattr(hfp, "collect_corpus", lambda: pytest.fail("must refuse before reading a corpus"))
+    assert hfp.run(["--out=" + str(tmp_path / "unused.json")]) == 2
+    assert len(calls) == 1 and "contracts.py" in capsys.readouterr().err
+    assert not (tmp_path / "unused.json").exists()
 
 
 @pytest.mark.parametrize("changed", ["protect-bash.sh", "_x4-env.sh",
