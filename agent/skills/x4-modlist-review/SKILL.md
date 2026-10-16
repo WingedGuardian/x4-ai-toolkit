@@ -12,6 +12,19 @@ Run commands via uv from the tool dir:
 `cd {{TOOLKIT}}/tools/x4validate && uv run --python 3.13 x4modlist <cmd>`
 Needs `X4_NEXUS_KEY` (user env). If a command errors "X4_NEXUS_KEY not set", the user must set it (endpoints, rate budget and how to get a key: `x4validate/_nexus.py`).
 
+## Establish the current situation
+
+Before proposing changes, read `## My preferences` in `KNOWLEDGEBASE.local.md`
+and reconcile it with the current request and session context: is this a kept save,
+a new game or a disposable test, and are updates, additions, removals or ordering
+changes authorized? Assume neither an ongoing playthrough nor a fresh game.
+Ask only about material facts that remain unknown or contradictory; a missing
+local file alone does not justify repeating an answered question. Continue
+independent read-only work while waiting. Apply standing user rulings before
+choosing work, and record new lasting rulings, dated, in that user-owned section.
+Keep it concise; if session context is truncated, read the full section directly.
+These choices do not waive verified backups, write guards or scoped authorization.
+
 ## Workflow
 Before adopting a mod, `x4modlist search "name" [--limit 15] [--json]` returns candidate
 Nexus identities, versions, update dates and status without changing the registry. It

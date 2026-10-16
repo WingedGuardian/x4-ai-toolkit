@@ -8,6 +8,19 @@ Port ONE mod to the current game version. **Mechanical work is automated + valid
 
 Tool: `cd {{TOOLKIT}}/tools/x4validate && uv run --python 3.13 x4validate <dev\mod> --update`
 
+## Establish the current situation
+
+Before proposing changes, read `## My preferences` in `KNOWLEDGEBASE.local.md`
+and reconcile it with the current request and session context: is this a kept save,
+a new game or a disposable test, and are updates, additions, removals or ordering
+changes authorized? Assume neither an ongoing playthrough nor a fresh game.
+Ask only about material facts that remain unknown or contradictory; a missing
+local file alone does not justify repeating an answered question. Continue
+independent read-only work while waiting. Apply standing user rulings before
+choosing work, and record new lasting rulings, dated, in that user-owned section.
+Keep it concise; if session context is truncated, read the full section directly.
+These choices do not waive verified backups, write guards or scoped authorization.
+
 ## Phases
 1. **Research (API-FIRST)** — dispatch the `mod-research` agent: game changelog (Egosoft patch notes), the mod's Nexus changelog/version/9.0-status, whether an updated upstream exists, known issues. Cross-check `KNOWLEDGEBASE.md` "Version Migration Map".
 2. **Mechanical checks** — run `x4validate <mod> --update` and read the report:

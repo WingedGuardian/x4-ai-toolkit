@@ -2,6 +2,8 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Mod-update and modlist reviews reconcile the current save situation, session intent and local user preferences before proposing changes; ask only for material missing facts. Save preservation and scoped authorization remain required.
+
 - Mutation-probe kills require new testcase failures against the same marked
   scope. Mutation-induced test-call exceptions can count as failures; collection,
   setup/teardown and runner errors remain unmeasured. Full escalation
