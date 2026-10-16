@@ -673,7 +673,7 @@ def main(argv=None) -> int:
         return 2
     msystem, conversion_off = _git_bash_argv_state()
     argv_under_git_bash = (args.mode == "xq" and args.file is None
-                           and bool(msystem) and not conversion_off)
+                           and msystem is not None and not conversion_off)
 
     xq = {"refs": q_refs, "attr": q_attr}.get(args.mode)
     query = xq(args.db, args.arg) if xq else query_text

@@ -2,6 +2,9 @@
 
 ## v4.0.0 — 2026-10-03
 
+- BaseX argument-query checks retain an empty-but-defined MSYSTEM marker as
+  evidence of possible path rewriting. Its regression uses an empty result,
+  so a separate count-query refusal cannot hide the channel check.
 - Installed-layout checks examine the selected instruction files and common
   runtime carrier. Workflow-source checks explicitly skip when that source
   is not shipped; common backup and validator behavior still runs for every agent.

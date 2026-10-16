@@ -728,13 +728,13 @@ def test_an_EMPTY_but_DEFINED_MSYSTEM_still_refuses(monkeypatch, capsys):
     so an empty value folded to None and the refusal switched OFF while the rewrite continued:
     a certified NEGATIVE CONFIRMED over a query nobody typed, which is F122 reopened. PRESENCE
     is the signal, not truthiness."""
-    _fake_basex(monkeypatch, "0")
-    _stale(monkeypatch, fresh=True)
+    _complete_zero(monkeypatch)
     monkeypatch.setenv("MSYSTEM", "")
-    rc = ask.main(["--db", "x4raw", "xq", "count(collection('x4raw')//nothing)"])
+    # A count-shaped zero is independently refused and would hide this channel bug.
+    rc = ask.main(["--db", "x4raw", "xq", "collection('x4raw')//nothing"])
     text = "".join(capsys.readouterr())
     assert rc == 4, text
-    assert "NEGATIVE CONFIRMED" not in text
+    assert "NEGATIVE CONFIRMED" not in text and "--file" in text
 
 
 def test_TWIN_an_EMPTY_but_DEFINED_conversion_switch_turns_the_refusal_OFF(monkeypatch, capsys):
