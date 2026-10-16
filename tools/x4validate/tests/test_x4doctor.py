@@ -940,6 +940,28 @@ def test_hash_unverifiable_is_UNKNOWN_not_OK_nor_FAIL(codex_root):
     assert r.status == doc.UNKNOWN and "scheme" in r.detail, r
 
 
+@pytest.mark.parametrize("states,status,detail", [
+    (("untrusted", "trusted", "trusted"), doc.TODO, "NOT REVIEWED"),
+    (("untrusted", "disabled", "trusted"), doc.FAIL, "disabled"),
+    (("untrusted", "mismatch", "trusted"), doc.FAIL, "changed"),
+    (("untrusted", "mismatch", "untrusted"), doc.UNKNOWN, "scheme"),
+    (("untrusted", "mismatch", "disabled"), doc.FAIL, "disabled"),
+])
+def test_pending_review_cannot_mask_disabled_or_unverifiable_hooks(codex_root, states, status, detail):
+    path = codex_root / ".codex/hooks.json"
+    definitions = json.loads(path.read_text(encoding="utf-8"))
+    definitions["hooks"]["PostToolUse"] = [{"hooks": [{"type": "command", "command": "bash after.sh"}]}]
+    path.write_text(json.dumps(definitions), encoding="utf-8")
+    expected = doc.expected_hooks(path)
+    assert len(expected) == len(states)
+    entries = {key: (expected[key] if state == "trusted" else
+                     "disabled" if state == "disabled" else "sha256:" + "0" * 64)
+               for key, state in zip(sorted(expected), states) if state != "untrusted"}
+    _cfg(codex_root, entries=entries)
+    result = _codex(codex_root)["codex.reviewed"]
+    assert result.status == status and detail in result.detail, result
+
+
 def test_the_hash_moves_with_every_field_codex_hashes():
     base = {"type": "command", "command": "bash x.sh", "timeout": 30}
     h0 = doc.codex_hook_hash("pre_tool_use", {"matcher": ".*"}, base, windows=False)

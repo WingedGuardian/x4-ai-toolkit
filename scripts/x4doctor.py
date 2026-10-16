@@ -1024,10 +1024,6 @@ def check_codex(ctx: Ctx) -> list[Check]:
         bad = {s: [h["key"].rsplit(":", 3)[1] for h in hooks if h["status"] == s]
                for s in ("untrusted", "disabled", "mismatch")}
         n_ok = sum(h["status"] == "trusted" for h in hooks)
-        if bad["untrusted"]:
-            return TODO, ("YOUR STEP: %d hook(s) NOT REVIEWED yet (%s): Codex skips them SILENTLY "
-                          "until you do. Open /hooks in Codex here and approve them"
-                          % (len(bad["untrusted"]), ", ".join(bad["untrusted"])))
         if bad["disabled"]:
             return FAIL, "%d hook(s) disabled in Codex's config (%s): they never run" % (
                 len(bad["disabled"]), ", ".join(bad["disabled"]))
@@ -1039,6 +1035,10 @@ def check_codex(ctx: Ctx) -> list[Check]:
             return FAIL, ("%d hook definition(s) changed since they were reviewed (%s): Codex treats "
                           "them as untrusted. Re-approve them in /hooks" % (len(bad["mismatch"]),
                                                                           ", ".join(bad["mismatch"])))
+        if bad["untrusted"]:
+            return TODO, ("YOUR STEP: %d hook(s) NOT REVIEWED yet (%s): Codex skips them SILENTLY "
+                          "until you do. Open /hooks in Codex here and approve them"
+                          % (len(bad["untrusted"]), ", ".join(bad["untrusted"])))
         return OK, "%d of %d hook(s) reviewed, hashes current" % (n_ok, len(hooks))
 
     def _rules(_):

@@ -2,6 +2,8 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Doctor reports disabled or changed hooks, and unconfirmed trust hashes,
+  before pending review steps when a Codex installation has mixed statuses.
 - Generic installs use the neutral runtime for Bash discovery, unpacking and
   baseline configuration. File-lock inventories recognize the generic carrier,
   demand AGENTS.md and include the neutral and shared runtime files.
