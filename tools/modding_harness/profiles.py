@@ -19,8 +19,64 @@ def comparison_key(resolved):
     return os.path.normcase(resolved)
 
 
+def _resolved(path):
+    """Keep native resolution while bounding probes of a deeply missing tail.
+
+    Windows' non-strict realpath retries every shrinking prefix. A long absent
+    tail therefore repeats work on the same characters. Strict native probes
+    locate its first missing component, whose ordinary non-strict resolution
+    retains junction/dangling-link semantics; the absent tail is appended once.
+    Other errors, dot-parent and embedded-colon semantics use the original
+    resolver unchanged.
+    """
+    original = os.fspath(path)
+    value = Path(path)
+    parts = value.parts
+    _drive, tail = os.path.splitdrive(original)
+    components = tail.replace("/", "\\").split("\\") if os.name == "nt" else ()
+    if (os.name != "nt" or len(parts) < 32
+            # Rebuilding prefixes or appending a tail can reinterpret C:parts.
+            # Delegate every non-anchor colon, including ADS-like spellings.
+            or any(":" in component for component in components)
+            or ".." in components or (_drive.startswith(("\\\\?\\", "\\\\.\\")) and "." in components)):
+        return str(value.resolve())
+    if not value.drive:
+        # Like native realpath, a rooted operand uses the process's current
+        # drive; an ordinary relative operand uses its complete current cwd.
+        value = Path.cwd() / value
+        parts = value.parts
+    if not value.is_absolute():          # leave per-drive C:relative semantics native
+        return str(Path(path).resolve())
+
+    def missing(error):
+        return getattr(error, "winerror", None) in (2, 3)
+
+    try:
+        return str(value.resolve(strict=True))
+    except OSError as error:
+        if not missing(error):
+            return str(value.resolve())
+    low, high = 1, len(parts)             # high is missing; low must resolve
+    try:
+        Path(parts[0]).resolve(strict=True)
+        while high - low > 1:
+            middle = (low + high) // 2
+            try:
+                Path(*parts[:middle]).resolve(strict=True)
+            except OSError as error:
+                if not missing(error):
+                    return str(value.resolve())
+                high = middle
+            else:
+                low = middle
+    except OSError:
+        return str(value.resolve())
+    boundary = Path(*parts[:high]).resolve()
+    return str(boundary.joinpath(*parts[high:]))
+
+
 def canonical(path):
-    return comparison_key(str(Path(path).resolve()))
+    return comparison_key(_resolved(path))
 
 
 @dataclass(frozen=True)

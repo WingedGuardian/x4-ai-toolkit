@@ -27,14 +27,26 @@ class PreservationFailed(OSError):
 
 def contains(parent, child):
     try:
-        return os.path.commonpath((canonical(parent), canonical(child))) == canonical(parent)
+        parent, child = canonical(parent), canonical(child)
+        return os.path.commonpath((parent, child)) == parent
     except ValueError:
         return False
 
 
 def protects(path, stores, ancestor=False):
     """A recognized mutation may neither change a store nor move/delete its ancestor."""
-    return any(contains(store, path) or (ancestor and contains(path, store)) for store in stores)
+    resolved = None
+    for store in stores:
+        try:
+            store = canonical(store)
+            if resolved is None:
+                resolved = canonical(path)
+            shared = os.path.commonpath((store, resolved))
+            if shared == store or (ancestor and shared == resolved):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _state(members):
