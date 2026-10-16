@@ -1651,12 +1651,12 @@ write_paths_env() {  # write_paths_env TOOLKIT_DIR
   } > "$tmp" || { rm -f "$tmp"; echo "ERROR: could not write $tmp; your existing config is untouched." >&2; return 1; }
 
   # VERIFY THE ARTIFACT, never the exit code -- and verify it BEFORE it is live.
-  # A config bash cannot source is exactly the failure the escaping above exists
-  # to prevent, and proving it costs one subshell.
-  if ! ( set -a; . "$tmp" ) >/dev/null 2>&1; then
+  # Parse without execution. Carried assignments are user data, and sourcing
+  # them here would execute substitutions/operators that the runtime data loader refuses.
+  if ! "$BASH" -n -- "$tmp" >/dev/null 2>&1; then
     rm -f "$tmp"
-    echo "ERROR: the config this run would write cannot be SOURCED by bash, so every" >&2
-    echo "       X4_* would come out unset. This is a quoting fault in one of the paths." >&2
+    echo "ERROR: the config this run would write has invalid assignment syntax." >&2
+    echo "       It was parsed without executing any carried settings." >&2
     echo "       NOTHING was changed: your existing $f is untouched." >&2
     return 1
   fi

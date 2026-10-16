@@ -2,6 +2,9 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Both installers check rewritten path-config syntax without executing carried
+  assignments. Command-like custom values are retained as data, matching the
+  runtime loader's refusal to evaluate substitutions and shell operators.
 - BaseX argument-query checks retain an empty-but-defined MSYSTEM marker as
   evidence of possible path rewriting. Its regression uses an empty result,
   so a separate count-query refusal cannot hide the channel check.

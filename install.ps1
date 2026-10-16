@@ -1708,46 +1708,31 @@ function Write-PathsEnv($t) {
     exit 1
   }
 
-  # VERIFY THE ARTIFACT, never the exit code. A config bash cannot source is exactly
-  # what the escaping above exists to prevent, and proving it costs one bash call --
-  # the same rule this installer already applies to the jq merge. Skipped, loudly, only
-  # when there is no bash to ask.
+  # Parse the artifact without execution. Carried assignments are user data;
+  # sourcing them would execute substitutions/operators refused by the runtime loader.
+  # Skipped, loudly, only when no Git Bash is available.
   $bash = Find-GitBash
   if ($bash) {
-    # ONE argument, no embedded double quote, and the path inside a SINGLE-quoted
-    # bash string. Windows PowerShell 5.1 splits a native argument that itself
-    # contains double quotes at the first space, so the previous form failed on
-    # every destination with a space in it -- which is the README's own command on
-    # a stock Steam install, and Write-PathsEnv runs for all three methods.
-    #
-    # ErrorActionPreference is relaxed around the call for the second half of the
-    # same fault: with 'Stop' in force, the 2>&1 merge turns bash's stderr into a
-    # TERMINATING error, so the script died here instead of reaching the branch
-    # below and printing the message written for exactly this case.
-    # .Replace, not -replace: the operator read the concatenation as extra
-    # operands ("allows only two elements to follow it, not 4") and the script
-    # died before installing anything. A path is not a regex either, so
-    # -replace was the wrong tool twice over. A single quote inside a
-    # single-quoted bash string is closed, escaped and reopened.
-    $sq = [string][char]39
-    $bp = ($tmp -replace '\\','/').Replace($sq, $sq + [char]92 + $sq + $sq)
+    # Pass a plain path argument, with no embedded shell program or quote layer.
+    # Relax ErrorActionPreference so syntax diagnostics reach the refusal below on 5.1 too.
+    $bp = $tmp.Replace('\','/')
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-      $probe = & $bash -c "set -a; . '$bp'" 2>&1
+      $probe = & $bash -n -- $bp 2>&1
     } finally {
       $ErrorActionPreference = $prevEAP
     }
     if ($LASTEXITCODE -ne 0) {
       Remove-Item -Force -LiteralPath $tmp -ErrorAction SilentlyContinue
-      Write-Host "ERROR: the config this run would write cannot be SOURCED by bash, so every" -ForegroundColor Red
-      Write-Host "       X4_* would come out unset. This is a quoting fault in one of the paths." -ForegroundColor Red
+      Write-Host "ERROR: the config this run would write has invalid assignment syntax." -ForegroundColor Red
+      Write-Host "       It was parsed without executing any carried settings." -ForegroundColor Red
       Write-Host "       NOTHING was changed: your existing $f is untouched." -ForegroundColor Red
       Write-Host ("       bash said: " + ($probe -join ' ')) -ForegroundColor Red
       exit 1
     }
   } else {
-    Write-Host "  [warn] no bash found, so the new config was NOT verified as sourceable"
+    Write-Host "  [warn] no bash found, so the new config syntax was NOT checked"
   }
   # GUARDED, as install.sh guards the identical `mv -f`. Unguarded this throws an
   # IOException when the destination is held open with FileShare::None -- an
