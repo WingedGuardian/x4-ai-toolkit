@@ -69,7 +69,16 @@ def _resolved(path):
                 high = middle
             else:
                 low = middle
-    except OSError:
+    except OSError as error:
+        drive = value.drive
+        if drive.startswith(("\\\\?\\", "\\\\.\\")):
+            drive = drive[4:]
+        if (missing(error) and len(drive) == 2 and drive[0] in
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" and drive[1] == ":"):
+            # A missing local drive has no existing child prefix. Resolve the
+            # short anchor natively, then append the absent no-dot/no-colon tail.
+            # UNC/other namespaces retain native traversal and referral behavior.
+            return str(Path(parts[0]).resolve().joinpath(*parts[1:]))
         return str(value.resolve())
     boundary = Path(*parts[:high]).resolve()
     return str(boundary.joinpath(*parts[high:]))
