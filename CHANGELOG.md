@@ -2,6 +2,9 @@
 
 ## v4.0.0 — 2026-10-03
 
+- New-host adapter guidance leads with complete Action v1 pre-operation checks,
+  distinguishes preview from permanent save preservation, and supplies current
+  owned-runtime prerequisites for canaries.
 - Codex end-to-end decoys include the pinned shared runtime and render hooks
   from shipped runtime files. Separate hook, control and fault directories
   retain evidence; existing decoy directories refuse replacement.

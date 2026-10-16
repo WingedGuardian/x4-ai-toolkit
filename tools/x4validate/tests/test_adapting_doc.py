@@ -3,6 +3,7 @@ it cites exists, no number it states can drift from the code, and installers shi
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import shlex
 import subprocess
@@ -27,6 +28,23 @@ def test_it_exists_and_names_the_product():
     assert "X4 AI Assistant Toolkit" in TEXT
 
 
+def test_action_v1_examples_parse_as_complete_batched_requests(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO / "tools"))
+    from modding_harness.generic import parse
+    blocks = re.findall(r"```json\n(.*?)\n```", TEXT, re.S)
+    actions = [json.loads(block) for block in blocks if '"api_version":1' in block]
+    assert len(actions) == 2, "the new-host file and shell examples must both be checked"
+    for example in actions:
+        example["cwd"] = str(tmp_path)
+        action = parse(json.dumps(example))
+        assert action.host == "future-coder" and action.session_id and action.tool_call_id
+        if action.surface == "files":
+            assert action.operations == ("write",) and len(action.paths) == 1
+            assert Path(action.paths[0]).is_relative_to(tmp_path)
+        else:
+            assert action.surface == "shell" and action.shell == "powershell" and action.command
+
+
 @pytest.mark.parametrize("heading", [
     "Self-assessment", "fail open or closed", "The guard contract", "Worked example: Claude Code",
     "Worked example: Codex", "Where your adapter goes", "Required proof", "Rules", "Upstream submission"])
@@ -34,9 +52,15 @@ def test_every_spec_11_section_is_present(heading):
     assert heading.lower() in TEXT.lower()
 
 
-def _x4guard_lines():
-    return [ln.strip().split("x4guard.py", 1)[1] for ln in TEXT.splitlines()
-            if "x4guard.py check" in ln and not ln.strip().startswith(("#", ">"))]
+def _x4guard_lines(text=TEXT):
+    blocks = re.findall(r"```(?:[A-Za-z]+)?\n(.*?)\n```", text, re.S)
+    return [ln.strip().split("x4guard.py", 1)[1] for block in blocks for ln in block.splitlines()
+            if "x4guard.py check" in ln and re.match(r"\s*python(?:3)?\s", ln)]
+
+
+def test_command_extraction_keeps_fenced_commands_without_parsing_prose():
+    text = "Legacy `x4guard.py check` is a preview.\n```\npython .claude/hooks/x4guard.py check --wrong x\n```"
+    assert _x4guard_lines(text) == [" check --wrong x"]
 
 
 def test_every_check_command_it_shows_parses_with_the_real_cli(monkeypatch, _guard_src):

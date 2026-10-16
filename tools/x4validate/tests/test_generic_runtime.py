@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,16 @@ def test_generic_runtime_works_without_any_named_agent_folder(tmp_path, brackets
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
     assert run("capabilities")["host_enforcement"].startswith("unmeasured")
+    # Execute the exact public new-host examples through the installed-only entry.
+    blocks = re.findall(r"```json\n(.*?)\n```", (REPO / "ADAPTING.md").read_text(encoding="utf-8"), re.S)
+    examples = [json.loads(block) for block in blocks if '"api_version":1' in block]
+    assert len(examples) == 2
+    for example in examples:
+        example["cwd"] = str(root)
+        reply = run("check", example)
+        assert reply["result"]["api_version"] == 1
+        assert reply["result"]["decision"] == "allow" and reply["result"]["evaluation"] == "evaluated", reply
+        assert reply["result"]["preservation"] == "not_required" and not reply["transactions"]
     action = {"api_version": 1, "host": "future-coder", "tool": "edit", "surface": "files",
               "cwd": str(root), "session_id": "s", "paths": [str(save)], "operations": ["write"]}
     preview = run("check", action, "--preview")

@@ -26,16 +26,24 @@ code, file named), **INFERRED** (reasoned, not run). Write your own findings the
 
 ## 0. Before you start
 
-- You need a guard tree: `.claude/hooks/`, `.codex/hooks/` or `.opencode/hooks/` (each carries
-  the same guards and an `x4guard.py` whose `check` answers), from an install that included
-  Claude Code, Codex or OpenCode (`--agent all` includes all three), from the release zip, or
-  from a git clone. An install made with `--agent generic` ships no guard tree at all (READ:
-  `install.sh`, `X4_AGENT_ITEMS_generic`). The 4.0 neutral runtime is in
-  `tools/x4_harness/` and `tools/modding_harness/`; it needs none of the named
-  agent directories. `python tools/agent-harness.py capabilities` describes its
-  contract, `check` accepts Action v1 JSON on stdin, and `coverage --session-id ID`
-  reports private process receipts. An integrating host must honor refusals before
-  execution; these commands do not establish interception or host trust.
+- Start with the 4.0 neutral entry `tools/agent-harness.py`, its runtime in
+  `tools/x4_harness/` and `tools/modding_harness/`, and `tools/modding-harness.lock.json`.
+  Generic-only installs carry these without any named agent directory.
+  `python tools/agent-harness.py capabilities` describes the current contract;
+  `coverage --session-id ID` reports private process receipts. Named guard trees
+  (`.claude/hooks/`, `.codex/hooks/`, `.opencode/hooks/`) supply native transports;
+  they are not prerequisites for the neutral entry. Conformance has additional
+  reference-tree requirements below.
+
+  `check` accepts Action v1 JSON on stdin. Without `--preview`, it performs
+  synchronous pre-operation policy and preservation: it may create permanent
+  save transactions and telemetry, but never executes the requested tool.
+  `check --preview` preserves no bytes and cannot authorize execution, even
+  when its policy decision is allow. An existing-save preview reports
+  `preservation: "required"` with no transaction; other actions may report
+  `"not_required"`. Run the normal check immediately before the same exact
+  operation. The integrating host must honor refusals before execution;
+  installing these commands establishes neither interception nor host trust.
 
   `save-list` lists permanent neutral transactions. `save-restore ID --to DIR`
   restores to a new directory by default; `--in-place` preserves the current save
@@ -195,9 +203,61 @@ cannot start is one more fail-open path on many agents.
 
 ## 2. The guard contract
 
-The toolkit's front door is `x4guard.py`, in `.claude/hooks/` (or `.codex/hooks/`,
-`.opencode/hooks/`). It takes
-ARGUMENTS, not stdin, and there is no agent option -- describe the action, not yourself:
+### Action v1 for a new host
+
+Send one complete JSON action on stdin to `python tools/agent-harness.py check`
+before executing the tool. Replace `<absolute-toolkit-root>` with the actual
+absolute working directory. A file request lists every affected path and its
+parallel operation; a move needs the source delete and destination write in
+the same request. Do not split a bulk action into single-file requests.
+
+```json
+{"api_version":1,"host":"future-coder","tool":"edit","surface":"files","cwd":"<absolute-toolkit-root>","session_id":"session-1","tool_call_id":"call-1","paths":["dev/mymod/libraries/wares.xml"],"operations":["write"]}
+```
+
+A shell request carries the actual executing shell and the complete command:
+
+```json
+{"api_version":1,"host":"future-coder","tool":"shell","surface":"shell","cwd":"<absolute-toolkit-root>","session_id":"session-1","tool_call_id":"call-2","shell":"powershell","command":"Get-Content -LiteralPath 'dev/mymod/content.xml'"}
+```
+
+Use `"shell":"bash"` for Bash. Parse the complete JSON reply and its inner
+`result`: integer `api_version: 1`, `decision` (`allow`, `ask`, `deny`),
+`evaluation`, `preservation`, `validation`, text `reason`, and text-array
+`warnings`. Keep the returned `transactions`. Normal X4 replies also have
+legacy top-level decision/context fields; there is no required top-level
+`api_version` or `preview` field. Exit 0 alone grants no permission.
+An `ask` or `deny`, failed evaluation, malformed reply, timeout or failed
+transport must stop execution and produce the host's measured refusal shape.
+Preview results cannot replace a normal pre-operation check.
+
+One or two existing saves are automatically preserved as a permanent verified
+transaction before an allowed mutation. Bulk access needs the policy's exact
+canonical path set, logical count and command hash bound to qualified human
+approval. Unknown hosts cannot grant their own approval. Ordinary timestamped
+edit backups are additional history, not substitutes for that transaction.
+
+An unknown surface follows the capability policy: allow with
+`evaluation: "unguarded"` and a sparse `WARN AND ALLOW` warning. Retain those
+fields and disclose the gap; do not describe it as a guarded action. Malformed
+known requests and unsupported actual shells are refusals. Action v1 currently
+passes paths/operations for file requests, not whole settings-file contents;
+`provenance` is not a demonstrated content channel. Settings edits without the
+required content remain refused. Native/legacy content options below apply
+only to their transport.
+
+The neutral pre-operation check currently starts a 40-second operation deadline
+after parsing and working-directory selection. Leave separate host/adapter
+startup and cleanup headroom and qualify the real transport under load. The
+legacy timing derivation below does not describe this neutral deadline.
+
+### Legacy policy-preview compatibility
+
+`x4guard.py` remains available in `.claude/hooks/`, `.codex/hooks/` and
+`.opencode/hooks/` for existing adapters and legacy conformance. Its argument-based
+`check` is a policy preview and provides no permanent save preservation. New
+hosts use the batched neutral pre-operation entry above. The legacy CLI takes
+ARGUMENTS, not stdin, and there is no agent option:
 
 ```
 python .claude/hooks/x4guard.py check --kind shell --shell bash --command "<command>"
@@ -265,9 +325,10 @@ Exit 2 means a usage error (a wrong option). The rules for calling it:
   been, and an allow comes back as an advisory carrying the GUARDS OFF note. Two answers are NOT
   relaxed: a guard that could not check the call still asks, and an inert verdict stays an inert
   deny (a guard that could not run judged nothing to relax).
-- **`check` has no side effects**: it never makes the backup that the Claude hooks make before an
-  edit. An adapter that wants backups runs `.claude/hooks/backup-before-edit.sh` itself after an
-  allow, as the Codex adapter does.
+- **Legacy `x4guard.py check` does not preserve saves.** A timestamp backup
+  added after a legacy allow is insufficient for a new host. Use the neutral
+  batched pre-operation check so local restrictions, whole operation scope and
+  permanent verified save preservation are evaluated together.
 - **Context size.** Bound any `reason` or `context` you inject to `X4_HOOK_MAX_CHARS` characters,
   keeping the FIRST part: the directive comes first. Print its value, from the toolkit folder,
   with `bash -c '. .claude/hooks/_x4-env.sh; echo "$X4_HOOK_MAX_CHARS"'`. If your agent reads
@@ -310,6 +371,7 @@ measurement is needed only for the opposite choice: rendering `ask` as a NATIVE 
 
 ### Choosing the time budget
 
+This section describes the legacy `x4guard.py check` transport only.
 These numbers are READ from `agent/guards/claude-hooks/x4guard.py` (the source of every deployed
 `x4guard.py`) at v4.0.0:
 
@@ -605,15 +667,23 @@ another empty scratch folder and `X4_CONFIG` at an EMPTY scratch file, so nothin
 install's config or game profile is read (all five, see below). With none of them set,
 both writes are allowed (MEASURED on the toy agent) -- which is why the control matters.
 
-The scratch folder needs ONLY `dev/` and `reference/` (with the decoy file in it): no `.claude/`,
-no copy of the toolkit. Your adapter keeps running the toolkit's REAL `x4guard.py`; only the
-environment points the guards at the scratch tree, and the environment wins over the toolkit's
-`x4-paths.env` (READ: `_x4-env.sh`). MEASURED both ways: the 2026-10-04 cold run (`X4_TOOLKIT`,
-`X4_REFERENCE`, `X4_GAME`, through the toy agent) and a 2026-10-05 probe of x4guard's `check`
-that also set `X4_PROFILE` to a scratch folder and `X4_CONFIG` to an EMPTY scratch file both
-blocked the `reference/` write and allowed the `dev/` one, with no `.claude/` in the scratch
-tree. Setting those last two as well is the safer
-canary: then nothing from your real install's config or game profile is read.
+The scratch `X4_TOOLKIT` must also contain exact copies of
+`tools/modding_harness/` and `tools/modding-harness.lock.json`: the current
+save dispatcher loads its shared runtime from that root even when an external
+legacy `x4guard.py` is the transport. For the neutral entry, also copy
+`tools/agent-harness.py` and `tools/x4_harness/`. No named agent directory is
+needed for the neutral entry. Set `X4_SAVES`, `X4_DOCUMENTS`, `X4_BACKUPS`,
+`X4_EXTENSIONS` and `X4_MODS` to owned scratch locations as well, and use an
+empty owned `X4_CONFIG` file. Keep the game root separate from `dev/` and
+`reference/`. A missing runtime is an inert refusal, not a successful block
+control. Both the evaluated reference deny and the evaluated dev allow must
+work before attempting the real host test.
+
+The 2026-10-04 and 2026-10-05 measurements used scratch trees without the
+current shared runtime. They are historical evidence, superseded as setup
+instructions by the runtime requirements above. The Codex-specific constructor
+in `scripts/codex-e2e.py` now retains separate decoys with its pinned runtime;
+it does not establish that a different host intercepts calls.
 
 **(c) x4doctor shows the layer live.** `python scripts/x4doctor.py` reports per agent target. For
 an agent it does not know yet it reports no target for you: say so plainly. That is a gap until a
