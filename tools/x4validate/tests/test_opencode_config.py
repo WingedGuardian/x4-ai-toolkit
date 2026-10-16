@@ -42,6 +42,8 @@ def driveless(p) -> str:
 @pytest.fixture
 def box(tmp_path):
     """root (an install with the generated .opencode/hooks), a reference OUTSIDE it, game, mods."""
+    from _layout import require_native_opencode
+    require_native_opencode(REPO)
     root = tmp_path / "toolkit"
     shutil.copytree(HOOKS, root / ".opencode" / "hooks",
                     ignore=shutil.ignore_patterns("__pycache__"))
@@ -76,7 +78,23 @@ def denied(perm: dict, key: str, inp: str) -> bool:
 
 
 def test_rendered_renderer_exists():
+    from _layout import require_native_opencode
+    require_native_opencode(REPO)
     assert (HOOKS / "opencode_config.py").is_file(), "regenerate: uv run python scripts/gen-agent-trees.py"
+
+
+@pytest.mark.parametrize("entry", ["box", "exists"])
+def test_unselected_installed_native_renderer_is_a_named_skip(tmp_path, monkeypatch, entry):
+    """The common suite runs without a native OpenCode payload on other agent installs."""
+    root = tmp_path / "installed"
+    root.mkdir()
+    monkeypatch.setattr(sys.modules[__name__], "REPO", root)
+    monkeypatch.setattr(sys.modules[__name__], "HOOKS", root / ".opencode/hooks")
+    with pytest.raises(pytest.skip.Exception, match="OpenCode native runtime was not selected"):
+        if entry == "box":
+            box.__wrapped__(tmp_path / "owned-box")
+        else:
+            test_rendered_renderer_exists()
 
 
 def _table(ref):
@@ -268,18 +286,15 @@ def _node_cmd():
     return [NODE, "--no-warnings", *strip]
 
 
-def test_the_python_matcher_agrees_with_opencodes_own(box, tmp_path):
+def _require_node():
     if not NODE:
         if os.environ.get("CI"):
             pytest.fail("node is required on CI to check the rules against OpenCode's own matcher")
         pytest.skip("node not installed -- the Python matcher NOT cross-checked against OpenCode's")
-    root, ref, game, env = box
-    perm = rendered(env, root)["permission"]
-    inputs = [i for i, _ in _table(ref)] + [
-        "rm -rf " + str(ref).replace("\\", "/") + "/x", "cp " + str(ref) + "/x dev/",
-        "Remove-Item -Recurse " + str(ref).replace("/", "\\") + "\\x", "ls", "rm -rf '" + str(ref) + "'"]
-    cases = [[i, p] for i in inputs for p in list(perm["edit"]) + list(perm["bash"])]
-    cases += [["ls -la", "ls *"], ["ls", "ls *"], ["a.b", "a?b"], ["axb", "a.b"], ["(x)", "(*)"], ["A", "a"]]
+
+
+def _crosscheck_matcher(cases, tmp_path):
+    _require_node()
     (tmp_path / "cases.json").write_text(json.dumps(cases), encoding="utf-8")
     driver = tmp_path / "drive.mjs"
     driver.write_text(
@@ -293,6 +308,58 @@ def test_the_python_matcher_agrees_with_opencodes_own(box, tmp_path):
     ours = [oc_match(i, p) for i, p in cases]
     diff = [(c, a, b) for c, a, b in zip(cases, ours, theirs) if a != b]
     assert diff == [] and len(theirs) == len(cases) and any(theirs) and not all(theirs)
+    return theirs
+
+
+def _common_matcher_cases(win):
+    """Explicit expectations independent of native renderer availability."""
+    return [
+        ("ls", "ls *", True), ("ls -la", "ls *", True), ("lst", "ls *", False),
+        ("a.b", "a?b", True), ("axb", "a.b", False), ("a.b", "a.b", True),
+        ("(x)", "(*)", True), ("x", "(*)", False), ("A", "a", win),
+        ("dev\\m\\a.xml", "dev/*", True), ("dev/m/a.xml", "dev\\*", True),
+        ("a\nb", "a?b", True), ("ab", "a?b", False), ("[x]", "[x]", True),
+    ]
+
+
+@pytest.mark.parametrize("win", [False, True])
+def test_common_python_matcher_has_explicit_portable_expectations(win):
+    for inp, pattern, expected in _common_matcher_cases(win):
+        assert oc_match(inp, pattern, win=win) is expected, (inp, pattern, win)
+
+
+def test_common_matcher_agrees_with_opencodes_own_without_native_renderer(tmp_path):
+    cases = _common_matcher_cases(WIN)
+    actual = _crosscheck_matcher([[i, p] for i, p, _ in cases], tmp_path)
+    assert actual == [expected for _, _, expected in cases]
+
+
+@pytest.mark.parametrize("ci", [False, True])
+def test_missing_node_only_skips_its_crosscheck_or_fails_on_ci(tmp_path, monkeypatch, ci):
+    monkeypatch.setattr(sys.modules[__name__], "NODE", None)
+    if ci:
+        monkeypatch.setenv("CI", "1")
+    else:
+        monkeypatch.delenv("CI", raising=False)
+    # These pure expectations still execute with Node absent.
+    for win in (False, True):
+        test_common_python_matcher_has_explicit_portable_expectations(win)
+    exception = pytest.fail.Exception if ci else pytest.skip.Exception
+    reason = "node is required on CI" if ci else "node not installed"
+    with pytest.raises(exception, match=reason):
+        test_common_matcher_agrees_with_opencodes_own_without_native_renderer(tmp_path)
+
+
+def test_the_python_matcher_agrees_with_opencodes_own(box, tmp_path):
+    _require_node()
+    root, ref, game, env = box
+    perm = rendered(env, root)["permission"]
+    inputs = [i for i, _ in _table(ref)] + [
+        "rm -rf " + str(ref).replace("\\", "/") + "/x", "cp " + str(ref) + "/x dev/",
+        "Remove-Item -Recurse " + str(ref).replace("/", "\\") + "\\x", "ls", "rm -rf '" + str(ref) + "'"]
+    cases = [[i, p] for i in inputs for p in list(perm["edit"]) + list(perm["bash"])]
+    cases += [["ls -la", "ls *"], ["ls", "ls *"], ["a.b", "a?b"], ["axb", "a.b"], ["(x)", "(*)"], ["A", "a"]]
+    _crosscheck_matcher(cases, tmp_path)
 
 
 def test_the_rendered_config_is_never_committed(tmp_path):

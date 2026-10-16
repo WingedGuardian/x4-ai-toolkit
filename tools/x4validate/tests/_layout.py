@@ -17,6 +17,7 @@ checkout that lost `agent/rules/codex-rules.yaml` is broken, not "installed".
 from __future__ import annotations
 
 import functools
+import os
 import subprocess
 from pathlib import Path
 
@@ -225,3 +226,11 @@ def require_native_codex(root: Path = ROOT) -> None:
     if not (root / ".codex").exists() and installed_layout(root):
         pytest.skip("Codex native runtime was not selected; this control exercises its adapter")
     assert (root / ".codex/hooks/codex_adapter.py").is_file(), "selected Codex adapter is missing"
+
+
+def require_native_opencode(root: Path = ROOT) -> None:
+    """Only an unselected native renderer may skip; selected or checkout damage fails."""
+    root = Path(root)
+    if not os.path.lexists(root / ".opencode") and installed_layout(root):
+        pytest.skip("OpenCode native runtime was not selected; this control exercises its renderer")
+    assert (root / ".opencode/hooks/opencode_config.py").is_file(), "selected OpenCode renderer is missing"

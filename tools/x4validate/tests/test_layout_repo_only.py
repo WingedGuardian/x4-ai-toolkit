@@ -135,6 +135,47 @@ def _drop_agent(root):
     shutil.rmtree(root / "agent")
 
 
+@pytest.mark.parametrize("checkout", [False, True])
+@pytest.mark.parametrize("payload", ["absent", "partial", "namespace-file", "renderer"])
+def test_only_an_unselected_installed_opencode_renderer_can_skip(tmp_path, checkout, payload):
+    root = _checkout(tmp_path / "source") if checkout else _installed(tmp_path / "installed")
+    if payload == "namespace-file":
+        (root / ".opencode").write_text("incomplete native namespace", encoding="utf-8")
+    elif payload != "absent":
+        (root / ".opencode/hooks").mkdir(parents=True)
+        if payload == "renderer":
+            (root / ".opencode/hooks/opencode_config.py").write_text("owned", encoding="utf-8")
+    assert _layout.installed_layout(root) is not checkout
+    if not checkout and payload == "absent":
+        with pytest.raises(pytest.skip.Exception, match="OpenCode native runtime was not selected"):
+            _layout.require_native_opencode(root)
+    elif payload != "renderer":
+        with pytest.raises(AssertionError, match="selected OpenCode renderer is missing"):
+            _layout.require_native_opencode(root)
+    else:
+        _layout.require_native_opencode(root)
+
+
+def test_broken_opencode_namespace_cannot_skip_as_unselected(tmp_path):
+    import os
+    import subprocess
+    root = _installed(tmp_path / "installed")
+    namespace = root / ".opencode"
+    missing = tmp_path / "missing-target"
+    if os.name == "nt":
+        result = subprocess.run(["cmd", "/c", "mklink", "/J", str(namespace), str(missing)],
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+    else:
+        namespace.symlink_to(missing, target_is_directory=True)
+    assert os.path.lexists(namespace) and not namespace.exists()
+    try:
+        with pytest.raises(AssertionError, match="selected OpenCode renderer is missing"):
+            _layout.require_native_opencode(root)
+    except pytest.skip.Exception as exc:
+        pytest.fail("a broken selected namespace was skipped as unselected: " + str(exc))
+
+
 def test_a_CHECKOUT_that_lost_agent_is_NOT_installed_and_does_NOT_skip(tmp_path):
     root = _repo(tmp_path / "tk", track_agent=True)
     _drop_agent(root)
