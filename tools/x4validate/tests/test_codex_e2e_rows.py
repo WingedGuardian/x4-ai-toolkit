@@ -11,6 +11,9 @@ No Codex runs here: the rows' check functions are pure over a transcript string.
 from __future__ import annotations
 
 import importlib.util
+import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,6 +26,15 @@ SCRIPT = REPO / "scripts" / "codex-e2e.py"
 @pytest.fixture(scope="module")
 def e2e():
     return _load()
+
+
+@pytest.fixture
+def codex_payload():
+    from _layout import installed_layout
+    hooks, rules = REPO / ".codex/hooks", REPO / ".codex/rules"
+    if not hooks.exists() and not rules.exists() and installed_layout():
+        pytest.skip("Codex runtime was not selected; live Codex decoy construction requires its hooks and rules")
+    assert hooks.is_dir() and rules.is_dir(), "selected Codex runtime is incomplete"
 
 
 def test_a_MISSING_codex_e2e_script_FAILS_rather_than_skips(monkeypatch, tmp_path):
@@ -80,3 +92,72 @@ def test_the_prompt_names_none_of_the_markers(e2e):
     prompt = e2e.ROWS["validator-context"][0]
     for marker in e2e.VALIDATOR_MARKERS:
         assert marker.lower() not in prompt.lower(), marker
+
+
+def test_decoy_carries_the_exact_shared_runtime_and_lock(e2e, tmp_path, codex_payload):
+    root, env = e2e.build_decoy(tmp_path)
+    expected = REPO / "tools/modding_harness"
+    for source in expected.rglob("*.py"):
+        assert (root / "tools/modding_harness" / source.relative_to(expected)).read_bytes() == source.read_bytes()
+    assert (root / "tools/modding-harness.lock.json").read_bytes() == (REPO / "tools/modding-harness.lock.json").read_bytes()
+    for name in ("X4_TOOLKIT", "X4_REFERENCE", "X4_GAME", "X4_PROFILE", "X4_SAVES",
+                 "X4_EXTENSIONS", "X4_MODS", "X4_DOCUMENTS", "X4_BACKUPS", "X4_CONFIG"):
+        assert Path(env[name]).resolve().is_relative_to(tmp_path.resolve()), (name, env[name])
+    assert Path(env["X4_CONFIG"]).read_bytes() == b""
+    assert not Path(env["X4_GAME"]).resolve().is_relative_to((root / "dev").resolve())
+
+
+def test_existing_decoy_is_refused_without_changing_its_bytes(e2e, tmp_path):
+    root = tmp_path / "X4 E2E root"
+    root.mkdir()
+    sentinel = root / "user-data.txt"
+    sentinel.write_bytes(b"retain this")
+    with pytest.raises(FileExistsError):
+        e2e.build_decoy(tmp_path)
+    assert sentinel.read_bytes() == b"retain this"
+    assert sorted(p.name for p in root.iterdir()) == [sentinel.name]
+
+
+def test_constructor_uses_only_shipped_runtime_rendering(e2e, tmp_path, monkeypatch, codex_payload):
+    runtime = tmp_path / "runtime-only"
+    for name in (".codex/hooks", ".codex/rules", "tools/modding_harness"):
+        shutil.copytree(REPO / name, runtime / name, ignore=shutil.ignore_patterns("__pycache__"))
+    for name in ("tools/modding-harness.lock.json", "tools/x4_harness/x4_upgrade_render.py",
+                 "tools/x4_harness/codex-hooks.json.tmpl"):
+        target = runtime / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / name, target)
+    monkeypatch.setattr(e2e, "REPO", runtime)
+    monkeypatch.setattr(e2e, "GEN", runtime / "absent-generator.py", raising=False)
+    root, _env = e2e.build_decoy(tmp_path / "out")
+    text = (root / ".codex/hooks.json").read_text(encoding="utf-8")
+    assert isinstance(json.loads(text), dict) and "{{" not in text
+    assert root.as_posix() in text
+
+
+@pytest.mark.parametrize("target,decision", [("reference/libraries/wares.xml", "deny"),
+                                               ("dev/mymod/libraries/wares.xml", "allow")])
+def test_constructed_decoy_runs_evaluated_policy_without_a_host(e2e, tmp_path, target, decision, codex_payload):
+    root, env = e2e.build_decoy(tmp_path)
+    result = subprocess.run([sys.executable, str(root / ".codex/hooks/x4guard.py"), "check",
+                             "--kind", "write", "--path", str(root / target)],
+                            cwd=root, env=env, capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stderr
+    verdict = json.loads(result.stdout)
+    assert verdict["decision"] == decision, verdict
+    assert not verdict.get("inert", False), verdict
+    assert e2e.ref_intact(root)
+
+
+def test_phase_a_retains_independent_hook_control_and_fault_roots(e2e, tmp_path, monkeypatch, codex_payload):
+    roots = []
+    def fake_host(root, env, prompt, log, bypass=True):
+        roots.append(root)
+        if not (root / ".codex/hooks.json").is_file():
+            (root / e2e.REF).write_text("control changed", encoding="utf-8")
+        return "INERT"
+    monkeypatch.setattr(e2e, "codex_exec", fake_host)
+    results = e2e.phase_a(tmp_path, ["shell-write"])
+    assert all(row["ok"] for row in results), results
+    assert len(roots) == len(set(roots)) == 3
+    assert [e2e.ref_intact(root) for root in roots] == [True, False, True]

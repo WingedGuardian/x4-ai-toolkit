@@ -2,6 +2,9 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Codex end-to-end decoys include the pinned shared runtime and render hooks
+  from shipped runtime files. Separate hook, control and fault directories
+  retain evidence; existing decoy directories refuse replacement.
 - Standalone hook replay fingerprints the resolved save dispatcher, shared
   Python runtime and lock, refusing incomplete or changing instruments.
   Conformance recognizes dispatcher nonanswers as unchecked, preserving the

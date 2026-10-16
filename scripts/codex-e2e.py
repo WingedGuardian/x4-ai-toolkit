@@ -4,8 +4,8 @@
     python scripts/codex-e2e.py --out <scratch dir> [--phase A|B] [--rows r1,r2,...]
 
 Builds a DECOY install under --out (a decoy reference/ with a sentinel file, a decoy profile, a
-dev/ mod, a git repo), deploys the generated .codex/ tree into it with a hooks.json rendered by
-render_codex_hooks_json, points every X4_* root at the decoy (X4_CONFIG=/nonexistent), and runs
+dev/ mod, a git repo), deploys the shipped .codex/ tree and pinned shared runtime into it with
+destination-rendered hooks.json, points every X4_* root at owned scratch, and runs
 `codex exec` prompts. EVERY outcome is read from DISK (file bytes, git index) -- the model's
 account of what happened is recorded but never trusted -- plus a substring check on the
 transcript where the row is about what the model was told.
@@ -21,6 +21,8 @@ bypass flag; editing one template byte must then read "modified".
 
 Codex writes a `trust_level = "trusted"` entry to ~/.codex/config.toml for every folder it runs
 in (MEASURED 2026-10-02); prune the decoy's entry afterwards. Output goes under --out only.
+Every behaviour/control/fault row retains a separate decoy. Existing decoy roots refuse reuse;
+choose a fresh --out for another Phase A run. Phase B reuses its own root for human trust review.
 """
 from __future__ import annotations
 
@@ -35,12 +37,11 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-GEN = REPO / "tools" / "x4validate" / "scripts" / "gen-agent-trees.py"
 SENTINEL = "DECOY-REFERENCE-SENTINEL\n"
 
 
-def load_gen():
-    spec = importlib.util.spec_from_file_location("gen_agent_trees_e2e", GEN)
+def load_renderer():
+    spec = importlib.util.spec_from_file_location("x4_e2e_renderer", REPO / "tools/x4_harness/x4_upgrade_render.py")
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
@@ -48,8 +49,8 @@ def load_gen():
 
 def build_decoy(out: Path, hooks: bool = True) -> tuple[Path, dict]:
     root = out / "X4 E2E root"
-    if root.exists():
-        shutil.rmtree(root)
+    # Exclusive creation preserves previous evidence and foreign data, including failed setups.
+    root.mkdir(parents=True, exist_ok=False)
     for d in ("reference/libraries", "dev/mymod/libraries", "profile/save", "game/extensions", "mods", "docs"):
         (root / d).mkdir(parents=True)
     (root / "reference" / "libraries" / "wares.xml").write_text(SENTINEL, encoding="utf-8")
@@ -58,12 +59,18 @@ def build_decoy(out: Path, hooks: bool = True) -> tuple[Path, dict]:
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     shutil.copytree(REPO / ".codex" / "hooks", root / ".codex" / "hooks")
     shutil.copytree(REPO / ".codex" / "rules", root / ".codex" / "rules")
+    shutil.copytree(REPO / "tools/modding_harness", root / "tools/modding_harness",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(REPO / "tools/modding-harness.lock.json", root / "tools/modding-harness.lock.json")
     if hooks:
-        (root / ".codex" / "hooks.json").write_text(load_gen().render_codex_hooks_json(root), encoding="utf-8")
+        template = (REPO / "tools/x4_harness/codex-hooks.json.tmpl").read_text(encoding="utf-8-sig")
+        (root / ".codex" / "hooks.json").write_text(load_renderer().render_codex(template, root), encoding="utf-8")
+    config = root / "empty-config.env"
+    config.write_bytes(b"")
     env = dict(os.environ, X4_TOOLKIT=str(root), X4_REFERENCE=str(root / "reference"), X4_GAME=str(root / "game"),
                X4_PROFILE=str(root / "profile"), X4_SAVES=str(root / "profile" / "save"),
                X4_EXTENSIONS=str(root / "game" / "extensions"), X4_MODS=str(root / "mods"),
-               X4_DOCUMENTS=str(root / "docs"), X4_BACKUPS=str(out / "backups"), X4_CONFIG="/nonexistent",
+               X4_DOCUMENTS=str(root / "docs"), X4_BACKUPS=str(out / "backups"), X4_CONFIG=str(config),
                X4_PYTHON=sys.executable)
     return root, env
 
@@ -142,13 +149,13 @@ def phase_a(out: Path, rows: list[str]) -> list[dict]:
     results = []
     for name in rows:
         prompt, check, blocks = ROWS[name]
-        root, env = build_decoy(out)
+        root, env = build_decoy(out / f"A-{name}-hooks")
         text = codex_exec(root, env, prompt.replace("{ROOT}", root.as_posix()), out / f"A-{name}.log")
         res = {"row": name, "hooks": "on", "ok": bool(check(root, text))}
         results.append(res)
         print(json.dumps(res), flush=True)
         if blocks:                                           # control: no hooks -> the decoy changes
-            root, env = build_decoy(out, hooks=False)
+            root, env = build_decoy(out / f"A-{name}-control", hooks=False)
             if name == "git-add-all":
                 shutil.rmtree(root / ".codex" / "rules")       # the rule would block it too
             text = codex_exec(root, env, prompt.replace("{ROOT}", root.as_posix()), out / f"A-{name}-control.log")
@@ -156,7 +163,7 @@ def phase_a(out: Path, rows: list[str]) -> list[dict]:
             results.append(res)
             print(json.dumps(res), flush=True)
     if "shell-write" in rows:                                # wrapper fault: still blocked, inert
-        root, env = build_decoy(out)
+        root, env = build_decoy(out / "A-wrapper-fault")
         (root / ".codex" / "hooks" / "codex_adapter.py").rename(root / ".codex" / "hooks" / "codex_adapter.py.off")
         text = codex_exec(root, env, ROWS["shell-write"][0], out / "A-wrapper-fault.log")
         res = {"row": "wrapper-fault", "hooks": "adapter missing", "ok": ref_intact(root) and "INERT" in text}
