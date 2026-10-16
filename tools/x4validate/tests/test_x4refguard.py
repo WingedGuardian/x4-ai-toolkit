@@ -32,6 +32,77 @@ from refguard_owner import own_or_skip  # noqa: E402
 SENTINEL = ".unpacked-and-locked"
 
 
+@pytest.mark.parametrize("platform", ["windows", "linux"])
+@pytest.mark.parametrize("full", [False, True])
+@pytest.mark.parametrize("fault", [None, "blocked", "."])
+def test_unreadable_tree_cannot_report_complete_protection(tmp_path, monkeypatch, platform, full, fault):
+    root = tmp_path / "enumeration-reference"
+    for directory in ("visible", "blocked"):
+        (root / directory).mkdir(parents=True)
+        (root / directory / "file.xml").write_text("owned fixture", encoding="utf-8")
+    (root / SENTINEL).write_text("owned", encoding="utf-8")
+    sid = "S-1-5-21-OWNED-FIXTURE"
+    monkeypatch.setattr(x4refguard, "_platform", lambda: platform)
+    monkeypatch.setattr(x4refguard, "_user_sid", lambda: sid)
+    monkeypatch.setattr(x4refguard, "_owner_is_user", lambda p: True)
+    monkeypatch.setattr(x4refguard, "_posix_mark", lambda p: "readonly")
+    monkeypatch.setattr(x4refguard, "_readonly", lambda p: True)
+    def acl(objects):
+        return sid, [{"path": str(p), "owner": sid, "rules": [{"sid": sid, "type": 1,
+                     "rights": x4refguard.EXPECTED_MASK, "inherited": p != root,
+                     "inh": 3, "prop": 0}]} for p in objects]
+    monkeypatch.setattr(x4refguard, "_acl", acl)
+    original = os.scandir
+    def scandir(path):
+        if fault is not None and Path(path) == root / fault:
+            raise PermissionError(13, "owned enumeration denial", str(path))
+        return original(path)
+    monkeypatch.setattr(os, "scandir", scandir)
+    result = (x4refguard._win_report if platform == "windows" else x4refguard._posix_report)(root, full)
+    assert result["enumeration_complete"] is (fault is None), result
+    assert result["sample_scope"] == ("FULL walk" if full else x4refguard.SAMPLE_SCOPE), result
+    if fault is None:
+        assert result["state"] == "protected", result
+        assert result["sampled"] == (6 if full else 4), result
+    else:
+        assert result["state"] == "error", result
+        assert "incomplete" in result["detail"] and "enumerat" in result["detail"], result
+        assert result["sampled"] == 0 and result["sample_ok"] == 0, result
+
+
+def test_count_failure_refuses_before_any_permission_change(tmp_path, monkeypatch, capsys):
+    def count(root):
+        raise PermissionError("owned enumeration failure")
+    monkeypatch.setattr(x4refguard, "_count", count)
+    assert x4refguard._confirm(tmp_path, "apply", True) == 2
+    assert "Nothing was changed" in capsys.readouterr().err
+
+
+def test_chmod_walk_failure_is_not_reported_as_completed(tmp_path, monkeypatch):
+    def walk(root):
+        yield root
+        raise PermissionError("owned enumeration failure")
+    calls = []
+    monkeypatch.setattr(x4refguard, "_walk", walk)
+    monkeypatch.setattr(x4refguard, "_mode", lambda p: 0o755)
+    monkeypatch.setattr(x4refguard, "_mutate_chmod", lambda *args: calls.append(args))
+    assert x4refguard._chmod_tree(tmp_path, writable=False) > 0
+    assert len(calls) == 1  # Synthetic mutation seam only, no filesystem permissions changed.
+
+
+@pytest.mark.parametrize("action", ["apply", "remove"])
+def test_incomplete_chmod_cannot_report_success(tmp_path, monkeypatch, action):
+    monkeypatch.setattr(x4refguard, "_platform", lambda: "linux")
+    monkeypatch.setattr(x4refguard, "_geteuid", lambda: 1000)
+    monkeypatch.setattr(x4refguard, "_owner_is_user", lambda p: True)
+    monkeypatch.setattr(x4refguard, "_confirm", lambda *args: None)
+    monkeypatch.setattr(x4refguard, "_posix_report", lambda *args: {"state": "absent", "detail": "mocked"})
+    monkeypatch.setattr(x4refguard, "_posix_mark", lambda p: "readonly" if action == "remove" else None)
+    monkeypatch.setattr(x4refguard, "_readonly", lambda p: False)
+    monkeypatch.setattr(x4refguard, "_chmod_tree", lambda *args, **kwargs: 1)
+    assert (x4refguard._posix_apply if action == "apply" else x4refguard._posix_remove)(tmp_path, yes=True) == 1
+
+
 def _under_temp(p: Path) -> bool:
     tmp = os.path.normcase(str(Path(tempfile.gettempdir()).resolve()))
     q = os.path.normcase(str(Path(p).resolve()))

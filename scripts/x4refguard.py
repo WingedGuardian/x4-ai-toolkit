@@ -294,7 +294,12 @@ def _confirm(root: Path, action: str, yes: bool) -> int | None:
     """B3: say WHAT and HOW MUCH before changing anything, then ask. None = proceed; an int
     is the exit code to return (2: not confirmed -- nothing was changed)."""
     print("x4refguard %s -- target: %s" % (action, root), file=sys.stderr, flush=True)
-    n = _count(root)
+    try:
+        n = _count(root)
+    except OSError as exc:
+        print("REFUSED: could not enumerate the complete target: %s. Nothing was changed." % exc,
+              file=sys.stderr)
+        return 2
     verb = "protect" if action == "apply" else "lift the protection from"
     print("  %d object(s) (directories + files) under it. This will %s all of them; on "
           "Windows that takes about 8 s per 100,000 objects (MEASURED), longer on a slow "
@@ -589,7 +594,14 @@ _WIN_GAPS = ["renaming the root itself (its PARENT grants that)",
 
 def _win_report(root: Path, full: bool) -> dict:
     r = _blank("error", root)
-    objs = _objects(root, full)
+    if full:
+        r["sample_scope"] = "FULL walk"
+    try:
+        objs = _objects(root, full)
+    except OSError as exc:
+        r["detail"] = "could not enumerate reference tree; protection coverage is incomplete: %s" % exc
+        return r
+    r["enumeration_complete"] = True
     try:
         user, items = _acl(objs)
     except AclError as exc:
@@ -758,7 +770,14 @@ _POSIX_GAPS = {
 
 def _posix_report(root: Path, full: bool) -> dict:
     r = _blank("absent", root)
-    objs = _objects(root, full)
+    if full:
+        r["sample_scope"] = "FULL walk"
+    try:
+        objs = _objects(root, full)
+    except OSError as exc:
+        r.update(state="error", detail="could not enumerate reference tree; protection coverage is incomplete: %s" % exc)
+        return r
+    r["enumeration_complete"] = True
     r["owner_is_user"] = _owner_is_user(root)
     mark = _posix_mark(root)
     r["sampled"] = len(objs)
@@ -783,16 +802,20 @@ def _posix_report(root: Path, full: bool) -> dict:
 
 def _chmod_tree(root: Path, writable: bool) -> int:
     """Clear (or restore the OWNER's) write bits on every dir and file. Symlinks are
-    never followed. Returns the number of objects that could not be changed."""
+    never followed. A nonzero result means failed changes or incomplete traversal."""
     failed = 0
-    for n, p in enumerate(_walk(root), 1):
-        if n % PROGRESS_EVERY == 0:
-            print("  chmod: %d object(s) done ..." % n, file=sys.stderr, flush=True)
-        try:
-            m = stat.S_IMODE(_mode(p))
-            _mutate_chmod(p, (m | stat.S_IWUSR) if writable else (m & ~0o222))
-        except OSError:
-            failed += 1
+    try:
+        for n, p in enumerate(_walk(root), 1):
+            if n % PROGRESS_EVERY == 0:
+                print("  chmod: %d object(s) done ..." % n, file=sys.stderr, flush=True)
+            try:
+                m = stat.S_IMODE(_mode(p))
+                _mutate_chmod(p, (m | stat.S_IWUSR) if writable else (m & ~0o222))
+            except OSError:
+                failed += 1
+    except OSError as exc:
+        print("chmod traversal incomplete; some objects remain unverified: %s" % exc, file=sys.stderr)
+        failed += 1  # At least one unverified object; the omitted subtree's size is unknown.
     return failed
 
 
@@ -817,6 +840,10 @@ def _posix_apply(root: Path, yes: bool = False) -> int:
     else:
         failed = _chmod_tree(root, writable=False)
         note = "chmod a-w: %d object(s) could not be changed" % failed
+        if failed:
+            print("FAILED: chmod was incomplete; at least %d object(s) failed or remain unverified. "
+                  "The tree may be partially protected." % failed, file=sys.stderr)
+            return 1
         if plat == "linux":
             note += " (chattr +i needs root; using the chmod fallback)"
     after = _posix_report(root, False)
@@ -852,7 +879,9 @@ def _posix_remove(root: Path, yes: bool = False) -> int:
                   file=sys.stderr)
             return 2
     if _readonly(root) or mark == "readonly":
-        _chmod_tree(root, writable=True)
+        if _chmod_tree(root, writable=True):
+            print("FAILED: chmod was incomplete; protection may remain on unverified objects.", file=sys.stderr)
+            return 1
     left = _posix_mark(root)
     if left is None:
         print("Layer 2 lifted: %s (owner write restored; group/other write bits are not "
@@ -864,10 +893,14 @@ def _posix_remove(root: Path, yes: bool = False) -> int:
 
 # =============================================================== shared walking
 
+def _walk_error(error):
+    raise error
+
+
 def _walk(root: Path):
     """Every directory and file under root, root first, symlinks never followed."""
     yield root
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=_walk_error):
         dirnames.sort()
         for n in dirnames:
             p = Path(dirpath) / n
@@ -880,7 +913,7 @@ def _walk(root: Path):
 
 
 def _first_file(d: Path):
-    for dirpath, dirnames, filenames in os.walk(d, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(d, followlinks=False, onerror=_walk_error):
         dirnames.sort()
         for n in sorted(filenames):
             return Path(dirpath) / n
@@ -894,10 +927,8 @@ def _objects(root: Path, full: bool) -> list:
     out = [root]
     if (root / SENTINEL).is_file():
         out.append(root / SENTINEL)
-    try:
-        tops = [e for e in os.scandir(root) if e.is_dir(follow_symlinks=False)]
-    except OSError:
-        tops = []
+    with os.scandir(root) as entries:
+        tops = [e for e in entries if e.is_dir(follow_symlinks=False)]
     for e in sorted(tops, key=lambda e: e.name):
         f = _first_file(Path(e.path))
         if f is not None:
@@ -914,6 +945,7 @@ def _blank(state: str, root=None, detail: str = "") -> dict:
         "mask": None, "mask_expected": EXPECTED_MASK if _platform() == "windows" else None,
         "sentinel": bool(root is not None and (Path(root) / SENTINEL).is_file()),
         "owner_is_user": None, "sampled": 0, "sample_ok": 0,
+        "enumeration_complete": False,
         "sample_scope": SAMPLE_SCOPE, "stops": [], "does_not_stop": [],
         "detail": detail,
     }

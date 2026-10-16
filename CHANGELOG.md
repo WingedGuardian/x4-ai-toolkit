@@ -2,6 +2,9 @@
 
 ## v4.0.0 — 2026-10-03
 
+- Reference-protection reports disclose enumeration failures as incomplete,
+  including during full scans. An incomplete preflight count refuses changes;
+  a later chmod traversal failure reports partial work and cannot pass.
 - Doctor reports disabled or changed hooks, and unconfirmed trust hashes,
   before pending review steps when a Codex installation has mixed statuses.
 - Generic installs use the neutral runtime for Bash discovery, unpacking and
