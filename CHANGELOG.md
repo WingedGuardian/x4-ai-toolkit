@@ -2,8 +2,9 @@
 
 ## v4.0.0 — 2026-10-03
 
-- Mutation-probe kills require new assertion failures against the same marked
-  scope. Collection and execution errors remain unmeasured. Full escalation
+- Mutation-probe kills require new testcase failures against the same marked
+  scope. Mutation-induced test-call exceptions can count as failures; collection,
+  setup/teardown and runner errors remain unmeasured. Full escalation
   restores pristine source before its baseline and uses a separate current budget.
   Dedicated checks cover required dependencies, overlay order and write banners
   while artifact publication remains blocked throughout the mutation window.

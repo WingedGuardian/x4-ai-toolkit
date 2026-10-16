@@ -495,7 +495,7 @@ def _purge_bytecode() -> None:
 
 @dataclass(frozen=True)
 class TestRun:
-    """An executed assertion failure is evidence; an execution error is not."""
+    """Test-call failures are evidence; pytest setup/teardown errors are not."""
     status: str
     failures: frozenset[str] = frozenset()
 
@@ -611,7 +611,7 @@ def full_suite() -> str:
 
 
 def full_suite_failures() -> set[str] | None:
-    """Complete assertion failure identities, or an explicit non-answer."""
+    """Complete testcase failure identities, or an explicit non-answer."""
     result = measure_tests(["tests"], FULL_SUITE_DESELECT,
                            timeout=FULL_SUITE_TIMEOUT)
     return set(result.failures) if result.status in ("pass", "fail") else None
