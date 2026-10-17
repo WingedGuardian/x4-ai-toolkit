@@ -602,8 +602,13 @@ def problems(expected: dict[str, str], root: Path) -> list[str]:
         p = root / rel
         if not p.is_file():
             out.append(f"MISSING  {rel}")
-        elif _norm(p.read_bytes()) != text:
-            out.append(f"STALE    {rel}")
+        else:
+            raw = p.read_bytes()
+            # Codex counts the file it reads, including CRLF and UTF-8 bytes.
+            # Mark an equivalent oversized checkout stale so write mode repairs
+            # it with the complete generated LF bytes, without truncation.
+            if _norm(raw) != text or (rel == "AGENTS.md" and len(raw) > AGENTS_MD_MAX_BYTES):
+                out.append(f"STALE    {rel}")
     for rel in sorted(_owned_files(root) - set(expected)):
         out.append(f"GHOST    {rel}")
     return sorted(out)
@@ -621,6 +626,10 @@ def main(argv=None) -> int:
     found = problems(expected, REPO)
     for line in size_report(expected):         # advisory, stdout, every run
         print(line)
+    entry = REPO / "AGENTS.md"
+    if entry.is_file() and entry.stat().st_size > AGENTS_MD_MAX_BYTES:
+        print(f"AGENTS.md on disk exceeds {AGENTS_MD_MAX_BYTES} bytes; regenerate to restore "
+              "the complete LF instructions.", file=sys.stderr)
     if args.check:
         for line in found:
             print(line, file=sys.stderr)

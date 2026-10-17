@@ -92,3 +92,7 @@ agent/targets/codex/hooks.json.tmpl text eol=lf
 tools/x4_harness/codex-hooks.json.tmpl text eol=lf
 .opencode/plugins/x4guard.js text eol=lf
 KNOWLEDGEBASE.local.md.example text eol=lf
+
+# Codex limits the actual AGENTS.md bytes, including checkout newlines.
+# A Windows CRLF checkout exceeded 32768 although the generated LF text fit.
+/AGENTS.md text eol=lf
