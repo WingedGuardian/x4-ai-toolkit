@@ -430,6 +430,12 @@ def handle(event: str, raw: bytes) -> str:
     cwd = payload.get("cwd")
     try:
         os.chdir(cwd)
+        ti = payload.get("tool_input")
+        if isinstance(ti, dict) and "workdir" in ti:
+            workdir = ti["workdir"]
+            if not isinstance(workdir, str) or not workdir.strip():
+                return _fail(event, "the tool workdir is not nonempty text")
+            os.chdir(workdir)
     except (OSError, TypeError) as e:
         return _fail(event, f"the payload cwd cannot be entered ({type(e).__name__}), so relative paths cannot be resolved")
     if event == "session_start":

@@ -97,7 +97,13 @@ def test_shell_heredoc_patch_is_judged_by_its_paths(sandbox):
     cmd = f"apply_patch <<'PATCH'\n{body}\nPATCH"
     assert run(env, native("bash_shell_heredoc_patch", tk, command=cmd), shell="bash")[0] == "deny"
     ok = cmd.replace("reference/libraries/x.xml", "dev/mymod/x.xml")
-    assert run(env, native("bash_shell_heredoc_patch", tk, command=ok), shell="bash")[0] == "allow"   # twin
+    refused, reason = run(env, native("bash_shell_heredoc_patch", tk, command=ok), shell="bash")
+    assert refused == "deny" and "execution workdir" in reason
+    # Explicit execution cwd is a synthetic contract twin, not native capture evidence.
+    for command, expected in ((cmd, "deny"), (ok, "allow")):
+        payload = native("bash_shell_heredoc_patch", tk, command=command)
+        payload["tool_input"]["workdir"] = str(tk)
+        assert run(env, payload, shell="bash")[0] == expected
 
 
 def test_profile_ask_becomes_deny_with_approval_text(sandbox):

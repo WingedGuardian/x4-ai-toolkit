@@ -133,7 +133,8 @@ def main(argv=None):
                        "transcript_path": args.transcript}
             deadline = time.monotonic() + 40
             output = save_policy.batch(payload, calls, lambda qualified: judge(calls, qualified, deadline),
-                                       deadline, action.host, args.preview)
+                                       deadline, action.host, args.preview,
+                                       execution_cwd_known=action.provenance.get("execution_cwd_known", True) is not False)
     except (OSError, ValueError, RecursionError, UnicodeError, TimeoutError) as exc:
         if args.command in upgrade_cli.COMMANDS:
             output, exit_status = upgrade_cli.failure(args.command, exc, "generic X4 entry failed")

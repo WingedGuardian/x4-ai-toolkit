@@ -4829,7 +4829,7 @@ def _as_ms(v) -> float:
 _AGENT_SETTINGS = re.compile(r"(^|/)\.claude/settings[^/]*\.json$")
 
 
-def facts(payload: dict, roots: dict, *, evidence: list | None = None) -> dict:
+def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution_context: bool = False) -> dict:
     inp = payload.get("tool_input") or {}
     cmd = inp.get("command") or ""
     timeout = inp.get("timeout", 0)
@@ -5057,7 +5057,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None) -> dict:
                 # An 8.3 short name is its long name (FX-G2 item 3; see long_name).
                 out.append((r if unres else long_name(join_cwd(d, r)), unres, r))
                 if evidence is not None and operation:
-                    physical = physical_join(physical_cwd, r)
+                    # A cd prefix may fail and execution may continue. The existing parser
+                    # does not prove control-flow dominance, so native context checks
+                    # never use it to invent the omitted tool execution directory.
+                    physical = physical_join("" if execution_context else physical_cwd, r)
                     row = {"operation": operation, "path": physical,
                                      "raw": r, "unresolved": unres or not physical or has_unresolved(physical)
                                      or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical)),
@@ -5080,6 +5083,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None) -> dict:
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
     search_seg, git_all = False, False
     for (s, c_cwd), prev, c_old, physical_cwd in zip(seg_cwd, seg_prev, unseeded, physical_dirs):
+        if execution_context:
+            # Context-only evidence; ordinary save membership/rules unchanged.
+            prep(git_wipes_worktree_targets(s), c_cwd, c_old, operation="delete")
         rm_t += prep(rm_paths(s), c_cwd, c_old, operation="delete")
         rm_t += prep(xargs_feed(s, prev), c_cwd, c_old, operation="delete")
         rm_t += prep(rsync_deletes(s), c_cwd, c_old, operation="delete", scope="tree")

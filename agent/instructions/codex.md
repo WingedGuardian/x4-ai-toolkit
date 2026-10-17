@@ -34,3 +34,8 @@ tell the user before any write or delete, and suggest they run
 
 Skills live in `.agents/skills/<name>/SKILL.md`; open the one this file names before the task.
 Never `git add -A` / `git add .`: stage explicit paths.
+
+Codex shell hooks may report only the session directory, omitting the actual tool workdir.
+Use absolute mutation paths (drive/UNC on Windows) for shell writes, deletes and moves when workdir is absent;
+an in-command cd cannot prove it. Reads remain allowed. Arbitrary script effects retain
+the documented coverage limits.

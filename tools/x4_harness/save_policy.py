@@ -225,10 +225,10 @@ class ScopeError(ValueError):
     """A static, safe diagnostic for a shell that could not be evaluated."""
 
 
-def shell_evidence(payload, roots):
+def shell_evidence(payload, roots, *, execution_context=False):
     import hook_facts
     evidence = []
-    facts = hook_facts.facts(payload, roots, evidence=evidence)
+    facts = hook_facts.facts(payload, roots, evidence=evidence, execution_context=execution_context)
     error = facts.get("powershell_error")
     if error and str(error).startswith(hook_facts.PS_PARSE_ERROR):
         raise ScopeError("PowerShell command does not parse; correct its syntax before retrying. "
@@ -253,7 +253,7 @@ def read_roots(deadline):
     return packet(result.stdout.decode("utf-8") + "{}")[0]
 
 
-def batch(payload, calls, judge, deadline, host, preview=False, helper=False):
+def batch(payload, calls, judge, deadline, host, preview=False, helper=False, *, execution_cwd_known=None):
     """The named adapters call this once, before ANY mutation is permitted."""
     if not calls:
         import x4guard
@@ -265,9 +265,32 @@ def batch(payload, calls, judge, deadline, host, preview=False, helper=False):
         roots = read_roots(deadline)
         root = native(roots["toolkit"])
     contracts = core(root, "contracts")
+    transport = core(root, "transport")
+    known_cwd = (transport.execution_cwd_known(host, payload) if execution_cwd_known is None
+                 else execution_cwd_known)
     evidence = []
     for kind, shell, command, path, _label, *_extra in calls:
         if kind == "shell":
+            if not known_cwd:
+                import patch_paths
+                patch = patch_paths.shell_patch(command)
+                unplaced_patch = False
+                if patch:
+                    body, directory = patch
+                    for _operation, target in patch_paths.parse_patch(body):
+                        if not transport.execution_path_absolute(target):
+                            unplaced_patch = True
+                context = shell_evidence({"tool_name": "PowerShell" if shell == "powershell" else "Bash",
+                    "tool_input": {"command": command}, "cwd": ""}, roots, execution_context=True)
+                # Carrier translation loses original operand dialect. On Windows,
+                # only a drive/UNC-qualified mutation is independent of the omitted
+                # execution directory (including nested PowerShell in Bash).
+                if unplaced_patch or any(row.get("unresolved") or
+                        not transport.execution_path_absolute(row.get("path", ""))
+                        for row in context):
+                    result = contracts.Result("deny", "failed", reason=transport.UNKNOWN_EXECUTION_CWD)
+                    return {"decision": "deny", "inert": True, "reason": result.reason,
+                            "context": None, "result": result.as_dict(), "transactions": []}
             evidence += shell_evidence({"tool_name": "PowerShell" if shell == "powershell" else "Bash",
                                         "tool_input": {"command": command}, "cwd": os.getcwd()}, roots)
         else:
