@@ -1483,8 +1483,8 @@ _i_backup_file() {
 }
 
 #: MOVE a lone 3.x config to the root, retaining its read-only attribute. When
-#: both configs agree, preserve a verified distinct backup and retire the old
-#: path. Differing copies are refused by precheck_config before any write.
+#: both configs agree, RENAME the 3.x one to a free .bak-<stamp> name (no clobber,
+#: read-only kept). Differing copies are refused by precheck_config before any write.
 _i_migrate_paths_env() {
   local new="$1/x4-paths.env" old="$1/.claude/x4-paths.env" bak
   [ -f "$old" ] || return 0
@@ -1494,10 +1494,22 @@ _i_migrate_paths_env() {
     return 0
   fi
   if [ "$(_i_assign_lines "$new")" = "$(_i_assign_lines "$old")" ]; then
-    bak="$(_i_backup_file "$old")" || { echo "ERROR: could not preserve the agreeing 3.x $old; it is still there." >&2; return 1; }
-    rm -- "$old" || { echo "ERROR: preserved $old as $bak but could not retire the old path." >&2; return 1; }
-    echo "  [migrated] the 3.x $old agreed with $new; renamed it to $bak (to undo: rename it back)"
-    return 0
+    # A RENAME, as install.ps1's no-clobber [IO.File]::Move: the same file, so a locked
+    # (read-only) copy stays locked -- a copy plus `rm` gave a new, writable file and
+    # deleted the original (release review H3). `mv -n` never replaces an existing name;
+    # whether it moved is judged by the result, since a refused -n is rc 0 on older mv.
+    local _try
+    for _try in 1 2 3 4 5 6 7 8; do
+      bak="$(mktemp -u "$old.bak-$(date +%Y%m%d-%H%M%S).XXXXXX")" || break
+      [ -e "$bak" ] && continue
+      mv -n -- "$old" "$bak" 2>/dev/null || true
+      if [ ! -e "$old" ] && [ -f "$bak" ]; then
+        echo "  [migrated] the 3.x $old agreed with $new; renamed it to $bak (to undo: rename it back)"
+        return 0
+      fi
+    done
+    echo "ERROR: could not rename the agreeing 3.x $old to a free .bak-<stamp> name; it is still there." >&2
+    return 1
   fi
   echo "ERROR: $new and the 3.x $old DIFFER on: $(_i_differing_keys "$new" "$old")-- refusing to choose." >&2
   return 1

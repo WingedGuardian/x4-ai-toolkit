@@ -2862,12 +2862,17 @@ def test_two_AGREEING_configs_retire_the_old_one_to_a_bak(installer, tmp_path, r
     before = old.read_bytes()
     if readonly:
         old.chmod(stat.S_IREAD)
+    identity = old.stat().st_ino
     try:
         r = _install(installer, tmp_path, dest)
         assert r.returncode == 0, (r.stdout + r.stderr)[-1500:]
         assert not old.exists() and new.read_bytes() == before
         backups = list((dest / ".claude").glob("x4-paths.env.bak-*"))
         assert len(backups) == 1 and backups[0].read_bytes() == before
+        # H3 (release review): RENAMED, as the message says -- the same file, not a copy
+        # plus a delete -- so a locked (read-only) 3.x config stays locked.
+        assert backups[0].stat().st_ino == identity, "the 3.x config was copied, not renamed"
+        assert os.access(backups[0], os.W_OK) is (not readonly)
     finally:
         for p in [old, *(dest / ".claude").glob("x4-paths.env.bak-*")]:
             if p.exists():
