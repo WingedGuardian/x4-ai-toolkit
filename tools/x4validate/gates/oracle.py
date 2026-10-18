@@ -14,7 +14,7 @@ import sys
 
 import _env
 
-from x4validate import _check, _debuglog, _merge
+from x4validate import _check, _debuglog, _merge, _registry
 
 EXT = _env.extensions()
 LOG = _env.oracle_log()
@@ -25,12 +25,21 @@ for e in entries:
     by_mod[e.folder].append(e)
 print(f"cardinality failures in log: {len(entries)} across {len(by_mod)} mod(s)\n")
 
+# WHERE IS A LOGGED FOLDER? In ANY install root (F285, LOW): the log names a folder, not
+# a root, and a mod in the profile root is installed all the same. The lowest root rank
+# wins (the game root), matching the engine's own preference.
+_where: dict[str, Path] = {}
+for _m in sorted(_registry.mods("installed"), key=lambda m: m.get("root_rank", 0)):
+    _where.setdefault(_m["folder"].lower(), Path(_m["path"]))
+_nowhere: list[str] = []   # logged, found in no root: the log is of a different modlist
+
 tot = Counter()
 rows = []
 scope: set[str] = set()   # judged mods + every mod loading before one (FX-H10)
 for folder in sorted(by_mod, key=lambda f: -len(by_mod[f])):
-    mod_dir = EXT / folder
+    mod_dir = _where.get(folder.lower()) or EXT / folder
     if not mod_dir.is_dir():
+        _nowhere.append(folder)
         # COUNTED, not merely shown. The row is printed but this `continue` used to
         # skip every `tot[...] +=` below, so an uninstalled mod's lines left the
         # DENOMINATOR entirely while the docstring says the denominator is the full
@@ -112,6 +121,11 @@ print(f"{'TOTAL':<32}{tot['lines']:>6}{tot['ops']:>6}{tot['agree']:>7}"
 # manifest anywhere else changes no tree replayed here. The profile and removed-folder
 # signals stay global -- neither can be placed in the load order.
 _stale = _env.modlist_staleness(LOG, scope).reasons()
+if _nowhere:
+    # A logged mod that is installed in NO root was removed since the launch (F285): the
+    # engine rejected ops of a mod this tree no longer has, so the log is of another modlist.
+    _stale.append(f"{len(_nowhere)} logged mod(s) with rejected ops are installed in no "
+                  f"root now: {', '.join(sorted(_nowhere))}")
 if _stale:
     print(f"\nREFUSING: {LOG.name} does not describe the current modlist -- "
           + "; ".join(_stale) + ". " + _env.STALE_ADVICE, file=sys.stderr)

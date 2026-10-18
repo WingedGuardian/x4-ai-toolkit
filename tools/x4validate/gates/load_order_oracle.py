@@ -161,6 +161,9 @@ def main() -> int:
     # age too: if it changed since the launch, the exclusion may postdate the log, so
     # it cannot be convicted below (release review P, finding 1).
     named = {f for seq in seqs.values() for f in seq}
+    # No content_scope (F285) ON PURPOSE: the load order comes from manifests and
+    # dependencies, never from a diff's contents, so an edited diff cannot change the
+    # order this gate compares against the log.
     st = _env.log_staleness(log.stat().st_mtime, seqs, scope=mods,
                             known=active | set(installed),
                             t_profile=_env.mtime_or_none(_profile_content()),

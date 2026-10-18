@@ -24,13 +24,14 @@ That is the same contract `Report.skipped` enforces one level down.
 from __future__ import annotations
 
 
+import os
 import sys
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from x4validate import _paths  # noqa: E402
+from x4validate import _freshness, _paths  # noqa: E402
 
 
 def sandbox_copy(src: Path, dest: Path) -> Path:
@@ -303,6 +304,37 @@ def newest_manifest(mods: list[dict]) -> tuple[float, str]:
     return newest, who
 
 
+def newest_engine_file(mods: list[dict]) -> tuple[float, str]:
+    """(time, "folder/rel") of the newest engine-loadable file in *mods*.
+
+    The files are those `_freshness.ENGINE_FILE_SUFFIXES` names (derived, never retyped):
+    a README edited after the log changes no tree. A file's time is the later of its
+    mtime and -- where the platform reports one -- its birth time, because a copy that
+    preserves mtime still creates a NEW file. Unreadable = newer (FAIL CLOSED, as
+    `newest_manifest`): a file whose age cannot be read cannot be shown to predate the log."""
+    newest, who = 0.0, ""
+    for m in mods:
+        root = Path(m["path"])
+        failed: list[str] = []
+        for dirpath, _dirs, names in os.walk(root, onerror=lambda e: failed.append(
+                getattr(e, "filename", None) or str(root))):
+            for name in names:
+                if os.path.splitext(name)[1].lower() not in _freshness.ENGINE_FILE_SUFFIXES:
+                    continue
+                full = os.path.join(dirpath, name)
+                rel = os.path.relpath(full, root).replace(os.sep, "/")
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    return float("inf"), f"{m['folder']}/{rel} (unreadable)"
+                t = max(st.st_mtime, getattr(st, "st_birthtime", 0.0) or 0.0)
+                if t > newest:
+                    newest, who = t, f"{m['folder']}/{rel}"
+        if failed:
+            return float("inf"), f"{m['folder']} (a folder could not be listed)"
+    return newest, who
+
+
 def mtime_or_none(p: Path | None) -> float | None:
     try:
         return p.stat().st_mtime if p is not None else None
@@ -345,12 +377,13 @@ def evidence_unlogged(mods: list[dict], logged: set[str],
 class Staleness:
     """Why a log does not describe the current modlist; empty `reasons()` = it does."""
     aged: list = _field(default_factory=list)       # manifest / profile newer than the log
+    edited: list = _field(default_factory=list)     # engine file newer than the log (F285)
     gone: list = _field(default_factory=list)       # logged, neither known nor a DLC
     unlogged: dict = _field(default_factory=dict)   # {folder: a logged class it ships}
     logged: set = _field(default_factory=set)       # every folder the log names (no DLC)
 
     def reasons(self) -> list[str]:
-        out = list(self.aged)
+        out = [*self.aged, *self.edited]
         if self.gone:
             out.append(f"{len(self.gone)} logged folder(s) are not installed now: "
                        f"{', '.join(self.gone)}")
@@ -367,7 +400,8 @@ STALE_ADVICE = ("Launch the game once with the current modlist (or point $X4_ORA
 
 def log_staleness(t_log: float, seqs: dict[str, list[str]], *, scope: list[dict],
                   known: set[str], t_profile: float | None,
-                  also_aged: list[dict] = ()) -> Staleness:
+                  also_aged: list[dict] = (),
+                  content_scope: list[dict] | None = None) -> Staleness:
     """The core decision, from inputs the caller has already gathered.
 
     *seqs*: signature sequences with DLC already dropped. *scope*: the mods whose
@@ -377,11 +411,20 @@ def log_staleness(t_log: float, seqs: dict[str, list[str]], *, scope: list[dict]
     content.xml mtime, or None. *also_aged*: further mods whose manifest age counts but
     which are not in *scope* -- an installed mod the log names that is no longer active
     (its manifest disabled it, a dependency changed): it was in that launch, so its
-    manifest changing since is the modlist changing (release review P, finding 1)."""
+    manifest changing since is the modlist changing (release review P, finding 1).
+    *content_scope*: the mods whose ENGINE-LOADABLE FILES must predate the log (F285: a
+    diff edited after the launch, manifest untouched, otherwise replays new ops against
+    the engine's verdicts on old ones). None = not asked: a caller that does not read
+    file content (load_order_oracle) leaves it out."""
     st = Staleness(logged={f for seq in seqs.values() for f in seq})
     newest, who = newest_manifest([*scope, *also_aged])
     if newest > t_log:
         st.aged.append(f"a manifest changed after the log was written ({who})")
+    if content_scope is not None:
+        t_file, which = newest_engine_file(content_scope)
+        if t_file > t_log:
+            st.edited.append(f"an engine-loadable file changed after the log was written "
+                             f"({which})")
     if t_profile is not None and t_profile > t_log:
         st.aged.append("the profile content.xml (the enable/disable decisions) changed "
                        "after the log was written")
@@ -423,4 +466,8 @@ def modlist_staleness(log: Path, scope: set[str] | None = None) -> Staleness:
             and (scope is None or f in scope)]
     return log_staleness(log.stat().st_mtime, seqs, scope=in_scope, known=known,
                          t_profile=mtime_or_none(_paths.profile_content()),
-                         also_aged=also)
+                         also_aged=also,
+                         # F285: a scoped caller (oracle.py) judges its mods' files, so
+                         # an inactive judged mod counts too; the whole-modlist caller
+                         # answers from the active tree only.
+                         content_scope=in_scope + (also if scope is not None else []))

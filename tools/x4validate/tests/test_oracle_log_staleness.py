@@ -121,16 +121,21 @@ def test_reverse_a_FRESH_log_keeps_its_verdicts(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- oracle
-def _oracle(monkeypatch, ext, log, *, judged="a", overlays=(), agree=True):
+def _oracle(monkeypatch, ext, log, *, judged="a", overlays=(), agree=True, game_ext=None,
+            extra=()):
     """Run gates/oracle.py over one engine-rejected op of mod *judged*.
 
     agree=True: our side reports the op 'no-base' (not OK) -> agreement, rc 0.
-    agree=False: our iterator never produces the op -> 'unseen', rc 1."""
+    agree=False: our iterator never produces the op -> 'unseen', rc 1.
+    *game_ext*: what `_env.extensions()` returns (default *ext*). *extra*: further logged
+    folders that also have a rejected op."""
     entry = SimpleNamespace(folder=judged, vpath="libraries/wares.xml",
                             sel="//ware[@id='x']", cardinality="none")
-    monkeypatch.setattr(_env, "extensions", lambda: ext)
+    more = [SimpleNamespace(folder=f, vpath="libraries/wares.xml",
+                            sel="//ware[@id='x']", cardinality="none") for f in extra]
+    monkeypatch.setattr(_env, "extensions", lambda: game_ext or ext)
     monkeypatch.setattr(_env, "oracle_log", lambda: log)
-    monkeypatch.setattr(_debuglog, "parse_debug", lambda p: [entry])
+    monkeypatch.setattr(_debuglog, "parse_debug", lambda p: [entry, *more])
     monkeypatch.setattr(_check, "tier_b_overlays",
                         lambda mod_dir, *a: (tuple(ext / o for o in overlays), []))
     diff = etree.fromstring(f'<diff><replace sel="{entry.sel}">1</replace></diff>')
@@ -306,3 +311,172 @@ def test_P3_twin_a_non_empty_DLC_set_is_silent(monkeypatch, capsys):
     _cfg_with_dlc(monkeypatch, ["ego_dlc_terran"])
     assert _env.dlc_folders() == frozenset({"ego_dlc_terran"})
     assert "no DLC set to exempt" not in capsys.readouterr().err
+
+
+# ----------------------------------------------------------------------- F285 (edited)
+# A diff edited AFTER the log, content.xml untouched, tripped none of the manifest, profile,
+# removed-folder or unlogged-mod signals: the gates replayed the NEW ops against the
+# engine's verdicts on the OLD ones. `Staleness.edited` is filled only when the caller
+# passes `content_scope` (oracle.py and oracle_reverse do; load_order_oracle does not).
+_WARES = "libraries/wares.xml"
+_EDITED = "an engine-loadable file changed after the log was written ({})"
+
+
+def _stamp(ext, folder, rel, log, delta):
+    """Set a shipped file's mtime to the log's mtime + *delta* seconds."""
+    t = os.stat(log).st_mtime + delta
+    os.utime(ext / folder / rel, (t, t))
+
+
+def test_F285_a_diff_edited_after_the_log_is_a_reason(tmp_path, monkeypatch):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a"),
+                        files={"a": [_WARES]})
+    _stamp(ext, "a", _WARES, log, +1000)
+    assert _env.modlist_staleness(log).reasons() == [_EDITED.format("a/libraries/wares.xml")]
+
+
+def test_F285_twin_the_same_file_older_than_the_log_is_not(tmp_path, monkeypatch):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a"),
+                        files={"a": [_WARES]})
+    _stamp(ext, "a", _WARES, log, -1000)
+    assert _env.modlist_staleness(log).reasons() == []
+
+
+def test_F285_twin_a_newer_NON_engine_file_is_not(tmp_path, monkeypatch):
+    """A README edited after the log changes no tree (ENGINE_FILE_SUFFIXES)."""
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a"),
+                        files={"a": ["README.txt", "notes.md"]})
+    _stamp(ext, "a", "README.txt", log, +1000)
+    _stamp(ext, "a", "notes.md", log, +1000)
+    assert _env.modlist_staleness(log).reasons() == []
+
+
+def test_F285_the_suffix_set_is_DERIVED_not_retyped(tmp_path, monkeypatch):
+    """Narrow the shared set and a .lua edit stops counting: _env reads _freshness live."""
+    from x4validate import _freshness
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a"),
+                        files={"a": ["ui/x.lua"]})
+    _stamp(ext, "a", "ui/x.lua", log, +1000)
+    assert len(_env.modlist_staleness(log).edited) == 1
+    monkeypatch.setattr(_freshness, "ENGINE_FILE_SUFFIXES", frozenset({".xml"}))
+    assert _env.modlist_staleness(log).edited == []
+
+
+def test_F285_a_scoped_caller_ignores_an_edit_in_a_mod_it_does_not_judge(tmp_path,
+                                                                      monkeypatch):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a", "z"], log_text=_sig("a") + _sig("z"),
+                        files={"z": [_WARES]})
+    _stamp(ext, "z", _WARES, log, +1000)
+    assert _env.modlist_staleness(log, {"a"}).reasons() == []
+    assert _env.modlist_staleness(log, {"z"}).reasons() == [
+        _EDITED.format("z/libraries/wares.xml")]
+
+
+def test_F285_log_staleness_without_content_scope_never_asks(tmp_path, monkeypatch):
+    """load_order_oracle's call shape: the same edited file, no content_scope -> no reason."""
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a"),
+                        files={"a": [_WARES]})
+    _stamp(ext, "a", _WARES, log, +1000)
+    mods = list(_registry.mods("active"))
+    kw = dict(scope=mods, known={"a"}, t_profile=None)
+    t_log = os.stat(log).st_mtime
+    assert _env.log_staleness(t_log, {"s": ["a"]}, **kw).reasons() == []
+    assert _env.log_staleness(t_log, {"s": ["a"]}, content_scope=mods, **kw).reasons() == [
+        _EDITED.format("a/libraries/wares.xml")]
+
+
+def test_F285_load_order_oracle_does_not_pass_content_scope():
+    """Structural: the load order comes from manifests, so a content edit cannot change it."""
+    import ast
+    src = (GATES / "load_order_oracle.py").read_text(encoding="utf-8")
+    calls = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Call)
+             and getattr(n.func, "attr", "") == "log_staleness"]
+    assert len(calls) == 1
+    assert "content_scope" not in {k.arg for k in calls[0].keywords}
+
+
+def test_F285_an_unreadable_file_FAILS_CLOSED(tmp_path, monkeypatch):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a"),
+                        files={"a": [_WARES]})
+    real = os.stat
+
+    def flaky(path, *a, **k):
+        if str(path).endswith("wares.xml"):
+            raise PermissionError("denied")
+        return real(path, *a, **k)
+    monkeypatch.setattr(os, "stat", flaky)
+    assert _env.modlist_staleness(log).reasons() == [
+        _EDITED.format("a/libraries/wares.xml (unreadable)")]
+
+
+def test_F285_an_unlistable_folder_FAILS_CLOSED(tmp_path, monkeypatch):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text=_sig("a"),
+                        files={"a": [_WARES]})
+    real = os.scandir
+
+    def deny(path=".", *a, **k):
+        if str(path).endswith("libraries"):
+            raise PermissionError("denied")
+        return real(path, *a, **k)
+    monkeypatch.setattr(os, "scandir", deny)
+    assert _env.modlist_staleness(log).reasons() == [
+        _EDITED.format("a (a folder could not be listed)")]
+
+
+def test_F285_oracle_refuses_on_an_edited_diff_with_content_xml_untouched(
+        tmp_path, monkeypatch, capsys):
+    """Manifest older than the log, diff newer: the case no other signal sees."""
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text="", files={"a": [_WARES]})
+    _stamp(ext, "a", _WARES, log, +1000)
+    assert _oracle(monkeypatch, ext, log, agree=True) == 2
+    assert "a/libraries/wares.xml" in capsys.readouterr().err
+
+
+def test_F285_oracle_twin_an_older_diff_keeps_its_verdict(tmp_path, monkeypatch):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text="", files={"a": [_WARES]})
+    _stamp(ext, "a", _WARES, log, -1000)
+    assert _oracle(monkeypatch, ext, log, agree=True) == 0
+
+
+def test_F285_oracle_ignores_an_edit_outside_its_scope_but_not_inside_an_overlay(
+        tmp_path, monkeypatch, capsys):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a", "z"], log_text="",
+                        files={"z": [_WARES]})
+    _stamp(ext, "z", _WARES, log, +1000)
+    assert _oracle(monkeypatch, ext, log, agree=True) == 0
+    assert _oracle(monkeypatch, ext, log, overlays=["z"], agree=True) == 2
+    assert "z/libraries/wares.xml" in capsys.readouterr().err
+
+
+def test_F285_reverse_refuses_on_an_edited_diff(tmp_path, monkeypatch, capsys):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text=LOG_REV,
+                        files={"a": [_WARES]})
+    _stamp(ext, "a", _WARES, log, +1000)
+    assert _reverse(monkeypatch, log, T_WITH_PAGE) == 2
+    assert "a/libraries/wares.xml" in capsys.readouterr().err
+
+
+def test_F285_reverse_twin_an_older_diff_keeps_its_verdict(tmp_path, monkeypatch):
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text=LOG_REV,
+                        files={"a": [_WARES]})
+    _stamp(ext, "a", _WARES, log, -1000)
+    assert _reverse(monkeypatch, log, T_WITH_PAGE) == 0
+
+
+# --------------------------------------------------------------- F285 (LOW: install roots)
+def test_F285_LOW_a_PROFILE_root_mod_is_judged_not_NOT_INSTALLED(tmp_path, monkeypatch,
+                                                                capsys):
+    """The judged mod lives in the profile root; the game-root extensions folder is empty."""
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text="", root_rank={"a": 1})
+    empty = tmp_path / "game_ext"
+    empty.mkdir()
+    assert _oracle(monkeypatch, ext, log, agree=True, game_ext=empty) == 0
+    assert "NOT INSTALLED" not in capsys.readouterr().out
+
+
+def test_F285_LOW_a_logged_folder_in_NO_root_refuses(tmp_path, monkeypatch, capsys):
+    """Twin: 'ghost' is in no root. Before the fix the judged mod 'a' carried a rc 0 and
+    ghost's lines were merely footnoted as outside the denominator."""
+    ext, log = _modlist(tmp_path, monkeypatch, ["a"], log_text="")
+    assert _oracle(monkeypatch, ext, log, agree=True, extra=["ghost"]) == 2
+    assert "installed in no root now: ghost" in capsys.readouterr().err

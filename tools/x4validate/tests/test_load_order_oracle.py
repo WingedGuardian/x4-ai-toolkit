@@ -324,3 +324,14 @@ def test_P1_an_EXCLUDED_logged_mod_edited_after_the_log_refuses_not_convicts(
            dropped=["e: NOT LOADED by the engine -- disabled by its manifest"])
     assert g.main() == 2
     assert "a manifest changed after the log was written (e)" in _rc(capsys)
+
+
+def test_F285_a_content_edit_after_the_log_does_not_refuse_the_load_order(
+        tmp_path, monkeypatch, capsys):
+    """Deliberately NOT asked here: the order comes from manifests and dependencies, so a
+    diff edited after the launch cannot change it. Twin of the oracle.py refusal."""
+    _world(tmp_path, monkeypatch, active=["a", "b"], log_lines=_AGREE,
+           files={"a": ["x.xml"], "b": ["x.xml"]})
+    t = os.stat(tmp_path / "debug.txt").st_mtime + 1000
+    os.utime(tmp_path / "ext" / "a" / "x.xml", (t, t))
+    assert g.main() == 0, _rc(capsys)
