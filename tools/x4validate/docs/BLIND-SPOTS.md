@@ -362,8 +362,10 @@ memory or from another session -- a remembered id was stale within a day here.
 | F281 | `gates/cross_tool.py` resolved positional HARD targets in a tree built from a bare `_merge.Config()`; for a nested `extensions/<owner>/<rel>` vpath the owner mod is never in `config.overlays`, so the tree was None and the row UNRESOLVED | **DEFECT (measured)**; exposure by newly installed mods **INFERRED** | live modlist: 9 of 50 mappable HARD rows (18%, over the 10% floor) in one owner mod's shield macros, gate said CANNOT (rc 3); after: 50 of 50 checked, all agree, the 41 earlier verdicts unchanged per row | ✅ **CLOSED 2026-10-12** (`7872a4e`; follow-up `845f2c2`) - one shared `_compat.base_tree_for` used by `_analyze_vpath` and the gate; follow-up adds the active-set exclusion disclosure (F139); an inactive owner, or a target matching other than one node, stays UNRESOLVED and counts against the floor |
 | F282 | `load_order_oracle` treated any folder in the engine's signature-check sequences that is not an installed mod as logged but not installed now, and refused; DLC folders are never in the mod lists | **DEFECT (measured)** | debug-2026-10-12T1155: 1 of 28,039 signature lines names a packed DLC file directly (`ego_dlc_terran`, error 13); the other 1,214 DLC mentions are mod-nested paths credited to the mod; pairs 8,299 compared, 0 inverted, before and after | ✅ **CLOSED 2026-10-12** (`42da66d`) - DLC names from `Config().dlc_dirs()` (never a prefix) are dropped from the sequences with a printed count; with no reference configured nothing is exempted and the gate refuses |
 | F283 | `oracle` and `oracle_reverse` gave verdicts on an engine log that predates the modlist; neither checked whether the log came from the current modlist | **DEFECT (measured)**; `oracle.py` scope rule not tested on a real stale log | against debug-2026-09-06 both exited 1 (oracle 4 false OK, oracle_reverse 1 disagreement) while `load_order_oracle` refused the same log; on the fresh 2026-10-12 log 226 of 226 agree, 0 disagreements | ✅ **CLOSED 2026-10-12** (`2227bf3`) - one shared `_env.modlist_staleness` / `log_staleness` (moved from `load_order_oracle`, output byte-identical) runs before any verdict, exit 2; `oracle.py` scopes the manifest and unlogged checks to the mods it judges plus their patch-time overlays (scope rule 85%); `oracle_reverse` checks the whole active modlist; manifest mtimes survive a copy-in so the never-logged check is the backstop; a mod shipping only packed files is never held against the log |
-| F284 | DLC folder names are matched case-sensitively: `_merge.Config.dlc_dirs` uses `p.name.startswith("ego_dlc_")` | **OPEN LIMIT (measured)**; fails closed; a non-standard reference casing only | release review P (2026-10-12): a reference folder `EGO_DLC_Terran` is not exempted by load_order_oracle, lowercase `ego_dlc_terran` is | **OPEN, NOT FIXED** - pre-arc root cause in `_merge.py`, an engine source, so a fix forces a store rebuild; deliberately not changed for 4.0 |
-| F285 | the oracle staleness check cannot see a diff file edited after the log; a removed PROFILE-root mod gets no signature line | **OPEN LIMIT (read)**; advisory, not gating | release review P (READ): `_env.modlist_staleness` checks manifest age, profile age, removed folders and unlogged mods only | **OPEN, NOT FIXED** - a diff XML edited after the log with content.xml untouched fires nothing, and oracle.py replays the new ops against the old verdicts; a removed profile-root mod shows only as a NOT INSTALLED row (LOW) |
+| F284 | DLC folder names are matched case-sensitively: `_merge.Config.dlc_dirs` uses `p.name.startswith("ego_dlc_")` | **OPEN LIMIT (measured)**; fails closed; a non-standard reference casing only | release review P (2026-10-12): a reference folder `EGO_DLC_Terran` is not exempted by load_order_oracle, lowercase `ego_dlc_terran` is | ✅ **CLOSED 2026-10-18** (`44e2bb2`) - one helper `_merge.is_dlc_folder` at all 5 case-sensitive sites (`dlc_dirs` unpacked + packed, `scan_installed`, `_strip_nesting`, `_resolve`); an AST guard bans a non-lowered prefix test elsewhere |
+| F285 | the oracle staleness check cannot see a diff file edited after the log; a removed PROFILE-root mod gets no signature line | **OPEN LIMIT (read)**; advisory, not gating | release review P (READ): `_env.modlist_staleness` checks manifest age, profile age, removed folders and unlogged mods only | ✅ **CLOSED 2026-10-18** (`a40f968`) - `_env.newest_engine_file` + `Staleness.edited` refuse (rc 2) when an engine-loadable file of a judged mod is newer than the log (`oracle.py`: judged mods + earlier loaders; `oracle_reverse`: active set; `load_order_oracle` deliberately not); `oracle.py` finds logged folders in every root and refuses one installed in none; unverified on a real engine log |
+| F286 | the plain path dropped a nested patch from a mod that loads BEFORE the patched file's owner | **DEFECT (measured)** | live, 172 active mods: plain path == nested path on 0 of 3 kuertee files (cue `AgentOperations` missing from `md/kuertee_emergent_missions_hunt.xml`); engine APPLIES such a patch (2026-10-12 log + a save, 3 MD files) | ✅ **CLOSED 2026-10-18** (`840865c`) - `build_effective` applies earlier overlays' nested files when the owner supplies the file; mirrored in `_compat._walk_positions` and `_compat_state.trace`; Tier B evaluates with the owner (INFO, not WARN); 3 of 3 agree |
+| F287 | x4compat judged ops that land on another mod's ADDED content wrongly (issue #11) | **DEFECT (measured)** | 7 + 2 synthetic fixtures; issue #11's Mission Commander / kuertee pair | ✅ **CLOSED 2026-10-18** (`e5a0794`, `0ad8f78`, `6862c30`, `f11c5a3`, `5b82913`) - ops judged at their own load position; replace/remove on added content is HARD naming the adder (+ partial, + engine UNMEASURED); an add into added content is advisory (`added_into`); live-corpus row delta not yet measured |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -7643,7 +7645,9 @@ SATISFIED with a note. The records ride on `ModList.notes` and reach every calle
 the set (`c45c46c`). Still UNMEASURED, each disclosed where it applies: anything about the
 Workshop root; whether the engine compares dependency ids case-sensitively; where a game-root
 mod that waits a pass falls relative to profile-root mods; what the engine does with a nested
-patch on an active mod that loads LATER (Tier B now WARNs instead of a path ERROR, `17e8346`).
+patch on an active mod that loads LATER (Tier B now WARNs instead of a path ERROR, `17e8346`) -- SUPERSEDED
+2026-10-18: MEASURED (2026-10-12 engine log + a save, 3 files) that the engine APPLIES it right after the
+owner's file; Tier B now evaluates the ops against the owner's file and reports an INFO (`840865c`; see F286).
 
 **RE-DERIVED BY:** `tests/test_extension_roots.py` (each of the four original clauses mutated
 separately is killed; the Workshop and case rules by
@@ -9674,7 +9678,50 @@ an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
 
-## F285 — the oracle staleness check cannot see a diff file edited after the log · **OPEN LIMIT (read)** · confidence 85% · ⚠ OPEN 2026-10-12, advisory, NOT FIXED
+## F287 — x4compat judged ops that land on another mod's ADDED content wrongly (issue #11) · **DEFECT (measured)** · confidence 90% · ✅ CLOSED 2026-10-18
+
+Pre-arc (`9cf6932`, `5eafcd7`): every op's `sel=` was resolved against the BASE tree, so a later op that, at
+its own load position, lands on content an earlier mod inserted was reported as "later mod wins" on the base
+node (issue #11: Mission Commander's `(...)[1]` replace hits one of the 6 elements kuertee's replace put in
+place of the base `set_value`). `e5a0794` / `0ad8f78` (sequential load-position resolution in
+`_compat_state.trace`; ops that match nothing or several nodes are listed as `unapplied`, never winners).
+Remaining gaps closed by `6862c30` / `f11c5a3` / `5b82913`: (a) an add into added content became a false
+"last adder wins" HARD row naming the parent's adder, losing the duplicate-key and SOFT rows; (b) row text used
+the internal tag "supply", never named the adder or a partial overwrite, and rendered synthetic node ids;
+(c) an unevaluable guard took its targets from the base tree; (d) `cross_tool` scoped SUBTREE rows by the
+synthetic id, so they went unmapped. USER DECISION 2026-10-18: a REPLACE or REMOVE landing on another mod's
+added content FAILS (HARD, names the adder, "partial: n of k elements X inserted; the others survive", and
+says the engine's positional-predicate resolution after an earlier insert is UNMEASURED); an ADD into it is
+advisory (`CompatReport.added_into`, exit unchanged), while two mods adding the same key there keep the
+normal duplicate HARD + SOFT rows. Denominator: 7 + 2 synthetic fixtures and 19 unit tests (13 RED before).
+NOT YET MEASURED: how many rows on the live modlist change kind or text. The engine's behaviour after an
+earlier insert remains UNMEASURED (merge model only).
+
+**RE-DERIVED BY:** `tests/test_compat_added_content.py`,
+`tests/test_compat.py::test_sequential_replacement_only_contests_the_actual_new_contribution`,
+`test_TWIN_two_one_element_replaces_are_the_plain_later_wins_row`,
+`tests/test_cross_tool_semantics.py::test_a_SUBTREE_on_a_sequential_identity_is_scoped_by_its_final_path`.
+
+## F286 — the plain path dropped a nested patch from a mod loading BEFORE its owner · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-18
+
+Pre-arc (`3f1cb0e`, v2.2.1): `build_effective` filled `owner_folders` only when its loop reached the owner, so
+`<aaa>/extensions/<zzz>/<rel>` with aaa loading earlier than zzz was in neither `sources` nor `skipped`, while
+the nested path (`_build_owned`) applied it: the two paths disagreed. Engine behaviour MEASURED 2026-10-12
+(engine log lines 29724/5 and 29734/5 open the patch right after the owner's file; save_020 contains the
+patched cues): APPLIED, right after the owner's file. Measured on 3 MD/aiscript files; macros and libraries
+are INFERRED to behave the same. Live, 172 active mods: plain == nested on 0 of 3 files before the fix and 3
+of 3 after (kuertee_additional_agent_actions -> kuertee_emergent_missions `md/kuertee_emergent_missions_hunt.xml`,
+missing cue `AgentOperations`; -> kuertee_high_security_rooms_are_locked `md/kuertee_hsral.xml`;
+kuertee_npc_reactions -> kuertee_waypoint_fields_for_deployments). The effective store, `x4eff` and `who-sets`
+carried the owner's unpatched file. Fix `840865c`, mirrored in `_compat._walk_positions` and
+`_compat_state.trace(nested=)`: without the mirror the file lost collision analysis as "instrument disagreed".
+Tier B now evaluates the ops against the owner's file and reports an INFO (F141).
+
+**RE-DERIVED BY:** `tests/test_merge.py` (`test_a_nested_patch_from_a_mod_loading_BEFORE_the_owner_applies`
+and twins), `tests/test_compat.py` (`test_an_EARLY_nested_patcher_does_not_cost_the_plain_file_its_analysis`,
+`test_walk_positions_mirrors_an_EARLY_nested_patch`), `tests/test_tierb_nested_later_target.py`.
+
+## F285 — the oracle staleness check cannot see a diff file edited after the log · **OPEN LIMIT (read)** · confidence 85% · ✅ CLOSED 2026-10-18
 
 `_env.modlist_staleness` checks manifest age, profile age, removed folders and unlogged
 mods. READ (release review P): if a mod's diff XML is edited after the log and its
@@ -9683,10 +9730,20 @@ the engine's verdicts on the old ones. Related, LOW (READ): a removed PROFILE-ro
 gets a signature line, so oracle.py shows it only as a NOT INSTALLED row and does not
 refuse. Advisory; not gating. Status: open limit, not fixed.
 
-RE-DERIVED BY (closest, partial): `tests/test_oracle_log_staleness.py`. It covers the
-manifest, profile, gone and unlogged reasons; it does NOT cover file-content edits.
+**Fix 2026-10-18 (`a40f968`).** `_env.newest_engine_file(mods)` walks the scoped mods' files whose suffix is in
+`_freshness.ENGINE_FILE_SUFFIXES`, taking `max(st_mtime, st_birthtime)`; an unreadable file counts as newer
+(fails closed). `Staleness.edited` is filled only when `log_staleness(..., content_scope=)` is passed:
+`modlist_staleness` passes the judged mods plus the mods loading before them for `oracle.py`, and the active
+set for `oracle_reverse`; `load_order_oracle` passes none, since a content edit cannot change load order.
+LOW clause: `oracle.py` resolves each logged folder through `_registry.mods("installed")` across every root;
+a folder found in no root is a refusal. 11 tests RED on the old code. Not yet run against a real engine log.
 
-## F284 — DLC folder names are matched case-sensitively · **OPEN LIMIT (measured)** · confidence 95% · ⚠ OPEN 2026-10-12, NOT FIXED
+RE-DERIVED BY: `tests/test_oracle_log_staleness.py` (an engine file edited after the log refuses; twins: an
+older file, a newer non-engine file, an edit outside the judged scope, a stat error failing closed, a
+profile-root mod judged, a folder in no root refusing) and `tests/test_load_order_oracle.py` (an AST check
+that it passes no `content_scope`).
+
+## F284 — DLC folder names are matched case-sensitively · **OPEN LIMIT (measured)** · confidence 95% · ✅ CLOSED 2026-10-18
 
 `_merge.Config.dlc_dirs` uses `p.name.startswith("ego_dlc_")`. MEASURED by release review P
 (2026-10-12): a reference folder named `EGO_DLC_Terran` is not exempted by
@@ -9695,6 +9752,15 @@ lowercased, so this bites only on a non-standard reference casing, and it FAILS 
 DLC is reported as a logged folder not installed now, giving CANNOT). The root cause is
 pre-arc, in `_merge.py`, an engine source, so the fix forces a store rebuild; deliberately
 not changed for 4.0. Status: open limit, not fixed.
+
+**Fix 2026-10-18 (`44e2bb2`).** One helper, `_merge.is_dlc_folder` (`name.lower().startswith("ego_dlc_")`),
+at all 5 case-sensitive sites: `_merge.dlc_dirs` (unpacked list and packed supplement),
+`_registry.scan_installed` (an `EGO_DLC_Terran` folder was listed as a MOD), `_compat._strip_nesting` and
+`_resolve._Roots.folder` (the last two were fed lowercased values, so latent). A mixed-case unpacked copy
+also used to lose to a packed lowercase one. The store rebuild this forces is part of the v4.0 round.
+RE-DERIVED BY: `tests/test_dlc_folder_case.py` (every positive has an excluded twin; an AST guard bans a
+non-lowered prefix test outside the helper, RED at e144c5e on exactly the 5 sites) and
+`tests/test_load_order_oracle.py::test_F284_a_MIXED_CASE_reference_DLC_folder_is_exempted`.
 
 RE-DERIVED BY (closest, partial): `tests/test_load_order_oracle.py`
 `test_a_DLC_folder_in_a_sequence_is_not_a_removed_folder`. It uses lowercase only and does

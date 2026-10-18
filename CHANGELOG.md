@@ -2,6 +2,27 @@
 
 ## v4.0.0 — 2026-10-03
 
+- x4compat (issue #11): ops are judged where they land at their own load position. A replace or remove that
+  lands on content another mod added is a failing HARD row that names the adder, says when it overwrites only
+  part of a multi-element insert ("partial: n of k elements X inserted; the others survive"), and marks the
+  engine's resolution after the insert UNMEASURED. An `<add>` into another mod's added content is advisory
+  (`added_into` / "ADDS INTO CONTENT ANOTHER MOD ADDED"), never failing; duplicate keys there still get HARD +
+  SOFT rows. Ops that match nothing or several nodes are listed as not applied. Text output prints real XPaths.
+- exprlint (issue #12): `fmt_missing_dot` reads string literals left to right, honouring `\'` escapes, so a
+  later literal starting with `[` is no longer a false positive (vanilla corpus: 1 false positive -> 0, no
+  real hit lost).
+- `x4modlist search` (issue #13): Nexus discovery by name. Needs `X4_NEXUS_KEY` and says so when it is missing
+  or refused. Candidates are marked have / have? / new against the active registry mods, with a count of active
+  mods that have no Nexus id; every result states its coverage (names only; hidden/removed and Workshop-only
+  mods absent; empty is not proof of absence). A GraphQL error is a non-answer (rc 2), never "no mods".
+- Fixed: a nested patch (`<mod>/extensions/<owner>/<file>`) from a mod that loads BEFORE its owner is applied
+  right after the owner's file, as the engine does (measured 2026-10-12). It used to be dropped silently by the
+  effective store. Tier B evaluates such a patch against the owner's file (INFO) instead of an UNMEASURED WARN
+  (F286, F141).
+- Fixed: DLC folders are recognised case-insensitively everywhere (`_merge.is_dlc_folder`) (F284).
+- The oracle gates refuse (rc 2) when an engine-loadable file of a mod they judge was edited or created after
+  the engine log, and `oracle.py` finds logged mods in every install root (F285).
+
 - Mod-update and modlist reviews reconcile the current save situation, session intent and local user preferences before proposing changes; ask only for material missing facts. Save preservation and scoped authorization remain required.
 
 - Mutation-probe kills require new testcase failures against the same marked
