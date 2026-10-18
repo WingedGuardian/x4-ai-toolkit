@@ -549,8 +549,17 @@ def _analyze_vpath(
     notes: dict[tuple[str, str], list[str]] = defaultdict(list)  # (folder, cid|key)
     off: list[tuple[str, etree._Element, list[str], list[str]]] = []  # guarded off
     base_owners = set(config.overlays)
+    # The plain door also applies `extensions/<owner>/<vpath>` patches onto a full/union
+    # supplier among these mods -- including from a mod loading BEFORE it (MEASURED
+    # 2026-10-12) -- so the sequential instrument must apply them too, or its byte
+    # check against full_tree() fails and the whole file loses collision analysis.
+    nested_door = (None if _merge._nested_target(vpath, config.packed_dlc_names())
+                   is not None else
+                   lambda f, owner: _merge.overlay_root(
+                       folder_to_path[f], f"extensions/{owner}/{vpath}", []))
     traced, final_paths, qualified = _compat_state.trace(vpath, base_tree,
-        [(f, r) for f, r in read if folder_to_path[f] not in base_owners], full_tree())
+        [(f, r) for f, r in read if folder_to_path[f] not in base_owners], full_tree(),
+        nested=nested_door)
     if base_tree is not None and not qualified:
         if report is not None:
             report.skip(vpath, "sequential selector instrument disagreed with the normal merge; "
@@ -1146,7 +1155,8 @@ def _walk_positions(vpath: str, ordered: list[str], folder_to_path: dict[str, Pa
 
     The per-overlay step mirrors `_merge.build_effective`'s loop (inert bare-path diff
     over a non-game base; nested `extensions/<owner>/` patches onto an earlier
-    full/union supplier) through `_merge`'s own `overlay_root` / `apply_overlay`. It is
+    full/union supplier, and an EARLIER mod's nested patch applied as soon as its
+    owner supplies the file) through `_merge`'s own `overlay_root` / `apply_overlay`. It is
     CHECKED, not trusted: returns True only when the finished tree serializes exactly
     as `build_effective` over the same mods (*want*, built here if not given). False --
     unsupported shape (a nested, mod-owned vpath), unbuildable, or a drifted pass --
@@ -1179,6 +1189,15 @@ def _walk_positions(vpath: str, ordered: list[str], folder_to_path: dict[str, Pa
                 tree, mode = _merge.apply_overlay(tree, oroot, vpath, odir.name)
                 if mode in ("union", "full"):
                     owners.append(odir.name)
+                    # Mirrors build_effective: an EARLIER mod's nested patch of this
+                    # owner applies right after the owner's file (MEASURED 2026-10-12).
+                    for prior in ordered[:pos]:
+                        if prior.lower() == odir.name.lower():
+                            continue
+                        nroot = _merge.overlay_root(folder_to_path[prior],
+                                                    f"extensions/{odir.name}/{vpath}", [])
+                        if nroot is not None:
+                            tree, _mode = _merge.apply_overlay(tree, nroot, vpath, prior)
         for owner in owners:
             if odir.name.lower() == owner.lower():
                 continue
