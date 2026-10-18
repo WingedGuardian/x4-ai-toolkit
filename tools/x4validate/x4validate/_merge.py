@@ -64,6 +64,18 @@ def _default_game_root() -> Path:
 GAME_ROOT = _default_game_root()
 
 
+def is_dlc_folder(name: str) -> bool:
+    """Is *name* an `ego_dlc_*` DLC folder? Case-insensitive, a PREFIX test.
+
+    The one implementation (F284). Five call sites used to test
+    `name.startswith("ego_dlc_")` on their own; a reference folder spelled
+    `EGO_DLC_Terran` was then no DLC to `Config.dlc_dirs` and a MOD to
+    `_registry.scan_installed`. `tests/test_dlc_folder_case.py` bans a
+    case-sensitive prefix test anywhere else.
+    """
+    return name.lower().startswith("ego_dlc_")
+
+
 def is_configured_reference(ref: Path | None) -> bool:
     """Is *ref* the reference tree this toolkit is configured for?
 
@@ -177,7 +189,7 @@ class Config:
         # path: the two early returns below used a plain sort, which puts `_` before the
         # letters (release review, finding 9).
         dirs = (sorted((p for p in ext.iterdir()
-                        if p.is_dir() and p.name.startswith("ego_dlc_")),
+                        if p.is_dir() and is_dlc_folder(p.name)),
                        key=lambda p: _loadorder.sort_key(p.name))
                 if ext.is_dir() else [])
         if not self.include_packed_dlc or not is_configured_reference(self.reference):
@@ -187,7 +199,7 @@ class Config:
         if not game_ext.is_dir():
             return dirs
         packed = [p for p in game_ext.iterdir()
-                  if p.is_dir() and p.name.startswith("ego_dlc_")
+                  if p.is_dir() and is_dlc_folder(p.name)
                   and p.name.lower() not in have and _cat.is_packed(p)]
         # ONE order across both kinds (AUDIT-2026-09-24 LO-6): packed DLC used to be
         # appended AFTER every unpacked one whatever their names, a second ordering rule
@@ -1137,7 +1149,18 @@ def build_effective(
     # nested ops ARE evaluated — so this door was the wrong one.
     owner_folders: list[str] = []
 
-    for odir in overlay_dirs:
+    def apply_nested(odir: Path, owner: str) -> None:
+        """Apply *odir*'s patch of *owner*'s file at `extensions/<owner>/<vpath>`."""
+        nonlocal tree
+        nroot = overlay_root(odir, f"extensions/{owner}/{vpath}", skipped)
+        if nroot is None:
+            return
+        tree, nmode = apply_overlay(tree, nroot, vpath, odir.name, recorder=recorder)
+        if recorder is not None and nmode != "full":
+            recorder.file_chain.append(Origin(odir.name, nmode))
+        sources.append(f"{odir.name}:{nmode}(nested:{owner})")
+
+    for pos, odir in enumerate(overlay_dirs):
         oroot = overlay_root(odir, vpath, skipped)
         if oroot is not None:
             # The engine only loads a bare-path <diff> when the GAME supplies the
@@ -1161,12 +1184,23 @@ def build_effective(
                     base_found = base_found or mode in {"union", "full"}
                     if mode in {"union", "full"} and odir.resolve() in game_dirs:
                         from_game = True
-                if mode in {"union", "full"} and odir.resolve() not in game_dirs:
-                    owner_folders.append(odir.name)
                 if recorder is not None and mode != "full":
                     # full-override already appended to file_chain in apply_overlay
                     recorder.file_chain.append(Origin(odir.name, mode))
                 sources.append(f"{odir.name}:{mode}")
+                if mode in {"union", "full"} and odir.resolve() not in game_dirs:
+                    owner_folders.append(odir.name)
+                    # A mod loading BEFORE this owner may already have shipped
+                    # `extensions/<owner>/<vpath>`. MEASURED 2026-10-12 (engine log +
+                    # a save): the engine APPLIES such a patch, right after the
+                    # owner's file and before every later mod -- exactly the order
+                    # `_build_owned` uses for the nested door. This loop used to fill
+                    # `owner_folders` only on reaching the owner, so those patches
+                    # were dropped with no trace in `sources` or `skipped`
+                    # (kuertee_additional_agent_actions -> kuertee_emergent_missions).
+                    for prior in overlay_dirs[:pos]:
+                        if prior.name.lower() != odir.name.lower():
+                            apply_nested(prior, odir.name)
 
         # Nested candidates: this overlay patching an EARLIER overlay's file at
         # `extensions/<owner>/<vpath>`. The inert-bare-diff rule does NOT apply —
@@ -1190,14 +1224,7 @@ def build_effective(
         for owner in owner_folders:
             if odir.name.lower() == owner.lower():
                 continue
-            nroot = overlay_root(odir, f"extensions/{owner}/{vpath}", skipped)
-            if nroot is None:
-                continue
-            tree, mode = apply_overlay(tree, nroot, vpath, odir.name,
-                                       recorder=recorder)
-            if recorder is not None and mode != "full":
-                recorder.file_chain.append(Origin(odir.name, mode))
-            sources.append(f"{odir.name}:{mode}(nested:{owner})")
+            apply_nested(odir, owner)
 
     # Text files (t/0001.xml, t/0001-lNNN.xml) have no single base file in reference
     # — the engine overlays them onto the language tree. A mod's t-diff adds <page>s

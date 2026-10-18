@@ -663,6 +663,7 @@ def scan_installed(dirs: list[Path] | None = None,
     2026-09-26: all 8 installed `ego_dlc_*/content.xml`, the packed mini-DLC included --
     their manifests are loose), but it is read from the manifest anyway.
     """
+    from x4validate._merge import is_dlc_folder  # lazy, as `_merge` is elsewhere here
     out = []
     # root_rank: the position of the root this mod was found in -- the WALK order. The
     # engine applies the game root's mods before the profile root's (MEASURED 2026-09-26,
@@ -677,7 +678,7 @@ def scan_installed(dirs: list[Path] | None = None,
         for sub in sorted(base.iterdir()):
             if not sub.is_dir():
                 continue
-            if sub.name.startswith("ego_dlc_"):
+            if is_dlc_folder(sub.name):
                 if dlc is not None:
                     dlc.append(_dlc_entry(sub))
                 continue

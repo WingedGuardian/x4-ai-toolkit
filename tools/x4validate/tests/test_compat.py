@@ -86,7 +86,7 @@ def test_sequential_instrument_disagreement_is_a_degraded_nonanswer(tmp_path, mo
     for name in ("a", "b"):
         _mod(ext, name, {"libraries/wares.xml":
              '<diff><replace sel="//price/@average">2</replace></diff>'})
-    monkeypatch.setattr(_compat._compat_state, "trace", lambda *a: ({}, {}, False))
+    monkeypatch.setattr(_compat._compat_state, "trace", lambda *a, **k: ({}, {}, False))
     rep = _compat.analyze(ext, config=cfg)
     assert not rep.collisions and any(s.degraded for s in rep.skipped)
 
@@ -2088,3 +2088,61 @@ def test_8R_an_absent_target_ADD_whose_child_key_another_mod_defines_is_named(tm
                ("b_mod", '<add sel="//ware[@id=\'gone\']" pos="after" if="false()">'
                          '<ware id="kware"/></add>'))
     assert [(g.mod, g.shared_with) for g in rep.guarded_off] == [("b_mod", ["a_mod"])]
+
+
+# --- a nested patch from a mod that loads BEFORE the owner (MEASURED 2026-10-12) -----
+#
+# The engine applies `<early>/extensions/<owner>/<rel>` right after the owner's file.
+# `build_effective`'s plain door now does too; x4compat's two sequential instruments
+# (`_walk_positions` and `_compat_state.trace`) self-check against it byte for byte,
+# so each must mirror the change or the file is SKIPPED as "instrument disagreed".
+
+def test_an_EARLY_nested_patcher_collides_on_the_nested_file(tmp_path, case_insensitive_fs):
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    _mod(ext, "target_mod", {"md/Thing.xml":
+         '<mdscript name="Thing"><cues><cue name="C" x="0"/></cues></mdscript>'})
+    for p in ("a_patch", "z_patch"):        # a_patch loads BEFORE target_mod
+        _mod(ext, p, {"extensions/target_mod/md/thing.xml":
+             f'<diff><replace sel="//cue/@x">{p}</replace></diff>'})
+    rep = _compat.analyze(ext, config=cfg)
+    assert rep.load_order.index("a_patch") < rep.load_order.index("target_mod")
+    hard = rep.by_kind("HARD")
+    assert len(hard) == 1 and hard[0].mods == ["a_patch", "z_patch"], hard
+    assert hard[0].winner == "z_patch"
+    assert not rep.degraded, [s.why for s in rep.skipped]
+
+
+def _early_bare_and_nested(tmp_path):
+    """a_patch (loads first) ships BOTH a bare diff on the GAME file and a nested patch
+    of target_mod's full override of it: the plain door's group is {a_patch,
+    target_mod}, and its merge now applies a_patch's nested op after target_mod."""
+    cfg = _setup_ref(tmp_path)
+    ext = tmp_path / "extensions"
+    vp = "assets/props/mat.xml"
+    _mod(ext, "target_mod", {vp: "<materials><m id='a' v='1'/></materials>"})
+    _mod(ext, "a_patch", {
+        vp: "<diff><add sel='/materials'><m id='b'/></add></diff>",
+        f"extensions/target_mod/{vp}": "<diff><replace sel=\"//m[@id='a']/@v\">2</replace></diff>"})
+    return cfg, ext, vp
+
+
+def test_an_EARLY_nested_patcher_does_not_cost_the_plain_file_its_analysis(tmp_path):
+    cfg, ext, vp = _early_bare_and_nested(tmp_path)
+    live = _merge.build_effective(vp, _merge.replace(
+        cfg, overlays=(ext / "a_patch", ext / "target_mod"))).tree
+    assert live.xpath("//m[@id='a']/@v") == ["2"]          # precondition: merge applies it
+    rep = _compat.analyze(ext, config=cfg)
+    disagreed = [s for s in rep.skipped if "instrument disagreed" in s.why]
+    assert not disagreed, [(s.what, s.why) for s in disagreed]
+
+
+def test_walk_positions_mirrors_an_EARLY_nested_patch(tmp_path):
+    cfg, ext, vp = _early_bare_and_nested(tmp_path)
+    paths = {"a_patch": ext / "a_patch", "target_mod": ext / "target_mod"}
+    seen = []
+    ok = _compat._walk_positions(vp, ["a_patch", "target_mod"], paths, cfg,
+                                 lambda pos, tree, applied: seen.append(
+                                     (pos, applied, tree.xpath("//m[@id='a']/@v"))))
+    assert ok, "the sequential pass drifted from build_effective"
+    assert seen[-1] == (1, True, ["2"]), seen

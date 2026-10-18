@@ -5,10 +5,10 @@ v3.3.0 release review (lane roots).
 Finding 6. `extensions/<T>/<rel>` patches mod T's own file. When T is active but loads
 AFTER the candidate, T is (correctly) not in the patch-time tree -- and the path fell
 through to "no base game file (path mismatch? this patch can never apply)", an ERROR
-that is the wrong diagnosis: the path is right, the ORDER is what is in question, and
-whether the engine applies a nested patch to a later-loading mod is UNMEASURED. It is
-now a WARN naming T, saying so, and advising an optional <dependency> on T (which
-places T first). A truly absent file keeps the path ERROR -- one twin per clause:
+that is the wrong diagnosis: the path is right, the ORDER is what is in question. It became a
+WARN calling the engine's behaviour UNMEASURED; MEASURED 2026-10-12 (engine log + a
+save), the engine APPLIES such a patch right after T's file, so the ops are now
+evaluated against T's file and the finding is an INFO naming the order. A truly absent file keeps the path ERROR -- one twin per clause:
 T loads later but does not ship the file; T loads earlier and does not ship it.
 
 Finding 7. The Tier B note said "(of M installed)" while M counted the ACTIVE set.
@@ -77,15 +77,32 @@ LATER = "extensions/zzz_later/libraries/later_only.xml"
 EARLIER = "extensions/aaa_base/libraries/aaa_only.xml"
 
 
-def test_a_nested_patch_on_a_LATER_loading_active_mod_is_a_WARN_naming_it(install):
+def test_a_nested_patch_on_a_LATER_loading_active_mod_is_EVALUATED(install):
+    """MEASURED 2026-10-12 (engine log + a save): the engine APPLIES a nested patch to
+    a mod that loads later, right after that mod's file. So its ops are evaluated
+    against the owner's file (plus earlier patchers) and the only finding is an INFO
+    naming the order -- the former UNMEASURED WARN is gone."""
     _ext, tmp, cfg = install
-    got, _rep = _findings(_cand(tmp, LATER), cfg, LATER)
+    got, rep = _findings(_cand(tmp, LATER), cfg, LATER)
     assert len(got) == 1, got
     f = got[0]
-    assert f.severity == "warn", f
+    assert (f.severity, f.category) == ("info", "load-order"), f
     assert "path mismatch" not in f.message, f.message
     assert "zzz_later" in f.message and "AFTER" in f.message, f.message
-    assert "UNMEASURED" in f.message and "dependency" in f.message, f.message
+    assert "UNMEASURED" not in f.message and "MEASURED" in f.message, f.message
+    assert any("1 diff file(s) checked" in n for n in rep.notes), rep.notes
+    assert not any("NOT evaluated" in n for n in rep.notes), rep.notes
+
+
+def test_TWIN_a_selector_the_LATER_owner_does_not_match_is_a_selector_ERROR(install):
+    """Proves the ops are really evaluated: a sel that the owner's file does not
+    match must now be caught, where the old WARN said nothing about the ops."""
+    _ext, tmp, cfg = install
+    cand = _cand(tmp)
+    _w(cand / LATER, "<diff><replace sel=\"/r/missing/@v\">2</replace></diff>")
+    got, _rep = _findings(cand, cfg, LATER)
+    errors = [f for f in got if f.severity == "error"]
+    assert len(errors) == 1 and "/r/missing/@v" in errors[0].message, got
 
 
 def test_TWIN_the_same_patch_on_an_EARLIER_mod_resolves(install):

@@ -1061,19 +1061,15 @@ def _no_base_finding(vpath: str, config: _merge.Config) -> tuple[str, str, str]:
                     f"{state} (designed no-op, not an error)")
         owner = _later_loading_owner(nested, config)
         if owner is not None:
-            # ACTIVE, SHIPS the file, but loads AFTER this mod (release review, finding
-            # 6): the path is right and the ORDER is the question -- "path mismatch" was
-            # the wrong diagnosis. WARN, not ERROR: whether the engine applies a nested
-            # patch to a mod that loads later is UNMEASURED, so neither verdict is known.
-            owner_id = _loadorder.mod_dependencies(owner)[0] or owner.name
-            return ("warn", "load-order",
-                    f"patch targets extension '{owner.name}', which is ACTIVE and ships "
-                    f"'{nested[1]}' but loads AFTER this mod, so that file is not in the "
-                    "tree yet at this mod's load position. Whether the engine applies a "
-                    "nested patch to a mod that loads later is UNMEASURED, and its ops "
-                    "were not evaluated. To make the order certain, add "
-                    f"<dependency id=\"{owner_id}\" optional=\"true\"/> to this mod's "
-                    f"content.xml, which loads '{owner.name}' first")
+            # ACTIVE, SHIPS the file, loads AFTER this mod -- and `_sel_check_file`
+            # already retried with the owner in the tree, so reaching here means even
+            # that built nothing (the owner's copy is unreadable, or is itself a
+            # <diff>). Not a path mismatch: the path names a real file.
+            return ("warn", "unverifiable",
+                    f"patch targets extension '{owner.name}', which is ACTIVE, loads "
+                    f"AFTER this mod and ships '{nested[1]}', but no base tree could be "
+                    "built from that file (unreadable, or itself a <diff>), so this "
+                    "patch's ops were not evaluated")
     parts = vpath.split("/")
     if len(parts) > 1 and parts[0] == "extensions" and parts[1].lower().startswith("ego_dlc_"):
         dlc = parts[1]
@@ -1185,9 +1181,35 @@ def _sel_check_file(vpath: str, diff_root, config: _merge.Config, report: Report
             report.skip(f"sel-resolution against a complete tree ({vpath})",
                         f"an overlay could not be parsed, so the comparison tree is "
                         f"incomplete: {msg}", degraded=True)
+    later_owner = None
+    if merged.tree is None:
+        nested = _merge._nested_target(vpath, config.packed_dlc_names())
+        later_owner = _later_loading_owner(nested, config) if nested is not None else None
+        if later_owner is not None:
+            # The target is ACTIVE, ships the file, and loads AFTER this mod. MEASURED
+            # 2026-10-12 (engine log + a save, kuertee_additional_agent_actions ->
+            # kuertee_emergent_missions and two more): the engine APPLIES such a patch,
+            # right after the owner's file and before later mods. So the tree this
+            # patch meets is the owner's file plus the nested patches of mods loading
+            # before THIS one -- exactly `_build_owned` over the patch-time overlays
+            # with the owner added (as `_compat._owner_aware_config` does).
+            merged = _merge.build_effective(vpath, _merge.replace(
+                config, overlays=tuple(config.overlays) + (later_owner,)))
+            for msg in merged.skipped:
+                if msg not in seen_skips:
+                    seen_skips.add(msg)
+                    report.skip(f"sel-resolution against a complete tree ({vpath})",
+                                f"an overlay could not be parsed, so the comparison tree "
+                                f"is incomplete: {msg}", degraded=True)
     if merged.tree is None:
         report.add(*_no_base_finding(vpath, config), vpath)
         return False
+    if later_owner is not None:
+        report.add("info", "load-order",
+                   f"patch targets extension '{later_owner.name}', which loads AFTER this "
+                   "mod; the engine applies a nested patch to a later-loading mod right "
+                   "after that mod's file (MEASURED 2026-10-12), so the ops were evaluated "
+                   f"against '{later_owner.name}'s file plus earlier patchers", vpath)
     if (not merged.base_from_game
             and _merge._nested_target(vpath, config.packed_dlc_names()) is None):
         # Some mod supplies this file, but the GAME does not — so a bare-path diff
@@ -1208,7 +1230,7 @@ def _sel_note(checked: int, found: int, payload: int | str) -> str:
             f"across {payload} payload XML file(s)")
     if found != checked:
         note += (f"; {found - checked} more diff file(s) found whose ops were NOT "
-                 "evaluated (no base / inactive or later-loading target / inert path -- see "
+                 "evaluated (no base / inactive target / inert path -- see "
                  "the findings)")
     return note
 

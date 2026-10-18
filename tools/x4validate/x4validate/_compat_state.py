@@ -110,27 +110,68 @@ class Nodes(Recorder):
         return result
 
 
-def trace(vpath, base, roots, expected=None):
+def trace(vpath, base, roots, expected=None, nested=None):
     """({(source, op index): OpTargets}, final identity->XPath, qualified).
 
     The final byte comparison is against the normal merge entry, rather than
     trusting this instrument merely because its own per-op calls succeeded.
+
+    *nested*, when given, is ``nested(source, owner) -> root | None``: *source*'s
+    patch of *owner*'s file at `extensions/<owner>/<vpath>`. It mirrors
+    `_merge.build_effective`'s plain door, which applies such a patch onto a
+    full/union supplier -- right after the owner for a mod loading EARLIER (MEASURED
+    2026-10-12), after the patcher's own file for one loading later. Those ops are
+    applied (so later selectors see their effect and the byte check can pass) but not
+    recorded per op: they belong to the nested vpath's own analysis. Without it, the
+    final comparison disagreed and the whole file lost collision analysis.
     """
     if base is None:
         return {}, {}, False
     tree = copy.deepcopy(base)
     nodes = Nodes(tree, vpath.lower().startswith(("libraries/", "index/", "t/")))
     records = {}
+    owners: list[str] = []
+    seen: list[str] = []
+
+    def apply_nested(source, owner):
+        nonlocal tree
+        nroot = nested(source, owner)
+        if nroot is None:
+            return True
+        nodes.source, nodes.op_index, nodes.split = source, f"nested:{owner}", False
+        tree, _m = _merge.apply_overlay(tree, nroot, vpath, source, recorder=nodes)
+        if tree is None:
+            return False
+        nodes.tree = tree
+        if nodes.pending_root:
+            nodes.register(tree)
+            nodes.pending_root = False
+        return True
+
+    def after(source):
+        seen.append(source)
+        if nested is None:
+            return True
+        return all(apply_nested(source, owner) for owner in owners
+                   if owner.lower() != source.lower())
+
     for source, root in roots:
         nodes.source = source
         if root.tag != "diff":
-            tree, _mode = _merge.apply_overlay(tree, root, vpath, source, recorder=nodes)
+            tree, mode = _merge.apply_overlay(tree, root, vpath, source, recorder=nodes)
             if tree is None:
                 return {}, {}, False
             nodes.tree = tree
             if nodes.pending_root:
                 nodes.register(tree)
                 nodes.pending_root = False
+            if nested is not None and mode in ("union", "full"):
+                owners.append(source)
+                if not all(apply_nested(prior, source) for prior in seen
+                           if prior.lower() != source.lower()):
+                    return {}, {}, False
+            if not after(source):
+                return {}, {}, False
             continue
         for index, op in enumerate(o for o in root if isinstance(o.tag, str)):
             nodes.op_index = index
@@ -158,5 +199,7 @@ def trace(vpath, base, roots, expected=None):
             records[(source, index)] = OpTargets(ids if active or ids is None else (),
                 tuple(sorted(nodes.created)) if active else (), active, verdict.detail, ids,
                 removed if active else ())
+        if not after(source):
+            return {}, {}, False
     qualified = expected is not None and etree.tostring(tree) == etree.tostring(expected)
     return records, nodes.final_paths(tree), qualified

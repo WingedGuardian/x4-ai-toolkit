@@ -623,6 +623,98 @@ def test_bare_diff_over_another_mods_file_stays_inert(tmp_path):
     assert any("diff(inert)" in s for s in res.sources), res.sources
 
 
+# --- a nested patch from a mod that loads BEFORE the owner ----------------------
+#
+# MEASURED 2026-10-12 (engine log + a save, no launch): `<aaa>/extensions/<zzz>/<rel>`
+# where aaa loads EARLIER than zzz is APPLIED by the engine, right after zzz's own
+# file and before later mods (live: kuertee_additional_agent_actions ->
+# kuertee_emergent_missions md/kuertee_emergent_missions_hunt.xml). The nested door
+# (`_build_owned`) already did that; the plain door filled `owner_folders` only when
+# its loop reached zzz, so aaa's patch was silently DROPPED -- in neither `sources`
+# nor `skipped`.
+
+_VP = "assets/test/macros/widget_macro.xml"
+_SEL = "//macro[@name='widget_macro']/properties/damage/@value"
+
+
+def _owned_world(tmp_path, patchers: dict[str, str]):
+    """zzz owns _VP (a full file, damage 100); each patcher ships a nested diff."""
+    ext = tmp_path / "extensions"
+    zzz = ext / "zzz"
+    (zzz / "assets/test/macros").mkdir(parents=True)
+    (zzz / _VP).write_text(
+        '<macros><macro name="widget_macro" class="bullet"><properties>'
+        '<damage value="100"/></properties></macro></macros>', encoding="utf-8")
+    dirs = {"zzz": zzz}
+    for name, body in patchers.items():
+        f = ext / name / "extensions" / "zzz" / _VP
+        f.parent.mkdir(parents=True)
+        f.write_text(f"<diff>{body}</diff>", encoding="utf-8")
+        dirs[name] = ext / name
+    return dirs
+
+
+def _cfg(tmp_path, dirs, order):
+    return _merge.Config(reference=tmp_path / "ref", include_packed_dlc=False,
+                         overlays=tuple(dirs[n] for n in order))
+
+
+def _both_doors(tmp_path, dirs, order):
+    cfg = _cfg(tmp_path, dirs, order)
+    return (_merge.build_effective(_VP, cfg),
+            _merge.build_effective(f"extensions/zzz/{_VP}", cfg))
+
+
+def test_a_nested_patch_from_a_mod_loading_BEFORE_the_owner_applies(tmp_path):
+    dirs = _owned_world(tmp_path, {"aaa": f'<replace sel="{_SEL}">555</replace>'})
+    plain, _nested = _both_doors(tmp_path, dirs, ["aaa", "zzz"])
+    assert plain.tree.find(".//damage").get("value") == "555", plain.sources
+    assert plain.sources == ["zzz:full", "aaa:diff(nested:zzz)"], plain.sources
+
+
+def test_an_early_and_a_late_nested_add_each_apply_exactly_once(tmp_path):
+    """Twin: the early patch is applied at the owner, never again when the loop later
+    passes the patcher; a LATER patcher keeps its own single application."""
+    add = "<add sel=\"//macro[@name='widget_macro']/properties\"><{t}/></add>"
+    dirs = _owned_world(tmp_path, {"aaa": add.format(t="early"),
+                                   "bbb": add.format(t="late")})
+    plain, nested = _both_doors(tmp_path, dirs, ["aaa", "zzz", "bbb"])
+    for res in (plain, nested):
+        assert len(res.tree.findall(".//early")) == 1, res.sources
+        assert len(res.tree.findall(".//late")) == 1, res.sources
+    assert plain.sources == ["zzz:full", "aaa:diff(nested:zzz)", "bbb:diff(nested:zzz)"]
+
+
+@pytest.mark.parametrize("order", [["aaa", "zzz"], ["zzz", "aaa"],
+                                   ["aaa", "zzz", "bbb"], ["bbb", "aaa", "zzz"]])
+def test_plain_and_nested_doors_give_identical_trees(tmp_path, order):
+    dirs = _owned_world(tmp_path, {
+        "aaa": f'<replace sel="{_SEL}">555</replace>'
+               "<add sel=\"//macro[@name='widget_macro']/properties\"><a/></add>",
+        "bbb": "<add sel=\"//macro[@name='widget_macro']/properties\"><b/></add>"})
+    dirs = {k: v for k, v in dirs.items() if k in order}
+    plain, nested = _both_doors(tmp_path, dirs, order)
+    assert etree.tostring(plain.tree) == etree.tostring(nested.tree), (
+        plain.sources, nested.sources)
+
+
+def test_a_nested_patch_whose_owner_is_not_active_applies_nothing(tmp_path):
+    """Twin: no owner in the overlay set, no document -- the patch has nothing to
+    patch, through either door."""
+    dirs = _owned_world(tmp_path, {"aaa": f'<replace sel="{_SEL}">555</replace>'})
+    plain, nested = _both_doors(tmp_path, dirs, ["aaa"])
+    assert plain.tree is None and nested.tree is None
+    assert not any("nested" in s for s in plain.sources), plain.sources
+
+
+def test_an_early_and_a_late_patch_on_one_attribute_the_LATER_wins(tmp_path):
+    dirs = _owned_world(tmp_path, {"aaa": f'<replace sel="{_SEL}">111</replace>',
+                                   "bbb": f'<replace sel="{_SEL}">222</replace>'})
+    plain, nested = _both_doors(tmp_path, dirs, ["aaa", "zzz", "bbb"])
+    assert plain.tree.find(".//damage").get("value") == "222"
+    assert nested.tree.find(".//damage").get("value") == "222"
+
+
 # --- Engine semantics: a MALFORMED overlay is contained ------------------------
 # Researched 2026-08-23 (KB 2026-08-23b). The engine logs
 #   "Error loading from XML merge/patch file '<TARGET>'. ... Skipping file."
