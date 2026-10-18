@@ -3789,7 +3789,7 @@ def test_FXB4_every_CI_BASH_install_leg_that_runs_on_Windows_is_ISOLATED_too():
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     blocks = re.split(r"(?m)^\s*- name: ", text)[1:]
     bash_steps = [b for b in blocks if "bash install.sh --method" in b and "shell: bash" in b
-                  and "if: runner.os == 'Linux'" not in b]
+                  and not re.search(r"(?m)^\s*if:.*runner\.os == 'Linux'", b)]
     assert len(bash_steps) >= 2, [b.splitlines()[0] for b in bash_steps]
     keys = []
     for b in bash_steps:
