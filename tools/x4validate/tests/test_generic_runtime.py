@@ -239,3 +239,42 @@ def test_bulk_in_place_restore_binds_human_scope_command_count_and_host(tmp_path
     restored = run(args)
     assert len(restored["published"]) == 3 and restored["pre_restore_transactions"]
     assert all(member.read_bytes() == b"original" for member in members)
+
+
+def test_K6_a_shell_action_without_cwd_never_borrows_the_entry_process_directory(tmp_path):
+    """K6: the generic entry passed execution_cwd_known=True when provenance omitted it, so a
+    relative mutation in a cwd-less shell action was resolved against agent-harness.py's OWN
+    directory. Run from inside the save folder, `rm progress.xml` became a save delete there."""
+    root = tmp_path / "toolkit"
+    for rel in ("tools/x4_harness", "tools/modding_harness"):
+        shutil.copytree(REPO / rel, root / rel, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(REPO / "tools/agent-harness.py", root / "tools/agent-harness.py")
+    config = root / ".modding-agent-harness/config.json"
+    config.parent.mkdir()
+    config.write_text(json.dumps({"save_reserve_bytes": 0}))
+    saves = tmp_path / "profile/save"
+    saves.mkdir(parents=True)
+    (saves / "progress.xml").write_bytes(b"fixture save")
+    env = dict(os.environ, X4_TOOLKIT=str(root), X4_PROFILE=str(saves.parent), X4_SAVES=str(saves),
+               X4_CONFIG="/nonexistent", X4_GAME=str(tmp_path / "game"), X4_REFERENCE=str(tmp_path / "reference"))
+    for name in ("X4_GUARD", "X4_GUARD_CHECK", "X4_BASH"):
+        env.pop(name, None)
+
+    def check(action):
+        result = subprocess.run([sys.executable, "-B", str(root / "tools/agent-harness.py"), "check"],
+                                input=json.dumps(action).encode(), capture_output=True, env=env,
+                                timeout=60, cwd=str(saves))
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    shell = {"api_version": 1, "host": "future-coder", "tool": "shell", "surface": "shell", "shell": "bash",
+             "session_id": "s", "command": "rm progress.xml"}
+    reply = check(shell)
+    assert reply["result"]["decision"] == "deny", reply
+    assert "absolute" in reply["result"]["reason"], reply
+    assert not reply["transactions"] and (saves / "progress.xml").exists()
+    # Twins: the same action WITH its cwd is judged there; a cwd-less harmless command passes.
+    reply = check(dict(shell, cwd=str(saves)))
+    assert reply["result"]["preservation"] == "verified" and reply["transactions"], reply
+    reply = check(dict(shell, command="echo hello"))
+    assert reply["result"]["decision"] == "allow", reply

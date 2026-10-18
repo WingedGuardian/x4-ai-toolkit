@@ -132,9 +132,13 @@ def main(argv=None):
                        "host_version": action.host_version, "tool_input": {"command": action.command},
                        "transcript_path": args.transcript}
             deadline = time.monotonic() + 40
+            # K6: an action with no cwd says nothing about where the host will execute it, so
+            # this process's own directory must never stand in for it (the vendored generic
+            # parser defaults provenance to "known"). Unknown means relative mutation targets
+            # are refused rather than resolved against the wrong folder.
+            known_cwd = bool(action.cwd) and action.provenance.get("execution_cwd_known", True) is not False
             output = save_policy.batch(payload, calls, lambda qualified: judge(calls, qualified, deadline),
-                                       deadline, action.host, args.preview,
-                                       execution_cwd_known=action.provenance.get("execution_cwd_known", True) is not False)
+                                       deadline, action.host, args.preview, execution_cwd_known=known_cwd)
     except (OSError, ValueError, RecursionError, UnicodeError, TimeoutError) as exc:
         if args.command in upgrade_cli.COMMANDS:
             output, exit_status = upgrade_cli.failure(args.command, exc, "generic X4 entry failed")
