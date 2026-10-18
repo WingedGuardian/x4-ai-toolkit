@@ -1615,6 +1615,33 @@ def _archive_hint(path: str | None, out) -> None:
           f"-- `x4live archive` keeps it.", file=out)
 
 
+def _publish_exclusive_copy(d: Path, stamp: str, sha: str, data: bytes) -> Path:
+    """Publish *data* under a fresh final name WITHOUT a hard link (a volume that has none).
+
+    No-clobber all the same: the name is created exclusively ("xb"), so a racing or
+    foreign file is never overwritten -- a taken name just draws another. The bytes are
+    re-read; a mismatch removes ONLY the file this call created (same-run scratch) so no
+    partial copy can satisfy the content-address glob, and refuses."""
+    while True:
+        dest = d / f"livedump-{stamp}-{uuid.uuid4().hex}-{sha[:8]}.uidata.xml"
+        try:
+            fh = dest.open("xb")
+            break
+        except FileExistsError:
+            continue  # silent-ok: name taken; draw another without touching it
+    try:
+        with fh:
+            fh.write(data)
+        back = dest.read_bytes()
+        if back != data:
+            raise _livedump.LiveDumpCorrupt(
+                f"wrote {len(data)} bytes to {dest} but read back {len(back)} -- not archived")
+    except BaseException:
+        dest.unlink(missing_ok=True)   # created by this call, this run -- never evidence
+        raise
+    return dest
+
+
 def cmd_archive(path: str | None, out_dir: str | None = None, out=None) -> int:
     """Copy the dump OUT of `uidata.xml`, which the game owns and overwrites.
 
@@ -1649,7 +1676,11 @@ def cmd_archive(path: str | None, out_dir: str | None = None, out=None) -> int:
     # lose the only thing that makes them evidence -- and it would report success.
     # Parse, fingerprint and copy ONE snapshot: the game may replace the source
     # between reads. Validating an earlier read cannot qualify later bytes.
-    data = src.read_bytes()
+    # A missing source is a NON-ANSWER (rc 2), as before 5398907 -- never a traceback.
+    try:
+        data = src.read_bytes()
+    except FileNotFoundError:
+        raise _livedump.LiveDumpUnavailable(f"{src} does not exist") from None
     # Match the universal-newline semantics of the ordinary read_text reader,
     # while retaining the original bytes for the archive itself (notably CRLF).
     text = data.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
@@ -1687,16 +1718,25 @@ def cmd_archive(path: str | None, out_dir: str | None = None, out=None) -> int:
         if back != data:
             raise _livedump.LiveDumpCorrupt(
                 f"wrote {len(data)} bytes to {tmp} but read back {len(back)} -- not archived")
+        linked = True
         while True:
             try:
                 os.link(tmp, dest)
                 break
             except FileExistsError:
                 dest = d / f"livedump-{stamp}-{uuid.uuid4().hex}-{sha[:8]}.uidata.xml"
+            except OSError:
+                linked = False      # no hard links here (exFAT, some shares): copy below
+                break
+        if not linked:
+            dest = _publish_exclusive_copy(d, stamp, sha, data)
     finally:
         tmp.unlink(missing_ok=True)  # never leave a .partial behind to be puzzled over
 
     print(f"archived: {dest}", file=out)
+    if not linked:
+        print("  this volume refused a hard link, so the final name was created "
+              "exclusively and written directly (never over an existing file).", file=out)
     print(f"  {len(dump.rows)} rows, {len(data)} bytes, payload sha {sha}", file=out)
     print(f"  byte-identical to the source, verified by re-read.", file=out)
     print(f"  replay it with:  x4live --file {dest} oracle", file=out)

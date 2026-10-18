@@ -168,15 +168,53 @@ def test_archive_validates_and_preserves_one_source_snapshot(src, tmp_path, monk
     assert archived.name.endswith("-" + C._dump_sha(str(archived))[:8] + ".uidata.xml")
 
 
-def test_unsupported_exclusive_publication_refuses_without_a_false_archive(src, tmp_path, monkeypatch):
+def test_no_hard_links_falls_back_to_an_exclusive_verified_copy(src, tmp_path, monkeypatch):
+    """A volume without hard links (exFAT, some network shares) still archives: the
+    final name is CREATED EXCLUSIVELY (never overwriting anything) and re-read. Until the
+    v4.0 review (V7) this refused outright, so the ground truth stayed in the file the
+    game overwrites."""
     def unsupported(*args, **kwargs):
         raise OSError("owned fixture: hard links unavailable")
     monkeypatch.setattr(C.os, "link", unsupported)
     d = tmp_path / "arch"
-    with pytest.raises(OSError, match="hard links unavailable"):
-        run(src, d)
-    assert not list(d.iterdir())
+    rc, out = run(src, d)
+    assert rc == 0, out
+    archived = list(d.glob("livedump-*.uidata.xml"))
+    assert len(archived) == 1 and archived[0].read_bytes() == src.read_bytes()
+    assert not list(d.glob("*.partial"))
+    assert "hard link" in out
     assert src.is_file()
+
+
+def test_TWIN_the_fallback_never_overwrites_an_existing_final_name(src, tmp_path, monkeypatch):
+    monkeypatch.setattr(C.os, "link",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no hard links")))
+    d = tmp_path / "arch"
+    d.mkdir()
+    names = iter(["taken", "taken", "free"])
+    monkeypatch.setattr(C.uuid, "uuid4", lambda: type("U", (), {"hex": next(names)})())
+    sha = C._dump_sha(str(src))
+    foreign = d / f"livedump-X-taken-{sha[:8]}.uidata.xml"
+    monkeypatch.setattr(C.datetime, "datetime",
+                        type("D", (), {"now": staticmethod(
+                            lambda: type("N", (), {"strftime": lambda self, f: "X"})())}))
+    foreign.write_bytes(b"foreign evidence")
+    rc, _out = run(src, d)
+    assert rc == 0
+    assert foreign.read_bytes() == b"foreign evidence"
+    assert (d / f"livedump-X-free-{sha[:8]}.uidata.xml").read_bytes() == src.read_bytes()
+
+
+def test_a_MISSING_source_is_refused_rc2_not_a_traceback(tmp_path, capsys):
+    """V7 (regression from 5398907): a raw FileNotFoundError ended the run, rc 1."""
+    missing = tmp_path / "nope" / "uidata.xml"
+    d = tmp_path / "arch"
+    with pytest.raises(L.LiveDumpUnavailable, match="does not exist"):
+        run(missing, d)
+    rc = C.main(["--file", str(missing), "archive", "--out", str(d)])
+    assert rc == 2
+    assert "does not exist" in capsys.readouterr().err
+    assert not d.exists()
 
 
 # --------------------------------------------------------------------------- #
