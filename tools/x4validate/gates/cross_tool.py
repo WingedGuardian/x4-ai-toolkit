@@ -657,7 +657,10 @@ def check_cross_tool_agreement() -> None:
     if subs:
         ok = viol = absent = unmapped = 0
         for c in subs:
-            mode, prop = _subtree_scope(c.target)
+            # The wiped node's XPath in the finished tree: x4compat's `target` can be an
+            # internal identity (a node another mod added), which no XPath shape maps.
+            w0 = getattr(c, "target_path", "") or c.target
+            mode, prop = _subtree_scope(w0)
             if mode == "unmapped":
                 unmapped += 1
                 continue
@@ -668,7 +671,7 @@ def check_cross_tool_agreement() -> None:
             if n:
                 viol += 1
                 if viol <= 3:
-                    print(f"          {c.vpath}: w0={c.target} victim={c.mods[0]!r} "
+                    print(f"          {c.vpath}: w0={w0} victim={c.mods[0]!r} "
                           f"wiped_by={c.wiped_by!r} still owns {n} attr(s)")
             else:
                 ok += 1

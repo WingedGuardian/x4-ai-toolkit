@@ -510,6 +510,37 @@ def test_sequential_identity_maps_via_its_qualified_final_path(tmp_path, monkeyp
     assert "checked 1 of 1 mappable" in out
 
 
+def _subtree_row(victim, target, target_path):
+    return _compat.Collision(_OWNED_REL, "SUBTREE", target, [victim, "w_mod"], "",
+                             "wipe", wiped_by="w_mod", target_path=target_path,
+                             target_tree="final")
+
+
+def test_a_SUBTREE_on_a_sequential_identity_is_scoped_by_its_final_path(
+        tmp_path, monkeypatch, capsys):
+    """Issue #11 follow-up: a SUBTREE target can be a synthetic identity (a node another
+    mod added); its scope comes from `target_path`. RED: the identity was scoped as-is,
+    so the row was 'unmapped' and the check could not run (CANNOT)."""
+    ct = _owned_world(tmp_path, monkeypatch, store_origin="z_patch")
+    row = _subtree_row("a_patch", "/macros/macro~x_mod:0:1", "/macros/macro")
+    _run_with(ct, monkeypatch, [row])
+    out = capsys.readouterr().out
+    assert not ct.failures and not ct.cannot, (ct.failures, ct.cannot, out)
+    assert "1/1 clean - 0 unmapped" in out, out
+
+
+def test_TWIN_a_SUBTREE_scoped_by_its_final_path_still_finds_a_surviving_victim(
+        tmp_path, monkeypatch, capsys):
+    """The same row whose victim still owns recharge.rate in the store must FAIL -- the
+    final path is used to check, not to excuse."""
+    ct = _owned_world(tmp_path, monkeypatch, store_origin="a_patch")
+    row = _subtree_row("a_patch", "/macros/macro~x_mod:0:1", "/macros/macro")
+    _run_with(ct, monkeypatch, [row])
+    out = capsys.readouterr().out
+    assert any(x.startswith("SUBTREE:") for x in ct.failures), (ct.failures, ct.cannot, out)
+    assert "~" not in out, out
+
+
 def test_FXH8_TWIN_an_INACTIVE_owner_and_a_0_node_target_stay_UNRESOLVED(
         tmp_path, monkeypatch, capsys):
     """The fallback survives: an owner that is not an active mod has no base tree, and

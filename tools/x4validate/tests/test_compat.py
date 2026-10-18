@@ -73,6 +73,14 @@ def test_sequential_replacement_only_contests_the_actual_new_contribution(tmp_pa
     row = hard[0]
     assert row.mods == ["a_feature", "b_patch"] and row.winner == "b_patch"
     assert row.target_tree == "final" and row.target_path == "/root/actions/set_value[2]"
+    # Issue #11 follow-up (user decision 2026-10-18): a replace landing on content another
+    # mod inserted FAILS, and says whose addition it is, that it is partial, and that the
+    # engine's resolution after the earlier insert is UNMEASURED.
+    assert row in rep.hard
+    assert "a_feature:added; b_patch:replace" in row.detail, row.detail
+    assert "the target was added by 'a_feature'" in row.detail
+    assert "partial: 1 of 3 elements a_feature inserted; the others survive" in row.detail
+    assert "UNMEASURED" in row.detail and "supply" not in row.detail
     assert not rep.by_kind("SUBTREE")
     live = _merge.build_effective(vpath, _merge.replace(
         cfg, overlays=(ext / "a_feature", ext / "b_patch"))).tree

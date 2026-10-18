@@ -174,6 +174,24 @@ class RemovedFirst:
 
 
 @dataclass
+class AddedInto:
+    """An `<add>` that lands, at its own load position, on content ANOTHER mod added
+    (issue #11 follow-up; user decision 2026-10-18). This is the normal compatibility-
+    patch pattern -- extend what the other mod added -- so it is REPORTED, never a
+    failing row. Two mods adding the same key there still make the usual duplicate
+    HARD row, exactly as under a base parent. The add only applies while `added_by`
+    loads first and still adds that node: removing or reordering it skips this op."""
+    vpath: str
+    mod: str          # the mod whose add lands on the other mod's content
+    line: int
+    sel: str
+    added_by: str     # the earlier mod that added the node it lands on
+    #: The anchor's XPath in the finished tree ("" when it has none there).
+    target_path: str = ""
+    guard: str = ""   # as `OrderMiss.guard`
+
+
+@dataclass
 class GuardedOff:
     """A `<diff>` op whose `if=` guard is FALSE when its mod loads (issue #8).
 
@@ -230,6 +248,8 @@ class CompatReport:
     removed_first: list[RemovedFirst] = field(default_factory=list)
     #: Ops whose `if=` guard is false at their load position -- see `GuardedOff`.
     guarded_off: list[GuardedOff] = field(default_factory=list)
+    #: Adds into content another mod added -- see `AddedInto`. Advisory, never failing.
+    added_into: list[AddedInto] = field(default_factory=list)
     #: WHICH roots were scanned, in words -- "" means every configured extensions root
     #: (the set the engine loads). An --ext-dir run scans that folder ONLY and says so
     #: here, because a mod in another root is then absent with nothing else to show it.
@@ -631,12 +651,18 @@ def _analyze_vpath(
                     continue
                 if not cids:
                     unmatched[folder].append(op)
-                    # Keep the old base target solely to disclose an attempted edit
-                    # after removal. It never becomes an applied op or a live winner.
-                    old = _resolve_op_targets(base_tree, sel) or []
-                    cids = [cid for cid in old if state == _G_UNEVAL or any(
-                        (r, i) < (rank[folder], idx) and (cid == removed or cid.startswith(removed + "/"))
-                        for r, i, removed in removals)]
+                    if state == _G_UNEVAL:
+                        # An unevaluable guard is KEPT, at what its selector matches at
+                        # ITS OWN load position -- never the base tree's answer, which
+                        # names a node an earlier mod may already have replaced.
+                        cids = list(tracked.potential or ())
+                    else:
+                        # Keep the old base target solely to disclose an attempted edit
+                        # after removal. It never becomes an applied op or a live winner.
+                        old = _resolve_op_targets(base_tree, sel) or []
+                        cids = [cid for cid in old if any(
+                            (r, i) < (rank[folder], idx) and (cid == removed or cid.startswith(removed + "/"))
+                            for r, i, removed in removals)]
                 if not tracked.applied and state != _G_UNEVAL and report is not None and cand_folder in (None, folder):
                     report.unapplied.append(f"{folder}/{vpath}:{op.sourceline or 0}: sel={sel!r} "
                                             f"was not applied: {tracked.detail}" +
@@ -681,7 +707,7 @@ def _analyze_vpath(
             overriders.append(folder)
 
     collisions: list[Collision] = []
-    contested: list[tuple[str, list[str], str, dict]] = []   # AN-5 rows, decided below
+    contested: list[tuple[str, list[str], str, dict, str]] = []   # AN-5 rows, decided below
     # Keys pass 1 already reported as HARD duplicates, with the mods of that
     # row: a union-key row is folded only when it names NO mod the hard row
     # missed (icons: the full-file shippers of icon#upgrade_* are different
@@ -698,6 +724,91 @@ def _analyze_vpath(
             out += [n for n in notes.get(pair, ()) if n not in out]
         return ("; " + "; ".join(out)) if out else ""
 
+    # Issue #11 follow-up: the top-level elements each op INSERTED (an add's children, a
+    # multi-element replace's siblings), so a later op on one of k of them can say it is
+    # a PARTIAL overwrite of that mod's addition.
+    inserted_by: dict[str, tuple[str, tuple[str, ...]]] = {}
+    for (folder, _index), record in traced.items():
+        if len(record.inserted) > 1:
+            for identity in record.inserted:
+                inserted_by[identity] = (folder, record.inserted)
+
+    def added_clause(cid: str, suppliers: list[str], subject: str = "target") -> str:
+        """Names WHO added the node an op lands on -- '' when no other mod added it."""
+        if not suppliers:
+            return ""
+        out = f"the {subject} was added by {', '.join(repr(s) for s in suppliers)}"
+        if cid in inserted_by:
+            maker, siblings = inserted_by[cid]
+            hit = sum(1 for sib in siblings if any(
+                "replace" in nmap.get(sib, ()) or "remove" in nmap.get(sib, ())
+                for f, nmap in diff_targets.items() if f != maker))
+            if hit < len(siblings):
+                out += (f" (partial: {hit} of {len(siblings)} elements {maker} inserted; "
+                        "the others survive)")
+        return out
+
+    # The engine has never been observed resolving a selector -- a positional predicate
+    # above all -- on content an earlier mod inserted; this answer is the merge model's.
+    unmeasured = ("UNMEASURED: which node the engine's selector (incl. any positional "
+                  "predicate) lands on after the earlier insert is the merge model's "
+                  "answer, not seen in game")
+
+    def same_parent_adds(cid: str, fs: list[str], parent_note: str) -> None:
+        # Same-parent adds coexist: one SOFT row naming EVERY adder. Each child key
+        # two or more of them add is ALSO a HARD row -- naming only THAT key's
+        # providers (issue #4: the whole parent-adder list used to be named, so an
+        # unrelated co-adder became the duplicate's "winner" and kept the HARD row in
+        # its own candidate report; only the first duplicated key was reported, and
+        # the SOFT row disappeared). The engine logs `Duplicate definition of '<id>'`
+        # (MEASURED); which definition survives is NOT measured, so the detail says
+        # so and `winner` is the last-loading provider by the usual convention.
+        # *parent_note* names the mod that ADDED the parent, when another mod did.
+        extra = f"; {parent_note}" if parent_note else ""
+        unchecked_wild: list[str] = []
+        for dup, providers in _dup_add_keys(cid, fs, add_child_keys).items():
+            if _is_wildcard_icon(dup):
+                # F276: the engine EXPANDS a wildcard icon per texture file and
+                # logs a duplicate only where two expansions share an ID -- so the
+                # comparison is per expanded ID, never per declared key.
+                shared, unchecked = _wildcard_icon_overlaps(
+                    dup, {f: _icon_decls([op for op in ops_at.get(f, {}).get(cid, [])
+                                          if op.tag == "add"], dup.split("#", 1)[1])
+                          for f in providers},
+                    folder_to_path)
+                # Not entered in hard_dup_keys: an expanded ID is not a declared key,
+                # so no UNION-KEY row is the same fact as this one.
+                for icon_id, holders in shared:
+                    last = winner(holders)
+                    collisions.append(Collision(
+                        vpath, "HARD", cid, holders, last,
+                        f"{len(holders)} mods' wildcard {dup} expand to icon ID "
+                        f"'{icon_id}' (duplicate); '{last}' loads last -- survivor "
+                        "not engine-measured" + extra + gnote((f, cid) for f in holders)))
+                if unchecked and (cand_folder is None or cand_folder in providers):
+                    unchecked_wild.append(
+                        f"{dup} of {', '.join(f for f, _ in unchecked)}")
+                    for f, why in unchecked:
+                        if report is not None:
+                            report.skip(
+                                f"{f}: wildcard {dup} at {vpath}",
+                                f"its texture set could not be enumerated ({why}), so "
+                                f"whether its expansion duplicates another mod's {dup} "
+                                "expansion is NOT CHECKED")
+                continue
+            hard_dup_keys.setdefault(dup, set()).update(providers)
+            last = winner(providers)
+            collisions.append(Collision(
+                vpath, "HARD", cid, providers, last,
+                f"{len(providers)} mods add {dup} under the same parent (duplicate); "
+                f"'{last}' loads last -- survivor not engine-measured" + extra
+                + gnote((f, cid) for f in providers)))
+        collisions.append(Collision(
+            vpath, "SOFT", cid, fs, winner(fs),
+            "multiple mods <add> under the same node (usually coexist)"
+            + (f"; NOT CHECKED: wildcard expansion of {'; '.join(unchecked_wild)}"
+               if unchecked_wild else "") + extra + gnote((f, cid) for f in fs)))
+
     # 1. diff-target node collisions
     node_to_mods: dict[str, dict[str, list[str]]] = defaultdict(dict)
     for folder, nmap in diff_targets.items():
@@ -708,73 +819,51 @@ def _analyze_vpath(
             continue
         if all(tags == ["supply"] for tags in per_mod.values()):
             continue  # descendant bookkeeping of an already contested replacement
-        all_tags = {t for tags in per_mod.values() for t in tags}
         fs = sorted(per_mod, key=lambda f: rank[f])
+        # "supply" = this mod ADDED the node (an add, or a replace's new content); it
+        # is not an op ON the node. The ops that land on it are the others.
+        suppliers = [f for f in fs if "supply" in per_mod[f]]
+        acting = [f for f in fs if any(t != "supply" for t in per_mod[f])]
+        # A supplier counts once ANOTHER mod's op lands on what it added.
+        others = [s for s in suppliers if any(f != s for f in acting)]
+        all_tags = {t for f in acting for t in per_mod[f] if t != "supply"}
         if all_tags == {"add"}:
-            # Same-parent adds coexist: one SOFT row naming EVERY adder. Each child key
-            # two or more of them add is ALSO a HARD row -- naming only THAT key's
-            # providers (issue #4: the whole parent-adder list used to be named, so an
-            # unrelated co-adder became the duplicate's "winner" and kept the HARD row in
-            # its own candidate report; only the first duplicated key was reported, and
-            # the SOFT row disappeared). The engine logs `Duplicate definition of '<id>'`
-            # (MEASURED); which definition survives is NOT measured, so the detail says
-            # so and `winner` is the last-loading provider by the usual convention.
-            unchecked_wild: list[str] = []
-            for dup, providers in _dup_add_keys(cid, fs, add_child_keys).items():
-                if _is_wildcard_icon(dup):
-                    # F276: the engine EXPANDS a wildcard icon per texture file and
-                    # logs a duplicate only where two expansions share an ID -- so the
-                    # comparison is per expanded ID, never per declared key.
-                    shared, unchecked = _wildcard_icon_overlaps(
-                        dup, {f: _icon_decls([op for op in ops_at.get(f, {}).get(cid, [])
-                                              if op.tag == "add"], dup.split("#", 1)[1])
-                              for f in providers},
-                        folder_to_path)
-                    # Not entered in hard_dup_keys: an expanded ID is not a declared key,
-                    # so no UNION-KEY row is the same fact as this one.
-                    for icon_id, holders in shared:
-                        last = winner(holders)
-                        collisions.append(Collision(
-                            vpath, "HARD", cid, holders, last,
-                            f"{len(holders)} mods' wildcard {dup} expand to icon ID "
-                            f"'{icon_id}' (duplicate); '{last}' loads last -- survivor "
-                            "not engine-measured" + gnote((f, cid) for f in holders)))
-                    if unchecked and (cand_folder is None or cand_folder in providers):
-                        unchecked_wild.append(
-                            f"{dup} of {', '.join(f for f, _ in unchecked)}")
-                        for f, why in unchecked:
-                            if report is not None:
-                                report.skip(
-                                    f"{f}: wildcard {dup} at {vpath}",
-                                    f"its texture set could not be enumerated ({why}), so "
-                                    f"whether its expansion duplicates another mod's {dup} "
-                                    "expansion is NOT CHECKED")
-                    continue
-                hard_dup_keys.setdefault(dup, set()).update(providers)
-                last = winner(providers)
-                collisions.append(Collision(
-                    vpath, "HARD", cid, providers, last,
-                    f"{len(providers)} mods add {dup} under the same parent (duplicate); "
-                    f"'{last}' loads last -- survivor not engine-measured"
-                    + gnote((f, cid) for f in providers)))
-            collisions.append(Collision(
-                vpath, "SOFT", cid, fs, winner(fs),
-                "multiple mods <add> under the same node (usually coexist)"
-                + (f"; NOT CHECKED: wildcard expansion of {'; '.join(unchecked_wild)}"
-                   if unchecked_wild else "") + gnote((f, cid) for f in fs)))
+            # An add into content ANOTHER mod added is the compatibility-patch pattern:
+            # reported, never failing (user decision 2026-10-18). The adders are then
+            # compared exactly as under a base parent -- duplicate keys are HARD.
+            if report is not None:
+                for f in acting:
+                    by = [s for s in suppliers if s != f]
+                    for op in (o for o in ops_at[f][cid] if by and o.tag == "add"):
+                        if cand_folder in (None, f, *by):
+                            report.added_into.append(AddedInto(
+                                vpath, f, op.sourceline or 0, op.get("sel", ""),
+                                ", ".join(by), final_paths.get(cid, ""), _guard(op)))
+            if len(acting) >= 2:
+                same_parent_adds(cid, acting, added_clause(cid, others, "parent"))
+            continue
+        ops_desc = "; ".join(
+            f"{f}:{'/'.join('added' if t == 'supply' else t for t in per_mod[f])}" for f in fs)
+        added = added_clause(cid, others)
+        added_note = f"; {added}; {unmeasured}" if added else ""
+        # AN EARLIER <remove> CAN END THE CONTEST (AUDIT-2026-09-24 AN-5): once a
+        # mod removes this node, a later op on it matches NOTHING and the engine
+        # skips it -- UNLESS some mod re-supplies the node in between. Which ops
+        # still match is decided below, per op AT ITS OWN LOAD POSITION.
+        if any("remove" in per_mod[f] for f in fs[:-1]):
+            contested.append((cid, fs, ops_desc, dict(per_mod), added_note))
+            continue
+        w = winner(fs)
+        if all(t == "add" for t in per_mod[w]):
+            # An add replaces nothing: the last mod merely inserting children here does
+            # not "win" over the replace before it -- it coexists with it.
+            verdict = (f"'{w}' loads last, but its <add> only inserts children and "
+                       "replaces nothing")
         else:
-            ops_desc = "; ".join(f"{f}:{'/'.join(per_mod[f])}" for f in fs)
-            # AN EARLIER <remove> CAN END THE CONTEST (AUDIT-2026-09-24 AN-5): once a
-            # mod removes this node, a later op on it matches NOTHING and the engine
-            # skips it -- UNLESS some mod re-supplies the node in between. Which ops
-            # still match is decided below, per op AT ITS OWN LOAD POSITION.
-            if any("remove" in per_mod[f] for f in fs[:-1]):
-                contested.append((cid, fs, ops_desc, dict(per_mod)))
-                continue
-            collisions.append(Collision(
-                vpath, "HARD", cid, fs, winner(fs),
-                f"{ops_desc} — '{winner(fs)}' loads last and wins"
-                + gnote((f, cid) for f in fs)))
+            verdict = f"'{w}' loads last and wins"
+        collisions.append(Collision(
+            vpath, "HARD", cid, fs, w,
+            f"{ops_desc} — {verdict}" + added_note + gnote((f, cid) for f in fs)))
 
     # 2. union-key collisions (two mods define the same registry entry).
     # Since 2026-08-02 diff-ADDED keys participate too (document-wide, any
@@ -880,11 +969,11 @@ def _analyze_vpath(
                 if b != a and rank[b] > rank[a]:
                     inside += [(a, b, cb) for cb in bmap if cb.startswith(w + "/")]
     if (contested or inside) and base_tree is not None:
-        queries = ([(f, op) for cid, fs, _d, _t in contested for f in fs
+        queries = ([(f, op) for cid, fs, _d, _t, _n in contested for f in fs
                     for op in ops_at[f][cid]]
                    + [(b, op) for _a, b, cb in inside for op in ops_at[b][cb]])
         at_pos = {(f, id(op)): actual_ops.get((f, id(op)), False) for f, op in queries}
-        for cid, fs, ops_desc, tags in contested:
+        for cid, fs, ops_desc, tags, added_note in contested:
             alive = [f for f in fs if any(at_pos[(f, id(op))] for op in ops_at[f][cid])]
             w = alive[-1] if alive else next(f for f in fs if "remove" in tags[f])
             dead = [f for f in fs if f not in alive and rank[f] > rank[w]]
@@ -894,7 +983,7 @@ def _analyze_vpath(
                     f"{ops_desc} — '{w}' REMOVES this node, and the later op(s) from "
                     f"{', '.join(repr(f) for f in dead) or 'no mod'} match nothing when "
                     "they load, so the engine skips them: the removal is what is live"
-                    + gnote((f, cid) for f in fs),
+                    + added_note + gnote((f, cid) for f in fs),
                     removed_by=w))
             else:
                 gone = [f for f in fs if rank[f] < rank[w] and "remove" in tags[f]]
@@ -902,9 +991,10 @@ def _analyze_vpath(
                     vpath, "HARD", cid, fs, w,
                     f"{ops_desc} — {', '.join(repr(f) for f in gone)} removes this node, "
                     f"but it exists again when '{w}' loads (another mod re-supplies it), "
-                    f"so '{w}' applies and wins"
+                    + (f"so '{w}' applies (its <add> only inserts children)"
+                       if all(t == "add" for t in tags[w]) else f"so '{w}' applies and wins")
                     + (f"; later op(s) from {', '.join(repr(f) for f in dead)} match "
-                       "nothing" if dead else "") + gnote((f, cid) for f in fs)))
+                       "nothing" if dead else "") + added_note + gnote((f, cid) for f in fs)))
         if report is not None:
             seen: set[tuple[str, int]] = set()
             for a, b, cb in inside:
@@ -1867,7 +1957,9 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
         lines.append(f"=== {kind}  ({len(group)}) ===")
         for c in sorted(group, key=lambda x: x.vpath):
             lines.append(f"  {c.vpath}")
-            lines.append(f"     node/key : {c.target}")
+            # The node's XPath in the finished tree; `target` can be an internal
+            # identity (a node another mod added has no base-tree path).
+            lines.append(f"     node/key : {c.target_path or c.target}")
             lines.append(f"     mods     : {', '.join(c.mods)}")
             # A SUBTREE has no live-value winner; showing the WIPER under a
             # "winner" label is what made an inbound report mis-read this row.
@@ -1925,6 +2017,22 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
                              "the skip is intended")
             lines.append(f"     needs    : {m.added_by}, which loads after it")
         lines.append("")
+    if report.added_into:
+        shown_any = True
+        lines.append(f"=== ADDS INTO CONTENT ANOTHER MOD ADDED  "
+                     f"({len(report.added_into)}, advisory) ===")
+        lines.append("  Not a failing collision: the compatibility-patch pattern. Each op "
+                     "applies only while the")
+        lines.append("  mod named as adding its anchor loads first and still adds it; "
+                     "without it, the op is skipped.")
+        for m in sorted(report.added_into, key=lambda x: (x.vpath, x.mod, x.line)):
+            lines.append(f"  {m.vpath}")
+            lines.append(f"     mod      : {m.mod} (line {m.line})  sel={m.sel}")
+            if m.guard:
+                lines.append(f"     guarded  : {m.guard}")
+            lines.append(f"     anchor   : {m.target_path or '(not in the finished tree)'}"
+                         f", added by {m.added_by}")
+        lines.append("")
     if report.guarded_off:
         met = [g for g in report.guarded_off if g.shared_with is None or g.shared_with]
         lines.append(f"=== GUARDED OFF: if= FALSE AT ITS LOAD POSITION  "
@@ -1974,6 +2082,8 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
                  f"{len(report.by_kind('SOFT'))} soft, "
                  f"{len(report.order_misses)} op(s) needing a later mod, "
                  f"{len(report.removed_first)} op(s) inside an earlier removal, "
+                 f"{len(report.added_into)} add(s) into another mod's added content "
+                 "(advisory), "
                  f"{len(report.guarded_off)} op(s) guarded off (if= false"
                  + (f"; {k} of them also an order miss"
                     if (k := sum(g.also_order_miss for g in report.guarded_off)) else "")
@@ -2098,6 +2208,9 @@ def main(argv: list[str] | None = None) -> int:
             # UNKNOWN, never the same as [] = nobody), also_order_miss (the same op is in
             # order_misses too, whose rows carry guard_false -- one op, not two).
             "guarded_off": [dataclasses.asdict(g) for g in report.guarded_off],
+            # Issue #11 follow-up: adds landing on content ANOTHER mod added -- advisory,
+            # never failing. Each row: vpath, mod, line, sel, added_by, target_path, guard.
+            "added_into": [dataclasses.asdict(m) for m in report.added_into],
             # NOT CHECKED (the text render's own section, above): an op whose sel=
             # could not be evaluated contributed no target and cannot participate in
             # collision detection -- omitting it here made a JSON consumer read

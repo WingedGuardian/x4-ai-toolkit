@@ -23,6 +23,11 @@ class OpTargets:
     detail: str = ""
     potential: tuple[str, ...] | None = ()
     removed_paths: tuple[tuple[str, str], ...] = ()
+    #: The NEW top-level elements this op inserted, in document order: an add's
+    #: children, or every sibling a multi-element replace put in the replaced slot. A
+    #: one-for-one replace continues the old identity, so it inserts nothing. Lets a
+    #: later op on ONE of k inserted siblings be told apart from a whole overwrite.
+    inserted: tuple[str, ...] = ()
 
 
 class Nodes(Recorder):
@@ -39,6 +44,7 @@ class Nodes(Recorder):
         self.union = union
         self.removed_keys = {}
         self.revived = set()
+        self.inserted = []
 
     def node_removed(self, path, origin):
         super().node_removed(path, origin)
@@ -80,14 +86,19 @@ class Nodes(Recorder):
                 self.created.update(identity + "/@" + attr for attr in el.attrib)
 
     def elem_created(self, el, origin, prior_chain=None):
+        fresh = el not in self.ids
         super().elem_created(el, origin, prior_chain)
         self.register(el)
+        if fresh and self.element_id(el) not in self.revived:
+            self.inserted.append(self.element_id(el))
 
     def elem_replaced(self, old, new, origin):
         super().elem_replaced(old, new, origin)
         if not self.split:
             self.ids[new] = self.element_id(old)
         self.register(new)
+        if self.split:
+            self.inserted.append(self.element_id(new))
 
     def attr_set(self, el, attr, origin):
         super().attr_set(el, attr, origin)
@@ -157,6 +168,7 @@ def trace(vpath, base, roots, expected=None, nested=None):
 
     for source, root in roots:
         nodes.source = source
+        nodes.split = False
         if root.tag != "diff":
             tree, mode = _merge.apply_overlay(tree, root, vpath, source, recorder=nodes)
             if tree is None:
@@ -176,6 +188,7 @@ def trace(vpath, base, roots, expected=None, nested=None):
         for index, op in enumerate(o for o in root if isinstance(o.tag, str)):
             nodes.op_index = index
             nodes.created.clear()
+            nodes.inserted = []
             nodes.split = len([c for c in op if isinstance(c.tag, str)]) > 1
             try:
                 selected = tree.xpath(op.get("sel", ""))
@@ -198,7 +211,7 @@ def trace(vpath, base, roots, expected=None, nested=None):
             active = verdict.ok and not verdict.skipped_if
             records[(source, index)] = OpTargets(ids if active or ids is None else (),
                 tuple(sorted(nodes.created)) if active else (), active, verdict.detail, ids,
-                removed if active else ())
+                removed if active else (), tuple(nodes.inserted) if active else ())
         if not after(source):
             return {}, {}, False
     qualified = expected is not None and etree.tostring(tree) == etree.tostring(expected)

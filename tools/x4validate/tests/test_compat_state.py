@@ -57,3 +57,44 @@ def test_removing_an_added_node_records_its_actual_removal_position():
     identity = records[("b", 0)].targets[0]
     assert identity not in final
     assert records[("b", 0)].removed_paths == ((identity, "/root/item[1]"),)
+
+
+def _trace(base, *diffs):
+    base = etree.fromstring(base)
+    expected = etree.fromstring(etree.tostring(base))
+    roots = []
+    for name, text in diffs:
+        root = etree.fromstring(text)
+        _merge.apply_diff(expected, root)
+        roots.append((name, root))
+    records, final, qualified = _compat_state.trace("md/test.xml", base, roots, expected)
+    assert qualified
+    return records, final
+
+
+def test_a_split_replacement_records_each_inserted_sibling():
+    """Issue #11: a later op landing on ONE of k siblings an earlier replace inserted is a
+    PARTIAL overwrite, so the op must record which top-level elements it inserted."""
+    records, final = _trace(
+        b'<root><actions><set_value name="$M" exact="1"/></actions></root>',
+        ("a", b'''<diff><replace sel="(//set_value[@name='$M'])[1]"><set_value name="r"/>'''
+              b'''<set_value name="$M" exact="0"/><do_if/></replace></diff>'''))
+    inserted = records[("a", 0)].inserted
+    assert len(inserted) == 3
+    assert [final[i] for i in inserted] == ["/root/actions/set_value[1]",
+                                            "/root/actions/set_value[2]", "/root/actions/do_if"]
+
+
+def test_TWIN_a_one_for_one_replacement_inserts_nothing_new():
+    """The replaced slot continues, so it is not content the mod ADDED."""
+    records, _final = _trace(
+        b'<root><actions><set_value name="$M" exact="1"/></actions></root>',
+        ("a", b'''<diff><replace sel="//set_value"><set_value name="$M" exact="3"/></replace></diff>'''))
+    assert records[("a", 0)].inserted == ()
+
+
+def test_TWIN_an_add_records_its_inserted_children_but_not_their_descendants():
+    records, final = _trace(
+        b'<root><cues/></root>',
+        ("a", b'<diff><add sel="//cues"><cue name="N"><actions/></cue><cue name="O"/></add></diff>'))
+    assert [final[i] for i in records[("a", 0)].inserted] == ["/root/cues/cue[1]", "/root/cues/cue[2]"]
