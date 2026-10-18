@@ -236,6 +236,14 @@ def shell_evidence(payload, roots, *, execution_context=False):
     if error or facts.get("carrier_untranslated"):
         raise ScopeError("Shell scope could not be completely evaluated; use literal targets and "
                          "an available parser. This call was not allowed.")
+    if facts.get("carriers_truncated"):
+        # protect-bash.sh denies this unconditionally; running that backend would expand
+        # the whole command a second time inside the same 20 s deadline (MEASURED
+        # 2026-10-18: 18.3 s locally, TimeoutExpired on the Windows CI runner), losing the
+        # reason Claude needs to act on. Same verdict, same wording, one expansion.
+        raise ScopeError("This command nests so many substitutions/wrappers that the guard stopped "
+                         "expanding them, so part of it was NEVER checked against any rule. Split it "
+                         "into simpler commands (or a script file) and re-run.")
     return evidence
 
 
