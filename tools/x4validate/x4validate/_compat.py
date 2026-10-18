@@ -1577,7 +1577,7 @@ def _strip_nesting(vpath: str) -> str:
     """
     v = vpath.replace("\\", "/").lower().lstrip("/")
     parts = v.split("/")
-    if len(parts) > 2 and parts[0] == "extensions" and not parts[1].startswith("ego_dlc_"):
+    if len(parts) > 2 and parts[0] == "extensions" and not _merge.is_dlc_folder(parts[1]):
         return "/".join(parts[2:])
     return v
 

@@ -292,6 +292,24 @@ def test_a_removed_MOD_folder_still_refuses_beside_a_DLC(tmp_path, monkeypatch, 
     assert "1 logged folder(s) are not installed now: removed_probe" in out, out
 
 
+def test_F284_a_MIXED_CASE_reference_DLC_folder_is_exempted(tmp_path, monkeypatch, capsys):
+    """F284: the DLC set comes from the REAL `_env.dlc_folders` over a reference whose
+    DLC folder is spelled `EGO_DLC_Terran`; the log names it in lowercase. Before the
+    fix `Config.dlc_dirs` matched the prefix case-sensitively, the set was empty and
+    the gate refused (rc 2, "not installed now: ego_dlc_terran")."""
+    _world(tmp_path, monkeypatch, active=["a", "b"], files={"a": ["x.xml"], "b": ["x.xml"]},
+           log_lines=[*_AGREE, _line("ego_dlc_terran", "t.gz")])
+    ref = tmp_path / "reference"
+    (ref / "extensions" / "EGO_DLC_Terran").mkdir(parents=True)
+    from x4validate import _merge
+    import _env
+    monkeypatch.setattr(_merge, "REFERENCE", ref)
+    monkeypatch.setattr(_merge, "GAME_ROOT", tmp_path / "no-game")
+    monkeypatch.setattr(g, "_dlc_folders", _env.dlc_folders)
+    assert g._dlc_folders() == frozenset({"ego_dlc_terran"})
+    assert g.main() == 0, _rc(capsys)
+
+
 def test_an_ego_dlc_NAMED_folder_the_config_does_not_know_still_refuses(
         tmp_path, monkeypatch, capsys):
     """Twin: the exemption is the CONFIGURED DLC set, not a name prefix. A folder that is

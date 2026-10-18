@@ -84,7 +84,7 @@ class _Roots:
 
     def folder(self, name: str, beside: Path) -> Path | None:
         key = name.lower()
-        if key.startswith("ego_dlc_"):
+        if _merge.is_dlc_folder(key):
             return self.dlc.get(key)
         if key in self.mods:
             return self.mods[key]
