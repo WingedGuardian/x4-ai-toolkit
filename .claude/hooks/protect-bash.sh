@@ -496,7 +496,10 @@ on lifts_reference_deny && ask "This LIFTS the OS delete/write protection on ref
 # === CONFIRM — rm targeting the game, profile, reference, mods, or toolkit ===
 # ADVISORY since 2026-10-02 (user): 54 hook prompts in 5 weeks, 54 approved, 0 refused --
 # an ask that is always approved protects nothing and trains approval. The game install
-# and reference/ are HARD blocks above; saves and the X4 PROFILE still ask below.
+# and reference/ are HARD blocks above. The X4 PROFILE and saves ask below, EXCEPT when the
+# save bridge (save_policy.py) passed --save-qualified: every change in the command is one
+# or two existing saves it backed up and verified first (user policy 2026-10-18). Three or
+# more, or a wildcard, need typed approval; anything the backup cannot cover still asks.
 on rm_in_profile && [ "$_harness_save_qualified" != 1 ] && ask "DELETING IN YOUR X4 PROFILE (mod list, config, saves) -- not reproducible. Confirm: $COMMAND"
 on rm_in_x4_dir && advise "This deletes files in an X4 directory (game extensions, mod sources or the toolkit). Make sure it is what you meant -- check git status afterwards, and redeploy if you removed a deployed mod by mistake. Command: $COMMAND"
 
@@ -522,9 +525,9 @@ on git_wipes_x4_dir && ask "git clean, reset --hard or stash -u/-a in an X4 dire
 on git_discards_x4_files && advise "This discards working-tree changes to files in an X4 directory, and git IGNORES the read-only protection x4lock applies (measured: git checkout over a locked file overwrote it AND left it unlocked). The named paths are tracked, so the content is recoverable -- but re-lock afterwards with: python scripts/x4lock.py lock"
 
 # === CONFIRM - deleting a SAVE GAME ===
-# Named separately from the rule above so the prompt says what is at risk. There is
-# no undo and no backup: on the reference machine that is 25 files and 1.7 GB.
-on rm_saves && [ "$_harness_save_qualified" != 1 ] && ask "DELETING A SAVE GAME. Saves are not reproducible and nothing backs them up. Confirm: $COMMAND"
+# Named separately from the rule above so the prompt says what is at risk. Reached only when
+# the save bridge could NOT back up everything this command changes first (see above).
+on rm_saves && [ "$_harness_save_qualified" != 1 ] && ask "DELETING A SAVE GAME, and the guard could not back up everything this command changes first (an unresolved target, a command it cannot see into, another profile file, or no save harness). Saves are not reproducible. Confirm: $COMMAND"
 
 # === CONFIRM - deleting or overwriting anything else under Documents ===
 # Game settings, other games' data, personal files. Not ours, not reproducible.
