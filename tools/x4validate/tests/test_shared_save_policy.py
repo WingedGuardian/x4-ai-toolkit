@@ -110,6 +110,7 @@ def test_directory_copy_batches_two_and_bulk_needs_one_command_bound_grant(insta
     assert len(records) == 1 and len(json.loads(records[0].read_text())["groups"]) == 2
     bulk = invoke_hook(install, "Bash", {"command": command(3)})
     assert bulk["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert_scope_refusal(bulk["hookSpecificOutput"])            # T2
     reason = bulk["hookSpecificOutput"]["permissionDecisionReason"]
     assert "SAVE_ACCESS_APPROVAL" in reason and "command_sha256" in reason
     assert len(list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))) == 1
@@ -139,6 +140,7 @@ def test_unqualified_directory_copy_never_authorizes_a_save_mutation(install, tm
     command = 'cp ' + option + operand + ' "' + roots["saves"] + '"'
     result = invoke_hook(install, "Bash", {"command": command})
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny", result
+    assert_scope_refusal(result["hookSpecificOutput"])          # T2: the policy's deny, not a crash
     assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
@@ -178,6 +180,7 @@ def test_whole_folder_and_store_writes_refuse(install):
         outcome = policy.enforce(root, roots, [{"path": str(path), "operation": op}], action,
                                 lambda save_only: contracts.Result(evaluation="evaluated"))
         assert outcome.result.decision == "deny" and not outcome.transactions
+        assert_scope_refusal({"permissionDecisionReason": outcome.result.reason})   # T2
 
 
 def test_wildcard_has_exact_command_bound_grant_and_membership_recheck(install):
@@ -197,6 +200,7 @@ def test_wildcard_has_exact_command_bound_grant_and_membership_recheck(install):
     outcome = policy.enforce(root, roots, evidence, action, lambda save_only: contracts.Result(evaluation="evaluated"),
                              transcript=str(transcript))
     assert outcome.result.decision == "deny" and not outcome.transactions
+    assert_scope_refusal({"permissionDecisionReason": outcome.result.reason})   # T2
 
 
 def invoke_hook(install, tool, ti, preview=False, omit_cwd=False, extra=None):
@@ -333,6 +337,7 @@ def test_real_shell_hook_batches_saves_and_retains_other_denials(install):
     assert "SAVE_ACCESS_APPROVAL" in result["hookSpecificOutput"]["permissionDecisionReason"]
     result = invoke_hook(install, "Bash", {"command": 'rm -rf "' + roots["saves"] + '"'})
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert_scope_refusal(result["hookSpecificOutput"])          # T2
     assert all(f.exists() for f in files)
 
 
@@ -360,6 +365,9 @@ def _with_content(install):
     '; $(echo rm) "{content}"',              # a substituted command name
     '; python -c "import os; os.remove(\'{content}\')"',   # an interpreter no row models
     '; rm "{content}"',                      # a resolved non-save profile file
+    '; bash -c "$CMD"',                      # a carrier whose program is not text held here
+    '; eval "$X"',
+    '; bash ./cleanup.sh',                   # a script file
 ])
 def test_K1_one_backed_up_save_never_lifts_the_ask_for_what_the_backup_cannot_cover(install, tail):
     """K1 (v4.0 release review): the profile ask was lifted for the WHOLE command once its
@@ -381,6 +389,10 @@ def test_K1_TWIN_one_and_two_backed_up_saves_still_proceed_and_three_need_typed_
         hso = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
         assert hso.get("permissionDecision") is None, (count, hso)
         assert "backup verified" in hso["additionalContext"], (count, hso)
+    # A carrier whose program IS literal text is walked like the top level (cmd //c, bash -c).
+    hso = invoke_hook(install, "Bash", {"command": "bash -c 'rm -- \"" + str(files[1]).replace(chr(92), "/") + "\"'"})[
+        "hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None and "backup verified" in hso["additionalContext"], hso
     hso = invoke_hook(install, "Bash", {"command": "rm -- " + " ".join('"' + str(f) + '"' for f in files)})[
         "hookSpecificOutput"]
     assert hso["permissionDecision"] in ("ask", "deny"), hso

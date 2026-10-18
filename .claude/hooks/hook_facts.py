@@ -4996,6 +4996,29 @@ _AGENT_SETTINGS = re.compile(r"(^|/)\.claude/settings[^/]*\.json$")
 _HOST_TRANSCRIPT = re.compile(r"(^|/)\.claude/projects/.*\.jsonl$|(^|/)\.codex/sessions/.*\.jsonl$")
 
 
+def _carries_program_text(seg: str) -> bool:
+    """K1: is this segment a CARRIER whose program arrives as TEXT in the command (`bash -c`,
+    `cmd /c`, `eval`, a PowerShell host's -Command/-EncodedCommand)? That text is walked as its
+    own segments, each judged against SAVE_MODELLED_VERBS, so the carrier verb itself hides
+    nothing. A script file (`bash x.sh`, `pwsh -File x.ps1`) or a program on stdin is not text
+    held here, and stays a blocker."""
+    v = verb(seg)
+    toks = tokens_of(seg)
+    k = next((i for i, t in enumerate(toks) if _verb_name(t) == v), None)
+    if k is None:
+        return False
+    rest = toks[k + 1:]
+    if v == "cmd":
+        return any(_CMD_RUN_SWITCH.fullmatch(t) or _CMD_KEEP_SWITCH.fullmatch(t) for t in rest)
+    if v in _SHELLS:
+        return any(_DASH_C.match(t) for t in rest)
+    if v == "eval":
+        return bool(rest)
+    if v in _PS_EXES:
+        return _ps_host_payload(toks[k:])[0] in ("cmd", "encoded")
+    return False
+
+
 def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution_context: bool = False) -> dict:
     inp = payload.get("tool_input") or {}
     cmd = inp.get("command") or ""
@@ -5197,7 +5220,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         if (_subst_verb(s) or has_unresolved(_verb_token(s) or "")) else verb(s)
         for s, _d in seg_cwd
         if _subst_verb(s) or has_unresolved(_verb_token(s) or "")
-        or verb(s) not in SAVE_MODELLED_VERBS})
+        or verb(s) not in SAVE_MODELLED_VERBS and not _carries_program_text(s)})
     segs = [s for s, _ in seg_cwd]
     cwd = seg_cwd[-1][1] if seg_cwd else ""
 
