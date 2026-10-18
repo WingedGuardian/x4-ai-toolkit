@@ -490,8 +490,14 @@ What it had to handle, all MEASURED on Codex 0.160.0:
   `agent/targets/codex/hooks.json.tmpl` is frozen: logic changes go into the adapter, never into
   the hook definition.
 
-Its conformance profile is `scripts/conformance-profiles/codex.json`; it feeds the adapter Codex
-payloads captured from a live run (`tools/x4validate/tests/fixtures/codex/0.160.0/`).
+Its conformance profile is `scripts/conformance-profiles/codex.json`. It starts from the
+captured envelopes in `tools/x4validate/tests/fixtures/codex/0.160.0/`, then supplies an
+explicit synthetic `tool_input.workdir` for shell policy comparisons. Both sides therefore
+receive the same known execution directory while the adapter process still starts in a
+neutral directory. This tests policy parity under supplied context; it does not prove that
+a live Codex hook provides that field. Session `cwd` alone is insufficient. Unchanged
+missing-workdir captures have separate refusal checks, and inert context failures are not
+counted as evaluated game policy.
 
 ## 4. Where your adapter goes
 

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_testlib import ADAPTER, FAKE_FINDING, FIX, HAS_PWSH, REPO, fake_validator, make_sandbox, native, process_alive, run_adapter as run
+from codex_testlib import UNKNOWN_EXECUTION_CWD, ADAPTER, FAKE_FINDING, FIX, HAS_PWSH, REPO, fake_validator, make_sandbox, native, process_alive, run_adapter as run
 
 
 @pytest.fixture
@@ -95,15 +95,19 @@ def test_shell_heredoc_patch_is_judged_by_its_paths(sandbox):
     tmp, tk, env = sandbox
     body = "*** Begin Patch\n*** Add File: reference/libraries/x.xml\n+<a/>\n*** End Patch"
     cmd = f"apply_patch <<'PATCH'\n{body}\nPATCH"
-    assert run(env, native("bash_shell_heredoc_patch", tk, command=cmd), shell="bash")[0] == "deny"
+    refused = run(env, native("bash_shell_heredoc_patch", tk, command=cmd), shell="bash")
+    assert refused == ("inert", UNKNOWN_EXECUTION_CWD)
     ok = cmd.replace("reference/libraries/x.xml", "dev/mymod/x.xml")
     refused, reason = run(env, native("bash_shell_heredoc_patch", tk, command=ok), shell="bash")
-    assert refused == "deny" and "execution workdir" in reason
+    assert (refused, reason) == ("inert", UNKNOWN_EXECUTION_CWD)
     # Explicit execution cwd is a synthetic contract twin, not native capture evidence.
     for command, expected in ((cmd, "deny"), (ok, "allow")):
         payload = native("bash_shell_heredoc_patch", tk, command=command)
         payload["tool_input"]["workdir"] = str(tk)
-        assert run(env, payload, shell="bash")[0] == expected
+        verdict, reason = run(env, payload, shell="bash")
+        assert verdict == expected
+        if expected == "deny":
+            assert "reference" in reason.casefold() and "INERT" not in reason
 
 
 def test_profile_ask_becomes_deny_with_approval_text(sandbox):

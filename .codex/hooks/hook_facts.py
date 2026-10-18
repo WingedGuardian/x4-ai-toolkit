@@ -2023,7 +2023,7 @@ def _spanning_view(cmd: str) -> str:
     return "".join(out)
 
 
-def _verb_token(seg: str) -> str:
+def _verb_word(seg: str) -> tuple[str, int | None]:
     """The RAW token carrying the command name, exactly as written.
 
     Split out of verb() for resolve_verb(): splicing a variable's value back into a
@@ -2066,8 +2066,11 @@ def _verb_token(seg: str) -> str:
     # (`A=${X:-echo a} rm`), a substitution the segmenter cut (`A=$(echo a; echo b) rm`, see
     # _spanning_view) and a wrapper option's VALUE (`env -C $(echo /tmp ) rm`). One word is
     # now one word, whatever spans it holds: _raw_words, and its first token for the tests.
+    token_index = 0
     for w in _raw_words(seg):
         tk = tokens(w)
+        at = token_index
+        token_index += len(tk)
         if not tk:
             continue
         t = tk[0][0]
@@ -2089,8 +2092,13 @@ def _verb_token(seg: str) -> str:
             continue
         if seen_wrapper and _WRAPPER_ARG.match(t):
             continue                    # a duration or a placeholder, not a command
-        return t
-    return ""
+        return t, at
+    return "", None
+
+
+def _verb_token(seg: str) -> str:
+    """The command token; position comes from the same wrapper/assignment walk."""
+    return _verb_word(seg)[0]
 
 
 def verb(seg: str) -> str:
@@ -3702,9 +3710,28 @@ def output_targets(seg):
     flags = tuple(f for f in _OUT_FLAGS if f != "-o") \
         if (_command_names(seg) & SEARCH_NAMES) else _OUT_FLAGS
     out, toks, i = [], tokens(seg), 0
+    # Bash's own -o selects an option; its value is not an output filename.
+    # Exclude only flags before the script/-c/-- boundary. Substitution and
+    # carried-command writes still have their own output flags and targets.
+    shell_options = set()
+    if verb(seg) == "bash":
+        _vt, k = _verb_word(seg)
+        j = k + 1 if k is not None else len(toks)
+        while j < len(toks):
+            t = toks[j][0]
+            if t in ("-", "--", "+") or t[:1] not in ("-", "+"):
+                break
+            if t.startswith("--"):
+                j += 2 if t in ("--rcfile", "--init-file") else 1
+                continue
+            if "c" in t[1:]:
+                break
+            if t == "-o":
+                shell_options.add(j)
+            j += 1 + sum(ch in "oO" for ch in t[1:])
     while i < len(toks):
         t, q = toks[i]
-        if (not q) and t in flags and i + 1 < len(toks):
+        if (not q) and t in flags and i not in shell_options and i + 1 < len(toks):
             out.append(toks[i + 1][0])
             i += 2
             continue

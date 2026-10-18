@@ -1,53 +1,120 @@
 {
   "v": 1,
   "agent": "codex",
-  "note": "The full Codex chain: the fail-closed codex-entry.ps1 wrapper -> codex_adapter.py -> the guards, fed the CAPTURED Codex 0.160.0 payloads. X4_CODEX_SHELL=bash is the POSIX stand-in for a bash-executed command (M9).",
-  "command": ["{PWSH}", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-              "{TOOLKIT}/.codex/hooks/codex-entry.ps1", "pre_tool_use"],
-  "requires": ["pwsh", "bash", "jq"],
+  "note": "Policy parity under supplied execution context, not observed host interception: the full Codex wrapper/adapter/guard chain uses captured 0.160.0 envelopes with explicitly synthetic absolute tool_input.workdir overrides for shell cases. Session cwd alone does not prove execution cwd. Missing-workdir refusals remain separately tested against unchanged captured envelopes. X4_CODEX_SHELL=bash is the POSIX stand-in for a bash-executed command (M9).",
+  "command": [
+    "{PWSH}",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "{TOOLKIT}/.codex/hooks/codex-entry.ps1",
+    "pre_tool_use"
+  ],
+  "requires": [
+    "pwsh",
+    "bash",
+    "jq"
+  ],
   "run_cwd": "neutral",
   "timeout_s": 180,
-  "env": {"X4_PYTHON": "{PYTHON}"},
+  "env": {
+    "X4_PYTHON": "{PYTHON}"
+  },
   "cases": {
     "shell-bash": {
       "payload": "../../tools/x4validate/tests/fixtures/codex/0.160.0/bash_powershell.json",
-      "set": {"/tool_input/command": "{{COMMAND}}", "/cwd": "{{CWD}}"},
-      "env": {"X4_CODEX_SHELL": "bash"}
+      "set": {
+        "/tool_input/command": "{{COMMAND}}",
+        "/cwd": "{{CWD}}",
+        "/tool_input/workdir": "{{CWD}}"
+      },
+      "env": {
+        "X4_CODEX_SHELL": "bash"
+      }
     },
     "shell-powershell": {
       "payload": "../../tools/x4validate/tests/fixtures/codex/0.160.0/bash_powershell.json",
-      "set": {"/tool_input/command": "{{COMMAND}}", "/cwd": "{{CWD}}"},
-      "env": {"X4_CODEX_SHELL": "powershell"}
+      "set": {
+        "/tool_input/command": "{{COMMAND}}",
+        "/cwd": "{{CWD}}",
+        "/tool_input/workdir": "{{CWD}}"
+      },
+      "env": {
+        "X4_CODEX_SHELL": "powershell"
+      }
     },
     "edit": {
       "payload": "../../tools/x4validate/tests/fixtures/codex/0.160.0/apply_patch_update.json",
-      "set": {"/tool_input/command": "*** Begin Patch\n*** Update File: {{PATH}}\n@@\n-x\n+y\n*** End Patch",
-              "/cwd": "{{CWD}}"},
-      "env": {"X4_CODEX_SHELL": "bash"}
+      "set": {
+        "/tool_input/command": "*** Begin Patch\n*** Update File: {{PATH}}\n@@\n-x\n+y\n*** End Patch",
+        "/cwd": "{{CWD}}"
+      },
+      "env": {
+        "X4_CODEX_SHELL": "bash"
+      }
     },
     "write": {
       "payload": "../../tools/x4validate/tests/fixtures/codex/0.160.0/apply_patch_add.json",
-      "set": {"/tool_input/command": "*** Begin Patch\n*** Add File: {{PATH}}\n{{CONTENT|lines:+}}*** End Patch",
-              "/cwd": "{{CWD}}"},
-      "env": {"X4_CODEX_SHELL": "bash"}
+      "set": {
+        "/tool_input/command": "*** Begin Patch\n*** Add File: {{PATH}}\n{{CONTENT|lines:+}}*** End Patch",
+        "/cwd": "{{CWD}}"
+      },
+      "env": {
+        "X4_CODEX_SHELL": "bash"
+      }
     }
   },
   "unsupported": {},
   "output": {
     "format": "json",
-    "exit_codes": {"0": "decode"},
+    "exit_codes": {
+      "0": "decode"
+    },
     "empty": "allow",
     "allowed_keys": {
-      "": ["continue", "decision", "hookSpecificOutput", "reason", "stopReason", "suppressOutput", "systemMessage"],
-      "/hookSpecificOutput": ["additionalContext", "hookEventName", "permissionDecision", "permissionDecisionReason", "updatedInput"]
+      "": [
+        "continue",
+        "decision",
+        "hookSpecificOutput",
+        "reason",
+        "stopReason",
+        "suppressOutput",
+        "systemMessage"
+      ],
+      "/hookSpecificOutput": [
+        "additionalContext",
+        "hookEventName",
+        "permissionDecision",
+        "permissionDecisionReason",
+        "updatedInput"
+      ]
     },
     "rules": [
-      {"when": {"/hookSpecificOutput/permissionDecision": "deny"},
-       "text": "/hookSpecificOutput/permissionDecisionReason", "decision": "deny",
-       "prefix_decisions": {"NEEDS YOUR APPROVAL:": "ask"}},
-      {"when": {"/hookSpecificOutput/additionalContext": {"present": true}},
-       "absent": ["/hookSpecificOutput/permissionDecision"],
-       "text": "/hookSpecificOutput/additionalContext", "decision": "advise"}
-    ]
+      {
+        "when": {
+          "/hookSpecificOutput/permissionDecision": "deny"
+        },
+        "text": "/hookSpecificOutput/permissionDecisionReason",
+        "decision": "deny",
+        "prefix_decisions": {
+          "NEEDS YOUR APPROVAL:": "ask"
+        }
+      },
+      {
+        "when": {
+          "/hookSpecificOutput/additionalContext": {
+            "present": true
+          }
+        },
+        "absent": [
+          "/hookSpecificOutput/permissionDecision"
+        ],
+        "text": "/hookSpecificOutput/additionalContext",
+        "decision": "advise"
+      }
+    ],
+    "inert_pattern": "\\A(?:X4 GUARD INERT:|GUARD\\ INERT:\\ Codex\\ supplied\\ a\\ session\\ directory\\ but\\ no\\ absolute\\ execution\\ workdir\\.\\ This\\ recognized\\ mutation\\ has\\ an\\ unresolved\\ target\\.\\ Use\\ absolute\\ mutation\\ paths;\\ an\\ in\\-command\\ directory\\ change\\ cannot\\ prove\\ the\\ missing\\ workdir\\.\\ This\\ call\\ was\\ not\\ allowed\\.\\Z)"
   }
 }

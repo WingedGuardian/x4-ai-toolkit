@@ -699,9 +699,12 @@ and preservation, while the integrating host must honor the complete result befo
 **What the Codex hooks cannot see.** Each of these was measured on Codex 0.160 unless it says
 otherwise:
 
-1. **A shell `workdir`.** Codex can run a command in another folder without telling the hook
-   which one, so a relative path is judged against the session folder. Use absolute paths
-   for anything under `reference\` or the game folder.
+1. **A shell `workdir`.** The measured hook payload supplied the session directory while
+   Codex could execute in another folder. The guard now refuses recognized mutations whose
+   target still depends on that missing execution directory; reads remain available. Use
+   absolute mutation paths. On Windows, include a native drive or UNC share; `/c/...` is
+   insufficient. An in-command directory change does not prove the omitted workdir. Policy conformance supplies synthetic workdir explicitly and is separate from
+   observed native-host coverage.
 2. **Typing into a running shell (`write_stdin`).** A shell or REPL started with a harmless
    command can then be sent any command, and those lines reach no guard (0 hook events for
    2 calls; a direct call is untested). This is disclosed, not blocked.

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO / "tools"))
+from modding_harness.transport import UNKNOWN_EXECUTION_CWD
 spec = importlib.util.spec_from_file_location("x4conformance", REPO / "scripts" / "x4conformance.py")
 xc = importlib.util.module_from_spec(spec); spec.loader.exec_module(xc)
 
@@ -281,3 +284,73 @@ def test_TWIN_the_same_case_WITH_a_reference_verdict_passes():
     ok = {"label": "x0", "kind": "shell-bash", "reference": "allow", "reference_why": "", "adapter": "allow"}
     assert xc.summarise(_res(90) + [ok], n_total=91, buckets={"replayed": 91}, gaps={},
                         min_cases=80)[0] == xc.RC_OK
+
+
+def test_shared_context_refusal_decodes_as_inert_not_policy_denial():
+    raw = _hso(permissionDecision="deny", permissionDecisionReason=UNKNOWN_EXECUTION_CWD)
+    assert xc.decode(CODEX["output"], raw, 0) == ("inert", UNKNOWN_EXECUTION_CWD)
+    assert json.loads(raw)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("reason", [
+    "prefix " + UNKNOWN_EXECUTION_CWD,
+    UNKNOWN_EXECUTION_CWD + " extra",
+    UNKNOWN_EXECUTION_CWD + "\n",
+    UNKNOWN_EXECUTION_CWD.replace("session directory", "execution directory"),
+    "GUARD INERT: unrelated failure",
+    "BLOCKED: path includes X4 GUARD INERT: text",
+    "prefix X4 GUARD INERT: y",
+    "BLOCKED: protected reference path",
+])
+def test_TWIN_inexact_or_embedded_inert_text_remains_policy_denial(reason):
+    raw = _hso(permissionDecision="deny", permissionDecisionReason=reason)
+    assert xc.decode(CODEX["output"], raw, 0) == ("deny", reason)
+
+
+@pytest.mark.parametrize("kind", ["shell-bash", "shell-powershell"])
+def test_codex_policy_parity_supplies_context_without_changing_capture(tmp_path, kind):
+    case = CODEX["cases"][kind]
+    fixture = Path(CODEX["_dir"]) / case["payload"]
+    before = fixture.read_bytes()
+    assert "workdir" not in json.loads(before)["tool_input"]
+    row = {"kind": kind, "payload": {"tool_name": "Bash", "tool_input": {"command": "echo hello"}}}
+    payload = xc.build_payload(row, CODEX, str(tmp_path))
+    assert payload["cwd"] == payload["tool_input"].get("workdir") == str(tmp_path)
+    assert payload["tool_input"]["command"] == "echo hello"
+    assert fixture.read_bytes() == before
+    assert CODEX["run_cwd"] == "neutral"
+
+
+def test_native_payload_passthrough_does_not_invent_execution_context(tmp_path):
+    raw = {"tool_name": "Bash", "tool_input": {"command": "rm notes.txt"}, "cwd": str(tmp_path)}
+    built = xc.build_payload({"native": raw}, CODEX, str(tmp_path))
+    assert built == raw and built is not raw
+    assert "workdir" not in built["tool_input"]
+
+
+@pytest.mark.parametrize("shell", ["bash", "powershell"])
+def test_extra_policy_parity_supplies_its_own_context(monkeypatch, tmp_path, shell):
+    import test_codex_conformance as conformance
+    seen = []
+    def observe(row, *_args):
+        seen.append(row)
+        return "allow", ""
+    monkeypatch.setattr(conformance.xc, "adapter_verdict", observe)
+    toolkit = tmp_path / "toolkit"
+    toolkit.mkdir()
+    case = {"id": "owned-extra-context", "fixture": "bash_powershell", "command": "echo hello", "shell": shell, "cwd": "{TK}"}
+    assert conformance.extra_codex(case, tmp_path, toolkit, {}) == "allow"
+    assert len(seen) == 1
+    payload = seen[0]["native"]
+    assert payload["cwd"] == payload["tool_input"].get("workdir") == str(toolkit)
+
+
+def test_policy_parity_refuses_a_population_that_checked_no_policy(monkeypatch):
+    import test_codex_conformance as conformance
+    rows = [{"label": str(n), "got": "inert", "payload": {
+        "tool_name": "Bash", "tool_input": {"command": "echo hello"}}} for n in range(80)]
+    results = [{"label": str(n), "kind": "shell-bash", "reference": "inert",
+                "adapter": "inert", "text": "checked nothing"} for n in range(80)]
+    monkeypatch.setattr(conformance.xc, "replay", lambda *_args, **_kwargs: results)
+    with pytest.raises(AssertionError, match="cases evaluated game policy"):
+        conformance.test_every_replayable_case_agrees((rows, None))

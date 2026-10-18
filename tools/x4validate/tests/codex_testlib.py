@@ -15,6 +15,9 @@ REPO = PKG.parents[1]
 HOOKS = REPO / ".codex" / "hooks"
 ADAPTER = HOOKS / "codex_adapter.py"
 FIX = PKG / "tests" / "fixtures" / "codex" / "0.160.0"
+if str(REPO / "tools") not in sys.path:
+    sys.path.insert(0, str(REPO / "tools"))
+from modding_harness.transport import UNKNOWN_EXECUTION_CWD
 HAS_PWSH = bool(shutil.which("pwsh") or shutil.which("powershell"))
 
 
@@ -114,7 +117,11 @@ def fake_validator(tmp_path: Path, env: dict, tk: Path, mod: str = "mymod") -> d
 
 
 def native(name: str, cwd, **tool_input) -> dict:
-    """A captured fixture with <CWD> filled in and tool_input overridden -- never a hand-built envelope."""
+    """A fixture-derived envelope with <CWD> filled in and tool_input overridden.
+
+    Do not inject execution workdir globally: unchanged missing-workdir envelopes
+    exercise the observed host contract. Policy-parity callers override it explicitly.
+    """
     text = (FIX / f"{name}.json").read_text(encoding="utf-8")
     d = json.loads(text.replace("<CWD>", json.dumps(str(cwd))[1:-1]))
     d["cwd"] = str(cwd)

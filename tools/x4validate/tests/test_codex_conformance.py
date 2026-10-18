@@ -1,6 +1,6 @@
 """Cross-agent conformance (spec 7.2): every guard case in scripts/test-hooks.sh, replayed through
-the Claude hooks AND through the full Codex chain (codex-entry wrapper -> adapter -> guards) in
-NATIVE Codex shape, must reach the SAME verdict.
+the Claude hooks AND through the full Codex chain (codex-entry wrapper -> adapter -> guards) using
+fixture-derived Codex envelopes with supplied execution context, must reach the SAME policy verdict.
 
 The mechanism is the x4conformance engine (`x4guard conformance`, scripts/x4conformance.py) with
 the Codex profile (scripts/conformance-profiles/codex.json) -- ONE mechanism, the same one any
@@ -11,13 +11,18 @@ total.
 
   Claude verdict: the hook script itself on the Claude-shaped payload (independent of x4guard),
                   re-run under X4_GUARD_CHECK=1 to tell "checked nothing" (inert) apart.
-  Codex verdict:  the profile's native payloads -- Bash -> captured bash_powershell fixture,
+  Codex verdict:  the profile's fixture-derived payloads -- Bash -> captured bash_powershell fixture,
                   X4_CODEX_SHELL=bash (POSIX stand-in, M9); PowerShell -> same fixture,
-                  X4_CODEX_SHELL=powershell; Edit -> an apply_patch Update File; Write -> an
+                  X4_CODEX_SHELL=powershell, both with explicit synthetic tool_input.workdir;
+                  Edit -> an apply_patch Update File; Write -> an
                   apply_patch Add File carrying the content -- decoded by the profile's output
                   rules (a deny "NEEDS YOUR APPROVAL:" -> ask; "X4 GUARD INERT" -> inert).
                   Grep/Glob/NotebookEdit, and payloads Codex cannot produce (no path, no
                   command), are counted as no_native_analogue.
+
+Supplied shell workdir makes policy-parity inputs comparable; it does not claim that a live
+Codex hook supplies workdir. Captured envelopes remain unchanged. Observed missing-workdir
+refusals are exercised separately, including test_codex_execution_cwd.py.
 
 The dump's sandbox lives under <repo>/.test-sandbox (the conftest `conformance_dump` fixture),
 never the system temp folder: test-hooks.sh refuses a sandbox under /tmp, which is where pytest
@@ -34,7 +39,7 @@ from pathlib import Path
 import pytest
 from ruamel.yaml import YAML
 
-from codex_testlib import FIX, REPO, XC as xc, make_sandbox, native
+from codex_testlib import UNKNOWN_EXECUTION_CWD, FIX, REPO, XC as xc, make_sandbox, native
 
 CODEX = xc.load_profile("codex", REPO)
 PWSH = shutil.which("pwsh") or shutil.which("powershell")
@@ -112,6 +117,8 @@ def test_every_replayable_case_agrees(conformance_dump):
     todo = [r for r in rows if xc.classify(r) in CODEX["cases"]]
     results = xc.replay(todo, CODEX, None, REPO, workers=WORKERS)
     assert len(results) == len(todo) >= 80
+    checked = sum(r["reference"] not in ("inert", "error", "unreadable") for r in results)
+    assert checked >= 80, f"only {checked} cases evaluated game policy"
     drift = [(res["label"], row["got"], res["reference"]) for row, res in zip(todo, results)
              if res["reference"] != row["got"]
              and not (res["reference"] == "inert" and row["got"] in ("ask", "deny"))]   # inert = normalised ask/deny
@@ -160,6 +167,9 @@ def extra_claude(case, tmp, tk, env) -> str:
 def extra_codex(case, tmp, tk, env) -> str:
     cwd = _fill(case.get("cwd", "{TK}"), tmp, tk)
     payload = native(case["fixture"], cwd, command=_fill(case["command"], tmp, tk))
+    # Synthetic policy-parity context only. Do not add this in native(), whose
+    # fixture-derived envelopes also exercise the observed missing-workdir contract.
+    payload["tool_input"]["workdir"] = cwd
     kind = "shell-powershell" if case.get("shell", "bash") == "powershell" else "shell-bash"
     run_dir = tmp / "adapter-cwd"
     run_dir.mkdir(exist_ok=True)
@@ -184,3 +194,38 @@ def test_codex_specific_extras(case, sandbox):
     assert x == c, (case["id"], "codex", x, "claude", c)
     if "expect" in case:
         assert x == case["expect"], (case["id"], "expected", case["expect"], "both said", x)
+
+
+@pytest.mark.parametrize("shell,command", [
+    ("bash", "printf x > wares.xml"),
+    ("powershell", "Set-Content -LiteralPath wares.xml -Value x"),
+])
+def test_supplied_execution_workdir_wins_over_both_unrelated_directories(sandbox, shell, command):
+    """Actual wrapper/adapter/guards, synthetic cwd contract; never execute mutations."""
+    tmp, toolkit, env = sandbox
+    process_cwd = tmp / "neutral-wrapper-process"
+    session_cwd = tmp / "neutral-session"
+    process_cwd.mkdir()
+    session_cwd.mkdir()
+    reference = toolkit / "reference/libraries"
+    reference_before = (reference / "wares.xml").read_bytes()
+    assert reference_before in (b"ref\n", b"ref\r\n")
+    development = toolkit / "dev/mymod"
+    (development / "wares.xml").write_bytes(b"owned development fixture\n")
+    kind = "shell-powershell" if shell == "powershell" else "shell-bash"
+    for directory, expected in ((reference, "deny"), (development, "allow")):
+        assert len({process_cwd.resolve(), session_cwd.resolve(), directory.resolve()}) == 3
+        payload = native("bash_powershell", session_cwd, command=command, workdir=str(directory))
+        row = {"label": "owned-distinct-context", "kind": kind, "native": payload,
+               "cwd": str(session_cwd), "env": env}
+        verdict, reason = xc.adapter_verdict(row, CODEX, None, REPO, process_cwd)
+        assert verdict == expected, (directory, verdict, reason)
+        if expected == "deny":
+            assert "reference" in reason.casefold() and "INERT" not in reason
+    # The unchanged fixture-derived envelope cannot establish this context.
+    payload = native("bash_powershell", session_cwd, command=command)
+    row = {"label": "owned-missing-context", "kind": kind, "native": payload,
+           "cwd": str(session_cwd), "env": env}
+    assert xc.adapter_verdict(row, CODEX, None, REPO, process_cwd) == ("inert", UNKNOWN_EXECUTION_CWD)
+    assert (reference / "wares.xml").read_bytes() == reference_before
+    assert (development / "wares.xml").read_bytes() == b"owned development fixture\n"
