@@ -824,8 +824,13 @@ def _analyze_vpath(
         # is not an op ON the node. The ops that land on it are the others.
         suppliers = [f for f in fs if "supply" in per_mod[f]]
         acting = [f for f in fs if any(t != "supply" for t in per_mod[f])]
-        # A supplier counts once ANOTHER mod's op lands on what it added.
-        others = [s for s in suppliers if any(f != s for f in acting)]
+        # A supplier counts once ANOTHER mod's op lands on what it added -- an op of a
+        # mod loading AFTER it. A supplier loading LATER did not add what an earlier op
+        # landed on: it re-created the node over that op's (base) edit, the plain
+        # later-wins row (MEASURED live 2026-10-18: 10 rows named the winner as the
+        # adder of its own replacement).
+        others = [s for s in suppliers
+                  if any(f != s and rank[f] > rank[s] for f in acting)]
         all_tags = {t for f in acting for t in per_mod[f] if t != "supply"}
         if all_tags == {"add"}:
             # An add into content ANOTHER mod added is the compatibility-patch pattern:
@@ -833,7 +838,7 @@ def _analyze_vpath(
             # compared exactly as under a base parent -- duplicate keys are HARD.
             if report is not None:
                 for f in acting:
-                    by = [s for s in suppliers if s != f]
+                    by = [s for s in suppliers if s != f and rank[s] < rank[f]]
                     for op in (o for o in ops_at[f][cid] if by and o.tag == "add"):
                         if cand_folder in (None, f, *by):
                             report.added_into.append(AddedInto(
