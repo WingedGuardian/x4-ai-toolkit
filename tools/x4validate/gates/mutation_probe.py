@@ -173,8 +173,12 @@ MUTANTS = [
            "a guess wearing the grammar of a measurement"),
     # --- _check.py: the bare-vs-nested door (gotcha #6, F19) -------------------
     Mutant("_check.py", "nested-path rewrite disabled",
-           "nested = _merge._nested_target(vpath, config.packed_dlc_names())",
-           "nested = None  # mutant: mod-on-mod patches lose their target",
+           # The line after pins it to the ORIGINAL site (the path-mismatch verdict):
+           # 840865c added a second, identical line for the later-loading owner.
+           "nested = _merge._nested_target(vpath, config.packed_dlc_names())\n"
+           "    if nested is not None:\n        installed = _installed_folders()",
+           "nested = None  # mutant: mod-on-mod patches lose their target\n"
+           "    if nested is not None:\n        installed = _installed_folders()",
            "a cross-mod patch silently no-ops; the engine never opens the bare form"),
 
     # --- _effective.py: load order and property depth --------------------------

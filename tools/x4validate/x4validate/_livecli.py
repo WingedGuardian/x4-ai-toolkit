@@ -1632,10 +1632,10 @@ def _publish_exclusive_copy(d: Path, stamp: str, sha: str, data: bytes) -> Path:
     try:
         with fh:
             fh.write(data)
-        back = dest.read_bytes()
-        if back != data:
+        copied = dest.read_bytes()
+        if copied != data:
             raise _livedump.LiveDumpCorrupt(
-                f"wrote {len(data)} bytes to {dest} but read back {len(back)} -- not archived")
+                f"wrote {len(data)} bytes to {dest} but read back {len(copied)} -- not archived")
     except BaseException:
         dest.unlink(missing_ok=True)   # created by this call, this run -- never evidence
         raise
