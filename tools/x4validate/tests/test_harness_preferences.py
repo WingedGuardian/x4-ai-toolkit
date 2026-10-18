@@ -36,3 +36,21 @@ def test_rendered_session_hook_injects_only_explicit_preferences(tmp_path, agent
     assert completed.returncode == 0, completed.stderr
     assert "Keep the local evidence." in completed.stdout
     assert "Unclassified note." not in completed.stdout and "WRONG PROJECT" not in completed.stdout
+
+
+def test_K7_guards_off_banner_precedes_injected_preferences(tmp_path):
+    """K7: up to 4 KiB of preferences were printed BEFORE the GUARDS OFF banner, and the
+    harness preview keeps only the head of SessionStart output (#38)."""
+    bash = Path("C:/Program Files/Git/bin/bash.exe") if os.name == "nt" else Path(shutil.which("bash") or "")
+    if not bash.is_file():
+        pytest.skip("Bash unavailable; rendered session hook not exercised")
+    _, root, env = make_sandbox(tmp_path)
+    shutil.copytree(REPO / ".claude/hooks", root / ".claude/hooks", ignore=shutil.ignore_patterns("__pycache__"))
+    (root / "KNOWLEDGEBASE.local.md").write_text("## My preferences\n" + "Keep the local evidence.\n" * 150)
+    env.update(X4_PYTHON=sys.executable, X4_GUARD="off")
+    payload = json.dumps({"hook_event_name": "SessionStart", "cwd": str(root), "session_id": "s"})
+    completed = subprocess.run([str(bash), str(root / ".claude/hooks/session-canary.sh")], input=payload, env=env,
+                               capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert completed.returncode == 0, completed.stderr
+    assert "Keep the local evidence." in completed.stdout
+    assert completed.stdout.lstrip().startswith("[x4 guards] *** GUARDS OFF"), completed.stdout[:300]

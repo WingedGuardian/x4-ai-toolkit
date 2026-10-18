@@ -26,16 +26,6 @@
 case "$0" in */*|*\\*) HOOK_DIR="${0%[/\\]*}" ;; *) HOOK_DIR=. ;; esac
 . "$HOOK_DIR/_x4-env.sh"
 
-# Anchor personal notes to THIS hook tree, independently of inherited tool roots.
-if [ -f "$HOOK_DIR/../../KNOWLEDGEBASE.local.md" ]; then
-  x4_resolve_python
-  if [ -n "$X4_PY" ]; then
-    "$X4_PY" "$HOOK_DIR/preferences.py" 2>/dev/null || echo "PREFERENCES: NOT INJECTED -- read KNOWLEDGEBASE.local.md yourself."
-  else
-    echo "PREFERENCES: NOT INJECTED -- Python is unavailable; read KNOWLEDGEBASE.local.md yourself."
-  fi
-fi
-
 # X4_GUARD=off (spec 5.7): FIRST, before the canary, because a session whose guards are off
 # must be unmissable -- and the preview keeps the head.
 if x4_guards_off; then
@@ -44,6 +34,18 @@ if x4_guards_off; then
   echo "            by the hooks. Each overridden call is logged to"
   echo "            ${X4_BACKUPS:-$X4_TOOLKIT/.claude/backups}/GUARDS-OFF.log."
   echo "            Unset X4_GUARD and restart the session to turn them back on."
+fi
+
+# Anchor personal notes to THIS hook tree, independently of inherited tool roots.
+# AFTER the GUARDS OFF banner (K7, v4.0 release review): preferences can run to 4 KiB, and
+# printed first they pushed the banner past the head the harness preview keeps (#38).
+if [ -f "$HOOK_DIR/../../KNOWLEDGEBASE.local.md" ]; then
+  x4_resolve_python
+  if [ -n "$X4_PY" ]; then
+    "$X4_PY" "$HOOK_DIR/preferences.py" 2>/dev/null || echo "PREFERENCES: NOT INJECTED -- read KNOWLEDGEBASE.local.md yourself."
+  else
+    echo "PREFERENCES: NOT INJECTED -- Python is unavailable; read KNOWLEDGEBASE.local.md yourself."
+  fi
 fi
 
 # The path config (Plan 3 lane I): a MISSING, DEPRECATED (3.x .claude/) or DOUBLED config is
