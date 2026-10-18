@@ -390,7 +390,12 @@ copy_toolkit() {
   refuse_if_dry_run "copying the toolkit into" "$1"  # copy_toolkit DEST  — copy tracked toolkit files (never game data / local config)
   precheck_project_settings "$1"
   local dest="$1"; mkdir -p "$dest/.claude"
-  if [ -f "$dest/KNOWLEDGEBASE.md" ] && ! cmp -s "$dest/KNOWLEDGEBASE.md" "$SRC/KNOWLEDGEBASE.md"; then
+  # An UNEDITED KB some release shipped (scripts/shipped-instruction-hashes.txt) is ours to
+  # replace: preserving it saved a KNOWLEDGEBASE.pre-4.0-<sha>.md of the toolkit's own text on
+  # every upgrade (release review H6). Only a KB that is neither the source's nor a shipped one
+  # can hold the user's notes.
+  if [ -f "$dest/KNOWLEDGEBASE.md" ] && ! cmp -s "$dest/KNOWLEDGEBASE.md" "$SRC/KNOWLEDGEBASE.md" \
+     && ! _h_is_shipped "$dest" KNOWLEDGEBASE.md; then
     if ! _oc_python; then
       echo "REFUSING: preserving the existing knowledgebase needs Python >= 3.10; no toolkit files were copied." >&2
       return 1
@@ -1100,6 +1105,28 @@ _codex_matches_template() {   # DEST EXPECTED TEXT
     --root "$1" --template "$SRC/$X4_CODEX_HOOKS_TMPL" >/dev/null 2>&1
 }
 
+#: Is DEST's .codex/hooks.json an UNEDITED rendering of a template some release SHIPPED?
+#: Un-render it -- this root's two JSON-escaped spellings back to {{ROOT_WIN}} / {{ROOT}},
+#: the inverse of render_codex_hooks_json -- and look the canonical hash up in the shipped
+#: list under the template's name, the rule .claude/settings.json already follows. Without it
+#: the first template change after a release refused every unedited upgrade (release review
+#: H4). install.ps1 mirrors it in Test-CodexShippedRendering.
+_codex_is_shipped_rendering() {   # DEST
+  local f="$1/.codex/hooks.json" root win t bs h
+  [ -f "$f" ] || return 1
+  bs="$(printf '%b' '\134')"
+  root="$(_abs_dir "$1")" || return 1
+  _codex_root_safe "$root" || return 1
+  win="$(_replace_all "$root" / "$bs")"
+  root="$(_replace_all "$root" "$bs" "$bs$bs")"
+  win="$(_replace_all "$win" "$bs" "$bs$bs")"
+  t="$(LC_ALL=C sed $'1s/^\xef\xbb\xbf//' "$f" | tr -d '\r')" || return 1
+  t="$(_replace_all "$t" "$win" '{{ROOT_WIN}}')"
+  t="$(_replace_all "$t" "$root" '{{ROOT}}')"
+  h="$(printf '%s' "$t" | _h_sha256)" || return 1
+  _h_known_hash "$h" "$X4_CODEX_HOOKS_TMPL"
+}
+
 #: _x4lock_steps DEST [FILE] -- the "unlock, re-run, lock" steps, aimed at the DESTINATION's own
 #: x4lock (FX-B2, delta review). They named `scripts/x4lock.py` relative to the cwd -- the SOURCE's
 #: copy, whose manifest never holds a separate install's files: `unlock` answered "not in the
@@ -1133,6 +1160,7 @@ precheck_codex_hooks_json() {   # DEST
   new="$(render_codex_hooks_json "$dest")" || return 0
   _codex_matches_template "$dest" "$new" && return 0
   if [ -w "$f" ]; then
+    _codex_is_shipped_rendering "$dest" && return 0   # an older SHIPPED rendering: ours to replace
     echo "REFUSING: custom Codex hook definitions need a reviewed upgrade; --over-existing cannot replace them." >&2
     echo "  Use tools/agent-harness.py upgrade-stage. Nothing has been changed." >&2
     exit 1

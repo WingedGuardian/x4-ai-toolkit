@@ -116,7 +116,9 @@ def test_FXB2_the_count_line_names_EVERY_name():
     g = _gen()
     rows = [("a" * 64, n, "v1.0.0") for n in g.NAMES] + [("b" * 64, g.NAMES[2], "v1.1.0")]
     line = g.count_line(rows, 2)
-    assert line.startswith("5 row(s) over 2 tags"), line
+    assert line.startswith("%d row(s) over 2 tags" % (len(g.NAMES) + 1)), line
     assert "1 CLAUDE.md" in line and "1 AGENTS.md" in line, line
     assert "2 .claude/x4-paths.env.example" in line, line
     assert "1 .claude/settings.json" in line, line
+    assert "1 KNOWLEDGEBASE.md" in line and "1 agent/targets/codex/hooks.json.tmpl" in line, line
+    assert all(n in line for n in g.NAMES), line
