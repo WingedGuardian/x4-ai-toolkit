@@ -940,14 +940,15 @@ x4_save_dispatch() {
   rc=$?
   case "$rc:$answer" in
     '0:X4SAVE '*) printf '%s' "${answer#X4SAVE }" ;;
-    # K10: under X4_GUARD_CHECK=1 a refusal that checked nothing exits 2. Its static reason
-    # (e.g. "PowerShell command does not parse") is the actionable part: pass it through,
-    # still a deny and still "checked nothing" -- never any other verdict on exit 2.
-    '2:X4SAVE {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", '*)
-       printf '%s' "${answer#X4SAVE }"
-       x4_guard_check_inert
-       return 0 ;;
-    *) printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"X4 save dispatcher did not return a complete decision; this call was not allowed."}}'
+    *) case "$rc:$answer" in
+         # K10: under X4_GUARD_CHECK=1 a refusal that checked nothing exits 2. Its static
+         # reason (e.g. "PowerShell command does not parse") is the actionable part: pass it
+         # through -- only a deny or an ask, and still "checked nothing" (exit 2 below).
+         '2:X4SAVE {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", '*|\
+         '2:X4SAVE {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", '*)
+           printf '%s' "${answer#X4SAVE }" ;;
+         *) printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"X4 save dispatcher did not return a complete decision; this call was not allowed."}}' ;;
+       esac
        x4_guard_check_inert
        return 0 ;;
   esac
