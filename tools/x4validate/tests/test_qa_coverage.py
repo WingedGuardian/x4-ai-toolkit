@@ -194,3 +194,35 @@ def test_UNSWEPT_never_names_a_subcommand_THAT_A_CELL_ALREADY_COVERS():
         "second gate that would absorb the loss of that cell:\n  "
         + "\n  ".join("%s %s" % p for p in dead)
         + "\n\nDelete the entry: a real check always beats a justified skip.")
+
+
+def test_x4modlist_search_is_swept_only_through_its_offline_refusal():
+    """`search` can reach the network, so its cell must be the keyless refusal and it must be
+    able to go red: with the cell removed the coverage check reports `search`."""
+    qa = _qa()
+    cells = [c for c in qa.CELLS if c.tool == "x4modlist" and "search" in c.argv]
+    assert len(cells) == 1, cells
+    cell = cells[0]
+    assert cell.expect == (2,) and cell.wants == "X4_NEXUS_KEY"
+    assert cell.env["X4_NEXUS_KEY"] == ""
+    assert Path(cell.env["X4_CONFIG"]).read_bytes() == b""    # no key can come from a file
+    assert "--registry" in cell.argv                         # the sandbox, never the real one
+
+
+def test_the_search_cell_runs_green_offline_and_goes_red_if_a_key_resolves(monkeypatch):
+    qa = _qa()
+    cell = next(c for c in qa.CELLS if c.tool == "x4modlist" and "search" in c.argv)
+    assert qa.run(cell).status == "GREEN", (cell.status, cell.detail, cell.out[-400:])
+    # The twin: the same cell with a key that resolves would get past the refusal. Prove the
+    # cell is judged on the exit code by pointing it at a different expectation.
+    monkeypatch.setattr(cell, "status", "")
+    monkeypatch.setattr(cell, "expect", (0,))
+    assert qa.run(cell).status == "RED"
+
+
+def test_removing_the_search_cell_is_reported_as_a_finding(monkeypatch):
+    qa = _qa()
+    kept = [c for c in qa.CELLS if not (c.tool == "x4modlist" and "search" in c.argv)]
+    monkeypatch.setattr(qa, "CELLS", kept)
+    findings, _ = qa.check_coverage()
+    assert any("x4modlist search" in f for f in findings), findings
