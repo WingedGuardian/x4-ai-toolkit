@@ -616,8 +616,11 @@ def _analyze_vpath(
         nested=nested_door)
     if base_tree is not None and not qualified:
         if report is not None:
-            report.skip(vpath, "sequential selector instrument disagreed with the normal merge; "
-                        "node collision analysis is unavailable", degraded=True)
+            report.skip(vpath, "sequential selector instrument disagreed with the normal merge, "
+                        "so this file produced NO rows of ANY kind (HARD, SUBTREE, "
+                        "FULL-OVERRIDE, UNION-KEY, SOFT) and none of its order-miss, "
+                        "removed-first, added-into, dependency or guarded-off disclosures "
+                        "-- not only its node collisions", degraded=True)
         return []
     actual_ops: dict[tuple[str, int], bool] = {}
     removals = [(rank[folder], index, identity)
@@ -1000,8 +1003,10 @@ def _analyze_vpath(
                 # x4effective's origin. The wiper keeps its own field.
                 collisions.append(Collision(
                     vpath, "SUBTREE", w0, [b, a], "",
-                    f"'{a}' loads after '{b}' and replace/removes {w0}, wiping "
-                    f"{len(hits)} of '{b}'s change(s) inside it (e.g. {cb0}) — "
+                    f"'{a}' loads after '{b}' and replace/removes "
+                    f"{_shown_path(final_paths.get(w0, ''), '', w0)}, wiping "
+                    f"{len(hits)} of '{b}'s change(s) inside it (e.g. "
+                    f"{_shown_path(final_paths.get(cb0, ''), '', cb0)}) — "
                     "load order is the engine's measured order; advisory where this "
                     "run's load-order notes name an UNMEASURED assumption"
                     + gnote([(a, w0)] + [(b, cb) for _w, cb in hits]),
