@@ -28,7 +28,12 @@ Run tools via uv from the tool dir:
    ops, so the mod silently changes less than it says. An op whose `if=` guard is false at its
    load position changes nothing, so it is not a collision: it is listed under GUARDED OFF
    (`guarded_off` in `--json`). A row involving a TRUE guard says the result depends on this
-   load order; an invalid guard keeps its row, labelled UNEVALUATED. **Zero hard
+   load order; an invalid guard keeps its row, labelled UNEVALUATED. Selectors resolve at
+   each op's own load position: a replace/remove landing on content ANOTHER mod added is a
+   HARD row that names the adder (and says when it overwrites only some of the elements that
+   mod inserted); an `<add>` into another mod's added content is the compatibility-patch
+   pattern -- advisory, listed under ADDS INTO CONTENT ANOTHER MOD ADDED (`added_into` in
+   `--json`), never failing. **Zero hard
    collisions is common and means "no structural clash" — NOT "no interaction" (see step 2).**
 
 2. **Behavioral — `x4xref`** (build once with `x4xref build`, then query). The conflicts that
