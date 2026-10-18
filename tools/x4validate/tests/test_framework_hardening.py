@@ -9,6 +9,7 @@ every edit. Only a validator that could not run, or a DEGRADED result, is disclo
 import concurrent.futures
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -151,3 +152,62 @@ def test_F4_CI_checks_the_lockfile_is_fresh_not_only_frozen():
     checks = [s for s in steps if "uv lock --check" in str(s.get("run", ""))]
     assert checks, "no CI step runs `uv lock --check`"
     assert all(s.get("working-directory") == "tools/x4validate" for s in checks), checks
+
+
+# ------------------------------------------------------- I1: one red check skips nothing
+#: A step's `if:` without a status function means `success() && ...`, so ONE early red
+#: check (the hook audit, say) silently skipped the pytest suite, the skip ceilings and
+#: both cold legs. Each job therefore names the steps that are SETUP (their failure makes
+#: every later step meaningless, so they keep the default) and every later step must run
+#: on `!cancelled()` gated on that setup -- or on a named earlier step it really needs.
+_SETUP_MARKER = {"tests": "setup", "scrub": "checkout"}
+
+
+def _ungated_checks(ci) -> list[str]:
+    """Names of check steps that an EARLIER failing check would skip."""
+    bad = []
+    for job_name, marker in _SETUP_MARKER.items():
+        steps = ci["jobs"][job_name]["steps"]
+        ids = [s.get("id") for s in steps]
+        if marker not in ids:
+            bad.append(f"{job_name}: no setup step with id '{marker}'")
+            continue
+        cut = ids.index(marker)
+        for s in steps[:cut + 1]:
+            if "if" in s:
+                bad.append(f"{job_name}: setup step {s.get('name', s.get('uses'))!r} is conditional")
+        seen = {marker}
+        for s in steps[cut + 1:]:
+            cond = str(s.get("if", ""))
+            name = s.get("name", s.get("uses"))
+            gate = re.findall(r"steps\.([A-Za-z0-9_-]+)\.outcome == 'success'", cond)
+            if "!cancelled()" not in cond or not gate or not set(gate) <= seen:
+                bad.append(f"{job_name}: {name!r} if={cond!r}")
+            if s.get("id"):
+                seen.add(s["id"])
+    return bad
+
+
+def test_I1_every_CI_check_runs_even_after_an_EARLIER_check_failed():
+    from _layout import require_repo
+    require_repo(".github/workflows/ci.yml", why="CI configuration is not installed")
+    ci = YAML(typ="safe").load((REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    assert _ungated_checks(ci) == []
+
+
+def test_I1_TWIN_the_gate_check_can_fail():
+    """One twin per clause: no !cancelled(), no setup gate, a gate on a LATER/unknown id,
+    a conditional setup step, a missing marker."""
+    def wf(tests_steps, scrub_steps=None):
+        return {"jobs": {"tests": {"steps": tests_steps},
+                         "scrub": {"steps": scrub_steps or [{"uses": "co", "id": "checkout"}]}}}
+    ok = "${{ !cancelled() && steps.setup.outcome == 'success' }}"
+    setup = [{"uses": "co"}, {"name": "setup", "id": "setup", "run": "true"}]
+    assert _ungated_checks(wf(setup + [{"name": "a", "if": ok}])) == []
+    assert _ungated_checks(wf(setup + [{"name": "a"}]))
+    assert _ungated_checks(wf(setup + [{"name": "a", "if": "${{ steps.setup.outcome == 'success' }}"}]))
+    assert _ungated_checks(wf(setup + [{"name": "a", "if": "${{ !cancelled() }}"}]))
+    assert _ungated_checks(wf(setup + [{"name": "a", "if": "${{ !cancelled() && steps.later.outcome == 'success' }}"},
+                                       {"name": "b", "id": "later", "if": ok}]))
+    assert _ungated_checks(wf([{"uses": "co", "if": "x"}, {"name": "s", "id": "setup"}]))
+    assert _ungated_checks(wf([{"uses": "co"}]))

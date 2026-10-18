@@ -61,6 +61,8 @@ def test_write_repairs_raw_budget_without_truncating_or_rewriting_other_crlf(tmp
 
 
 def test_windows_style_git_clone_keeps_actual_agents_bytes_within_budget(tmp_path):
+    from _layout import require_repo
+    require_repo("agent", why="AGENTS.md is rendered from the repo-only agent/ source")
     g = generator()
     expected = g.render_agents_md(REPO / "agent").encode("utf-8")
     assert len(expected) <= 32768

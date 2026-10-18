@@ -160,3 +160,70 @@ def test_record_writes_a_discover_block_the_replay_accepts(monkeypatch, tmp_path
     assert set(block) == set(nf.DISCOVER_CASES)
     assert [r["version"] for r in block["complete"]["data"]["mods"]["nodes"]] == ["1.0", "2.0", "3.0"]
     assert nf.replay() == 0, capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Release review (gates minors M1-M3): the replay must REFUSE what it did not record.
+# ---------------------------------------------------------------------------
+
+def test_M1_an_unrecorded_plain_graphql_query_is_a_hard_failure_not_the_example_reply():
+    rp = nf._Replay(_fixture())
+    try:
+        rp.post_json("https://x", {"query": "query { somethingNeverRecorded }"}, {})
+    except AssertionError as exc:
+        assert "unrecorded GraphQL query" in str(exc)
+    else:
+        raise AssertionError("an unrecorded query was served the `example` reply")
+
+
+def test_M1_TWIN_a_recorded_plain_query_is_still_served():
+    rp = nf._Replay(_fixture())
+    assert rp.post_json("https://x", {"query": 'search "nomatch"'}, {}) == \
+        _fixture()["graphql"]["nomatch"]
+
+
+def test_M2_a_network_call_during_replay_turns_it_RED(monkeypatch, capsys):
+    """"network calls made: 0" was printed, never measured. Planted: a code path that
+    reaches urllib.request.urlopen (and swallows the outcome, as a refresh might)."""
+    import urllib.request
+    real = nf._modlist._classify
+
+    def leaky(*args, **kwargs):
+        try:
+            urllib.request.urlopen("http://127.0.0.1:9/", timeout=1)
+        except BaseException:
+            pass
+        return real(*args, **kwargs)
+    monkeypatch.setattr(nf._modlist, "_classify", leaky)
+    assert nf.replay() == 1
+    assert "FAIL  network calls attempted:" in capsys.readouterr().out
+
+
+def test_M2_TWIN_the_clean_replay_reports_a_MEASURED_zero(capsys):
+    assert nf.replay() == 0
+    assert "network calls attempted: 0" in capsys.readouterr().out
+
+
+def test_M3_a_discover_reply_with_fewer_than_three_rows_REFUSES_clearly(
+        monkeypatch, capsys, tmp_path):
+    fx = _fixture()
+    nodes = fx["discover"]["complete"]["data"]["mods"]["nodes"][:2]
+    fx["discover"] = nf.discover_bodies(nodes)
+    small = tmp_path / "nexus.json"
+    small.write_text(json.dumps(fx), encoding="utf-8")
+    monkeypatch.setattr(nf, "FIXTURE", small)
+    assert nf.replay() == 1
+    assert "fewer than 3" in capsys.readouterr().out
+
+
+def test_M3_a_key_leaked_on_STDERR_turns_the_search_check_RED(monkeypatch, capsys):
+    import sys
+    real = nf._modlist.main
+
+    def leaky(argv):
+        if "search" in argv and nf.discover_term("errors") in argv:
+            print("fixture-key-not-a-real-credential", file=sys.stderr)
+        return real(argv)
+    monkeypatch.setattr(nf._modlist, "main", leaky)
+    assert nf.replay() == 1
+    assert "no key in the output" in capsys.readouterr().out

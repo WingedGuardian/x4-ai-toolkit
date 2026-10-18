@@ -2862,12 +2862,17 @@ def test_two_AGREEING_configs_retire_the_old_one_to_a_bak(installer, tmp_path, r
     before = old.read_bytes()
     if readonly:
         old.chmod(stat.S_IREAD)
+    identity = old.stat().st_ino
     try:
         r = _install(installer, tmp_path, dest)
         assert r.returncode == 0, (r.stdout + r.stderr)[-1500:]
         assert not old.exists() and new.read_bytes() == before
         backups = list((dest / ".claude").glob("x4-paths.env.bak-*"))
         assert len(backups) == 1 and backups[0].read_bytes() == before
+        # H3 (release review): RENAMED, as the message says -- the same file, not a copy
+        # plus a delete -- so a locked (read-only) 3.x config stays locked.
+        assert backups[0].stat().st_ino == identity, "the 3.x config was copied, not renamed"
+        assert os.access(backups[0], os.W_OK) is (not readonly)
     finally:
         for p in [old, *(dest / ".claude").glob("x4-paths.env.bak-*")]:
             if p.exists():
@@ -3392,8 +3397,13 @@ def test_R2_cosmetic_install_ps1_prints_ONE_separator_in_its_summary(tmp_path):
             assert "/" not in ln.split(":", 1)[1], ln
 
 
-@pytest.mark.parametrize("installer", ["sh", "ps1"])
-def test_R2B1_an_INSTALLED_toolkits_suite_COLLECTS_and_counts_its_repo_only_skips(installer,
+@pytest.mark.parametrize("installer,agent", [
+    ("sh", "all"), ("ps1", "all"),
+    # SINGLE agents (release review T3): `--agent all` ships every carrier, so a module that
+    # imported from one native carrier (.codex/hooks) at import time collected fine there and
+    # died in a claude-only install. One installer per single agent keeps the cost bounded.
+    ("sh", "claude"), ("sh", "codex"), ("sh", "opencode"), ("sh", "generic")])
+def test_R2B1_an_INSTALLED_toolkits_suite_COLLECTS_and_counts_its_repo_only_skips(installer, agent,
                                                                                 tmp_path):
     """SETUP_PROMPT.txt has the user run the installed toolkit's suite. Before R2-B1 it died in
     collection (3 errors: modules reading the repo-only agent/ source at import). A REAL install
@@ -3406,11 +3416,12 @@ def test_R2B1_an_INSTALLED_toolkits_suite_COLLECTS_and_counts_its_repo_only_skip
     NOT covered here. Running the installed suite for real is left to the release's cold
     install check. COST (MEASURED 2026-10-05, Windows): each parametrization makes a fresh
     install and `uv run` builds that install's own .venv, so the two cases build TWO venvs;
-    18.3 s (sh) + 12.9 s (ps1) = ~31 s, ~0.1 GB written to the temp drive."""
+    18.3 s (sh) + 12.9 s (ps1) = ~31 s, ~0.1 GB written to the temp drive. The four
+    single-agent cases add one install + venv each."""
     if shutil.which("uv") is None:
         pytest.skip("no uv to run the installed suite with")
     dest = _fresh(tmp_path)
-    r = _install(installer, tmp_path, dest, "--agent", "all")
+    r = _install(installer, tmp_path, dest, "--agent", agent)
     assert r.returncode == 0, _ok(r)
     assert not (dest / "agent").exists(), "an install copied the repo-only agent/ source"
     env = {k: v for k, v in os.environ.items() if not k.startswith("X4_")}
@@ -3789,7 +3800,7 @@ def test_FXB4_every_CI_BASH_install_leg_that_runs_on_Windows_is_ISOLATED_too():
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     blocks = re.split(r"(?m)^\s*- name: ", text)[1:]
     bash_steps = [b for b in blocks if "bash install.sh --method" in b and "shell: bash" in b
-                  and "if: runner.os == 'Linux'" not in b]
+                  and not re.search(r"(?m)^\s*if:.*runner\.os == 'Linux'", b)]
     assert len(bash_steps) >= 2, [b.splitlines()[0] for b in bash_steps]
     keys = []
     for b in bash_steps:

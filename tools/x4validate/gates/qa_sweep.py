@@ -41,7 +41,8 @@ class Cell:
     label: str
     argv: list[str]
     expect: tuple[int, ...] = (0,)
-    #: substring that must appear in stdout for the cell to count as doing work
+    #: substring that must appear in the cell's output -- stdout AND stderr, combined, as
+    #: `run()` matches it -- for the cell to count as doing work; absent, the cell is YELLOW
     wants: str | None = None
     #: True when a non-zero exit is a legitimate finding, not a tool failure
     findings_ok: bool = False
@@ -419,10 +420,14 @@ _ALL_CELLS: list[Cell] = [
                                                "refresh", "--ids", "__no_such_mod__"],
          expect=(0, 1), findings_ok=True),
     # `search` is the other cell that COULD reach the network, so it is swept only through its
-    # REFUSAL: with no key it must exit 2 naming X4_NEXUS_KEY before any request is made.
-    # The child gets an empty config file and a blank key (a blank env value is dropped by
-    # `_paths`, so the ambient key cannot leak in); if a key somehow resolved anyway the
-    # cell would see rc 0 or a Nexus answer, not 2, and go RED.
+    # REFUSAL: with no key it must exit 2 naming X4_NEXUS_KEY (in stdout or stderr, which
+    # `wants` matches combined) before any request is made. The child gets an empty config
+    # file and a blank key (a blank env value is dropped by `_paths`, so the ambient key
+    # cannot leak in). If a key resolved anyway, what the cell shows depends on Nexus's
+    # answer: ACCEPTED -> rc 0 -> RED; any other Nexus failure -> rc 2 without the key's
+    # name -> YELLOW, not RED. A key Nexus REFUSES prints the same static "missing or was
+    # refused" text with rc 2, so it reads GREEN although a request was made: this cell
+    # proves the keyless refusal, not the absence of a key.
     Cell("x4modlist", "search (no key, no network)",
          ["--registry", _sandbox_registry(), "search", "qa-sweep"], expect=(2,),
          wants="X4_NEXUS_KEY",

@@ -9,8 +9,23 @@ from pathlib import Path
 
 import pytest
 
+from _layout import common_hook_dir, require_native_codex, require_native_opencode
 from codex_testlib import REPO, make_sandbox, native, run_adapter
 from test_opencode_adapter import call as open_call, run as open_run
+
+sys.path.insert(0, str(REPO / "scripts"))
+from gitbash import find_bash, why_not  # noqa: E402
+
+#: The common guards, from whichever carrier this install selected (every carrier holds them
+#: verbatim): `.claude/hooks` exists only when Claude was installed (release review T4).
+HOOKS = common_hook_dir(REPO)
+
+
+def _bash() -> str:
+    bash = find_bash()
+    if bash is None:
+        pytest.skip("no usable bash: " + why_not())
+    return bash
 
 
 @pytest.mark.parametrize('shape', ['bash-syntax', 'guards-off-syntax', 'powershell-syntax'])
@@ -27,7 +42,7 @@ def test_claude_check_protocol_distinguishes_failed_evaluation_from_a_policy_ver
     else:
         env.pop('X4_GUARD', None)
     def run(values):
-        return subprocess.run([shutil.which('bash'), str(REPO / '.claude/hooks/protect-bash.sh')],
+        return subprocess.run([_bash(), str(HOOKS / 'protect-bash.sh')],
                   input=json.dumps(payload).encode(), capture_output=True, env=values, timeout=35)
     native_result = run(env)
     assert native_result.returncode == 0
@@ -42,7 +57,7 @@ def test_claude_check_protocol_keeps_an_evaluated_protection_denial_as_a_verdict
     env.update(X4_GUARD_CHECK='1')
     env.pop('X4_GUARD', None)
     payload = {'tool_name': 'Bash', 'tool_input': {'command': 'rm -rf "' + (root / 'reference').as_posix() + '"'}, 'cwd': str(root)}
-    result = subprocess.run([shutil.which('bash'), str(REPO / '.claude/hooks/protect-bash.sh')],
+    result = subprocess.run([_bash(), str(HOOKS / 'protect-bash.sh')],
               input=json.dumps(payload).encode(), capture_output=True, env=env, timeout=35)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'] == 'deny'
@@ -58,9 +73,9 @@ def test_nonzero_worker_output_never_becomes_an_allow_and_preserves_check_failur
         env['X4_GUARD_CHECK'] = '1'
     else:
         env.pop('X4_GUARD_CHECK', None)
-    result = subprocess.run([shutil.which('bash'), '-c',
+    result = subprocess.run([_bash(), '-c',
         '. "$3"; PY="$1"; HOOK_DIR="$2"; INPUT="{}"; x4_save_dispatch shell', '--',
-        sys.executable, str(worker), str(REPO / '.claude/hooks/_x4-env.sh')],
+        sys.executable, str(worker), str(HOOKS / '_x4-env.sh')],
         capture_output=True, env=env, timeout=20)
     assert result.returncode == (2 if checking else 0), result.stdout
     assert json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'] == 'deny'
@@ -70,12 +85,12 @@ def test_nonzero_worker_output_never_becomes_an_allow_and_preserves_check_failur
 def test_check_protocol_regressions_are_killed_in_an_owned_rendered_copy(tmp_path, defect):
     _tmp, root, env = make_sandbox(tmp_path)
     tree = root / '.claude/hooks'
-    shutil.copytree(REPO / '.claude/hooks', tree, ignore=shutil.ignore_patterns('__pycache__'))
+    shutil.copytree(HOOKS, tree, ignore=shutil.ignore_patterns('__pycache__'))
     env.update(X4_GUARD_CHECK='1', PYTHONDONTWRITEBYTECODE='1')
     env.pop('X4_GUARD', None)
     payload = {'tool_name':'Bash', 'tool_input':{'command':"echo 'unterminated"}, 'cwd':str(root)}
     def run():
-        return subprocess.run([shutil.which('bash'), str(tree / 'protect-bash.sh')],
+        return subprocess.run([_bash(), str(tree / 'protect-bash.sh')],
                   input=json.dumps(payload).encode(), capture_output=True, env=env, timeout=35)
     assert run().returncode == 2
     if defect == 'python-status':
@@ -115,6 +130,7 @@ def transactions(root):
 
 
 def test_codex_batches_two_preserves_then_three_refuses_and_typed_grant_succeeds(tmp_path):
+    require_native_codex(REPO)
     tmp, root, env, files = prepare(tmp_path)
     payload = native("apply_patch_multi", root, command=patch(files[:2]))
     assert run_adapter(env, payload)[0] in ("allow", "advise")
@@ -125,7 +141,7 @@ def test_codex_batches_two_preserves_then_three_refuses_and_typed_grant_succeeds
     assert len(transactions(root)) == 1
     # Fixture provenance matches the qualified reader contract. This does not
     # claim a current running Codex TUI was intercepted.
-    spec = importlib.util.spec_from_file_location("host_save_profile", REPO / "agent/guards/claude-hooks/save_policy.py")
+    spec = importlib.util.spec_from_file_location("host_save_profile", HOOKS / "save_policy.py")
     policy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(policy)
     line = policy.core(root, "approval").example("human-session", "write", files)
@@ -141,6 +157,7 @@ def test_codex_batches_two_preserves_then_three_refuses_and_typed_grant_succeeds
 
 
 def test_opencode_single_save_preserves_and_bulk_has_no_invented_human_reader(tmp_path):
+    require_native_opencode(REPO)
     tmp, root, env, files = prepare(tmp_path)
     payload = open_call(root, "edit", {"filePath": str(files[0]), "oldString": "old", "newString": "new"})
     result = open_run(env, payload)
@@ -153,6 +170,7 @@ def test_opencode_single_save_preserves_and_bulk_has_no_invented_human_reader(tm
 
 
 def test_a_backend_denial_never_preserves_or_gets_overruled(tmp_path):
+    require_native_codex(REPO)
     tmp, root, env, files = prepare(tmp_path)
     payload = native("apply_patch_multi", root, command=patch([files[0], root / "reference/libraries/wares.xml"]))
     assert run_adapter(env, payload)[0] == "deny"
@@ -161,6 +179,7 @@ def test_a_backend_denial_never_preserves_or_gets_overruled(tmp_path):
 
 @pytest.mark.parametrize('host', ['codex', 'opencode'])
 def test_named_adapter_file_paths_are_literal_with_bracketed_parents_and_names(tmp_path, host):
+    (require_native_codex if host == 'codex' else require_native_opencode)(REPO)
     tmp, root, env, _files = prepare(tmp_path)
     profile = tmp / 'profile [one]'
     folder = profile / 'save'

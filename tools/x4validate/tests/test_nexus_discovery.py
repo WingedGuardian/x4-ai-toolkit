@@ -308,3 +308,39 @@ def test_TWIN_an_unexpected_RuntimeError_keeps_its_name_only(monkeypatch, capsys
     assert _modlist.main(["search", "a", "--json"]) == 2
     out = capsys.readouterr().out
     assert "reinstall" not in out and "secret" not in out
+
+
+# ---------------------------------------------------------------------------
+# Release review (tests): no test here may read the MACHINE's default registry. On a
+# configured machine `search` marked candidates against the user's real modlist, so a
+# result depended on whose machine ran it. Every test gets a private empty registry as the
+# default (a test that wants None or its own --registry still sets it), and a tripwire
+# fails any read of the default the module saw at import.
+# ---------------------------------------------------------------------------
+_MACHINE_DEFAULT = _registry.DEFAULT_REGISTRY
+
+
+@pytest.fixture(autouse=True)
+def _private_default_registry(monkeypatch, tmp_path):
+    private = tmp_path / "private-default-registry" / "modlist.yaml"
+    private.parent.mkdir()
+    _registry.save_registry(_registry._new_registry(), private)
+    monkeypatch.setattr(_registry, "DEFAULT_REGISTRY", private)
+    if _MACHINE_DEFAULT is not None:
+        machine = _registry._registry_file(_MACHINE_DEFAULT).resolve()
+        real = _registry.load_registry
+
+        def tripwire(path=None, *a, **kw):
+            if path is not None and _registry._registry_file(type(machine)(path)).resolve() == machine:
+                pytest.fail(f"a test read the machine's default registry: {machine}")
+            return real(path, *a, **kw)
+        monkeypatch.setattr(_registry, "load_registry", tripwire)
+
+
+def test_the_search_default_registry_is_the_private_one_not_the_machines(monkeypatch, capsys):
+    monkeypatch.setattr(_nexus, "nexus_key", lambda: "fake-key")
+    monkeypatch.setattr(_nexus, "_post_json", lambda *a: page(1))
+    rc, out, _ = _run(capsys, "search", "a", "--json")
+    doc = json.loads(out)
+    assert rc == 0 and doc["registry"] == {"status": "checked", "active_mods": 0,
+                                           "active_without_nexus_id": 0}, doc["registry"]

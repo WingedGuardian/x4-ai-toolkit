@@ -25,8 +25,11 @@ def fixture(base):
     source.mkdir()
     files = {".agents/skills/example/SKILL.md": b"Run {{TOOLKIT}}/tools/example\n",
              ".opencode/skills/example/SKILL.md": b"Run {{TOOLKIT}}/tools/example\n",
-             "tools/x4_harness/codex-hooks.json.tmpl": (REPO / "agent/targets/codex/hooks.json.tmpl").read_bytes(),
-             ".codex/hooks/codex-entry.sh": (REPO / ".codex/hooks/codex-entry.sh").read_bytes()}
+             # The SHIPPED template (every install has tools/x4_harness; agent/ is repo-only).
+             "tools/x4_harness/codex-hooks.json.tmpl": (REPO / "tools/x4_harness/codex-hooks.json.tmpl").read_bytes(),
+             # Any staged Codex file: the renderer never reads it, so fixed bytes, not the
+             # real .codex/hooks copy that only a Codex install has (release review T4).
+             ".codex/hooks/codex-entry.sh": b"#!/bin/sh\n# fixture: a staged Codex hook file\n"}
     for name, data in files.items():
         path = source / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,7 +70,7 @@ def test_rendered_review_generates_codex_and_keeps_per_host_shells_independent(t
 def test_codex_root_refuses_shell_expansion_and_broken_quoting(bad):
     module = renderer()
     with pytest.raises(ValueError, match="refusing a Codex hook root"):
-        module.render_codex((REPO / "agent/targets/codex/hooks.json.tmpl").read_text(), "C:/fixture/" + bad + "toolkit")
+        module.render_codex((REPO / "tools/x4_harness/codex-hooks.json.tmpl").read_text(), "C:/fixture/" + bad + "toolkit")
 
 
 def test_unrendered_skill_refuses_before_any_installed_write(tmp_path):

@@ -154,16 +154,27 @@ def test_powershell_deadline_includes_input_and_descendant_output(tree, failure,
             "print('X4OK {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\","
             "\"permissionDecisionReason\":\"adapter result\"}}')") if failure == "inherited-pipes" else (
                 "import time; time.sleep(6)")
+    launcher = [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]
+    env = dict(os.environ, X4_PYTHON=sys.executable, X4_NO_PYTHON_FALLBACK="1", X4_WRAPPER_TIMEOUT_S="1")
+    payload = b"x" * (2 << 20) if failure == "unread-stdin" else b"{}"
+    # BASELINE first, same launcher, payload and machine load, with an adapter that does
+    # nothing: an absolute bound (3.5 s) was MEASURED at 3.31 s on an idle machine, so any
+    # load turned PowerShell + Python startup into a failure of the deadline.
+    (tree / "codex_adapter.py").write_text("pass", encoding="utf-8")
+    start = time.monotonic()
+    _run(launcher, tree / "codex-entry.ps1", "pre_tool_use", payload, env)
+    baseline = time.monotonic() - start
     (tree / "codex_adapter.py").write_text(body, encoding="utf-8")
     start = time.monotonic()
-    result = _run([powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"],
-                  tree / "codex-entry.ps1", "pre_tool_use", b"x" * (2 << 20) if failure == "unread-stdin" else b"{}",
-                  dict(os.environ, X4_PYTHON=sys.executable, X4_NO_PYTHON_FALLBACK="1", X4_WRAPPER_TIMEOUT_S="1"))
+    result = _run(launcher, tree / "codex-entry.ps1", "pre_tool_use", payload, env)
     elapsed = time.monotonic() - start
     assert result.returncode == 0
     reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
     assert "X4 GUARD INERT" in reason
-    assert elapsed < 3.5, (failure, elapsed)
+    # The deadline is 1 s: the run may cost the no-op baseline plus that second plus slack,
+    # and must never reach the adapter's 6 s sleep (that would be no deadline at all).
+    assert elapsed < baseline + 1.0 + 1.5, (failure, elapsed, baseline)
+    assert elapsed < 6.0, (failure, elapsed, baseline)
     if failure == "inherited-pipes":
         import ctypes
         from ctypes import wintypes

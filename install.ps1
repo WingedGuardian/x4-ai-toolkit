@@ -938,6 +938,32 @@ function Test-CodexMatchesTemplate($dest, $expected) {
   return ($checked.Rc -eq 0)
 }
 
+#: Is $dest's .codex/hooks.json an UNEDITED rendering of a template some release SHIPPED?
+#: The mirror of install.sh's _codex_is_shipped_rendering: un-render this root's two
+#: JSON-escaped spellings back to {{ROOT_WIN}} / {{ROOT}} (the inverse of Get-CodexHooksJson)
+#: and look the canonical hash up in the shipped list under the template's name (release
+#: review H4: the first template change after a release refused every unedited upgrade).
+function Test-CodexShippedRendering($dest) {
+  $f = Get-CodexHooksJsonPath $dest
+  if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { return $false }
+  try { $root = (Resolve-Path -LiteralPath $dest -ErrorAction Stop).ProviderPath } catch { return $false }
+  if (-not (Test-CodexRootSafe $root)) { return $false }
+  $bs = [string][char]92
+  $root = $root.TrimEnd([char]92, [char]47)
+  $posix = $root.Replace($bs, '/')
+  $win = $posix.Replace('/', $bs)
+  try { $b = [IO.File]::ReadAllBytes($f) } catch { return $false }
+  $start = 0
+  if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { $start = 3 }
+  $t = (New-Object Text.UTF8Encoding($false)).GetString($b, $start, $b.Length - $start)
+  $t = $t.Replace("`r", '').TrimEnd("`n")
+  $t = $t.Replace($win.Replace($bs, $bs + $bs), '{{ROOT_WIN}}').Replace($posix.Replace($bs, $bs + $bs), '{{ROOT}}')
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try { $h = $sha.ComputeHash((New-Object Text.UTF8Encoding($false)).GetBytes($t)) } finally { $sha.Dispose() }
+  $hex = -join ($h | ForEach-Object { $_.ToString('x2') })
+  return ((Test-HKnownHash $hex $X4CodexHooksTmpl) -eq 'yes')
+}
+
 #: PRECONDITION before any write: a READ-ONLY hooks.json this install would CHANGE.
 #: The "unlock, re-run, lock" steps, aimed at the DESTINATION's own x4lock (FX-B2, delta review;
 #: install.sh's _x4lock_steps). `scripts/x4lock.py` relative to the cwd is the SOURCE's copy,
@@ -971,6 +997,7 @@ function Test-CodexHooksPrecheck($dest) {
   if ($null -eq $new) { return }
   if (Test-CodexMatchesTemplate $dest $new) { return }
   if (-not $ro) {
+    if (Test-CodexShippedRendering $dest) { return }   # an older SHIPPED rendering: ours to replace
     Write-Host 'REFUSING: custom Codex hook definitions need a reviewed upgrade; -OverExisting cannot replace them.' -ForegroundColor Red
     Write-Host '  Use tools/agent-harness.py upgrade-stage. Nothing has been changed.'
     exit 1
@@ -1487,8 +1514,11 @@ function Copy-Toolkit($dest) {
   New-Item -ItemType Directory -Force -Path (Join-Path $dest '.claude') | Out-Null
   $notes = Join-Path $dest 'KNOWLEDGEBASE.md'
   $reference = Join-Path $SRC 'KNOWLEDGEBASE.md'
+  # An UNEDITED KB some release shipped is ours to replace (release review H6; install.sh's
+  # copy_toolkit): only a KB that is neither the source's nor a shipped one can hold notes.
   if ((Test-Path -LiteralPath $notes -PathType Leaf) -and
-      (Get-X4RawSha256 $notes) -ne (Get-X4RawSha256 $reference)) {
+      (Get-X4RawSha256 $notes) -ne (Get-X4RawSha256 $reference) -and
+      -not (Test-HIsShipped $dest 'KNOWLEDGEBASE.md')) {
     $py = Find-OcPython
     if (-not $py) { throw 'Preserving the existing knowledgebase needs Python >= 3.10; no toolkit files were copied.' }
     $extra = @($py | Select-Object -Skip 1)
