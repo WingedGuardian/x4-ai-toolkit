@@ -143,6 +143,17 @@ def _sandbox_dir() -> Path:
     return _SANDBOX_DIR
 
 
+def _keyless_config() -> Path:
+    """An EMPTY config file, for cells that must run with no `X4_NEXUS_KEY` anywhere.
+
+    `X4_CONFIG` naming a file replaces the toolkit's own `x4-paths.env`, so a key kept there
+    is not read either. Written once per sweep, into the throwaway directory.
+    """
+    path = _sandbox_dir() / "keyless-x4-paths.env"
+    path.write_bytes(b"")
+    return path
+
+
 def _sandbox_registry() -> str:
     """A throwaway copy of the real registry, made once per sweep.
 
@@ -407,6 +418,15 @@ _ALL_CELLS: list[Cell] = [
     Cell("x4modlist", "refresh (no network)", ["--registry", _sandbox_registry(),
                                                "refresh", "--ids", "__no_such_mod__"],
          expect=(0, 1), findings_ok=True),
+    # `search` is the other cell that COULD reach the network, so it is swept only through its
+    # REFUSAL: with no key it must exit 2 naming X4_NEXUS_KEY before any request is made.
+    # The child gets an empty config file and a blank key (a blank env value is dropped by
+    # `_paths`, so the ambient key cannot leak in); if a key somehow resolved anyway the
+    # cell would see rc 0 or a Nexus answer, not 2, and go RED.
+    Cell("x4modlist", "search (no key, no network)",
+         ["--registry", _sandbox_registry(), "search", "qa-sweep"], expect=(2,),
+         wants="X4_NEXUS_KEY",
+         env={"X4_NEXUS_KEY": "", "X4_CONFIG": str(_keyless_config())}),
     # `changed` exits 1 when it FINDS something, which is the normal state.
     Cell("x4modlist", "changed", ["--registry", _sandbox_registry(), "changed"],
          expect=(0, 1, 3), findings_ok=True),

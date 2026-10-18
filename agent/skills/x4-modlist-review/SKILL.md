@@ -27,9 +27,17 @@ These choices do not waive verified backups, write guards or scoped authorizatio
 
 ## Workflow
 Before adopting a mod, `x4modlist search "name" [--limit 15] [--json]` returns candidate
-Nexus identities, versions, update dates and status without changing the registry. It
-labels complete, zero, partial and unavailable searches. A capped or damaged page is
-never a complete negative, and search says nothing about installation or game compatibility.
+Nexus identities, versions, update dates and status without changing the registry. It needs
+`X4_NEXUS_KEY` (environment or `x4-paths.env`) and says so when the key is missing or refused.
+It labels complete, zero, partial and unavailable searches; a capped or damaged page is never
+a complete negative (the malformed/duplicate count is printed). Each candidate is marked
+against the ACTIVE registry mods: `have` = a pinned/exact Nexus id, `have?` = an unconfirmed
+guess, `new` = no active mod carries that id. The output also states how many active mods lack
+a Nexus id (so `new` cannot rule those out); with no usable registry it says marking is
+unavailable instead of marking everything `new`. Every result ends with its coverage: names
+only (never descriptions), hidden/removed mods and Steam Workshop-only mods are absent, and an
+empty result means none within that coverage, not that none exist. Search says nothing about
+game compatibility.
 
 1. **Ingest** — `x4modlist ingest` scans the installed folders (reading each mod's OWN `content.xml` for its real `id`/`name`/`version`/`author` — folder names can differ from the manifest `id`, e.g. folder `X4CapturableXenonXL` → id `X4_Capturable_Xenon XL PERSONAL`) and merges that as PRIMARY; the old profile content.xml is a secondary backfill pass so nothing tracked historically is silently dropped. `--installed-only` skips the content.xml pass; `--dirs a,b,c` overrides the scanned directories.
 2. **Refresh** — `x4modlist refresh` pulls upstream version/status and auto-resolves identities for installed mods. Identity resolution prefers each mod's REAL manifest name (far more reliable than guessing from the folder/id) over a humanized-id guess, with fallbacks for common author-prefix ("<author>: X" → "X") and suffix-qualifier ("X - Some Edition" / "X <overhaul>" → "X") naming patterns. `--force` bypasses the once-per-day TTL; `--ids a,b,c` targets specific mods (works even for NOT-installed old-list mods, to check upstream status before deciding to re-acquire).
