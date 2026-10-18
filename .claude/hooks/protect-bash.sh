@@ -217,10 +217,30 @@ if [ "${1:-}" != --harness-policy-backend ]; then
   x4_save_dispatch shell
   exit 0
 fi
-[ "${2:-}" = --save-qualified ] && _harness_save_qualified=1
+_harness_facts_stdin=0
+for _a in "${@:2}"; do
+  case "$_a" in
+    --save-qualified) _harness_save_qualified=1 ;;
+    --facts-stdin) _harness_facts_stdin=1 ;;
+  esac
+done
 
-FACTS_RAW=$( { emit_roots; printf '%s' "$INPUT"; } | "$PY" "$HOOK_DIR/hook_facts.py" 2>/dev/null)
-PARSE_RC=$?
+if [ "$_harness_facts_stdin" = 1 ]; then
+  # K5 (v4.0 release review): the save bridge already ran hook_facts once for its evidence
+  # and sends `<rc>\n<payload json>\n<hook_facts stdout>` -- the same bytes this file would
+  # get from a second analyser process (which re-ran the PowerShell translation and doubled
+  # the hook's latency). json.dumps never emits a raw newline, so the payload is one line.
+  PARSE_RC="${INPUT%%$'\n'*}"
+  _rest="${INPUT#*$'\n'}"
+  case "$_rest" in
+    *$'\n'*) INPUT="${_rest%%$'\n'*}"; FACTS_RAW="${_rest#*$'\n'}" ;;
+    *) INPUT="$_rest"; FACTS_RAW="" ;;
+  esac
+  case "$PARSE_RC" in ''|*[!0-9]*) PARSE_RC=99 ;; esac   # malformed: the generic refusal below
+else
+  FACTS_RAW=$( { emit_roots; printf '%s' "$INPUT"; } | "$PY" "$HOOK_DIR/hook_facts.py" 2>/dev/null)
+  PARSE_RC=$?
+fi
 # rc 5: the PowerShell TOOL command does not PARSE as PowerShell. That is a syntax error in
 # the command I wrote, with the parser's own message to act on -- hygiene, so a DENY with
 # an actionable reason rather than a prompt spent on the user (v3.3.0 release review,

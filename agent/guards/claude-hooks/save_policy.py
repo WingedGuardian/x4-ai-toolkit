@@ -236,14 +236,29 @@ def enforce(root, roots, evidence, action, backend, *, transcript="", preview=Fa
         return dispatch.Outcome(contracts.Result("deny", "failed", "failed", reason=str(exc)))
 
 
+#: One budget per native hook call, analysis and backend together (K5). The hook entries in
+#: agent/targets/claude/settings.json give each guard 30 s, so this leaves headroom for
+#: interpreter start-up and the transport on either side.
+HOOK_BUDGET_S = 20
+
+
 class ScopeError(ValueError):
     """A static, safe diagnostic for a shell that could not be evaluated."""
 
 
-def shell_evidence(payload, roots, *, execution_context=False):
+def shell_evidence(payload, roots, *, execution_context=False, ipc=None):
+    """Evidence rows for one shell payload. `ipc` (a list) also receives the (exit code,
+    stdout bytes) hook_facts.py would print for the same payload and roots, so the Bash
+    backend can take them with --facts-stdin instead of analysing the command again (K5)."""
     import hook_facts
     evidence = []
-    facts = hook_facts.facts(payload, roots, evidence=evidence, execution_context=execution_context)
+    if ipc is None:
+        facts = hook_facts.facts(payload, roots, evidence=evidence, execution_context=execution_context)
+    else:
+        # The root packet exactly as hook_facts.main() reads it (long names included).
+        rc, raw, facts = hook_facts.ipc(payload, hook_facts.ipc_roots(
+            "\n".join(str(k) + "\t" + str(v) for k, v in roots.items())), evidence=evidence)
+        ipc[:] = [rc, raw]
     error = facts.get("powershell_error")
     if error and str(error).startswith(hook_facts.PS_PARSE_ERROR):
         raise ScopeError("PowerShell command does not parse; correct its syntax before retrying. "
@@ -406,6 +421,10 @@ def main(argv=None):
     import x4guard
     args = list(sys.argv[1:] if argv is None else argv)
     failed = False
+    # K5: ONE budget for the whole call, evidence included -- it ran before the deadline was
+    # set, so a slow PowerShell translation (up to 15 s) came on top of the backend's 20 s.
+    deadline = time.monotonic() + HOOK_BUDGET_S
+    ipc = []
     try:
         kind, script = args
         roots, payload = packet(sys.stdin.buffer.read().decode("utf-8"))
@@ -417,9 +436,8 @@ def main(argv=None):
                                   command=str((payload.get("tool_input") or {}).get("command", "")),
                                   session_id=str(payload.get("session_id", "")),
                                   tool_call_id=str(payload.get("tool_use_id", "")))
-        deadline = time.monotonic() + 20
         if kind == "shell":
-            evidence = shell_evidence(payload, roots)
+            evidence = shell_evidence(payload, roots, ipc=ipc)
         else:
             ti = payload.get("tool_input") or {}
             path = ti.get("file_path") or ti.get("notebook_path")
@@ -440,11 +458,21 @@ def main(argv=None):
             if not bash:
                 raise ValueError(why)
             args = [bash, script, "--harness-policy-backend"] + (["--save-qualified"] if save_only else [])
-            completed = subprocess.run(args, input=json.dumps(payload).encode("utf-8"),
-                                       capture_output=True, timeout=max(.01, deadline - time.monotonic()))
-            if completed.returncode:
+            data = json.dumps(payload).encode("utf-8")
+            if ipc:
+                args.append("--facts-stdin")
+                data = str(ipc[0]).encode("ascii") + b"\n" + data + b"\n" + ipc[1]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("the hook's time budget was spent before the rule backend ran")
+            # Bounded with a process-tree kill: subprocess.run's Windows timeout path waits
+            # on every grandchild holding the pipes (K5; see x4guard._run_bounded).
+            rc, out, _err = x4guard._run_bounded(args, data, dict(os.environ), remaining)
+            if rc is None:
+                raise TimeoutError("the rule backend did not finish within the hook's time budget")
+            if rc:
                 raise ValueError("Bash rule backend did not complete")
-            decision, reason, context = x4guard.parse_hook_output(completed.stdout.decode("utf-8"))
+            decision, reason, context = x4guard.parse_hook_output(out.decode("utf-8"))
             return contracts.Result("allow" if decision == "advise" else decision, "evaluated",
                                     reason=reason or "", warnings=(context,) if context else ())
 

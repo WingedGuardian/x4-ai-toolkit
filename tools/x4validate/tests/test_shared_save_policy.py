@@ -384,3 +384,50 @@ def test_K1_TWIN_one_and_two_backed_up_saves_still_proceed_and_three_need_typed_
         "hookSpecificOutput"]
     assert hso["permissionDecision"] in ("ask", "deny"), hso
     assert_scope_refusal(hso, "SAVE_ACCESS_APPROVAL")
+
+
+def _count_analyser_runs(hooks, marker):
+    """Make the copied hook_facts.py record every run as a SCRIPT (an import does not count)."""
+    source = hooks / "hook_facts.py"
+    text = source.read_text(encoding="utf-8")
+    tail = 'if __name__ == "__main__":\n    raise SystemExit(main())'
+    assert text.rstrip().endswith(tail)
+    text = text.rstrip()[:-len(tail)] + ('if __name__ == "__main__":\n    open(' + repr(str(marker)) +
+                                         ', "a").write("run ")\n    raise SystemExit(main())\n')
+    source.write_bytes(text.encode("utf-8"))
+
+
+@pytest.mark.parametrize("tool,command", [("Bash", "ls -la"), ("Bash", 'rm "{save}"'),
+                                          ("PowerShell", "Get-ChildItem .")])
+def test_K5_the_native_hook_analyses_the_command_once(install, tool, command):
+    """K5: the save bridge ran hook_facts for its evidence and the Bash backend ran it AGAIN in
+    a second process (PowerShell translated twice) -- MEASURED 0.99 s vs 0.47 s before the
+    bridge. The backend now takes the bridge's bytes (--facts-stdin)."""
+    if tool == "PowerShell" and not (shutil.which("pwsh") or shutil.which("powershell")):
+        pytest.skip("no PowerShell to translate with")
+    root, _roots, files = install
+    invoke_hook(install, "Bash", {"command": "true"})          # installs the hook copy
+    marker = root / "analyser-runs.txt"
+    _count_analyser_runs(root / ".claude/hooks", marker)
+    hooks = root / ".claude/hooks"
+    command = command.replace("{save}", str(files[0]).replace("\\", "/"))
+    spec = importlib.util.spec_from_file_location("fixture_x4guard2", hooks / "x4guard.py")
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    bash, _why = guard.resolve_bash()
+    env = dict(os.environ, X4_TOOLKIT=str(root), X4_PROFILE=_roots["profile"], X4_SAVES=_roots["saves"],
+               X4_GAME=str(root.parent / "game"), X4_REFERENCE=str(root / "reference"),
+               X4_CONFIG=str(root / "owned-missing.env"), X4_MODS=str(root / "dev"),
+               X4_DOCUMENTS=str(root.parent / "documents"), X4_PYTHON=sys.executable)
+    env.pop("X4_GUARD", None)
+    env.pop("X4_GUARD_CHECK", None)
+    payload = json.dumps({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(root),
+                          "session_id": "s"}).encode()
+    native = subprocess.run([bash, str(hooks / "protect-bash.sh")], input=payload, capture_output=True,
+                            env=env, timeout=60)
+    assert native.returncode == 0, native.stderr
+    assert not marker.exists(), "the backend re-ran the analyser: " + marker.read_text()
+    # Twin: the backend alone (no precomputed facts) still analyses -- the marker can go red.
+    alone = subprocess.run([bash, str(hooks / "protect-bash.sh"), "--harness-policy-backend"], input=payload,
+                           capture_output=True, env=env, timeout=60)
+    assert alone.returncode == 0 and marker.read_text() == "run ", alone.stderr

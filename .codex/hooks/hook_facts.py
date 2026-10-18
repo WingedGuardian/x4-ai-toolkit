@@ -5720,6 +5720,50 @@ ROOT_SEP = "--X4-ROOTS-END--"
 PS_PARSE_ERROR = "does not parse as PowerShell"
 
 
+def ipc_roots(head: str) -> dict:
+    """The root packet's `name<TAB>path` lines, as main() reads them."""
+    roots = {}
+    for line in head.splitlines():
+        if "\t" in line:
+            k, v = line.split("\t", 1)
+            roots[k.strip()] = long_name(v.strip())   # a short-name ROOT too (FX-G2)
+    return roots
+
+
+def ipc(payload: dict, roots: dict, *, evidence: list | None = None):
+    """(exit code, stdout bytes, facts) exactly as main() reports them to protect-bash.sh.
+
+    K5 (v4.0 release review): the save bridge computes the facts ONCE with this and hands the
+    same bytes to the Bash backend (`--facts-stdin`), instead of a second process re-parsing
+    the command and re-running the PowerShell translation -- that doubled the hook's latency.
+    """
+    f = facts(payload, roots, evidence=evidence)
+    if f.get("powershell_error"):
+        # rc 4 + the reason on stdout: the caller ASKS with it. Nothing was analysed, so
+        # no fact line may be emitted -- a partial stream would read as a clean pass.
+        # rc 5 when the reason is that the command DOES NOT PARSE as PowerShell: that is
+        # the caller's own syntax error, which the caller DENIES with the parser's message
+        # so it is fixed and re-run -- hygiene spends Claude's attention, never the user's
+        # (v3.3.0 release review, finding 7). Only a missing/failing PowerShell still asks.
+        why = str(f["powershell_error"])
+        return (5 if why.startswith(PS_PARSE_ERROR) else 4), why.encode("utf-8", "replace"), f
+    g = dict(f)
+    cmd = g.pop("command", "")
+    g.pop("cwd", None)
+    g.pop("save_lift_blockers", None)   # the save bridge's, not a Bash rule's
+    out = []
+    for k, v in sorted(g.items()):
+        out.append(k + "\t" + _ipc_value(k, v))
+    out.append(SENTINEL)
+    # BINARY, and UTF-8 encoded explicitly. Python's text-mode stdout translates "\n"
+    # to "\r\n" on Windows, which put a trailing CR on EVERY value: the shell then
+    # compared "1\r" against "1", every predicate read false, and the hook allowed
+    # everything while looking perfectly healthy. The sentinel split failed for the
+    # same reason. Encoding first also means a non-cp1252 character in a command can
+    # never raise mid-write and truncate the output.
+    return 0, ("\n".join(out) + "\n" + cmd).encode("utf-8", "replace"), f
+
+
 def main() -> int:
     import json
 
@@ -5737,41 +5781,15 @@ def main() -> int:
     roots = {}
     if ROOT_SEP in raw:
         head, raw = raw.split(ROOT_SEP, 1)
-        for line in head.splitlines():
-            if "\t" in line:
-                k, v = line.split("\t", 1)
-                roots[k.strip()] = long_name(v.strip())   # a short-name ROOT too (FX-G2)
+        roots = ipc_roots(head)
     try:
         payload = json.loads(raw)
     except ValueError:
         return 3                      # unparseable: likewise a refusal, not an allow
-    f = facts(payload, roots)
-    if f.get("powershell_error"):
-        # rc 4 + the reason on stdout: the caller ASKS with it. Nothing was analysed, so
-        # no fact line may be emitted -- a partial stream would read as a clean pass.
-        # rc 5 when the reason is that the command DOES NOT PARSE as PowerShell: that is
-        # the caller's own syntax error, which the caller DENIES with the parser's message
-        # so it is fixed and re-run -- hygiene spends Claude's attention, never the user's
-        # (v3.3.0 release review, finding 7). Only a missing/failing PowerShell still asks.
-        why = str(f["powershell_error"])
-        sys.stdout.buffer.write(why.encode("utf-8", "replace"))
-        sys.stdout.buffer.flush()
-        return 5 if why.startswith(PS_PARSE_ERROR) else 4
-    cmd = f.pop("command", "")
-    f.pop("cwd", None)
-    out = []
-    for k, v in sorted(f.items()):
-        out.append(k + "\t" + _ipc_value(k, v))
-    out.append(SENTINEL)
-    # BINARY, and UTF-8 encoded explicitly. Python's text-mode stdout translates "\n"
-    # to "\r\n" on Windows, which put a trailing CR on EVERY value: the shell then
-    # compared "1\r" against "1", every predicate read false, and the hook allowed
-    # everything while looking perfectly healthy. The sentinel split failed for the
-    # same reason. Encoding first also means a non-cp1252 character in a command can
-    # never raise mid-write and truncate the output.
-    sys.stdout.buffer.write(("\n".join(out) + "\n" + cmd).encode("utf-8", "replace"))
+    rc, out, _f = ipc(payload, roots)
+    sys.stdout.buffer.write(out)
     sys.stdout.buffer.flush()
-    return 0
+    return rc
 
 
 if __name__ == "__main__":
