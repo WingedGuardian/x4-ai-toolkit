@@ -254,6 +254,13 @@ fi
 # BLOCK was reached. A whitelist decided on text the filesystem does not resolve that
 # way is a whitelist for a different file.
 _NP="$(x4_norm "$FILE_PATH")"
+# H1 (v4.0 release review): a HOST SESSION TRANSCRIPT is written by the host alone. The save
+# guard reads the user's typed save approvals from it, so an agent write there could forge
+# one -- and `*.claude/projects/*` is whitelisted below for the memory notes beside it.
+case "$_NP" in
+  */.claude/projects/*.jsonl|*/.codex/sessions/*.jsonl)
+    deny "BLOCKED: $FILE_PATH is a host session transcript. The host alone writes it, and the save guard reads the user's typed save approvals from it -- an agent edit could forge one. Leave it to the host." ;;
+esac
 # The project's instruction and notes files, at the PROJECT ROOT ONLY: CLAUDE.md (and
 # Claude's .claude/CLAUDE.md), AGENTS.md (Codex's CLAUDE.md, 2026-09-30), KNOWLEDGEBASE.md,
 # and the agent's own notes -- X4-NOTES.md and the 4.0 migration's X4-NOTES.pre-4.0.md (lane

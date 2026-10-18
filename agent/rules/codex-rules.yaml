@@ -37,6 +37,7 @@
 - {id: rm-game, source: protect-bash.sh, anchor: "on rm_hits_game", fact: rm_hits_game, verdict: deny, bucket: hook_only, reason: "path-scoped: the configured game root"}
 - {id: rm-reference, source: protect-bash.sh, anchor: "on rm_targets_reference", fact: rm_targets_reference, verdict: deny, bucket: hook_only, reason: "path-scoped: the configured reference root"}
 - {id: write-reference, source: protect-bash.sh, anchor: "on writes_reference", fact: writes_reference, verdict: deny, bucket: hook_only, reason: "path-scoped: the configured reference root"}
+- {id: write-host-transcript, source: protect-bash.sh, anchor: "on writes_host_transcript", fact: writes_host_transcript, verdict: deny, bucket: hook_only, reason: "path-scoped: a host session transcript, where typed save approvals are read"}
 - {id: write-agent-settings, source: protect-bash.sh, anchor: "on writes_agent_settings", fact: writes_agent_settings, verdict: deny, bucket: hook_only, reason: "path- and content-scoped settings protection; no unconditional argv prefix"}
 - id: lift-reference-deny
   source: protect-bash.sh

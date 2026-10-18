@@ -713,3 +713,28 @@ def test_JQ1_TWIN_the_same_command_from_an_unrelated_folder_is_allowed(sandbox):
     v = _jq1_check_in(env, tmp / "elsewhere", "--kind", "shell", "--shell", "bash",
                   "--command", "git clean -fdx")
     assert v["decision"] == "allow" and not v["inert"], v
+
+
+def test_H1_writes_to_a_host_transcript_are_refused_in_every_channel(sandbox):
+    """H1: typed save approvals are read from the host transcript, and `*.claude/projects/*` was
+    whitelisted for Edit/Write while a Bash append there was allowed -- a forged approval line
+    was one write away. Memory notes beside the transcripts stay writable."""
+    tmp, tk, env = sandbox
+    project = tmp / "home" / ".claude" / "projects" / "C--work"
+    (project / "memory").mkdir(parents=True)
+    transcript = project / "0b1e.jsonl"
+    codex = tmp / "home" / ".codex" / "sessions" / "2026" / "rollout-1.jsonl"
+    for path in (transcript, codex):
+        for kind in ("write", "delete"):
+            v = _check_in(env, tk, "--kind", kind, "--path", str(path), "--command", "x")
+            assert v["decision"] == "deny" and not v["inert"] and "transcript" in v["reason"], v
+        v = _check_in(env, tk, "--kind", "shell", "--shell", "bash", "--command",
+                      "echo '{}' >> '" + path.as_posix() + "'")
+        assert v["decision"] == "deny" and not v["inert"] and "transcript" in v["reason"], v
+    # Twins: a memory note in the same folder, and a .jsonl elsewhere.
+    v = _check_in(env, tk, "--kind", "write", "--path", str(project / "memory" / "note.md"), "--command", "x")
+    assert v["decision"] in ("allow", "advise"), v
+    v = _check_in(env, tk, "--kind", "shell", "--shell", "bash", "--command",
+                  "echo '{}' >> '" + (tmp / "work" / "log.jsonl").as_posix() + "'")
+    assert v["decision"] in ("allow", "advise"), v
+

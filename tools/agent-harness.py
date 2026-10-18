@@ -16,6 +16,17 @@ import save_policy
 import x4guard
 
 
+TRANSCRIPT_REFUSED = (
+    "--transcript is refused: this entry cannot verify that a named file is the host's own session "
+    "transcript, so it cannot read a typed human save approval from it. Changes to more than two "
+    "saves need that approval through the agent's native guard hook; or restore to a new folder "
+    "with save-restore --to.")
+
+
+class TranscriptRefused(ValueError):
+    pass
+
+
 def judge(calls, qualified, deadline):
     verdicts = [x4guard.verdict_for(kind, shell, command, path, deadline=deadline, save_qualified=qualified)
                 for kind, shell, command, path, _label in calls]
@@ -55,6 +66,12 @@ def main(argv=None):
     contracts = save_policy.core(ROOT, "contracts")
     exit_status = 0
     try:
+        if getattr(args, "transcript", ""):
+            # H1 (v4.0 release review): this entry cannot verify that a caller-named file is the
+            # host's own transcript, nor that the declared --host wrote it. MEASURED: a one-line
+            # forged jsonl yielded a grant matching a 3-save delete. Only a native hook, which
+            # receives transcript_path in the HOST's own hook input, may read typed approvals.
+            raise TranscriptRefused(TRANSCRIPT_REFUSED)
         if args.command == "capabilities":
             output = {"api_version": 1, "profile": "x4", "unknown_policy": "warn and allow",
                       "surfaces": {"files": "adapter fixtures", "shell": "Bash/PowerShell backend fixtures",
@@ -139,6 +156,11 @@ def main(argv=None):
             known_cwd = bool(action.cwd) and action.provenance.get("execution_cwd_known", True) is not False
             output = save_policy.batch(payload, calls, lambda qualified: judge(calls, qualified, deadline),
                                        deadline, action.host, args.preview, execution_cwd_known=known_cwd)
+    except TranscriptRefused as exc:
+        # A structured refusal like every other decision here (exit 0; adapters block on it).
+        result = contracts.Result("deny", "evaluated", reason=str(exc)).as_dict()
+        output = {"api_version": 1, "decision": "deny", "reason": str(exc), "result": result,
+                  "transactions": []}
     except (OSError, ValueError, RecursionError, UnicodeError, TimeoutError) as exc:
         if args.command in upgrade_cli.COMMANDS:
             output, exit_status = upgrade_cli.failure(args.command, exc, "generic X4 entry failed")

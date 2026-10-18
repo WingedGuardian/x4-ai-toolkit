@@ -4950,6 +4950,11 @@ def _as_ms(v) -> float:
 
 #: A Claude Code settings file, any level (FX-G2 settings rule, user decision 2026-10-05).
 _AGENT_SETTINGS = re.compile(r"(^|/)\.claude/settings[^/]*\.json$")
+#: H1 (v4.0 release review): a HOST SESSION TRANSCRIPT. The save bridge reads a typed human
+#: save approval from it, so an agent write there could forge one (MEASURED: a one-line jsonl
+#: produced a grant matching a 3-save delete). Claude Code: ~/.claude/projects/**.jsonl;
+#: Codex: ~/.codex/sessions/**.jsonl. Memory notes (.md) beside them are not matched.
+_HOST_TRANSCRIPT = re.compile(r"(^|/)\.claude/projects/.*\.jsonl$|(^|/)\.codex/sessions/.*\.jsonl$")
 
 
 def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution_context: bool = False) -> dict:
@@ -5529,6 +5534,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             _AGENT_SETTINGS.search(norm(pp or rr))
             for pp, _u, rr in copy_t + redir_t_all + sed_t + out_t),
         "writes_profile": hit(writes_any, "profile"),
+        # H1: any shell write/append/copy/move ONTO a host session transcript (see _HOST_TRANSCRIPT).
+        "writes_host_transcript": any(
+            _HOST_TRANSCRIPT.search(norm(pp or rr))
+            for pp, _u, rr in copy_t + redir_t_all + sed_t + out_t + mod_t),
         "copy_into_game_or_profile": bool(copy_t) and (
             hit(copy_t, "game") or hit(copy_t, "profile")),
         "redirect_truncate_into_game_or_profile": (

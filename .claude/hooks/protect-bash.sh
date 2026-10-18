@@ -477,6 +477,7 @@ fi
 # user's no-prompt rule) -- and the file-edit tools, whose content settings_guard.py judges,
 # stay open for every other settings edit. ACCEPTED RESIDUAL: a write from inside an opaque
 # interpreter (`python -c "open(...)"`) is not seen.
+on writes_host_transcript && deny "BLOCKED: a shell command may not write a host session transcript (.claude/projects/**.jsonl, .codex/sessions/**.jsonl). The host alone writes it, and the save guard reads the user's typed save approvals from it -- an agent-written line could forge one. Command: $COMMAND"
 on writes_agent_settings && deny "BLOCKED: a shell command may not write a Claude Code settings file (.claude/settings*.json): its env block reaches every hook, and the guard cannot see what a shell write leaves there -- X4_GUARD in it would switch the X4 guards off. Make the edit with your file-edit tool (Write / Edit / apply_patch), whose content the guard checks; X4_GUARD itself is the user's to set, at launch. Command: $COMMAND"
 
 # === HARD BLOCK — re-unpack into a locked reference/ ===

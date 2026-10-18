@@ -199,7 +199,7 @@ def test_wildcard_has_exact_command_bound_grant_and_membership_recheck(install):
     assert outcome.result.decision == "deny" and not outcome.transactions
 
 
-def invoke_hook(install, tool, ti, preview=False, omit_cwd=False):
+def invoke_hook(install, tool, ti, preview=False, omit_cwd=False, extra=None):
     root, roots, _files = install
     hooks = root / ".claude/hooks"
     shutil.copytree(REPO / "agent/guards/claude-hooks", hooks, dirs_exist_ok=True,
@@ -220,6 +220,7 @@ def invoke_hook(install, tool, ti, preview=False, omit_cwd=False):
     if preview:
         env["X4_GUARD_CHECK"] = "1"
     payload = {"tool_name": tool, "tool_input": ti, "cwd": str(root), "session_id": "s"}
+    payload.update(extra or {})
     if omit_cwd:
         payload.pop("cwd")
     result = subprocess.run([bash, str(hooks / ("protect-bash.sh" if tool in ("Bash", "PowerShell") else "protect-files.sh"))],
@@ -482,3 +483,21 @@ def test_K8_the_typed_approval_line_comes_first_and_the_message_is_bounded(insta
     line = hso["permissionDecisionReason"].split("\n")[1]
     grant = json.loads(line[len("SAVE_ACCESS_APPROVAL "):])
     assert grant["op"] == "delete" and len(grant["paths"]) == 3
+
+
+def test_H1_TWIN_the_native_hook_still_honours_a_typed_approval_in_the_host_transcript(install):
+    """The CLI refuses a caller-named transcript (H1); the NATIVE hook reads the one the host
+    names in its own hook input, so a typed bulk approval there still authorizes the batch."""
+    root, _roots, files = install
+    approval = policy.core(root, "approval")
+    command = "rm -- " + " ".join('"' + str(f).replace("\\", "/") + '"' for f in files)
+    refused = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    grant = next(line for line in refused["permissionDecisionReason"].splitlines()
+                 if line.startswith(approval.KEY + " "))
+    transcript = root.parent / "host-transcript.jsonl"
+    transcript.write_text(json.dumps({"type": "user", "origin": {"kind": "human"}, "sessionId": "s",
+                                      "message": {"role": "user", "content": grant}}))
+    hso = invoke_hook(install, "Bash", {"command": command},
+                      extra={"transcript_path": str(transcript)})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None, hso
+    assert "backup verified" in hso["additionalContext"]
