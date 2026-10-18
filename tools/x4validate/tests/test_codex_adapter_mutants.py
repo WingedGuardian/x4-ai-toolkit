@@ -19,6 +19,11 @@ import pytest
 from codex_testlib import HOOKS, make_sandbox, native, parse_output
 
 PWSH = shutil.which("pwsh") or shutil.which("powershell")
+# WINDOWS-ONLY since 8bdaa55, deliberately: codex-entry.ps1 now launches the adapter through
+# kernel32 P/Invoke (CreateProcess with an explicit handle list, a job object to bound the
+# adapter's lifetime -- READ, codex-entry.ps1 Add-Type block), which pwsh on Linux cannot load,
+# so every probe here would fail for a reason that is not the mutant. Before it, pwsh on ubuntu
+# ran this chain. ⚠ The POSIX entry (codex-entry.sh) has no mutant file of its own.
 pytestmark = pytest.mark.skipif(not PWSH or os.name != "nt", reason="the native Windows entry chain is NOT checked here")
 
 

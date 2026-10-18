@@ -111,10 +111,22 @@ def test_a_bash_delete_of_reference_THROWS(oc):
 
 
 def test_unknown_tools_still_allow_when_receipts_are_unavailable(oc, tmp_path):
+    """What the name says, each clause asserted: the read-family tools are UNKNOWN to the v1
+    plugin (only bash/edit/write/apply_patch are judged), the receipt service is UNAVAILABLE
+    (no Python), and each call is still ALLOWED -- with the warning that says so, which is
+    also the proof that the receipt path really failed rather than quietly working."""
     tk, env = oc
     env = dict(env, X4_PYTHON=str(tmp_path / "no-python.exe"), X4_NO_PYTHON_FALLBACK="1")
-    r = drive(tk, env, [before(t, {"filePath": str(tk / "reference" / "x")}) for t in ("read", "glob", "grep", "webfetch")])
+    tools = ("read", "glob", "grep", "webfetch")
+    args = {"filePath": str(tk / "reference" / "x")}
+    steps = []
+    for n, t in enumerate(tools):
+        steps += [before(t, args, str(n)), after(t, args, str(n))]
+    r = drive(tk, env, steps)
     assert not any(s["threw"] for s in r["steps"]), r
+    notes = [step["output"]["output"] for step in r["steps"][1::2]]
+    for t, note in zip(tools, notes):
+        assert f"WARN AND ALLOW: unknown tool {t}; coverage receipt unavailable" in note, (t, note)
 
 
 def test_unknown_occurrences_reach_receipts_and_sparse_output(oc):
