@@ -18,8 +18,9 @@ Two modes:
              artifact leaks neither the API key nor which mods are installed,
              and it was still verified against reality at the moment it was made.
 
-  (default)  Replay the fixture with no network at all, exercising fetch_mod,
-             search_mods, steam_title, the classifier, the failure paths
+  (default)  Replay the fixture with no network at all (urlopen is stubbed to
+             refuse and count), exercising fetch_mod, discover, search_mods,
+             the classifier, the failure paths
              (HTTP 404, empty search, malformed node), and the UPDATE VERDICT
              `refresh` derives from files.json -- asserted both ways ("available"
              and "none"), judged against the newest MAIN file even when a newer
@@ -39,6 +40,7 @@ import json
 import shutil
 import sys
 import urllib.error
+import urllib.request
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -209,6 +211,16 @@ class _Replay:
     def __init__(self, fx: dict):
         self.fx = fx
         self.calls: list[str] = []
+        #: Every attempt to reach the real network while the replay runs. MEASURED by
+        #: `urlopen` below, so "network calls attempted: 0" is a count, not a claim.
+        self.network: list[str] = []
+
+    def urlopen(self, req, *args, **kwargs):
+        """Stands in for `urllib.request.urlopen` during the replay: records and RAISES,
+        so a path that bypasses `_get_json`/`_post_json` can neither reach the network
+        nor pass unseen (a caller that swallows the error is still counted)."""
+        self.network.append(getattr(req, "full_url", str(req)))
+        raise AssertionError(f"network call attempted during replay: {self.network[-1]}")
 
     def get_json(self, url: str, headers: dict) -> dict:
         self.calls.append(url)
@@ -269,7 +281,9 @@ class _Replay:
         for name in ("nomatch", "malformed", "example"):
             if f'"{name}"' in query:
                 return self.fx["graphql"][name]
-        return self.fx["graphql"]["example"]
+        # Like the discover branch: a query naming no recorded reply is a hard failure,
+        # never a quiet `example` default that lets a changed request replay green.
+        raise AssertionError(f"unrecorded GraphQL query: {query[:120]!r}")
 
 
 def _check(label: str, got, want, failures: list[str]) -> None:
@@ -397,6 +411,13 @@ def _check_discover(fx: dict, failures: list[str]) -> None:
         return
     rows = block["complete"]["data"]["mods"]["nodes"]
     ids = [r["modId"] for r in rows]
+    if len(ids) < 3:
+        # The search check below needs rows on BOTH sides of the registry (some "have",
+        # some "new"); with fewer rows it would index past the reply or go one-sided.
+        failures.append(f"the fixture's discover reply has {len(ids)} row(s), fewer than 3 "
+                        "-- the installed/new check cannot be two-sided; re-run --record")
+        print(f"   FAIL  discover reply has fewer than 3 rows ({len(ids)})")
+        return
     got = {c: _nexus.discover(discover_term(c), 5) for c in DISCOVER_CASES}
     _check("discover complete: state", got["complete"]["state"], "complete", failures)
     _check("discover complete: ids in order",
@@ -424,23 +445,31 @@ def _check_discover(fx: dict, failures: list[str]) -> None:
         reg_path = _sandbox_registry(tmp, fx)
 
         def run(case: str):
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
+            buf, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
                 rc = _modlist.main(["--registry", str(reg_path), "search",
                                     discover_term(case), "--json"])
-            return rc, buf.getvalue()
+            return rc, buf.getvalue(), err.getvalue()
 
-        rc, out = run("complete")
+        # What "have" means, derived from the sandbox registry itself rather than from
+        # positions in the reply: a candidate is "have" iff its id is a registry nexus id.
+        registered = {int(m["auto"]["nexus_id"]) for m in
+                      _registry.load_registry(reg_path)["mods"]}
+        want = {i: ("have" if i in registered else "new") for i in ids}
+        if set(want.values()) != {"have", "new"}:
+            failures.append(f"search check is one-sided ({sorted(set(want.values()))}): the "
+                            "fixture's discover ids and the sandbox registry do not overlap "
+                            "partially -- re-run --record")
+        rc, out, _err = run("complete")
         doc = json.loads(out)
         _check("search complete: rc", rc, 0, failures)
         _check("search marks installed ids from the registry",
-               {c["mod_id"]: c["local"] for c in doc["candidates"]},
-               {ids[0]: "have", ids[1]: "have", ids[2]: "new"}, failures)
+               {c["mod_id"]: c["local"] for c in doc["candidates"]}, want, failures)
         _check("search carries the coverage statement", bool(doc["coverage"]), True, failures)
-        rc, out = run("errors")
-        _check("search errors: rc 2 and no key in the output",
-               (rc, "fixture-key-not-a-real-credential" in out), (2, False), failures)
-        rc, out = run("zero")
+        rc, out, err = run("errors")
+        _check("search errors: rc 2 and no key in the output (stdout or stderr)",
+               (rc, "fixture-key-not-a-real-credential" in out + err), (2, False), failures)
+        rc, out, _err = run("zero")
         _check("search zero: rc 0", (rc, json.loads(out)["state"]), (0, "zero"), failures)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -456,7 +485,9 @@ def replay() -> int:
     failures: list[str] = []
 
     orig_get, orig_post, orig_key = _nexus._get_json, _nexus._post_json, _nexus.nexus_key
+    orig_urlopen = urllib.request.urlopen
     _nexus._get_json, _nexus._post_json = rp.get_json, rp.post_json
+    urllib.request.urlopen = rp.urlopen
     _nexus.nexus_key = lambda: "fixture-key-not-a-real-credential"
     try:
         print("=" * 88)
@@ -505,13 +536,15 @@ def replay() -> int:
 
         _check_discover(fx, failures)
         _check_refresh_end_to_end(fx, failures)
-        print(f"\n  recorded calls served: {len(rp.calls)}  (network calls made: 0)")
+        print(f"\n  recorded calls served: {len(rp.calls)}")
+        _check("network calls attempted", len(rp.network), 0, failures)
         if rp.derived_files:
             print(f"  NOTE: {rp.derived_files} files.json repl(y/ies) DERIVED from the REST "
                   "record -- this fixture predates file-list recording; re-run --record")
     finally:
         _nexus._get_json, _nexus._post_json = orig_get, orig_post
         _nexus.nexus_key = orig_key
+        urllib.request.urlopen = orig_urlopen
 
     print("\n" + "=" * 88)
     if failures:
