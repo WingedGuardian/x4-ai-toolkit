@@ -4,6 +4,7 @@ import subprocess
 
 import pytest
 
+from _layout import require_repo
 from test_install_over_existing import ROOT, _fresh, _install, _ok
 
 
@@ -11,6 +12,7 @@ from test_install_over_existing import ROOT, _fresh, _install, _ok
 @pytest.mark.parametrize("method", ["separate", "in-game"])
 @pytest.mark.parametrize("customization", ["permissions", "pre_handler", "post_handler", "matcher", "timeout"])
 def test_custom_project_settings_refuse_before_any_destination_write(tmp_path, installer, method, customization):
+    require_repo(".claude/settings.json", why="an install without Claude ships no settings to customise")
     dest = _fresh(tmp_path)
     if method == "in-game":
         dest = tmp_path / "game"
@@ -42,6 +44,7 @@ def test_custom_project_settings_refuse_before_any_destination_write(tmp_path, i
 
 @pytest.mark.parametrize("installer", ["sh", "ps1", "ps51"])
 def test_exact_shipped_three_x_settings_can_upgrade(tmp_path, installer):
+    require_repo(".git", ".claude/settings.json", why="reads the v3.3.1 tag's settings from git history")
     dest = _fresh(tmp_path)
     target = dest / ".claude/settings.json"
     target.parent.mkdir()

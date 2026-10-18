@@ -26,6 +26,11 @@ def _directory_link(tmp_path, link, outside):
 
 @pytest.fixture(scope="module")
 def plain_source(tmp_path_factory):
+    from _layout import installed_layout
+    if installed_layout(ROOT):
+        # An installed toolkit (or an extracted release zip) has no git to archive from, and
+        # needs none: it IS a plain, Git-less source (release review T4).
+        return ROOT
     root = tmp_path_factory.mktemp("plain-link-source")
     archive = subprocess.check_output(["git", "-C", str(ROOT), "archive", "--format=zip", "HEAD"])
     with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
