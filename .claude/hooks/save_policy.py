@@ -90,6 +90,11 @@ def _scope_prefix(path):
     return prefix
 
 
+#: Evidence marker for a command whose mutations are not all modelled (K1). It names
+#: no path, so it never becomes a mutation; it only withholds the profile-ask lift.
+OPAQUE = "unmodelled"
+
+
 def resolve(root, roots, evidence, deadline=None):
     dispatch = core(root, "dispatch")
     profiles = core(root, "profiles")
@@ -121,11 +126,20 @@ def resolve(root, roots, evidence, deadline=None):
                 expanded.append({**row, "path": str(native(raw) / native(source["path"]).name), "scope": "file"})
         else:
             expanded.append(row)
+    # K1: a profile ask may be lifted only when EVERY mutation of the command is in the
+    # resolved evidence. One unresolved operand (even one naming no root: `rm <save> $X`)
+    # or one verb no row models (`python -c`, `$(echo rm)`) can reach a non-save profile
+    # file the backup never covered, so the whole command keeps its old ask.
+    transparent = True
     for row in expanded:
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError("save scope resolution deadline expired")
+        if row.get("operation") == OPAQUE:
+            transparent = False
+            continue
         raw = row.get("path", "") or row.get("raw", "")
         if row.get("unresolved"):
+            transparent = False
             # Keep an unresolved protected operand as a refusal, never an empty set.
             if any(value and str(value).casefold() in raw.casefold() for value in
                    (*save_roots, roots.get("profile", ""), store.root)):
@@ -190,7 +204,8 @@ def resolve(root, roots, evidence, deadline=None):
     recheck = (lambda: resolve(root, roots, evidence, deadline)[1].mutations) if wildcard or directory_copy else None
     plan = dispatch.SavePlan(mutations, wildcard, helper=directory_copy,
                              unresolved="; ".join(dict.fromkeys(problems)), recheck=recheck)
-    return profile, plan, tuple(dict.fromkeys(affected)), profile_targets > 0 and profile_targets == save_targets
+    return (profile, plan, tuple(dict.fromkeys(affected)),
+            transparent and profile_targets > 0 and profile_targets == save_targets)
 
 
 def enforce(root, roots, evidence, action, backend, *, transcript="", preview=False, deadline=None,
@@ -244,6 +259,8 @@ def shell_evidence(payload, roots, *, execution_context=False):
         raise ScopeError("This command nests so many substitutions/wrappers that the guard stopped "
                          "expanding them, so part of it was NEVER checked against any rule. Split it "
                          "into simpler commands (or a script file) and re-run.")
+    if facts.get("save_lift_blockers") and not execution_context:
+        evidence.append({"operation": OPAQUE, "verbs": list(facts["save_lift_blockers"])})
     return evidence
 
 

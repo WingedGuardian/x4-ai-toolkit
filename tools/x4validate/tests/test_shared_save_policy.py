@@ -331,3 +331,54 @@ def test_real_shell_hook_batches_saves_and_retains_other_denials(install):
     result = invoke_hook(install, "Bash", {"command": 'rm -rf "' + roots["saves"] + '"'})
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert all(f.exists() for f in files)
+
+
+ENGINE_FAILURES = ("policy engine failed", "X4 save dispatcher", "GUARD INERT", "did not return a complete decision",
+                   "preservation/policy failed")
+
+
+def assert_scope_refusal(hso, *needles):
+    """A deny or ask that is the POLICY's answer, never an engine failure wearing its verdict."""
+    reason = hso.get("permissionDecisionReason", "")
+    assert not any(failure in reason for failure in ENGINE_FAILURES), reason
+    for needle in needles:
+        assert needle in reason, reason
+
+
+def _with_content(install):
+    content = Path(install[1]["profile"]) / "content.xml"
+    content.write_text("<content/>")
+    return content
+
+
+@pytest.mark.parametrize("tail", [
+    ' $X',                                  # an unresolved operand naming no root
+    ' "$(cat list)"',                        # a substitution operand
+    '; $(echo rm) "{content}"',              # a substituted command name
+    '; python -c "import os; os.remove(\'{content}\')"',   # an interpreter no row models
+    '; rm "{content}"',                      # a resolved non-save profile file
+])
+def test_K1_one_backed_up_save_never_lifts_the_ask_for_what_the_backup_cannot_cover(install, tail):
+    """K1 (v4.0 release review): the profile ask was lifted for the WHOLE command once its
+    resolved rows were one save. MEASURED before the fix: each of the first four advised."""
+    root, _roots, files = install
+    content = _with_content(install)
+    command = 'rm "' + str(files[0]) + '"' + tail.replace("{content}", str(content).replace("\\", "/"))
+    hso = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") == "ask", hso
+    assert_scope_refusal(hso, "X4 PROFILE")
+    assert content.exists() and files[0].exists()
+
+
+def test_K1_TWIN_one_and_two_backed_up_saves_still_proceed_and_three_need_typed_approval(install):
+    root, _roots, files = install
+    _with_content(install)
+    for count in (1, 2):
+        command = "rm -- " + " ".join('"' + str(f) + '"' for f in files[:count])
+        hso = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+        assert hso.get("permissionDecision") is None, (count, hso)
+        assert "backup verified" in hso["additionalContext"], (count, hso)
+    hso = invoke_hook(install, "Bash", {"command": "rm -- " + " ".join('"' + str(f) + '"' for f in files)})[
+        "hookSpecificOutput"]
+    assert hso["permissionDecision"] in ("ask", "deny"), hso
+    assert_scope_refusal(hso, "SAVE_ACCESS_APPROVAL")

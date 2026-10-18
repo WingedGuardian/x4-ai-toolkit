@@ -623,6 +623,17 @@ def piped_in(cmd: str) -> list:
 RESERVED = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until",
             "case", "esac", "in", "for", "select", "function", "!", "{", "}", "coproc", "[[", "]]"}
 
+#: K1: the verbs whose every file mutation reaches an evidence row (rm/mv/cp/redirect/tee/
+#: touch/mkdir targets), plus verbs with no file effect of their own. A segment whose verb
+#: is anything else -- an interpreter, a script, a cmdlet the translator passed through --
+#: may mutate a file no row shows, so the save bridge must not lift a profile ask for it.
+#: Deliberately an ALLOWLIST: an unknown verb costs an ask, never a silent advise.
+SAVE_MODELLED_VERBS = frozenset({
+    "", "rm", "rmdir", "unlink", "mv", "cp", "tee", "touch", "mkdir", "echo", "printf",
+    "cat", "ls", "cd", "pushd", "popd", "true", "false", ":", "test", "[", "pwd",
+    "get-childitem", "get-item", "test-path", "get-content", "write-output", "write-host",
+}) | (RESERVED - {"coproc"})
+
 #: The `in` of `case WORD in`. A TOKEN, not the substring: see the block in
 #: strip_compound_prefix() for the bypass that shape caused.
 _CASE_IN = re.compile(r"\s+in(?:\s|$)")
@@ -5125,6 +5136,18 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         return False
 
     verb_unresolved = any(_subst_verb_at_root(s, d) for s, d in seg_cwd)
+    # K1 (v4.0 release review): the save bridge may lift the PROFILE asks only when every
+    # mutation in the command is one the evidence collector modelled. A command name that
+    # arrives by substitution or a variable, or any verb outside SAVE_MODELLED_VERBS (an
+    # interpreter, a script, an unknown cmdlet), can write or delete what no evidence row
+    # shows -- MEASURED: `rm <save>; python -c "os.remove('<profile>/content.xml')"` and
+    # `rm <save>; $(echo rm) <profile>/content.xml` were advised once one save qualified.
+    save_lift_blockers = sorted({
+        "a command name from a substitution or variable"
+        if (_subst_verb(s) or has_unresolved(_verb_token(s) or "")) else verb(s)
+        for s, _d in seg_cwd
+        if _subst_verb(s) or has_unresolved(_verb_token(s) or "")
+        or verb(s) not in SAVE_MODELLED_VERBS})
     segs = [s for s, _ in seg_cwd]
     cwd = seg_cwd[-1][1] if seg_cwd else ""
 
@@ -5439,6 +5462,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         "carrier_untranslated": bool(_UNTRANSLATED),
         "from_powershell": from_powershell,
         "verb_unresolved": verb_unresolved,
+        # Verbs whose file effects no evidence row models (K1); non-empty keeps the
+        # save bridge from lifting any profile ask for this command.
+        "save_lift_blockers": save_lift_blockers,
 
         # A `mv` SOURCE that is a protected root is a delete of that root: the
         # install is equally gone whether it was removed or moved away. Sources
