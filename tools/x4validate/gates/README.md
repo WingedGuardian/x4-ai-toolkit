@@ -12,7 +12,8 @@ Run them from `tools/x4validate/`.
 
 ## Running them
 
-**`scripts/run-gates.sh`** — quick gates by default, `--all` for everything (~55 min),
+**`scripts/run-gates.sh`** — quick gates by default, `--all` for everything (per-gate times
+below; no whole-sweep total is quoted, because one would go stale with the first slow gate),
 `--list` for the roster. It reports what it did **not** run and why, and the buckets sum
 to the population: a bare *all green* from a runner that quietly skipped nine gates is the
 defect this toolkit exists to refuse.
@@ -42,18 +43,20 @@ store and BaseX `x4eff`, both behind a modlist that three concurrent sessions ha
 That is the argument for the runner in one line.
 > **Measured runtimes — background the long ones.** A foreground Bash call is capped at
 > 600000 ms (10 min) and a larger `timeout` is silently clamped, so an over-cap run is killed
-> mid-way and looks like a hang. MEASURED on the reference machine over 115 mods:
-> MEASURED on a full sweep 2026-08-26: **`corpus_sweep.py` ~1230 s** (242 runs, both tiers) ·
+> mid-way and looks like a hang. MEASURED on the reference machine over 115 mods, on a full
+> sweep 2026-08-26 (each figure is that gate's own time on that date): **`corpus_sweep.py` ~1230 s** (242 runs, both tiers) ·
 > **`perf_guard.py` and `--record` ~685 s** (replays `--update` per mod) ·
 > `xsd_fast_parity.py` ~220 s · `schema_sweep.py` ~180 s · `noop_audit.py` ~160 s ·
 > `regress.py` ~155 s · `stress_sweep.py` ~150 s · `update_corpus.py` ~105 s ·
 > The historical mutation-probe timing no longer describes the current suite.
-> `mutation_probe.py` has 55 mutants across 9 files. Targeted calls have a 120s
-> budget; full escalation has a separate 7200s budget per call. A targeted miss
-> requires a pristine marked full baseline once, then a full run for that mutant.
-> The ordinary 5,693-test suite measured 4,632.6s on 2026-10-16. Everything else is seconds
-> to ~1 min; the whole sweep is ~55 min. Run the long ones in the background, or scope them
-> down (`perf_guard.py --limit=N`).
+> `mutation_probe.py`: its mutant and file counts are printed on every run (derive them
+> from `MUTANTS`, never from this page). Targeted calls have a 120 s budget
+> (`TEST_TIMEOUT`); full escalation has a separate 7200 s budget per call
+> (`FULL_SUITE_TIMEOUT`). A targeted miss requires a pristine marked full baseline once,
+> then a full run for that mutant -- and the ordinary 5,693-test suite measured 4,632.6 s
+> locally on 2026-10-16, so an escalation costs over an hour per call. Everything else is
+> seconds to ~1 min. Run the long ones in the background, or scope them down
+> (`perf_guard.py --limit=N`).
 
 <!-- A table header must ADJOIN its rows. This one sat 30 lines above them with a
      `## Running them` section in between, so GitHub rendered the section as prose
@@ -84,7 +87,7 @@ not the instance, and they run over your own installed modlist rather than fixtu
 | `qa_sweep.py` | `uv run python gates/qa_sweep.py` | Every CLI × every subcommand against the real install. Mods and targets are discovered from your install, never named. |
 | `determinism_audit.py` | `uv run python gates/determinism_audit.py [--with-build]` | **0 non-deterministic outputs.** The same command twice must produce byte-identical output AND the same exit code, and a rebuilt store must be logically identical. Each case names the exit codes that count as an answer (x4compat: 0 or 1, since 1 = collisions found); the same refusal twice is no answer twice, not "stable". rc 1 on any variance, a traceback, or a failed `--with-build` build (a failed build leaves the old store, which would fingerprint as idempotent); **rc 2 when a case never answered**. Without this every recorded baseline is noise and "no change since last run" means nothing. |
 | `stress_sweep.py` | `uv run python gates/stress_sweep.py [--corpus=DIR]` | **0 crashes, 0 wrong exit codes** on unseen mod corpora, chained tools, and pathological XML (entity bombs, XXE, deep nesting, cyclic cross-mod patches, unicode with RTL overrides). Every cell is judged against a per-case expected-rc table (measured 2026-09-25, then judged): an entity bomb that exits a clean 0 fails like a crash does. Point `--corpus` at a folder of mods the toolkit has never processed; **rc 2** when `--corpus` is not a directory or holds no mod -- the axis you asked for is named, never silently dropped; run without `--corpus`, the unseen-corpus axis is printed as **NOT CHECKED** (on its own line and in the summary). The XXE cell points its external entity at a sentinel file and FAILS if the sentinel's content reaches a tool's output or a tree built by the toolkit's own parsers (`_merge.parse_file`, lxml's default parser) -- an exit code alone cannot show the entity stayed unexpanded. |
-| `mutation_probe.py` | `uv run python gates/mutation_probe.py` [`--recover`] | **every mutant killed.** Breaks a guard deliberately and requires the suite to notice. A survivor is a line nothing really checks — its first run found the RFC-5261 ambiguous-selector rule was untested by anything a contributor can run. **Covers 9 files including `_merge.py`, `_registry.py` and `_compat.py` (55 mutants, derived from the module's own table 2026-10-16)**, selected so that every mutant inverts a guard whose failure has a MEASURED cost in the register — a contrived mutant nothing kills is noise, not a finding. Only a NEW testcase failure relative to the pristine baseline with the SAME marker and scope counts as a kill. A mutation-induced exception during the test call can count as a failure. Missing scope, collection/setup/teardown errors, malformed reports and all-skipped runs are nonanswers. Full escalation is lazy and baselines restored source while retaining the marker. Children use the calling Python interpreter. A mutant that HANGS is its own verdict, not a pass. ⚠ **THIS GATE DELIBERATELY BREAKS THE WORKING TREE WHILE IT RUNS**, and the mutated file is a TRACKED file, so the tree looks normal — tell anyone sharing it before starting. It writes `.mutation-probe-active` for the duration (a second party can check for that without asking you) and keeps byte-for-byte copies in `.mutation-probe-pristine/`, because `finally` does NOT run on SIGKILL. If a run is killed, the next invocation REFUSES with exit 2 and names `--recover`, which restores and says WHICH file was mutated. Proven by actually killing a run mid-mutation, not by simulating it. |
+| `mutation_probe.py` | `uv run python gates/mutation_probe.py` [`--recover`] | **every mutant killed.** Breaks a guard deliberately and requires the suite to notice. A survivor is a line nothing really checks — its first run found the RFC-5261 ambiguous-selector rule was untested by anything a contributor can run. **Covers 9 files including `_merge.py`, `_registry.py` and `_compat.py` (the count is printed on every run and derived from the module's own `MUTANTS` table)**, selected so that every mutant inverts a guard whose failure has a MEASURED cost in the register — a contrived mutant nothing kills is noise, not a finding. Only a NEW testcase failure relative to the pristine baseline with the SAME marker and scope counts as a kill. A mutation-induced exception during the test call can count as a failure. Missing scope, collection/setup/teardown errors, malformed reports and all-skipped runs are nonanswers. Full escalation is lazy and baselines restored source while retaining the marker. Children use the calling Python interpreter. A mutant that HANGS is its own verdict, not a pass. ⚠ **THIS GATE DELIBERATELY BREAKS THE WORKING TREE WHILE IT RUNS**, and the mutated file is a TRACKED file, so the tree looks normal — tell anyone sharing it before starting. It writes `.mutation-probe-active` for the duration (a second party can check for that without asking you) and keeps byte-for-byte copies in `.mutation-probe-pristine/`, because `finally` does NOT run on SIGKILL. If a run is killed, the next invocation REFUSES with exit 2 and names `--recover`, which restores and says WHICH file was mutated. Proven by actually killing a run mid-mutation, not by simulating it. |
 | `fuzz_diff.py` | `uv run python gates/fuzz_diff.py [--n=N] [--seed=N]` | **0 invariant violations.** Generates random-but-legal diff ops and asserts what must hold for ANY of them: never raises · applied-and-structural implies the tree changed · not-applied implies unchanged · not-applied always carries a reason · the same op twice gives the same result. Seeded, so a failure reproduces. The corpus audits prove we handle every op that *exists*; this probes every op that is *legal*. |
 | `edge_sweep.py` | `uv run python gates/edge_sweep.py` | Hostile and degenerate inputs — empty mods, malformed manifests, missing operands, SQL injection, path traversal, an unconfigured environment. The bar is **fail well**: a clear message and an exit code inside the cell's EXPECTED set (a per-cell table, measured 2026-09-25 and then judged -- e.g. a missing dir must refuse with 2, a nothing-to-check mod may say 2 or 3 but never 0), never a traceback. rc 1 on a traceback, hang, or an rc outside the set. `x4xref who-calls ''` must refuse (2), never answer an empty name. Needs no game paths. |
 
