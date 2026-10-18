@@ -108,6 +108,9 @@ def test_shell_heredoc_patch_is_judged_by_its_paths(sandbox):
         assert verdict == expected
         if expected == "deny":
             assert "reference" in reason.casefold() and "INERT" not in reason
+            # T2: the policy's refusal, never an engine failure wearing its verdict.
+            assert not any(f in reason for f in ("policy engine failed", "X4 save dispatcher",
+                                                 "GUARD INERT", "preservation/policy failed")), reason
 
 
 def test_profile_ask_becomes_deny_with_approval_text(sandbox):

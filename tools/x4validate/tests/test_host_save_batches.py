@@ -45,7 +45,12 @@ def test_claude_check_protocol_keeps_an_evaluated_protection_denial_as_a_verdict
     result = subprocess.run([shutil.which('bash'), str(REPO / '.claude/hooks/protect-bash.sh')],
               input=json.dumps(payload).encode(), capture_output=True, env=env, timeout=35)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    hso = json.loads(result.stdout)['hookSpecificOutput']
+    assert hso['permissionDecision'] == 'deny'
+    # T2: an evaluated protection denial, not an engine failure that also says deny.
+    assert not any(f in hso['permissionDecisionReason'] for f in (
+        'policy engine failed', 'X4 save dispatcher', 'GUARD INERT', 'preservation/policy failed')), hso
+    assert 'reference' in hso['permissionDecisionReason'], hso
 
 
 @pytest.mark.parametrize('checking', [False, True])
