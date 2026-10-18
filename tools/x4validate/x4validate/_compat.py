@@ -192,6 +192,32 @@ class AddedInto:
 
 
 @dataclass
+class DependentOverwrite:
+    """A replace/remove landing on content ANOTHER mod added, where the overwriting mod
+    DECLARES a dependency on that adder (user decision 2026-10-18, issue #11 follow-up).
+
+    That is the intended-patch pattern -- a `_vro` compatibility patch rewriting what its
+    base mod added -- so it is ADVISORY, never a failing row. The rule: the overwriter's
+    content.xml names the adder's manifest `id` (NOT its folder name) in a `<dependency>`,
+    required or optional; DIRECT dependencies only, a transitive one does not count. Only a
+    row with ONE overwriter qualifies: two mods overwriting the same added node contend
+    with EACH OTHER, and that stays HARD. Without the declaration the row stays HARD.
+
+    Carries the HARD row it would have been (`detail`, `winner`, the target fields)."""
+    vpath: str
+    mod: str              # the overwriting mod (it declares the dependency)
+    added_by: str         # the mod(s) that added the node, ", "-joined
+    dependency: str       # "required" | "optional" -- the weakest across `added_by`
+    target: str           # internal node identity (may be synthetic; JSON only)
+    target_path: str = ""
+    target_tree: str = "base"
+    removal_path: str = ""
+    winner: str = ""
+    removed_by: str = ""
+    detail: str = ""
+
+
+@dataclass
 class GuardedOff:
     """A `<diff>` op whose `if=` guard is FALSE when its mod loads (issue #8).
 
@@ -250,6 +276,9 @@ class CompatReport:
     guarded_off: list[GuardedOff] = field(default_factory=list)
     #: Adds into content another mod added -- see `AddedInto`. Advisory, never failing.
     added_into: list[AddedInto] = field(default_factory=list)
+    #: Overwrites of a DECLARED dependency's added content -- see `DependentOverwrite`.
+    #: Advisory, never failing; one record per row it would have been.
+    dependent_overwrites: list[DependentOverwrite] = field(default_factory=list)
     #: WHICH roots were scanned, in words -- "" means every configured extensions root
     #: (the set the engine loads). An --ext-dir run scans that folder ONLY and says so
     #: here, because a mod in another root is then absent with nothing else to show it.
@@ -477,6 +506,7 @@ def _analyze_vpath(
     per_mod_vpath: dict[str, str] | None = None,
     report: CompatReport | None = None,
     cand_folder: str | None = None,
+    depends: dict[str, dict[str, str]] | None = None,
 ) -> list[Collision]:
     """Classify collisions among mods touching a single virtual path.
 
@@ -491,6 +521,10 @@ def _analyze_vpath(
     overwriting another's file. Defaults to *vpath* for every mod.
 
     *report* receives the files that could not be analysed at all.
+
+    *depends* maps a folder to the folders it DIRECTLY declares a dependency on
+    (`required`/`optional`), resolved by manifest id (`analyze` builds it). None = not
+    known: every overwrite of another mod's added content then stays HARD.
     """
     config = _owner_aware_config(vpath, folder_to_path, config)   # idempotent
     base_tree = base_tree_for(vpath, folder_to_path, config)
@@ -707,7 +741,10 @@ def _analyze_vpath(
             overriders.append(folder)
 
     collisions: list[Collision] = []
-    contested: list[tuple[str, list[str], str, dict, str]] = []   # AN-5 rows, decided below
+    contested: list[tuple[str, list[str], str, dict, str, list[str]]] = []   # AN-5 rows
+    # id(row) -> the mods that ADDED its node (issue #11): decides, at the end, whether
+    # the row is an intended patch of a declared dependency (advisory) or stays HARD.
+    row_adders: dict[int, list[str]] = {}
     # Keys pass 1 already reported as HARD duplicates, with the mods of that
     # row: a union-key row is folded only when it names NO mod the hard row
     # missed (icons: the full-file shippers of icon#upgrade_* are different
@@ -856,7 +893,7 @@ def _analyze_vpath(
         # skips it -- UNLESS some mod re-supplies the node in between. Which ops
         # still match is decided below, per op AT ITS OWN LOAD POSITION.
         if any("remove" in per_mod[f] for f in fs[:-1]):
-            contested.append((cid, fs, ops_desc, dict(per_mod), added_note))
+            contested.append((cid, fs, ops_desc, dict(per_mod), added_note, others))
             continue
         w = winner(fs)
         if all(t == "add" for t in per_mod[w]):
@@ -869,6 +906,8 @@ def _analyze_vpath(
         collisions.append(Collision(
             vpath, "HARD", cid, fs, w,
             f"{ops_desc} — {verdict}" + added_note + gnote((f, cid) for f in fs)))
+        if added:
+            row_adders[id(collisions[-1])] = others
 
     # 2. union-key collisions (two mods define the same registry entry).
     # Since 2026-08-02 diff-ADDED keys participate too (document-wide, any
@@ -974,11 +1013,11 @@ def _analyze_vpath(
                 if b != a and rank[b] > rank[a]:
                     inside += [(a, b, cb) for cb in bmap if cb.startswith(w + "/")]
     if (contested or inside) and base_tree is not None:
-        queries = ([(f, op) for cid, fs, _d, _t, _n in contested for f in fs
+        queries = ([(f, op) for cid, fs, _d, _t, _n, _o in contested for f in fs
                     for op in ops_at[f][cid]]
                    + [(b, op) for _a, b, cb in inside for op in ops_at[b][cb]])
         at_pos = {(f, id(op)): actual_ops.get((f, id(op)), False) for f, op in queries}
-        for cid, fs, ops_desc, tags, added_note in contested:
+        for cid, fs, ops_desc, tags, added_note, others_ in contested:
             alive = [f for f in fs if any(at_pos[(f, id(op))] for op in ops_at[f][cid])]
             w = alive[-1] if alive else next(f for f in fs if "remove" in tags[f])
             dead = [f for f in fs if f not in alive and rank[f] > rank[w]]
@@ -990,6 +1029,8 @@ def _analyze_vpath(
                     "they load, so the engine skips them: the removal is what is live"
                     + added_note + gnote((f, cid) for f in fs),
                     removed_by=w))
+                if added_note:
+                    row_adders[id(collisions[-1])] = others_
             else:
                 gone = [f for f in fs if rank[f] < rank[w] and "remove" in tags[f]]
                 collisions.append(Collision(
@@ -1000,6 +1041,8 @@ def _analyze_vpath(
                        if all(t == "add" for t in tags[w]) else f"so '{w}' applies and wins")
                     + (f"; later op(s) from {', '.join(repr(f) for f in dead)} match "
                        "nothing" if dead else "") + added_note + gnote((f, cid) for f in fs)))
+            if added_note:
+                row_adders[id(collisions[-1])] = others_
         if report is not None:
             seen: set[tuple[str, int]] = set()
             for a, b, cb in inside:
@@ -1060,7 +1103,34 @@ def _analyze_vpath(
         if not collision.winner_qualified:
             collision.detail = collision.detail.replace("loads last and wins", "loads last among potential contenders")
             collision.detail += "; no qualified live winner is claimed"
-    return collisions
+    return _split_dependent(vpath, collisions, row_adders, depends, report, cand_folder)
+
+
+def _split_dependent(vpath: str, collisions: list[Collision],
+                     row_adders: dict[int, list[str]],
+                     depends: dict[str, dict[str, str]] | None,
+                     report: CompatReport | None,
+                     cand_folder: str | None) -> list[Collision]:
+    """Move each HARD row whose ONE overwriter declares a direct dependency on every mod
+    that added its node out of the failing rows, into `report.dependent_overwrites`
+    (user decision 2026-10-18). Everything else is returned unchanged."""
+    if not depends:
+        return collisions
+    kept: list[Collision] = []
+    for c in collisions:
+        adders = row_adders.get(id(c))
+        over = [f for f in c.mods if f not in (adders or ())]
+        declared = depends.get(over[0], {}) if len(over) == 1 else {}
+        if c.kind != "HARD" or not adders or not all(a in declared for a in adders):
+            kept.append(c)
+            continue
+        if report is not None and cand_folder in (None, *c.mods):
+            report.dependent_overwrites.append(DependentOverwrite(
+                vpath, over[0], ", ".join(adders),
+                "optional" if any(declared[a] == "optional" for a in adders) else "required",
+                c.target, c.target_path, c.target_tree, c.removal_path, c.winner,
+                c.removed_by, c.detail))
+    return kept
 
 
 def _would_share(folder: str, tag: str, cids: list[str], keys: list[str],
@@ -1800,6 +1870,35 @@ def _name_clashes(mods: list[dict], rank: dict[str, int],
     return out
 
 
+def _declared_dependencies(mods: list[dict]) -> dict[str, dict[str, str]]:
+    """folder -> {folder it DIRECTLY declares a dependency on: "required" | "optional"}.
+
+    Resolved by manifest ID, never by folder name -- the two differ (MEASURED live:
+    `Basestar_hades-class_vro` names id `bsg_ship_mod`, the folder `Basestar_hades-class`).
+    An exact id first, then one equal ignoring case -- the same resolution as
+    `_loadorder.compute_load_order`, which records a case-only match as UNMEASURED.
+    Direct only: a dependency of a dependency is not followed. A manifest that will not
+    parse declares nothing here (load order already records it)."""
+    ids: dict[str, str] = {}
+    for m in mods:
+        ids.setdefault(m.get("id") or _loadorder.mod_dependencies(Path(m["path"]))[0],
+                       m["folder"])
+    by_lower: dict[str, str] = {}
+    for mod_id, folder in ids.items():
+        by_lower.setdefault(mod_id.lower(), folder)
+    out: dict[str, dict[str, str]] = {}
+    for m in mods:
+        _mid, deps = _loadorder.mod_dependencies(Path(m["path"]))
+        for dep_id, optional in deps:
+            folder = ids.get(dep_id) or by_lower.get(dep_id.lower())
+            if folder and folder != m["folder"]:
+                kind = "optional" if optional else "required"
+                mine = out.setdefault(m["folder"], {})
+                if mine.get(folder) != "required":
+                    mine[folder] = kind
+    return out
+
+
 def analyze(
     ext_dir: Path | None,
     candidate: Path | None = None,
@@ -1848,6 +1947,7 @@ def analyze(
     order_dropped: list[str] = []
     order = compute_load_order(mods, order_dropped)
     rank = {f: i for i, f in enumerate(order)}
+    depends = _declared_dependencies(mods)
 
     # Invert: lowercased vpath -> {folder: that mod's OWN real vpath}
     #
@@ -1899,7 +1999,7 @@ def analyze(
                           next(iter(per_mod.values())))
         found = _analyze_vpath(real_vpath, list(per_mod), folder_to_path, rank, config,
                                report.unresolvable, per_mod_vpath=per_mod,
-                               report=report, cand_folder=cand_folder)
+                               report=report, cand_folder=cand_folder, depends=depends)
         if cand_folder is not None:
             found = [c for c in found if cand_folder in c.mods]
         report.collisions.extend(found)
@@ -1964,7 +2064,7 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
             lines.append(f"  {c.vpath}")
             # The node's XPath in the finished tree; `target` can be an internal
             # identity (a node another mod added has no base-tree path).
-            lines.append(f"     node/key : {c.target_path or c.target}")
+            lines.append(f"     node/key : {_shown_path(c.target_path, c.removal_path, c.target)}")
             lines.append(f"     mods     : {', '.join(c.mods)}")
             # A SUBTREE has no live-value winner; showing the WIPER under a
             # "winner" label is what made an inbound report mis-read this row.
@@ -2038,6 +2138,9 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
             lines.append(f"     anchor   : {m.target_path or '(not in the finished tree)'}"
                          f", added by {m.added_by}")
         lines.append("")
+    if report.dependent_overwrites:
+        shown_any = True
+        lines.extend(_render_dependent(report.dependent_overwrites))
     if report.guarded_off:
         met = [g for g in report.guarded_off if g.shared_with is None or g.shared_with]
         lines.append(f"=== GUARDED OFF: if= FALSE AT ITS LOAD POSITION  "
@@ -2089,6 +2192,9 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
                  f"{len(report.removed_first)} op(s) inside an earlier removal, "
                  f"{len(report.added_into)} add(s) into another mod's added content "
                  "(advisory), "
+                 f"{len(report.dependent_overwrites)} overwrite(s) of a declared "
+                 f"dependency's added content in {len(_dependent_pairs(report))} mod "
+                 "pair(s) (advisory), "
                  f"{len(report.guarded_off)} op(s) guarded off (if= false"
                  + (f"; {k} of them also an order miss"
                     if (k := sum(g.also_order_miss for g in report.guarded_off)) else "")
@@ -2098,6 +2204,55 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
         lines.append("DEGRADED: some files yielded no comparison — see NOT ANALYSED "
                      "above. Exit 3.")
     return "\n".join(lines)
+
+
+def _dependent_pairs(report: CompatReport) -> dict[tuple[str, str], list[DependentOverwrite]]:
+    pairs: dict[tuple[str, str], list[DependentOverwrite]] = defaultdict(list)
+    for d in report.dependent_overwrites:
+        pairs[(d.mod, d.added_by)].append(d)
+    return pairs
+
+
+#: How many example targets one grouped dependency line names (the rest: --json).
+_DEP_EXAMPLES = 3
+
+
+def _render_dependent(rows: list[DependentOverwrite]) -> list[str]:
+    """ONE line per (overwriter, adder) pair -- a `_vro` patch of its base mod is
+    thousands of rows of one decision (MEASURED live: 1,848 for one pair)."""
+    pairs = _dependent_pairs(CompatReport(dependent_overwrites=rows))
+    lines = [f"=== OVERWRITES OF A DECLARED DEPENDENCY'S ADDED CONTENT  "
+             f"({len(rows)} op targets, {len(pairs)} mod pair(s), advisory) ===",
+             "  Not a failing collision: the overwriting mod declares a DIRECT dependency "
+             "(required or",
+             "  optional, by manifest id) on the mod that added the content -- an intended "
+             "patch. A",
+             "  transitive dependency does not count. Every row in full: --json "
+             "(dependent_overwrites)."]
+    for (mod, adder), group in sorted(pairs.items(), key=lambda kv: (kv[0][0].lower(),
+                                                                     kv[0][1].lower())):
+        dep = "optional" if any(d.dependency == "optional" for d in group) else "required"
+        files = {d.vpath for d in group}
+        n = len(group)
+        lines.append(f"  {mod} over {adder} ({dep} dependency): {n} op target"
+                     f"{'' if n == 1 else 's'} in {len(files)} file"
+                     f"{'' if len(files) == 1 else 's'}")
+        for d in sorted(group, key=lambda x: (x.vpath, x.target_path))[:_DEP_EXAMPLES]:
+            lines.append(f"     e.g. {d.vpath}  {_shown_path(d.target_path, d.removal_path)}")
+    lines.append("")
+    return lines
+
+
+def _shown_path(target_path: str, removal_path: str, target: str = "") -> str:
+    """The XPath a reader can use -- never an internal synthetic identity (``~mod:op:n``),
+    which names a node another mod ADDED and means nothing outside this run."""
+    if target_path:
+        return target_path
+    if removal_path:
+        return f"{removal_path} (removed)"
+    if target and "~" not in target:
+        return target
+    return "(a node another mod added; no single path in the finished tree)"
 
 
 def _scan_dirs(ext_dir: Path | None) -> list[Path] | None:
@@ -2164,8 +2319,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--version", action="version",
                    version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
-    pc = sub.add_parser("check", help="analyze collisions across the enabled (active) "
-                                      "modlist")
+    pc = sub.add_parser(
+        "check", help="analyze collisions across the enabled (active) modlist",
+        description="A replace/remove landing on content ANOTHER mod added fails (HARD) "
+                    "unless the overwriting mod declares a DIRECT dependency (required or "
+                    "optional, matched by the adder's manifest id, not its folder name) on "
+                    "that mod: then it is an intended patch, reported as an advisory "
+                    "grouped per mod pair (every row in --json dependent_overwrites). A "
+                    "dependency of a dependency does not count, and two mods overwriting "
+                    "the same added node still fail.")
     pc.add_argument("candidate", nargs="?",
                     help="the mod to focus on ('before I add this'): an existing folder "
                          "PATH is the copy analysed (a same-named copy in the extensions "
@@ -2216,6 +2378,13 @@ def main(argv: list[str] | None = None) -> int:
             # Issue #11 follow-up: adds landing on content ANOTHER mod added -- advisory,
             # never failing. Each row: vpath, mod, line, sel, added_by, target_path, guard.
             "added_into": [dataclasses.asdict(m) for m in report.added_into],
+            # Issue #11 dependency rule: a replace/remove on content added by a mod the
+            # overwriter DIRECTLY declares a dependency on (by manifest id) -- advisory,
+            # never failing. One row per collision it would have been: vpath, mod, added_by,
+            # dependency (required|optional), target, target_path, target_tree,
+            # removal_path, winner, removed_by, detail.
+            "dependent_overwrites": [dataclasses.asdict(d)
+                                     for d in report.dependent_overwrites],
             # NOT CHECKED (the text render's own section, above): an op whose sel=
             # could not be evaluated contributed no target and cannot participate in
             # collision detection -- omitting it here made a JSON consumer read

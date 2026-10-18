@@ -25,6 +25,12 @@ options:
 usage: x4compat check [-h] [--ext-dir EXT_DIR] [--reference REFERENCE] [--soft] [--json]
                       [candidate]
 
+A replace/remove landing on content ANOTHER mod added fails (HARD) unless the overwriting mod
+declares a DIRECT dependency (required or optional, matched by the adder's manifest id, not its
+folder name) on that mod: then it is an intended patch, reported as an advisory grouped per mod
+pair (every row in --json dependent_overwrites). A dependency of a dependency does not count, and
+two mods overwriting the same added node still fail.
+
 positional arguments:
   candidate             the mod to focus on ('before I add this'): an existing folder PATH is the
                         copy analysed (a same-named copy in the extensions dir is then left out);

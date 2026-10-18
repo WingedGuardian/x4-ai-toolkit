@@ -33,7 +33,11 @@ Run tools via uv from the tool dir:
    load order; an invalid guard keeps its row, labelled UNEVALUATED. Selectors resolve at
    each op's own load position: a replace/remove landing on content ANOTHER mod added is a
    HARD row that names the adder (and says when it overwrites only some of the elements that
-   mod inserted); an `<add>` into another mod's added content is the compatibility-patch
+   mod inserted) -- UNLESS the overwriting mod declares a DIRECT dependency (required or
+   optional, by the adder's manifest `id`, not its folder name) on that adder: then it is an
+   intended patch, advisory, one line per mod pair under OVERWRITES OF A DECLARED
+   DEPENDENCY'S ADDED CONTENT (`dependent_overwrites` in `--json`). A transitive dependency
+   does not count, and two mods overwriting the same added node still fail; an `<add>` into another mod's added content is the compatibility-patch
    pattern -- advisory, listed under ADDS INTO CONTENT ANOTHER MOD ADDED (`added_into` in
    `--json`), never failing. **Zero hard
    collisions is common and means "no structural clash" — NOT "no interaction" (see step 2).**
