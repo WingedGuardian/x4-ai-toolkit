@@ -11,7 +11,9 @@ import json
 import hashlib
 import importlib
 import importlib.util
+import ntpath
 import os
+import posixpath
 import re
 import sys
 import subprocess
@@ -40,7 +42,49 @@ def core(root, name):
     return importlib.import_module(prefix + "." + name)
 
 
-def native(path):
+#: Evidence rows from hook_facts carry `dialect`: "windows" when PowerShell or cmd spelled the
+#: path (a backslash separates), anything else is Bash (on POSIX a backslash is a filename
+#: character). Mirrors hook_facts.WINDOWS_DIALECT.
+WINDOWS_DIALECT = "windows"
+_WINDOWS_ANCHORED = re.compile(r"^[A-Za-z]:[\\/]|^[\\/]{2}")
+
+
+class ForeignPath(ValueError):
+    """A Windows drive/UNC path that a Windows dialect spelled, judged on a POSIX host. No
+    POSIX save root can contain it and its meaning there is not knowable, so it is never a
+    resolved target: the caller treats it as unresolved (never guessed into a POSIX path)."""
+
+
+def native_text(path, dialect="bash", *, posix=None):
+    """The absolute physical path text of evidence `path`, spelled in `dialect`, under the
+    host's semantics. `posix` defaults to THIS host; tests pass it to run the other branch
+    (LINUX GAP, v4.0 release review: on ubuntu `\\tmp\\x` from PowerShell raised "no absolute
+    physical path" and denied, and `<save>\\a.xml.gz` from cmd was never a save)."""
+    posix = os.name != "nt" if posix is None else posix
+    if posix:
+        if dialect == WINDOWS_DIALECT:
+            if _WINDOWS_ANCHORED.match(path):
+                raise ForeignPath("a Windows drive/UNC path names nothing on this POSIX host")
+            path = path.replace(chr(92), "/")
+        if not posixpath.isabs(path):
+            raise ValueError("save mutation has no absolute physical path")
+        return path
+    return _windows_native_text(path)
+
+
+def native(path, dialect="bash"):
+    return Path(native_text(path, dialect)).absolute()
+
+
+def _row_native(row, key="path"):
+    """native() of an evidence row's path in its own dialect; None when it is foreign."""
+    try:
+        return native(row.get(key, ""), row.get("dialect", "bash"))
+    except ForeignPath:
+        return None
+
+
+def _windows_native_text(path):
     if os.name == "nt":
         path = re.sub(r"^/([A-Za-z])(?=/|$)", lambda match: match[1].upper() + ":", path)
         # Other MSYS mounts must be translated by the calling Bash transport.
@@ -57,9 +101,9 @@ def native(path):
             path = converted.stdout.decode("utf-8").strip()
             if not re.match(r"^[A-Za-z]:/|^//", path):
                 raise ValueError("MSYS path conversion returned no native absolute path")
-    if not os.path.isabs(path):
+    if not ntpath.isabs(path):
         raise ValueError("save mutation has no absolute physical path")
-    return Path(path).absolute()
+    return path
 
 
 def folders(roots):
@@ -111,19 +155,22 @@ def resolve(root, roots, evidence, deadline=None):
     directory_copy = False
     for row in evidence:
         raw = row.get("path", "")
-        if (raw and not row.get("unresolved") and row.get("scope") == "copy-destination"
-                and native(raw).is_dir() and any(preservation.contains(folder, native(raw)) for folder in save_roots)):
+        dest = _row_native(row) if raw and not row.get("unresolved") and row.get("scope") == "copy-destination" else None
+        if (dest is not None and dest.is_dir()
+                and any(preservation.contains(folder, dest) for folder in save_roots)):
             directory_copy = True
             sources = row.get("copy_sources")
             if not isinstance(sources, list) or not sources:
                 problems.append("copy into a save folder must identify its resulting filenames")
                 continue
             for source in sources:
-                if (source.get("unresolved") or not source.get("path") or _has_magic(source["path"])
-                        or not native(source["path"]).is_file() or native(source["path"]).is_symlink()):
+                placed = None if source.get("unresolved") or not source.get("path") else _row_native(
+                    {"path": source["path"], "dialect": row.get("dialect", "bash")})
+                if (placed is None or _has_magic(source["path"])
+                        or not placed.is_file() or placed.is_symlink()):
                     problems.append("copy source filename or file kind is not qualified")
                     continue
-                expanded.append({**row, "path": str(native(raw) / native(source["path"]).name), "scope": "file"})
+                expanded.append({**row, "path": str(dest / placed.name), "scope": "file", "dialect": "bash"})
         else:
             expanded.append(row)
     # K1: a profile ask may be lifted only when EVERY mutation of the command is in the
@@ -145,7 +192,12 @@ def resolve(root, roots, evidence, deadline=None):
                    (*save_roots, roots.get("profile", ""), store.root)):
                 problems.append("unresolved protected operand")
             continue
-        path = native(raw)
+        path = _row_native({"path": raw, "dialect": row.get("dialect", "bash")})
+        if path is None:
+            # A Windows drive path on a POSIX host (LINUX GAP): not a target here, and not
+            # known either -- it withholds the save qualification like any unresolved row.
+            transparent = False
+            continue
         op = row["operation"]
         affected.append((str(path), op))
         pattern = row.get("literal") is not True and _has_magic(path)
@@ -495,7 +547,8 @@ def _without_harness(roots, evidence, rules):
         if row.get("unresolved"):
             touches = touches or any(name in raw.casefold() for name in names)
         elif raw:
-            touches = touches or any(_under(native(raw), folder) for folder in folder_list)
+            placed = _row_native({"path": raw, "dialect": row.get("dialect", "bash")})
+            touches = touches or placed is not None and any(_under(placed, folder) for folder in folder_list)
     decision, reason, context = rules(False)
     hso = {"hookEventName": "PreToolUse"}
     if decision == "deny":

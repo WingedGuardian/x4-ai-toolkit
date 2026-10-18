@@ -269,8 +269,28 @@ def join_cwd(cwd: str, p: str) -> str:
     return norm(norm(cwd) + "/" + p)
 
 
-def physical_join(cwd: str, path: str) -> str:
-    """Keep case for file I/O; never reuse a case-folded comparison path."""
+#: The HOST's path semantics for physical evidence (LINUX GAP, v4.0 release review). On POSIX a
+#: backslash written in a BASH command is a filename character, not a separator; only text a
+#: Windows dialect (PowerShell, cmd) spelled uses it as one. Module-level so a test can force
+#: the POSIX branch on Windows.
+POSIX_HOST = os.name != "nt"
+#: Evidence `dialect` values: "bash" (POSIX shell text) or "windows" (PowerShell/cmd text).
+WINDOWS_DIALECT = "windows"
+
+
+def physical_join(cwd: str, path: str, *, posix_bash: bool = False) -> str:
+    """Keep case for file I/O; never reuse a case-folded comparison path.
+
+    `posix_bash`: the path was written in a Bash command on a POSIX host, where only `/`
+    separates and `C:/x` or `\\tmp\\x` is RELATIVE -- so nothing is folded or guessed."""
+    if posix_bash:
+        if not path:
+            return cwd
+        if posixpath.isabs(path):
+            return posixpath.normpath(path)
+        if not cwd or not posixpath.isabs(cwd):
+            return ""
+        return posixpath.normpath(cwd + "/" + path)
     def provider_file(value):
         if not value:
             return value
@@ -1650,6 +1670,7 @@ def cmd_heredoc_bodies(cmd: str) -> list[str]:
                             and _cmd_reads_stdin(_unwrap(sg))):
         sh = chr(10).join(cmd_to_sh([ln]) for ln in h.split(chr(10)) if ln.strip())
         if sh.strip():
+            _WIN_DIALECT.add(sh)
             out.append(sh)
     return out
 
@@ -4341,6 +4362,9 @@ def _here_string(seg: str) -> str:
 #: A carrier the walk cannot open is not a clean pass: facts() turns a non-empty list
 #: into `carrier_untranslated`, which protect-bash.sh ASKS on.
 _UNTRANSLATED: list = []
+#: Command texts produced by translating PowerShell or cmd (LINUX GAP): their paths are
+#: Windows-spelled. Cleared per facts() call, like _UNTRANSLATED.
+_WIN_DIALECT: set = set()
 
 #: text -> (sh or None, reason). One translation per distinct text per process: the
 #: carrier walk revisits strings, and each translation is a PowerShell start.
@@ -4781,7 +4805,9 @@ def _inner_commands(cmd: str) -> list[str]:
         pipes = [True] * len(segs)
     for n, seg in enumerate(segs):
         if _verb_name(verb(seg)) in ("cmd",) + _PS_EXES:
-            out.extend(_windows_carrier(seg, cmd, segs[n - 1] if n and pipes[n] else None))
+            translated = _windows_carrier(seg, cmd, segs[n - 1] if n and pipes[n] else None)
+            _WIN_DIALECT.update(translated)
+            out.extend(translated)
         # `echo '<cmd>' | bash` and `printf '%s' '<cmd>' | sh`. The consumer must have
         # NO script operand (see _reads_stdin_program) and the producer must be an echo
         # or printf of a literal, so an ordinary `echo ... > file && bash script.sh`
@@ -4872,7 +4898,7 @@ _MAX_CARRIER_DEPTH = 4
 _MAX_CARRIED = 250
 
 
-def carried_commands(body: str, extra: list) -> tuple:
+def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tuple:
     """Every command string reachable from `body`, following carriers.
 
     _inner_commands was applied EXACTLY ONCE, to the top level, so a command one
@@ -4882,12 +4908,19 @@ def carried_commands(body: str, extra: list) -> tuple:
     Deduplicated, because two carriers can yield the same text and the rules below
     are pure functions of it -- re-running them buys nothing and costs latency on
     the blocking path.
+
+    `dialects` (text -> "bash"/"windows", seeded with `body`) is filled for every text:
+    a PowerShell/cmd translation is Windows-spelled, a shell carrier's text is Bash, and
+    a substitution keeps its parent's dialect (LINUX GAP).
     """
+    d = {} if dialects is None else dialects
+    d.setdefault(body, "bash")
     seen = {body}
     out = [body]
     frontier = [body]
     truncated = False
     for e in extra:
+        d.setdefault(e, WINDOWS_DIALECT if e in _WIN_DIALECT else "bash")
         if e not in seen:
             seen.add(e)
             out.append(e)
@@ -4895,9 +4928,15 @@ def carried_commands(body: str, extra: list) -> tuple:
     for _ in range(_MAX_CARRIER_DEPTH):
         nxt = []
         for c in frontier:
-            for inner in (p_ for i_ in _inner_commands(c) + substitutions(c)
-                          for p_ in _carrier_parts(i_)):
-                if inner and inner not in seen:
+            inners = _inner_commands(c)
+            subs = substitutions(c)
+            for i_, kind in ([(x, WINDOWS_DIALECT if x in _WIN_DIALECT else "bash") for x in inners]
+                             + [(x, d.get(c, "bash")) for x in subs]):
+                for inner in _carrier_parts(i_):
+                    if inner:
+                        d.setdefault(inner, kind)
+                    if not inner or inner in seen:
+                        continue
                     seen.add(inner)
                     nxt.append(inner)
                     if len(out) + len(nxt) >= _MAX_CARRIED:
@@ -4963,6 +5002,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     timeout = inp.get("timeout", 0)
     background = inp.get("run_in_background", False)
     del _UNTRANSLATED[:]
+    _WIN_DIALECT.clear()
     _ps_spent[0] = 0.0                  # the translation budget is per hook call
 
     # THE POWERSHELL TOOL (AUDIT-2026-09-24 HK-1). It had no PreToolUse guard at all, so
@@ -5005,8 +5045,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             _UNTRANSLATED.append(why_)
         else:
             _UNTRANSLATED.extend(unknown_)
+            _WIN_DIALECT.add(sh_)
             extra.append(sh_)
-    all_cmds, carriers_truncated = carried_commands(body, extra)
+    # Which dialect spelled each command's paths (LINUX GAP): see carried_commands.
+    dialects = {body: WINDOWS_DIALECT if from_powershell else "bash"}
+    all_cmds, carriers_truncated = carried_commands(body, extra, dialects)
     # ...and each one with its separator-holding substitutions collapsed (FX-G6 / reviewer
     # K I4): `A=$(echo a; echo b) rm -rf <game>` -- see _spanning_view. Inserted after the
     # top level, so the last command (and the `cwd` fact read from it) is unchanged; the
@@ -5017,6 +5060,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         v_ = _spanning_view(c_)
         if v_ != c_ and v_ not in all_cmds and v_ not in views:
             views.append(v_)
+            dialects.setdefault(v_, dialects.get(c_, "bash"))
     carried = list(all_cmds)            # the assignment tables read the commands as written
     all_cmds[1:1] = views
     # FX-G6 / reviewer K I2: a `git config` that may WRITE, anywhere in the command (any
@@ -5042,7 +5086,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # resolve_verb runs HERE, once per segment, with the assignment table already
     # computed above: a command name arriving through a variable (`RM=rm; $RM -rf ...`)
     # otherwise reaches no verb-keyed rule at all, hard blocks included.
-    seg_cwd, seg_prev, unseeded, physical_dirs = [], [], [], []
+    seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect = [], [], [], [], []
     base = session_cwd(payload)
     # A carried command (bash -c, a heredoc fed to a shell, $(...)) is walked on its own,
     # so it cannot see a `cd` made around it. When nothing anywhere changes directory it
@@ -5067,6 +5111,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             prev = tracked[k - 1][0] if k else None
             pds = physical[k][1] if physical else [""] * len(ds)
             for d, ud, pd in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds)):
+                seg_dialect.append(dialects.get(c, "bash"))
                 seg_cwd.append((rs, d))
                 seg_prev.append(prev)
                 unseeded.append(ud)
@@ -5200,8 +5245,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                     # A cd prefix may fail and execution may continue. The existing parser
                     # does not prove control-flow dominance, so native context checks
                     # never use it to invent the omitted tool execution directory.
-                    physical = physical_join("" if execution_context else physical_cwd, r)
-                    row = {"operation": operation, "path": physical,
+                    posix_bash = POSIX_HOST and cur_dialect[0] != WINDOWS_DIALECT
+                    physical = physical_join("" if execution_context else physical_cwd, r,
+                                             posix_bash=posix_bash)
+                    row = {"operation": operation, "path": physical, "dialect": cur_dialect[0],
                                      "raw": r, "unresolved": unres or not physical or has_unresolved(physical)
                                      or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical)),
                                      "scope": scope}
@@ -5210,19 +5257,21 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                         for source in copy_sources:
                             for resolved in resolve_all(source, assigns):
                                 resolved = subst_root_var(resolved, roots)
-                                placed = physical_join(physical_cwd, resolved)
+                                placed = physical_join(physical_cwd, resolved, posix_bash=posix_bash)
                                 sources.append({"path": placed, "unresolved": not placed or has_unresolved(resolved)
                                                 or has_unresolved(placed) or bool(_DEBRIS.search(resolved))})
                         row["copy_sources"] = sources
                     evidence.append(row)
         return out
 
+    cur_dialect = ["bash"]                # the dialect of the segment prep() is reading
     rm_t, copy_t, redir_t, mv_src = [], [], [], []
     sed_t, out_t, search_files = [], [], []
     gitwipe_t, gitdiscard_t, gitwipe_pairs = [], [], []
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
     search_seg, git_all = False, False
-    for (s, c_cwd), prev, c_old, physical_cwd in zip(seg_cwd, seg_prev, unseeded, physical_dirs):
+    for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0] in zip(
+            seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect):
         if execution_context:
             # Context-only evidence; ordinary save membership/rules unchanged.
             prep(git_wipes_worktree_targets(s), c_cwd, c_old, operation="delete")

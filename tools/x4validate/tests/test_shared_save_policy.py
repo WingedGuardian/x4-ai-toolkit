@@ -501,3 +501,98 @@ def test_H1_TWIN_the_native_hook_still_honours_a_typed_approval_in_the_host_tran
                       extra={"transcript_path": str(transcript)})["hookSpecificOutput"]
     assert hso.get("permissionDecision") is None, hso
     assert "backup verified" in hso["additionalContext"]
+
+
+# ------------------------------------------------------------------ LINUX GAP (POSIX semantics)
+# CI ubuntu failed 8 hook tests: native() used the host's os.path.isabs while hook_facts treats
+# `\tmp\...` and `C:/...` as absolute everywhere, so PowerShell/cmd-spelled paths raised "no
+# absolute physical path" (deny), and `<save>\a.xml.gz` from cmd was never a save. Each
+# evidence row now records the DIALECT that spelled it; on POSIX only a Windows dialect's
+# backslash separates. These run the POSIX branch on any host (it is injectable).
+BSL = chr(92)
+
+
+@pytest.mark.parametrize("path,dialect,want", [
+    (BSL + "tmp" + BSL + "s" + BSL + "save" + BSL + "a.xml.gz", "windows", "/tmp/s/save/a.xml.gz"),
+    ("/tmp/s/save" + BSL + "a.xml.gz", "windows", "/tmp/s/save/a.xml.gz"),
+    ("/tmp/s/save" + BSL + "a.xml.gz", "bash", "/tmp/s/save" + BSL + "a.xml.gz"),   # a filename char
+    ("/tmp/s/save/a.xml.gz", "bash", "/tmp/s/save/a.xml.gz"),
+])
+def test_LINUX_native_text_on_posix_converts_only_a_windows_dialect(path, dialect, want):
+    assert policy.native_text(path, dialect, posix=True) == want
+
+
+@pytest.mark.parametrize("path,dialect,error", [
+    ("C:/work/x/build", "windows", "ForeignPath"),
+    ("C:" + BSL + "work", "windows", "ForeignPath"),
+    (BSL + BSL + "server" + BSL + "share", "windows", "ForeignPath"),
+    (BSL + "tmp" + BSL + "x", "bash", "ValueError"),          # Bash: a relative filename
+    ("relative/a.xml.gz", "bash", "ValueError"),
+])
+def test_LINUX_native_text_on_posix_never_guesses_a_windows_anchor(path, dialect, error):
+    with pytest.raises(policy.ForeignPath if error == "ForeignPath" else ValueError) as caught:
+        policy.native_text(path, dialect, posix=True)
+    assert (error == "ForeignPath") == isinstance(caught.value, policy.ForeignPath)
+
+
+def test_LINUX_TWIN_native_text_on_windows_is_unchanged(tmp_path):
+    if os.name != "nt":
+        pytest.skip("the Windows branch needs a Windows host (MSYS conversion)")
+    assert policy.native_text("C:/work/a.xml", "windows", posix=False) == "C:/work/a.xml"
+    with pytest.raises(ValueError):
+        policy.native_text(BSL + "tmp" + BSL + "x", "windows", posix=False)
+
+
+@pytest.fixture
+def posix_facts(monkeypatch):
+    sys.path.insert(0, str(REPO / "agent/guards/claude-hooks"))
+    try:
+        import hook_facts
+    finally:
+        sys.path.pop(0)
+    monkeypatch.setattr(hook_facts, "POSIX_HOST", True)
+    return hook_facts
+
+
+def _posix_rows(hook_facts, tool, command):
+    t = "/tmp/psfe_x"
+    roots = {"game": t + "/X4 Foundations", "reference": t + "/reference", "toolkit": t + "/tk",
+             "profile": t + "/Documents/Egosoft/X4/123", "mods": t + "/tk/dev", "documents": t + "/Documents",
+             "saves": t + "/Documents/Egosoft/X4/123/save", "config": ""}
+    evidence = []
+    facts = hook_facts.facts({"tool_name": tool, "tool_input": {"command": command}, "cwd": "/tmp/w"},
+                             roots, evidence=evidence)
+    assert not facts.get("powershell_error") and not facts.get("carrier_untranslated"), facts
+    out = []
+    for row in evidence:
+        try:
+            out.append((row["dialect"], policy.native_text(row["path"], row["dialect"], posix=True)))
+        except policy.ForeignPath:
+            out.append((row["dialect"], "FOREIGN"))
+    return out
+
+
+SAVE_W = BSL.join(["", "tmp", "psfe_x", "Documents", "Egosoft", "X4", "123", "save"])
+WANT_SAVE = "/tmp/psfe_x/Documents/Egosoft/X4/123/save/a.xml.gz"
+
+
+@pytest.mark.skipif(not (shutil.which("pwsh") or shutil.which("powershell")), reason="no PowerShell to translate with")
+@pytest.mark.parametrize("command,want", [
+    ("$p=@{LiteralPath='" + SAVE_W + BSL + "a.xml.gz'}; Remove-Item @p", [("windows", WANT_SAVE)]),
+    ("$items = Get-ChildItem '" + SAVE_W + "'; $items | Remove-Item",
+     [("windows", "/tmp/psfe_x/Documents/Egosoft/X4/123/save/*")]),
+])
+def test_LINUX_powershell_paths_are_windows_dialect_and_resolve_on_posix(posix_facts, command, want):
+    assert _posix_rows(posix_facts, "PowerShell", command) == want
+
+
+@pytest.mark.parametrize("tool,command,want", [
+    ("Bash", 'cmd //c del /q "%X4_SAVES%' + BSL + 'a.xml.gz"', [("windows", WANT_SAVE)]),
+    ("Bash", 'cmd //c "cd /d C:' + BSL + 'work' + BSL + 'x && rd /s /q build"', [("windows", "FOREIGN")]),
+    # Twins: Bash text keeps its backslash as a filename character on POSIX.
+    ("Bash", "rm '/tmp/psfe_x/Documents/Egosoft/X4/123/save" + BSL + "a.xml.gz'",
+     [("bash", "/tmp/psfe_x/Documents/Egosoft/X4/123/save" + BSL + "a.xml.gz")]),
+    ("Bash", "cd /tmp/w && rm 'a" + BSL + "b'", [("bash", "/tmp/w/a" + BSL + "b")]),
+])
+def test_LINUX_cmd_carrier_paths_are_windows_dialect_and_bash_paths_are_not(posix_facts, tool, command, want):
+    assert _posix_rows(posix_facts, tool, command) == want
