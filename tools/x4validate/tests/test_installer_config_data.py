@@ -38,7 +38,14 @@ def test_backup_timestamp_collisions_never_replace_older_evidence(tmp_path, inst
     assert result.returncode == 0, result.stdout[-2400:] + result.stderr[-2400:]
     assert {p: p.read_bytes() for p in previous} == previous
     new = [p for p in config.parent.glob(config.name + ".bak-*") if p not in previous]
-    assert any(p.read_bytes() == old for p in new), "no distinct faithful backup was retained"
+    faithful = [p for p in new if p.read_bytes() == old]
+    assert faithful, "no distinct faithful backup was retained"
+    # The planted window must actually have been HIT: a backup stamped outside it (a slow
+    # install, a skewed clock) collides with nothing, and the test above would pass without
+    # ever exercising the collision it exists for.
+    assert any(f.name != q.name and f.name.startswith(q.name) for f in faithful for q in previous), (
+        "the faithful backup's timestamp fell outside the planted collision window: "
+        + ", ".join(f.name for f in faithful))
 
 
 @pytest.mark.parametrize("installer", ["sh", "ps1", "ps51"])
