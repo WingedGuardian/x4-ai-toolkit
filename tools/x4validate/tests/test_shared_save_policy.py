@@ -457,3 +457,28 @@ def test_K4_a_missing_harness_names_the_fix_and_only_profile_changes_ask(install
                       )["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny", hso
     assert_scope_refusal(hso)
+
+
+def test_K8_the_typed_approval_line_comes_first_and_the_message_is_bounded(install):
+    """K8: the approval refusal listed every path unbounded, after the explanation; above the
+    hook-output cap (#38) the harness files it and Claude sees only the head."""
+    root, roots, files = install
+    saves = Path(roots["saves"])
+    many = [saves / ("campaign-" + "x" * 60 + "-%03d.xml.gz" % i) for i in range(150)]
+    for path in many:
+        path.write_bytes(b"save")
+    hso = invoke_hook(install, "Bash", {"command": "rm -- " + " ".join(
+        '"' + str(p).replace("\\", "/") + '"' for p in many)})["hookSpecificOutput"]
+    assert hso["permissionDecision"] in ("ask", "deny"), hso
+    reason = hso["permissionDecisionReason"]
+    assert_scope_refusal(hso)
+    assert reason.startswith("SAVE APPROVAL REQUIRED"), reason[:200]
+    assert reason.split("\n")[1].startswith("SAVE_ACCESS_APPROVAL "), reason[:300]
+    assert len(reason) <= 10000, len(reason)
+    assert all(p.exists() for p in many)
+    # Twin: a grant line that fits is delivered whole and parses.
+    hso = invoke_hook(install, "Bash", {"command": "rm -- " + " ".join(
+        '"' + str(f).replace("\\", "/") + '"' for f in files)})["hookSpecificOutput"]
+    line = hso["permissionDecisionReason"].split("\n")[1]
+    grant = json.loads(line[len("SAVE_ACCESS_APPROVAL "):])
+    assert grant["op"] == "delete" and len(grant["paths"]) == 3

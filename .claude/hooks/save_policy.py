@@ -398,6 +398,33 @@ PREVIEW_NEEDS_BACKUP = (
     "save contents is acceptable.")
 
 
+APPROVAL_HEAD = ("SAVE APPROVAL REQUIRED: ask the user to type the line(s) below EXACTLY, as their own "
+                 "message, then retry the same command:")
+
+
+def _bounded(text):
+    """K8: the hook-output cap the Bash guards apply through x4_bound (#38): above it the
+    harness files the output and Claude sees a short preview, so the HEAD is what survives."""
+    try:
+        cap = int(os.environ.get("X4_HOOK_MAX_CHARS") or 10000)
+    except ValueError:
+        cap = 10000
+    if len(text) <= cap:
+        return text
+    note = "\n[X4 GUARD: the last {} characters of this message were cut to stay under the hook output limit]"
+    keep = max(cap - len(note) - 12, 0)
+    return text[:keep] + note.format(len(text) - keep)
+
+
+def _approval_first(reason):
+    """K8: the typed-approval line(s) the user needs come FIRST, before the explanation."""
+    lines = reason.split("\n")
+    grants = [line for line in lines if line.startswith("SAVE_ACCESS_APPROVAL ")]
+    if not grants:
+        return reason
+    return "\n".join([APPROVAL_HEAD] + grants + [line for line in lines if line not in grants])
+
+
 def _hook_json(result):
     hso = {"hookEventName": "PreToolUse"}
     if result.decision not in ("deny", "ask") and result.preservation == "required":
@@ -405,13 +432,15 @@ def _hook_json(result):
         result = replace(result, decision="ask",
                          reason=PREVIEW_NEEDS_BACKUP + ("\n" + warnings if warnings.strip() else ""))
     if result.decision in ("deny", "ask"):
-        hso.update(permissionDecision=result.decision, permissionDecisionReason=result.reason)
+        hso.update(permissionDecision=result.decision,
+                   permissionDecisionReason=_bounded(_approval_first(result.reason)))
     else:
         text = "\n".join(result.warnings)
         if result.preservation == "verified":
-            text += "\nSave backup verified in the permanent neutral store before this call."
+            # First, so the bound below can never cut it (K8).
+            text = "Save backup verified in the permanent neutral store before this call.\n" + text
         if text.strip():
-            hso["additionalContext"] = text.strip()
+            hso["additionalContext"] = _bounded(text.strip())
         else:
             return ""
     return json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
@@ -445,6 +474,13 @@ def _under(path, folder):
         return False
 
 
+def _bounded_json(hso):
+    for key in ("permissionDecisionReason", "additionalContext"):
+        if key in hso:
+            hso[key] = _bounded(hso[key])
+    return json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
+
+
 def _without_harness(roots, evidence, rules):
     """(failed, hook JSON) when the harness cannot load (K4). The Bash rules decide, unrelaxed
     by save qualification; a change that touches the profile or a save folder -- or an
@@ -464,18 +500,18 @@ def _without_harness(roots, evidence, rules):
     hso = {"hookEventName": "PreToolUse"}
     if decision == "deny":
         hso.update(permissionDecision="deny", permissionDecisionReason=reason or "")
-        return False, json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
+        return False, _bounded_json(hso)
     if touches:
         detail = "\n".join(part for part in (reason, context) if part)
         hso.update(permissionDecision="ask",
                    permissionDecisionReason=HARNESS_MISSING_ASK + ("\n" + detail if detail else ""))
-        return True, json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
+        return True, _bounded_json(hso)
     if decision == "ask":
         hso.update(permissionDecision="ask",
                    permissionDecisionReason=(reason or "") + "\n" + HARNESS_MISSING_NOTE)
     else:
         hso["additionalContext"] = HARNESS_MISSING_NOTE + ("\n" + context if context else "")
-    return False, json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
+    return False, _bounded_json(hso)
 
 
 def main(argv=None):
