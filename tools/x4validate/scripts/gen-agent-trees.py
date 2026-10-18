@@ -428,8 +428,8 @@ CODEX_HOOKS_TEMPLATE = Path("targets") / "codex" / "hooks.json.tmpl"
 #: inside quotes, and a quote or a newline would end the argument. Such a root is refused.
 
 
-def render_codex_hooks(src: Path) -> dict[str, str]:
-    guards = render_hooks(src)
+def render_codex_hooks(src: Path, guards: dict[str, str] | None = None) -> dict[str, str]:
+    guards = render_hooks(src) if guards is None else guards
     out = {".codex/hooks/" + rel[len(".claude/hooks/"):]: text for rel, text in guards.items()}
     root = src / "guards" / "adapters"
     for name, dest in CODEX_ADAPTERS.items():
@@ -445,11 +445,16 @@ def render_codex_hooks_json(root: Path, src: Path | None = None) -> str:
     `{{ROOT}}` gets the forward-slash form (POSIX `command`), `{{ROOT_WIN}}` the backslash form
     (`commandWindows`), each JSON-escaped. Refuses a root cmd.exe would mangle."""
     import importlib.util
-    renderer = Path(__file__).resolve().parents[3] / "agent/guards/claude-hooks/x4_upgrade_render.py"
+    # Template AND renderer from the same source tree: a renderer taken from this repo's
+    # agent/ for another `src` rendered that tree's template with the wrong code.
+    src = src or REPO / "agent"
+    renderer = src / "guards" / "claude-hooks" / "x4_upgrade_render.py"
+    if not renderer.is_file():
+        raise GenerationError(f"no Codex hooks.json renderer at {renderer}")
     spec = importlib.util.spec_from_file_location("x4_upgrade_renderer_for_generation", renderer)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    tmpl = _read((src or REPO / "agent") / CODEX_HOOKS_TEMPLATE)
+    tmpl = _read(src / CODEX_HOOKS_TEMPLATE)
     try:
         return module.render_codex(tmpl, root)
     except ValueError as exc:
@@ -492,8 +497,8 @@ def render_codex_rules(src: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_codex_tree(src: Path) -> dict[str, str]:
-    out = render_codex_hooks(src)
+def render_codex_tree(src: Path, guards: dict[str, str] | None = None) -> dict[str, str]:
+    out = render_codex_hooks(src, guards)
     out[".codex/rules/x4.rules"] = render_codex_rules(src)
     return out
 
@@ -511,8 +516,8 @@ OPENCODE_ADDENDUM = ".opencode/X4-OPENCODE.md"
 OPENCODE_PLUGIN_SOURCE = Path("targets") / "opencode" / "x4guard.js"
 
 
-def render_opencode_tree(src: Path) -> dict[str, str]:
-    guards = render_hooks(src)
+def render_opencode_tree(src: Path, guards: dict[str, str] | None = None) -> dict[str, str]:
+    guards = render_hooks(src) if guards is None else guards
     out = {".opencode/hooks/" + rel[len(".claude/hooks/"):]: text for rel, text in guards.items()}
     root = src / "guards" / "adapters"
     for name, dest in OPENCODE_ADAPTERS.items():
@@ -554,11 +559,13 @@ def generate(repo: Path) -> dict[str, str]:
         out[rel] = text
     out.update(render_skills(src, "claude"))
     out.update(render_skills(src, "codex"))
-    out.update(render_hooks(src))
-    out.update(render_codex_tree(src))
-    out.update(render_opencode_tree(src))
+    # ONE read of the guard tree feeds all four copies, so they cannot disagree mid-run.
+    guards = render_hooks(src)
+    out.update(guards)
+    out.update(render_codex_tree(src, guards))
+    out.update(render_opencode_tree(src, guards))
     out.update({"tools/x4_harness/" + rel[len(".claude/hooks/"):]: text
-                for rel, text in render_hooks(src).items() if not Path(rel).name.startswith(("test_", "test-"))})
+                for rel, text in guards.items() if not Path(rel).name.startswith(("test_", "test-"))})
     out["tools/agent-harness.py"] = _read(src / "guards/adapters/generic.py")
     out["tools/x4_harness/codex-hooks.json.tmpl"] = _read(src / CODEX_HOOKS_TEMPLATE)
     out[".claude/settings.json"] = _read(src / "targets" / "claude" / "settings.json")

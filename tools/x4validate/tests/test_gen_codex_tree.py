@@ -139,3 +139,39 @@ def test_hooks_json_is_not_a_generated_file(tmp_path):
     if own_checkout(REPO):
         r = subprocess.run(["git", "-C", str(REPO), "check-ignore", "-q", ".codex/hooks.json"])
         assert r.returncode == 0, ".codex/hooks.json must be git-ignored"
+
+
+def test_M7_render_codex_hooks_json_takes_its_RENDERER_from_the_given_source(tmp_path):
+    """The template came from `src`, the renderer from this repo's agent/ whatever `src` was:
+    a different source tree was rendered by the wrong code. Planted: a renderer in `src`
+    that returns a sentinel; the repo's real renderer cannot produce it."""
+    src = tmp_path / "agent"
+    (src / "targets" / "codex").mkdir(parents=True)
+    (src / "targets" / "codex" / "hooks.json.tmpl").write_text('{"t": "{{ROOT}}"}', encoding="utf-8")
+    hooks = src / "guards" / "claude-hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "x4_upgrade_render.py").write_text(
+        "def render_codex(tmpl, root):\n    return 'SENTINEL-FROM-SRC'\n", encoding="utf-8")
+    assert load().render_codex_hooks_json(tmp_path / "X4", src) == "SENTINEL-FROM-SRC"
+
+
+def test_M7_TWIN_without_src_the_repo_renderer_still_renders(tmp_path):
+    out = load().render_codex_hooks_json(tmp_path / "X4")
+    assert "SENTINEL" not in out and json.loads(out)["hooks"]
+
+
+def test_M7_generate_reads_the_guard_tree_ONCE(monkeypatch):
+    """generate() rendered the guards four times (directly twice, and once inside each of the
+    Codex and OpenCode trees) -- four reads of one tree that could differ mid-run."""
+    g = load()
+    calls = []
+    real = g.render_hooks
+
+    def counting(src):
+        calls.append(src)
+        return real(src)
+    monkeypatch.setattr(g, "render_hooks", counting)
+    out = g.generate(REPO)
+    assert len(calls) == 1, len(calls)
+    assert any(k.startswith(".codex/hooks/") for k in out)
+    assert any(k.startswith(".opencode/hooks/") for k in out)
