@@ -625,7 +625,14 @@ def _analyze_vpath(
 
     for folder, root in read:
         if folder_to_path[folder] in base_owners:
-            continue  # already supplies the owner-aware base, never apply twice
+            # Already supplies the owner-aware base: its ops are never applied twice. But
+            # a FULL file it ships is still one of the full files at this path, so it
+            # stays an OVERRIDER -- skipping it outright (e5a0794) silently lost every
+            # FULL-OVERRIDE of a mod's own file (MEASURED live: 2 cpsdo_vro rows).
+            if (root.tag != "diff" and not is_union
+                    and vpath.lower() not in _PER_EXTENSION_FILES):
+                overriders.append(folder)
+            continue
         if root.tag == "diff":
             if base_tree is None:
                 if report is not None and folder not in no_base_reported:
