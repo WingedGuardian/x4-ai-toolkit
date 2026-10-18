@@ -13,6 +13,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from lxml import etree
+from ruamel.yaml.error import YAMLError
 
 from . import _nexus, _registry
 from x4validate import _paths, __version__
@@ -1016,25 +1017,134 @@ def cmd_mark(args) -> int:
     return 0
 
 
+#: What a `search` result does NOT cover. Fixed text, printed after EVERY result (and
+#: carried as `coverage` in --json): an empty page is a statement about this search, not
+#: about Nexus. Names only; never describe a hit's description, which is not searched.
+SEARCH_COVERAGE = (
+    "searches mod names only, never descriptions",
+    "hidden and removed mods are absent from this search",
+    "Steam Workshop-only mods are absent",
+    "an empty result means none within this coverage, not that none exist",
+)
+
+#: Static, actionable text for a failed search. NEVER built from `str(exc)`: a transport
+#: or GraphQL error body can echo request headers, which carry the API key.
+_SEARCH_FAILURES = {
+    "NexusAuthError": "Nexus did not accept the request: X4_NEXUS_KEY is missing or was "
+                      "refused. Set X4_NEXUS_KEY (environment or x4-paths.env).",
+    "NexusRateLimited": "the Nexus rate limit is spent; try again later",
+    "NexusUnreachable": "Nexus could not be reached (network failure)",
+}
+
+
+def _search_failure_reason(exc: BaseException) -> str:
+    name = type(exc).__name__
+    return f"{name}: {_SEARCH_FAILURES[name]}" if name in _SEARCH_FAILURES else name
+
+
+def _search_registry_marks(args) -> tuple[dict | None, str]:
+    """(marks, why-not): what the ACTIVE registry says is installed, by Nexus id.
+
+    `marks` is None, with a reason, whenever the registry cannot be consulted -- an
+    unconfigured location or a missing file. Never an empty registry: that would mark
+    every candidate `new`, a statement about the modlist made by a missing setting.
+    """
+    path = Path(args.registry) if args.registry else _registry.DEFAULT_REGISTRY
+    if path is None:
+        return None, "the registry location is not configured (set X4_MODS or X4_REGISTRY, or pass --registry)"
+    path = _registry._registry_file(Path(path))
+    if not path.is_file():
+        return None, f"the registry file does not exist: {path}"
+    try:
+        reg = _registry.load_registry(path)
+    except (OSError, ValueError, YAMLError) as exc:
+        return None, f"the registry could not be read ({type(exc).__name__})"
+    trusted: dict[int, list[str]] = {}
+    guessed: dict[int, list[str]] = {}
+    active = unidentified = 0
+    for m in reg["mods"]:
+        if not _registry._active(m):
+            continue
+        active += 1
+        nid, _fid, state = _registry.identity(m)
+        if nid is None:
+            unidentified += 1
+        elif state in _registry.TRUSTED_ID_STATES:
+            trusted.setdefault(int(nid), []).append(m["id"])
+        elif state == "guess":
+            guessed.setdefault(int(nid), []).append(m["id"])
+    return {"trusted": trusted, "guessed": guessed, "active": active,
+            "unidentified": unidentified}, ""
+
+
+def _search_reason_text(reason: str, result: dict) -> str:
+    if reason == "malformed or duplicate candidates were excluded":
+        return f"{result.get('malformed', 0)} malformed or duplicate candidate(s) were excluded"
+    return reason
+
+
 def cmd_search(args) -> int:
+    """Nexus discovery (v2 GraphQL, names only): candidates with version/date/status.
+
+    Read-only: it never writes the registry. Each candidate is marked against the ACTIVE
+    registry (`have` = a pinned/exact id, `have?` = an unconfirmed guess, `new` = no
+    active mod carries it) -- or left unmarked, with the reason, when the registry
+    cannot be consulted. A key is required; the failure text is static, never the
+    exception message.
+    """
     try:
         result = _nexus.discover(args.name, args.limit)
-    except (_nexus.NexusError, RuntimeError) as exc:
-        # Do not echo raw transport bodies or request headers into agent context.
-        result = {"v": 1, "provider": "nexus", "game": "x4foundations",
-                  "state": "unavailable", "candidates": [], "total": None,
-                  "installed_evidence": "not_checked", "reasons": [type(exc).__name__]}
+    except (_nexus.NexusError, RuntimeError, ValueError) as exc:
+        result = {"v": 1, "provider": "nexus", "game": "x4foundations", "query": args.name,
+                  "state": "unavailable", "candidates": [], "total": None, "returned": 0,
+                  "malformed": 0, "limit": args.limit, "installed_evidence": "not_checked",
+                  "reasons": [_search_failure_reason(exc)]}
+    marks, why = _search_registry_marks(args)
+    for row in result["candidates"]:
+        if marks is None:
+            row["local"], row["installed_as"] = None, []
+        elif row["mod_id"] in marks["trusted"]:
+            row["local"], row["installed_as"] = "have", marks["trusted"][row["mod_id"]]
+        elif row["mod_id"] in marks["guessed"]:
+            row["local"], row["installed_as"] = "have?", marks["guessed"][row["mod_id"]]
+        else:
+            row["local"], row["installed_as"] = "new", []
+        row["installed_evidence"] = "registry" if marks is not None else "not_checked"
+    result["installed_evidence"] = "registry" if marks is not None else "not_checked"
+    result["registry"] = ({"status": "checked", "active_mods": marks["active"],
+                           "active_without_nexus_id": marks["unidentified"]}
+                          if marks is not None else {"status": "unavailable", "reason": why})
+    result["coverage"] = list(SEARCH_COVERAGE)
     if args.json:
         print(json.dumps(result, ensure_ascii=False))
     else:
         print(f"Nexus discovery: {result['state']} — {len(result['candidates'])} of "
               f"{result['total'] if result['total'] is not None else '?'} search matches")
         for row in result["candidates"]:
+            tag = ""
+            if row["local"] == "have":
+                tag = f"  [have: {', '.join(row['installed_as'])}]"
+            elif row["local"] == "have?":
+                tag = f"  [have? unconfirmed id: {', '.join(row['installed_as'])}]"
+            elif row["local"] == "new":
+                tag = "  [new]"
             print(f"  [{row['mod_id']}] {row['name']}  v{row['version'] or '?'}  "
-                  f"updated {row['updated_at'] or '?'}  status={row['status'] or '?'}\n    {row['url']}")
-        print("Search candidates; installation and local identity were not checked.")
+                  f"updated {row['updated_at'] or '?'}  status={row['status'] or '?'}{tag}")
+            print(f"    {row['url']}")
         for reason in result["reasons"]:
-            print("  " + reason)
+            print("  " + _search_reason_text(reason, result))
+        if marks is None:
+            print(f"Local marking is unavailable ({why}); candidates were not checked "
+                  "against installed mods.")
+        else:
+            print(f"Marked against {marks['active']} active registry mod(s): have = a "
+                  "confirmed (pinned/exact) Nexus id, have? = an unconfirmed guess, new = "
+                  "no active mod carries this id.")
+            if marks["unidentified"]:
+                print(f"  {marks['unidentified']} active mod(s) lack a Nexus id, so `new` "
+                      "cannot rule those out.")
+        print("Search matches are candidates, not proof of identity.")
+        print("Coverage: " + "; ".join(SEARCH_COVERAGE) + ".")
     return 2 if result["state"] == "unavailable" else 0
 
 
@@ -1051,7 +1161,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--registry", help="path to modlist.yaml (default: dev\\_registry\\modlist.yaml)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    ps = sub.add_parser("search", help="discover Nexus candidates with version/date/status; does not change the registry")
+    ps = sub.add_parser("search", help="discover Nexus candidates (names only) with version/date/status, marked have/have?/new against the registry; needs X4_NEXUS_KEY; does not change the registry")
     ps.add_argument("name", help="mod name or search text to look up on Nexus")
     ps.add_argument("--limit", type=int, choices=range(1, 101), default=15, metavar="1..100",
                     help="maximum search candidates to return (default: %(default)s)")

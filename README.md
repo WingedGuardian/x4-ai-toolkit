@@ -752,8 +752,9 @@ Open your agent in the toolkit folder and just talk. Some examples:
 **Mod-list & research**
 
 `uv run x4modlist search "name" --json` (from `tools/x4validate`) discovers Nexus
-candidates with version, date and status. It reports capped/partial results and
-unavailable evidence; it does not infer installation or change your registry.
+candidates (names only) with version, date and status, marked `have` / `have?` / `new`
+against your active registry mods. It needs `X4_NEXUS_KEY`, reports capped/partial results,
+unavailable evidence and its own coverage, and never changes your registry.
 
 - *"Triage my mod list against Nexus — what's updated, obsolete, or abandoned for 9.0?"*
 - *"What does this Nexus mod do, and are there known 9.0 issues, before I edit it?"*

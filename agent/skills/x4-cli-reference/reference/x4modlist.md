@@ -10,8 +10,9 @@ X4 mod-registry triage tool (API-first).
 
 positional arguments:
   {search,ingest,refresh,dashboard,needs-review,resolve,source,verify,tracked,ignore,mark,changed,snapshot}
-    search              discover Nexus candidates with version/date/status; does not change the
-                        registry
+    search              discover Nexus candidates (names only) with version/date/status, marked
+                        have/have?/new against the registry; needs X4_NEXUS_KEY; does not change
+                        the registry
     ingest              scan installed extension folders (PRIMARY) into the registry, cross-
                         checked against the profile content.xml
     refresh             refresh upstream metadata via Nexus/Steam API, and say which mods have an
