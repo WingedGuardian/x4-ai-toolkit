@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -197,7 +198,16 @@ class EntityDefs:
         #: How many files the corpus tier actually PARSED. The byte pre-filter's
         #: whole claim is that this stays near zero; a test asserts it.
         self.corpus_parses = 0
+        #: all_names(): documents built by a MERGE vs parsed straight from their one
+        #: source's bytes (V2: only a document something patches needs the merge).
+        self.merged_documents = 0
+        self.direct_documents = 0
         self._index: set[str] = set()
+        #: The same names, case-FOLDED: the engine resolves macro/component names
+        #: ignoring case (V9 -- MEASURED live, 40 of 1,500 sampled registrations are
+        #: defined only under another capitalisation, e.g. XU_EP2_universe_macro).
+        self._index_folded: set[str] | None = None
+        self._registered_folded: dict[str, list[str]] = {}
         self._registered: dict[str, list[str]] = {}
         self._document_names: dict[str, set[str]] = {}
         self._touch: dict[str, set[Path]] | None = None
@@ -230,8 +240,17 @@ class EntityDefs:
     def __contains__(self, name: object) -> bool:
         if name in self._index:
             return True
-        for vpath in self._registered.get(name, ()):
-            if name in self._names_for_document(vpath):
+        if not isinstance(name, str):
+            return False
+        folded = name.lower()
+        if self._index_folded is None:
+            self._index_folded = {n.lower() for n in self._index}
+            for reg, vpaths in self._registered.items():
+                self._registered_folded.setdefault(reg.lower(), []).extend(vpaths)
+        if folded in self._index_folded:
+            return True
+        for vpath in self._registered_folded.get(folded, ()):
+            if folded in {n.lower() for n in self._names_for_document(vpath)}:
                 return True
         # Cheap middle tier: the mod under test is ONE small directory, and its
         # own unindexed content is the common miss (MEASURED: 753 macro names
@@ -240,12 +259,12 @@ class EntityDefs:
         # the answer any weaker — a name found here is genuinely defined.
         if self._own is None:
             self._own = self._scan(self._extra, "mod")
-        if name in self._own:
+        if folded in {n.lower() for n in self._own}:
             return True
-        if name in self._corpus_answers:
-            return self._corpus_answers[name]
-        found = self._search_corpus(str(name))
-        self._corpus_answers[name] = found
+        if folded in self._corpus_answers:
+            return self._corpus_answers[folded]
+        found = self._search_corpus(name)
+        self._corpus_answers[folded] = found
         return found
 
     @property
@@ -267,16 +286,19 @@ class EntityDefs:
         MEASURED, 7 distinct references across 114 mods miss the eager tiers —
         at most 2 for any single mod.
         """
-        needle = name.encode("utf-8", "replace")
-        # _xq, not an f-string: a name containing a quote would otherwise build a
-        # malformed XPath and raise, turning a reference question into a crash.
-        xq = _refs._xq(name)
+        # Case-insensitive, as the engine is (V9): the byte pre-filter folds too, and
+        # the parsed candidate is compared folded. Folding the bytes is a SUPERSET
+        # filter -- it can only keep more files for the exact check.
+        needle = name.lower().encode("utf-8", "replace")
+        folded = name.lower()
         sources = ([self._config.reference] + self._config.dlc_dirs()
                    + list(self._config.overlays) + self._extra)
         candidates = self._candidate_documents(sources, needle)
         for vpath in candidates:
             root = self._effective_definition_tree(vpath)
-            if root is not None and root.xpath(f"//macro[@name={xq}] | //component[@name={xq}]"):
+            if root is not None and any(
+                    n.lower() == folded
+                    for n in root.xpath("//macro/@name | //component/@name")):
                 return True
         return False
 
@@ -291,7 +313,8 @@ class EntityDefs:
                 for vpath, data in _scan.iter_mod_xml_bytes(src, unreadable=unreadable):
                     # UTF-16 XML and numeric character references cannot be
                     # rejected by a UTF-8 byte needle; parse those candidates.
-                    if needle is not None and needle not in data and b"&" not in data and b"\0" not in data:
+                    if (needle is not None and needle not in data.lower()
+                            and b"&" not in data and b"\0" not in data):
                         continue
                     if needle is None and not re.search(rb"<(?:macro|component)\b", data) and b"\0" not in data:
                         continue
@@ -334,7 +357,12 @@ class EntityDefs:
         distinct macro references, ~2,500 of which miss the eager index. The lazy
         tier re-enumerates base + DLC + every overlay for each of them (~2.5s a
         call) and blew a 600s cap with no result. The same question answered in
-        bulk takes **19.4s**. Registered as BLIND-SPOTS **F65**.
+        bulk took **19.4s** then. Registered as BLIND-SPOTS **F65**.
+
+        Since every candidate became a MERGED document (d6cc98a/ded0a21), only a document
+        something patches is merged; one source's full file is parsed from the bytes
+        already read (V2). MEASURED 2026-10-18 on the live install (19,763 documents,
+        22,860 names, identical per document): 116 s merging all -> 31-44 s, 3,381 merged.
 
         Cached, so repeated calls are free. Returns the union of the eager index
         and the corpus scan — the same set `__contains__` would answer from,
@@ -382,9 +410,79 @@ class EntityDefs:
         7 sampled "missing" references were real entities living in a library.
         """
         names: set[str] = set()
-        for vpath in self._candidate_documents(sources):
+        docs, sources_of, unreadable = self._bulk_documents(sources)
+        for key, (vpath, data) in docs.items():
+            if (key not in self._document_names and data is not None and not unreadable
+                    and len(sources_of.get(key, ())) == 1):
+                root = self._direct_root(data)
+                if root is not None:
+                    self.direct_documents += 1
+                    self._document_names[key] = set(root.xpath(
+                        "//macro/@name | //component/@name"))
+            if key not in self._document_names:
+                self.merged_documents += 1
             names |= self._names_for_document(vpath)
         return names
+
+    @staticmethod
+    def _direct_root(data):
+        """*data* parsed, when it IS its document's effective tree; else None (merge).
+
+        Only a full, non-diff file qualifies: a `<diff>` with nothing under it defines
+        nothing, and the merge is what says so."""
+        try:
+            root = _merge.parse_bytes(data)
+        except etree.XMLSyntaxError:
+            return None  # silent-ok: falls back to the merge path, which reports it as before
+        return None if root.tag == "diff" else root
+
+    def _bulk_documents(self, sources):
+        """Candidate definition documents for a bulk scan, with WHO ships each one.
+
+        Returns ({key: (vpath, bytes)}, {key: {physical sources}}, unreadable?). A key's
+        source set counts every file the merge for that document could apply -- every
+        XML, not only definition candidates: a DLC file at `extensions/<dlc>/<rel>` also
+        counts for base `<rel>` (build_effective applies DLC diffs there), and a
+        mod-on-mod patch counts for the owner's logical document. Physical identity (the
+        file's own path) keeps the reference tree's unpacked `extensions/<dlc>/` and the
+        same DLC root from counting one file twice. A key whose bytes come from two
+        sources keeps no bytes: it is merged."""
+        owners = {p.name.lower() for p in list(self._config.overlays) + self._extra}
+        dlc = {p.resolve() for p in self._config.dlc_dirs()}
+        docs: dict[str, tuple[str, bytes | None]] = {}
+        sources_of: dict[str, set[str]] = {}
+        any_unreadable = bool(self._unreadable_touchers)
+        for src in sources:
+            unreadable = []
+            in_dlc = src.resolve() in dlc
+            try:
+                for vpath, data in _scan.iter_mod_xml_bytes(src, unreadable=unreadable):
+                    ident = os.path.normcase(str(src / vpath))
+                    if in_dlc:
+                        logical = "extensions/" + src.name + "/" + vpath
+                        keys = (logical, vpath)
+                    else:
+                        logical = _modfiles.logical_vpath(vpath, owners)
+                        keys = (logical,)
+                    for k in keys:
+                        sources_of.setdefault(k.lower(), set()).add(ident)
+                    if not re.search(rb"<(?:macro|component)\b", data) and b"\0" not in data:
+                        continue
+                    key = logical.lower()
+                    # A mod-on-mod file (extensions/<owner>/<rel>) is never ITS document's
+                    # tree as read: the merge decides what it lands on. MEASURED live: 19
+                    # full files under extensions/cpsdo_zb_modpack/assets/prop/ that the
+                    # owner does not ship (it has props/) merge to NO tree.
+                    direct = data if (key not in docs and logical == vpath) else None
+                    docs[key] = (docs[key][0], None) if key in docs else (logical, direct)
+            except (OSError, ValueError) as exc:
+                unreadable.append(_scan.Unreadable(str(src), str(exc)))
+            for failure in unreadable:
+                any_unreadable = True
+                if self._report is not None:
+                    self._report.skip("effective entity-definition inputs", str(failure),
+                                      degraded=True)
+        return docs, sources_of, any_unreadable
 
 
 def _mod_identity(mod_dir: Path, report: Report | None = None) -> tuple[str, str]:

@@ -39,7 +39,8 @@ THREE THINGS THAT MADE THIS WRONG BEFORE IT WAS RIGHT, all enforced below:
      (4.2%) collide and a genuine miss could hide behind one.
   3. EntityDefs.__contains__ is a per-NAME oracle whose cost model assumes a mod (7
      misses). A save has 5,022 references; it blew a 600s cap. Use
-     EntityDefs.all_names() -- built once, 19.4s. BLIND-SPOTS F65.
+     EntityDefs.all_names() -- built once (19.4s then; 31-44s MEASURED 2026-10-18 over
+     19,763 effective documents). BLIND-SPOTS F65.
 """
 from __future__ import annotations
 
@@ -229,7 +230,7 @@ def cmd_check(path: Path, limit: int = 40, out=None) -> int:
     _effective.require_base_documents(cfg, "check save references")
     defs = _check.EntityDefs(cfg, report=report)
     print(f"building the definition set over base + {len(cfg.dlc_dirs())} DLC + "
-          f"{len(cfg.overlays)} active mods (~20s)...", file=sys.stderr)
+          f"{len(cfg.overlays)} active mods (~30-45 s on a ~130-mod install)...", file=sys.stderr)
     names = defs.all_names()
     folded = {n.lower() for n in names}
     collisions = len(names) - len(folded)
