@@ -178,6 +178,7 @@ evade this policy. Missing preservation or evaluation is a refusal, not permissi
 - `reference\` is never edited — it is source-of-truth for base game XML
 - **Deletions go to the Recycle Bin / Trash, always** (Windows: `Microsoft.VisualBasic.FileIO.FileSystem`
   `DeleteFile`/`DeleteDirectory` with `SendToRecycleBin`; Linux: `gio trash`; macOS: Finder Trash).
+- Retention: `RETENTION.md`, `scripts/x4housekeep.py`. `cleanupPeriodDays`: user settings only.
   A permanent delete needs the user's OK for that deletion. Report what went and what failed.
   The guards judge a move to the trash exactly as a delete (same blocks and confirmations).
 - **Never saturate the machine.** Before any heavy job (full test suites, corpus builds, load

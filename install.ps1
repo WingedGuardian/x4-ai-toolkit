@@ -315,7 +315,7 @@ $X4CopyPrune = @('tools\x4validate\.venv',
 #: destination's own, never copied in and never deleted out), so they live HERE and
 #: not in $X4CopyPrune, whose second meaning would erase a user's built databases
 #: on every upgrade. See X4_KEEP_LOCAL in install.sh.
-$X4KeepLocal = @('x4-paths.env','.claude\x4-paths.env','.claude\settings.local.json','.claude\backups','.codex\hooks.json','.codex\config.toml',
+$X4KeepLocal = @('x4-paths.env','x4-housekeep.json','.claude\x4-paths.env','.claude\settings.local.json','.claude\backups','.codex\hooks.json','.codex\config.toml',
                  '.opencode\opencode.jsonc','.claude\.reference-buildid',
                  'tools\basex\basex\data','tools\basex\basex\coverage-x4raw.json',
                  'tools\basex\basex\coverage-x4eff.json','tools\basex\_eff',
@@ -468,7 +468,7 @@ function Get-OwnedEnvLinesFromFile($f) {
 #:
 #: COMMON to every agent target; each agent's own files live in $X4AgentItems only.
 $X4CopyItems = @('tools','bin','scripts','mods','KNOWLEDGEBASE.md','KNOWLEDGEBASE.local.md.example','README.md',
-                 'CHANGELOG.md','LICENSE','setup.sh','install.sh','install.ps1','SETUP_PROMPT.txt','ADAPTING.md',
+                 'CHANGELOG.md','LICENSE','setup.sh','install.sh','install.ps1','SETUP_PROMPT.txt','ADAPTING.md','RETENTION.md','x4-housekeep.json.example',
                  '.gitignore','.gitattributes','x4-paths.env.example')
 
 #: PER-AGENT sets -- the mirror of X4_AGENT_ITEMS_* in install.sh (audit F8). `agent\`,
