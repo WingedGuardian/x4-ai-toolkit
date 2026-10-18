@@ -563,3 +563,31 @@ def test_crosscheck_still_compares_normally_when_the_log_IS_readable(monkeypatch
     rc = _cc(monkeypatch, tmp_path, "nothing about modA in here\n", [])
     err = capsys.readouterr().err
     assert rc == 2 and "REFUSING" in err and "unreadable" not in err.lower(), err
+
+
+def test_archiving_the_SAME_log_twice_writes_ONE_copy_and_says_so(tmp_path, resolved_extensions,
+                                                                 capsys):
+    """V8: since 5398907 every run drew a random-suffixed name, so the same debug.txt was
+    archived again on every `x4debug baseline` -- an archive of near-duplicates nobody can
+    quote from. Deduplicated by CONTENT (sha256 of the bytes), not by name or mtime."""
+    log = _write(tmp_path)
+    dest = tmp_path / "archive"
+    first = _debugcli.archive(log, dest)
+    again = _debugcli.archive(log, dest)
+    assert again == first
+    assert len(list(dest.glob("debug-*.txt"))) == 1
+    assert _debugcli.read_archive_meta(first)["sha256"]
+    rc = _debugcli.main(["baseline", str(log), "--dest", str(dest)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "already archived" in out and "nothing written" in out.lower(), out
+    assert len(list(dest.glob("debug-*.txt"))) == 1
+
+
+def test_TWIN_a_log_with_DIFFERENT_bytes_is_archived_alongside(tmp_path, resolved_extensions):
+    log = _write(tmp_path)
+    dest = tmp_path / "archive"
+    first = _debugcli.archive(log, dest)
+    log.write_text(log.read_text(encoding="utf-8") + "[=ERROR=] 9.0 one more\n", encoding="utf-8")
+    second = _debugcli.archive(log, dest)
+    assert second != first and len(list(dest.glob("debug-*.txt"))) == 2

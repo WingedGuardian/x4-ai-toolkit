@@ -39,6 +39,7 @@ import json
 import re
 import shutil
 import sys
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -197,6 +198,23 @@ def _meta_path(archived: Path) -> Path:
     return Path(str(archived) + ".meta.json")
 
 
+def find_archived(data: bytes, dest_dir: Path) -> Path | None:
+    """An archived copy whose BYTES equal *data*, or None (V8: content dedupe).
+
+    By content, never by name or mtime: names carry a random suffix since 5398907, and
+    one log can be re-stamped. Same-size candidates only, each hashed in full."""
+    if not dest_dir.is_dir():
+        return None
+    want = hashlib.sha256(data).hexdigest()
+    for cand in sorted(dest_dir.glob("debug-*.txt")):
+        try:
+            if cand.stat().st_size == len(data) and                     hashlib.sha256(cand.read_bytes()).hexdigest() == want:
+                return cand
+        except OSError:
+            continue  # silent-ok: an unreadable candidate is not a match; we archive anew
+    return None
+
+
 def archive(log: Path, dest_dir: Path, config=None) -> Path:
     """Copy a log into the archive with a fingerprint, so two runs are comparable.
 
@@ -206,6 +224,11 @@ def archive(log: Path, dest_dir: Path, config=None) -> Path:
     to skip. `engine_dependent: false` is recorded explicitly rather than left
     implied, so the next reader need not infer the intent.
     """
+    # ONE snapshot of the bytes: the game may rewrite the file between reads.
+    data = log.read_bytes()
+    existing = find_archived(data, dest_dir)
+    if existing is not None:
+        return existing     # identical content already archived: write nothing (V8)
     dest_dir.mkdir(parents=True, exist_ok=True)
     # LOCAL time, matching the `captured` field below. A UTC filename beside a
     # local `captured` reads as two different launches to anyone diffing the
@@ -224,8 +247,8 @@ def archive(log: Path, dest_dir: Path, config=None) -> Path:
             break
         except FileExistsError:
             continue  # silent-ok: exclusive reservation lost; retry without overwriting evidence
-    with target, log.open("rb") as source:
-        shutil.copyfileobj(source, target)
+    with target:
+        target.write(data)
     shutil.copystat(log, out)
 
     # ...but copy-first left the other half open: if parsing or fingerprinting
@@ -239,6 +262,7 @@ def archive(log: Path, dest_dir: Path, config=None) -> Path:
         "captured": datetime.fromtimestamp(out.stat().st_mtime).isoformat(timespec="seconds"),
         "engine_dependent": False,
         "degraded": False,
+        "sha256": hashlib.sha256(data).hexdigest(),
     }
     try:
         text = out.read_text(encoding="utf-8", errors="replace")
@@ -452,9 +476,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "baseline":
         dest = Path(args.dest) if args.dest else _default_archive_dir()
+        try:
+            already = find_archived(log.read_bytes(), dest)
+        except OSError:
+            already = None   # silent-ok: archive() below reads it again and raises if it must
         out = archive(log, dest)
         meta = read_archive_meta(out)
-        print(f"  archived {out}")
+        if already is not None and already == out:
+            print(f"  already archived, identical content: {out} -- nothing written")
+        else:
+            print(f"  archived {out}")
         # The DEGRADED case is checked FIRST, and it is not hypothetical: archive()
         # builds these five keys with a single `meta.update({...})` inside a try, so
         # any raise in it -- parse_log_text, Config(), game_extensions(), fingerprint()
