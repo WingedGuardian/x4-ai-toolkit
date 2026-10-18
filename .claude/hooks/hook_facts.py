@@ -2445,6 +2445,91 @@ _DEBRIS = re.compile("[\"'()<>|`]")
 _DEVICE = re.compile(r"^(nul|con|prn|aux|com[1-9]|lpt[1-9]):?$", re.I)
 
 
+def _python_inert_literal_program(code: str) -> bool:
+    """Small positive proof for dropping argv after -c; opaque code keeps argv.
+
+    In particular exec/eval, indirect calls and imported helpers may consume argv
+    as code. This is deliberately limited to pass, prose and literal print calls.
+    """
+    import ast
+    if len(code) > 65536:
+        return False
+    try:
+        tree = ast.parse(code)
+        if sum(1 for _ in ast.walk(tree)) > 256:
+            return False
+        for statement in tree.body:
+            if isinstance(statement, ast.Pass):
+                continue
+            if not isinstance(statement, ast.Expr):
+                return False
+            node = statement.value
+            if isinstance(node, ast.Constant):
+                continue
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'print'
+                    and all(isinstance(arg, ast.Constant) for arg in node.args)
+                    and all(keyword.arg in ('sep', 'end') and isinstance(keyword.value, ast.Constant) for keyword in node.keywords)):
+                return False
+        return True
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+
+
+def _python_literal_source(segment: str) -> str:
+    """First actual -c program for the durable literal-open heuristic.
+
+    Module/script arguments are data to Python, even when they resemble code.
+    For -c only proven inert literal programs can discard trailing argv: an
+    opaque program may execute those arguments through exec or another helper.
+    Keep the old conservative scan for unknown flags, launchers, interactive
+    execution and timeit/pdb (which intentionally execute argument text).
+    This does not inspect arbitrary script/module implementations.
+    """
+    verb_token, index = _verb_word(segment)
+    name = _verb_name(verb_token)
+    if name not in _PYTHONS or name == 'uv' or index is None:
+        return segment
+    rest = tokens_of(segment)[index + 1:]
+    i = 0
+    while i < len(rest):
+        word = rest[i]
+        redirect = _REDIR_TOKEN.match(word)
+        if redirect:
+            i += 2 if redirect.end() == len(word) else 1
+            continue
+        if word == '--' or not word.startswith('-'):
+            return ''  # first positional script; subsequent argv is not inline code
+        if word == '-':
+            return segment  # supplied stdin is outside this literal argument proof
+        if name == 'py' and re.fullmatch(r'-[23](?:\.\d+)?(?:-(?:32|64))?|-V:.+', word):
+            i += 1
+            continue
+        if word == '--check-hash-based-pycs':
+            i += 2
+            continue
+        if word in ('--help', '--version'):
+            return ''
+        flags, k = word[1:], 0
+        while k < len(flags):
+            flag = flags[k]
+            if flag in 'cm':
+                value = flags[k + 1:] or (rest[i + 1] if i + 1 < len(rest) else '')
+                if flag == 'c':
+                    return value if _python_inert_literal_program(value) else segment
+                return segment if value in ('timeit', 'pdb') else ''
+            if flag in 'WX':
+                if k + 1 == len(flags):
+                    i += 1  # separate option value is not another Python option
+                break
+            if flag in 'hV':
+                return ''
+            if flag == 'i' or flag not in 'bBdEIOPqRsSuvx':
+                return segment
+            k += 1
+        i += 1
+    return segment
+
+
 def _python_script_target(rest: list):
     """(`"module"`|`"file"`, value) for the first thing a python invocation would
     actually EXECUTE, given the tokens AFTER its verb -- or None when nothing runs
@@ -5480,9 +5565,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             # `FZ="wQQ"` then `open(<durable>, "${FZ%QQ}")`. The path half already
             # consulted `resolve`; the mode half did not, which the fuzzer measured
             # as 3 bypasses of a DENY on 2026-09-06.
-            and (re.search(r"open\([^,]*,\s*[\"']w[\"']", sg)
+            # Only the executable -c text can supply the literal open call.
+            # Keep durable names in argv visible: actual code may open argv[1].
+            and (re.search(r"open\([^,]*,\s*[\"']w[\"']", _python_literal_source(sg))
                  or any(re.search(r"open\([^,]*,\s*[\"']w[\"']", x)
-                        for x in resolve_variants(sg, assigns)))
+                        for x in (_python_literal_source(value) for value in resolve_variants(sg, assigns))))
             and _verb_name(verb(sg)) in _PYTHONS
             # OVER `all_cmds`, not `segments(body)` -- the same defect as B4, in the
             # rule with the most to lose. MEASURED 2026-09-06 by the fuzzer, once this
