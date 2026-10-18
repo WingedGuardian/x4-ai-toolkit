@@ -738,3 +738,16 @@ def test_H1_writes_to_a_host_transcript_are_refused_in_every_channel(sandbox):
                   "echo '{}' >> '" + (tmp / "work" / "log.jsonl").as_posix() + "'")
     assert v["decision"] in ("allow", "advise"), v
 
+
+def test_D1_personal_notes_at_the_root_are_writable_in_the_in_game_layout(sandbox):
+    """D1: KNOWLEDGEBASE.local.md was DENIED where X4_GAME == X4_TOOLKIT, while the instructions
+    send agents there; the deny message pointed only at X4-NOTES.md."""
+    _, tk, env = sandbox
+    env = dict(env, X4_GAME=str(tk))
+    v = _check_in(env, tk, "--kind", "write", "--path", str(tk / "KNOWLEDGEBASE.local.md"), "--command", "x")
+    assert v["decision"] in ("allow", "advise") and not v["inert"], v
+    # Twin: the same name deeper in the game tree stays denied, and the message routes there.
+    (tk / "libraries").mkdir(exist_ok=True)
+    v = _check_in(env, tk, "--kind", "write", "--path", str(tk / "libraries" / "KNOWLEDGEBASE.local.md"),
+                  "--command", "x")
+    assert v["decision"] == "deny" and "KNOWLEDGEBASE.local.md" in v["reason"], v
