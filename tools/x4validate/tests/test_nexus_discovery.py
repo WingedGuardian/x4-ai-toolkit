@@ -280,3 +280,31 @@ def test_a_blank_search_text_is_a_refusal_not_a_traceback(monkeypatch, capsys):
     monkeypatch.setattr(_nexus, "_post_json", lambda *a: pytest.fail("network reached"))
     rc, out, err = _run(capsys, "search", "   ")
     assert rc == 2 and "Traceback" not in out + err
+
+
+def test_a_MISSING_harness_core_prints_an_actionable_message_not_a_bare_name(
+        monkeypatch, capsys, tmp_path):
+    """V12: with tools/modding_harness absent the search printed bare 'RuntimeError'."""
+    from x4validate import _harness, _registry
+    monkeypatch.setattr(_registry, "DEFAULT_REGISTRY", None)
+    monkeypatch.setattr(_nexus, "nexus_key", lambda: "fake-key")
+    monkeypatch.setattr(_nexus, "_post_json", lambda *a: pytest.fail("network reached"))
+    monkeypatch.setattr(_harness, "_package", lambda: tmp_path / "no_such_harness")
+    assert _modlist.main(["search", "a"]) == 2
+    out = capsys.readouterr().out
+    assert "harness" in out and "reinstall" in out and "X4_TOOLKIT" in out, out
+    assert "RuntimeError" not in out.replace("HarnessMissing", ""), out
+    assert _modlist.main(["search", "a", "--json"]) == 2
+    reasons = json.loads(capsys.readouterr().out)["reasons"]
+    assert any("reinstall" in r for r in reasons), reasons
+
+
+def test_TWIN_an_unexpected_RuntimeError_keeps_its_name_only(monkeypatch, capsys):
+    """Only the harness gets the harness message; any other RuntimeError is not it."""
+    from x4validate import _registry
+    monkeypatch.setattr(_registry, "DEFAULT_REGISTRY", None)
+    monkeypatch.setattr(_nexus, "discover", lambda *a: (_ for _ in ()).throw(
+        RuntimeError("secret-body")))
+    assert _modlist.main(["search", "a", "--json"]) == 2
+    out = capsys.readouterr().out
+    assert "reinstall" not in out and "secret" not in out

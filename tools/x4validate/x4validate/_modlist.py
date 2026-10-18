@@ -1034,6 +1034,9 @@ _SEARCH_FAILURES = {
                       "refused. Set X4_NEXUS_KEY (environment or x4-paths.env).",
     "NexusRateLimited": "the Nexus rate limit is spent; try again later",
     "NexusUnreachable": "Nexus could not be reached (network failure)",
+    "HarnessMissing": "the pinned harness core this toolkit ships (tools/modding_harness) "
+                      "is missing, so search cannot run: reinstall the toolkit, or point "
+                      "X4_TOOLKIT at a complete copy",
 }
 
 

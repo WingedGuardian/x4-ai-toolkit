@@ -8,10 +8,18 @@ import sys
 from pathlib import Path
 
 
+class HarnessMissing(RuntimeError):
+    """The pinned harness core (`tools/modding_harness`) is not where it ships."""
+
+
+def _package() -> Path:
+    return Path(__file__).resolve().parents[2] / "modding_harness"
+
+
 def module(name):
-    package = Path(__file__).resolve().parents[2] / "modding_harness"
+    package = _package()
     if not package.is_dir():
-        raise RuntimeError("the pinned offline harness core is missing; repair this toolkit installation")
+        raise HarnessMissing("the pinned offline harness core is missing; repair this toolkit installation")
     namespace = "_x4_harness_" + hashlib.sha256(str(package).encode()).hexdigest()[:16]
     if namespace not in sys.modules:
         spec = importlib.util.spec_from_file_location(namespace, package / "__init__.py",
