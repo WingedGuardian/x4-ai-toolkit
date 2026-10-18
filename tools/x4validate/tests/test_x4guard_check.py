@@ -220,7 +220,8 @@ def test_I3_a_guard_that_checked_nothing_is_inert_not_a_plain_ask(sandbox):
     v = _check_in(env, tk, "--kind", "shell", "--shell", "powershell", "--command",
                   f"Remove-Item -Force '{tk / 'reference' / 'libraries' / 'wares.xml'}'")
     assert v["decision"] == "deny" and v["inert"] and "NOTHING was checked" in v["reason"], v
-    assert "X4 save dispatcher" in v["reason"], v
+    # K10: the dispatcher's actionable reason survives the exit-2 transport.
+    assert "Shell scope could not be completely evaluated" in v["reason"], v
 
 
 def test_I4_a_delete_is_at_least_as_strict_as_rm(sandbox):
@@ -294,10 +295,9 @@ def test_guard_signals_not_checked_with_exit_2_only_under_X4_GUARD_CHECK(sandbox
                                     "targets and an available parser. This call was not allowed."}}
     assert json.loads(plain.stdout) == expected
     assert check.returncode == 2
-    # The shell transport turns the dispatcher's nonzero check result into its
-    # own structured refusal; exit2 still distinguishes it from a native verdict.
-    expected["hookSpecificOutput"]["permissionDecisionReason"] = (
-        "X4 save dispatcher did not return a complete decision; this call was not allowed.")
+    # K10: the shell transport passes the dispatcher's static, actionable refusal through
+    # (it was replaced by "did not return a complete decision"); exit 2 still marks it as
+    # checked-nothing, distinct from a native verdict.
     assert json.loads(check.stdout) == expected
 
 
