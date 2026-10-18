@@ -84,7 +84,8 @@ TARGETS: dict[str, list[str]] = {
                      "tests/test_active_scope_engine_rules.py"],
     "_compat.py": ["tests/test_compat.py", "tests/test_compat_dropped.py"],
     "_check.py": ["tests/test_check.py", "tests/test_tierb.py",
-                  "tests/test_reference_scope.py"],
+                  "tests/test_reference_scope.py",
+                  "tests/test_tierb_nested_later_target.py"],
     "_effective.py": ["tests/test_effective.py", "tests/test_prop_depth.py",
                       "tests/test_effective_scope.py", "tests/test_provenance.py",
                       "tests/test_mutation_probe_detectors.py"],
@@ -172,10 +173,21 @@ MUTANTS = [
            "index/macros.xml decides a name clash, not load order; naming one is "
            "a guess wearing the grammar of a measurement"),
     # --- _check.py: the bare-vs-nested door (gotcha #6, F19) -------------------
+    # Two call sites share the bare statement, so each anchor carries the line after
+    # it (the 4-space form is a substring of the 8-space one; the next line differs).
     Mutant("_check.py", "nested-path rewrite disabled",
-           "nested = _merge._nested_target(vpath, config.packed_dlc_names())",
-           "nested = None  # mutant: mod-on-mod patches lose their target",
+           "    nested = _merge._nested_target(vpath, config.packed_dlc_names())\n"
+           "    if nested is not None:\n",
+           "    nested = None  # mutant: mod-on-mod patches lose their target\n"
+           "    if nested is not None:\n",
            "a cross-mod patch silently no-ops; the engine never opens the bare form"),
+    Mutant("_check.py", "nested patch before its later-loading owner not evaluated",
+           "nested = _merge._nested_target(vpath, config.packed_dlc_names())\n"
+           "        later_owner = _later_loading_owner(",
+           "nested = None  # mutant: the later-loading owner is never added\n"
+           "        later_owner = _later_loading_owner(",
+           "a nested patch from a mod loading BEFORE its owner is applied by the "
+           "engine (MEASURED 2026-10-12); without the owner its ops go unevaluated"),
 
     # --- _effective.py: load order and property depth --------------------------
     Mutant("_effective.py", "load order replaced by ALPHABETICAL (gotcha #13)",
