@@ -33,6 +33,8 @@ Exit: 0 all replays behave as recorded, 1 any mismatch, 2 no fixture.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import shutil
 import sys
@@ -43,13 +45,51 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from x4validate import _modlist, _nexus, _registry  # noqa: E402
+from x4validate import _harness, _modlist, _nexus, _registry  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "nexus.json"
 RECORD = "--record" in sys.argv
 
 #: An id that must not exist, for the 404 path. Far above the live id space.
 MISSING_ID = 99999999
+
+
+#: The terms the replay sends through `discover`, and the reply each one is routed to.
+DISCOVER_CASES = ("complete", "partial", "malformed", "errors", "zero")
+
+
+def discover_term(case: str) -> str:
+    return f"discover {case}"
+
+
+def _page(total, nodes):
+    return {"data": {"mods": {"totalCount": total, "nodes": nodes}}}
+
+
+def discover_bodies(rows: list[dict]) -> dict:
+    """The five replies the discover contract must tell apart, from ONE row list in the
+    recorded shape (`modId name version author updatedAt status`, `totalCount`).
+
+    Only `complete` is a real reply when recorded; the other four are DERIVED from it with
+    the same field names, because a live account cannot be made to return a capped page, a
+    damaged node or a GraphQL error on demand. The fixture's note says which it holds.
+    """
+    n = len(rows)
+    return {
+        "complete": _page(n, rows),
+        "partial": _page(n + 7, rows),
+        "malformed": _page(n + 2, rows + [{"name": "no id here"}, dict(rows[0])]),
+        "errors": {"errors": [{"message": "Example GraphQL error"}], "data": None},
+        "zero": _page(0, []),
+    }
+
+
+def _anonymize_discover_rows(nodes: list[dict]) -> list[dict]:
+    """Keep the fields discover reads, with their live values; ids, names, authors neutral."""
+    return [{"modId": 1000 + i, "name": f"Example Mod {i}",
+             "version": n.get("version"), "author": f"example_author_{i}",
+             "updatedAt": n.get("updatedAt"), "status": n.get("status")}
+            for i, n in enumerate(nodes, 1)]
 
 
 # ---------------------------------------------------------------- recording --
@@ -127,6 +167,19 @@ def record() -> int:
             {"modId": 1000 + i, "name": f"Example Mod {i}"} for i in range(1, len(hits) + 1)
         ]}}}
     fixture["graphql"]["nomatch"] = {"data": {"mods": {"nodes": []}}}
+    # The discovery query (`x4modlist search`): one live reply, parsed by OUR parser before it
+    # is anonymized, so the field names it asks for are checked against the schema here.
+    provider = _harness.module("discovery")
+    raw = _nexus._mapped("discover", _nexus._post_json, _nexus.NEXUS_GQL,
+                         provider.request("x4foundations", "station", 3), headers)
+    live = provider.parse(raw, "x4foundations", "station", 3)
+    assert live["state"] in ("complete", "partial") and live["candidates"],         f"live discover reply was not usable: {live['state']} {live['reasons']}"
+    for c in live["candidates"]:
+        assert not c["unavailable_fields"], f"live discover lost fields {c['unavailable_fields']}"
+    fixture["discover"] = discover_bodies(
+        _anonymize_discover_rows(raw["data"]["mods"]["nodes"]))
+    print(f"  graphql discover -> {live['state']}, {len(live['candidates'])} live row(s) "
+          "(anonymized; partial/malformed/errors/zero derived)")
     # A node the parser must survive (missing modId) — the silent-ok path.
     fixture["graphql"]["malformed"] = {
         "data": {"mods": {"nodes": [{"name": "no id here"}, {"modId": 1001, "name": "ok"}]}}}
@@ -190,8 +243,28 @@ class _Replay:
         return {"files": [{"file_id": 1, "name": "main", "version": body.get("version", ""),
                            "uploaded_time": uploaded, "category_name": "MAIN"}]}
 
+    @staticmethod
+    def _variable_term(variables: dict) -> str:
+        """The search term of a discovery request: `f.nameStemmed[0].value` (or `f.name`)."""
+        f = variables.get("f") or {}
+        for field in ("nameStemmed", "name"):
+            terms = f.get(field)
+            if terms:
+                return str(terms[0].get("value", ""))
+        raise AssertionError("a discovery request carried no search term")
+
     def post_json(self, url: str, body: dict, headers: dict) -> dict:
         self.calls.append(url)
+        variables = body.get("variables")
+        if variables is not None:
+            # `discover` puts the term in GraphQL VARIABLES, not in the query text. An
+            # unrecorded term is a hard failure, never a quiet default reply.
+            term = self._variable_term(variables)
+            case = term.removeprefix("discover ") if term.startswith("discover ") else None
+            block = (self.fx.get("discover") or {}).get(case)
+            if block is None:
+                raise AssertionError(f"unrecorded discover term: {term!r}")
+            return block
         query = body.get("query", "")
         for name in ("nomatch", "malformed", "example"):
             if f'"{name}"' in query:
@@ -310,6 +383,69 @@ def _check_refresh_end_to_end(fx: dict, failures: list[str]) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _check_discover(fx: dict, failures: list[str]) -> None:
+    """Drive `discover` and `x4modlist search` through the replay -- not only search_mods.
+
+    `discover` sends its term in GraphQL `variables`, not in the query text the old routing
+    searched, so every discover call silently got the same reply and a parser that stopped
+    telling complete / partial / malformed / errors apart replayed green.
+    """
+    block = fx.get("discover")
+    if not block or set(block) != set(DISCOVER_CASES):
+        failures.append("the fixture has no complete `discover` block -- run --record once")
+        print("   FAIL  fixture lacks the discover block")
+        return
+    rows = block["complete"]["data"]["mods"]["nodes"]
+    ids = [r["modId"] for r in rows]
+    got = {c: _nexus.discover(discover_term(c), 5) for c in DISCOVER_CASES}
+    _check("discover complete: state", got["complete"]["state"], "complete", failures)
+    _check("discover complete: ids in order",
+           [c["mod_id"] for c in got["complete"]["candidates"]], ids, failures)
+    _check("discover complete: version/date/status all present",
+           [c["unavailable_fields"] for c in got["complete"]["candidates"]],
+           [[] for _ in ids], failures)
+    _check("discover partial: state", got["partial"]["state"], "partial", failures)
+    _check("discover partial: total exceeds returned",
+           (got["partial"]["total"], got["partial"]["returned"]),
+           (len(ids) + 7, len(ids)), failures)
+    _check("discover malformed: usable rows kept, damaged ones counted",
+           (got["malformed"]["state"], got["malformed"]["returned"],
+            got["malformed"]["malformed"]), ("partial", len(ids), 2), failures)
+    _check("discover errors: a non-answer with no candidates",
+           (got["errors"]["state"], got["errors"]["candidates"]), ("unavailable", []),
+           failures)
+    _check("discover zero: an answer", (got["zero"]["state"], got["zero"]["total"]),
+           ("zero", 0), failures)
+
+    # The command itself, against a throwaway registry (search never writes it).
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="x4gate_search_"))
+    try:
+        reg_path = _sandbox_registry(tmp, fx)
+
+        def run(case: str):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = _modlist.main(["--registry", str(reg_path), "search",
+                                    discover_term(case), "--json"])
+            return rc, buf.getvalue()
+
+        rc, out = run("complete")
+        doc = json.loads(out)
+        _check("search complete: rc", rc, 0, failures)
+        _check("search marks installed ids from the registry",
+               {c["mod_id"]: c["local"] for c in doc["candidates"]},
+               {ids[0]: "have", ids[1]: "have", ids[2]: "new"}, failures)
+        _check("search carries the coverage statement", bool(doc["coverage"]), True, failures)
+        rc, out = run("errors")
+        _check("search errors: rc 2 and no key in the output",
+               (rc, "fixture-key-not-a-real-credential" in out), (2, False), failures)
+        rc, out = run("zero")
+        _check("search zero: rc 0", (rc, json.loads(out)["state"]), (0, "zero"), failures)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def replay() -> int:
     if not FIXTURE.is_file():
         print(f"no fixture at {FIXTURE} — run with --record once (needs X4_NEXUS_KEY)",
@@ -367,6 +503,7 @@ def replay() -> int:
         if not label:
             failures.append("_classify returned an empty label")
 
+        _check_discover(fx, failures)
         _check_refresh_end_to_end(fx, failures)
         print(f"\n  recorded calls served: {len(rp.calls)}  (network calls made: 0)")
         if rp.derived_files:
