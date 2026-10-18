@@ -3392,8 +3392,13 @@ def test_R2_cosmetic_install_ps1_prints_ONE_separator_in_its_summary(tmp_path):
             assert "/" not in ln.split(":", 1)[1], ln
 
 
-@pytest.mark.parametrize("installer", ["sh", "ps1"])
-def test_R2B1_an_INSTALLED_toolkits_suite_COLLECTS_and_counts_its_repo_only_skips(installer,
+@pytest.mark.parametrize("installer,agent", [
+    ("sh", "all"), ("ps1", "all"),
+    # SINGLE agents (release review T3): `--agent all` ships every carrier, so a module that
+    # imported from one native carrier (.codex/hooks) at import time collected fine there and
+    # died in a claude-only install. One installer per single agent keeps the cost bounded.
+    ("sh", "claude"), ("sh", "codex"), ("sh", "opencode"), ("sh", "generic")])
+def test_R2B1_an_INSTALLED_toolkits_suite_COLLECTS_and_counts_its_repo_only_skips(installer, agent,
                                                                                 tmp_path):
     """SETUP_PROMPT.txt has the user run the installed toolkit's suite. Before R2-B1 it died in
     collection (3 errors: modules reading the repo-only agent/ source at import). A REAL install
@@ -3406,11 +3411,12 @@ def test_R2B1_an_INSTALLED_toolkits_suite_COLLECTS_and_counts_its_repo_only_skip
     NOT covered here. Running the installed suite for real is left to the release's cold
     install check. COST (MEASURED 2026-10-05, Windows): each parametrization makes a fresh
     install and `uv run` builds that install's own .venv, so the two cases build TWO venvs;
-    18.3 s (sh) + 12.9 s (ps1) = ~31 s, ~0.1 GB written to the temp drive."""
+    18.3 s (sh) + 12.9 s (ps1) = ~31 s, ~0.1 GB written to the temp drive. The four
+    single-agent cases add one install + venv each."""
     if shutil.which("uv") is None:
         pytest.skip("no uv to run the installed suite with")
     dest = _fresh(tmp_path)
-    r = _install(installer, tmp_path, dest, "--agent", "all")
+    r = _install(installer, tmp_path, dest, "--agent", agent)
     assert r.returncode == 0, _ok(r)
     assert not (dest / "agent").exists(), "an install copied the repo-only agent/ source"
     env = {k: v for k, v in os.environ.items() if not k.startswith("X4_")}

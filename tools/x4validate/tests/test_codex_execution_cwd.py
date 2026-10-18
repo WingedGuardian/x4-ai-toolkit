@@ -7,7 +7,17 @@ from unittest.mock import patch
 
 import pytest
 
+from _layout import require_native_codex
+
 ROOT = Path(__file__).resolve().parents[3]
+# The unknown-execution-cwd path is Codex's (its payload carries no cwd) and needs the Codex
+# carrier's patch_paths beside save_policy. A module-level import from .codex/hooks broke
+# COLLECTION of every install without Codex (release review T3): skip, counted, when Codex
+# was not selected; a selected-but-damaged carrier still fails.
+try:
+    require_native_codex(ROOT)
+except pytest.skip.Exception as exc:
+    pytest.skip(str(exc), allow_module_level=True)
 sys.path.insert(0, str(ROOT / ".codex/hooks"))
 sys.path.insert(0, str(ROOT / "tools"))
 import save_policy
