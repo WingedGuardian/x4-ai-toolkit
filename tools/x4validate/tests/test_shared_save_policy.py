@@ -292,7 +292,9 @@ def test_powershell_file_to_save_directory_preserves_destination_first(install, 
 def test_real_file_hook_preserves_before_permission_and_preview_is_readonly(install):
     root, _roots, files = install
     result = invoke_hook(install, "Write", {"file_path": str(files[0]), "content": "changed"}, preview=True)
-    assert "PREVIEW ONLY" in result["hookSpecificOutput"]["additionalContext"]
+    # K3: a preview preserves nothing, so it asks rather than advising an unbacked change.
+    assert result["hookSpecificOutput"]["permissionDecision"] == "ask", result
+    assert "NOT BACKED UP" in result["hookSpecificOutput"]["permissionDecisionReason"]
     assert not (root / ".modding-agent-harness/backups").exists()
     assert not (root / ".modding-agent-harness/coverage.sqlite3").exists()
     result = invoke_hook(install, "Write", {"file_path": str(files[0]), "content": "changed"})

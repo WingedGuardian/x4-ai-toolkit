@@ -238,6 +238,28 @@ def test_I4_a_delete_is_at_least_as_strict_as_rm(sandbox):
     assert target.exists()                      # verdict only: nothing executed
 
 
+@pytest.mark.parametrize("kind", ["delete", "write"])
+def test_K3_a_read_only_check_of_a_save_mutation_never_reads_as_allowed(sandbox, kind):
+    """K3 (v4.0 release review): `check --kind delete --path <save>` ran the dispatcher in
+    preview (no backup) and returned advise "PREVIEW ONLY" -- an adapter mapping advise to
+    allow could then delete the save with no backup. A check preserves nothing, so it asks."""
+    tmp, tk, env = sandbox
+    target = tmp / "profile" / "save" / "quick.xml.gz"
+    target.write_bytes(b"x")
+    v = _check_in(env, tk, "--kind", kind, "--path", str(target))
+    assert v["decision"] == "ask" and not v["inert"], v
+    assert "NOT BACKED UP" in v["reason"], v
+    assert target.read_bytes() == b"x"
+    assert not (tk / ".modding-agent-harness" / "backups").exists()
+
+
+def test_K3_TWIN_a_check_of_a_non_save_path_is_unchanged(sandbox):
+    _, tk, env = sandbox
+    v = _check_in(env, tk, "--kind", "delete", "--path", str(tk / "dev" / "mymod" / "a.xml"))
+    assert v["decision"] in ("allow", "advise") and not v["inert"], v
+    assert "NOT BACKED UP" not in (v.get("reason") or "") + (v.get("context") or ""), v
+
+
 @pytest.mark.parametrize("body", ["exit 1", "printf 'not json'", "sleep 6"])
 def test_I5_a_guard_that_fails_is_an_inert_deny(sandbox, tmp_path, body):
     _, tk, env = sandbox

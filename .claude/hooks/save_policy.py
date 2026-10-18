@@ -373,16 +373,28 @@ def packet(raw):
     return roots, payload
 
 
+#: K3: a read-only check (X4_GUARD_CHECK=1, `x4guard check`) never preserves bytes, so a save
+#: mutation it judges has NO backup. Reporting that as an advisory let an adapter that maps
+#: advise -> allow delete a save unbacked; it asks instead, and says how to get the backup.
+PREVIEW_NEEDS_BACKUP = (
+    "X4 SAVE CHANGE NOT BACKED UP: this is a read-only check, so no save bytes were preserved, "
+    "and a save may be changed only after a verified backup. Run the change through the agent's "
+    "native guard hook (it backs the save up first), or confirm only if losing the current "
+    "save contents is acceptable.")
+
+
 def _hook_json(result):
     hso = {"hookEventName": "PreToolUse"}
+    if result.decision not in ("deny", "ask") and result.preservation == "required":
+        warnings = "\n".join(result.warnings)
+        result = replace(result, decision="ask",
+                         reason=PREVIEW_NEEDS_BACKUP + ("\n" + warnings if warnings.strip() else ""))
     if result.decision in ("deny", "ask"):
         hso.update(permissionDecision=result.decision, permissionDecisionReason=result.reason)
     else:
         text = "\n".join(result.warnings)
         if result.preservation == "verified":
             text += "\nSave backup verified in the permanent neutral store before this call."
-        elif result.preservation == "required":
-            text += "\nPREVIEW ONLY: executing this save change still requires verified preservation."
         if text.strip():
             hso["additionalContext"] = text.strip()
         else:
