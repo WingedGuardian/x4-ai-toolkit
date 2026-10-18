@@ -417,6 +417,67 @@ def _hook_json(result):
     return json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
 
 
+_HARNESS_FIX = ("Fix: point X4_TOOLKIT (x4-paths.env or the environment) at the toolkit folder that "
+                "contains tools/modding_harness, or reinstall the toolkit.")
+#: K4: saves are never changed without a backup, so without the harness a change that touches
+#: the profile ASKS -- an inability, never relaxed by X4_GUARD=off. The prefix keeps it
+#: classified as checked-nothing by x4conformance's NOT_CHECKED.
+HARNESS_MISSING_ASK = ("X4 save dispatcher failed: the pinned save harness (tools/modding_harness) "
+                       "could not be loaded from X4_TOOLKIT, so no save can be backed up, and this call "
+                       "changes something in your X4 profile or saves. Confirm only if losing the current "
+                       "contents is acceptable. " + _HARNESS_FIX)
+HARNESS_MISSING_NOTE = ("X4 SAVE PROTECTION UNAVAILABLE: the pinned save harness (tools/modding_harness) "
+                        "could not be loaded from X4_TOOLKIT. Every other guard rule ran; any change to "
+                        "your X4 profile or saves will ask until this is fixed. " + _HARNESS_FIX)
+
+
+class _Answered(Exception):
+    def __init__(self, text):
+        super().__init__("answered")
+        self.text = text
+
+
+def _under(path, folder):
+    try:
+        path, folder = (os.path.normcase(os.path.realpath(str(p))) for p in (path, folder))
+        return os.path.commonpath((path, folder)) == folder
+    except ValueError:
+        return False
+
+
+def _without_harness(roots, evidence, rules):
+    """(failed, hook JSON) when the harness cannot load (K4). The Bash rules decide, unrelaxed
+    by save qualification; a change that touches the profile or a save folder -- or an
+    unresolved operand naming one -- asks on top, because no backup can be made."""
+    folder_list = list(folders(roots)) + ([native(roots["profile"])] if roots.get("profile") else [])
+    names = [str(value).casefold() for value in (roots.get("profile"), roots.get("saves")) if value]
+    touches = False
+    for row in evidence:
+        if row.get("operation") == OPAQUE:
+            continue
+        raw = str(row.get("path", "") or row.get("raw", ""))
+        if row.get("unresolved"):
+            touches = touches or any(name in raw.casefold() for name in names)
+        elif raw:
+            touches = touches or any(_under(native(raw), folder) for folder in folder_list)
+    decision, reason, context = rules(False)
+    hso = {"hookEventName": "PreToolUse"}
+    if decision == "deny":
+        hso.update(permissionDecision="deny", permissionDecisionReason=reason or "")
+        return False, json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
+    if touches:
+        detail = "\n".join(part for part in (reason, context) if part)
+        hso.update(permissionDecision="ask",
+                   permissionDecisionReason=HARNESS_MISSING_ASK + ("\n" + detail if detail else ""))
+        return True, json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
+    if decision == "ask":
+        hso.update(permissionDecision="ask",
+                   permissionDecisionReason=(reason or "") + "\n" + HARNESS_MISSING_NOTE)
+    else:
+        hso["additionalContext"] = HARNESS_MISSING_NOTE + ("\n" + context if context else "")
+    return False, json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
+
+
 def main(argv=None):
     import x4guard
     args = list(sys.argv[1:] if argv is None else argv)
@@ -428,14 +489,16 @@ def main(argv=None):
     try:
         kind, script = args
         roots, payload = packet(sys.stdin.buffer.read().decode("utf-8"))
-        root = native(roots["toolkit"])
-        contracts = core(root, "contracts")
-        action = contracts.Action("claude", str(payload.get("tool_name", "")), kind,
-                                  cwd=str(payload.get("cwd", "")),
-                                  shell="powershell" if payload.get("tool_name") == "PowerShell" else "bash",
-                                  command=str((payload.get("tool_input") or {}).get("command", "")),
-                                  session_id=str(payload.get("session_id", "")),
-                                  tool_call_id=str(payload.get("tool_use_id", "")))
+        try:
+            root = native(roots["toolkit"])
+            contracts = core(root, "contracts")
+        except Exception:
+            # K4: no loadable pinned harness (X4_TOOLKIT names a folder without it, or it is
+            # damaged). The Bash rules need no harness and still run; only save preservation
+            # is impossible, which _without_harness handles. The cause was hidden behind
+            # "X4 save dispatcher failed: ValueError" on EVERY call.
+            root = contracts = None
+        cwd = str(payload.get("cwd", ""))
         if kind == "shell":
             evidence = shell_evidence(payload, roots, ipc=ipc)
         else:
@@ -447,13 +510,13 @@ def main(argv=None):
             # no longer treats a single leading slash as a Windows absolute
             # path. Resolve that mount before deciding that a cwd is needed.
             if not (os.path.isabs(path) or (os.name == "nt" and path.startswith("/"))):
-                if not action.cwd:
+                if not cwd:
                     raise ValueError("relative file request has no absolute cwd")
-                path = os.path.join(str(native(action.cwd)), path)
+                path = os.path.join(str(native(cwd)), path)
             path = str(native(path))
             evidence = [{"path": path, "operation": "write", "literal": True}]
 
-        def backend(save_only):
+        def rules(save_only):
             bash, why = x4guard.resolve_bash()
             if not bash:
                 raise ValueError(why)
@@ -472,15 +535,29 @@ def main(argv=None):
                 raise TimeoutError("the rule backend did not finish within the hook's time budget")
             if rc:
                 raise ValueError("Bash rule backend did not complete")
-            decision, reason, context = x4guard.parse_hook_output(out.decode("utf-8"))
+            return x4guard.parse_hook_output(out.decode("utf-8"))
+
+        if contracts is None:
+            failed, text = _without_harness(roots, evidence, rules)
+            raise _Answered(text)
+
+        def backend(save_only):
+            decision, reason, context = rules(save_only)
             return contracts.Result("allow" if decision == "advise" else decision, "evaluated",
                                     reason=reason or "", warnings=(context,) if context else ())
 
+        action = contracts.Action("claude", str(payload.get("tool_name", "")), kind, cwd=cwd,
+                                  shell="powershell" if payload.get("tool_name") == "PowerShell" else "bash",
+                                  command=str((payload.get("tool_input") or {}).get("command", "")),
+                                  session_id=str(payload.get("session_id", "")),
+                                  tool_call_id=str(payload.get("tool_use_id", "")))
         outcome = enforce(root, roots, evidence, action, backend,
                           transcript=str(payload.get("transcript_path", "")),
                           preview=os.environ.get("X4_GUARD_CHECK") == "1", deadline=deadline)
         failed = outcome.result.evaluation == "failed"
         text = _hook_json(outcome.result)
+    except _Answered as answered:
+        text = answered.text
     except BaseException as exc:
         failed = True
         # No raw shell/payload/exception text (which may include private data).

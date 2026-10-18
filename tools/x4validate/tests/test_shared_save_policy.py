@@ -431,3 +431,29 @@ def test_K5_the_native_hook_analyses_the_command_once(install, tool, command):
     alone = subprocess.run([bash, str(hooks / "protect-bash.sh"), "--harness-policy-backend"], input=payload,
                            capture_output=True, env=env, timeout=60)
     assert alone.returncode == 0 and marker.read_text() == "run ", alone.stderr
+
+
+def test_K4_a_missing_harness_names_the_fix_and_only_profile_changes_ask(install, tmp_path):
+    """K4: with X4_TOOLKIT naming a folder without tools/modding_harness EVERY Bash/PowerShell/
+    Edit/Write call was denied "X4 save dispatcher failed: ValueError", and X4_GUARD=off did not
+    help. The Bash rules need no harness; only save preservation does."""
+    root, roots, files = install
+    invoke_hook(install, "Bash", {"command": "true"})            # installs the hook copy
+    (root / "tools/modding_harness").rename(tmp_path / "harness-moved-away")
+    other = root / "notes.txt"
+    hso = invoke_hook(install, "Bash", {"command": "ls -la"})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None and "tools/modding_harness" in hso["additionalContext"], hso
+    hso = invoke_hook(install, "Write", {"file_path": str(other), "content": "x"})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None and "X4_TOOLKIT" in hso["additionalContext"], hso
+    for tool, ti in (("Bash", {"command": 'rm -- "' + str(files[0]).replace("\\", "/") + '"'}),
+                     ("Write", {"file_path": str(files[0]), "content": "x"})):
+        hso = invoke_hook(install, tool, ti)["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "ask", (tool, hso)
+        assert "tools/modding_harness" in hso["permissionDecisionReason"], hso
+        assert "X4_TOOLKIT" in hso["permissionDecisionReason"], hso
+    assert files[0].read_bytes() == files[0].name.encode()
+    # Twin: a hard block needs no harness and still denies with its own reason.
+    hso = invoke_hook(install, "Bash", {"command": 'rm -rf "' + str(root.parent / "game").replace("\\", "/") + '"'}
+                      )["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny", hso
+    assert_scope_refusal(hso)
