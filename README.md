@@ -609,7 +609,7 @@ leave Claude settings alone.
 
 Customized `.codex/hooks.json` also uses reviewed migration. An unchanged JSON
 definition stays byte-exact, including formatting and read-only protection.
-Codex installs require a root without `%`, `!`, `$`, backticks, quotes or line
+Codex installs require a root without `%`, `!`, `$`, backticks, double quotes or line
 breaks, which its shell command definitions cannot safely carry. Generic-only
 installs do not acquire that Codex restriction.
 
@@ -686,7 +686,7 @@ written; `all` and `auto` stand alone):
 | Overwrites in `reference\` | blocked (hook; and the OS lock, once applied) | blocked when the hook is live; the OS lock, once applied, stops accidental ones | only the OS lock, once applied, stops accidental ones |
 | Destructive shell commands elsewhere | blocked or asked (hook) | blocked when the hook is live; the worst prefix cases by rules regardless | not blocked |
 | Non-save profile changes | asks (manifest edits advise) | **deny with instructions** when the hook is live | through a qualified adapter |
-| Recognized save mutations | 1–2 saves preserved first; bulk needs bound approval | same policy when the hook is live | same policy through the normal Action v1 entry |
+| Recognized save mutations | 1–2 saves preserved first; bulk needs bound approval | same policy when the hook is live | 1–2 saves preserved first; bulk refused through the neutral CLI, which reads no typed approval |
 | A guard that crashes | asks | **denies** (our wrapper), unless the interpreter cannot start: then **Codex runs the command** | -- |
 | Hooks not reviewed or changed | n/a | **guards off, silently**: `x4doctor` and the session instructions flag it | -- |
 | Post-edit validator feedback | yes | yes (when the hook is live) | no |

@@ -928,8 +928,9 @@ preserve_user_claude_md() {   # DEST -- AFTER every precheck, BEFORE the copy
   echo "  [note] your CLAUDE.md is not one this toolkit ever shipped, so it was KEPT (not lost) as:"
   echo "           $dest/$to"
   echo "         That copy is NO LONGER LOADED by any agent: the 4.0 CLAUDE.md replaced it."
-  echo "         To bring your notes back, merge what you want into X4-NOTES.md in the same"
-  echo "         folder -- every agent's instructions read it, and the toolkit never writes it."
+  echo "         To bring your notes back, merge what you want into KNOWLEDGEBASE.local.md in"
+  echo "         the same folder -- every agent's instructions read it (and a legacy X4-NOTES.md),"
+  echo "         and the toolkit never overwrites it."
   _r2_your_edits_hint "$dest" "$to" "$prev"
   _h_hash_caveat
 }
