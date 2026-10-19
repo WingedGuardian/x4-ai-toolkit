@@ -215,6 +215,9 @@ class DependentOverwrite:
     winner: str = ""
     removed_by: str = ""
     detail: str = ""
+    #: As `Collision.winner_qualified` -- False when no qualified live winner is claimed,
+    #: so a consumer re-checking this row (gates/cross_tool.py) does not invent one.
+    winner_qualified: bool = True
 
 
 @dataclass
@@ -1141,7 +1144,7 @@ def _split_dependent(vpath: str, collisions: list[Collision],
                 vpath, over[0], ", ".join(adders),
                 "optional" if any(declared[a] == "optional" for a in adders) else "required",
                 c.target, c.target_path, c.target_tree, c.removal_path, c.winner,
-                c.removed_by, c.detail))
+                c.removed_by, c.detail, c.winner_qualified))
     return kept
 
 

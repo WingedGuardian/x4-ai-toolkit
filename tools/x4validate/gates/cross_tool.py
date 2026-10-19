@@ -480,6 +480,18 @@ def _victim_attrs(con, vpath: str, victim: str, prop: str | None) -> int | None:
     return None
 
 
+def _dependent_as_hard(d) -> "_compat.Collision":
+    """The HARD row a `DependentOverwrite` was before the dependency split moved it out
+    (`_compat._split_dependent`): mods = the adders, then the one overwriter."""
+    adders = [a for a in d.added_by.split(", ") if a]
+    return _compat.Collision(
+        vpath=d.vpath, kind="HARD", target=d.target, mods=[*adders, d.mod],
+        winner=d.winner, detail=d.detail, removed_by=d.removed_by,
+        target_path=d.target_path, target_tree=d.target_tree,
+        removal_path=d.removal_path,
+        winner_qualified=getattr(d, "winner_qualified", True))
+
+
 def check_cross_tool_agreement() -> None:
     print("\n2. CROSS-TOOL AGREEMENT - x4compat's winner vs x4effective's origin")
     try:
@@ -494,7 +506,12 @@ def check_cross_tool_agreement() -> None:
         not_run("cross-tool agreement", "the effective store is stale -- rebuild and re-run")
         return
     report = _compat.analyze(_env.extensions(), config=_merge.Config())
-    if not report.collisions:
+    # The ADVISORY rows (issue #11: an overwrite of a declared dependency's added content)
+    # were HARD rows before the split and keep every field the HARD check reads, so they
+    # are cross-checked as their own population -- release review F7: 2,544 live rows had
+    # left the denominator with nothing saying so.
+    dependent = [_dependent_as_hard(d) for d in getattr(report, "dependent_overwrites", ())]
+    if not report.collisions and not dependent:
         note(False, "found collisions to cross-check", "none on this install")
         return
     by_kind: dict[str, list] = {}
@@ -536,12 +553,13 @@ def check_cross_tool_agreement() -> None:
         return final_trees[vpath]
 
     # --- kinds where the winner supplies the live value ----------------------
-    for kind, column in (("FULL-OVERRIDE", "entities"),
-                         ("UNION-KEY", "entities"),
-                         ("HARD", "attrs")):
-        rows = by_kind.get(kind, [])
+    for label, kind, column, rows in (
+            ("FULL-OVERRIDE", "FULL-OVERRIDE", "entities", by_kind.get("FULL-OVERRIDE", [])),
+            ("UNION-KEY", "UNION-KEY", "entities", by_kind.get("UNION-KEY", [])),
+            ("HARD", "HARD", "attrs", by_kind.get("HARD", [])),
+            ("HARD (dependent_overwrites)", "HARD", "attrs", dependent)):
         if not rows:
-            print(f"          {kind}: none on this install")
+            print(f"          {label}: none on this install")
             continue
         checked = disagree = absent = 0
         why: dict[str, int] = {}                        # HARD: every miss, by reason
@@ -628,11 +646,11 @@ def check_cross_tool_agreement() -> None:
             # Every miss is printed BY REASON and the buckets sum to the population.
             for reason, n in sorted(why.items(), key=lambda kv: -kv[1]):
                 tag = "explained" if reason in EXPLAINED else "CHECKER"
-                print(f"          HARD not compared x{n} [{tag}]: {reason}")
+                print(f"          {label} not compared x{n} [{tag}]: {reason}")
             explained = sum(n for r, n in why.items() if r in EXPLAINED)
             unexplained = absent - explained
             mappable = len(rows) - explained
-            print(f"          HARD coverage: checked {checked} of {mappable} mappable "
+            print(f"          {label} coverage: checked {checked} of {mappable} mappable "
                   f"({len(rows)} total, {explained} explained out, {unexplained} unmapped "
                   f"by the checker; floor: unmapped <= {MAX_UNEXPLAINED_SHARE:.0%})")
             if mappable and unexplained > MAX_UNEXPLAINED_SHARE * mappable:
@@ -641,16 +659,16 @@ def check_cross_tool_agreement() -> None:
                 # it DID find is a finding, and a finding outranks a refusal: record the
                 # FAIL first, then the floor refusal beside it (release review 2026-09-26).
                 if disagree:
-                    note(False, "HARD: compat winner is the store's origin", detail)
-                not_run("HARD: compat winner is the store's origin",
+                    note(False, f"{label}: compat winner is the store's origin", detail)
+                not_run(f"{label}: compat winner is the store's origin",
                         f"{detail}; {unexplained} of {mappable} mappable rows unmapped by the "
                         f"checker, over the {MAX_UNEXPLAINED_SHARE:.0%} floor")
                 continue
         if not checked:
             # 0 of N is a non-answer: every row was unmappable, so nothing agreed.
-            not_run(f"{kind}: compat winner is the store's origin", detail)
+            not_run(f"{label}: compat winner is the store's origin", detail)
             continue
-        note(disagree == 0, f"{kind}: compat winner is the store's origin", detail)
+        note(disagree == 0, f"{label}: compat winner is the store's origin", detail)
 
     # --- SUBTREE: the winner is the WIPER; the VICTIM must be gone -----------
     subs = by_kind.get("SUBTREE", [])
