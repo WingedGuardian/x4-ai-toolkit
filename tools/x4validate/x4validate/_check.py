@@ -1168,6 +1168,21 @@ def _no_base_finding(vpath: str, config: _merge.Config) -> tuple[str, str, str]:
                     f"AFTER this mod and ships '{nested[1]}', but no base tree could be "
                     "built from that file (unreadable, or itself a <diff>), so this "
                     "patch's ops were not evaluated")
+        owner = next((p for p in config.overlays if p.name.lower() == nested[0].lower()), None)
+        if owner is not None and nested[0].lower() not in config.packed_dlc_names():
+            oroot = _merge.overlay_root(owner, nested[1], [])
+            if oroot is not None and oroot.tag == "diff":
+                # The path names a real file; it is the owner's PATCH of a file owned
+                # elsewhere, not a document of its own. MEASURED 2026-10-19 (engine log,
+                # 1 of 1 live, a doubly-nested `extensions/<mod>/extensions/<DLC>/...`):
+                # the engine never opened a nested patch of such a file, while it opened
+                # all 10 whose owner ships the file FULL (F305). Depth 1 is INFERRED.
+                return ("error", "path",
+                        f"patch targets '{owner.name}'s copy of '{nested[1]}', but "
+                        f"'{owner.name}' ships that file as a <diff> (a patch of a file it "
+                        "does not own), and the engine never opens a nested patch of a "
+                        f"<diff> (MEASURED 2026-10-19) -- patch '{nested[1]}' at its own "
+                        "path instead; this patch can never apply")
     parts = vpath.split("/")
     if len(parts) > 1 and parts[0] == "extensions" and parts[1].lower().startswith("ego_dlc_"):
         dlc = parts[1]

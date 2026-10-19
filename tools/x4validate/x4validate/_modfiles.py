@@ -23,19 +23,36 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from x4validate import _cat
+from x4validate import _cat, _merge
 
 
 def logical_vpath(vpath: str, owner_folders: set[str]) -> str:
-    """Map a single-level mod-on-mod patch to the owner's logical document.
+    """Map a mod-on-mod patch ``extensions/<owner>/<V>`` to the owner's logical document V.
 
-    DLC paths and double nesting retain their identity; transitive nesting is
-    not engine-qualified. Shared by provenance enumeration and definition lookup.
+    Shared by provenance enumeration (`_effective.build_touch_map`) and x4validate's
+    entity-definition lookup. One level is stripped, and V must be a GAME vpath:
+
+    * ``extensions/<B>/<rel>`` -> ``<rel>`` (single nesting).
+    * ``extensions/<B>/extensions/<DLC>/<rel>`` -> ``extensions/<DLC>/<rel>`` (F305): B
+      ships a file at a DLC vpath and this patches B's copy. MEASURED 2026-10-19 (engine
+      log, 171 active mods): the engine opened 10 of the 11 such files live, right after
+      B's own file -- every one whose B ships the file FULL; the 11th, over a B that ships
+      a <diff>, was not opened. Whether a file applies is `_merge.build_effective`'s
+      call (it applies a nested patch only over an owner supplying the file); this
+      function only decides WHICH document the file belongs to, so the merge of the DLC
+      vpath is handed every mod that might patch it. Keeping the literal key here (the
+      rule before F305) handed it none of them, and the store recorded B's values.
+    * ``extensions/<B>/extensions/<mod D>/<rel>`` keeps its literal key: a patch on B's
+      PATCH of D. No live instance (0 of 11) and no engine measurement, so it is not
+      reinterpreted. DLC paths of the game itself keep their identity too.
     """
     parts = vpath.replace("\\", "/").split("/")
     if (len(parts) >= 3 and parts[0].lower() == "extensions"
-            and parts[1].lower() in owner_folders and parts[2].lower() != "extensions"):
-        return "/".join(parts[2:])
+            and parts[1].lower() in owner_folders):
+        if parts[2].lower() != "extensions":
+            return "/".join(parts[2:])
+        if len(parts) >= 5 and _merge.is_dlc_folder(parts[3]):
+            return "/".join(parts[2:])
     return vpath
 
 
