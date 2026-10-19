@@ -576,7 +576,11 @@ def check_script_registry_scope() -> None:
 #: v3.3.1 and master code on the same 159-mod list, so the +2 is modlist drift (+5 groups from
 #: mods added since, -3 from mods removed); itemised in BLIND-SPOTS F33. Not vanilla-only:
 #: 35 of the 65 involve a mod, so this count moves with the modlist.
-_F33_ENTITY_GROUPS = 65     # duplicate (kind, name) -- 23 DISAGREED as of 2026-08-24 (63-group set; not re-measured). OPEN.
+#: RE-PINNED 2026-10-19 at 62: b88e425 code and v4.0 code, each building a store from the
+#: same 170-mod list, give the IDENTICAL 62-group set (same groups, same origins per group,
+#: 25,739 entities each), so the -3 is modlist drift, not the merge fixes; 32 of 62 involve
+#: a mod (was 35 of 65).
+_F33_ENTITY_GROUPS = 62    # duplicate (kind, name) -- 23 DISAGREED as of 2026-08-24 (63-group set; not re-measured). OPEN.
 _F33_ATTR_GROUPS = 0        # duplicate (entity_id, prop) -- FIXED, pinned at zero.
 
 
