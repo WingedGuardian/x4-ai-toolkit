@@ -4885,6 +4885,40 @@ class TestAShellWriteToAgentSettingsIsRefused(unittest.TestCase):
                 self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
 
 
+class TestH1AShellWriteToAHostTranscriptIsRefused(unittest.TestCase):
+    """H1 (v4.0 release review): the save guard reads the user's typed approvals from the host
+    transcript, so a shell line appended there forges one. Every shell write/append/copy/move ONTO
+    `.claude/projects/**.jsonl` or `.codex/sessions/**.jsonl` is refused. Added after CI run
+    39187589960: verify-hook-tests.py found this predicate probed by NO test in either direction."""
+    FACT = "writes_host_transcript"
+    T = "/srv/h/.claude/projects/C--work/0b1e.jsonl"
+    X = "/srv/h/.codex/sessions/2026/rollout-1.jsonl"
+
+    def test_every_write_primitive_onto_a_transcript_fires(self):
+        for p in (self.T, self.X):
+            for c in ("echo '{}' >> '" + p + "'", "echo x > '" + p + "'", "cp a.jsonl '" + p + "'",
+                      "mv a.jsonl '" + p + "'", "echo x | tee -a '" + p + "'",
+                      "sed -i s/a/b/ '" + p + "'"):
+                with self.subTest(c=c):
+                    self.assertTrue(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    # --- one falsification twin per clause ---
+    def test_TWIN_a_read_of_a_transcript_is_not_a_write(self):
+        """Clause: a WRITE."""
+        for c in ("cat '" + self.T + "'", "grep x '" + self.X + "'", "cp '" + self.T + "' /c/x/copy.jsonl"):
+            with self.subTest(c=c):
+                self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_TWIN_a_memory_note_or_a_jsonl_elsewhere_is_not_a_transcript(self):
+        """Clauses: under `.claude/projects` or `.codex/sessions`, and a `.jsonl`."""
+        for c in ("echo x >> '/srv/h/.claude/projects/C--work/memory/note.md'",
+                  "echo '{}' >> '/c/work/log.jsonl'",
+                  "echo '{}' >> '/srv/h/.claude/other/0b1e.jsonl'",
+                  "echo '{}' >> '/srv/h/.codex/config/x.jsonl'"):
+            with self.subTest(c=c):
+                self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
+
 # ======================================================================================
 # FX-G4 (v4.0.0 delta review, reviewers G and H). Each RED was reproduced end to end
 # through protect-bash.sh against scratch roots, with a deny control, before the fix.
