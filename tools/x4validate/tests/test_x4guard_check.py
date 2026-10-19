@@ -734,9 +734,13 @@ def test_H1_writes_to_a_host_transcript_are_refused_in_every_channel(sandbox):
     # Twins: a memory note in the same folder, and a .jsonl elsewhere.
     v = _check_in(env, tk, "--kind", "write", "--path", str(project / "memory" / "note.md"), "--command", "x")
     assert v["decision"] in ("allow", "advise"), v
+    # Not under tmp_path: on Linux that is /tmp/pytest-of-*, and the /tmp measurement-output
+    # rule denies there for its own reason (ubuntu CI run 39187589960), so the twin would test
+    # that rule instead of this one. Judged only -- nothing is written.
+    elsewhere = Path.home() / "x4-h1-twin" / "work" / "log.jsonl"
     v = _check_in(env, tk, "--kind", "shell", "--shell", "bash", "--command",
-                  "echo '{}' >> '" + (tmp / "work" / "log.jsonl").as_posix() + "'")
-    assert v["decision"] in ("allow", "advise"), v
+                  "echo '{}' >> '" + elsewhere.as_posix() + "'")
+    assert v["decision"] in ("allow", "advise") and not v["inert"], v
 
 
 def test_D1_personal_notes_at_the_root_are_writable_in_the_in_game_layout(sandbox):

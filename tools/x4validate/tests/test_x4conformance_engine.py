@@ -72,6 +72,36 @@ def test_a_missing_profile_file_is_a_profile_error(tmp_path):
         xc.load_profile(str(tmp_path / "nope.json"), REPO)
 
 
+def _shipped_hook_script(key):
+    """The script the SHIPPED Codex PreToolUse hook runs under `command` (POSIX) or
+    `commandWindows` -- what a real host executes, which conformance must replay."""
+    tmpl = json.loads((REPO / "agent/targets/codex/hooks.json.tmpl").read_text(encoding="utf-8"))
+    (hook,) = [h for g in tmpl["hooks"]["PreToolUse"] for h in g["hooks"]]
+    return next(w for w in hook[key].replace("\\", "/").replace('"', " ").split() if "codex-entry." in w).rsplit("/", 1)[1]
+
+
+@pytest.mark.parametrize("posix,key", [(True, "command"), (False, "commandWindows")])
+def test_codex_conformance_runs_the_entry_the_host_runs_on_each_os(posix, key):
+    """ubuntu CI run 39187589960: the profile ran codex-entry.ps1 under pwsh on Linux, a path no
+    host takes (hooks.json gives Linux codex-entry.sh), and since 8bdaa55 the .ps1's kernel32
+    P/Invoke made every case INERT there. Each OS replays its own production entry."""
+    argv = xc.profile_command(CODEX, posix=posix)
+    script = next(a for a in argv if "codex-entry." in a).rsplit("/", 1)[1]
+    assert script == _shipped_hook_script(key)
+
+
+def test_TWIN_a_profile_without_command_posix_uses_command_everywhere():
+    assert xc.profile_command(CLAUDE, posix=True) == xc.profile_command(CLAUDE, posix=False) == CLAUDE["command"]
+
+
+@pytest.mark.parametrize("bad", [[], "bash x", [1]])
+def test_a_malformed_command_posix_is_a_profile_error(tmp_path, bad):
+    p = _profile(); p["command_posix"] = bad
+    f = tmp_path / "p.json"; f.write_text(json.dumps(p), encoding="utf-8")
+    with pytest.raises(xc.ProfileError, match="command_posix"):
+        xc.load_profile(str(f), REPO)
+
+
 # --- decode: Codex shapes (the C4 contract), Claude shapes, text rules --------------------- #
 
 def _hso(**k):

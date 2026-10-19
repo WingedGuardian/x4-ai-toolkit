@@ -744,7 +744,21 @@ jobs:
           # MEASURED run 38306816644 at 46238fc: ubuntu 205 (as expected); windows 57, not
           # 56 -- the FX-H10 ownership control also cannot bite on the windows runner (+1),
           # every other row as itemised above. Windows ceiling set to 57 + 3 = 60.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '208' || '60' }}
+          # MEASURED run 39187589960 at 2955ebb, per job, every grouped skip compared with
+          # run 38483595938 at b88e425 (ubuntu 205, windows 57). Ubuntu 205 -> 327 (FAILED,
+          # 327 > 208); every +122 is a platform gate on a test added since b88e425:
+          #   +34 test_codex_execution_cwd   (Windows native cwd/drive/workdir cases)
+          #   +33 test_install_over_existing (no Windows PowerShell 5.1: 6 -> 39)
+          #   +20 test_codex_shell_option_context (Windows native execution-cwd contract)
+          #   +11 test_shared_save_policy    (provider/extended-drive/Git Bash/MSYS spellings)
+          #    +9 test_codex_adapter_mutants (native Windows entry chain, kernel32 since 8bdaa55)
+          #    +6 test_save_scope_compat     (Windows drive namespace parsing)
+          #    +4 test_codex_wrapper         (Windows PowerShell deadline/cancellation)
+          #    +3 conftest qa_sweep          (needs an X4 install: 12 -> 15, on BOTH legs)
+          #    +1 test_compat                (case-insensitive filesystem)
+          #    +1 test_bootstrap_scripts_are_portable (Windows PowerShell 5.1)
+          # Windows 57 -> 60 = the same +3 qa_sweep rows. Ceilings: measured + 3.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '330' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         run: uv run --frozen python -m pytest -q -rs

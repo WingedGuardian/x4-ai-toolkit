@@ -57,3 +57,16 @@ def test_directory_copy_source_spellings_follow_the_same_cwd_and_assignment_lane
     row = next(r for r in records if r["scope"] == "copy-destination")
     assert row["copy_sources"] == [{"path": "/Fixture/Workspace/Work/Input/Case.xml.gz", "unresolved": False}]
     assert row["path"] == "/Fixture/Saves/"
+
+
+def test_a_trailing_slash_survives_on_a_posix_host_too(monkeypatch):
+    """The POSIX branch of physical_join normalised `/Fixture/Saves/` to `/Fixture/Saves`
+    (ubuntu CI run 39187589960) while Windows kept it. Runs the POSIX branch on any host."""
+    monkeypatch.setattr(facts, "POSIX_HOST", True)
+    records = evidence('cp -- "Input/Case.xml.gz" "$X4_SAVES/"', roots={"saves": "/Fixture/Saves"})
+    row = next(r for r in records if r["scope"] == "copy-destination")
+    assert row["path"] == "/Fixture/Saves/"
+    assert facts.physical_join("/w", "a/b/", posix_bash=True) == "/w/a/b/"
+    assert facts.physical_join("/w", "/", posix_bash=True) == "/"
+    # TWIN: no slash written, none invented
+    assert facts.physical_join("/w", "/Fixture/Saves", posix_bash=True) == "/Fixture/Saves"

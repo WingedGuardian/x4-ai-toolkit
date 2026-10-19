@@ -287,10 +287,18 @@ def physical_join(cwd: str, path: str, *, posix_bash: bool = False) -> str:
         if not path:
             return cwd
         if posixpath.isabs(path):
-            return posixpath.normpath(path)
-        if not cwd or not posixpath.isabs(cwd):
+            joined = posixpath.normpath(path)
+        elif not cwd or not posixpath.isabs(cwd):
             return ""
-        return posixpath.normpath(cwd + "/" + path)
+        else:
+            joined = posixpath.normpath(cwd + "/" + path)
+        # normpath drops a trailing `/`; the Windows branch keeps it, so evidence for
+        # `cp f "$X4_SAVES/"` differed by host (ubuntu CI run 39187589960,
+        # test_save_provenance). save_policy decides a directory destination by is_dir(), so
+        # this is spelling parity -- the row says what the command wrote, on every host.
+        if path.endswith("/") and not joined.endswith("/"):
+            joined += "/"
+        return joined
     def provider_file(value):
         if not value:
             return value

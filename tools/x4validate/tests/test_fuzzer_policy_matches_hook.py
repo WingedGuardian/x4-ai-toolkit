@@ -47,7 +47,16 @@ def test_no_predicate_is_silently_unfuzzed():
     policy = m.policy_map(names)
     # `from_powershell` is a LABEL, not a rule: protect-bash.sh uses it to say the quoted
     # command is a translation of the PowerShell the caller typed (AUDIT-2026-09-24 HK-1).
-    METADATA = {"command", "cwd", "timeout", "background", "from_powershell"}
+    # `save_lift_blockers` (K1, v4.0) is the SAVE BRIDGE's input, not a Bash rule: hook_facts
+    # pops it before the protect-bash.sh IPC and save_policy.py turns it into an opaque
+    # evidence row (pinned in test_shared_save_policy.py). The exemption holds only while
+    # that consumer exists -- asserted below, so a dead consumer cannot hide behind it.
+    BRIDGE = {"save_lift_blockers"}
+    save_policy = (m.HOOKS / "save_policy.py").read_text(encoding="utf-8")
+    for name in BRIDGE:
+        assert 'facts.get("%s")' % name in save_policy, (
+            "%s is exempt as save-bridge input, but save_policy.py no longer reads it" % name)
+    METADATA = {"command", "cwd", "timeout", "background", "from_powershell"} | BRIDGE
     unmapped = sorted(names - set(policy) - METADATA)
     assert not unmapped, (
         "these facts are computed but carry no verdict, so the fuzzer cannot test them "

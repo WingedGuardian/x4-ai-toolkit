@@ -89,8 +89,16 @@ def test_H4_a_rendering_of_a_SHIPPED_older_codex_template_upgrades(tmp_path, sou
 @pytest.mark.parametrize("edited", [False, True])
 def test_H6_an_UNEDITED_shipped_knowledgebase_is_not_preserved_as_notes(tmp_path, installer, edited):
     require_repo(".git", why="reads a released KNOWLEDGEBASE.md from a tag")
-    shipped = subprocess.check_output(["git", "-C", str(ROOT), "show", "v3.3.1:KNOWLEDGEBASE.md"])
-    assert shipped != (ROOT / "KNOWLEDGEBASE.md").read_bytes(), "the planted KB must DIFFER from the source's"
+    # v3.2.0, not v3.3.1: the source KB has been byte-identical to v3.3.0/v3.3.1 since 5e34431,
+    # so on an LF checkout (ubuntu CI run 39187589960) the v3.3.1 plant equalled the source and
+    # the precondition below failed; it passed on Windows only because autocrlf made the
+    # checkout's bytes differ. v3.2.0's KB is a different shipped row in
+    # scripts/shipped-instruction-hashes.txt (v3.0.0..v3.2.0), so the shipped-list path is
+    # what this exercises on every OS.
+    shipped = subprocess.check_output(["git", "-C", str(ROOT), "show", "v3.2.0:KNOWLEDGEBASE.md"])
+    source = (ROOT / "KNOWLEDGEBASE.md").read_bytes()
+    assert shipped.replace(b"\r\n", b"\n") != source.replace(b"\r\n", b"\n"), (
+        "the planted KB must DIFFER from the source's in CONTENT, not only in line endings")
     dest = _fresh(tmp_path)
     (dest / "KNOWLEDGEBASE.md").write_bytes(shipped + (b"\n## My own note\nkeep me\n" if edited else b""))
     r = _install(installer, tmp_path, dest, "--agent", "claude")

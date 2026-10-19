@@ -575,6 +575,10 @@ Field by field:
   in the profile anyway, written with `{PYTHON}` and `{TOOLKIT}`: an upstreamed profile is run by
   NAME, without `--`. The FIRST line conformance prints, `adapter: ...`, is the argv it really
   uses -- check it to see which one won.
+- `command_posix` (optional): the argv used INSTEAD of `command` on Linux/macOS, for an agent
+  whose host runs a different hook entry there. Codex's profile uses it because its hooks.json
+  runs `codex-entry.sh` off Windows and `codex-entry.ps1` only on Windows; replay what the host
+  really runs on each OS. `--` still replaces both.
 - `requires`: programs that must exist, or the run stops with exit 2.
 - `run_cwd`: `"neutral"` (the default, and what you want) runs your adapter in an EMPTY scratch
   folder, exactly like an agent that starts hooks somewhere unrelated. An adapter that ignores
