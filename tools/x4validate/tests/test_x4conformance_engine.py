@@ -217,6 +217,22 @@ def test_one_disagreement_is_1_and_names_the_item():
     assert rc == xc.RC_DISAGREE and "d0" in text
 
 
+@pytest.mark.parametrize("reference,adapter,text,rc", [
+    ("advise", "ask", "NEEDS YOUR APPROVAL: " + xc.BACKUP_ONLY + ": a read-only check", xc.RC_OK),
+    ("allow", "ask", xc.BACKUP_ONLY, xc.RC_OK),
+    # Twins: only the STRICTER direction, and only with the read-only check's own reason.
+    ("advise", "ask", "some other ask", xc.RC_DISAGREE),
+    ("ask", "allow", xc.BACKUP_ONLY, xc.RC_DISAGREE),
+    ("deny", "ask", xc.BACKUP_ONLY, xc.RC_DISAGREE),
+])
+def test_K3_a_read_only_check_may_ask_where_the_native_hook_backs_a_save_up(reference, adapter, text, rc):
+    """K3: `x4guard check` cannot preserve a save, so it asks where the native hook backs up and
+    allows. An adapter built on it diverges there, stricter, and only there."""
+    rows = _res(1) + [{"label": "s0", "kind": "shell-bash", "reference": reference, "adapter": adapter,
+                       "text": text}]
+    assert xc.summarise(rows, n_total=2, buckets={"replayed": 2}, gaps={}, min_cases=1)[0] == rc
+
+
 def test_buckets_that_do_not_sum_to_the_total_are_an_engine_error():
     with pytest.raises(AssertionError):
         xc.summarise(_res(3), n_total=5, buckets={"replayed": 3}, gaps={}, min_cases=1)
