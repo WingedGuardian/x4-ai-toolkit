@@ -12,6 +12,11 @@
     "{TOOLKIT}/.codex/hooks/codex-entry.ps1",
     "pre_tool_use"
   ],
+  "command_posix": [
+    "{BASH}",
+    "{TOOLKIT}/.codex/hooks/codex-entry.sh",
+    "pre_tool_use"
+  ],
   "requires": [
     "pwsh",
     "bash",

@@ -30,6 +30,8 @@ Exit codes:
 
 Profile format v1 (scripts/conformance-profiles/<name>.json; ADAPTING.md explains each field):
   v: 1;  agent: name;  command: [argv...] with {TOOLKIT} {HOOKS} {PYTHON} {BASH} {PWSH} {HOOK};
+  command_posix: [argv...] (optional) used INSTEAD of command off Windows -- for an agent whose
+  host runs a different hook entry there (Codex: codex-entry.sh, not the Windows-only .ps1);
   requires: [programs];  run_cwd: "neutral" (an empty scratch dir; default) | "case" (the row's
   cwd);  timeout_s;  env: {VAR: value};
   cases: {KIND: {payload: FILE relative to the profile | "row", set: {json-pointer: template},
@@ -108,6 +110,9 @@ def load_profile(spec: str, root: Path) -> dict:
     for k, c in cases.items():
         if not isinstance(c, dict) or "payload" not in c:
             raise ProfileError(f"profile {path}: cases.{k} needs a \"payload\"")
+    cp = prof.get("command_posix")
+    if cp is not None and not (isinstance(cp, list) and cp and all(isinstance(x, str) for x in cp)):
+        raise ProfileError(f"profile {path}: command_posix must be a non-empty list of strings")
     out = prof.get("output")
     if not isinstance(out, dict) or out.get("format") not in ("json", "text") or not isinstance(out.get("rules"), list):
         raise ProfileError(f"profile {path}: output needs format \"json\"|\"text\" and a rules list")
@@ -565,8 +570,20 @@ def _expand(s: str, ph: dict) -> str:
     return re.sub(r"(?<!\{)\{(TOOLKIT|HOOKS|PYTHON|BASH|PWSH|HOOK)\}(?!\})", sub, s)
 
 
+def profile_command(profile: dict, *, posix=None):
+    """The profile's own argv for THIS host: `command_posix` off Windows when the profile has
+    one, else `command`. Codex runs `codex-entry.sh` on Linux/macOS and the .ps1 only on
+    Windows (agent/targets/codex/hooks.json.tmpl `command` vs `commandWindows`); the .ps1 starts
+    its adapter through kernel32 P/Invoke since 8bdaa55, so pwsh on Linux answered INERT for
+    every case (ubuntu CI run 39187589960). `posix` defaults to this host; tests pass it."""
+    posix = os.name != "nt" if posix is None else posix
+    if posix and profile.get("command_posix"):
+        return profile["command_posix"]
+    return profile.get("command")
+
+
 def adapter_command(profile: dict, argv, root: Path, row=None) -> list:
-    cmd = list(argv) if argv else profile.get("command")
+    cmd = list(argv) if argv else profile_command(profile)
     if not cmd:
         raise ProfileError("no adapter command: the profile has no \"command\" and none was given after --")
     ph = _placeholders(root, row)
@@ -731,7 +748,7 @@ def main(argv=None) -> int:
         prof = load_profile(a.profile, root)
     except ProfileError as e:
         return refuse(str(e))
-    if not (adapter_argv or prof.get("command")):
+    if not (adapter_argv or profile_command(prof)):
         return refuse("no adapter command: the profile has no \"command\" and none was given after --")
     if not (root / ".claude" / "hooks").is_dir():
         return refuse(f"{root / '.claude' / 'hooks'} is missing: the reference guards cannot run")
