@@ -111,23 +111,24 @@ def build_touch_map(ordered: list[tuple[dict, Path]]) -> dict[str, list[tuple[st
     the patcher's key minted a phantom duplicate entity at a vpath the game does
     not have. DLC-nested paths (``extensions/ego_dlc_*``) are NOT rewritten —
     those are genuine game vpaths, and ego_dlc folders never appear in *ordered*.
+
+    A DOUBLY-nested ``extensions/<owner>/extensions/<DLC>/<rel>`` (the owner ships a
+    file at a DLC vpath) is registered under ``extensions/<DLC>/<rel>`` (F305; the rule
+    and its engine evidence are in `_modfiles.logical_vpath`). It used to keep its
+    literal key, so the merge of the DLC vpath never saw the patcher and the store
+    kept the owner's values: 10 of 10 live files the engine opens. The reason given
+    then -- the rewrite "double-applied ebi_m0_vro (it ships BOTH the direct DLC patch
+    and the double-nested form)" -- was the toucher list naming a mod TWICE, so its
+    bare diff ran twice; `touchers_for` now hands each mod over once.
     """
     folders = {mod["folder"].lower() for mod, _ in ordered}
     touch: dict[str, list[tuple[str, str]]] = {}
     for mod, path in ordered:
+        own = mod["folder"].lower()
         for low, real in _compat._mod_xml_paths(path).items():
             parts = low.split("/")
-            if (len(parts) >= 3 and parts[0] == "extensions"
-                    and parts[1] in folders
-                    and parts[1] != mod["folder"].lower()
-                    # SINGLE-level nesting only. A double-nested file —
-                    # extensions/<modA>/extensions/<dlc-or-mod>/<rel> — is a patch
-                    # on another mod's PATCH FILE, and whether the engine applies
-                    # that transitively is not engine-proven. Rewriting it onto the
-                    # inner vpath double-applied ebi_m0_vro (it ships BOTH the
-                    # direct DLC patch and the double-nested form) and flipped six
-                    # entity origins. Unproven == keep the old behavior.
-                    and parts[2] != "extensions"):
+            # A mod nesting under its OWN folder is not a patch on another mod.
+            if len(parts) >= 3 and parts[1] != own:
                 low = _modfiles.logical_vpath(low, folders)
             touch.setdefault(low, []).append((mod["folder"], real))
     return touch
@@ -426,7 +427,18 @@ def component_vpaths(config: _merge.Config, touch: dict[str, list[tuple[str, str
 
 def touchers_for(vpath: str, touch: dict[str, list[tuple[str, str]]],
                  folder_to_path: dict[str, Path]) -> list[Path]:
-    return [folder_to_path[f] for f, _ in touch.get(vpath.lower(), []) if f in folder_to_path]
+    """The overlay ROOTS that touch *vpath*, in load order, each ONCE.
+
+    A mod shipping two files that map to one document (a bare DLC patch AND a
+    doubly-nested one, F305) appears twice in the touch map. The merge takes overlay
+    ROOTS and finds each of a root's files itself, so a root listed twice had its
+    files applied twice."""
+    out: list[Path] = []
+    for f, _ in touch.get(vpath.lower(), []):
+        p = folder_to_path.get(f)
+        if p is not None and p not in out:
+            out.append(p)
+    return out
 
 
 # --- entity model -------------------------------------------------------------

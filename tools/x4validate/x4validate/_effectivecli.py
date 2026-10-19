@@ -820,10 +820,13 @@ def logical_vpath(vpath: str, mod_folders: set[str],
     disk with no engine meaning -- the document the engine builds is
     ``md/morerooms.xml``. That asymmetry is the engine's, not ours.
 
-    **Why double-nested is excluded.** It mirrors ``build_touch_map``, which
-    refuses ``extensions/<modA>/extensions/<x>/<rel>`` because whether the engine
-    applies a patch-on-a-patch transitively is not engine-proven. Resolving it here
-    would let the CLI answer a question the merge model declines to answer.
+    **Double nesting mirrors ``build_touch_map`` (F305).** ``extensions/<modA>/
+    extensions/<DLC>/<rel>`` -- modA ships a file at a DLC vpath and this patches
+    modA's copy -- maps to ``extensions/<DLC>/<rel>``, the document the store keys it
+    under (engine-opened, MEASURED 2026-10-19; see `_modfiles.logical_vpath`). With a
+    MOD, or a folder that is not a known DLC, in the inner position it is still
+    refused: that shape is unmeasured, and resolving it here would let the CLI answer
+    a question the merge model declines to answer.
 
     *dlc_folders* is asked of ``Config.dlc_dirs()``, never guessed from an
     ``ego_dlc_`` name prefix: a prefix test cannot notice a DLC being added, and
@@ -842,7 +845,8 @@ def logical_vpath(vpath: str, mod_folders: set[str],
     if folder not in {f.lower() for f in mod_folders}:
         return None
     if parts[2].lower() == "extensions":
-        return None
+        if len(parts) < 5 or parts[3].lower() not in {d.lower() for d in dlc_folders}:
+            return None
     return "/".join(parts[2:])
 
 

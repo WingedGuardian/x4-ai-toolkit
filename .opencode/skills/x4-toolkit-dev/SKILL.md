@@ -20,7 +20,7 @@ anyone changing them does.
 | **"is this mod installed / active / banned?"** | **`_registry.mods("active"\|"installed")`** — and for a ban, grep the profile by **MANIFEST ID** (a workshop mod is `ws_<numeric id>`), never by name | ✗ reading the profile `content.xml` as an inventory — it is a DECISION LOG: **287 of 348 entries are fossils**, **54 of 115 installed mods are absent**, and a name-shaped search finding nothing is the WRONG QUERY, not evidence (#30) |
 | **"scan EVERY installed mod for X"** (an ad-hoc corpus sweep) | **`_scan.iter_corpus_xml(ext, report)`** + **`CorpusScan.verdict(hits, noun)`** — it states the scanned set, so a zero is an ABSENCE and not a non-answer. | a hand-rolled loop over `extensions/` — loose-only, and silent about what it never opened |
 | **"every base+DLC vpath?"** | **`_effective.base_vpaths`** (loose THEN packed; `reference_vpaths` is its `assets/`-only filter) | ✗ `reference.rglob("*.xml")` — loose-only, so the two mini-DLC are invisible. Written **7 times**; now gated by `tests/test_no_loose_only_reference_walk.py` |
-| mutation-test code? | **`gates/mutation_probe.py`**, but ONLY the 9 `x4validate/_*.py` files it names -- it takes no target argument | hand-mutating anything else (gates, hooks) without clearing `__pycache__`: a same-length mutant restored within one SECOND leaves its BYTECODE behind |
+| mutation-test code? | **`gates/mutation_probe.py`**, but ONLY the 10 `x4validate/_*.py` files it names -- it takes no target argument | hand-mutating anything else (gates, hooks) without clearing `__pycache__`: a same-length mutant restored within one SECOND leaves its BYTECODE behind |
 
 # Core Principle: A Step That Narrows Data MUST Announce It
 

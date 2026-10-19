@@ -32,13 +32,25 @@ def test_a_mod_nesting_under_its_OWN_folder_is_not_rewritten(tmp_path):
     assert "libraries/w.xml" not in t
 
 
-def test_a_DOUBLE_nested_patch_is_not_rewritten_onto_the_inner_vpath(tmp_path):
-    """E2: `extensions/<modB>/extensions/<x>/<rel>` patches modB's PATCH FILE; it is
-    not transitively rewritten to `extensions/<x>/<rel>`."""
-    lit = "extensions/b/extensions/ego_dlc_x/libraries/w.xml"
-    t = _touch(tmp_path, {"a": [lit], "b": ["libraries/o.xml"]})
+def test_a_DOUBLE_nested_patch_on_a_MOD_inner_is_not_rewritten(tmp_path):
+    """E2: `extensions/<modB>/extensions/<modD>/<rel>` patches modB's PATCH of modD;
+    unmeasured, so it is not transitively rewritten to `extensions/<modD>/<rel>`.
+    (Under a DLC the same shape IS rewritten since F305 -- see
+    tests/test_double_nested_dlc_patch.py.)"""
+    lit = "extensions/b/extensions/d/libraries/w.xml"
+    t = _touch(tmp_path, {"a": [lit], "b": ["libraries/o.xml"], "d": ["libraries/w.xml"]})
     assert lit in t
-    assert "extensions/ego_dlc_x/libraries/w.xml" not in t
+    assert [f for f, _ in t["libraries/w.xml"]] == ["d"], t
+    assert "extensions/d/libraries/w.xml" not in t
+
+
+def test_a_DOUBLE_nested_patch_under_a_DLC_is_filed_under_the_DLC_vpath(tmp_path):
+    """F305: modB ships a file at a DLC vpath; the patch of modB's copy belongs to that
+    DLC document (the engine opens it right after modB's file, MEASURED 2026-10-19)."""
+    lit = "extensions/b/extensions/ego_dlc_x/libraries/w.xml"
+    t = _touch(tmp_path, {"a": [lit], "b": ["extensions/ego_dlc_x/libraries/w.xml"]})
+    assert lit not in t
+    assert [f for f, _ in t["extensions/ego_dlc_x/libraries/w.xml"]] == ["a", "b"], t
 
 
 def test_nesting_under_a_folder_that_is_NOT_an_installed_mod_is_not_rewritten(tmp_path):

@@ -76,14 +76,27 @@ def test_twin_unknown_folder_is_not_rewritten():
 
 
 def test_twin_double_nested_is_not_rewritten():
-    """Clause 5: parts[2] != 'extensions'.
+    """Clause 5: parts[2] != 'extensions', unless the inner folder is a known DLC.
 
-    Mirrors `_effective.build_touch_map`, which refuses the same shape because
-    whether the engine applies a patch-on-a-patch transitively is NOT engine-proven.
+    Mirrors `_effective.build_touch_map`, which keeps the same shape literal when the
+    inner folder is not a DLC: a patch on another mod's patch is NOT engine-measured.
     Diverging here would make the CLI answer a question the merge model refuses.
     """
     assert _effectivecli.logical_vpath(
         "extensions/moreroomsforships/extensions/other/md/x.xml", MODS, DLC) is None
+
+
+def test_double_nested_under_a_DLC_maps_to_the_DLC_vpath():
+    """Clause 5's exception (F305): the mod ships a file at a DLC vpath and this
+    patches its copy -- the store keys it under the DLC vpath, so the CLI does too.
+    Twins: the DLC must be KNOWN (asked of dlc_dirs, not a prefix) and a rel must follow."""
+    assert _effectivecli.logical_vpath(
+        "extensions/moreroomsforships/extensions/ego_dlc_split/md/x.xml", MODS, DLC
+    ) == "extensions/ego_dlc_split/md/x.xml"
+    assert _effectivecli.logical_vpath(
+        "extensions/moreroomsforships/extensions/ego_dlc_boron/md/x.xml", MODS, DLC) is None
+    assert _effectivecli.logical_vpath(
+        "extensions/moreroomsforships/extensions/ego_dlc_split", MODS, DLC) is None
 
 
 # --- normalisation ------------------------------------------------------------
