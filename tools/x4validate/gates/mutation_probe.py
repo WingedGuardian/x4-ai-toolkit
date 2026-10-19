@@ -82,7 +82,8 @@ TARGETS: dict[str, list[str]] = {
                      "tests/test_mod_scope_is_explicit.py",
                      "tests/test_profile_is_a_decision_log.py",
                      "tests/test_active_scope_engine_rules.py"],
-    "_compat.py": ["tests/test_compat.py", "tests/test_compat_dropped.py"],
+    "_compat.py": ["tests/test_compat.py", "tests/test_compat_dropped.py",
+                   "tests/test_compat_dependency_patch.py"],
     "_check.py": ["tests/test_check.py", "tests/test_tierb.py",
                   "tests/test_reference_scope.py",
                   "tests/test_tierb_nested_later_target.py"],
@@ -172,6 +173,26 @@ MUTANTS = [
            'kind="NAME-CLASH", target=name, mods=folders, winner=folders[0],',
            "index/macros.xml decides a name clash, not load order; naming one is "
            "a guess wearing the grammar of a measurement"),
+    # --- _compat.py: the declared-dependency rule (issue #11, release review F7) -
+    Mutant("_compat.py", "dependent-overwrite split disabled",
+           "return _split_dependent(vpath, collisions, row_adders, depends, report, cand_folder)",
+           "return collisions  # mutant: no row is ever moved to dependent_overwrites",
+           "an overwrite of a declared dependency's added content stays a failing HARD "
+           "row: the user's 2026-10-18 rule is unenforced and nothing notices"),
+    Mutant("_compat.py", "one declared adder of several excuses the row (all -> any)",
+           "not all(a in declared for a in adders)",
+           "not any(a in declared for a in adders)",
+           "an overwriter declaring only ONE of a node's adders is reported advisory "
+           "against the adder it never declared"),
+    Mutant("_compat.py", "an id claimed by two folders binds to one of them",
+           "folder = next(iter(holders)) if len(holders) == 1 else None",
+           "folder = next(iter(holders)) if holders else None",
+           "a dependency on a duplicated id downgrades a row against whichever folder "
+           "the set yields first -- possibly not the one the engine binds"),
+    Mutant("_compat.py", "a dependency across the game/profile roots counts",
+           "and not _loadorder.crosses_isolated_roots(kind_of[folder],",
+           "and not 0 * _loadorder.crosses_isolated_roots(kind_of[folder],",
+           "a dependency the engine does not resolve (F141) excuses an overwrite"),
     # --- _check.py: the bare-vs-nested door (gotcha #6, F19) -------------------
     # Two call sites share the bare statement, so each anchor carries the line after
     # it (the 4-space form is a substring of the 8-space one; the next line differs).

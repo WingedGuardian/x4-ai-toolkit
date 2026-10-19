@@ -215,6 +215,9 @@ class DependentOverwrite:
     winner: str = ""
     removed_by: str = ""
     detail: str = ""
+    #: As `Collision.winner_qualified` -- False when no qualified live winner is claimed,
+    #: so a consumer re-checking this row (gates/cross_tool.py) does not invent one.
+    winner_qualified: bool = True
 
 
 @dataclass
@@ -1141,7 +1144,7 @@ def _split_dependent(vpath: str, collisions: list[Collision],
                 vpath, over[0], ", ".join(adders),
                 "optional" if any(declared[a] == "optional" for a in adders) else "required",
                 c.target, c.target_path, c.target_tree, c.removal_path, c.winner,
-                c.removed_by, c.detail))
+                c.removed_by, c.detail, c.winner_qualified))
     return kept
 
 
@@ -1890,20 +1893,34 @@ def _declared_dependencies(mods: list[dict]) -> dict[str, dict[str, str]]:
     An exact id first, then one equal ignoring case -- the same resolution as
     `_loadorder.compute_load_order`, which records a case-only match as UNMEASURED.
     Direct only: a dependency of a dependency is not followed. A manifest that will not
-    parse declares nothing here (load order already records it)."""
-    ids: dict[str, str] = {}
+    parse declares nothing here (load order already records it).
+
+    AMBIGUOUS OR UNRESOLVABLE = NOT DECLARED (release review F7). This map can only
+    DOWNGRADE a failing row, so it refuses rather than guesses:
+      * an id claimed by more than one folder (or, for a case-only match, more than one
+        folder matching ignoring case) binds to no folder here -- `_loadorder` records
+        the clash ("the later one wins"), and which copy the engine binds is not
+        modelled consistently enough to excuse an overwrite against either;
+      * a dependency crossing the game <-> profile extensions roots does not resolve in
+        the engine (BLIND-SPOTS F141, `_loadorder.crosses_isolated_roots`), so it is
+        not a declaration the engine honours."""
+    claims: dict[str, set[str]] = defaultdict(set)
+    claims_lower: dict[str, set[str]] = defaultdict(set)
+    kind_of = {m["folder"]: _loadorder.root_kind(m) for m in mods}
     for m in mods:
-        ids.setdefault(m.get("id") or _loadorder.mod_dependencies(Path(m["path"]))[0],
-                       m["folder"])
-    by_lower: dict[str, str] = {}
-    for mod_id, folder in ids.items():
-        by_lower.setdefault(mod_id.lower(), folder)
+        mod_id = m.get("id") or _loadorder.mod_dependencies(Path(m["path"]))[0]
+        if mod_id:
+            claims[mod_id].add(m["folder"])
+            claims_lower[mod_id.lower()].add(m["folder"])
     out: dict[str, dict[str, str]] = {}
     for m in mods:
         _mid, deps = _loadorder.mod_dependencies(Path(m["path"]))
         for dep_id, optional in deps:
-            folder = ids.get(dep_id) or by_lower.get(dep_id.lower())
-            if folder and folder != m["folder"]:
+            holders = claims.get(dep_id) or claims_lower.get(dep_id.lower()) or set()
+            folder = next(iter(holders)) if len(holders) == 1 else None
+            if (folder and folder != m["folder"]
+                    and not _loadorder.crosses_isolated_roots(kind_of[folder],
+                                                              kind_of[m["folder"]])):
                 kind = "optional" if optional else "required"
                 mine = out.setdefault(m["folder"], {})
                 if mine.get(folder) != "required":

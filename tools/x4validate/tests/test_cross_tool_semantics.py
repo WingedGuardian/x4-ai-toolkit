@@ -561,3 +561,55 @@ def test_FXH8_TWIN_an_INACTIVE_owner_and_a_0_node_target_stay_UNRESOLVED(
     assert "checked 1 of 3 mappable" in out, out
     assert any(x.startswith("HARD:") for x in ct.cannot), (ct.cannot, out)
     assert not ct.failures, ct.failures
+
+
+def _dependent_run(monkeypatch, tmp_path, winner, qualified=True):
+    """The GT-5 positional world, with the row arriving as an ADVISORY
+    `DependentOverwrite` instead of a HARD collision (release review F7)."""
+    import types
+    from lxml import etree
+    from test_audit0924_gates import _store_k
+    from conftest import import_gate as _ig
+    from x4validate import _compat
+    vp = "libraries/wares.xml"
+    tree = etree.fromstring(b'<wares><ware id="ore"><price max="1"/></ware>'
+                            b'<ware id="silicon"><price max="2"/></ware></wares>')
+    run_dir = tmp_path / f"run-{winner}-{qualified}"
+    run_dir.mkdir()
+    db = _store_k(run_dir / "e.sqlite", [("ware", "ore", vp, "price.max", "1", "modA"),
+                                         ("ware", "silicon", vp, "price.max", "9", "modB")])
+    dep = _compat.DependentOverwrite(vp, "modB", "modA", "required", "/wares/ware[2]",
+                                     winner=winner, winner_qualified=qualified)
+    ct = _ig("cross_tool", module_level=False)
+    monkeypatch.setattr(ct, "failures", [])
+    monkeypatch.setattr(ct, "cannot", [])
+    monkeypatch.setattr(ct._env, "effective_db", lambda: db)
+    monkeypatch.setattr(ct._env, "extensions", lambda: tmp_path)
+    monkeypatch.setattr(ct._env, "stale_store_refusal", lambda db, who: None)
+    monkeypatch.setattr(ct._merge, "Config", lambda *a, **k: None)
+    monkeypatch.setattr(ct._registry, "mods", lambda *a, **k: [])
+    monkeypatch.setattr(ct._compat, "base_tree_for", lambda vp, f2p, cfg: tree)
+    monkeypatch.setattr(ct._compat, "analyze", lambda *a, **k: types.SimpleNamespace(
+        collisions=[], dependent_overwrites=[dep]))
+    ct.check_cross_tool_agreement()
+    return ct
+
+
+def test_a_DEPENDENT_OVERWRITE_row_is_cross_checked_and_can_go_red(tmp_path, monkeypatch, capsys):
+    """2,544 live advisory rows were never compared with the store, and the denominator
+    did not say so. They are HARD rows moved aside, so they get the HARD check."""
+    ct = _dependent_run(monkeypatch, tmp_path, "modB")
+    out = capsys.readouterr().out
+    assert not ct.failures and not ct.cannot, (ct.failures, ct.cannot, out)
+    assert "HARD (dependent_overwrites) coverage: checked 1 of 1" in out, out
+    ct = _dependent_run(monkeypatch, tmp_path, "modA")
+    assert any(f.startswith("HARD (dependent_overwrites):") for f in ct.failures), (
+        "modA owns ore, not silicon: the advisory row's winner disagrees with the store")
+
+
+def test_TWIN_an_unqualified_dependent_row_claims_no_owner(tmp_path, monkeypatch):
+    """`winner_qualified` travels with the advisory row: an unqualified winner is not
+    compared (it would be a confident wrong answer), and 0 checked is a non-answer."""
+    ct = _dependent_run(monkeypatch, tmp_path, "modA", qualified=False)
+    assert not ct.failures
+    assert any(c.startswith("HARD (dependent_overwrites):") for c in ct.cannot), ct.cannot

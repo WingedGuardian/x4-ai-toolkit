@@ -1561,6 +1561,15 @@ def check_parity(ctx: Ctx) -> list[Check]:
                     return UNKNOWN, ("cannot tell whether this root is a source checkout or an "
                                      "install: %s. Parity runs the generator only in a checkout"
                                      % why)
+                if state == "unknown":
+                    # F7 (v4.0.0 delta review): git could not answer AND the generator is
+                    # absent. Parity cannot run either way (N/A), but nothing measured that
+                    # this is an install -- so do not say it is.
+                    return NA, ("whether this root is a source checkout or an installed toolkit "
+                                "could not be determined: %s. Parity cannot run here either way: "
+                                "it needs the generator (tools/x4validate/scripts/"
+                                "gen-agent-trees.py), which is absent. The installed guards are "
+                                "checked by guards.selftest and %s.*" % (why, target))
                 if state != "checkout" or not gen.is_file():
                     return NA, ("this root IS an installed toolkit (not a source checkout, i.e. no .git tracking agent/: runtime-only), "
                                 "so no deploy relationship exists here -- parity checks a tree "

@@ -1547,6 +1547,41 @@ def test_Ma_parity_on_a_root_whose_git_cannot_answer_is_UNKNOWN(tmp_path, commit
         assert "git could not read" in row["detail"], row
 
 
+
+@pytest.mark.parametrize("commit", [False, True])
+def test_Ma_parity_WITHOUT_the_generator_does_not_overclaim_an_install(tmp_path, commit):
+    """Release review F7: with NO generator, parity is N/A either way (it cannot run). But
+    when git could not answer, the old text still said "this root IS an installed
+    toolkit" -- a claim nothing measured. It must say the status could not be determined,
+    and why. TWIN (commit=True): git answers "no agent/ in HEAD" -- an install, and the
+    install wording stays."""
+    b = _tree(tmp_path / "B", dict(_CLAUDE, **{"tools/x4validate/x4validate/_paths.py": "#\n"}))
+    (b / "scripts").mkdir()
+    for name in ("x4doctor.py", "toolkit_layout.py"):
+        shutil.copy2(REPO / "scripts" / name, b / "scripts" / name)
+    subprocess.run(["git", "init", "-q", str(b)], check=True, capture_output=True)
+    if commit:
+        (b / "readme.txt").write_text("x", encoding="utf-8")
+        subprocess.run(["git", "-C", str(b), "add", "readme.txt"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(b), "-c", "user.name=t", "-c", "user.email=t@t",
+                        "-c", "commit.gpgsign=false", "commit", "-q", "-m", "i"],
+                       check=True, capture_output=True)
+    env = {k: v for k, v in os.environ.items() if k not in _LEAKY}
+    env.update(X4_CONFIG="", X4_REFERENCE="", PYTHONDONTWRITEBYTECODE="1")
+    env.pop("X4_TOOLKIT", None)
+    r = subprocess.run([sys.executable, str(b / "scripts" / "x4doctor.py"), "--root", str(b),
+                        "--agent", "claude", "--json"], capture_output=True, text=True, env=env,
+                       timeout=300)
+    row = {c["id"]: c for c in json.loads(r.stdout)["checks"]}["parity.claude"]
+    assert row["status"] == "N/A", row
+    if commit:
+        assert "IS an installed toolkit" in row["detail"], row
+    else:
+        assert "IS an installed toolkit" not in row["detail"], row
+        assert "could not be determined" in row["detail"], row
+        assert "git could not read" in row["detail"], row
+        assert "gen-agent-trees.py" in row["detail"], row
+
 # --- cosmetic (install red-team 2026-10-04): the targets line of a claude+codex install ---- #
 
 def test_targets_line_does_not_list_generic_for_a_codex_install(tmp_path):
