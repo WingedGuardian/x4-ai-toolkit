@@ -392,7 +392,13 @@ class TestPS4ProviderAndPrefixedPaths(_PSE2E):
         for sp in self.spellings(self.G):
             cases.append(("deny", "Remove-Item -Recurse -Force '" + sp + "'"))
         for sp in self.spellings(self.S):
-            cases.append(("advise", "Remove-Item -LiteralPath '" + sp + BS + "a.xml.gz'"))
+            # Off Windows a `\\?\` / `\\.\` device prefix is a Windows anchor that names nothing
+            # on the POSIX host, so the save evidence is ForeignPath (save_policy.native_text,
+            # LINUX GAP 3d5dee4): unresolved, no backup, no lift -- the profile ASK stands.
+            # MEASURED with hook_facts.POSIX_HOST injected; ubuntu CI run 39187589960 got ask.
+            foreign = os.name != "nt" and sp.startswith(BS + BS)
+            cases.append(("ask" if foreign else "advise",
+                          "Remove-Item -LiteralPath '" + sp + BS + "a.xml.gz'"))
         self.expect(cases)
 
     def test_in_a_nested_bash_carrier_too(self):
@@ -443,8 +449,11 @@ class TestPS6OtherWritingCmdlets(_PSE2E):
             ("deny", "New-Item " + f + " -Force"),
             # Set-Acl exists only in Windows PowerShell's security module: elsewhere the
             # static binder cannot bind its positional path, and the translator fails CLOSED
-            # (ask) -- on a platform where the cmdlet cannot run at all (CI ubuntu, v3.3.0).
-            ("deny" if os.name == "nt" else "ask", "Set-Acl " + f + " -AclObject $a"),
+            # -- on a platform where the cmdlet cannot run at all (CI ubuntu). v3.3.0 asked;
+            # since the synchronous save dispatcher (64df0c5) an untranslated PowerShell
+            # command is refused before protect-bash.sh's ask (save_policy.ScopeError), the
+            # same refusal an unknown mutating cmdlet gets (ubuntu CI run 39187589960: deny).
+            ("deny" if os.name == "nt" else "scope-refusal", "Set-Acl " + f + " -AclObject $a"),
             ("deny", "Start-Process git -RedirectStandardOutput '" + R + BS + "o.txt'"),
         ])
 
