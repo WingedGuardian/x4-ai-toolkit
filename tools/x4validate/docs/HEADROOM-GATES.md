@@ -1,10 +1,11 @@
 # Capped step-1 gates
 
-The 2026-10-07 takeover replaces blanket occupancy limits with the user's shared
-resource-budget headroom policy. The resource tool is external to this repository:
-40% total managed CPU, 8 GiB total managed memory, below-normal priority, at most
-eight workers. Leave 6 GiB available RAM, 8 GiB available commit and 150 GiB free
-on C:. Other output drives keep max(20 GiB, 5%). Estimate overruns warn; sustained
+The resource policy is the toolkit rule in `agent/instructions/core.md` (unified
+2026-10-19). On the maintainer's workstation an external resource tool enforces it:
+40% total managed CPU, 25% of RAM (8 GiB there) total managed memory, below-normal
+priority, at most eight workers. Admission leaves 20% of RAM and 15% of commit
+available; the system drive keeps min(pagefile, 50 GiB) free, other output drives
+min(5%, 50 GiB). User-directed runs and the game are exempt. Estimate overruns warn; sustained
 pressure throttles and blocks new batches; emergency floors stop only the job tree.
 The resource tool's `HEADROOM.md` specifies the sample windows and emergency floors.
 `scripts/run-gates.sh --all` explicitly passes `--workers=8` to historical hook
@@ -22,7 +23,7 @@ stopped `run-gates.sh --all` in QA. The resumed QA-through-XSD tail completed
 under a 7 GiB cap, with a 6.40 GiB job peak and 7.50 GiB minimum available RAM.
 Use `--cpu 40 --ram 7` for this full sweep on this corpus, subject to admission;
 the 4 GiB pytest budget does not establish QA's memory requirement. The policy
-still reserves 6 GiB available RAM and limits all managed jobs to 8 GiB total.
+still reserves 20% of RAM (6.4 GiB there) and limits all managed jobs to 25% (8 GiB).
 The completed tail passed all 13 remaining gates; prior baseline drift and an
 outdated load-order log remained failures/non-answers in the combined receipts.
 

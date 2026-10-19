@@ -180,11 +180,11 @@ evade this policy. Missing preservation or evaluation is a refusal, not permissi
   `DeleteFile`/`DeleteDirectory` with `SendToRecycleBin`; Linux: `gio trash`; macOS: Finder Trash).
   A permanent delete needs the user's OK for that deletion. Report what went and what failed.
   The guards judge a move to the trash exactly as a delete (same blocks and confirmations).
-- **Never saturate the machine.** Before any heavy job (full test suites, corpus builds, load
-  tests, parallel workers), measure what is already running and keep every resource — CPU, RAM,
-  free disk on each drive written to, GPU — at or under 80% of the total. If it would not fit:
-  wait, shrink it, or tell the user before starting. Use at most eight test workers; never
-  terminate another session's processes.
+- **Resources: limit work you start yourself** (test suites, corpus builds, load tests, parallel
+  agents): together at most 40% of CPU and 25% of RAM, low priority, at most eight test workers;
+  load probes idle and time-boxed. The game and work the user directs are exempt. Hard floor: the
+  system drive keeps min(pagefile, 50 GB) free, other drives min(5%, 50 GB). Raise a concern only
+  when a job could reach a floor; never terminate another session's processes.
 
 ### Iteration snapshots (standing process)
 Before experimenting on a working state, snapshot it to `.claude\backups\known-good-<name>\`.
