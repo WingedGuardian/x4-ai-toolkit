@@ -157,10 +157,14 @@ MUTANTS = [
      "test_a_QUOTED_marker_still_opens_a_heredoc"),
     ("noclobber >| is a redirect", r'_REDIR = re.compile(r"(\d?)>(\|?)(>?)")',
      r'_REDIR = re.compile(r"(\d?)>()(>?)")', "test_noclobber_override_is_a_truncate"),
+    # Re-anchored v4.0 (CI run 39187589960): copy_dests gained a `--` stop and judges a
+    # quoted -t too (the shell strips the quotes). Same clause: the -t destination lookup.
     ("cp/mv -t destination",
      'toks = tokens(seg)\n    for i, (t, quoted) in enumerate(toks):\n'
-     '        if not quoted and t in ("-t", "--target-directory"):',
+     '        if t == "--":\n            break\n'
+     '        if t in ("-t", "--target-directory"):',
      'toks = tokens(seg)\n    for i, (t, quoted) in enumerate(toks):\n'
+     '        if t == "--":\n            break\n'
      '        if False:',
      "test_dash_t_names_the_destination"),
     # Re-anchored 2026-09-06: B10 hoisted the name out (`name = _verb_name(t)`) so the
@@ -192,14 +196,15 @@ MUTANTS = [
      "test_a_FILTERED_find_is_scoped_and_does_not_fire"),
     # AUDIT-2026-09-24 HK-2: a filtered find-delete is SCOPED, not exempt ...
     ("a filtered find-delete still reaches the in-tree rules",
-     "        scoped_rm_t += prep(find_scoped_deletes(s), c_cwd, c_old)", "        pass",
+     "        scoped_rm_t += prep(find_scoped_deletes(s), c_cwd, c_old, operation=\"delete\", scope=\"filtered-tree\")",
+     "        pass",
      "test_every_save_by_filter_asks"),
     # ... except a regenerable-cache cleanup, which is why the exemption existed.
     ("a cache-only filter stays exempt",
      "    return [] if _only_regenerable(toks) else paths", "    return paths",
      "test_TWIN_a_pycache_cleanup_is_still_silent_everywhere"),
     ("truncate / dd of= are truncating writes",
-     "        redir_t += [(\"truncate\",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False)]",
+     "        redir_t += [(\"truncate\",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False, operation=\"write\")]",
      "        pass",
      "test_truncate_into_reference"),
     ("a find WITHOUT -delete is not", 'deletes = "-delete" in toks', "deletes = True",
@@ -249,8 +254,8 @@ MUTANTS = [
     # Re-anchored v3.3.0 (hooks lane): the heredoc list is now built as `extra`, so the
     # PowerShell-fed heredocs can join it. Same subject: the RAW command is walked.
     ("a heredoc BODY is data for the operand rules too",
-     "    all_cmds, carriers_truncated = carried_commands(body, extra)",
-     "    all_cmds, carriers_truncated = carried_commands(cmd, [])",
+     "    all_cmds, carriers_truncated = carried_commands(body, extra, dialects)",
+     "    all_cmds, carriers_truncated = carried_commands(cmd, [], dialects)",
      "test_a_delete_inside_a_heredoc_body_is_not_a_delete"),
     ("a comment keeps its newline, which is a separator",
      "            while i < len(s) and s[i] != \"\\n\":      # keep the newline: it is a separator",
@@ -314,7 +319,7 @@ MUTANTS = [
      "                if False:\n                    return True",
      "test_delete_of_a_root_env_var_by_name"),
     ("bash -c is parsed too",
-     "    all_cmds, carriers_truncated = carried_commands(body, extra)",
+     "    all_cmds, carriers_truncated = carried_commands(body, extra, dialects)",
      "    all_cmds, carriers_truncated = [body], False",
      "test_delete_inside_bash_c_is_seen"),
 
@@ -408,7 +413,7 @@ MUTANTS = [
      "                nxt = toks[i + 1]",
      "test_an_absolute_delete_under_exec"),
     ("a mv SOURCE that is a root is a delete",
-     '        mv_src += prep(move_sources(s), c_cwd, c_old)',
+     '        mv_src += prep(move_sources(s), c_cwd, c_old, operation="move")',
      '        mv_src += []',
      "test_moving_the_game_root_away"),
     ("mv keeps every operand but the LAST as a source",
@@ -616,8 +621,8 @@ MUTANTS = [
      "test_TWIN_a_message_that_reads_like_the_flag_is_not_the_flag"),
     # v4.0.0 review FX-P2: heredocs inside a carried command, and expanding heredoc bodies.
     ("FX-P2: a carried command's heredoc body is stripped",
-     "                          for p_ in _carrier_parts(i_)):",
-     "                          for p_ in [i_]):",
+     "                for inner in _carrier_parts(i_):",
+     "                for inner in [i_]:",
      "test_the_reported_commit_idiom_is_not_a_durable_write"),
     ("FX-P2: a shell inside the opener's substitution takes the body",
      "    return any(sink(sg) for c in cands for sg in segments(c))",
