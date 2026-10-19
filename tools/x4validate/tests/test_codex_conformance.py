@@ -138,8 +138,19 @@ def _extra_cases():
 
 
 @pytest.fixture
-def sandbox(tmp_path):
-    return make_sandbox(tmp_path)
+def sandbox():
+    """Under <repo>/.test-sandbox, never tmp_path: on Linux that is /tmp/pytest-of-*, where the
+    /tmp measurement-output rule denies a write for its own reason (ubuntu CI run 39269462240),
+    so an allow-expecting row would test that rule instead of the workdir contract."""
+    import tempfile
+    base = REPO / ".test-sandbox"
+    base.mkdir(exist_ok=True)
+    run = Path(tempfile.mkdtemp(prefix="codex-conf-", dir=base))
+    try:
+        yield make_sandbox(run)
+    finally:
+        # Same-run scratch this fixture created; nothing else is ever removed here.
+        shutil.rmtree(run, ignore_errors=True)
 
 
 def _fill(s: str, tmp: Path, tk: Path) -> str:
