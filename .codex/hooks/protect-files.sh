@@ -298,7 +298,12 @@ case "$_NP" in
     _nrel="${_NP##*/}"
     case "$_NP" in */.claude/claude.md) _nrel=".claude/claude.md" ;; esac
     x4_canon_memo "$FILE_PATH"; _nfc="$_X4_CANON_RESULT"
-    for _nr in "${X4_GAME:-}" "${X4_TOOLKIT:-}"; do
+    # KNOWLEDGEBASE.local.md only where it is READ: the toolkit root, or this hook tree's own
+    # project root (session-canary.sh reads $HOOK_DIR/../..) -- never X4_GAME as such (264828c:
+    # in the separate layout an agent wrote <game>/KNOWLEDGEBASE.local.md, which nothing reads).
+    _nr1="${X4_GAME:-}"; _nr2="${X4_TOOLKIT:-}"
+    [ "$_nrel" = "knowledgebase.local.md" ] && _nr1="$HOOK_DIR/../.."
+    for _nr in "$_nr1" "$_nr2"; do
       [ -n "$_nr" ] || continue
       x4_canon_memo "$_nr"
       [ "$_nfc" = "${_X4_CANON_RESULT%/}/$_nrel" ] && exit 0
@@ -370,7 +375,10 @@ fi
 # The reason ROUTES the agent (lane N, user decision N3): "work in your mod folder" alone
 # left a live Codex run with nowhere to put its notes (2026-10-03).
 _GR="${X4_GAME:-$X4_TOOLKIT}"; _GR="${_GR%[/\\]}"
-_GAME_DENY="BLOCKED: $FILE_PATH is in the game installation. Notes -> $_GR/X4-NOTES.md. Personal notes and preferences -> $_GR/KNOWLEDGEBASE.local.md. Game/engine facts -> $_GR/KNOWLEDGEBASE.md (x4lock keeps it read-only: python \"$X4_TOOLKIT/scripts/x4lock.py\" unlock \"$_GR/KNOWLEDGEBASE.md\", edit, then relock with x4lock.py lock). Mod files -> your mod folder (dev/ or X4_MODS), then deploy."
+# Notes route (v4.0 release review, IN-ARC 264828c): KNOWLEDGEBASE.local.md is read from the
+# TOOLKIT root (session-canary.sh, preferences.py, the OpenCode plugin, upgrade.py), so routing
+# it to X4_GAME sent an agent in the separate layout to write a file nothing reads.
+_GAME_DENY="BLOCKED: $FILE_PATH is in the game installation. Notes and personal preferences -> ${X4_TOOLKIT%[/\\]}/KNOWLEDGEBASE.local.md. Game/engine facts -> $_GR/KNOWLEDGEBASE.md (x4lock keeps it read-only: python \"$X4_TOOLKIT/scripts/x4lock.py\" unlock \"$_GR/KNOWLEDGEBASE.md\", edit, then relock with x4lock.py lock). Mod files -> your mod folder (dev/ or X4_MODS), then deploy. (Legacy notes file, still writable: $_GR/X4-NOTES.md.)"
 if [ -n "${X4_GAME:-}" ] && x4_under "$FILE_PATH" "$X4_GAME"; then
   deny "$_GAME_DENY"
 fi
