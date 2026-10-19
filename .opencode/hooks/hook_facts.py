@@ -838,13 +838,62 @@ def _ansi_c_decode(body: str) -> str:
     return ''.join(out)
 
 
+#: C1 (v4.0 release review): the dequoted text of every word whose UNQUOTED part holds a
+#: brace expansion (`save_00{0,1,2}.xml.gz`, `x{1..3}`, `{a,b}/c`). tokens() returns the
+#: word as written, so a rule reading it sees ONE literal path where bash runs the command on
+#: several: MEASURED, `rm <saves>/save_00{0,1,2}.xml.gz` reached the save bridge as one save
+#: that did not exist, was "backed up" as nothing, and lifted the profile ask. Filled by
+#: tokens() as a side channel (keyed by TEXT, so a quoted word spelled identically in the same
+#: command is caught too -- the fail-closed direction), cleared per facts() call; facts()
+#: marks such an operand's evidence row unresolved. A quoted `'{0,1}'` is a literal name and
+#: is not recorded.
+_BRACE_WORDS: set = set()
+_BRACE_SEQ = re.compile(r"^(-?[0-9]+|[A-Za-z])[.][.](-?[0-9]+|[A-Za-z])([.][.]-?[0-9]+)?$")
+
+
+def _has_brace_expansion(m: str) -> bool:
+    """Does `m` (a word with every QUOTED character replaced by NUL) hold a brace expansion
+    bash would perform: an unquoted `{` not opening `${`, its matching unquoted `}`, and
+    between them a top-level unquoted `,` or a `x..y` sequence? Over-matching only makes an
+    operand unresolved, which keeps the ask -- never the reverse."""
+    for i, c in enumerate(m):
+        if c != "{" or (i and m[i - 1] == "$"):
+            continue
+        depth = 0
+        for j in range(i, len(m)):
+            if m[j] == "{":
+                depth += 1
+            elif m[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    body, d2 = m[i + 1:j], 0
+                    for ch in body:
+                        d2 += (ch == "{") - (ch == "}")
+                        if ch == "," and d2 == 0:
+                            return True
+                    if _BRACE_SEQ.match(body):
+                        return True
+                    break
+    return False
+
+
 def tokens(seg: str) -> list[tuple[str, bool]]:
     """(text, was_quoted) per token. Quotes are stripped from the text; a
     backslash-escaped space JOINS, which is why `X4\\ Foundations` must stay one token
-    -- the bash tokeniser split it and the game-delete block stopped firing."""
+    -- the bash tokeniser split it and the game-delete block stopped firing.
+
+    A word whose unquoted part holds a brace expansion is recorded in _BRACE_WORDS (C1)."""
     out, buf, quoted, started = [], [], False, False
+    mbuf = []                               # buf with every quoted/escaped char as NUL
     q = ""
     i = 0
+
+    def emit():
+        text = "".join(buf)
+        if "{" in mbuf and _has_brace_expansion("".join(mbuf)):
+            _BRACE_WORDS.add(text)
+        out.append((text, quoted))
+
     while i < len(seg):
         c = seg[i]
         if q:
@@ -854,8 +903,10 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
                   and seg[i + 1] in _DQ_ESCAPES):
                 i += 1
                 buf.append(seg[i])
+                mbuf.append(chr(0))
             else:
                 buf.append(c)
+                mbuf.append(chr(0))
         elif c in "\"'":
             # ANSI-C / locale quoting: `$'rm'` and `$"rm"` are the word `rm`. The `$`
             # is a quoting SIGIL, not part of the name. Without this the token was
@@ -864,6 +915,7 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
             dollar = bool(buf) and buf[-1] == "$"
             if dollar:
                 buf.pop()
+                mbuf.pop()
             if dollar and c == chr(39):
                 # $'...' -- take the WHOLE run and decode it. Popping the sigil was
                 # only half the job: inside a single-quoted run this loop appends
@@ -879,7 +931,9 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
                         j += 1
                     body.append(seg[j])
                     j += 1
-                buf.append(_ansi_c_decode(''.join(body)))
+                dec = _ansi_c_decode(''.join(body))
+                buf.append(dec)
+                mbuf.extend(chr(0) * len(dec))
                 quoted = started = True
                 i = j + 1
                 continue
@@ -888,17 +942,20 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
         elif c == chr(92) and i + 1 < len(seg):
             i += 1
             buf.append(seg[i])          # \<space> joins; \x keeps x
+            mbuf.append(chr(0))         # an escaped `{` / `,` is literal (C1)
             started = True
         elif c.isspace():
             if started:
-                out.append(("".join(buf), quoted))
+                emit()
             buf, quoted, started = [], False, False
+            mbuf = []
         else:
             buf.append(c)
+            mbuf.append(c)
             started = True
         i += 1
     if started:
-        out.append(("".join(buf), quoted))
+        emit()
     return out
 
 
@@ -5034,6 +5091,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     background = inp.get("run_in_background", False)
     del _UNTRANSLATED[:]
     _WIN_DIALECT.clear()
+    _BRACE_WORDS.clear()                # C1: per call, like the two above
     _ps_spent[0] = 0.0                  # the translation budget is per hook call
 
     # THE POWERSHELL TOOL (AUDIT-2026-09-24 HK-1). It had no PreToolUse guard at all, so
@@ -5281,7 +5339,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                                              posix_bash=posix_bash)
                     row = {"operation": operation, "path": physical, "dialect": cur_dialect[0],
                                      "raw": r, "unresolved": unres or not physical or has_unresolved(physical)
-                                     or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical)),
+                                     or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical))
+                                     # C1: an unquoted brace-expanded word names SEVERAL paths
+                                     # (or none), never the one literal path written here.
+                                     or p in _BRACE_WORDS or r in _BRACE_WORDS,
                                      "scope": scope}
                     if copy_sources is not None:
                         sources = []
@@ -5290,7 +5351,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                                 resolved = subst_root_var(resolved, roots)
                                 placed = physical_join(physical_cwd, resolved, posix_bash=posix_bash)
                                 sources.append({"path": placed, "unresolved": not placed or has_unresolved(resolved)
-                                                or has_unresolved(placed) or bool(_DEBRIS.search(resolved))})
+                                                or has_unresolved(placed) or bool(_DEBRIS.search(resolved))
+                                                or source in _BRACE_WORDS or resolved in _BRACE_WORDS})
                         row["copy_sources"] = sources
                     evidence.append(row)
         return out

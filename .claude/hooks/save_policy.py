@@ -228,6 +228,13 @@ def resolve(root, roots, evidence, deadline=None):
         for candidate in candidates:
             candidate = native(candidate)
             affected.append((str(candidate), op))
+            if op in ("move", "delete") and not pattern and not os.path.lexists(candidate):
+                # C1 (v4.0 release review): a delete/move of a path that does not exist is not
+                # the command's real target -- it is a spelling this resolver could not expand
+                # (MEASURED: `rm <saves>/save_00{0,1,2}.xml.gz` arrived as ONE absent "save",
+                # backed up as nothing, and lifted the profile ask). Nothing absent can be
+                # preserved, so it withholds the lift exactly as an unresolved row does.
+                transparent = False
             if preservation.protects(candidate, [Path(root) / ".modding-agent-harness"], ancestor=op in ("move", "delete")):
                 problems.append("neutral harness state is protected")
             if preservation.protects(candidate, [store.root], ancestor=op in ("move", "delete")):

@@ -4919,6 +4919,57 @@ class TestH1AShellWriteToAHostTranscriptIsRefused(unittest.TestCase):
                 self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
 
 
+def _evidence(command, cwd=TOOLKIT):
+    ev = []
+    H.facts({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd}, ROOTS, evidence=ev)
+    return ev
+
+
+class TestC1BraceExpansionIsUnresolvedEvidence(unittest.TestCase):
+    """C1 (v4.0 release review): an unquoted brace word reached the save bridge as ONE literal
+    path -- `rm <saves>/save_00{0,1,2}.xml.gz` advised with 0 backups. Every evidence row from an
+    unquoted `{a,b}` / `{x..y}` word is unresolved; a quoted or escaped one is a literal name."""
+    S = PROF + "/save/"
+
+    def _rows(self, command):
+        return [r for r in _evidence(command) if r.get("operation") != "unmodelled"]
+
+    def test_unquoted_brace_rows_are_unresolved_in_every_verb_shape(self):
+        for c in (D + " " + self.S + "save_00{0,1,2}.xml.gz", D + " " + self.S + "s{0..2}.xml.gz",
+                  D + " -f " + self.S + "{a,b}.xml.gz", D + " " + self.S + "a.xml.gz{,}",
+                  "mv " + self.S + "s{0,1}.xml.gz /c/x", "printf '' | tee " + self.S + "s{0,1}.xml.gz",
+                  "cd '" + self.S + "' && " + D + " s{0,1}.xml.gz",
+                  "bash -c '" + D + " " + self.S + "s{0,1}.xml.gz'"):
+            with self.subTest(c=c):
+                rows = [r for r in self._rows(c) if "{" in r.get("raw", "")]
+                self.assertTrue(rows, c)
+                self.assertTrue(all(r["unresolved"] for r in rows), (c, rows))
+
+    def test_TWIN_quoted_escaped_or_parameter_braces_stay_literal(self):
+        """Clause: UNQUOTED, and a real brace expansion (a `,` or `..` inside, not `${`)."""
+        for c in (D + " '" + self.S + "s{0,1}.xml.gz'", D + ' "' + self.S + 's{0,1}.xml.gz"',
+                  D + " " + self.S + "s'{0,1}'.xml.gz", D + " " + self.S + "s" + BS + "{0,1" + BS + "}.xml.gz",
+                  D + " " + self.S + "s$'{0,1}'.xml.gz", D + " " + self.S + "s{0}.xml.gz",
+                  D + " " + self.S + "s{}.xml.gz", D + " " + self.S + "s{a.b}.xml.gz"):
+            with self.subTest(c=c):
+                rows = [r for r in self._rows(c) if "{" in r.get("raw", "")]
+                self.assertTrue(rows, c)
+                self.assertFalse(any(r["unresolved"] for r in rows), (c, rows))
+
+    def test_the_side_channel_is_cleared_per_call(self):
+        _evidence(D + " " + self.S + "s{0,1}.xml.gz")
+        rows = self._rows(D + " '" + self.S + "s{0,1}.xml.gz'")
+        self.assertFalse(any(r["unresolved"] for r in rows), rows)
+
+    def test_has_brace_expansion_grammar(self):
+        yes = ("a{b,c}", "{a,b}", "{1..3}", "{a..z}", "x{-1..2..1}", "{a,{b,c}}", "{,}")
+        no = ("a{b}", "${a,b}", "{}", "a{b.c}", "{a", "a}", "{1...3}", chr(0) + "a,b}")
+        for w in yes:
+            self.assertTrue(H._has_brace_expansion(w), w)
+        for w in no:
+            self.assertFalse(H._has_brace_expansion(w), w)
+
+
 # ======================================================================================
 # FX-G4 (v4.0.0 delta review, reviewers G and H). Each RED was reproduced end to end
 # through protect-bash.sh against scratch roots, with a deny control, before the fix.
