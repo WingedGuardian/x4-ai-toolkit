@@ -371,6 +371,11 @@ def _with_content(install):
     '; bash -c "$CMD"',                      # a carrier whose program is not text held here
     '; eval "$X"',
     '; bash ./cleanup.sh',                   # a script file
+    # I1: a carrier that also runs startup code its text never shows.
+    "; BASH_ENV=./e.sh bash -c 'true'",
+    '; env BASH_ENV=./e.sh bash -c true',
+    '; bash --rcfile ./e.sh -i -c true',
+    '; bash -lc true',
 ])
 def test_K1_one_backed_up_save_never_lifts_the_ask_for_what_the_backup_cannot_cover(install, tail):
     """K1 (v4.0 release review): the profile ask was lifted for the WHOLE command once its

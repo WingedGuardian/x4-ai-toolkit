@@ -5061,6 +5061,19 @@ _AGENT_SETTINGS = re.compile(r"(^|/)\.claude/settings[^/]*\.json$")
 _HOST_TRANSCRIPT = re.compile(r"(^|/)\.claude/projects/.*\.jsonl$|(^|/)\.codex/sessions/.*\.jsonl$")
 
 
+#: I1: a variable that makes a shell run code its `-c` text never shows (startup file, exported
+#: function, xtrace prompt, zsh's dot-dir), named ANYWHERE in the command -- a prefix, `env`,
+#: `export`/`declare`/a plain assignment, `printf -v`, PowerShell `$env:` (whose translation
+#: drops the assignment, so the raw PowerShell text is searched too). Case-sensitive for the
+#: shell text; the PowerShell form is case-insensitive, as Windows variables are.
+_SHELL_STARTUP_NAMES = r"BASH_ENV|ENV|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|ZDOTDIR|BASH_FUNC_[^\s=]*"
+_SHELL_STARTUP_SET = re.compile(r"(?<![A-Za-z0-9_])(?:" + _SHELL_STARTUP_NAMES + r")(?![A-Za-z0-9_])")
+_PS_STARTUP_SET = re.compile(r"\$env:(?:" + _SHELL_STARTUP_NAMES + r")(?![A-Za-z0-9_])|"
+                             r"(?<![A-Za-z0-9_$:])(?:BASH_ENV|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|"
+                             r"ZDOTDIR|BASH_FUNC_[^\s=]*)(?![A-Za-z0-9_])|[\"']ENV[\"']", re.IGNORECASE)
+_SHELL_STARTUP_ENV = [False]
+
+
 def _carries_program_text(seg: str) -> bool:
     """K1: is this segment a CARRIER whose program arrives as TEXT in the command (`bash -c`,
     `cmd /c`, `eval`, a PowerShell host's -Command/-EncodedCommand)? That text is walked as its
@@ -5073,14 +5086,32 @@ def _carries_program_text(seg: str) -> bool:
     if k is None:
         return False
     rest = toks[k + 1:]
+    # I1 (v4.0 release review): a carrier is transparent only when the TEXT is all it runs.
+    # A shell also runs STARTUP CODE that the text never shows -- MEASURED, each lifted the
+    # profile ask once one save qualified: `BASH_ENV=<f> bash -c '...'`, `env BASH_ENV=<f> bash
+    # -c true`, `bash --rcfile <f> -i -c true`, `bash -lc true`, PowerShell `$env:BASH_ENV=...;
+    # bash -c 'true'`. So: no startup-steering variable anywhere in the command, and bash/sh/
+    # dash/ksh with exactly a bare `-c` (zsh reads .zshenv from $ZDOTDIR/$HOME on EVERY run);
+    # cmd only with /d (AutoRun off); a PowerShell host only with -NoProfile.
+    if _SHELL_STARTUP_ENV[0]:
+        return False
     if v == "cmd":
-        return any(_CMD_RUN_SWITCH.fullmatch(t) or _CMD_KEEP_SWITCH.fullmatch(t) for t in rest)
+        switches = [t for t in rest[:next((i for i, t in enumerate(rest) if _CMD_RUN_SWITCH.fullmatch(t)
+                                           or _CMD_KEEP_SWITCH.fullmatch(t)), len(rest)) + 1]]
+        return (any(_CMD_RUN_SWITCH.fullmatch(t) or _CMD_KEEP_SWITCH.fullmatch(t) for t in rest)
+                and any(re.fullmatch(r"/{1,2}[dD]", t) for t in switches))
     if v in _SHELLS:
-        return any(_DASH_C.match(t) for t in rest)
+        return v != "zsh" and rest[:1] == ["-c"] and len(rest) > 1
     if v == "eval":
         return bool(rest)
     if v in _PS_EXES:
-        return _ps_host_payload(toks[k:])[0] in ("cmd", "encoded")
+        # Only a switch BEFORE the program text counts (`-Command x -NoProfile` is text).
+        head = rest[:next((i for i, t in enumerate(rest) if re.fullmatch(
+            r"[-/](c(o(m(m(a(n(d)?)?)?)?)?)?|ec|e(n(c(o(d(e(d(c(o(m(m(a(n(d)?)?)?)?)?)?)?)?)?)?)?)?)?|cwa|"
+            r"commandwitha(r(g(s)?)?)?)", t, re.I)), len(rest))]
+        no_profile = any(t[:1] in ("-", "/") and len(t) >= 4 and "noprofile".startswith(t[1:].lower())
+                         for t in head)
+        return no_profile and _ps_host_payload(toks[k:])[0] in ("cmd", "encoded")
     return False
 
 
@@ -5119,6 +5150,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _GIT_ENV_CONFIG[0] = bool(_GIT_CONFIG_ENV_SET.search(body)
                               or _GIT_CONFIG_ENV_SET.search(inp.get("command") or "")
                               or _GIT_HOME_SET.search(body))
+    # I1: a variable that steers a shell's startup code, named anywhere (see _carries_program_text).
+    _SHELL_STARTUP_ENV[0] = bool(_SHELL_STARTUP_SET.search(body) or _SHELL_STARTUP_SET.search(cmd)
+                                 or from_powershell and _PS_STARTUP_SET.search(inp.get("command") or ""))
     # Heredoc bodies come from the RAW command: strip_heredocs has already removed
     # them from `body`, and only the ones opened by a shell are commands at all.
     extra = [strip_comments(h) for h in heredoc_bodies(spliced)]

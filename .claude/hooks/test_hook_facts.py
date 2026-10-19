@@ -4970,6 +4970,53 @@ class TestC1BraceExpansionIsUnresolvedEvidence(unittest.TestCase):
             self.assertFalse(H._has_brace_expansion(w), w)
 
 
+def _blockers(command, tool="Bash"):
+    return H.facts({"tool_name": tool, "tool_input": {"command": command}, "cwd": TOOLKIT},
+                   ROOTS).get("save_lift_blockers") or []
+
+
+class TestI1ACarrierIsTransparentOnlyWhenItsTextIsAllItRuns(unittest.TestCase):
+    """I1 (v4.0 release review, 254ec43 `_carries_program_text`): the K1 carrier exemption lifted
+    the profile ask for shells that also run STARTUP code the text never shows. MEASURED E2E, each
+    advised with one backed-up save: `BASH_ENV=<f> bash -c '...'`, `env BASH_ENV=<f> bash -c true`,
+    `bash --rcfile x -i -c true`, `bash -lc true`, PowerShell `$env:BASH_ENV=...; bash -c 'true'`."""
+    SAVE = D + " '" + PROF + "/save/a.xml.gz'; "
+
+    def test_startup_steering_makes_the_carrier_a_blocker(self):
+        for tail in ("BASH_ENV=/srv/e.sh bash -c true", "env BASH_ENV=/srv/e.sh bash -c true",
+                     "export BASH_ENV=/srv/e.sh; bash -c true", "BASH_ENV=/srv/e.sh; bash -c true",
+                     "printf -v BASH_ENV %s /srv/e.sh; bash -c true", "ENV=/srv/e.sh sh -c true",
+                     "env 'BASH_FUNC_true%%=() { :; }' bash -c true", "SHELLOPTS=xtrace bash -c true",
+                     "PS4='$(true)' bash -xc true", "ZDOTDIR=/srv bash -c true",
+                     "bash -lc true", "bash -l -c true", "bash --login -c true", "bash -ic true",
+                     "bash --rcfile /srv/e.sh -i -c true", "bash --init-file /srv/e.sh -c true",
+                     "bash -e -c true", "zsh -c true",
+                     "cmd //c 'echo hi'", "powershell -Command 'Write-Output 1'",
+                     "pwsh -c 'Write-Output 1'", "powershell -Command 'x' -NoProfile"):
+            with self.subTest(tail=tail):
+                self.assertTrue(_blockers(self.SAVE + tail), tail)
+
+    def test_powershell_env_assignment_is_seen_although_its_translation_drops_it(self):
+        save = "Remove-Item -LiteralPath '" + PROF.replace("/", BS) + BS + "save" + BS + "a.xml.gz'; "
+        for tail in ("$env:BASH_ENV = '/srv/e.sh'; bash -c 'true'", "$Env:bash_env='x'; bash -c 'true'",
+                     "$env:ENV = 'x'; sh -c 'true'"):
+            with self.subTest(tail=tail):
+                self.assertTrue(_blockers(save + tail, "PowerShell"), tail)
+        self.assertFalse(_blockers(save + "bash -c 'true'", "PowerShell"))      # TWIN
+
+    def test_TWIN_each_clause_keeps_its_exemption_when_the_text_is_all_it_runs(self):
+        """The positive twin for every clause of _carries_program_text: bash/sh/dash/ksh with a
+        bare -c, eval, cmd with /d, a PowerShell host with -NoProfile (-Command / -nop -c /
+        -EncodedCommand), and an unrelated assignment in front."""
+        enc = "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAxAA=="       # Write-Output 1 (UTF-16LE)
+        for tail in ("bash -c true", "sh -c 'echo hi'", "dash -c true", "ksh -c true", "eval 'true'",
+                     "X=1 bash -c true", "env X=1 bash -c true", "cmd //d //c 'echo hi'", "cmd /d /c echo",
+                     "powershell -NoProfile -Command 'Write-Output 1'", "pwsh -nop -c 'Write-Output 1'",
+                     "powershell -NoProfile -EncodedCommand " + enc, "echo environment; bash -c true"):
+            with self.subTest(tail=tail):
+                self.assertEqual(_blockers(self.SAVE + tail), [], tail)
+
+
 # ======================================================================================
 # FX-G4 (v4.0.0 delta review, reviewers G and H). Each RED was reproduced end to end
 # through protect-bash.sh against scratch roots, with a deny control, before the fix.
