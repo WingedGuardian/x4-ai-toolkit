@@ -278,6 +278,69 @@ def _is_full_file(mod: Path, vpath: str) -> bool:
         return False
 
 
+def _union_file_keys(mod: Path, vpath: str) -> set[str]:
+    """The merge keys of one mod's COMPLETE t/ or index/ file, read independently of
+    x4compat: `page <id> t <id>` for a t-file (entries merge per (page, t)), and
+    `<tag>#<id or name>` of the root's children for index/ -- the identity x4compat's
+    `_child_keys` gives a union child. Raises on a file it cannot read."""
+    p = mod / vpath
+    if p.is_file():
+        root = etree.parse(str(p)).getroot()
+    else:
+        data = _cat.read_path(mod, vpath)
+        if data is None:
+            raise OSError(f"{vpath} not found in {mod.name}")
+        root = etree.fromstring(data)
+    keys: set[str] = set()
+    if vpath.lower().startswith("t/"):
+        for page in root.iter("page"):
+            for tt in page.iter("t"):
+                keys.add(f"page {page.get('id')} t {tt.get('id')}")
+    else:
+        for child in root:
+            if isinstance(child.tag, str):
+                k = child.get("id") or child.get("name")
+                if k:
+                    keys.add(f"{child.tag}#{k}")
+    return keys
+
+
+def _union_dir_excused(shared: dict[str, list[str]], ext: Path
+                       ) -> tuple[set[str], dict[str, list[str]]]:
+    """Which shared full files under t/ and index/ are excused as union-merged.
+
+    Release review F7: 2b1a902 excused every one unconditionally, so this property
+    could no longer go red for those directories. A file is excused only when every
+    sharing mod's keys are DISJOINT; a duplicate key, or a copy that cannot be read,
+    leaves it unexcused (x4compat must then report it). libraries/ is not handled here:
+    it is not wholly union-merged and keeps the gate's explicit list.
+    Returns (excused vpaths, vpath -> the clashes / unreadable copies that kept it out)."""
+    union_dirs = tuple(d for d in _compat.UNION_DIRS if d != "libraries/")
+    excused: set[str] = set()
+    clashes: dict[str, list[str]] = {}
+    for v, folders in shared.items():
+        if not v.lower().startswith(union_dirs):
+            continue
+        seen: dict[str, str] = {}
+        bad: list[str] = []
+        for folder in folders:
+            try:
+                keys = _union_file_keys(ext / folder, v)
+            except (etree.XMLSyntaxError, OSError, ValueError) as exc:
+                bad.append(f"{folder}: unreadable ({exc})")
+                continue
+            for k in sorted(keys):
+                if k in seen:
+                    bad.append(f"{k} in {seen[k]} and {folder}")
+                else:
+                    seen[k] = folder
+        if bad:
+            clashes[v] = bad
+        else:
+            excused.add(v)
+    return excused, clashes
+
+
 def check_x4compat() -> None:
     print("\nx4compat")
     report = _compat.analyze(EXT, config=_merge.Config())
@@ -379,12 +442,18 @@ def check_x4compat() -> None:
     shared_full = {v for v, m in full.items() if len(m) > 1}
     reported = {c.vpath.lower() for c in report.collisions}
     # 4. ...and false for whole union DIRECTORIES: t/ and index/ files are merged
-    #    entry by entry (KNOWLEDGEBASE "t-files are UNIONED"), and x4compat
-    #    already compares their keys (_compat.UNION_DIRS). libraries/ is NOT
+    #    entry by entry (KNOWLEDGEBASE "t-files are UNIONED"). libraries/ is NOT
     #    wholly union-merged, so it keeps the explicit list above. MEASURED
     #    2026-10-18: two mods' complete t/0001-l359.xml, 0 shared (page, t) ids.
-    union_dirs = tuple(p for p in _compat.UNION_DIRS if p != "libraries/")
-    union_merged |= {v for v in shared_full if v.lower().startswith(union_dirs)}
+    #    But only a file whose sharing mods' keys are DISJOINT is excused, checked
+    #    here (release review F7): excusing the directory outright meant a missed
+    #    duplicate key could never trip this property.
+    union_ok, union_bad = _union_dir_excused({v: full[v] for v in shared_full}, EXT)
+    union_merged |= union_ok
+    for v, why in sorted(union_bad.items()):
+        print(f"          {v}: union file NOT excused -- {'; '.join(why[:3])}")
+    print(f"          union dirs: {len(union_ok)} shared t/ index/ file(s) with disjoint "
+          f"keys excused, {len(union_bad)} with a duplicate key or unreadable copy kept")
     unexplained = sorted(shared_full - reported - manifests - union_merged)
     note(not unexplained, "shared full-file paths are reported or a known non-override class",
          f"{len(shared_full)} shared; {len(shared_full & reported)} reported, "
