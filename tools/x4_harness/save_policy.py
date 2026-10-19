@@ -325,6 +325,12 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None):
     if error or facts.get("carrier_untranslated"):
         raise ScopeError("Shell scope could not be completely evaluated; use literal targets and "
                          "an available parser. This call was not allowed.")
+    if facts.get("cd_lanes_truncated"):
+        # C7: protect-bash.sh denies this too; same verdict and wording, one expansion.
+        raise ScopeError("This command's cd targets have so many possible values (${VAR:+...} / "
+                         "${VAR-...} with unset variables) that the guard cannot tell which directory "
+                         "later relative paths are in, so it was NEVER fully checked. Use literal cd "
+                         "targets, or split it into simpler commands, and re-run.")
     if facts.get("carriers_truncated"):
         # protect-bash.sh denies this unconditionally; running that backend would expand
         # the whole command a second time inside the same 20 s deadline (MEASURED

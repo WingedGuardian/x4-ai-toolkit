@@ -327,7 +327,20 @@ decide allow protect-bash.sh "$(cj "python - <<'PY'
 guard = 'grep -qiE content.xml against \$X4_PROFILE'
 PY")"   "a manifest search described inside a heredoc body is data"
 decide deny  protect-bash.sh "$(cj "rm -rf '$X4_REFERENCE'")" "rm reference/"
-decide advise protect-bash.sh "$(cj "rm -f '$SBX_TMP/profile/save/save_001.xml.gz'")" "deleting an absent named save needs no preservation"
+# C1 (v4.0 release review): an ABSENT delete target is not a save the bridge can preserve -- it
+# was how `rm <saves>/save_00{0,1,2}.xml.gz` lifted the ask with 0 backups. It keeps the ask now.
+decide ask    protect-bash.sh "$(cj "rm -f '$SBX_TMP/profile/save/save_001.xml.gz'")" "C1: deleting an absent named save keeps the profile ask"
+# An unresolved operand naming the save folder is the bridge's "unresolved protected operand"
+# REFUSAL (deny), stricter than the ask -- either way nothing is lifted.
+decide deny   protect-bash.sh "$(cj "rm -f $SBX_TMP/profile/save/save_00{1,2}.xml.gz")" "C1: a brace-expanded save delete is refused, never lifted"
+# C6: a redirect / output-flag target is judged at EVERY value of an unset-variable operator.
+decide deny   protect-bash.sh "$(cj "echo x > \"\${NOPE:+x}$X4_REFERENCE/libraries/wares.xml\"")" "C6: > into reference/ behind \${NOPE:+x}"
+decide deny   protect-bash.sh "$(cj "echo x >> \"\${NOPE+x}$X4_REFERENCE/libraries/wares.xml\"")" "C6: >> into reference/ behind \${NOPE+x}"
+decide deny   protect-bash.sh "$(cj "curl -o \"\${NOPE:+x}$X4_REFERENCE/libraries/wares.xml\" http://127.0.0.1:9/x")" "C6: curl -o into reference/ behind \${NOPE:+x}"
+# P1: an assignment prefix holding a spaced process substitution is ONE word.
+decide deny   protect-bash.sh "$(cj "X=<(echo a) rm -rf '$X4_REFERENCE'")" "P1: X=<(echo a) prefix keeps the reference hard block"
+decide deny   protect-bash.sh "$(cj "env X=<(echo a) rm -rf '$X4_REFERENCE'")" "P1: env X=<(echo a) prefix keeps the reference hard block"
+decide deny   protect-bash.sh "$(cj "env X=\$(echo a rm) -rf '$X4_REFERENCE'")" "P1: env word-splits an unquoted expansion into the command name"
 decide advise protect-bash.sh "$(cj "echo x > '$SBX_TMP/docs/notes.txt'")"            "writing into Documents"
 # ...but only when Documents is the TARGET. MEASURED 2026-08-30: 193 of 196 hits
 # were a command that merely NAMED a path there -- `(rm|mv|cp|tee|>) anywhere` AND
@@ -537,7 +550,7 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
   "a substituted argument in a cd is untouched"
 
 
-EXPECT=305
+EXPECT=312
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written

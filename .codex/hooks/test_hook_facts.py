@@ -5012,6 +5012,50 @@ class TestC1BraceExpansionIsUnresolvedEvidence(unittest.TestCase):
             self.assertFalse(H._has_brace_expansion(w), w)
 
 
+class TestP1AnAssignmentPrefixIsOneWordWhateverSpanItHolds(unittest.TestCase):
+    """P1 (v4.0 release review, pre-existing): `X=<(echo a) rm -rf <game>` was ALLOWED past every
+    Bash rule -- the word reader split the process substitution at its blank and `a)` became the
+    verb. The CLASS, from the grammar (each shape run in Git Bash first: the command DOES run):
+    `<(`/`>(` (also mid-word, nested, quoted `)`, escaped blank), `$[ ]`, an array value, `+=`, a
+    subscript with blanks, and a `case` inside `$( )`."""
+    PREFIXES = ("X=<(echo a)", "X=>(cat -n)", "X=<( echo a )", "X=a<(echo b)c", "X=$[1 + 2]",
+                "X=(a b)", "X+=<(echo a)", "X[1 + 1]=a", "X=<(echo $(echo a b))",
+                "X=$(echo a) Y=<(echo b c)", "X=<(echo " + Q + "a)" + Q + " b)", "X=<(echo a" + BS + " b)",
+                "X=$(case a in a) echo x y;; esac)", "X=$((1 + 2))", "X=${Y:- a}", "X=$(echo a b)")
+
+    def test_the_verb_and_every_hard_block_survive_each_prefix(self):
+        for p in self.PREFIXES:
+            for wrap in ("", "env "):
+                with self.subTest(p=wrap + p):
+                    self.assertEqual(H.verb(wrap + p + " " + D + " -rf /x"), D)
+                    f = F(wrap + p + " " + DEL_GAME)
+                    self.assertTrue(f["rm_hits_game"] or f.get("verb_unresolved"), (p, f))
+            with self.subTest(p=p, rule="git add -A"):
+                self.assertTrue(F(p + " git add -A")["git_add_all"])
+
+    def test_operands_start_after_the_real_verb(self):
+        self.assertEqual(H._operands("X=<(echo a) " + D + " -rf /x"), ["/x"])
+        self.assertEqual(H._operands("sudo -u root " + D + " /x"), ["/x"])
+
+    def test_TWIN_a_glob_with_a_bracket_is_still_split_and_a_plain_word_untouched(self):
+        """Clause: a subscript joins only when `]=` follows (a glob `a[b c]` is two words)."""
+        self.assertEqual(H._raw_words("ls a[b c]"), ["ls", "a[b", "c]"])
+        self.assertEqual(H._raw_words("cat <(true) x"), ["cat", "<(true)", "x"])
+        self.assertEqual(H._raw_words("X=1 " + D + " a"), ["X=1", D, "a"])
+
+    def test_env_word_splitting_makes_the_command_name_unknowable(self):
+        """After `env`, `NAME=$(...)` is an ordinary argument: an UNQUOTED expansion is word-split
+        and a field becomes the command. MEASURED in Git Bash: `env X=$(echo a rm) -rf <dir>` runs
+        rm. The guard read `<game>` as the verb and ALLOWED it."""
+        for w in ("X=$(echo a " + D + ")", "X=${Y:- " + D + "}", "X=" + chr(96) + "echo a " + D + chr(96),
+                  "X=$V"):
+            with self.subTest(w=w):
+                self.assertTrue(F("env " + w + ' -rf "' + GAME + '"')["verb_unresolved"])
+        # TWIN: quoted (no splitting), or no wrapper (a real assignment): the verb is known.
+        for c in ("env X=" + DQ + "$(echo a b)" + DQ + " " + D + " -rf /x", "X=$(echo a b) " + D + " -rf /x"):
+            self.assertIsNone(H._env_split_index(c), c)
+
+
 def _blockers(command, tool="Bash"):
     return H.facts({"tool_name": tool, "tool_input": {"command": command}, "cwd": TOOLKIT},
                    ROOTS).get("save_lift_blockers") or []
@@ -5217,6 +5261,21 @@ class TestK_C1EveryValueOfAnUnknownVariable(unittest.TestCase):
             with self.subTest(c=c):
                 self.assertTrue(FC(c, _ELSEWHERE)["rm_hits_game"], c)
 
+    def test_C6_redirect_and_output_flag_targets_are_judged_at_every_value(self):
+        """C6 (v4.0 release review, IN-ARC since FX-G5 47d06cd): prep(expand=False) -- REDIRECT and
+        output-flag targets -- took ONE resolve(), the alternate. MEASURED E2E: `echo x >
+        "${NOPE:+x}<reference>/libraries/wares.xml"` ADVISED where the plain path denies."""
+        w = REF + "/libraries/wares.xml"
+        for c in ('echo x > "${NOPE:+x}' + w + '"', 'echo x >> "${NOPE:+x}' + w + '"',
+                  'echo x > "${NOPE+x}' + w + '"', 'echo x 2> "${NOPE:+x}' + w + '"',
+                  'curl -o "${NOPE:+x}' + w + '" http://127.0.0.1:9/x',
+                  'curl --output "${NOPE:+x}' + w + '" http://127.0.0.1:9/x'):
+            with self.subTest(c=c):
+                self.assertTrue(FC(c, _ELSEWHERE)["writes_reference"], c)
+        # TWIN: the plain path is unchanged, and an alternate word elsewhere stays harmless.
+        self.assertTrue(FC('echo x > "' + w + '"', _ELSEWHERE)["writes_reference"])
+        self.assertFalse(FC('echo x > "${NOPE:+x}/srv/out.txt"', _ELSEWHERE)["writes_reference"])
+
     def test_resolve_variants_offers_every_state(self):
         self.assertEqual(sorted(H.resolve_variants("${NOPE:+zz}", {})), ["", "zz"])
         self.assertEqual(sorted(H.resolve_variants("${NOPE-w}x", {})), ["${NOPE-w}x", "wx", "x"])
@@ -5285,6 +5344,27 @@ class TestG7EveryCdValueIsALane(unittest.TestCase):
                                _ELSEWHERE)["rm_targets_reference"])
         finally:
             H._MAX_CD_LANES = saved
+
+    def test_C7_past_the_lane_bound_the_directory_is_unknown_and_refused_from_every_root(self):
+        """C7 (v4.0 release review), MEASURED from the toolkit root at the REAL bound: `cd
+        "${A:+a}${B:+b}." && cd "${C:+c}${D:+d}${E:+e}<reference>" && rm -rf libraries` ADVISED
+        (v3.3.1 denied): past 16 lanes each lane took the first value under ANY root -- the
+        toolkit -- never the reference. The test above runs only from OUTSIDE every root, so it
+        could not fail for that. Past the bound now: `cd_lanes_truncated`, which protect-bash
+        denies, from every cwd."""
+        for tail in (REF + '" && ' + D + ' -rf libraries', PROF + '" && ' + D + ' -rf save'):
+            c = 'cd "${A:+a}${B:+b}." && cd "${C:+c}${D:+d}${E:+e}' + tail
+            for cwd in self.CWDS + (TOOLKIT,):
+                with self.subTest(c=c, cwd=cwd):
+                    self.assertTrue(FC(c, cwd)["cd_lanes_truncated"], (c, cwd))
+
+    def test_C7_TWIN_within_the_bound_nothing_is_truncated_and_the_flag_resets(self):
+        c = 'cd "${A:+a}${B:+b}." && cd "${C:+c}' + REF + '" && ' + D + ' -rf libraries'   # 4 x 3 = 12
+        for cwd in self.CWDS + (TOOLKIT,):
+            with self.subTest(cwd=cwd):
+                f = FC(c, cwd)
+                self.assertFalse(f["cd_lanes_truncated"])
+                self.assertTrue(f["rm_targets_reference"])
 
     # --- one falsification twin per clause ---
     def test_TWIN_an_assigned_variable_is_one_lane(self):
