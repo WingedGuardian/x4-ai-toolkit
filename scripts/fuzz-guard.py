@@ -747,6 +747,31 @@ def _m_reserved_coproc(c):
     return "coproc { " + c + "; }"
 
 
+# --- ASSIGNMENT-PREFIX axis (P1, v4.0 release review) ----------------------------
+# MEASURED: `X=<(echo a) rm -rf <game>` was ALLOWED past every Bash rule -- the word reader
+# split the process substitution at its blank and `a)` became the command. `>(cat -n)` only
+# survived because `-n)` reads as a flag. So the CLASS, from the grammar: every span bash keeps
+# inside ONE assignment word, bare and behind `env` (where the word is an ordinary argument
+# and an UNQUOTED expansion is word-split -- its fields can become the command).
+_PREFIX_WORDS = [
+    "X=<(echo a)", "X=>(cat -n)", "X=<( echo a )", "X=a<(echo b)c", "X=$(echo a b)",
+    "X=$((1 + 2))", "X=${Y:- a}", "X=" + chr(96) + "echo a b" + chr(96), "X=$[1 + 2]",
+    "X=(a b)", "X+=<(echo a)", "X[1 + 1]=a", "X=$(echo $(echo a b))", "X=<(echo $(echo a b))",
+    "X=$(echo a) Y=<(echo b c)", "X=<(echo " + Q + "a)" + Q + " b)", "X=<(echo a" + BS + " b)",
+    "X=$(case a in a) echo x y;; esac)", "X=" + Q + "a b" + Q, "X=$" + Q + "a b" + Q,
+]
+
+
+def _prefix_mutator(word, wrap=""):
+    def m(c):
+        return wrap + word + " " + c
+    return m
+
+
+_PREFIX_MUTATORS = [("ASSIGN PREFIX " + wrap + w, _prefix_mutator(w, wrap))
+                    for wrap in ("", "env ") for w in _PREFIX_WORDS]
+
+
 MUTATORS = [
     ("comment with an apostrophe", _m_comment_apostrophe),
     ("comment with a quote", _m_comment_quote),
@@ -874,7 +899,7 @@ MUTATORS = [
     ("wrapper: sh -ic", _m_sh_ic),
     ("wrapper: eval", _m_eval),
     ("wrapper: eval inside if", _m_eval_in_if),
-]
+] + _PREFIX_MUTATORS
 
 
 def seeds(roots):
@@ -974,6 +999,9 @@ def seeds(roots):
         ("cmd /r carrier at reference", "cmd //r rd /s /q " + QU + ref + QU),
         # FX-G4 (v4.0.0 delta review, reviewers G and H): one seed per rule the lane added.
         ("cmd /k reads stdin at reference", "echo rd /s /q " + QU + ref + QU + " | cmd //k"),
+        # C7 (v4.0 release review): past the cd-lane bound the directory is UNKNOWN -> refused.
+        ("cd lanes past the bound", "cd " + QU + "${A:+a}${B:+b}." + QU + " && cd " + QU
+         + "${C:+c}${D:+d}${E:+e}" + ref + QU + " && " + d + " -rf libraries"),
         ("root variable under an operator", d + " -rf " + QU + "${X4_GAME:-/x}" + QU),
         # `env` first: the VERB mutators rewrite the first word, and a path glued onto an
         # ASSIGNMENT makes a command that never runs git (a mutant that is not a bypass).

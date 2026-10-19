@@ -262,7 +262,10 @@ def test_missing_save_under_native_drive_namespace_does_not_require_a_backup(ins
     root, roots, _files = install
     target = Path(roots["saves"]) / "Missing.xml.gz"
     result = invoke_hook(install, "PowerShell", {"command": "Remove-Item -LiteralPath '" + prefix + str(target) + "'"})
-    assert result["hookSpecificOutput"].get("permissionDecision") is None, result
+    # C1 (v4.0 release review): an absent delete target is no longer a "save" that lifts the
+    # profile ask -- it keeps it. Still no backup, no deny, and the `?` is not a wildcard.
+    assert result["hookSpecificOutput"].get("permissionDecision") == "ask", result
+    assert_scope_refusal(result["hookSpecificOutput"], "X4 PROFILE")
     assert not target.exists()
     assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
@@ -368,6 +371,11 @@ def _with_content(install):
     '; bash -c "$CMD"',                      # a carrier whose program is not text held here
     '; eval "$X"',
     '; bash ./cleanup.sh',                   # a script file
+    # I1: a carrier that also runs startup code its text never shows.
+    "; BASH_ENV=./e.sh bash -c 'true'",
+    '; env BASH_ENV=./e.sh bash -c true',
+    '; bash --rcfile ./e.sh -i -c true',
+    '; bash -lc true',
 ])
 def test_K1_one_backed_up_save_never_lifts_the_ask_for_what_the_backup_cannot_cover(install, tail):
     """K1 (v4.0 release review): the profile ask was lifted for the WHOLE command once its
@@ -397,6 +405,72 @@ def test_K1_TWIN_one_and_two_backed_up_saves_still_proceed_and_three_need_typed_
         "hookSpecificOutput"]
     assert hso["permissionDecision"] in ("ask", "deny"), hso
     assert_scope_refusal(hso, "SAVE_ACCESS_APPROVAL")
+
+
+@pytest.mark.parametrize("operands", [
+    "SV/s{1,2}.xml.gz",                        # 2 saves, brace list
+    "SV/s{1,2,3}.xml.gz",                      # 3 saves, brace list
+    "SV/s{1..3}.xml.gz",                       # a sequence
+    'SV/{s1,s2}.xml.gz',                       # the brace spans the name
+    '"SV/s1.xml.gz" SV/s{2,3}.xml.gz',         # mixed: one literal (backed up), two braced
+    'SV/s1.xml.gz{,}',                         # one save named twice
+])
+def test_C1_brace_expanded_save_operands_keep_the_profile_ask(install, operands):
+    """C1 (v4.0 release review), MEASURED before the fix: `rm <saves>/save_00{0,1,2}.xml.gz`
+    ADVISED with 0 backups (v3.3.1 asked) -- the literal `{...}` word reached the save bridge as
+    ONE save that did not exist; the mixed form printed "Save backup verified" while two were
+    unbacked. A word bash expands into several paths must never lift the profile ask."""
+    root, roots, _files = install
+    saves = Path(roots["saves"])
+    named = [saves / ("s%d.xml.gz" % n) for n in (1, 2, 3)]
+    for f in named:
+        f.write_bytes(f.name.encode())
+    command = "rm -- " + operands.replace("SV", str(saves).replace(chr(92), "/"))
+    hso = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") in ("ask", "deny"), (command, hso)
+    assert_scope_refusal(hso)
+    assert "backup verified" not in hso.get("permissionDecisionReason", ""), hso
+    assert all(f.exists() for f in named)
+
+
+@pytest.mark.parametrize("spelling", ["'{saves}/x{a,b}.xml.gz'", '"{saves}/x{a,b}.xml.gz"',
+                                      "{saves}/x'{a,b}'.xml.gz", "{saves}/x" + chr(92) + "{a,b" + chr(92) + "}.xml.gz"])
+def test_C1_TWIN_a_quoted_brace_is_a_literal_name_and_is_backed_up(install, spelling):
+    """A QUOTED or escaped `{a,b}` is one literal filename: when that file exists it is one save,
+    backed up and advised exactly like any other single save."""
+    root, roots, _files = install
+    target = Path(roots["saves"]) / "x{a,b}.xml.gz"
+    target.write_bytes(b"literal")
+    command = "rm -- " + spelling.replace("{saves}", str(roots["saves"]).replace(chr(92), "/"))
+    hso = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None, (command, hso)
+    assert "backup verified" in hso["additionalContext"], hso
+    assert target.exists()
+
+
+@pytest.mark.parametrize("command", ["rm -- SV/x{a,b}.xml.gz", "printf '' | tee SV/x{a,b}.xml.gz"])
+def test_C1_an_UNQUOTED_brace_is_unresolved_even_when_its_literal_name_exists(install, command):
+    """The clause twin of the existence check: here the literal `x{a,b}.xml.gz` EXISTS (so an
+    existence test passes), but bash runs on xa/xb -- and a tee WRITE has no existence test at
+    all. Only hook_facts marking the unquoted brace word unresolved keeps these asks."""
+    root, roots, _files = install
+    saves = Path(roots["saves"])
+    for name in ("x{a,b}.xml.gz", "xa.xml.gz", "xb.xml.gz"):
+        (saves / name).write_bytes(b"s")
+    hso = invoke_hook(install, "Bash", {"command": command.replace("SV", str(saves).replace(chr(92), "/"))}
+                      )["hookSpecificOutput"]
+    assert hso.get("permissionDecision") in ("ask", "deny"), hso
+    assert_scope_refusal(hso)
+
+
+def test_C1_an_absent_delete_target_keeps_the_ask_and_an_existing_one_TWIN_is_backed_up(install):
+    root, roots, files = install
+    sv = str(roots["saves"]).replace(chr(92), "/")
+    hso = invoke_hook(install, "Bash", {"command": 'rm -- "' + sv + '/absent.xml.gz"'})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") == "ask", hso
+    hso = invoke_hook(install, "Bash", {"command": 'rm -- "' + str(files[0]).replace(chr(92), "/") + '"'}
+                      )["hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None and "backup verified" in hso["additionalContext"], hso
 
 
 def _count_analyser_runs(hooks, marker):

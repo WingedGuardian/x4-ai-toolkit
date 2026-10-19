@@ -272,13 +272,24 @@ class _PSE2E(unittest.TestCase):
                     # T2: the POLICY's deny, never an engine failure that also says deny.
                     self.assertFalse(engine_failure(reason), (command, reason))
 
+    def expect_with_save(self, cases, tool="PowerShell"):
+        """C1 (v4.0 release review): an ABSENT delete target keeps the profile ask, so a probe of
+        the resolved-save path (advise + backup) needs the save to EXIST -- for these cases only:
+        a file in the folder changes what a whole-folder pipeline resolves to elsewhere."""
+        save = self.prof / "save" / "a.xml.gz"
+        save.write_bytes(b"opaque save fixture")
+        try:
+            self.expect(cases, tool)
+        finally:
+            save.unlink()                # this run's own fixture (same-run scratch)
+
 
 class TestPS1Splatting(_PSE2E):
     """StaticParameterBinder cannot see a splat, so `Remove-Item @p` bound NO path and the
     delete reached no rule."""
 
     def test_a_literal_hashtable_splat_is_resolved(self):
-        self.expect([
+        self.expect_with_save([
             ("deny", "$p=@{Path='" + self.R + BS + "libraries'; Recurse=$true}; Remove-Item @p"),
             ("advise", "$p=@{LiteralPath='" + self.S + BS + "a.xml.gz'}; Remove-Item @p"),
             ("deny", "$q=@{Path='" + self.R + BS + "a.xml'; Value='x'}; Set-Content @q"),
@@ -399,7 +410,7 @@ class TestPS4ProviderAndPrefixedPaths(_PSE2E):
             foreign = os.name != "nt" and sp.startswith(BS + BS)
             cases.append(("ask" if foreign else "advise",
                           "Remove-Item -LiteralPath '" + sp + BS + "a.xml.gz'"))
-        self.expect(cases)
+        self.expect_with_save(cases)
 
     def test_in_a_nested_bash_carrier_too(self):
         sp = "FileSystem::" + self.R
@@ -416,10 +427,13 @@ class TestPS5CmdPercentVariables(_PSE2E):
     any other is an unknown operand."""
 
     def test_root_variables(self):
-        self.expect([
+        self.expect_with_save([
             ("deny", 'cmd //c rd /s /q "%X4_REFERENCE%"'),
             ("deny", 'cmd /c "rd /s /q %X4_REFERENCE%' + BS + 'libraries"'),
-            ("advise", 'cmd //c del /q "%X4_SAVES%' + BS + 'a.xml.gz"'),
+            # I1 (v4.0 release review): cmd is transparent only with /d (AutoRun off); without it
+            # the profile ask stands -- the twin of the advised /d form.
+            ("advise", 'cmd //d //c del /q "%X4_SAVES%' + BS + 'a.xml.gz"'),
+            ("ask", 'cmd //c del /q "%X4_SAVES%' + BS + 'a.xml.gz"'),
         ], tool="Bash")
 
     def test_TWIN_an_unknown_variable_is_an_unknown_operand(self):

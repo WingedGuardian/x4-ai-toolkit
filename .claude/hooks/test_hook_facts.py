@@ -4902,6 +4902,48 @@ class TestH1AShellWriteToAHostTranscriptIsRefused(unittest.TestCase):
                 with self.subTest(c=c):
                     self.assertTrue(FC(c, _ELSEWHERE)[self.FACT], c)
 
+    def test_M1_a_directory_destination_that_receives_a_jsonl_fires(self):
+        """M1 (v4.0 release review): `cp x.jsonl <projects>/p/` and `cp -t <dir> x.jsonl` were
+        ALLOWED -- the file lands as <dir>/x.jsonl. The source's NAME decides; an unresolved or
+        pattern source, or a recursive copy, may carry one, so it fires too."""
+        for d in ("/srv/h/.claude/projects/C--work", "/srv/h/.codex/sessions/2026"):
+            for c in ("cp /srv/a.jsonl '" + d + "/'", "cp -t '" + d + "' /srv/a.jsonl",
+                      "cp --target-directory='" + d + "' /srv/a.jsonl", "mv /srv/a.jsonl '" + d + "'",
+                      "install /srv/a.jsonl '" + d + "/'", "cp /srv/*.jsonl '" + d + "/'",
+                      "cp \"$SRC\" '" + d + "/'", "cp -r /srv/dir '" + d + "/'", "rsync /srv/a '" + d + "/'"):
+                with self.subTest(c=c):
+                    self.assertTrue(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_M1_TWIN_a_non_jsonl_source_or_a_destination_outside_the_tree_does_not(self):
+        """Clauses: the destination is IN a transcript tree, and the landing name is a .jsonl."""
+        for c in ("cp /srv/notes.md '/srv/h/.claude/projects/C--work/memory/'",
+                  "cp -t /srv/h/.claude/projects/C--work/memory /srv/notes.md",
+                  "cp /srv/a.jsonl /srv/other/", "cp -t /srv/other /srv/a.jsonl"):
+            with self.subTest(c=c):
+                self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_M1_relocated_trees_from_the_hosts_own_variables(self):
+        """$CLAUDE_CONFIG_DIR/projects and $CODEX_HOME/sessions: as written, and by value."""
+        for c in ("echo x >> \"$CODEX_HOME/sessions/2026/r.jsonl\"",
+                  "echo x >> \"${CLAUDE_CONFIG_DIR}/projects/p/s.jsonl\"",
+                  "cp /srv/a.jsonl \"$CLAUDE_CONFIG_DIR/projects/p/\""):
+            with self.subTest(c=c):
+                self.assertTrue(FC(c, _ELSEWHERE)[self.FACT], c)
+        saved = {k: os.environ.get(k) for k in ("CLAUDE_CONFIG_DIR", "CODEX_HOME")}
+        try:
+            os.environ["CLAUDE_CONFIG_DIR"] = "/srv/cfg"
+            os.environ["CODEX_HOME"] = "/srv/cx"
+            self.assertTrue(FC("echo x >> /srv/cfg/projects/p/s.jsonl", _ELSEWHERE)[self.FACT])
+            self.assertTrue(FC("cp /srv/a.jsonl /srv/cx/sessions/2026/", _ELSEWHERE)[self.FACT])
+            self.assertFalse(FC("echo x >> /srv/cfg/projects/p/memory/n.md", _ELSEWHERE)[self.FACT])
+            self.assertFalse(FC("echo x >> /srv/cfg/other/s.jsonl", _ELSEWHERE)[self.FACT])
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
     # --- one falsification twin per clause ---
     def test_TWIN_a_read_of_a_transcript_is_not_a_write(self):
         """Clause: a WRITE."""
@@ -4917,6 +4959,148 @@ class TestH1AShellWriteToAHostTranscriptIsRefused(unittest.TestCase):
                   "echo '{}' >> '/srv/h/.codex/config/x.jsonl'"):
             with self.subTest(c=c):
                 self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
+
+def _evidence(command, cwd=TOOLKIT):
+    ev = []
+    H.facts({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd}, ROOTS, evidence=ev)
+    return ev
+
+
+class TestC1BraceExpansionIsUnresolvedEvidence(unittest.TestCase):
+    """C1 (v4.0 release review): an unquoted brace word reached the save bridge as ONE literal
+    path -- `rm <saves>/save_00{0,1,2}.xml.gz` advised with 0 backups. Every evidence row from an
+    unquoted `{a,b}` / `{x..y}` word is unresolved; a quoted or escaped one is a literal name."""
+    S = PROF + "/save/"
+
+    def _rows(self, command):
+        return [r for r in _evidence(command) if r.get("operation") != "unmodelled"]
+
+    def test_unquoted_brace_rows_are_unresolved_in_every_verb_shape(self):
+        for c in (D + " " + self.S + "save_00{0,1,2}.xml.gz", D + " " + self.S + "s{0..2}.xml.gz",
+                  D + " -f " + self.S + "{a,b}.xml.gz", D + " " + self.S + "a.xml.gz{,}",
+                  "mv " + self.S + "s{0,1}.xml.gz /c/x", "printf '' | tee " + self.S + "s{0,1}.xml.gz",
+                  "cd '" + self.S + "' && " + D + " s{0,1}.xml.gz",
+                  "bash -c '" + D + " " + self.S + "s{0,1}.xml.gz'"):
+            with self.subTest(c=c):
+                rows = [r for r in self._rows(c) if "{" in r.get("raw", "")]
+                self.assertTrue(rows, c)
+                self.assertTrue(all(r["unresolved"] for r in rows), (c, rows))
+
+    def test_TWIN_quoted_escaped_or_parameter_braces_stay_literal(self):
+        """Clause: UNQUOTED, and a real brace expansion (a `,` or `..` inside, not `${`)."""
+        for c in (D + " '" + self.S + "s{0,1}.xml.gz'", D + ' "' + self.S + 's{0,1}.xml.gz"',
+                  D + " " + self.S + "s'{0,1}'.xml.gz", D + " " + self.S + "s" + BS + "{0,1" + BS + "}.xml.gz",
+                  D + " " + self.S + "s$'{0,1}'.xml.gz", D + " " + self.S + "s{0}.xml.gz",
+                  D + " " + self.S + "s{}.xml.gz", D + " " + self.S + "s{a.b}.xml.gz"):
+            with self.subTest(c=c):
+                rows = [r for r in self._rows(c) if "{" in r.get("raw", "")]
+                self.assertTrue(rows, c)
+                self.assertFalse(any(r["unresolved"] for r in rows), (c, rows))
+
+    def test_the_side_channel_is_cleared_per_call(self):
+        _evidence(D + " " + self.S + "s{0,1}.xml.gz")
+        rows = self._rows(D + " '" + self.S + "s{0,1}.xml.gz'")
+        self.assertFalse(any(r["unresolved"] for r in rows), rows)
+
+    def test_has_brace_expansion_grammar(self):
+        yes = ("a{b,c}", "{a,b}", "{1..3}", "{a..z}", "x{-1..2..1}", "{a,{b,c}}", "{,}")
+        no = ("a{b}", "${a,b}", "{}", "a{b.c}", "{a", "a}", "{1...3}", chr(0) + "a,b}")
+        for w in yes:
+            self.assertTrue(H._has_brace_expansion(w), w)
+        for w in no:
+            self.assertFalse(H._has_brace_expansion(w), w)
+
+
+class TestP1AnAssignmentPrefixIsOneWordWhateverSpanItHolds(unittest.TestCase):
+    """P1 (v4.0 release review, pre-existing): `X=<(echo a) rm -rf <game>` was ALLOWED past every
+    Bash rule -- the word reader split the process substitution at its blank and `a)` became the
+    verb. The CLASS, from the grammar (each shape run in Git Bash first: the command DOES run):
+    `<(`/`>(` (also mid-word, nested, quoted `)`, escaped blank), `$[ ]`, an array value, `+=`, a
+    subscript with blanks, and a `case` inside `$( )`."""
+    PREFIXES = ("X=<(echo a)", "X=>(cat -n)", "X=<( echo a )", "X=a<(echo b)c", "X=$[1 + 2]",
+                "X=(a b)", "X+=<(echo a)", "X[1 + 1]=a", "X=<(echo $(echo a b))",
+                "X=$(echo a) Y=<(echo b c)", "X=<(echo " + Q + "a)" + Q + " b)", "X=<(echo a" + BS + " b)",
+                "X=$(case a in a) echo x y;; esac)", "X=$((1 + 2))", "X=${Y:- a}", "X=$(echo a b)")
+
+    def test_the_verb_and_every_hard_block_survive_each_prefix(self):
+        for p in self.PREFIXES:
+            for wrap in ("", "env "):
+                with self.subTest(p=wrap + p):
+                    self.assertEqual(H.verb(wrap + p + " " + D + " -rf /x"), D)
+                    f = F(wrap + p + " " + DEL_GAME)
+                    self.assertTrue(f["rm_hits_game"] or f.get("verb_unresolved"), (p, f))
+            with self.subTest(p=p, rule="git add -A"):
+                self.assertTrue(F(p + " git add -A")["git_add_all"])
+
+    def test_operands_start_after_the_real_verb(self):
+        self.assertEqual(H._operands("X=<(echo a) " + D + " -rf /x"), ["/x"])
+        self.assertEqual(H._operands("sudo -u root " + D + " /x"), ["/x"])
+
+    def test_TWIN_a_glob_with_a_bracket_is_still_split_and_a_plain_word_untouched(self):
+        """Clause: a subscript joins only when `]=` follows (a glob `a[b c]` is two words)."""
+        self.assertEqual(H._raw_words("ls a[b c]"), ["ls", "a[b", "c]"])
+        self.assertEqual(H._raw_words("cat <(true) x"), ["cat", "<(true)", "x"])
+        self.assertEqual(H._raw_words("X=1 " + D + " a"), ["X=1", D, "a"])
+
+    def test_env_word_splitting_makes_the_command_name_unknowable(self):
+        """After `env`, `NAME=$(...)` is an ordinary argument: an UNQUOTED expansion is word-split
+        and a field becomes the command. MEASURED in Git Bash: `env X=$(echo a rm) -rf <dir>` runs
+        rm. The guard read `<game>` as the verb and ALLOWED it."""
+        for w in ("X=$(echo a " + D + ")", "X=${Y:- " + D + "}", "X=" + chr(96) + "echo a " + D + chr(96),
+                  "X=$V"):
+            with self.subTest(w=w):
+                self.assertTrue(F("env " + w + ' -rf "' + GAME + '"')["verb_unresolved"])
+        # TWIN: quoted (no splitting), or no wrapper (a real assignment): the verb is known.
+        for c in ("env X=" + DQ + "$(echo a b)" + DQ + " " + D + " -rf /x", "X=$(echo a b) " + D + " -rf /x"):
+            self.assertIsNone(H._env_split_index(c), c)
+
+
+def _blockers(command, tool="Bash"):
+    return H.facts({"tool_name": tool, "tool_input": {"command": command}, "cwd": TOOLKIT},
+                   ROOTS).get("save_lift_blockers") or []
+
+
+class TestI1ACarrierIsTransparentOnlyWhenItsTextIsAllItRuns(unittest.TestCase):
+    """I1 (v4.0 release review, 254ec43 `_carries_program_text`): the K1 carrier exemption lifted
+    the profile ask for shells that also run STARTUP code the text never shows. MEASURED E2E, each
+    advised with one backed-up save: `BASH_ENV=<f> bash -c '...'`, `env BASH_ENV=<f> bash -c true`,
+    `bash --rcfile x -i -c true`, `bash -lc true`, PowerShell `$env:BASH_ENV=...; bash -c 'true'`."""
+    SAVE = D + " '" + PROF + "/save/a.xml.gz'; "
+
+    def test_startup_steering_makes_the_carrier_a_blocker(self):
+        for tail in ("BASH_ENV=/srv/e.sh bash -c true", "env BASH_ENV=/srv/e.sh bash -c true",
+                     "export BASH_ENV=/srv/e.sh; bash -c true", "BASH_ENV=/srv/e.sh; bash -c true",
+                     "printf -v BASH_ENV %s /srv/e.sh; bash -c true", "ENV=/srv/e.sh sh -c true",
+                     "env 'BASH_FUNC_true%%=() { :; }' bash -c true", "SHELLOPTS=xtrace bash -c true",
+                     "PS4='$(true)' bash -xc true", "ZDOTDIR=/srv bash -c true",
+                     "bash -lc true", "bash -l -c true", "bash --login -c true", "bash -ic true",
+                     "bash --rcfile /srv/e.sh -i -c true", "bash --init-file /srv/e.sh -c true",
+                     "bash -e -c true", "zsh -c true",
+                     "cmd //c 'echo hi'", "powershell -Command 'Write-Output 1'",
+                     "pwsh -c 'Write-Output 1'", "powershell -Command 'x' -NoProfile"):
+            with self.subTest(tail=tail):
+                self.assertTrue(_blockers(self.SAVE + tail), tail)
+
+    def test_powershell_env_assignment_is_seen_although_its_translation_drops_it(self):
+        save = "Remove-Item -LiteralPath '" + PROF.replace("/", BS) + BS + "save" + BS + "a.xml.gz'; "
+        for tail in ("$env:BASH_ENV = '/srv/e.sh'; bash -c 'true'", "$Env:bash_env='x'; bash -c 'true'",
+                     "$env:ENV = 'x'; sh -c 'true'"):
+            with self.subTest(tail=tail):
+                self.assertTrue(_blockers(save + tail, "PowerShell"), tail)
+        self.assertFalse(_blockers(save + "bash -c 'true'", "PowerShell"))      # TWIN
+
+    def test_TWIN_each_clause_keeps_its_exemption_when_the_text_is_all_it_runs(self):
+        """The positive twin for every clause of _carries_program_text: bash/sh/dash/ksh with a
+        bare -c, eval, cmd with /d, a PowerShell host with -NoProfile (-Command / -nop -c /
+        -EncodedCommand), and an unrelated assignment in front."""
+        enc = "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAxAA=="       # Write-Output 1 (UTF-16LE)
+        for tail in ("bash -c true", "sh -c 'echo hi'", "dash -c true", "ksh -c true", "eval 'true'",
+                     "X=1 bash -c true", "env X=1 bash -c true", "cmd //d //c 'echo hi'", "cmd /d /c echo",
+                     "powershell -NoProfile -Command 'Write-Output 1'", "pwsh -nop -c 'Write-Output 1'",
+                     "powershell -NoProfile -EncodedCommand " + enc, "echo environment; bash -c true"):
+            with self.subTest(tail=tail):
+                self.assertEqual(_blockers(self.SAVE + tail), [], tail)
 
 
 # ======================================================================================
@@ -5077,6 +5261,21 @@ class TestK_C1EveryValueOfAnUnknownVariable(unittest.TestCase):
             with self.subTest(c=c):
                 self.assertTrue(FC(c, _ELSEWHERE)["rm_hits_game"], c)
 
+    def test_C6_redirect_and_output_flag_targets_are_judged_at_every_value(self):
+        """C6 (v4.0 release review, IN-ARC since FX-G5 47d06cd): prep(expand=False) -- REDIRECT and
+        output-flag targets -- took ONE resolve(), the alternate. MEASURED E2E: `echo x >
+        "${NOPE:+x}<reference>/libraries/wares.xml"` ADVISED where the plain path denies."""
+        w = REF + "/libraries/wares.xml"
+        for c in ('echo x > "${NOPE:+x}' + w + '"', 'echo x >> "${NOPE:+x}' + w + '"',
+                  'echo x > "${NOPE+x}' + w + '"', 'echo x 2> "${NOPE:+x}' + w + '"',
+                  'curl -o "${NOPE:+x}' + w + '" http://127.0.0.1:9/x',
+                  'curl --output "${NOPE:+x}' + w + '" http://127.0.0.1:9/x'):
+            with self.subTest(c=c):
+                self.assertTrue(FC(c, _ELSEWHERE)["writes_reference"], c)
+        # TWIN: the plain path is unchanged, and an alternate word elsewhere stays harmless.
+        self.assertTrue(FC('echo x > "' + w + '"', _ELSEWHERE)["writes_reference"])
+        self.assertFalse(FC('echo x > "${NOPE:+x}/srv/out.txt"', _ELSEWHERE)["writes_reference"])
+
     def test_resolve_variants_offers_every_state(self):
         self.assertEqual(sorted(H.resolve_variants("${NOPE:+zz}", {})), ["", "zz"])
         self.assertEqual(sorted(H.resolve_variants("${NOPE-w}x", {})), ["${NOPE-w}x", "wx", "x"])
@@ -5145,6 +5344,27 @@ class TestG7EveryCdValueIsALane(unittest.TestCase):
                                _ELSEWHERE)["rm_targets_reference"])
         finally:
             H._MAX_CD_LANES = saved
+
+    def test_C7_past_the_lane_bound_the_directory_is_unknown_and_refused_from_every_root(self):
+        """C7 (v4.0 release review), MEASURED from the toolkit root at the REAL bound: `cd
+        "${A:+a}${B:+b}." && cd "${C:+c}${D:+d}${E:+e}<reference>" && rm -rf libraries` ADVISED
+        (v3.3.1 denied): past 16 lanes each lane took the first value under ANY root -- the
+        toolkit -- never the reference. The test above runs only from OUTSIDE every root, so it
+        could not fail for that. Past the bound now: `cd_lanes_truncated`, which protect-bash
+        denies, from every cwd."""
+        for tail in (REF + '" && ' + D + ' -rf libraries', PROF + '" && ' + D + ' -rf save'):
+            c = 'cd "${A:+a}${B:+b}." && cd "${C:+c}${D:+d}${E:+e}' + tail
+            for cwd in self.CWDS + (TOOLKIT,):
+                with self.subTest(c=c, cwd=cwd):
+                    self.assertTrue(FC(c, cwd)["cd_lanes_truncated"], (c, cwd))
+
+    def test_C7_TWIN_within_the_bound_nothing_is_truncated_and_the_flag_resets(self):
+        c = 'cd "${A:+a}${B:+b}." && cd "${C:+c}' + REF + '" && ' + D + ' -rf libraries'   # 4 x 3 = 12
+        for cwd in self.CWDS + (TOOLKIT,):
+            with self.subTest(cwd=cwd):
+                f = FC(c, cwd)
+                self.assertFalse(f["cd_lanes_truncated"])
+                self.assertTrue(f["rm_targets_reference"])
 
     # --- one falsification twin per clause ---
     def test_TWIN_an_assigned_variable_is_one_lane(self):

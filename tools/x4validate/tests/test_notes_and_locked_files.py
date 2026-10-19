@@ -160,6 +160,34 @@ def test_N3_the_game_install_deny_routes_the_agent(sandbox):
         assert str(game / "X4-NOTES.md").replace("\\", "/") in reason.replace("\\", "/")
 
 
+def test_N3_preferences_route_to_the_TOOLKIT_root_where_they_are_read(sandbox):
+    """v4.0 release review (IN-ARC 264828c): the deny routed preferences to
+    `$X4_GAME/KNOWLEDGEBASE.local.md`, but session-canary.sh, preferences.py, the OpenCode plugin
+    and upgrade.py read the TOOLKIT root -- in the separate layout an agent wrote a file nothing
+    reads. X4-NOTES.md is listed as the legacy file, after the preferences route."""
+    _, tk, game, env = sandbox
+    for get in (hook, check):
+        d, reason = get(env, game / "libraries" / "wares.xml")
+        assert d == "deny"
+        r = reason.replace("\\", "/")
+        want = str(tk / "KNOWLEDGEBASE.local.md").replace("\\", "/")
+        assert want in r, (want, reason)
+        assert str(game / "KNOWLEDGEBASE.local.md").replace("\\", "/") not in r, reason
+        assert r.index("KNOWLEDGEBASE.local.md") < r.index("X4-NOTES.md"), reason
+
+
+def test_N3_local_knowledgebase_is_writable_only_where_it_is_read(sandbox):
+    _, tk, game, env = sandbox
+    assert both(env, tk / "KNOWLEDGEBASE.local.md") == "allow"
+    assert both(env, game / "KNOWLEDGEBASE.local.md") == "deny"          # separate layout: unread there
+    # TWIN: the in-game layout (the toolkit IS the game folder) keeps it writable at that root.
+    copy_shared_runtime(game)
+    env = dict(env, X4_TOOLKIT=str(game), X4_REFERENCE=str(game / "reference"))
+    env.pop("X4_GAME")
+    assert both(env, game / "KNOWLEDGEBASE.local.md") == "allow"
+    assert both(env, game / "sub" / "KNOWLEDGEBASE.local.md") == "deny"
+
+
 def test_N3_the_name_backstop_deny_routes_too(sandbox):
     """The second deny site (X4_GAME unset, `X4 Foundations/` in the path)."""
     tmp, _, _, env = sandbox

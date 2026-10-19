@@ -419,6 +419,14 @@ if on carriers_truncated; then
   deny "This command nests so many substitutions/wrappers that the guard stopped expanding them, so part of it was NEVER checked against any rule. Split it into simpler commands (or a script file) and re-run."
 fi
 
+# C7 (v4.0 release review): too many possible directories from `cd` targets with unset-variable
+# operators (${V:+x}...) -- the guard no longer knows where later relative paths land. Same verdict.
+if on cd_lanes_truncated; then
+  x4_guard_check_inert
+  _X4_UNRELAXED=1
+  deny "This command's cd targets have so many possible values (\${VAR:+...} / \${VAR-...} with unset variables) that the guard cannot tell which directory later relative paths are in, so it was NEVER fully checked. Use literal cd targets, or split it into simpler commands, and re-run."
+fi
+
 # === HARD BLOCK — delete the game installation ===
 # The target must be a real path in the tree, OR bear the game's name while not being
 # an archive. MEASURED 2026-08-30: 7 of 8 refusals here were a .zip merely NAMED after

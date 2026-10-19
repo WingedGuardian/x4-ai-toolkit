@@ -838,13 +838,62 @@ def _ansi_c_decode(body: str) -> str:
     return ''.join(out)
 
 
+#: C1 (v4.0 release review): the dequoted text of every word whose UNQUOTED part holds a
+#: brace expansion (`save_00{0,1,2}.xml.gz`, `x{1..3}`, `{a,b}/c`). tokens() returns the
+#: word as written, so a rule reading it sees ONE literal path where bash runs the command on
+#: several: MEASURED, `rm <saves>/save_00{0,1,2}.xml.gz` reached the save bridge as one save
+#: that did not exist, was "backed up" as nothing, and lifted the profile ask. Filled by
+#: tokens() as a side channel (keyed by TEXT, so a quoted word spelled identically in the same
+#: command is caught too -- the fail-closed direction), cleared per facts() call; facts()
+#: marks such an operand's evidence row unresolved. A quoted `'{0,1}'` is a literal name and
+#: is not recorded.
+_BRACE_WORDS: set = set()
+_BRACE_SEQ = re.compile(r"^(-?[0-9]+|[A-Za-z])[.][.](-?[0-9]+|[A-Za-z])([.][.]-?[0-9]+)?$")
+
+
+def _has_brace_expansion(m: str) -> bool:
+    """Does `m` (a word with every QUOTED character replaced by NUL) hold a brace expansion
+    bash would perform: an unquoted `{` not opening `${`, its matching unquoted `}`, and
+    between them a top-level unquoted `,` or a `x..y` sequence? Over-matching only makes an
+    operand unresolved, which keeps the ask -- never the reverse."""
+    for i, c in enumerate(m):
+        if c != "{" or (i and m[i - 1] == "$"):
+            continue
+        depth = 0
+        for j in range(i, len(m)):
+            if m[j] == "{":
+                depth += 1
+            elif m[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    body, d2 = m[i + 1:j], 0
+                    for ch in body:
+                        d2 += (ch == "{") - (ch == "}")
+                        if ch == "," and d2 == 0:
+                            return True
+                    if _BRACE_SEQ.match(body):
+                        return True
+                    break
+    return False
+
+
 def tokens(seg: str) -> list[tuple[str, bool]]:
     """(text, was_quoted) per token. Quotes are stripped from the text; a
     backslash-escaped space JOINS, which is why `X4\\ Foundations` must stay one token
-    -- the bash tokeniser split it and the game-delete block stopped firing."""
+    -- the bash tokeniser split it and the game-delete block stopped firing.
+
+    A word whose unquoted part holds a brace expansion is recorded in _BRACE_WORDS (C1)."""
     out, buf, quoted, started = [], [], False, False
+    mbuf = []                               # buf with every quoted/escaped char as NUL
     q = ""
     i = 0
+
+    def emit():
+        text = "".join(buf)
+        if "{" in mbuf and _has_brace_expansion("".join(mbuf)):
+            _BRACE_WORDS.add(text)
+        out.append((text, quoted))
+
     while i < len(seg):
         c = seg[i]
         if q:
@@ -854,8 +903,10 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
                   and seg[i + 1] in _DQ_ESCAPES):
                 i += 1
                 buf.append(seg[i])
+                mbuf.append(chr(0))
             else:
                 buf.append(c)
+                mbuf.append(chr(0))
         elif c in "\"'":
             # ANSI-C / locale quoting: `$'rm'` and `$"rm"` are the word `rm`. The `$`
             # is a quoting SIGIL, not part of the name. Without this the token was
@@ -864,6 +915,7 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
             dollar = bool(buf) and buf[-1] == "$"
             if dollar:
                 buf.pop()
+                mbuf.pop()
             if dollar and c == chr(39):
                 # $'...' -- take the WHOLE run and decode it. Popping the sigil was
                 # only half the job: inside a single-quoted run this loop appends
@@ -879,7 +931,9 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
                         j += 1
                     body.append(seg[j])
                     j += 1
-                buf.append(_ansi_c_decode(''.join(body)))
+                dec = _ansi_c_decode(''.join(body))
+                buf.append(dec)
+                mbuf.extend(chr(0) * len(dec))
                 quoted = started = True
                 i = j + 1
                 continue
@@ -888,17 +942,20 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
         elif c == chr(92) and i + 1 < len(seg):
             i += 1
             buf.append(seg[i])          # \<space> joins; \x keeps x
+            mbuf.append(chr(0))         # an escaped `{` / `,` is literal (C1)
             started = True
         elif c.isspace():
             if started:
-                out.append(("".join(buf), quoted))
+                emit()
             buf, quoted, started = [], False, False
+            mbuf = []
         else:
             buf.append(c)
+            mbuf.append(c)
             started = True
         i += 1
     if started:
-        out.append(("".join(buf), quoted))
+        emit()
     return out
 
 
@@ -987,7 +1044,7 @@ def resolve_all(tok: str, assigns: dict) -> list:
         # (`Z="$f"; rm -rf "$Z"`) is that array's elements, not its literal `(a b)`.
         elems = _array_elements(one)
         if elems and not _array_elements(tok):
-            out += [identity_subst(resolve(e, assigns)) for e in elems][:64]
+            out += [identity_subst(r) for e in elems for r in resolve_variants(e, assigns)][:64]
         else:
             out.append(identity_subst(one))
     return out
@@ -1579,9 +1636,11 @@ def _blank_arith(line: str, mask: list) -> str:
 def _ps_reads_stdin(sg: str) -> bool:
     """A PowerShell host whose program comes from stdin (`-Command -`, `-File -`, or no
     program argument at all)."""
-    toks = _drop_redirects(words(sg))
-    k = next((i for i, t in enumerate(toks) if _verb_name(t) in _PS_EXES), None)
-    return k is not None and _ps_host_payload(toks[k:])[0] in ("stdin", "none")
+    ws = words(sg)
+    k = _verb_at(sg)
+    if k is None or _verb_name(ws[k]) not in _PS_EXES:      # P1: the verb, not a PS-named word
+        k = next((i for i, t in enumerate(ws) if _verb_name(t) in _PS_EXES), None)
+    return k is not None and _ps_host_payload(_drop_redirects(ws[k:]))[0] in ("stdin", "none")
 
 
 def ps_heredoc_bodies(cmd: str) -> list[str]:
@@ -1666,7 +1725,9 @@ def _cmd_toks_read_stdin(toks: list) -> bool:
 def _cmd_reads_stdin(sg: str) -> bool:
     """A cmd.exe whose program is (partly) its stdin: see _cmd_toks_read_stdin."""
     toks = tokens_of(sg)
-    k = next((i for i, t in enumerate(toks) if _verb_name(t) == "cmd"), None)
+    k = _verb_at(sg)
+    if k is None or _verb_name(toks[k]) != "cmd":            # P1: see _verb_at
+        k = next((i for i, t in enumerate(toks) if _verb_name(t) == "cmd"), None)
     return k is not None and _cmd_toks_read_stdin(toks[k:])
 
 
@@ -1912,7 +1973,7 @@ def _verb_name(t: str) -> str:
 #: is goes quiet on `FOO=bar git clean -fdx` (B3). Shared so the two readers of
 #: this shape cannot drift apart, which is exactly how that bypass existed:
 #: `_verb_token` skipped assignments and `_git_destructive` did not.
-_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?[+]?=")    # P1: `+=`, `A[i]=`
 
 
 #: Wrapper flags that consume the NEXT token as their VALUE, per wrapper.
@@ -1975,6 +2036,25 @@ def _raw_words(seg: str, spans: bool = True) -> list:
     return out
 
 
+#: P1: the head of a word that opens an ARRAY value (`A=(` / `A+=(`) or a SUBSCRIPT (`A[`).
+_ARRAY_HEAD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*[+]?=$")
+_SUBSCRIPT_HEAD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _subscript_assigns(seg: str, i: int) -> bool:
+    """Is the `[` at seg[i] a subscript ASSIGNMENT (`A[i + 1]=v`, `A[x]+=v`)? Only then does bash
+    keep its blanks inside the word; a glob `a[b c]` is split like any other word."""
+    depth = 0
+    for j in range(i, len(seg)):
+        if seg[j] == "[":
+            depth += 1
+        elif seg[j] == "]":
+            depth -= 1
+            if depth == 0:
+                return seg.startswith("=", j + 1) or seg.startswith("+=", j + 1)
+    return False
+
+
 def _span_open(word: str) -> bool:
     """Does `word` hold a substitution / `${` span it never closes (a segment cut inside
     one)? Quote-aware, unlike counting parens: `A=$(echo "(")` is closed."""
@@ -1986,6 +2066,7 @@ def _scan_words(seg: str, spans: bool) -> tuple:
     (words so far, (index of the word that opened it, its start offset in `seg`))."""
     out, buf, stack = [], [], []
     esc, last, opened = False, "", None      # opened: (len(out), buf-start) of the outer span
+    inner = []                               # the word being read INSIDE a span (case/esac)
     for i, c, inq, _k in _qwalk(seg):
         if esc:
             esc, last = False, ""
@@ -2003,14 +2084,40 @@ def _scan_words(seg: str, spans: bool) -> tuple:
                 continue
             if spans:
                 top = stack[-1] if stack else ""
+                if stack and (c.isspace() or c in ";|&()" + chr(96)):
+                    # P1: a `case` inside a substitution: its pattern `a)` closes nothing.
+                    w = "".join(inner)
+                    if w == "case" and top != chr(96):
+                        stack.append("esac")
+                    elif w == "esac" and top == "esac":
+                        stack.pop()
+                    top = stack[-1] if stack else ""
+                    inner = []
+                elif stack:
+                    inner.append(c)
+                # The word so far, joined only for `(` / `[` at the outer level (O(n) per word:
+                # joining on every character made a 100 KB nested command quadratic).
+                head = "".join(buf) if c in "([" and not stack and len(buf) < 256 else ""
                 if c == chr(96) and top == chr(96):
                     stack.pop()
-                elif c in "({" and last == "$" or c == chr(96) or (c == "(" and top == ")"):
+                elif top == "esac" and c == ")":
+                    pass
+                elif (c == "{" and last == "$" or c == chr(96) or c == "(" and (
+                        last in ("$", "<", ">") or top in (")", "esac") or (not stack and _ARRAY_HEAD.match(head)))
+                      or c == "[" and (last == "$" or not stack and _SUBSCRIPT_HEAD.match(head)
+                                       and _subscript_assigns(seg, i))):
+                    # P1 (v4.0 release review): every span bash keeps inside ONE word -- `$(`,
+                    # `${`, backticks, and also process substitution `<(` / `>(`, legacy
+                    # arithmetic `$[`, an array value `A=(`, a subscript `A[i + 1]=`. MEASURED:
+                    # `X=<(echo a) rm -rf <game>` split at the blank and `a)` became the verb.
                     if not stack:
                         opened = (len(out), i - len(buf))
-                    stack.append({"(": ")", "{": "}"}.get(c, chr(96)))
+                    stack.append({"(": ")", "{": "}", "[": "]"}.get(c, chr(96)))
+                    inner = []
                 elif stack and c == top:
                     stack.pop()
+        elif stack and spans:
+            inner.append(c)
         last = c if not inq else ""
         buf.append(c)
     if stack and opened is not None:
@@ -2119,7 +2226,7 @@ def _verb_word(seg: str) -> tuple[str, int | None]:
             # THIS token is that value and never the command.
             want_value = False
             continue
-        if _ASSIGNMENT.match(t):
+        if _ASSIGNMENT.match(t) or _ASSIGNMENT.match(w):     # P1: `A[i + 1]=v` is one word
             continue
         name = _verb_name(t)
         if name in WRAPPERS:
@@ -2134,6 +2241,66 @@ def _verb_word(seg: str) -> tuple[str, int | None]:
             continue                    # a duration or a placeholder, not a command
         return t, at
     return "", None
+
+
+_SPLIT_EXPANSION = re.compile(r"[$](?=[A-Za-z_{(\[0-9@*#?!-])|[<>][(]|" + chr(96))
+
+
+def _env_split_index(seg: str):
+    """P1 (v4.0 release review): after a WRAPPER (`env`), `NAME=value` is an ordinary argument,
+    so an UNQUOTED expansion in it is WORD-SPLIT and a later field becomes the command bash
+    runs. MEASURED in Git Bash: `env X=$(echo a rm) -rf <dir>` runs `rm -rf <dir>`, and the guard
+    allowed it with `<game>` (verb() read `<game>`). Returns the tokens() index just past such a
+    word -- everything from there may be the command and its arguments -- or None."""
+    if "=" not in seg or not any(w in seg for w in WRAPPERS):
+        return None                     # the common case pays two substring scans
+    seen_wrapper = False
+    index = 0
+    for w in _raw_words(seg):
+        tk = tokens(w)
+        index += len(tk)
+        if not tk:
+            continue
+        t = tk[0][0]
+        if _verb_name(t) in WRAPPERS:
+            seen_wrapper = True
+            continue
+        if seen_wrapper and _ASSIGNMENT.match(t):
+            if any(not inq and _SPLIT_EXPANSION.match(w, i) for i, _c, inq, _k in _qwalk(w)):
+                return index
+            continue
+        if seen_wrapper and t.startswith("-"):
+            continue
+        if not seen_wrapper and _ASSIGNMENT.match(t):
+            continue
+        return None
+    return None
+
+
+def _verb_at(seg: str, default=None):
+    """The tokens(seg) INDEX of the command name (_verb_word's), or `default`. P1 (v4.0
+    release review): `next(i for i, t in enumerate(toks) if t == vt)` took the FIRST token
+    spelled like the verb -- inside an assignment's `<( echo a )` or `$(echo a b)` that is the
+    wrong one, and every helper reading "the words after the verb" read the prefix instead."""
+    at = _verb_word(seg)[1]
+    return default if at is None else at
+
+
+def _verb_offset(seg: str) -> int:
+    """The CHARACTER offset in `seg` of the word holding the command name, or -1."""
+    at = _verb_word(seg)[1]
+    if at is None:
+        return -1
+    pos, index = 0, 0
+    for w in _raw_words(seg):
+        start = seg.find(w, pos)
+        if start < 0:
+            return -1
+        if index == at:
+            return start
+        index += len(tokens(w))
+        pos = start + len(w)
+    return -1
 
 
 def _verb_token(seg: str) -> str:
@@ -2182,7 +2349,9 @@ def resolve_verb(seg: str, assigns: dict[str, str]) -> str:
     r = resolve(t, assigns)
     if r == t or has_unresolved(r) or not _BARE_VERB.match(r):
         return seg
-    i = seg.find(t)
+    # P1: the verb's OWN word, not the first place its text occurs (an assignment can hold it).
+    o = _verb_offset(seg)
+    i = seg.find(t, o) if o >= 0 else seg.find(t)
     if i < 0:                            # tokens() de-quoted it beyond recognition
         return seg
     return seg[:i] + r + seg[i + len(t):]
@@ -2330,15 +2499,15 @@ def _icacls_paths(seg: str) -> list:
 
 def _operands(seg: str) -> list[str]:
     """Non-flag, non-redirect operands after the verb."""
-    out, seen_verb, skip = [], False, False
-    for t, quoted in tokens(seg):
+    out, skip = [], False
+    # P1: the verb is where _verb_word finds it (whole words), not the first token that is
+    # not an assignment -- a spaced `X=<(echo a)` made `a)` the verb and `rm` an operand.
+    vi = _verb_word(seg)[1]
+    if vi is None:
+        return []
+    for t, quoted in tokens(seg)[vi + 1:]:
         if skip:
             skip = False
-            continue
-        if not seen_verb:
-            if quoted or not (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t)
-                              or t in WRAPPERS or t.startswith("-")):
-                seen_verb = True
             continue
         if t in ("<", ">", ">>", ">|", "&>"):
             skip = True
@@ -2692,14 +2861,9 @@ def exact_copy_sources(seg: str) -> list[str] | None:
     """
     if verb(seg) not in ("cp", "mv"):
         return None
-    toks = tokens(seg)
     operands, directory = [], None
-    after_verb, options, skip = False, True, False
-    for token, quoted in toks:
-        if not after_verb:
-            if token == _verb_token(seg):
-                after_verb = True
-            continue
+    options, skip = True, False
+    for token, quoted in tokens(seg)[_verb_at(seg, -1) + 1:]:      # P1: see _verb_at
         if skip:
             directory, skip = token, False
             continue
@@ -2759,8 +2923,7 @@ def robocopy_effects(seg: str) -> tuple:
     if verb(seg) != "robocopy":
         return [], [], []
     toks = tokens_of(seg)
-    vt = _verb_token(seg)
-    k = next((i for i, t in enumerate(toks) if t == vt), 0)
+    k = _verb_at(seg, 0)                # P1: see _verb_at
     sw = [t.lstrip("/").split(":", 1)[0].lower() for t in toks[k + 1:] if _ROBO_SWITCH.match(t)]
     ops = [t for t in toks[k + 1:] if not _ROBO_SWITCH.match(t)
            and not t.startswith(("<", ">")) and not re.match(r"^\d+>", t)]
@@ -2783,8 +2946,7 @@ def modify_targets(seg: str) -> list[str]:
     if v not in ("touch", "chmod", "chown", "chgrp", "ln"):
         return []
     toks = tokens(seg)
-    vt = _verb_token(seg)
-    k = next((i for i, (t, _q) in enumerate(toks) if t == vt), 0)
+    k = _verb_at(seg, 0)                # P1: see _verb_at
     ops, skip, target_dir = [], False, None
     for i, (t, q) in enumerate(toks[k + 1:], k + 1):
         if skip:
@@ -2852,8 +3014,7 @@ def xargs_feed(seg: str, prev) -> list[str]:
 def _find_roots(seg: str) -> list:
     """The starting points of a find: operands after the verb, before the first `-flag`."""
     toks_q = tokens(seg)
-    vt = _verb_token(seg)
-    start = next((i + 1 for i, (t, _q) in enumerate(toks_q) if t == vt), 1)
+    start = _verb_at(seg, 0) + 1        # P1: see _verb_at
     out = []
     for t, quoted in toks_q[start:]:
         if not quoted and t.startswith(("-", "(", "!")):
@@ -3007,8 +3168,7 @@ def _find_delete(seg: str) -> tuple:
     # NO path. Found by scripts/fuzz-guard.py on the HK-2 seed (AUDIT-2026-09-24): 9
     # wrapper spellings, ask -> allow.
     toks_q = tokens(seg)
-    vt = _verb_token(seg)
-    start = next((i + 1 for i, (t, _q) in enumerate(toks_q) if t == vt), 1)
+    start = _verb_at(seg, 0) + 1        # P1: see _verb_at
     out = []
     for t, quoted in toks_q[start:]:
         if not quoted and t.startswith("-"):
@@ -3165,15 +3325,11 @@ def search_paths(seg: str, require_recursive: bool = True) -> list[str]:
     recursive = SEARCH_VERBS[v]
     pattern_given = False
     ops: list[str] = []
-    seen_verb = skip = False
-    for t, quoted in tokens(seg):
+    skip = False
+    vi = _verb_word(seg)[1]             # P1: see _operands
+    for t, quoted in (tokens(seg)[vi + 1:] if vi is not None else []):
         if skip:
             skip = False
-            continue
-        if not seen_verb:
-            if quoted or not (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t)
-                              or t in WRAPPERS or t.startswith("-")):
-                seen_verb = True
             continue
         if not quoted and t.startswith("-") and t != "-":
             if _RECURSIVE.match(t) or t == "--recursive":
@@ -3237,6 +3393,12 @@ def cwd_track(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
 #: this bound a lane takes the value that lands under a configured root instead (the
 #: FX-G6 single choice) -- never silently the plain resolve.
 _MAX_CD_LANES = 16
+#: C7 (v4.0 release review): set when a walk passed _MAX_CD_LANES. Picking one value per lane
+#: there was the shape FX-G7 itself calls wrong -- MEASURED from the toolkit root: `cd
+#: "${A:+a}${B:+b}." && cd "${C:+c}${D:+d}${E:+e}<reference>" && rm -rf libraries` ADVISED (v3.3.1
+#: denied). Past the bound the directory is UNKNOWN, so facts() reports `cd_lanes_truncated`
+#: and protect-bash.sh DENIES (split the command), exactly as for carriers_truncated.
+_CD_LANES_TRUNCATED = [False]
 
 
 def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None = None, *, physical=False) -> list:
@@ -3314,8 +3476,9 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
         if len(lanes) * len(cands) <= _MAX_CD_LANES:
             lanes = [step(seg, v, ln, c) for ln in lanes for c in cands]
         else:
-            # Past the bound: one value per lane, the first landing under a configured
-            # root, else the plain resolve() (the FX-G6 rule).
+            # Past the bound: the directory is UNKNOWN (C7) -- reported, and refused by
+            # protect-bash.sh. The lanes below only keep the walk going for the other facts.
+            _CD_LANES_TRUNCATED[0] = True
             lanes = [step(seg, v, ln, next((c for c in cands
                                             if any(rt and under(join_cwd(ln[0], c), rt)
                                                    for rt in (roots or {}).values())),
@@ -3555,30 +3718,11 @@ def _git_destructive(seg, wanted, deep=False):
     # one answer. MEASURED 2026-09-06: fixing only `_verb_token` left 10 bypasses here
     # (`env -u X4_GAME git -C <game> clean -fdx` and four more spellings), because
     # these two rules do their own scan rather than keying off verb().
-    vi = 0
-    seen_wrapper = False
-    wrapper = ""
-    want_value = False
-    while vi < len(toks):
-        t = toks[vi]
-        if want_value:
-            want_value = False
-            vi += 1
-        elif _ASSIGNMENT.match(t):
-            vi += 1
-        elif _verb_name(t) in WRAPPERS:
-            seen_wrapper = True
-            wrapper = _verb_name(t)
-            vi += 1
-        elif seen_wrapper and (t.startswith("-") or _WRAPPER_ARG.match(t)):
-            # Only AFTER a wrapper: a bare number or flag there belongs to the
-            # wrapper (`timeout 5`, `nice -n 5`), never to git.
-            if t in _WRAPPER_VALUE_OPTS.get(wrapper, ()):
-                want_value = True
-            vi += 1
-        else:
-            break
-    if vi >= len(toks):
+    # P1 (v4.0 release review): the SAME verb index _verb_word computes, from whole WORDS --
+    # it steps over assignments and wrappers exactly as this loop did, and an assignment
+    # holding a spaced `<(...)` no longer offers a fragment (`a)`) as the command.
+    vi = _verb_word(seg)[1]
+    if vi is None or vi >= len(toks):
         return []
     si = next((i for i, t in enumerate(toks[vi + 1:], vi + 1)
                if not t.startswith("-") and i not in skip), None)
@@ -3756,15 +3900,11 @@ def sed_in_place_targets(seg):
                   for t, q in toks)
     if not inplace:
         return []
-    files, seen_verb, skip, script_flag = [], False, False, False
-    for t, q in toks:
+    files, skip, script_flag = [], False, False
+    vi = _verb_word(seg)[1]             # P1: see _operands
+    for t, q in (toks[vi + 1:] if vi is not None else []):
         if skip:
             skip = False
-            continue
-        if not seen_verb:
-            if q or not (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t) or t in WRAPPERS
-                         or t.startswith("-")):
-                seen_verb = True
             continue
         if (not q) and t in ("-e", "-f", "--expression", "--file"):
             script_flag = True
@@ -4250,7 +4390,7 @@ def _echo_printf_program(prev: str) -> list:
     printf format cannot be reproduced."""
     toks = tokens(prev)
     vt = _verb_token(prev)
-    k = next((i for i, (t, _q) in enumerate(toks) if t == vt), 0)
+    k = _verb_at(prev, 0)               # P1: see _verb_at
     args = [t for t, _q in toks[k + 1:]]
     args = _drop_redirects(args)
     if _verb_name(verb(prev)) == "echo":
@@ -4269,7 +4409,8 @@ def _echo_printf_program(prev: str) -> list:
     # The producer's words AS WRITTEN: everything after the verb WORD -- stepping past the rest
     # of a quoted or ANSI-C verb (`"echo"`, `$'echo'`, `"C:/x/echo.exe"`), whose closing
     # quote would otherwise open a string over the program (fuzz-guard, FX-G4).
-    i = prev.find(vt) if vt else -1
+    o = _verb_offset(prev)              # P1: the verb's own word, not its first spelling
+    i = (prev.find(vt, o) if o >= 0 else prev.find(vt)) if vt else -1
     raw = ""
     if i >= 0:
         mask = _quote_mask(prev)
@@ -4294,8 +4435,7 @@ def _procsub_program(seg: str) -> list:
     toks = tokens(seg)
     if not toks or _verb_name(verb(seg)) not in _SHELL_SINKS:
         return []
-    vt = _verb_token(seg)
-    k = next((i for i, (t, _q) in enumerate(toks) if t == vt), None)
+    k = _verb_at(seg)                   # P1: see _verb_at
     if k is None:
         return []
     # The SHELL'S OWN option words, up to its script operand (FX-G5 / reviewer J2 item 2,
@@ -4333,7 +4473,8 @@ def _procsub_program(seg: str) -> list:
     if syntax_only:
         return []                      # `bash -n`: a syntax check, nothing is executed
     mask = _quote_mask(seg)
-    at = next((i for i in range(len(seg) - 1)
+    # P1: the first `<(` AFTER the shell's own word -- an assignment prefix can hold one.
+    at = next((i for i in range(max(_verb_offset(seg), 0), len(seg) - 1)
                if seg[i:i + 2] == "<(" and not mask[i]), -1)
     close = _match_paren(seg, at + 1) if at >= 0 else -1
     # No `)` in the segment: the segmenter took it as a case-arm/subshell close (`x) bash
@@ -4693,8 +4834,7 @@ def _ps_stdin_program(seg: str, prev) -> tuple:
     v = verb(prev)
     if v in ("echo", "printf"):
         toks = tokens(prev)
-        vt = _verb_token(prev)
-        k = next((i for i, (t, _q) in enumerate(toks) if t == vt), 0)
+        k = _verb_at(prev, 0)           # P1: see _verb_at
         words = [t for t, q in toks[k + 1:] if q or not t.startswith("-")]
         if v == "printf" and words and "%" in words[0]:
             words = words[1:]                  # the format string
@@ -4727,6 +4867,9 @@ def _windows_carrier(seg: str, cmd: str, prev=None) -> list:
     # payload ASKS (MEASURED in the friction replay). Only UNQUOTED redirect tokens are
     # dropped, so a `>` inside the quoted payload is still the payload's own.
     raw = tokens(seg)
+    vi = _verb_at(seg)
+    if vi is not None and _verb_name(raw[vi][0]) in ("cmd",) + _PS_EXES:
+        raw = raw[vi:]                  # P1: from the verb's own word (see _verb_at)
     toks, i = [], 0
     while i < len(raw):
         t, q = raw[i]
@@ -4768,7 +4911,9 @@ def _windows_carrier(seg: str, cmd: str, prev=None) -> list:
         return inline + [cmd_to_sh([ln]) for t_ in texts for ln in t_.split(chr(10)) if ln.strip()]
     kind, payload = _ps_host_payload(toks)
     if kind == "cmd":
-        text = resolve(payload, _text_assignments(cmd))
+        # C6: every value bash can hand the host (`-Command "${NOPE:+x}Remove-Item <ref>"`),
+        # walked as one program -- a superset of each variant's commands, one translation.
+        text = chr(10).join(dict.fromkeys(resolve_variants(payload, _text_assignments(cmd))))
     elif kind == "encoded":
         try:
             text = base64.b64decode(payload, validate=True).decode("utf-16-le")
@@ -5002,6 +5147,71 @@ _AGENT_SETTINGS = re.compile(r"(^|/)\.claude/settings[^/]*\.json$")
 #: produced a grant matching a 3-save delete). Claude Code: ~/.claude/projects/**.jsonl;
 #: Codex: ~/.codex/sessions/**.jsonl. Memory notes (.md) beside them are not matched.
 _HOST_TRANSCRIPT = re.compile(r"(^|/)\.claude/projects/.*\.jsonl$|(^|/)\.codex/sessions/.*\.jsonl$")
+#: M1: the transcript TREES, for a copy/move whose destination is a directory there (`cp x.jsonl
+#: ~/.claude/projects/p/`, `cp -t <dir> x.jsonl` were ALLOWED -- the file lands as <dir>/x.jsonl).
+_HOST_TRANSCRIPT_TREE = re.compile(r"(^|/)\.claude/projects(/|$)|(^|/)\.codex/sessions(/|$)")
+#: ...and the same trees RELOCATED by the host's own variables: Claude Code keeps transcripts in
+#: $CLAUDE_CONFIG_DIR/projects, Codex in $CODEX_HOME/sessions. Matched as written (`$CODEX_HOME/
+#: sessions/...`) and, when the hook's environment holds the variable, by its value.
+_RELOCATED_TREE = re.compile(r"\$\{?(CLAUDE_CONFIG_DIR\}?/projects|CODEX_HOME\}?/sessions)(/|$)")
+
+
+def _transcript_trees() -> list:
+    out = []
+    for var, sub in (("CLAUDE_CONFIG_DIR", "/projects"), ("CODEX_HOME", "/sessions")):
+        v = os.environ.get(var)
+        if v:
+            out.append(norm(v).rstrip("/") + sub)
+    return out
+
+
+def _in_transcript_tree(path: str, raw: str) -> bool:
+    n = norm(path or raw)
+    return bool(_HOST_TRANSCRIPT_TREE.search(n) or _RELOCATED_TREE.search(raw or "")
+                or any(n == t or under(n, t) for t in _transcript_trees()))
+
+
+def _is_transcript(path: str, raw: str) -> bool:
+    n = norm(path or raw)
+    return bool(_HOST_TRANSCRIPT.search(n)) or (n.endswith(".jsonl") and _in_transcript_tree(path, raw))
+
+
+_COPY_RECURSIVE = re.compile(r"^-[A-Za-z]*[rRa][A-Za-z]*$|^--(recursive|archive)$")
+
+
+def _copy_lands_a_transcript(seg: str, dests: list, assigns: dict) -> bool:
+    """M1: does this cp/mv/install/rsync put a `.jsonl` INTO a transcript tree under the SOURCE's
+    name (a directory destination)? Fail closed: a source that is unresolved, a pattern, or a
+    recursive copy (it may carry a .jsonl inside) counts too."""
+    if verb(seg) not in COPY_VERBS or verb(seg) == "tee":
+        return False
+    if not any(_in_transcript_tree(pp, rr) for pp, _u, rr in dests):
+        return False
+    toks = tokens_of(seg)
+    if verb(seg) == "rsync" or any(_COPY_RECURSIVE.match(t) for t in toks):
+        return True
+    dest_raw = set(copy_dests(seg))
+    sources = [o for o in _operands(seg) if o not in dest_raw]
+    if not sources:
+        return True
+    for o in sources:
+        for r in resolve_all(o, assigns):
+            if has_unresolved(r) or any(c in r for c in _OPERAND_PATTERN_CHARS) or                     norm(r).rstrip("/").endswith(".jsonl"):
+                return True
+    return False
+
+
+#: I1: a variable that makes a shell run code its `-c` text never shows (startup file, exported
+#: function, xtrace prompt, zsh's dot-dir), named ANYWHERE in the command -- a prefix, `env`,
+#: `export`/`declare`/a plain assignment, `printf -v`, PowerShell `$env:` (whose translation
+#: drops the assignment, so the raw PowerShell text is searched too). Case-sensitive for the
+#: shell text; the PowerShell form is case-insensitive, as Windows variables are.
+_SHELL_STARTUP_NAMES = r"BASH_ENV|ENV|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|ZDOTDIR|BASH_FUNC_[^\s=]*"
+_SHELL_STARTUP_SET = re.compile(r"(?<![A-Za-z0-9_])(?:" + _SHELL_STARTUP_NAMES + r")(?![A-Za-z0-9_])")
+_PS_STARTUP_SET = re.compile(r"\$env:(?:" + _SHELL_STARTUP_NAMES + r")(?![A-Za-z0-9_])|"
+                             r"(?<![A-Za-z0-9_$:])(?:BASH_ENV|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|"
+                             r"ZDOTDIR|BASH_FUNC_[^\s=]*)(?![A-Za-z0-9_])|[\"']ENV[\"']", re.IGNORECASE)
+_SHELL_STARTUP_ENV = [False]
 
 
 def _carries_program_text(seg: str) -> bool:
@@ -5012,18 +5222,36 @@ def _carries_program_text(seg: str) -> bool:
     held here, and stays a blocker."""
     v = verb(seg)
     toks = tokens_of(seg)
-    k = next((i for i, t in enumerate(toks) if _verb_name(t) == v), None)
+    k = _verb_at(seg)                   # P1: see _verb_at
     if k is None:
         return False
     rest = toks[k + 1:]
+    # I1 (v4.0 release review): a carrier is transparent only when the TEXT is all it runs.
+    # A shell also runs STARTUP CODE that the text never shows -- MEASURED, each lifted the
+    # profile ask once one save qualified: `BASH_ENV=<f> bash -c '...'`, `env BASH_ENV=<f> bash
+    # -c true`, `bash --rcfile <f> -i -c true`, `bash -lc true`, PowerShell `$env:BASH_ENV=...;
+    # bash -c 'true'`. So: no startup-steering variable anywhere in the command, and bash/sh/
+    # dash/ksh with exactly a bare `-c` (zsh reads .zshenv from $ZDOTDIR/$HOME on EVERY run);
+    # cmd only with /d (AutoRun off); a PowerShell host only with -NoProfile.
+    if _SHELL_STARTUP_ENV[0]:
+        return False
     if v == "cmd":
-        return any(_CMD_RUN_SWITCH.fullmatch(t) or _CMD_KEEP_SWITCH.fullmatch(t) for t in rest)
+        switches = [t for t in rest[:next((i for i, t in enumerate(rest) if _CMD_RUN_SWITCH.fullmatch(t)
+                                           or _CMD_KEEP_SWITCH.fullmatch(t)), len(rest)) + 1]]
+        return (any(_CMD_RUN_SWITCH.fullmatch(t) or _CMD_KEEP_SWITCH.fullmatch(t) for t in rest)
+                and any(re.fullmatch(r"/{1,2}[dD]", t) for t in switches))
     if v in _SHELLS:
-        return any(_DASH_C.match(t) for t in rest)
+        return v != "zsh" and rest[:1] == ["-c"] and len(rest) > 1
     if v == "eval":
         return bool(rest)
     if v in _PS_EXES:
-        return _ps_host_payload(toks[k:])[0] in ("cmd", "encoded")
+        # Only a switch BEFORE the program text counts (`-Command x -NoProfile` is text).
+        head = rest[:next((i for i, t in enumerate(rest) if re.fullmatch(
+            r"[-/](c(o(m(m(a(n(d)?)?)?)?)?)?|ec|e(n(c(o(d(e(d(c(o(m(m(a(n(d)?)?)?)?)?)?)?)?)?)?)?)?)?|cwa|"
+            r"commandwitha(r(g(s)?)?)?)", t, re.I)), len(rest))]
+        no_profile = any(t[:1] in ("-", "/") and len(t) >= 4 and "noprofile".startswith(t[1:].lower())
+                         for t in head)
+        return no_profile and _ps_host_payload(toks[k:])[0] in ("cmd", "encoded")
     return False
 
 
@@ -5034,6 +5262,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     background = inp.get("run_in_background", False)
     del _UNTRANSLATED[:]
     _WIN_DIALECT.clear()
+    _BRACE_WORDS.clear()                # C1: per call, like the two above
+    _CD_LANES_TRUNCATED[0] = False      # C7: per call
     _ps_spent[0] = 0.0                  # the translation budget is per hook call
 
     # THE POWERSHELL TOOL (AUDIT-2026-09-24 HK-1). It had no PreToolUse guard at all, so
@@ -5061,6 +5291,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _GIT_ENV_CONFIG[0] = bool(_GIT_CONFIG_ENV_SET.search(body)
                               or _GIT_CONFIG_ENV_SET.search(inp.get("command") or "")
                               or _GIT_HOME_SET.search(body))
+    # I1: a variable that steers a shell's startup code, named anywhere (see _carries_program_text).
+    _SHELL_STARTUP_ENV[0] = bool(_SHELL_STARTUP_SET.search(body) or _SHELL_STARTUP_SET.search(cmd)
+                                 or from_powershell and _PS_STARTUP_SET.search(inp.get("command") or ""))
     # Heredoc bodies come from the RAW command: strip_heredocs has already removed
     # them from `body`, and only the ones opened by a shell are commands at all.
     extra = [strip_comments(h) for h in heredoc_bodies(spliced)]
@@ -5172,7 +5405,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     def _subst_verb(seg):
         """Is this segment's command name a substitution -- written in place, or (FX-G4 /
         reviewer G-OUT, MEASURED: `x=$(printf rm); $x -rf "<reference>"` was ALLOWED while
-        `x=rm; $x` denied) through a variable this command assigned a substitution to?"""
+        `x=rm; $x` denied) through a variable this command assigned a substitution to?
+        P1: or a field WORD-SPLIT out of an `env NAME=<unquoted expansion>` (_env_split_index)."""
+        if _env_split_index(seg) is not None:
+            return True
         t = _verb_token(seg)
         if not t:
             return False
@@ -5207,7 +5443,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         if not _subst_verb(seg):
             return False
         # Every value of every operand (FX-G6 / reviewer K C1): `"${NOPE:+x}<game>"` too.
-        for r in (r for o in _operands(seg) for r in resolve_variants(o, assigns)):
+        split = _env_split_index(seg)
+        ops = _operands(seg) if split is None else [
+            t for t, q in tokens(seg)[split:] if q or not t.startswith("-")]
+        for r in (r for o in ops for r in resolve_variants(o, assigns)):
             if any(v and is_root(r, v) for v in roots.values()):
                 return True
             # ...and anything INSIDE reference/, whose every delete and write is a hard
@@ -5249,7 +5488,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         for p in paths:
             # expand=False: resolved exactly as before this lane -- loop words and
             # `$(...)` values are not substituted, so such an operand stays unresolved.
-            rs = resolve_all(p, assigns) if expand else [resolve(p, plain_assigns)]
+            # C6 (v4.0 release review): EVERY value here too. One resolve() judged
+            # `> "${NOPE:+x}<reference>/libraries/wares.xml"` as the alternate only -- ADVISED
+            # where the plain path denies (broken since FX-G5 47d06cd; 0801a1a fixed the
+            # other rules only). resolve_variants' first value is the plain resolve().
+            rs = resolve_all(p, assigns) if expand else resolve_variants(p, plain_assigns)
             for r in rs:
                 # A LEADING ROOT VARIABLE IS ITS ROOT, for every operand (FX-G2 items 1-2,
                 # v4.0.0 delta review). Only `cd` (R2-P1) and the icacls rule substituted it,
@@ -5281,7 +5524,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                                              posix_bash=posix_bash)
                     row = {"operation": operation, "path": physical, "dialect": cur_dialect[0],
                                      "raw": r, "unresolved": unres or not physical or has_unresolved(physical)
-                                     or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical)),
+                                     or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical))
+                                     # C1: an unquoted brace-expanded word names SEVERAL paths
+                                     # (or none), never the one literal path written here.
+                                     or p in _BRACE_WORDS or r in _BRACE_WORDS,
                                      "scope": scope}
                     if copy_sources is not None:
                         sources = []
@@ -5290,7 +5536,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                                 resolved = subst_root_var(resolved, roots)
                                 placed = physical_join(physical_cwd, resolved, posix_bash=posix_bash)
                                 sources.append({"path": placed, "unresolved": not placed or has_unresolved(resolved)
-                                                or has_unresolved(placed) or bool(_DEBRIS.search(resolved))})
+                                                or has_unresolved(placed) or bool(_DEBRIS.search(resolved))
+                                                or source in _BRACE_WORDS or resolved in _BRACE_WORDS})
                         row["copy_sources"] = sources
                     evidence.append(row)
         return out
@@ -5301,6 +5548,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     gitwipe_t, gitdiscard_t, gitwipe_pairs = [], [], []
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
     search_seg, git_all = False, False
+    transcript_copy = False             # M1, see _copy_lands_a_transcript
     for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0] in zip(
             seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect):
         if execution_context:
@@ -5329,8 +5577,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # truncate / dd of=are truncating writes, judged as `>` is (see clobber_targets).
         redir_t += [("truncate",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False, operation="write")]
         mv_src += prep(move_sources(s), c_cwd, c_old, operation="move")
-        copy_t += prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination",
-                       copy_sources=exact_copy_sources(s))
+        dests_ = prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination",
+                      copy_sources=exact_copy_sources(s))
+        copy_t += dests_
+        transcript_copy = transcript_copy or _copy_lands_a_transcript(s, dests_, assigns)
         sed_t += prep(sed_in_place_targets(s), c_cwd, c_old, operation="write")
         out_t += prep(output_targets(s), c_cwd, c_old, False, operation="write")
         search_files += prep(search_paths(s, require_recursive=False), c_cwd, c_old)
@@ -5542,6 +5792,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # data and reports success. Unreachable by ordinary work: MEASURED over
         # 13,503 real commands, the largest walk produced 25 of the 250 allowed.
         "carriers_truncated": carriers_truncated,
+        "cd_lanes_truncated": _CD_LANES_TRUNCATED[0],
         # A cmd/PowerShell carrier whose text could not be translated (HK-2): some
         # command reached NO rule, so -- like the truncation above -- not a clean pass.
         "carrier_untranslated": bool(_UNTRANSLATED),
@@ -5615,8 +5866,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             for pp, _u, rr in copy_t + redir_t_all + sed_t + out_t),
         "writes_profile": hit(writes_any, "profile"),
         # H1: any shell write/append/copy/move ONTO a host session transcript (see _HOST_TRANSCRIPT).
-        "writes_host_transcript": any(
-            _HOST_TRANSCRIPT.search(norm(pp or rr))
+        # M1: also a directory destination that receives a .jsonl, and the host-relocated trees.
+        "writes_host_transcript": transcript_copy or any(
+            _is_transcript(pp, rr)
             for pp, _u, rr in copy_t + redir_t_all + sed_t + out_t + mod_t),
         "copy_into_game_or_profile": bool(copy_t) and (
             hit(copy_t, "game") or hit(copy_t, "profile")),
