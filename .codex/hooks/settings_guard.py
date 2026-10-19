@@ -66,13 +66,65 @@ def is_settings(path: str) -> bool:
     return bool(SETTINGS.search(norm(path)))
 
 
+#: The NAME part of a shell word `NAME=value` that is not a plain literal: built only from name
+#: characters plus quoting / expansion characters (`X4_GUA""RD`, `X4_$'GUARD'`, `X4_$V`,
+#: `${P}GUARD`), and holding at least one of the latter. A `(` or `/` (a `$(date)=x`, a URL's
+#: `?a=b`) is not a name and is left alone.
+_DYN_NAME = re.compile(r"^(?=.*[\"'\\$`])[A-Za-z0-9_\"'\\${}`]+$")
+
+
+def _shell_words(s: str):
+    """`s` split at UNQUOTED blanks and command separators (quote-aware, stdlib only)."""
+    out, buf, q, i = [], [], "", 0
+    while i < len(s):
+        c = s[i]
+        if q:
+            buf.append(c)
+            if c == q:
+                q = ""
+            elif c == chr(92) and q == '"' and i + 1 < len(s):
+                i += 1
+                buf.append(s[i])
+        elif c == chr(92) and i + 1 < len(s):
+            buf += [c, s[i + 1]]
+            i += 1
+        elif c in "\"'":
+            q = c
+            buf.append(c)
+        elif c.isspace() or c in ";&|()<>":
+            if buf:
+                out.append("".join(buf))
+            buf = []
+        else:
+            buf.append(c)
+        i += 1
+    if buf:
+        out.append("".join(buf))
+    return out
+
+
+def dynamic_assignment(s: str) -> bool:
+    """Does shell text `s` assign through a NAME that is not a plain literal? (v4.0 release
+    review, lane F7, MEASURED in Git Bash: `env X4_GUA""RD=off bash ...`, `export X4_GUA""RD=off;
+    bash ...`, `env X4_$'GUARD'=off bash ...` and `V=GUARD; env X4_$V=off bash ...` each SET
+    X4_GUARD=off, and none names the key literally.) Fail closed: any such name is refused,
+    whatever it spells -- what it spells is decided at run time, or by quote removal."""
+    for w in _shell_words(s):
+        eq = w.find("=")
+        if eq > 0 and w[eq - 1] == "+":
+            eq -= 1
+        if eq > 0 and _DYN_NAME.match(w[:eq]):
+            return True
+    return False
+
+
 def guard_keys(text: str):
     """(keys set in an `env` block, decidable?) for settings-file TEXT. Unparseable JSON is
     decidable only when the text cannot spell a key at all."""
     try:
         doc = json.loads(text) if text.strip() else {}
     except ValueError:
-        if any(k in text.upper() for k in KEYS) or _ESCAPE.search(text):
+        if any(k in text.upper() for k in KEYS) or _ESCAPE.search(text) or dynamic_assignment(text):
             return [], False
         return [], True
     found = []
@@ -96,6 +148,10 @@ def guard_keys(text: str):
             # block was read. The key ANYWHERE in the file is refused (USER DECISION: "block
             # X4_GUARD there"); a settings file has no legitimate use for it.
             found.append(_MENTION.search(o).group(0))
+        elif isinstance(o, str) and dynamic_assignment(o):
+            # ...and a NAME spelled so that no literal text shows it (see dynamic_assignment).
+            found.append("X4_GUARD (an assignment whose variable NAME is quoted, escaped or "
+                         "built from a variable -- write the name literally)")
     return found, True
 
 

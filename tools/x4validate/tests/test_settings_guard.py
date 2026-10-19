@@ -143,6 +143,42 @@ def test_only_the_TOP_LEVEL_permissions_block_is_exempt(sandbox):
         assert d == want, (doc, d)
 
 
+#: Lane F7 (v4.0 release review), MEASURED in Git Bash: each SETS X4_GUARD=off, none names it.
+DYNAMIC_NAMES = ['env X4_GUA""RD=off bash .claude/hooks/protect-bash.sh',
+                 'export X4_GUA""RD=off; bash .claude/hooks/protect-bash.sh',
+                 "env X4_$'GUARD'=off bash .claude/hooks/protect-bash.sh",
+                 "V=GUARD; env X4_$V=off bash .claude/hooks/protect-bash.sh",
+                 "env ${P}GUARD=off bash .claude/hooks/protect-bash.sh",
+                 "env X4_GUA" + chr(92) + "RD=off bash .claude/hooks/protect-bash.sh"]
+BENIGN_COMMANDS = ["bash .claude/hooks/protect-bash.sh", "FOO=1 bash .claude/hooks/x.sh",
+                   'bash "$CLAUDE_PROJECT_DIR/.claude/hooks/x.sh"', "echo $(date)=x",
+                   "jq '.a=1' f.json", 'X="$HOME" bash x.sh', "curl https://h/x?a=b"]
+
+
+@needs_bash
+@pytest.mark.parametrize("command", DYNAMIC_NAMES)
+def test_F7_a_hook_command_assigning_through_a_non_literal_NAME_is_denied(sandbox, command):
+    """The class, not the spellings: a NAME that is quoted, escaped or built from a variable is
+    decided at run time, so the literal-text match cannot see it -- refused whatever it spells."""
+    _tmp, _tk, env, s = sandbox
+    doc = json.loads(json.dumps(_HOOKCMD))
+    doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = command
+    d, why = _hook(env, "protect-files.sh", {"tool_name": "Write", "tool_input": {
+        "file_path": str(s), "content": json.dumps(doc)}})
+    assert d == "deny" and "X4_GUARD" in why, (command, d, why)
+
+
+@needs_bash
+@pytest.mark.parametrize("command", BENIGN_COMMANDS)
+def test_F7_TWIN_ordinary_hook_commands_are_allowed(sandbox, command):
+    _tmp, _tk, env, s = sandbox
+    doc = json.loads(json.dumps(_HOOKCMD))
+    doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = command
+    d, why = _hook(env, "protect-files.sh", {"tool_name": "Write", "tool_input": {
+        "file_path": str(s), "content": json.dumps(doc)}})
+    assert d == "allow", (command, d, why)
+
+
 @needs_bash
 def test_an_edit_whose_old_string_does_not_apply_is_judged_on_its_new_text(sandbox):
     """FX-G4 / reviewer H-M1: an Edit whose old_string is not in the file as read here was ALLOWED
