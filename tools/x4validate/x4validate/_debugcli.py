@@ -227,7 +227,7 @@ def _usable_meta(archived: Path) -> bool:
     try:
         meta = read_archive_meta(archived)
     except (OSError, ValueError):
-        return False
+        return False  # silent-ok: unusable metadata means "do not reuse"; the caller archives anew and keeps the old copy
     return isinstance(meta, dict) and meta.get("degraded") is False
 
 
