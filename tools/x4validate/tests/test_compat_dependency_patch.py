@@ -16,6 +16,8 @@ import contextlib
 import io
 import json
 
+import pytest
+
 from x4validate import _compat, _merge
 
 VPATH = "md/m.xml"
@@ -175,3 +177,88 @@ def test_A_the_text_groups_many_ops_into_ONE_line_per_pair(tmp_path):
     assert rc == 0
     assert out.count("b_patch over a_adder") == 1, out
     assert "5 op targets" in out, out
+
+
+# --- A: the dependency must resolve the way the ENGINE resolves it (review F7) -------
+
+ADD_NEW_Y = "<diff><replace sel=\"//cue[@name='New']\"><cue name=\"New\" x=\"5\" y=\"1\"/></replace></diff>"
+
+
+def test_A_TWIN_an_overwriter_declaring_only_ONE_of_TWO_adders_stays_HARD(tmp_path):
+    """Two mods supplied the node (a1 added it, a2 re-created it by a replace); b_patch
+    declares a dependency on a1 only. EVERY adder must be declared -- `any` would pass it."""
+    ext, cfg = _world(tmp_path, {
+        "a1": (ADD_NEW, "a1_id", []),
+        "a2": (ADD_NEW_Y, "a2_id", []),
+        "b_patch": (REPLACE_NEW_X, "patch_id", [("a1_id", False)])})
+    rep = _compat.analyze(ext, config=cfg)
+    attr = [c for c in rep.hard if c.target.endswith("/@x")]
+    assert len(attr) == 1 and attr[0].mods == ["a1", "a2", "b_patch"], rep.hard
+    assert rep.dependent_overwrites == []
+
+
+def test_A_an_overwriter_declaring_BOTH_adders_is_advisory(tmp_path):
+    """Control for the twin above: the same world, both adders declared."""
+    ext, cfg = _world(tmp_path, {
+        "a1": (ADD_NEW, "a1_id", []),
+        "a2": (ADD_NEW_Y, "a2_id", []),
+        "b_patch": (REPLACE_NEW_X, "patch_id", [("a1_id", False), ("a2_id", False)])})
+    rep = _compat.analyze(ext, config=cfg)
+    assert not [c for c in rep.hard if c.target.endswith("/@x")], rep.hard
+    assert [(d.mod, d.added_by) for d in rep.dependent_overwrites] == [
+        ("b_patch", "a1, a2")]
+
+
+def test_A_TWIN_a_dependency_on_an_id_claimed_by_TWO_folders_stays_HARD(tmp_path):
+    """a_adder and c_dup both claim id X. Which folder the engine binds a dependency on X
+    to is not modelled consistently (load order records 'the later one wins'; this rule
+    used to take the FIRST), so the row is never downgraded against either of them."""
+    ext, cfg = _world(tmp_path, {
+        "a_adder": (ADD_NEW, "X", []),
+        "b_patch": (REPLACE_NEW_X, "patch_id", [("X", False)]),
+        "c_dup": ("<diff/>", "X", [])})
+    rep = _compat.analyze(ext, config=cfg)
+    assert len(rep.hard) == 1 and rep.dependent_overwrites == [], (
+        rep.hard, rep.dependent_overwrites)
+    assert any("claimed by both" in s.what for s in rep.skipped), rep.skipped
+
+
+def test_A_TWIN_a_case_only_match_to_TWO_folders_stays_HARD(tmp_path):
+    """Ids 'Adder' and 'ADDER' in two folders; a dependency on 'adder' matches both only
+    ignoring case -- ambiguous, so no downgrade."""
+    ext, cfg = _world(tmp_path, {
+        "a_adder": (ADD_NEW, "Adder", []),
+        "b_patch": (REPLACE_NEW_X, "patch_id", [("adder", False)]),
+        "c_dup": ("<diff/>", "ADDER", [])})
+    rep = _compat.analyze(ext, config=cfg)
+    assert len(rep.hard) == 1 and rep.dependent_overwrites == []
+
+
+def _entry(tmp_path, folder, mid, deps=(), kind=None):
+    p = tmp_path / folder
+    _w(p / "content.xml", _manifest(mid, deps))
+    e = {"folder": folder, "path": p}
+    if kind is not None:
+        e["root_kind"] = kind
+    return e
+
+
+@pytest.mark.parametrize("dep_kind,adder_kind", [("profile", "game"), ("game", "profile")])
+def test_A_TWIN_a_dependency_across_the_game_profile_roots_does_not_count(
+        tmp_path, dep_kind, adder_kind):
+    """BLIND-SPOTS F141: a dependency does not resolve between the game and profile
+    extensions roots, so it cannot make an overwrite intended."""
+    mods = [_entry(tmp_path, "a_adder", "adder_id", kind=adder_kind),
+            _entry(tmp_path, "b_patch", "patch_id", [("adder_id", False)], kind=dep_kind)]
+    assert _compat._declared_dependencies(mods) == {}
+
+
+@pytest.mark.parametrize("dep_kind,adder_kind", [
+    ("game", "game"), ("profile", "profile"), ("workshop", "game"), (None, None)])
+def test_A_a_dependency_within_one_root_or_an_unmeasured_one_counts(
+        tmp_path, dep_kind, adder_kind):
+    """Control for the twin above: same root, the Workshop root (unmeasured, modelled as
+    resolving, as `_loadorder` does) and an entry with no kind (the game root)."""
+    mods = [_entry(tmp_path, "a_adder", "adder_id", kind=adder_kind),
+            _entry(tmp_path, "b_patch", "patch_id", [("adder_id", False)], kind=dep_kind)]
+    assert _compat._declared_dependencies(mods) == {"b_patch": {"a_adder": "required"}}
