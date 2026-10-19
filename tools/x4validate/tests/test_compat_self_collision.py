@@ -1,6 +1,6 @@
 """The adder named on a HARD row must load BEFORE the op that lands on its content
 (MEASURED live 2026-10-18: 10 rows named the WINNER as the adder of a node it re-created by
-a later full replace -- "zzz_moona_mk4_tuning over zzz_moona_mk4_tuning"). A mod's own ops
+a later full replace -- a local tuning overlay reported "over" itself). A mod's own ops
 never form a collision row with itself."""
 
 from __future__ import annotations
