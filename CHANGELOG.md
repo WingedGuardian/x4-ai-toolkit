@@ -183,6 +183,8 @@ tests, fixtures, gates or release tooling.
 
 #### Codex, OpenCode and other hosts
 
+- **Codex save evidence on Linux and macOS keeps a written trailing `/`** on a folder path, as
+  on Windows; the POSIX branch dropped it.
 - **Codex users must re-review hooks:** post-tool validation also receives the captured native
   shell name `Bash`, covering shell-carried patches. OpenCode shell patches retain workdir and
   literal cd attribution for post validation; malformed patches disclose that validation did not
@@ -212,6 +214,13 @@ tests, fixtures, gates or release tooling.
 
 #### Maintainers
 
+- **(maintainers)** Conformance: the Codex profile replays `codex-entry.sh` off Windows, as the
+  shipped `hooks.json` does (new optional profile key `command_posix`, documented in ADAPTING.md).
+  The `.ps1` entry is Windows-only since its native process launch, so the ubuntu leg had replayed
+  a path no host takes and reported every case INERT (BLIND-SPOTS F293).
+- **(maintainers)** The hook mutation probe's 7 stale anchors are re-anchored to the same guard
+  clauses; `writes_host_transcript` has a fuzzer seed and a test in both directions. Skip
+  ceilings re-measured and itemised per file: ubuntu 330, windows 63 (measured + 3).
 - **(maintainers)** CI runs every independent check after an earlier one fails: once setup
   succeeds, each later step runs unless the run was cancelled, so one red check no longer hides
   the rest (a failed step still fails the job).

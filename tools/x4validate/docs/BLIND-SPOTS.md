@@ -371,6 +371,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F290 | Pre-arc hook gaps: an interpreter program (`python -c "os.remove(...)"`) and a carrier whose text is not in the command (`eval "$X"`, `bash -c "$CMD"`) are allowed | **OPEN LIMIT (measured)**; present before 4.0 | 4 of 4 shapes allowed by `x4guard check` against a scratch profile, 2 of 2 controls ask (2026-10-18) | OPEN - accepted residual ("hooks inspect known command forms", README); not changed for 4.0 |
 | F291 | A typed save approval never expires and is reusable within its session; an approval line over ~10,000 characters cannot be shown whole | **OPEN LIMIT (read)**; upstream `modding_harness/approval.py` | `Approval.matches` (`approval.py:29-37`) checks session, operation and path set only; `_bounded` cuts the save message at `X4_HOOK_MAX_CHARS` | OPEN - upstream harness change needed |
 | F292 | The identifier scan's HISTORY mode matches banned tokens on word boundaries, so a token inside a snake_case word passes history while TREE mode flags it | **OPEN LIMIT (measured)**; by design | 2026-10-18: a personal overlay-name prefix inside a test docstring passed the history scan and was caught by the tree scan (fixed in the tree, `40c927c`) | OPEN - deliberate trade-off (80% false positives without it) |
+| F293 | The ubuntu Codex conformance leg replayed `codex-entry.ps1` under pwsh, a path no Linux host takes, and reported every case INERT; a stale-mutant refusal also hid a coverage gap behind it | **DEFECT (measured)** · ✅ FIXED 2026-10-19 | CI run 39187589960: every Codex row INERT on ubuntu since `8bdaa55`; `writes_host_transcript` exercised by no test | `command_posix` profile key (`5ec0012`); anchors re-pinned (`1084ad0`); rule pinned both ways (`8852e39`) |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -9695,6 +9696,30 @@ after including the parser and translator, all four changes void the reading, an
 an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
+
+## F293 — The ubuntu Codex conformance leg tested a path no host takes, and a stale-mutant refusal hid a coverage gap · **DEFECT (measured)** · confidence 90% · ✅ FIXED 2026-10-19
+
+MEASURED: CI run 39187589960 (`2955ebb`) reported every Codex conformance and extras case INERT on
+ubuntu ("the Codex hook wrapper failed (wrapper error: MethodInvocationException)"). READ: since
+`8bdaa55`, `codex-entry.ps1` launches its adapter through `kernel32.dll` calls; the conformance
+profile replayed that `.ps1` on every OS, while the shipped `hooks.json.tmpl` gives Linux
+`codex-entry.sh`. So the ubuntu leg exercised an entry no Linux host runs. INFERRED, not run on
+Linux: pwsh there cannot load the Windows library, and PowerShell wraps the error.
+
+Second shape, same run: `verify-hook-tests.py` refuses on stale mutant anchors before it prints
+its coverage table, so 7 anchors broken by `64df0c5` and `3d5dee4` hid that the new
+`writes_host_transcript` rule was exercised by no test in either direction.
+
+FIXED: an optional profile key `command_posix` (`5ec0012`); the Codex profile replays
+`codex-entry.sh` off Windows, and a test ties each OS's replayed script to the shipped template
+(RED without the key). Anchors re-pinned to the same clauses, each mutant killed by its own test
+(`1084ad0`); the rule pinned both ways (`8852e39`) and seeded in the fuzzer (`3733b0c`).
+Still thin: mutation coverage of the Linux `codex-entry.sh` chain (`test_codex_adapter_mutants`
+skips its native-chain cases off Windows); see F289. The residual 10%: the ubuntu fix is
+unverified until a CI run reaches it.
+
+**RE-DERIVED BY:** `tests/test_codex_conformance.py`, `scripts/verify-hook-tests.py`,
+`tests/test_hook_facts.py`.
 
 ## F292 — The identifier scan's history mode tolerates a banned token inside a snake_case word · **OPEN LIMIT (measured)** · confidence 95% · OPEN (by design)
 
