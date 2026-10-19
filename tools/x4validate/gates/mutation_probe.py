@@ -86,10 +86,15 @@ TARGETS: dict[str, list[str]] = {
                    "tests/test_compat_dependency_patch.py"],
     "_check.py": ["tests/test_check.py", "tests/test_tierb.py",
                   "tests/test_reference_scope.py",
-                  "tests/test_tierb_nested_later_target.py"],
+                  "tests/test_tierb_nested_later_target.py",
+                  "tests/test_double_nested_dlc_patch.py"],
     "_effective.py": ["tests/test_effective.py", "tests/test_prop_depth.py",
                       "tests/test_effective_scope.py", "tests/test_provenance.py",
-                      "tests/test_mutation_probe_detectors.py"],
+                      "tests/test_mutation_probe_detectors.py",
+                      "tests/test_double_nested_dlc_patch.py"],
+    "_modfiles.py": ["tests/test_double_nested_dlc_patch.py",
+                     "tests/test_mutation_gaps_lanek_effective.py",
+                     "tests/test_effective.py"],
     "_scan.py": ["tests/test_scan.py", "tests/test_corpus_scan.py",
                  "tests/test_no_packed_only_scan.py"],
     #: The ORACLE. Everything else here proves the toolkit self-consistent; these
@@ -219,6 +224,23 @@ MUTANTS = [
            "if depth >= MAX_PROP_DEPTH:",
            "if depth >= 1:  # mutant: the whole flight model disappears",
            "9,197 of 13,291 ship attributes vanish and the store still reports success"),
+
+    # --- F305: a doubly-nested patch `extensions/<B>/extensions/<DLC>/<rel>` ---
+    Mutant("_modfiles.py", "doubly-nested DLC patch keeps its literal key",
+           "if len(parts) >= 5 and _merge.is_dlc_folder(parts[3]):",
+           "if False:  # mutant: doubly-nested DLC patch filed under its literal path",
+           "the store merges the DLC vpath without the patcher and records the "
+           "middle mod's values (10 engine-opened files live, F305)"),
+    Mutant("_effective.py", "toucher roots handed to the merge more than once",
+           "if p is not None and p not in out:",
+           "if p is not None:  # mutant: no de-duplication",
+           "a mod shipping a bare DLC patch AND the doubly-nested form has its "
+           "bare diff applied twice"),
+    Mutant("_check.py", "nested patch of a DIFF owner diagnosed as a path mismatch",
+           'if oroot is not None and oroot.tag == "diff":',
+           "if False:  # mutant: the diff-owner diagnosis is never given",
+           "a nested patch the engine never opens (the owner ships a <diff>) is "
+           "blamed on a misspelt path"),
 
     # --- _scan.py: loose THEN packed (F1, written 7 times) ---------------------
     Mutant("_scan.py", "packed half of iter_mod_xml never entered",
