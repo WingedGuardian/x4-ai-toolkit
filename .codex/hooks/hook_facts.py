@@ -5059,6 +5059,58 @@ _AGENT_SETTINGS = re.compile(r"(^|/)\.claude/settings[^/]*\.json$")
 #: produced a grant matching a 3-save delete). Claude Code: ~/.claude/projects/**.jsonl;
 #: Codex: ~/.codex/sessions/**.jsonl. Memory notes (.md) beside them are not matched.
 _HOST_TRANSCRIPT = re.compile(r"(^|/)\.claude/projects/.*\.jsonl$|(^|/)\.codex/sessions/.*\.jsonl$")
+#: M1: the transcript TREES, for a copy/move whose destination is a directory there (`cp x.jsonl
+#: ~/.claude/projects/p/`, `cp -t <dir> x.jsonl` were ALLOWED -- the file lands as <dir>/x.jsonl).
+_HOST_TRANSCRIPT_TREE = re.compile(r"(^|/)\.claude/projects(/|$)|(^|/)\.codex/sessions(/|$)")
+#: ...and the same trees RELOCATED by the host's own variables: Claude Code keeps transcripts in
+#: $CLAUDE_CONFIG_DIR/projects, Codex in $CODEX_HOME/sessions. Matched as written (`$CODEX_HOME/
+#: sessions/...`) and, when the hook's environment holds the variable, by its value.
+_RELOCATED_TREE = re.compile(r"\$\{?(CLAUDE_CONFIG_DIR\}?/projects|CODEX_HOME\}?/sessions)(/|$)")
+
+
+def _transcript_trees() -> list:
+    out = []
+    for var, sub in (("CLAUDE_CONFIG_DIR", "/projects"), ("CODEX_HOME", "/sessions")):
+        v = os.environ.get(var)
+        if v:
+            out.append(norm(v).rstrip("/") + sub)
+    return out
+
+
+def _in_transcript_tree(path: str, raw: str) -> bool:
+    n = norm(path or raw)
+    return bool(_HOST_TRANSCRIPT_TREE.search(n) or _RELOCATED_TREE.search(raw or "")
+                or any(n == t or under(n, t) for t in _transcript_trees()))
+
+
+def _is_transcript(path: str, raw: str) -> bool:
+    n = norm(path or raw)
+    return bool(_HOST_TRANSCRIPT.search(n)) or (n.endswith(".jsonl") and _in_transcript_tree(path, raw))
+
+
+_COPY_RECURSIVE = re.compile(r"^-[A-Za-z]*[rRa][A-Za-z]*$|^--(recursive|archive)$")
+
+
+def _copy_lands_a_transcript(seg: str, dests: list, assigns: dict) -> bool:
+    """M1: does this cp/mv/install/rsync put a `.jsonl` INTO a transcript tree under the SOURCE's
+    name (a directory destination)? Fail closed: a source that is unresolved, a pattern, or a
+    recursive copy (it may carry a .jsonl inside) counts too."""
+    if verb(seg) not in COPY_VERBS or verb(seg) == "tee":
+        return False
+    if not any(_in_transcript_tree(pp, rr) for pp, _u, rr in dests):
+        return False
+    toks = tokens_of(seg)
+    if verb(seg) == "rsync" or any(_COPY_RECURSIVE.match(t) for t in toks):
+        return True
+    dest_raw = set(copy_dests(seg))
+    sources = [o for o in _operands(seg) if o not in dest_raw]
+    if not sources:
+        return True
+    for o in sources:
+        for r in resolve_all(o, assigns):
+            if has_unresolved(r) or any(c in r for c in _OPERAND_PATTERN_CHARS) or                     norm(r).rstrip("/").endswith(".jsonl"):
+                return True
+    return False
 
 
 #: I1: a variable that makes a shell run code its `-c` text never shows (startup file, exported
@@ -5397,6 +5449,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     gitwipe_t, gitdiscard_t, gitwipe_pairs = [], [], []
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
     search_seg, git_all = False, False
+    transcript_copy = False             # M1, see _copy_lands_a_transcript
     for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0] in zip(
             seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect):
         if execution_context:
@@ -5425,8 +5478,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # truncate / dd of=are truncating writes, judged as `>` is (see clobber_targets).
         redir_t += [("truncate",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False, operation="write")]
         mv_src += prep(move_sources(s), c_cwd, c_old, operation="move")
-        copy_t += prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination",
-                       copy_sources=exact_copy_sources(s))
+        dests_ = prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination",
+                      copy_sources=exact_copy_sources(s))
+        copy_t += dests_
+        transcript_copy = transcript_copy or _copy_lands_a_transcript(s, dests_, assigns)
         sed_t += prep(sed_in_place_targets(s), c_cwd, c_old, operation="write")
         out_t += prep(output_targets(s), c_cwd, c_old, False, operation="write")
         search_files += prep(search_paths(s, require_recursive=False), c_cwd, c_old)
@@ -5711,8 +5766,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             for pp, _u, rr in copy_t + redir_t_all + sed_t + out_t),
         "writes_profile": hit(writes_any, "profile"),
         # H1: any shell write/append/copy/move ONTO a host session transcript (see _HOST_TRANSCRIPT).
-        "writes_host_transcript": any(
-            _HOST_TRANSCRIPT.search(norm(pp or rr))
+        # M1: also a directory destination that receives a .jsonl, and the host-relocated trees.
+        "writes_host_transcript": transcript_copy or any(
+            _is_transcript(pp, rr)
             for pp, _u, rr in copy_t + redir_t_all + sed_t + out_t + mod_t),
         "copy_into_game_or_profile": bool(copy_t) and (
             hit(copy_t, "game") or hit(copy_t, "profile")),

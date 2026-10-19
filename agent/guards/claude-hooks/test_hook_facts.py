@@ -4902,6 +4902,48 @@ class TestH1AShellWriteToAHostTranscriptIsRefused(unittest.TestCase):
                 with self.subTest(c=c):
                     self.assertTrue(FC(c, _ELSEWHERE)[self.FACT], c)
 
+    def test_M1_a_directory_destination_that_receives_a_jsonl_fires(self):
+        """M1 (v4.0 release review): `cp x.jsonl <projects>/p/` and `cp -t <dir> x.jsonl` were
+        ALLOWED -- the file lands as <dir>/x.jsonl. The source's NAME decides; an unresolved or
+        pattern source, or a recursive copy, may carry one, so it fires too."""
+        for d in ("/srv/h/.claude/projects/C--work", "/srv/h/.codex/sessions/2026"):
+            for c in ("cp /srv/a.jsonl '" + d + "/'", "cp -t '" + d + "' /srv/a.jsonl",
+                      "cp --target-directory='" + d + "' /srv/a.jsonl", "mv /srv/a.jsonl '" + d + "'",
+                      "install /srv/a.jsonl '" + d + "/'", "cp /srv/*.jsonl '" + d + "/'",
+                      "cp \"$SRC\" '" + d + "/'", "cp -r /srv/dir '" + d + "/'", "rsync /srv/a '" + d + "/'"):
+                with self.subTest(c=c):
+                    self.assertTrue(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_M1_TWIN_a_non_jsonl_source_or_a_destination_outside_the_tree_does_not(self):
+        """Clauses: the destination is IN a transcript tree, and the landing name is a .jsonl."""
+        for c in ("cp /srv/notes.md '/srv/h/.claude/projects/C--work/memory/'",
+                  "cp -t /srv/h/.claude/projects/C--work/memory /srv/notes.md",
+                  "cp /srv/a.jsonl /srv/other/", "cp -t /srv/other /srv/a.jsonl"):
+            with self.subTest(c=c):
+                self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_M1_relocated_trees_from_the_hosts_own_variables(self):
+        """$CLAUDE_CONFIG_DIR/projects and $CODEX_HOME/sessions: as written, and by value."""
+        for c in ("echo x >> \"$CODEX_HOME/sessions/2026/r.jsonl\"",
+                  "echo x >> \"${CLAUDE_CONFIG_DIR}/projects/p/s.jsonl\"",
+                  "cp /srv/a.jsonl \"$CLAUDE_CONFIG_DIR/projects/p/\""):
+            with self.subTest(c=c):
+                self.assertTrue(FC(c, _ELSEWHERE)[self.FACT], c)
+        saved = {k: os.environ.get(k) for k in ("CLAUDE_CONFIG_DIR", "CODEX_HOME")}
+        try:
+            os.environ["CLAUDE_CONFIG_DIR"] = "/srv/cfg"
+            os.environ["CODEX_HOME"] = "/srv/cx"
+            self.assertTrue(FC("echo x >> /srv/cfg/projects/p/s.jsonl", _ELSEWHERE)[self.FACT])
+            self.assertTrue(FC("cp /srv/a.jsonl /srv/cx/sessions/2026/", _ELSEWHERE)[self.FACT])
+            self.assertFalse(FC("echo x >> /srv/cfg/projects/p/memory/n.md", _ELSEWHERE)[self.FACT])
+            self.assertFalse(FC("echo x >> /srv/cfg/other/s.jsonl", _ELSEWHERE)[self.FACT])
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
     # --- one falsification twin per clause ---
     def test_TWIN_a_read_of_a_transcript_is_not_a_write(self):
         """Clause: a WRITE."""

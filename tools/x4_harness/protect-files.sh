@@ -261,6 +261,18 @@ case "$_NP" in
   */.claude/projects/*.jsonl|*/.codex/sessions/*.jsonl)
     deny "BLOCKED: $FILE_PATH is a host session transcript. The host alone writes it, and the save guard reads the user's typed save approvals from it -- an agent edit could forge one. Leave it to the host." ;;
 esac
+# M1: the same trees RELOCATED by the host's own variables ($CLAUDE_CONFIG_DIR/projects,
+# $CODEX_HOME/sessions). Only paid when a variable is set and the path ends in .jsonl.
+case "$_NP" in
+  *.jsonl)
+    for _tv in "${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR/projects}" "${CODEX_HOME:+$CODEX_HOME/sessions}"; do
+      [ -n "$_tv" ] || continue
+      _tn="$(x4_norm "$_tv")"
+      case "$_NP" in
+        "${_tn%/}"/*) deny "BLOCKED: $FILE_PATH is a host session transcript (relocated tree). The host alone writes it, and the save guard reads the user's typed save approvals from it -- an agent edit could forge one. Leave it to the host." ;;
+      esac
+    done ;;
+esac
 # The project's instruction and notes files, at the PROJECT ROOT ONLY: CLAUDE.md (and
 # Claude's .claude/CLAUDE.md), AGENTS.md (Codex's CLAUDE.md, 2026-09-30), KNOWLEDGEBASE.md,
 # and the agent's own notes -- X4-NOTES.md and the 4.0 migration's X4-NOTES.pre-4.0.md (lane
