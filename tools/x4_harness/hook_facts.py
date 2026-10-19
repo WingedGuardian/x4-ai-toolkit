@@ -2357,6 +2357,102 @@ def resolve_verb(seg: str, assigns: dict[str, str]) -> str:
     return seg[:i] + r + seg[i + len(t):]
 
 
+def _verb_word_text(seg: str) -> tuple:
+    """(the raw WORD holding the command name, the text after it), or ("", "")."""
+    at = _verb_word(seg)[1]
+    if at is None:
+        return "", ""
+    pos, index = 0, 0
+    for w in _raw_words(seg):
+        start = seg.find(w, pos)
+        if start < 0:
+            return "", ""
+        if index == at:
+            return w, seg[start + len(w):]
+        index += len(tokens(w))
+        pos = start + len(w)
+    return "", ""
+
+
+def _dynamic_program(seg: str) -> bool:
+    """F10 (v4.0): is this segment's COMMAND NAME unidentifiable here -- a variable this
+    command does not assign a bare name to (`$R`, `"$R"`, `${A[0]}`), or a substitution?
+    Call it on a segment resolve_verb() has already seen. A segment cut inside an open
+    substitution is not a command position (the substitution is walked on its own), the
+    same exclusion _subst_verb makes."""
+    t = _verb_token(seg)
+    if not t or not has_unresolved(t):
+        return False
+    w, _rest = _verb_word_text(seg)
+    # SINGLE-quoted text is literal: `'$GAME/x'` names a program called that, it expands
+    # nothing (MEASURED in the corpus replay: python source lines carried as commands read
+    # `'... $GAME ...'` as an unknown name and asked).
+    if w and not has_unresolved(blank_single_quoted(w)):
+        return False
+    toks = _raw_words(seg)
+    k = next((i for i, x in enumerate(toks) if x == w), 0)
+    return not any(_span_open(x) for x in toks[:k])
+
+
+#: git's subcommands that a rule keys on (git_add_all, the wipe/discard rules). A dynamic
+#: program word followed by one of them may BE git: `$G add -A`.
+_GIT_RULE_SUBCOMMANDS = frozenset({"add", "stage", "clean", "reset", "stash", "checkout", "restore"})
+
+#: A quoted word that eval would re-read as more than one word, or as an operator.
+_EVAL_SPLITS = re.compile(r"[\s;&|<>()" + chr(96) + r"]")     # a bare `$X` re-expands only a value
+
+#: How many program words in a row one segment's readings step past (`$A $B $C rm ...`).
+_MAX_DYNAMIC_READINGS = 8
+
+
+def dynamic_program_readings(seg: str) -> list:
+    """F10 (v4.0): what a segment whose command name is UNIDENTIFIABLE may run, as extra
+    command texts for every rule to judge. MEASURED (Skyrim sibling, Windows): with the
+    name held in a variable, each of these really deletes and the guard allowed them all --
+    `$R rm -rf X` (R=command/sudo/...), `$R 'rm -rf X'` (R=eval: the quoted word is ONE
+    token, so "read the next words as a command" alone misses it), `$G add -A` (G=git).
+
+    The readings are SPECULATIVE and ADDITIVE -- none is assumed to be the one that runs:
+      * the words after it, as written (the name is a wrapper: command, sudo, call ...);
+      * their VALUES joined by blanks (the name is eval / a shell that runs its text);
+      * `git <words>` when the first word is a git subcommand some rule keys on;
+    repeated past each further unidentifiable word. A reading that is not a command at all
+    (`-c "<python>"` read as shell) simply matches no rule: these texts go through the same
+    tolerant segmenter as every carried command and never through `bash -n`, so a reading
+    that does not parse cannot fail the parse of the command it came from, and nothing is
+    ever marked "fully analysed" because of one. The backstop for a name that may itself be
+    the destructive program (`$R -rf <game>`) is facts()' `program_dynamic_protected`."""
+    out, cur = [], seg
+    for _ in range(_MAX_DYNAMIC_READINGS):
+        if not _dynamic_program(cur):
+            break
+        rest = _verb_word_text(cur)[1].strip()
+        if not rest:
+            break
+        toks = tokens(rest)
+        # The eval reading only where re-reading CHANGES the words: a quoted word holding a
+        # blank or an operator. Joining a quoted plain path changes nothing an eval would run,
+        # but un-quotes it for the text rules -- MEASURED in the corpus replay, a quoted
+        # script path then read as a foreground long job (4 historical commands).
+        joined = " ".join(t for t, _q in toks) if any(
+            q and _EVAL_SPLITS.search(t) for t, q in toks) else rest
+        for r in (rest, joined):
+            if r and r not in out:
+                out.append(r)
+        first = toks[0][0].lower() if toks else ""
+        if first in _GIT_RULE_SUBCOMMANDS:
+            out.append("git " + rest)
+        # The name may be a HOST that runs its text: cmd (`$R /c del <x>`) or a PowerShell
+        # (`$R -Command 'Remove-Item <x>'`). Only the spellings no other program shares --
+        # `-c` is python's and bash's too, and their reading is the joined one above.
+        if _CMD_RUN_SWITCH.fullmatch(first) or _CMD_KEEP_SWITCH.fullmatch(first):
+            out.append("cmd " + rest)
+        elif first in ("-ec", "-enc", "-encodedcommand") or first.startswith("-comm"):
+            out.append("powershell " + rest)
+        cur = rest
+    return out
+
+
 def tokens_of(seg: str) -> list[str]:
     """Raw token strings of a segment, flags included."""
     return [t for t, _q in tokens(seg)]
@@ -4672,8 +4768,13 @@ def _sh_quote(s: str) -> str:
     return "'" + s.replace("'", "'" + chr(92) + "''") + "'"
 
 
-#: cmd.exe's `%NAME%` expansion. `%%` is a literal percent.
-_CMD_VAR = re.compile(r"%%|%([A-Za-z_][A-Za-z0-9_]*)%")
+#: cmd.exe's `%NAME%` expansion. `%%` is a literal percent. F10: and `!NAME!`, DELAYED
+#: expansion (`cmd /v:on`) -- MEASURED in the Skyrim sibling, `!R! del <x>` with R=call
+#: really deletes, and `!R!` was carried as a literal name. Read as a variable whether or
+#: not /v:on is given: conservative, never a guess that delayed expansion is off.
+_CMD_VAR = re.compile(r"%%|%([A-Za-z_][A-Za-z0-9_]*)%|!([A-Za-z_][A-Za-z0-9_]*)!")
+#: A cmd word holding ANY expansion -- wider than _CMD_VAR (`%ProgramFiles(x86)%`).
+_CMD_DYN = re.compile(r"%[^%\s]+%|![^!\s]+!")
 
 
 def _cmd_word(w: str) -> str:
@@ -4689,8 +4790,9 @@ def _cmd_word(w: str) -> str:
     for m in _CMD_VAR.finditer(w):
         if m.start() > pos:
             out.append(_sh_quote(w[pos:m.start()]))
-        out.append(_sh_quote("%") if m.group(1) is None
-                   else '"${' + m.group(1).upper() + '}"')
+        name = m.group(1) or m.group(2)
+        out.append(_sh_quote("%") if name is None
+                   else '"${' + name.upper() + '}"')
         pos = m.end()
     if pos < len(w) or not out:
         out.append(_sh_quote(w[pos:]))
@@ -4772,8 +4874,26 @@ def cmd_to_sh(rest: list) -> str:
 _CMD_CD = {"cd", "chdir", "pushd"}
 
 
-def _cmd_line(ws: list) -> str:
+def _cmd_line(ws: list, _depth: int = 0) -> str:
     ws = [_cmd_restore(w) for w in ws]
+    if ws and _CMD_DYN.search(ws[0]) and _depth < _MAX_DYNAMIC_READINGS:
+        # F10: the PROGRAM word is an expansion (`%R% del <x>`, `!R! del <x>`, `%R%del <x>`
+        # with R=`call `, MEASURED in the Skyrim sibling to really delete). It was carried as a
+        # literal name, so no rule saw the `del`. Now: the line itself with the name as a shell
+        # variable (facts' `program_dynamic_protected` asks when an operand is protected), PLUS
+        # every speculative reading cmd could run -- the words after it as a command, and the
+        # name's literal remainder glued to them (`%R%del` -> `del`). Additive, never a choice.
+        head = _cmd_word(ws[0])
+        if "${" not in head:
+            head = '"${CMD_DYNAMIC_PROGRAM}"' + head
+        lines = [" ".join([head] + [_cmd_word(a) for a in ws[1:]])]
+        lit = _CMD_DYN.sub("", ws[0])
+        for alt in (([lit] + ws[1:]) if lit.strip() else [], ws[1:]):
+            if alt:
+                ln = _cmd_line(alt, _depth + 1)
+                if ln and ln not in lines:
+                    lines.append(ln)
+        return "\n".join(lines)
     v = _verb_name(ws[0])
     if v in _CMD_CD:
         rest = [w for w in ws[1:] if w.lower() != "/d"]
@@ -4956,7 +5076,19 @@ def _inner_commands(cmd: str) -> list[str]:
     pipes = piped_in(cmd)
     if len(pipes) != len(segs):          # never guess the pairing short: assume piped
         pipes = [True] * len(segs)
+    assigns_ = None
+    dynamic = {}                         # F10: segment index -> its readings
     for n, seg in enumerate(segs):
+        # F10: a command NAME from a variable. One this command assigns a bare name to is
+        # spliced in first, so `R=eval; $R '<cmd>'` reaches the eval arm below (MEASURED:
+        # allowed); one it cannot name contributes its speculative readings.
+        if has_unresolved(_verb_token(seg) or ""):
+            if assigns_ is None:
+                assigns_ = assignments(cmd)
+            seg = resolve_verb(seg, assigns_)
+            readings = dynamic_program_readings(seg)
+            if readings:
+                dynamic[n] = readings
         if _verb_name(verb(seg)) in ("cmd",) + _PS_EXES:
             translated = _windows_carrier(seg, cmd, segs[n - 1] if n and pipes[n] else None)
             _WIN_DIALECT.update(translated)
@@ -5026,7 +5158,44 @@ def _inner_commands(cmd: str) -> list[str]:
             rest = [t for t, _ in toks[k + 1:] if not t.startswith("-")]
             if rest:
                 out.append(rest[0])
+    out.extend(_reading_variants(cmd, segs, dynamic))
     return out
+
+
+def _reading_variants(cmd: str, segs: list, dynamic: dict) -> list:
+    """F10: each speculative reading IN PLACE of the segment it reads, so the command around
+    it -- a `cd <abs>` before it, the assignments, the pipe feeding it -- still applies.
+    Standalone, a reading is a carried command whose directory is unknown once anything
+    changes directory, so `cd <game> && $R rm -rf extensions` lost the deny its plain
+    spelling gets. Variant i puts EVERY dynamic segment's i-th reading (its last, when it has
+    fewer) in place at once: one variant per reading, never one per COMBINATION, which on a
+    script with several `"$PY" ...` lines would multiply. A segment that cannot be located in
+    the text (unwrapping changed it) contributes its readings standalone instead. EVERY
+    segment is located in order, so a dynamic one is never matched inside an earlier
+    segment's quoted text (`echo "$R x"; $R x`)."""
+    if not dynamic:
+        return []
+    spans, pos, loose = [], 0, []
+    for n, written in enumerate(segs):
+        i = cmd.find(written, pos)
+        if i >= 0:
+            pos = i + len(written)
+        if n not in dynamic:
+            continue
+        if i < 0:
+            loose.extend(dynamic[n])
+            continue
+        spans.append((i, i + len(written), dynamic[n]))
+    out = []
+    for k in range(max((len(r) for _a, _b, r in spans), default=0)):
+        parts, last = [], 0
+        for a, b, readings in spans:
+            parts.append(cmd[last:a])
+            parts.append(readings[min(k, len(readings) - 1)])
+            last = b
+        parts.append(cmd[last:])
+        out.append("".join(parts))
+    return out + loose
 
 
 #: How many times a carrier may nest before the walk stops. `bash -c` inside
@@ -5665,6 +5834,33 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                 _UNTRANSLATED.append("the cmdlet %s, which the guard does not model, is "
                                      "given a protected path" % name)
 
+    # F10 (v4.0): A PROGRAM THE GUARD CANNOT NAME, GIVEN A PROTECTED PATH. The same question
+    # as the unknown cmdlet above, for a command name from a variable or a substitution
+    # (`$R -rf <game>`, `"$R" <profile>/content.xml`, `& $R Remove-Item <save>` from the
+    # PowerShell front end, `%R% del <x>` from cmd): it may be a delete, and no rule can
+    # say. The readings (dynamic_program_readings) catch the wrapper and eval shapes with
+    # the plain command's own verdict; this is the backstop for the name that may BE the
+    # destructive program. UNSEEDED for the same reason as the unknown cmdlet. A command
+    # name that is a ROOT variable (`"$X4_GAME/X4.exe"`) is a known program, not this case.
+    program_dynamic = False
+    for (s, _c), c_old in zip(seg_cwd, unseeded):
+        if not _dynamic_program(s):
+            continue
+        if not has_unresolved(subst_root_var(resolve(_verb_token(s), assigns), roots)):
+            continue
+        ops = prep(_operands(s), c_old, c_old)
+        if any(hit(ops, k, conservative=True)
+               for k in ("game", "reference", "profile", "saves", "documents")):
+            program_dynamic = True
+            break
+        # ...or NAMES one inside a longer word: `$R -c 'Remove-Item <ref>'` (R = a PowerShell
+        # host) hands the root over as TEXT, which no path reading of the word can see.
+        if any(norm(roots[k]) in norm(o) or k in root_vars_named(o)
+               for o in _operands(s)
+               for k in ("game", "reference", "profile", "saves", "documents") if roots.get(k)):
+            program_dynamic = True
+            break
+
     redir_t_all = [(p, u, r) for _m, p, u, r in redir_t]
     writes_any = copy_t + rm_t + scoped_rm_t + mod_t + [(p, u, r) for _, p, u, r in redir_t]
     trunc_redirect = [(p, u, r) for m, p, u, r in redir_t if m == "truncate"]
@@ -5798,6 +5994,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         "carrier_untranslated": bool(_UNTRANSLATED),
         "from_powershell": from_powershell,
         "verb_unresolved": verb_unresolved,
+        # F10: a command name from a variable/substitution, given a protected path.
+        "program_dynamic_protected": program_dynamic,
         # Verbs whose file effects no evidence row models (K1); non-empty keeps the
         # save bridge from lifting any profile ask for this command.
         "save_lift_blockers": save_lift_blockers,

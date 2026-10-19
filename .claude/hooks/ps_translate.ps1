@@ -640,6 +640,13 @@ function Translate-Command([CommandAst]$c) {
         $first = $c.CommandElements[0]
         if ($first -is [ScriptBlockExpressionAst]) { return $lines }   # its body is walked on its own
         $raw = @(Vals $first) | Select-Object -First 1
+        # F10: a command NAME the translator cannot read (`& $R`, `. $R`, `& "$($R)-Item"`,
+        # `& (Get-Command $n)`). Its speculative readings go first; the command itself then
+        # travels under a NAMED unknown, so the hook asks when it is given a protected path.
+        if (-not (IsLiteralName $first)) {
+            foreach ($l in (Dynamic-Readings $c ([string]$raw))) { if ($l) { $lines.Add($l) } }
+            if (IsResolved ([string]$raw)) { $raw = UVar 'PS_COMMAND' }
+        }
     }
     $name = Canon $raw
     $binding = $null
@@ -1054,6 +1061,106 @@ function Translate-Code($ast, [string]$what, [string]$label) {
     try { return @(Translate-Text $txt) }
     catch [FormatException] { Unknown "$what of text that does not parse as PowerShell: $label"; return @() }
     finally { $script:Depth-- }
+}
+
+# ------------------------------------------------------------------ unreadable command names
+# F10 (v4.0). MEASURED in the Skyrim sibling (Windows PowerShell 5.1 and pwsh 7), with the
+# command name in a variable each of these really deletes, and the guard allowed every one:
+#     & $R Remove-Item <x>     . $R Remove-Item <x>       (R = 'powershell' on 5.1)
+#     & $R 'Remove-Item <x>'                              (R = 'Invoke-Expression')
+#     & "$($R)-Item" <x>                                  (R = 'Remove')
+# The name was carried as a literal (or flattened to the constants inside it), so no rule
+# knew a delete was possible. A name is READABLE only when it is a constant or a value this
+# command assigns literally.
+function IsLiteralName($ast) {
+    if ($ast -is [StringConstantExpressionAst]) { return $true }
+    if ($ast -is [VariableExpressionAst] -or $ast -is [ExpandableStringExpressionAst]) {
+        $v = @(Vals $ast)
+        return ($v.Count -eq 1 -and (IsResolved ([string]$v[0])))
+    }
+    if ($ast -is [ParenExpressionAst] -and $ast.Pipeline -is [PipelineAst] -and
+        $ast.Pipeline.PipelineElements.Count -eq 1 -and $ast.Pipeline.PipelineElements[0] -is [CommandExpressionAst]) {
+        return (IsLiteralName $ast.Pipeline.PipelineElements[0].Expression)
+    }
+    if ($ast -is [BinaryExpressionAst] -and $ast.Operator -eq [TokenKind]::Plus) {
+        return ((IsLiteralName $ast.Left) -and (IsLiteralName $ast.Right))
+    }
+    return $false
+}
+
+#: The command names a partly-readable name (`"$($R)-Item"`) is matched against: every name
+#: this translator models, so a reading reaches the rule its plain spelling reaches.
+$MODELLED_NAMES = @($WRITERS) + @($ALIASES.Keys) + @('invoke-expression', 'start-process', 'set-location',
+                    'push-location', 'tee-object', 'new-object', 'select-string')
+
+# The SPECULATIVE readings of a command whose name cannot be read, each translated as
+# PowerShell -- ADDITIVE, none assumed to be the one that runs:
+#   * the arguments' source text as a command (the name is a host, `powershell`, or `&`-like);
+#   * the arguments' VALUES joined by blanks (the name is Invoke-Expression);
+#   * for a partly-literal name, every modelled name its literal part fits, with the arguments.
+# A reading that does not parse contributes NOTHING and is NOT reported: `& $exe --version`
+# is ordinary, and reading `--version` as PowerShell is a guess about the name, not about the
+# command. That is not a pass -- the command itself still reaches the hook under a named
+# unknown (see Translate-Command), which asks when an argument is a protected path.
+function Dynamic-Readings([CommandAst]$c, [string]$raw) {
+    $rest = @($c.CommandElements | Select-Object -Skip 1)
+    $texts = New-Object Collections.Generic.List[string]
+    $restText = (@($rest | ForEach-Object { $_.Extent.Text }) -join ' ')
+    if ($rest.Count) {
+        $texts.Add($restText)
+        # The name may be a HOST that runs its text: `& $R -Command '<ps>'` (R = powershell or
+        # pwsh, any unambiguous prefix of -Command / -EncodedCommand), `& $R /c '<cmd>'`.
+        if ($rest[0] -is [CommandParameterAst]) {
+            $pn = $rest[0].ParameterName.ToLowerInvariant()
+            if ($pn -and ('command'.StartsWith($pn) -or 'encodedcommand'.StartsWith($pn) -or $pn -eq 'ec')) {
+                $texts.Add("powershell $restText")
+            }
+        } elseif ($rest[0].Extent.Text -match '^/{1,2}[cCkKrR]$') {
+            $texts.Add("cmd $restText")
+        }
+        $vals = foreach ($e in $rest) {
+            if ($e -is [StringConstantExpressionAst] -or $e -is [ExpandableStringExpressionAst]) {
+                @(Vals $e) | Select-Object -First 1
+            } else { $e.Extent.Text }
+        }
+        $texts.Add((@($vals) -join ' '))
+    }
+    if ($raw -and -not (IsResolved $raw)) {
+        $pat = [regex]::Replace($raw, "$SOH[^$STX]*$STX", '*')
+        if ($pat -match '[A-Za-z]') {
+            foreach ($n in ($MODELLED_NAMES | Select-Object -Unique)) {
+                if ($n -like $pat) { $texts.Add(("$n $restText").Trim()) }
+            }
+        }
+    }
+    $out = @()
+    foreach ($t in ($texts | Select-Object -Unique)) {
+        if (-not $t) { continue }
+        # A value the translator could not resolve goes back as the variable it came from.
+        $t = [regex]::Replace($t, "$SOH([^$STX]*)$STX", '$$$1')
+        # A line that opens with a PARAMETER is no command (`& $py -m pytest` read as the
+        # command `-m`): dropped, and it must be, because the hook asks bash to PARSE the
+        # translation and a leading `-` reads as an option to bash itself.
+        $out += @(Translate-Speculative $t | Where-Object { $_ -notmatch '^\s*-' })
+    }
+    return $out
+}
+
+function Translate-Speculative([string]$txt) {
+    if ($script:Depth -ge 4) {
+        Unknown "a command whose name the guard cannot read, nested past the guard's depth limit (4)"
+        return @()
+    }
+    # A reading is text the command ALREADY holds: its assignments were collected with the
+    # command, and collecting them again would mark every one ambiguous.
+    $saved = @($script:Assign.Clone(), $script:Tables.Clone(), $script:AssignAst.Clone(), $script:AssignAll.Clone())
+    $script:Depth++
+    try { return @(Translate-Text $txt) }
+    catch [FormatException] { return @() }
+    finally {
+        $script:Depth--
+        $script:Assign, $script:Tables, $script:AssignAst, $script:AssignAll = $saved
+    }
 }
 
 # .NET types in System.IO that write nothing by being constructed or called, or whose

@@ -394,6 +394,16 @@ if on verb_unresolved; then
   deny "A command name here arrives through substitution (\$(...) or backticks), so the guard cannot tell what command this is and NO rule -- including the hard blocks on the game install -- was evaluated for it. Write the command name literally and re-run."
 fi
 
+# F10 (v4.0): the same unknown verb through a VARIABLE (`$R -rf <game>`, `& $R Remove-Item
+# <save>`, cmd's `%R% del <x>`), given a protected path. The guard cannot say whether it
+# deletes; the readings of what it may run (eval, a wrapper, git) are judged by the rules
+# below with the plain command's own verdict, and this asks for the rest. An ASK, like the
+# unknown PowerShell cmdlet, and not relaxed by X4_GUARD=off: it is an inability.
+if on program_dynamic_protected; then
+  _X4_UNRELAXED=1
+  ask "A command name here comes from a variable or expansion (\$R, \"\$R\", %R%, !R!, & \$R), and the command is given a protected path (the game, reference/, the profile or a save) -- so the guard cannot tell whether it deletes or overwrites it. Write the command name literally, or confirm only if you know what the variable holds."
+fi
+
 # A POWERSHELL TOOL command reaches this file already TRANSLATED by PowerShell's own
 # parser into the equivalent POSIX-shell command (hook_facts.powershell_to_sh), so every
 # rule below judges it exactly as it judges Bash (AUDIT-2026-09-24 HK-1). The messages
