@@ -550,7 +550,7 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
   "a substituted argument in a cd is untouched"
 
 
-EXPECT=312
+EXPECT=319
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
@@ -1338,7 +1338,17 @@ decide ask    protect-bash.sh "$(cj "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=clean.r
 decide deny   protect-bash.sh "$(cj "echo ${_RMG} | bash")"                              "H7: unquoted echo piped into bash is its program"
 decide deny   protect-bash.sh "$(cj "bash <(echo ${_RMG})")"                             "H8: a process substitution run as a script"
 decide deny   protect-bash.sh "$(cj "x=\$(printf rm); \$x -rf \"$_g4r\"")"               "G-OUT: a verb from a variable holding a substitution"
-decide advise protect-bash.sh "$(cj "\$(echo rm) -rf \"$_g4g/libraries\"")"              "F183: a substituted verb below the game root advises"
+# F10 (v4.0): F183's advisory became an ASK -- an unknown command name given a protected path
+# may itself be the delete (program_dynamic_protected), the unknown-cmdlet convention.
+decide ask    protect-bash.sh "$(cj "\$(echo rm) -rf \"$_g4g/libraries\"")"              "F183/F10: a substituted verb below the game root asks"
+# F10 (v4.0): a command NAME from a variable (MEASURED on master: every non-twin row ALLOWED).
+decide deny   protect-bash.sh "$(cj "\$R rm -rf \"$_g4r\"")"                              "F10: \$R before a reference delete"
+decide deny   protect-bash.sh "$(cj "\$R 'rm -rf \"$_g4r\"'")"                            "F10: \$R with the delete as one quoted word (eval)"
+decide ask    protect-bash.sh "$(cj "\$R -rf \"$_g4g\"")"                                 "F10: a variable name given the game root asks"
+decide deny   protect-bash.sh "$(cj "\$R git add -A")"                                    "F10: \$R before git add -A"
+decide deny   protect-bash.sh "$(cj "cmd //c \"%R% del $_g4r/a.xml\"")"                   "F10: cmd %R% before a reference delete"
+decide allow  protect-bash.sh "$(cj "\$R --version")"                                     "TWIN F10: an unknown name with no protected path"
+decide allow  protect-bash.sh "$(cj "\"\$PY\" -c \"import os; print(os.getcwd())\"")"     "TWIN F10: \"\$PY\" -c <python> is not read as a delete"
 decide allow  protect-bash.sh "$(cj 'python scripts/x4refguard.py apply --toolkit "$X4_TOOLKIT"')" "H9: a variable in an OPTION value is not the action"
 decide ask    protect-bash.sh "$(cj 'python scripts/x4refguard.py "$ACT"')"                "TWIN H9: an unresolved ACTION still asks"
 # FX-G5 / reviewer J2: each was ALLOWED before

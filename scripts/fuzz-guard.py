@@ -31,6 +31,7 @@ Exit 0 clean / 1 bypass found / 2 refused (controls failed, or nothing exercised
 """
 from __future__ import annotations
 
+import base64
 import importlib.util
 import re
 import shutil
@@ -684,6 +685,62 @@ def _m_verb_windows_path(c):
     return _retitle(c, lambda v: DQ + "C:" + BS + "tools" + BS + v + ".exe" + DQ)
 
 
+# --- DYNAMIC PROGRAM WORD axis (F10, v4.0) ---------------------------------------
+# A command NAME the guard cannot identify, ahead of the dangerous command. MEASURED in the
+# Skyrim sibling on Windows: with the name in a variable each of these really runs what
+# follows it (R=command/sudo/call/eval/powershell/Invoke-Expression), and every one was a
+# silent ALLOW here. One mutator per spelling class, in each dialect the guard reads.
+def _m_dyn_var(c):
+    return _retitle(c, lambda v: "$R " + v)
+
+
+def _m_dyn_var_quoted(c):
+    return _retitle(c, lambda v: DQ + "$R" + DQ + " " + v)
+
+
+def _m_dyn_array(c):
+    return _retitle(c, lambda v: "${A[0]} " + v)
+
+
+def _m_dyn_subst(c):
+    return _retitle(c, lambda v: "$(echo command) " + v)
+
+
+def _m_dyn_chain(c):
+    """Past the carrier walk's depth: five unknown names in a row."""
+    return _retitle(c, lambda v: "$A $B $C $D $E " + v)
+
+
+def _m_dyn_eval_word(c):
+    """The rest as ONE quoted word (R=eval): reading "the next words" alone misses it."""
+    pre, seg = _last_segment(c)
+    return pre + "$R " + _sq(seg)
+
+
+def _m_dyn_subst_eval_word(c):
+    pre, seg = _last_segment(c)
+    return pre + "$(printf eval) " + _sq(seg)
+
+
+def _m_dyn_git_name(c):
+    return _retitle(c, lambda v: "$G" if v == "git" else v)
+
+
+def _m_dyn_cmd_percent(c):
+    return "cmd //c %R% bash -c " + _sq(c)
+
+
+def _m_dyn_cmd_delayed(c):
+    return "cmd //v:on //c !R! bash -c " + _sq(c)
+
+
+def _m_dyn_powershell(c):
+    """`& $R bash -c '<c>'` run by a PowerShell host. ENCODED, so no quoting layer between
+    the shells can change the text. Starts one PowerShell per distinct seed."""
+    ps = "& $R bash -c " + AP + c.replace(AP, AP + AP) + AP
+    return "powershell -EncodedCommand " + base64.b64encode(ps.encode("utf-16-le")).decode("ascii")
+
+
 # --- STDIN axis: a shell whose program never appears as an operand -------------
 # Each of these hands a shell a command through a channel the parse pass has to model
 # separately, because the text is data everywhere else in the file.
@@ -899,6 +956,17 @@ MUTATORS = [
     ("wrapper: sh -ic", _m_sh_ic),
     ("wrapper: eval", _m_eval),
     ("wrapper: eval inside if", _m_eval_in_if),
+    ("DYNAMIC $R before the command", _m_dyn_var),
+    ("DYNAMIC quoted $R before the command", _m_dyn_var_quoted),
+    ("DYNAMIC ${A[0]} before the command", _m_dyn_array),
+    ("DYNAMIC substituted name before the command", _m_dyn_subst),
+    ("DYNAMIC five unknown names in a row", _m_dyn_chain),
+    ("DYNAMIC $R with the command as one quoted word", _m_dyn_eval_word),
+    ("DYNAMIC substituted eval with the command as one word", _m_dyn_subst_eval_word),
+    ("DYNAMIC git's own name from a variable", _m_dyn_git_name),
+    ("DYNAMIC cmd %R% program word", _m_dyn_cmd_percent),
+    ("DYNAMIC cmd !R! delayed expansion", _m_dyn_cmd_delayed),
+    ("DYNAMIC PowerShell & $R", _m_dyn_powershell),
 ] + _PREFIX_MUTATORS
 
 
@@ -1026,6 +1094,11 @@ def seeds(roots):
         ("append to a host transcript", "echo x >> " + QU
          + "C:/Users/tester/.claude/projects/C--work/0b1e.jsonl" + QU),
         ("wrapper value with a blank", "env -C $(echo /tmp ) " + d + " -rf " + QU + g + QU),
+        # F10 (v4.0): `program_dynamic_protected` -- a command name from a variable, given a
+        # protected path. The name may BE the delete, so no reading can stand in for it.
+        # Behind `env`: the VERB mutators rewrite the FIRST word, and quoting `$R` itself
+        # (`$'$R'`) makes it a literal program named `$R` -- a mutant, not a bypass.
+        ("variable command name at the game", "env $R -rf " + QU + g + QU),
         # NOT seeded: `cmd //c "cd /d <game> && rd /s /q extensions"`. Its dangerous part
         # is cmd.exe text inside one quoted word, and every mutator here rewrites BASH
         # syntax -- `timeout -s KILL 5 rd` or `$'rd'` inside that word is a different cmd

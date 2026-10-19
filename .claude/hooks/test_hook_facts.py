@@ -4026,6 +4026,9 @@ class TestLiftingTheReferenceDenyIsJudgedWhereItRuns(unittest.TestCase):
     def test_a_runner_named_by_a_variable_or_a_launcher_lifts(self):
         for cmd in ('"$X4_PYTHON" scripts/x4refguard.py remove',
                     "${PY} scripts/x4refguard.py remove",
+                    # a valued interpreter flag first: F10's reading of the words after an
+                    # unknown name then names `utf8`, so only the variable-runner clause sees it
+                    '"$X4_PYTHON" -X utf8 scripts/x4refguard.py remove',
                     "conda run -n x4 python scripts/x4refguard.py remove",
                     "pipx run x4refguard remove"):
             with self.subTest(cmd=cmd):
@@ -4961,20 +4964,32 @@ class TestH1AShellWriteToAHostTranscriptIsRefused(unittest.TestCase):
                 self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
 
 
-def _evidence(command, cwd=TOOLKIT):
+def _evidence(command, cwd=TOOLKIT, roots=None):
     ev = []
-    H.facts({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd}, ROOTS, evidence=ev)
+    H.facts({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd},
+            ROOTS if roots is None else roots, evidence=ev)
     return ev
+
+
+#: HOST-NATIVE fixture roots for the evidence tests. On a POSIX host a `C:/...` path is a
+#: FOREIGN drive path, unresolved for its own reason -- so a twin asserting "resolved" could not
+#: test its own clause there (CI rc9, ubuntu: 6 subtests of the C1 twin failed for exactly that).
+_NATIVE_PROF = PROF if os.name == "nt" else "/home/tester/Documents/Egosoft/X4/12345678"
+_NATIVE_TK = TOOLKIT if os.name == "nt" else "/home/tester/Desktop/Modding/X4"
+_NATIVE_ROOTS = dict(ROOTS, profile=_NATIVE_PROF, saves=_NATIVE_PROF + "/save",
+                     documents=_NATIVE_PROF.split("/Egosoft/")[0], toolkit=_NATIVE_TK,
+                     mods=_NATIVE_TK + "/dev", reference=_NATIVE_TK + "/reference")
 
 
 class TestC1BraceExpansionIsUnresolvedEvidence(unittest.TestCase):
     """C1 (v4.0 release review): an unquoted brace word reached the save bridge as ONE literal
     path -- `rm <saves>/save_00{0,1,2}.xml.gz` advised with 0 backups. Every evidence row from an
     unquoted `{a,b}` / `{x..y}` word is unresolved; a quoted or escaped one is a literal name."""
-    S = PROF + "/save/"
+    S = _NATIVE_PROF + "/save/"
 
     def _rows(self, command):
-        return [r for r in _evidence(command) if r.get("operation") != "unmodelled"]
+        return [r for r in _evidence(command, _NATIVE_TK, _NATIVE_ROOTS)
+                if r.get("operation") != "unmodelled"]
 
     def test_unquoted_brace_rows_are_unresolved_in_every_verb_shape(self):
         for c in (D + " " + self.S + "save_00{0,1,2}.xml.gz", D + " " + self.S + "s{0..2}.xml.gz",
@@ -4999,7 +5014,7 @@ class TestC1BraceExpansionIsUnresolvedEvidence(unittest.TestCase):
                 self.assertFalse(any(r["unresolved"] for r in rows), (c, rows))
 
     def test_the_side_channel_is_cleared_per_call(self):
-        _evidence(D + " " + self.S + "s{0,1}.xml.gz")
+        _evidence(D + " " + self.S + "s{0,1}.xml.gz", _NATIVE_TK, _NATIVE_ROOTS)
         rows = self._rows(D + " '" + self.S + "s{0,1}.xml.gz'")
         self.assertFalse(any(r["unresolved"] for r in rows), rows)
 
@@ -5796,6 +5811,153 @@ class TestHM5TakeownAndHM3FileUrls(unittest.TestCase):
         self.assertTrue(F("gio trash '" + url + "'")["rm_hits_game"])
         self.assertEqual(H._url_path("file:///C:/a%20b"), "C:/a b")
         self.assertEqual(H._url_path("C:/a%20b"), "C:/a%20b")       # TWIN: not a URL, literal
+
+
+class TestF10DynamicProgramWord(unittest.TestCase):
+    """F10 (v4.0): a command NAME the guard cannot identify -- a variable (`$R`, `"$R"`,
+    `${R}`, `${A[0]}`), a substitution, cmd's `%R%` / `!R!` -- reached no rule, so with the
+    name held in a variable each of these REALLY deletes (MEASURED in the Skyrim sibling on
+    Windows) and the guard ALLOWED every one (MEASURED here, 125 of 125 shapes). Its words are
+    now read speculatively (wrapper, eval, git) and judged like the plain command, and a name
+    that may itself BE the delete asks when it is given a protected path."""
+
+    def test_the_words_after_an_unknown_name_are_judged_as_a_command(self):
+        for pre in ("$R ", DQ + "$R" + DQ + " ", "${R} ", "${A[0]} ", "nice $R ", "$A $B $C ",
+                    "$A $B $C $D $E $F ",          # past the carrier walk's depth (4)
+                    "R=$(printf eval); $R ", "$(echo command) "):
+            with self.subTest(pre=pre):
+                self.assertTrue(F(pre + DEL_REF)["rm_targets_reference"], pre)
+                self.assertTrue(F(pre + DEL_GAME)["rm_hits_game"], pre)
+
+    def test_a_quoted_word_after_an_unknown_name_is_read_as_eval_reads_it(self):
+        """`$R 'rm -rf X'` with R=eval: the quoted word is ONE token, so reading only "the
+        next words as the command" misses it (the Skyrim sibling's lesson)."""
+        for pre in ("$R ", "$(echo eval) ", "R=$(printf eval); $R ", "$A $B "):
+            with self.subTest(pre=pre):
+                self.assertTrue(F(pre + Q + DEL_REF + Q)["rm_targets_reference"], pre)
+
+    def test_a_name_this_command_assigns_reaches_the_carrier_it_names(self):
+        self.assertTrue(F("R=eval; $R " + Q + DEL_REF + Q)["rm_targets_reference"])
+        self.assertTrue(F("R=bash; $R -c " + Q + DEL_GAME + Q)["rm_hits_game"])
+
+    def test_an_unknown_name_before_git_add_all(self):
+        for c in ("$R git add -A", "$R add -A", "$G stage .", "$R " + Q + "git add -A" + Q):
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["git_add_all"], c)
+
+    def test_the_reading_keeps_the_directory_a_cd_set(self):
+        """A reading carried ON ITS OWN has no directory once anything changes one, so
+        `cd <game> && $R rm -rf extensions` lost the hard block the plain spelling gets."""
+        c = "cd " + DQ + GAME + DQ + " && $R " + D + " -rf extensions"
+        self.assertTrue(F(c)["rm_hits_game"])
+        self.assertTrue(F("cd " + DQ + GAME + DQ + " && $R " + Q + D + " -rf extensions" + Q)["rm_hits_game"])
+
+    def test_cmd_percent_and_delayed_expansion_program_words(self):
+        for payload in ("%R% del " + REF + "/a.xml", "!R! del " + REF + "/a.xml",
+                        "%R%del " + REF + "/a.xml", "%R% rd /s /q " + REF,
+                        "%A% %B% del " + REF + "/a.xml"):
+            with self.subTest(payload=payload):
+                for carrier in ("cmd //c ", "cmd //v:on //c "):
+                    self.assertTrue(F(carrier + DQ + payload + DQ)["rm_targets_reference"], payload)
+        self.assertIn("rm -f x", H.cmd_to_sh(["%R% del x"]))
+        self.assertIn("rm -f x", H.cmd_to_sh(["%R%del x"]))
+        self.assertIn("rm -f x", H.cmd_to_sh(["!R! del x"]))
+        # `!NAME!` in an OPERAND is a variable too (delayed expansion), never literal text
+        self.assertEqual(H.cmd_to_sh(["type !F!"]), 'cat "${F}"')
+        self.assertTrue(F("cmd //c " + DQ + "%R% git add -A" + DQ)["git_add_all"])
+
+    def test_an_unknown_name_given_a_protected_path_asks(self):
+        for c in ("$R -rf " + DQ + GAME + DQ, DQ + "$R" + DQ + " " + DQ + PROF + "/content.xml" + DQ,
+                  "$R " + DQ + PROF + "/save/a.xml.gz" + DQ, "${R} " + DQ + REF + "/libraries" + DQ,
+                  "$R -rf " + DQ + "$X4_GAME" + DQ, "cd " + DQ + GAME + DQ + " && $R -rf extensions",
+                  "cmd //c " + DQ + "%R% " + REF + "/a.xml" + DQ,
+                  # the root as TEXT inside a word (R = a PowerShell host): no path reading sees it
+                  "$R -c " + Q + "Remove-Item " + REF + "/libraries" + Q):
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["program_dynamic_protected"], c)
+
+    def test_TWIN_an_unknown_name_away_from_protected_paths_is_silent(self):
+        for c in ("$R --version", DQ + "$PY" + DQ + " -c " + DQ + "import os; print(os.getcwd())" + DQ,
+                  "$R " + D + " -rf ./build", "$JQ -r .x data.json", "$UV run pytest -q",
+                  "cmd //c " + DQ + "%R% --version" + DQ, "R=" + D + "; $R -rf ./build",
+                  DQ + "$X4_GAME/X4.exe" + DQ + " -debug all", "$R " + Q + "echo hi" + Q):
+            with self.subTest(c=c):
+                f = F(c)
+                self.assertFalse(f["program_dynamic_protected"], c)
+                self.assertFalse(f["rm_targets_reference"] or f["rm_hits_game"] or f["git_add_all"], c)
+
+    def test_TWIN_a_known_name_given_a_protected_path_is_not_this_rule(self):
+        """A name this command assigns (`R=cat`), or a ROOT variable naming a program, is
+        identifiable: the ordinary rules judge it, and this one stays silent."""
+        self.assertFalse(F("R=cat; $R " + DQ + REF + "/a.xml" + DQ)["program_dynamic_protected"])
+        self.assertFalse(F(DQ + "$X4_GAME/X4.exe" + DQ + " " + DQ + PROF + "/content.xml" + DQ)
+                         ["program_dynamic_protected"])
+        # a segment CUT inside a substitution is no command position: `$P` there is find's
+        # operand, and the substitution itself is walked (and judged) on its own
+        self.assertFalse(F("f=$(find " + DQ + "$P" + DQ + " " + DQ + REF + DQ + " -name x | head -1)")
+                         ["program_dynamic_protected"])
+
+    def test_TWIN_many_unknown_names_do_not_multiply_into_a_truncation(self):
+        """One variant per reading, never one per combination: a script of `"$PY" ...` lines
+        must not walk into the carrier bound and be refused for its length."""
+        c = "; ".join(DQ + "$PY" + DQ + " s%d.py " % i + DQ + "$A" + DQ + " " + DQ + "$B" + DQ
+                      + " 'x y'" for i in range(12))
+        f = F(c)
+        self.assertFalse(f["carriers_truncated"])
+        self.assertFalse(f["program_dynamic_protected"])
+
+    def test_readings_are_speculative_and_never_fail_the_parse(self):
+        """A reading that is not shell (`-c "<python>"` read as shell) matches no rule and
+        changes no other verdict -- lesson 1 of the sibling: it must not abort the parse."""
+        c = DQ + "$PY" + DQ + " -c " + DQ + "import os; print(os.listdir('(')); x = [1, 2" + DQ
+        f = F(c)
+        self.assertFalse(any(f[k] for k in ("rm_targets_reference", "rm_hits_game", "git_add_all",
+                                            "program_dynamic_protected", "carriers_truncated")))
+
+
+@unittest.skipUnless(_PWSH, "no PowerShell on this machine: the PowerShell front-end cannot be "
+                            "exercised here (it fails closed without one)")
+class TestF10PowerShellUnreadableCommandName(unittest.TestCase):
+    """F10 (v4.0): `& $R`, `. $R`, `& $R '<text>'`, `& "$($R)-Item"` -- MEASURED in the Skyrim
+    sibling to really delete with R = powershell / Invoke-Expression / Remove -- were
+    translated with the name as a literal, so no rule knew a delete was possible."""
+
+    def P(self, command):
+        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
+
+    def test_each_unreadable_name_shape_reaches_the_plain_commands_rule(self):
+        for c in ("& $R Remove-Item " + Q + REF + Q, ". $R Remove-Item " + Q + REF + Q,
+                  "& $R " + DQ + "Remove-Item " + Q + REF + Q + DQ,
+                  "& " + DQ + "$($R)-Item" + DQ + " " + Q + REF + Q,
+                  "& $env:R Remove-Item " + Q + REF + Q,
+                  "& (Get-Command $n) Remove-Item " + Q + REF + Q,
+                  "& $R rm -rf " + Q + REF + Q):
+            with self.subTest(c=c):
+                self.assertTrue(self.P(c)["rm_targets_reference"], c)
+        self.assertTrue(self.P("& $R git add -A")["git_add_all"])
+        # a host this command NAMES through a variable is spliced in before the carrier arms:
+        # `-c` is no host-only spelling, so no speculative reading would find this one
+        f = F("R=powershell; $R -c " + DQ + "Remove-Item " + Q + REF + Q + DQ)
+        self.assertTrue(f["rm_targets_reference"])
+        self.assertTrue(self.P("& $R " + Q + "git add -A" + Q)["git_add_all"])
+
+    def test_an_unreadable_name_given_a_protected_path_asks(self):
+        self.assertTrue(self.P("& $R " + Q + PROF + "/content.xml" + Q)["program_dynamic_protected"])
+        self.assertTrue(self.P("& (Get-Command $n) " + Q + GAME + Q)["program_dynamic_protected"])
+
+    def test_TWIN_readable_names_and_harmless_unreadable_ones(self):
+        for c in ("& $exe --version", "& $py -m pytest -q tests", "& $exe build --out ./out",
+                  "& 'git' status", "& $py -c " + DQ + "print(1)" + DQ):
+            with self.subTest(c=c):
+                f = self.P(c)
+                self.assertFalse(f.get("powershell_error"), c)
+                self.assertFalse(f["program_dynamic_protected"] or f["rm_targets_reference"]
+                                 or f["carrier_untranslated"], c)
+        # a name this command assigns literally is READ: not this rule. (Its parameters do not
+        # bind statically, so the translator already reports the target unresolved -> ask.)
+        f = self.P("$n = 'Remove-Item'; & $n " + Q + REF + Q)
+        self.assertFalse(f["program_dynamic_protected"])
+        self.assertTrue(f["carrier_untranslated"])
 
 
 def load_tests(loader, standard_tests, pattern):
