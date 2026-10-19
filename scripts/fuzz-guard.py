@@ -992,6 +992,11 @@ def seeds(roots):
         # `bash -c '...'` the two-shells-deep mutator breaks its single quotes. Both are mutants,
         # not bypasses (MEASURED, FX-G6). Pinned by test_hook_facts and test-hooks.sh instead.
         ("separator inside a prefix substitution", "A=$(echo a; echo b) " + d + " -rf " + QU + g + QU),
+        # H1 (v4.0): `writes_host_transcript` shipped with no seed; the coverage floor refused
+        # on both CI legs of run 39187589960. The save guard reads typed approvals from this
+        # file, so an appended line is a forged approval -- the deny must survive the mutators.
+        ("append to a host transcript", "echo x >> " + QU
+         + "C:/Users/tester/.claude/projects/C--work/0b1e.jsonl" + QU),
         ("wrapper value with a blank", "env -C $(echo /tmp ) " + d + " -rf " + QU + g + QU),
         # NOT seeded: `cmd //c "cd /d <game> && rd /s /q extensions"`. Its dangerous part
         # is cmd.exe text inside one quoted word, and every mutator here rewrites BASH
