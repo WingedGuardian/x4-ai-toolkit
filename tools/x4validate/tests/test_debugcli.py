@@ -591,3 +591,48 @@ def test_TWIN_a_log_with_DIFFERENT_bytes_is_archived_alongside(tmp_path, resolve
     log.write_text(log.read_text(encoding="utf-8") + "[=ERROR=] 9.0 one more\n", encoding="utf-8")
     second = _debugcli.archive(log, dest)
     assert second != first and len(list(dest.glob("debug-*.txt"))) == 2
+
+
+def test_a_DEGRADED_archive_is_not_reused_once_the_world_resolves(tmp_path, resolved_extensions,
+                                                                 monkeypatch, capsys):
+    """Release review F7: the V8 dedupe reused ANY same-bytes archive. A capture first
+    archived while the extensions root was unresolved kept its degraded meta, so every
+    later `baseline` of that log reused it and returned rc 1 forever. A degraded match
+    is not a usable baseline: archive anew, and keep the degraded one as evidence."""
+    log = _write(tmp_path)
+    dest = tmp_path / "archive"
+    good_root = _debugcli._paths.game_extensions
+    monkeypatch.setattr(_debugcli._paths, "game_extensions", lambda: None)
+    first = _debugcli.archive(log, dest)
+    assert _debugcli.read_archive_meta(first)["degraded"] is True
+    monkeypatch.setattr(_debugcli._paths, "game_extensions", good_root)
+    rc = _debugcli.main(["baseline", str(log), "--dest", str(dest)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "already archived" not in out, out
+    assert len(list(dest.glob("debug-*.txt"))) == 2
+    assert first.exists() and _debugcli._meta_path(first).exists()
+
+
+def test_an_archive_with_MISSING_metadata_is_not_reused(tmp_path, resolved_extensions, capsys):
+    """Release review F7: a same-bytes archive whose `.meta.json` is gone was reused, and
+    `read_archive_meta` on it raised FileNotFoundError out of `baseline` as a traceback."""
+    log = _write(tmp_path)
+    dest = tmp_path / "archive"
+    first = _debugcli.archive(log, dest)
+    meta = _debugcli._meta_path(first)
+    meta.rename(meta.with_name(meta.name + ".moved"))   # this test's own tmp file
+    rc = _debugcli.main(["baseline", str(log), "--dest", str(dest)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "already archived" not in out, out
+    assert len(list(dest.glob("debug-*.txt"))) == 2
+
+
+def test_TWIN_an_archive_with_UNREADABLE_metadata_is_not_reused(tmp_path, resolved_extensions):
+    log = _write(tmp_path)
+    dest = tmp_path / "archive"
+    first = _debugcli.archive(log, dest)
+    _debugcli._meta_path(first).write_text("{not json", encoding="utf-8")
+    again = _debugcli.archive(log, dest)
+    assert again != first and _debugcli.read_archive_meta(again)["degraded"] is False

@@ -202,17 +202,33 @@ def find_archived(data: bytes, dest_dir: Path) -> Path | None:
     """An archived copy whose BYTES equal *data*, or None (V8: content dedupe).
 
     By content, never by name or mtime: names carry a random suffix since 5398907, and
-    one log can be re-stamped. Same-size candidates only, each hashed in full."""
+    one log can be re-stamped. Same-size candidates only, each hashed in full.
+
+    ONLY A USABLE BASELINE IS REUSED (release review F7): a match whose `.meta.json` is
+    missing, unreadable or DEGRADED is not one. Reusing it made every later `baseline`
+    of that log return rc 1 forever (degraded) or raise FileNotFoundError (missing);
+    such a copy is skipped -- kept on disk as evidence -- and the log archived anew."""
     if not dest_dir.is_dir():
         return None
     want = hashlib.sha256(data).hexdigest()
     for cand in sorted(dest_dir.glob("debug-*.txt")):
         try:
-            if cand.stat().st_size == len(data) and                     hashlib.sha256(cand.read_bytes()).hexdigest() == want:
+            if cand.stat().st_size == len(data) and \
+                    hashlib.sha256(cand.read_bytes()).hexdigest() == want and \
+                    _usable_meta(cand):
                 return cand
         except OSError:
             continue  # silent-ok: an unreadable candidate is not a match; we archive anew
     return None
+
+
+def _usable_meta(archived: Path) -> bool:
+    """True when *archived* has metadata that parses to a dict and is not degraded."""
+    try:
+        meta = read_archive_meta(archived)
+    except (OSError, ValueError):
+        return False
+    return isinstance(meta, dict) and meta.get("degraded") is False
 
 
 def archive(log: Path, dest_dir: Path, config=None) -> Path:
