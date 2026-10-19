@@ -64,7 +64,11 @@ def test_identity_control_claude_profile_agrees_on_every_row(conformance_dump):
     prof = xc.load_profile("claude", REPO)
     res = xc.replay(rows, prof, None, REPO, workers=4)
     assert len(res) >= 80
-    bad = [r for r in res if r["reference"] != r["adapter"]]
+    # The claude profile runs the hooks under X4_GUARD_CHECK=1, and since K3 (fc87208) that
+    # read-only check ASKS where the native hook backs a save up and advises -- the one
+    # divergence summarise() accepts (0830f4b). This test kept its own stricter comparison, so
+    # #197 failed on both OS in CI run 39187589960. Same predicate as the engine, never a copy.
+    bad = [r for r in res if r["reference"] != r["adapter"] and not xc._backup_only_divergence(r)]
     assert not bad, bad[:10]               # PER ITEM
 
 
