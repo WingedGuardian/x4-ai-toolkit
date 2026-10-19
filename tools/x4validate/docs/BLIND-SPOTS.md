@@ -7676,7 +7676,7 @@ separately is killed; the Workshop and case rules by
 `test_a_case_only_dependency_mismatch_is_SATISFIED_and_noted`,
 `test_a_case_only_match_across_game_and_profile_is_still_refused`),
 `tests/test_load_order_notes_reach_users.py`, `tests/test_tierb_nested_later_target.py`
-(`test_a_nested_patch_on_a_LATER_loading_active_mod_is_a_WARN_naming_it` and its twins) and
+(`test_a_nested_patch_on_a_LATER_loading_active_mod_is_EVALUATED` and its twins) and
 `tests/test_load_order_probe.py` (`test_round2_probes_exist_with_their_roots`,
 `test_every_chain_probe_carries_a_proof_op`).
 
