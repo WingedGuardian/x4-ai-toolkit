@@ -378,6 +378,13 @@ def check_x4compat() -> None:
                 full.setdefault(v, []).append(d.name)
     shared_full = {v for v, m in full.items() if len(m) > 1}
     reported = {c.vpath.lower() for c in report.collisions}
+    # 4. ...and false for whole union DIRECTORIES: t/ and index/ files are merged
+    #    entry by entry (KNOWLEDGEBASE "t-files are UNIONED"), and x4compat
+    #    already compares their keys (_compat.UNION_DIRS). libraries/ is NOT
+    #    wholly union-merged, so it keeps the explicit list above. MEASURED
+    #    2026-10-18: two mods' complete t/0001-l359.xml, 0 shared (page, t) ids.
+    union_dirs = tuple(p for p in _compat.UNION_DIRS if p != "libraries/")
+    union_merged |= {v for v in shared_full if v.lower().startswith(union_dirs)}
     unexplained = sorted(shared_full - reported - manifests - union_merged)
     note(not unexplained, "shared full-file paths are reported or a known non-override class",
          f"{len(shared_full)} shared; {len(shared_full & reported)} reported, "
