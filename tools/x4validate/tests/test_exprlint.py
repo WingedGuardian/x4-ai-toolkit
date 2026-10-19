@@ -30,6 +30,13 @@ def test_literals_cannot_cross_format_boundaries():
     assert _ids("<a text=\"'random(1,2) $t.keys.list.count'\"/>") == set()
 
 
+def test_escaped_quote_does_not_end_a_literal():
+    # An escaped quote inside a literal is text: read as the literal's end, the `[` after
+    # it would look like a missing format dot (issue #12).
+    assert "fmt_missing_dot" not in _ids(r"""<a text="'it\'[s]'.[$a]"/>""")
+    assert "fmt_missing_dot" in _ids(r"""<a text="'it\'s %s'[$a]"/>""")
+
+
 def test_list_literal_braces_only_on_in_attr():
     assert "list_literal_in_braces" in _ids('<do_for_each in="{entityrole.marine, entityrole.service}"/>')
     assert "list_literal_in_braces" not in _ids('<do_for_each in="[entityrole.marine, entityrole.service]"/>')
