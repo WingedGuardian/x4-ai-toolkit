@@ -48,8 +48,10 @@ code, file named), **INFERRED** (reasoned, not run). Write your own findings the
   `save-list` lists permanent neutral transactions. `save-restore ID --to DIR`
   restores to a new directory by default; `--in-place` preserves the current save
   first and applies the same bulk approval policy. A bulk helper needs canonical
-  paths, logical count and command hash from a qualified human reader; an unknown
-  host cannot grant that approval. Both commands use the configured save store.
+  paths, logical count and command hash typed by the user. Typed approvals are read
+  only by a native hook from the transcript its host hands it; these commands
+  refuse `--transcript`, so through them bulk access is refused. Both commands use
+  the configured save store.
 
   `upgrade-preview --candidate FILE [--previous FILE]` compares version 1 hash
   inventories (`{"v":1,"files":{"relative/path":"sha256"}}`) without writing
@@ -104,7 +106,7 @@ code, file named), **INFERRED** (reasoned, not run). Write your own findings the
   review before claiming enforcement.
 
   `preferences` renders only the explicit `## My preferences` section from
-  `KNOWLEDGEBASE.local.md`, using the same bounded parser as Skyrim. Existing
+  `KNOWLEDGEBASE.local.md`, using the shared `modding_harness` bounded parser. Existing
   Claude/Codex session hooks and the OpenCode system transform reinject it;
   other hosts can read it themselves. The example file starts with an empty
   preference section. The installers retain an independently verified
@@ -234,7 +236,11 @@ Preview results cannot replace a normal pre-operation check.
 One or two existing saves are automatically preserved as a permanent verified
 transaction before an allowed mutation. Bulk access needs the policy's exact
 canonical path set, logical count and command hash bound to qualified human
-approval. Unknown hosts cannot grant their own approval. Ordinary timestamped
+approval. That approval is read only from a native host's own session
+transcript: the neutral CLI refuses a caller-named `--transcript`, and the guards
+refuse agent writes to Claude Code and Codex transcript files. A typed approval
+does not expire within its session and can be matched again by the same
+operation and paths (an upstream harness limitation). Ordinary timestamped
 edit backups are additional history, not substitutes for that transaction.
 
 An unknown surface follows the capability policy: allow with

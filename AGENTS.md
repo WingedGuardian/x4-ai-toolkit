@@ -129,8 +129,8 @@ ask/deny, failed evaluation, malformed output or transport failure. Exit 0 alone
 insufficient. Normal checks preserve recognized saves; `--preview` and legacy
 `x4guard.py check` are policy previews and cannot replace permanent preservation.
 
-On Windows Codex runs shell commands in **PowerShell**: use `"shell":"powershell"` (judged as
-bash, a PowerShell write into `reference\` was measured to pass), and write the toolkit root
+On Windows Codex runs shell commands in **PowerShell**: use `"shell":"powershell"` (a PowerShell
+write into `reference\` checked as `"bash"` passed, measured), and write the toolkit root
 as `$env:X4_TOOLKIT` wherever these instructions say `$X4_TOOLKIT` (in PowerShell that form
 expands to nothing). Installed skills already say `$env:X4_TOOLKIT` on Windows (the installer
 renders them); a skill in an uninstalled copy says `TOOLKIT` in double curly braces, meaning

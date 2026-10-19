@@ -837,8 +837,9 @@ function Save-HUserClaudeMd($dest) {
   Write-Host '  [note] your CLAUDE.md is not one this toolkit ever shipped, so it was KEPT (not lost) as:'
   Write-Host ('           ' + (Join-Path $dest $to))
   Write-Host '         That copy is NO LONGER LOADED by any agent: the 4.0 CLAUDE.md replaced it.'
-  Write-Host '         To bring your notes back, merge what you want into X4-NOTES.md in the same'
-  Write-Host '         folder -- every agent''s instructions read it, and the toolkit never writes it.'
+  Write-Host '         To bring your notes back, merge what you want into KNOWLEDGEBASE.local.md in'
+  Write-Host '         the same folder -- every agent''s instructions read it (and a legacy X4-NOTES.md),'
+  Write-Host '         and the toolkit never overwrites it.'
   Write-R2YourEditsHint $dest $to $prev
   Show-HHashCaveat
 }

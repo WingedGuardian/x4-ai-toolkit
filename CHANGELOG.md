@@ -2,149 +2,253 @@
 
 ## v4.0.0 — 2026-10-03
 
-- x4compat (issue #11): ops are judged where they land at their own load position. A replace or remove that
-  lands on content another mod added is a failing HARD row that names the adder, says when it overwrites only
-  part of a multi-element insert ("partial: n of k elements X inserted; the others survive"), and marks the
-  engine's resolution after the insert UNMEASURED. An `<add>` into another mod's added content is advisory
-  (`added_into` / "ADDS INTO CONTENT ANOTHER MOD ADDED"), never failing; duplicate keys there still get HARD +
-  SOFT rows. Ops that match nothing or several nodes are listed as not applied. Text output prints real XPaths.
-- exprlint (issue #12): `fmt_missing_dot` reads string literals left to right, honouring `\'` escapes, so a
-  later literal starting with `[` is no longer a false positive (vanilla corpus: 1 false positive -> 0, no
-  real hit lost).
-- `x4modlist search` (issue #13): Nexus discovery by name. Needs `X4_NEXUS_KEY` and says so when it is missing
-  or refused. Candidates are marked have / have? / new against the active registry mods, with a count of active
-  mods that have no Nexus id; every result states its coverage (names only; hidden/removed and Workshop-only
-  mods absent; empty is not proof of absence). A GraphQL error is a non-answer (rc 2), never "no mods".
-- Fixed: a nested patch (`<mod>/extensions/<owner>/<file>`) from a mod that loads BEFORE its owner is applied
-  right after the owner's file, as the engine does (measured 2026-10-12). It used to be dropped silently by the
-  effective store. Tier B evaluates such a patch against the owner's file (INFO) instead of an UNMEASURED WARN
-  (F286, F141).
-- Fixed: DLC folders are recognised case-insensitively everywhere (`_merge.is_dlc_folder`) (F284).
-- The oracle gates refuse (rc 2) when an engine-loadable file of a mod they judge was edited or created after
-  the engine log, and `oracle.py` finds logged mods in every install root (F285).
-
-- Mod-update and modlist reviews reconcile the current save situation, session intent and local user preferences before proposing changes; ask only for material missing facts. Save preservation and scoped authorization remain required.
-
-- Mutation-probe kills require new testcase failures against the same marked
-  scope. Mutation-induced test-call exceptions can count as failures; collection,
-  setup/teardown and runner errors remain unmeasured. Full escalation
-  restores pristine source before its baseline and uses a separate current budget.
-  Dedicated checks cover required dependencies, overlay order and write banners
-  while artifact publication remains blocked throughout the mutation window.
-
-- Filesystem-provider paths retain physical filename case for save preservation.
-  Recursive helper qualification applies where its scope intersects saves;
-  unrelated mod operations retain their existing policy, while neutral state
-  and permanent backup stores remain protected. Unresolved shell scope refuses
-  with static actionable diagnostics without exposing command or parser text.
-  Extended Windows drive paths retain their original I/O spelling; the namespace
-  question mark is not treated as a save filename wildcard.
-
-- Current guidance leads manual and unknown-host integration through normal
-  Action v1 preservation, distinguishes process receipts from host enforcement,
-  and documents the acting Python toolkit root and retained local notes.
-- Installed-layout installer fixtures use exact public native runtime inputs
-  independent of the selected host; workflow-source checks name absent sources.
-  Native audit fixtures carry the pinned shared policy and private writable roots.
-
-- Installer config and global-settings backups reserve distinct files and verify
-  their bytes before rewriting. Same-second captures retain earlier backups;
-  a failed config backup now refuses the rewrite. Retiring an agreeing legacy
-  config retains a distinct backup, including read-only legacy configurations.
-
-- Baseline capture reserves a fresh STAMP directory; repeat labels refuse without
-  changing previous evidence. Debug captures retain distinct logs and metadata
-  even when source timestamps match. Live-dump archives verify full payload
-  digests in existing candidates and publish verified snapshots without replacement.
-
-- Both installers check rewritten path-config syntax without executing carried
-  assignments. Command-like custom values are retained as data, matching the
-  runtime loader's refusal to evaluate substitutions and shell operators.
-- BaseX argument-query checks retain an empty-but-defined MSYSTEM marker as
-  evidence of possible path rewriting. Its regression uses an empty result,
-  so a separate count-query refusal cannot hide the channel check.
-- Installed-layout checks examine the selected instruction files and common
-  runtime carrier. Workflow-source checks explicitly skip when that source
-  is not shipped; common backup and validator behavior still runs for every agent.
-  Configuration precedence and note-file protections use that same carrier;
-  only native Codex controls skip when its runtime was not selected.
-- Targeted hook replay rechecks runtime bytes and resolved paths before
-  reporting its delta, using the same final stability check as full replay.
-- New-host adapter guidance leads with complete Action v1 pre-operation checks,
-  distinguishes preview from permanent save preservation, and supplies current
-  owned-runtime prerequisites for canaries.
-- Codex end-to-end decoys include the pinned shared runtime and render hooks
-  from shipped runtime files. Separate hook, control and fault directories
-  retain evidence; existing decoy directories refuse replacement.
-- Standalone hook replay fingerprints the resolved save dispatcher, shared
-  Python runtime and lock, refusing incomplete or changing instruments.
-  Conformance recognizes dispatcher nonanswers as unchecked, preserving the
-  checked-case floor and all adapter mutation controls.
-- Reference-protection reports disclose enumeration failures as incomplete,
-  including during full scans. An incomplete preflight count refuses changes;
-  a later chmod traversal failure reports partial work and cannot pass.
-- Doctor reports disabled or changed hooks, and unconfirmed trust hashes,
-  before pending review steps when a Codex installation has mixed statuses.
-- Generic installs use the neutral runtime for Bash discovery, unpacking and
-  baseline configuration. File-lock inventories recognize the generic carrier,
-  demand AGENTS.md and include the neutral and shared runtime files.
-- Codex users must re-review hooks: post-tool validation also receives the
-  captured native shell name `Bash`, covering shell-carried patches. OpenCode
-  shell patches retain workdir and literal cd attribution for post validation;
-  malformed patches disclose that validation did not run.
-  codex-hooks-template: 9e50f5517b2e895cc412ca1727d00e85a8e54ba910286b1c662870f321f00212
-- Native Codex entry wrappers validate the complete event output schema. On
-  Windows the adapter process uses an explicit standard-handle list and an
-  owned job, bounding adapter stdin, execution and output drain by one deadline.
-- File hooks normalize Git Bash absolute paths before native Python 3.13's
-  absolute-path check; save preservation and ordinary policy receive the same
-  physical target. Hook smoke fixtures cannot use a caller's backup store.
-- The offline shared harness is pinned to 50ac29f, including exclusive absent
-  restore, typed settings migration and known DevBench fallback policy fixes.
-- Unknown-tool warnings use the current installed runtime even when X4_TOOLKIT
-  is unset or names another toolkit. No game configuration is needed to report
-  an unsupported surface as warn-and-allow.
-- Release verification compares every archive member with its committed Git
-  object and refuses duplicate members. Only text conversion declared by the
-  committed attributes is accepted; machine-local attributes cannot certify it.
-- Both installers preflight destination links along the exact copy set, refusing
-  junctions or symbolic links that redirect writes before changing instructions
-  or copying files. Unrelated local links remain usable.
-- Upgrade review preparation renders skill commands for their declared shells and
-  generates destination-specific Codex definitions from the frozen template.
-  Both native settings files retain unrelated content; complete pre-tool groups
-  establish ownership, and unknown policies require ordered integration. Shared
-  metadata staging completes short writes and verifies readback before publication.
-- The ordinary installers retain customized Codex definitions and semantically
-  unchanged read-only definitions, including JSON formatting differences. Codex
-  root spellings that shell expansion would alter refuse before installation.
-- Both installers refuse customized project settings before copying or moving
-  user instructions. `--over-existing` no longer discards permissions or custom
-  hooks. Exact released defaults remain recognized through the shared history
-  manifest; customized settings use the reviewed upgrade workflow.
-- Neutral recovery uses one total deadline for root resolution, verification,
-  current-save preservation and publication, including new-directory restores.
-- Named file copies/moves into existing save directories preserve the actual
-  destination filenames first, including PowerShell and cp target-directory
-  options. Bulk scope stays together and approvals bind the command. Directory
-  trees, unresolved/glob sources and aliasing options remain refused.
-
-- Local knowledge and preferences survive upgrades. Both installers retain a
-  verified independent legacy knowledgebase before replacement, preserve existing
-  local notes, and refuse if preservation fails. Claude, Codex and OpenCode use
-  Skyrim's shared bounded preference parser; unclassified notes are not injected
-  as standing instructions. Ownership previews preserve modified/unowned files.
-
-- Shared pinned OpenCode V1 transport with bounded discovery/cleanup, sparse
-  unknown-tool warnings, and private pre/post correlation receipts. Running-host
-  enforcement remains unmeasured. Generic recovery now supports guarded in-place
-  replacement with verified current-save preservation and command-bound bulk grants.
-
 **The toolkit is now the "X4 AI Assistant Toolkit"** and works with more than one coding agent:
 **Claude Code and OpenAI Codex** are first-class, **OpenCode** is best effort (CLI only, built from
 its docs and source, not measured), and any other agent can be connected through `ADAPTING.md`.
 The repository becomes `x4-ai-toolkit` (GitHub redirects the old `x4-claude-toolkit` address), and
 the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
+
+### Fixed before release: the last review round (2026-10-12 to 2026-10-18)
+
+What you will notice comes first, grouped by area. Bullets tagged **(maintainers)** change only
+tests, fixtures, gates or release tooling.
+
+#### x4compat, x4validate, x4save and the other tools
+
+- **x4compat (issue #11): ops are judged where they land, at their own load position.** A replace
+  or remove that lands on content another mod added is a failing HARD row that names the adder, says
+  when it overwrites only part of a multi-element insert ("partial: n of k elements X inserted; the
+  others survive"), and marks the engine's resolution after the insert UNMEASURED. The mod named as
+  the adder must load before the op: a mod that overwrote its own later-loading content was named as
+  its own adder, and those rows are now plain later-wins HARD rows. An `<add>` into another mod's
+  added content is advisory (`added_into` / "ADDS INTO CONTENT ANOTHER MOD ADDED"), never failing;
+  duplicate keys there still get HARD + SOFT rows. Ops that match nothing or several nodes are listed
+  as not applied (BLIND-SPOTS F287).
+- **x4compat: overwriting a declared dependency's added content is advisory.** When the one mod that
+  replaces or removes added content declares a direct dependency (required or optional, matched by
+  manifest id, never by folder name) on every mod that added it, the overwrite is the intended patch:
+  it is listed under "OVERWRITES OF A DECLARED DEPENDENCY'S ADDED CONTENT", one line per (overwriter,
+  adder) pair with an op count and three example paths, and in `--json` as `dependent_overwrites`
+  with every row. It does not fail the run. A transitive dependency does not count, and two mods
+  overwriting the same added node still fail. On the maintainer's modlist this moved 2,544 ops over
+  36 mod pairs to the advisory list and left 77 failing HARD rows, where the release candidate
+  without the rule had 2,621 (MEASURED 2026-10-18).
+- x4compat: a mod that ships a complete file over another mod's own file is reported as a
+  FULL-OVERRIDE again; the in-release sequential resolver had dropped those rows silently (3 rows
+  on the maintainer's modlist). Text output prints real XPaths and never an internal node id; a
+  node with no single path in the finished tree is described in words. When x4compat's two
+  instruments disagree on a file, the message says that file lost rows of every kind.
+- **exprlint (issue #12):** `fmt_missing_dot` reads string literals left to right, honouring `\'`
+  escapes, so a later literal starting with `[` is no longer a false positive. Measured over the
+  vanilla reference only (514,501 attribute values): 1 false positive (`md/npc_usecases.xml:363`)
+  -> 0, no real hit lost. Mods, loose or packed, were not part of that measurement.
+- **`x4modlist search` (issue #13): Nexus discovery by name.** Needs `X4_NEXUS_KEY` and says so when
+  it is missing or refused. Candidates are marked have / have? / new against the active registry
+  mods, with a count of active mods that have no Nexus id; every result states its coverage (names
+  only; hidden/removed and Workshop-only mods absent; empty is not proof of absence). A GraphQL error
+  never reads as "no mods": with usable candidates the result is `partial` (rc 0), without any it is
+  a non-answer (rc 2). A toolkit missing its shared harness core says to reinstall it, or to point
+  `X4_TOOLKIT` at a complete copy (rc 2).
+- **x4validate and x4save: definitions are resolved after overlays.** A macro or component name is
+  checked against the merged files, so a definition a mod patches in or out is seen as the merge
+  model sees it. Only documents with more than one contributor (or a diff, a nested mod-on-mod
+  file or an unreadable input) are merged; a lone complete file is parsed as it is. On the maintainer's install
+  that takes 31-44 s instead of the ~116 s the first in-release version needed, with identical names
+  in all 19,763 documents. Names are matched case-insensitively: 40 of 1,500
+  sampled live registrations, and 490 of 20,665 in a full pass, are defined only in another
+  capitalisation (map macros); the first in-release version reported them as undefined (MEASURED
+  2026-10-18; BLIND-SPOTS F288, F65).
+- `x4save check` refuses (rc 2) a save that is not readable XML (corrupt gzip, malformed XML or a
+  DTD); the save is now parsed as XML rather than scanned with a pattern.
+- Fixed: a nested patch (`<mod>/extensions/<owner>/<file>`) from a mod that loads BEFORE its owner is
+  applied right after the owner's file, as the engine does. It used to be dropped silently by the
+  effective store. Tier B evaluates such a patch against the owner's file (INFO) instead of an
+  UNMEASURED WARN. Engine behaviour measured 2026-10-12 on 3 MD/aiscript files; macros and libraries
+  are inferred to behave the same (F286, F141).
+- Fixed: DLC folders are recognised case-insensitively in the Python tools (`_merge.is_dlc_folder`).
+  `scripts/generate-baseline.sh` still skips DLC by the lowercase `ego_dlc_*` name (F284).
+- `x4live` archive: a missing source refuses (rc 2) again instead of a traceback, and a volume that
+  refuses hard links (such as exFAT) gets an exclusive copy that never overwrites.
+- `x4debug baseline` no longer re-archives a log it already holds: an archive with the same size and
+  SHA-256 is reused ("already archived, identical content"), and new archives record `sha256` in
+  their metadata.
+- `x4debug` captures retain distinct logs and metadata even when source timestamps match, and live
+  dump archives verify full payload digests in existing candidates and publish verified snapshots
+  without replacement. Baseline capture reserves a fresh STAMP directory; a repeated label refuses
+  without changing previous evidence.
+- Mod-update and modlist reviews reconcile the current save situation, session intent and local
+  user preferences before proposing changes; they ask only for material missing facts. Save
+  preservation and scoped authorization remain required.
+
+#### Guards and save safety
+
+- **Saves (user decision, 2026-10-18): a command that changes one or two recognised saves proceeds
+  without asking, but only after a verified backup of exactly what it changes** ("Save backup
+  verified" in the hook output). More than two saves, or a wildcard, needs a typed approval line
+  naming the canonical paths, count and command hash. A one- or two-save command no longer lifts
+  the ask for anything else it touches: an unresolved operand, a command name built by
+  substitution, a verb the save model does not cover, a script file, a program on stdin or a
+  dynamic `bash -c "$CMD"` / `eval "$X"` keeps the profile ask.
+- `x4guard check` (read-only, so it can back nothing up) now ASKS on a save change, where it used to
+  advise.
+- **A toolkit whose save harness (`tools/modding_harness`) cannot load** asks only for calls that
+  change the X4 profile or saves, and names the fix (point `X4_TOOLKIT` at a complete toolkit, or
+  reinstall); every other call gets its normal verdict plus an advisory. It used to deny every
+  shell and file call with "X4 save dispatcher failed: ValueError". `X4_GUARD=off` does not lift
+  that ask.
+- **Typed save approvals come only from the host's own transcript.** `tools/agent-harness.py check`
+  and `save-restore` refuse a caller-named `--transcript`, and the guards refuse agent writes to
+  Claude Code and Codex transcript files (`.claude/projects/**/*.jsonl`, `.codex/sessions/**/*.jsonl`)
+  by a file edit or a shell command. A typed approval does not expire within its session (see
+  *Known limitations*).
+- The save-approval line leads the refusal ("SAVE APPROVAL REQUIRED"), and save messages are cut at
+  the hook output limit with a notice; the GUARDS OFF banner leads the session start.
+- **Your notes file is `KNOWLEDGEBASE.local.md`** at the project root, writable in every layout
+  (in the in-game layout it was blocked as a game file). An existing `X4-NOTES.md` is kept and
+  still read as legacy notes.
+- **Codex: a shell write, delete or move whose target depends on an unknown working directory is
+  denied.** Codex's native hooks do not receive the tool's `workdir` (measured on Codex 0.162.1);
+  without an absolute `workdir`, a recognised mutation of a relative or unresolved target (on
+  Windows, one that is not drive- or UNC-qualified) is refused, and a `cd` inside the command does
+  not count. Reads and absolute-path mutations pass. Bash's own `-o` option (`bash -o pipefail`) is
+  no longer read as an output file; real output targets (`>`, `curl -o`, `strace -o`) still are.
+- The neutral entry (`tools/agent-harness.py`) treats a shell action with no `cwd` as an unknown
+  working directory: a relative mutation is refused.
+- Python argument data is no longer read as code: text passed after `python -m <module>`,
+  `python <script>.py` or an inert `-c` program does not trip the deny on writing the knowledgebase
+  or instruction files. Real code still does (`python -c "open(...,'w')"`, `exec`/`eval`, `-i`,
+  `-m timeit`, `uv run python`).
+- **Linux/macOS: PowerShell and `cmd` paths are read with their own separators.** Every
+  PowerShell-spelled path on a POSIX host was treated as unresolved and the call denied. A Windows
+  drive or UNC path there is unresolved (never guessed), and a backslash in a Bash command stays a
+  filename character. Windows is unchanged.
+- **Hook latency is back down:** each command is analysed once, and the whole hook call runs under
+  one budget. A trivial PowerShell command went 0.99 s -> 0.55 s and Bash `ls -la` 0.27 s -> 0.19 s
+  (median of 7 on the maintainer's machine; before the save-policy rework: 0.47 s and 0.11 s).
+- Filesystem-provider paths retain physical filename case for save preservation. Recursive helper
+  qualification applies where its scope intersects saves; unrelated mod operations retain their
+  existing policy, while neutral state and permanent backup stores remain protected. Unresolved
+  shell scope refuses with static actionable diagnostics without exposing command or parser text.
+  Extended Windows drive paths retain their original I/O spelling; the namespace question mark is
+  not treated as a save filename wildcard.
+- File hooks normalize Git Bash absolute paths before native Python 3.13's absolute-path check; save
+  preservation and ordinary policy receive the same physical target.
+- Named file copies/moves into existing save directories preserve the actual destination filenames
+  first, including PowerShell and cp target-directory options. Bulk scope stays together and
+  approvals bind the command. Directory trees, unresolved/glob sources and aliasing options remain
+  refused.
+- Unknown-tool warnings use the current installed runtime even when `X4_TOOLKIT` is unset or names
+  another toolkit. No game configuration is needed to report an unsupported surface as
+  warn-and-allow.
+- Reference-protection reports disclose enumeration failures as incomplete, including during full
+  scans. An incomplete preflight count refuses changes; a later chmod traversal failure reports
+  partial work and cannot pass.
+
+#### Installers and upgrades
+
+- **Local knowledge and preferences survive upgrades.** Both installers retain a verified
+  independent legacy knowledgebase before replacement, preserve existing local notes, and refuse if
+  preservation fails. Claude, Codex and OpenCode use the shared `modding_harness` preference parser;
+  unclassified notes are not injected as standing instructions. Ownership previews preserve
+  modified/unowned files.
+- Upgrades recognise every `KNOWLEDGEBASE.md` a release tag shipped (an unedited one is no longer
+  saved aside as `KNOWLEDGEBASE.pre-4.0-<sha>.md`) and every Codex `hooks.json` rendering a tag
+  shipped. No tag has shipped a Codex template yet, so today only the current one is recognised;
+  the list grows from v4.0.0 on.
+- `install.sh` retires an agreeing 3.x `.claude/x4-paths.env` by renaming it to
+  `.claude/x4-paths.env.bak-<date>-<time>.<random>` without overwriting anything (it used to delete
+  it while saying "renamed"); `install.ps1` does the same. If no name is free, the old file stays.
+- Installer config and global-settings backups reserve distinct files and verify their bytes before
+  rewriting. Same-second captures retain earlier backups; a failed config backup now refuses the
+  rewrite. Retiring an agreeing legacy config retains a distinct backup, including read-only legacy
+  configurations.
+- Both installers check rewritten path-config syntax without executing carried assignments.
+  Command-like custom values are retained as data, matching the runtime loader's refusal to
+  evaluate substitutions and shell operators.
+- Both installers preflight destination links along the exact copy set, refusing junctions or
+  symbolic links that redirect writes before changing instructions or copying files. Unrelated
+  local links remain usable.
+- Upgrade review preparation renders skill commands for their declared shells and generates
+  destination-specific Codex definitions from the frozen template. Both native settings files
+  retain unrelated content; complete pre-tool groups establish ownership, and unknown policies
+  require ordered integration. Shared metadata staging completes short writes and verifies readback
+  before publication.
+- The ordinary installers retain customized Codex definitions and semantically unchanged read-only
+  definitions, including JSON formatting differences. Codex root spellings that shell expansion
+  would alter refuse before installation.
+- Both installers refuse customized project settings before copying or moving user instructions.
+  `--over-existing` no longer discards permissions or custom hooks. Exact released defaults remain
+  recognized through the shared history manifest; customized settings use the reviewed upgrade
+  workflow.
+
+#### Codex, OpenCode and other hosts
+
+- **Codex users must re-review hooks:** post-tool validation also receives the captured native
+  shell name `Bash`, covering shell-carried patches. OpenCode shell patches retain workdir and
+  literal cd attribution for post validation; malformed patches disclose that validation did not
+  run.
+  codex-hooks-template: 9e50f5517b2e895cc412ca1727d00e85a8e54ba910286b1c662870f321f00212
+- Native Codex entry wrappers validate the complete event output schema. On Windows the adapter
+  process uses an explicit standard-handle list and an owned job, bounding adapter stdin, execution
+  and output drain by one deadline.
+- Doctor reports disabled or changed hooks, and unconfirmed trust hashes, before pending review
+  steps when a Codex installation has mixed statuses.
+- Generic installs use the neutral runtime for Bash discovery, unpacking and baseline
+  configuration. File-lock inventories recognize the generic carrier, demand AGENTS.md and include
+  the neutral and shared runtime files.
+- The offline shared harness is pinned to `12a87ea` (`tools/modding-harness.lock.json`), including
+  exclusive absent restore, typed settings migration and known DevBench fallback policy fixes.
+- Shared pinned OpenCode V1 transport with bounded discovery/cleanup, sparse unknown-tool warnings,
+  and private pre/post correlation receipts. Running-host enforcement remains unmeasured. Generic
+  recovery supports guarded in-place replacement with verified current-save preservation; bulk
+  in-place recovery needs a typed approval, which the neutral entry cannot read (see above).
+- Neutral recovery uses one total deadline for root resolution, verification, current-save
+  preservation and publication, including new-directory restores.
+- Current guidance leads manual and unknown-host integration through normal Action v1
+  preservation, distinguishes process receipts from host enforcement, and documents the acting
+  Python toolkit root and retained local notes. New-host adapter guidance leads with complete
+  Action v1 pre-operation checks, distinguishes preview from permanent save preservation, and
+  supplies current owned-runtime prerequisites for canaries.
+
+#### Maintainers
+
+- **(maintainers)** CI runs every independent check after an earlier one fails: once setup
+  succeeds, each later step runs unless the run was cancelled, so one red check no longer hides
+  the rest (a failed step still fails the job).
+- **(maintainers)** The oracle gates refuse (rc 2) when an engine-loadable file of a mod they judge
+  was edited or created after the engine log: `oracle.py` (its judged mods and the mods loading
+  before them) and `oracle_reverse.py` (the active set). `load_order_oracle` deliberately does not,
+  since load order comes from manifests, not file contents. Creation time is read from
+  `st_birthtime` where the platform reports it. `oracle.py` finds logged mods in every install root.
+  Not yet run against a real engine log (F285).
+- **(maintainers)** `gates/mutation_probe.py` carries 56 mutants. Kills require new testcase
+  failures against the same marked scope. Mutation-induced test-call exceptions can count as
+  failures; collection, setup/teardown and runner errors remain unmeasured. Full escalation
+  restores pristine source before its baseline and uses a separate current budget. Dedicated
+  checks cover required dependencies, overlay order and write banners while artifact publication
+  remains blocked throughout the mutation window.
+- **(maintainers)** Release verification compares every archive member with its committed Git
+  object and refuses duplicate members. Only text conversion declared by the committed attributes
+  is accepted; machine-local attributes cannot certify it.
+- **(maintainers)** Installed-layout installer fixtures use exact public native runtime inputs
+  independent of the selected host; workflow-source checks name absent sources. Native audit
+  fixtures carry the pinned shared policy and private writable roots. Installed-layout checks
+  examine the selected instruction files and common runtime carrier; workflow-source checks
+  explicitly skip when that source is not shipped, and common backup and validator behavior still
+  runs for every agent. Configuration precedence and note-file protections use that same carrier;
+  only native Codex controls skip when its runtime was not selected. Hook smoke fixtures cannot use
+  a caller's backup store.
+- **(maintainers)** BaseX argument-query checks retain an empty-but-defined MSYSTEM marker as
+  evidence of possible path rewriting. Its regression uses an empty result, so a separate
+  count-query refusal cannot hide the channel check.
+- **(maintainers)** Targeted hook replay rechecks runtime bytes and resolved paths before reporting
+  its delta, using the same final stability check as full replay. Standalone hook replay
+  fingerprints the resolved save dispatcher, shared Python runtime and lock, refusing incomplete or
+  changing instruments. Conformance recognizes dispatcher nonanswers as unchecked, preserving the
+  checked-case floor and all adapter mutation controls.
+- **(maintainers)** Codex end-to-end decoys include the pinned shared runtime and render hooks from
+  shipped runtime files. Separate hook, control and fault directories retain evidence; existing
+  decoy directories refuse replacement.
 
 ### Upgrading from 3.x
 
@@ -161,8 +265,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 3. **An edited `CLAUDE.md` is kept on disk, but no longer loaded**: if its hash matches no
    `CLAUDE.md` a release tag shipped, it is moved to `X4-NOTES.pre-4.0.md` (or a dated name)
    before the 4.0 file is copied. No agent reads that copy; to bring your notes back, merge what
-   you want into **`X4-NOTES.md`**, which every agent's instructions read and the toolkit never
-   writes. An unedited 3.x `.claude/x4-paths.env.example` is removed (an edited one is kept).
+   you want into **`KNOWLEDGEBASE.local.md`** at the project root, which every agent's
+   instructions read and the toolkit never overwrites (an existing `X4-NOTES.md` is kept and
+   still read, as legacy notes). An unedited 3.x `.claude/x4-paths.env.example` is removed (an
+   edited one is kept).
 4. **`AGENTS.md` is new** (the instruction file for Codex, OpenCode and other agents). No release
    before 4.0 shipped one (0 of 23 tags), so an `AGENTS.md` already in the destination is yours:
    it is moved aside to `AGENTS.pre-4.0.md` (or a dated name), never overwritten.
@@ -570,8 +676,9 @@ confusing messages and six cosmetic ones. All are fixed:
   `GUARDS-OFF.log`, and the session starts with a GUARDS OFF banner. A guard that could not check
   still asks.
 - **An agent can save its notes, and is told how to edit a locked file.** Exactly
-  `<project root>/X4-NOTES.md` (and `X4-NOTES.pre-4.0.md`) is allowed; the same name deeper in the
-  game folder is still blocked. A write to a file x4lock has locked gets a note naming the unlock,
+  `<project root>/KNOWLEDGEBASE.local.md` (the notes file; allowed in every layout since `264828c`),
+  the legacy `X4-NOTES.md` and `X4-NOTES.pre-4.0.md` are allowed; the same names deeper in the
+  game folder are still blocked. A write to a file x4lock has locked gets a note naming the unlock,
   edit and relock commands; the lock stays. The game-folder block now says where notes, game
   facts and mod files go. New: `x4lock.py protected <path>`.
 - The file guard allowed `CLAUDE.md` in the game root but denied **`AGENTS.md`**; it now allows
@@ -941,6 +1048,18 @@ confusing messages and six cosmetic ones. All are fixed:
 - Two false refusals fail closed: a `..` in a not-yet-existing part of a path given to the unpack,
   and an `X4_REFERENCE` ending in a dot, can read as a different tree; the refusal prints both
   paths (BLIND-SPOTS F229).
+- **A typed save approval does not expire within its session.** Once typed, it matches the same
+  operation and paths again for the rest of that session, and an approval line longer than the
+  hook output limit (~10,000 characters, about a hundred saves) cannot be shown whole. Both live
+  in the pinned shared harness (BLIND-SPOTS F291).
+- **Some shell forms are still allowed** (present before 4.0; measured in the 2026-10-18 hook
+  review): a program the guards cannot see into, such as `python -c "import os; os.remove('<save>')"`, and `eval "$X"` or
+  `bash -c "$CMD"` whose text is not in the command. The hooks inspect known command forms; they
+  do not sandbox interpreters (BLIND-SPOTS F290).
+- **Codex on Linux is less tested than on Windows**: the Linux entry wrapper (`codex-entry.sh`) has
+  no mutation tests, and the adapter mutation tests run on Windows only. Its fault handling is
+  tested with stub adapters; whether the full chain (wrapper, adapter, guards) is exercised on Linux
+  is unverified (BLIND-SPOTS F289).
 
 ### Maintainers
 

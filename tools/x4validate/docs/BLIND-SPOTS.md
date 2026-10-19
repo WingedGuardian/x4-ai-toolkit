@@ -143,7 +143,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F62 | a silent existence-filter narrowed a mutation scope; the test that should have caught it asserted `any` | **DEFECT** | `mutation_probe.run_tests` dropped missing test paths before invoking pytest — right to DO, wrong to do SILENTLY, and inside the one gate built to detect vacuous assertions. MEASURED: the mirror's `_registry.py` scope lists 4 files and 3 exist, so the public probe ran **3 of 4** and printed the same `killed` line. Two more in the same function, both in dev too: an empty scope returned the verdict **`"hang"`** (an absence rendered as a timeout that was never measured, which the caller then "confirms"), and `test_every_target_has_tests_that_exist` asserted **`any`** while its NAME promised all — three of four present passed. ⚠ A prediction of mine that was WRONG is recorded in the section: I expected a false KILLED via pytest error; the filter runs first | ✅ **FIXED 2026-08-26** — a partial scope NAMES what it dropped; an empty one returns the new verdict **`noscope`**, own bucket, excluded from the killed count, fails the gate; an empty BASELINE returns **rc 2**, never rc 1. `mp_scope_gaps()` returns named gaps, asserted with `all`. Asymmetry is the proof: GREEN on dev, RED on the mirror naming the exact file. 6 tests written first and watched fail; probe re-run **11/11 killed, 0 unmeasured** |
 | F63 | a helper that cannot say *"there is no extensions root"* | **DEFECT** | `_effective._ext_root` returns `_registry.GAME_EXTENSIONS` behind `except AttributeError` — a guard that NEVER FIRES, because the attribute exists and its VALUE is `None` when nothing is configured. `_freshness.fingerprint` then refused (correctly — that is F46), unable to tell *"the caller forgot"* from *"the caller looked and there is none"*. MEASURED 2026-08-26: **5 tests fail on any machine with no X4 installed** — every fresh clone, every CI runner — and public CI was **RED for two consecutive runs**, byte-identical to `verify-cold.sh`'s output. ⚠ Nobody looked; the handoff said CI had not run. NOT user-reachable: the cold CLI matrix shows `x4effective` refusing with exit 2 at the door. **Symptom 2, OPEN:** warm, `_ext_root` returns the REAL extensions path for a store built over throwaway test dirs, so that store is stamped with a world it was never built from | ✅ **FIXED 2026-08-27** — symptom 2 closed: `_ext_root` returns None when the config describes a DIFFERENT world, so a test-built store is stamped UNKNOWN rather than with the real game. Population re-derived: 2 call sites, **4** test functions (the register said 5), 3 production consumers all passing `config=None`. Symptom 1 was `fingerprint(config, extensions=_UNSET)`: omitted still RAISES (F46 intact), an explicit `None` records the content axis **UNKNOWN**. `compare()` returns NOT fresh whenever either side is UNKNOWN — `None == None` would otherwise make two unknowns MATCH and report **FRESH**, and the test failed with exactly `Verdict(fresh=True, reasons=[])` before the fix. `_freshness.py` is NOT an `ENGINE_SOURCE`, so the hash held at `b25a2a99853d4c84` and nothing needed rebuilding. Symptom 2 left OPEN on purpose: `_effective.py` IS an engine source and that fix needs its own planned rebuild. Cost today genuinely zero, population stated (2 call sites, 5 tests) so it can be re-derived rather than trusted |
 | F64 | `origin` / `chain` records WHO WON, never WHO INTRODUCED IT | **ADJACENT-ANSWER** (no tool misbehaved) | A root `<replace sel="//macros">` swaps the whole document, so the base contributes **no chain entry** — and that is VRO's dominant idiom (848 root-replaces, CLAUDE.md #10). A single-entry chain then reads as *"this mod introduced this"* when it usually means *"this mod re-supplied what vanilla already had"*. PEER-MEASURED over the store: of **35,423** single-op root-replace attributes, **23,182 (65.4%)** also exist in vanilla with the chain hiding it; only **39** vpaths are truly mod-added. Sharpest case `bullet_arg_m_ion_01_mk1_macro`: **vanilla 10, live 10, chain `[vro]`** — identical value, sole credit, no hint a base file exists. It cost a real design conclusion (*"VRO added Kha'ak shield disruption"* — false). ⚠ **The same shape is `x4compat.Collision.winner`** (#18/F25): winning and originating are different questions, and no tool says which it answers | ✅ **FIXED 2026-08-27** — `who-sets` and `dump --chain` now disclose when base+DLC ALSO supply the vpath. Scope is EXISTENCE not the vanilla value, on purpose: reporting the value means re-deriving the property flatten, and a second normaliser implementation is what made the original check report 2.6% where the answer was 65.4%. First production caller of `base_has()`, written preventively for exactly this and unused until now. Silent for the 39 genuinely mod-added vpaths, for pure-base values, and for chains that already name base. Superseded proposal: have `who-sets` state whether a vanilla file exists at the vpath and carries the same prop — no merge-model or schema change. **Deliberately bundled with F63 symptom 2**: both live in `_effective.py`, an `ENGINE_SOURCE`, so either alone forces a rebuild of the effective store AND BaseX `x4eff`. Together that is one rebuild, not two. Found and measured by the parallel session; full table in `KNOWLEDGEBASE.md` § *2026-08-26h* |
-| F65 | `EntityDefs` costs its corpus tier PER NAME, on a population model that only holds for a mod | **SCOPE** | `_check.py::EntityDefs.__contains__` falls through to `_search_corpus`, which re-enumerates base + DLC + every overlay **for each unresolved name** (~2.5s each). Its own docstring states the justification and the population: *"MEASURED, 7 distinct references across 114 mods miss the eager tiers — at most 2 for any single mod."* That is correct **for a mod**. A SAVEGAME is a different population: MEASURED 2026-08-26, one save carries **5,022 distinct macro references**, of which ~2,500 miss the eager index, so the lazy tier would run for hours — observed blowing a 600s cap with no result. The bulk path `_scan` builds the whole definition set once in **19.4s**. Nothing misbehaved; the tool answered a per-name question at per-name cost, and the cost model is stated but not enforced | ✅ **FIXED** — `all_names()` (`_check.py:283`) answers the many-name question ONCE (19.4s) instead of ~2,500 per-name corpus scans; the lazy tier is unchanged, because it is right for the mod caller it was built for. Shipped 2026-08-26 with **zero tests**; covered 2026-08-27 with 5, pinning the property that matters: the bulk set is **index ∪ corpus and macro ∪ component**, and **never narrower than `__contains__`** — a narrower one would not crash, it would report defined names as DANGLING and inflate `x4save check` with false findings (macro-only was MEASURED at **1,792 misses**). Includes a falsification twin |
+| F65 | `EntityDefs` costs its corpus tier PER NAME, on a population model that only holds for a mod | **SCOPE** | `_check.py::EntityDefs.__contains__` falls through to `_search_corpus`, which re-enumerates base + DLC + every overlay **for each unresolved name** (~2.5s each). Its own docstring states the justification and the population: *"MEASURED, 7 distinct references across 114 mods miss the eager tiers — at most 2 for any single mod."* That is correct **for a mod**. A SAVEGAME is a different population: MEASURED 2026-08-26, one save carries **5,022 distinct macro references**, of which ~2,500 miss the eager index, so the lazy tier would run for hours — observed blowing a 600s cap with no result. The bulk path `_scan` builds the whole definition set once in **19.4s**. Nothing misbehaved; the tool answered a per-name question at per-name cost, and the cost model is stated but not enforced | ✅ **FIXED** — `all_names()` (`_check.py:283`) answers the many-name question ONCE (19.4s) instead of ~2,500 per-name corpus scans; the lazy tier is unchanged, because it is right for the mod caller it was built for. Shipped 2026-08-26 with **zero tests**; covered 2026-08-27 with 5, pinning the property that matters: the bulk set is **index ∪ corpus and macro ∪ component**, and **never narrower than `__contains__`** — a narrower one would not crash, it would report defined names as DANGLING and inflate `x4save check` with false findings (macro-only was MEASURED at **1,792 misses**). Includes a falsification twin. **UPDATE 2026-10-18:** v4.0 resolves definitions AFTER overlays (`d6cc98a`/`ded0a21`), which took the bulk set to ~116 s (whole `x4save check` ~7 min); `fae1a03` merges only documents with a second contributor, a diff, a nested file or an unreadable input: **31-44 s**, 19,763 documents and 22,860 names identical per document (0 differ), 3,381 merged / 16,382 read directly; names now match case-insensitively (F288) |
 | F66 | producer/consumer key normalisation — **investigated, NO DISAGREEMENT FOUND** | **NEGATIVE** (recorded so the line is not re-opened) | 3 pairs measured: prop keys **18/18 consumers agree** against the store's 44,708 distinct `attrs.prop`; vpath case **0 of 21** external call sites bypass the case-insensitive door; cross-door `_scan`->`_cat` **216 lookups, 12 misses, all the loose `content.xml` manifest, 0 unexplained**. 4 of 5 pre-registered predictions were WRONG | ✅ **CLOSED 2026-08-27.** The structural reason is the finding: **consumers ITERATE the mapping, they do not look it up by key.** Only 2 direct dict accesses exist and both are inside `_cat.py` (`:150` builds the VFS, `:256` is the exact-hit fast path *within* `_get_ci`, which falls through to a folded lookup). ⚠ Nothing ENFORCES this — it is a convention, not a guard. A future key-lookup consumer would reintroduce the whole class silently |
 | F67 | nothing verifies the working tree COMPLIES with the `.gitattributes` line-ending pin | **DEFECT** | The pin governs CHECKOUT only. MEASURED 2026-08-27: `_effective.py` sat **fully CRLF (1205 lines)** in this tree while HEAD and all **6** sibling `ENGINE_SOURCES` were LF — the last holdout, undetected for 2 days. Cost: the engine hash here was **`b25a2a99853d4c84`** where a fresh clone of the SAME commit computes **`3239fa6c515b83b6`**, so every recorded "engine hash is X" was machine-local | ✅ **FIXED 2026-08-27** — `tests/test_line_ending_pin_is_obeyed.py` asks GIT what the pin resolves to (`check-attr eol --stdin`) and reads the WORKING TREE, never `git show`; no allow-list. **Population was wider than the finding: 8 of 129 in dev and 14 of 155 in the mirror — 22 files, not 1**, two of them functionally broken by CRLF (`bin/xrcat`, `x4-paths.env.example`, both bash-sourced). All normalised as pure repairs with `git diff HEAD` EMPTY in both trees. Engine hash asserted unchanged. ⚠ The guard itself returned 0 pinned files at first and only its denominator assert caught it — `text=True` subprocess I/O translates newlines on the way IN on Windows. Superseded note: A cheap guard exists in shape: count `\r\n` in each `ENGINE_SOURCES` file and fail if any is non-zero while `.gitattributes` pins LF. ⚠ Note the direction — this fails SAFE (a false STALE, never a false FRESH), which is precisely why it survived F53's "fix" and two days of use |
 | F68 | `x4effective attr` printed a confident zero over a key that cannot exist | **DEFECT** | `_reject_unknown_kind` was written for exactly this — its docstring says *"without this an unknown kind reads as a confident empty answer"* — and is wired into `ls`, `show` and `who-sets` but **not `attr`**, the one command whose arguments are both free-form. MEASURED 2026-08-27 against the live store: `attr zzznotakind hull.max` → `0 value(s) for hull.max`, **rc 0**; `attr macro properties.hull.max` → same, **rc 0**. `who-sets` gets the prop case right (`no prop 'x' on y`, rc 1), so `attr` was the lone hole. Reported by the parallel session, who paid for it: a hand-rolled flatten kept the `<properties>` wrapper, matched only keys living OUTSIDE it, and reported **2.6%** where the answer was **65.4%** — plausible and self-consistent, the only tell being that every printed example was `component.ref` | ✅ **FIXED 2026-08-27** — `_reject_unknown_prop` + `_prop_suggestions`, wired into `attr` alongside the existing kind guard (rc 2 unknown kind, rc 1 unknown prop). Prints the denominator first (*"that kind has 8,672 distinct prop(s)"*), then store-derived suggestions, then **the kind that DOES carry the prop** — `attr ship hull.max` now answers *"`hull.max` is carried by kind `macro` (1973 value(s))"*, which is the sharpest miss because both arguments are individually real. 8 tests written first and watched fail: 3 RED, 3 GREEN on the first run — including a falsification twin proving a **true** zero (prop exists, `--class` excludes it) is still rc 0, so the guard cannot pass by rejecting everything empty |
@@ -365,7 +365,12 @@ memory or from another session -- a remembered id was stale within a day here.
 | F284 | DLC folder names are matched case-sensitively: `_merge.Config.dlc_dirs` uses `p.name.startswith("ego_dlc_")` | **OPEN LIMIT (measured)**; fails closed; a non-standard reference casing only | release review P (2026-10-12): a reference folder `EGO_DLC_Terran` is not exempted by load_order_oracle, lowercase `ego_dlc_terran` is | ✅ **CLOSED 2026-10-18** (`44e2bb2`) - one helper `_merge.is_dlc_folder` at all 5 case-sensitive sites (`dlc_dirs` unpacked + packed, `scan_installed`, `_strip_nesting`, `_resolve`); an AST guard bans a non-lowered prefix test elsewhere |
 | F285 | the oracle staleness check cannot see a diff file edited after the log; a removed PROFILE-root mod gets no signature line | **OPEN LIMIT (read)**; advisory, not gating | release review P (READ): `_env.modlist_staleness` checks manifest age, profile age, removed folders and unlogged mods only | ✅ **CLOSED 2026-10-18** (`a40f968`) - `_env.newest_engine_file` + `Staleness.edited` refuse (rc 2) when an engine-loadable file of a judged mod is newer than the log (`oracle.py`: judged mods + earlier loaders; `oracle_reverse`: active set; `load_order_oracle` deliberately not); `oracle.py` finds logged folders in every root and refuses one installed in none; unverified on a real engine log |
 | F286 | the plain path dropped a nested patch from a mod that loads BEFORE the patched file's owner | **DEFECT (measured)** | live, 172 active mods: plain path == nested path on 0 of 3 kuertee files (cue `AgentOperations` missing from `md/kuertee_emergent_missions_hunt.xml`); engine APPLIES such a patch (2026-10-12 log + a save, 3 MD files) | ✅ **CLOSED 2026-10-18** (`840865c`) - `build_effective` applies earlier overlays' nested files when the owner supplies the file; mirrored in `_compat._walk_positions` and `_compat_state.trace`; Tier B evaluates with the owner (INFO, not WARN); 3 of 3 agree |
-| F287 | x4compat judged ops that land on another mod's ADDED content wrongly (issue #11) | **DEFECT (measured)** | 7 + 2 synthetic fixtures; issue #11's Mission Commander / kuertee pair | ✅ **CLOSED 2026-10-18** (`e5a0794`, `0ad8f78`, `6862c30`, `f11c5a3`, `5b82913`) - ops judged at their own load position; replace/remove on added content is HARD naming the adder (+ partial, + engine UNMEASURED); an add into added content is advisory (`added_into`); live-corpus row delta not yet measured |
+| F287 | x4compat judged ops that land on another mod's ADDED content wrongly (issue #11) | **DEFECT (measured)** | 7 + 2 synthetic fixtures; issue #11's Mission Commander / kuertee pair | ✅ **CLOSED 2026-10-18** (`e5a0794`, `0ad8f78`, `6862c30`, `f11c5a3`, `5b82913`) - ops judged at their own load position; replace/remove on added content is HARD naming the adder (+ partial, + engine UNMEASURED); an add into added content is advisory (`added_into`); live corpus MEASURED 2026-10-18 after the dependency rule (`7c0ba2b`) and the adder-load-order fix (`3cba49f`): failing HARD 2,621 -> 77, 2,544 ops over 36 pairs advisory (`dependent_overwrites`) |
+| F288 | `EntityDefs` name lookup was case-sensitive in-release (d6cc98a/ded0a21), so a definition registered in another capitalisation read as undefined | **DEFECT (measured)**; in-arc | 40 of 1,500 sampled live registrations (fae1a03 message); 490 of 20,665 in a full pass (F4 lane, 2026-10-18), map macros such as `XU_EP2_universe_macro` | ✅ **FIXED 2026-10-18** (`fae1a03`) - every `EntityDefs` tier folds case (index, registrations, the mod's own scan, the corpus search and its byte pre-filter) |
+| F289 | The Linux Codex entry wrapper `codex-entry.sh` has no mutation tests, and the adapter mutation tests are Windows-only since `8bdaa55` | **OPEN LIMIT (read)** | `tests/test_codex_adapter_mutants.py` skips off Windows (line 27); `test_codex_wrapper.py` runs `codex-entry.sh` with stub adapters only | OPEN - whether the full Linux chain (wrapper, real adapter, guards) is exercised anywhere is UNVERIFIED |
+| F290 | Pre-arc hook gaps: an interpreter program (`python -c "os.remove(...)"`) and a carrier whose text is not in the command (`eval "$X"`, `bash -c "$CMD"`) are allowed | **OPEN LIMIT (measured)**; present before 4.0 | 4 of 4 shapes allowed by `x4guard check` against a scratch profile, 2 of 2 controls ask (2026-10-18) | OPEN - accepted residual ("hooks inspect known command forms", README); not changed for 4.0 |
+| F291 | A typed save approval never expires and is reusable within its session; an approval line over ~10,000 characters cannot be shown whole | **OPEN LIMIT (read)**; upstream `modding_harness/approval.py` | `Approval.matches` (`approval.py:29-37`) checks session, operation and path set only; `_bounded` cuts the save message at `X4_HOOK_MAX_CHARS` | OPEN - upstream harness change needed |
+| F292 | The identifier scan's HISTORY mode matches banned tokens on word boundaries, so a token inside a snake_case word passes history while TREE mode flags it | **OPEN LIMIT (measured)**; by design | 2026-10-18: a personal overlay-name prefix inside a test docstring passed the history scan and was caught by the tree scan (fixed in the tree, `40c927c`) | OPEN - deliberate trade-off (80% false positives without it) |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -3306,6 +3311,19 @@ method, which is its own hazard and would break silently in a refactor.
 — `x4validate` passes one mod at a time, which is the population the design assumes. The cost today
 is **zero for shipped code**, and stated as such rather than left implied, because "the cost is zero"
 is the line this register has twice found nobody re-checks (F22).
+
+**UPDATE 2026-10-18 (v4.0).** `d6cc98a` and `ded0a21` resolve definition candidates AFTER overlays, so a
+definition a mod patches is judged in the merged document. That made `all_names()` merge every candidate
+document: ~116 s for the bulk set, and the in-release review measured `x4save check` at ~7 min against
+the 19.4 s above. `fae1a03` parses a document straight from its bytes when exactly one source ships it as
+a full, non-diff file at its own path; a second contributor of any kind, a diff root, a nested mod-on-mod
+file or any unreadable input still merges. MEASURED on the live install, read-only: **31-44 s**; 19,763
+documents and 22,860 names identical per document between the two paths (0 differ); 3,381 merged, 16,382
+direct. The first cut read 19 lone nested full files raw (under one mod's `assets/prop/`) that the merge
+resolves to no tree; the per-item diff caught them and they merge again. Names are matched
+case-insensitively since the same commit (F288). The `x4save` banner and `_savecli.py` docstring carry the
+new number. RE-DERIVED BY: `tests/test_effective_definition_consumers.py`
+(`test_all_names_merges_only_documents_something_patches` and its `TWIN_` cases).
 
 
 ## F66 — producer/consumer key normalisation, investigated and CLEAR · **NEGATIVE** · confidence 90%
@@ -9678,6 +9696,68 @@ an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
 
+## F292 — The identifier scan's history mode tolerates a banned token inside a snake_case word · **OPEN LIMIT (measured)** · confidence 95% · OPEN (by design)
+
+READ: `scripts/scan-identifiers.py::_token_hit` (lines 490-513) matches a banned token only as a whole
+word (`(?<![0-9a-z_])token(?![0-9a-z_])`), and `scan_history` uses it (line 597); the tree scan keeps a
+plain substring test (line 722). Its docstring gives the reason: a round-2 reviewer measured 4 of 5
+flagged history commits as a short token inside a longer snake_case identifier (80% false positives).
+MEASURED 2026-10-18: a personal overlay-name prefix inside a test docstring (`3cba49f`) passed the
+history scan and was caught by the tree scan; the tree was fixed in `40c927c`, and the prefix remains in
+public history. Consequence: a clean HISTORY scan does not prove that no banned token appears inside a
+longer word. The residual 5%: whether any other banned token sits inside a snake_case word in public
+history has not been enumerated.
+
+## F291 — A typed save approval never expires and can be matched again within its session · **OPEN LIMIT (read)** · confidence 90% · OPEN (upstream)
+
+READ: `tools/modding_harness/approval.py` (vendored, pinned `12a87ea`): `read()` rescans the whole
+session transcript on every call, and `Approval.matches` (lines 29-37) checks only the reader, the
+typed-human origin, the session id, the operation and the exact sorted path set (plus count and
+command hash for a wildcard). Nothing records use or time, so one typed line authorizes the same
+operation on the same paths for the rest of the session. The grant line lists every path
+(`approval.py:146-151`); `save_policy.py`'s `_bounded` cuts the save message at `X4_HOOK_MAX_CHARS`
+(default 10,000), so a line for roughly a hundred saves cannot be shown whole (`a0c0c21`: reported,
+not fixed). Forging a grant is closed separately (`7f3f7ea`: the neutral CLI refuses `--transcript`;
+the guards refuse agent writes to `.claude/projects/**/*.jsonl` and `.codex/sessions/**/*.jsonl`).
+Fix needs an upstream harness change. The residual 10%: the exact path count at which the line
+exceeds the limit depends on path lengths and was not measured.
+
+## F290 — Interpreter programs and carriers whose text is not in the command pass the Bash guard · **OPEN LIMIT (measured)** · confidence 95% · OPEN (accepted residual)
+
+MEASURED 2026-10-18, `x4guard check --kind shell --shell bash` (read-only) with `X4_PROFILE` pointed at a
+scratch profile holding `content.xml` and two save files: allowed - `python -c "import os;
+os.remove('<profile>/save/save_001.xml.gz')"`, the same for `<profile>/content.xml`, `eval "$X"` and
+`bash -c "$CMD"` (4 of 4). Controls: `rm '<profile>/content.xml'` asks, `rm '<profile>/save/save_001.xml.gz'`
+asks (2 of 2). Present before 4.0 (the 2026-10-18 hook review found them pre-arc). The README states the
+scope ("These hooks inspect known command forms; they do not sandbox arbitrary interpreter programs").
+In-arc, these shapes appended to a one-save `rm` keep the profile ask (`6613f22`;
+`test_shared_save_policy.py`), so the save lift cannot carry them. The residual 5%: the verdicts were
+measured through `x4guard check`, not through a live Claude Code or Codex hook call.
+
+## F289 — The Linux Codex entry chain has no mutation tests · **OPEN LIMIT (read)** · confidence 85% · OPEN
+
+READ: `tests/test_codex_adapter_mutants.py` skips unless PowerShell runs on Windows (line 27); since
+`8bdaa55` `codex-entry.ps1` P/Invokes kernel32, which pwsh on Linux cannot load (`3dc76b8`). The POSIX
+wrapper `codex-entry.sh` has no mutant file (comment at line 26). `tests/test_codex_wrapper.py` does run
+`codex-entry.sh` under bash on any platform with bash (`wrappers()`), but with stub adapters that inject
+faults, and `tests/test_codex_adapter.py` drives the adapter directly. The residual 15%: whether any
+test runs the full Linux chain (wrapper, real adapter, guards) was not enumerated; the F2 fix lane
+reported that none has since `8bdaa55`, which is not re-derived here.
+
+## F288 — `EntityDefs` name lookup was case-sensitive in-release · **DEFECT (measured)** · confidence 90% · ✅ FIXED 2026-10-18
+
+In-arc (`d6cc98a`/`ded0a21`): resolving definitions after overlays made the name lookup case-sensitive,
+so a macro registered in one capitalisation and defined in another read as undefined in
+`x4validate` and `x4save check`. MEASURED: 40 of 1,500 sampled live registrations (`fae1a03` message;
+e.g. `XU_EP2_universe_macro`); the F4 fix lane's full pass found 490 of 20,665 (2026-10-18, live
+install, map macros). Fix `fae1a03`: `EntityDefs.__contains__` folds case in every tier (the index, the
+registrations, the mod's own scan, the corpus search and its byte pre-filter). The residual 10%: the
+490/20,665 figure comes from the lane report and was not re-run here.
+
+**RE-DERIVED BY:** `tests/test_effective_definition_consumers.py`
+(`test_a_registration_whose_file_spells_the_name_in_another_case_is_found`,
+`test_TWIN_exact_case_is_still_found_and_an_absent_name_still_is_not`).
+
 ## F287 — x4compat judged ops that land on another mod's ADDED content wrongly (issue #11) · **DEFECT (measured)** · confidence 90% · ✅ CLOSED 2026-10-18
 
 Pre-arc (`9cf6932`, `5eafcd7`): every op's `sel=` was resolved against the BASE tree, so a later op that, at
@@ -9694,13 +9774,24 @@ added content FAILS (HARD, names the adder, "partial: n of k elements X inserted
 says the engine's positional-predicate resolution after an earlier insert is UNMEASURED); an ADD into it is
 advisory (`CompatReport.added_into`, exit unchanged), while two mods adding the same key there keep the
 normal duplicate HARD + SOFT rows. Denominator: 7 + 2 synthetic fixtures and 19 unit tests (13 RED before).
-NOT YET MEASURED: how many rows on the live modlist change kind or text. The engine's behaviour after an
-earlier insert remains UNMEASURED (merge model only).
+~~NOT YET MEASURED: how many rows on the live modlist change kind or text.~~ SUPERSEDED 2026-10-18: the
+first live run gave 2,621 failing HARD rows (72 at b88e425), almost all a mod overwriting content its own
+declared dependency adds. USER DECISION 2026-10-18 (#11 dependency rule, `7c0ba2b`): when the ONE
+overwriting mod declares a direct dependency (required or optional, by manifest id, never folder name) on
+every adder, the row is advisory (`CompatReport.dependent_overwrites`, grouped per pair in text); a
+transitive dependency does not count and two overwriters still fail. `3cba49f`: the mod named as adder must
+load before the op (a mod overwriting its own later-loading content had been named its own adder; those 10
+rows are now plain later-wins HARD). MEASURED 2026-10-18 (F4 lane, live x4compat): failing HARD 77, 2,544
+ops over 36 pairs advisory. Also restored: FULL-OVERRIDE rows for a full file over another mod's own file
+(`2f45e4f`, 3 rows), and text output no longer prints synthetic node ids (`4cee9af`, 25 rows had).
+The engine's behaviour after an earlier insert remains UNMEASURED (merge model only).
 
 **RE-DERIVED BY:** `tests/test_compat_added_content.py`,
 `tests/test_compat.py::test_sequential_replacement_only_contests_the_actual_new_contribution`,
 `test_TWIN_two_one_element_replaces_are_the_plain_later_wins_row`,
-`tests/test_cross_tool_semantics.py::test_a_SUBTREE_on_a_sequential_identity_is_scoped_by_its_final_path`.
+`tests/test_cross_tool_semantics.py::test_a_SUBTREE_on_a_sequential_identity_is_scoped_by_its_final_path`,
+`tests/test_compat_dependency_patch.py`, `tests/test_compat_self_collision.py`,
+`tests/test_compat_owner_full_override.py`, `tests/test_compat_render_no_synthetic_ids.py`.
 
 ## F286 — the plain path dropped a nested patch from a mod loading BEFORE its owner · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-18
 
@@ -9728,7 +9819,7 @@ mods. READ (release review P): if a mod's diff XML is edited after the log and i
 content.xml is not touched, none of those fire, and oracle.py replays the new ops against
 the engine's verdicts on the old ones. Related, LOW (READ): a removed PROFILE-root mod never
 gets a signature line, so oracle.py shows it only as a NOT INSTALLED row and does not
-refuse. Advisory; not gating. Status: open limit, not fixed.
+refuse. Advisory; not gating. ~~Status: open limit, not fixed.~~ SUPERSEDED 2026-10-18 by the fix below.
 
 **Fix 2026-10-18 (`a40f968`).** `_env.newest_engine_file(mods)` walks the scoped mods' files whose suffix is in
 `_freshness.ENGINE_FILE_SUFFIXES`, taking `max(st_mtime, st_birthtime)`; an unreadable file counts as newer
@@ -9751,7 +9842,7 @@ load_order_oracle's DLC exemption; lowercase `ego_dlc_terran` is. The log side i
 lowercased, so this bites only on a non-standard reference casing, and it FAILS CLOSED (the
 DLC is reported as a logged folder not installed now, giving CANNOT). The root cause is
 pre-arc, in `_merge.py`, an engine source, so the fix forces a store rebuild; deliberately
-not changed for 4.0. Status: open limit, not fixed.
+not changed for 4.0. ~~Status: open limit, not fixed.~~ SUPERSEDED 2026-10-18 by the fix below.
 
 **Fix 2026-10-18 (`44e2bb2`).** One helper, `_merge.is_dlc_folder` (`name.lower().startswith("ego_dlc_")`),
 at all 5 case-sensitive sites: `_merge.dlc_dirs` (unpacked list and packed supplement),
@@ -9762,9 +9853,9 @@ RE-DERIVED BY: `tests/test_dlc_folder_case.py` (every positive has an excluded t
 non-lowered prefix test outside the helper, RED at e144c5e on exactly the 5 sites) and
 `tests/test_load_order_oracle.py::test_F284_a_MIXED_CASE_reference_DLC_folder_is_exempted`.
 
-RE-DERIVED BY (closest, partial): `tests/test_load_order_oracle.py`
-`test_a_DLC_folder_in_a_sequence_is_not_a_removed_folder`. It uses lowercase only and does
-NOT cover a mixed-case folder name.
+SUPERSEDED 2026-10-18 (kept as history; the RE-DERIVED BY above replaces it): ~~RE-DERIVED BY (closest,
+partial): `tests/test_load_order_oracle.py` `test_a_DLC_folder_in_a_sequence_is_not_a_removed_folder`. It
+uses lowercase only and does NOT cover a mixed-case folder name.~~
 
 ## F283 — oracle and oracle_reverse gave verdicts on a log that predates the modlist (FX-H9b) · **DEFECT (measured)** · confidence 95% · ✅ CLOSED 2026-10-12
 
