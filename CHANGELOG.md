@@ -32,16 +32,23 @@ tests, fixtures, gates or release tooling.
   with every row. It does not fail the run. A transitive dependency does not count, and two mods
   overwriting the same added node still fail. On the maintainer's modlist this moved 2,544 ops over
   36 mod pairs to the advisory list and left 77 failing HARD rows, where the release candidate
-  without the rule had 2,621 (MEASURED 2026-10-18).
+  without the rule had 2,621 (MEASURED 2026-10-18, before the refinement below; not re-measured
+  since).
+- x4compat: that overwrite is advisory only when the dependency resolves to exactly one mod folder
+  and does not cross the game/profile extensions roots (the engine does not resolve a dependency
+  across them). A manifest id held by two folders, even differing only in case, or a cross-root
+  dependency, leaves the row HARD. `--json` `dependent_overwrites` rows carry `winner_qualified`
+  (BLIND-SPOTS F300).
 - x4compat: a mod that ships a complete file over another mod's own file is reported as a
   FULL-OVERRIDE again; the in-release sequential resolver had dropped those rows silently (3 rows
   on the maintainer's modlist). Text output prints real XPaths and never an internal node id; a
   node with no single path in the finished tree is described in words. When x4compat's two
   instruments disagree on a file, the message says that file lost rows of every kind.
 - **exprlint (issue #12):** `fmt_missing_dot` reads string literals left to right, honouring `\'`
-  escapes, so a later literal starting with `[` is no longer a false positive. Measured over the
-  vanilla reference only (514,501 attribute values): 1 false positive (`md/npc_usecases.xml:363`)
-  -> 0, no real hit lost. Mods, loose or packed, were not part of that measurement.
+  escapes, so a later literal starting with `[` is no longer a false positive. Measured once,
+  2026-10-14, over the vanilla reference only (514,501 attribute values): 1 false positive
+  (`md/npc_usecases.xml:363`) -> 0, no real hit lost. That was a one-off release-review
+  measurement, not re-derivable from the repository; mods, loose or packed, were not part of it.
 - **`x4modlist search` (issue #13): Nexus discovery by name.** Needs `X4_NEXUS_KEY` and says so when
   it is missing or refused. Candidates are marked have / have? / new against the active registry
   mods, with a count of active mods that have no Nexus id; every result states its coverage (names
@@ -71,11 +78,15 @@ tests, fixtures, gates or release tooling.
   refuses hard links (such as exFAT) gets an exclusive copy that never overwrites.
 - `x4debug baseline` no longer re-archives a log it already holds: an archive with the same size and
   SHA-256 is reused ("already archived, identical content"), and new archives record `sha256` in
-  their metadata.
+  their metadata. Only an archive whose metadata is present and not degraded is reused, so a
+  degraded first capture no longer fails every later baseline, and missing metadata no longer
+  crashes it (BLIND-SPOTS F301).
 - `x4debug` captures retain distinct logs and metadata even when source timestamps match, and live
   dump archives verify full payload digests in existing candidates and publish verified snapshots
   without replacement. Baseline capture reserves a fresh STAMP directory; a repeated label refuses
   without changing previous evidence.
+- `x4doctor`: when git cannot tell a checkout from an install, parity N/A says so, with git's
+  reason, instead of calling the root an installed toolkit.
 - Mod-update and modlist reviews reconcile the current save situation, session intent and local
   user preferences before proposing changes; they ask only for material missing facts. Save
   preservation and scoped authorization remain required.
@@ -89,8 +100,20 @@ tests, fixtures, gates or release tooling.
   the ask for anything else it touches: an unresolved operand, a command name built by
   substitution, a verb the save model does not cover, a script file, a program on stdin or a
   dynamic `bash -c "$CMD"` / `eval "$X"` keeps the profile ask.
+- Brace-expanded save operands (`save_00{0,1,2}.xml.gz`) no longer lift the profile ask, and a
+  delete or move target that does not exist keeps it. A mixed form had printed "Save backup
+  verified" for saves that were never backed up (BLIND-SPOTS F294).
+- `bash -c` lifts the save ask only when its text is all it runs: not with `BASH_ENV`, `ENV`,
+  `SHELLOPTS`, `BASHOPTS`, `PS4`, `PROMPT_COMMAND`, `ZDOTDIR` or `BASH_FUNC_*` named in the command,
+  and not with `-i`, `-l`, `--login`, `--rcfile` or `--init-file`. `cmd` needs `/d` (no AutoRun),
+  a PowerShell host needs `-NoProfile`, and `zsh -c` is never exempt (it reads `.zshenv`). You may
+  notice that `cmd //c del <save>` and `env PATH=$PATH:/x <save delete>` now ask (BLIND-SPOTS F295,
+  F296).
 - `x4guard check` (read-only, so it can back nothing up) now ASKS on a save change, where it used to
   advise.
+- `x4guard check` (any `X4_GUARD_CHECK=1` run) shows the save dispatcher's own refusal reason, such
+  as "use literal targets", where it printed "did not return a complete decision"; it still exits 2.
+  The missing-harness ask passes through the same way.
 - **A toolkit whose save harness (`tools/modding_harness`) cannot load** asks only for calls that
   change the X4 profile or saves, and names the fix (point `X4_TOOLKIT` at a complete toolkit, or
   reinstall); every other call gets its normal verdict plus an advisory. It used to deny every
@@ -101,11 +124,16 @@ tests, fixtures, gates or release tooling.
   Claude Code and Codex transcript files (`.claude/projects/**/*.jsonl`, `.codex/sessions/**/*.jsonl`)
   by a file edit or a shell command. A typed approval does not expire within its session (see
   *Known limitations*).
+- Copying a `.jsonl` into a transcript folder (a directory destination too), or into a
+  `$CLAUDE_CONFIG_DIR` or `$CODEX_HOME` transcript tree, is denied.
 - The save-approval line leads the refusal ("SAVE APPROVAL REQUIRED"), and save messages are cut at
   the hook output limit with a notice; the GUARDS OFF banner leads the session start.
 - **Your notes file is `KNOWLEDGEBASE.local.md`** at the project root, writable in every layout
   (in the in-game layout it was blocked as a game file). An existing `X4-NOTES.md` is kept and
   still read as legacy notes.
+- The game-install deny points personal notes at the toolkit's `KNOWLEDGEBASE.local.md`, where they
+  are read (`X4-NOTES.md` listed as legacy). In the separate layout,
+  `<game>/KNOWLEDGEBASE.local.md` is no longer allowed: nothing read it.
 - **Codex: a shell write, delete or move whose target depends on an unknown working directory is
   denied.** Codex's native hooks do not receive the tool's `workdir` (measured on Codex 0.162.1);
   without an absolute `workdir`, a recognised mutation of a relative or unresolved target (on
@@ -118,6 +146,16 @@ tests, fixtures, gates or release tooling.
   `python <script>.py` or an inert `-c` program does not trip the deny on writing the knowledgebase
   or instruction files. Real code still does (`python -c "open(...,'w')"`, `exec`/`eval`, `-i`,
   `-m timeit`, `uv run python`).
+- An assignment prefix holding a process substitution, `$[ ]`, an array or a subscript no longer
+  hides the command that runs: `X=<(echo a) rm -rf <game>` was ALLOWED past every Bash rule, also
+  in v3.3.1. After `env`, an unquoted expansion in `NAME=value` is word-split, so the command name
+  is unknowable and the call is refused or asked (BLIND-SPOTS F296).
+- Redirect and `-o` targets are judged at every value of `${VAR:+x}`; one value was judged before,
+  so `> "${NOPE:+x}<reference>/..."` was an advisory. More than 16 possible `cd` directories is
+  refused, not guessed (BLIND-SPOTS F297).
+- The settings guard refuses `X4_GUARD` spelled through quotes, `$'..'`, braces, backslashes or
+  variables: `env X4_GUA""RD=off` and similar spellings switched the guards off unseen
+  (BLIND-SPOTS F298).
 - **Linux/macOS: PowerShell and `cmd` paths are read with their own separators.** Every
   PowerShell-spelled path on a POSIX host was treated as unresolved and the call denied. A Windows
   drive or UNC path there is unresolved (never guessed), and a backslash in a Bash command stays a
@@ -218,8 +256,8 @@ tests, fixtures, gates or release tooling.
   shipped `hooks.json` does (new optional profile key `command_posix`, documented in ADAPTING.md).
   The `.ps1` entry is Windows-only since its native process launch, so the ubuntu leg had replayed
   a path no host takes and reported every case INERT (BLIND-SPOTS F293).
-- **(maintainers)** The hook mutation probe's 7 stale anchors are re-anchored to the same guard
-  clauses; `writes_host_transcript` has a fuzzer seed and a test in both directions. Skip
+- **(maintainers)** The 7 stale mutant anchors in `scripts/verify-hook-tests.py` (the hook mutation
+  probe, not `gates/mutation_probe.py`) are re-anchored to the same guard clauses; `writes_host_transcript` has a fuzzer seed and a test in both directions. Skip
   ceilings re-measured and itemised per file: ubuntu 330, windows 63 (measured + 3).
 - **(maintainers)** CI runs every independent check after an earlier one fails: once setup
   succeeds, each later step runs unless the run was cancelled, so one red check no longer hides
@@ -230,7 +268,8 @@ tests, fixtures, gates or release tooling.
   since load order comes from manifests, not file contents. Creation time is read from
   `st_birthtime` where the platform reports it. `oracle.py` finds logged mods in every install root.
   Not yet run against a real engine log (F285).
-- **(maintainers)** `gates/mutation_probe.py` carries 56 mutants. Kills require new testcase
+- **(maintainers)** `gates/mutation_probe.py` carries 60 mutants (4 added for the x4compat
+  dependency rule). Kills require new testcase
   failures against the same marked scope. Mutation-induced test-call exceptions can count as
   failures; collection, setup/teardown and runner errors remain unmeasured. Full escalation
   restores pristine source before its baseline and uses a separate current budget. Dedicated
@@ -258,6 +297,22 @@ tests, fixtures, gates or release tooling.
 - **(maintainers)** Codex end-to-end decoys include the pinned shared runtime and render hooks from
   shipped runtime files. Separate hook, control and fault directories retain evidence; existing
   decoy directories refuse replacement.
+- **(maintainers)** `scripts/verify-hook-tests.py` carries 215 mutants (8 new, 2 re-anchored).
+  `scripts/fuzz-guard.py` has 40 assignment-prefix mutators: 8,262 mutants (54 seeds x 153
+  mutators), 0 bypasses (MEASURED 2026-10-19).
+- **(maintainers)** `gates/cross_tool.py` cross-checks the `dependent_overwrites` advisory rows as
+  their own population; on the live store the result is UNMEASURED until the store is rebuilt.
+- **(maintainers)** `gates/tool_properties.py` treats `t/` and `index/` full files as union-merged
+  and excuses a shared one only when the sharing mods' keys are disjoint (19 of 19 disjoint on the
+  live install, per the review lane; not re-run here). Its F33 entity-group pin moves 65 -> 62:
+  modlist drift, not code, since `b88e425`'s code and v4.0's built the identical 62-group set from
+  the same 170-mod list (BLIND-SPOTS F302).
+- **(maintainers)** `gates/nexus_fixture.py` refuses an unrecorded GraphQL query (it used to get the
+  example reply), measures attempted network calls instead of printing a constant, and derives the
+  search have/new map from the sandbox registry.
+- **(maintainers)** The Codex conformance tests sandbox under `<repo>/.test-sandbox`, not pytest's
+  `tmp_path`: on ubuntu that is under `/tmp`, where the `/tmp` rule denied writes the tests expect
+  to be allowed.
 
 ### Upgrading from 3.x
 
@@ -458,7 +513,9 @@ confusing messages and six cosmetic ones. All are fixed:
   manifests only for the mods it judges and the mods loading before them. `oracle_reverse`
   checks the whole modlist. The manifest check also covers an installed mod the log names
   that is no longer active (for example, disabled since). Before this, `load_order_oracle`
-  reported that case as a finding (exit 1); now all three gates refuse. An empty DLC set is
+  reported that case as a finding (exit 1); now `load_order_oracle` and `oracle_reverse` refuse,
+  and `oracle` refuses only when that mod is in its scope (the mods it judges and those loading
+  before them, `gates/_env.py` `modlist_staleness`). An empty DLC set is
   now announced, the same as an unconfigured one. `load_order_oracle`'s output on a current
   log is unchanged. (F283)
 - The `icacls` lifts, the release-gate exit codes, the gate report folders and the restored
