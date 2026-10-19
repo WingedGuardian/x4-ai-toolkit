@@ -37,6 +37,7 @@
 - {id: rm-game, source: protect-bash.sh, anchor: "on rm_hits_game", fact: rm_hits_game, verdict: deny, bucket: hook_only, reason: "path-scoped: the configured game root"}
 - {id: rm-reference, source: protect-bash.sh, anchor: "on rm_targets_reference", fact: rm_targets_reference, verdict: deny, bucket: hook_only, reason: "path-scoped: the configured reference root"}
 - {id: write-reference, source: protect-bash.sh, anchor: "on writes_reference", fact: writes_reference, verdict: deny, bucket: hook_only, reason: "path-scoped: the configured reference root"}
+- {id: write-host-transcript, source: protect-bash.sh, anchor: "on writes_host_transcript", fact: writes_host_transcript, verdict: deny, bucket: hook_only, reason: "path-scoped: a host session transcript, where typed save approvals are read"}
 - {id: write-agent-settings, source: protect-bash.sh, anchor: "on writes_agent_settings", fact: writes_agent_settings, verdict: deny, bucket: hook_only, reason: "path- and content-scoped settings protection; no unconditional argv prefix"}
 - id: lift-reference-deny
   source: protect-bash.sh
@@ -52,12 +53,12 @@
 
 - {id: reunpack-locked, source: protect-bash.sh, anchor: "BLOCKED: reference/ is locked", verdict: deny, bucket: hook_only, reason: "sentinel-gated: only while reference/.unpacked-and-locked exists"}
 - {id: rm-in-x4-dir, source: protect-bash.sh, anchor: "on rm_in_x4_dir", fact: rm_in_x4_dir, bucket: hook_only, reason: "path-scoped (verdict changed ask->advise on 2026-10-02)"}
-- {id: rm-in-profile, source: protect-bash.sh, anchor: "on rm_in_profile", fact: rm_in_profile, verdict: ask, bucket: hook_only, optional: true, reason: "path-scoped: the X4 profile"}
+- {id: rm-in-profile, source: protect-bash.sh, anchor: "on rm_in_profile", fact: rm_in_profile, verdict: ask, bucket: hook_only, optional: true, reason: "path-scoped: the X4 profile; not fired (--save-qualified) when every change is 1-2 existing saves the save bridge backed up and verified first"}
 - {id: git-wipe-from-session-dir, source: protect-bash.sh, anchor: "on git_wipe_from_session_dir", fact: git_wipe_from_session_dir, verdict: deny, bucket: hook_only, reason: "cwd-scoped: only when the session runs in an X4 directory, which a Codex prefix rule cannot see"}
 - {id: git-wipes-x4-dir, source: protect-bash.sh, anchor: "on git_wipes_x4_dir", fact: git_wipes_x4_dir, verdict: ask, bucket: hook_only, reason: "path-scoped: only inside an X4 directory"}
 - {id: git-discards-x4-files, source: protect-bash.sh, anchor: "on git_discards_x4_files", fact: git_discards_x4_files, verdict: advise, bucket: hook_only, reason: "path-scoped; an advisory has no Codex rule form"}
-- {id: rm-saves, source: protect-bash.sh, anchor: "on rm_saves", fact: rm_saves, verdict: ask, bucket: hook_only, reason: "path-scoped: the saves folder"}
-- {id: writes-profile, source: protect-bash.sh, anchor: "on writes_profile", fact: writes_profile, verdict: ask, bucket: hook_only, optional: true, reason: "path-scoped: the X4 profile"}
+- {id: rm-saves, source: protect-bash.sh, anchor: "on rm_saves", fact: rm_saves, verdict: ask, bucket: hook_only, reason: "path-scoped: the saves folder; not fired (--save-qualified) when every change is 1-2 existing saves the save bridge backed up and verified first -- 3+ or a wildcard need typed approval"}
+- {id: writes-profile, source: protect-bash.sh, anchor: "on writes_profile", fact: writes_profile, verdict: ask, bucket: hook_only, optional: true, reason: "path-scoped: the X4 profile; not fired (--save-qualified) when every change is 1-2 existing saves the save bridge backed up and verified first"}
 - {id: writes-documents, source: protect-bash.sh, anchor: "on writes_documents", fact: writes_documents, bucket: hook_only, reason: "path-scoped (verdict changed ask->advise on 2026-10-02)"}
 - {id: copy-into-game, source: protect-bash.sh, anchor: "Copying into a game or profile directory", verdict: advise, bucket: hook_only, reason: "path-scoped; an advisory has no Codex rule form"}
 - {id: redirect-into-game, source: protect-bash.sh, anchor: "Redirecting output into a game or profile directory", verdict: advise, bucket: hook_only, reason: "path-scoped; an advisory has no Codex rule form"}

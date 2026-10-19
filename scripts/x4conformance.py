@@ -306,6 +306,18 @@ def neutral_run_dir(root: Path) -> Path:
     return Path(tempfile.mkdtemp(prefix="x4conf-run-", dir=str(base)))
 
 
+#: The read-only check's ask for a save change it cannot back up (save_policy.PREVIEW_NEEDS_BACKUP).
+BACKUP_ONLY = "X4 SAVE CHANGE NOT BACKED UP"
+
+
+def _backup_only_divergence(r) -> bool:
+    """K3 (v4.0 release review): a native hook preserves 1-2 saves and allows; an adapter that
+    judges through `x4guard check` cannot preserve, so it asks with BACKUP_ONLY. That is the
+    one divergence accepted, and only in the stricter direction (allow/advise -> ask)."""
+    return (r["reference"] in ("allow", "advise") and r["adapter"] == "ask"
+            and BACKUP_ONLY in (r.get("text") or ""))
+
+
 def summarise(results, n_total, buckets, gaps, min_cases) -> tuple:
     """(exit code, report). Buckets must account for every case; disagreements are listed PER ITEM."""
     assert sum(buckets.values()) == n_total, f"buckets {buckets} do not sum to the {n_total} cases"
@@ -323,7 +335,12 @@ def summarise(results, n_total, buckets, gaps, min_cases) -> tuple:
                          f"{r.get('reference_why') or r['reference']}"[:600])
         lines.append(f"CANNOT EVALUATE: {len(broken)} of {len(results)} replayed case(s) have no reference verdict")
         return RC_ERROR, "\n".join(lines)
-    bad = [r for r in results if r["reference"] != r["adapter"]]
+    bad = [r for r in results if r["reference"] != r["adapter"] and not _backup_only_divergence(r)]
+    backup_only = [r for r in results if r["reference"] != r["adapter"] and _backup_only_divergence(r)]
+    if backup_only:
+        lines.append(f"{len(backup_only)} replayed case(s) change a save the native hook backs up first: "
+                     "this adapter judges through a read-only check, which cannot, so it ASKS where the "
+                     "native hook allowed -- stricter, and counted as agreeing")
     if bad:
         for r in bad:
             extra = f" -- {r['text']}" if r.get("text") else ""

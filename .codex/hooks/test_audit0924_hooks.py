@@ -204,6 +204,14 @@ import hook_facts as _H  # noqa: E402
 
 BS = chr(92)
 
+#: T2 (v4.0 release review): reasons that mean the guard FAILED, whatever verdict carries them.
+ENGINE_FAILURES = ("policy engine failed", "X4 save dispatcher", "GUARD INERT",
+                   "preservation/policy failed")
+
+
+def engine_failure(reason):
+    return any(failure in (reason or "") for failure in ENGINE_FAILURES)
+
 
 @unittest.skipUnless(_H._pwsh_exe(), "no PowerShell here: the front-end cannot be exercised "
                                      "(without one normal dispatch refuses PowerShell commands)")
@@ -258,7 +266,11 @@ class _PSE2E(unittest.TestCase):
             if want == "scope-refusal":
                 self.assert_scope_refusal(command, tool)
             else:
-                self.assertEqual(self.verdict(command, tool), want, command)
+                got, reason = self.verdict_with(command, tool)
+                self.assertEqual(got, want, command)
+                if want == "deny":
+                    # T2: the POLICY's deny, never an engine failure that also says deny.
+                    self.assertFalse(engine_failure(reason), (command, reason))
 
 
 class TestPS1Splatting(_PSE2E):
@@ -545,6 +557,9 @@ class _RR(_PSE2E):
                 continue
             if got != want:
                 bad.append("%s (want %s): %s" % (got, want, command))
+            elif want == "deny" and engine_failure(reason):
+                # T2: a deny produced by an engine failure is not the policy's deny.
+                bad.append("deny by ENGINE FAILURE (%s): %s" % (reason[:80], command))
         self.assertEqual(bad, [])
 
     def verdict_with(self, command, tool="PowerShell", **extra):

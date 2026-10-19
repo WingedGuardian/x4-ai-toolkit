@@ -220,7 +220,8 @@ def test_I3_a_guard_that_checked_nothing_is_inert_not_a_plain_ask(sandbox):
     v = _check_in(env, tk, "--kind", "shell", "--shell", "powershell", "--command",
                   f"Remove-Item -Force '{tk / 'reference' / 'libraries' / 'wares.xml'}'")
     assert v["decision"] == "deny" and v["inert"] and "NOTHING was checked" in v["reason"], v
-    assert "X4 save dispatcher" in v["reason"], v
+    # K10: the dispatcher's actionable reason survives the exit-2 transport.
+    assert "Shell scope could not be completely evaluated" in v["reason"], v
 
 
 def test_I4_a_delete_is_at_least_as_strict_as_rm(sandbox):
@@ -236,6 +237,28 @@ def test_I4_a_delete_is_at_least_as_strict_as_rm(sandbox):
     assert rank[d["decision"]] == max(rank[w["decision"]], rank[s["decision"]], rank[s2["decision"]]), (d, w, s, s2)
     assert d["guards"] == ["protect-files.sh", "protect-bash.sh"]
     assert target.exists()                      # verdict only: nothing executed
+
+
+@pytest.mark.parametrize("kind", ["delete", "write"])
+def test_K3_a_read_only_check_of_a_save_mutation_never_reads_as_allowed(sandbox, kind):
+    """K3 (v4.0 release review): `check --kind delete --path <save>` ran the dispatcher in
+    preview (no backup) and returned advise "PREVIEW ONLY" -- an adapter mapping advise to
+    allow could then delete the save with no backup. A check preserves nothing, so it asks."""
+    tmp, tk, env = sandbox
+    target = tmp / "profile" / "save" / "quick.xml.gz"
+    target.write_bytes(b"x")
+    v = _check_in(env, tk, "--kind", kind, "--path", str(target))
+    assert v["decision"] == "ask" and not v["inert"], v
+    assert "NOT BACKED UP" in v["reason"], v
+    assert target.read_bytes() == b"x"
+    assert not (tk / ".modding-agent-harness" / "backups").exists()
+
+
+def test_K3_TWIN_a_check_of_a_non_save_path_is_unchanged(sandbox):
+    _, tk, env = sandbox
+    v = _check_in(env, tk, "--kind", "delete", "--path", str(tk / "dev" / "mymod" / "a.xml"))
+    assert v["decision"] in ("allow", "advise") and not v["inert"], v
+    assert "NOT BACKED UP" not in (v.get("reason") or "") + (v.get("context") or ""), v
 
 
 @pytest.mark.parametrize("body", ["exit 1", "printf 'not json'", "sleep 6"])
@@ -272,10 +295,9 @@ def test_guard_signals_not_checked_with_exit_2_only_under_X4_GUARD_CHECK(sandbox
                                     "targets and an available parser. This call was not allowed."}}
     assert json.loads(plain.stdout) == expected
     assert check.returncode == 2
-    # The shell transport turns the dispatcher's nonzero check result into its
-    # own structured refusal; exit2 still distinguishes it from a native verdict.
-    expected["hookSpecificOutput"]["permissionDecisionReason"] = (
-        "X4 save dispatcher did not return a complete decision; this call was not allowed.")
+    # K10: the shell transport passes the dispatcher's static, actionable refusal through
+    # (it was replaced by "did not return a complete decision"); exit 2 still marks it as
+    # checked-nothing, distinct from a native verdict.
     assert json.loads(check.stdout) == expected
 
 
@@ -691,3 +713,41 @@ def test_JQ1_TWIN_the_same_command_from_an_unrelated_folder_is_allowed(sandbox):
     v = _jq1_check_in(env, tmp / "elsewhere", "--kind", "shell", "--shell", "bash",
                   "--command", "git clean -fdx")
     assert v["decision"] == "allow" and not v["inert"], v
+
+
+def test_H1_writes_to_a_host_transcript_are_refused_in_every_channel(sandbox):
+    """H1: typed save approvals are read from the host transcript, and `*.claude/projects/*` was
+    whitelisted for Edit/Write while a Bash append there was allowed -- a forged approval line
+    was one write away. Memory notes beside the transcripts stay writable."""
+    tmp, tk, env = sandbox
+    project = tmp / "home" / ".claude" / "projects" / "C--work"
+    (project / "memory").mkdir(parents=True)
+    transcript = project / "0b1e.jsonl"
+    codex = tmp / "home" / ".codex" / "sessions" / "2026" / "rollout-1.jsonl"
+    for path in (transcript, codex):
+        for kind in ("write", "delete"):
+            v = _check_in(env, tk, "--kind", kind, "--path", str(path), "--command", "x")
+            assert v["decision"] == "deny" and not v["inert"] and "transcript" in v["reason"], v
+        v = _check_in(env, tk, "--kind", "shell", "--shell", "bash", "--command",
+                      "echo '{}' >> '" + path.as_posix() + "'")
+        assert v["decision"] == "deny" and not v["inert"] and "transcript" in v["reason"], v
+    # Twins: a memory note in the same folder, and a .jsonl elsewhere.
+    v = _check_in(env, tk, "--kind", "write", "--path", str(project / "memory" / "note.md"), "--command", "x")
+    assert v["decision"] in ("allow", "advise"), v
+    v = _check_in(env, tk, "--kind", "shell", "--shell", "bash", "--command",
+                  "echo '{}' >> '" + (tmp / "work" / "log.jsonl").as_posix() + "'")
+    assert v["decision"] in ("allow", "advise"), v
+
+
+def test_D1_personal_notes_at_the_root_are_writable_in_the_in_game_layout(sandbox):
+    """D1: KNOWLEDGEBASE.local.md was DENIED where X4_GAME == X4_TOOLKIT, while the instructions
+    send agents there; the deny message pointed only at X4-NOTES.md."""
+    _, tk, env = sandbox
+    env = dict(env, X4_GAME=str(tk))
+    v = _check_in(env, tk, "--kind", "write", "--path", str(tk / "KNOWLEDGEBASE.local.md"), "--command", "x")
+    assert v["decision"] in ("allow", "advise") and not v["inert"], v
+    # Twin: the same name deeper in the game tree stays denied, and the message routes there.
+    (tk / "libraries").mkdir(exist_ok=True)
+    v = _check_in(env, tk, "--kind", "write", "--path", str(tk / "libraries" / "KNOWLEDGEBASE.local.md"),
+                  "--command", "x")
+    assert v["decision"] == "deny" and "KNOWLEDGEBASE.local.md" in v["reason"], v

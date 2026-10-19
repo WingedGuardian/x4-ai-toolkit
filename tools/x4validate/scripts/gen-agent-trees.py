@@ -567,6 +567,9 @@ def generate(repo: Path) -> dict[str, str]:
     out.update({"tools/x4_harness/" + rel[len(".claude/hooks/"):]: text
                 for rel, text in guards.items() if not Path(rel).name.startswith(("test_", "test-"))})
     out["tools/agent-harness.py"] = _read(src / "guards/adapters/generic.py")
+    # save_policy.batch imports it for an action whose execution cwd is unknown (K6): without
+    # it the generic entry crashed (ModuleNotFoundError) instead of refusing the action.
+    out["tools/x4_harness/patch_paths.py"] = _read(src / "guards/adapters/patch_paths.py")
     out["tools/x4_harness/codex-hooks.json.tmpl"] = _read(src / CODEX_HOOKS_TEMPLATE)
     out[".claude/settings.json"] = _read(src / "targets" / "claude" / "settings.json")
     return dict(sorted(out.items()))

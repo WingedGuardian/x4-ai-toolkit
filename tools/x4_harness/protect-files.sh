@@ -254,10 +254,20 @@ fi
 # BLOCK was reached. A whitelist decided on text the filesystem does not resolve that
 # way is a whitelist for a different file.
 _NP="$(x4_norm "$FILE_PATH")"
+# H1 (v4.0 release review): a HOST SESSION TRANSCRIPT is written by the host alone. The save
+# guard reads the user's typed save approvals from it, so an agent write there could forge
+# one -- and `*.claude/projects/*` is whitelisted below for the memory notes beside it.
+case "$_NP" in
+  */.claude/projects/*.jsonl|*/.codex/sessions/*.jsonl)
+    deny "BLOCKED: $FILE_PATH is a host session transcript. The host alone writes it, and the save guard reads the user's typed save approvals from it -- an agent edit could forge one. Leave it to the host." ;;
+esac
 # The project's instruction and notes files, at the PROJECT ROOT ONLY: CLAUDE.md (and
 # Claude's .claude/CLAUDE.md), AGENTS.md (Codex's CLAUDE.md, 2026-09-30), KNOWLEDGEBASE.md,
 # and the agent's own notes -- X4-NOTES.md and the 4.0 migration's X4-NOTES.pre-4.0.md (lane
 # N, user decision N1: the instructions send agents there, and the game-install block below
+# -- and KNOWLEDGEBASE.local.md, the user's personal notes and preferences (D1, v4.0 release
+# review: core.md, AGENTS.md and the skills send agents there, and this block denied it in
+# the in-game layout, X4_GAME == X4_TOOLKIT)
 # denied it, MEASURED in a live Codex run 2026-10-03). The NAME alone is not enough: the same
 # name anywhere deeper in the game tree stays denied (or asked, in a deployed mod), so the
 # RESOLVED path must equal a root plus the name. The instruction files were a NAME-ANYWHERE
@@ -272,7 +282,7 @@ _NP="$(x4_norm "$FILE_PATH")"
 # only the `X4 Foundations/` name backstop protects it. The case is pure shell, so every
 # other path pays nothing.
 case "$_NP" in
-  */x4-notes.md|*/x4-notes.pre-4.0.md|*/claude.md|*/agents.md|*/knowledgebase.md)
+  */x4-notes.md|*/x4-notes.pre-4.0.md|*/claude.md|*/agents.md|*/knowledgebase.md|*/knowledgebase.local.md)
     _nrel="${_NP##*/}"
     case "$_NP" in */.claude/claude.md) _nrel=".claude/claude.md" ;; esac
     x4_canon_memo "$FILE_PATH"; _nfc="$_X4_CANON_RESULT"
@@ -348,7 +358,7 @@ fi
 # The reason ROUTES the agent (lane N, user decision N3): "work in your mod folder" alone
 # left a live Codex run with nowhere to put its notes (2026-10-03).
 _GR="${X4_GAME:-$X4_TOOLKIT}"; _GR="${_GR%[/\\]}"
-_GAME_DENY="BLOCKED: $FILE_PATH is in the game installation. Notes -> $_GR/X4-NOTES.md. Game/engine facts -> $_GR/KNOWLEDGEBASE.md (x4lock keeps it read-only: python \"$X4_TOOLKIT/scripts/x4lock.py\" unlock \"$_GR/KNOWLEDGEBASE.md\", edit, then relock with x4lock.py lock). Mod files -> your mod folder (dev/ or X4_MODS), then deploy."
+_GAME_DENY="BLOCKED: $FILE_PATH is in the game installation. Notes -> $_GR/X4-NOTES.md. Personal notes and preferences -> $_GR/KNOWLEDGEBASE.local.md. Game/engine facts -> $_GR/KNOWLEDGEBASE.md (x4lock keeps it read-only: python \"$X4_TOOLKIT/scripts/x4lock.py\" unlock \"$_GR/KNOWLEDGEBASE.md\", edit, then relock with x4lock.py lock). Mod files -> your mod folder (dev/ or X4_MODS), then deploy."
 if [ -n "${X4_GAME:-}" ] && x4_under "$FILE_PATH" "$X4_GAME"; then
   deny "$_GAME_DENY"
 fi

@@ -110,6 +110,7 @@ def test_directory_copy_batches_two_and_bulk_needs_one_command_bound_grant(insta
     assert len(records) == 1 and len(json.loads(records[0].read_text())["groups"]) == 2
     bulk = invoke_hook(install, "Bash", {"command": command(3)})
     assert bulk["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert_scope_refusal(bulk["hookSpecificOutput"])            # T2
     reason = bulk["hookSpecificOutput"]["permissionDecisionReason"]
     assert "SAVE_ACCESS_APPROVAL" in reason and "command_sha256" in reason
     assert len(list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))) == 1
@@ -139,6 +140,7 @@ def test_unqualified_directory_copy_never_authorizes_a_save_mutation(install, tm
     command = 'cp ' + option + operand + ' "' + roots["saves"] + '"'
     result = invoke_hook(install, "Bash", {"command": command})
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny", result
+    assert_scope_refusal(result["hookSpecificOutput"])          # T2: the policy's deny, not a crash
     assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
@@ -178,6 +180,7 @@ def test_whole_folder_and_store_writes_refuse(install):
         outcome = policy.enforce(root, roots, [{"path": str(path), "operation": op}], action,
                                 lambda save_only: contracts.Result(evaluation="evaluated"))
         assert outcome.result.decision == "deny" and not outcome.transactions
+        assert_scope_refusal({"permissionDecisionReason": outcome.result.reason})   # T2
 
 
 def test_wildcard_has_exact_command_bound_grant_and_membership_recheck(install):
@@ -197,9 +200,10 @@ def test_wildcard_has_exact_command_bound_grant_and_membership_recheck(install):
     outcome = policy.enforce(root, roots, evidence, action, lambda save_only: contracts.Result(evaluation="evaluated"),
                              transcript=str(transcript))
     assert outcome.result.decision == "deny" and not outcome.transactions
+    assert_scope_refusal({"permissionDecisionReason": outcome.result.reason})   # T2
 
 
-def invoke_hook(install, tool, ti, preview=False, omit_cwd=False):
+def invoke_hook(install, tool, ti, preview=False, omit_cwd=False, extra=None):
     root, roots, _files = install
     hooks = root / ".claude/hooks"
     shutil.copytree(REPO / "agent/guards/claude-hooks", hooks, dirs_exist_ok=True,
@@ -220,6 +224,7 @@ def invoke_hook(install, tool, ti, preview=False, omit_cwd=False):
     if preview:
         env["X4_GUARD_CHECK"] = "1"
     payload = {"tool_name": tool, "tool_input": ti, "cwd": str(root), "session_id": "s"}
+    payload.update(extra or {})
     if omit_cwd:
         payload.pop("cwd")
     result = subprocess.run([bash, str(hooks / ("protect-bash.sh" if tool in ("Bash", "PowerShell") else "protect-files.sh"))],
@@ -292,7 +297,9 @@ def test_powershell_file_to_save_directory_preserves_destination_first(install, 
 def test_real_file_hook_preserves_before_permission_and_preview_is_readonly(install):
     root, _roots, files = install
     result = invoke_hook(install, "Write", {"file_path": str(files[0]), "content": "changed"}, preview=True)
-    assert "PREVIEW ONLY" in result["hookSpecificOutput"]["additionalContext"]
+    # K3: a preview preserves nothing, so it asks rather than advising an unbacked change.
+    assert result["hookSpecificOutput"]["permissionDecision"] == "ask", result
+    assert "NOT BACKED UP" in result["hookSpecificOutput"]["permissionDecisionReason"]
     assert not (root / ".modding-agent-harness/backups").exists()
     assert not (root / ".modding-agent-harness/coverage.sqlite3").exists()
     result = invoke_hook(install, "Write", {"file_path": str(files[0]), "content": "changed"})
@@ -330,4 +337,274 @@ def test_real_shell_hook_batches_saves_and_retains_other_denials(install):
     assert "SAVE_ACCESS_APPROVAL" in result["hookSpecificOutput"]["permissionDecisionReason"]
     result = invoke_hook(install, "Bash", {"command": 'rm -rf "' + roots["saves"] + '"'})
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert_scope_refusal(result["hookSpecificOutput"])          # T2
     assert all(f.exists() for f in files)
+
+
+ENGINE_FAILURES = ("policy engine failed", "X4 save dispatcher", "GUARD INERT", "did not return a complete decision",
+                   "preservation/policy failed")
+
+
+def assert_scope_refusal(hso, *needles):
+    """A deny or ask that is the POLICY's answer, never an engine failure wearing its verdict."""
+    reason = hso.get("permissionDecisionReason", "")
+    assert not any(failure in reason for failure in ENGINE_FAILURES), reason
+    for needle in needles:
+        assert needle in reason, reason
+
+
+def _with_content(install):
+    content = Path(install[1]["profile"]) / "content.xml"
+    content.write_text("<content/>")
+    return content
+
+
+@pytest.mark.parametrize("tail", [
+    ' $X',                                  # an unresolved operand naming no root
+    ' "$(cat list)"',                        # a substitution operand
+    '; $(echo rm) "{content}"',              # a substituted command name
+    '; python -c "import os; os.remove(\'{content}\')"',   # an interpreter no row models
+    '; rm "{content}"',                      # a resolved non-save profile file
+    '; bash -c "$CMD"',                      # a carrier whose program is not text held here
+    '; eval "$X"',
+    '; bash ./cleanup.sh',                   # a script file
+])
+def test_K1_one_backed_up_save_never_lifts_the_ask_for_what_the_backup_cannot_cover(install, tail):
+    """K1 (v4.0 release review): the profile ask was lifted for the WHOLE command once its
+    resolved rows were one save. MEASURED before the fix: each of the first four advised."""
+    root, _roots, files = install
+    content = _with_content(install)
+    command = 'rm "' + str(files[0]) + '"' + tail.replace("{content}", str(content).replace("\\", "/"))
+    hso = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") == "ask", hso
+    assert_scope_refusal(hso, "X4 PROFILE")
+    assert content.exists() and files[0].exists()
+
+
+def test_K1_TWIN_one_and_two_backed_up_saves_still_proceed_and_three_need_typed_approval(install):
+    root, _roots, files = install
+    _with_content(install)
+    for count in (1, 2):
+        command = "rm -- " + " ".join('"' + str(f) + '"' for f in files[:count])
+        hso = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+        assert hso.get("permissionDecision") is None, (count, hso)
+        assert "backup verified" in hso["additionalContext"], (count, hso)
+    # A carrier whose program IS literal text is walked like the top level (cmd //c, bash -c).
+    hso = invoke_hook(install, "Bash", {"command": "bash -c 'rm -- \"" + str(files[1]).replace(chr(92), "/") + "\"'"})[
+        "hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None and "backup verified" in hso["additionalContext"], hso
+    hso = invoke_hook(install, "Bash", {"command": "rm -- " + " ".join('"' + str(f) + '"' for f in files)})[
+        "hookSpecificOutput"]
+    assert hso["permissionDecision"] in ("ask", "deny"), hso
+    assert_scope_refusal(hso, "SAVE_ACCESS_APPROVAL")
+
+
+def _count_analyser_runs(hooks, marker):
+    """Make the copied hook_facts.py record every run as a SCRIPT (an import does not count)."""
+    source = hooks / "hook_facts.py"
+    text = source.read_text(encoding="utf-8")
+    tail = 'if __name__ == "__main__":\n    raise SystemExit(main())'
+    assert text.rstrip().endswith(tail)
+    text = text.rstrip()[:-len(tail)] + ('if __name__ == "__main__":\n    open(' + repr(str(marker)) +
+                                         ', "a").write("run ")\n    raise SystemExit(main())\n')
+    source.write_bytes(text.encode("utf-8"))
+
+
+@pytest.mark.parametrize("tool,command", [("Bash", "ls -la"), ("Bash", 'rm "{save}"'),
+                                          ("PowerShell", "Get-ChildItem .")])
+def test_K5_the_native_hook_analyses_the_command_once(install, tool, command):
+    """K5: the save bridge ran hook_facts for its evidence and the Bash backend ran it AGAIN in
+    a second process (PowerShell translated twice) -- MEASURED 0.99 s vs 0.47 s before the
+    bridge. The backend now takes the bridge's bytes (--facts-stdin)."""
+    if tool == "PowerShell" and not (shutil.which("pwsh") or shutil.which("powershell")):
+        pytest.skip("no PowerShell to translate with")
+    root, _roots, files = install
+    invoke_hook(install, "Bash", {"command": "true"})          # installs the hook copy
+    marker = root / "analyser-runs.txt"
+    _count_analyser_runs(root / ".claude/hooks", marker)
+    hooks = root / ".claude/hooks"
+    command = command.replace("{save}", str(files[0]).replace("\\", "/"))
+    spec = importlib.util.spec_from_file_location("fixture_x4guard2", hooks / "x4guard.py")
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    bash, _why = guard.resolve_bash()
+    env = dict(os.environ, X4_TOOLKIT=str(root), X4_PROFILE=_roots["profile"], X4_SAVES=_roots["saves"],
+               X4_GAME=str(root.parent / "game"), X4_REFERENCE=str(root / "reference"),
+               X4_CONFIG=str(root / "owned-missing.env"), X4_MODS=str(root / "dev"),
+               X4_DOCUMENTS=str(root.parent / "documents"), X4_PYTHON=sys.executable)
+    env.pop("X4_GUARD", None)
+    env.pop("X4_GUARD_CHECK", None)
+    payload = json.dumps({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(root),
+                          "session_id": "s"}).encode()
+    native = subprocess.run([bash, str(hooks / "protect-bash.sh")], input=payload, capture_output=True,
+                            env=env, timeout=60)
+    assert native.returncode == 0, native.stderr
+    assert not marker.exists(), "the backend re-ran the analyser: " + marker.read_text()
+    # Twin: the backend alone (no precomputed facts) still analyses -- the marker can go red.
+    alone = subprocess.run([bash, str(hooks / "protect-bash.sh"), "--harness-policy-backend"], input=payload,
+                           capture_output=True, env=env, timeout=60)
+    assert alone.returncode == 0 and marker.read_text() == "run ", alone.stderr
+
+
+def test_K4_a_missing_harness_names_the_fix_and_only_profile_changes_ask(install, tmp_path):
+    """K4: with X4_TOOLKIT naming a folder without tools/modding_harness EVERY Bash/PowerShell/
+    Edit/Write call was denied "X4 save dispatcher failed: ValueError", and X4_GUARD=off did not
+    help. The Bash rules need no harness; only save preservation does."""
+    root, roots, files = install
+    invoke_hook(install, "Bash", {"command": "true"})            # installs the hook copy
+    (root / "tools/modding_harness").rename(tmp_path / "harness-moved-away")
+    other = root / "notes.txt"
+    hso = invoke_hook(install, "Bash", {"command": "ls -la"})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None and "tools/modding_harness" in hso["additionalContext"], hso
+    hso = invoke_hook(install, "Write", {"file_path": str(other), "content": "x"})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None and "X4_TOOLKIT" in hso["additionalContext"], hso
+    for tool, ti in (("Bash", {"command": 'rm -- "' + str(files[0]).replace("\\", "/") + '"'}),
+                     ("Write", {"file_path": str(files[0]), "content": "x"})):
+        hso = invoke_hook(install, tool, ti)["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "ask", (tool, hso)
+        assert "tools/modding_harness" in hso["permissionDecisionReason"], hso
+        assert "X4_TOOLKIT" in hso["permissionDecisionReason"], hso
+    assert files[0].read_bytes() == files[0].name.encode()
+    # Twin: a hard block needs no harness and still denies with its own reason.
+    hso = invoke_hook(install, "Bash", {"command": 'rm -rf "' + str(root.parent / "game").replace("\\", "/") + '"'}
+                      )["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny", hso
+    assert_scope_refusal(hso)
+
+
+def test_K8_the_typed_approval_line_comes_first_and_the_message_is_bounded(install):
+    """K8: the approval refusal listed every path unbounded, after the explanation; above the
+    hook-output cap (#38) the harness files it and Claude sees only the head."""
+    root, roots, files = install
+    saves = Path(roots["saves"])
+    many = [saves / ("campaign-" + "x" * 60 + "-%03d.xml.gz" % i) for i in range(150)]
+    for path in many:
+        path.write_bytes(b"save")
+    hso = invoke_hook(install, "Bash", {"command": "rm -- " + " ".join(
+        '"' + str(p).replace("\\", "/") + '"' for p in many)})["hookSpecificOutput"]
+    assert hso["permissionDecision"] in ("ask", "deny"), hso
+    reason = hso["permissionDecisionReason"]
+    assert_scope_refusal(hso)
+    assert reason.startswith("SAVE APPROVAL REQUIRED"), reason[:200]
+    assert reason.split("\n")[1].startswith("SAVE_ACCESS_APPROVAL "), reason[:300]
+    assert len(reason) <= 10000, len(reason)
+    assert all(p.exists() for p in many)
+    # Twin: a grant line that fits is delivered whole and parses.
+    hso = invoke_hook(install, "Bash", {"command": "rm -- " + " ".join(
+        '"' + str(f).replace("\\", "/") + '"' for f in files)})["hookSpecificOutput"]
+    line = hso["permissionDecisionReason"].split("\n")[1]
+    grant = json.loads(line[len("SAVE_ACCESS_APPROVAL "):])
+    assert grant["op"] == "delete" and len(grant["paths"]) == 3
+
+
+def test_H1_TWIN_the_native_hook_still_honours_a_typed_approval_in_the_host_transcript(install):
+    """The CLI refuses a caller-named transcript (H1); the NATIVE hook reads the one the host
+    names in its own hook input, so a typed bulk approval there still authorizes the batch."""
+    root, _roots, files = install
+    approval = policy.core(root, "approval")
+    command = "rm -- " + " ".join('"' + str(f).replace("\\", "/") + '"' for f in files)
+    refused = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    grant = next(line for line in refused["permissionDecisionReason"].splitlines()
+                 if line.startswith(approval.KEY + " "))
+    transcript = root.parent / "host-transcript.jsonl"
+    transcript.write_text(json.dumps({"type": "user", "origin": {"kind": "human"}, "sessionId": "s",
+                                      "message": {"role": "user", "content": grant}}))
+    hso = invoke_hook(install, "Bash", {"command": command},
+                      extra={"transcript_path": str(transcript)})["hookSpecificOutput"]
+    assert hso.get("permissionDecision") is None, hso
+    assert "backup verified" in hso["additionalContext"]
+
+
+# ------------------------------------------------------------------ LINUX GAP (POSIX semantics)
+# CI ubuntu failed 8 hook tests: native() used the host's os.path.isabs while hook_facts treats
+# `\tmp\...` and `C:/...` as absolute everywhere, so PowerShell/cmd-spelled paths raised "no
+# absolute physical path" (deny), and `<save>\a.xml.gz` from cmd was never a save. Each
+# evidence row now records the DIALECT that spelled it; on POSIX only a Windows dialect's
+# backslash separates. These run the POSIX branch on any host (it is injectable).
+BSL = chr(92)
+
+
+@pytest.mark.parametrize("path,dialect,want", [
+    (BSL + "tmp" + BSL + "s" + BSL + "save" + BSL + "a.xml.gz", "windows", "/tmp/s/save/a.xml.gz"),
+    ("/tmp/s/save" + BSL + "a.xml.gz", "windows", "/tmp/s/save/a.xml.gz"),
+    ("/tmp/s/save" + BSL + "a.xml.gz", "bash", "/tmp/s/save" + BSL + "a.xml.gz"),   # a filename char
+    ("/tmp/s/save/a.xml.gz", "bash", "/tmp/s/save/a.xml.gz"),
+])
+def test_LINUX_native_text_on_posix_converts_only_a_windows_dialect(path, dialect, want):
+    assert policy.native_text(path, dialect, posix=True) == want
+
+
+@pytest.mark.parametrize("path,dialect,error", [
+    ("C:/work/x/build", "windows", "ForeignPath"),
+    ("C:" + BSL + "work", "windows", "ForeignPath"),
+    (BSL + BSL + "server" + BSL + "share", "windows", "ForeignPath"),
+    (BSL + "tmp" + BSL + "x", "bash", "ValueError"),          # Bash: a relative filename
+    ("relative/a.xml.gz", "bash", "ValueError"),
+])
+def test_LINUX_native_text_on_posix_never_guesses_a_windows_anchor(path, dialect, error):
+    with pytest.raises(policy.ForeignPath if error == "ForeignPath" else ValueError) as caught:
+        policy.native_text(path, dialect, posix=True)
+    assert (error == "ForeignPath") == isinstance(caught.value, policy.ForeignPath)
+
+
+def test_LINUX_TWIN_native_text_on_windows_is_unchanged(tmp_path):
+    if os.name != "nt":
+        pytest.skip("the Windows branch needs a Windows host (MSYS conversion)")
+    assert policy.native_text("C:/work/a.xml", "windows", posix=False) == "C:/work/a.xml"
+    with pytest.raises(ValueError):
+        policy.native_text(BSL + "tmp" + BSL + "x", "windows", posix=False)
+
+
+@pytest.fixture
+def posix_facts(monkeypatch):
+    sys.path.insert(0, str(REPO / "agent/guards/claude-hooks"))
+    try:
+        import hook_facts
+    finally:
+        sys.path.pop(0)
+    monkeypatch.setattr(hook_facts, "POSIX_HOST", True)
+    return hook_facts
+
+
+def _posix_rows(hook_facts, tool, command):
+    t = "/tmp/psfe_x"
+    roots = {"game": t + "/X4 Foundations", "reference": t + "/reference", "toolkit": t + "/tk",
+             "profile": t + "/Documents/Egosoft/X4/123", "mods": t + "/tk/dev", "documents": t + "/Documents",
+             "saves": t + "/Documents/Egosoft/X4/123/save", "config": ""}
+    evidence = []
+    facts = hook_facts.facts({"tool_name": tool, "tool_input": {"command": command}, "cwd": "/tmp/w"},
+                             roots, evidence=evidence)
+    assert not facts.get("powershell_error") and not facts.get("carrier_untranslated"), facts
+    out = []
+    for row in evidence:
+        try:
+            out.append((row["dialect"], policy.native_text(row["path"], row["dialect"], posix=True)))
+        except policy.ForeignPath:
+            out.append((row["dialect"], "FOREIGN"))
+    return out
+
+
+SAVE_W = BSL.join(["", "tmp", "psfe_x", "Documents", "Egosoft", "X4", "123", "save"])
+WANT_SAVE = "/tmp/psfe_x/Documents/Egosoft/X4/123/save/a.xml.gz"
+
+
+@pytest.mark.skipif(not (shutil.which("pwsh") or shutil.which("powershell")), reason="no PowerShell to translate with")
+@pytest.mark.parametrize("command,want", [
+    ("$p=@{LiteralPath='" + SAVE_W + BSL + "a.xml.gz'}; Remove-Item @p", [("windows", WANT_SAVE)]),
+    ("$items = Get-ChildItem '" + SAVE_W + "'; $items | Remove-Item",
+     [("windows", "/tmp/psfe_x/Documents/Egosoft/X4/123/save/*")]),
+])
+def test_LINUX_powershell_paths_are_windows_dialect_and_resolve_on_posix(posix_facts, command, want):
+    assert _posix_rows(posix_facts, "PowerShell", command) == want
+
+
+@pytest.mark.parametrize("tool,command,want", [
+    ("Bash", 'cmd //c del /q "%X4_SAVES%' + BSL + 'a.xml.gz"', [("windows", WANT_SAVE)]),
+    ("Bash", 'cmd //c "cd /d C:' + BSL + 'work' + BSL + 'x && rd /s /q build"', [("windows", "FOREIGN")]),
+    # Twins: Bash text keeps its backslash as a filename character on POSIX.
+    ("Bash", "rm '/tmp/psfe_x/Documents/Egosoft/X4/123/save" + BSL + "a.xml.gz'",
+     [("bash", "/tmp/psfe_x/Documents/Egosoft/X4/123/save" + BSL + "a.xml.gz")]),
+    ("Bash", "cd /tmp/w && rm 'a" + BSL + "b'", [("bash", "/tmp/w/a" + BSL + "b")]),
+])
+def test_LINUX_cmd_carrier_paths_are_windows_dialect_and_bash_paths_are_not(posix_facts, tool, command, want):
+    assert _posix_rows(posix_facts, tool, command) == want

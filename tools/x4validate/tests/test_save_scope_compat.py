@@ -43,6 +43,10 @@ def test_other_provider_and_uri_spellings_are_not_decoded_as_filesystem(path):
     ({"powershell_error": "does not parse as PowerShell: PRIVATE_MARKER"}, "does not parse"),
     ({"powershell_error": "PRIVATE_MARKER"}, "scope could not be completely evaluated"),
     ({"carrier_untranslated": True}, "scope could not be completely evaluated"),
+    # Past the expansion bound the Bash backend's only answer is the same deny; running
+    # it re-expands the whole command, which doubled the cost under the 20 s deadline and
+    # replaced the actionable reason with "policy engine failed: TimeoutExpired" on CI.
+    ({"carriers_truncated": True}, "stopped expanding"),
 ])
 def test_scope_refusal_has_actionable_static_diagnostic_without_command_or_parser_text(monkeypatch, flags, expected):
     monkeypatch.setitem(sys.modules, "hook_facts", SimpleNamespace(
@@ -51,6 +55,16 @@ def test_scope_refusal_has_actionable_static_diagnostic_without_command_or_parse
         policy.shell_evidence({"command": "PRIVATE_MARKER"}, {})
     assert expected in str(caught.value)
     assert "PRIVATE_MARKER" not in str(caught.value)
+
+
+@pytest.mark.parametrize("flags", [{"carriers_truncated": False}, {}])
+def test_TWIN_a_command_within_the_expansion_bound_still_yields_evidence(monkeypatch, flags):
+    def collect(*args, evidence=None, **kwargs):
+        evidence.append({"path": "C:/x", "operation": "delete"})
+        return flags
+    monkeypatch.setitem(sys.modules, "hook_facts", SimpleNamespace(
+        facts=collect, PS_PARSE_ERROR="does not parse as PowerShell"))
+    assert policy.shell_evidence({"command": "x"}, {}) == [{"path": "C:/x", "operation": "delete"}]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows drive namespace parsing")

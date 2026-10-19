@@ -11,7 +11,9 @@ import json
 import hashlib
 import importlib
 import importlib.util
+import ntpath
 import os
+import posixpath
 import re
 import sys
 import subprocess
@@ -40,7 +42,49 @@ def core(root, name):
     return importlib.import_module(prefix + "." + name)
 
 
-def native(path):
+#: Evidence rows from hook_facts carry `dialect`: "windows" when PowerShell or cmd spelled the
+#: path (a backslash separates), anything else is Bash (on POSIX a backslash is a filename
+#: character). Mirrors hook_facts.WINDOWS_DIALECT.
+WINDOWS_DIALECT = "windows"
+_WINDOWS_ANCHORED = re.compile(r"^[A-Za-z]:[\\/]|^[\\/]{2}")
+
+
+class ForeignPath(ValueError):
+    """A Windows drive/UNC path that a Windows dialect spelled, judged on a POSIX host. No
+    POSIX save root can contain it and its meaning there is not knowable, so it is never a
+    resolved target: the caller treats it as unresolved (never guessed into a POSIX path)."""
+
+
+def native_text(path, dialect="bash", *, posix=None):
+    """The absolute physical path text of evidence `path`, spelled in `dialect`, under the
+    host's semantics. `posix` defaults to THIS host; tests pass it to run the other branch
+    (LINUX GAP, v4.0 release review: on ubuntu `\\tmp\\x` from PowerShell raised "no absolute
+    physical path" and denied, and `<save>\\a.xml.gz` from cmd was never a save)."""
+    posix = os.name != "nt" if posix is None else posix
+    if posix:
+        if dialect == WINDOWS_DIALECT:
+            if _WINDOWS_ANCHORED.match(path):
+                raise ForeignPath("a Windows drive/UNC path names nothing on this POSIX host")
+            path = path.replace(chr(92), "/")
+        if not posixpath.isabs(path):
+            raise ValueError("save mutation has no absolute physical path")
+        return path
+    return _windows_native_text(path)
+
+
+def native(path, dialect="bash"):
+    return Path(native_text(path, dialect)).absolute()
+
+
+def _row_native(row, key="path"):
+    """native() of an evidence row's path in its own dialect; None when it is foreign."""
+    try:
+        return native(row.get(key, ""), row.get("dialect", "bash"))
+    except ForeignPath:
+        return None
+
+
+def _windows_native_text(path):
     if os.name == "nt":
         path = re.sub(r"^/([A-Za-z])(?=/|$)", lambda match: match[1].upper() + ":", path)
         # Other MSYS mounts must be translated by the calling Bash transport.
@@ -57,9 +101,9 @@ def native(path):
             path = converted.stdout.decode("utf-8").strip()
             if not re.match(r"^[A-Za-z]:/|^//", path):
                 raise ValueError("MSYS path conversion returned no native absolute path")
-    if not os.path.isabs(path):
+    if not ntpath.isabs(path):
         raise ValueError("save mutation has no absolute physical path")
-    return Path(path).absolute()
+    return path
 
 
 def folders(roots):
@@ -90,6 +134,11 @@ def _scope_prefix(path):
     return prefix
 
 
+#: Evidence marker for a command whose mutations are not all modelled (K1). It names
+#: no path, so it never becomes a mutation; it only withholds the profile-ask lift.
+OPAQUE = "unmodelled"
+
+
 def resolve(root, roots, evidence, deadline=None):
     dispatch = core(root, "dispatch")
     profiles = core(root, "profiles")
@@ -106,32 +155,49 @@ def resolve(root, roots, evidence, deadline=None):
     directory_copy = False
     for row in evidence:
         raw = row.get("path", "")
-        if (raw and not row.get("unresolved") and row.get("scope") == "copy-destination"
-                and native(raw).is_dir() and any(preservation.contains(folder, native(raw)) for folder in save_roots)):
+        dest = _row_native(row) if raw and not row.get("unresolved") and row.get("scope") == "copy-destination" else None
+        if (dest is not None and dest.is_dir()
+                and any(preservation.contains(folder, dest) for folder in save_roots)):
             directory_copy = True
             sources = row.get("copy_sources")
             if not isinstance(sources, list) or not sources:
                 problems.append("copy into a save folder must identify its resulting filenames")
                 continue
             for source in sources:
-                if (source.get("unresolved") or not source.get("path") or _has_magic(source["path"])
-                        or not native(source["path"]).is_file() or native(source["path"]).is_symlink()):
+                placed = None if source.get("unresolved") or not source.get("path") else _row_native(
+                    {"path": source["path"], "dialect": row.get("dialect", "bash")})
+                if (placed is None or _has_magic(source["path"])
+                        or not placed.is_file() or placed.is_symlink()):
                     problems.append("copy source filename or file kind is not qualified")
                     continue
-                expanded.append({**row, "path": str(native(raw) / native(source["path"]).name), "scope": "file"})
+                expanded.append({**row, "path": str(dest / placed.name), "scope": "file", "dialect": "bash"})
         else:
             expanded.append(row)
+    # K1: a profile ask may be lifted only when EVERY mutation of the command is in the
+    # resolved evidence. One unresolved operand (even one naming no root: `rm <save> $X`)
+    # or one verb no row models (`python -c`, `$(echo rm)`) can reach a non-save profile
+    # file the backup never covered, so the whole command keeps its old ask.
+    transparent = True
     for row in expanded:
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError("save scope resolution deadline expired")
+        if row.get("operation") == OPAQUE:
+            transparent = False
+            continue
         raw = row.get("path", "") or row.get("raw", "")
         if row.get("unresolved"):
+            transparent = False
             # Keep an unresolved protected operand as a refusal, never an empty set.
             if any(value and str(value).casefold() in raw.casefold() for value in
                    (*save_roots, roots.get("profile", ""), store.root)):
                 problems.append("unresolved protected operand")
             continue
-        path = native(raw)
+        path = _row_native({"path": raw, "dialect": row.get("dialect", "bash")})
+        if path is None:
+            # A Windows drive path on a POSIX host (LINUX GAP): not a target here, and not
+            # known either -- it withholds the save qualification like any unresolved row.
+            transparent = False
+            continue
         op = row["operation"]
         affected.append((str(path), op))
         pattern = row.get("literal") is not True and _has_magic(path)
@@ -190,7 +256,8 @@ def resolve(root, roots, evidence, deadline=None):
     recheck = (lambda: resolve(root, roots, evidence, deadline)[1].mutations) if wildcard or directory_copy else None
     plan = dispatch.SavePlan(mutations, wildcard, helper=directory_copy,
                              unresolved="; ".join(dict.fromkeys(problems)), recheck=recheck)
-    return profile, plan, tuple(dict.fromkeys(affected)), profile_targets > 0 and profile_targets == save_targets
+    return (profile, plan, tuple(dict.fromkeys(affected)),
+            transparent and profile_targets > 0 and profile_targets == save_targets)
 
 
 def enforce(root, roots, evidence, action, backend, *, transcript="", preview=False, deadline=None,
@@ -221,14 +288,29 @@ def enforce(root, roots, evidence, action, backend, *, transcript="", preview=Fa
         return dispatch.Outcome(contracts.Result("deny", "failed", "failed", reason=str(exc)))
 
 
+#: One budget per native hook call, analysis and backend together (K5). The hook entries in
+#: agent/targets/claude/settings.json give each guard 30 s, so this leaves headroom for
+#: interpreter start-up and the transport on either side.
+HOOK_BUDGET_S = 20
+
+
 class ScopeError(ValueError):
     """A static, safe diagnostic for a shell that could not be evaluated."""
 
 
-def shell_evidence(payload, roots, *, execution_context=False):
+def shell_evidence(payload, roots, *, execution_context=False, ipc=None):
+    """Evidence rows for one shell payload. `ipc` (a list) also receives the (exit code,
+    stdout bytes) hook_facts.py would print for the same payload and roots, so the Bash
+    backend can take them with --facts-stdin instead of analysing the command again (K5)."""
     import hook_facts
     evidence = []
-    facts = hook_facts.facts(payload, roots, evidence=evidence, execution_context=execution_context)
+    if ipc is None:
+        facts = hook_facts.facts(payload, roots, evidence=evidence, execution_context=execution_context)
+    else:
+        # The root packet exactly as hook_facts.main() reads it (long names included).
+        rc, raw, facts = hook_facts.ipc(payload, hook_facts.ipc_roots(
+            "\n".join(str(k) + "\t" + str(v) for k, v in roots.items())), evidence=evidence)
+        ipc[:] = [rc, raw]
     error = facts.get("powershell_error")
     if error and str(error).startswith(hook_facts.PS_PARSE_ERROR):
         raise ScopeError("PowerShell command does not parse; correct its syntax before retrying. "
@@ -236,6 +318,16 @@ def shell_evidence(payload, roots, *, execution_context=False):
     if error or facts.get("carrier_untranslated"):
         raise ScopeError("Shell scope could not be completely evaluated; use literal targets and "
                          "an available parser. This call was not allowed.")
+    if facts.get("carriers_truncated"):
+        # protect-bash.sh denies this unconditionally; running that backend would expand
+        # the whole command a second time inside the same 20 s deadline (MEASURED
+        # 2026-10-18: 18.3 s locally, TimeoutExpired on the Windows CI runner), losing the
+        # reason Claude needs to act on. Same verdict, same wording, one expansion.
+        raise ScopeError("This command nests so many substitutions/wrappers that the guard stopped "
+                         "expanding them, so part of it was NEVER checked against any rule. Split it "
+                         "into simpler commands (or a script file) and re-run.")
+    if facts.get("save_lift_blockers") and not execution_context:
+        evidence.append({"operation": OPAQUE, "verbs": list(facts["save_lift_blockers"])})
     return evidence
 
 
@@ -348,41 +440,156 @@ def packet(raw):
     return roots, payload
 
 
+#: K3: a read-only check (X4_GUARD_CHECK=1, `x4guard check`) never preserves bytes, so a save
+#: mutation it judges has NO backup. Reporting that as an advisory let an adapter that maps
+#: advise -> allow delete a save unbacked; it asks instead, and says how to get the backup.
+PREVIEW_NEEDS_BACKUP = (
+    "X4 SAVE CHANGE NOT BACKED UP: this is a read-only check, so no save bytes were preserved, "
+    "and a save may be changed only after a verified backup. Run the change through the agent's "
+    "native guard hook (it backs the save up first), or confirm only if losing the current "
+    "save contents is acceptable.")
+
+
+APPROVAL_HEAD = ("SAVE APPROVAL REQUIRED: ask the user to type the line(s) below EXACTLY, as their own "
+                 "message, then retry the same command:")
+
+
+def _bounded(text):
+    """K8: the hook-output cap the Bash guards apply through x4_bound (#38): above it the
+    harness files the output and Claude sees a short preview, so the HEAD is what survives."""
+    try:
+        cap = int(os.environ.get("X4_HOOK_MAX_CHARS") or 10000)
+    except ValueError:
+        cap = 10000
+    if len(text) <= cap:
+        return text
+    note = "\n[X4 GUARD: the last {} characters of this message were cut to stay under the hook output limit]"
+    keep = max(cap - len(note) - 12, 0)
+    return text[:keep] + note.format(len(text) - keep)
+
+
+def _approval_first(reason):
+    """K8: the typed-approval line(s) the user needs come FIRST, before the explanation."""
+    lines = reason.split("\n")
+    grants = [line for line in lines if line.startswith("SAVE_ACCESS_APPROVAL ")]
+    if not grants:
+        return reason
+    return "\n".join([APPROVAL_HEAD] + grants + [line for line in lines if line not in grants])
+
+
 def _hook_json(result):
     hso = {"hookEventName": "PreToolUse"}
+    if result.decision not in ("deny", "ask") and result.preservation == "required":
+        warnings = "\n".join(result.warnings)
+        result = replace(result, decision="ask",
+                         reason=PREVIEW_NEEDS_BACKUP + ("\n" + warnings if warnings.strip() else ""))
     if result.decision in ("deny", "ask"):
-        hso.update(permissionDecision=result.decision, permissionDecisionReason=result.reason)
+        hso.update(permissionDecision=result.decision,
+                   permissionDecisionReason=_bounded(_approval_first(result.reason)))
     else:
         text = "\n".join(result.warnings)
         if result.preservation == "verified":
-            text += "\nSave backup verified in the permanent neutral store before this call."
-        elif result.preservation == "required":
-            text += "\nPREVIEW ONLY: executing this save change still requires verified preservation."
+            # First, so the bound below can never cut it (K8).
+            text = "Save backup verified in the permanent neutral store before this call.\n" + text
         if text.strip():
-            hso["additionalContext"] = text.strip()
+            hso["additionalContext"] = _bounded(text.strip())
         else:
             return ""
     return json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
+
+
+_HARNESS_FIX = ("Fix: point X4_TOOLKIT (x4-paths.env or the environment) at the toolkit folder that "
+                "contains tools/modding_harness, or reinstall the toolkit.")
+#: K4: saves are never changed without a backup, so without the harness a change that touches
+#: the profile ASKS -- an inability, never relaxed by X4_GUARD=off. The prefix keeps it
+#: classified as checked-nothing by x4conformance's NOT_CHECKED.
+HARNESS_MISSING_ASK = ("X4 save dispatcher failed: the pinned save harness (tools/modding_harness) "
+                       "could not be loaded from X4_TOOLKIT, so no save can be backed up, and this call "
+                       "changes something in your X4 profile or saves. Confirm only if losing the current "
+                       "contents is acceptable. " + _HARNESS_FIX)
+HARNESS_MISSING_NOTE = ("X4 SAVE PROTECTION UNAVAILABLE: the pinned save harness (tools/modding_harness) "
+                        "could not be loaded from X4_TOOLKIT. Every other guard rule ran; any change to "
+                        "your X4 profile or saves will ask until this is fixed. " + _HARNESS_FIX)
+
+
+class _Answered(Exception):
+    def __init__(self, text):
+        super().__init__("answered")
+        self.text = text
+
+
+def _under(path, folder):
+    try:
+        path, folder = (os.path.normcase(os.path.realpath(str(p))) for p in (path, folder))
+        return os.path.commonpath((path, folder)) == folder
+    except ValueError:
+        return False
+
+
+def _bounded_json(hso):
+    for key in ("permissionDecisionReason", "additionalContext"):
+        if key in hso:
+            hso[key] = _bounded(hso[key])
+    return json.dumps({"hookSpecificOutput": hso}, ensure_ascii=True)
+
+
+def _without_harness(roots, evidence, rules):
+    """(failed, hook JSON) when the harness cannot load (K4). The Bash rules decide, unrelaxed
+    by save qualification; a change that touches the profile or a save folder -- or an
+    unresolved operand naming one -- asks on top, because no backup can be made."""
+    folder_list = list(folders(roots)) + ([native(roots["profile"])] if roots.get("profile") else [])
+    names = [str(value).casefold() for value in (roots.get("profile"), roots.get("saves")) if value]
+    touches = False
+    for row in evidence:
+        if row.get("operation") == OPAQUE:
+            continue
+        raw = str(row.get("path", "") or row.get("raw", ""))
+        if row.get("unresolved"):
+            touches = touches or any(name in raw.casefold() for name in names)
+        elif raw:
+            placed = _row_native({"path": raw, "dialect": row.get("dialect", "bash")})
+            touches = touches or placed is not None and any(_under(placed, folder) for folder in folder_list)
+    decision, reason, context = rules(False)
+    hso = {"hookEventName": "PreToolUse"}
+    if decision == "deny":
+        hso.update(permissionDecision="deny", permissionDecisionReason=reason or "")
+        return False, _bounded_json(hso)
+    if touches:
+        detail = "\n".join(part for part in (reason, context) if part)
+        hso.update(permissionDecision="ask",
+                   permissionDecisionReason=HARNESS_MISSING_ASK + ("\n" + detail if detail else ""))
+        return True, _bounded_json(hso)
+    if decision == "ask":
+        hso.update(permissionDecision="ask",
+                   permissionDecisionReason=(reason or "") + "\n" + HARNESS_MISSING_NOTE)
+    else:
+        hso["additionalContext"] = HARNESS_MISSING_NOTE + ("\n" + context if context else "")
+    return False, _bounded_json(hso)
 
 
 def main(argv=None):
     import x4guard
     args = list(sys.argv[1:] if argv is None else argv)
     failed = False
+    # K5: ONE budget for the whole call, evidence included -- it ran before the deadline was
+    # set, so a slow PowerShell translation (up to 15 s) came on top of the backend's 20 s.
+    deadline = time.monotonic() + HOOK_BUDGET_S
+    ipc = []
     try:
         kind, script = args
         roots, payload = packet(sys.stdin.buffer.read().decode("utf-8"))
-        root = native(roots["toolkit"])
-        contracts = core(root, "contracts")
-        action = contracts.Action("claude", str(payload.get("tool_name", "")), kind,
-                                  cwd=str(payload.get("cwd", "")),
-                                  shell="powershell" if payload.get("tool_name") == "PowerShell" else "bash",
-                                  command=str((payload.get("tool_input") or {}).get("command", "")),
-                                  session_id=str(payload.get("session_id", "")),
-                                  tool_call_id=str(payload.get("tool_use_id", "")))
-        deadline = time.monotonic() + 20
+        try:
+            root = native(roots["toolkit"])
+            contracts = core(root, "contracts")
+        except Exception:
+            # K4: no loadable pinned harness (X4_TOOLKIT names a folder without it, or it is
+            # damaged). The Bash rules need no harness and still run; only save preservation
+            # is impossible, which _without_harness handles. The cause was hidden behind
+            # "X4 save dispatcher failed: ValueError" on EVERY call.
+            root = contracts = None
+        cwd = str(payload.get("cwd", ""))
         if kind == "shell":
-            evidence = shell_evidence(payload, roots)
+            evidence = shell_evidence(payload, roots, ipc=ipc)
         else:
             ti = payload.get("tool_input") or {}
             path = ti.get("file_path") or ti.get("notebook_path")
@@ -392,30 +599,54 @@ def main(argv=None):
             # no longer treats a single leading slash as a Windows absolute
             # path. Resolve that mount before deciding that a cwd is needed.
             if not (os.path.isabs(path) or (os.name == "nt" and path.startswith("/"))):
-                if not action.cwd:
+                if not cwd:
                     raise ValueError("relative file request has no absolute cwd")
-                path = os.path.join(str(native(action.cwd)), path)
+                path = os.path.join(str(native(cwd)), path)
             path = str(native(path))
             evidence = [{"path": path, "operation": "write", "literal": True}]
 
-        def backend(save_only):
+        def rules(save_only):
             bash, why = x4guard.resolve_bash()
             if not bash:
                 raise ValueError(why)
             args = [bash, script, "--harness-policy-backend"] + (["--save-qualified"] if save_only else [])
-            completed = subprocess.run(args, input=json.dumps(payload).encode("utf-8"),
-                                       capture_output=True, timeout=max(.01, deadline - time.monotonic()))
-            if completed.returncode:
+            data = json.dumps(payload).encode("utf-8")
+            if ipc:
+                args.append("--facts-stdin")
+                data = str(ipc[0]).encode("ascii") + b"\n" + data + b"\n" + ipc[1]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("the hook's time budget was spent before the rule backend ran")
+            # Bounded with a process-tree kill: subprocess.run's Windows timeout path waits
+            # on every grandchild holding the pipes (K5; see x4guard._run_bounded).
+            rc, out, _err = x4guard._run_bounded(args, data, dict(os.environ), remaining)
+            if rc is None:
+                raise TimeoutError("the rule backend did not finish within the hook's time budget")
+            if rc:
                 raise ValueError("Bash rule backend did not complete")
-            decision, reason, context = x4guard.parse_hook_output(completed.stdout.decode("utf-8"))
+            return x4guard.parse_hook_output(out.decode("utf-8"))
+
+        if contracts is None:
+            failed, text = _without_harness(roots, evidence, rules)
+            raise _Answered(text)
+
+        def backend(save_only):
+            decision, reason, context = rules(save_only)
             return contracts.Result("allow" if decision == "advise" else decision, "evaluated",
                                     reason=reason or "", warnings=(context,) if context else ())
 
+        action = contracts.Action("claude", str(payload.get("tool_name", "")), kind, cwd=cwd,
+                                  shell="powershell" if payload.get("tool_name") == "PowerShell" else "bash",
+                                  command=str((payload.get("tool_input") or {}).get("command", "")),
+                                  session_id=str(payload.get("session_id", "")),
+                                  tool_call_id=str(payload.get("tool_use_id", "")))
         outcome = enforce(root, roots, evidence, action, backend,
                           transcript=str(payload.get("transcript_path", "")),
                           preview=os.environ.get("X4_GUARD_CHECK") == "1", deadline=deadline)
         failed = outcome.result.evaluation == "failed"
         text = _hook_json(outcome.result)
+    except _Answered as answered:
+        text = answered.text
     except BaseException as exc:
         failed = True
         # No raw shell/payload/exception text (which may include private data).

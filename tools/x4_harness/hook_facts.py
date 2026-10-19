@@ -269,8 +269,28 @@ def join_cwd(cwd: str, p: str) -> str:
     return norm(norm(cwd) + "/" + p)
 
 
-def physical_join(cwd: str, path: str) -> str:
-    """Keep case for file I/O; never reuse a case-folded comparison path."""
+#: The HOST's path semantics for physical evidence (LINUX GAP, v4.0 release review). On POSIX a
+#: backslash written in a BASH command is a filename character, not a separator; only text a
+#: Windows dialect (PowerShell, cmd) spelled uses it as one. Module-level so a test can force
+#: the POSIX branch on Windows.
+POSIX_HOST = os.name != "nt"
+#: Evidence `dialect` values: "bash" (POSIX shell text) or "windows" (PowerShell/cmd text).
+WINDOWS_DIALECT = "windows"
+
+
+def physical_join(cwd: str, path: str, *, posix_bash: bool = False) -> str:
+    """Keep case for file I/O; never reuse a case-folded comparison path.
+
+    `posix_bash`: the path was written in a Bash command on a POSIX host, where only `/`
+    separates and `C:/x` or `\\tmp\\x` is RELATIVE -- so nothing is folded or guessed."""
+    if posix_bash:
+        if not path:
+            return cwd
+        if posixpath.isabs(path):
+            return posixpath.normpath(path)
+        if not cwd or not posixpath.isabs(cwd):
+            return ""
+        return posixpath.normpath(cwd + "/" + path)
     def provider_file(value):
         if not value:
             return value
@@ -622,6 +642,17 @@ def piped_in(cmd: str) -> list:
 #: one fix serves every rule instead of each rule learning the grammar.
 RESERVED = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until",
             "case", "esac", "in", "for", "select", "function", "!", "{", "}", "coproc", "[[", "]]"}
+
+#: K1: the verbs whose every file mutation reaches an evidence row (rm/mv/cp/redirect/tee/
+#: touch/mkdir targets), plus verbs with no file effect of their own. A segment whose verb
+#: is anything else -- an interpreter, a script, a cmdlet the translator passed through --
+#: may mutate a file no row shows, so the save bridge must not lift a profile ask for it.
+#: Deliberately an ALLOWLIST: an unknown verb costs an ask, never a silent advise.
+SAVE_MODELLED_VERBS = frozenset({
+    "", "rm", "rmdir", "unlink", "mv", "cp", "tee", "touch", "mkdir", "echo", "printf",
+    "cat", "ls", "cd", "pushd", "popd", "true", "false", ":", "test", "[", "pwd",
+    "get-childitem", "get-item", "test-path", "get-content", "write-output", "write-host",
+}) | (RESERVED - {"coproc"})
 
 #: The `in` of `case WORD in`. A TOKEN, not the substring: see the block in
 #: strip_compound_prefix() for the bypass that shape caused.
@@ -1639,6 +1670,7 @@ def cmd_heredoc_bodies(cmd: str) -> list[str]:
                             and _cmd_reads_stdin(_unwrap(sg))):
         sh = chr(10).join(cmd_to_sh([ln]) for ln in h.split(chr(10)) if ln.strip())
         if sh.strip():
+            _WIN_DIALECT.add(sh)
             out.append(sh)
     return out
 
@@ -4330,6 +4362,9 @@ def _here_string(seg: str) -> str:
 #: A carrier the walk cannot open is not a clean pass: facts() turns a non-empty list
 #: into `carrier_untranslated`, which protect-bash.sh ASKS on.
 _UNTRANSLATED: list = []
+#: Command texts produced by translating PowerShell or cmd (LINUX GAP): their paths are
+#: Windows-spelled. Cleared per facts() call, like _UNTRANSLATED.
+_WIN_DIALECT: set = set()
 
 #: text -> (sh or None, reason). One translation per distinct text per process: the
 #: carrier walk revisits strings, and each translation is a PowerShell start.
@@ -4770,7 +4805,9 @@ def _inner_commands(cmd: str) -> list[str]:
         pipes = [True] * len(segs)
     for n, seg in enumerate(segs):
         if _verb_name(verb(seg)) in ("cmd",) + _PS_EXES:
-            out.extend(_windows_carrier(seg, cmd, segs[n - 1] if n and pipes[n] else None))
+            translated = _windows_carrier(seg, cmd, segs[n - 1] if n and pipes[n] else None)
+            _WIN_DIALECT.update(translated)
+            out.extend(translated)
         # `echo '<cmd>' | bash` and `printf '%s' '<cmd>' | sh`. The consumer must have
         # NO script operand (see _reads_stdin_program) and the producer must be an echo
         # or printf of a literal, so an ordinary `echo ... > file && bash script.sh`
@@ -4861,7 +4898,7 @@ _MAX_CARRIER_DEPTH = 4
 _MAX_CARRIED = 250
 
 
-def carried_commands(body: str, extra: list) -> tuple:
+def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tuple:
     """Every command string reachable from `body`, following carriers.
 
     _inner_commands was applied EXACTLY ONCE, to the top level, so a command one
@@ -4871,12 +4908,19 @@ def carried_commands(body: str, extra: list) -> tuple:
     Deduplicated, because two carriers can yield the same text and the rules below
     are pure functions of it -- re-running them buys nothing and costs latency on
     the blocking path.
+
+    `dialects` (text -> "bash"/"windows", seeded with `body`) is filled for every text:
+    a PowerShell/cmd translation is Windows-spelled, a shell carrier's text is Bash, and
+    a substitution keeps its parent's dialect (LINUX GAP).
     """
+    d = {} if dialects is None else dialects
+    d.setdefault(body, "bash")
     seen = {body}
     out = [body]
     frontier = [body]
     truncated = False
     for e in extra:
+        d.setdefault(e, WINDOWS_DIALECT if e in _WIN_DIALECT else "bash")
         if e not in seen:
             seen.add(e)
             out.append(e)
@@ -4884,9 +4928,15 @@ def carried_commands(body: str, extra: list) -> tuple:
     for _ in range(_MAX_CARRIER_DEPTH):
         nxt = []
         for c in frontier:
-            for inner in (p_ for i_ in _inner_commands(c) + substitutions(c)
-                          for p_ in _carrier_parts(i_)):
-                if inner and inner not in seen:
+            inners = _inner_commands(c)
+            subs = substitutions(c)
+            for i_, kind in ([(x, WINDOWS_DIALECT if x in _WIN_DIALECT else "bash") for x in inners]
+                             + [(x, d.get(c, "bash")) for x in subs]):
+                for inner in _carrier_parts(i_):
+                    if inner:
+                        d.setdefault(inner, kind)
+                    if not inner or inner in seen:
+                        continue
                     seen.add(inner)
                     nxt.append(inner)
                     if len(out) + len(nxt) >= _MAX_CARRIED:
@@ -4939,6 +4989,34 @@ def _as_ms(v) -> float:
 
 #: A Claude Code settings file, any level (FX-G2 settings rule, user decision 2026-10-05).
 _AGENT_SETTINGS = re.compile(r"(^|/)\.claude/settings[^/]*\.json$")
+#: H1 (v4.0 release review): a HOST SESSION TRANSCRIPT. The save bridge reads a typed human
+#: save approval from it, so an agent write there could forge one (MEASURED: a one-line jsonl
+#: produced a grant matching a 3-save delete). Claude Code: ~/.claude/projects/**.jsonl;
+#: Codex: ~/.codex/sessions/**.jsonl. Memory notes (.md) beside them are not matched.
+_HOST_TRANSCRIPT = re.compile(r"(^|/)\.claude/projects/.*\.jsonl$|(^|/)\.codex/sessions/.*\.jsonl$")
+
+
+def _carries_program_text(seg: str) -> bool:
+    """K1: is this segment a CARRIER whose program arrives as TEXT in the command (`bash -c`,
+    `cmd /c`, `eval`, a PowerShell host's -Command/-EncodedCommand)? That text is walked as its
+    own segments, each judged against SAVE_MODELLED_VERBS, so the carrier verb itself hides
+    nothing. A script file (`bash x.sh`, `pwsh -File x.ps1`) or a program on stdin is not text
+    held here, and stays a blocker."""
+    v = verb(seg)
+    toks = tokens_of(seg)
+    k = next((i for i, t in enumerate(toks) if _verb_name(t) == v), None)
+    if k is None:
+        return False
+    rest = toks[k + 1:]
+    if v == "cmd":
+        return any(_CMD_RUN_SWITCH.fullmatch(t) or _CMD_KEEP_SWITCH.fullmatch(t) for t in rest)
+    if v in _SHELLS:
+        return any(_DASH_C.match(t) for t in rest)
+    if v == "eval":
+        return bool(rest)
+    if v in _PS_EXES:
+        return _ps_host_payload(toks[k:])[0] in ("cmd", "encoded")
+    return False
 
 
 def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution_context: bool = False) -> dict:
@@ -4947,6 +5025,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     timeout = inp.get("timeout", 0)
     background = inp.get("run_in_background", False)
     del _UNTRANSLATED[:]
+    _WIN_DIALECT.clear()
     _ps_spent[0] = 0.0                  # the translation budget is per hook call
 
     # THE POWERSHELL TOOL (AUDIT-2026-09-24 HK-1). It had no PreToolUse guard at all, so
@@ -4989,8 +5068,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             _UNTRANSLATED.append(why_)
         else:
             _UNTRANSLATED.extend(unknown_)
+            _WIN_DIALECT.add(sh_)
             extra.append(sh_)
-    all_cmds, carriers_truncated = carried_commands(body, extra)
+    # Which dialect spelled each command's paths (LINUX GAP): see carried_commands.
+    dialects = {body: WINDOWS_DIALECT if from_powershell else "bash"}
+    all_cmds, carriers_truncated = carried_commands(body, extra, dialects)
     # ...and each one with its separator-holding substitutions collapsed (FX-G6 / reviewer
     # K I4): `A=$(echo a; echo b) rm -rf <game>` -- see _spanning_view. Inserted after the
     # top level, so the last command (and the `cwd` fact read from it) is unchanged; the
@@ -5001,6 +5083,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         v_ = _spanning_view(c_)
         if v_ != c_ and v_ not in all_cmds and v_ not in views:
             views.append(v_)
+            dialects.setdefault(v_, dialects.get(c_, "bash"))
     carried = list(all_cmds)            # the assignment tables read the commands as written
     all_cmds[1:1] = views
     # FX-G6 / reviewer K I2: a `git config` that may WRITE, anywhere in the command (any
@@ -5026,7 +5109,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # resolve_verb runs HERE, once per segment, with the assignment table already
     # computed above: a command name arriving through a variable (`RM=rm; $RM -rf ...`)
     # otherwise reaches no verb-keyed rule at all, hard blocks included.
-    seg_cwd, seg_prev, unseeded, physical_dirs = [], [], [], []
+    seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect = [], [], [], [], []
     base = session_cwd(payload)
     # A carried command (bash -c, a heredoc fed to a shell, $(...)) is walked on its own,
     # so it cannot see a `cd` made around it. When nothing anywhere changes directory it
@@ -5051,6 +5134,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             prev = tracked[k - 1][0] if k else None
             pds = physical[k][1] if physical else [""] * len(ds)
             for d, ud, pd in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds)):
+                seg_dialect.append(dialects.get(c, "bash"))
                 seg_cwd.append((rs, d))
                 seg_prev.append(prev)
                 unseeded.append(ud)
@@ -5125,6 +5209,18 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         return False
 
     verb_unresolved = any(_subst_verb_at_root(s, d) for s, d in seg_cwd)
+    # K1 (v4.0 release review): the save bridge may lift the PROFILE asks only when every
+    # mutation in the command is one the evidence collector modelled. A command name that
+    # arrives by substitution or a variable, or any verb outside SAVE_MODELLED_VERBS (an
+    # interpreter, a script, an unknown cmdlet), can write or delete what no evidence row
+    # shows -- MEASURED: `rm <save>; python -c "os.remove('<profile>/content.xml')"` and
+    # `rm <save>; $(echo rm) <profile>/content.xml` were advised once one save qualified.
+    save_lift_blockers = sorted({
+        "a command name from a substitution or variable"
+        if (_subst_verb(s) or has_unresolved(_verb_token(s) or "")) else verb(s)
+        for s, _d in seg_cwd
+        if _subst_verb(s) or has_unresolved(_verb_token(s) or "")
+        or verb(s) not in SAVE_MODELLED_VERBS and not _carries_program_text(s)})
     segs = [s for s, _ in seg_cwd]
     cwd = seg_cwd[-1][1] if seg_cwd else ""
 
@@ -5172,8 +5268,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                     # A cd prefix may fail and execution may continue. The existing parser
                     # does not prove control-flow dominance, so native context checks
                     # never use it to invent the omitted tool execution directory.
-                    physical = physical_join("" if execution_context else physical_cwd, r)
-                    row = {"operation": operation, "path": physical,
+                    posix_bash = POSIX_HOST and cur_dialect[0] != WINDOWS_DIALECT
+                    physical = physical_join("" if execution_context else physical_cwd, r,
+                                             posix_bash=posix_bash)
+                    row = {"operation": operation, "path": physical, "dialect": cur_dialect[0],
                                      "raw": r, "unresolved": unres or not physical or has_unresolved(physical)
                                      or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical)),
                                      "scope": scope}
@@ -5182,19 +5280,21 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                         for source in copy_sources:
                             for resolved in resolve_all(source, assigns):
                                 resolved = subst_root_var(resolved, roots)
-                                placed = physical_join(physical_cwd, resolved)
+                                placed = physical_join(physical_cwd, resolved, posix_bash=posix_bash)
                                 sources.append({"path": placed, "unresolved": not placed or has_unresolved(resolved)
                                                 or has_unresolved(placed) or bool(_DEBRIS.search(resolved))})
                         row["copy_sources"] = sources
                     evidence.append(row)
         return out
 
+    cur_dialect = ["bash"]                # the dialect of the segment prep() is reading
     rm_t, copy_t, redir_t, mv_src = [], [], [], []
     sed_t, out_t, search_files = [], [], []
     gitwipe_t, gitdiscard_t, gitwipe_pairs = [], [], []
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
     search_seg, git_all = False, False
-    for (s, c_cwd), prev, c_old, physical_cwd in zip(seg_cwd, seg_prev, unseeded, physical_dirs):
+    for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0] in zip(
+            seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect):
         if execution_context:
             # Context-only evidence; ordinary save membership/rules unchanged.
             prep(git_wipes_worktree_targets(s), c_cwd, c_old, operation="delete")
@@ -5439,6 +5539,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         "carrier_untranslated": bool(_UNTRANSLATED),
         "from_powershell": from_powershell,
         "verb_unresolved": verb_unresolved,
+        # Verbs whose file effects no evidence row models (K1); non-empty keeps the
+        # save bridge from lifting any profile ask for this command.
+        "save_lift_blockers": save_lift_blockers,
 
         # A `mv` SOURCE that is a protected root is a delete of that root: the
         # install is equally gone whether it was removed or moved away. Sources
@@ -5503,6 +5606,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             _AGENT_SETTINGS.search(norm(pp or rr))
             for pp, _u, rr in copy_t + redir_t_all + sed_t + out_t),
         "writes_profile": hit(writes_any, "profile"),
+        # H1: any shell write/append/copy/move ONTO a host session transcript (see _HOST_TRANSCRIPT).
+        "writes_host_transcript": any(
+            _HOST_TRANSCRIPT.search(norm(pp or rr))
+            for pp, _u, rr in copy_t + redir_t_all + sed_t + out_t + mod_t),
         "copy_into_game_or_profile": bool(copy_t) and (
             hit(copy_t, "game") or hit(copy_t, "profile")),
         "redirect_truncate_into_game_or_profile": (
@@ -5694,6 +5801,50 @@ ROOT_SEP = "--X4-ROOTS-END--"
 PS_PARSE_ERROR = "does not parse as PowerShell"
 
 
+def ipc_roots(head: str) -> dict:
+    """The root packet's `name<TAB>path` lines, as main() reads them."""
+    roots = {}
+    for line in head.splitlines():
+        if "\t" in line:
+            k, v = line.split("\t", 1)
+            roots[k.strip()] = long_name(v.strip())   # a short-name ROOT too (FX-G2)
+    return roots
+
+
+def ipc(payload: dict, roots: dict, *, evidence: list | None = None):
+    """(exit code, stdout bytes, facts) exactly as main() reports them to protect-bash.sh.
+
+    K5 (v4.0 release review): the save bridge computes the facts ONCE with this and hands the
+    same bytes to the Bash backend (`--facts-stdin`), instead of a second process re-parsing
+    the command and re-running the PowerShell translation -- that doubled the hook's latency.
+    """
+    f = facts(payload, roots, evidence=evidence)
+    if f.get("powershell_error"):
+        # rc 4 + the reason on stdout: the caller ASKS with it. Nothing was analysed, so
+        # no fact line may be emitted -- a partial stream would read as a clean pass.
+        # rc 5 when the reason is that the command DOES NOT PARSE as PowerShell: that is
+        # the caller's own syntax error, which the caller DENIES with the parser's message
+        # so it is fixed and re-run -- hygiene spends Claude's attention, never the user's
+        # (v3.3.0 release review, finding 7). Only a missing/failing PowerShell still asks.
+        why = str(f["powershell_error"])
+        return (5 if why.startswith(PS_PARSE_ERROR) else 4), why.encode("utf-8", "replace"), f
+    g = dict(f)
+    cmd = g.pop("command", "")
+    g.pop("cwd", None)
+    g.pop("save_lift_blockers", None)   # the save bridge's, not a Bash rule's
+    out = []
+    for k, v in sorted(g.items()):
+        out.append(k + "\t" + _ipc_value(k, v))
+    out.append(SENTINEL)
+    # BINARY, and UTF-8 encoded explicitly. Python's text-mode stdout translates "\n"
+    # to "\r\n" on Windows, which put a trailing CR on EVERY value: the shell then
+    # compared "1\r" against "1", every predicate read false, and the hook allowed
+    # everything while looking perfectly healthy. The sentinel split failed for the
+    # same reason. Encoding first also means a non-cp1252 character in a command can
+    # never raise mid-write and truncate the output.
+    return 0, ("\n".join(out) + "\n" + cmd).encode("utf-8", "replace"), f
+
+
 def main() -> int:
     import json
 
@@ -5711,41 +5862,15 @@ def main() -> int:
     roots = {}
     if ROOT_SEP in raw:
         head, raw = raw.split(ROOT_SEP, 1)
-        for line in head.splitlines():
-            if "\t" in line:
-                k, v = line.split("\t", 1)
-                roots[k.strip()] = long_name(v.strip())   # a short-name ROOT too (FX-G2)
+        roots = ipc_roots(head)
     try:
         payload = json.loads(raw)
     except ValueError:
         return 3                      # unparseable: likewise a refusal, not an allow
-    f = facts(payload, roots)
-    if f.get("powershell_error"):
-        # rc 4 + the reason on stdout: the caller ASKS with it. Nothing was analysed, so
-        # no fact line may be emitted -- a partial stream would read as a clean pass.
-        # rc 5 when the reason is that the command DOES NOT PARSE as PowerShell: that is
-        # the caller's own syntax error, which the caller DENIES with the parser's message
-        # so it is fixed and re-run -- hygiene spends Claude's attention, never the user's
-        # (v3.3.0 release review, finding 7). Only a missing/failing PowerShell still asks.
-        why = str(f["powershell_error"])
-        sys.stdout.buffer.write(why.encode("utf-8", "replace"))
-        sys.stdout.buffer.flush()
-        return 5 if why.startswith(PS_PARSE_ERROR) else 4
-    cmd = f.pop("command", "")
-    f.pop("cwd", None)
-    out = []
-    for k, v in sorted(f.items()):
-        out.append(k + "\t" + _ipc_value(k, v))
-    out.append(SENTINEL)
-    # BINARY, and UTF-8 encoded explicitly. Python's text-mode stdout translates "\n"
-    # to "\r\n" on Windows, which put a trailing CR on EVERY value: the shell then
-    # compared "1\r" against "1", every predicate read false, and the hook allowed
-    # everything while looking perfectly healthy. The sentinel split failed for the
-    # same reason. Encoding first also means a non-cp1252 character in a command can
-    # never raise mid-write and truncate the output.
-    sys.stdout.buffer.write(("\n".join(out) + "\n" + cmd).encode("utf-8", "replace"))
+    rc, out, _f = ipc(payload, roots)
+    sys.stdout.buffer.write(out)
     sys.stdout.buffer.flush()
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

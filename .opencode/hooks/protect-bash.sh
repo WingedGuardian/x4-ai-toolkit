@@ -217,10 +217,30 @@ if [ "${1:-}" != --harness-policy-backend ]; then
   x4_save_dispatch shell
   exit 0
 fi
-[ "${2:-}" = --save-qualified ] && _harness_save_qualified=1
+_harness_facts_stdin=0
+for _a in "${@:2}"; do
+  case "$_a" in
+    --save-qualified) _harness_save_qualified=1 ;;
+    --facts-stdin) _harness_facts_stdin=1 ;;
+  esac
+done
 
-FACTS_RAW=$( { emit_roots; printf '%s' "$INPUT"; } | "$PY" "$HOOK_DIR/hook_facts.py" 2>/dev/null)
-PARSE_RC=$?
+if [ "$_harness_facts_stdin" = 1 ]; then
+  # K5 (v4.0 release review): the save bridge already ran hook_facts once for its evidence
+  # and sends `<rc>\n<payload json>\n<hook_facts stdout>` -- the same bytes this file would
+  # get from a second analyser process (which re-ran the PowerShell translation and doubled
+  # the hook's latency). json.dumps never emits a raw newline, so the payload is one line.
+  PARSE_RC="${INPUT%%$'\n'*}"
+  _rest="${INPUT#*$'\n'}"
+  case "$_rest" in
+    *$'\n'*) INPUT="${_rest%%$'\n'*}"; FACTS_RAW="${_rest#*$'\n'}" ;;
+    *) INPUT="$_rest"; FACTS_RAW="" ;;
+  esac
+  case "$PARSE_RC" in ''|*[!0-9]*) PARSE_RC=99 ;; esac   # malformed: the generic refusal below
+else
+  FACTS_RAW=$( { emit_roots; printf '%s' "$INPUT"; } | "$PY" "$HOOK_DIR/hook_facts.py" 2>/dev/null)
+  PARSE_RC=$?
+fi
 # rc 5: the PowerShell TOOL command does not PARSE as PowerShell. That is a syntax error in
 # the command I wrote, with the parser's own message to act on -- hygiene, so a DENY with
 # an actionable reason rather than a prompt spent on the user (v3.3.0 release review,
@@ -457,6 +477,7 @@ fi
 # user's no-prompt rule) -- and the file-edit tools, whose content settings_guard.py judges,
 # stay open for every other settings edit. ACCEPTED RESIDUAL: a write from inside an opaque
 # interpreter (`python -c "open(...)"`) is not seen.
+on writes_host_transcript && deny "BLOCKED: a shell command may not write a host session transcript (.claude/projects/**.jsonl, .codex/sessions/**.jsonl). The host alone writes it, and the save guard reads the user's typed save approvals from it -- an agent-written line could forge one. Command: $COMMAND"
 on writes_agent_settings && deny "BLOCKED: a shell command may not write a Claude Code settings file (.claude/settings*.json): its env block reaches every hook, and the guard cannot see what a shell write leaves there -- X4_GUARD in it would switch the X4 guards off. Make the edit with your file-edit tool (Write / Edit / apply_patch), whose content the guard checks; X4_GUARD itself is the user's to set, at launch. Command: $COMMAND"
 
 # === HARD BLOCK — re-unpack into a locked reference/ ===
@@ -476,7 +497,10 @@ on lifts_reference_deny && ask "This LIFTS the OS delete/write protection on ref
 # === CONFIRM — rm targeting the game, profile, reference, mods, or toolkit ===
 # ADVISORY since 2026-10-02 (user): 54 hook prompts in 5 weeks, 54 approved, 0 refused --
 # an ask that is always approved protects nothing and trains approval. The game install
-# and reference/ are HARD blocks above; saves and the X4 PROFILE still ask below.
+# and reference/ are HARD blocks above. The X4 PROFILE and saves ask below, EXCEPT when the
+# save bridge (save_policy.py) passed --save-qualified: every change in the command is one
+# or two existing saves it backed up and verified first (user policy 2026-10-18). Three or
+# more, or a wildcard, need typed approval; anything the backup cannot cover still asks.
 on rm_in_profile && [ "$_harness_save_qualified" != 1 ] && ask "DELETING IN YOUR X4 PROFILE (mod list, config, saves) -- not reproducible. Confirm: $COMMAND"
 on rm_in_x4_dir && advise "This deletes files in an X4 directory (game extensions, mod sources or the toolkit). Make sure it is what you meant -- check git status afterwards, and redeploy if you removed a deployed mod by mistake. Command: $COMMAND"
 
@@ -502,9 +526,9 @@ on git_wipes_x4_dir && ask "git clean, reset --hard or stash -u/-a in an X4 dire
 on git_discards_x4_files && advise "This discards working-tree changes to files in an X4 directory, and git IGNORES the read-only protection x4lock applies (measured: git checkout over a locked file overwrote it AND left it unlocked). The named paths are tracked, so the content is recoverable -- but re-lock afterwards with: python scripts/x4lock.py lock"
 
 # === CONFIRM - deleting a SAVE GAME ===
-# Named separately from the rule above so the prompt says what is at risk. There is
-# no undo and no backup: on the reference machine that is 25 files and 1.7 GB.
-on rm_saves && [ "$_harness_save_qualified" != 1 ] && ask "DELETING A SAVE GAME. Saves are not reproducible and nothing backs them up. Confirm: $COMMAND"
+# Named separately from the rule above so the prompt says what is at risk. Reached only when
+# the save bridge could NOT back up everything this command changes first (see above).
+on rm_saves && [ "$_harness_save_qualified" != 1 ] && ask "DELETING A SAVE GAME, and the guard could not back up everything this command changes first (an unresolved target, a command it cannot see into, another profile file, or no save harness). Saves are not reproducible. Confirm: $COMMAND"
 
 # === CONFIRM - deleting or overwriting anything else under Documents ===
 # Game settings, other games' data, personal files. Not ours, not reproducible.
