@@ -372,6 +372,17 @@ memory or from another session -- a remembered id was stale within a day here.
 | F291 | A typed save approval never expires and is reusable within its session; an approval line over ~10,000 characters cannot be shown whole | **OPEN LIMIT (read)**; upstream `modding_harness/approval.py` | `Approval.matches` (`approval.py:29-37`) checks session, operation and path set only; `_bounded` cuts the save message at `X4_HOOK_MAX_CHARS` | OPEN - upstream harness change needed |
 | F292 | The identifier scan's HISTORY mode matches banned tokens on word boundaries, so a token inside a snake_case word passes history while TREE mode flags it | **OPEN LIMIT (measured)**; by design | 2026-10-18: a personal overlay-name prefix inside a test docstring passed the history scan and was caught by the tree scan (fixed in the tree, `40c927c`) | OPEN - deliberate trade-off (80% false positives without it) |
 | F293 | The ubuntu Codex conformance leg replayed `codex-entry.ps1` under pwsh, a path no Linux host takes, and reported every case INERT; a stale-mutant refusal also hid a coverage gap behind it | **DEFECT (measured)** · ✅ FIXED 2026-10-19 | CI run 39187589960: every Codex row INERT on ubuntu since `8bdaa55`; `writes_host_transcript` exercised by no test | `command_posix` profile key (`5ec0012`); anchors re-pinned (`1084ad0`); rule pinned both ways (`8852e39`) |
+| F294 | The save bridge counted a brace-expanded operand (`save_00{0,1,2}.xml.gz`) as ONE existing save, so a 2-3 save delete lifted the profile ask with 0 backups | **DEFECT (measured)** · IN-ARC (`64df0c5`; the K1 fix `6613f22` missed it) | `ebd4825` message: advise with 0 backups (v3.3.1 asked); a mixed form printed "Save backup verified" with two saves unbacked | ✅ **FIXED 2026-10-19** (`ebd4825`) - an unquoted brace word is unresolved evidence; an absent delete/move target withholds the lift |
+| F295 | A carrier with literal program text (`bash -c '...'`) lifted the save ask although shell startup code (`BASH_ENV`, `--rcfile`, `-l`, `-i`) also ran | **DEFECT (measured)** · IN-ARC (`254ec43`) | `6b45275` message: 5 of 5 startup shapes advised, end to end | ✅ **FIXED 2026-10-19** (`6b45275`) - transparent only with no startup-steering variable named, a bare leading `-c` (never zsh), `cmd /d`, PowerShell `-NoProfile`; residual OPEN: a variable inherited from the launch environment is not visible |
+| F296 | Helpers located the command name as the FIRST token spelled like it, so `X=<(echo a) rm -rf <game>` was allowed by every Bash rule, hard blocks included | **DEFECT (measured)** · PRE-ARC (present in v3.3.1) | fuzz-guard ASSIGN PREFIX mutators: 58 bypasses before (`c8663f3` message); 0 over 8,262 mutants after (MEASURED 2026-10-19) | ✅ **FIXED 2026-10-19** (`c8663f3`) - one word per assignment span; every helper uses `_verb_word`'s index; a word-split `env NAME=$(...)` makes the command name unknowable |
+| F297 | Redirect and `-o` targets were judged at ONE value of `${VAR:+x}`, and a `cd` past the 16-lane bound took one value | **DEFECT (measured)** · IN-ARC (`47d06cd`; lane bound `fc2d357`) | `c8663f3` message: `> "${NOPE:+x}<reference>/..."`, `>>`, `${NOPE+x}`, `curl -o` advised where the plain path denies | ✅ **FIXED 2026-10-19** (`c8663f3`) - every `resolve_variants` value; lane overflow is `cd_lanes_truncated`, denied. Corrects F241's "every path rule" |
+| F298 | The settings guard matched `X4_GUARD` by literal text, so a NAME built through quotes, `$'..'`, braces, a backslash or a variable switched the guards off unseen | **DEFECT (measured)** · IN-ARC (`dbaaf7d`; v3.3.1 had no `X4_GUARD`) | 6 of 6 spellings set `X4_GUARD=off` in Git Bash and were allowed (review lane; `tests/test_settings_guard.py` `DYNAMIC_NAMES`) | ✅ **FIXED 2026-10-19** (`2126d8b`) - a `NAME=value` word whose NAME mixes quoting or expansion characters is refused whatever it spells |
+| F299 | save_policy's "unresolved protected operand" refusal is a case-folded SUBSTRING test of the root in the raw operand, so it depends on slash direction | **OPEN LIMIT (read)**; fails closed | `save_policy.py:188-193`; review lane: one spelling denied, the other asked | OPEN - both verdicts fail closed; the verdict depends on spelling |
+| F300 | x4compat's dependency rule bound a manifest id held by two folders FIRST-wins (load order is LAST-wins) and counted a dependency across the game/profile roots | **DEFECT (measured)** · IN-ARC (`7c0ba2b`) | reviewer's duplicate-id probe; the `all` -> `any` mutant survived every test | ✅ **FIXED 2026-10-19** (`6645ee8`) - an ambiguous id binds to no folder, a cross-root dependency is no declaration: the row stays HARD; 4 new mutants |
+| F301 | x4debug baseline reused a same-bytes archive whose metadata was degraded or missing | **DEFECT (measured)** · IN-ARC (`add8290`) | degraded: rc 1 on every later baseline; missing: `FileNotFoundError` traceback (`c3f85b1` message, RED tests) | ✅ **FIXED 2026-10-19** (`c3f85b1`) - reused only when the metadata parses to a dict with `degraded: false` |
+| F302 | Gate populations: cross_tool never compared the `dependent_overwrites` rows, and tool_properties' `t/`/`index/` excuse could not go red | **DEFECT (measured)** · IN-ARC (`7c0ba2b`, `2b1a902`) | 2,544 live advisory rows compared by nothing, with no denominator saying so; a duplicate key in a shared `t/` file was excused | ✅ **FIXED 2026-10-19** (`279a7fe`, `0b7a0af`) - own population with coverage line and floor; excused only when keys are disjoint. Live cross_tool result UNMEASURED until the store is rebuilt |
+| F303 | A complete `libraries/`, `t/` or `index/` file at a nested `extensions/<owner>/` path is classed FULL-OVERRIDE, key-blind, and nested diff adds skip the duplicate-key pass | **OPEN LIMIT (read)** | `_compat.py:534`: `is_union` is False for every nested vpath; live impact 0 (release review B, not re-derived) | OPEN - engine merge semantics for this shape UNMEASURED |
+| F304 | About 47 commits of v3.3.1..b88e425 had no recorded review round | **PROCESS (reported)** · RECORDED 2026-10-19 | coverage audit 2026-10-19 (not re-derived here); the range holds 503 commits, 447 non-merge (MEASURED) | RECORDED - reviewed in a gap review the same day, which found F297 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -9533,6 +9544,10 @@ root, else the plain one. **Open:** a PowerShell host payload (`powershell -c ..
 resolves ONE value (a translation per value costs a pwsh run).
 **RE-DERIVED BY:** `TestK_C1EveryValueOfAnUnknownVariable`; E2E rows `K-C1` in `scripts/test-hooks.sh`.
 
+**SUPERSEDED IN PART 2026-10-19 (the record above is kept as written):** "Every path rule iterates
+them" was not true of redirect and output-flag (`-o`) targets, which took ONE `resolve()` until
+`c8663f3`; see F297.
+
 ## F242 — a lone `-` was read as the script of a process-substitution shell · **DEFECT (measured)** · confidence 95% · ✅ FIXED 2026-10-06
 
 **Finding (reviewer K C2; IN-ARC, FX-G5 f03d19b).** `_procsub_program` treated `-` as the script
@@ -9697,6 +9712,200 @@ an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
 
+## F304 — About 47 commits of v3.3.1..b88e425 had no recorded review round · **PROCESS (reported)** · confidence 75% · RECORDED 2026-10-19
+
+The v4.0 review-coverage audit (2026-10-19) found that about 47 commits in `v3.3.1..b88e425` were
+covered by no recorded review round: each round had reviewed its own slice, and nothing checked the
+slices against the whole range. MEASURED here: `git rev-list --count v3.3.1..b88e425` is 503 (447
+non-merge). A gap review covered them the same day and found the two IN-ARC defects in F297. The
+lesson: review coverage is a property of the COMMIT RANGE, not of the list of rounds, so it is
+checked against the range. The residual 25%: the figure of 47, and which commits it names, come from
+the audit report and are recorded nowhere in the repository.
+
+## F303 — A complete union file at a nested `extensions/<owner>/` path is classed as a key-blind FULL-OVERRIDE · **OPEN LIMIT (read)** · confidence 85% · OPEN
+
+READ: `x4validate/_compat.py:534` sets `is_union = vpath.lower().startswith(UNION_DIRS)`, with
+`UNION_DIRS = ("libraries/", "index/", "t/")` (line 52). A nested vpath begins `extensions/<owner>/`,
+so `is_union` is False for every one of them. A complete `libraries/`, `t/` or `index/` file shipped
+over an owner's copy therefore falls to the plain overrider branch (lines 750-754) and is reported as
+a FULL-OVERRIDE with no key comparison, and a nested diff's adds skip the duplicate-key pass, which is
+gated on `is_union` (line 740). How the engine merges a complete union file over another mod's copy
+is UNMEASURED, so whether FULL-OVERRIDE is the wrong verdict is itself unknown. Live impact: 0 rows
+(release review B, not re-derived here). The residual 15%: the engine behaviour, and the live count.
+
+## F302 — Two gate properties lost their population: cross_tool never compared the `dependent_overwrites` rows, and tool_properties' `t/` and `index/` excuse could not go red · **DEFECT (measured)** · confidence 85% · ✅ FIXED 2026-10-19
+
+In-release, two shapes. (a) `gates/cross_tool.py` compared x4compat's winners with x4effective's
+origins for `report.collisions` only. The issue #11 split (`7c0ba2b`) moves HARD rows whose overwriter
+declares a dependency on the adder into `report.dependent_overwrites` (2,544 ops on the live modlist,
+F287), and those rows were compared by nothing, with nothing in the denominator saying so. Fix
+`279a7fe`: each row is rebuilt as its HARD Collision and checked as its own population, "HARD
+(dependent_overwrites)", with its own coverage line and floor; `DependentOverwrite` gains
+`winner_qualified` (additive, default True) so an unqualified winner is not invented. The live result
+is UNMEASURED until the store is rebuilt. (b) `2b1a902` excused every shared full file under `t/` and
+`index/` as union-merged, so the completeness property could not go red there: a duplicate key between
+two mods shipping the same complete file was waved through. Fix `0b7a0af`: the gate reads each copy
+((page id, t id) for `t/`; the root child's tag and id-or-name for `index/`) and excuses the file only
+when the keys are disjoint; a duplicate or an unreadable copy stays unexcused (restoring excuse-all
+fails 3 tests, `0b7a0af` message). Live: 19 of 19 shared files disjoint (review lane, not re-run
+here). Same gate, unrelated to the defect: the F33 entity-group pin moved 65 -> 62 (`710cf40`), modlist
+drift, since `b88e425`'s code and v4.0's built the identical 62 groups (25,739 entities) from the same
+170-mod list. The residual 15%: both live figures above are unmeasured or not re-run here.
+
+**RE-DERIVED BY:** `tests/test_cross_tool_semantics.py`
+(`test_a_DEPENDENT_OVERWRITE_row_is_cross_checked_and_can_go_red`,
+`test_TWIN_an_unqualified_dependent_row_claims_no_owner`); `tests/test_tool_properties_union_dirs.py`
+(`test_a_shared_union_file_with_DISJOINT_keys_is_excused`,
+`test_TWIN_a_shared_union_file_with_a_DUPLICATE_key_is_NOT_excused`,
+`test_TWIN_an_UNREADABLE_shared_union_file_is_NOT_excused`).
+
+## F301 — x4debug baseline reused a same-bytes archive whose metadata was degraded or missing · **DEFECT (measured)** · confidence 95% · ✅ FIXED 2026-10-19
+
+In-release (`add8290`, the content dedupe): `find_archived` returned any archived copy with equal
+bytes. A copy whose metadata was DEGRADED (captured while the extensions root was unresolved) was
+reused by every later `baseline` of that log, which then returned rc 1 for good; a copy whose
+`.meta.json` was missing made `read_archive_meta` raise `FileNotFoundError` out of `baseline` as a
+traceback. Fix `c3f85b1`: only a copy whose metadata parses to a dict with `degraded: false` is
+reused; anything else stays on disk and the log is archived anew. The three tests were RED before the
+fix (`c3f85b1` message). The residual 5%: a metadata file that parses but describes a different log is
+not considered.
+
+**RE-DERIVED BY:** `tests/test_debugcli.py`
+(`test_a_DEGRADED_archive_is_not_reused_once_the_world_resolves`,
+`test_an_archive_with_MISSING_metadata_is_not_reused`,
+`test_TWIN_an_archive_with_UNREADABLE_metadata_is_not_reused`).
+
+## F300 — x4compat's dependency rule bound an ambiguous manifest id first-wins and ignored the game/profile root isolation · **DEFECT (measured)** · confidence 90% · ✅ FIXED 2026-10-19
+
+In-release (`7c0ba2b`, the issue #11 rule that moves an overwrite of a declared dependency's added
+content to the advisory `dependent_overwrites`). `_declared_dependencies` resolved a manifest id
+claimed by two folders FIRST-wins while `_loadorder` records LAST-wins, so a row could be downgraded
+against the wrong adder; and it counted a dependency across the game and profile extensions roots,
+which the engine does not resolve (F141). The `all` -> `any` mutant (one declared adder of two is
+enough) survived every test. Fix `6645ee8`: an id, or a case-only match, held by more than one folder
+binds to no folder, and a cross-root dependency is not a declaration, so the row stays HARD;
+`gates/mutation_probe.py` gains four mutants (split disabled, `all` -> `any`, duplicate id binds,
+cross-root counts). The residual 10%: the live figures in F287 (2,544 advisory, 77 HARD) predate this
+fix and were not re-measured.
+
+**RE-DERIVED BY:** `tests/test_compat_dependency_patch.py`
+(`test_A_TWIN_a_dependency_on_an_id_claimed_by_TWO_folders_stays_HARD`,
+`test_A_TWIN_a_case_only_match_to_TWO_folders_stays_HARD`,
+`test_A_TWIN_a_dependency_across_the_game_profile_roots_does_not_count`,
+`test_A_TWIN_an_overwriter_declaring_only_ONE_of_TWO_adders_stays_HARD`); `gates/mutation_probe.py`.
+
+## F299 — save_policy's "unresolved protected operand" refusal depends on slash direction · **OPEN LIMIT (read)** · confidence 80% · OPEN
+
+READ: `agent/guards/claude-hooks/save_policy.py:188-193` (deployed as `.claude/hooks/save_policy.py`
+and `tools/x4_harness/save_policy.py`): for an unresolved evidence row it adds the refusal "unresolved
+protected operand" only when a save root, the profile root or the backup store root occurs as a
+case-folded SUBSTRING of the raw operand. A root spelled with `/` does not occur in an operand spelled
+with `\`, or the reverse, so the same unresolved save operand is denied in one spelling and asked in
+the other (review lane report; not re-run here). Both verdicts fail closed: the row withholds the save
+lift either way (`transparent = False`, line 189). `_without_harness` uses the same substring shape
+(lines 560-561). The residual 20%: which spellings the lane measured is not recorded.
+
+## F298 — The settings guard matched `X4_GUARD` by its literal text · **DEFECT (measured)** · confidence 95% · ✅ FIXED 2026-10-19
+
+In-release: the settings guard arrived in `dbaaf7d` (2026-10-05); v3.3.1 ships no `X4_GUARD` at
+all. `guard_keys` matched `X4_GUARD` / `X4_GUARD_CHECK` by literal text in a hooks command, so a
+NAME assembled at run time set `X4_GUARD=off` and was allowed. MEASURED in Git Bash by the review lane,
+6 of 6 spellings (`tests/test_settings_guard.py` `DYNAMIC_NAMES`): `env X4_GUA""RD=off`,
+`export X4_GUA""RD=off; ...`, `env X4_$'GUARD'=off`, `V=GUARD; env X4_$V=off`, `env ${P}GUARD=off`
+and a backslash inside the name. Fix `2126d8b`: any shell word `NAME=value` in a settings string
+whose NAME is built from name characters plus quoting or expansion characters (quotes, backslash,
+`$`, backtick, braces) is refused, whatever it spells; unparseable JSON holding one is undecidable
+(deny). Seven ordinary hook commands stay allowed. The residual 5%: a NAME assembled outside the
+settings string (a script the hook command runs) is not in view.
+
+**RE-DERIVED BY:** `tests/test_settings_guard.py`
+(`test_F7_a_hook_command_assigning_through_a_non_literal_NAME_is_denied`,
+`test_F7_TWIN_ordinary_hook_commands_are_allowed`).
+
+## F297 — Redirect and `-o` targets were judged at one value of a variable, and a `cd` past the lane bound took one value · **DEFECT (measured)** · confidence 90% · ✅ FIXED 2026-10-19
+
+In-arc, two shapes. (a) Since FX-G5 (`47d06cd`) redirect and output-flag targets took ONE
+`resolve()`. `0801a1a` moved the other path rules to every value of an unassigned variable (F241),
+not these, while F241 said every path rule iterates them. MEASURED (`c8663f3` message):
+`echo x > "${NOPE:+x}<reference>/..."`, `>>`, `${NOPE+x}` and `curl -o` advised where the plain
+path denies. v3.3.1 did not have this gap: MEASURED 2026-10-19 by calling v3.3.1's
+`hook_facts.facts()` on synthetic roots, `echo x > "${NOPE:+x}<reference>/a.xml"` yields
+`writes_reference`, as the plain path does (fact level, not a full hook call). (b) Past
+`_MAX_CD_LANES` (16), each `cd` lane took the first value under ANY root (`fc2d357`, F250's bounded
+fallback), so from the toolkit or the game folder it never took the reference. Fix `c8663f3`: redirect
+and `-o` targets, array elements and a PowerShell `-Command` payload take every `resolve_variants`
+value; lane overflow is `cd_lanes_truncated`, denied by `protect-bash.sh` and the save bridge with an
+actionable reason. Found by the gap review (F304). The residual 10%: other single-value sites were
+looked for by that review, not enumerated here.
+
+**RE-DERIVED BY:** `.claude/hooks/test_hook_facts.py` (source `agent/guards/claude-hooks/test_hook_facts.py`)
+`test_C6_redirect_and_output_flag_targets_are_judged_at_every_value`,
+`test_C7_past_the_lane_bound_the_directory_is_unknown_and_refused_from_every_root`,
+`test_C7_TWIN_within_the_bound_nothing_is_truncated_and_the_flag_resets`; rows in `scripts/test-hooks.sh`.
+
+## F296 — Helpers located the command name as the first token spelled like it, so an assignment prefix hid the command from every Bash rule · **DEFECT (measured)** · confidence 95% · ✅ FIXED 2026-10-19
+
+Pre-arc: MEASURED 2026-10-19, v3.3.1's `hook_facts.facts()` on synthetic roots emits no fact at all
+for `X=<(echo a) rm -rf <game>`, while the control `rm -rf <game>` yields `rm_hits_game` (fact level,
+not a full hook call). At `c8663f3^` the same command was ALLOWED by every Bash rule, hard blocks
+included (also save deletes, `content.xml`, `git add -A`, and `env X=<(...)`): the word reader split
+`<(...)` at its blank and `a)` became the verb, and every helper that located the verb as "the first
+token spelled like it" (operands, search, sed, git, robocopy, modify, find roots, the carriers,
+`resolve_verb`, the K1 carrier test; listed in `c8663f3`) read the prefix instead. MEASURED with
+`scripts/fuzz-guard.py`'s new ASSIGN PREFIX mutators (20 words, bare and behind `env`: 40): 58
+bypasses before the fix (`c8663f3` message; over 8,109 mutants per the review lane), and 0 over 8,262
+mutants (54 seeds x 153 mutators) after, MEASURED 2026-10-19 at `32cd4a3` with the planted control
+rediscovering 254. Also after `env`, an unquoted expansion in `NAME=value` is word-split (MEASURED in
+Git Bash: `env X=$(echo a rm) -rf <dir>` runs rm), so the command name is unknowable
+(`_env_split_index`; a verb-unresolved fact and a save-lift blocker). READ: `_env_split_index`
+returns an index for `env PATH=$PATH:/x rm <save>`, so that form now asks. Fix `c8663f3`: one word per
+assignment span (`<(`, `>(`, `$[ ]`, `A=(`, `+=`, subscripts); every helper uses `_verb_word`'s
+index or offset. The sibling Skyrim toolkit had the same class in its own parser; its fix belongs to
+that repository and is not verified here. The residual 5%: spans the fuzzer's 20 words do not cover.
+
+**RE-DERIVED BY:** `.claude/hooks/test_hook_facts.py` (source `agent/guards/claude-hooks/test_hook_facts.py`)
+`test_the_verb_and_every_hard_block_survive_each_prefix`,
+`test_env_word_splitting_makes_the_command_name_unknowable`; `scripts/fuzz-guard.py`.
+
+## F295 — A carrier with literal program text lifted the save ask although shell startup code also ran · **DEFECT (measured)** · confidence 90% · ✅ FIXED 2026-10-19 (residual OPEN)
+
+In-release (`254ec43`, the K1 follow-up): `_carries_program_text` exempted any shell with a `-c`
+anywhere, so startup code the text never shows lifted the profile ask once one save qualified.
+MEASURED end to end (`6b45275` message), 5 shapes advised: `BASH_ENV=<f> bash -c '...'`,
+`env BASH_ENV=<f> bash -c true`, `bash --rcfile <f> -i -c true`, `bash -lc true`, and PowerShell
+`$env:BASH_ENV=...; bash -c 'true'` (whose translation drops the assignment). Fix `6b45275`: a carrier
+is transparent only when no startup-steering variable (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`,
+`PS4`, `PROMPT_COMMAND`, `ZDOTDIR`, `BASH_FUNC_*`) is named anywhere in the command, and only as
+bash/sh/dash/ksh with a bare leading `-c` (zsh never: `.zshenv` runs every time), `cmd` with `/d`
+(no AutoRun) or a PowerShell host with `-NoProfile` before its program text. `cmd //c` without `/d`
+now asks (`a303712` adds that twin). RESIDUAL (OPEN): the check reads the command text only, so a
+`BASH_ENV` or `ENV` already exported in the environment the agent was launched from is not visible
+(INFERRED from the design; not measured).
+
+**RE-DERIVED BY:** `.claude/hooks/test_hook_facts.py` (source `agent/guards/claude-hooks/test_hook_facts.py`)
+`test_startup_steering_makes_the_carrier_a_blocker`,
+`test_TWIN_each_clause_keeps_its_exemption_when_the_text_is_all_it_runs`;
+`.claude/hooks/test_audit0924_hooks.py`.
+
+## F294 — The save bridge counted a brace-expanded operand as one existing save · **DEFECT (measured)** · confidence 95% · ✅ FIXED 2026-10-19
+
+In-release (`64df0c5`, the save bridge; the K1 fix `6613f22` did not cover it). MEASURED (`ebd4825`
+message): `rm <saves>/save_00{0,1,2}.xml.gz` advised with 0 backups, where v3.3.1 asked: `hook_facts`
+handed the literal `{...}` word to the bridge as one resolved path, and `save_policy.resolve()`
+counted it as one save without checking that it exists. The mixed `rm <save0>
+<saves>/save_00{1,2}.xml.gz` printed "Save backup verified" while two saves were unbacked. Fix
+`ebd4825`: `hook_facts.tokens()` records every word whose unquoted part holds a brace expansion
+(`{a,b}`, `{x..y}`) and its evidence rows are unresolved (a quoted, escaped or `$'..'` brace stays a
+literal name); `save_policy.resolve()` withholds the lift for a delete or move target that does not
+exist. `a303712` makes the audit probes create the save they delete. The residual 5%: other shell
+expansions that turn one word into several are covered only where they were already unresolved.
+
+**RE-DERIVED BY:** `.claude/hooks/test_hook_facts.py` (source `agent/guards/claude-hooks/test_hook_facts.py`)
+`test_unquoted_brace_rows_are_unresolved_in_every_verb_shape`,
+`test_TWIN_quoted_escaped_or_parameter_braces_stay_literal`; `tests/test_shared_save_policy.py`
+(`test_C1_brace_expanded_save_operands_keep_the_profile_ask`,
+`test_C1_an_absent_delete_target_keeps_the_ask_and_an_existing_one_TWIN_is_backed_up`).
+
 ## F293 — The ubuntu Codex conformance leg tested a path no host takes, and a stale-mutant refusal hid a coverage gap · **DEFECT (measured)** · confidence 90% · ✅ FIXED 2026-10-19
 
 MEASURED: CI run 39187589960 (`2955ebb`) reported every Codex conformance and extras case INERT on
@@ -9718,8 +9927,11 @@ Still thin: mutation coverage of the Linux `codex-entry.sh` chain (`test_codex_a
 skips its native-chain cases off Windows); see F289. The residual 10%: the ubuntu fix is
 unverified until a CI run reaches it.
 
-**RE-DERIVED BY:** `tests/test_codex_conformance.py`, `scripts/verify-hook-tests.py`,
-`tests/test_hook_facts.py`.
+**RE-DERIVED BY:** `tests/test_x4conformance_engine.py`
+(`test_codex_conformance_runs_the_entry_the_host_runs_on_each_os`,
+`test_TWIN_a_profile_without_command_posix_uses_command_everywhere`), `scripts/verify-hook-tests.py`,
+`.claude/hooks/test_hook_facts.py` (source `agent/guards/claude-hooks/test_hook_facts.py`) `test_every_write_primitive_onto_a_transcript_fires`,
+`test_TWIN_a_read_of_a_transcript_is_not_a_write`.
 
 ## F292 — The identifier scan's history mode tolerates a banned token inside a snake_case word · **OPEN LIMIT (measured)** · confidence 95% · OPEN (by design)
 
@@ -10016,7 +10228,10 @@ x4lock still LOCKS (an unlocked guard is the failure it exists to prevent) but p
 x4doctor parity is UNKNOWN where the generator exists; test skips resting on it say
 "[layout UNKNOWN, treated as installed: ...]". Not covered: variables outside
 `--local-env-vars` (e.g. `GIT_CEILING_DIRECTORIES`, irrelevant with `.git` at the root);
-the list is git 2.48's and is not re-derived on a git upgrade.
+the list is git 2.48's and is not re-derived on a git upgrade. Also not covered: on git older
+than about 2.39, `-c safe.directory` passed this way is probably ignored (INFERRED; not checked
+against git's release notes), so a checkout owned by another account reads as "unknown": disclosed
+(x4lock locks it, x4doctor reports UNKNOWN), not silent.
 
 RE-DERIVED BY: `tests/test_layout_repo_only.py` `test_an_exported_GIT_DIR_*`,
 `test_a_worktree_with_an_exported_GIT_DIR_is_still_a_checkout`,
