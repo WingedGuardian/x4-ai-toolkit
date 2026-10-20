@@ -346,7 +346,7 @@ tests, fixtures, gates or release tooling.
 - Generic installs use the neutral runtime for Bash discovery, unpacking and baseline
   configuration. File-lock inventories recognize the generic carrier, demand AGENTS.md and include
   the neutral and shared runtime files.
-- The offline shared harness is pinned to `12a87ea` (`tools/modding-harness.lock.json`), including
+- The offline shared harness is pinned to `d2af1e8` (`tools/modding-harness.lock.json`), including
   exclusive absent restore, typed settings migration and known DevBench fallback policy fixes.
 - Shared pinned OpenCode V1 transport with bounded discovery/cleanup, sparse unknown-tool warnings,
   and private pre/post correlation receipts. Running-host enforcement remains unmeasured. Generic
@@ -689,10 +689,10 @@ confusing messages and six cosmetic ones. All are fixed:
   General*, so both `CLAUDE.md` and `AGENTS.md` carry them): deletions go to the Recycle Bin or
   Trash (Windows: `Microsoft.VisualBasic.FileIO.FileSystem` with `SendToRecycleBin`; Linux:
   `gio trash`; macOS: the Finder Trash), and a permanent delete needs your OK for that deletion;
-  and the agent never saturates the machine -- before a heavy job (full test suites, corpus
-  builds, load tests, parallel workers) it measures what is already running and keeps CPU, RAM,
-  free disk on each drive it writes to and GPU at or under 80% of the total, or waits, shrinks
-  the job or tells you before starting; it uses at most eight test workers and never terminates
+  and initiative-driven tests, scans and builds share a 40% CPU / 25% RAM budget through
+  the resource wrapper, with at most eight workers. Games and work explicitly directed by
+  the user are exempt. The system drive keeps min(pagefile, 50 GB) free; other drives keep
+  min(5%, 50 GB). The agent waits or reduces its job when needed and never terminates
   another session's processes. **The guards judge a move to the Trash exactly as `rm`
   of the same paths** (`gio trash`, `trash-put`, `gvfs-trash`, `kioclient` move to `trash:/`, a
   Finder delete through `osascript`): before, `gio trash <game>` or a trashed file in
@@ -830,7 +830,7 @@ confusing messages and six cosmetic ones. All are fixed:
 ### New: `x4housekeep` -- disk retention, and the toolkit cleans up its own temp files
 
 - **`x4housekeep` and a retention policy (`RETENTION.md`):** `report` / `plan` / `apply` for agent output, ported from the Skyrim toolkit's `housekeep` with the X4 save rule. Byte-identical copies of live files and build intermediates go to the Recycle Bin, duplicates become read-only hard links, and per-launch logs are gzipped then aged out. The user profile (`Documents\Egosoft\X4\`), `*backup*` folders (per-edit backups included), git-tracked files, doc-linked evidence and task folders written in the last 48 hours are never touched; `apply` re-hashes every file and refuses anything that changed since the plan. The policy says why `cleanupPeriodDays` belongs in user settings, never in a project's. The shared section is pinned in both toolkits by `test_retention_policy.py`. `x4-housekeep.json` is the user's own file: installs never overwrite it.
-- **The toolkit cleans up its own temp files.** `session-canary.sh` (Claude Code, Codex and OpenCode) launches `x4housekeep session` in the background at most every 6 hours. On Windows (the only platform it moves anything on) it moves the toolkit's own leftover temp dirs to the Recycle Bin once nothing in them changed for 24 hours and no process has a file open inside, plus pytest's older runs and `garbage-*` leftovers. Nothing is ever deleted outright; a dir the bin refuses stays where it is and is named in the note. The Recycle Bin helper uses the shell's own delete with "warn if not recycling" set, never `DeleteDirectory(..., 'OnlyErrorDialogs', ...)`, which suppresses Windows' "too big for the Recycle Bin" prompt. The next session start shows one `[x4 disk]` line only when something needs you: free space near the floor, `~/.codex/sessions` past 5 GiB, more than 10 git worktrees. `x4housekeep sweep-temp` runs the sweep by hand. `X4_HOUSEKEEP_SWEEP=off` in the environment turns the session-start sweep off. `qa_sweep` now removes its two sandboxes on exit, and the tool audit removes its pytest temp. Measured on one machine before the fix: 1,184 `x4qa_registry_*` and 767 `x4qa_out_*` leftovers. `test_temp_hygiene.py` fails when the code creates a temp prefix the sweep does not know.
+- **The toolkit cleans up its own temp files.** `session-canary.sh` (Claude Code, Codex and OpenCode) launches `x4housekeep session` in the background at most every 6 hours. On Windows (the only platform it moves anything on) it moves the toolkit's own leftover temp dirs to the Recycle Bin once nothing in them changed for 24 hours and no process has a file open inside, including pytest and `garbage-*` leftovers only when an ownership receipt qualifies them. Unmarked legacy and foreign directories remain; pytest now uses isolated per-invocation scratch. Nothing is ever deleted outright; a dir the bin refuses stays where it is and is named in the note. The Recycle Bin helper uses the shell's own delete with "warn if not recycling" set, never `DeleteDirectory(..., 'OnlyErrorDialogs', ...)`, which suppresses Windows' "too big for the Recycle Bin" prompt. The next session start shows one `[x4 disk]` line only when something needs you: free space near the floor, `~/.codex/sessions` past 5 GiB, more than 10 git worktrees. `x4housekeep sweep-temp` runs the sweep by hand. `X4_HOUSEKEEP_SWEEP=off` in the environment turns the session-start sweep off. `qa_sweep` now removes its two sandboxes on exit, and the tool audit removes its pytest temp. Measured on one machine before the fix: 1,184 `x4qa_registry_*` and 767 `x4qa_out_*` leftovers. `test_temp_hygiene.py` fails when the code creates a temp prefix the sweep does not know.
 
 ### Safety
 
@@ -1247,10 +1247,10 @@ confusing messages and six cosmetic ones. All are fixed:
   operation and paths again for the rest of that session, and an approval line longer than the
   hook output limit (~10,000 characters, about a hundred saves) cannot be shown whole. Both live
   in the pinned shared harness (BLIND-SPOTS F291).
-- **Some shell forms are still allowed** (present before 4.0; measured in the 2026-10-18 hook
-  review): a program the guards cannot see into, such as `python -c "import os; os.remove('<save>')"`, and `eval "$X"` or
-  `bash -c "$CMD"` whose text is not in the command. The hooks inspect known command forms; they
-  do not sandbox interpreters (BLIND-SPOTS F290).
+- **Opaque shell code remains a boundary.** Explicit protected save paths now trigger the
+  possible-access review/refusal policy (F314). Dynamically computed or hidden paths, including
+  `eval "$X"` and `bash -c "$CMD"` whose text is absent, remain outside complete inspection.
+  Opaque game/reference program behavior also remains an accepted limit (F290).
 - **Codex on Linux is less tested than on Windows**: the Linux entry wrapper (`codex-entry.sh`) has
   no mutation tests, and the adapter mutation tests run on Windows only. Its fault handling is
   tested with stub adapters; whether the full chain (wrapper, adapter, guards) is exercised on Linux
