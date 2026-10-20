@@ -10,6 +10,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- A dropped or malformed Steam HTTP response is now a reported per-row outage
+  during Workshop identity lookup, preserving prior identity facts instead of
+  escaping refresh as an uncaught protocol exception (BLIND-SPOTS F313).
+
 - Release archives now omit maintainer briefs, audit working papers and design
   specifications. Measurements and repair documentation still ship; citations to
   excluded records point to their retained GitHub copies.

@@ -391,6 +391,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F310 | Shell syntax rejection was reported as an inert guard failure | **DEFECT (measured)** | Bash/PowerShell on two rendered hosts; syntax and real failure controls | FIXED 2026-10-20 - dedicated syntax refusal; incomplete analysis remains failed |
 | F311 | Prior-run cleanup bypassed the Recycle Bin and pruned measured baselines | **DEFECT (measured/read)** | Two installers, two BaseX builders, two shell drivers, deploy and probe removal | FIXED 2026-10-20 - shared recoverable removal and baseline retention |
 | F312 | Restoring an older backup destroyed the current destination | **DEFECT (read/measured)** | Restore entry point and byte-preservation controls | FIXED 2026-10-20 - retain current bytes before publishing the restore |
+| F313 | Steam title lookup leaked incomplete HTTP reads out of refresh | **DEFECT (measured)** | Three transport failures and the real no-title twin | FIXED 2026-10-20 - HTTPException maps to SteamUnavailable |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11011,3 +11012,18 @@ identity/hash checks narrow that race but cannot provide filesystem CAS. This
 standalone recovery helper does not bypass the guards for profile/save paths.
 
 **RE-DERIVED BY:** tests/test_restore_backup.py.
+
+## F313 - Steam HTTP protocol failures escaped outage handling · **DEFECT (measured)** · confidence 99% · FIXED 2026-10-20
+
+READ: Nexus transport already mapped http.client.HTTPException, while the
+keyless Steam title lookup omitted it. _modlist handles SteamUnavailable per
+row, retaining identity facts and counting the error; an uncaught IncompleteRead
+escaped that path. The Steam transport now maps the same protocol-error family.
+
+MEASURED: IncompleteRead and BadStatusLine at open, plus IncompleteRead while
+reading the response body, all failed before the fix and pass afterward. The
+real no-title response still returns None. The transport and runtime regression
+files together pass 41 tests without network access.
+
+**RE-DERIVED BY:** tests/test_nexus_transport.py;
+tests/test_audit0924_runtime.py.

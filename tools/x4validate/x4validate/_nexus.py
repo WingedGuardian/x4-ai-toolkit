@@ -404,7 +404,7 @@ def steam_title(ws_number: str) -> tuple[str, str] | None:
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             d = json.load(r)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException) as exc:
         # URLError (HTTPError's parent), timeouts, other OSErrors and a non-JSON body
         # (json.load raising ValueError) are all "could not ask", never "asked, no
         # title" -- catching only HTTPError previously let some of these crash a

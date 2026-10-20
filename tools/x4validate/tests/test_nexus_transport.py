@@ -146,6 +146,8 @@ def test_only_run_wide_causes_are_fatal():
     TimeoutError("timed out"),
     OSError("connection reset"),
     ValueError("not json"),  # json.load on a non-JSON body
+    http.client.IncompleteRead(b"partial", 100),
+    http.client.BadStatusLine("bad status"),
 ])
 def test_steam_title_RAISES_on_a_transport_failure_not_returns_none(monkeypatch, exc):
     """A transport failure is not the same fact as 'Steam has no title for this item' --
@@ -165,3 +167,12 @@ def test_steam_title_still_returns_none_on_a_REAL_no_title_answer(monkeypatch):
     monkeypatch.setattr(_nexus.urllib.request, "urlopen", urlopen)
     assert _nexus.steam_title("ws_1") is None
     assert issubclass(_nexus.NexusFatal, _nexus.NexusError)   # old `except NexusError` still catches
+
+
+def test_steam_title_maps_a_dropped_response_body_to_unavailable(monkeypatch):
+    class Dropped(_Resp):
+        def read(self, *args):
+            raise http.client.IncompleteRead(b"partial", 100)
+    monkeypatch.setattr(_nexus.urllib.request, "urlopen", lambda *a, **k: Dropped(b""))
+    with pytest.raises(_nexus.SteamUnavailable):
+        _nexus.steam_title("ws_1")
