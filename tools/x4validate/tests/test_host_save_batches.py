@@ -157,6 +157,26 @@ def transactions(root):
     return list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
+@pytest.mark.parametrize("host", ["codex", "opencode"])
+@pytest.mark.parametrize("count", [1, 3])
+def test_rendered_hosts_preserve_opaque_named_saves_or_refuse_bulk(tmp_path, host, count):
+    _tmp, root, env, files = prepare(tmp_path)
+    command = "./unknown-tool --wipe " + " ".join("'" + p.as_posix() + "'" for p in files[:count])
+    if host == "codex":
+        decision, reason = run_adapter(env, native("bash_powershell", root,
+            command=command, workdir=str(root)), shell="bash")
+    else:
+        result = open_run(env, open_call(root, "bash", {"command": command, "workdir": str(root)}, shell="bash"))
+        decision, reason = result["decision"], result["reason"]
+        assert not result["inert"], result
+    # The Codex fixture decoder recovers the ask marker from its wire-level deny.
+    # OpenCode exposes that same refusal directly as deny.
+    assert decision == ("ask" if host == "codex" and count == 1 else "deny"), (decision, reason)
+    assert len(transactions(root)) == (1 if count == 1 else 0)
+    assert ("backup verified" if count == 1 else "SAVE_ACCESS_APPROVAL") in reason
+    assert all(p.read_bytes() == p.name.encode() for p in files)
+
+
 def test_codex_batches_two_preserves_then_three_refuses_and_typed_grant_succeeds(tmp_path):
     require_native_codex(REPO)
     tmp, root, env, files = prepare(tmp_path)

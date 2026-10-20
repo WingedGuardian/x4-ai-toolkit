@@ -184,6 +184,8 @@ def resolve(root, roots, evidence, deadline=None):
         if row.get("operation") == OPAQUE:
             transparent = False
             continue
+        if row.get("possible_opaque_save_access"):
+            transparent = False
         raw = row.get("path", "") or row.get("raw", "")
         if row.get("unresolved"):
             transparent = False
@@ -286,6 +288,10 @@ def enforce(root, roots, evidence, action, backend, *, transcript="", preview=Fa
                          operations=tuple(op for _path, op in affected))
         def evaluate(request):
             result = backend(save_only and not plan.unresolved)
+            if result.decision != "deny" and any(row.get("possible_opaque_save_access") for row in evidence):
+                result = replace(result, decision="ask", reason=(result.reason + "\n" if result.reason else "") +
+                    "Possible save access by an opaque program. Only the named save pairs can be "
+                    "preserved; the program's other effects are unverified. Review or split this call.")
             if plan.unresolved and result.decision != "deny":
                 result = replace(result, decision="deny", evaluation="partial", preservation="failed",
                                  reason="save scope refused: " + plan.unresolved)
@@ -321,11 +327,13 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None):
     import hook_facts
     evidence = []
     if ipc is None:
-        facts = hook_facts.facts(payload, roots, evidence=evidence, execution_context=execution_context)
+        facts = hook_facts.facts(payload, roots, evidence=evidence, execution_context=execution_context,
+                                protected_save_folders=folders(roots))
     else:
         # The root packet exactly as hook_facts.main() reads it (long names included).
         rc, raw, facts = hook_facts.ipc(payload, hook_facts.ipc_roots(
-            "\n".join(str(k) + "\t" + str(v) for k, v in roots.items())), evidence=evidence)
+            "\n".join(str(k) + "\t" + str(v) for k, v in roots.items())), evidence=evidence,
+            protected_save_folders=folders(roots))
         ipc[:] = [rc, raw]
     error = facts.get("powershell_error")
     if error and str(error).startswith(hook_facts.PS_PARSE_ERROR):

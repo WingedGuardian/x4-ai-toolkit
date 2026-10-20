@@ -382,6 +382,10 @@ never hides a defect, and a run that checked nothing never exits 0. It acts for 
 lives in (`--toolkit DIR` to choose another) and says so when `X4_TOOLKIT` names a different one.
 
 These hooks inspect known command forms; they do not sandbox arbitrary interpreter programs.
+Opaque shell programs explicitly naming saves are treated as possible writes,
+with named pairs preserved before review. Unqualified scope and unapproved bulk
+access are refused. Known reader forms and literal output are exempt from this
+rule; it does not prove what an unknown program actually does.
 The loss canary detects file loss. Persistent process receipts are available through
 `python tools/agent-harness.py coverage --session-id ID`; they describe checks that reached
 the toolkit and do not prove host interception. Independent `reference/` filesystem

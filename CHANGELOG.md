@@ -10,6 +10,11 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Opaque programs explicitly naming saves now require review after preservation
+  of named pairs. Unqualified embedded scope and unapproved bulk access refuse.
+  Known reader forms and literal output stay exempt; the historical replay's
+  measured review cost is recorded separately (BLIND-SPOTS F314).
+
 - Retiring an unedited 3.x path example now recycles it too. Edited examples
   remain local, and redirected removal roots are refused on the Python 3.10
   installer floor (BLIND-SPOTS F311).

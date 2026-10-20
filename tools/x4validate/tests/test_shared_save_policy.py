@@ -78,6 +78,76 @@ def test_batch_ask_keeps_transaction_and_preservation_notice(install, monkeypatc
     assert files[0].read_bytes() == files[0].name.encode()
 
 
+@pytest.mark.parametrize("count", [1, 3])
+def test_opaque_program_naming_saves_cannot_silently_bypass_preservation(install, count):
+    root, roots, files = install
+    command = "./unknown-tool --wipe " + " ".join("'" + p.as_posix() + "'" for p in files[:count])
+    result = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    transactions = list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+    if count == 1:
+        assert result["permissionDecision"] == "ask", result
+        assert "opaque program" in result["permissionDecisionReason"]
+        assert "backup verified" in result["permissionDecisionReason"]
+        assert len(transactions) == 1
+    else:
+        assert result["permissionDecision"] == "deny", result
+        assert "SAVE_ACCESS_APPROVAL" in result["permissionDecisionReason"]
+        assert not transactions
+    assert all(p.read_bytes() == p.name.encode() for p in files)
+
+
+@pytest.mark.parametrize("program", ["awk", "gawk"])
+def test_opaque_embedded_save_program_refuses_unqualified_scope(install, program):
+    root, roots, files = install
+    command = program + " 'BEGIN{system(\"rm " + Path(roots['saves']).as_posix() + "/0*.xml.gz\")}'"
+    result = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    assert result["permissionDecision"] == "deny", result
+    assert "unresolved protected operand" in result["permissionDecisionReason"]
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+def test_opaque_unrelated_operand_and_quoted_save_prose_are_outside_scope(install):
+    root, roots, files = install
+    unrelated = invoke_hook(install, "Bash", {"command": "./unknown-tool --wipe 'unrelated.xml.gz'"})
+    assert not unrelated.get("hookSpecificOutput", {}).get("permissionDecision"), unrelated
+    prose = invoke_hook(install, "Bash", {"command": "printf '%s' '" + files[0].as_posix() + "'"})
+    assert not prose.get("hookSpecificOutput", {}).get("permissionDecision"), prose
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+def test_opaque_relative_save_operand_uses_the_command_directory(install):
+    root, roots, files = install
+    command = "cd '" + Path(roots['saves']).as_posix() + "'; ./unknown-tool '" + files[0].name + "'"
+    result = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    assert result["permissionDecision"] == "ask", result
+    assert "backup verified" in result["permissionDecisionReason"]
+    assert len(list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))) == 1
+
+
+@pytest.mark.parametrize("prefix", ["head -c 3", "tail -n 1", "du -h", "gzip -dc", "zcat"])
+def test_opaque_save_rule_exempts_known_read_only_program_forms(install, prefix):
+    root, roots, files = install
+    result = invoke_hook(install, "Bash", {"command": prefix + " '" + files[0].as_posix() + "'"})
+    assert not result.get("hookSpecificOutput", {}).get("permissionDecision"), result
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+def test_opaque_save_rule_exempts_proven_literal_python_prose(install):
+    root, roots, files = install
+    command = 'python -c "print(\'' + files[0].as_posix() + '\')"'
+    result = invoke_hook(install, "Bash", {"command": command})
+    assert not result.get("hookSpecificOutput", {}).get("permissionDecision"), result
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+@pytest.mark.parametrize("options", ["", "-S -c", "-Sc", "--suffix --stdout", "--suffix=--stdout", "-- -c"])
+def test_opaque_gzip_without_stdout_is_still_possible_save_mutation(install, options):
+    root, roots, files = install
+    result = invoke_hook(install, "Bash", {"command": "gzip " + options + " '" + files[0].as_posix() + "'"})
+    assert result["hookSpecificOutput"]["permissionDecision"] == "ask", result
+    assert "backup verified" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 @pytest.fixture
 def install(tmp_path):
     import shutil

@@ -2835,6 +2835,44 @@ def _python_literal_source(segment: str) -> str:
     return segment
 
 
+def _save_read_only_program(segment: str) -> bool:
+    """Narrow exemptions for the possible-access policy, never a profile-ask lift.
+
+    Redirects/substitutions still go through their own mutation analysis. gzip
+    without stdout can replace its input and must retain the opaque-save policy.
+    """
+    name = verb(segment)
+    if name in {"head", "tail", "du", "zcat"}:
+        return True
+    if name == "gzip":
+        _name, index = _verb_word(segment)
+        words = tokens_of(segment)[index + 1:] if index is not None else []
+        i = 0
+        while i < len(words):
+            word = words[i]
+            # Stop before operands: POSIXLY_CORRECT can disable getopt permutation.
+            if word == "--" or word == "-" or not word.startswith("-"):
+                break
+            if word in ("--stdout", "--to-stdout"):
+                return True
+            if word == "--suffix":
+                i += 2
+                continue
+            if not word.startswith("--"):
+                for k, flag in enumerate(word[1:], 1):
+                    if flag == "c":
+                        return True
+                    if flag in "Sb":  # suffix/legacy bit-count arguments consume the rest or next word
+                        if k == len(word) - 1:
+                            i += 1
+                        break
+            i += 1
+    if name in _PYTHONS and name != "uv":
+        source = _python_literal_source(segment)
+        return bool(source and source != segment and _python_inert_literal_program(source))
+    return False
+
+
 def _python_script_target(rest: list):
     """(`"module"`|`"file"`, value) for the first thing a python invocation would
     actually EXECUTE, given the tokens AFTER its verb -- or None when nothing runs
@@ -5424,7 +5462,8 @@ def _carries_program_text(seg: str) -> bool:
     return False
 
 
-def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution_context: bool = False) -> dict:
+def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution_context: bool = False,
+          protected_save_folders=()) -> dict:
     inp = payload.get("tool_input") or {}
     cmd = inp.get("command") or ""
     timeout = inp.get("timeout", 0)
@@ -5718,8 +5757,36 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
     search_seg, git_all = False, False
     transcript_copy = False             # M1, see _copy_lands_a_transcript
+    # The save bridge supplies its single authoritative folder enumeration. This
+    # parser stays independently importable and does not discover filesystem roots.
+    save_folders = [norm(str(folder)) for folder in protected_save_folders]
     for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0] in zip(
             seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect):
+        if (save_folders and evidence is not None and not execution_context
+                and verb(s) not in SAVE_MODELLED_VERBS and not _carries_program_text(s)
+                and not _save_read_only_program(s)):
+            # Possible access is not a measured mutation. Only SAVE operands feed
+            # this conservative policy; the accepted game/reference residual stays scoped.
+            for operand in _operands(s):
+                start = len(evidence)
+                prep([operand], c_cwd, c_old, operation="write")
+                possible = evidence[start:]
+                del evidence[start:]
+                for row in possible:
+                    path = norm(row["path"])
+                    raw = norm(row["raw"])
+                    exact = any(under(path, folder) for folder in save_folders)
+                    embedded = any(folder and folder + "/" in raw for folder in save_folders)
+                    if not (exact or embedded):
+                        continue
+                    # Program text or a glued option is not an exact physical operand.
+                    # Refuse its unresolved scope instead of backing up a guessed subset.
+                    if embedded and not exact:
+                        row["unresolved"] = True
+                    row["possible_opaque_save_access"] = True
+                    if any(path == folder for folder in save_folders):
+                        row["scope"] = "tree"
+                    evidence.append(row)
         if execution_context:
             # Context-only evidence; ordinary save membership/rules unchanged.
             prep(git_wipes_worktree_targets(s), c_cwd, c_old, operation="delete")
@@ -6269,14 +6336,14 @@ def ipc_roots(head: str) -> dict:
     return roots
 
 
-def ipc(payload: dict, roots: dict, *, evidence: list | None = None):
+def ipc(payload: dict, roots: dict, *, evidence: list | None = None, protected_save_folders=()):
     """(exit code, stdout bytes, facts) exactly as main() reports them to protect-bash.sh.
 
     K5 (v4.0 release review): the save bridge computes the facts ONCE with this and hands the
     same bytes to the Bash backend (`--facts-stdin`), instead of a second process re-parsing
     the command and re-running the PowerShell translation -- that doubled the hook's latency.
     """
-    f = facts(payload, roots, evidence=evidence)
+    f = facts(payload, roots, evidence=evidence, protected_save_folders=protected_save_folders)
     if f.get("powershell_error"):
         # rc 4 + the reason on stdout: the caller ASKS with it. Nothing was analysed, so
         # no fact line may be emitted -- a partial stream would read as a clean pass.

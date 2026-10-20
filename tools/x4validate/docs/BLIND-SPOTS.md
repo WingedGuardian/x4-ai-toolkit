@@ -392,6 +392,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F311 | Prior-run cleanup bypassed the Recycle Bin and pruned measured baselines | **DEFECT (measured/read)** | Two installers, two BaseX builders, two shell drivers, deploy and probe removal | FIXED 2026-10-20 - shared recoverable removal and baseline retention |
 | F312 | Restoring an older backup destroyed the current destination | **DEFECT (read/measured)** | Restore entry point and byte-preservation controls | FIXED 2026-10-20 - retain current bytes before publishing the restore |
 | F313 | Steam title lookup leaked incomplete HTTP reads out of refresh | **DEFECT (measured)** | Three transport failures and the real no-title twin | FIXED 2026-10-20 - HTTPException maps to SteamUnavailable |
+| F314 | Opaque programs naming saves bypassed review and preservation | **DEFECT (measured)** | Named/bulk/embedded scope, reader twins, 26,346-payload replay and 31 per-item verdicts | FIXED 2026-10-20 - possible-access review after preservation; unresolved scope refused |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11033,3 +11034,35 @@ files together pass 41 tests without network access.
 
 **RE-DERIVED BY:** tests/test_nexus_transport.py;
 tests/test_audit0924_runtime.py.
+
+## F314 - Opaque save access bypassed preservation · **DEFECT (measured)** · confidence 97% · FIXED 2026-10-20
+
+Opaque programs naming resolved save operands now enter a conservative possible-
+write policy. This is explicitly possible access, not evidence that the program
+mutates a save. Exact named pairs are preserved before the review verdict;
+unapproved bulk access and embedded/unresolved save scope refuse. The bridge
+supplies the authoritative save-folder set to the otherwise independent parser.
+Known readers (head, tail, du, zcat, gzip stdout) and proven literal Python output
+are exempt from this new rule. gzip suffix values and operands cannot impersonate
+its stdout option. Existing profile-ask lift rules are unchanged.
+
+MEASURED: 160 save/scope/rendered-host regressions pass, plus four new Codex and
+OpenCode named-save/bulk controls. The Codex fixture decoder exposes its ask
+marker from a wire-level deny; OpenCode exposes deny directly. These are rendered
+adapter fixtures, not live host interception measurements.
+
+The final stable parse-only replay flagged 31 of 26,346 historical payloads,
+with zero parse/carrier non-answers and zero dropped input lines. All 31 were
+classified and compared through both preview hooks: 18 save analysis/copy calls,
+13 guard/probe harnesses; 9 allow->ask, 19 allow->deny, 2 deny->deny, 1 ask->ask.
+This is measured friction on legitimate history, not 31 detected destructive
+programs. Seven candidate matches were removed by reader exemptions; none added.
+
+Residual: history extraction lacks per-command cwd; only explicit roots and
+directories established in the command are represented. Unknown implementations
+are not inspected, so other effects remain unverified. The accepted opaque
+game/reference residual is not widened. Preview replay creates no save backups.
+
+**RE-DERIVED BY:** tests/test_shared_save_policy.py opaque cases;
+tests/test_host_save_batches.py::test_rendered_hosts_preserve_opaque_named_saves_or_refuse_bulk;
+docs/superpowers/measurements/2026-10-20-opaque-save-policy.md.
