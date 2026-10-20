@@ -54,6 +54,8 @@ RECORD = "--record" in sys.argv
 
 #: An id that must not exist, for the 404 path. Far above the live id space.
 MISSING_ID = 99999999
+#: How many AVAILABLE mods --record records; it scans up to RECORD_SCAN registry ids to find them.
+RECORD_MODS, RECORD_SCAN = 3, 12
 
 
 #: The terms the replay sends through `discover`, and the reply each one is routed to.
@@ -133,7 +135,7 @@ def _anonymize_rest(raw: dict, ordinal: int) -> dict:
 
 
 def record() -> int:
-    ids = _registry_ids()
+    ids = _registry_ids(RECORD_SCAN)
     if not ids:
         print("no nexus ids in the local registry — cannot record", file=sys.stderr)
         return 2
@@ -143,24 +145,32 @@ def record() -> int:
         print(f"cannot record: {exc}", file=sys.stderr)
         return 2
 
-    print(f"recording against the live API for {len(ids)} discovered id(s)")
+    print(f"recording against the live API: up to {RECORD_MODS} available mod(s) among "
+          f"{len(ids)} discovered id(s)")
     fixture: dict = {"recorded": date.today().isoformat(),
                      "note": "anonymized; shapes verified against the live API when recorded",
                      "rest": {}, "graphql": {}, "steam": {}, "missing_id": MISSING_ID}
 
     headers = {"apikey": _nexus.nexus_key(), **_nexus._APP}
-    for i, nid in enumerate(ids, 1):
+    i = 0
+    for nid in ids:
+        if i >= RECORD_MODS:
+            break
         raw = _nexus._get_json(f"{_nexus.NEXUS_REST}/{nid}.json", headers)
+        for field in ("version", "status", "updated_timestamp"):
+            assert field in raw, f"live REST response lost field {field!r}"
+        # A removed/hidden mod (`available: false`) is SKIPPED: Nexus sends it without
+        # `name` (MEASURED 2026-10-20, one removed and one hidden mod), and a removed mod's
+        # files.json answered 403 (MEASURED; hidden INFERRED), so it cannot feed the
+        # update-verdict replay. The registry order put two of them first.
+        if raw.get("available") is False:
+            print(f"  rest  id={nid} -> status={raw.get('status')!r}, unavailable: skipped")
+            continue
+        assert "name" in raw, f"live REST response lost field 'name' (available mod {nid})"
+        i += 1
         # Prove the live shape still parses BEFORE we anonymize it.
         meta = _nexus.fetch_mod(nid)
         assert meta.nexus_id == nid and meta.status, f"live parse failed for {nid}"
-        for field in ("version", "status", "updated_timestamp"):
-            assert field in raw, f"live REST response lost field {field!r}"
-        # Nexus sends no `name` for a removed/hidden mod (`available: false`; MEASURED
-        # 2026-10-20 on one of each) -- `fetch_mod` reads it with a default. A mod that IS
-        # available must still carry it.
-        if raw.get("available") is not False:
-            assert "name" in raw, f"live REST response lost field 'name' (available mod {nid})"
         fixture["rest"][str(1000 + i)] = _anonymize_rest(raw, i)
         # The file list feeds the update verdict (RG-3). Names anonymized; the fields the
         # parser reads (version, upload time, category) kept as recorded.
@@ -171,6 +181,13 @@ def record() -> int:
              "category_name": f.get("category_name", "")}
             for j, f in enumerate((rawf or {}).get("files") or [], 1)]}
         print(f"  rest  id={nid} -> status={meta.status!r} version={meta.version!r} (anonymized)")
+
+    # The replay's update verdicts need two recorded mods; refuse rather than write a
+    # fixture that cannot exercise them.
+    if i < 2:
+        print(f"cannot record: only {i} available mod(s) among the first {len(ids)} "
+              "registry ids", file=sys.stderr)
+        return 2
 
     # A real search, recorded under a neutral term.
     hits = _nexus.search_mods("station", 3)
