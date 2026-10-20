@@ -10,6 +10,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Hook-only game-root deployments now resolve the configured shared runtime for
+  unknown tools. This fixes the question-tool ValueError caused by looking for a
+  full tools installation inside a hook-only folder (BLIND-SPOTS F315).
+
 - Opaque programs explicitly naming saves now require review after preservation
   of named pairs. Unqualified embedded scope and unapproved bulk access refuse.
   Known reader forms and literal output stay exempt; the historical replay's

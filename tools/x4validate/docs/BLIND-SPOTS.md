@@ -393,6 +393,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F312 | Restoring an older backup destroyed the current destination | **DEFECT (read/measured)** | Restore entry point and byte-preservation controls | FIXED 2026-10-20 - retain current bytes before publishing the restore |
 | F313 | Steam title lookup leaked incomplete HTTP reads out of refresh | **DEFECT (measured)** | Three transport failures and the real no-title twin | FIXED 2026-10-20 - HTTPException maps to SteamUnavailable |
 | F314 | Opaque programs naming saves bypassed review and preservation | **DEFECT (measured)** | Named/bulk/embedded scope, reader twins, 26,346-payload replay and 31 per-item verdicts | FIXED 2026-10-20 - possible-access review after preservation; unresolved scope refused |
+| F315 | Unknown tools in hook-only deployments raised ValueError before routing | **DEFECT (measured)** | Actual installed reproduction and Codex/OpenCode hook-only fixtures | FIXED 2026-10-20 - resolve the configured external runtime when local tools are absent |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11066,3 +11067,26 @@ game/reference residual is not widened. Preview replay creates no save backups.
 **RE-DERIVED BY:** tests/test_shared_save_policy.py opaque cases;
 tests/test_host_save_batches.py::test_rendered_hosts_preserve_opaque_named_saves_or_refuse_bulk;
 docs/superpowers/measurements/2026-10-20-opaque-save-policy.md.
+
+## F315 - Hook-only unknown-tool calls could not find the runtime · **DEFECT (measured)** · confidence 99% · FIXED 2026-10-20
+
+MEASURED: the installed Codex handle, fed an unknown question-tool payload without
+submitting a question, raised ValueError: pinned offline harness is missing.
+The no-calls path assumed the deployed hook root contained tools/modding_harness;
+the supported hook-only game-root layout deliberately keeps tools in a separate
+configured toolkit. Known shell calls already used that configured runtime.
+
+The bridge now retains the dependency-free lookup for full installs, and uses
+the same authoritative root resolver as known calls only when its local runtime
+is absent. No toolkit files are copied into a hook-only game folder. Unknown
+tools remain explicitly unguarded rather than being claimed as evaluated.
+
+MEASURED: both Codex and OpenCode hook-only fixtures reproduced the failure
+before the fix and pass afterward. Their receipts reach the configured toolkit.
+The host/batch adapter regression selection passes 111 tests, zero skips,
+including existing local-runtime/no-Bash controls. Live confirmation follows
+deployment; this entry does not claim the UI question tool has run successfully.
+
+**RE-DERIVED BY:** tests/test_host_save_batches.py::
+test_hook_only_deployment_routes_unknown_tools_to_configured_runtime;
+tests/test_codex_adapter.py; tests/test_opencode_adapter.py.

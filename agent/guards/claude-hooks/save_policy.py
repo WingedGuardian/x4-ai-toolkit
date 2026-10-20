@@ -392,9 +392,15 @@ def _batch(payload, calls, judge, deadline, host, preview=False, helper=False, *
     if not calls:
         import x4guard
         # Every generated host folder and tools/x4_harness has the same depth.
-        # Unknown tools need neither game roots nor another install's package.
+        # A full install can judge unknown tools without launching the root reader.
         root = native(str(Path(__file__).resolve().parents[2]) if x4guard._deployed() else
                       os.environ.get("X4_TOOLKIT") or str(Path(__file__).resolve().parents[1]))
+        if not (root / "tools/modding_harness").is_dir():
+            # A hook-only game-root deployment deliberately keeps tools in its
+            # configured external toolkit. Use the same authoritative resolver as
+            # known calls, rather than assuming that every deployed root owns tools/.
+            roots = read_roots(deadline)
+            root = native(roots["toolkit"])
     else:
         roots = read_roots(deadline)
         root = native(roots["toolkit"])

@@ -177,6 +177,28 @@ def test_rendered_hosts_preserve_opaque_named_saves_or_refuse_bulk(tmp_path, hos
     assert all(p.read_bytes() == p.name.encode() for p in files)
 
 
+@pytest.mark.parametrize("host", ["codex", "opencode"])
+def test_hook_only_deployment_routes_unknown_tools_to_configured_runtime(tmp_path, monkeypatch, host):
+    _tmp, toolkit, env, _files = prepare(tmp_path)
+    game = tmp_path / "hook-only-game"
+    hooks = game / (".codex" if host == "codex" else ".opencode") / "hooks"
+    shutil.copytree(REPO / (".codex" if host == "codex" else ".opencode") / "hooks", hooks,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    assert not (game / "tools/modding_harness").exists()
+    if host == "codex":
+        payload = native("bash_powershell", game)
+        payload.update(tool_name="request_user_input_async", tool_input={"questions": [{"title": "fixture"}]})
+        decision, reason = run_adapter(env, payload, adapter=hooks / "codex_adapter.py")
+        assert decision in ("allow", "advise"), (decision, reason)
+    else:
+        import test_opencode_adapter as opened
+        monkeypatch.setattr(opened, "ADAPTER", hooks / "opencode_adapter.py")
+        result = opened.run(env, open_call(game, "fixture_unknown", {"question": "fixture"}))
+        assert result["decision"] in ("allow", "advise") and not result["inert"], result
+    assert (toolkit / ".modding-agent-harness/coverage.sqlite3").is_file()
+    assert not (game / "tools").exists(), "hook-only deployment must remain a hook-only layout"
+
+
 def test_codex_batches_two_preserves_then_three_refuses_and_typed_grant_succeeds(tmp_path):
     require_native_codex(REPO)
     tmp, root, env, files = prepare(tmp_path)
