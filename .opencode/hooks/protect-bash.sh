@@ -436,6 +436,12 @@ if on cd_lanes_truncated; then
   deny "This command's cd targets have so many possible values (\${VAR:+...} / \${VAR-...} with unset variables) that the guard cannot tell which directory later relative paths are in, so it was NEVER fully checked. Use literal cd targets, or split it into simpler commands, and re-run."
 fi
 
+if on operand_expansion_truncated; then
+  x4_guard_check_inert
+  _X4_UNRELAXED=1
+  deny "Brace or array operands could not be expanded completely; some targets were NEVER checked. Use literal targets or split this command before retrying."
+fi
+
 # === HARD BLOCK — delete the game installation ===
 # The target must be a real path in the tree, OR bear the game's name while not being
 # an archive. MEASURED 2026-08-30: 7 of 8 refusals here were a .zip merely NAMED after

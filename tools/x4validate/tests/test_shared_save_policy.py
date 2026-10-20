@@ -106,6 +106,57 @@ def test_opaque_embedded_save_program_refuses_unqualified_scope(install, program
     assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
+@pytest.mark.parametrize("prefix", ["--wipe=", "-o"])
+@pytest.mark.parametrize("quoted", [False, True])
+def test_opaque_glued_save_options_refuse_without_guessing_membership(install, prefix, quoted):
+    root, roots, files = install
+    target = files[0].as_posix()
+    command = "./unknown-tool " + prefix + ("'" + target + "'" if quoted else target)
+    result = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    assert result["permissionDecision"] == "deny", result
+    assert "unresolved protected operand" in result["permissionDecisionReason"]
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+    assert files[0].read_bytes() == files[0].name.encode()
+
+
+def test_opaque_unrelated_glued_options_still_allow(install):
+    root, roots, files = install
+    result = invoke_hook(install, "Bash", {"command": "./unknown-tool --output=unrelated.xml.gz -v"})
+    assert not result.get("hookSpecificOutput", {}).get("permissionDecision"), result
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+@pytest.mark.parametrize("spelling", ["$X4_SAVES", "${X4_SAVES}", "${X4_PROFILE}/save"])
+@pytest.mark.parametrize("quoted", [False, True])
+def test_opaque_glued_save_root_variables_cannot_hide_scope(install, spelling, quoted):
+    root, roots, files = install
+    target = spelling + "/" + files[0].name
+    command = "./unknown-tool --wipe=" + ('"' + target + '"' if quoted else target)
+    result = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    assert result["permissionDecision"] == "deny", result
+    assert "unresolved protected operand" in result["permissionDecisionReason"]
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+@pytest.mark.parametrize("name", ["X4_SAVES", "X4_PROFILE"])
+@pytest.mark.parametrize("assignment_first", [False, True])
+def test_opaque_glued_root_variable_assignments_cannot_erase_possible_scope(install, name, assignment_first):
+    root, roots, files = install
+    ordinary = (root / "ordinary").as_posix()
+    suffix = "/save" if name == "X4_PROFILE" else ""
+    assignment = name + "='" + ordinary + "'"
+    call = "./unknown-tool --out=\"$" + name + suffix + "/x.xml.gz\""
+    command = assignment + "; " + call if assignment_first else call + "; " + assignment
+    result = invoke_hook(install, "Bash", {"command": command})
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny", result
+    assert "unresolved protected operand" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_opaque_glued_non_save_profile_variable_keeps_accepted_scope(install):
+    result = invoke_hook(install, "Bash", {"command": './unknown-tool --out="$X4_PROFILE/config.xml"'})
+    assert not result.get("hookSpecificOutput", {}).get("permissionDecision"), result
+
+
 def test_opaque_unrelated_operand_and_quoted_save_prose_are_outside_scope(install):
     root, roots, files = install
     unrelated = invoke_hook(install, "Bash", {"command": "./unknown-tool --wipe 'unrelated.xml.gz'"})

@@ -72,6 +72,7 @@ def test_claude_check_protocol_keeps_an_evaluated_protection_denial_as_a_verdict
 @pytest.mark.parametrize("host", ["codex", "opencode"])
 @pytest.mark.parametrize("shell", ["bash", "powershell"])
 def test_rendered_hosts_keep_syntax_refusals_out_of_guard_failure_channel(tmp_path, host, shell):
+    (require_native_codex if host == "codex" else require_native_opencode)(REPO)
     if shell == "powershell" and not (shutil.which("pwsh") or shutil.which("powershell")):
         pytest.skip("no PowerShell parser")
     _tmp, root, env = make_sandbox(tmp_path)
@@ -160,6 +161,7 @@ def transactions(root):
 @pytest.mark.parametrize("host", ["codex", "opencode"])
 @pytest.mark.parametrize("count", [1, 3])
 def test_rendered_hosts_preserve_opaque_named_saves_or_refuse_bulk(tmp_path, host, count):
+    (require_native_codex if host == "codex" else require_native_opencode)(REPO)
     _tmp, root, env, files = prepare(tmp_path)
     command = "./unknown-tool --wipe " + " ".join("'" + p.as_posix() + "'" for p in files[:count])
     if host == "codex":
@@ -179,6 +181,7 @@ def test_rendered_hosts_preserve_opaque_named_saves_or_refuse_bulk(tmp_path, hos
 
 @pytest.mark.parametrize("host", ["codex", "opencode"])
 def test_hook_only_deployment_routes_unknown_tools_to_configured_runtime(tmp_path, monkeypatch, host):
+    (require_native_codex if host == "codex" else require_native_opencode)(REPO)
     _tmp, toolkit, env, _files = prepare(tmp_path)
     game = tmp_path / "hook-only-game"
     hooks = game / (".codex" if host == "codex" else ".opencode") / "hooks"
@@ -197,6 +200,54 @@ def test_hook_only_deployment_routes_unknown_tools_to_configured_runtime(tmp_pat
         assert result["decision"] in ("allow", "advise") and not result["inert"], result
     assert (toolkit / ".modding-agent-harness/coverage.sqlite3").is_file()
     assert not (game / "tools").exists(), "hook-only deployment must remain a hook-only layout"
+
+
+@pytest.mark.parametrize("host", ["codex", "opencode"])
+@pytest.mark.parametrize("prefix", ["--wipe=", "-o"])
+def test_rendered_hosts_refuse_glued_opaque_save_options(tmp_path, host, prefix):
+    (require_native_codex if host == "codex" else require_native_opencode)(REPO)
+    _tmp, root, env, files = prepare(tmp_path)
+    command = "./unknown-tool " + prefix + files[0].as_posix()
+    if host == "codex":
+        decision, reason = run_adapter(env, native("bash_powershell", root,
+            command=command, workdir=str(root)), shell="bash")
+    else:
+        result = open_run(env, open_call(root, "bash", {"command": command, "workdir": str(root)}, shell="bash"))
+        decision, reason = result["decision"], result["reason"]
+        assert not result["inert"], result
+    assert decision == "deny" and "unresolved protected operand" in reason, (decision, reason)
+    assert not transactions(root)
+
+
+@pytest.mark.parametrize("host", ["codex", "opencode"])
+@pytest.mark.parametrize("shape", ["braces", "array", "parameters", "carrier"])
+def test_rendered_hosts_refuse_incomplete_expansion_with_a_remedy(tmp_path, host, shape):
+    import shlex
+    (require_native_codex if host == "codex" else require_native_opencode)(REPO)
+    _tmp, root, env, files = prepare(tmp_path)
+    reference = Path(env["X4_REFERENCE"])
+    if shape == "braces":
+        command = "rm -rf " + reference.parent.as_posix() + "/{" + ",".join(
+            ["junk%d" % i for i in range(64)] + [reference.name]) + "}"
+    elif shape == "array":
+        command = "A=(" + " ".join("'" + (reference.parent / ("junk%d" % i)).as_posix() + "'"
+            for i in range(64)) + " '" + reference.as_posix() + "'); rm -rf \"$A/file\""
+    elif shape == "parameters":
+        command = 'rm -rf "' + reference.parent.as_posix() + '/${A:+a}${B:+b}${C:+c}${D:+d}${E:+e}"'
+    else:
+        command = "rm -rf " + shlex.quote(reference.as_posix())
+        for _ in range(5):
+            command = "bash -c " + shlex.quote(command)
+    if host == "codex":
+        decision, reason = run_adapter(env, native("bash_powershell", root,
+            command=command, workdir=str(root)), shell="bash")
+    else:
+        result = open_run(env, open_call(root, "bash", {"command": command, "workdir": str(root)}, shell="bash"))
+        decision, reason = result["decision"], result["reason"]
+        assert result["inert"], result
+    assert decision == ("inert" if host == "codex" else "deny") and "NEVER checked" in reason, (decision, reason)
+    assert "split" in reason.lower() or "simpler" in reason.lower()
+    assert not transactions(root)
 
 
 def test_codex_batches_two_preserves_then_three_refuses_and_typed_grant_succeeds(tmp_path):

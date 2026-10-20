@@ -1019,6 +1019,19 @@ _ASSIGN_SUBST = re.compile(r"(?:^|[\s;&|()])([A-Za-z_][A-Za-z0-9_]*)=\"?\$\(")
 _FOR_IN = re.compile(r"(?:^|[\s;&|()])for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s")
 
 
+_OPERAND_EXPANSION_TRUNCATED = [False]  # per facts() call, like the cwd/carrier scope signals
+
+
+def _bounded_operand_values(values):
+    out = []
+    for value in values:
+        if len(out) == 64:
+            _OPERAND_EXPANSION_TRUNCATED[0] = True
+            break
+        out.append(value)
+    return out
+
+
 def resolve_all(tok: str, assigns: dict) -> list:
     """Every value a WHOLE-token reference can take: each element of an array (`"$f"` for
     a for-loop variable, `"${A[@]}"`), else the one resolve() gives -- read through
@@ -1035,8 +1048,8 @@ def resolve_all(tok: str, assigns: dict) -> list:
     if len(arrays) == 1:
         name = arrays.pop()
         ref = re.compile(r"\$\{" + name + r"\}|\$" + name + r"(?![A-Za-z0-9_])")
-        return [identity_subst(r) for e in _array_elements(assigns[name])
-                for r in resolve_variants(ref.sub(lambda _m, e=e: e, tok), assigns)][:64]
+        return _bounded_operand_values(identity_subst(r) for e in _array_elements(assigns[name])
+                for r in resolve_variants(ref.sub(lambda _m, e=e: e, tok), assigns))
     # Every value an unassigned `${V:+w}` / `${V-w}` can give (FX-G6 / reviewer K C1).
     out = []
     for one in resolve_variants(tok, assigns):
@@ -1044,7 +1057,7 @@ def resolve_all(tok: str, assigns: dict) -> list:
         # (`Z="$f"; rm -rf "$Z"`) is that array's elements, not its literal `(a b)`.
         elems = _array_elements(one)
         if elems and not _array_elements(tok):
-            out += [identity_subst(r) for e in elems for r in resolve_variants(e, assigns)][:64]
+            out += _bounded_operand_values(identity_subst(r) for e in elems for r in resolve_variants(e, assigns))
         else:
             out.append(identity_subst(one))
     return out
@@ -1301,6 +1314,9 @@ def resolve_variants(tok: str, assigns: dict) -> list:
         combos = itertools.product(_UNASSIGNED_STATES, repeat=len(names))
     else:
         # Bounded, never silently one value: each name in each state, the rest uniform.
+        # This samples rather than enumerates every combination. A mixed protected
+        # branch may be missing, so the caller must refuse incomplete analysis.
+        _OPERAND_EXPANSION_TRUNCATED[0] = True
         combos = [tuple(s if j == i else u for j in range(len(names)))
                   for u in _UNASSIGNED_STATES for i in range(len(names))
                   for s in _UNASSIGNED_STATES]
@@ -2593,8 +2609,12 @@ def _icacls_paths(seg: str) -> list:
     return _icacls_parts(seg)[0]
 
 
-def _operands(seg: str) -> list[str]:
-    """Non-flag, non-redirect operands after the verb."""
+def _operands(seg: str, *, include_flags: bool = False) -> list[str]:
+    """Non-redirect operands after the verb; opaque access also inspects flags.
+
+    Unknown programs can carry paths in --option=PATH or -oPATH. Their option
+    grammar is unverified, so the possible-access policy must not drop them.
+    """
     out, skip = [], False
     # P1: the verb is where _verb_word finds it (whole words), not the first token that is
     # not an assignment -- a spaced `X=<(echo a)` made `a)` the verb and `rm` an operand.
@@ -2610,7 +2630,7 @@ def _operands(seg: str) -> list[str]:
             continue
         if not quoted and (t.startswith(("<", ">")) or re.match(r"^\d+>", t)):
             continue
-        if not quoted and t.startswith("-"):
+        if not include_flags and not quoted and t.startswith("-"):
             continue
         out.append(t)
     return out
@@ -4232,11 +4252,14 @@ def _brace_expand(pat, _depth=0):
     Bounded deliberately: 6 levels and 64 results. A crafted `{a,b}{a,b}{a,b}...`
     expands combinatorially, and a guard that can be made to hang is a guard that can
     be removed -- the whole point here is to answer quickly on every command.
-    Over the budget it returns what it has, which is CONSERVATIVE: fewer candidate
-    patterns can only mean fewer matches, never a spurious block.
+    Hitting a bound marks incomplete scope. Partial candidates must never be
+    certified as complete: the omitted target could be the protected one.
     """
     i = pat.find("{")
-    if i < 0 or _depth > 6:
+    if i < 0:
+        return [pat]
+    if _depth > 6:
+        _OPERAND_EXPANSION_TRUNCATED[0] = True
         return [pat]
     depth, j = 0, -1
     for k in range(i, len(pat)):
@@ -4259,16 +4282,24 @@ def _brace_expand(pat, _depth=0):
         depth += (ch == "{") - (ch == "}")
         cur += ch
     parts.append(cur)
+    if len(parts) == 1:
+        # Bash ranges are not modelled here. Never call their one literal-looking
+        # spelling a complete expansion. Non-range single braces stay literal.
+        if ("{" in body + tail or
+                re.fullmatch(r"(?:-?\d+\.\.-?\d+|[A-Za-z]\.\.[A-Za-z])(?:\.\.-?\d+)?", body)):
+            _OPERAND_EXPANSION_TRUNCATED[0] = True
+        return [pat]
     out = []
     for p in parts:
         for rest in _brace_expand(head + p + tail, _depth + 1):
             out.append(rest)
-            if len(out) >= 64:
-                return out
+            if len(out) > 64:
+                _OPERAND_EXPANSION_TRUNCATED[0] = True
+                return out[:64]
     return out
 
 
-def glob_covers(operand, target):
+def glob_covers(operand, target, *, expand_braces=True):
     """Would this operand, expanded by the shell, act on `target`?
 
     WHY THIS EXISTS. The HARD BLOCKS compared the operand to the root with `==`, so a
@@ -4296,7 +4327,7 @@ def glob_covers(operand, target):
         return False
     if not any(c in operand for c in _OPERAND_PATTERN_CHARS):
         return False                      # a literal path; `==` already handled it
-    for cand in _brace_expand(operand):
+    for cand in _brace_expand(operand) if expand_braces else [operand]:
         if fnmatch.fnmatchcase(target, cand):
             return True
         head, sep, tailseg = cand.rpartition("/")
@@ -5282,10 +5313,14 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
     for e in extra:
         d.setdefault(e, WINDOWS_DIALECT if e in _WIN_DIALECT else "bash")
         if e not in seen:
+            if len(out) >= _MAX_CARRIED:
+                return out, True
             seen.add(e)
             out.append(e)
             frontier.append(e)
-    for _ in range(_MAX_CARRIER_DEPTH):
+    # One discovery-only pass distinguishes a leaf at the boundary from a
+    # reachable command that would otherwise disappear beyond the depth cap.
+    for depth in range(_MAX_CARRIER_DEPTH + 1):
         nxt = []
         for c in frontier:
             inners = _inner_commands(c)
@@ -5297,6 +5332,8 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
                         d.setdefault(inner, kind)
                     if not inner or inner in seen:
                         continue
+                    if depth == _MAX_CARRIER_DEPTH:
+                        return out, True
                     seen.add(inner)
                     nxt.append(inner)
                     if len(out) + len(nxt) >= _MAX_CARRIED:
@@ -5472,6 +5509,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _WIN_DIALECT.clear()
     _BRACE_WORDS.clear()                # C1: per call, like the two above
     _CD_LANES_TRUNCATED[0] = False      # C7: per call
+    _OPERAND_EXPANSION_TRUNCATED[0] = False
     _ps_spent[0] = 0.0                  # the translation budget is per hook call
 
     # THE POWERSHELL TOOL (AUDIT-2026-09-24 HK-1). It had no PreToolUse guard at all, so
@@ -5760,6 +5798,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # The save bridge supplies its single authoritative folder enumeration. This
     # parser stays independently importable and does not discover filesystem roots.
     save_folders = [norm(str(folder)) for folder in protected_save_folders]
+    save_spellings = set(save_folders) | {str(folder).replace(chr(92), "/").casefold()
+                                         for folder in protected_save_folders}
+    save_mentions = [re.compile(re.escape(folder) + r"(?=$|[/\s\"'`<>);,*?\[\]{}$])")
+                     for folder in save_spellings if folder]
     for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0] in zip(
             seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect):
         if (save_folders and evidence is not None and not execution_context
@@ -5767,16 +5809,28 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                 and not _save_read_only_program(s)):
             # Possible access is not a measured mutation. Only SAVE operands feed
             # this conservative policy; the accepted game/reference residual stays scoped.
-            for operand in _operands(s):
+            for operand in _operands(s, include_flags=True):
                 start = len(evidence)
-                prep([operand], c_cwd, c_old, operation="write")
+                # Resolve configured roots even inside an option or program-text
+                # candidate, only to discover possible access. A glued value is
+                # still not qualified membership and must remain unresolved.
+                candidates = {operand}
+                for match in _VAR_ANY.finditer(operand):
+                    candidates.add(operand[:match.start()] + subst_root_var(operand[match.start():], roots))
+                prep(sorted(candidates), c_cwd, c_old, operation="write")
                 possible = evidence[start:]
                 del evidence[start:]
                 for row in possible:
                     path = norm(row["path"])
                     raw = norm(row["raw"])
+                    raw_spelling = str(row["raw"]).replace(chr(92), "/").casefold()
                     exact = any(under(path, folder) for folder in save_folders)
-                    embedded = any(folder and folder + "/" in raw for folder in save_folders)
+                    # A glued short option can put a letter before C:/, where
+                    # norm deliberately does not recognize a standalone drive.
+                    # Match native and normalized spellings without extracting
+                    # or guessing an unknown program's actual option value.
+                    embedded = any(pattern.search(spelling) for pattern in save_mentions
+                                   for spelling in (raw, raw_spelling))
                     if not (exact or embedded):
                         continue
                     # Program text or a glued option is not an exact physical operand.
@@ -5849,6 +5903,12 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         for mode, tgt in redirects(s):
             redir_t += [(mode,) + o for o in prep([tgt], c_cwd, c_old, False, operation="write")]
 
+    # Only unquoted brace syntax is expanded by Bash. Reuse the tokenizer's
+    # quote-aware side channel, resolving roots exactly as prep() did. Quoted
+    # literal range-looking filenames must not trigger an expansion refusal.
+    brace_patterns = {norm(subst_root_var(value, roots)) for word in tuple(_BRACE_WORDS)
+                      for value in resolve_all(word, assigns)}
+
     def hit(ops, key, conservative=False):
         """`conservative` is the delete-only rule (user decision 2026-09-01): an
         operand this hook cannot resolve is not evidence of safety. Deletes are the one
@@ -5874,7 +5934,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                     return True
             elif under(path, root):
                 return True
-            elif glob_covers(norm(path), norm(root)):
+            elif glob_covers(norm(path), norm(root), expand_braces=norm(raw) in brace_patterns):
                 # `under()` compares literal paths, so `rm -rf "<ref>"*` -- which is a
                 # SIBLING pattern that expands to include the root -- slipped past every
                 # root rule. The operand is fully present in the text, so this is
@@ -5963,7 +6023,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # so it must not reach a non-overridable deny; a glob is fully present in the
         # text, so whether it covers the root is decidable -- and `rm -rf "<game>"*`
         # deletes the installation exactly as the literal form does.
-        return glob_covers(n, g) or glob_covers(n, g + "/extensions")
+        return (glob_covers(n, g, expand_braces=norm(_raw) in brace_patterns)
+                or glob_covers(n, g + "/extensions", expand_braces=norm(_raw) in brace_patterns))
 
     # No archive exclusion: GAME_ROOTISH is anchored at $ and so is ARCHIVE, and they
     # demand different endings, so nothing can match both -- PROVEN over probes, and
@@ -6044,7 +6105,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         not any(hit(named, k, conservative=True) for k in _wipe_keys)
         and any(hit(seeded, k, conservative=True) for k in _wipe_keys)
         for named, seeded in gitwipe_pairs)
-    return {
+    result = {
         "command": cmd,
         "timeout": timeout,
         "background": background,
@@ -6306,6 +6367,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                                     for sg, _c in seg_cwd),
         "cwd": cwd,
     }
+    # Several fields above evaluate glob membership; capture scope AFTER every
+    # field has run so a late overflow cannot disappear from the result.
+    result["operand_expansion_truncated"] = _OPERAND_EXPANSION_TRUNCATED[0]
+    return result
 
 
 # ----------------------------------------------------------------------- CLI

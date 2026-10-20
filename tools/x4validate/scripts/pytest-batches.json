@@ -107,13 +107,13 @@
     "reason": "READ: repository attributes and in-memory git archive inspection; no shared writes"
   },
   "test_shared_save_policy.py": {
-    "sha256": "8e0af3a672d3709cbf3b178e9e87430452f4922704a6ef3f2e153c2595ce3b41",
+    "sha256": "6248cd34db32a3852002737131b32e029273b85888730787e7e517af93e9dd61",
     "mode": "serial",
     "reviewed": true,
     "reason": "READ: owned save fixtures and rendered subprocess adapters; no real save or OS recycler access"
   },
   "test_host_save_batches.py": {
-    "sha256": "367b000199316d5aae154b742e3f6e6561f942272b3d35642f54d3d58ad76845",
+    "sha256": "5ea8017c938755962b0590675a5b1232e7e64e30141ddd34d55cc310c373a676",
     "mode": "serial",
     "reviewed": true,
     "reason": "READ: owned save fixtures and rendered subprocess adapters; no real save or OS recycler access"

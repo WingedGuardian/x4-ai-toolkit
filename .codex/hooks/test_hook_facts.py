@@ -1749,6 +1749,28 @@ class TestAnUnquotedHeredocRunsItsSubstitutions(unittest.TestCase):
 
 
 class TestCarriersNest(unittest.TestCase):
+    def test_valid_quoted_carrier_depth_never_hides_unseen_commands(self):
+        import shlex
+        root = "C:/x4-guard-fixture/game"
+        for depth in (1, 4, 5, 6):
+            command = D + " -rf " + root
+            for _ in range(depth):
+                command = "bash -c " + shlex.quote(command)
+            with self.subTest(depth=depth):
+                result = F(command, roots={"game": root})
+                self.assertEqual(result["carriers_truncated"], depth > H._MAX_CARRIER_DEPTH)
+                if depth <= H._MAX_CARRIER_DEPTH:
+                    self.assertTrue(result["rm_hits_game"])
+        command = "echo harmless"
+        for _ in range(5):
+            command = "bash -c " + shlex.quote(command)
+        self.assertTrue(F(command)["carriers_truncated"])
+
+    def test_extra_seed_commands_obey_the_same_count_bound(self):
+        out, truncated = H.carried_commands("echo body", ["echo extra%d" % i for i in range(251)])
+        self.assertTrue(truncated)
+        self.assertLessEqual(len(out), H._MAX_CARRIED)
+
     def test_a_shell_inside_a_shell(self):
         self.assertTrue(F("bash -c " + chr(39) + "sh -c " + chr(34) + D + " -rf "
                           + REF + chr(34) + chr(39))["rm_targets_reference"])
@@ -2894,6 +2916,62 @@ class TestBraceExpansionIsBounded(unittest.TestCase):
 
     def test_an_unbalanced_brace_is_returned_untouched(self):
         self.assertEqual(H._brace_expand("a{b,c"), ["a{b,c"])
+
+    def test_overflow_is_reported_instead_of_certifying_a_partial_operand_set(self):
+        base = "C:/x4-guard-fixture"
+        roots = {"game": base + "/game", "reference": base + "/reference"}
+        for count in (64, 65):
+            values = [base + "/junk%d" % i for i in range(count - 1)] + [roots["game"]]
+            commands = [
+                D + " -rf " + base + "/{" + ",".join(["junk%d" % i for i in range(count - 1)] + ["game"]) + "}",
+                "for f in " + " ".join(values) + '; do ' + D + ' -rf "$f/extensions"; done',
+                "A=(" + " ".join(values) + '); ' + D + ' -rf "$A/extensions"',
+                "A=(" + " ".join(values) + '); Z="$A"; ' + D + ' -rf "$Z"',
+            ]
+            for command in commands:
+                with self.subTest(count=count, command=command):
+                    result = F(command, roots=roots)
+                    self.assertEqual(bool(result.get("operand_expansion_truncated")), count > 64)
+                    if count == 64:
+                        self.assertTrue(result["rm_hits_game"])
+
+    def test_benign_overflow_is_still_incomplete_and_the_next_call_is_clear(self):
+        roots = {"game": "C:/x4-guard-fixture/game"}
+        pattern = "C:/x4-guard-fixture/{" + ",".join("junk%d" % i for i in range(65)) + "}"
+        result = F(D + " -rf " + pattern, roots=roots)
+        self.assertTrue(result.get("operand_expansion_truncated"))
+        self.assertFalse(result["rm_hits_game"])
+        self.assertFalse(F(D + " -rf C:/x4-guard-fixture/ordinary", roots=roots).get("operand_expansion_truncated"))
+
+    def test_unmodelled_numeric_range_does_not_claim_complete_analysis(self):
+        roots = {"game": "C:/x4-guard-fixture/42", "reference": "C:/x4-guard-fixture/r42"}
+        for pattern in ("{1..64}", "r{1..64}", "{100..164}"):
+            with self.subTest(pattern=pattern):
+                self.assertTrue(F(D + " -rf C:/x4-guard-fixture/" + pattern,
+                                  roots=roots).get("operand_expansion_truncated"))
+
+    def test_literal_parent_braces_do_not_hide_later_expansions(self):
+        for leaf, pattern in (("game", "{junk,game}"), ("42", "{1..64}")):
+            base = "C:/x4-guard-fixture/{literal}/"
+            result = F(D + " -rf " + base + pattern, roots={"game": base + leaf})
+            self.assertTrue(result["rm_hits_game"] or result.get("operand_expansion_truncated"))
+
+    def test_parameter_sampling_is_not_certified_as_complete(self):
+        for count in (4, 5):
+            suffix = "".join("${%s:+%s}" % (chr(65 + i), chr(97 + i)) for i in range(count))
+            result = F(D + ' -rf "C:/x4-guard-fixture/' + suffix + '"',
+                       roots={"game": "C:/x4-guard-fixture/ab"})
+            if count == 4:
+                self.assertTrue(result["rm_hits_game"])
+                self.assertFalse(result.get("operand_expansion_truncated"))
+            else:
+                self.assertTrue(result.get("operand_expansion_truncated"))
+
+    def test_quoted_numeric_braces_are_a_literal_filename(self):
+        result = F(D + " -rf 'C:/x4-guard-fixture/{1..64}'",
+                   roots={"game": "C:/x4-guard-fixture/42"})
+        self.assertFalse(result["rm_hits_game"])
+        self.assertFalse(result.get("operand_expansion_truncated"))
 
     def test_a_literal_path_is_never_treated_as_a_pattern(self):
         self.assertFalse(H.glob_covers("/c/games/x4", "/c/games/x4"))

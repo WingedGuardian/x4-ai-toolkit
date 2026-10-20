@@ -10,6 +10,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Glued opaque save options and configured-root spellings now enter possible-access
+  review without guessing their membership. Bounded operand and carrier analysis
+  refuses incomplete scope rather than silently dropping targets (F321/F322).
+
 - Malformed Steam JSON and non-absence result statuses now report an outage;
   only explicit FileNotFound records a missing Workshop item (F320).
 

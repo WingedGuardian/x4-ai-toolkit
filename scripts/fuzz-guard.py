@@ -985,6 +985,8 @@ def seeds(roots):
         ("game delete", d + " -rf " + QU + g + QU),
         ("extensions wholesale", d + " -rf " + QU + g + "/extensions" + QU),
         ("reference delete", d + " -rf " + QU + ref + QU),
+        ("parameter expansion exceeds complete-analysis bound",
+         d + ' -rf "C:/guard-fixture/${A:+a}${B:+b}${C:+c}${D:+d}${E:+e}"'),
         ("one deployed mod", d + " -rf " + QU + g + "/extensions/amod" + QU),
         ("savegame delete", d + " -f " + QU + saves + "/save_001.xml.gz" + QU),
         ("write under documents", "echo x > " + QU + docs + "/n.txt" + QU),

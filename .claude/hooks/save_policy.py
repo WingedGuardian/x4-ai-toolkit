@@ -348,6 +348,9 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None):
                          "${VAR-...} with unset variables) that the guard cannot tell which directory "
                          "later relative paths are in, so it was NEVER fully checked. Use literal cd "
                          "targets, or split it into simpler commands, and re-run.")
+    if facts.get("operand_expansion_truncated"):
+        raise ScopeError("Brace or array operands could not be expanded completely; some targets were "
+                         "NEVER checked. Use literal targets or split this command before retrying.")
     if facts.get("carriers_truncated"):
         # protect-bash.sh denies this unconditionally; running that backend would expand
         # the whole command a second time inside the same 20 s deadline (MEASURED
@@ -384,6 +387,15 @@ def batch(payload, calls, judge, deadline, host, preview=False, helper=False, *,
         result = {"api_version": 1, "decision": "deny", "evaluation": "evaluated",
                   "preservation": "not_required", "validation": "not_run", "reason": str(exc), "warnings": []}
         return {"decision": "deny", "inert": False, "reason": str(exc), "context": None,
+                "result": result, "transactions": []}
+    except ScopeError as exc:
+        # These diagnostics are static and safe to show. Keep failed analysis in
+        # the failure channel, while preserving the remedy instead of replacing
+        # it with an opaque "adapter raised ScopeError" message.
+        reason = "X4 GUARD INERT: " + str(exc)
+        result = {"api_version": 1, "decision": "deny", "evaluation": "failed",
+                  "preservation": "not_required", "validation": "not_run", "reason": reason, "warnings": []}
+        return {"decision": "deny", "inert": True, "reason": reason, "context": None,
                 "result": result, "transactions": []}
 
 

@@ -399,6 +399,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F318 | Linked evidence with spaces, punctuation or URI escapes lost Forever protection | **DEFECT (measured)** | 16 name/spelling cases, same-byte unlinked twins, late-link and bound controls | FIXED 2026-10-20 - conservative bounded reference discovery |
 | F319 | Named known-good baselines and audit logs lacked the promised Forever guard | **DEFECT (measured)** | Four named-file/folder controls with ordinary cleanup twins | FIXED 2026-10-20 - explicit baseline and audit-name protection |
 | F320 | Malformed Steam JSON and failure statuses impersonated missing items | **DEFECT (measured)** | Eight invalid shapes, seven failure statuses and valid/absent twins | FIXED 2026-10-20 - only explicit FileNotFound means absence |
+| F321 | Glued opaque options hid possible save access | **DEFECT (measured)** | Literal, configured-root, assignment-order and rendered-host controls; frozen replay 34/26,346 | FIXED 2026-10-20 - inspect flags and embedded roots without guessing membership |
+| F322 | Bounded operand/carrier analysis silently omitted targets | **DEFECT (measured)** | 64/65, numeric/nested braces, five-name combinations and carrier-depth twins | FIXED 2026-10-20 - incomplete analysis explicitly refuses with remedy |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11049,6 +11051,9 @@ tests/test_audit0924_runtime.py.
 
 ## F314 - Opaque save access bypassed preservation · **DEFECT (measured)** · confidence 97% · FIXED 2026-10-20
 
+SUPERSEDED MEASUREMENT 2026-10-20: the 31-match price below is the earlier
+parser. F321 records the final 34-match replay and all per-item comparisons.
+
 Opaque programs naming resolved save operands now enter a conservative possible-
 write policy. This is explicitly possible access, not evidence that the program
 mutates a save. Exact named pairs are preserved before the review verdict;
@@ -11214,3 +11219,59 @@ and prevents DROP DB under the driver's actual set -e. No JVM or real bin ran.
 
 **RE-DERIVED BY:** tests/test_nexus_transport.py;
 tests/test_audit0924_gates.py; tests/test_audit0924_runtime.py.
+
+## F321 - Glued opaque options hid save scope · **DEFECT (measured)** · confidence 98% · FIXED 2026-10-20
+
+MEASURED: three of five initial glued-option controls failed; unrelated options
+and an already-qualified form passed. Long options dropped unquoted flags; short
+options could hide a drive prefix from normalization. Embedded configured root
+variables were also not resolved for possible-access discovery.
+
+The opaque-only operand pass now includes flags and checks native/normalized save
+spellings plus configured-root variable views. It does not guess an unknown
+option grammar: glued membership remains unresolved and refuses before a backup
+can be treated as complete. Non-save profile paths keep their accepted scope.
+Native adapter controls qualify the selected host before copying/running it.
+MEASURED: 259 save, scope, native-host and layout controls pass, zero skips.
+
+MEASURED on a frozen corpus: 31 -> 34 opaque candidates out of 26,346 distinct
+payloads, 3 added and 0 removed. All three additions were independently read:
+fuzzer/predicate verification, a verdict/timing driver, and an external-helper
+guard matrix. These are legitimate test activity, not demonstrated destructive
+requests; the matrix helper's internals remain unreviewed. All 34 preview verdicts
+were compared: 9 allow->ask, 21 allow->deny, 3 deny->deny, 1 ask->ask. Technical
+non-answers 0; new incomplete-analysis flags 0. No history command was executed.
+
+Residual: configured save-root variables in opaque glued arguments conservatively
+refuse even with an earlier ordinary assignment. Two controls measured this
+friction. An attempted narrowing was WITHDRAWN because command-wide assignments
+cannot prove execution ordering; four controls now pin both assignment orders.
+Use literal ordinary arguments or a separate call with literal resolved paths.
+Hidden program behavior and opaque game/reference behavior remain accepted limits.
+
+**RE-DERIVED BY:** tests/test_shared_save_policy.py;
+tests/test_host_save_batches.py; docs/superpowers/measurements/2026-10-20-opaque-save-policy.md.
+
+## F322 - Expansion bounds silently narrowed protection · **DEFECT (measured)** · confidence 99% · FIXED 2026-10-20
+
+Independent synthetic parser controls measured targets omitted at element 65 in
+brace and suffix-array expansion, numeric/later nested braces, five-variable mixed
+parameter combinations and deeply nested shell carriers. Whole-token arrays were
+already complete and remain supported. A truncated sample is not proof of safety.
+
+Bounded expansion now records incompleteness, including late predicate evaluation.
+Numeric or nested/later brace shapes outside the model also announce non-answers.
+Only quote-aware unquoted braces expand; quoted literal twins remain qualified.
+Carrier traversal makes one discovery-only boundary pass and checks initial seed
+counts. Both backend and save bridge refuse incomplete analysis with a literal/
+split-command remedy; adapters retain their explicit inert channel.
+
+MEASURED: full canonical parser unit suite passed 790 tests, zero skips, on the
+exact parser later used for the frozen replay. The 26,346-command replay introduced
+zero incomplete-analysis flags and had zero technical non-answers. Boundary and
+native host controls use synthetic command strings only. Verifier integration:
+228/228 mutation anchors match once and seven verifier/fuzzer self-tests pass.
+Actual mutation detection is pending remote CI; anchor placement is not that proof.
+
+**RE-DERIVED BY:** agent/guards/claude-hooks/test_hook_facts.py;
+tests/test_host_save_batches.py; scripts/fuzz-guard.py; scripts/verify-hook-tests.py.
