@@ -114,16 +114,22 @@ def _anonymize_rest(raw: dict, ordinal: int) -> dict:
     """Keep every field the parser reads; replace identifying VALUES.
 
     `updated_timestamp` is kept as a real epoch because `fetch_mod` converts it
-    and a placeholder would not exercise that conversion.
+    and a placeholder would not exercise that conversion. `name` is kept ABSENT when the
+    live reply had none: Nexus omits it for a removed or hidden mod (MEASURED 2026-10-20),
+    and a placeholder there would record a shape the API never sends.
     """
-    return {
-        "name": f"Example Mod {ordinal}",
+    out = {
         "version": str(raw.get("version", "")),
         "updated_timestamp": int(raw.get("updated_timestamp") or 0),
         "status": raw.get("status", ""),
         "author": f"example_author_{ordinal}",
         "mod_id": 1000 + ordinal,
     }
+    if "name" in raw:
+        out["name"] = f"Example Mod {ordinal}"
+    if "available" in raw:
+        out["available"] = bool(raw["available"])
+    return out
 
 
 def record() -> int:
@@ -148,8 +154,13 @@ def record() -> int:
         # Prove the live shape still parses BEFORE we anonymize it.
         meta = _nexus.fetch_mod(nid)
         assert meta.nexus_id == nid and meta.status, f"live parse failed for {nid}"
-        for field in ("name", "version", "status", "updated_timestamp"):
+        for field in ("version", "status", "updated_timestamp"):
             assert field in raw, f"live REST response lost field {field!r}"
+        # Nexus sends no `name` for a removed/hidden mod (`available: false`; MEASURED
+        # 2026-10-20 on one of each) -- `fetch_mod` reads it with a default. A mod that IS
+        # available must still carry it.
+        if raw.get("available") is not False:
+            assert "name" in raw, f"live REST response lost field 'name' (available mod {nid})"
         fixture["rest"][str(1000 + i)] = _anonymize_rest(raw, i)
         # The file list feeds the update verdict (RG-3). Names anonymized; the fields the
         # parser reads (version, upload time, category) kept as recorded.
