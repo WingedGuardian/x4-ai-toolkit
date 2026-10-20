@@ -38,10 +38,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from x4recycle import recycle_or_raise
 
 from lxml import etree
 
@@ -210,8 +212,11 @@ def main(argv=None) -> int:
               "reference\\ indexes it twice, and skipping one that is packed leaves it "
               "out of the index.", file=sys.stderr)
         return 2
-    if out.exists():
-        shutil.rmtree(out)
+    try:
+        recycle_or_raise([out])
+    except (OSError, RuntimeError) as exc:
+        print(f"REFUSING: {exc}", file=sys.stderr)
+        return 2
     mods_out = out / "mods"
     base_out = out / "base_extensions"
     mods_out.mkdir(parents=True)

@@ -21,10 +21,10 @@ def ignored_baselines(gitignore: str) -> list[str]:
 
 
 def unpruned(gitignore: str, sh: str, ps1: str) -> list[str]:
-    """Rows naming each ignored baseline missing from either installer's prune list."""
-    sh_list = re.search(r'X4_COPY_PRUNE="([^"]*)"', sh)
-    ps_list = re.search(r"\$X4CopyPrune = @\((.*?)\)", ps1, re.S)
-    assert sh_list and ps_list, "a prune list could not be located, so nothing was checked"
+    """Baselines must stay local, without being removed from the destination."""
+    sh_list = re.search(r'X4_KEEP_LOCAL="([^"]*)"', sh)
+    ps_list = re.search(r"\$X4KeepLocal = @\((.*?)\)", ps1, re.S)
+    assert sh_list and ps_list, "a keep-local list could not be located, so nothing was checked"
     sh_items = set(sh_list.group(1).split())
     ps_items = set(re.findall(r"'([^']+)'", ps_list.group(1)))
     rows = []
@@ -48,6 +48,6 @@ def test_every_ignored_baseline_is_pruned_by_both_installers():
 
 def test_TWIN_a_baseline_missing_from_one_installer_is_reported():
     gi = ".a-baseline.json" + chr(13) + chr(10) + ".b-baseline.json" + chr(10)
-    sh = 'X4_COPY_PRUNE="tools/x4validate/.a-baseline.json tools/x4validate/.b-baseline.json"'
-    ps1 = "$X4CopyPrune = @('tools" + BS + "x4validate" + BS + ".a-baseline.json')"
+    sh = 'X4_KEEP_LOCAL="tools/x4validate/.a-baseline.json tools/x4validate/.b-baseline.json"'
+    ps1 = "$X4KeepLocal = @('tools" + BS + "x4validate" + BS + ".a-baseline.json')"
     assert unpruned(gi, sh, ps1) == ["install.ps1: .b-baseline.json"]

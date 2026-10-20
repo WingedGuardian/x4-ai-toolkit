@@ -197,10 +197,27 @@ def test_an_ORPHAN_is_deleted_one_named_FILE_at_a_time(tmp_path):
     d = _mod()
     src_root, ext = _shipped(tmp_path)
     assert d.deploy("helper", apply=True, src_root=src_root, ext_root=ext, out=_quiet)
-    (ext / "helper" / "ui" / "stale.lua").write_text("old\n", encoding="utf-8")
+    (ext / "helper" / "ui" / "stale.lua").write_bytes(b"old\n")
     assert d.deploy("helper", apply=True, src_root=src_root, ext_root=ext, out=_quiet)
     assert not (ext / "helper" / "ui" / "stale.lua").exists()
     assert (ext / "helper" / "ui" / "a.lua").is_file()
+    bin_dir = pathlib.Path(os.environ["X4_RECYCLE_TEST_BIN"])
+    assert any(p.name.endswith("-stale.lua") and p.read_bytes() == b"old\n"
+               for p in bin_dir.iterdir())
+
+
+def test_orphan_recycle_refusal_retains_it_and_fails_deploy(tmp_path, monkeypatch):
+    d = _mod()
+    src_root, ext = _shipped(tmp_path)
+    assert d.deploy("helper", apply=True, src_root=src_root, ext_root=ext, out=_quiet)
+    orphan = ext / "helper/ui/stale.lua"
+    orphan.write_bytes(b"retain")
+    def refuse(paths):
+        raise OSError("declined")
+    monkeypatch.setattr(d, "recycle_or_raise", refuse)
+    with pytest.raises(OSError, match="declined"):
+        d.deploy("helper", apply=True, src_root=src_root, ext_root=ext, out=_quiet)
+    assert orphan.read_bytes() == b"retain"
 
 
 def test_REFUSES_to_delete_an_orphan_that_is_a_SYMLINK(tmp_path):

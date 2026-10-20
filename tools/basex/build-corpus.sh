@@ -88,7 +88,7 @@ cd "$BASEX_DIR"
 # be dropped; left in place, a build that dies from here on (BaseX rejecting an input
 # exits 1 below; an interrupt) leaves that licence beside a partial database, and ask.py
 # certifies negatives over it. Absent coverage means no negative is ever certified.
-rm -f "$BASEX_DIR/coverage-$DB.json"
+(cd "$X4VALIDATE" && uv run python "$HERE/../../scripts/x4recycle.py" "$BASEX_DIR/coverage-$DB.json")
 java -cp BaseX.jar org.basex.BaseX -c "DROP DB $DB" >/dev/null 2>&1 || true
 
 # BaseX exits 0 even when an ADD names a path it cannot find, so the exit code is
@@ -146,7 +146,7 @@ fi
 # Staging is transient by design — the index is the durable artifact. Keep it
 # only if KEEP_STAGE=1 (useful when debugging an extraction failure).
 if [ "${KEEP_STAGE:-0}" != "1" ]; then
-  rm -rf "$STAGE"
+  (cd "$X4VALIDATE" && uv run python "$HERE/../../scripts/x4recycle.py" "$STAGE")
   echo "staging discarded (KEEP_STAGE=1 to keep it)"
 fi
 

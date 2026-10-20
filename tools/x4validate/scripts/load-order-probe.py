@@ -38,6 +38,8 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[2] / "scripts"))
+from x4recycle import recycle_or_raise  # noqa: E402
 sys.path.insert(0, str(HERE.parent))
 from x4validate import _paths  # noqa: E402
 
@@ -361,8 +363,7 @@ def deploy(src: Path, apply: bool) -> int:
 
 def remove(apply: bool) -> int:
     """Remove ONLY folders carrying this tool's marker AND an lo_probe manifest id, from the
-    game root AND the profile root. Files are unlinked one by one and directories removed
-    only when EMPTY -- never a recursive delete."""
+    game root AND the profile root. Whole marked folders go to the Recycle Bin/Trash."""
     ext = _ext_root()
     if ext is None or not ext.is_dir():
         print("cannot run: no game extensions folder configured", file=sys.stderr)
@@ -390,11 +391,11 @@ def remove(apply: bool) -> int:
         print(f"  {d.name}: {len(files)} file(s)")
         if not apply:
             continue
-        for f in files:
-            f.unlink()
-        for sub in sorted((p for p in d.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)):
-            sub.rmdir()                   # raises if not empty -- by design
-        d.rmdir()
+        try:
+            recycle_or_raise([d])
+        except (OSError, RuntimeError) as exc:
+            print(f"NOT removed: {d}: {exc}", file=sys.stderr)
+            return 1
     if not apply:
         print("(dry run -- nothing removed; add --apply)")
     left = [d.name for d in victims if d.exists()] if apply else []

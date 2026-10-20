@@ -67,3 +67,16 @@ def test_TWIN_build_effective_over_a_minimal_reference_still_builds(builder, tmp
     rc = builder.main(["--out", str(tree), "--reference", str(ref)])
     assert rc == 0, capsys.readouterr()
     assert (tree / "libraries" / "wares.xml").is_file()
+
+
+def test_existing_build_recycle_refusal_stops_before_rebuild(builder, tmp_path, monkeypatch, capsys):
+    ref = tmp_path / "reference"
+    (ref / "libraries").mkdir(parents=True)
+    (ref / "libraries/wares.xml").write_bytes(b"<wares/>")
+    tree = _previous_build(tmp_path)
+    def refuse(paths):
+        raise OSError("declined")
+    monkeypatch.setattr(builder, "recycle_or_raise", refuse)
+    assert builder.main(["--out", str(tree), "--reference", str(ref)]) == 2
+    assert "declined" in capsys.readouterr().err
+    assert (tree / "libraries/wares.xml").read_bytes() == b"<wares><ware id='kept'/></wares>"

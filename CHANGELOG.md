@@ -10,6 +10,11 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Prior-run cleanup now uses the Recycle Bin/Trash for installer caches,
+  BaseX output, deployed-mod orphan files and marked load-order probes. Failed
+  recycling stops the operation. Both installers preserve the destination's seven
+  measured gate baselines instead of pruning them (BLIND-SPOTS F311).
+
 - A shell syntax error now returns an actionable refusal rather than an inert
   guard diagnosis. Missing parsers, failed workers and incomplete analysis remain
   distinct failures (BLIND-SPOTS F310).

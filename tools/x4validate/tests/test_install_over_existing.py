@@ -1115,6 +1115,10 @@ def test_the_upgrade_KEEPS_the_recovery_store_and_still_PRUNES_build_artifacts(
     artifact.mkdir(parents=True)
     (artifact / "stale.pyc").write_bytes(b"\x00stale")
 
+    baseline = dest / "tools/x4validate/.perf-baseline.json"
+    baseline.parent.mkdir(parents=True, exist_ok=True)
+    baseline.write_bytes(b'MY-MEASURED-BASELINE')
+
     mine = dest / ".claude" / "my-own-notes"
     mine.mkdir(parents=True)
     (mine / "README.md").write_text("MY-OWN-NOTES", encoding="utf-8")
@@ -1136,6 +1140,10 @@ def test_the_upgrade_KEEPS_the_recovery_store_and_still_PRUNES_build_artifacts(
     assert not (artifact / "stale.pyc").exists(), (
         "the build-artifact prune stopped working, so the SUBJECT assertion above "
         "proves nothing about the prune list")
+    recycled = pathlib.Path(os.environ["X4_RECYCLE_TEST_BIN"])
+    assert any((p / "stale.pyc").is_file() and (p / "stale.pyc").read_bytes() == b"\x00stale"
+               for p in recycled.iterdir() if p.name.endswith("-__pycache__"))
+    assert baseline.read_bytes() == b'MY-MEASURED-BASELINE'
 
     # TWIN: bounds the change to the list rather than to deletion in general.
     assert (mine / "README.md").read_text(encoding="utf-8") == "MY-OWN-NOTES", (

@@ -57,7 +57,11 @@ def pytest_sessionstart(session):
     toolkit = Path(__file__).resolve().parents[3]
     sys.path.insert(0, str(toolkit / "scripts"))
     from x4temp import mark_owned_temp
-    mark_owned_temp(session.config._tmp_path_factory.getbasetemp(), toolkit)
+    base = session.config._tmp_path_factory.getbasetemp()
+    mark_owned_temp(base, toolkit)
+    # Child installer/build tests must never reach a real OS recycler or popup.
+    os.environ["X4_RECYCLE_TEST_ROOT"] = str(base)
+    os.environ["X4_RECYCLE_TEST_BIN"] = str(base / ".fake-recycle-bin")
 
 
 def import_gate(name: str, *, module_level: bool = True):

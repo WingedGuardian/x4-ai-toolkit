@@ -31,6 +31,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from x4recycle import recycle_or_raise
+
 from lxml import etree
 
 from x4validate import _cat, _compat, _effective, _merge, _modfiles, _registry
@@ -111,7 +114,7 @@ def enumeration_report(config: _merge.Config, base: dict[str, str]) -> dict:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--out", required=True, help="output tree (wiped and recreated)")
+    p.add_argument("--out", required=True, help="output tree (previous tree recycled and recreated)")
     p.add_argument("--reference", default=None)
     p.add_argument("--limit", type=int, default=0, help="build only N contested vpaths (smoke test)")
     args = p.parse_args(argv)
@@ -130,8 +133,11 @@ def main(argv=None) -> int:
     config = _merge.Config(reference=config.reference, overlays=tuple(overlays))
 
     out = Path(args.out)
-    if out.exists():
-        shutil.rmtree(out)
+    try:
+        recycle_or_raise([out])
+    except (OSError, RuntimeError) as exc:
+        print(f"REFUSING: {exc}", file=sys.stderr)
+        return 2
     out.mkdir(parents=True)
 
     t0 = time.time()

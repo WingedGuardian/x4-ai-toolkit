@@ -1,6 +1,6 @@
 {
   "__helpers__": {
-    "conftest.py": "4854c4c5aa368478f1c2c8dd9a50231d8a36143cba88c70e7e8a24bad51f3c86",
+    "conftest.py": "89d4c153e4f6a837f75e7106864c3a9b969946ac64d5cc4de1f17ec0473543a1",
     "_layout.py": "ab6b44f80098867f7624b0461b5bf8855dc98fbe781a53e228be24c21f0771dd",
     "codex_testlib.py": "80dd0366c824ceb655b5e2eb4a6af7d155d177cc28668b59ec0610f44a587561"
   },
@@ -47,10 +47,10 @@
     "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions"
   },
   "test_install_over_existing.py": {
-    "sha256": "1a4f23941838bb63fabe6b3fc2e5410b38fec284b4505c734f813f57178c3c68",
-    "mode": "functions",
+    "sha256": "54911b84f27025a90676afb051fdcd25a7e10bbcdb7490b119c2655191a46b0c",
+    "mode": "serial",
     "reviewed": true,
-    "reason": "READ: installer destinations confined to per-test tmp_path, UUID registry keys with per-process cleanup; function fixtures, no timing thresholds"
+    "reason": "READ: sandbox filesystem and bounded fake recycle bin; subprocess installers/builders, no real OS recycler"
   },
   "test_x4housekeep.py": {
     "sha256": "5ed0e6daa6e7236add2be47c7ae4b5e05880b9f2d27f0f4a8d7422aa661bd57d",
@@ -69,5 +69,29 @@
     "mode": "parallel",
     "reviewed": true,
     "reason": "READ: tmp_path outputs only; runs copies of the session hook and a child Python inside tmp_path; no shared writes"
+  },
+  "test_x4recycle.py": {
+    "sha256": "3ba1b47bd84bba347444af6bf7835cea9a64d9756fd702b2c521b6615298fa35",
+    "mode": "serial",
+    "reviewed": true,
+    "reason": "READ: sandbox filesystem and bounded fake recycle bin; subprocess installers/builders, no real OS recycler"
+  },
+  "test_deploy_mod.py": {
+    "sha256": "121714d1dc72074a7fc4a828abab04bcda335a5d73cb5041517ab3df71ba216f",
+    "mode": "serial",
+    "reviewed": true,
+    "reason": "READ: sandbox filesystem and bounded fake recycle bin; subprocess installers/builders, no real OS recycler"
+  },
+  "test_basex_build_effective_refuses_empty_reference.py": {
+    "sha256": "155cfcf6432c5e1e9db0e2cf54fc0ad43a0ff38d4a50c1572ee8ffde42eb2dfb",
+    "mode": "serial",
+    "reviewed": true,
+    "reason": "READ: sandbox filesystem and bounded fake recycle bin; subprocess installers/builders, no real OS recycler"
+  },
+  "test_ignored_baselines_never_travel.py": {
+    "sha256": "701359545689b9a209b229722a9020ea7bda6902d1edf6cfc454175109ab8753",
+    "mode": "serial",
+    "reviewed": true,
+    "reason": "READ: sandbox filesystem and bounded fake recycle bin; subprocess installers/builders, no real OS recycler"
   }
 }

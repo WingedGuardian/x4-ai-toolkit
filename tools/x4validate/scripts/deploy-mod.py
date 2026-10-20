@@ -14,7 +14,7 @@ WHY THIS EXISTS
     shell variable away from deleting the wrong tree inside the game installation, and it
     destroys the destination BEFORE the copy, so a failure part way leaves no mod at all.
     This script never removes a directory. It diffs the two trees, copies what is new or
-    changed, and unlinks orphans one named file at a time after printing them.
+    changed, and recycles orphans one named file at a time after printing them.
 
 GUARDS, in order. Any failure raises `Refused` before a single byte is written, and with
 several mods EVERY mod's guards run before ANY mod is written:
@@ -55,6 +55,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 MODS = REPO / "mods"
 FLAGS = {"--apply", "-h", "--help"}
+sys.path.insert(0, str(REPO / "scripts"))
+from x4recycle import recycle_or_raise  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from x4validate import _paths  # noqa: E402
@@ -186,8 +188,8 @@ def deploy(name: str, apply: bool, src_root: Path = MODS, ext_root: Path | None 
         (dst / f).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src / f, dst / f)
     for f in orphan:
-        (dst / f).unlink()          # one named file; never a directory
-        out(f"      deleted orphan: {f}")
+        recycle_or_raise([dst / f])  # one named file; never a directory
+        out(f"      recycled orphan: {f}")
 
     back = files_of(dst)
     bad = [f for f in sorted(srcf) if not (dst / f).is_file() or sha(src / f) != sha(dst / f)]

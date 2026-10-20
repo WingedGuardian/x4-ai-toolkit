@@ -389,6 +389,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F308 | An ask returned before save approval/preservation; X4 also dropped preserved ask transactions | **DEFECT (measured)** | Five mixed/control commands; two of seven bridge regressions failed after core import | FIXED 2026-10-20 - core d2af1e8, preserved ask notices/ids and protected-path spelling |
 | F309 | Unattended housekeep relied on generic temp names and shallow activity checks | **DEFECT (measured)** | Three of four initial controls failed; three further active-folder/canonical controls failed | FIXED 2026-10-20 - ownership receipts, complete activity/protection checks and explicit errors |
 | F310 | Shell syntax rejection was reported as an inert guard failure | **DEFECT (measured)** | Bash/PowerShell on two rendered hosts; syntax and real failure controls | FIXED 2026-10-20 - dedicated syntax refusal; incomplete analysis remains failed |
+| F311 | Prior-run cleanup bypassed the Recycle Bin and pruned measured baselines | **DEFECT (measured/read)** | Two installers, two BaseX builders, two shell drivers, deploy and probe removal | FIXED 2026-10-20 - shared recoverable removal and baseline retention |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -10963,3 +10964,29 @@ test_rendered_hosts_keep_syntax_refusals_out_of_guard_failure_channel,
 test_claude_check_protocol_distinguishes_failed_evaluation_from_a_policy_verdict,
 test_check_protocol_regressions_are_killed_in_an_owned_rendered_copy;
 tests/test_save_scope_compat.py::test_batch_syntax_refusal_is_not_an_inert_guard_failure.
+
+## F311 - Prior-run cleanup bypassed recoverable removal · **DEFECT (measured/read)** · confidence 97% · FIXED 2026-10-20
+
+READ: both installers removed seven measured gate baselines along with disposable
+caches. Both now keep these baselines local, excluding incoming copies while
+retaining destination bytes. Cache pruning, BaseX output replacement and cleanup,
+shipped-mod orphans, and marked load-order probe removal use scripts/x4recycle.py.
+It delegates Windows removal to housekeep's single Recycle Bin implementation,
+uses gio trash on Linux and Finder Trash on macOS, and refuses on failed or
+unavailable removal. A successful backend response is checked against the path.
+No permanent-delete fallback exists. Same-run mktemp logs retain ordinary cleanup.
+
+MEASURED: sandbox installer upgrades preserve a destination measured baseline and
+recover cache bytes in the fake bin. Orphan replacement likewise retains the old
+bytes in the fake bin. Backend refusal, a missing response, and false success
+leave the original intact and fail the operation. Odd literal path names are
+exercised. The pytest session shares a bounded fake bin with subprocesses;
+unconfigured pytest removal refuses before any native OS call.
+
+Residual: native Trash/Recycle Bin services are not invoked by tests. A real
+OS refusal can leave a partially copied deploy, which is reported as failure.
+The user explicitly included regenerable BaseX output in recoverable removal.
+
+**RE-DERIVED BY:** tests/test_x4recycle.py; tests/test_deploy_mod.py;
+tests/test_install_over_existing.py::test_the_upgrade_KEEPS_the_recovery_store_and_still_PRUNES_build_artifacts;
+tests/test_basex_build_effective_refuses_empty_reference.py.

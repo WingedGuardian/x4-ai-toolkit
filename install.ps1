@@ -285,13 +285,6 @@ $X4CopyPrune = @('tools\x4validate\.venv',
                  'tools\.pytest_cache',
                  'tools\basex\__pycache__',
                  'tools\basex\basex\.basex',
-                 'tools\x4validate\.perf-baseline.json',
-                 'tools\x4validate\.obtainability-baseline.json',
-                 'tools\x4validate\.claude-md-budget-baseline.json',
-                 'tools\x4validate\.toolkit-usage-baseline.json',
-                 'tools\x4validate\.hook-false-positive-baseline.json',
-                 'tools\x4validate\.instrument-hygiene-baseline.json',
-                 'tools\x4validate\.schema-sweep-baseline.json',
                  'tools\x4validate\gates\__pycache__',
                  'tools\x4validate\scripts\__pycache__',
                  'tools\x4validate\tests\__pycache__',
@@ -319,7 +312,14 @@ $X4KeepLocal = @('x4-paths.env','x4-housekeep.json','.claude\x4-paths.env','.cla
                  '.opencode\opencode.jsonc','.claude\.reference-buildid',
                  'tools\basex\basex\data','tools\basex\basex\coverage-x4raw.json',
                  'tools\basex\basex\coverage-x4eff.json','tools\basex\_eff',
-                 'tools\basex\stage-manifest.json')
+                 'tools\basex\stage-manifest.json',
+                 'tools\x4validate\.perf-baseline.json',
+                 'tools\x4validate\.obtainability-baseline.json',
+                 'tools\x4validate\.claude-md-budget-baseline.json',
+                 'tools\x4validate\.toolkit-usage-baseline.json',
+                 'tools\x4validate\.hook-false-positive-baseline.json',
+                 'tools\x4validate\.instrument-hygiene-baseline.json',
+                 'tools\x4validate\.schema-sweep-baseline.json')
 
 #: THE TRACKED SET, when the source is a git checkout -- the mirror of
 #: _tracked_copy_set in install.sh, same two clauses: $SRC is the TOP of its work
@@ -1509,6 +1509,15 @@ function Get-X4RawSha256($path) {
   finally { $sha.Dispose(); $stream.Dispose() }
 }
 
+function Recycle-CopyPrune($dest) {
+  $victims = @($X4CopyPrune | ForEach-Object { Join-Path $dest $_ } | Where-Object { Test-Path -LiteralPath $_ })
+  if (-not $victims.Count) { return }
+  $py = Find-OcPython
+  if (-not $py) { throw 'Recycling old build artifacts needs Python >= 3.10' }
+  $r = Invoke-X4Native $py[0] (@($py | Select-Object -Skip 1) + @((Join-Path $SRC 'scripts/x4recycle.py')) + $victims)
+  if ($r.Rc -ne 0) { throw ('Recycling old build artifacts failed: ' + $r.Out) }
+}
+
 function Copy-Toolkit($dest) {
   Refuse-IfDryRun 'copying the toolkit into' $dest
   Test-ProjectSettingsPrecheck $dest
@@ -1560,10 +1569,7 @@ function Copy-Toolkit($dest) {
   # the same file has the same inode in each and a recursive copy refuses. A cleanup
   # that only runs after the copy cannot make the copy possible. Kept in step with
   # install.sh deliberately -- one installer correct by accident is how the two drift.
-  foreach ($junk in $X4CopyPrune) {
-    $p = Join-Path $dest $junk
-    if (Test-Path -LiteralPath $p) { Remove-Item -Recurse -Force -LiteralPath $p -ErrorAction SilentlyContinue }
-  }
+  Recycle-CopyPrune $dest
 
   $tracked = Get-TrackedCopySet
   if ($tracked) {
@@ -1598,10 +1604,7 @@ function Copy-Toolkit($dest) {
   # way through. pyvenv.cfg and the Scripts shims also embed absolute paths, so a copied
   # venv points back at the source. setup.sh recreates it anyway.
   # ...and again afterwards, so the SOURCE machine's virtualenv does not linger here.
-  foreach ($junk in $X4CopyPrune) {
-    $p = Join-Path $dest $junk
-    if (Test-Path -LiteralPath $p) { Remove-Item -Recurse -Force -LiteralPath $p -ErrorAction SilentlyContinue }
-  }
+  Recycle-CopyPrune $dest
 
   # PUT THE USER'S BACK. Whatever the copy just landed came from the SOURCE machine --
   # its paths, its Nexus key -- and has no business on this one. PRESERVED, not merely
