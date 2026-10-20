@@ -52,6 +52,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from x4temp import owns_temp
@@ -99,7 +100,6 @@ DEFAULTS = {
 }
 LAUNCH_RE = re.compile(r"^launch-(\d{8})-(\d{6})$")
 STAMP_RE = re.compile(r"^(\d{8})_(\d{6})$")
-LINK_TAIL = r"/[^)\s\]\"'`<>|]+"
 GIB = 1024 ** 3
 
 
@@ -173,6 +173,7 @@ def evidence_links(cfg) -> set:
     """Every agent-output path a project doc links to (written relative to the root, as docs link them). A linked
     file is never planned for anything."""
     links = set()
+    reference_chars = 0
     prefixes = []
     for r in cfg["agent_output"]:
         try:
@@ -183,14 +184,34 @@ def evidence_links(cfg) -> set:
             prefixes.append(re.escape(rel.replace("\\", "/")))
     if not prefixes:
         return links
-    link_re = re.compile("(?:{})".format("|".join(prefixes)) + LINK_TAIL)
+    start_re = re.compile("(?:{})/".format("|".join(prefixes)), re.I if os.name == "nt" else 0)
     for doc in cfg["evidence_docs"]:
         p = _abs(cfg, doc)
         if not p.is_file():
             continue
-        for m in link_re.findall(p.read_text(encoding="utf-8", errors="replace")):
-            m = m.rstrip(".,;:*")
-            links.add(_key(cfg["root"] / m))
+        text = p.read_text(encoding="utf-8", errors="replace")
+        # This is conservative reference discovery, not a Markdown parser. Keep
+        # every plausible line-bounded destination, including spaces and balanced
+        # punctuation. Stopping at the FIRST ')' or space silently lost evidence.
+        # Both literal and URI/Markdown-escaped spellings can name real files.
+        views = {text, unquote(text)}
+        views |= {re.sub(r"\\([!\"#$%&'()*+,./:;<=>?@\[\]^_`{|}~\\-])", r"\1", s) for s in tuple(views)}
+        for view in views:
+            for line in view.splitlines():
+                for start in start_re.finditer(line):
+                    tail = line[start.start():]
+                    if len(tail) > 32768:
+                        raise OSError("evidence reference line exceeds the safe discovery bound; cleanup refused")
+                    ends = [i for i, ch in enumerate(tail) if ch.isspace() or ch in ")]\"'`<>|,;:*"]
+                    for end in ends + [len(tail)]:
+                        candidate = tail[:end]
+                        if candidate:
+                            reference_chars += len(candidate)
+                            if reference_chars > 8 * 1024 * 1024:
+                                raise OSError("evidence references exceed the safe discovery byte bound; cleanup refused")
+                            links.add(_key(cfg["root"] / candidate))
+                        if len(links) > 50000:
+                            raise OSError("evidence references exceed the safe discovery bound; cleanup refused")
     return links
 
 

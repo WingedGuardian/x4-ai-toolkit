@@ -112,6 +112,39 @@ def test_a_copy_of_a_live_game_file_is_recreatable_and_a_variant_is_not(tree):
     assert key(off) not in planned(doc, "recreatable")
 
 
+@pytest.mark.parametrize("name", ["plain.log", "report final.log", "report(final).log", "report [final] '&.log"])
+@pytest.mark.parametrize("form", ["angle", "encoded", "reference", "code"])
+def test_linked_evidence_with_literal_odd_names_is_kept(tree, name, form):
+    from urllib.parse import quote
+    linked = write(tree / "out/task" / name, blob("catalog"))
+    twin = write(tree / "out/unlinked" / name, blob("catalog"))
+    rel = linked.relative_to(tree).as_posix()
+    body = {"angle": f"[evidence](<{rel}>)", "encoded": f"[evidence]({quote(rel)})",
+            "reference": f"[evidence]: <{rel}>", "code": f"`{rel}`"}[form]
+    (tree / "CLAUDE.md").write_text(body, encoding="utf-8")
+    cfg = cfg_for(tree)
+    doc = hk.plan(cfg)
+    assert key(linked) not in planned(doc), (body, doc["actions"])
+    assert key(twin) in planned(doc, "recreatable"), "unlinked same-name/same-byte twin must still qualify"
+
+
+def test_a_link_added_after_planning_protects_the_evidence_at_apply(tree):
+    linked = write(tree / "out/task/report(final).log", blob("catalog"))
+    cfg = cfg_for(tree)
+    doc = hk.plan(cfg)
+    assert key(linked) in planned(doc, "recreatable")
+    (tree / "CLAUDE.md").write_text("[evidence](out/task/report(final).log)", encoding="utf-8")
+    assert hk.apply(doc, cfg, recycler=FakeBin(tree)) == 1
+    assert linked.read_bytes() == blob("catalog")
+
+
+def test_overlong_evidence_reference_refuses_cleanup_instead_of_truncating(tree):
+    write(tree / "out/task/report.log", blob("catalog"))
+    (tree / "CLAUDE.md").write_text("[evidence](out/task/" + "x" * 32769 + ")", encoding="utf-8")
+    with pytest.raises(OSError, match="discovery bound"):
+        hk.plan(cfg_for(tree))
+
+
 def test_a_snapshot_of_a_live_state_file_is_not_recreatable(tree):
     write(tree / "game" / "registry.xml", blob("state"))
     snap = write(tree / "out" / "t" / "registry.xml", blob("state"))

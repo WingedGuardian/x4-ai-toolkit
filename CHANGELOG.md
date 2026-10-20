@@ -10,6 +10,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Linked evidence keeps Forever protection when relative references contain
+  spaces, parentheses, brackets or URI escapes. Bounded discovery preserves
+  plausible destinations and refuses overflow instead of truncating (F318).
+
 - Deduplication retains pre-existing hard links whose other names may be live
   files outside the configured roots. Apply rechecks link ownership before chmod
   while allowing links created earlier in the same batch (BLIND-SPOTS F317).

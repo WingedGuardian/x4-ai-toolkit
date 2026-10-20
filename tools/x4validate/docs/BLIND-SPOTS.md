@@ -396,6 +396,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F315 | Unknown tools in hook-only deployments raised ValueError before routing | **DEFECT (measured)** | Actual installed reproduction and Codex/OpenCode hook-only fixtures | FIXED 2026-10-20 - resolve the configured external runtime when local tools are absent |
 | F316 | Pytest itself pruned shared earlier-run temp outside ownership checks | **DEFECT (measured)** | Main/BaseX startup, seeded foreign run, explicit-path twins | FIXED 2026-10-20 - per-invocation owned scratch and refusal of existing basetemp |
 | F317 | Deduplication chmod reached outside live files through existing hard links | **DEFECT (measured)** | Canonical/duplicate external-link refusals, late-link refusal, three-copy twin | FIXED 2026-10-20 - retain unqualified links and count only links created by this apply |
+| F318 | Linked evidence with spaces, punctuation or URI escapes lost Forever protection | **DEFECT (measured)** | 16 name/spelling cases, same-byte unlinked twins, late-link and bound controls | FIXED 2026-10-20 - conservative bounded reference discovery |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11144,5 +11145,27 @@ Residual: the final checks and filesystem writes are not one system-wide atomic
 transaction; concurrent changes after the final check remain possible. READ:
 the sibling Skyrim housekeep link implementation also lacks a link-count guard;
 that is a separate follow-up lead, not a claim that it has been fixed there.
+
+**RE-DERIVED BY:** tests/test_x4housekeep.py; scripts/x4housekeep.py.
+
+## F318 - Evidence-link truncation lost protected files · **DEFECT (measured)** · confidence 98% · FIXED 2026-10-20
+
+Independent READ review found LINK_TAIL stopped at the first whitespace or closing
+parenthesis. MEASURED before the fix: 13 of 17 controls failed (12 odd-name links
+plus a link added after planning); four plain-name controls passed. An idle linked
+file identical to a live file was planned as recreatable despite the Forever rule.
+
+Discovery now conservatively retains possible line-bounded destinations rather
+than claiming to parse Markdown. It checks literal, URI-decoded and escaped forms
+at every plausible ending, preserving spaces and nested punctuation. This can
+retain extra candidates, which is safe. Discovery bounds refuse cleanup rather
+than silently narrowing references. MEASURED: 56 housekeep controls pass, zero
+skips, including 16 spelling/name combinations with unlinked same-byte twins,
+the late-link refusal, and an overlong-reference refusal. No real recycler ran.
+
+Residual: relative links are interpreted from the configured toolkit root, as
+documented; this is conservative discovery rather than complete Markdown parsing.
+The install-dependent run was stopped at its verified own rb parent after this
+production finding; its partial log is retained and is not a passing result.
 
 **RE-DERIVED BY:** tests/test_x4housekeep.py; scripts/x4housekeep.py.
