@@ -741,6 +741,51 @@ class TestRR3CmdCarrier(_RR):
         ], tool="Bash")
 
 
+class TestF10DynamicProgramWordE2E(_RR):
+    """F10 (v4.0), through the REAL hook: an unidentifiable command name (variable,
+    substitution, `%R%`/`!R!`, `& $R`) gets at least the plain command's verdict, or an ask
+    when the name itself may be the delete. MEASURED on master: every non-twin row allowed."""
+
+    def test_bash_and_cmd(self):
+        R, Rf, Gf = self.R, self.Rf, self.Gf
+        self.expect([
+            ("deny", "$R rm -rf '" + Rf + "'"),
+            ("deny", '"$R" rm -rf \'' + Rf + "'"),
+            ("deny", "$R 'rm -rf \"" + Rf + "\"'"),
+            ("deny", "R=eval; $R 'rm -rf \"" + Gf + "\"'"),
+            ("deny", "cd '" + Gf + "' && $R rm -rf extensions"),
+            ("deny", "$R git add -A"),
+            ("deny", "$R add -A"),
+            ("ask", "$R -rf '" + Gf + "'"),
+            ("deny", 'cmd //c "%R% del ' + Rf + '/a.xml"'),
+            ("deny", 'cmd //v:on //c "!R! del ' + Rf + '/a.xml"'),
+            ("deny", 'cmd //c "%R%del ' + Rf + '/a.xml"'),
+        ], tool="Bash")
+
+    def test_powershell(self):
+        R, G = self.R, self.G
+        self.expect([
+            ("deny", "& $R Remove-Item '" + R + "'"),
+            ("deny", ". $R Remove-Item '" + R + "'"),
+            ("deny", "& $R \"Remove-Item '" + R + "'\""),
+            ("deny", "& \"$($R)-Item\" '" + G + "'"),
+            ("deny", "& $R git add -A"),
+            ("deny", "cmd /c \"%R% del " + R + "\\a.xml\""),
+        ])
+
+    def test_TWIN_unknown_names_that_touch_nothing_protected(self):
+        self.expect([
+            ("allow", "$R --version"),
+            ("allow", '"$PY" -c "import os; print(os.getcwd())"'),
+            ("allow", 'cmd //c "%R% --version"'),
+        ], tool="Bash")
+        self.expect([
+            ("allow", "& $exe --version"),
+            # pwsh 7 reads `pwsh Remove-Item` as -File: it runs nothing (the sibling's twin)
+            ("allow", "& pwsh Remove-Item '" + self.R + "'"),
+        ])
+
+
 class TestRR4DotNetWritersAndScriptBlocks(_RR):
     """IMPORTANT: .NET file writers and code-runners were unmodelled, so they allowed."""
 
