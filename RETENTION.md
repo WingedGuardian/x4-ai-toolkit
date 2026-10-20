@@ -80,6 +80,7 @@ link.
   matching names alone and other projects' pytest runs are left alone. High-volume
   QA and pytest producers write receipts; other unmarked scratch remains manual.
   Receipts are checked against both the canonical toolkit and directory paths.
+  Set `X4_HOUSEKEEP_SWEEP=off` to disable the session sweep.
   A protected file, unreadable tree, active descendant or failed probe keeps the
   candidate in place and is accounted for. A failed probe restore names its retained
   location. Tests use a fake recycler and cannot invoke the real Recycle Bin.
@@ -94,6 +95,8 @@ link.
   recreatable.
 - **Agent output** has no fixed folder here (work goes to the session scratchpad). If you keep one, list it in
   `agent_output`.
+  Deduplication keeps pre-existing hard links because their other names may be live
+  files outside those roots; apply rechecks ownership before changing permissions.
 - **Not covered by the tool:** git worktrees a session leaves behind (`git worktree list`; each is a full checkout)
   and the BaseX databases (rebuildable from the repo).
 

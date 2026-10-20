@@ -263,10 +263,17 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
 - **Command + file guards** (as Claude Code runs them; Codex and OpenCode reach the same guards
   through an adapter, see the agent table above) — block writes to `reference\` and direct `.cat`/`.dat` edits; confirm non-save profile changes. Recognized mutations of one or two saves first get permanent verified preservation; bulk save access needs bound human approval. A mod manifest is ADVISED rather than confirmed
   (a deliberate 2026-08-29 choice: the note is worth having, the interruption is not).
+  An opaque program naming saves requires review; its named pairs are preserved first,
+  and unresolved save scope is refused. A separate profile confirmation never skips
+  save preservation or bulk approval.
   They cover every tool that can change a file: Bash, **PowerShell** (parsed by PowerShell's
   own parser and judged by the same rules as Bash — it needs `pwsh` or Windows PowerShell,
   and asks rather than guesses without one), Edit, Write and NotebookEdit.
 - **Auto-backup** — every edited file is copied to `.claude\backups\` with an audit log.
+- **Disk retention** — `scripts/x4housekeep.py` reports output and applies reviewed plans
+  through the Recycle Bin. On Windows, session start also sweeps idle Temp directories
+  carrying this toolkit's ownership receipt; matching names alone are insufficient.
+  Set `X4_HOUSEKEEP_SWEEP=off` to disable that sweep. See [RETENTION.md](RETENTION.md).
 - **Confidence system** — no guessing; the agent rates confidence and lists assumptions first.
 - **Baseline capture** — `scripts/generate-baseline.sh` records a known-good snapshot (game version, installed-mod hashes, a normalized debug.txt error fingerprint) to diff against later.
 - **Loss canary** — `python scripts/x4canary.py` refuses if a tracked file in a watched
