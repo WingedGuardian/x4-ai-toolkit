@@ -39,6 +39,12 @@ deployed file equal to the repo file after that rewrite is the same file. The re
 goes ONE way: a repo file carrying `$X4_TOOLKIT` is drift, because it would break every
 in-game install.
 
+THE CODEX TARGET (F11, 2026-10-20) is compared too, whenever the game root holds `.codex/`,
+`.agents/` or AGENTS.md (`CODEX_MARKS`); with none of them it is N/A, said in one line.
+AGENTS.md with no `.codex/` is NOT N/A: AGENTS.md steers Codex, so that root is instructed
+and unguarded -- the measured state that made this target exist -- and the gate says
+`CODEX UNGUARDED` and fails. See `TARGETS["codex"]` for its population.
+
 Run:  uv run python gates/deploy_parity.py
 Exit: 0 every file identical - 1 drift, each file named with its direction - 2 could not
       compare (no game root configured, or nothing to compare; never "at parity").
@@ -86,13 +92,16 @@ class TargetSpec:
     """One agent's deployed tree: where it lives under a root, what its population is,
     and which subtrees the installer rewrites (from one token to any of its renderings).
 
-    Only `claude` is defined: deploy-claude-dir.py deploys `.claude/` and nothing else,
-    so no other agent tree HAS a deploy workflow to be at parity with (`.codex/` and
-    `.opencode/` reach a root only through the installer). x4doctor reads the same table
-    and reports a target with no entry here as N/A, naming that reason (v4.0.0 review
-    R4-2/R5-10: this docstring promised a Codex entry "appended by the Codex adapter
-    lane", and nothing ever appended one). Add an entry only together with a deploy
-    workflow that writes that tree.
+    `claude` and `codex` are defined, each with a deploy workflow that writes it
+    (`deploy-claude-dir.py --target claude|codex`). `.opencode/` reaches a root only
+    through the installer and has no entry; x4doctor reads this table and reports a
+    target with no entry as N/A, naming that reason. Add an entry only together with a
+    deploy workflow that writes that tree.
+
+    `rendered`: (deployed name, source template) pairs whose deployed form is the template
+    rendered for the DESTINATION root -- compared as canonical JSON, never as bytes.
+    `rewrite_required`: a deployed file in rewrite scope that still carries `rewrite_from`
+    is NOT at parity (the Codex skills' token is meaningless outside a source checkout).
     """
     name: str
     root_rel: str
@@ -101,12 +110,86 @@ class TargetSpec:
     rewrite_scope: tuple[str, ...]
     rewrite_from: bytes = REWRITE_FROM
     rewrite_to: tuple[bytes, ...] = (REWRITE_TO,)
+    rendered: tuple[tuple[str, str], ...] = ()
+    rewrite_required: bool = False
 
+
+#: The Codex target (F11, 2026-10-20). MEASURED that day: a game root deployed with this
+#: script had `.claude/` and AGENTS.md but no `.codex/` -- every Codex session there ran with
+#: NO guard hook, and x4doctor said only "the codex target is not installed here".
+#: The population is install.sh's X4_AGENT_ITEMS_codex (`AGENTS.md .codex .agents`) minus:
+#:   * `.codex/hooks.json` and `.codex/config.toml` -- per-machine (X4_KEEP_LOCAL). hooks.json
+#:     is still COMPARED and DEPLOYED, as a rendering of the template for the destination
+#:     root (`rendered`), because its whole content is derivable; config.toml never is;
+#:   * AGENTS.md -- a game root's AGENTS.md is owned by the game-root repository and may
+#:     carry that workspace's own section after the generated part (READ 2026-10-20: the
+#:     dev game root's does), exactly as its CLAUDE.md is outside the claude population.
+#: The installer renders `{{TOOLKIT}}` in `.agents/` per OS (`$env:X4_TOOLKIT` on Windows,
+#: where Codex runs PowerShell; `$X4_TOOLKIT` elsewhere): either rendering is parity.
+CODEX_TEMPLATE = "tools/x4_harness/codex-hooks.json.tmpl"
+CODEX_RENDERER = "tools/x4_harness/x4_upgrade_render.py"
+CODEX_HOOKS_JSON = ".codex/hooks.json"
+TOOLKIT_TOKEN = b"{{TOOLKIT}}"
+TOOLKIT_RENDER_WINDOWS = b"$env:X4_TOOLKIT"
+TOOLKIT_RENDER_POSIX = b"$X4_TOOLKIT"
 
 TARGETS: dict[str, TargetSpec] = {
     "claude": TargetSpec("claude", ".claude", TOP_FILES, SUBTREES, REWRITE_SCOPE),
+    "codex": TargetSpec("codex", ".", (), (".codex/hooks", ".codex/rules", ".agents/skills"),
+                        (".agents/",), TOOLKIT_TOKEN,
+                        (TOOLKIT_RENDER_WINDOWS, TOOLKIT_RENDER_POSIX),
+                        rendered=((CODEX_HOOKS_JSON, CODEX_TEMPLATE),),
+                        rewrite_required=True),
 }
 CLAUDE = TARGETS["claude"]
+CODEX = TARGETS["codex"]
+
+#: What makes the Codex target IN SCOPE for a root. AGENTS.md is the file that steers Codex,
+#: so AGENTS.md with no `.codex/` is the unguarded state itself -- reported, never N/A.
+CODEX_MARKS = (".codex", ".agents", "AGENTS.md")
+
+
+def codex_marks(root: Path) -> list[str]:
+    return [m for m in CODEX_MARKS if (root / m).exists()]
+
+
+def _load_renderer(source_dir: Path):
+    """The toolkit's own Codex renderer (`render_codex`), from the SOURCE tree compared --
+    one implementation for the installer's check-codex, this gate and the deploy."""
+    import importlib.util
+    path = source_dir / CODEX_RENDERER
+    spec = importlib.util.spec_from_file_location("x4_upgrade_render_for_parity", path)
+    if spec is None or spec.loader is None:
+        raise FileNotFoundError(path)
+    mod = importlib.util.module_from_spec(spec)
+    saved = sys.dont_write_bytecode      # the renderer sets it on import; keep ours
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = saved
+    return mod
+
+
+def render_template_text(template: str, dest_root: Path, source_dir: Path = REPO_ROOT) -> str:
+    """`template` rendered for `dest_root` by the source's renderer, ending in one newline
+    (install.sh writes `printf '%s\\n'`)."""
+    mod = _load_renderer(source_dir)
+    return mod.render_codex(template, Path(dest_root).resolve()).rstrip("\n") + "\n"
+
+
+def render_rendered(source_dir: Path, template_rel: str, dest_root: Path) -> str:
+    raw = (source_dir / template_rel).read_bytes().decode("utf-8-sig")
+    return render_template_text(raw, dest_root, source_dir)
+
+
+def canonical_json(raw: bytes) -> str | None:
+    """The installer's check-codex comparison: parsed, keys sorted. None = not JSON."""
+    import json
+    try:
+        return json.dumps(json.loads(raw.decode("utf-8-sig")), sort_keys=True,
+                          ensure_ascii=True, allow_nan=False)
+    except (ValueError, UnicodeDecodeError):
+        return None  # silent-ok: None IS the channel -- a non-JSON file never compares equal, so it reads as drift
 
 
 def in_rewrite_scope(name: str, spec: TargetSpec = CLAUDE) -> bool:
@@ -114,6 +197,9 @@ def in_rewrite_scope(name: str, spec: TargetSpec = CLAUDE) -> bool:
 
 IDENTICAL = "identical"
 IDENTICAL_REWRITTEN = "identical (after the installer rewrite)"
+IDENTICAL_RENDERED = "identical (rendered for this root)"
+UNRENDERED = "drift (the installer token is still unrendered)"
+UNRENDERABLE = "cannot render the source template"
 DRIFT = "drift"
 ONLY_REPO = "only in repo"
 ONLY_GAME = "only in game root"
@@ -128,7 +214,7 @@ class Row:
 
     @property
     def at_parity(self) -> bool:
-        return self.state in (IDENTICAL, IDENTICAL_REWRITTEN)
+        return self.state in (IDENTICAL, IDENTICAL_REWRITTEN, IDENTICAL_RENDERED)
 
 
 def repo_claude_dir() -> Path:
@@ -178,10 +264,17 @@ def compare_file(repo_file: Path, game_file: Path, name: str,
         return Row(name, ONLY_GAME)
     repo, game = _norm(repo_file.read_bytes()), _norm(game_file.read_bytes())
     if repo == game:
+        if (spec.rewrite_required and in_rewrite_scope(name, spec)
+                and spec.rewrite_from in game):
+            return Row(name, UNRENDERED)
         return Row(name, IDENTICAL)
     if in_rewrite_scope(name, spec) and any(
             repo.replace(spec.rewrite_from, to) == game for to in spec.rewrite_to):
         return Row(name, IDENTICAL_REWRITTEN)
+    return _drift(name, repo, game)
+
+
+def _drift(name: str, repo: bytes, game: bytes) -> Row:
     r = repo.decode("utf-8", "replace").split("\n")
     g = game.decode("utf-8", "replace").split("\n")
     diff = list(difflib.unified_diff(r, g, n=0, lineterm=""))
@@ -190,10 +283,31 @@ def compare_file(repo_file: Path, game_file: Path, name: str,
     return Row(name, DRIFT, game_only, repo_only)
 
 
+def compare_rendered(source_dir: Path, template_rel: str, game_dir: Path, name: str) -> Row:
+    """A file whose deployed form is the source template rendered for the GAME root.
+    Equal as canonical JSON is parity (the installer's own check-codex rule), so a
+    deployed file that differs only in formatting is left alone -- Codex re-asks for
+    review of any CHANGED hooks.json."""
+    game_file = game_dir / name
+    try:
+        want = render_rendered(source_dir, template_rel, game_dir)
+    except Exception as exc:  # noqa: BLE001 -- a render failure is a ROW, never parity
+        return Row(name, f"{UNRENDERABLE} ({type(exc).__name__}: {exc})")
+    if not game_file.is_file():
+        return Row(name, ONLY_REPO)
+    have = game_file.read_bytes()
+    a, b = canonical_json(have), canonical_json(want.encode("utf-8"))
+    if a is not None and a == b:
+        return Row(name, IDENTICAL_RENDERED)
+    return _drift(name, want.encode("utf-8"), _norm(have))
+
+
 def compare_trees(repo_claude: Path, game_claude: Path,
                   spec: TargetSpec = CLAUDE) -> list[Row]:
     names = sorted(population(repo_claude, spec) | population(game_claude, spec))
-    return [compare_file(repo_claude / n, game_claude / n, n, spec) for n in names]
+    rows = [compare_file(repo_claude / n, game_claude / n, n, spec) for n in names]
+    rows += [compare_rendered(repo_claude, tmpl, game_claude, n) for n, tmpl in spec.rendered]
+    return sorted(rows, key=lambda r: r.name)
 
 
 def describe(row: Row) -> str:
@@ -223,27 +337,51 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    off = [r for r in rows if not r.at_parity]
-    rewritten = sum(1 for r in rows if r.state == IDENTICAL_REWRITTEN)
     print("DEPLOY PARITY -- repo .claude/ (source) vs game root .claude/ (deployed)")
     print(f"  repo:      {repo}")
     print(f"  game root: {game}")
+    bad = _report(rows, "")
+    bad |= _codex(repo.parent, game.parent)
+    if not bad:
+        print("  at parity.")
+    return 1 if bad else 0
+
+
+def _report(rows: list[Row], target_flag: str) -> bool:
+    """Print one target's comparison; True when anything is off parity."""
+    off = [r for r in rows if not r.at_parity]
+    rewritten = sum(1 for r in rows if r.state in (IDENTICAL_REWRITTEN, IDENTICAL_RENDERED))
     print(f"  {len(rows)} file(s) compared on normalised content: "
-          f"{len(rows) - len(off)} at parity ({rewritten} via the installer rewrite), "
-          f"{len(off)} not")
-    if off:
-        print("", file=sys.stderr)
-        print(f"DRIFT -- {len(off)} file(s). The gate names no winner; read both "
-              "directions, then:", file=sys.stderr)
-        print("  * a change that belongs in the toolkit: make it in the REPO, then run "
-              "scripts/deploy-claude-dir.py --apply", file=sys.stderr)
-        print("  * a repo change not yet deployed: run scripts/deploy-claude-dir.py "
-              "--apply", file=sys.stderr)
-        for r in off:
-            print(f"    {describe(r)}", file=sys.stderr)
-        return 1
-    print("  at parity.")
-    return 0
+          f"{len(rows) - len(off)} at parity ({rewritten} via the installer rewrite or "
+          f"render), {len(off)} not")
+    if not off:
+        return False
+    cmd = "scripts/deploy-claude-dir.py" + target_flag + " --apply"
+    print("", file=sys.stderr)
+    print(f"DRIFT -- {len(off)} file(s). The gate names no winner; read both "
+          "directions, then:", file=sys.stderr)
+    print("  * a change that belongs in the toolkit: make it in the REPO, then run "
+          f"{cmd}", file=sys.stderr)
+    print(f"  * a repo change not yet deployed: run {cmd}", file=sys.stderr)
+    for r in off:
+        print(f"    {describe(r)}", file=sys.stderr)
+    return True
+
+
+def _codex(repo_root: Path, game_root: Path) -> bool:
+    """The Codex target. N/A only where nothing marks Codex in the root; AGENTS.md without
+    `.codex/` is the 2026-10-20 state -- instructed, unguarded -- and is reported first."""
+    marks = codex_marks(game_root)
+    if not marks:
+        print("  codex: N/A -- no .codex/, .agents/ or AGENTS.md in the game root (Codex is "
+              "not set up there)")
+        return False
+    if not (game_root / ".codex").is_dir():
+        print(f"CODEX UNGUARDED: {game_root} has {', '.join(marks)} but no .codex/, so a Codex "
+              "session there runs with NO guard hooks. Deploy them: "
+              "scripts/deploy-claude-dir.py --target codex --apply", file=sys.stderr)
+    print("DEPLOY PARITY -- repo .codex/ + .agents/ (source) vs game root (deployed, Codex)")
+    return _report(compare_trees(repo_root, game_root, CODEX), " --target codex")
 
 
 if __name__ == "__main__":  # pragma: no cover
