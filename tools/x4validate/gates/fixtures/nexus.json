@@ -1,30 +1,33 @@
 {
-  "recorded": "2026-08-09",
-  "note": "anonymized; shapes verified against the live API when recorded. The `files` block (added 2026-09-26) is SYNTHETIC in the recorded shape, dated from the REST record, until the next --record replaces it. The `discover` block (added 2026-10-18) is SYNTHETIC in the expected shape (rows dated from the REST record; partial/malformed/errors/zero derived from it) until the next --record replaces it with one live reply",
+  "recorded": "2026-10-20",
+  "note": "anonymized; shapes verified against the live API when recorded",
   "rest": {
     "1001": {
-      "name": "Example Mod 1",
-      "version": "1.0",
-      "updated_timestamp": 1585927265,
-      "status": "published",
-      "author": "example_author_1",
-      "mod_id": 1001
-    },
-    "1002": {
-      "name": "Example Mod 2",
       "version": "2.3.3",
       "updated_timestamp": 1722087970,
       "status": "published",
+      "author": "example_author_1",
+      "mod_id": 1001,
+      "name": "Example Mod 1",
+      "available": true
+    },
+    "1002": {
+      "version": "1",
+      "updated_timestamp": 1785563665,
+      "status": "published",
       "author": "example_author_2",
-      "mod_id": 1002
+      "mod_id": 1002,
+      "name": "Example Mod 2",
+      "available": true
     },
     "1003": {
-      "name": "Example Mod 3",
-      "version": "8.00.3",
-      "updated_timestamp": 1775567766,
+      "version": "5.02",
+      "updated_timestamp": 1785175544,
       "status": "published",
       "author": "example_author_3",
-      "mod_id": 1003
+      "mod_id": 1003,
+      "name": "Example Mod 3",
+      "available": true
     }
   },
   "graphql": {
@@ -100,22 +103,673 @@
         {
           "file_id": 1,
           "name": "Example File 1",
-          "version": "0.9",
-          "uploaded_time": "2020-02-10T09:12:44.000+00:00",
-          "category_name": "OLD_VERSION"
+          "version": "1.0",
+          "uploaded_time": "2019-04-07T05:40:31.000+00:00",
+          "category_name": "ARCHIVED"
         },
         {
           "file_id": 2,
           "name": "Example File 2",
-          "version": "1.0",
-          "uploaded_time": "2020-04-03T15:21:05.000+00:00",
-          "category_name": "MAIN"
+          "version": "1.1",
+          "uploaded_time": "2019-04-10T16:21:00.000+00:00",
+          "category_name": null
         },
         {
           "file_id": 3,
           "name": "Example File 3",
-          "version": "1.0-addon",
-          "uploaded_time": "2021-06-18T20:03:11.000+00:00",
+          "version": "1.12",
+          "uploaded_time": "2019-04-12T20:00:25.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 4,
+          "name": "Example File 4",
+          "version": "1.13",
+          "uploaded_time": "2019-04-13T05:36:53.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 5,
+          "name": "Example File 5",
+          "version": "1.131",
+          "uploaded_time": "2019-04-15T15:50:14.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 6,
+          "name": "Example File 6",
+          "version": "1.2",
+          "uploaded_time": "2019-04-16T15:57:17.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 7,
+          "name": "Example File 7",
+          "version": "1.21",
+          "uploaded_time": "2019-04-18T15:52:32.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 8,
+          "name": "Example File 8",
+          "version": "1.3",
+          "uploaded_time": "2019-04-23T18:55:53.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 9,
+          "name": "Example File 9",
+          "version": "1.31",
+          "uploaded_time": "2019-06-30T16:11:55.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 10,
+          "name": "Example File 10",
+          "version": "1.5",
+          "uploaded_time": "2020-03-28T08:53:41.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 11,
+          "name": "Example File 11",
+          "version": "1.51",
+          "uploaded_time": "2020-03-28T14:18:42.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 12,
+          "name": "Example File 12",
+          "version": "1.52",
+          "uploaded_time": "2020-03-29T08:36:36.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 13,
+          "name": "Example File 13",
+          "version": "1.53",
+          "uploaded_time": "2020-03-31T18:48:03.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 14,
+          "name": "Example File 14",
+          "version": "1.54",
+          "uploaded_time": "2020-04-05T20:12:58.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 15,
+          "name": "Example File 15",
+          "version": "1.6",
+          "uploaded_time": "2020-04-10T11:45:32.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 16,
+          "name": "Example File 16",
+          "version": "1.61",
+          "uploaded_time": "2020-04-11T15:59:00.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 17,
+          "name": "Example File 17",
+          "version": "1.70",
+          "uploaded_time": "2020-04-18T15:17:24.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 18,
+          "name": "Example File 18",
+          "version": "1.0",
+          "uploaded_time": "2020-04-18T15:19:20.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 19,
+          "name": "Example File 19",
+          "version": "1.0",
+          "uploaded_time": "2020-04-18T15:21:48.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 20,
+          "name": "Example File 20",
+          "version": "1.71",
+          "uploaded_time": "2020-04-19T08:52:25.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 21,
+          "name": "Example File 21",
+          "version": "1.71",
+          "uploaded_time": "2020-04-19T12:54:14.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 22,
+          "name": "Example File 22",
+          "version": "1.72",
+          "uploaded_time": "2020-04-25T19:55:36.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 23,
+          "name": "Example File 23",
+          "version": "1.1",
+          "uploaded_time": "2020-04-25T20:01:40.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 24,
+          "name": "Example File 24",
+          "version": "1.73",
+          "uploaded_time": "2020-04-30T20:07:02.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 25,
+          "name": "Example File 25",
+          "version": "1.74",
+          "uploaded_time": "2020-05-08T09:03:00.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 26,
+          "name": "Example File 26",
+          "version": "1.2",
+          "uploaded_time": "2020-05-08T09:10:01.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 27,
+          "name": "Example File 27",
+          "version": "1.21",
+          "uploaded_time": "2020-05-08T18:43:35.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 28,
+          "name": "Example File 28",
+          "version": "1.8",
+          "uploaded_time": "2020-05-16T13:38:39.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 29,
+          "name": "Example File 29",
+          "version": "1.30",
+          "uploaded_time": "2020-05-16T13:51:23.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 30,
+          "name": "Example File 30",
+          "version": "1.81",
+          "uploaded_time": "2020-05-17T17:55:02.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 31,
+          "name": "Example File 31",
+          "version": "1.31",
+          "uploaded_time": "2020-05-17T17:59:22.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 32,
+          "name": "Example File 32",
+          "version": "1.82",
+          "uploaded_time": "2020-05-28T13:56:08.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 33,
+          "name": "Example File 33",
+          "version": "1.32",
+          "uploaded_time": "2020-05-28T13:56:59.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 34,
+          "name": "Example File 34",
+          "version": "1.83",
+          "uploaded_time": "2020-12-04T15:48:18.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 35,
+          "name": "Example File 35",
+          "version": "1.32",
+          "uploaded_time": "2020-12-04T15:49:12.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 36,
+          "name": "Example File 36",
+          "version": "1.90",
+          "uploaded_time": "2021-01-24T14:08:54.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 37,
+          "name": "Example File 37",
+          "version": "1.4.0",
+          "uploaded_time": "2021-01-24T14:11:00.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 38,
+          "name": "Example File 38",
+          "version": "1.91",
+          "uploaded_time": "2021-01-26T15:59:22.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 39,
+          "name": "Example File 39",
+          "version": "0",
+          "uploaded_time": "2021-02-04T19:30:43.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 40,
+          "name": "Example File 40",
+          "version": "1.95",
+          "uploaded_time": "2021-02-23T16:08:29.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 41,
+          "name": "Example File 41",
+          "version": "1.50",
+          "uploaded_time": "2021-02-23T16:14:18.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 42,
+          "name": "Example File 42",
+          "version": "1.51",
+          "uploaded_time": "2021-02-23T21:35:53.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 43,
+          "name": "Example File 43",
+          "version": "1.51",
+          "uploaded_time": "2021-02-23T21:39:03.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 44,
+          "name": "Example File 44",
+          "version": "1.96",
+          "uploaded_time": "2021-02-23T21:41:13.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 45,
+          "name": "Example File 45",
+          "version": "2.0.0",
+          "uploaded_time": "2021-03-18T12:45:54.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 46,
+          "name": "Example File 46",
+          "version": "2.0.0",
+          "uploaded_time": "2021-03-18T12:47:55.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 47,
+          "name": "Example File 47",
+          "version": "2.0.0",
+          "uploaded_time": "2021-03-18T12:48:42.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 48,
+          "name": "Example File 48",
+          "version": "2.0.0",
+          "uploaded_time": "2021-03-18T19:47:24.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 49,
+          "name": "Example File 49",
+          "version": "2.1.0",
+          "uploaded_time": "2021-03-30T18:54:55.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 50,
+          "name": "Example File 50",
+          "version": "2.1.0",
+          "uploaded_time": "2021-03-30T18:57:14.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 51,
+          "name": "Example File 51",
+          "version": "2.1.1",
+          "uploaded_time": "2021-03-31T12:18:48.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 52,
+          "name": "Example File 52",
+          "version": "2.1.1",
+          "uploaded_time": "2021-03-31T15:57:25.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 53,
+          "name": "Example File 53",
+          "version": "2.1.0",
+          "uploaded_time": "2021-04-05T14:22:11.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 54,
+          "name": "Example File 54",
+          "version": "2.1.1",
+          "uploaded_time": "2021-04-06T20:32:54.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 55,
+          "name": "Example File 55",
+          "version": "2.1.1",
+          "uploaded_time": "2021-04-07T06:09:02.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 56,
+          "name": "Example File 56",
+          "version": "2.1.2",
+          "uploaded_time": "2021-04-09T16:00:14.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 57,
+          "name": "Example File 57",
+          "version": "2.1.2",
+          "uploaded_time": "2021-04-09T16:51:39.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 58,
+          "name": "Example File 58",
+          "version": "2.1.3",
+          "uploaded_time": "2021-04-19T16:20:08.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 59,
+          "name": "Example File 59",
+          "version": "2.1.2",
+          "uploaded_time": "2021-04-22T13:56:28.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 60,
+          "name": "Example File 60",
+          "version": "2.1.4",
+          "uploaded_time": "2021-12-11T11:04:22.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 61,
+          "name": "Example File 61",
+          "version": "2.1.4",
+          "uploaded_time": "2021-12-11T11:06:12.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 62,
+          "name": "Example File 62",
+          "version": "1.0",
+          "uploaded_time": "2021-12-11T11:08:07.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 63,
+          "name": "Example File 63",
+          "version": "2.1.5",
+          "uploaded_time": "2022-03-19T08:52:17.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 64,
+          "name": "Example File 64",
+          "version": "2.1.5",
+          "uploaded_time": "2022-03-19T08:54:32.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 65,
+          "name": "Example File 65",
+          "version": "2.1.6",
+          "uploaded_time": "2022-04-25T19:05:52.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 66,
+          "name": "Example File 66",
+          "version": "1.0",
+          "uploaded_time": "2022-08-17T17:14:12.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 67,
+          "name": "Example File 67",
+          "version": "1.0",
+          "uploaded_time": "2022-08-18T19:15:55.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 68,
+          "name": "Example File 68",
+          "version": "2.1.7",
+          "uploaded_time": "2022-08-24T18:12:16.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 69,
+          "name": "Example File 69",
+          "version": "1.01",
+          "uploaded_time": "2022-08-24T18:12:50.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 70,
+          "name": "Example File 70",
+          "version": "2.1.7",
+          "uploaded_time": "2022-08-24T18:15:27.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 71,
+          "name": "Example File 71",
+          "version": "2.2.0",
+          "uploaded_time": "2022-09-04T17:30:52.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 72,
+          "name": "Example File 72",
+          "version": "2.2.0",
+          "uploaded_time": "2022-09-04T17:31:40.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 73,
+          "name": "Example File 73",
+          "version": "2.2.0",
+          "uploaded_time": "2022-09-04T17:32:51.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 74,
+          "name": "Example File 74",
+          "version": "2.2.0",
+          "uploaded_time": "2022-09-04T17:45:36.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 75,
+          "name": "Example File 75",
+          "version": "1.1",
+          "uploaded_time": "2023-05-11T15:24:49.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 76,
+          "name": "Example File 76",
+          "version": "2.3.0",
+          "uploaded_time": "2023-05-11T15:27:42.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 77,
+          "name": "Example File 77",
+          "version": "2.3.0",
+          "uploaded_time": "2023-05-11T15:32:49.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 78,
+          "name": "Example File 78",
+          "version": "1.2",
+          "uploaded_time": "2023-05-11T16:30:16.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 79,
+          "name": "Example File 79",
+          "version": "2.3.0",
+          "uploaded_time": "2023-05-11T17:43:31.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 80,
+          "name": "Example File 80",
+          "version": "2.3.0",
+          "uploaded_time": "2023-05-11T20:37:07.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 81,
+          "name": "Example File 81",
+          "version": "1.1.1",
+          "uploaded_time": "2023-05-18T15:21:13.000+00:00",
+          "category_name": "OPTIONAL"
+        },
+        {
+          "file_id": 82,
+          "name": "Example File 82",
+          "version": "1.2.1",
+          "uploaded_time": "2023-05-18T15:22:21.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 83,
+          "name": "Example File 83",
+          "version": "2.3.1",
+          "uploaded_time": "2023-05-18T18:21:55.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 84,
+          "name": "Example File 84",
+          "version": "2.3.1",
+          "uploaded_time": "2023-05-18T18:25:11.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 85,
+          "name": "Example File 85",
+          "version": "2.3.1",
+          "uploaded_time": "2023-05-18T18:26:53.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 86,
+          "name": "Example File 86",
+          "version": "1.2.1",
+          "uploaded_time": "2023-05-19T05:40:43.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 87,
+          "name": "Example File 87",
+          "version": "1.0",
+          "uploaded_time": "2023-05-21T06:20:23.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 88,
+          "name": "Example File 88",
+          "version": "1.0",
+          "uploaded_time": "2023-05-21T16:45:25.000+00:00",
+          "category_name": "UPDATE"
+        },
+        {
+          "file_id": 89,
+          "name": "Example File 89",
+          "version": "2.3.2",
+          "uploaded_time": "2023-05-25T11:07:35.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 90,
+          "name": "Example File 90",
+          "version": "2.3.2",
+          "uploaded_time": "2023-05-25T16:25:25.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 91,
+          "name": "Example File 91",
+          "version": "2.3.3",
+          "uploaded_time": "2024-06-01T13:51:33.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 92,
+          "name": "Example File 92",
+          "version": "2.3.3",
+          "uploaded_time": "2024-06-01T13:54:05.000+00:00",
+          "category_name": "MAIN"
+        },
+        {
+          "file_id": 93,
+          "name": "Example File 93",
+          "version": "2.3.3",
+          "uploaded_time": "2024-06-01T13:57:04.000+00:00",
+          "category_name": "MAIN"
+        },
+        {
+          "file_id": 94,
+          "name": "Example File 94",
+          "version": "2.3.3",
+          "uploaded_time": "2024-06-01T13:57:58.000+00:00",
+          "category_name": "OPTIONAL"
+        },
+        {
+          "file_id": 95,
+          "name": "Example File 95",
+          "version": "2.3.3",
+          "uploaded_time": "2024-07-13T06:24:52.000+00:00",
+          "category_name": "MAIN"
+        },
+        {
+          "file_id": 96,
+          "name": "Example File 96",
+          "version": "1.3.0",
+          "uploaded_time": "2024-07-27T13:46:10.000+00:00",
           "category_name": "OPTIONAL"
         }
       ]
@@ -125,15 +779,99 @@
         {
           "file_id": 1,
           "name": "Example File 1",
-          "version": "2.3.2",
-          "uploaded_time": "2024-05-02T11:40:27.000+00:00",
-          "category_name": "OLD_VERSION"
+          "version": "1",
+          "uploaded_time": "2026-06-10T13:33:59.000+00:00",
+          "category_name": "ARCHIVED"
         },
         {
           "file_id": 2,
           "name": "Example File 2",
-          "version": "2.3.3",
-          "uploaded_time": "2024-07-27T13:46:10.000+00:00",
+          "version": "1.01",
+          "uploaded_time": "2026-06-10T14:06:08.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 3,
+          "name": "Example File 3",
+          "version": "1.02",
+          "uploaded_time": "2026-06-11T06:16:09.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 4,
+          "name": "Example File 4",
+          "version": "1.03",
+          "uploaded_time": "2026-06-13T04:56:37.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 5,
+          "name": "Example File 5",
+          "version": "1.04",
+          "uploaded_time": "2026-06-13T13:19:02.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 6,
+          "name": "Example File 6",
+          "version": "1.05",
+          "uploaded_time": "2026-06-14T13:10:48.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 7,
+          "name": "Example File 7",
+          "version": "1.06",
+          "uploaded_time": "2026-06-21T11:25:19.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 8,
+          "name": "Example File 8",
+          "version": "1.08",
+          "uploaded_time": "2026-07-05T16:32:38.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 9,
+          "name": "Example File 9",
+          "version": "1.09",
+          "uploaded_time": "2026-07-05T17:50:02.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 10,
+          "name": "Example File 10",
+          "version": "1.11",
+          "uploaded_time": "2026-07-09T14:14:46.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 11,
+          "name": "Example File 11",
+          "version": "1.12",
+          "uploaded_time": "2026-07-12T05:56:41.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 12,
+          "name": "Example File 12",
+          "version": "1.13",
+          "uploaded_time": "2026-07-15T06:22:14.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 13,
+          "name": "Example File 13",
+          "version": "1.14",
+          "uploaded_time": "2026-07-17T08:21:57.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 14,
+          "name": "Example File 14",
+          "version": "1.15",
+          "uploaded_time": "2026-08-01T05:54:25.000+00:00",
           "category_name": "MAIN"
         }
       ]
@@ -143,16 +881,513 @@
         {
           "file_id": 1,
           "name": "Example File 1",
-          "version": "8.00.3",
-          "uploaded_time": "2026-04-07T13:16:06.000+00:00",
-          "category_name": "MAIN"
+          "version": "1.0",
+          "uploaded_time": "2019-03-25T00:03:32.000+00:00",
+          "category_name": null
         },
         {
           "file_id": 2,
           "name": "Example File 2",
-          "version": "8.00.3-patch",
-          "uploaded_time": "2026-04-09T14:16:06.000+00:00",
-          "category_name": "MISCELLANEOUS"
+          "version": "1.01",
+          "uploaded_time": "2019-03-25T01:15:17.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 3,
+          "name": "Example File 3",
+          "version": "1.0.2",
+          "uploaded_time": "2019-03-25T20:53:43.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 4,
+          "name": "Example File 4",
+          "version": "1.1",
+          "uploaded_time": "2019-03-26T01:01:34.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 5,
+          "name": "Example File 5",
+          "version": "1.2",
+          "uploaded_time": "2019-03-26T21:18:30.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 6,
+          "name": "Example File 6",
+          "version": "1.3",
+          "uploaded_time": "2019-03-31T17:38:41.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 7,
+          "name": "Example File 7",
+          "version": "1.4",
+          "uploaded_time": "2019-04-04T19:43:45.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 8,
+          "name": "Example File 8",
+          "version": "1.5",
+          "uploaded_time": "2019-04-11T21:16:03.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 9,
+          "name": "Example File 9",
+          "version": "1.6",
+          "uploaded_time": "2019-05-28T22:07:03.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 10,
+          "name": "Example File 10",
+          "version": "1.61",
+          "uploaded_time": "2019-05-29T07:00:16.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 11,
+          "name": "Example File 11",
+          "version": "1.62",
+          "uploaded_time": "2019-06-08T23:59:26.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 12,
+          "name": "Example File 12",
+          "version": "1.62",
+          "uploaded_time": "2019-06-09T00:01:02.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 13,
+          "name": "Example File 13",
+          "version": "1.7",
+          "uploaded_time": "2019-06-22T10:29:50.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 14,
+          "name": "Example File 14",
+          "version": "1.8",
+          "uploaded_time": "2019-07-24T16:40:09.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 15,
+          "name": "Example File 15",
+          "version": "1.9",
+          "uploaded_time": "2019-10-14T16:14:54.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 16,
+          "name": "Example File 16",
+          "version": "1.95",
+          "uploaded_time": "2019-11-03T22:52:18.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 17,
+          "name": "Example File 17",
+          "version": "1.96",
+          "uploaded_time": "2019-11-08T23:43:48.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 18,
+          "name": "Example File 18",
+          "version": "2.0",
+          "uploaded_time": "2020-03-31T16:05:34.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 19,
+          "name": "Example File 19",
+          "version": "2.0",
+          "uploaded_time": "2020-03-31T16:19:12.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 20,
+          "name": "Example File 20",
+          "version": "2.01",
+          "uploaded_time": "2020-03-31T20:00:36.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 21,
+          "name": "Example File 21",
+          "version": "2.01",
+          "uploaded_time": "2020-03-31T22:40:20.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 22,
+          "name": "Example File 22",
+          "version": "2.02",
+          "uploaded_time": "2020-04-02T20:33:42.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 23,
+          "name": "Example File 23",
+          "version": "2.1",
+          "uploaded_time": "2020-04-14T00:47:18.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 24,
+          "name": "Example File 24",
+          "version": "2.1.1",
+          "uploaded_time": "2020-04-15T08:48:44.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 25,
+          "name": "Example File 25",
+          "version": "2.1.2",
+          "uploaded_time": "2020-04-18T01:06:22.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 26,
+          "name": "Example File 26",
+          "version": "2.1.3",
+          "uploaded_time": "2020-04-19T22:40:09.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 27,
+          "name": "Example File 27",
+          "version": "2.1.4",
+          "uploaded_time": "2020-04-20T18:06:49.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 28,
+          "name": "Example File 28",
+          "version": "2.1.5",
+          "uploaded_time": "2020-04-21T19:25:59.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 29,
+          "name": "Example File 29",
+          "version": "2.1.6",
+          "uploaded_time": "2020-04-26T20:24:11.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 30,
+          "name": "Example File 30",
+          "version": "2.1.7",
+          "uploaded_time": "2020-05-03T20:26:23.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 31,
+          "name": "Example File 31",
+          "version": "2.1.8",
+          "uploaded_time": "2020-05-16T15:18:51.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 32,
+          "name": "Example File 32",
+          "version": "2.1.9",
+          "uploaded_time": "2020-05-20T14:53:15.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 33,
+          "name": "Example File 33",
+          "version": "2.2",
+          "uploaded_time": "2020-06-14T18:15:10.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 34,
+          "name": "Example File 34",
+          "version": "2.3.0",
+          "uploaded_time": "2020-08-23T18:50:51.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 35,
+          "name": "Example File 35",
+          "version": "2.3.1",
+          "uploaded_time": "2020-08-23T22:21:10.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 36,
+          "name": "Example File 36",
+          "version": "2.3.2",
+          "uploaded_time": "2020-08-24T10:10:58.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 37,
+          "name": "Example File 37",
+          "version": "2.3.3",
+          "uploaded_time": "2020-09-25T20:55:24.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 38,
+          "name": "Example File 38",
+          "version": "2.3.3",
+          "uploaded_time": "2020-09-27T22:57:13.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 39,
+          "name": "Example File 39",
+          "version": "2.3.4",
+          "uploaded_time": "2020-10-15T22:52:13.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 40,
+          "name": "Example File 40",
+          "version": "2.4",
+          "uploaded_time": "2021-03-15T20:27:05.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 41,
+          "name": "Example File 41",
+          "version": "3.0",
+          "uploaded_time": "2021-03-16T17:22:21.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 42,
+          "name": "Example File 42",
+          "version": "3.0",
+          "uploaded_time": "2021-03-16T17:54:02.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 43,
+          "name": "Example File 43",
+          "version": "3.0.1",
+          "uploaded_time": "2021-03-17T00:04:04.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 44,
+          "name": "Example File 44",
+          "version": "3.0.1",
+          "uploaded_time": "2021-03-17T00:34:14.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 45,
+          "name": "Example File 45",
+          "version": "3.0.1",
+          "uploaded_time": "2021-03-17T01:18:00.000+00:00",
+          "category_name": null
+        },
+        {
+          "file_id": 46,
+          "name": "Example File 46",
+          "version": "3.0.2",
+          "uploaded_time": "2021-03-17T22:27:24.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 47,
+          "name": "Example File 47",
+          "version": "3.0.3",
+          "uploaded_time": "2021-03-18T19:42:22.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 48,
+          "name": "Example File 48",
+          "version": "3.0.4",
+          "uploaded_time": "2021-03-19T13:09:22.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 49,
+          "name": "Example File 49",
+          "version": "3.0.5",
+          "uploaded_time": "2021-03-20T16:31:46.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 50,
+          "name": "Example File 50",
+          "version": "3.0.6",
+          "uploaded_time": "2021-04-03T16:56:33.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 51,
+          "name": "Example File 51",
+          "version": "3.1",
+          "uploaded_time": "2021-09-13T15:28:51.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 52,
+          "name": "Example File 52",
+          "version": "3.2",
+          "uploaded_time": "2021-12-09T12:55:52.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 53,
+          "name": "Example File 53",
+          "version": "3.3.5",
+          "uploaded_time": "2022-04-24T18:25:08.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 54,
+          "name": "Example File 54",
+          "version": "3.36",
+          "uploaded_time": "2022-05-08T14:44:27.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 55,
+          "name": "Example File 55",
+          "version": "3.40",
+          "uploaded_time": "2022-09-10T15:47:01.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 56,
+          "name": "Example File 56",
+          "version": "4.0",
+          "uploaded_time": "2023-04-27T18:20:52.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 57,
+          "name": "Example File 57",
+          "version": "4.0.1",
+          "uploaded_time": "2023-04-27T22:07:23.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 58,
+          "name": "Example File 58",
+          "version": "4.0.2",
+          "uploaded_time": "2023-05-01T20:59:11.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 59,
+          "name": "Example File 59",
+          "version": "4.0.3",
+          "uploaded_time": "2023-06-10T17:58:22.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 60,
+          "name": "Example File 60",
+          "version": "1.0",
+          "uploaded_time": "2023-08-12T19:29:38.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 61,
+          "name": "Example File 61",
+          "version": "4.04",
+          "uploaded_time": "2023-08-12T19:42:22.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 62,
+          "name": "Example File 62",
+          "version": "4.10",
+          "uploaded_time": "2024-06-21T22:48:00.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 63,
+          "name": "Example File 63",
+          "version": "4.10",
+          "uploaded_time": "2024-06-22T11:16:50.000+00:00",
+          "category_name": "ARCHIVED"
+        },
+        {
+          "file_id": 64,
+          "name": "Example File 64",
+          "version": "4.20",
+          "uploaded_time": "2024-08-09T13:40:29.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 65,
+          "name": "Example File 65",
+          "version": "4.30",
+          "uploaded_time": "2025-02-20T17:20:02.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 66,
+          "name": "Example File 66",
+          "version": "4.301",
+          "uploaded_time": "2025-03-02T08:57:45.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 67,
+          "name": "Example File 67",
+          "version": "4.40",
+          "uploaded_time": "2025-09-28T12:16:59.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 68,
+          "name": "Example File 68",
+          "version": "4.41",
+          "uploaded_time": "2025-09-29T17:55:22.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 69,
+          "name": "Example File 69",
+          "version": "4.42",
+          "uploaded_time": "2025-10-19T16:32:22.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 70,
+          "name": "Example File 70",
+          "version": "5.0",
+          "uploaded_time": "2026-06-21T15:08:40.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 71,
+          "name": "Example File 71",
+          "version": "5.0",
+          "uploaded_time": "2026-06-21T20:00:55.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 72,
+          "name": "Example File 72",
+          "version": "5.01",
+          "uploaded_time": "2026-06-24T21:23:21.000+00:00",
+          "category_name": "OLD_VERSION"
+        },
+        {
+          "file_id": 73,
+          "name": "Example File 73",
+          "version": "5.02",
+          "uploaded_time": "2026-07-27T18:05:44.000+00:00",
+          "category_name": "MAIN"
         }
       ]
     }
@@ -166,25 +1401,25 @@
             {
               "modId": 1001,
               "name": "Example Mod 1",
-              "version": "1.0",
+              "version": "1.01",
               "author": "example_author_1",
-              "updatedAt": "2020-04-03T15:21:05Z",
+              "updatedAt": "2026-10-06T15:37:40Z",
               "status": "published"
             },
             {
               "modId": 1002,
               "name": "Example Mod 2",
-              "version": "2.3.3",
+              "version": "1.1.d",
               "author": "example_author_2",
-              "updatedAt": "2024-07-27T13:46:10Z",
+              "updatedAt": "2026-10-18T19:00:47Z",
               "status": "published"
             },
             {
               "modId": 1003,
               "name": "Example Mod 3",
-              "version": "8.00.3",
+              "version": "1.0.0",
               "author": "example_author_3",
-              "updatedAt": "2026-04-07T13:16:06Z",
+              "updatedAt": "2026-08-25T16:13:08Z",
               "status": "published"
             }
           ]
@@ -199,25 +1434,25 @@
             {
               "modId": 1001,
               "name": "Example Mod 1",
-              "version": "1.0",
+              "version": "1.01",
               "author": "example_author_1",
-              "updatedAt": "2020-04-03T15:21:05Z",
+              "updatedAt": "2026-10-06T15:37:40Z",
               "status": "published"
             },
             {
               "modId": 1002,
               "name": "Example Mod 2",
-              "version": "2.3.3",
+              "version": "1.1.d",
               "author": "example_author_2",
-              "updatedAt": "2024-07-27T13:46:10Z",
+              "updatedAt": "2026-10-18T19:00:47Z",
               "status": "published"
             },
             {
               "modId": 1003,
               "name": "Example Mod 3",
-              "version": "8.00.3",
+              "version": "1.0.0",
               "author": "example_author_3",
-              "updatedAt": "2026-04-07T13:16:06Z",
+              "updatedAt": "2026-08-25T16:13:08Z",
               "status": "published"
             }
           ]
@@ -232,25 +1467,25 @@
             {
               "modId": 1001,
               "name": "Example Mod 1",
-              "version": "1.0",
+              "version": "1.01",
               "author": "example_author_1",
-              "updatedAt": "2020-04-03T15:21:05Z",
+              "updatedAt": "2026-10-06T15:37:40Z",
               "status": "published"
             },
             {
               "modId": 1002,
               "name": "Example Mod 2",
-              "version": "2.3.3",
+              "version": "1.1.d",
               "author": "example_author_2",
-              "updatedAt": "2024-07-27T13:46:10Z",
+              "updatedAt": "2026-10-18T19:00:47Z",
               "status": "published"
             },
             {
               "modId": 1003,
               "name": "Example Mod 3",
-              "version": "8.00.3",
+              "version": "1.0.0",
               "author": "example_author_3",
-              "updatedAt": "2026-04-07T13:16:06Z",
+              "updatedAt": "2026-08-25T16:13:08Z",
               "status": "published"
             },
             {
@@ -259,9 +1494,9 @@
             {
               "modId": 1001,
               "name": "Example Mod 1",
-              "version": "1.0",
+              "version": "1.01",
               "author": "example_author_1",
-              "updatedAt": "2020-04-03T15:21:05Z",
+              "updatedAt": "2026-10-06T15:37:40Z",
               "status": "published"
             }
           ]
