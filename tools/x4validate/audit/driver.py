@@ -218,7 +218,7 @@ def tests():
     try:
         run("pytest-tools-reviewed", [PYTHON, "-m", "pytest", "tests", "-q",
             "--ignore=tests/test_install_over_existing.py", "--ignore=tests/test_installer_recovery_command_works.py", "--ignore=tests/test_installer_literal_paths.py", "--ignore=tests/test_installers_agree.py", "--ignore=tests/test_gate_install_is_hermetic.py",
-            "--tb=short", "-o", "faulthandler_timeout=60", "-o", f"cache_dir={OUT / 'pytest-cache'}", "--basetemp", temp], env=env, timeout=1200)
+            "--tb=short", "-o", "faulthandler_timeout=60", "-o", f"cache_dir={OUT / 'pytest-cache'}", "--basetemp", temp / "tests"], env=env, timeout=1200)
     finally:
         shutil.rmtree(temp, ignore_errors=True)   # a whole suite's tmp_path dirs; the results are already in OUT
 

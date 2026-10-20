@@ -10,6 +10,11 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Main and BaseX pytest runs now use per-invocation owned scratch instead of
+  pytest's shared older-run pruning. Existing `--basetemp` output is refused;
+  fresh caller paths remain supported. This closes a cleanup route outside the
+  session sweep's ownership checks (BLIND-SPOTS F316).
+
 - Hook-only game-root deployments now resolve the configured shared runtime for
   unknown tools. This fixes the question-tool ValueError caused by looking for a
   full tools installation inside a hook-only folder (BLIND-SPOTS F315).

@@ -1,6 +1,6 @@
 {
   "__helpers__": {
-    "conftest.py": "89d4c153e4f6a837f75e7106864c3a9b969946ac64d5cc4de1f17ec0473543a1",
+    "conftest.py": "47900a6a71e808220b3274095dee61f71704d51b9134c4c291725457c26f155f",
     "_layout.py": "ab6b44f80098867f7624b0461b5bf8855dc98fbe781a53e228be24c21f0771dd",
     "codex_testlib.py": "80dd0366c824ceb655b5e2eb4a6af7d155d177cc28668b59ec0610f44a587561"
   },
@@ -117,5 +117,11 @@
     "mode": "serial",
     "reviewed": true,
     "reason": "READ: owned save fixtures and rendered subprocess adapters; no real save or OS recycler access"
+  },
+  "test_pytest_temp_isolation.py": {
+    "sha256": "97e2395f646803fa8259158c28cdaf15a523431653640dcfc1edce7014dd814a",
+    "mode": "exclusive",
+    "reviewed": true,
+    "reason": "READ: isolated child pytest bootstraps with a synthetic foreign temp root; no real prior-run cleanup or OS bin"
   }
 }

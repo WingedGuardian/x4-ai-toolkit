@@ -70,6 +70,11 @@ link.
 
 ## X4 checklist
 
+- **Pytest has its own disposable directory per invocation.** Both the main and
+  BaseX suites avoid pytest's shared numbered-directory cleanup. Legacy unmarked
+  runs and other projects' runs are preserved. A caller's `--basetemp` must name
+  a new directory; existing output is refused before pytest can wipe it.
+
 - **Automatic Temp cleanup requires ownership.** Only a receipt written when this
   toolkit creates a directory grants ownership. Legacy unmarked directories,
   matching names alone and other projects' pytest runs are left alone. High-volume

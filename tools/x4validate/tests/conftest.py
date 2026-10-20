@@ -50,18 +50,18 @@ sys.dont_write_bytecode = True
 os.environ["X4_HOUSEKEEP_SWEEP"] = "off"  # every subprocess test inherits safe session-start behavior
 
 GATES = Path(__file__).resolve().parent.parent / "gates"
+_TOOLKIT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_TOOLKIT / "scripts"))
+import x4pytest
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
+    x4pytest.configure(config, _TOOLKIT)
 
 
 def pytest_sessionstart(session):
-    """Receipt only for this toolkit's newly created pytest base, never its shared parent."""
-    toolkit = Path(__file__).resolve().parents[3]
-    sys.path.insert(0, str(toolkit / "scripts"))
-    from x4temp import mark_owned_temp
-    base = session.config._tmp_path_factory.getbasetemp()
-    mark_owned_temp(base, toolkit)
-    # Child installer/build tests must never reach a real OS recycler or popup.
-    os.environ["X4_RECYCLE_TEST_ROOT"] = str(base)
-    os.environ["X4_RECYCLE_TEST_BIN"] = str(base / ".fake-recycle-bin")
+    x4pytest.session_start(session, _TOOLKIT)
 
 
 def import_gate(name: str, *, module_level: bool = True):

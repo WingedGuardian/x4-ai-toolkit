@@ -394,6 +394,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F313 | Steam title lookup leaked incomplete HTTP reads out of refresh | **DEFECT (measured)** | Three transport failures and the real no-title twin | FIXED 2026-10-20 - HTTPException maps to SteamUnavailable |
 | F314 | Opaque programs naming saves bypassed review and preservation | **DEFECT (measured)** | Named/bulk/embedded scope, reader twins, 26,346-payload replay and 31 per-item verdicts | FIXED 2026-10-20 - possible-access review after preservation; unresolved scope refused |
 | F315 | Unknown tools in hook-only deployments raised ValueError before routing | **DEFECT (measured)** | Actual installed reproduction and Codex/OpenCode hook-only fixtures | FIXED 2026-10-20 - resolve the configured external runtime when local tools are absent |
+| F316 | Pytest itself pruned shared earlier-run temp outside ownership checks | **DEFECT (measured)** | Main/BaseX startup, seeded foreign run, explicit-path twins | FIXED 2026-10-20 - per-invocation owned scratch and refusal of existing basetemp |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11092,3 +11093,34 @@ deployment; this entry does not claim the UI question tool has run successfully.
 **RE-DERIVED BY:** tests/test_host_save_batches.py::
 test_hook_only_deployment_routes_unknown_tools_to_configured_runtime;
 tests/test_codex_adapter.py; tests/test_opencode_adapter.py.
+
+## F316 - Pytest bypassed the ownership boundary · **DEFECT (measured)** · confidence 98% · FIXED 2026-10-20
+
+READ: the pinned pytest TempPathFactory.getbasetemp registered numbered-directory
+pruning over its shared per-user root. Marking the new run did not constrain that
+upstream cleanup. MEASURED in a fully synthetic shared temp root: the pre-fix
+main bootstrap deleted an older unmarked other-project canary. An existing
+explicit basetemp was also wiped. No real shared root was used by those controls.
+
+scripts/x4pytest.py now configures a new owned TemporaryDirectory before temp
+initialization, registers same-run cleanup immediately and marks its ownership.
+Both suite bootstraps use it. Existing explicit basetemp paths refuse; fresh
+explicit paths remain caller-owned. Late global initialization cancels the
+pinned pytest ExitStack's deferred pruning and refuses. The audit runner passes
+an absent child inside its owned scratch instead of an already-created directory.
+
+MEASURED: 21 isolation/temp/recycler controls pass, zero skips. Both actual suite
+bootstraps preserve the seeded foreign run and clean only their own scratch.
+The late-init and fresh/existing explicit-path twins also pass.
+
+The in-flight install-bound run was stopped through its verified own rb parent
+before normal completion; its partial log is retained and is not a pass. Earlier
+completed real pytest runs used the shared default. There is no before/after
+inventory supporting a claim about which real older directories they removed.
+The install-bound selection must be rerun from the isolated final source.
+
+Residual: this controls the toolkit's bootstraps, not unrelated pytest processes.
+The late-plugin cancellation path is tied to the pinned pytest ExitStack API.
+
+**RE-DERIVED BY:** tests/test_pytest_temp_isolation.py; tests/test_temp_hygiene.py;
+tests/test_x4recycle.py; scripts/x4pytest.py.
