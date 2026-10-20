@@ -246,7 +246,11 @@ def test_bx2_a_config_FAILURE_refuses_instead_of_guessing(monkeypatch, tmp_path,
 # ============================================================================ BX-3 (build scripts)
 
 @pytest.mark.parametrize("script", ["build-corpus.sh", "build-effective.sh"])
-def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script):
+@pytest.mark.parametrize("recycle_fails", [False, True])
+def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script, recycle_fails, tmp_path):
+    import os
+    import shlex
+    import subprocess
     text = (BASEX / script).read_text(encoding="utf-8")
     # The first DROP DB on a line that is not a COMMENT: issue #10 added a comment naming
     # "the DROP DB below" above the revoke, and a bare text.find() anchored there.
@@ -257,10 +261,43 @@ def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script
             break
         pos += len(line)
     assert drop > 0, f"{script}: no DROP DB found -- the fixture premise moved"
-    revoke = re.search(r"rm -f[^\n]*coverage-", text[:drop])
-    assert revoke, (f"{script}: nothing removes coverage-$DB.json before DROP DB; an "
-                    f"interrupted or failed rebuild (exit at the 'not found' grep) leaves the "
-                    f"previous build's supports_negative_claim=true beside a partial database")
+    revoke = re.search(r'^\(cd .*x4recycle\.py.*coverage-.*$', text[:drop], re.M)
+    assert revoke, f"{script}: no recoverable coverage revocation before DROP DB"
+    assert "set -euo pipefail" in text[:drop]
+    spec = importlib.util.spec_from_file_location("gitbash_for_bx3", PKG.parents[1] / "scripts/gitbash.py")
+    resolver = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(resolver)
+    bash = resolver.find_bash()
+    assert bash, "this shell-driver control requires Bash"
+    coverage = tmp_path / "coverage-test.json"
+    coverage.write_text("old licence")
+    fake_bin = tmp_path / "fake-bin"
+    if recycle_fails:
+        fake_bin.write_text("cannot be a directory")
+    witness = tmp_path / "drop-witness"
+    env = dict(os.environ, X4_RECYCLE_TEST_ROOT=str(tmp_path),
+               X4_RECYCLE_TEST_BIN=str(fake_bin), PYTEST_CURRENT_TEST="bx3-seam")
+    quote = lambda value: shlex.quote(Path(value).as_posix())
+    setup = "\n".join([
+        "set -euo pipefail",
+        "HERE=" + quote(BASEX),
+        "BASEX_DIR=" + quote(tmp_path),
+        "X4VALIDATE=" + quote(PKG),
+        "DB=test",
+        'uv() { shift; shift; ' + quote(sys.executable) + ' "$@"; }',
+        "java() { printf dropped > " + quote(witness) + "; }",
+    ])
+    drop_line = next(line for line in text.splitlines()
+                     if "DROP DB" in line and not line.lstrip().startswith("#"))
+    run = subprocess.run([bash, "-c", setup + "\n" + revoke.group() + "\n" + drop_line],
+                         env=env, capture_output=True, text=True, timeout=30)
+    if recycle_fails:
+        assert run.returncode != 0 and coverage.read_text() == "old licence", run.stderr
+        assert not witness.exists(), "DROP DB ran after failed coverage revocation"
+    else:
+        assert run.returncode == 0 and witness.read_text() == "dropped", run.stderr
+        assert not coverage.exists()
+        assert [p.read_text() for p in fake_bin.iterdir()] == ["old licence"]
 
 
 # ============================================================================ BX-4 (coverage.py)

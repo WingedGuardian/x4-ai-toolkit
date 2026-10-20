@@ -398,6 +398,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F317 | Deduplication chmod reached outside live files through existing hard links | **DEFECT (measured)** | Canonical/duplicate external-link refusals, late-link refusal, three-copy twin | FIXED 2026-10-20 - retain unqualified links and count only links created by this apply |
 | F318 | Linked evidence with spaces, punctuation or URI escapes lost Forever protection | **DEFECT (measured)** | 16 name/spelling cases, same-byte unlinked twins, late-link and bound controls | FIXED 2026-10-20 - conservative bounded reference discovery |
 | F319 | Named known-good baselines and audit logs lacked the promised Forever guard | **DEFECT (measured)** | Four named-file/folder controls with ordinary cleanup twins | FIXED 2026-10-20 - explicit baseline and audit-name protection |
+| F320 | Malformed Steam JSON and failure statuses impersonated missing items | **DEFECT (measured)** | Eight invalid shapes, seven failure statuses and valid/absent twins | FIXED 2026-10-20 - only explicit FileNotFound means absence |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11188,3 +11189,24 @@ the explicit period boundary preserves the old prose behavior on POSIX too.
 The shared retention-policy text and its cross-toolkit hash are unchanged.
 
 **RE-DERIVED BY:** tests/test_x4housekeep.py; tests/test_retention_policy.py.
+
+## F320 - Steam response failures impersonated missing items · **DEFECT (measured)** · confidence 99% · FIXED 2026-10-20
+
+MEASURED: eight malformed response controls failed before the shape fix; a valid
+named-item twin passed. Missing response/detail/result fields, a non-list or empty
+detail set, non-integer status and a missing/non-string title can no longer return
+a false absence or unusable title. Only explicit EResult.FileNotFound (9) returns
+None. Seven other failure/unknown status controls raise SteamUnavailable, preserving
+the existing caller's per-row outage path. Valve's EResult reference distinguishes
+FileNotFound from service, access and timeout failures:
+https://partner.steamgames.com/doc/api/steam_api#EResult
+
+MEASURED: Steam transport, runtime and native host regression files passed 92
+tests with zero skips; no network calls or history command execution occurred.
+The adjacent BaseX coverage-revocation controls were stale after recoverable
+cleanup replaced rm. Four shell seam controls now verify both build drivers:
+successful fake-bin recycling precedes DROP DB; recycler refusal retains coverage
+and prevents DROP DB under the driver's actual set -e. No JVM or real bin ran.
+
+**RE-DERIVED BY:** tests/test_nexus_transport.py;
+tests/test_audit0924_gates.py; tests/test_audit0924_runtime.py.

@@ -410,7 +410,19 @@ def steam_title(ws_number: str) -> tuple[str, str] | None:
         # title" -- catching only HTTPError previously let some of these crash a
         # refresh (RG-1) while others silently impersonated a real answer.
         raise SteamUnavailable(f"Steam GetPublishedFileDetails unreachable: {exc}") from exc
-    details = (((d or {}).get("response") or {}).get("publishedfiledetails") or [])
-    if details and details[0].get("title"):
-        return details[0]["title"], str(details[0].get("creator", ""))
-    return None
+    response = d.get("response") if isinstance(d, dict) else None
+    details = response.get("publishedfiledetails") if isinstance(response, dict) else None
+    if (not isinstance(details, list) or len(details) != 1 or not isinstance(details[0], dict)
+            or type(details[0].get("result")) is not int):
+        raise SteamUnavailable("Steam GetPublishedFileDetails returned an unusable item response")
+    item = details[0]
+    if item["result"] == 9:  # EResult.FileNotFound: an explicit per-item absence
+        return None
+    if item["result"] != 1:
+        # Other EResult values include access, service and timeout failures.
+        # https://partner.steamgames.com/doc/api/steam_api#EResult
+        raise SteamUnavailable(f"Steam GetPublishedFileDetails failed with result {item['result']}")
+    title = item.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise SteamUnavailable("Steam reported a successful item without a usable title")
+    return title, str(item.get("creator", ""))

@@ -176,3 +176,30 @@ def test_steam_title_maps_a_dropped_response_body_to_unavailable(monkeypatch):
     monkeypatch.setattr(_nexus.urllib.request, "urlopen", lambda *a, **k: Dropped(b""))
     with pytest.raises(_nexus.SteamUnavailable):
         _nexus.steam_title("ws_1")
+
+
+@pytest.mark.parametrize("payload", [[], {}, {"response": {}},
+    {"response": {"publishedfiledetails": []}},
+    {"response": {"publishedfiledetails": [{}]}},
+    {"response": {"publishedfiledetails": [{"result": 1, "title": 123}]}},
+    {"response": {"publishedfiledetails": [{"result": True, "title": "name"}]}},
+    {"response": {"publishedfiledetails": [{"result": 1}]}},
+])
+def test_steam_malformed_answers_cannot_impersonate_a_real_no_title(monkeypatch, payload):
+    monkeypatch.setattr(_nexus.urllib.request, "urlopen", lambda *a, **k: _Resp(json.dumps(payload).encode()))
+    with pytest.raises(_nexus.SteamUnavailable):
+        _nexus.steam_title("ws_1")
+
+
+@pytest.mark.parametrize("status", [2, 3, 15, 16, 20, 22, 999])
+def test_steam_failure_status_is_unavailable_not_absence(monkeypatch, status):
+    payload = {"response": {"publishedfiledetails": [{"result": status}]}}
+    monkeypatch.setattr(_nexus.urllib.request, "urlopen", lambda *a, **k: _Resp(json.dumps(payload).encode()))
+    with pytest.raises(_nexus.SteamUnavailable):
+        _nexus.steam_title("ws_1")
+
+
+def test_steam_valid_named_item_keeps_its_title_and_creator(monkeypatch):
+    payload = {"response": {"publishedfiledetails": [{"result": 1, "title": "A real title", "creator": "123"}]}}
+    monkeypatch.setattr(_nexus.urllib.request, "urlopen", lambda *a, **k: _Resp(json.dumps(payload).encode()))
+    assert _nexus.steam_title("ws_1") == ("A real title", "123")
