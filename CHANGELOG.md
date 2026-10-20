@@ -10,6 +10,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Deduplication retains pre-existing hard links whose other names may be live
+  files outside the configured roots. Apply rechecks link ownership before chmod
+  while allowing links created earlier in the same batch (BLIND-SPOTS F317).
+
 - Main and BaseX pytest runs now use per-invocation owned scratch instead of
   pytest's shared older-run pruning. Existing `--basetemp` output is refused;
   fresh caller paths remain supported. This closes a cleanup route outside the

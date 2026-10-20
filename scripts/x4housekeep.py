@@ -356,6 +356,15 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
     live = live_index(cfg) if tasks else {}
     live_hash = {}
     by_size = {}
+
+    def queue_duplicate(f, task, size, digest=None):
+        # chmod affects every name of an inode. Existing links may include live
+        # files outside every configured root; their ownership is unqualified.
+        if f.stat().st_nlink != 1:
+            count("kept: pre-existing hard links (ownership unqualified)", size)
+        else:
+            by_size.setdefault(size, []).append((f, task, digest))
+
     for task, state in tasks:
         for f in walk_files(task):
             try:
@@ -389,10 +398,10 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
                     act({"class": "recreatable", "path": str(f), "bytes": size, "hash": h,
                                     "live": match, "task": str(task)}, "plan: copy of a live file -> Recycle Bin")
                     continue
-                by_size.setdefault(size, []).append((f, task, h))
+                queue_duplicate(f, task, size, h)
                 continue
             if size >= cfg["min_bytes"]:
-                by_size.setdefault(size, []).append((f, task, None))
+                queue_duplicate(f, task, size)
                 continue
             count("kept: below min_bytes / not duplicated", size)
 
@@ -573,6 +582,7 @@ class _Memo:
 
     def __init__(self):
         self.hashes, self.newest = {}, {}
+        self.links = {}  # only canonical links successfully created by THIS apply
 
     def hash(self, path):
         st = os.stat(path)
@@ -616,6 +626,8 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
             return "canonical copy changed or gone"
         if guard.why_protected(c):
             return "canonical copy is protected"
+        if p.stat().st_nlink != 1 or c.stat().st_nlink != 1 + memo.links.get(_key(c), 0):
+            return "hard-link ownership changed or is unqualified"
     if action["class"] in ("launch", "snapshot", "scratch"):
         why = protected_inside(guard, p)
         if why:
@@ -627,15 +639,18 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
     return ""
 
 
-def link(action):
+def link(action, expected_canonical_links=1):
     dup, canon = Path(action["path"]), Path(action["canonical"])
     tmp = dup.with_name(dup.name + ".housekeep-link")
     if tmp.exists():
         raise OSError("leftover {} -- inspect it by hand".format(tmp))
+    if dup.stat().st_nlink != 1 or canon.stat().st_nlink != expected_canonical_links:
+        raise OSError("hard-link ownership changed before linking")
     os.link(canon, tmp)
-    if os.stat(tmp).st_ino != os.stat(canon).st_ino or blake(tmp) != action["hash"]:
+    if (os.stat(tmp).st_ino != os.stat(canon).st_ino or blake(tmp) != action["hash"]
+            or dup.stat().st_nlink != 1 or canon.stat().st_nlink != expected_canonical_links + 1):
         recycle([tmp])                                           # our own just-made link -- still the bin, never a delete
-        raise OSError("the new link does not resolve to the canonical bytes")
+        raise OSError("the new link's bytes or ownership changed")
     if not os.access(dup, os.W_OK):
         os.chmod(dup, stat.S_IWRITE | stat.S_IREAD)
     os.replace(tmp, dup)
@@ -684,7 +699,9 @@ def apply(plan_doc: dict, cfg, only=None, recycler=recycle, now: float | None = 
                 continue
             try:
                 if cls == "link":
-                    link(a)
+                    canonical_key = _key(a["canonical"])
+                    link(a, 1 + memo.links.get(canonical_key, 0))
+                    memo.links[canonical_key] = memo.links.get(canonical_key, 0) + 1
                     done += a["bytes"]
                 elif cls == "gzip":
                     compress(a)

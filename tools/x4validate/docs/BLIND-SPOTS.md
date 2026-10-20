@@ -395,6 +395,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F314 | Opaque programs naming saves bypassed review and preservation | **DEFECT (measured)** | Named/bulk/embedded scope, reader twins, 26,346-payload replay and 31 per-item verdicts | FIXED 2026-10-20 - possible-access review after preservation; unresolved scope refused |
 | F315 | Unknown tools in hook-only deployments raised ValueError before routing | **DEFECT (measured)** | Actual installed reproduction and Codex/OpenCode hook-only fixtures | FIXED 2026-10-20 - resolve the configured external runtime when local tools are absent |
 | F316 | Pytest itself pruned shared earlier-run temp outside ownership checks | **DEFECT (measured)** | Main/BaseX startup, seeded foreign run, explicit-path twins | FIXED 2026-10-20 - per-invocation owned scratch and refusal of existing basetemp |
+| F317 | Deduplication chmod reached outside live files through existing hard links | **DEFECT (measured)** | Canonical/duplicate external-link refusals, late-link refusal, three-copy twin | FIXED 2026-10-20 - retain unqualified links and count only links created by this apply |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11124,3 +11125,24 @@ The late-plugin cancellation path is tied to the pinned pytest ExitStack API.
 
 **RE-DERIVED BY:** tests/test_pytest_temp_isolation.py; tests/test_temp_hygiene.py;
 tests/test_x4recycle.py; scripts/x4pytest.py.
+
+## F317 - Pre-existing hard links crossed deduplication ownership · **DEFECT (measured)** · confidence 98% · FIXED 2026-10-20
+
+MEASURED before the fix: three of four new controls failed. A canonical file
+already linked to an unlisted live file made that live file read-only; an already
+linked duplicate could make its outside name writable; a link added after planning
+was accepted. The independent three-copy deduplication twin passed.
+
+Planning now retains candidates with pre-existing hard links. Apply rechecks the
+duplicate's single-link ownership and the canonical's link count, allowing only
+the extra links successfully created by that same apply. The link operation
+rechecks before creation and before chmod/publication. Ordinary three-copy batches
+remain supported. MEASURED: all 38 housekeep controls pass, zero skips; the four
+new cases pass. Tests use synthetic files and a fake recycler only.
+
+Residual: the final checks and filesystem writes are not one system-wide atomic
+transaction; concurrent changes after the final check remain possible. READ:
+the sibling Skyrim housekeep link implementation also lacks a link-count guard;
+that is a separate follow-up lead, not a claim that it has been fixed there.
+
+**RE-DERIVED BY:** tests/test_x4housekeep.py; scripts/x4housekeep.py.

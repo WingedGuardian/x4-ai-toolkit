@@ -167,6 +167,44 @@ def test_duplicates_become_one_read_only_copy(tree):
     assert not os.access(b, os.W_OK)
 
 
+@pytest.mark.parametrize("side", ["canonical", "duplicate"])
+def test_preexisting_outside_hardlink_never_changes_live_permissions(tree, side):
+    import stat
+    a = write(tree / "out/a/x.log", blob("dup"))
+    b = write(tree / "out/b/x.log", blob("dup"))
+    outside = tree / "unlisted-live.log"
+    os.link(a if side == "canonical" else b, outside)
+    if side == "duplicate":
+        os.chmod(b, stat.S_IREAD)
+    before = outside.stat().st_mode
+    cfg = cfg_for(tree, live_roots=[])
+    doc = hk.plan(cfg)
+    hk.apply(doc, cfg, recycler=FakeBin(tree))
+    assert outside.stat().st_mode == before, "deduplication changed an unlisted live inode's permissions"
+    assert not doc["actions"], "pre-existing hardlink ownership was not qualified"
+    assert outside.read_bytes() == blob("dup")
+
+
+def test_three_independent_duplicates_can_link_in_one_apply(tree):
+    files = [write(tree / "out" / n / "x.log", blob("dup")) for n in ("a", "b", "c")]
+    cfg = cfg_for(tree, live_roots=[])
+    assert hk.apply(hk.plan(cfg), cfg, recycler=FakeBin(tree)) == 0
+    assert len({p.stat().st_ino for p in files}) == 1
+    assert files[0].stat().st_nlink == 3
+
+
+def test_hardlink_added_after_planning_refuses_before_live_chmod(tree):
+    a = write(tree / "out/a/x.log", blob("dup"))
+    write(tree / "out/b/x.log", blob("dup"))
+    cfg = cfg_for(tree, live_roots=[])
+    doc = hk.plan(cfg)
+    outside = tree / "unlisted-live.log"
+    os.link(a, outside)
+    before = outside.stat().st_mode
+    assert hk.apply(doc, cfg, recycler=FakeBin(tree)) == 1
+    assert outside.stat().st_mode == before
+
+
 def test_rows_sum_to_every_byte_scanned(tree):
     write(tree / "out" / "a" / "01.cat", blob("catalog"))
     write(tree / "out" / "a" / "Egosoft" / "X4" / "1" / "save" / "s.xml.gz", b"save")
