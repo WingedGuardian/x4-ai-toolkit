@@ -99,5 +99,11 @@
     "mode": "serial",
     "reviewed": true,
     "reason": "READ: sandbox restore and Bash child; no shared destination or OS recycle calls"
+  },
+  "test_release_bundle_docs.py": {
+    "sha256": "8a8f28f3269ccd0bd8cfcb815978bb4b702a1e5864d2b760c032c68b369a5cae",
+    "mode": "serial",
+    "reviewed": true,
+    "reason": "READ: repository attributes and in-memory git archive inspection; no shared writes"
   }
 }

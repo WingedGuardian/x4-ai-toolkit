@@ -227,6 +227,6 @@ Bare `python` on the author's machine is 3.10; the toolkit needs 3.13 through `u
 
 ## Where the design lives
 
-- `docs/superpowers/specs/2026-09-30-universal-agent-support-design.md` (why this file exists,
-  and what replaces it)
+- [Universal agent design](https://github.com/WingedGuardian/x4-ai-toolkit/blob/master/docs/superpowers/specs/2026-09-30-universal-agent-support-design.md)
+  (maintainer record on GitHub; excluded from release archives)
 - `docs/superpowers/measurements/2026-09-30-codex-spike.md` (what Codex was measured to do)

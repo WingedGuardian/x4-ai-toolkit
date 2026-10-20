@@ -10,6 +10,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Release archives now omit maintainer briefs, audit working papers and design
+  specifications. Measurements and repair documentation still ship; citations to
+  excluded records point to their retained GitHub copies.
+
 - Restoring an older backup now preserves and verifies the current destination
   first. Literal backup lookup and staged publication reject failed preservation
   and changed input bytes (BLIND-SPOTS F312).

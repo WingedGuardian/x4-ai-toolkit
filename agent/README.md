@@ -2,7 +2,8 @@
 
 Edit here, never in `.claude/` or `CLAUDE.md`. Regenerate with
 `cd tools/x4validate && uv run python scripts/gen-agent-trees.py`.
-The design is `docs/superpowers/specs/2026-09-30-universal-agent-support-design.md`.
+The [design record](https://github.com/WingedGuardian/x4-ai-toolkit/blob/master/docs/superpowers/specs/2026-09-30-universal-agent-support-design.md)
+is retained in maintainer checkouts and on GitHub; it is excluded from release archives.
 An INSTALLED toolkit is runtime-only: the installers copy the generated files, never `agent/`.
 
 ## The guards

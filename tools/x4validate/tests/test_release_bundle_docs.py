@@ -12,8 +12,10 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-DROPPED = ("docs/superpowers/plans/", "docs/handoffs/")
-KEPT = ("docs/superpowers/measurements/", "docs/superpowers/specs/")
+DROPPED = ("docs/superpowers/plans/", "docs/handoffs/", "docs/SUBAGENT-BRIEF.md",
+           "docs/REVIEW-SCOPE.md", "docs/AUDIT-framework-2026-10-01.md", "docs/audits/",
+           "docs/superpowers/specs/", "tools/x4validate/docs/superpowers/specs/")
+KEPT = ("docs/superpowers/measurements/",)
 
 
 def _tracked(prefix: str = "") -> list[str]:
@@ -88,3 +90,18 @@ def test_no_shipped_markdown_links_to_a_dropped_file():
             if any(resolved.startswith(d) for d in DROPPED):
                 dangling.append(f"{p} -> {target}")
     assert dangling == [], dangling
+
+
+def test_archive_matches_the_document_policy_and_retains_repair_docs():
+    import io, tarfile
+    tracked = _tracked()
+    result = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar",
+                             "--worktree-attributes", "HEAD"], capture_output=True)
+    assert result.returncode == 0, result.stderr
+    with tarfile.open(fileobj=io.BytesIO(result.stdout)) as archive:
+        shipped = {p.name for p in archive if p.isfile()}
+    for prefix in DROPPED:
+        assert not any(p.startswith(prefix) for p in shipped), prefix
+    measured = [p for p in tracked if p.startswith(KEPT)]
+    assert measured and all(p in shipped for p in measured)
+    assert {"README.md", "ADAPTING.md", "RETENTION.md"} <= shipped

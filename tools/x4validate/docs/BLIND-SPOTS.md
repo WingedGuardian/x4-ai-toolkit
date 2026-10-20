@@ -7819,7 +7819,7 @@ still depends on the hand-kept lists. The 5%: that path.
 
 Independent hands-on audit on `aa57efc`; no implementation fixes. Full evidence,
 controls, confidence, and limitations are in
-[the audit report](../../../docs/audits/2026-10-01-tools.md).
+[the audit report](https://github.com/WingedGuardian/x4-ai-toolkit/blob/master/docs/audits/2026-10-01-tools.md).
 
 - BaseX interpolates `attr` input as query syntax without name validation;
   `name[false()]` receives a complete-database negative certificate (TA-01).
@@ -7841,7 +7841,7 @@ regression tests, review, and fresh CLI verification.
 2026-10-02 follow-up: regression-backed repairs are installed in toolkit/dev/x4cat
 after review and E2E (toolkit 2914 passed / 49 skipped). Existing production
 artifacts require explicit rebuild for fresh negative claims. See
-[repair status and compatibility changes](../../../docs/audits/2026-10-02-tool-fixes.md).
+[repair status and compatibility changes](https://github.com/WingedGuardian/x4-ai-toolkit/blob/master/docs/audits/2026-10-02-tool-fixes.md).
 The findings above describe the audited baseline, not the patched behavior.
 
 ## F145 — the PowerShell/cmd guard's stated residuals after the v3.3.0 release review · **SCOPE (measured)** · confidence 90% · ✅ FIXED 2026-09-27

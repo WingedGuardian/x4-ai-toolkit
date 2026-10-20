@@ -76,6 +76,12 @@ tools/x4validate/scripts/mutate-mod-lua.py export-ignore
 # the README and CHANGELOG cite them as evidence.
 docs/superpowers/plans/ export-ignore
 docs/handoffs/ export-ignore
+docs/SUBAGENT-BRIEF.md export-ignore
+docs/REVIEW-SCOPE.md export-ignore
+docs/AUDIT-framework-2026-10-01.md export-ignore
+docs/audits/ export-ignore
+docs/superpowers/specs/ export-ignore
+tools/x4validate/docs/superpowers/specs/ export-ignore
 
 # Maintainer-only: the isolated tool-audit harness (its README: "a local audit instrument,
 # not a shipped CLI"). Tracked for maintainers; excluded from the bundle (v4.0.0 review R5-12).
