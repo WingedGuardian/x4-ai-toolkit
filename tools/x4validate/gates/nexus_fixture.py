@@ -14,9 +14,11 @@ Two modes:
              registry, and assert our parsers handle the live responses. Then
              write an ANONYMIZED fixture: field names, types and status values
              are preserved (that is what the parsers actually read), while ids,
-             names and authors become neutral placeholders. So the committed
-             artifact leaks neither the API key nor which mods are installed,
-             and it was still verified against reality at the moment it was made.
+             names and authors become neutral placeholders. The committed
+             artifact never holds the API key, and it was verified against
+             reality at the moment it was made. It is NOT unlinkable: the real
+             version strings and upload times the parsers read are kept, and
+             matched against Nexus they could identify the recorded mods.
 
   (default)  Replay the fixture with no network at all (urlopen is stubbed to
              refuse and count), exercising fetch_mod, discover, search_mods,
@@ -56,6 +58,8 @@ RECORD = "--record" in sys.argv
 MISSING_ID = 99999999
 #: How many AVAILABLE mods --record records; it scans up to RECORD_SCAN registry ids to find them.
 RECORD_MODS, RECORD_SCAN = 3, 12
+#: The fixture id of the one recorded UNAVAILABLE (removed/hidden) mod: no name, no files.
+UNAVAILABLE_ID = 1099
 
 
 #: The terms the replay sends through `discover`, and the reply each one is routed to.
@@ -164,7 +168,15 @@ def record() -> int:
         # files.json answered 403 (MEASURED; hidden INFERRED), so it cannot feed the
         # update-verdict replay. The registry order put two of them first.
         if raw.get("available") is False:
-            print(f"  rest  id={nid} -> status={raw.get('status')!r}, unavailable: skipped")
+            # The FIRST one is kept as UNAVAILABLE_ID (anonymized, no file list), so the
+            # replay still parses the name-less shape `fetch_mod` meets on real registries.
+            kept = str(UNAVAILABLE_ID) not in fixture["rest"]
+            if kept:
+                body = _anonymize_rest(raw, UNAVAILABLE_ID - 1000)
+                assert "name" not in body, "an unavailable mod's reply carried a name"
+                fixture["rest"][str(UNAVAILABLE_ID)] = body
+            what = "kept as the name-less sample" if kept else "skipped"
+            print(f"  rest  id={nid} -> status={raw.get('status')!r}, unavailable: {what}")
             continue
         assert "name" in raw, f"live REST response lost field 'name' (available mod {nid})"
         i += 1
@@ -531,6 +543,15 @@ def replay() -> int:
         # updated_timestamp -> YYYY-MM-DD is real conversion logic, not a passthrough
         ok_date = len(meta.updated) == 10 and meta.updated[4] == "-"
         _check("fetch_mod .updated is YYYY-MM-DD", ok_date, True, failures)
+
+        # A removed/hidden mod's reply has no `name`: fetch_mod must still parse it.
+        if str(UNAVAILABLE_ID) in fx["rest"]:
+            gone = _nexus.fetch_mod(UNAVAILABLE_ID)
+            _check("fetch_mod on an unavailable mod: .status", gone.status,
+                   fx["rest"][str(UNAVAILABLE_ID)]["status"], failures)
+            _check("fetch_mod on an unavailable mod: .name is empty", gone.name, "", failures)
+        else:
+            print("   NOTE  fixture has no unavailable-mod sample (recorded before 2026-10-20)")
 
         # 404 must become NexusError, not an HTTPError escaping to the caller
         try:

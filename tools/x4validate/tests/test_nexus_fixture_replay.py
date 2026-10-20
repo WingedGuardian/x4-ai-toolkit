@@ -22,7 +22,9 @@ def _fixture() -> dict:
 def test_the_committed_fixture_carries_a_recorded_file_list_for_every_mod():
     fx = _fixture()
     files = fx.get("files") or {}
-    assert set(files) == set(fx["rest"]), "every REST mod needs its files.json record"
+    # The unavailable-mod sample has no file list by construction (its files.json is a 403).
+    assert set(files) == set(fx["rest"]) - {str(nf.UNAVAILABLE_ID)}, \
+        "every available REST mod needs its files.json record"
     for mod_id, body in files.items():
         cats = {f["category_name"] for f in body["files"]}
         assert "MAIN" in cats, f"{mod_id}: no MAIN file -- the verdict has nothing to judge"

@@ -2,6 +2,14 @@
   "recorded": "2026-10-20",
   "note": "anonymized; shapes verified against the live API when recorded",
   "rest": {
+    "1099": {
+      "version": "1",
+      "updated_timestamp": 1543495784,
+      "status": "removed",
+      "author": "example_author_99",
+      "mod_id": 1099,
+      "available": false
+    },
     "1001": {
       "version": "2.3.3",
       "updated_timestamp": 1722087970,
