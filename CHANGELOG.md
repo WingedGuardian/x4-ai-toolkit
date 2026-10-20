@@ -8,6 +8,15 @@ its docs and source, not measured), and any other agent can be connected through
 The repository becomes `x4-ai-toolkit` (GitHub redirects the old `x4-claude-toolkit` address), and
 the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
+### Save preservation review (2026-10-20)
+
+- Save changes bundled with another approval prompt now pass scope checks, bulk
+  approval and verified preservation before the prompt is returned (shared core
+  d2af1e8; BLIND-SPOTS F308). X4 retains the transaction ids and backup notice.
+- Unresolved protected operands use consistent Windows path separators, so a
+  mixed literal/brace-expanded save command refuses instead of reporting a
+  backup for only its resolved subset.
+
 ### Fixed before release: the last review round (2026-10-12 to 2026-10-18)
 
 What you will notice comes first, grouped by area. Bullets tagged **(maintainers)** change only

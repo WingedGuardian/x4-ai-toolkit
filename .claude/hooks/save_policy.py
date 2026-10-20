@@ -188,7 +188,12 @@ def resolve(root, roots, evidence, deadline=None):
         if row.get("unresolved"):
             transparent = False
             # Keep an unresolved protected operand as a refusal, never an empty set.
-            if any(value and str(value).casefold() in raw.casefold() for value in
+            def spelling(value):
+                text = str(value)
+                if os.name == "nt" or row.get("dialect") == WINDOWS_DIALECT:
+                    text = text.replace(chr(92), "/")
+                return text.casefold()
+            if any(value and spelling(value) in spelling(raw) for value in
                    (*save_roots, roots.get("profile", ""), store.root)):
                 problems.append("unresolved protected operand")
             continue
@@ -435,7 +440,8 @@ def batch(payload, calls, judge, deadline, host, preview=False, helper=False, *,
     result = outcome.result
     if result.decision in ("deny", "ask"):
         return {"decision": result.decision, "inert": result.evaluation == "failed",
-                "reason": result.reason, "context": None, "result": result.as_dict(), "transactions": []}
+                "reason": _decision_reason(result), "context": None, "result": result.as_dict(),
+                "transactions": list(outcome.transactions)}
     context = "\n".join(result.warnings)
     if result.preservation == "verified":
         context += "\nSave backup verified in the permanent neutral store before this call."
@@ -490,6 +496,13 @@ def _approval_first(reason):
     return "\n".join([APPROVAL_HEAD] + grants + [line for line in lines if line not in grants])
 
 
+def _decision_reason(result):
+    """Keep preservation visible even when an ask is rendered as a refusal by a host."""
+    if result.preservation == "verified":
+        return "Save backup verified in the permanent neutral store before this call.\n" + result.reason
+    return result.reason
+
+
 def _hook_json(result):
     hso = {"hookEventName": "PreToolUse"}
     if result.decision not in ("deny", "ask") and result.preservation == "required":
@@ -498,7 +511,7 @@ def _hook_json(result):
                          reason=PREVIEW_NEEDS_BACKUP + ("\n" + warnings if warnings.strip() else ""))
     if result.decision in ("deny", "ask"):
         hso.update(permissionDecision=result.decision,
-                   permissionDecisionReason=_bounded(_approval_first(result.reason)))
+                   permissionDecisionReason=_bounded(_approval_first(_decision_reason(result))))
     else:
         text = "\n".join(result.warnings)
         if result.preservation == "verified":

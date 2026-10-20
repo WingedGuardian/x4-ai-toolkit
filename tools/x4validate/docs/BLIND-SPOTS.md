@@ -386,6 +386,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F305 | A doubly-nested patch (`extensions/<B>/extensions/<DLC>/<rel>`) was kept under its literal path by the effective store and the definition lookup | **DEFECT (measured)** | engine log 2026-10-19: 10 of 11 such files opened (owner ships FULL), 1 not (owner ships `<diff>`); the store's merge matched the full merge on 0 of 10 | ✅ **FIXED 2026-10-19** - filed under the DLC path, each mod once; mod-inner case left literal (0 live, unmeasured) |
 | F306 | A command name from a variable, substitution, `%R%`/`!R!` or `& $R` reached no guard rule, so a delete behind it was allowed | **DEFECT (measured)** · PRE-ARC | 125 of 125 non-twin shapes allowed on master `21a2320` where the plain command was denied/asked | ✅ **FIXED 2026-10-19** - speculative readings of the words after the name + a backstop ask |
 | F307 | `deploy-claude-dir.py` deployed `.claude/` only, so a Codex session in a game root it served ran with no guard hooks | **DEFECT (measured)** · IN-ARC (v4.0 Codex target never reached the deploy workflow) | dev game root 2026-10-20: `.claude/` + AGENTS.md, no `.codex/` or `.agents/`; `x4doctor --agent codex`: "the codex target is not installed here" | ✅ **FIXED 2026-10-20** - `--target codex`; the parity gate fails `CODEX UNGUARDED` on AGENTS.md without `.codex/` |
+| F308 | An ask returned before save approval/preservation; X4 also dropped preserved ask transactions | **DEFECT (measured)** | Five mixed/control commands; two of seven bridge regressions failed after core import | FIXED 2026-10-20 - core d2af1e8, preserved ask notices/ids and protected-path spelling |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -10889,3 +10890,24 @@ RE-DERIVED BY: `tests/test_instrument_hygiene.py`
 `test_real_hygiene_failures_still_match`,
 `test_a_baseline_from_another_matcher_is_not_compared`, and
 `test_a_matcher_changed_during_the_scan_voids_the_reading`.
+
+## F308 - Approval prompts bypassed save preservation and bulk approval · **DEFECT (measured)** · confidence 98% · FIXED 2026-10-20
+
+READ: the old shared Dispatcher returned asks before save scope, approval and
+preservation. Core d2af1e8 holds an ask through these checks. X4's batch bridge
+then discarded Outcome.transactions, and both prompt renderers omitted the
+verified-backup notice. MEASURED after importing the core: 2 of 7 new bridge
+regressions failed (one missing notice; one missing transaction), with 5 controls
+passing. The broader save suite exposed one mixed brace/literal row whose
+unresolved protected path used a different Windows separator spelling.
+
+The bridge now retains transactions and verified notices on asks; unresolved
+protected path comparisons normalize Windows separators. Residual: these tests
+exercise real rendered guards and synthetic saves, not a human approval click
+in every supported host. Opaque-program handling is a separate review item.
+
+**RE-DERIVED BY:** tests/test_shared_save_policy.py::
+test_mixed_asks_never_bypass_save_preservation_or_bulk_approval,
+test_batch_ask_keeps_transaction_and_preservation_notice,
+test_C1_brace_expanded_save_operands_keep_the_profile_ask,
+test_C1_TWIN_a_quoted_brace_is_a_literal_name_and_is_backed_up.

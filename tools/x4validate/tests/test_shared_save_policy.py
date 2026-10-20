@@ -29,6 +29,55 @@ def test_neutral_private_state_is_ignored_but_runtime_sources_are_trackable(tmp_
     assert result.stdout.split(b"\0")[:-1] == [name.encode() for name in names[:-1]]
 
 
+@pytest.mark.parametrize("count,mixed", [(1, "none"), (3, "none"), (1, "profile"),
+                                        (3, "profile"), (3, "compound")])
+def test_mixed_asks_never_bypass_save_preservation_or_bulk_approval(install, count, mixed):
+    root, roots, files = install
+    other = Path(roots["profile"]) / "content.xml"
+    other.write_bytes(b"keep profile")
+    command = "rm -- " + " ".join("'" + p.as_posix() + "'" for p in files[:count])
+    if mixed == "profile":
+        command += " '" + other.as_posix() + "'"
+    elif mixed == "compound":
+        command += "; cd '" + Path(roots["profile"]).as_posix() + "' && git clean -fdx"
+    result = invoke_hook(install, "Bash", {"command": command})
+    hso = result["hookSpecificOutput"]
+    records = list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+    if count > 2:
+        assert hso["permissionDecision"] == "deny", hso
+        assert "SAVE_ACCESS_APPROVAL" in hso["permissionDecisionReason"]
+        assert not records
+    else:
+        assert len(records) == 1
+        manifest = json.loads(records[0].read_text(encoding="utf-8"))
+        assert len(manifest["groups"]) == count
+        if mixed != "none":
+            assert hso["permissionDecision"] == "ask", hso
+            assert "backup verified" in hso["permissionDecisionReason"], hso
+        else:
+            assert hso.get("permissionDecision") is None, hso
+            assert "backup verified" in hso["additionalContext"]
+    assert other.read_bytes() == b"keep profile"
+    assert all(p.read_bytes() == p.name.encode() for p in files)
+
+
+@pytest.mark.parametrize("preview", [False, True])
+def test_batch_ask_keeps_transaction_and_preservation_notice(install, monkeypatch, preview):
+    root, roots, files = install
+    monkeypatch.setattr(policy, "read_roots", lambda deadline: dict(roots, toolkit=str(root)))
+    calls = [("write", None, None, str(files[0]), "save"),
+             ("write", None, None, str(Path(roots["profile"]) / "content.xml"), "profile")]
+    payload = {"tool_name": "fixture", "session_id": "s", "tool_input": {}}
+    result = policy.batch(payload, calls, lambda qualified: {
+        "decision": "ask", "inert": False, "reason": "Other profile change", "context": None},
+        None, "claude", preview=preview, execution_cwd_known=True)
+    assert result["decision"] == "ask" and not result["inert"], result
+    assert result["result"]["preservation"] == ("required" if preview else "verified")
+    assert len(result["transactions"]) == (0 if preview else 1), result
+    assert ("backup verified" in result["reason"]) is not preview
+    assert files[0].read_bytes() == files[0].name.encode()
+
+
 @pytest.fixture
 def install(tmp_path):
     import shutil
