@@ -383,6 +383,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F302 | Gate populations: cross_tool never compared the `dependent_overwrites` rows, and tool_properties' `t/`/`index/` excuse could not go red | **DEFECT (measured)** · IN-ARC (`7c0ba2b`, `2b1a902`) | 2,544 live advisory rows compared by nothing, with no denominator saying so; a duplicate key in a shared `t/` file was excused | ✅ **FIXED 2026-10-19** (`2389311`, `c4568db`) - own population with coverage line and floor; excused only when keys are disjoint. Live cross_tool result UNMEASURED until the store is rebuilt |
 | F303 | A complete `libraries/`, `t/` or `index/` file at a nested `extensions/<owner>/` path is classed FULL-OVERRIDE, key-blind, and nested diff adds skip the duplicate-key pass | **OPEN LIMIT (read)** | `_compat.py:534`: `is_union` is False for every nested vpath; live impact 0 (release review B, not re-derived) | OPEN - engine merge semantics for this shape UNMEASURED |
 | F304 | About 47 commits of v3.3.1..b88e425 had no recorded review round | **PROCESS (reported)** · RECORDED 2026-10-19 | coverage audit 2026-10-19 (not re-derived here); the range holds 503 commits, 447 non-merge (MEASURED) | RECORDED - reviewed in a gap review the same day, which found F297 |
+| F305 | A doubly-nested patch (`extensions/<B>/extensions/<DLC>/<rel>`) was kept under its literal path by the effective store and the definition lookup | **DEFECT (measured)** | engine log 2026-10-19: 10 of 11 such files opened (owner ships FULL), 1 not (owner ships `<diff>`); the store's merge matched the full merge on 0 of 10 | ✅ **FIXED 2026-10-19** - filed under the DLC path, each mod once; mod-inner case left literal (0 live, unmeasured) |
+| F306 | A command name from a variable, substitution, `%R%`/`!R!` or `& $R` reached no guard rule, so a delete behind it was allowed | **DEFECT (measured)** · PRE-ARC | 125 of 125 non-twin shapes allowed on master `21a2320` where the plain command was denied/asked | ✅ **FIXED 2026-10-19** - speculative readings of the words after the name + a backstop ask |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -9711,6 +9713,56 @@ after including the parser and translator, all four changes void the reading, an
 an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
+
+## F306 — A command name from a variable, substitution, `%R%`/`!R!` or `& $R` reached no rule, so a delete behind it was allowed · **DEFECT (measured)** · PRE-ARC · confidence 90% · ✅ FIXED 2026-10-19
+
+MEASURED 2026-10-19 through the real `protect-bash.sh` on scratch roots (Windows): 125 of 125
+non-twin shapes were ALLOWED on master `21a2320`, while the plain control was denied, asked or
+advised. Shapes: bash (`$R`, `"$R"`, `${R}`, `${A[0]}`, a chain of names, `$R '<cmd>'` as eval,
+`R=eval; $R`, `R=$(printf eval); $R`), cmd (`%R%`, `!R!` under `/v:on`, `%R%del`), PowerShell
+(`& $R`, `. $R`, `& $R '<text>'`, `& "$($R)-Item"`, `& $env:R`, `& (Get-Command $n)`), and
+`git add -A`, against reference, game root, a game file, a save and the profile `content.xml`.
+The sibling Skyrim toolkit's session measured on Windows that each of these really deletes
+(reported, not re-measured here). Cause: a rule fires only on a command it can name, and an
+unknown name is no name; cmd carried `%R%`/`!R!` literally (`!NAME!` was never a variable);
+PowerShell treated a non-constant name as a literal, or flattened it to its constants.
+
+FIXED (`9af2b04`, tests `81e7273`): speculative, additive readings of the words after an unknown
+name (as written, as `eval` would re-read them, as `git <words>`, as `cmd /c` / `powershell
+-Command`), each put back in place of its segment; a reading that does not parse adds nothing
+and never marks the command fully checked. cmd and PowerShell equivalents. New fact
+`program_dynamic_protected` (an ask `X4_GUARD=off` does not relax) is the backstop when an
+unknown name is given a protected path. fuzz-guard: 441 bypasses before, 0 over 9,020 mutants
+after. False-positive replay: 3 of 26,420 historical commands changed verdict, none lost a fact.
+Residual 10%: `$R -rf <reference or game root>` asks rather than denies, because
+`"$X4_PYTHON" <root>` (the documented interpreter spelling) cannot be told apart; `$R -c
+'<PowerShell text>'` relies on the root named in the text; Linux behaviour of the cmd and
+PowerShell forms is UNVERIFIED.
+
+**RE-DERIVED BY:** `.claude/hooks/test_hook_facts.py` (`TestF10DynamicProgramWord`,
+`TestF10PowerShellUnreadableCommandName`), `.claude/hooks/test_audit0924_hooks.py`
+(`TestF10DynamicProgramWordE2E`), `scripts/fuzz-guard.py` (DYNAMIC axis).
+
+## F305 — The effective store dropped a patch on another mod's file at a DLC path · **DEFECT (measured)** · confidence 90% · ✅ FIXED 2026-10-19
+
+`_effective.build_touch_map` and `_modfiles.logical_vpath` kept
+`extensions/<B>/extensions/<DLC>/<rel>` under its literal path, so the store's merge of the DLC
+file never received the patching mod and kept B's values with origin B. Found by
+`gates/cross_tool.py`'s dependent_overwrites check on its first live run: 4 of 2,430 rows
+disagreed (x4compat named the patching overlay mod, the store the middle mod `ebi_timelines_faction_use_ship`).
+MEASURED 2026-10-19 (engine log of the current modlist, 171 active mods): 11 such files on disk;
+the engine opened the 10 whose owner ships the file FULL, each right after the owner's file, and
+not the 1 whose owner ships a `<diff>`. `_merge.build_effective` (all mods loaded) already
+matched all 11; the store's merge matched it on 0 of 10 before and 10 of 10 after; 16 store input
+entries changed, 8 of 8 equal to the full merge. INFERRED: the opened ops apply (same mechanism
+as F286); an earlier-loading patcher applies right after the owner; depth-1 diff-owner inertness.
+Unmeasured and left literal: a mod (not a DLC) in the inner position (0 live). Open:
+`build_effective` does not record that it skipped a nested patch on a diff-owner file (the
+engine skips it too, so the result is right, but the skip is silent).
+
+**RE-DERIVED BY:** `tests/test_double_nested_dlc_patch.py`,
+`tests/test_mutation_gaps_lanek_effective.py`, `tests/test_dump_accepts_physical_mod_vpath.py`,
+`gates/cross_tool.py`.
 
 ## F304 — About 47 commits of v3.3.1..b88e425 had no recorded review round · **PROCESS (reported)** · confidence 75% · RECORDED 2026-10-19
 

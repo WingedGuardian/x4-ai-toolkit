@@ -15,6 +15,14 @@ tests, fixtures, gates or release tooling.
 
 #### x4compat, x4validate, x4save and the other tools
 
+- **Effective store, x4validate definitions and `x4effective dump`: a patch on another mod's
+  file at a DLC path is no longer dropped (BLIND-SPOTS F305).** A mod patching mod B's own file
+  at `extensions/<DLC>/<rel>` ships `extensions/<B>/extensions/<DLC>/<rel>`. The store filed it
+  under that literal path, so B's values were recorded with B as origin. On the live modlist
+  this affected 10 files (4 of 2,430 cross-tool rows). Such patches now count towards the DLC
+  file, and each mod is applied to a document once. Tier B reports a nested patch on a mod that
+  ships the file as a `<diff>` as never loaded, naming that diff, instead of "path mismatch?".
+  Rebuild the effective store after upgrading.
 - **x4compat (issue #11): ops are judged where they land, at their own load position.** A replace
   or remove that lands on content another mod added is a failing HARD row that names the adder, says
   when it overwrites only part of a multi-element insert ("partial: n of k elements X inserted; the
@@ -93,6 +101,14 @@ tests, fixtures, gates or release tooling.
 
 #### Guards and save safety
 
+- **A command name the guard cannot read is no longer a way past it (BLIND-SPOTS F306).** With
+  the name in a variable or expansion, `$R rm -rf <reference>`, `$R 'rm -rf ...'` (R=eval),
+  cmd's `%R% del` / `!R! del` / `%R%del`, PowerShell's `& $R Remove-Item` / `. $R` /
+  `& $R 'Remove-Item ...'` / `& "$($R)-Item"`, and `$R git add -A` were all allowed. The words
+  after such a name are now judged as the commands they may be, with the plain command's
+  verdict, and an unknown name given a protected path (game, reference, profile, a save) asks.
+  Ordinary `"$PY" ...`, `& $exe ...` and `cmd /c "%R% ..."` commands away from those paths
+  are unaffected: 3 of 26,420 replayed historical commands changed verdict.
 - **Saves (user decision, 2026-10-18): a command that changes one or two recognised saves proceeds
   without asking, but only after a verified backup of exactly what it changes** ("Save backup
   verified" in the hook output). More than two saves, or a wildcard, needs a typed approval line
@@ -252,6 +268,11 @@ tests, fixtures, gates or release tooling.
 
 #### Maintainers
 
+- **(maintainers)** fuzz-guard has a DYNAMIC-name axis in bash, cmd and PowerShell (11
+  mutators; 441 bypasses on the code before, 0 of 9,020 after); verify-hook-tests has 228
+  mutants; the rule inventory classifies the cd-lane deny and the new ask; the brace-expansion
+  twin uses host-native roots, so it holds on Linux. mutation_probe covers `_modfiles.py` (3
+  mutants for the doubly-nested path).
 - **(maintainers)** Conformance: the Codex profile replays `codex-entry.sh` off Windows, as the
   shipped `hooks.json` does (new optional profile key `command_posix`, documented in ADAPTING.md).
   The `.ps1` entry is Windows-only since its native process launch, so the ubuntu leg had replayed
