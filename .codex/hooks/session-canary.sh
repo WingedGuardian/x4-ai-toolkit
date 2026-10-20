@@ -49,7 +49,9 @@ _x4_kbin=""
 if command -v git >/dev/null 2>&1; then
   # "Not a repo" is silent; any OTHER rev-parse failure (dubious ownership, a broken config)
   # is git REFUSING a repo, and is said in one bounded line (review LOW-1).
-  _x4_kbout="$(git -C "$_x4_kbr" rev-parse --is-inside-work-tree 2>&1)"; _x4_kbrc=$?
+  # LC_ALL=C: the "not a git repository" match below reads git's ENGLISH message; a
+  # translated git would turn every non-repo root into a false "git refused" line.
+  _x4_kbout="$(LC_ALL=C git -C "$_x4_kbr" rev-parse --is-inside-work-tree 2>&1)"; _x4_kbrc=$?
   if [ "$_x4_kbrc" = 0 ]; then
     [ "$_x4_kbout" = true ] && _x4_kbin=1
   else

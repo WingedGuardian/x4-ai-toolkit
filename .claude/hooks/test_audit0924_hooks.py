@@ -1049,7 +1049,8 @@ class TestLaneIConfigLocation(unittest.TestCase):
     def edit(self, path):
         payload = json.dumps({"tool_name": "Edit", "tool_input": {"file_path": path.as_posix()}})
         p = subprocess.run([BASH, str(HOOKS / "protect-files.sh")], input=payload,
-                           capture_output=True, text=True, env=self.env, timeout=60)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           env=self.env, timeout=60)
         self.assertEqual(p.returncode, 0, p.stderr[-300:])
         if not p.stdout.strip():
             return "allow"
@@ -1057,7 +1058,8 @@ class TestLaneIConfigLocation(unittest.TestCase):
 
     def banner(self):
         p = subprocess.run([BASH, str(HOOKS / "session-canary.sh")], input="{}",
-                           capture_output=True, text=True, env=self.env, timeout=60)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           env=self.env, timeout=60)
         return [l for l in p.stdout.splitlines() if l.startswith("[x4 config]")]
 
     def test_no_config_still_HARD_BLOCKS_the_default_reference(self):
