@@ -87,7 +87,8 @@ DEFAULTS = {
     # tools/x4validate/tests/test_temp_hygiene.py fails when a prefix the code creates is missing here.
     "temp_prefixes": ["x4qa_", "x4gate_", "x4reg_gate_", "x4reader_", "x4diff_truth_", "x4stress_",
                       "x4-tool-audit-pytest-", "x4-pytest-batch-", "x4-mutation-result-", "x4-fake-install-",
-                      "hk5_", "hk6_", "psfe_", "split_", "lanei_", "vht-case-", "x4-acl-privilege-probe-"],
+                      "hk5_", "hk6_", "psfe_", "split_", "lanei_", "vht-case-", "x4-acl-privilege-probe-",
+                      "f11kb_"],
     "temp_after_hours": 24,           # nothing in the dir or its direct children newer than this
     "sweep_every_hours": 6,           # session start launches a sweep at most this often
     "codex_sessions_warn_gib": 5,     # session note when ~/.codex/sessions passes this
@@ -230,6 +231,20 @@ class Guard:
         if any(fnmatch.fnmatch(low, g) for g in self.globs):
             return "protected_globs"
         return ""
+
+
+def protected_inside(guard: "Guard", target: Path) -> str:
+    """The first Forever reason for a whole-folder (or single-file) action: the target itself, or any file under it.
+    A launch, snapshot or scratch folder holding a save, a backup folder or a tracked file is never recycled whole."""
+    target = Path(target)
+    why = guard.why_protected(target / "_" if target.is_dir() else target)   # the folder's OWN name counts too
+    if why:
+        return why
+    for f in walk_files(target) if target.is_dir() else ():
+        why = guard.why_protected(f)
+        if why:
+            return why
+    return ""
 
 
 # --------------------------------------------------------------------------- task folders
@@ -406,7 +421,10 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
                 count("kept: launch log, labelled or not a launch folder (Forever)", size)
                 continue
             age = (now - time.mktime(time.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S"))) / 86400
-            if age >= cfg["recycle_after_days"]:
+            why = protected_inside(guard, p) if age >= cfg["gzip_after_days"] else ""
+            if why and age >= cfg["recycle_after_days"]:
+                count("kept: protected ({})".format(why), size)
+            elif age >= cfg["recycle_after_days"]:
                 act({"class": "launch", "path": str(p), "bytes": size, "fingerprint": fingerprint(p)},
                     "plan: launch folder past recycle_after_days -> Recycle Bin")
             elif age >= cfg["gzip_after_days"]:
@@ -414,6 +432,10 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
                     s = f.stat().st_size
                     if f.suffix.lower() == ".gz" or s < 65536:
                         count("kept: launch log, recent or already compressed", s)
+                        continue
+                    fwhy = guard.why_protected(f)
+                    if fwhy:
+                        count("kept: protected ({})".format(fwhy), s)
                         continue
                     act({"class": "gzip", "path": str(f), "bytes": s, "hash": blake(f)},
                         "plan: launch log -> gzip (original to Recycle Bin)")
@@ -433,7 +455,10 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
             files = sorted(walk_files(p))
             sig = sorted((str(f.relative_to(p)).lower(), f.stat().st_size, blake(f)) for f in files)
             size = sum(s for _, s, _ in sig)
-            if sig == prev and i != len(stamps) - 1:
+            why = protected_inside(guard, p) if sig == prev and i != len(stamps) - 1 else ""
+            if why:
+                count("kept: protected ({})".format(why), size)
+            elif sig == prev and i != len(stamps) - 1:
                 act({"class": "snapshot", "path": str(p), "bytes": size, "fingerprint": fingerprint(p)},
                     "plan: snapshot repeating the previous one -> Recycle Bin")
             else:
@@ -442,9 +467,13 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
 
     # ---- named scratch folders
     for s in (cfg["scratch"] if wants("scratch") else []):
-        p = Path(s)
+        p = _abs(cfg, s)                     # relative to the toolkit root, like every other configured path -- never the cwd
         if p.is_dir():
             fp = fingerprint(p)
+            why = protected_inside(guard, p)
+            if why:
+                count("kept: protected ({})".format(why), fp[1])
+                continue
             act({"class": "scratch", "path": str(p), "bytes": fp[1], "fingerprint": fp},
                 "plan: named scratch folder -> Recycle Bin")
 
@@ -561,6 +590,9 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
         if guard.why_protected(c) in ("save", "git-tracked"):
             return "canonical copy is protected"
     if action["class"] in ("launch", "snapshot", "scratch"):
+        why = protected_inside(guard, p)
+        if why:
+            return "protected ({})".format(why)
         if fingerprint(p) != action["fingerprint"]:
             return "folder changed since the plan"
     return ""
@@ -653,6 +685,12 @@ def apply(plan_doc: dict, cfg, only=None, recycler=recycle, now: float | None = 
 # A dir the bin will not take stays where it is and is named in the session note. Same code as the Skyrim
 # toolkit's tools/housekeep.py.
 
+def _has_bin() -> bool:
+    """recycle() is Windows-only. Off Windows the sweep KEEPS what it found (and says so) rather than raising: a raise
+    in the detached session job meant the state file was never written and the sweep re-ran at every session start."""
+    return os.name == "nt"
+
+
 def _newest_shallow(p: Path) -> float:
     newest = p.stat().st_mtime
     try:
@@ -715,7 +753,8 @@ def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler
     temp = Path(temp or tempfile.gettempdir())
     now = time.time() if now is None else now
     cutoff = now - cfg["temp_after_hours"] * 3600
-    rows = {"recycled": 0, "kept: changed recently": 0, "kept: in use": 0, "failed": 0}
+    rows = {"recycled": 0, "kept: changed recently": 0, "kept: in use": 0, "kept: no Recycle Bin on this OS": 0,
+            "failed": 0}
     ready = []
     for p, _why in temp_candidates(cfg, temp):
         try:
@@ -728,8 +767,11 @@ def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler
             rows["kept: in use"] += 1
         else:
             ready.append(p)
+    if recycler is None and not _has_bin():
+        rows["kept: no Recycle Bin on this OS"] = len(ready)
+        ready = []
     failed = []
-    for p, err in (recycler or recycle)(ready).items():
+    for p, err in ((recycler or recycle)(ready) if ready else {}).items():
         if err:
             rows["failed"] += 1
             failed.append("{}  ({})".format(p, err))
@@ -751,6 +793,8 @@ def session(cfg, state: Path) -> int:
     """The session-start job: sweep the toolkit's temp dirs, then write a one-line note for the next banner when
     something needs the user (free space near the floor, Codex sessions or worktrees past their threshold).
     Runs at most once per sweep_every_hours: the state file's age is the clock."""
+    if os.environ.get("X4_HOUSEKEEP_SWEEP", "").lower() == "off":     # a test harness: never the real temp dir / bin
+        return 0
     try:
         if time.time() - state.stat().st_mtime < cfg["sweep_every_hours"] * 3600:
             return 0
@@ -763,6 +807,9 @@ def session(cfg, state: Path) -> int:
         notes.append("moved {} leftover temp dir(s) to the Recycle Bin{}".format(
             r["recycled"], "; {} could not be recycled and were LEFT IN PLACE (ask the user before any permanent "
                            "delete)".format(r["failed"]) if r["failed"] else ""))
+    if r["kept: no Recycle Bin on this OS"]:
+        notes.append("{} leftover toolkit temp dir(s) kept: x4housekeep recycles on Windows only".format(
+            r["kept: no Recycle Bin on this OS"]))
     home = Path(os.environ.get("USERPROFILE") or os.path.expanduser("~"))
     codex = dir_size(home / ".codex" / "sessions") / GIB
     if codex > cfg["codex_sessions_warn_gib"]:

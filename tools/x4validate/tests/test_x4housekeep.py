@@ -68,6 +68,16 @@ class FakeBin:
         return {p: None for p in paths}
 
 
+@pytest.fixture(autouse=True)
+def _never_the_real_bin(monkeypatch):
+    """No test may reach the real Recycle Bin (SHFileOperation, or an OS prompt): the module's recycle() raises here.
+    A test that needs a bin injects FakeBin explicitly. The harness opt-out is cleared so session() runs."""
+    def refuse(*_a, **_k):
+        raise AssertionError("the REAL recycle() was reached from a test")
+    monkeypatch.setattr(hk, "recycle", refuse)
+    monkeypatch.delenv("X4_HOUSEKEEP_SWEEP", raising=False)
+
+
 @pytest.fixture
 def tree(tmp_path):
     write(tmp_path / "game" / "01.cat", blob("catalog"))
@@ -160,13 +170,59 @@ def test_rows_sum_to_every_byte_scanned(tree):
     assert sum(hk.plan(cfg_for(tree))["rows"].values()) == scanned
 
 
+# --------------------------------------------------------------------------- whole-folder classes (review 2026-10-20)
+# launch / snapshot / scratch recycle a FOLDER: they must consult the Forever list for every file inside it, not only
+# the per-file classes. Each guard has a twin with the same layout minus the protected file.
+
+def test_a_scratch_folder_holding_a_save_or_a_backup_is_never_planned(tree):
+    write(tree / "scratchA" / "profile-copy" / "save" / "quicksave.xml.gz", b"save")
+    write(tree / "scratchB" / "known-good-backups" / "w.xml", b"bk")
+    write(tree / "scratchC" / "plain" / "w.xml", b"x")                       # twin: nothing protected inside
+    cfg = cfg_for(tree, scratch=["scratchA", "scratchB", "scratchC"])
+    doc = hk.plan(cfg)
+    assert planned(doc, "scratch") == {key(tree / "scratchC")}
+    # apply re-proves it: a plan forged before the save appeared is refused, not executed
+    forged = {"class": "scratch", "path": str(tree / "scratchA"), "bytes": 4,
+              "fingerprint": hk.fingerprint(tree / "scratchA")}
+    assert hk.check(forged, cfg, hk.Guard(cfg), time.time()).startswith("protected")
+
+
+def test_a_relative_scratch_path_is_the_toolkit_roots_never_the_cwd(tree, monkeypatch):
+    write(tree / "scratch" / "f.txt", b"x")
+    elsewhere = tree / "cwd"
+    write(elsewhere / "scratch" / "keep.txt", b"y")
+    monkeypatch.chdir(elsewhere)
+    doc = hk.plan(cfg_for(tree, scratch=["scratch"]))
+    assert planned(doc, "scratch") == {key(tree / "scratch")}, "resolved against the cwd"
+
+
+def test_a_launch_folder_holding_a_backup_is_never_recycled_or_gzipped(tree):
+    old = "launch-20200101-000000"
+    write(tree / "launches" / old / "backups" / "x.log", blob("bk", 100_000))
+    write(tree / "launches2" / old / "logs" / "x.log", blob("lg", 100_000))  # twin: no backup folder
+    cfg = cfg_for(tree, launch_logs=["launches", "launches2"])
+    doc = hk.plan(cfg)
+    assert planned(doc, "launch") == {key(tree / "launches2" / old)}
+    cfg2 = cfg_for(tree, launch_logs=["launches", "launches2"], recycle_after_days=10 ** 6)   # gzip age instead
+    doc2 = hk.plan(cfg2)
+    assert planned(doc2, "gzip") == {key(tree / "launches2" / old / "logs" / "x.log")}
+
+
+def test_a_repeating_snapshot_holding_a_save_is_never_planned(tree):
+    for root, inner in (("snaps", "save/s.xml.gz"), ("snaps2", "data/s.bin")):    # snaps2 = twin
+        for stamp in ("20260101_000000", "20260102_000000", "20260103_000000"):
+            write(tree / root / stamp / inner, b"same")
+    doc = hk.plan(cfg_for(tree, legacy_snapshots=["snaps", "snaps2"]))
+    assert planned(doc, "snapshot") == {key(tree / "snaps2" / "20260102_000000")}
+
+
 def test_the_example_config_loads():
     ex = REPO / "x4-housekeep.json.example"
     hk.load_config(ex)
     assert set(json.loads(ex.read_text(encoding="utf-8"))) - {"_comment"} <= set(hk.DEFAULTS)
 
 
-# --------------------------------------------------------------------------- temp sweep (the one permanent delete)
+# --------------------------------------------------------------------------- temp sweep (Recycle Bin only, faked here)
 
 def stale(d, days=3):
     t = time.time() - days * DAY
@@ -232,6 +288,7 @@ def test_session_runs_at_most_once_per_interval_and_writes_a_note(tmp_path, monk
     monkeypatch.setattr(hk.tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setattr(hk, "recycle", FakeBin(tmp_path))
+    monkeypatch.setattr(hk, "_has_bin", lambda: True)           # the FakeBin is the bin, on every OS
     state = tmp_path / "note.txt"
     state.write_text("", encoding="utf-8")                   # a sweep ran just now
     left = tdir(tmp_path / "temp", "x4qa_thr001")
@@ -257,6 +314,49 @@ def test_a_dir_the_bin_refuses_is_left_in_place_and_named(tmp_path):
     res = hk.sweep_temp(sweep_cfg(tmp_path), temp=temp, recycler=picky)
     assert refused.exists() and not taken.exists()
     assert res["rows"]["failed"] == 1 and "x4qa_big001" in res["failed"][0]
+
+
+def _no_real_bin(*_a, **_k):
+    raise AssertionError("the REAL recycle() was reached from a test")
+
+
+def test_off_windows_the_sweep_keeps_its_candidates_and_the_session_still_writes_its_state(tmp_path, monkeypatch):
+    cfg = sweep_cfg(tmp_path)
+    cfg.update(codex_sessions_warn_gib=10 ** 6, worktrees_warn=10 ** 6, free_floor_gib=0)
+    monkeypatch.setattr(hk.tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.delenv("X4_HOUSEKEEP_SWEEP", raising=False)
+    monkeypatch.setattr(hk, "recycle", _no_real_bin)
+    monkeypatch.setattr(hk, "_has_bin", lambda: False)
+    left = tdir(tmp_path / "temp", "x4qa_lin001")
+    state = tmp_path / "note.txt"
+    assert hk.session(cfg, state) == 0                          # used to raise: state never written, rerun forever
+    assert left.exists() and state.is_file()
+    assert "kept: x4housekeep recycles on Windows only" in state.read_text(encoding="utf-8")
+    fake = FakeBin(tmp_path)                                    # twin: a platform with a bin recycles it
+    monkeypatch.setattr(hk, "recycle", fake)
+    monkeypatch.setattr(hk, "_has_bin", lambda: True)
+    os.utime(state, (time.time() - 7 * 3600,) * 2)
+    hk.session(cfg, state)
+    assert not left.exists() and len(fake.got) == 1
+
+
+def test_session_never_sweeps_when_the_harness_says_off(tmp_path, monkeypatch):
+    cfg = sweep_cfg(tmp_path)
+    cfg.update(codex_sessions_warn_gib=10 ** 6, worktrees_warn=10 ** 6, free_floor_gib=0)
+    monkeypatch.setattr(hk.tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    left = tdir(tmp_path / "temp", "x4qa_off001")
+    monkeypatch.setenv("X4_HOUSEKEEP_SWEEP", "off")
+    monkeypatch.setattr(hk, "recycle", _no_real_bin)
+    hk.session(cfg, tmp_path / "note.txt")
+    assert left.exists()
+    fake = FakeBin(tmp_path)                                    # twin: unset, the same call sweeps
+    monkeypatch.setattr(hk, "recycle", fake)
+    monkeypatch.setattr(hk, "_has_bin", lambda: True)
+    monkeypatch.delenv("X4_HOUSEKEEP_SWEEP")
+    hk.session(cfg, tmp_path / "note.txt")
+    assert not left.exists()
 
 
 def test_the_tool_never_deletes_permanently():
