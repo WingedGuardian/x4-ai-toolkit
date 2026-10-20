@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
@@ -67,7 +68,8 @@ def recycle_or_raise(paths, *, recycler=None):
         path = Path(value).absolute()
         if not os.path.lexists(path):
             continue
-        if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+        redirected = getattr(path.lstat(), "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if path.is_symlink() or redirected:
             raise OSError(f"refusing to recycle a link: {path}")
         if path.parent == path or path == Path.home():
             raise OSError(f"refusing to recycle a root or home: {path}")

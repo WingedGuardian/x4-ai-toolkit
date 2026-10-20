@@ -782,9 +782,9 @@ function Remove-HOldPathsExample($dest) {   # AFTER the copy
   $old = Join-Path (Join-Path $dest '.claude') 'x4-paths.env.example'
   switch (Get-HOldExampleAction $dest) {
     'remove' {
-      try { Remove-Item -LiteralPath $old -ErrorAction Stop } catch { }
+      try { Recycle-InstallerPaths @($old) } catch { Write-Warning $_.Exception.Message }
       if (Test-Path -LiteralPath $old) {
-        Write-Host ('  [warn] could not remove the stale 3.x ' + $old + ' (it is unedited, so deleting it is safe).')
+        Write-Host ('  [warn] could not recycle the stale 3.x ' + $old + '; it was retained.')
       } else {
         Write-Host "  [note] removed the 3.x .claude/x4-paths.env.example (an unedited shipped copy); 4.0's"
         Write-Host '         example is x4-paths.env.example at the toolkit root.'
@@ -1509,13 +1509,17 @@ function Get-X4RawSha256($path) {
   finally { $sha.Dispose(); $stream.Dispose() }
 }
 
-function Recycle-CopyPrune($dest) {
-  $victims = @($X4CopyPrune | ForEach-Object { Join-Path $dest $_ } | Where-Object { Test-Path -LiteralPath $_ })
+function Recycle-InstallerPaths($victims) {
   if (-not $victims.Count) { return }
   $py = Find-OcPython
-  if (-not $py) { throw 'Recycling old build artifacts needs Python >= 3.10' }
+  if (-not $py) { throw 'Recycling old installer files needs Python >= 3.10' }
   $r = Invoke-X4Native $py[0] (@($py | Select-Object -Skip 1) + @((Join-Path $SRC 'scripts/x4recycle.py')) + $victims)
-  if ($r.Rc -ne 0) { throw ('Recycling old build artifacts failed: ' + $r.Out) }
+  if ($r.Rc -ne 0) { throw ('Recycling old installer files failed: ' + $r.Out) }
+}
+
+function Recycle-CopyPrune($dest) {
+  $victims = @($X4CopyPrune | ForEach-Object { Join-Path $dest $_ } | Where-Object { Test-Path -LiteralPath $_ })
+  Recycle-InstallerPaths $victims
 }
 
 function Copy-Toolkit($dest) {

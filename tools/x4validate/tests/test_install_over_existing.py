@@ -3284,10 +3284,13 @@ def test_an_UNEDITED_3x_example_is_removed_by_the_upgrade(installer, tmp_path):
     old = dest / ".claude" / "x4-paths.env.example"
     old.parent.mkdir(parents=True)
     old.write_bytes(_v3_example().replace(b"\n", b"\r\n"))       # CRLF: still the shipped file
+    previous = old.read_bytes()
     r = _install(installer, tmp_path, dest, "--agent", "claude")
     assert r.returncode == 0, _ok(r)
     assert (dest / "x4-paths.env.example").is_file()
     assert not old.exists(), "the unedited 3.x example was left behind\n" + _ok(r)
+    assert any(p.name.endswith("-x4-paths.env.example") and p.read_bytes() == previous
+               for p in pathlib.Path(os.environ["X4_RECYCLE_TEST_BIN"]).iterdir())
     assert "removed" in r.stdout and ".claude/x4-paths.env.example" in r.stdout.replace("\\", "/"), _ok(r)
 
 

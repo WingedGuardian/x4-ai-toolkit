@@ -386,6 +386,11 @@ copy_item() {   # copy_item REL DEST
   done
 }
 
+recycle_installer_paths() {
+  _oc_python || { echo "REFUSING: recycling old installer files needs Python >= 3.10" >&2; return 1; }
+  "${X4_OC_PY[@]}" "$SRC/scripts/x4recycle.py" "$@"
+}
+
 recycle_copy_prune() {
   local dest="$1" junk
   local victims=()
@@ -393,8 +398,7 @@ recycle_copy_prune() {
     [ ! -e "$dest/$junk" ] && [ ! -L "$dest/$junk" ] || victims+=("$dest/$junk")
   done
   [ "${#victims[@]}" -gt 0 ] || return 0
-  _oc_python || { echo "REFUSING: recycling old build artifacts needs Python >= 3.10" >&2; return 1; }
-  "${X4_OC_PY[@]}" "$SRC/scripts/x4recycle.py" "${victims[@]}"
+  recycle_installer_paths "${victims[@]}"
 }
 
 copy_toolkit() {
@@ -954,11 +958,11 @@ retire_old_paths_example() {   # DEST -- AFTER the copy
   local dest="$1" old="$1/.claude/x4-paths.env.example"
   case "$(_old_example_action "$dest")" in
     remove)
-      if rm -f -- "$old" && [ ! -e "$old" ]; then
+      if recycle_installer_paths "$old" && [ ! -e "$old" ]; then
         echo "  [note] removed the 3.x .claude/x4-paths.env.example (an unedited shipped copy); 4.0's"
         echo "         example is x4-paths.env.example at the toolkit root."
       else
-        echo "  [warn] could not remove the stale 3.x $old (it is unedited, so deleting it is safe)."
+        echo "  [warn] could not recycle the stale 3.x $old; it was retained."
       fi ;;
     keep)
       echo "  [note] kept $dest/.claude/x4-paths.env.example: it differs from every example a"

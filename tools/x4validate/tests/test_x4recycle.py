@@ -44,3 +44,15 @@ def test_unconfigured_test_never_calls_native_recycler(tmp_path, monkeypatch):
     with pytest.raises(AssertionError, match="inject a fake"):
         recycle_or_raise([victim])
     assert victim.read_bytes() == b"keep"
+
+
+def test_a_redirected_root_is_refused_without_touching_its_target(tmp_path):
+    from test_deploy_mod import _symlink_or_skip
+    target = tmp_path / "outside"
+    target.mkdir()
+    (target / "precious").write_bytes(b"keep")
+    link = tmp_path / "linked"
+    _symlink_or_skip(link, target, is_dir=True)
+    with pytest.raises(OSError, match="link"):
+        recycle_or_raise([link])
+    assert (target / "precious").read_bytes() == b"keep"

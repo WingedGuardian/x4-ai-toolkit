@@ -10,6 +10,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Retiring an unedited 3.x path example now recycles it too. Edited examples
+  remain local, and redirected removal roots are refused on the Python 3.10
+  installer floor (BLIND-SPOTS F311).
+
 - A dropped or malformed Steam HTTP response is now a reported per-row outage
   during Workshop identity lookup, preserving prior identity facts instead of
   escaping refresh as an uncaught protocol exception (BLIND-SPOTS F313).
