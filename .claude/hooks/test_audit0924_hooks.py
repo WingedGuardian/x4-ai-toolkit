@@ -41,7 +41,8 @@ def _owned_env(tmp, **roots):
                X4_PROFILE=str(tmp / "profile"),
                X4_SAVES=str(pathlib.Path(roots.get("X4_PROFILE", tmp / "profile")) / "save"),
                X4_DOCUMENTS=str(tmp / "documents"), X4_BACKUPS=str(tmp / "backups"),
-               X4_MODS=str(toolkit / "dev"), X4_PYTHON=sys.executable, X4_BASH=BASH or "")
+               X4_MODS=str(toolkit / "dev"), X4_PYTHON=sys.executable, X4_BASH=BASH or "",
+               X4_HOUSEKEEP_SWEEP="off")   # never a real temp sweep / Recycle Bin from a test
     env.update({k: str(v) for k, v in roots.items()})
     return env
 
@@ -1116,7 +1117,18 @@ class TestF11UncommittedKnowledgebase(unittest.TestCase):
         self.base = b"".join(b"fact %d\n" % i for i in range(100))
 
     def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)   # same-run scratch
+        # Same-run scratch. git writes its objects READ-ONLY, and on Windows a bare
+        # rmtree(ignore_errors=True) silently left every .git/objects file behind --
+        # MEASURED 2026-10-20: 188 f11kb_* dirs in one temp folder, all 69 files sampled
+        # read-only objects. Clear the bit and retry the one call that failed.
+        def _writable(func, path, _exc):
+            os.chmod(path, 0o700)
+            func(path)
+        kw = {"onexc": _writable} if sys.version_info >= (3, 12) else {"onerror": _writable}
+        try:
+            shutil.rmtree(self.tmp, **kw)
+        except OSError:
+            pass   # left for x4housekeep's temp sweep (f11kb_ is one of its prefixes)
 
     def git(self, *a):
         r = subprocess.run(["git", "-C", str(self.root), *a], capture_output=True, text=True)
@@ -1136,7 +1148,8 @@ class TestF11UncommittedKnowledgebase(unittest.TestCase):
         env = {k: v for k, v in os.environ.items()
                if not k.startswith("X4_") and k not in ("CLAUDE_PROJECT_DIR", "HOOK_DIR", "PYTHONPATH")}
         env.update(X4_TOOLKIT=str(self.tmp / "no-toolkit"), X4_PYTHON=sys.executable,
-                   X4_CONFIG=str(self.tmp / "none.env"), HOME=str(self.tmp / "home"), **extra)
+                   X4_CONFIG=str(self.tmp / "none.env"), HOME=str(self.tmp / "home"),
+                   X4_HOUSEKEEP_SWEEP="off", **extra)
         p = subprocess.run([BASH, str(self.root / ".claude" / "hooks" / "session-canary.sh")],
                            input="{}", capture_output=True, text=True, env=env, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr)

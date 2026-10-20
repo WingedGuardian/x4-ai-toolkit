@@ -53,7 +53,7 @@
     "reason": "READ: installer destinations confined to per-test tmp_path, UUID registry keys with per-process cleanup; function fixtures, no timing thresholds"
   },
   "test_x4housekeep.py": {
-    "sha256": "350a7e626c333139d56a6ea9ed15541d7bade241453172aa441a791578b38bd3",
+    "sha256": "230f7666395e309da683066db9d6938bbfc4e4948c280eeefc1d21c73ee55da4",
     "mode": "parallel",
     "reviewed": true,
     "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions"
@@ -65,7 +65,7 @@
     "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions"
   },
   "test_temp_hygiene.py": {
-    "sha256": "5d26b1c36db24492192f70a306043ce00aaeb3e7fbd6f08d6cd59c6bf28064a7",
+    "sha256": "8ac372298ae873e3a986c5604e167ee0115b249b1b41a5337796ffeafdea87fe",
     "mode": "parallel",
     "reviewed": true,
     "reason": "READ: tmp_path outputs only; runs copies of the session hook and a child Python inside tmp_path; no shared writes"

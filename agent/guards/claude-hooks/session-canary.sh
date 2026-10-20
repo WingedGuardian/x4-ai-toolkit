@@ -122,14 +122,17 @@ fi
 # unless something needs the user -- then start the next sweep DETACHED: removing a few thousand temp dirs can take
 # minutes and this hook has seconds. x4housekeep throttles itself (sweep_every_hours). Before the canary lookup,
 # which can exit early. A test run never launches a real sweep of the real temp dir.
+# ONLY $X4_TOOLKIT's copy (_x4-env.sh always sets it). A fallback to the script beside the hooks
+# let every hook test that points X4_TOOLKIT at a fixture run the REPO's script against the REAL
+# temp dir and the real Recycle Bin -- PYTEST_CURRENT_TEST does not exist under unittest or a
+# shell harness (2026-10-20). X4_HOUSEKEEP_SWEEP=off is the explicit opt-out every harness sets.
 HK_NOTE="$HOOK_DIR/../housekeep-session.txt"
 [ -s "$HK_NOTE" ] && cat "$HK_NOTE"
 HK=""
-for c in "${X4_TOOLKIT:-}/scripts/x4housekeep.py" "$HOOK_DIR/../../scripts/x4housekeep.py"; do
-  [ -f "$c" ] && { HK="$c"; break; }
-done
+[ -f "${X4_TOOLKIT:-}/scripts/x4housekeep.py" ] && HK="$X4_TOOLKIT/scripts/x4housekeep.py"
 _x4_hkpy="$(x4_python)"
-if [ -n "$HK" ] && [ -n "$_x4_hkpy" ] && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
+if [ -n "$HK" ] && [ -n "$_x4_hkpy" ] && [ "${X4_HOUSEKEEP_SWEEP:-}" != off ] \
+   && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
   ( "$_x4_hkpy" -B "$HK" session "$HK_NOTE" </dev/null >/dev/null 2>&1 & )
 fi
 

@@ -102,6 +102,7 @@ def test_session_start_launches_the_sweep_only_outside_tests(tmp_path):
     (tk / "scripts" / "x4housekeep.py").write_text(
         "import sys\nopen(sys.argv[-1] + '.launched', 'w').write(' '.join(sys.argv[1:]))\n", encoding="utf-8")
     env = dict(os.environ, X4_TOOLKIT=str(tk), CLAUDE_PROJECT_DIR=str(tmp_path / "proj"))
+    env.pop("X4_HOUSEKEEP_SWEEP", None)
     _run_hook(hooks, env)
     time.sleep(2)
     note = hooks.parent / "housekeep-session.txt"
@@ -115,3 +116,53 @@ def test_session_start_launches_the_sweep_only_outside_tests(tmp_path):
         time.sleep(0.2)
     args = launched.read_text(encoding="utf-8").split()
     assert args[0] == "session" and Path(args[1]).name == "housekeep-session.txt"
+
+
+_MARKER = "import sys\nopen(sys.argv[-1] + '.launched', 'w').write(' '.join(sys.argv[1:]))\n"
+
+
+def _launched(hooks, wait):
+    flag = Path(str(hooks.parent / "housekeep-session.txt") + ".launched")
+    for _ in range(int(wait / 0.2)):
+        if flag.exists():
+            return True
+        time.sleep(0.2)
+    return flag.exists()
+
+
+@needs_bash
+def test_session_start_never_runs_the_script_beside_the_hooks(tmp_path):
+    """Only $X4_TOOLKIT's x4housekeep. The fallback to <hooks>/../../scripts let every hook test with a fixture
+    X4_TOOLKIT run the REPO's script on the real temp dir and the real Recycle Bin (2026-10-20): under unittest or a
+    shell harness PYTEST_CURRENT_TEST does not exist, so X4_SWEEP_IN_TESTS=1 below reproduces that condition."""
+    hooks = _hook_tree(tmp_path)
+    (tmp_path / "proj" / "scripts").mkdir()
+    (tmp_path / "proj" / "scripts" / "x4housekeep.py").write_text(_MARKER, encoding="utf-8")
+    env = dict(os.environ, X4_TOOLKIT=str(tmp_path / "fixture-tk"), CLAUDE_PROJECT_DIR=str(tmp_path / "proj"),
+               X4_SWEEP_IN_TESTS="1")
+    env.pop("X4_HOUSEKEEP_SWEEP", None)
+    _run_hook(hooks, env)
+    assert not _launched(hooks, 2), "the script beside the hooks was launched"
+    env["X4_TOOLKIT"] = str(tmp_path / "proj")                       # twin: the same script, named by X4_TOOLKIT
+    _run_hook(hooks, env)
+    assert _launched(hooks, 10)
+
+
+@needs_bash
+def test_session_start_never_sweeps_when_the_harness_says_off(tmp_path):
+    hooks = _hook_tree(tmp_path)
+    (tmp_path / "proj" / "scripts").mkdir()
+    (tmp_path / "proj" / "scripts" / "x4housekeep.py").write_text(_MARKER, encoding="utf-8")
+    env = dict(os.environ, X4_TOOLKIT=str(tmp_path / "proj"), CLAUDE_PROJECT_DIR=str(tmp_path / "proj"),
+               X4_SWEEP_IN_TESTS="1", X4_HOUSEKEEP_SWEEP="off")
+    _run_hook(hooks, env)
+    assert not _launched(hooks, 2), "X4_HOUSEKEEP_SWEEP=off did not stop the launch"
+    env.pop("X4_HOUSEKEEP_SWEEP")                                    # twin: without the opt-out it launches
+    _run_hook(hooks, env)
+    assert _launched(hooks, 10)
+
+
+def test_every_hook_harness_sets_the_sweep_opt_out():
+    """Tripwire (a substring READ, not a measurement): each non-pytest runner of session-canary.sh carries the opt-out."""
+    for rel in ("agent/guards/claude-hooks/test_audit0924_hooks.py", "scripts/test-hooks.sh"):
+        assert "X4_HOUSEKEEP_SWEEP" in (REPO / rel).read_text(encoding="utf-8"), rel
