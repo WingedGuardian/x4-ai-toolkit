@@ -294,6 +294,10 @@ tests, fixtures, gates or release tooling.
 
 #### Maintainers
 
+- **(maintainers)** AGENTS.md headroom won back with no rule dropped: core.md "Discovery vs.
+  Proof" (shorter routing cells, the mode story in one sentence, the Discovery/Proof table as a
+  paragraph) and codex.md's manual preflight (detail now only in ADAPTING.md §2). AGENTS.md
+  32,581 -> 30,863 bytes; CLAUDE.md 30,034 -> 28,857 characters.
 - **(maintainers)** deploy_parity: `TARGETS["codex"]` (rendered files compared as canonical JSON;
   a deployed skill still carrying the raw token is not parity), 17 new tests; deploy-claude-dir: 12
   new tests for `--target codex`; session-canary: 11 tests on scratch git repos
