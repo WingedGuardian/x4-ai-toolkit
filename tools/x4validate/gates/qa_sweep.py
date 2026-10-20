@@ -139,8 +139,13 @@ def _sandbox_dir() -> Path:
     """
     global _SANDBOX_DIR
     if _SANDBOX_DIR is None:
+        import atexit
+        import shutil
         import tempfile
         _SANDBOX_DIR = Path(tempfile.mkdtemp(prefix="x4qa_out_"))
+        # Removed at exit: nothing reads it after the sweep. Without this every sweep left one behind
+        # (767 of them, and 1,184 registry copies, on one machine by 2026-10-18).
+        atexit.register(shutil.rmtree, _SANDBOX_DIR, True)
     return _SANDBOX_DIR
 
 
@@ -164,9 +169,11 @@ def _sandbox_registry() -> str:
     """
     global _SANDBOX
     if _SANDBOX is None:
+        import atexit
         import shutil
         import tempfile
         tmp = Path(tempfile.mkdtemp(prefix="x4qa_registry_"))
+        atexit.register(shutil.rmtree, tmp, True)
         dest = tmp / "modlist.yaml"
         try:
             src = _env.registry_file()

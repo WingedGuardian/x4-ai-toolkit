@@ -118,6 +118,21 @@ if [ "${#_x4_sg_files[@]}" -gt 0 ] && [ -n "$_x4_sgpy" ]; then
   fi
 fi
 
+# Disk housekeeping (RETENTION.md, "The toolkit cleans up after itself"). Show the previous sweep's note -- empty
+# unless something needs the user -- then start the next sweep DETACHED: removing a few thousand temp dirs can take
+# minutes and this hook has seconds. x4housekeep throttles itself (sweep_every_hours). Before the canary lookup,
+# which can exit early. A test run never launches a real sweep of the real temp dir.
+HK_NOTE="$HOOK_DIR/../housekeep-session.txt"
+[ -s "$HK_NOTE" ] && cat "$HK_NOTE"
+HK=""
+for c in "${X4_TOOLKIT:-}/scripts/x4housekeep.py" "$HOOK_DIR/../../scripts/x4housekeep.py"; do
+  [ -f "$c" ] && { HK="$c"; break; }
+done
+_x4_hkpy="$(x4_python)"
+if [ -n "$HK" ] && [ -n "$_x4_hkpy" ] && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
+  ( "$_x4_hkpy" -B "$HK" session "$HK_NOTE" </dev/null >/dev/null 2>&1 & )
+fi
+
 # The canary lives in the toolkit, not beside the hooks: it is a tool, and it needs the
 # x4validate package to resolve roots. If the toolkit is not configured there is nothing
 # to say -- but say THAT, rather than printing a reassuring nothing.

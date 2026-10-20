@@ -249,7 +249,7 @@ X4_COPY_PRUNE="tools/x4validate/.venv tools/x4validate/.pytest_cache tools/basex
 #: `.claude/.reference-buildid` too (FX-G5 / reviewer J2 item 7): THIS machine's finished-unpack
 #: marker, which x4doctor reads as evidence of a MOVED tree -- copied in, a fresh install read
 #: "moved"; pruned, an upgrade would erase the destination's own.
-X4_KEEP_LOCAL="x4-paths.env .claude/x4-paths.env .claude/settings.local.json .claude/backups .claude/.reference-buildid .codex/hooks.json .codex/config.toml .opencode/opencode.jsonc tools/basex/basex/data tools/basex/basex/coverage-x4raw.json tools/basex/basex/coverage-x4eff.json tools/basex/_eff tools/basex/stage-manifest.json"
+X4_KEEP_LOCAL="x4-paths.env x4-housekeep.json .claude/x4-paths.env .claude/settings.local.json .claude/backups .claude/.reference-buildid .codex/hooks.json .codex/config.toml .opencode/opencode.jsonc tools/basex/basex/data tools/basex/basex/coverage-x4raw.json tools/basex/basex/coverage-x4eff.json tools/basex/_eff tools/basex/stage-manifest.json"
 
 #: THE TRACKED SET, when the source is a git checkout.
 #:
@@ -589,7 +589,7 @@ _owned_lines_old() {   # _owned_lines_old CONFIG_FILE
 #: COMMON to every agent target. Each agent's own files are named once more, in its
 #: X4_AGENT_ITEMS_<name> set below, and never here: an item in both lists is an item
 #: two answers can disagree about.
-X4_COPY_ITEMS="tools bin scripts mods KNOWLEDGEBASE.md KNOWLEDGEBASE.local.md.example README.md CHANGELOG.md LICENSE setup.sh install.sh install.ps1 SETUP_PROMPT.txt ADAPTING.md .gitignore .gitattributes x4-paths.env.example"
+X4_COPY_ITEMS="tools bin scripts mods KNOWLEDGEBASE.md KNOWLEDGEBASE.local.md.example README.md CHANGELOG.md LICENSE setup.sh install.sh install.ps1 SETUP_PROMPT.txt ADAPTING.md RETENTION.md x4-housekeep.json.example .gitignore .gitattributes x4-paths.env.example"
 
 #: PER-AGENT sets (audit F8: the installers shipped no AGENTS.md at all). `agent/` -- the
 #: neutral source the generator reads -- is in NO set: an installed toolkit is
