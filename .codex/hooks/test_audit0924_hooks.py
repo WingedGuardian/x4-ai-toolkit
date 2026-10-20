@@ -1097,5 +1097,120 @@ class TestLaneIConfigLocation(unittest.TestCase):
         self.assertNotIn("elsewhere", " ".join(lines))
 
 
+@unittest.skipUnless(BASH and shutil.which("git"), "bash or git unavailable; the session hook is not exercised")
+class TestF11UncommittedKnowledgebase(unittest.TestCase):
+    """F11 (2026-10-20): Codex appended ~1,767 lines to a game root's KNOWLEDGEBASE.md over 2.5
+    weeks and never committed them. The session hook now names an uncommitted knowledgebase in
+    the hook's own root. One twin per clause; the fixture repo pins core.autocrlf=false so the
+    line-ending churn case is real (MEASURED: plain --numstat counted 103 added for 3)."""
+
+    KB = "KNOWLEDGEBASE.md"
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="f11kb_"))
+        self.root = self.tmp / "root"
+        shutil.copytree(HOOKS, self.root / ".claude" / "hooks",
+                        ignore=shutil.ignore_patterns("__pycache__", "test*"))
+        self.base = b"".join(b"fact %d\n" % i for i in range(100))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)   # same-run scratch
+
+    def git(self, *a):
+        r = subprocess.run(["git", "-C", str(self.root), *a], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def repo(self, files=None):
+        self.git("init", "-q")
+        for k, v in (("user.email", "t@example.invalid"), ("user.name", "t"),
+                     ("core.autocrlf", "false"), ("commit.gpgsign", "false")):
+            self.git("config", k, v)
+        for name, data in (files or {self.KB: self.base}).items():
+            (self.root / name).write_bytes(data)
+            self.git("add", "--", name)
+        self.git("commit", "-q", "-m", "c")
+
+    def run_hook(self, **extra):
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("X4_") and k not in ("CLAUDE_PROJECT_DIR", "HOOK_DIR", "PYTHONPATH")}
+        env.update(X4_TOOLKIT=str(self.tmp / "no-toolkit"), X4_PYTHON=sys.executable,
+                   X4_CONFIG=str(self.tmp / "none.env"), HOME=str(self.tmp / "home"), **extra)
+        p = subprocess.run([BASH, str(self.root / ".claude" / "hooks" / "session-canary.sh")],
+                           input="{}", capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return [ln for ln in p.stdout.splitlines() if ln.startswith("[x4 kb]")], p.stdout
+
+    def test_uncommitted_additions_are_named_with_the_count_and_the_directive(self):
+        self.repo()
+        (self.root / self.KB).write_bytes(self.base + b"new a\nnew b\nnew c\n")
+        lines, _ = self.run_hook()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("KNOWLEDGEBASE.md has 3 uncommitted added line(s)", lines[0])
+        self.assertIn("Commit it alone (explicit path)", lines[0])
+        self.assertRegex(lines[0], r"last commit of it: \d{4}-\d\d-\d\d")
+
+    def test_TWIN_a_clean_tree_prints_nothing(self):
+        self.repo()
+        self.assertEqual(self.run_hook()[0], [])
+
+    def test_line_ending_churn_is_not_counted(self):
+        self.repo()
+        (self.root / self.KB).write_bytes((self.base + b"x\ny\nz\n").replace(b"\n", b"\r\n"))
+        lines, _ = self.run_hook()
+        self.assertTrue(lines and "has 3 uncommitted added" in lines[0], lines)
+
+    def test_TWIN_line_ending_churn_ALONE_prints_nothing(self):
+        self.repo()
+        (self.root / self.KB).write_bytes(self.base.replace(b"\n", b"\r\n"))
+        self.assertEqual(self.run_hook()[0], [])
+
+    def test_STAGED_but_uncommitted_additions_are_counted(self):
+        self.repo()
+        (self.root / self.KB).write_bytes(self.base + b"staged\n")
+        self.git("add", "--", self.KB)
+        lines, _ = self.run_hook()
+        self.assertTrue(lines and "has 1 uncommitted added" in lines[0], lines)
+
+    def test_the_LOCAL_notes_file_is_checked_too(self):
+        self.repo({self.KB: self.base, "KNOWLEDGEBASE.local.md": b"## Notes\n"})
+        (self.root / "KNOWLEDGEBASE.local.md").write_bytes(b"## Notes\nmine\n")
+        lines, _ = self.run_hook()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("KNOWLEDGEBASE.local.md has 1 uncommitted", lines[0])
+
+    def test_an_UNTRACKED_knowledgebase_is_named_as_never_committed(self):
+        self.repo({"other.txt": b"x\n"})
+        (self.root / self.KB).write_bytes(self.base)
+        lines, _ = self.run_hook()
+        self.assertTrue(lines and "untracked" in lines[0] and self.KB in lines[0], lines)
+
+    def test_TWIN_an_IGNORED_knowledgebase_is_the_users_choice_and_silent(self):
+        self.repo({".gitignore": b"/KNOWLEDGEBASE.local.md\n"})
+        (self.root / "KNOWLEDGEBASE.local.md").write_bytes(b"## Notes\nmine\n")
+        self.assertEqual(self.run_hook()[0], [])
+
+    def test_TWIN_not_a_git_repo_prints_nothing(self):
+        (self.root / self.KB).write_bytes(self.base + b"more\n")
+        self.assertEqual(self.run_hook(GIT_CEILING_DIRECTORIES=str(self.tmp))[0], [])
+
+    def test_the_line_follows_GUARDS_OFF_and_precedes_the_preferences(self):
+        """#38: the preview keeps the HEAD. GUARDS OFF stays first (K7); the directive comes
+        before the up-to-4 KiB preferences block."""
+        self.repo({self.KB: self.base, "KNOWLEDGEBASE.local.md": b"## My preferences\nKeep it.\n"})
+        (self.root / self.KB).write_bytes(self.base + b"more\n")
+        _, out = self.run_hook(X4_GUARD="off")
+        self.assertTrue(out.lstrip().startswith("[x4 guards] *** GUARDS OFF"), out[:300])
+        # The preferences block, injected or (in this bare fixture) its NOT INJECTED line.
+        pref = max(out.find("Keep it."), out.find("PREFERENCES"))
+        kb = out.find("[x4 kb]")
+        self.assertTrue(0 < kb < pref, (kb, pref, out[:600]))
+
+    def test_no_file_content_is_printed(self):
+        self.repo()
+        (self.root / self.KB).write_bytes(self.base + b"SECRET-CONTENT-LINE\n")
+        _, out = self.run_hook()
+        self.assertNotIn("SECRET-CONTENT-LINE", out)
+
+
 if __name__ == "__main__":
     unittest.main()

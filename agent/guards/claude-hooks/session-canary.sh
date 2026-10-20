@@ -36,6 +36,34 @@ if x4_guards_off; then
   echo "            Unset X4_GUARD and restart the session to turn them back on."
 fi
 
+# AN UNCOMMITTED KNOWLEDGEBASE in this hook's own root (F11, 2026-10-20). MEASURED that day:
+# Codex appended ~1,767 lines to a game root's KNOWLEDGEBASE.md over 2.5 weeks and never
+# committed them -- nothing it read said to, and an uncommitted file has no recovery point.
+# One directive line per file, AFTER the GUARDS OFF banner and BEFORE the preferences (#38:
+# the preview keeps the head). Counts only, never content. `diff HEAD` covers staged and
+# unstaged; --ignore-cr-at-eol because line-ending churn alone made plain --numstat report
+# 103 added lines for 3 (MEASURED on a fixture). No git, or not a work tree: nothing to commit
+# to, so nothing to say. An untracked file that is IGNORED is the user's choice: silent.
+_x4_kbr="$HOOK_DIR/../.."
+if command -v git >/dev/null 2>&1 && git -C "$_x4_kbr" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  for _x4_kb in KNOWLEDGEBASE.md KNOWLEDGEBASE.local.md; do
+    [ -f "$_x4_kbr/$_x4_kb" ] || continue
+    if ! git -C "$_x4_kbr" ls-files --error-unmatch -- "$_x4_kb" >/dev/null 2>&1; then
+      git -C "$_x4_kbr" check-ignore -q -- "$_x4_kb" 2>/dev/null && continue
+      echo "[x4 kb] $_x4_kb is untracked (never committed) in this git repo. Commit it alone (explicit path), or ask the user whose it is."
+      continue
+    fi
+    if ! _x4_ns="$(git -C "$_x4_kbr" diff HEAD --numstat --ignore-cr-at-eol -- "$_x4_kb" 2>/dev/null)"; then
+      echo "[x4 kb] could not check whether $_x4_kb has uncommitted changes (git diff failed)."
+      continue
+    fi
+    [ -n "$_x4_ns" ] || continue
+    _x4_add="${_x4_ns%%[[:space:]]*}"; _x4_del="${_x4_ns#*[[:space:]]}"; _x4_del="${_x4_del%%[[:space:]]*}"
+    _x4_when="$(git -C "$_x4_kbr" log -1 --format=%cs -- "$_x4_kb" 2>/dev/null)"
+    echo "[x4 kb] $_x4_kb has $_x4_add uncommitted added line(s) and $_x4_del removed (last commit of it: ${_x4_when:-unknown}). Commit it alone (explicit path), or ask the user whose edits these are."
+  done
+fi
+
 # Anchor personal notes to THIS hook tree, independently of inherited tool roots.
 # AFTER the GUARDS OFF banner (K7, v4.0 release review): preferences can run to 4 KiB, and
 # printed first they pushed the banner past the head the harness preview keeps (#38).
