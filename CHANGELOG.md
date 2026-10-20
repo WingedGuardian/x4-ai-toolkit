@@ -105,8 +105,9 @@ tests, fixtures, gates or release tooling.
   git work tree and its `KNOWLEDGEBASE.md` or `KNOWLEDGEBASE.local.md` has uncommitted changes, one
   `[x4 kb]` line gives the added and removed line counts (line-ending churn is not counted) and the
   date the file was last committed, and asks the agent to commit that file alone or ask you whose
-  edits they are. An untracked file is named as never committed; an ignored one is left alone. No
-  file content is printed. The instructions (AGENTS.md, CLAUDE.md) now say: in a git repo, commit
+  edits they are. An untracked file is named as never committed; an ignored one is left alone. If
+  git refuses the folder (for example "dubious ownership"), one line says the check could not run,
+  with git's reason. No file content is printed. The instructions (AGENTS.md, CLAUDE.md) now say: in a git repo, commit
   each edited knowledgebase/notes file alone, by explicit path; never push. Measured on 2026-10-20:
   an agent had appended about 1,767 lines to a knowledgebase over two and a half weeks without
   ever committing them.
@@ -256,7 +257,12 @@ tests, fixtures, gates or release tooling.
   byte-identical; when the deploy writes it, approve the hooks in Codex's `/hooks`, since Codex
   skips new or changed hook definitions until then. `gates/deploy_parity.py` compares the Codex
   tree whenever the root has `.codex/`, `.agents/` or AGENTS.md, and fails with `CODEX UNGUARDED`
-  when AGENTS.md is there without `.codex/`.
+  when AGENTS.md is there without `.codex/`. A root with no `.claude/` but a Codex file is checked
+  for the Codex tree, its claude section reading N/A; a root with neither is refused (rc 2).
+  x4doctor's `parity.codex` now does a real comparison against the toolkit source wherever the
+  Codex target is installed and the toolkit is separate, and can FAIL (it was always N/A).
+  `deploy-claude-dir.py --dest <dir>` naming a directory that does not exist is now refused with
+  rc 2; before, the deploy created it from nothing.
 - **Codex save evidence on Linux and macOS keeps a written trailing `/`** on a folder path, as
   on Windows; the POSIX branch dropped it.
 - **Codex users must re-review hooks:** post-tool validation also receives the captured native

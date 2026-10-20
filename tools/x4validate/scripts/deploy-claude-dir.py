@@ -462,6 +462,12 @@ def main(argv: list[str] | None = None) -> int:
     for t in targets:
         if t == "claude":
             dest = Path(args.dest) if args.dest else (root / ".claude" if root else None)
+            if args.dest and not dest.is_dir():
+                # The 4.0 code created a named --dest from nothing (rc 0); it is refused now,
+                # so a typo cannot plant a fresh .claude/ somewhere unintended.
+                print(f"REFUSING: --dest {dest} is not an existing directory. Nothing was "
+                      "written.", file=sys.stderr)
+                return 2
             if dest is None or not dest.is_dir():
                 print("REFUSING: no game root configured (or it has no .claude/). Nothing to "
                       "deploy into; pass --dest to name one.", file=sys.stderr)

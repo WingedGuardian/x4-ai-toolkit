@@ -447,3 +447,11 @@ def test_the_ACTION_line_is_printed_only_when_hooks_json_was_really_written(crep
 def test_TWIN_the_ACTION_line_is_printed_after_a_real_write(crepo, dest, capsys):
     assert _codex(crepo, dest, "--apply") == 0
     assert "ACTION FOR YOU" in capsys.readouterr().out
+
+
+def test_a_named_dest_that_does_not_exist_is_REFUSED(repo, tmp_path, capsys):
+    """Review LOW-4: before F11 a missing --dest was created from nothing (rc 0)."""
+    _commit(repo, "skills/a/SKILL.md", b"v1"+bytes([10]))
+    d = tmp_path / "typo" / ".claude"
+    assert dep.main(["--repo", str(repo), "--dest", str(d), "--apply"]) == 2
+    assert not d.exists() and "--dest" in capsys.readouterr().err
