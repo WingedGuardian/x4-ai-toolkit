@@ -56,3 +56,15 @@ def test_a_redirected_root_is_refused_without_touching_its_target(tmp_path):
     with pytest.raises(OSError, match="link"):
         recycle_or_raise([link])
     assert (target / "precious").read_bytes() == b"keep"
+
+
+def test_home_alias_is_refused_before_calling_any_backend(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "sub").mkdir(parents=True)
+    (home / "precious").write_bytes(b"keep")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    def unexpected(paths):
+        raise AssertionError("the home alias reached the recycler")
+    with pytest.raises(OSError, match="root or home"):
+        recycle_or_raise([home / "sub/.."], recycler=unexpected)
+    assert (home / "precious").read_bytes() == b"keep"

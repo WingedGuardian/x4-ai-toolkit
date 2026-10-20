@@ -10985,6 +10985,8 @@ examples, while edited examples remain in place. Redirected removal roots use
 reparse attributes rather than a Python-3.12-only junction method, preserving
 the Python 3.10 installer floor. Thirteen sandbox controls pass, including both
 installer twins and dry runs; no native recycler was called.
+Canonical root/home aliases are refused too (including a sandbox home spelled
+through sub/..); eight recycler controls pass without a native OS call.
 
 MEASURED: sandbox installer upgrades preserve a destination measured baseline and
 recover cache bytes in the fake bin. Orphan replacement likewise retains the old

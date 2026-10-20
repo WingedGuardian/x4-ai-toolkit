@@ -71,7 +71,7 @@
     "reason": "READ: tmp_path outputs only; runs copies of the session hook and a child Python inside tmp_path; no shared writes"
   },
   "test_x4recycle.py": {
-    "sha256": "c8fe90f5b8e3180a35a97a3142fe2cf0f9091ff31337f4c7201adeb9f40c05f9",
+    "sha256": "fa89a5bdcd73a27f08a005efbde2afa7ca9f7a4f64d76cad48e3595add855fcb",
     "mode": "serial",
     "reviewed": true,
     "reason": "READ: sandbox filesystem and bounded fake recycle bin; subprocess installers/builders, no real OS recycler"

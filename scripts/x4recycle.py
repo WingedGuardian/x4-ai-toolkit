@@ -71,7 +71,8 @@ def recycle_or_raise(paths, *, recycler=None):
         redirected = getattr(path.lstat(), "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
         if path.is_symlink() or redirected:
             raise OSError(f"refusing to recycle a link: {path}")
-        if path.parent == path or path == Path.home():
+        canonical = path.resolve()
+        if canonical.parent == canonical or canonical == Path.home().resolve():
             raise OSError(f"refusing to recycle a root or home: {path}")
         if str(path) not in names:
             names.append(str(path))
