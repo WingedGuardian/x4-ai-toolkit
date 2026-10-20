@@ -137,6 +137,7 @@ def test_a_skill_SUBFILE_is_compared_not_just_SKILL_md(tmp_path):
 
 def test_no_game_root_is_a_REFUSAL(monkeypatch, capsys):
     monkeypatch.setattr(dp, "game_claude_dir", lambda: None)
+    monkeypatch.setattr(dp, "game_root_dir", lambda: None)
     assert dp.main() == 2
     assert "REFUSING" in capsys.readouterr().err
 
@@ -405,3 +406,37 @@ def test_TWIN_an_unrewritten_CLAUDE_skill_is_still_identical(tmp_path):
     r, g = _pair(tmp_path, {"skills/a/SKILL.md": "cd $CLAUDE_PROJECT_DIR/x" + NL},
                  {"skills/a/SKILL.md": "cd $CLAUDE_PROJECT_DIR/x" + NL})
     assert dp.compare_trees(r, g)[0].state == dp.IDENTICAL
+
+
+def _codex_only(tmp_path, monkeypatch, game_files):
+    """Review LOW-2: a root with no .claude/ (a Codex-only setup) was never checked: main()
+    refused with rc 2 before the codex section."""
+    repo = _codex_repo(tmp_path / "repo")
+    _tree(repo / ".claude", {"hooks/c.sh": "x" + NL})
+    game = _tree(tmp_path / "game", game_files) if game_files else tmp_path / "game"
+    game.mkdir(exist_ok=True)
+    monkeypatch.setattr(dp, "repo_claude_dir", lambda: repo / ".claude")
+    monkeypatch.setattr(dp, "game_claude_dir", lambda: None)
+    monkeypatch.setattr(dp, "game_root_dir", lambda: game)
+    return game
+
+
+def test_a_CODEX_ONLY_root_is_checked_and_claude_is_NA(tmp_path, monkeypatch, capsys):
+    game = _codex_only(tmp_path, monkeypatch, dict(_DEPLOYED, **{"AGENTS.md": "# x" + NL}))
+    (game / ".codex" / "hooks.json").write_text(dp.render_template_text(_TMPL, game), encoding="utf-8")
+    rc = dp.main()
+    out = capsys.readouterr()
+    assert rc == 0, out.out + out.err
+    assert "claude: N/A" in out.out and "Codex" in out.out
+
+
+def test_TWIN_a_CODEX_ONLY_root_with_codex_drift_is_rc_1(tmp_path, monkeypatch, capsys):
+    _codex_only(tmp_path, monkeypatch, dict(_DEPLOYED, **{".codex/hooks/h.sh": "echo CHANGED" + NL}))
+    assert dp.main() == 1
+    assert ".codex/hooks/h.sh" in capsys.readouterr().err
+
+
+def test_TWIN_a_root_with_NEITHER_tree_is_a_REFUSAL(tmp_path, monkeypatch, capsys):
+    _codex_only(tmp_path, monkeypatch, {})
+    assert dp.main() == 2
+    assert "REFUSING" in capsys.readouterr().err

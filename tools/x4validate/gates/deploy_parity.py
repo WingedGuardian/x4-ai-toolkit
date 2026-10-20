@@ -47,7 +47,9 @@ and unguarded -- the measured state that made this target exist -- and the gate 
 
 Run:  uv run python gates/deploy_parity.py
 Exit: 0 every file identical - 1 drift, each file named with its direction - 2 could not
-      compare (no game root configured, or nothing to compare; never "at parity").
+      compare (no game root configured, a root with neither .claude/ nor any Codex file, or
+      nothing to compare; never "at parity"). A root with no .claude/ but a Codex file (a
+      Codex-only setup) is checked for the Codex tree, the claude section reading N/A.
 """
 
 from __future__ import annotations
@@ -317,32 +319,50 @@ def describe(row: Row) -> str:
     return f"{row.name}: {row.state}"
 
 
+def game_root_dir() -> Path | None:
+    """The configured game root, whether or not it holds a .claude/."""
+    root = _paths.game_root()
+    return Path(root) if root is not None and Path(root).is_dir() else None
+
+
 def main() -> int:
     repo = repo_claude_dir()
     game = game_claude_dir()
     if not repo.is_dir():
         print(f"REFUSING: no repo .claude/ at {repo}", file=sys.stderr)
         return 2
-    if game is None:
-        print("REFUSING: no game root configured (or it has no .claude/), so there is no "
-              "deployed copy to compare. This is not 'at parity'.", file=sys.stderr)
+    # Review LOW-2: a root with no .claude/ (Codex only) is still checked for the Codex tree;
+    # the claude section says N/A. A root with NEITHER tree is a refusal, never "at parity".
+    root = game.parent if game is not None else game_root_dir()
+    if root is None or (game is None and not codex_marks(root)):
+        print("REFUSING: no game root configured, or it has neither .claude/ nor any Codex "
+              "file (.codex/, .agents/, AGENTS.md), so there is no deployed copy to compare. "
+              "This is not 'at parity'.", file=sys.stderr)
         return 2
-    if game.resolve() == repo.resolve():
+    if game is not None and game.resolve() == repo.resolve():
         print(f"REFUSING: the game root's .claude/ IS the repo's ({repo}); comparing a "
               "tree to itself proves nothing.", file=sys.stderr)
         return 2
-    rows = compare_trees(repo, game)
-    if not rows:
+    if root.resolve() == repo.parent.resolve():
+        print(f"REFUSING: the game root IS the repo ({root}); comparing a tree to itself "
+              "proves nothing.", file=sys.stderr)
+        return 2
+    rows = compare_trees(repo, game) if game is not None else None
+    if rows is not None and not rows:
         print("REFUSING: nothing to compare -- both deployment populations are empty.",
               file=sys.stderr)
         return 2
 
-    codex_unguarded(game.parent)
+    codex_unguarded(root)
     print("DEPLOY PARITY -- repo .claude/ (source) vs game root .claude/ (deployed)")
     print(f"  repo:      {repo}")
-    print(f"  game root: {game}")
-    bad = _report(rows, "")
-    bad |= _codex(repo.parent, game.parent)
+    print(f"  game root: {root}")
+    if rows is None:
+        print("  claude: N/A -- the game root has no .claude/ (Claude Code is not set up there)")
+        bad = False
+    else:
+        bad = _report(rows, "")
+    bad |= _codex(repo.parent, root)
     if not bad:
         print("  at parity.")
     return 1 if bad else 0
