@@ -26,6 +26,11 @@
 case "$0" in */*|*\\*) HOOK_DIR="${0%[/\\]*}" ;; *) HOOK_DIR=. ;; esac
 . "$HOOK_DIR/_x4-env.sh"
 
+# Every SessionStart contribution shares the host's one output budget. Buffer
+# early exits too; bounding only the final canary report left preferences and
+# housekeeping notes outside the cap.
+_x4_session_context(){
+
 # X4_GUARD=off (spec 5.7): FIRST, before the canary, because a session whose guards are off
 # must be unmissable -- and the preview keeps the head.
 if x4_guards_off; then
@@ -44,6 +49,7 @@ fi
 # unstaged; --ignore-cr-at-eol because line-ending churn alone made plain --numstat report
 # 103 added lines for 3 (MEASURED on a fixture). No git, or not a work tree: nothing to commit
 # to, so nothing to say. An untracked file that is IGNORED is the user's choice: silent.
+_x4_prefix_context="$(
 _x4_kbr="$HOOK_DIR/../.."
 _x4_kbin=""
 if command -v git >/dev/null 2>&1; then
@@ -135,6 +141,7 @@ if [ -n "$HK" ] && [ -n "$_x4_hkpy" ] && [ "${X4_HOUSEKEEP_SWEEP:-}" != off ] \
    && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
   ( "$_x4_hkpy" -B "$HK" session "$HK_NOTE" </dev/null >/dev/null 2>&1 & )
 fi
+)"
 
 # The canary lives in the toolkit, not beside the hooks: it is a tool, and it needs the
 # x4validate package to resolve roots. If the toolkit is not configured there is nothing
@@ -146,6 +153,7 @@ done
 if [ -z "$CANARY" ]; then
   echo "[x4 canary] NOT RUN: scripts/x4canary.py not found under \$X4_TOOLKIT (${X4_TOOLKIT:-unset})."
   echo "            Irreplaceable files are UNCHECKED this session."
+  [ -z "$_x4_prefix_context" ] || printf '%s\n' "$_x4_prefix_context"
   exit 0
 fi
 
@@ -156,6 +164,7 @@ fi
 PY="$(x4_python)"
 if [ -z "$PY" ]; then
   echo "[x4 canary] NOT RUN: no usable python (X4_PYTHON=${X4_PYTHON:-unset}; none on PATH otherwise). Irreplaceable files are UNCHECKED."
+  [ -z "$_x4_prefix_context" ] || printf '%s\n' "$_x4_prefix_context"
   exit 0
 fi
 
@@ -196,6 +205,7 @@ case $RC in
     # to surface was printed where the model never reads it.
     printf '%s
 ' "$OUT" | grep -F 'NOT CHECKED:' || :
+    [ -z "$_x4_prefix_context" ] || printf '%s\n' "$_x4_prefix_context"
     ;;
   1)
     x4_bound "$(
@@ -203,6 +213,7 @@ case $RC in
       echo "            Recover it BEFORE doing anything else, and do not re-run"
       echo "            whatever wrote it:  git -C <repo> checkout -- <path>"
       echo "            (report from $CANARY)"
+      [ -z "$_x4_prefix_context" ] || printf '%s\n' "$_x4_prefix_context"
       echo "$OUT" | sed 's/^/            /'
     )"
     echo
@@ -211,9 +222,12 @@ case $RC in
     x4_bound "$(
       echo "[x4 canary] COULD NOT CHECK (exit $RC) -- this is not a clean result."
       echo "            (report from $CANARY)"
+      [ -z "$_x4_prefix_context" ] || printf '%s\n' "$_x4_prefix_context"
       echo "$OUT" | sed 's/^/            /'
     )"
     echo
     ;;
 esac
 exit 0
+}
+x4_bound "$(_x4_session_context)"

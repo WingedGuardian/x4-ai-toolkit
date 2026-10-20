@@ -53,7 +53,7 @@ def test_K7_guards_off_banner_precedes_injected_preferences(tmp_path):
     if not bash.is_file():
         pytest.skip("Bash unavailable; rendered session hook not exercised")
     _, root, env = make_sandbox(tmp_path)
-    shutil.copytree(REPO / ".claude/hooks", root / ".claude/hooks", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(common_hook_dir(REPO), root / ".claude/hooks", ignore=shutil.ignore_patterns("__pycache__"))
     (root / "KNOWLEDGEBASE.local.md").write_text("## My preferences\n" + "Keep the local evidence.\n" * 150)
     env.update(X4_PYTHON=sys.executable, X4_GUARD="off")
     payload = json.dumps({"hook_event_name": "SessionStart", "cwd": str(root), "session_id": "s"})
@@ -62,3 +62,39 @@ def test_K7_guards_off_banner_precedes_injected_preferences(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert "Keep the local evidence." in completed.stdout
     assert completed.stdout.lstrip().startswith("[x4 guards] *** GUARDS OFF"), completed.stdout[:300]
+
+
+@pytest.mark.parametrize("status", [-2, -1, 0, 1, 2])
+@pytest.mark.parametrize("long_note", [False, True])
+def test_complete_session_context_shares_one_output_cap(tmp_path, status, long_note):
+    bash = find_bash()
+    assert bash, "the session-context control requires Bash"
+    _, root, env = make_sandbox(tmp_path)
+    hooks = root / ".claude/hooks"
+    shutil.copytree(common_hook_dir(REPO), hooks, ignore=shutil.ignore_patterns("__pycache__"))
+    (root / "KNOWLEDGEBASE.local.md").write_text(
+        "## My preferences\n" + "Keep the local evidence.\n" * 150, encoding="utf-8")
+    (root / "scripts").mkdir(exist_ok=True)
+    if status != -1:
+        (root / "scripts/x4canary.py").write_text(
+            "import sys\nprint('NOT CHECKED: fixture' if " + str(status) + " == 0 else 'detail ' * 6000)\n"
+            "raise SystemExit(" + str(status) + ")\n", encoding="utf-8")
+    if long_note:
+        (hooks.parent / "housekeep-session.txt").write_text("[x4 disk] " + "detail " * 6000, encoding="utf-8")
+    env.update(X4_TOOLKIT=str(root), X4_PYTHON=sys.executable, X4_GUARD="off",
+               X4_HOOK_MAX_CHARS="10000", X4_HOUSEKEEP_SWEEP="off",
+               X4_CONFIG=str(tmp_path / "absent.env"), HOME=str(tmp_path / "home"))
+    if status == -2:
+        env["X4_PYTHON"] = "no_such_session_python"
+    completed = subprocess.run([bash, str(hooks / "session-canary.sh")], input="{}",
+        env=env, capture_output=True, text=True, encoding="utf-8", timeout=40)
+    assert completed.returncode == 0, completed.stderr
+    assert len(completed.stdout.rstrip("\n")) <= 10000, len(completed.stdout)
+    assert completed.stdout.lstrip().startswith("[x4 guards] *** GUARDS OFF")
+    preference = "PREFERENCES: NOT INJECTED" if status == -2 else "Keep the local evidence."
+    assert preference in completed.stdout
+    priority = ("NOT RUN:" if status < 0 else "NOT CHECKED: fixture" if status == 0
+                else "Recover it BEFORE" if status == 1 else "COULD NOT CHECK")
+    assert completed.stdout.index(priority) < completed.stdout.index(preference)
+    assert completed.stdout.index(priority) < 2000
+    assert ("TRUNCATED" in completed.stdout) == (long_note or status > 0)

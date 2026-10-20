@@ -401,6 +401,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F320 | Malformed Steam JSON and failure statuses impersonated missing items | **DEFECT (measured)** | Eight invalid shapes, seven failure statuses and valid/absent twins | FIXED 2026-10-20 - only explicit FileNotFound means absence |
 | F321 | Glued opaque options hid possible save access | **DEFECT (measured)** | Literal, configured-root, assignment-order and rendered-host controls; frozen replay 34/26,346 | FIXED 2026-10-20 - inspect flags and embedded roots without guessing membership |
 | F322 | Bounded operand/carrier analysis silently omitted targets | **DEFECT (measured)** | 64/65, numeric/nested braces, five-name combinations and carrier-depth twins | FIXED 2026-10-20 - incomplete analysis explicitly refuses with remedy |
+| F323 | Session notices exceeded the host cap outside the bounded canary block | **DEFECT (measured)** | Whole-channel cap, priority and ten status/long-note controls | FIXED 2026-10-20 - bound the complete session including early exits |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11275,3 +11276,27 @@ Actual mutation detection is pending remote CI; anchor placement is not that pro
 
 **RE-DERIVED BY:** agent/guards/claude-hooks/test_hook_facts.py;
 tests/test_host_save_batches.py; scripts/fuzz-guard.py; scripts/verify-hook-tests.py.
+
+## F323 - Session prefixes escaped the canary output cap · **DEFECT (measured)** · confidence 99% · FIXED 2026-10-20
+
+MEASURED: the hook smoke reported 12,060 characters despite a bounded canary.
+Independent attribution counted 2,160 preference characters added to a 9,900-
+character canary result. Only the report body was bounded; the actual host
+channel also contained preferences, settings/config notices and housekeeping.
+This mechanism predates the final parser changes.
+
+Two synthetic combined-output controls failed at 14,202 characters before the
+fix; the short clean twin passed. Session output is now buffered and bounded as
+one channel, including early exits. Guards-off remains first. Recovery, failed
+check and not-run notices precede the optional prefix/report so they remain near
+the head. The existing x4_bound renderer remains the common cap implementation.
+
+MEASURED: all 50 preference, temp-hygiene and settings controls pass, zero skips.
+Ten combined-output cases cover missing Python, missing canary, a clean run's
+not-checked disclosure, loss and failure, each with short/long housekeeping
+notes. They assert total size, explicit truncation and priority before preferences
+within 2,000 characters. Existing short preference and guards-off twins pass.
+The K7 fixture now uses the common installed carrier instead of assuming Claude.
+
+**RE-DERIVED BY:** tests/test_harness_preferences.py;
+agent/guards/claude-hooks/session-canary.sh; scripts/test-hooks.sh.
