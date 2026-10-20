@@ -1,6 +1,6 @@
 {
   "__helpers__": {
-    "conftest.py": "a45ecebc86cafce69257edf0522954dd3a22a4b41d1e8bfd139241b8fff3d653",
+    "conftest.py": "4854c4c5aa368478f1c2c8dd9a50231d8a36143cba88c70e7e8a24bad51f3c86",
     "_layout.py": "ab6b44f80098867f7624b0461b5bf8855dc98fbe781a53e228be24c21f0771dd",
     "codex_testlib.py": "80dd0366c824ceb655b5e2eb4a6af7d155d177cc28668b59ec0610f44a587561"
   },
@@ -51,5 +51,23 @@
     "mode": "functions",
     "reviewed": true,
     "reason": "READ: installer destinations confined to per-test tmp_path, UUID registry keys with per-process cleanup; function fixtures, no timing thresholds"
+  },
+  "test_x4housekeep.py": {
+    "sha256": "5ed0e6daa6e7236add2be47c7ae4b5e05880b9f2d27f0f4a8d7422aa661bd57d",
+    "mode": "parallel",
+    "reviewed": true,
+    "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions"
+  },
+  "test_retention_policy.py": {
+    "sha256": "26b25ea9475af84c8fe730a5a345dc8e7099d11660d4e7368dbdc511f13c7d92",
+    "mode": "parallel",
+    "reviewed": true,
+    "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions"
+  },
+  "test_temp_hygiene.py": {
+    "sha256": "f9676193558f3fbc1d64ceb2dd4b79bf01b9004ef2a7f057d24818b35cfaf378",
+    "mode": "parallel",
+    "reviewed": true,
+    "reason": "READ: tmp_path outputs only; runs copies of the session hook and a child Python inside tmp_path; no shared writes"
   }
 }

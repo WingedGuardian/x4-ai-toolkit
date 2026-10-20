@@ -20,6 +20,7 @@ real install. Only a genuinely clean machine (CI) could surface it.
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from pathlib import Path
 
@@ -46,8 +47,17 @@ import pytest
 #: run-gates.sh, verify-cold.sh and ci.yml; this line is belt-and-braces for the
 #: in-process case only.
 sys.dont_write_bytecode = True
+os.environ["X4_HOUSEKEEP_SWEEP"] = "off"  # every subprocess test inherits safe session-start behavior
 
 GATES = Path(__file__).resolve().parent.parent / "gates"
+
+
+def pytest_sessionstart(session):
+    """Receipt only for this toolkit's newly created pytest base, never its shared parent."""
+    toolkit = Path(__file__).resolve().parents[3]
+    sys.path.insert(0, str(toolkit / "scripts"))
+    from x4temp import mark_owned_temp
+    mark_owned_temp(session.config._tmp_path_factory.getbasetemp(), toolkit)
 
 
 def import_gate(name: str, *, module_level: bool = True):

@@ -387,6 +387,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F306 | A command name from a variable, substitution, `%R%`/`!R!` or `& $R` reached no guard rule, so a delete behind it was allowed | **DEFECT (measured)** · PRE-ARC | 125 of 125 non-twin shapes allowed on master `21a2320` where the plain command was denied/asked | ✅ **FIXED 2026-10-19** - speculative readings of the words after the name + a backstop ask |
 | F307 | `deploy-claude-dir.py` deployed `.claude/` only, so a Codex session in a game root it served ran with no guard hooks | **DEFECT (measured)** · IN-ARC (v4.0 Codex target never reached the deploy workflow) | dev game root 2026-10-20: `.claude/` + AGENTS.md, no `.codex/` or `.agents/`; `x4doctor --agent codex`: "the codex target is not installed here" | ✅ **FIXED 2026-10-20** - `--target codex`; the parity gate fails `CODEX UNGUARDED` on AGENTS.md without `.codex/` |
 | F308 | An ask returned before save approval/preservation; X4 also dropped preserved ask transactions | **DEFECT (measured)** | Five mixed/control commands; two of seven bridge regressions failed after core import | FIXED 2026-10-20 - core d2af1e8, preserved ask notices/ids and protected-path spelling |
+| F309 | Unattended housekeep relied on generic temp names and shallow activity checks | **DEFECT (measured)** | Three of four initial controls failed; three further active-folder/canonical controls failed | FIXED 2026-10-20 - ownership receipts, complete activity/protection checks and explicit errors |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -10911,3 +10912,30 @@ test_mixed_asks_never_bypass_save_preservation_or_bulk_approval,
 test_batch_ask_keeps_transaction_and_preservation_notice,
 test_C1_brace_expanded_save_operands_keep_the_profile_ask,
 test_C1_TWIN_a_quoted_brace_is_a_literal_name_and_is_backed_up.
+
+## F309 - Housekeep cleanup scope and failure reporting · **DEFECT (measured)** · confidence 95% · FIXED 2026-10-20
+
+MEASURED against the imported lane with a fake recycler: 3 of 4 initial review
+controls failed. Another toolkit's marked folder was taken, active descendants
+were missed and a failed probe restoration aborted the sweep. A gzip control
+passed. Three further controls reproduced active scratch/launch removal and an
+edited hard-link plan accepting a canonical file outside agent output.
+
+Automatic cleanup now requires a receipt from creation matching the canonical
+toolkit and directory, then complete activity and Forever checks. Unmarked
+legacy output remains manual. QA and pytest producers opt in; names alone grant
+no authority. Failed probes retain and name their location; unreadable trees
+refuse. Whole-folder plan/apply paths recheck activity. Hard-link canonicals must
+remain unprotected agent output. Gzip coverage uses only a fake recycler.
+
+Residual: whole-folder fingerprints remain count/size/latest-mtime checks,
+not content hashes; concurrent foreign writers cannot be excluded atomically.
+Real OS Recycle Bin behavior was not exercised by these tests.
+
+**RE-DERIVED BY:** tests/test_x4housekeep.py::
+test_unmarked_matching_prefix_is_kept_and_other_toolkit_markers_are_kept,
+test_sweep_keeps_nested_active_files_and_forever_content,
+test_failed_probe_restore_is_reported_and_other_candidates_continue,
+test_whole_folder_cleanup_keeps_recently_written_content,
+test_a_link_plan_cannot_make_a_live_game_file_readonly,
+test_gzip_round_trip_uses_a_fake_bin_and_keeps_existing_output.

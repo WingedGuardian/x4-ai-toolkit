@@ -66,7 +66,7 @@ def _marked(source_lines: list[str], handler: ast.ExceptHandler) -> bool:
 
 def _offenders(package: Path = PACKAGE) -> list[str]:
     out = []
-    for path in sorted(package.glob("*.py")):
+    for path in ([package] if package.is_file() else sorted(package.glob("*.py"))):
         source = path.read_text(encoding="utf-8")
         lines = source.split("\n")  # AST lines count LF, not Unicode paragraph/line separators.
         for node in ast.walk(ast.parse(source)):
@@ -78,6 +78,10 @@ def _offenders(package: Path = PACKAGE) -> list[str]:
 
 
 GATES = PACKAGE.parent / "gates"
+
+
+def test_housekeep_has_no_unmarked_silent_swallow():
+    assert _offenders(PACKAGE.parents[2] / "scripts" / "x4housekeep.py") == []
 
 
 def test_no_unmarked_silent_swallow_in_the_gates():
@@ -121,6 +125,7 @@ def test_the_guard_actually_detects_a_swallow(tmp_path):
         "def f():\n    try:\n        g()\n    except ValueError:\n        continue\n",
         encoding="utf-8")
     assert _offenders(fake) == ["_bad.py:4"]
+    assert _offenders(fake / "_bad.py") == ["_bad.py:4"]
 
 
 def test_the_marker_silences_it(tmp_path):

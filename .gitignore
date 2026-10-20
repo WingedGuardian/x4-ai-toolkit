@@ -22,6 +22,7 @@
 /x4-paths.env
 /x4-paths.env.*
 !/x4-paths.env.example
+/x4-housekeep.json
 # 3.x leftovers in .claude/ (still read, deprecated) carry the key too -- and the old
 # template there is no longer the template, so it is not re-included.
 .claude/x4-paths.env
@@ -131,3 +132,4 @@ release/nexus/
 /KNOWLEDGEBASE.pre-4.0-*.md
 # Private neutral runtime state: telemetry, permanent saves and upgrade journals.
 .modding-agent-harness/
+housekeep-session.txt

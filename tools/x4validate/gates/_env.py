@@ -34,6 +34,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from x4validate import _freshness, _paths  # noqa: E402
 
 
+def mark_temp(directory):
+    """Opt this newly created toolkit directory into ownership-checked cleanup."""
+    toolkit = Path(__file__).resolve().parents[3]
+    sys.path.insert(0, str(toolkit / "scripts"))
+    from x4temp import mark_owned_temp
+    return mark_owned_temp(directory, toolkit)
+
+
 def sandbox_copy(src: Path, dest: Path) -> Path:
     """Copy a protected file into a throwaway location AND make it writable.
 

@@ -12,6 +12,8 @@
 #
 # Requires: bash, jq. Uses only temp dirs — touches nothing real.
 set -u
+# No session-canary run here may launch a real x4housekeep sweep of the real temp dir / Recycle Bin.
+export X4_HOUSEKEEP_SWEEP=off
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 HOOKS="$REPO/.claude/hooks"
 

@@ -19,6 +19,7 @@ PACKAGE=Path(__file__).resolve().parents[1]
 REPO=PACKAGE.parents[1]
 sys.path.insert(0,str(REPO/"scripts"))
 from gate_support import wait_dispatch, save, source_fingerprint, external_output, protected_roots, gate_environment
+from x4temp import mark_owned_temp
 
 
 def classify(path):
@@ -88,6 +89,7 @@ def run_batch(batch, out, number):
     # Guard tests interpret path spellings. A report folder such as .claude/backups
     # is policy-exempt, so it must never become the test sandbox's parent.
     with tempfile.TemporaryDirectory(prefix="x4-pytest-batch-") as scratch:
+        mark_owned_temp(scratch, REPO)
         command=[sys.executable,"-B","-m","pytest","-q","-rfEs","-p","no:cacheprovider",
                  "-p","batch_report","--basetemp",str(Path(scratch)/"tests"),*batch]
         with (out/f"batch-{number}.log").open("wb") as log:

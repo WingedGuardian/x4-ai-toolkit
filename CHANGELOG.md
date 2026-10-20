@@ -10,6 +10,11 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Housekeep's unattended sweep requires creation-time ownership receipts;
+  matching Temp prefixes and other projects' pytest runs grant no authority.
+  Complete activity/protection checks, probe failure reporting and canonical
+  hard-link restrictions are covered with fake-bin tests (BLIND-SPOTS F309).
+
 - Save changes bundled with another approval prompt now pass scope checks, bulk
   approval and verified preservation before the prompt is returned (shared core
   d2af1e8; BLIND-SPOTS F308). X4 retains the transaction ids and backup notice.
@@ -767,6 +772,11 @@ confusing messages and six cosmetic ones. All are fixed:
   state is no longer silent: `x4doctor`'s `roots.config` FAILs, and Claude Code and Codex name it
   once per session (OpenCode has no session start, so only `x4doctor` reports it there). A
   deprecated or doubled config is named the same way.
+
+### New: `x4housekeep` -- disk retention, and the toolkit cleans up its own temp files
+
+- **`x4housekeep` and a retention policy (`RETENTION.md`):** `report` / `plan` / `apply` for agent output, ported from the Skyrim toolkit's `housekeep` with the X4 save rule. Byte-identical copies of live files and build intermediates go to the Recycle Bin, duplicates become read-only hard links, and per-launch logs are gzipped then aged out. The user profile (`Documents\Egosoft\X4\`), `*backup*` folders (per-edit backups included), git-tracked files, doc-linked evidence and task folders written in the last 48 hours are never touched; `apply` re-hashes every file and refuses anything that changed since the plan. The policy says why `cleanupPeriodDays` belongs in user settings, never in a project's. The shared section is pinned in both toolkits by `test_retention_policy.py`. `x4-housekeep.json` is the user's own file: installs never overwrite it.
+- **The toolkit cleans up its own temp files.** `session-canary.sh` (Claude Code, Codex and OpenCode) launches `x4housekeep session` in the background at most every 6 hours. On Windows (the only platform it moves anything on) it moves the toolkit's own leftover temp dirs to the Recycle Bin once nothing in them changed for 24 hours and no process has a file open inside, plus pytest's older runs and `garbage-*` leftovers. Nothing is ever deleted outright; a dir the bin refuses stays where it is and is named in the note. The Recycle Bin helper uses the shell's own delete with "warn if not recycling" set, never `DeleteDirectory(..., 'OnlyErrorDialogs', ...)`, which suppresses Windows' "too big for the Recycle Bin" prompt. The next session start shows one `[x4 disk]` line only when something needs you: free space near the floor, `~/.codex/sessions` past 5 GiB, more than 10 git worktrees. `x4housekeep sweep-temp` runs the sweep by hand. `X4_HOUSEKEEP_SWEEP=off` in the environment turns the session-start sweep off. `qa_sweep` now removes its two sandboxes on exit, and the tool audit removes its pytest temp. Measured on one machine before the fix: 1,184 `x4qa_registry_*` and 767 `x4qa_out_*` leftovers. `test_temp_hygiene.py` fails when the code creates a temp prefix the sweep does not know.
 
 ### Safety
 
