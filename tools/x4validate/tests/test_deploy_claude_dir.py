@@ -432,3 +432,18 @@ def test_after_codex_apply_the_parity_gate_agrees(crepo, dest):
 
 def test_codex_into_the_repo_itself_is_a_refusal(crepo):
     assert dep.main(["--repo", str(crepo), "--root", str(crepo), "--target", "codex"]) == 2
+
+
+def test_the_ACTION_line_is_printed_only_when_hooks_json_was_really_written(crepo, dest, capsys):
+    """Review LOW-3: 'ACTION FOR YOU: .codex/hooks.json was written' printed whenever the plan
+    held a create/update, even when the write FAILED. A directory in its place makes it fail."""
+    (dest.parent / ".codex" / "hooks.json").mkdir(parents=True)
+    assert _codex(crepo, dest, "--apply") == 1
+    out = capsys.readouterr()
+    assert "ACTION FOR YOU" not in out.out
+    assert ".codex/hooks.json" in out.err
+
+
+def test_TWIN_the_ACTION_line_is_printed_after_a_real_write(crepo, dest, capsys):
+    assert _codex(crepo, dest, "--apply") == 0
+    assert "ACTION FOR YOU" in capsys.readouterr().out

@@ -421,8 +421,11 @@ def _deploy_one(repo_root: Path, dest: Path, spec, args) -> tuple[int, list[str]
     if broken:
         print(f"  PARITY BROKEN after apply for {len(broken)} file(s) this deploy wrote or "
               "checked -- the plan and the write disagree", file=sys.stderr)
-    if spec.name == "codex" and any(REAPPROVE in a.reason
-                                    for a in actions if a.kind in (CREATE, UPDATE)):
+    # Only when the write LANDED (review LOW-3): the file on disk is at parity after apply.
+    # Not "no failure line": a re-lock failure is a failure line on a file that WAS written.
+    written = [a.name for a in actions if a.kind in (CREATE, UPDATE) and REAPPROVE in a.reason
+               and not any(r.name == a.name for r in off)]
+    if spec.name == "codex" and written:
         print("  ACTION FOR YOU: .codex/hooks.json was written. Open Codex in this folder, run "
               "/hooks and approve the X4 hooks; then check: python scripts/x4doctor.py "
               f"--root \"{dest}\" --agent codex")
