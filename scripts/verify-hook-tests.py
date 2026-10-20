@@ -1257,8 +1257,13 @@ def main(argv=None) -> int:
             if not 1 <= args.sample <= population:
                 parser.error("--sample must be between 1 and the trial population")
             cases = [cases[i*population//args.sample] for i in range(args.sample)]
-        if args.workers > 1 and not os.environ.get("RB_PRESSURE_FILE"):
-            print("REFUSING: parallel trials require rb.py run")
+        # A GitHub Actions runner is an ephemeral VM running nothing but this job, so the
+        # rb admission this guard stands for has nothing to protect there. CI needs the
+        # workers: 298 serial trials of a 782-test file were still running 4 h into the
+        # 300-minute job limit (ci/v4-rc10, 2026-10-20).
+        if (args.workers > 1 and not os.environ.get("RB_PRESSURE_FILE")
+                and os.environ.get("GITHUB_ACTIONS") != "true"):
+            print("REFUSING: parallel trials require rb.py run (or a GitHub Actions runner)")
             return 2
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             values = []

@@ -197,7 +197,10 @@ jobs:
       - name: Prove the hook tests can fail (mutation + predicate coverage)
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: bash
-        run: python scripts/verify-hook-tests.py
+        # 4 workers = the runner's 4 vCPUs. Serial, 298 trials of the 782-test hook file were
+        # still running 4 h into the job's 300-minute limit (ci/v4-rc10); each trial has its
+        # own temp copy.
+        run: python scripts/verify-hook-tests.py --workers 4
 
       - name: Prove the guard has no syntax bypass (differential fuzzer)
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
