@@ -337,6 +337,7 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
+    codex_unguarded(game.parent)
     print("DEPLOY PARITY -- repo .claude/ (source) vs game root .claude/ (deployed)")
     print(f"  repo:      {repo}")
     print(f"  game root: {game}")
@@ -368,6 +369,15 @@ def _report(rows: list[Row], target_flag: str) -> bool:
     return True
 
 
+def codex_unguarded(game_root: Path) -> None:
+    """The directive, printed FIRST (#38: a reader of a cut-off output keeps the head)."""
+    marks = codex_marks(game_root)
+    if marks and not (game_root / ".codex").is_dir():
+        print(f"CODEX UNGUARDED: {game_root} has {', '.join(marks)} but no .codex/, so a Codex "
+              "session there runs with NO guard hooks. Deploy them: "
+              "scripts/deploy-claude-dir.py --target codex --apply", file=sys.stderr)
+
+
 def _codex(repo_root: Path, game_root: Path) -> bool:
     """The Codex target. N/A only where nothing marks Codex in the root; AGENTS.md without
     `.codex/` is the 2026-10-20 state -- instructed, unguarded -- and is reported first."""
@@ -376,10 +386,6 @@ def _codex(repo_root: Path, game_root: Path) -> bool:
         print("  codex: N/A -- no .codex/, .agents/ or AGENTS.md in the game root (Codex is "
               "not set up there)")
         return False
-    if not (game_root / ".codex").is_dir():
-        print(f"CODEX UNGUARDED: {game_root} has {', '.join(marks)} but no .codex/, so a Codex "
-              "session there runs with NO guard hooks. Deploy them: "
-              "scripts/deploy-claude-dir.py --target codex --apply", file=sys.stderr)
     print("DEPLOY PARITY -- repo .codex/ + .agents/ (source) vs game root (deployed, Codex)")
     return _report(compare_trees(repo_root, game_root, CODEX), " --target codex")
 
