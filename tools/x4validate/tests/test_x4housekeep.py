@@ -113,14 +113,14 @@ def test_a_copy_of_a_live_game_file_is_recreatable_and_a_variant_is_not(tree):
 
 
 @pytest.mark.parametrize("name", ["plain.log", "report final.log", "report(final).log", "report [final] '&.log"])
-@pytest.mark.parametrize("form", ["angle", "encoded", "reference", "code"])
+@pytest.mark.parametrize("form", ["angle", "encoded", "reference", "code", "prose"])
 def test_linked_evidence_with_literal_odd_names_is_kept(tree, name, form):
     from urllib.parse import quote
     linked = write(tree / "out/task" / name, blob("catalog"))
     twin = write(tree / "out/unlinked" / name, blob("catalog"))
     rel = linked.relative_to(tree).as_posix()
     body = {"angle": f"[evidence](<{rel}>)", "encoded": f"[evidence]({quote(rel)})",
-            "reference": f"[evidence]: <{rel}>", "code": f"`{rel}`"}[form]
+            "reference": f"[evidence]: <{rel}>", "code": f"`{rel}`", "prose": f"See {rel}."}[form]
     (tree / "CLAUDE.md").write_text(body, encoding="utf-8")
     cfg = cfg_for(tree)
     doc = hk.plan(cfg)
@@ -145,6 +145,20 @@ def test_overlong_evidence_reference_refuses_cleanup_instead_of_truncating(tree)
         hk.plan(cfg_for(tree))
 
 
+@pytest.mark.parametrize("ending", [".", "..."])
+def test_prose_reference_retains_sentence_punctuation_under_posix_path_semantics(tree, monkeypatch, ending):
+    import posixpath
+    target = write(tree / "out/task/report.log", b"evidence")
+    (tree / "CLAUDE.md").write_text("See out/task/report.log" + ending, encoding="utf-8")
+    cfg = cfg_for(tree)
+    # Windows abspath strips terminal dots; POSIX preserves them. Exercise that
+    # lexical difference here as well as on the native Ubuntu CI leg.
+    def posix_key(p):
+        return posixpath.normpath(str(p).replace(chr(92), "/"))
+    monkeypatch.setattr(hk, "_key", posix_key)
+    assert posix_key(target) in hk.evidence_links(cfg)
+
+
 def test_a_snapshot_of_a_live_state_file_is_not_recreatable(tree):
     write(tree / "game" / "registry.xml", blob("state"))
     snap = write(tree / "out" / "t" / "registry.xml", blob("state"))
@@ -163,6 +177,25 @@ def test_backup_folders_and_git_tracked_files_are_never_planned(tree):
     doc = hk.plan(cfg_for(tree))
     assert not {key(backup), key(tracked)} & planned(doc)
     assert key(twin) in planned(doc)
+
+
+@pytest.mark.parametrize("special,ordinary", [
+    ("known-good-baseline/item.bin", "ordinary/item.bin"),
+    ("known-good-baseline.zip", "ordinary.zip"),
+    ("AUDIT_LOG.txt", "ordinary.txt"),
+    ("GUARDS-OFF.log", "ordinary.log"),
+])
+def test_named_forever_baselines_and_audit_records_survive_whole_folder_cleanup(tree, special, ordinary):
+    protected = write(tree / "out/protected" / special, b"evidence")
+    write(tree / "out/plain" / ordinary, b"evidence")
+    cfg = cfg_for(tree, scratch=["out/protected", "out/plain"])
+    assert hk.Guard(cfg).why_protected(protected), special
+    doc = hk.plan(cfg, only={"scratch"})
+    assert planned(doc, "scratch") == {key(tree / "out/plain")}
+    fake = FakeBin(tree)
+    assert hk.apply(doc, cfg, recycler=fake) == 0
+    assert protected.read_bytes() == b"evidence"
+    assert not (tree / "out/plain").exists()
 
 
 def test_an_active_task_folder_and_a_loose_root_file_are_never_planned(tree):

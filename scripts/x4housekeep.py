@@ -202,7 +202,7 @@ def evidence_links(cfg) -> set:
                     tail = line[start.start():]
                     if len(tail) > 32768:
                         raise OSError("evidence reference line exceeds the safe discovery bound; cleanup refused")
-                    ends = [i for i, ch in enumerate(tail) if ch.isspace() or ch in ")]\"'`<>|,;:*"]
+                    ends = [i for i, ch in enumerate(tail) if ch.isspace() or ch in ")]\"'`<>|.,;:*"]
                     for end in ends + [len(tail)]:
                         candidate = tail[:end]
                         if candidate:
@@ -236,6 +236,10 @@ class Guard:
         except ValueError:                       # another drive: no relative form, judge the whole path
             rel = p
         rel_parts = rel.replace("\\", "/").lower().split("/")
+        if any(part.startswith("known-good-") for part in rel_parts):
+            return "known-good baseline"
+        if rel_parts[-1] in {"audit_log.txt", "guards-off.log"}:
+            return "audit record"
         if not rel.startswith(".."):
             if any("backup" in part for part in rel_parts[:-1]):
                 return "backup folder"

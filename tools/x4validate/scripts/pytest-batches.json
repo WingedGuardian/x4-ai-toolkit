@@ -53,7 +53,7 @@
     "reason": "READ: sandbox filesystem and bounded fake recycle bin; subprocess installers/builders, no real OS recycler"
   },
   "test_x4housekeep.py": {
-    "sha256": "8dc92d3dd37ace27e021b6067aff149c8b0625014ebfa8288583df305112c6ab",
+    "sha256": "7840d7e38e37926cb45f3bfd364240f7894398636bfb5a129575bb88bf3c1814",
     "mode": "parallel",
     "reviewed": true,
     "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions"

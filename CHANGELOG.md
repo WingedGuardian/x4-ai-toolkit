@@ -10,6 +10,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- `known-good-*` baselines, `AUDIT_LOG.txt` and `GUARDS-OFF.log` now have explicit
+  Forever protection, including whole-folder cleanup; the old backup-name test
+  did not prove those names were retained (F319).
+
 - Linked evidence keeps Forever protection when relative references contain
   spaces, parentheses, brackets or URI escapes. Bounded discovery preserves
   plausible destinations and refuses overflow instead of truncating (F318).

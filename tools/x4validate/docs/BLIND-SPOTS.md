@@ -397,6 +397,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F316 | Pytest itself pruned shared earlier-run temp outside ownership checks | **DEFECT (measured)** | Main/BaseX startup, seeded foreign run, explicit-path twins | FIXED 2026-10-20 - per-invocation owned scratch and refusal of existing basetemp |
 | F317 | Deduplication chmod reached outside live files through existing hard links | **DEFECT (measured)** | Canonical/duplicate external-link refusals, late-link refusal, three-copy twin | FIXED 2026-10-20 - retain unqualified links and count only links created by this apply |
 | F318 | Linked evidence with spaces, punctuation or URI escapes lost Forever protection | **DEFECT (measured)** | 16 name/spelling cases, same-byte unlinked twins, late-link and bound controls | FIXED 2026-10-20 - conservative bounded reference discovery |
+| F319 | Named known-good baselines and audit logs lacked the promised Forever guard | **DEFECT (measured)** | Four named-file/folder controls with ordinary cleanup twins | FIXED 2026-10-20 - explicit baseline and audit-name protection |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11169,3 +11170,21 @@ The install-dependent run was stopped at its verified own rb parent after this
 production finding; its partial log is retained and is not a passing result.
 
 **RE-DERIVED BY:** tests/test_x4housekeep.py; scripts/x4housekeep.py.
+
+## F319 - Named Forever records were not protected · **DEFECT (measured)** · confidence 98% · FIXED 2026-10-20
+
+READ: RETENTION promises known-good-* baselines, AUDIT_LOG.txt and GUARDS-OFF.log
+are Forever. Guard only recognized backup folder names, tracking and document
+links. MEASURED: four new controls failed for an otherwise unprotected known-good
+folder, a known-good archive and the two named audit logs. Prior coverage used
+known-good-backups, which accidentally passed through the backup-name guard.
+
+Guard now recognizes the promised names directly. Each whole-folder cleanup
+control keeps its protected evidence and still recycles the ordinary twin through
+a fake bin. MEASURED: 68 housekeep/retention controls pass, zero skips. This includes
+the four new Forever cases, four prose-link forms and two lexical POSIX-path
+controls for sentence-final dots. Windows abspath already strips trailing dots;
+the explicit period boundary preserves the old prose behavior on POSIX too.
+The shared retention-policy text and its cross-toolkit hash are unchanged.
+
+**RE-DERIVED BY:** tests/test_x4housekeep.py; tests/test_retention_policy.py.
