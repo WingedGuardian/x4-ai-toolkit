@@ -45,7 +45,22 @@ fi
 # 103 added lines for 3 (MEASURED on a fixture). No git, or not a work tree: nothing to commit
 # to, so nothing to say. An untracked file that is IGNORED is the user's choice: silent.
 _x4_kbr="$HOOK_DIR/../.."
-if command -v git >/dev/null 2>&1 && git -C "$_x4_kbr" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+_x4_kbin=""
+if command -v git >/dev/null 2>&1; then
+  # "Not a repo" is silent; any OTHER rev-parse failure (dubious ownership, a broken config)
+  # is git REFUSING a repo, and is said in one bounded line (review LOW-1).
+  _x4_kbout="$(git -C "$_x4_kbr" rev-parse --is-inside-work-tree 2>&1)"; _x4_kbrc=$?
+  if [ "$_x4_kbrc" = 0 ]; then
+    [ "$_x4_kbout" = true ] && _x4_kbin=1
+  else
+    case "$_x4_kbout" in
+      *"not a git repository"*) ;;
+      *) _x4_kbfirst="$(printf '%s\n' "$_x4_kbout" | head -n 1 | tr -d '\r' | cut -c1-150)"
+         echo "[x4 kb] could not check the knowledgebase: git refused this folder ($_x4_kbfirst)" ;;
+    esac
+  fi
+fi
+if [ -n "$_x4_kbin" ]; then
   for _x4_kb in KNOWLEDGEBASE.md KNOWLEDGEBASE.local.md; do
     [ -f "$_x4_kbr/$_x4_kb" ] || continue
     if ! git -C "$_x4_kbr" ls-files --error-unmatch -- "$_x4_kb" >/dev/null 2>&1; then

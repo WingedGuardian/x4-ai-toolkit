@@ -1193,6 +1193,18 @@ class TestF11UncommittedKnowledgebase(unittest.TestCase):
         (self.root / self.KB).write_bytes(self.base + b"more\n")
         self.assertEqual(self.run_hook(GIT_CEILING_DIRECTORIES=str(self.tmp))[0], [])
 
+    def test_a_repo_git_REFUSES_is_said_not_skipped(self):
+        """Review LOW-1: a failed rev-parse other than "not a git repository" (dubious ownership,
+        a broken config) read as "not a repo" and the check skipped silently. A malformed
+        .git/config is the portable stand-in (MEASURED: rc 128, "bad config line")."""
+        self.repo()
+        (self.root / self.KB).write_bytes(self.base + b"more\n")
+        (self.root / ".git" / "config").write_bytes(b"[core\n")
+        lines, _ = self.run_hook()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("could not check the knowledgebase: git refused this folder (", lines[0])
+        self.assertLess(len(lines[0]), 260, lines[0])
+
     def test_the_line_follows_GUARDS_OFF_and_precedes_the_preferences(self):
         """#38: the preview keeps the HEAD. GUARDS OFF stays first (K7); the directive comes
         before the up-to-4 KiB preferences block."""
