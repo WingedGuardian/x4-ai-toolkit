@@ -118,8 +118,9 @@ Under Claude Code these rules are enforced by tested hooks. **Under Codex they m
 Codex hooks fail OPEN** (measured, Codex 0.159.2): if a hook crashes, times out or was never
 reviewed by the user, Codex runs the command anyway, and unreviewed or changed hooks are
 skipped silently. So keep every rule below by your own discipline (and never write into the
-game installation). Before each write, delete or move, send the exact operation as complete
-Action v1 JSON to `python tools/agent-harness.py check` (fields and reply: `ADAPTING.md` §2).
+game installation). Immediately before each write, delete or move, send the exact operation as
+complete Action v1 JSON to `python tools/agent-harness.py check`, run in the toolkit folder
+(fields and reply: its `ADAPTING.md` §2).
 Stop on ask/deny, a failed evaluation, malformed output or a transport failure; exit 0 alone is
 not enough, and `--preview` (like legacy `x4guard.py check`) is not permanent save preservation.
 
