@@ -249,7 +249,8 @@ scope-expanding *actions* before taking them.
 `KNOWLEDGEBASE.md` is the master reference for discovered quirks, XML schema patterns,
 cross-file dependency maps, the version migration map, and tool notes. **Consult it before
 making changes.** After every session, bug, or research task, extract new facts and add them.
-The environment gets smarter the more you use it.
+The environment gets smarter the more you use it. In a git repo, commit each edited
+knowledgebase/notes file alone (explicit path); never push.
 
 ## x4live is EXPERIMENTAL — say so before you use it
 
@@ -441,5 +442,5 @@ say which regime a formula belongs to, and the packed-inclusive scoping rule.
 
 **Learned facts and preferences go in `KNOWLEDGEBASE.local.md`** as above. Also read an existing `X4-NOTES.md`; it remains preserved legacy evidence. Never edit `CLAUDE.md`, `AGENTS.md`, `.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, `.claude/hooks/`, `.agents/skills/`, `.codex/hooks/`, `.codex/rules/`, `tools/x4_harness/`, `tools/agent-harness.py`, `.opencode/hooks/`, `.opencode/plugins/x4guard.js`, `.opencode/skills/`, `.opencode/X4-OPENCODE.md`: they are regenerated and your edit is lost.
 
-**`KNOWLEDGEBASE.md` and the other protected files are kept read-only by x4lock**, so a write to one fails until you unlock it: `python <toolkit>/scripts/x4lock.py unlock <file>`, edit, then `python <toolkit>/scripts/x4lock.py lock`. The guard prints the exact commands.
+**`KNOWLEDGEBASE.md` and the other protected files are kept read-only by x4lock**, so a write to one fails until you unlock it: `python <toolkit>/scripts/x4lock.py unlock <file>`, edit, `python <toolkit>/scripts/x4lock.py lock`, then commit it. The guard prints the exact commands.
 
