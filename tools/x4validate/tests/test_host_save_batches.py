@@ -48,7 +48,8 @@ def test_claude_check_protocol_distinguishes_failed_evaluation_from_a_policy_ver
     assert native_result.returncode == 0
     assert json.loads(native_result.stdout)['hookSpecificOutput']['permissionDecision'] in ('deny', 'ask')
     checked = run(dict(env, X4_GUARD_CHECK='1'))
-    assert checked.returncode == 2, checked.stdout
+    assert checked.returncode == 0, checked.stdout
+    assert "parse" in json.loads(checked.stdout)["hookSpecificOutput"]["permissionDecisionReason"].lower()
     assert not list((root / '.modding-agent-harness/backups/saves/transactions').glob('*.json'))
 
 
@@ -66,6 +67,25 @@ def test_claude_check_protocol_keeps_an_evaluated_protection_denial_as_a_verdict
     assert not any(f in hso['permissionDecisionReason'] for f in (
         'policy engine failed', 'X4 save dispatcher', 'GUARD INERT', 'preservation/policy failed')), hso
     assert 'reference' in hso['permissionDecisionReason'], hso
+
+
+@pytest.mark.parametrize("host", ["codex", "opencode"])
+@pytest.mark.parametrize("shell", ["bash", "powershell"])
+def test_rendered_hosts_keep_syntax_refusals_out_of_guard_failure_channel(tmp_path, host, shell):
+    if shell == "powershell" and not (shutil.which("pwsh") or shutil.which("powershell")):
+        pytest.skip("no PowerShell parser")
+    _tmp, root, env = make_sandbox(tmp_path)
+    command = "Write-Output 'unterminated" if shell == "powershell" else "echo 'unterminated"
+    if host == "codex":
+        result, reason = run_adapter(env, native("bash_powershell", root,
+            command=command, workdir=str(root)), shell=shell)
+        assert result == "deny" and "parse" in reason.lower(), (result, reason)
+        assert "GUARD INERT" not in reason
+    else:
+        result = open_run(env, open_call(root, "bash", {"command": command, "workdir": str(root)}, shell=shell))
+        assert result["decision"] == "deny" and not result["inert"], result
+        assert "parse" in result["reason"].lower()
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
 @pytest.mark.parametrize('checking', [False, True])
@@ -93,7 +113,10 @@ def test_check_protocol_regressions_are_killed_in_an_owned_rendered_copy(tmp_pat
     shutil.copytree(HOOKS, tree, ignore=shutil.ignore_patterns('__pycache__'))
     env.update(X4_GUARD_CHECK='1', PYTHONDONTWRITEBYTECODE='1')
     env.pop('X4_GUARD', None)
-    payload = {'tool_name':'Bash', 'tool_input':{'command':"echo 'unterminated"}, 'cwd':str(root)}
+    def nested(depth, tag="q"):
+        return "echo " + tag if not depth else "echo " + " ".join(
+            "$(" + nested(depth - 1, tag + chr(97 + i)) + ")" for i in range(3))
+    payload = {'tool_name':'Bash', 'tool_input':{'command':nested(6)}, 'cwd':str(root)}
     def run():
         return subprocess.run([_bash(), str(tree / 'protect-bash.sh')],
                   input=json.dumps(payload).encode(), capture_output=True, env=env, timeout=35)

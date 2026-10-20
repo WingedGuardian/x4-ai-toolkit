@@ -361,9 +361,8 @@ fi
 if [ "$_x4_plain" != 1 ] && ! bash -n -c "$COMMAND" 2>/dev/null; then
   # DENY, not ask (user, 2026-10-02: an ask they always approve protects nothing). This is
   # Claude's own syntax error -- bash -n rejecting it means bash would not run it either --
-  # so the reason must be something Claude can act on. Check-mode signal FIRST: under
-  # X4_GUARD_CHECK this still exits 2 ("checked nothing"), which x4guard reports as inert.
-  x4_guard_check_inert
+  # so the reason must be something Claude can act on. A parser rejection is an
+  # evaluated refusal (exit 0), not a failed parser invocation.
   _X4_UNRELAXED=1
   deny "This command does not PARSE (bash -n rejects it), so bash would not run it and the guard could evaluate NO rule against it. Fix the quoting and re-run -- a Windows path ending in a backslash inside double quotes, or a heredoc whose body contains its own terminator line, are the usual causes."
 fi

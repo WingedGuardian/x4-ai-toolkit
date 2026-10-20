@@ -310,6 +310,10 @@ class ScopeError(ValueError):
     """A static, safe diagnostic for a shell that could not be evaluated."""
 
 
+class ShellSyntaxError(ScopeError):
+    """The real shell parser rejected the request, rather than failing to run."""
+
+
 def shell_evidence(payload, roots, *, execution_context=False, ipc=None):
     """Evidence rows for one shell payload. `ipc` (a list) also receives the (exit code,
     stdout bytes) hook_facts.py would print for the same payload and roots, so the Bash
@@ -325,7 +329,7 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None):
         ipc[:] = [rc, raw]
     error = facts.get("powershell_error")
     if error and str(error).startswith(hook_facts.PS_PARSE_ERROR):
-        raise ScopeError("PowerShell command does not parse; correct its syntax before retrying. "
+        raise ShellSyntaxError("PowerShell command does not parse; correct its syntax before retrying. "
                          "This call was not allowed.")
     if error or facts.get("carrier_untranslated"):
         raise ScopeError("Shell scope could not be completely evaluated; use literal targets and "
@@ -364,6 +368,18 @@ def read_roots(deadline):
 
 
 def batch(payload, calls, judge, deadline, host, preview=False, helper=False, *, execution_cwd_known=None):
+    """A syntax refusal is a decision; incomplete analysis still propagates as a failure."""
+    try:
+        return _batch(payload, calls, judge, deadline, host, preview, helper,
+                      execution_cwd_known=execution_cwd_known)
+    except ShellSyntaxError as exc:
+        result = {"api_version": 1, "decision": "deny", "evaluation": "evaluated",
+                  "preservation": "not_required", "validation": "not_run", "reason": str(exc), "warnings": []}
+        return {"decision": "deny", "inert": False, "reason": str(exc), "context": None,
+                "result": result, "transactions": []}
+
+
+def _batch(payload, calls, judge, deadline, host, preview=False, helper=False, *, execution_cwd_known=None):
     """The named adapters call this once, before ANY mutation is permitted."""
     if not calls:
         import x4guard
@@ -673,6 +689,9 @@ def main(argv=None):
         text = _hook_json(outcome.result)
     except _Answered as answered:
         text = answered.text
+    except ShellSyntaxError as exc:
+        text = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                          "permissionDecision": "deny", "permissionDecisionReason": str(exc)}})
     except BaseException as exc:
         failed = True
         # No raw shell/payload/exception text (which may include private data).

@@ -925,13 +925,13 @@ class TestHygieneDeniesInBash(_RR):
         self.assertEqual(self.verdict_with("echo 'balanced'", tool="Bash")[0], "allow")
 
     def test_TWIN_under_X4_GUARD_CHECK_both_still_signal_checked_nothing(self):
-        """x4guard reads exit 2 as "could not evaluate" (inert). The deny must not hide it."""
+        """Syntax is an evaluated refusal; truncated analysis still reports exit 2."""
         env = dict(self.env, X4_GUARD_CHECK="1")
         for cmd in ("echo 'unterminated", self._deep()):
             payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
             p = subprocess.run([BASH, str(HOOKS / "protect-bash.sh")], input=payload,
                                capture_output=True, text=True, env=env, timeout=120)
-            self.assertEqual(p.returncode, 2, cmd[:60])
+            self.assertEqual(p.returncode, 0 if cmd == "echo 'unterminated" else 2, cmd[:60])
 
 
 class TestRRPreArcBash(_RR):

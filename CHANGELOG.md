@@ -10,6 +10,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- A shell syntax error now returns an actionable refusal rather than an inert
+  guard diagnosis. Missing parsers, failed workers and incomplete analysis remain
+  distinct failures (BLIND-SPOTS F310).
+
 - Housekeep's unattended sweep requires creation-time ownership receipts;
   matching Temp prefixes and other projects' pytest runs grant no authority.
   Complete activity/protection checks, probe failure reporting and canonical

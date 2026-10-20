@@ -67,6 +67,19 @@ def test_TWIN_a_command_within_the_expansion_bound_still_yields_evidence(monkeyp
     assert policy.shell_evidence({"command": "x"}, {}) == [{"path": "C:/x", "operation": "delete"}]
 
 
+def test_batch_syntax_refusal_is_not_an_inert_guard_failure(monkeypatch):
+    monkeypatch.setattr(policy, "read_roots", lambda deadline: {"toolkit": str(ROOT)})
+    def syntax(*args, **kwargs):
+        raise policy.ShellSyntaxError("PowerShell command does not parse; correct its syntax.")
+    monkeypatch.setattr(policy, "shell_evidence", syntax)
+    result = policy.batch({"tool_name": "fixture", "tool_input": {}},
+        [("shell", "powershell", "bad syntax", None, "fixture")], lambda qualified: None,
+        None, "codex", preview=True, execution_cwd_known=True)
+    assert result["decision"] == "deny" and not result["inert"]
+    assert result["result"]["evaluation"] == "evaluated"
+    assert "does not parse" in result["reason"] and not result["transactions"]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows drive namespace parsing")
 @pytest.mark.parametrize("prefix", ["\\\\?\\", "\\\\.\\"])
 @pytest.mark.parametrize("suffix,pattern", [("MiXeD.xml.gz", False), ("*.xml.gz", True), ("Save[12].xml.gz", True)])

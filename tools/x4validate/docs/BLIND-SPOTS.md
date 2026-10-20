@@ -388,6 +388,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F307 | `deploy-claude-dir.py` deployed `.claude/` only, so a Codex session in a game root it served ran with no guard hooks | **DEFECT (measured)** · IN-ARC (v4.0 Codex target never reached the deploy workflow) | dev game root 2026-10-20: `.claude/` + AGENTS.md, no `.codex/` or `.agents/`; `x4doctor --agent codex`: "the codex target is not installed here" | ✅ **FIXED 2026-10-20** - `--target codex`; the parity gate fails `CODEX UNGUARDED` on AGENTS.md without `.codex/` |
 | F308 | An ask returned before save approval/preservation; X4 also dropped preserved ask transactions | **DEFECT (measured)** | Five mixed/control commands; two of seven bridge regressions failed after core import | FIXED 2026-10-20 - core d2af1e8, preserved ask notices/ids and protected-path spelling |
 | F309 | Unattended housekeep relied on generic temp names and shallow activity checks | **DEFECT (measured)** | Three of four initial controls failed; three further active-folder/canonical controls failed | FIXED 2026-10-20 - ownership receipts, complete activity/protection checks and explicit errors |
+| F310 | Shell syntax rejection was reported as an inert guard failure | **DEFECT (measured)** | Bash/PowerShell on two rendered hosts; syntax and real failure controls | FIXED 2026-10-20 - dedicated syntax refusal; incomplete analysis remains failed |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -10939,3 +10940,26 @@ test_failed_probe_restore_is_reported_and_other_candidates_continue,
 test_whole_folder_cleanup_keeps_recently_written_content,
 test_a_link_plan_cannot_make_a_live_game_file_readonly,
 test_gzip_round_trip_uses_a_fake_bin_and_keeps_existing_output.
+
+## F310 - Syntax refusals were classified as guard failures · **DEFECT (measured)** · confidence 98% · FIXED 2026-10-20
+
+READ: a PowerShell parse rejection escaped batch as ScopeError, and Bash syntax
+rejection used the failed-check exit. The host then reported an inert adapter
+instead of the user's correctable syntax error. A dedicated ShellSyntaxError
+now returns an evaluated deny with its static diagnostic. Bash parser rejection
+returns a normal refusal too. Missing parsers, crashed workers and bounded-out
+analysis retain their failure channel.
+
+MEASURED: all four Bash/PowerShell x rendered Codex/OpenCode cases refuse with a
+parse diagnostic and no inert classification. Worker-exit propagation controls
+retain a separate red path. The control uses distinct nested commands: identical
+substitution text is deduplicated and does not exercise the expansion ceiling.
+
+Residual: rendered payload fixtures demonstrate adapter behavior, not live host
+interception or a newly reviewed hook installation.
+
+**RE-DERIVED BY:** tests/test_host_save_batches.py::
+test_rendered_hosts_keep_syntax_refusals_out_of_guard_failure_channel,
+test_claude_check_protocol_distinguishes_failed_evaluation_from_a_policy_verdict,
+test_check_protocol_regressions_are_killed_in_an_owned_rendered_copy;
+tests/test_save_scope_compat.py::test_batch_syntax_refusal_is_not_an_inert_guard_failure.
