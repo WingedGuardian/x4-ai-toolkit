@@ -10,6 +10,10 @@ the release asset is `X4.Foundations.AI.Assistant.Toolkit-v4.0.0.zip`.
 
 ### Save preservation review (2026-10-20)
 
+- Restoring an older backup now preserves and verifies the current destination
+  first. Literal backup lookup and staged publication reject failed preservation
+  and changed input bytes (BLIND-SPOTS F312).
+
 - Prior-run cleanup now uses the Recycle Bin/Trash for installer caches,
   BaseX output, deployed-mod orphan files and marked load-order probes. Failed
   recycling stops the operation. Both installers preserve the destination's seven

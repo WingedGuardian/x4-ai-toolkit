@@ -93,5 +93,11 @@
     "mode": "serial",
     "reviewed": true,
     "reason": "READ: sandbox filesystem and bounded fake recycle bin; subprocess installers/builders, no real OS recycler"
+  },
+  "test_restore_backup.py": {
+    "sha256": "62b63af7ba15a1f4112f42134928a86bc3bb1d168cd9362e6cd927a6607f391e",
+    "mode": "serial",
+    "reviewed": true,
+    "reason": "READ: sandbox restore and Bash child; no shared destination or OS recycle calls"
   }
 }

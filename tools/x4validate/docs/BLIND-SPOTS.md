@@ -390,6 +390,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F309 | Unattended housekeep relied on generic temp names and shallow activity checks | **DEFECT (measured)** | Three of four initial controls failed; three further active-folder/canonical controls failed | FIXED 2026-10-20 - ownership receipts, complete activity/protection checks and explicit errors |
 | F310 | Shell syntax rejection was reported as an inert guard failure | **DEFECT (measured)** | Bash/PowerShell on two rendered hosts; syntax and real failure controls | FIXED 2026-10-20 - dedicated syntax refusal; incomplete analysis remains failed |
 | F311 | Prior-run cleanup bypassed the Recycle Bin and pruned measured baselines | **DEFECT (measured/read)** | Two installers, two BaseX builders, two shell drivers, deploy and probe removal | FIXED 2026-10-20 - shared recoverable removal and baseline retention |
+| F312 | Restoring an older backup destroyed the current destination | **DEFECT (read/measured)** | Restore entry point and byte-preservation controls | FIXED 2026-10-20 - retain current bytes before publishing the restore |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -10990,3 +10991,23 @@ The user explicitly included regenerable BaseX output in recoverable removal.
 **RE-DERIVED BY:** tests/test_x4recycle.py; tests/test_deploy_mod.py;
 tests/test_install_over_existing.py::test_the_upgrade_KEEPS_the_recovery_store_and_still_PRUNES_build_artifacts;
 tests/test_basex_build_effective_refuses_empty_reference.py.
+
+## F312 - Restore discarded the current destination · **DEFECT (read/measured)** · confidence 98% · FIXED 2026-10-20
+
+READ: scripts/restore-from-backup.sh copied the old snapshot directly over its
+destination. The shared Python restore implementation now independently copies,
+syncs and hashes the current bytes in a uniquely named before-restore backup,
+then stages and verifies the selected old snapshot before atomic publication.
+An absent destination uses no-replace publication. Current/source changes and
+preservation failures refuse. Only this call's temporary copies are unlinked.
+
+MEASURED: five controls cover existing and absent destinations, preservation
+corruption, literal lookup/traversal refusal, and the documented Bash entry with
+parentheses, brackets, apostrophes and ampersands in owned sandbox names. The
+newer destination survives independently when the old bytes are restored.
+
+Residual: publication is not an OS-wide transaction against a concurrent writer;
+identity/hash checks narrow that race but cannot provide filesystem CAS. This
+standalone recovery helper does not bypass the guards for profile/save paths.
+
+**RE-DERIVED BY:** tests/test_restore_backup.py.
