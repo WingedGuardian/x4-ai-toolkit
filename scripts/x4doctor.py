@@ -1589,7 +1589,7 @@ def check_parity(ctx: Ctx) -> list[Check]:
             spec = _parity_targets(m).get(target)
             if spec is None:
                 return NA, ("no deploy workflow ships .%s/: deploy_parity defines only the %s "
-                            "deployment (deploy-claude-dir.py deploys .claude/), and .%s/ reaches a "
+                            "deployment(s) (deploy-claude-dir.py --target deploys only those), and .%s/ reaches a "
                             "root only through the installer -- whose output %s.* checks"
                             % (target, ", ".join(sorted(_parity_targets(m))) or "no", target, target))
             a, b = src / spec.root_rel, ctx.root / spec.root_rel

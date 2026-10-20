@@ -605,7 +605,7 @@ def test_TWIN_a_toolkit_root_WITH_an_agent_source_is_still_checked(tmp_path, mon
 
 def test_a_codex_target_with_no_deploy_workflow_is_NA_with_the_reason(tmp_path, monkeypatch):
     """R4-2: deploy_parity defines only the Claude deployment; .codex/ reaches a root only
-    through the installer (deploy-claude-dir.py deploys .claude/). With no TargetSpec there
+    through the installer (deploy-claude-dir.py deploys only the defined targets). With no TargetSpec there
     is no deploy relationship to check -- N/A naming why, never an UNKNOWN that blocks exit 0."""
     files = dict(_CLAUDE, **{".codex/hooks/x.sh": "#\n", "AGENTS.md": GEN_BANNER + "\n"})
     ctx = _pair(tmp_path, monkeypatch, files, files)

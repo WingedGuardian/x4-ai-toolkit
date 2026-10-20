@@ -385,6 +385,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F304 | About 47 commits of v3.3.1..b88e425 had no recorded review round | **PROCESS (reported)** · RECORDED 2026-10-19 | coverage audit 2026-10-19 (not re-derived here); the range holds 503 commits, 447 non-merge (MEASURED) | RECORDED - reviewed in a gap review the same day, which found F297 |
 | F305 | A doubly-nested patch (`extensions/<B>/extensions/<DLC>/<rel>`) was kept under its literal path by the effective store and the definition lookup | **DEFECT (measured)** | engine log 2026-10-19: 10 of 11 such files opened (owner ships FULL), 1 not (owner ships `<diff>`); the store's merge matched the full merge on 0 of 10 | ✅ **FIXED 2026-10-19** - filed under the DLC path, each mod once; mod-inner case left literal (0 live, unmeasured) |
 | F306 | A command name from a variable, substitution, `%R%`/`!R!` or `& $R` reached no guard rule, so a delete behind it was allowed | **DEFECT (measured)** · PRE-ARC | 125 of 125 non-twin shapes allowed on master `21a2320` where the plain command was denied/asked | ✅ **FIXED 2026-10-19** - speculative readings of the words after the name + a backstop ask |
+| F307 | `deploy-claude-dir.py` deployed `.claude/` only, so a Codex session in a game root it served ran with no guard hooks | **DEFECT (measured)** · IN-ARC (v4.0 Codex target never reached the deploy workflow) | dev game root 2026-10-20: `.claude/` + AGENTS.md, no `.codex/` or `.agents/`; `x4doctor --agent codex`: "the codex target is not installed here" | ✅ **FIXED 2026-10-20** - `--target codex`; the parity gate fails `CODEX UNGUARDED` on AGENTS.md without `.codex/` |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -9713,6 +9714,32 @@ after including the parser and translator, all four changes void the reading, an
 an unchanged control passes. No hook policy changed. Old receipts lack these two
 fingerprints and cannot retrospectively prove their stability. RE-DERIVED BY:
 `tests/test_hook_false_positives_gate.py` `test_changing_each_verdict_dependency_voids_the_replay`.
+
+## F307 — `deploy-claude-dir.py` deployed `.claude/` only, so a Codex session in a game root it served ran unguarded · **DEFECT (measured)** · IN-ARC · confidence 90% · ✅ FIXED 2026-10-20
+
+MEASURED 2026-10-20 on the dev game root (deployed by this script, not by the installer): it held
+`.claude/` and AGENTS.md but no `.codex/` and no `.agents/`, and `x4doctor --root <game root>
+--agent codex` answered only "the codex target is not installed here". Codex reads AGENTS.md, so
+every Codex session there was instructed by the toolkit and guarded by nothing. The installer
+cannot serve this layout (`--method separate --agent codex` would write the toolkit into the
+repo, and it refused on the locked path config). Cause: `deploy_parity.TARGETS` held only
+`claude`, by design ("add an entry only together with a deploy workflow"), and no workflow wrote
+`.codex/`; the parity gate and x4doctor both reported the absence as N/A.
+
+FIXED (F11 lane): `TARGETS["codex"]` = `.codex/hooks`, `.codex/rules`, `.agents/skills` (install.sh's
+X4_AGENT_ITEMS_codex minus the per-machine `.codex/config.toml` and the game-root-owned AGENTS.md)
+plus `.codex/hooks.json` rendered for the destination root by the toolkit's own `render_codex`,
+compared as canonical JSON. `deploy-claude-dir.py --target codex|all` deploys it by the existing
+rules; an unchanged hooks.json stays byte-identical because Codex skips a changed one until the
+user re-approves it. The gate treats `.codex/`, `.agents/` or AGENTS.md as putting the Codex target
+in scope; AGENTS.md without `.codex/` fails as `CODEX UNGUARDED`. Dry run against the real game
+root (2026-10-20): 49 files to create (24 hooks, 1 rules file, 23 skill files, hooks.json), 0
+refused; nothing written. Residual 10%: Codex's trust of the deployed hooks is the user's `/hooks`
+step and is checked by x4doctor, not by this gate; AGENTS.md drift in a game root is reported by
+the deploy, not gated.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_deploy_parity.py` (the codex tests),
+`tools/x4validate/tests/test_deploy_claude_dir.py` (the `--target codex` tests).
 
 ## F306 — A command name from a variable, substitution, `%R%`/`!R!` or `& $R` reached no rule, so a delete behind it was allowed · **DEFECT (measured)** · PRE-ARC · confidence 90% · ✅ FIXED 2026-10-19
 

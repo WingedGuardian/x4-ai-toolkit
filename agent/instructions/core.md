@@ -235,7 +235,8 @@ scope-expanding *actions* before taking them.
 `KNOWLEDGEBASE.md` is the master reference for discovered quirks, XML schema patterns,
 cross-file dependency maps, the version migration map, and tool notes. **Consult it before
 making changes.** After every session, bug, or research task, extract new facts and add them.
-The environment gets smarter the more you use it.
+The environment gets smarter the more you use it. In a git repo, commit each edited
+knowledgebase/notes file alone (explicit path); never push.
 
 ## x4live is EXPERIMENTAL — say so before you use it
 
@@ -334,43 +335,38 @@ flag it as open — what is never fine is an unverified claim wearing the gramma
 
 ## Discovery vs. Proof (Standing Rule — which tool answers which question)
 
-**Route BEFORE you search.** Ask *"which tool answers THIS question?"* before typing a search
-command, not after it returns something confusing — reaching for `grep`/`find` by reflex when a
-purpose-built tool exists is a recurring, expensive failure. It is a rule about which tool you
-REACH FOR, not only about what you may claim. Exact flags and subcommands: the generated
-`x4-cli-reference` skill.
+**Route BEFORE you search:** ask *"which tool answers THIS question?"* before a search command,
+not after a confusing result. Reaching for `grep`/`find` by reflex when a purpose-built tool
+exists is a recurring, expensive failure; this governs which tool you REACH FOR, not only what you
+may claim. Flags and subcommands: the generated `x4-cli-reference` skill.
 
 | Question shape | Tool | Not this |
 |---|---|---|
-| "what values does attribute X take across the corpus?" | **BaseX** (`tools\basex\ask.py`) | ✗ `grep -r` over `reference\` (60 GB, minutes vs ~1s) |
-| "who references / who calls / who listens to X?" | **BaseX**, or **x4xref** for MD+aiscript cues | ✗ recursive grep |
-| "what is the LIVE value, and which mod set it?" | **x4effective** | ✗ reading `reference\` (that is vanilla only) |
-| "do this mod's selectors resolve / is it correct?" | **x4validate** (`--tier b` for cross-mod) | ✗ eyeballing the diff |
-| **"is my new MD/aiscript SCHEMA-valid?"** | **`x4validate <mod> --update`** — the schema pass is GATED behind it (compiling `md.xsd` costs ~102 s) and does NOT run by default. `--xsd-fast` skips the compile but **loses the "element not expected" class**, which is where element-ORDERING errors live | ✗ a default `x4validate` run — it reports `OK: no issues found` on a script it never schema-checked; ✗ hand-rolling lxml because you assumed the tool cannot do it |
-| **"what did the ENGINE actually complain about?"** | **x4debug triage** | ✗ hand-rolled `grep \| sort \| uniq -c` — it has no way to notice it dropped a shape |
-| **"did we PREDICT what the engine hit?"** | **x4debug crosscheck** | ✗ comparing the two TOTALS — different populations, so they agree by accident |
-| "does this collide with the modlist / who wins?" | **x4compat** | ✗ guessing at load order |
-| "is this ship a near-duplicate of one I own?" | **x4similar** | — |
-| **"does this vpath exist in the LIVE tree, and WHO supplies it?"** | **`x4effective dump --chain <vpath>`** — rc 0 names every source in order, rc 1 means absent. | `_effective.base_has` — base+DLC only, so a mod-supplied file reads as a confident ABSENT |
-| what is installed / what has updates / is this abandoned? | **x4modlist** | reading the profile `content.xml` as an inventory -- it is a DECISION LOG |
-| how do a mod's numbers compare to the live tree? | **x4stats** (advisory, never a verdict) | quoting a vanilla number as if it were effective |
-| what changed between two versions of a mod? | **x4diff** | eyeballing two folders, or `diff -rq` -- line endings swamp the real findings |
-| what is baked into a savegame, and what does it reference? | **x4save** | assuming a removed mod leaves dangling refs -- the engine deletes them silently |
-| what is the RUNNING game's state right now? | **x4live** (needs the game running) | inferring live state from files on disk |
-| **"does a file with this NAME exist?"** | a file-NAME search (your agent's glob/find tool) | ✗ a CONTENT search — it searches *contents*; a file can exist without containing its own name |
-| "find this text, in one known area" | a CONTENT search (ripgrep) | ✗ `grep -r` via the shell |
+| values of attribute X across the corpus? | **BaseX** (`tools\basex\ask.py`) | `grep -r` over `reference\` (60 GB) |
+| who references / calls / listens to X? | **BaseX**, or **x4xref** for MD+aiscript cues | recursive grep |
+| the LIVE value, and which mod set it? | **x4effective** | `reference\` (vanilla only) |
+| do this mod's selectors resolve? | **x4validate** (`--tier b` for cross-mod) | eyeballing the diff |
+| **is my new MD/aiscript SCHEMA-valid?** | **`x4validate <mod> --update`**: the schema pass is GATED behind it (~102 s `md.xsd` compile); `--xsd-fast` skips it but loses "element not expected" (element-ORDERING errors) | a default run (it says `OK: no issues found` unchecked); hand-rolled lxml |
+| **what did the ENGINE complain about?** | **x4debug triage** | `grep \| sort \| uniq -c` (cannot see what it dropped) |
+| **did we PREDICT what the engine hit?** | **x4debug crosscheck** | comparing TOTALS (different populations) |
+| collides with the modlist / who wins? | **x4compat** | guessing at load order |
+| near-duplicate of a ship I own? | **x4similar** | — |
+| **does this vpath exist LIVE, and WHO supplies it?** | **`x4effective dump --chain <vpath>`** (rc 0 names every source, rc 1 absent) | `_effective.base_has` (base+DLC only: a mod's file reads ABSENT) |
+| installed / updates / abandoned? | **x4modlist** | the profile `content.xml` (a DECISION LOG) |
+| a mod's numbers vs the live tree? | **x4stats** (advisory, never a verdict) | a vanilla number quoted as effective |
+| what changed between two mod versions? | **x4diff** | `diff -rq` (line endings swamp it) |
+| what a savegame bakes in and references? | **x4save** | assuming dangling refs (the engine deletes them silently) |
+| the RUNNING game's state? | **x4live** (needs the game running) | inferring it from files on disk |
+| **does a file with this NAME exist?** | a file-NAME search (glob/find) | a CONTENT search (a file need not contain its own name) |
+| find text in one known area | a CONTENT search (ripgrep) | `grep -r` via the shell |
 
-★ **A negative from ONE invocation mode is a claim about that MODE, not about the tool.**
-MEASURED 2026-08-27: `x4validate` reported OK on a schema-invalid MD file and was filed as "it
-does not schema-validate MD". It does — the pass is gated behind `--update`, and **"no such
-check" and "the check is gated" produce an IDENTICAL clean output.** Before filing *"the tool
-does not do X"*, check whether X sits behind a FLAG; a default mode is a configuration, not a
-capability. **Never state a negative from a tool that cannot see the whole picture:**
-
-| Question | Tool | Why |
-|---|---|---|
-| *Discovery* — "where does this appear, what values exist, who mentions X?" | **BaseX** | Fast across many files, packed mods included; **but `x4raw` is files as-written, with no diff application or load order** (`x4eff` is the merged tree). |
-| *Proof* — "what does the game actually see / is this reference real?" | **x4validate / x4effective** | Reads packed `.cat` via `_cat`, applies diffs in load order, models the effective merged tree. |
+★ **A negative from ONE invocation MODE is about that mode, not the tool:** a gated check and a
+missing check look identical (x4validate's schema pass, above), so check for a FLAG before
+saying the tool can't. **Never state a negative from a tool that cannot see the whole picture.**
+*Discovery* (where X appears, what values exist) is **BaseX**: fast, packed mods included, but
+`x4raw` is files as written, with no diffs or load order; `x4eff` is the merged tree. *Proof*
+(what the game actually sees) is **x4validate / x4effective**: packed `.cat`, diffs in load
+order, the merged tree.
 
 **A BaseX negative is admissible — but only with a denominator.** A **bare** "0 hits" is only a
 lead; `tools\basex\ask.py` refuses to render a zero as a finding unless `coverage-<db>.json`
@@ -427,5 +423,5 @@ say which regime a formula belongs to, and the packed-inclusive scoping rule.
 
 **Learned facts and preferences go in `KNOWLEDGEBASE.local.md`** as above. Also read an existing `X4-NOTES.md`; it remains preserved legacy evidence. Never edit {{GENERATED_FILES}}: they are regenerated and your edit is lost.
 
-**`KNOWLEDGEBASE.md` and the other protected files are kept read-only by x4lock**, so a write to one fails until you unlock it: `python <toolkit>/scripts/x4lock.py unlock <file>`, edit, then `python <toolkit>/scripts/x4lock.py lock`. The guard prints the exact commands.
+**`KNOWLEDGEBASE.md` and the other protected files are kept read-only by x4lock**, so a write to one fails until you unlock it: `python <toolkit>/scripts/x4lock.py unlock <file>`, edit, `python <toolkit>/scripts/x4lock.py lock`, then commit it. The guard prints the exact commands.
 

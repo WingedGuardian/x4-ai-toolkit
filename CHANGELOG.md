@@ -101,6 +101,16 @@ tests, fixtures, gates or release tooling.
 
 #### Guards and save safety
 
+- **Session start names an uncommitted knowledgebase.** When the folder the agent runs in is a
+  git work tree and its `KNOWLEDGEBASE.md` or `KNOWLEDGEBASE.local.md` has uncommitted changes, one
+  `[x4 kb]` line gives the added and removed line counts (line-ending churn is not counted) and the
+  date the file was last committed, and asks the agent to commit that file alone or ask you whose
+  edits they are. An untracked file is named as never committed; an ignored one is left alone. If
+  git refuses the folder (for example "dubious ownership"), one line says the check could not run,
+  with git's reason. No file content is printed. The instructions (AGENTS.md, CLAUDE.md) now say: in a git repo, commit
+  each edited knowledgebase/notes file alone, by explicit path; never push. Measured on 2026-10-20:
+  an agent had appended about 1,767 lines to a knowledgebase over two and a half weeks without
+  ever committing them.
 - **A command name the guard cannot read is no longer a way past it (BLIND-SPOTS F306).** With
   the name in a variable or expansion, `$R rm -rf <reference>`, `$R 'rm -rf ...'` (R=eval),
   cmd's `%R% del` / `!R! del` / `%R%del`, PowerShell's `& $R Remove-Item` / `. $R` /
@@ -237,6 +247,22 @@ tests, fixtures, gates or release tooling.
 
 #### Codex, OpenCode and other hosts
 
+- **A Codex session in a game root set up with `deploy-claude-dir.py` ran with no guard hooks
+  (BLIND-SPOTS F307).** The script deployed `.claude/` only, so such a root had AGENTS.md, which
+  steers Codex, and no `.codex/`. `deploy-claude-dir.py --target codex` (or `--target all`) now
+  deploys `.codex/hooks`, `.codex/rules`, `.agents/skills` (the toolkit path rendered as the
+  installer does) and a `.codex/hooks.json` rendered for that root. It never writes AGENTS.md or
+  `.codex/config.toml`, and reports whether AGENTS.md still holds the toolkit's current text and
+  how its size compares with Codex's 32,768-byte default budget. An unchanged hooks.json is left
+  byte-identical; when the deploy writes it, approve the hooks in Codex's `/hooks`, since Codex
+  skips new or changed hook definitions until then. `gates/deploy_parity.py` compares the Codex
+  tree whenever the root has `.codex/`, `.agents/` or AGENTS.md, and fails with `CODEX UNGUARDED`
+  when AGENTS.md is there without `.codex/`. A root with no `.claude/` but a Codex file is checked
+  for the Codex tree, its claude section reading N/A; a root with neither is refused (rc 2).
+  x4doctor's `parity.codex` now does a real comparison against the toolkit source wherever the
+  Codex target is installed and the toolkit is separate, and can FAIL (it was always N/A).
+  `deploy-claude-dir.py --dest <dir>` naming a directory that does not exist is now refused with
+  rc 2; before, the deploy created it from nothing.
 - **Codex save evidence on Linux and macOS keeps a written trailing `/`** on a folder path, as
   on Windows; the POSIX branch dropped it.
 - **Codex users must re-review hooks:** post-tool validation also receives the captured native
@@ -268,6 +294,15 @@ tests, fixtures, gates or release tooling.
 
 #### Maintainers
 
+- **(maintainers)** AGENTS.md headroom won back with no rule dropped: core.md "Discovery vs.
+  Proof" (shorter routing cells, the mode story in one sentence, the Discovery/Proof table as a
+  paragraph) and codex.md's manual preflight (detail now only in ADAPTING.md §2). AGENTS.md
+  32,581 -> 30,863 bytes; CLAUDE.md 30,034 -> 28,857 characters.
+- **(maintainers)** deploy_parity: `TARGETS["codex"]` (rendered files compared as canonical JSON;
+  a deployed skill still carrying the raw token is not parity), 17 new tests; deploy-claude-dir: 12
+  new tests for `--target codex`; session-canary: 11 tests on scratch git repos
+  (`TestF11UncommittedKnowledgebase`). 15 clause mutants (10 deploy/parity, 5 hook), each
+  caught; a no-op control mutant survived.
 - **(maintainers)** fuzz-guard has a DYNAMIC-name axis in bash, cmd and PowerShell (11
   mutators; 441 bypasses on the code before, 0 of 9,020 after); verify-hook-tests has 228
   mutants; the rule inventory classifies the cd-lane deny and the new ask; the brace-expansion

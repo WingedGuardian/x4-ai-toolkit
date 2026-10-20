@@ -269,7 +269,7 @@ def test_the_destination_being_the_repo_is_a_refusal(repo):
 def test_a_plan_WRITE_disagreement_after_apply_is_rc_1(repo, dest, monkeypatch):
     """The shape of the plan()/target_bytes() split found once already: printed, rc 0."""
     _commit(repo, "skills/a/SKILL.md", b"v1\n")
-    monkeypatch.setattr(dep, "target_bytes", lambda r, d, n: b"not what the plan said\n")
+    monkeypatch.setattr(dep, "target_bytes", lambda r, d, n, *rest: b"not what the plan said\n")
     assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 1
 
 
@@ -290,3 +290,168 @@ def test_a_CREATED_file_outside_the_manifest_stays_writable(repo, dest, monkeypa
     monkeypatch.setattr(dep.x4lock, "manifest", lambda: [])
     assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 0
     assert (dest / "skills" / "a" / "SKILL.md").stat().st_mode & stat.S_IWRITE
+
+
+# --- --target codex (F11, 2026-10-20) ------------------------------------------------- #
+# MEASURED 2026-10-20: the script deployed .claude/ only, so a Codex session in the game root
+# it served ran with no guard hooks. --target codex deploys .codex/hooks, .codex/rules,
+# .agents/skills and a RENDERED .codex/hooks.json, by the same safety rules.
+
+import json  # noqa: E402
+
+_RENDERER = dep.REPO_ROOT / dep.parity.CODEX_RENDERER
+_TMPL_V1 = json.dumps({"hooks": {"SessionStart": [{"hooks": [{
+    "type": "command", "command": 'bash "{{ROOT}}/.codex/hooks/codex-entry.sh" session_start'}]}]}},
+    indent=2) + "\n"
+_TMPL_V2 = _TMPL_V1.replace("session_start", "session_start --v2")
+_TOKEN_VALUE = "$env:X4_TOOLKIT" if os.name == "nt" else "$X4_TOOLKIT"
+
+
+def _commit_at(repo: Path, rel: str, content: bytes, msg: str = "c") -> None:
+    p = repo / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(content)
+    _git(repo, "add", "--", rel)
+    _git(repo, "commit", "-q", "-m", msg)
+
+
+@pytest.fixture
+def crepo(repo):
+    """A source tree carrying the Codex target, its template and the real renderer."""
+    _commit_at(repo, dep.parity.CODEX_RENDERER, _RENDERER.read_bytes())
+    _commit_at(repo, dep.parity.CODEX_TEMPLATE, _TMPL_V1.encode())
+    _commit_at(repo, ".codex/hooks/h.sh", b"echo hi\n")
+    _commit_at(repo, ".codex/rules/x4.rules", b"rule\n")
+    _commit_at(repo, ".agents/skills/a/SKILL.md", b"cd {{TOOLKIT}}/tools\n")
+    _commit(repo, "hooks/c.sh", b"x\n")
+    return repo
+
+
+def _codex(repo, dest, *extra):
+    return dep.main(["--repo", str(repo), "--dest", str(dest), "--target", "codex", *extra])
+
+
+def test_codex_dry_run_writes_nothing(crepo, dest):
+    assert _codex(crepo, dest) == 0
+    assert not (dest.parent / ".codex").exists() and not (dest.parent / ".agents").exists()
+
+
+def test_codex_apply_creates_hooks_rules_skills_and_a_RENDERED_hooks_json(crepo, dest, capsys):
+    root = dest.parent
+    assert _codex(crepo, dest, "--apply") == 0
+    assert (root / ".codex/hooks/h.sh").read_bytes() == b"echo hi\n"
+    assert (root / ".codex/rules/x4.rules").read_bytes() == b"rule\n"
+    assert (root / ".agents/skills/a/SKILL.md").read_bytes() == \
+        ("cd " + _TOKEN_VALUE + "/tools\n").encode()
+    hooks = json.loads((root / ".codex/hooks.json").read_text(encoding="utf-8"))
+    cmd = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    assert str(root.resolve()).replace(chr(92), "/") in cmd and "{{" not in cmd
+    out = capsys.readouterr().out
+    assert "/hooks" in out, "a NEW hooks.json must say Codex needs it approved"
+
+
+def test_TWIN_default_target_is_still_claude_only(crepo, dest):
+    assert dep.main(["--repo", str(crepo), "--dest", str(dest), "--apply"]) == 0
+    assert (dest / "hooks" / "c.sh").is_file()
+    assert not (dest.parent / ".codex").exists()
+
+
+def test_target_all_deploys_both(crepo, dest):
+    assert dep.main(["--repo", str(crepo), "--dest", str(dest), "--target", "all", "--apply"]) == 0
+    assert (dest / "hooks" / "c.sh").is_file() and (dest.parent / ".codex/hooks/h.sh").is_file()
+
+
+def test_an_UNCHANGED_hooks_json_is_left_BYTE_IDENTICAL(crepo, dest, capsys):
+    """Codex skips a CHANGED hooks.json until the user re-approves it in /hooks, so an
+    equal-but-reformatted one (canonical JSON) is never rewritten."""
+    root = dest.parent
+    data = json.loads(dep.parity.render_rendered(crepo, dep.parity.CODEX_TEMPLATE, root))
+    body = json.dumps(data, indent=8).replace("\n", "\r\n").encode()
+    (root / ".codex").mkdir()
+    (root / ".codex/hooks.json").write_bytes(body)
+    kinds = _kinds(dep.plan(crepo, root, spec=dep.parity.CODEX))
+    assert kinds[".codex/hooks.json"] == dep.SKIP
+    assert _codex(crepo, dest, "--apply") == 0
+    assert (root / ".codex/hooks.json").read_bytes() == body
+    assert "re-approve" not in capsys.readouterr().out
+
+
+def test_TWIN_an_OLDER_shipped_hooks_json_is_UPDATED_and_says_so(crepo, dest, capsys):
+    root = dest.parent
+    old = dep.parity.render_rendered(crepo, dep.parity.CODEX_TEMPLATE, root)
+    _commit_at(crepo, dep.parity.CODEX_TEMPLATE, _TMPL_V2.encode())
+    (root / ".codex").mkdir()
+    (root / ".codex/hooks.json").write_text(old, encoding="utf-8")
+    assert _kinds(dep.plan(crepo, root, spec=dep.parity.CODEX))[".codex/hooks.json"] == dep.UPDATE
+    assert _codex(crepo, dest, "--apply") == 0
+    assert "--v2" in (root / ".codex/hooks.json").read_text(encoding="utf-8")
+    assert "re-approve" in capsys.readouterr().out
+
+
+def test_TWIN_a_CUSTOM_hooks_json_is_REFUSED_and_left_untouched(crepo, dest):
+    root = dest.parent
+    (root / ".codex").mkdir()
+    (root / ".codex/hooks.json").write_bytes(b'{"hooks": {"Mine": []}}\n')
+    assert _codex(crepo, dest, "--apply") == 1
+    assert (root / ".codex/hooks.json").read_bytes() == b'{"hooks": {"Mine": []}}\n'
+
+
+def test_codex_per_machine_config_and_AGENTS_md_are_never_touched(crepo, dest, capsys):
+    root = dest.parent
+    (root / ".codex").mkdir()
+    (root / ".codex/config.toml").write_bytes(b"project_doc_max_bytes = 65536\n")
+    (root / "AGENTS.md").write_bytes(b"# mine\n")
+    assert _codex(crepo, dest, "--apply") == 0
+    assert (root / ".codex/config.toml").read_bytes() == b"project_doc_max_bytes = 65536\n"
+    assert (root / "AGENTS.md").read_bytes() == b"# mine\n"
+    names = _kinds(dep.plan(crepo, root, spec=dep.parity.CODEX))
+    assert ".codex/config.toml" not in names and "AGENTS.md" not in names
+    assert "AGENTS.md" in capsys.readouterr().out, "the AGENTS.md state must be reported"
+
+
+def test_a_deployed_UNRENDERED_codex_skill_is_UPDATED_not_skipped(crepo, dest):
+    root = dest.parent
+    (root / ".agents/skills/a").mkdir(parents=True)
+    (root / ".agents/skills/a/SKILL.md").write_bytes(b"cd {{TOOLKIT}}/tools\n")
+    assert _kinds(dep.plan(crepo, root, spec=dep.parity.CODEX))[".agents/skills/a/SKILL.md"] == dep.UPDATE
+
+
+def test_TWIN_a_hand_edited_codex_hook_is_REFUSED(crepo, dest):
+    root = dest.parent
+    (root / ".codex/hooks").mkdir(parents=True)
+    (root / ".codex/hooks/h.sh").write_bytes(b"echo local edit\n")
+    assert _kinds(dep.plan(crepo, root, spec=dep.parity.CODEX))[".codex/hooks/h.sh"] == dep.REFUSE
+
+
+def test_after_codex_apply_the_parity_gate_agrees(crepo, dest):
+    root = dest.parent
+    assert _codex(crepo, dest, "--apply") == 0
+    rows = dep.parity.compare_trees(crepo, root, dep.parity.CODEX)
+    assert rows and all(r.at_parity for r in rows), [(r.name, r.state) for r in rows]
+
+
+def test_codex_into_the_repo_itself_is_a_refusal(crepo):
+    assert dep.main(["--repo", str(crepo), "--root", str(crepo), "--target", "codex"]) == 2
+
+
+def test_the_ACTION_line_is_printed_only_when_hooks_json_was_really_written(crepo, dest, capsys):
+    """Review LOW-3: 'ACTION FOR YOU: .codex/hooks.json was written' printed whenever the plan
+    held a create/update, even when the write FAILED. A directory in its place makes it fail."""
+    (dest.parent / ".codex" / "hooks.json").mkdir(parents=True)
+    assert _codex(crepo, dest, "--apply") == 1
+    out = capsys.readouterr()
+    assert "ACTION FOR YOU" not in out.out
+    assert ".codex/hooks.json" in out.err
+
+
+def test_TWIN_the_ACTION_line_is_printed_after_a_real_write(crepo, dest, capsys):
+    assert _codex(crepo, dest, "--apply") == 0
+    assert "ACTION FOR YOU" in capsys.readouterr().out
+
+
+def test_a_named_dest_that_does_not_exist_is_REFUSED(repo, tmp_path, capsys):
+    """Review LOW-4: before F11 a missing --dest was created from nothing (rc 0)."""
+    _commit(repo, "skills/a/SKILL.md", b"v1"+bytes([10]))
+    d = tmp_path / "typo" / ".claude"
+    assert dep.main(["--repo", str(repo), "--dest", str(d), "--apply"]) == 2
+    assert not d.exists() and "--dest" in capsys.readouterr().err

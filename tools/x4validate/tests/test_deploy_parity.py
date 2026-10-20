@@ -137,6 +137,7 @@ def test_a_skill_SUBFILE_is_compared_not_just_SKILL_md(tmp_path):
 
 def test_no_game_root_is_a_REFUSAL(monkeypatch, capsys):
     monkeypatch.setattr(dp, "game_claude_dir", lambda: None)
+    monkeypatch.setattr(dp, "game_root_dir", lambda: None)
     assert dp.main() == 2
     assert "REFUSING" in capsys.readouterr().err
 
@@ -219,3 +220,223 @@ def test_a_spec_rewrite_accepts_EACH_of_its_renderings_and_nothing_else(tmp_path
                 for k, c in (("r" + str(ok) + rendered[3:6], src), ("g" + str(ok) + rendered[3:6], rendered)))
         rows = dp.compare_trees(r, g, spec)
         assert rows[0].at_parity is ok, (rendered, rows)
+
+
+# --- the Codex target (F11, 2026-10-20) ------------------------------------------------ #
+# MEASURED 2026-10-20: a dev-layout game root had .claude/ and AGENTS.md but no .codex/, so
+# every Codex session there ran with no guard hooks. deploy-claude-dir.py now deploys a
+# `codex` target; these pin what the gate compares for it. One twin per clause.
+
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_REAL_RENDERER = Path(dp.REPO_ROOT) / dp.CODEX_RENDERER
+_BS = chr(92)
+_TMPL = json.dumps({"hooks": {"SessionStart": [{"hooks": [{
+    "type": "command",
+    "command": 'bash "{{ROOT}}/.codex/hooks/codex-entry.sh" session_start',
+    "commandWindows": 'pwsh -File "{{ROOT_WIN}}' + _BS + ".codex" + _BS + "hooks" + _BS
+                      + 'codex-entry.ps1" session_start'}]}]}}, indent=2) + NL
+
+
+def _codex_repo(root, files=None, tmpl=_TMPL):
+    files = dict(files if files is not None else
+                 {".codex/hooks/h.sh": "echo hi" + NL, ".codex/rules/x4.rules": "rule" + NL,
+                  ".agents/skills/a/SKILL.md": "cd {{TOOLKIT}}/tools" + NL})
+    files[dp.CODEX_TEMPLATE] = tmpl
+    _tree(root, files)
+    (root / dp.CODEX_RENDERER).write_bytes(_REAL_RENDERER.read_bytes())
+    (root / ".claude").mkdir(exist_ok=True)
+    return root
+
+
+def _row(r, g, name):
+    return {x.name: x for x in dp.compare_trees(r, g, dp.TARGETS["codex"])}[name]
+
+
+def test_TARGETS_has_codex_covering_hooks_rules_skills_and_the_rendered_hooks_json():
+    t = dp.TARGETS["codex"]
+    assert t.root_rel == "."
+    assert t.top_files == ()
+    assert t.subtrees == (".codex/hooks", ".codex/rules", ".agents/skills")
+    assert t.rewrite_scope == (".agents/",)
+    assert t.rewrite_from == b"{{TOOLKIT}}"
+    assert set(t.rewrite_to) == {b"$env:X4_TOOLKIT", b"$X4_TOOLKIT"}
+    assert t.rendered == ((".codex/hooks.json", dp.CODEX_TEMPLATE),)
+    assert t.rewrite_required is True
+
+
+def test_TWIN_claude_renders_nothing_and_requires_no_rewrite():
+    t = dp.TARGETS["claude"]
+    assert t.rendered == () and t.rewrite_required is False
+
+
+def test_codex_per_machine_files_and_AGENTS_md_are_outside_the_population(tmp_path):
+    """install.sh X4_KEEP_LOCAL: .codex/config.toml (and hooks.json, which arrives only as a
+    RENDERED row). AGENTS.md is owned by the game-root repository, not by this deployment."""
+    g = _tree(tmp_path / "g", {".codex/config.toml": "x=1" + NL, ".codex/hooks.json": "{}",
+                                "AGENTS.md": "# a" + NL, ".codex/hooks/h.sh": "x" + NL,
+                                ".codex/hooks/__pycache__/h.pyc": b"\0"})
+    assert dp.population(g, dp.TARGETS["codex"]) == {".codex/hooks/h.sh"}
+
+
+def test_codex_hooks_json_rendered_for_THIS_root_is_at_parity(tmp_path):
+    r = _codex_repo(tmp_path / "repo")
+    g = tmp_path / "game"
+    _tree(g, {".codex/hooks.json": dp.render_template_text(_TMPL, g)})
+    row = _row(r, g, ".codex/hooks.json")
+    assert row.state == dp.IDENTICAL_RENDERED and row.at_parity
+
+
+def test_codex_hooks_json_REFORMATTED_but_equal_is_at_parity(tmp_path):
+    """The installer's own rule (_codex_matches_template -> check-codex): canonical JSON."""
+    r = _codex_repo(tmp_path / "repo")
+    g = tmp_path / "game"
+    data = json.loads(dp.render_template_text(_TMPL, g))
+    _tree(g, {".codex/hooks.json": json.dumps(data, indent=4, sort_keys=True).replace(NL, CRLF)})
+    row = _row(r, g, ".codex/hooks.json")
+    assert row.at_parity, row
+
+
+def test_TWIN_codex_hooks_json_rendered_for_ANOTHER_root_is_drift(tmp_path):
+    r = _codex_repo(tmp_path / "repo")
+    g = tmp_path / "game"
+    _tree(g, {".codex/hooks.json": dp.render_template_text(_TMPL, tmp_path / "elsewhere")})
+    assert _row(r, g, ".codex/hooks.json").state == dp.DRIFT
+
+
+def test_TWIN_codex_hooks_json_absent_is_only_in_repo(tmp_path):
+    r = _codex_repo(tmp_path / "repo")
+    g = tmp_path / "game"
+    g.mkdir()
+    assert _row(r, g, ".codex/hooks.json").state == dp.ONLY_REPO
+
+
+def test_codex_hooks_json_with_NO_template_in_the_source_is_never_parity(tmp_path):
+    r = _codex_repo(tmp_path / "repo")
+    (r / dp.CODEX_TEMPLATE).unlink()
+    g = tmp_path / "game"
+    _tree(g, {".codex/hooks.json": dp.render_template_text(_TMPL, g)})
+    row = _row(r, g, ".codex/hooks.json")
+    assert not row.at_parity and "render" in row.state, row
+
+
+def test_codex_skill_with_the_token_RENDERED_is_at_parity(tmp_path):
+    r = _codex_repo(tmp_path / "repo")
+    for i, value in enumerate(("$env:X4_TOOLKIT", "$X4_TOOLKIT")):
+        g = _tree(tmp_path / ("g" + str(i)), {".agents/skills/a/SKILL.md": "cd " + value + "/tools" + NL})
+        row = _row(r, g, ".agents/skills/a/SKILL.md")
+        assert row.state == dp.IDENTICAL_REWRITTEN, (value, row)
+
+
+def test_TWIN_codex_skill_with_the_token_UNRENDERED_is_not_parity(tmp_path):
+    """Only a source checkout may carry {{TOOLKIT}}; a deployed skill holding it sends Codex to
+    a literal `{{TOOLKIT}}/tools`. Identical bytes are NOT parity for a rewrite_required spec."""
+    r = _codex_repo(tmp_path / "repo")
+    g = _tree(tmp_path / "g", {".agents/skills/a/SKILL.md": "cd {{TOOLKIT}}/tools" + NL})
+    row = _row(r, g, ".agents/skills/a/SKILL.md")
+    assert row.state == dp.UNRENDERED and not row.at_parity, row
+
+
+def test_TWIN_a_token_free_codex_file_identical_is_still_identical(tmp_path):
+    """Each clause of the UNRENDERED test: in scope but token-free, and out of scope."""
+    files = {".codex/hooks/h.sh": "# {{TOOLKIT}} is data here" + NL,
+             ".agents/skills/b/SKILL.md": "no token" + NL}
+    r = _codex_repo(tmp_path / "repo", files)
+    g = _tree(tmp_path / "g", files)
+    assert _row(r, g, ".codex/hooks/h.sh").state == dp.IDENTICAL
+    assert _row(r, g, ".agents/skills/b/SKILL.md").state == dp.IDENTICAL
+
+
+def _main_pair(tmp_path, monkeypatch, game_files):
+    repo = _codex_repo(tmp_path / "repo")
+    _tree(repo / ".claude", {"hooks/c.sh": "x" + NL})
+    game = _tree(tmp_path / "game", dict({".claude/hooks/c.sh": "x" + NL}, **game_files))
+    monkeypatch.setattr(dp, "repo_claude_dir", lambda: repo / ".claude")
+    monkeypatch.setattr(dp, "game_claude_dir", lambda: game / ".claude")
+    return repo, game
+
+
+_DEPLOYED = {".codex/hooks/h.sh": "echo hi" + NL, ".codex/rules/x4.rules": "rule" + NL,
+             ".agents/skills/a/SKILL.md": "cd $env:X4_TOOLKIT/tools" + NL}
+
+
+def test_main_AGENTS_md_without_codex_is_rc_1_and_says_CODEX_UNGUARDED(tmp_path, monkeypatch, capsys):
+    """The 2026-10-20 finding: AGENTS.md steers Codex in this root, and no .codex/ guards it."""
+    _main_pair(tmp_path, monkeypatch, {"AGENTS.md": "# x" + NL})
+    assert dp.main() == 1
+    out = capsys.readouterr()
+    assert "CODEX UNGUARDED" in out.err
+    assert "--target codex" in out.err
+
+
+def test_TWIN_main_no_codex_marks_at_all_is_NA_and_rc_0(tmp_path, monkeypatch, capsys):
+    _main_pair(tmp_path, monkeypatch, {})
+    assert dp.main() == 0
+    assert "codex: N/A" in capsys.readouterr().out
+
+
+def test_TWIN_main_a_fully_deployed_codex_target_is_rc_0(tmp_path, monkeypatch, capsys):
+    _, game = _main_pair(tmp_path, monkeypatch, dict(_DEPLOYED, **{"AGENTS.md": "# x" + NL}))
+    (game / ".codex" / "hooks.json").write_text(dp.render_template_text(_TMPL, game), encoding="utf-8")
+    rc = dp.main()
+    out = capsys.readouterr()
+    assert rc == 0, out.out + out.err
+    assert "CODEX UNGUARDED" not in out.out + out.err
+
+
+def test_TWIN_main_codex_drift_alone_is_rc_1(tmp_path, monkeypatch, capsys):
+    _, game = _main_pair(tmp_path, monkeypatch, dict(_DEPLOYED, **{".codex/hooks/h.sh": "echo CHANGED" + NL}))
+    (game / ".codex" / "hooks.json").write_text(dp.render_template_text(_TMPL, game), encoding="utf-8")
+    assert dp.main() == 1
+    err = capsys.readouterr().err
+    assert ".codex/hooks/h.sh" in err and "CODEX UNGUARDED" not in err
+
+
+def test_TWIN_main_codex_dir_without_hooks_json_is_rc_1(tmp_path, monkeypatch, capsys):
+    """.codex/ present but its hooks.json absent: Codex has no hook definitions to run."""
+    _main_pair(tmp_path, monkeypatch, dict(_DEPLOYED))
+    assert dp.main() == 1
+    assert ".codex/hooks.json" in capsys.readouterr().err
+
+
+def test_TWIN_an_unrewritten_CLAUDE_skill_is_still_identical(tmp_path):
+    """rewrite_required is the CODEX clause: a claude skill keeping $CLAUDE_PROJECT_DIR is
+    what an in-place layout runs, and stays identical."""
+    r, g = _pair(tmp_path, {"skills/a/SKILL.md": "cd $CLAUDE_PROJECT_DIR/x" + NL},
+                 {"skills/a/SKILL.md": "cd $CLAUDE_PROJECT_DIR/x" + NL})
+    assert dp.compare_trees(r, g)[0].state == dp.IDENTICAL
+
+
+def _codex_only(tmp_path, monkeypatch, game_files):
+    """Review LOW-2: a root with no .claude/ (a Codex-only setup) was never checked: main()
+    refused with rc 2 before the codex section."""
+    repo = _codex_repo(tmp_path / "repo")
+    _tree(repo / ".claude", {"hooks/c.sh": "x" + NL})
+    game = _tree(tmp_path / "game", game_files) if game_files else tmp_path / "game"
+    game.mkdir(exist_ok=True)
+    monkeypatch.setattr(dp, "repo_claude_dir", lambda: repo / ".claude")
+    monkeypatch.setattr(dp, "game_claude_dir", lambda: None)
+    monkeypatch.setattr(dp, "game_root_dir", lambda: game)
+    return game
+
+
+def test_a_CODEX_ONLY_root_is_checked_and_claude_is_NA(tmp_path, monkeypatch, capsys):
+    game = _codex_only(tmp_path, monkeypatch, dict(_DEPLOYED, **{"AGENTS.md": "# x" + NL}))
+    (game / ".codex" / "hooks.json").write_text(dp.render_template_text(_TMPL, game), encoding="utf-8")
+    rc = dp.main()
+    out = capsys.readouterr()
+    assert rc == 0, out.out + out.err
+    assert "claude: N/A" in out.out and "Codex" in out.out
+
+
+def test_TWIN_a_CODEX_ONLY_root_with_codex_drift_is_rc_1(tmp_path, monkeypatch, capsys):
+    _codex_only(tmp_path, monkeypatch, dict(_DEPLOYED, **{".codex/hooks/h.sh": "echo CHANGED" + NL}))
+    assert dp.main() == 1
+    assert ".codex/hooks/h.sh" in capsys.readouterr().err
+
+
+def test_TWIN_a_root_with_NEITHER_tree_is_a_REFUSAL(tmp_path, monkeypatch, capsys):
+    _codex_only(tmp_path, monkeypatch, {})
+    assert dp.main() == 2
+    assert "REFUSING" in capsys.readouterr().err
