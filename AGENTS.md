@@ -180,6 +180,10 @@ evade this policy. Missing preservation or evaluation is a refusal, not permissi
   load probes idle and time-boxed. The game and work the user directs are exempt. Hard floor: the
   system drive keeps min(pagefile, 50 GB) free, other drives min(5%, 50 GB). Raise a concern only
   when a job could reach a floor; never terminate another session's processes.
+  Memory limits refer to **physical RAM**: admission leaves 20% available. Commit uses a fixed
+  512 MiB reserve after job reservations, never a percentage; stop our job below 256 MiB commit
+  for 10 seconds or 128 MiB immediately. Physical-RAM emergency stops remain 2 GiB/10 seconds
+  and 1 GiB immediately. User-directed work is exempt from admission shares, not emergency floors.
 
 ### Iteration snapshots (standing process)
 Before experimenting on a working state, snapshot it to `.claude\backups\known-good-<name>\`.
