@@ -1,6 +1,6 @@
 # Changelog
 
-## v4.0.0 — 2026-10-03
+## v4.0.0 — 2026-10-21
 
 **The toolkit is now the "X4 AI Assistant Toolkit"** and works with more than one coding agent:
 **Claude Code and OpenAI Codex** are first-class, **OpenCode** is best effort (CLI only, built from
