@@ -121,8 +121,22 @@ def test_opaque_glued_save_options_refuse_without_guessing_membership(install, p
 
 def test_opaque_unrelated_glued_options_still_allow(install):
     root, roots, files = install
-    result = invoke_hook(install, "Bash", {"command": "./unknown-tool --output=unrelated.xml.gz -v"})
+    # Only analyze this synthetic workspace: the command is never executed. A POSIX
+    # pytest sandbox lives under /tmp, where output is independently refused.
+    cwd = "C:/x4-fixture-workspace" if os.name == "nt" else "/x4-fixture-workspace"
+    result = invoke_hook(install, "Bash", {"command": "./unknown-tool --output=unrelated.xml.gz -v"},
+                         extra={"cwd": cwd})
     assert not result.get("hookSpecificOutput", {}).get("permissionDecision"), result
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+def test_opaque_unrelated_glued_output_keeps_shared_tmp_refusal(install):
+    root, roots, files = install
+    result = invoke_hook(install, "Bash", {"command": "./unknown-tool --output=unrelated.xml.gz -v"},
+                         extra={"cwd": "/tmp/x4-fixture-shared"})
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny", result
+    assert "WRITING MEASUREMENT OUTPUT TO /tmp" in hso["permissionDecisionReason"], result
     assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
