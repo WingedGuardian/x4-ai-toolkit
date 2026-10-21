@@ -35,6 +35,7 @@
 - {id: part-not-analysed, source: protect-bash.sh, anchor: "Part of this command could not be analysed", verdict: ask, bucket: hook_only, reason: "depends on parsing nested PowerShell"}
 - {id: over-nested, source: protect-bash.sh, anchor: "This command nests so many substitutions", bucket: hook_only, reason: "depends on expansion depth (verdict changed ask->deny on 2026-10-02)"}
 - {id: cd-lanes-overflow, source: protect-bash.sh, anchor: "cd targets have so many possible values", verdict: deny, bucket: hook_only, reason: "depends on how many directories the cd targets can name (C7, v4.0 release review)"}
+- {id: operand-expansion-incomplete, source: protect-bash.sh, anchor: "Brace or array operands could not be expanded completely", verdict: deny, bucket: hook_only, reason: "depends on bounded command expansion; no unconditional argv prefix can represent incomplete analysis"}
 - {id: variable-command-name-protected-path, source: protect-bash.sh, anchor: "A command name here comes from a variable or expansion", verdict: ask, bucket: hook_only, reason: "path-scoped, and depends on reading which word is the command name (F10, v4.0)"}
 - {id: rm-game, source: protect-bash.sh, anchor: "on rm_hits_game", fact: rm_hits_game, verdict: deny, bucket: hook_only, reason: "path-scoped: the configured game root"}
 - {id: rm-reference, source: protect-bash.sh, anchor: "on rm_targets_reference", fact: rm_targets_reference, verdict: deny, bucket: hook_only, reason: "path-scoped: the configured reference root"}

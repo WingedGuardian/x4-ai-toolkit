@@ -103,15 +103,25 @@ def test_UNSET_applies_no_ceiling(monkeypatch):
     assert tr._session.exitstatus == 0
 
 
-def test_the_exit_status_really_reaches_PYTEST(tmp_path):
+@pytest.mark.parametrize("cap, expected", [("", 1), ("0", 0)])
+def test_the_exit_status_really_reaches_PYTEST(tmp_path, cap, expected):
     """The unit tests above drive the function directly, so they cannot prove pytest
     calls it or honours `_session.exitstatus`. One subprocess run does -- and it is
     the wiring, not the logic, that the empty-string hole actually lived in."""
-    t = tmp_path / "test_one.py"
+    root = tmp_path / "toolkit"
+    cases = root / "tools" / "x4validate" / "tests"
+    cases.mkdir(parents=True)
+    scripts = root / "scripts"
+    scripts.mkdir()
+    for name in ("x4pytest.py", "x4temp.py"):
+        (scripts / name).write_bytes((CONFTEST.parents[3] / "scripts" / name).read_bytes())
+    t = cases / "test_one.py"
     t.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
-    (tmp_path / "conftest.py").write_bytes(CONFTEST.read_bytes())
-    env = {**__import__("os").environ, "X4_MAX_SKIPS": ""}
+    (cases / "conftest.py").write_bytes(CONFTEST.read_bytes())
+    env = {**__import__("os").environ, "X4_MAX_SKIPS": cap}
+    env.pop("PYTHONPATH", None)  # the fixture must supply its own production bootstrap
     r = subprocess.run([sys.executable, "-m", "pytest", str(t), "-q", "-p", "no:cacheprovider"],
-                       cwd=tmp_path, env=env, capture_output=True, text=True)
-    assert r.returncode != 0, r.stdout[-2000:]
-    assert "not a number" in r.stdout, r.stdout[-2000:]
+                       cwd=cases, env=env, capture_output=True, text=True)
+    assert r.returncode == expected, r.stdout[-2000:] + r.stderr[-2000:]
+    assert "1 passed" in r.stdout, r.stdout[-2000:] + r.stderr[-2000:]
+    assert ("not a number" in r.stdout) == (cap == ""), r.stdout[-2000:]

@@ -2,7 +2,7 @@
 
 The two repos have disjoint histories, so nothing can import one from the other. Instead each pins the hash of the
 section between the shared-policy markers. Change the text in one repo and this goes red until the new hash is
-pinned -- in BOTH repos (skyrimvr-claude-toolkit: tests/test_retention_policy.py, docs/RETENTION.md), with the same
+pinned -- in BOTH repos (the sibling Skyrim toolkit: tests/test_retention_policy.py, docs/RETENTION.md), with the same
 text.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ def shared_section(text: bytes) -> bytes:
 
 def test_the_shared_policy_matches_the_pinned_text_shared_with_the_skyrim_toolkit():
     got = hashlib.sha256(shared_section(DOC.read_bytes())).hexdigest()
-    assert got == PINNED, ("the shared retention policy changed ({}). Make the same edit in skyrimvr-claude-toolkit "
+    assert got == PINNED, ("the shared retention policy changed ({}). Make the same edit in the sibling Skyrim toolkit "
                            "docs/RETENTION.md, then pin the new hash in both repos.".format(got))
 
 
