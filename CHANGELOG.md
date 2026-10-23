@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Shared preservation core pinned to 221292e: incomplete local prompts refuse, and unknown surfaces cannot discard declared save work or claim evaluated coverage through a prompt.
+
 ## v4.0.0 — 2026-10-21
 
 **The toolkit is now the "X4 AI Assistant Toolkit"** and works with more than one coding agent:
