@@ -440,6 +440,8 @@ say which regime a formula belongs to, and the packed-inclusive scoping rule.
 
 **A CLI banner saying UNKNOWN or STALE means the artifact may not describe your files: rebuild** (`uv run x4effective build` · `uv run x4xref build` · `cd tools/basex; bash build-corpus.sh; bash build-effective.sh`) before you trust a number from it. An absent fingerprint is UNKNOWN, never fresh.
 
+**BaseX staleness is a maintenance task, never a reason to skip BaseX.** When freshness is stale or unknown, refresh the required database, verify its freshness and coverage, then use it. If refresh is blocked, resolve or explicitly report the blocker; never silently substitute an old result or a narrower search as current corpus evidence.
+
 **Learned facts and preferences go in `KNOWLEDGEBASE.local.md`** as above. Also read an existing `X4-NOTES.md`; it remains preserved legacy evidence. Never edit `CLAUDE.md`, `AGENTS.md`, `.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, `.claude/hooks/`, `.agents/skills/`, `.codex/hooks/`, `.codex/rules/`, `tools/x4_harness/`, `tools/agent-harness.py`, `.opencode/hooks/`, `.opencode/plugins/x4guard.js`, `.opencode/skills/`, `.opencode/X4-OPENCODE.md`: they are regenerated and your edit is lost.
 
 **`KNOWLEDGEBASE.md` and the other protected files are kept read-only by x4lock**, so a write to one fails until you unlock it: `python <toolkit>/scripts/x4lock.py unlock <file>`, edit, `python <toolkit>/scripts/x4lock.py lock`, then commit it. The guard prints the exact commands.
