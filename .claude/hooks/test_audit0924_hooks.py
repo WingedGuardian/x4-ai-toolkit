@@ -115,7 +115,7 @@ class TestHK5ProductionReadPath(unittest.TestCase):
         return json.loads(p.stdout)["hookSpecificOutput"].get("permissionDecision", "advise")
 
     def test_a_payload_read_from_a_FILE_is_seen(self):
-        tmp = pathlib.Path(tempfile.mkdtemp(prefix="hk5_"))
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4hk5_"))
         try:
             ref = tmp / "ref"
             (ref / "libraries").mkdir(parents=True)
@@ -176,7 +176,7 @@ class TestHK6Minor(unittest.TestCase):
         """AUDIT-2026-09-24 HK-6: `sed -i` on a game file is DENIED with a reason reading
         'confirm: ...' -- there is nothing to confirm on a deny. Either the verdict (ask) or
         the wording is wrong; which one is a design decision."""
-        tmp = pathlib.Path(tempfile.mkdtemp(prefix="hk6_"))
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4hk6_"))
         try:
             game = tmp / "game"
             (game / "libraries").mkdir(parents=True)
@@ -222,7 +222,7 @@ class _PSE2E(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="psfe_"))
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4psfe_"))
         t = cls.tmp
         cls.game, cls.ref, cls.tk = t / "X4 Foundations", t / "reference", t / "tk"
         cls.docs = t / "Documents"
@@ -527,7 +527,7 @@ class TestEmptyCommandSplit(unittest.TestCase):
     every rule that quotes the command then quoted the dump. Runnable without PowerShell."""
 
     def run_stub(self, facts):
-        tmp = pathlib.Path(tempfile.mkdtemp(prefix="split_"))
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4split_"))
         try:
             for source in (REPO / "tools/x4_harness").iterdir():
                 if source.is_file():
@@ -1037,7 +1037,7 @@ class TestLaneIConfigLocation(unittest.TestCase):
     default reference HARD BLOCK with no config, and SAY so at session start."""
 
     def setUp(self):
-        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lanei_"))
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4lanei_"))
         self.tk = self.tmp / "tk"
         (self.tk / "reference" / "libraries").mkdir(parents=True)
         (self.tmp / "elsewhere" / "libraries").mkdir(parents=True)
@@ -1115,7 +1115,7 @@ class TestF11UncommittedKnowledgebase(unittest.TestCase):
     KB = "KNOWLEDGEBASE.md"
 
     def setUp(self):
-        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="f11kb_"))
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4f11kb_"))
         self.root = self.tmp / "root"
         shutil.copytree(HOOKS, self.root / ".claude" / "hooks",
                         ignore=shutil.ignore_patterns("__pycache__", "test*"))

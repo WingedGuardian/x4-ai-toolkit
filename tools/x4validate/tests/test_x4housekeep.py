@@ -481,11 +481,84 @@ def test_the_sweep_keeps_a_dir_a_process_has_a_file_open_in(tmp_path):
     assert res["rows"]["kept: in use"] == 1
 
 
-def test_the_sweep_keeps_the_newest_pytest_run_and_removes_older_runs_and_garbage(tmp_path):
-    base = tmp_path / "temp" / "pytest-of-someone"
+def test_the_sweep_never_touches_the_machine_wide_pytest_root(tmp_path):
+    """RETENTION.md "Toolkit temp": the toolkit's own name prefixes only, never `pytest-of-<user>`, which every
+    project on the machine shares. Even a receipt does not make an old pytest run or a garbage-* dir the toolkit's."""
+    temp = tmp_path / "temp"
+    base = temp / "pytest-of-someone"
     old, newest, garbage = tdir(base, "pytest-9"), tdir(base, "pytest-10"), tdir(base, "garbage-0d1e")
-    hk.sweep_temp(sweep_cfg(tmp_path), temp=tmp_path / "temp", recycler=FakeBin(tmp_path))
-    assert newest.exists() and not old.exists() and not garbage.exists()
+    ours = tdir(temp, "x4qa_twin001")                          # twin: a toolkit prefix in the same temp is swept
+    fake = FakeBin(tmp_path)
+    res = hk.sweep_temp(sweep_cfg(tmp_path), temp=temp, recycler=fake)
+    assert old.exists() and newest.exists() and garbage.exists()
+    assert not ours.exists() and [Path(p) for p in fake.got] == [ours]
+    assert sum(res["rows"].values()) == 1                      # the pytest dirs were never even candidates
+
+
+def _created_prefixes():
+    import re
+    pat = re.compile(r"""(?:mkdtemp|TemporaryDirectory)\(\s*prefix=["']([^"']+)["']""")
+    found = set()
+    for root in (REPO / "tools" / "x4validate", REPO / "scripts", REPO / "agent" / "guards" / "claude-hooks"):
+        for f in root.rglob("*.py"):
+            if ".venv" not in f.parts:
+                found.update(pat.findall(f.read_text(encoding="utf-8", errors="replace")))
+    return found
+
+
+def _distinctive(prefix):
+    """A name only this toolkit would pick: it says x4. `split_` or `pytest-of-` could be anyone's."""
+    return prefix.lower().startswith("x4")
+
+
+def test_every_swept_temp_prefix_is_distinctive_and_has_a_creator_in_the_repo():
+    created = _created_prefixes()
+    assert "x4qa_registry_" in created, "the creator scan found nothing: fix it"
+    prefixes = hk.DEFAULTS["temp_prefixes"]
+    generic = [p for p in prefixes if not _distinctive(p)]
+    assert not generic, "generic temp prefixes an unrelated project could also use: {}".format(generic)
+    orphan = [p for p in prefixes if not any(c.startswith(p) for c in created)]
+    assert not orphan, "swept temp prefixes nothing in the repo creates: {}".format(orphan)
+    # twins: the predicates can go red
+    assert not _distinctive("split_") and not _distinctive("pytest-of-")
+    assert not any(c.startswith("x4-no-such-creator-") for c in created)
+
+
+def test_apply_resolves_the_recycler_at_call_time_so_the_test_fixture_can_intercept_it():
+    """A default bound at def time is the REAL recycle(): monkeypatching hk.recycle would not reach apply()."""
+    import inspect
+    assert inspect.signature(hk.apply).parameters["recycler"].default is None
+
+
+def test_the_harness_opt_out_only_stops_the_session_sweep_never_an_explicit_run(tmp_path, monkeypatch, capsys):
+    """X4_HOUSEKEEP_SWEEP=off is for test harnesses: the unattended session-start sweep. A sweep-temp or apply the
+    user runs by hand still runs."""
+    monkeypatch.setattr(hk.tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
+    monkeypatch.setattr(hk, "_has_bin", lambda: True)
+    monkeypatch.setenv("X4_HOUSEKEEP_SWEEP", "off")
+    fake = FakeBin(tmp_path)
+    monkeypatch.setattr(hk, "recycle", fake)
+    left = tdir(tmp_path / "temp", "x4qa_hand001")
+    cfg = sweep_cfg(tmp_path)
+    monkeypatch.setattr(hk, "load_config", lambda _p: cfg)
+    assert hk.main(["sweep-temp"]) == 0
+    assert not left.exists() and len(fake.got) == 1
+    state = tmp_path / "note.txt"                              # twin: the session sweep honours the opt-out
+    again = tdir(tmp_path / "temp", "x4qa_sess001")
+    assert hk.session(cfg, state) == 0
+    assert again.exists() and len(fake.got) == 1
+
+
+def test_apply_by_hand_runs_under_the_harness_opt_out(tree, monkeypatch):
+    monkeypatch.setenv("X4_HOUSEKEEP_SWEEP", "off")
+    fake = FakeBin(tree)
+    monkeypatch.setattr(hk, "recycle", fake)
+    source = write(tree / "launches" / "launch-20200101-000000" / "x.log", blob("log", 100_000))
+    cfg = cfg_for(tree, launch_logs=["launches"], recycle_after_days=10 ** 6)
+    doc = hk.plan(cfg, only={"gzip"})
+    assert planned(doc, "gzip") == {key(source)}
+    assert hk.apply(doc, cfg) == 0                             # no recycler passed: the module's (faked) bin
+    assert fake.got == [str(source)]
 
 
 def test_session_runs_at_most_once_per_interval_and_writes_a_note(tmp_path, monkeypatch):

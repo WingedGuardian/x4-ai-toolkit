@@ -88,11 +88,13 @@ DEFAULTS = {
     "recycle_after_days": 90,
     "free_floor_gib": 0,              # report warns within 20 GiB of it; 0 = no floor
     # The toolkit's OWN temp dirs: immediate children of the system temp dir whose name starts with one of these.
-    # tools/x4validate/tests/test_temp_hygiene.py fails when a prefix the code creates is missing here.
+    # tools/x4validate/tests/test_temp_hygiene.py fails when a prefix the code creates is missing here, and
+    # test_x4housekeep.py when one here is generic (no "x4" in it) or has no creator in the repo. Never a folder
+    # every project shares, such as pytest's pytest-of-<user> (RETENTION.md, "Toolkit temp").
     "temp_prefixes": ["x4qa_", "x4gate_", "x4reg_gate_", "x4reader_", "x4diff_truth_", "x4stress_",
                       "x4-tool-audit-pytest-", "x4-pytest-batch-", "x4-mutation-result-", "x4-fake-install-",
-                      "hk5_", "hk6_", "psfe_", "split_", "lanei_", "vht-case-", "x4-acl-privilege-probe-",
-                      "f11kb_", "x4-pytest-session-"],
+                      "x4hk5_", "x4hk6_", "x4psfe_", "x4split_", "x4lanei_", "x4-vht-case-",
+                      "x4-acl-privilege-probe-", "x4f11kb_", "x4-pytest-session-"],
     "temp_after_hours": 24,           # nothing in the dir or its direct children newer than this
     "sweep_every_hours": 6,           # session start launches a sweep at most this often
     "codex_sessions_warn_gib": 5,     # session note when ~/.codex/sessions passes this
@@ -701,7 +703,9 @@ def compress(action) -> Path:
     return gz
 
 
-def apply(plan_doc: dict, cfg, only=None, recycler=recycle, now: float | None = None) -> int:
+def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = None) -> int:
+    # Resolved at CALL time: a def-time default would be the real recycle() even where a test replaced it.
+    recycler = recycle if recycler is None else recycler
     now = time.time() if now is None else now
     guard = Guard(cfg)
     memo = _Memo()
@@ -786,7 +790,8 @@ def _in_use(p: Path) -> bool:
 
 
 def temp_candidates(cfg, temp: Path):
-    """Potential names only. A name grants no ownership; sweep_temp verifies each receipt."""
+    """Potential names only. A name grants no ownership; sweep_temp verifies each receipt. Only the toolkit's own
+    prefixes: never pytest's machine-wide pytest-of-<user>, whose runs belong to every project (RETENTION.md)."""
     prefixes = tuple(cfg["temp_prefixes"])
     entries = list(os.scandir(temp))
     for e in entries:
@@ -800,19 +805,6 @@ def temp_candidates(cfg, temp: Path):
             raise OSError("could not inspect temporary candidate {}".format(e.path)) from exc
         if prefixes and e.name.startswith(prefixes):
             yield Path(e.path), "toolkit temp"
-        elif e.name.startswith("pytest-of-"):
-            # pytest keeps the newest three runs itself and leaves garbage-* behind when it cannot delete one.
-            try:
-                kids = [k for k in os.scandir(e.path) if k.is_dir(follow_symlinks=False)]
-            except OSError as exc:
-                raise OSError("could not inspect pytest temporary root {}".format(e.path)) from exc
-            runs = sorted((k for k in kids if re.fullmatch(r"pytest-\d+", k.name)),
-                          key=lambda k: int(k.name.split("-")[1]))
-            for k in runs[:-1]:                        # never the newest: it may belong to a run starting now
-                yield Path(k.path), "old pytest run"
-            for k in kids:
-                if k.name.startswith("garbage-"):
-                    yield Path(k.path), "pytest garbage"
 
 
 def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler=None) -> dict:

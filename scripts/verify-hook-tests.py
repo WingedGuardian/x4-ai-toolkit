@@ -1164,7 +1164,7 @@ def wait_for_dispatch():
 
 def evaluate_source(source):
     wait_for_dispatch()
-    with tempfile.TemporaryDirectory(prefix="vht-case-") as td:
+    with tempfile.TemporaryDirectory(prefix="x4-vht-case-") as td:
         work = Path(td)
         for f in FILES:
             shutil.copy2(HOOKS / f, work / f)
