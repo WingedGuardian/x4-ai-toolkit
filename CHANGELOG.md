@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- RETENTION.md shared policy updated in step with the Skyrim toolkit (user ruling 2026-10-24): save backups named under Forever; a Rolling tool store row; Toolkit temp limited to the toolkit's own name prefixes, never `pytest-of-<user>`.
 - Shared preservation core pinned to 221292e: incomplete local prompts refuse, and unknown surfaces cannot discard declared save work or claim evaluated coverage through a prompt.
 
 ## v4.0.0 — 2026-10-21

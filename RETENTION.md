@@ -12,13 +12,14 @@ toolkit; `scripts/x4housekeep.py` implements the parts a tool can.
 
 | Class | What | Rule |
 |---|---|---|
-| **Forever** | Saves and every copy of them; backup stores and their manifests (anything under a folder named `*backup*`); knowledgebase snapshots; known-good baselines; audit logs; folders a person labelled by hand | Never removed by a tool. A person decides. |
+| **Forever** | Saves and every copy of them, save backups included; every other backup store and its manifests (anything under a folder named `*backup*`) except the rolling tool stores below; known-good baselines; audit logs; folders a person labelled by hand | Never removed by a tool. A person decides. |
 | **Evidence** | Findings, READMEs, receipts (`.md`, `.json`, `.jsonl`), small logs; every file a project doc links to | Kept. They are small, and docs point at them. |
 | **Recreatable** | A byte-identical copy of a file that is still live (a fixture copy of a game master) | Removed as soon as it is idle: the live file is the copy. |
 | **Build output** | Compiler intermediates inside build folders (`.obj .pch .lib .ilk .iobj .ipdb .tlog .idb`) | Removed once idle. Binaries and debug symbols (`.dll .exe .pdb`) are kept. |
 | **Duplicate** | The same bytes at several agent-output paths | Stored once: hard links to one read-only copy. Every path keeps working. |
 | **Rolling** | Per-launch log captures, snapshot folders, scratch test beds | Compressed after 7 days, removed after 90; a snapshot that repeats the one before is removed; a scratch bed is removed by name when its task is done. |
-| **Toolkit temp** | Directories the toolkit's own code and tests make in the system temp dir, and pytest's old runs | Recycled by the session-start sweep once nothing in them changed for 24 hours and no process holds a file open inside. |
+| **Rolling tool store** | A tool's own rotating snapshots of the files it watches (script, config and knowledgebase snapshots), even under a `*backup*` folder. Each toolkit's checklist names its stores and their numbers | Kept by age or count, always with the newest copy; the rest goes to the Recycle Bin. |
+| **Toolkit temp** | Directories the toolkit's own code and tests make in the system temp dir, by the toolkit's own name prefixes only (never a folder every project shares, such as pytest's `pytest-of-<user>`), and, where a toolkit keeps them, the batches a rolling tool store retires into `.claude/retired/` | Recycled by the session-start sweep once nothing in them changed for 24 hours (a retired batch: 10 minutes) and no process holds a file open inside. |
 
 ### The toolkit cleans up after itself
 

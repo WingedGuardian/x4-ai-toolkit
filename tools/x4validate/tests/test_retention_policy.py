@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-PINNED = "e89302148024fd266cbd0a5075fea84c6d1f705c49d835c7f7c91e7198cdf3ef"
+PINNED = "6c4fc1024bb44d5505ed79d8a983e128a0079aa2cc21a664b607bcaee486feac"
 DOC = REPO / "RETENTION.md"
 
 
