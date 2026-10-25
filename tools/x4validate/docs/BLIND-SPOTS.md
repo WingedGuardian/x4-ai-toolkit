@@ -402,6 +402,9 @@ memory or from another session -- a remembered id was stale within a day here.
 | F321 | Glued opaque options hid possible save access | **DEFECT (measured)** | Literal, configured-root, assignment-order and rendered-host controls; frozen replay 34/26,346 | FIXED 2026-10-20 - inspect flags and embedded roots without guessing membership |
 | F322 | Bounded operand/carrier analysis silently omitted targets | **DEFECT (measured)** | 64/65, numeric/nested braces, five-name combinations and carrier-depth twins | FIXED 2026-10-20 - incomplete analysis explicitly refuses with remedy |
 | F323 | Session notices exceeded the host cap outside the bounded canary block | **DEFECT (measured)** | Whole-channel cap, priority and ten status/long-note controls | FIXED 2026-10-20 - bound the complete session including early exits |
+| F324 | The session-start temp sweep reached pytest's machine-wide `pytest-of-<user>` and listed seven generic prefixes | **DEFECT (measured)** · PRE-ARC | RED tests on `ea22bd4`: shared-root, prefix-shape and recycler-binding controls; opt-out twin | FIXED 2026-10-25 - own prefixes only, x4-prefixed creators, recycler resolved at call time |
+| F325 | build-release.sh built a vX.Y.Z tag whose CHANGELOG opened with `## Unreleased` | **DEFECT (measured)** · PRE-ARC | Fixture tag v4.0.1: rc 0 before, 3 refusal cases + 2 twins after | FIXED 2026-10-25 - the tag must head the CHANGELOG and match pyproject |
+| F326 | An inline `python -c`/`node -e` write onto a host transcript was allowed | **DEFECT (measured)** · PRE-ARC | 5 of 5 inline shapes allowed where `echo >>` denied; replay 0 of 42,557 changed | FIXED 2026-10-25 - the write call's own literal target is judged |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11300,3 +11303,61 @@ The K7 fixture now uses the common installed carrier instead of assuming Claude.
 
 **RE-DERIVED BY:** tests/test_harness_preferences.py;
 agent/guards/claude-hooks/session-canary.sh; scripts/test-hooks.sh.
+
+## F324 - The temp sweep reached a folder every project shares · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-10-25
+
+READ: `scripts/x4housekeep.py` `temp_candidates` offered old `pytest-N` runs and `garbage-*`
+dirs under `pytest-of-<user>`, which every project on the machine shares. The ownership receipt
+gated each one, but RETENTION.md ("Toolkit temp") rules that root out entirely. Seven entries
+in `temp_prefixes` (`hk5_`, `hk6_`, `psfe_`, `split_`, `lanei_`, `f11kb_`, `vht-case-`) were names
+any project could use; every one had a creator in this repo (hook tests, verify-hook-tests.py), so
+they were renamed there to `x4`-prefixed names. MEASURED RED on `ea22bd4`: the shared-root test,
+the prefix-shape test and the recycler-binding test failed; the opt-out test passed.
+
+Found beside it: `apply()` bound `recycler=recycle` at definition time, so a test that replaced
+`hk.recycle` with a fake would still have reached the real Recycle Bin through `apply()` without
+a recycler argument. No existing test did; it is now resolved at call time. Checked and ABSENT:
+`X4_HOUSEKEEP_SWEEP=off` stops only `session()`; `sweep-temp` and `apply` run by hand still run
+(pinned by two tests). The renamed hook-test dirs carry no ownership receipt, so the sweep still
+keeps them ("ownership unverified"); unchanged.
+
+**RE-DERIVED BY:** tools/x4validate/tests/test_x4housekeep.py; tests/test_temp_hygiene.py.
+
+## F325 - A version tag built with release notes still under Unreleased · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-10-25
+
+Probed from the Skyrim toolkit's release-review finding. MEASURED: a fixture repo tagged `v4.0.1`
+whose CHANGELOG opened with `## Unreleased` and whose pyproject said 4.0.0 built and verified
+(rc 0), and the CI test `test_the_newest_changelog_release_is_this_version` passed too, because
+it compares only the first `## vX.Y.Z` heading and allows Unreleased above it. That is correct for
+a working tree and wrong for a release. `build-release.sh` now refuses (rc 2) a `vX.Y.Z` ref
+unless, at the ref, the first `## ` heading is `## vX.Y.Z` and pyproject says `X.Y.Z`; one twin per
+clause. Another ref is a dry run and prints that the check did not run. READ: v3.0.0, v3.3.1 and
+v4.0.0 all satisfy the rule.
+
+**RE-DERIVED BY:** tools/x4validate/tests/test_build_release.py.
+
+## F326 - An inline interpreter could write a host transcript · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-10-25
+
+Probed from the Skyrim toolkit's release review by feeding command strings to the deployed
+`protect-bash.sh` against a sandbox. MEASURED: `python -c "open('<T>','a')"`, `python3`/`py` forms,
+`Path(...).write_text`, `node -e "fs.appendFileSync('<T>')"` and the PowerShell-tool spelling were
+ALLOWED while `echo x >> <T>` and `Add-Content <T>` were denied (H1). The save guard reads typed
+approvals from that transcript, so an inline write could forge one.
+
+Fix, narrow on purpose: `writes_host_transcript` also fires when a python `-c` / node `-e` program's
+own write call (`open` with a w/a/x/+ mode, `Path().write_text/write_bytes/open`, `append/writeFile`,
+`createWriteStream`, `shutil.copy*/move` or `os.replace/rename` destination) has a literal target in
+a transcript tree, as written or resolved, relative targets against the cwd. MEASURED over 44,002
+historical commands: 28 interpreter programs named a transcript .jsonl and every one READ it, several
+writing a scratch file beside it, so a mention-based rule would refuse ordinary analysis. Replay of
+42,557 Bash commands, committed vs new `hook_facts`: 0 changed facts (control: the probe command
+changes 1). RESIDUAL: a target in a program variable or argv, a heredoc program, perl/ruby and
+script files are not seen (the F290 opaque-program class).
+
+Probed with it and ABSENT: `eval` of a variable aimed at the game or reference (deny/ask in all 9
+forms); `iex`, `| Invoke-Expression`, `[scriptblock]::Create` (deny); `source`/`.` of a script
+(allowed exactly as `bash <script>` is: the accepted script-file residual). PRESENT but already
+registered: an inline program deleting inside reference/ is allowed with a relative OR an absolute
+path (F290 accepted residual), so cwd resolution is not the gap there.
+
+**RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`TestInlineInterpreterWriteOntoATranscript`).
