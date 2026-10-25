@@ -5448,13 +5448,13 @@ def _copy_lands_a_transcript(seg: str, dests: list, assigns: dict) -> bool:
 #: H1 follow-up (probed 2026-10-25 from the Skyrim toolkit's release review): an INLINE interpreter
 #: program writing a transcript (`python -c "open('<T>','a')"`, `node -e "fs.appendFileSync('<T>')"`)
 #: was ALLOWED while `echo x >> <T>` was refused. Each pattern captures the WRITE call's own target
-#: literal (`p`) and, where the call takes one, its mode (`m`, which must hold w/a/x/+). Narrow on
+#: literal (`p`, also as `open(file=...)`) and, where the call takes one, its mode (`m`, which must hold w/a/x/+). Narrow on
 #: purpose -- MEASURED over 44,002 historical commands, every one of the 28 interpreter programs that
 #: named a transcript .jsonl READ it, several while writing a scratch file, so a mention, or a mention
 #: beside an unrelated write, would refuse ordinary transcript analysis. RESIDUAL: a target held in a
 #: program variable or argv, perl/ruby, and a script file are not seen (F290's opaque-program class).
 _INLINE_WRITE_TARGETS = (
-    re.compile(r"""\bopen\(\s*[rRbBuU]{0,2}(['"])(?P<p>[^'"]+)\1\s*,\s*(?:mode\s*=\s*)?[rRbBuU]{0,2}(['"])(?P<m>[^'"]*)\3"""),
+    re.compile(r"""\bopen\(\s*(?:file\s*=\s*)?[rRbBuU]{0,2}(['"])(?P<p>[^'"]+)\1\s*,\s*(?:mode\s*=\s*)?[rRbBuU]{0,2}(['"])(?P<m>[^'"]*)\3"""),
     re.compile(r"""\bPath\(\s*[rRbBuU]{0,2}(['"])(?P<p>[^'"]+)\1\s*\)\s*\.(?:write_text|write_bytes|open\(\s*(?:mode\s*=\s*)?(['"])(?P<m>[^'"]*)\3)"""),
     re.compile(r"""\b(?:append|write)File(?:Sync)?\(\s*(['"`])(?P<p>[^'"`]+)\1"""),
     re.compile(r"""\bcreateWriteStream\(\s*(['"`])(?P<p>[^'"`]+)\1"""),

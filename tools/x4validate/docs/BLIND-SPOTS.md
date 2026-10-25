@@ -404,7 +404,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F323 | Session notices exceeded the host cap outside the bounded canary block | **DEFECT (measured)** | Whole-channel cap, priority and ten status/long-note controls | FIXED 2026-10-20 - bound the complete session including early exits |
 | F324 | The session-start temp sweep reached pytest's machine-wide `pytest-of-<user>` and listed seven generic prefixes | **DEFECT (measured)** · PRE-ARC | RED tests on `ea22bd4`: shared-root, prefix-shape and recycler-binding controls; opt-out twin | FIXED 2026-10-25 - own prefixes only, x4-prefixed creators, recycler resolved at call time |
 | F325 | build-release.sh built a vX.Y.Z tag whose CHANGELOG opened with `## Unreleased` | **DEFECT (measured)** · PRE-ARC | Fixture tag v4.0.1: rc 0 before, 3 refusal cases + 2 twins after | FIXED 2026-10-25 - the tag must head the CHANGELOG and match pyproject |
-| F326 | An inline `python -c`/`node -e` write onto a host transcript was allowed | **DEFECT (measured)** · PRE-ARC | 5 of 5 inline shapes allowed where `echo >>` denied; replay 0 of 42,557 changed | FIXED 2026-10-25 - the write call's own literal target is judged |
+| F326 | An inline `python -c`/`node -e` write onto a host transcript was allowed | **DEFECT (measured)** · PRE-ARC | every probed inline shape allowed where `echo >>` denied; replay 0 of 42,557 changed | FIXED 2026-10-25 - the write call's own literal target is judged |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11340,18 +11340,19 @@ v4.0.0 all satisfy the rule.
 
 Probed from the Skyrim toolkit's release review by feeding command strings to the deployed
 `protect-bash.sh` against a sandbox. MEASURED: `python -c "open('<T>','a')"`, `python3`/`py` forms,
-`Path(...).write_text`, `node -e "fs.appendFileSync('<T>')"` and the PowerShell-tool spelling were
-ALLOWED while `echo x >> <T>` and `Add-Content <T>` were denied (H1). The save guard reads typed
+`Path(...).write_text`, `node -e "fs.appendFileSync('<T>')"`, and the same programs run from the
+PowerShell tool were ALLOWED while `echo x >> <T>` and `Add-Content <T>` were denied (H1). The save guard reads typed
 approvals from that transcript, so an inline write could forge one.
 
 Fix, narrow on purpose: `writes_host_transcript` also fires when a python `-c` / node `-e` program's
-own write call (`open` with a w/a/x/+ mode, `Path().write_text/write_bytes/open`, `append/writeFile`,
+own write call (`open`, positional or `file=`, with a w/a/x/+ mode, `Path().write_text/write_bytes/open`, `append/writeFile`,
 `createWriteStream`, `shutil.copy*/move` or `os.replace/rename` destination) has a literal target in
 a transcript tree, as written or resolved, relative targets against the cwd. MEASURED over 44,002
 historical commands: 28 interpreter programs named a transcript .jsonl and every one READ it, several
 writing a scratch file beside it, so a mention-based rule would refuse ordinary analysis. Replay of
 42,557 Bash commands, committed vs new `hook_facts`: 0 changed facts (control: the probe command
-changes 1). RESIDUAL: a target in a program variable or argv, a heredoc program, perl/ruby and
+changes 1). RESIDUAL: a target in a program variable or argv, a first copy argument containing parentheses
+(`shutil.copy(Path('a'), '<T>')`), a heredoc program, perl/ruby and
 script files are not seen (the F290 opaque-program class).
 
 Probed with it and ABSENT: `eval` of a variable aimed at the game or reference (deny/ask in all 9

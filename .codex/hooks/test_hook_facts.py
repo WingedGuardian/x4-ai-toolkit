@@ -5057,6 +5057,7 @@ class TestInlineInterpreterWriteOntoATranscript(unittest.TestCase):
         t = self.T
         for c in ('python -c "open(\'' + t + '\',\'a\').write(\'x\')"',
                   'python3 -c "open(r\'' + t + '\', mode=\'w\')"',
+                  'python -c "open(file=\'' + t + '\', mode=\'a\')"',
                   'py -c "import pathlib;pathlib.Path(\'' + t + '\').write_text(\'x\')"',
                   'python -c "from pathlib import Path; Path(\'' + t + '\').open(\'a\')"',
                   'python -c "import shutil;shutil.copy(\'/srv/f.jsonl\',\'' + t + '\')"',
