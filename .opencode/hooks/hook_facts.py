@@ -5445,6 +5445,47 @@ def _copy_lands_a_transcript(seg: str, dests: list, assigns: dict) -> bool:
     return False
 
 
+#: H1 follow-up (probed 2026-10-25 from the Skyrim toolkit's release review): an INLINE interpreter
+#: program writing a transcript (`python -c "open('<T>','a')"`, `node -e "fs.appendFileSync('<T>')"`)
+#: was ALLOWED while `echo x >> <T>` was refused. Each pattern captures the WRITE call's own target
+#: literal (`p`) and, where the call takes one, its mode (`m`, which must hold w/a/x/+). Narrow on
+#: purpose -- MEASURED over 44,002 historical commands, every one of the 28 interpreter programs that
+#: named a transcript .jsonl READ it, several while writing a scratch file, so a mention, or a mention
+#: beside an unrelated write, would refuse ordinary transcript analysis. RESIDUAL: a target held in a
+#: program variable or argv, perl/ruby, and a script file are not seen (F290's opaque-program class).
+_INLINE_WRITE_TARGETS = (
+    re.compile(r"""\bopen\(\s*[rRbBuU]{0,2}(['"])(?P<p>[^'"]+)\1\s*,\s*(?:mode\s*=\s*)?[rRbBuU]{0,2}(['"])(?P<m>[^'"]*)\3"""),
+    re.compile(r"""\bPath\(\s*[rRbBuU]{0,2}(['"])(?P<p>[^'"]+)\1\s*\)\s*\.(?:write_text|write_bytes|open\(\s*(?:mode\s*=\s*)?(['"])(?P<m>[^'"]*)\3)"""),
+    re.compile(r"""\b(?:append|write)File(?:Sync)?\(\s*(['"`])(?P<p>[^'"`]+)\1"""),
+    re.compile(r"""\bcreateWriteStream\(\s*(['"`])(?P<p>[^'"`]+)\1"""),
+    re.compile(r"""\b(?:shutil\.(?:copy\w*|move)|os\.(?:replace|rename))\(\s*[^,()]+,\s*[rR]?(['"])(?P<p>[^'"]+)\1"""),
+)
+_NODES = ("node", "nodejs")
+
+
+def _inline_program_writes_transcript(seg: str, cwd: str, assigns: dict) -> bool:
+    """Does this python -c / node -e program's own write call target a host transcript?"""
+    name = _verb_name(verb(seg))
+    if name in _PYTHONS and name != "uv":
+        texts = [_python_literal_source(v) for v in [seg] + list(resolve_variants(seg, assigns))]
+    elif name in _NODES and any(t in ("-e", "--eval", "-p", "--print") or t.startswith(("--eval=", "--print="))
+                                for t in tokens_of(seg)):
+        texts = [seg] + list(resolve_variants(seg, assigns))
+    else:
+        return False
+    for text in texts:
+        for pattern in _INLINE_WRITE_TARGETS:
+            for m in pattern.finditer(text or ""):
+                mode = m.groupdict().get("m")
+                if mode is not None and not any(ch in mode for ch in "wax+"):
+                    continue
+                raw = m.group("p").replace(chr(92) * 2, "/").replace(chr(92), "/")
+                path = join_cwd(cwd, raw) if cwd else raw
+                if _is_transcript(path or raw, raw):
+                    return True
+    return False
+
+
 #: I1: a variable that makes a shell run code its `-c` text never shows (startup file, exported
 #: function, xtrace prompt, zsh's dot-dir), named ANYWHERE in the command -- a prefix, `env`,
 #: `export`/`declare`/a plain assignment, `printf -v`, PowerShell `$env:` (whose translation
@@ -5795,6 +5836,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
     search_seg, git_all = False, False
     transcript_copy = False             # M1, see _copy_lands_a_transcript
+    transcript_inline = False           # H1 follow-up, see _inline_program_writes_transcript
     # The save bridge supplies its single authoritative folder enumeration. This
     # parser stays independently importable and does not discover filesystem roots.
     save_folders = [norm(str(folder)) for folder in protected_save_folders]
@@ -5871,6 +5913,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                       copy_sources=exact_copy_sources(s))
         copy_t += dests_
         transcript_copy = transcript_copy or _copy_lands_a_transcript(s, dests_, assigns)
+        transcript_inline = transcript_inline or _inline_program_writes_transcript(s, c_cwd, assigns)
         sed_t += prep(sed_in_place_targets(s), c_cwd, c_old, operation="write")
         out_t += prep(output_targets(s), c_cwd, c_old, False, operation="write")
         search_files += prep(search_paths(s, require_recursive=False), c_cwd, c_old)
@@ -6193,7 +6236,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         "writes_profile": hit(writes_any, "profile"),
         # H1: any shell write/append/copy/move ONTO a host session transcript (see _HOST_TRANSCRIPT).
         # M1: also a directory destination that receives a .jsonl, and the host-relocated trees.
-        "writes_host_transcript": transcript_copy or any(
+        "writes_host_transcript": transcript_copy or transcript_inline or any(
             _is_transcript(pp, rr)
             for pp, _u, rr in copy_t + redir_t_all + sed_t + out_t + mod_t),
         "copy_into_game_or_profile": bool(copy_t) and (

@@ -5042,6 +5042,69 @@ class TestH1AShellWriteToAHostTranscriptIsRefused(unittest.TestCase):
                 self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
 
 
+class TestInlineInterpreterWriteOntoATranscript(unittest.TestCase):
+    """Probed 2026-10-25 from the Skyrim toolkit's release review: `python -c "open('<T>','a')..."`
+    and `node -e "fs.appendFileSync('<T>',...)"` were ALLOWED while `echo x >> <T>` was refused, so
+    an inline program could still forge a typed save approval. Narrow on purpose: the WRITE call's
+    own target must be the transcript. MEASURED over 44,002 historical commands: all 28 interpreter
+    programs naming a transcript .jsonl READ it (several writing a scratch file), so a mention
+    alone, or a mention beside any write, would refuse ordinary transcript analysis."""
+    FACT = "writes_host_transcript"
+    T = "/srv/h/.claude/projects/C--work/0b1e.jsonl"
+    W = "C:" + BS + BS + "Users" + BS + BS + "me" + BS + BS + ".codex" + BS + BS + "sessions" + BS + BS + "r.jsonl"
+
+    def test_an_inline_write_call_aimed_at_a_transcript_fires(self):
+        t = self.T
+        for c in ('python -c "open(\'' + t + '\',\'a\').write(\'x\')"',
+                  'python3 -c "open(r\'' + t + '\', mode=\'w\')"',
+                  'py -c "import pathlib;pathlib.Path(\'' + t + '\').write_text(\'x\')"',
+                  'python -c "from pathlib import Path; Path(\'' + t + '\').open(\'a\')"',
+                  'python -c "import shutil;shutil.copy(\'/srv/f.jsonl\',\'' + t + '\')"',
+                  'python -c "import os;os.replace(\'/srv/f\', \'' + t + '\')"',
+                  'node -e "require(\'fs\').appendFileSync(\'' + t + '\',\'x\')"',
+                  'node -e "require(\'fs\').writeFileSync(\'' + t + '\',\'x\')"',
+                  'T=\'' + t + '\'; python -c "open(\'$T\',\'a\')"',
+                  'python -c "open(\'' + self.W + '\',\'a\')"'):
+            with self.subTest(c=c):
+                self.assertTrue(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_a_relative_target_resolves_against_the_cwd(self):
+        c = 'python -c "open(\'0b1e.jsonl\',\'a\')"'
+        self.assertTrue(FC(c, "/srv/h/.claude/projects/C--work")[self.FACT])
+        self.assertFalse(FC(c, _ELSEWHERE)[self.FACT])                        # twin: the cwd decides
+
+    # --- one falsification twin per clause ---
+    def test_TWIN_a_read_of_a_transcript_is_not_a_write(self):
+        """Clause: a WRITE call (mode w/a/x/+, write_text, appendFileSync...)."""
+        t = self.T
+        for c in ('python -c "print(open(\'' + t + '\').read())"',
+                  'python -c "open(\'' + t + '\',\'r\').read()"',
+                  'python -c "open(\'' + t + '\', encoding=\'utf-8\').read()"',
+                  'node -e "console.log(require(\'fs\').readFileSync(\'' + t + '\',\'utf8\'))"'):
+            with self.subTest(c=c):
+                self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_TWIN_a_write_to_another_file_beside_a_transcript_read_is_not(self):
+        """Clause: the write call's OWN target is the transcript -- the historical shape."""
+        c = ('python -c "L=open(\'' + self.T + '\').read(); open(\'/srv/scratch/out.txt\',\'w\').write(L)"')
+        self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_TWIN_the_text_outside_an_interpreter_program_is_not(self):
+        """Clause: an INTERPRETER's program -- echo/grep of the same text, or a script's argv data."""
+        prog = "\"open('" + self.T + "','a')\""
+        for c in ("echo " + prog, "grep -F " + prog + " /srv/x.txt", "python tool.py " + prog,
+                  "node tool.js " + prog):
+            with self.subTest(c=c):
+                self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_TWIN_a_jsonl_outside_a_transcript_tree_is_not(self):
+        """Clause: the target is in a transcript tree."""
+        for c in ('python -c "open(\'/srv/h/.claude/other/0b1e.jsonl\',\'a\')"',
+                  'node -e "require(\'fs\').appendFileSync(\'/c/work/log.jsonl\',\'x\')"'):
+            with self.subTest(c=c):
+                self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
+
 def _evidence(command, cwd=TOOLKIT, roots=None):
     ev = []
     H.facts({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd},
