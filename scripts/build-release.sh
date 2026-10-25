@@ -26,7 +26,8 @@
 #   scripts/build-release.sh <ref>     build dist/X4.Foundations.AI.Assistant.Toolkit-<ref>.zip
 #   scripts/build-release.sh --selftest  rebuild v3.0.0 and assert its known sha256
 #
-# Exit: 0 built and verified · 1 the archive does not match the ref · 2 cannot build
+# Exit: 0 built and verified · 1 the archive does not match the ref · 2 cannot build (including a
+# vX.Y.Z ref whose CHANGELOG top heading or pyproject version is not that version)
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 export GIT_ATTR_NOSYSTEM=1
@@ -222,6 +223,26 @@ fi
 REF="${1:-}"
 [ -n "$REF" ] || die "usage: scripts/build-release.sh <ref> | --selftest"
 git rev-parse -q --verify "$REF^{}" >/dev/null || die "no such ref: $REF"
+
+# A VERSION TAG MUST NAME ITSELF IN ITS NOTES AND ITS PACKAGE. The CI test only compares
+# the first `## vX.Y.Z` heading with pyproject and allows `## Unreleased` above it, which
+# is right for a working tree and wrong for a release: a tag whose CHANGELOG still opened
+# with `## Unreleased`, its pyproject still at the previous version, built and verified
+# (MEASURED 2026-10-25, probing the Skyrim toolkit's release-review finding). Read AT THE
+# REF, like everything else here. A ref that is not vX.Y.Z is a dry run and says so.
+if printf '%s' "$REF" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+  _ver="${REF#v}"
+  _top="$(git show "$REF:CHANGELOG.md" 2>/dev/null | tr -d '\r' | grep -m1 '^## ')"
+  case "$_top" in
+    "## $REF"|"## $REF "*) ;;
+    *) die "$REF: CHANGELOG.md at the ref opens with '${_top:-no ## heading}', not '## $REF'. Rename the Unreleased section to the release heading, commit, and re-tag." ;;
+  esac
+  _pv="$(git show "$REF:tools/x4validate/pyproject.toml" 2>/dev/null | tr -d '\r' \
+        | sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  [ "$_pv" = "$_ver" ] || die "$REF: tools/x4validate/pyproject.toml at the ref says version '${_pv:-none}', not '$_ver'."
+else
+  echo "  note: $REF is not a vX.Y.Z tag, so the CHANGELOG/pyproject version check did not run (a dry run)."
+fi
 
 # A DIRTY TREE IS NOT AN ERROR HERE -- git archive cannot see it -- but it IS a warning
 # worth printing, because it means the thing you just tested is not the thing you are

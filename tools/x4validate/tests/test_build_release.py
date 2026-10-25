@@ -226,8 +226,12 @@ def test_the_bundle_is_named_for_the_v4_product(tmp_path):
     (r / "scripts").mkdir(parents=True)
     shutil.copy2(SCRIPT, r / "scripts" / "build-release.sh")
     (r / "a.txt").write_text("x\n", encoding="utf-8")
+    (r / "CHANGELOG.md").write_text("# Changelog\n\n## v9.9.9\n", encoding="utf-8")   # a tag names itself
+    (r / "tools" / "x4validate").mkdir(parents=True)
+    (r / "tools" / "x4validate" / "pyproject.toml").write_text('[project]\nversion = "9.9.9"\n', encoding="utf-8")
     for a in (["init", "-q", "."], ["config", "user.name", "t"], ["config", "user.email", "t@t"],
-              ["config", "core.autocrlf", "false"], ["add", "a.txt", "scripts/build-release.sh"],
+              ["config", "core.autocrlf", "false"], ["add", "a.txt", "scripts/build-release.sh", "CHANGELOG.md",
+                                                     "tools/x4validate/pyproject.toml"],
               ["commit", "-qm", "base"], ["tag", "v9.9.9"]):
         assert subprocess.run(["git", "-C", str(r), *a], capture_output=True).returncode == 0, a
     p = subprocess.run([_bash(), "scripts/build-release.sh", "v9.9.9"], cwd=str(r),
@@ -324,3 +328,51 @@ def test_TWIN_a_CHECKOUT_without_the_attribute_FAILS_the_export_ignore_audit(tmp
     (co / ".gitattributes").write_text("tools/x4validate/audit/** export-ignore\n",
                                        encoding="utf-8")
     _audit_export_ignore(co)                                           # and with it, passes
+
+
+def _release_repo(tmp_path, heading, version, tag="v4.0.1"):
+    """A tiny repo holding the build script, a CHANGELOG whose first `## ` heading is `heading`, and a
+    pyproject at `version`, tagged `tag`."""
+    r = tmp_path / "rel"
+    (r / "scripts").mkdir(parents=True)
+    (r / "tools" / "x4validate").mkdir(parents=True)
+    (r / "scripts" / "build-release.sh").write_bytes(SCRIPT.read_bytes())
+    (r / "tools" / "x4validate" / "pyproject.toml").write_text(
+        '[project]\nname = "x4validate"\nversion = "%s"\n' % version, encoding="utf-8")
+    (r / "CHANGELOG.md").write_text("# Changelog\n\n%s\n\n- a fix\n\n## v4.0.0 - 2026-10-21\n\n- old\n" % heading,
+                                    encoding="utf-8")
+    g = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.autocrlf=false", "-C", str(r)]
+    for a in (["init", "-q", "."], ["add", "scripts/build-release.sh", "tools/x4validate/pyproject.toml",
+                                    "CHANGELOG.md"], ["commit", "-qm", "release"], ["tag", tag]):
+        assert subprocess.run(g[:7] + ["-C", str(r)] + a, capture_output=True).returncode == 0, a
+    return r
+
+
+@pytest.mark.parametrize("heading,version,ok", [
+    ("## Unreleased", "4.0.0", False),            # the notes never got their version heading
+    ("## Unreleased", "4.0.1", False),            # clause A alone: the top heading is not the tag
+    ("## v4.0.1 - 2026-10-25", "4.0.0", False),   # clause B alone: the package says another version
+    ("## v4.0.1 - 2026-10-25", "4.0.1", True),    # twin: both agree with the tag
+])
+def test_a_version_tag_builds_only_when_its_notes_and_package_name_that_version(tmp_path, heading, version, ok):
+    """Skyrim toolkit 2026-10 release review, probed here: a tag whose CHANGELOG still opened with
+    `## Unreleased` (and whose pyproject still said the previous version) built and verified."""
+    _needs(SCRIPT.is_file(), "no scripts/build-release.sh (dev-only script) - not checked")
+    r = _release_repo(tmp_path, heading, version)
+    p = subprocess.run([_bash(), "scripts/build-release.sh", "v4.0.1"], cwd=str(r), capture_output=True,
+                       text=True, timeout=120)
+    if ok:
+        assert p.returncode == 0, p.stdout + p.stderr
+    else:
+        assert p.returncode == 2 and "REFUSING" in p.stderr, p.stdout + p.stderr
+        assert not (r / "dist" / "X4.Foundations.AI.Assistant.Toolkit-v4.0.1.zip").exists()
+
+
+def test_a_ref_that_is_not_a_version_tag_still_builds(tmp_path):
+    """Twin on the trigger: only a vX.Y.Z ref is a release; a branch build is a dry run and says so."""
+    _needs(SCRIPT.is_file(), "no scripts/build-release.sh (dev-only script) - not checked")
+    r = _release_repo(tmp_path, "## Unreleased", "4.0.0", tag="rc-test")
+    p = subprocess.run([_bash(), "scripts/build-release.sh", "rc-test"], cwd=str(r), capture_output=True,
+                       text=True, timeout=120)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "not a vX.Y.Z" in p.stdout
