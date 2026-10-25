@@ -44,9 +44,11 @@ jobs:
   tests:
     name: tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Last successful candidate: Windows 193m35s, Ubuntu 148m36s.
+    # Last successful candidate: Windows 193m35s, Ubuntu 148m36s. Run 40190622339 (2026-10-25) hit 300 on ubuntu
+    # in its last step: every step ran ~1.5x slower than run 39380863476 (suite 29 -> 47 min, hook mutation
+    # 106 -> 157 min). 360 is the GitHub-hosted maximum.
     # Bound hangs while retaining margin for the existing serial conformance gates.
-    timeout-minutes: 300
+    timeout-minutes: 360
     # Both legs GATE: ubuntu was promoted on 2026-09-09 (the matrix note below records the run
     # and why). `continue-on-error` stays keyed on `experimental` so demoting a leg is one
     # visible edit. Ubuntu is the only POSIX evidence: Linux/macOS support is still "best
