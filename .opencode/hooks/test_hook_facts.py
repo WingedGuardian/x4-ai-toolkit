@@ -5105,6 +5105,49 @@ class TestInlineInterpreterWriteOntoATranscript(unittest.TestCase):
             with self.subTest(c=c):
                 self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
 
+    # --- 4.0.1: the same program fed to the interpreter as a HEREDOC on stdin ---
+    NL = chr(10)
+
+    def _hd(self, opener, body, term="EOF"):
+        return opener + self.NL + body + self.NL + term
+
+    def test_a_heredoc_program_writing_a_transcript_fires(self):
+        """4.0.1 batch: `python - <<'EOF'` / `open('<T>','a')` / `EOF` was ALLOWED -- the body is
+        stripped as data, and only a -c/-e program was scanned."""
+        t = self.T
+        w = "open('" + t + "','a').write('x')"
+        for opener, body in (("python - <<'EOF'", w), ("python3 - <<EOF", w), ("py -3.12 - <<\"EOF\"", w),
+                             ("python <<'EOF'", w), ("python3 -u - <<-EOF", w),
+                             ("node <<'EOF'", "require('fs').appendFileSync('" + t + "','x')"),
+                             ("node - <<'EOF'", "require('fs').writeFileSync('" + t + "','x')"),
+                             ("cd /srv && python - <<'EOF' > /srv/out.txt",
+                              "from pathlib import Path" + self.NL + "Path('" + t + "').write_text('x')"),
+                             ("python - <<'EOF'", "open('" + self.W + "','a')")):
+            c = self._hd(opener, body)
+            with self.subTest(c=c):
+                self.assertTrue(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_TWIN_a_heredoc_program_reading_a_transcript_is_not(self):
+        """Clause: a WRITE call -- the same heredoc that only READS the transcript stays allowed."""
+        t = self.T
+        for opener, body in (("python - <<'EOF'", "print(open('" + t + "').read())"),
+                             ("python3 - <<EOF", "L=open('" + t + "').read()" + self.NL
+                              + "open('/srv/scratch/out.txt','w').write(L)"),
+                             ("node <<'EOF'", "console.log(require('fs').readFileSync('" + t + "','utf8'))")):
+            c = self._hd(opener, body)
+            with self.subTest(c=c):
+                self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
+    def test_TWIN_a_heredoc_that_is_not_an_interpreter_program_is_not(self):
+        """Clause: the body is the interpreter's PROGRAM -- a file being written by cat, or stdin DATA
+        for a script / -c program, is not."""
+        body = "open('" + self.T + "','a')"
+        for opener in ("cat > /srv/notes.md <<'EOF'", "python tool.py <<'EOF'",
+                       "python -c 'import sys; print(sys.stdin.read())' <<'EOF'", "node tool.js <<'EOF'"):
+            c = self._hd(opener, body)
+            with self.subTest(c=c):
+                self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
+
 
 def _evidence(command, cwd=TOOLKIT, roots=None):
     ev = []
