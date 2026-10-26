@@ -144,15 +144,159 @@ def test_missing_backend_and_expired_deadline_are_inert(guard, monkeypatch, tmp_
     assert g.write_verdicts(paths, deadline=time.monotonic() + 5, save_qualified=False)[0]["inert"]
 
 
-def test_3589_path_request_fits_unchanged_deadline(guard):
+def test_3589_path_request_fits_unchanged_deadline(guard, monkeypatch):
+    """A 3589-path request is answered inside the caller's 35 s deadline, unextended.
+
+    Proven through the request's OWN deadline accounting, not a wall clock around the call
+    (which a loaded or suspended machine stretches -- CLAUDE.md #31): the ONE backend run is
+    handed what is left of that deadline and no more, and _run_bounded KILLS it at that
+    budget, returning rc None -> every reply inert. So a complete, non-inert reply from a run
+    that did not time out IS the proof that the request fit."""
     g, r = guard
+    original = g._run_bounded
+    runs = []
+    def observe(argv, payload, env, timeout):
+        result = original(argv, payload, env, timeout)
+        runs.append((timeout, result[0]))
+        return result
+    monkeypatch.setattr(g, "_run_bounded", observe)
     paths = [str(r["X4_MODS"] / f"ror/assets/ships/ship-{n}/macros/ship.xml") for n in range(3589)]
-    start = time.monotonic()
-    replies = g.write_verdicts(paths, deadline=start + 35, save_qualified=False)
-    elapsed = time.monotonic() - start
+    replies = g.write_verdicts(paths, deadline=g._clock() + 35, save_qualified=False)
+    assert len(runs) == 1, runs
+    budget, rc = runs[0]
+    assert 0 < budget <= 35, budget          # the caller's deadline, never extended
+    assert rc == 0, runs                     # finished inside it: rc None would mean killed
     assert len(replies) == 3589
     assert all(v["decision"] == "allow" and not v["inert"] for v in replies)
-    assert elapsed < 35, elapsed
+
+
+def test_batch_save_qualified_relaxes_profile_and_saves_like_single(guard):
+    """Gap 1: the batch argv puts --save-qualified in $3 (protect-files.sh reads `$2` OR `$3`).
+    Qualified, the profile and save confirmations do not fire; unqualified they ask; a hard
+    block is never relaxed. Bulk equals single in both modes."""
+    g, r = guard
+    paths = [str(r["X4_PROFILE"] / "config.xml"), str(r["X4_SAVES"] / "quicksave.xml.gz"),
+             str(r["X4_REFERENCE"] / "a.xml"), str(r["X4_MODS"] / "a.xml")]
+    for qualified, expected in ((True, ["allow", "allow", "deny", "allow"]),
+                                (False, ["ask", "ask", "deny", "allow"])):
+        bulk = g.write_verdicts(paths, deadline=time.monotonic() + 30, save_qualified=qualified)
+        single = [g.verdict_for("write", None, None, p, save_qualified=qualified) for p in paths]
+        assert bulk == single, (qualified, bulk, single)
+        assert [v["decision"] for v in bulk] == expected, (qualified, bulk)
+        assert not any(v["inert"] for v in bulk)
+
+
+def _instrumented_backend(g, tmp_path):
+    """A hooks copy whose path reader and normaliser announce themselves on stderr, so a test
+    can tell a refusal made BEFORE any path was processed from one that happened later. The
+    batch passes are the newline-terminated normaliser calls (`printf '%s\\n'`); x4_norm's
+    single-path calls carry no newline and are neither marked nor counted."""
+    import shutil
+    hooks = tmp_path / "instrumented-hooks"
+    shutil.copytree(g.HERE, hooks, ignore=shutil.ignore_patterns("__pycache__"))
+    script = hooks / "_x4-env.sh"
+    text = script.read_text(encoding="utf-8")
+    for name in ("x4_winpath() {", "x4_norm_stream() {"):
+        assert text.count(name) == 1, name
+        text = text.replace(name, "_x4_orig_" + name, 1)
+    text += r"""
+x4_winpath() { printf 'READ_PATH\n' >&2; _x4_orig_x4_winpath "$@"; }
+x4_norm_stream() {
+  local input n
+  input="$(cat; printf x)"; input="${input%x}"
+  case "$input" in
+    *$'\n')
+      printf 'NORMALIZED\n' >&2
+      n=$(( $(cat "$X4_TEST_CALLS" 2>/dev/null || echo 0) + 1 ))
+      printf '%s' "$n" > "$X4_TEST_CALLS"
+      printf '%s' "$input" | _x4_orig_x4_norm_stream || return $?
+      [ "$n" = "${X4_TEST_CORRUPT:-}" ] && printf '/extra/line\n'
+      return 0 ;;
+  esac
+  printf '%s' "$input" | _x4_orig_x4_norm_stream
+}
+"""
+    script.write_text(text, encoding="utf-8")
+    return hooks
+
+
+def _run_backend(g, hooks, payload, **env):
+    import os
+    import subprocess
+    bash, why = g.resolve_bash()
+    assert bash, why
+    return subprocess.run([bash, str(hooks / "protect-files.sh"), "--harness-policy-backend", "--batch"],
+                          input=payload, capture_output=True, timeout=120,
+                          env=dict(os.environ, X4_GUARD_CHECK="1", **env))
+
+
+def _frame(*fields):
+    return b"".join(f.encode("utf-8") + b"\0" for f in fields)
+
+
+@pytest.mark.parametrize("case", ["count-0", "count-over-limit", "trailing-empty-field",
+                                  "trailing-unterminated", "lf-in-path", "cr-in-path"])
+def test_batch_reader_refuses_malformed_frames_before_judging(guard, tmp_path, case):
+    """Gap 2: the Bash reader's own refusals. x4guard never sends these shapes (it routes LF/CR
+    paths to the single backend and frames the count itself), so only a direct call reaches
+    them. Each must exit 2 with NO verdict frame, and -- where the refusal is the first line of
+    defence -- before any path is read or normalised: a later check catching the same frame
+    by accident (the line count, an EOF) must not be what keeps the test green."""
+    g, r = guard
+    hooks = _instrumented_backend(g, tmp_path)
+    ok = str(r["X4_MODS"] / "a.xml")
+    item = '{"tool_name": "Write", "tool_input": {"file_path": "x", "content": ""}}'
+    payload, read_first = {
+        "count-0": (_frame("0"), False),
+        "count-over-limit": (_frame("100001", ok, item), False),
+        "trailing-empty-field": (_frame("1", ok, item) + b"\0", True),
+        "trailing-unterminated": (_frame("1", ok, item) + b"junk", True),
+        "lf-in-path": (_frame("1", ok + "\nb.xml", item), False),
+        "cr-in-path": (_frame("1", ok + "\rb.xml", item), False),
+    }[case]
+    result = _run_backend(g, hooks, payload, X4_TEST_CALLS=str(tmp_path / "calls"))
+    err = result.stderr.decode("utf-8", "replace")
+    assert result.returncode == 2 and result.stdout == b"", (result.returncode, result.stdout, err)
+    assert "NORMALIZED" not in err, err
+    if not read_first:
+        assert "READ_PATH" not in err, err
+
+
+@pytest.mark.parametrize("corrupt", ["1", "2"])
+def test_batch_normaliser_line_count_mismatch_is_refused(guard, tmp_path, corrupt):
+    """Gap 2: the lexical (1st) and canonical (2nd) normaliser passes must each return exactly
+    one line per path. An extra line from either is refused (exit 2, no frame), never read as a
+    shifted list of verdicts."""
+    g, r = guard
+    hooks = _instrumented_backend(g, tmp_path)
+    item = '{"tool_name": "Write", "tool_input": {"file_path": "x", "content": ""}}'
+    payload = _frame("2", str(r["X4_MODS"] / "a.xml"), item, str(r["X4_MODS"] / "b.xml"), item)
+    control = _run_backend(g, hooks, payload, X4_TEST_CALLS=str(tmp_path / "control"))
+    assert control.returncode == 0 and control.stdout.startswith(b"X4FILE1\0" + b"2\0"), control
+    result = _run_backend(g, hooks, payload, X4_TEST_CALLS=str(tmp_path / "calls"),
+                          X4_TEST_CORRUPT=corrupt)
+    assert result.returncode == 2 and result.stdout == b"", (result.returncode, result.stdout)
+
+
+def test_batch_linked_toolkit_subfolder_decides_like_single(guard, monkeypatch, tmp_path, request):
+    """Gap 3: a toolkit working subfolder that is ITSELF a link (`_X4_BATCH_LINKED`) is
+    whitelisted through the link, as the single path's `-L` branch does -- here `dev` is a
+    link into the game folder, so a write through it, and to its target, is allowed while the
+    rest of the game folder stays denied. Decisions asserted, not probe counts."""
+    import os
+    g, r = guard
+    toolkit = tmp_path / "tk"
+    toolkit.mkdir()
+    real_dev = r["X4_GAME"] / "workdev"
+    real_dev.mkdir(parents=True)
+    _make_link("junction" if os.name == "nt" else "symlink", toolkit / "dev", real_dev, request)
+    monkeypatch.setenv("X4_TOOLKIT", str(toolkit))
+    paths = [str(toolkit / "dev" / "m" / "a.xml"), str(real_dev / "b.xml"),
+             str(r["X4_GAME"] / "libraries" / "c.xml")]
+    bulk = g.write_verdicts(paths, deadline=time.monotonic() + 30, save_qualified=False)
+    single = [g.verdict_for("write", None, None, p, save_qualified=False) for p in paths]
+    assert bulk == single, (bulk, single)
+    assert [v["decision"] for v in bulk] == ["allow", "allow", "deny"], bulk
 
 
 def test_normalizer_output_followed_by_failure_is_inert(guard, monkeypatch, tmp_path):
