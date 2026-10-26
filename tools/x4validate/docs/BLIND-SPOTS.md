@@ -409,6 +409,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F328 | build-release.sh skipped the version check for `tags/` and `refs/tags/` spellings | **DEFECT (measured)** · PRE-ARC | 6 fixture cases red before, green after; archive failure ruled out as the refuser | FIXED 2026-10-26 - strip the prefix before matching |
 | F329 | A heredoc program fed to python/node could write a host transcript | **DEFECT (measured)** · PRE-ARC | 9 heredoc shapes allowed before; replay 0 of 42,910 changed | FIXED 2026-10-26 - the same write-call patterns over an interpreter's stdin program |
 | F330 | `'<literal>' \| iex` was refused as not completely evaluated | **DEFECT (measured)** · PRE-ARC | 2 benign forms refused, 2 delete twins; replay 0 of 10 iex rows changed | FIXED 2026-10-26 - a lone constant piped into a bare iex is read as `iex '<literal>'` |
+| F331 | A Windows-form write through a junction was judged as the path spelled, not the file reached | **DEFECT (measured)** · PRE-ARC | 24 of 24 Windows-form junction writes allowed (reference/game/profile/saves); 72 of 72 link-creating commands allowed; replay 0 of 3,447 changed | FIXED 2026-10-26 - protect-files resolves a drive-form path through its links, fail closed; Bash channel, link creation and hardlinks stay residual |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11428,3 +11429,56 @@ output and a longer pipeline stay unreadable (twins). Replay: 10 of 44,361 histo
 name iex or Invoke-Expression; 0 changed (control: the probe command changes).
 
 **RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`TestHK1PowerShellFrontEnd`).
+
+## F331 - A Windows-form write through a junction was judged as the path spelled, not the file reached · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-10-26 (protect-files only; residuals below)
+
+Found by the release review of 05dc8a2; present before it. MEASURED in sandbox roots (a temp
+toolkit, game, reference, profile and saves): a JUNCTION at `<toolkit>/dev`, inside the mods root,
+or in an unwhitelisted folder, pointing into reference/, the game install, the profile or the
+saves, let Write/Edit through `<link>/new.xml` in the Windows form (`C:\...` and `C:/...`):
+ALLOW in the single and batch backends alike, 24 of 24 rows. x4_canon fed only POSIX-absolute
+paths to realpath, so the drive form was compared as written.
+
+Can an agent make the link? MEASURED, policy backend: 72 of 72 link-creating commands were
+ALLOWED (`cmd /c mklink /J|/D|/H`, `ln -s`, `ln`, `fsutil hardlink create`, python `os.symlink`,
+`_winapi.CreateJunction`, `os.link`, `git -c core.symlinks=true clone`, PowerShell
+`New-Item -ItemType Junction|SymbolicLink|HardLink`, `ni -it junction`,
+`[IO.Directory]::CreateSymbolicLink`, each aimed at reference/, the game, the profile and the
+saves). A junction and a hardlink need no privilege; a symlink failed with WinError 1314 on the
+reference machine (no Developer Mode).
+
+OS layer: x4refguard's deny ACE held through a junction and a hardlink (MEASURED on a sandbox
+dir carrying the same ACE: create and overwrite via the junction refused, write via the hardlink
+refused; making the hardlink itself succeeded). So reference/ WITH x4refguard applied was not
+writable this way; the game install, profile and saves have no OS layer.
+
+Fix, narrow (protect-files.sh / `_x4-env.sh`): under Git Bash a Windows-form path is first
+normalised as before, then walked component by component with the `-L` builtin (true for a
+junction, MEASURED). Only a path that crosses a link pays `realpath -m` plus `cygpath -m`
+(realpath reports a followed target in MOUNT form, `/tmp/...` for `%TEMP%`, MEASURED, while a
+link-free root stays `/c/...`). The batch backend runs the same walk on its normalised paths.
+A failed resolution refuses: inert in single (`X4 GUARD INERT`), exit 2 in batch. A memo of
+link-free prefixes keeps the batch cost down: 3589 paths, 2%-CPU cap, 22 s -> 26 s; single
+Write median 565 -> 619 ms under the same cap. Git Bash 5.3 reports OSTYPE=cygwin, so both
+msys* and cygwin* take this branch.
+
+RESIDUAL (measured, not fixed here):
+* the Bash/PowerShell channel: `echo > <link>/x`, `cp`, `Set-Content` through the same junctions
+  were ALLOWED in every form, /c/... included -- hook_facts compares paths lexically (36 of 36).
+* link CREATION is not judged (72 of 72 above). The toolkit creates no junction or symlink
+  outside tests and an audit probe; its `os.link` calls are temp-to-destination publishes
+  (READ, not traced into every caller). Same mechanism, other target: F221(c), a junction to
+  `.claude`, recorded only by user decision 2026-10-06 -- unchanged here.
+* hardlinks: a hardlink to a file in any protected root is the same file under another name; no
+  path rule can see it (12 of 12 allowed in every channel).
+* a toolkit working subfolder that is ITSELF a link (`_X4_BATCH_LINKED`) is whitelisted through
+  it by design: `<toolkit>/dev` as a junction into the game folder is allowed (MEASURED,
+  `test_batch_linked_toolkit_subfolder_decides_like_single`), and so would a missing subfolder
+  (`dist`) an agent makes a junction (INFERRED from the same branch);
+  only the hard blocks above the whitelist (reference/, config, archives, transcripts) outrank it.
+
+REPLAY: 3,447 distinct historical Write/Edit/MultiEdit/NotebookEdit paths (624 X4 transcripts), old vs new batch backend under the machine's configured roots: 0 changed, 0 loosened, 0 inert; 200 sampled Bash commands: 0 changed (protect-bash calls none of the changed helpers). Control: a sandbox junction into a stand-in reference changed allow -> deny.
+
+**RE-DERIVED BY:** tools/x4validate/tests/test_file_guard_batch.py
+(`test_windows_form_write_through_a_link_follows_the_real_target`,
+`test_windows_form_link_resolution_failure_is_inert`).

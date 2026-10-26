@@ -16,6 +16,7 @@
 - `scripts/build-release.sh` now applies the version check to a tag named `tags/vX.Y.Z` or `refs/tags/vX.Y.Z` too; both spellings skipped it as a dry run before, and the bundle is named after the short tag (F328).
 - The guard now also refuses a heredoc program fed to python/node on stdin (`python - <<'EOF'`, `node <<EOF`, or a body piped into one) whose own write call targets a host session transcript, the same narrow patterns as `python -c`. Reads stay allowed; over 42,910 historical Bash commands no verdict changed (F329).
 - The PowerShell guard reads a string constant piped into a bare `iex` (`'Get-ChildItem' | iex`) as it reads `iex 'Get-ChildItem'`, instead of refusing it as not completely evaluated. `'rm -r <game>' | iex` still reaches the delete rules; any other upstream stays refused (F330).
+- Writes and edits on Windows now follow a junction to the file they really reach: a path like `<toolkit>\dev\x.xml` with `dev` a junction into `reference\`, the game folder or the profile was judged as the toolkit file it is spelled as and allowed. Only a path that crosses a link pays the extra lookup, and a lookup that fails refuses the write. Over 3,447 historical edit paths no verdict changed. Making links, and the Bash/PowerShell channel, are not covered yet (F331).
 
 ## v4.0.0 — 2026-10-21
 
