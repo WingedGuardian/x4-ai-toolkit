@@ -543,9 +543,10 @@ def blank_single_quoted(s: str) -> str:
     return "".join(out)
 
 
-def segments(cmd: str) -> list[str]:
+def segments(cmd: str, raw: bool = False) -> list[str]:
     """Split on shell separators that are OUTSIDE quotes. A `|` inside grep -E 'a|b'
-    is not a pipeline."""
+    is not a pipeline. `raw`: the same pieces before _unwrap (reserved words kept), one per
+    segment, in the same order."""
     parts, buf, chars = [], [], list(_scan(cmd))
     i = 0
     while i < len(chars):
@@ -581,6 +582,8 @@ def segments(cmd: str) -> list[str]:
         buf.append(c)
         i += 1
     parts.append("".join(buf))
+    if raw:
+        return [p for p in parts if p.strip()]
     return [_unwrap(p) for p in parts if p.strip()]
 
 
@@ -5579,6 +5582,7 @@ _PY_LINK_CALLS = (
     (re.compile(r"\.symlink_to\(\s*(?:target\s*=\s*)?"), "symbolic"),
     (re.compile(r"\.hardlink_to\(\s*(?:target\s*=\s*)?"), "hard"),
 )
+_PWD_REF = re.compile(r"\$\{PWD\}|\$PWD(?![A-Za-z0-9_])")
 _PY_STR = re.compile(r"""[rRbBuU]{0,2}(['"])(?P<p>[^'"]*)\1""")
 #: The link literal of `Path(<lit>).symlink_to(...)`, ending right where the call begins.
 _PY_LINK_RECEIVER = re.compile(r"""Path\(\s*[rRbBuU]{0,2}(['"])(?P<p>[^'"]*)\1\s*\)\s*$""")
@@ -5706,6 +5710,10 @@ def _judge_link(target, link, kind, cwd: str, assigns: dict, roots: dict) -> str
     HARDLINK's target -- an existing file the call opens -- is read from the cwd alone."""
     if target is None:
         return "unresolved"
+    if cwd and "PWD" not in assigns:
+        # F331 review: `$PWD` / `${PWD}` IS the segment's folder, which is known here.
+        target = _PWD_REF.sub(lambda _m: cwd, target)
+        link = _PWD_REF.sub(lambda _m: cwd, link) if link else link
     prot = [roots[k] for k in _LINK_KEYS if roots.get(k)]
     verdict = ""
     for rv in resolve_variants(target, assigns):
@@ -5733,17 +5741,20 @@ def _judge_link(target, link, kind, cwd: str, assigns: dict, roots: dict) -> str
     return verdict
 
 
-def _is_for_header(seg: str, cmds: list) -> bool:
-    """Is this segment a `for NAME in WORDS` header? segments() strips the `for` and leaves
-    `NAME in WORDS`, so a loop variable named like a link verb read as one -- MEASURED in the
-    F331 replay: `for ln in 3124 3253` from the game folder was a false hard deny. Scoped to the
-    link rule: the other rules' reading of that segment (the save bridge's blockers among them)
-    is unchanged. Only a segment whose own text follows a `for` keyword in the command counts."""
-    toks = tokens_of(seg)
-    if len(toks) < 2 or toks[1] != "in":
-        return False
-    pat = re.compile(r"(?:^|[\s;&|()])for\s+" + re.escape(seg.strip()))
-    return any(pat.search(c) for c in cmds)
+def _for_headers(cmd: str) -> list:
+    """For each segment segments(cmd) returns, in order: is it a `for NAME in WORDS` header?
+    segments() strips the `for` and leaves `NAME in WORDS`, so a loop variable named like a
+    link verb read as one -- MEASURED in the F331 replay: `for ln in 3124 3253` from the game
+    folder was a false hard deny. Judged by POSITION, never by text (review of 3e4b4fd: a real
+    `ln in <ref> .` spelled like an earlier header was skipped too). Read only by the link
+    rule; every other rule's reading of the header is unchanged."""
+    out = []
+    for piece in segments(cmd, raw=True):
+        words = piece.replace("(", " ").replace("{", " ").split()
+        while words and words[0] in RESERVED and words[0] != "for":
+            words = words[1:]
+        out.append(bool(words) and words[0] == "for")
+    return out
 
 
 def _heredoc_program_links(spliced: str) -> list:
@@ -5915,6 +5926,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # computed above: a command name arriving through a variable (`RM=rm; $RM -rf ...`)
     # otherwise reaches no verb-keyed rule at all, hard blocks included.
     seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect = [], [], [], [], []
+    seg_for = []                        # F331: is THIS segment a `for` header (_for_headers)?
     base = session_cwd(payload)
     # A carried command (bash -c, a heredoc fed to a shell, $(...)) is walked on its own,
     # so it cannot see a `cd` made around it. When nothing anywhere changes directory it
@@ -5932,6 +5944,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         bare = cwd_lanes(c, roots=roots)
         physical = cwd_lanes(c, base if (top or not moves) else "", seeded=True,
                              roots=roots, physical=True) if evidence is not None else []
+        heads = _for_headers(c)
         for k, (s, ds) in enumerate(tracked):
             uds = bare[k][1] if k < len(bare) else [""]
             rs = resolve_verb(s, assigns)
@@ -5940,6 +5953,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             pds = physical[k][1] if physical else [""] * len(ds)
             for d, ud, pd in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds)):
                 seg_dialect.append(dialects.get(c, "bash"))
+                seg_for.append(k < len(heads) and heads[k])
                 seg_cwd.append((rs, d))
                 seg_prev.append(prev)
                 unseeded.append(ud)
@@ -6130,8 +6144,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                                          for folder in protected_save_folders}
     save_mentions = [re.compile(re.escape(folder) + r"(?=$|[/\s\"'`<>);,*?\[\]{}$])")
                      for folder in save_spellings if folder]
-    for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0] in zip(
-            seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect):
+    for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0], is_for_ in zip(
+            seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect, seg_for):
         if (save_folders and evidence is not None and not execution_context
                 and verb(s) not in SAVE_MODELLED_VERBS and not _carries_program_text(s)
                 and not _save_read_only_program(s)):
@@ -6200,7 +6214,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         copy_t += dests_
         transcript_copy = transcript_copy or _copy_lands_a_transcript(s, dests_, assigns)
         transcript_inline = transcript_inline or _inline_program_writes_transcript(s, c_cwd, assigns)
-        for tgt_, at_, kind_ in ([] if _is_for_header(s, all_cmds) else _segment_links(s, assigns)):  # F331
+        for tgt_, at_, kind_ in ([] if is_for_ else _segment_links(s, assigns)):     # F331
             j_ = _judge_link(tgt_, at_, kind_, c_cwd, assigns, roots)
             link_protected = link_protected or j_ == "protected"
             link_unresolved = link_unresolved or j_ == "unresolved"

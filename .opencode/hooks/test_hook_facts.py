@@ -6335,6 +6335,28 @@ class TestF331LinkCreationIntoAProtectedRoot(unittest.TestCase):
         c = "for ln in a; do :; done; ln -s in " + DQ + REF + DQ + " d"
         self.assertTrue(FC(c, _ELSEWHERE)["link_into_protected"], c)
 
+    def test_a_for_header_is_judged_by_position_not_by_text(self):
+        """Review of 3e4b4fd: the header was matched by TEXT, so a real `ln in <ref>/a.xml .` spelled
+        exactly like an earlier `for ln in <ref>/a.xml .` header was skipped too."""
+        c = ("for ln in " + REF + "/a.xml .; do :; done; ln in " + REF + "/a.xml .")
+        self.assertTrue(FC(c, _ELSEWHERE)["link_into_protected"], c)
+        c = "if true; then for ln in " + REF + "/a.xml .; do :; done; fi"
+        self.assertFalse(FC(c, _ELSEWHERE)["link_into_protected"], c)
+
+    def test_PWD_is_the_segments_own_folder(self):
+        """Review: `ln -s "$PWD/src" lnk` was refused as unresolved although the folder is known."""
+        for c in ('ln -s "$PWD/src" lnk', 'ln -s "${PWD}/src" lnk', "ln -s $PWD/src lnk"):
+            with self.subTest(c=c):
+                f = FC(c, _ELSEWHERE)
+                self.assertFalse(f["link_target_unresolved"] or f["link_into_protected"], c)
+        # ...and it is judged: the folder holding reference/, then the cd's folder.
+        self.assertTrue(FC('ln -s "$PWD/reference" lnk', TOOLKIT)["link_into_protected"])
+        self.assertTrue(FC('cd "' + TOOLKIT + '" && ln -s "${PWD}/reference" lnk', _ELSEWHERE)["link_into_protected"])
+        # A substitution stays unreadable (refused with the remedy: write it absolute).
+        self.assertTrue(FC('ln -s "$(git rev-parse --show-toplevel)/x" lnk', _ELSEWHERE)["link_target_unresolved"])
+        # With no known folder, $PWD is unreadable too.
+        self.assertTrue(FC('ln -s "$PWD/src" lnk', _NO_CWD)["link_target_unresolved"])
+
     def test_a_link_placed_inside_reference_is_a_write_there(self):
         """Item 3: the link's own PATH inside a protected root is a write into it."""
         for c in ("ln -s C:/work/src " + DQ + REF + "/lnk" + DQ,
@@ -6396,6 +6418,34 @@ class TestF331PowerShellLinkCreation(unittest.TestCase):
                   "[IO.Directory]::CreateSymbolicLink(" + Q + _w(REF) + BS + "lnk" + Q + ", " + Q + "C:" + BS + "work" + Q + ")"):
             with self.subTest(c=c):
                 self.assertTrue(self.P(c)["writes_reference"], c)
+
+    def test_an_item_type_PREFIX_is_the_link_type_powershell_makes(self):
+        """Review (MEASURED in PowerShell 7.6.6): -ItemType resolves a case-insensitive PREFIX --
+        d/c -> Directory, f -> File, s -> SymbolicLink, j/Junc -> Junction, h -> HardLink. Only
+        the exact names were read as links, so `-ItemType J` made a junction nobody judged."""
+        at = _w(_LINK_AT)
+        for it in ("J", "junc", "Ju", "h", "HARD", "s", "Sym", "symboliclink"):
+            c = "New-Item -ItemType " + it + " -Path " + Q + at + Q + " -Value " + Q + _w(REF) + Q
+            with self.subTest(c=c):
+                self.assertTrue(self.P(c)["link_into_protected"], c)
+        # Twins: a directory/file prefix, or a non-type, carries no link target.
+        for it in ("d", "Dir", "c", "f", "File"):
+            c = "New-Item -ItemType " + it + " -Path " + Q + at + Q + " -Value " + Q + _w(REF) + Q
+            with self.subTest(c=c):
+                f = self.P(c)
+                self.assertFalse(f["link_into_protected"] or f["link_target_unresolved"], c)
+
+    def test_a_non_literal_item_type_may_be_a_link(self):
+        """Review: `-ItemType $t` may be a link type. Its -Value is judged as a link target (a
+        protected one is refused); an unreadable value is refused with the remedy; with no -Value
+        there is nothing a link could point at."""
+        at = _w(_LINK_AT)
+        self.assertTrue(self.P("New-Item -ItemType $t -Path " + Q + at + Q + " -Value " + Q + _w(REF) + Q)["link_into_protected"])
+        self.assertTrue(self.P("New-Item -ItemType $t -Path " + Q + at + Q + " -Value $v")["link_target_unresolved"])
+        f = self.P("New-Item -ItemType $t -Path " + Q + at + Q)
+        self.assertFalse(f["link_into_protected"] or f["link_target_unresolved"])
+        f = self.P("New-Item -ItemType $t -Path " + Q + at + Q + " -Value " + Q + "C:" + BS + "work" + BS + "src" + Q)
+        self.assertFalse(f["link_into_protected"] or f["link_target_unresolved"])
 
     def test_an_unreadable_powershell_target_is_refused(self):
         f = self.P("New-Item -ItemType Junction -Path " + Q + _w(_LINK_AT) + Q + " -Target $src")

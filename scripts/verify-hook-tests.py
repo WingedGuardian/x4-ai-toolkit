@@ -1163,9 +1163,21 @@ MUTANTS = [
      '        return []',
      'TestF331LinkCreationIntoAProtectedRoot.test_a_link_placed_inside_reference_is_a_write_there'),
     ("F331 link replay: a `for` header holds no link command",
-     "        for tgt_, at_, kind_ in ([] if _is_for_header(s, all_cmds) else _segment_links(s, assigns)):",
-     "        for tgt_, at_, kind_ in _segment_links(s, assigns):",
+     "        for tgt_, at_, kind_ in ([] if is_for_ else _segment_links(s, assigns)):     # F331",
+     "        for tgt_, at_, kind_ in _segment_links(s, assigns):     # F331",
      'TestF331LinkCreationIntoAProtectedRoot.test_TWIN_a_for_loop_variable_named_ln_is_no_ln_command'),
+    ("F331 review: a header's flag is by POSITION (a reserved word before `for` is stepped over)",
+     '        while words and words[0] in RESERVED and words[0] != "for":',
+     '        while False:',
+     'TestF331LinkCreationIntoAProtectedRoot.test_a_for_header_is_judged_by_position_not_by_text'),
+    ("F331 review: $PWD is the segment's folder",
+     '        target = _PWD_REF.sub(lambda _m: cwd, target)',
+     '        target = target',
+     'TestF331LinkCreationIntoAProtectedRoot.test_PWD_is_the_segments_own_folder'),
+    ("F331 review: $PWD only when the folder is known",
+     '    if cwd and "PWD" not in assigns:',
+     '    if "PWD" not in assigns:',
+     'TestF331LinkCreationIntoAProtectedRoot.test_PWD_is_the_segments_own_folder'),
 ]
 
 SHIM = '''

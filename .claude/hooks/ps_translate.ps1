@@ -779,7 +779,18 @@ function Translate-Command([CommandAst]$c) {
             # write through the link lands there. It was emitted as an append to the link path
             # alone, so no rule saw the target: it now travels as `ln`, which the Bash half judges
             # by its target. An unreadable or missing target stays a variable -> the hook asks.
-            $isLink = $type -and $type.ToLowerInvariant() -in 'junction', 'symboliclink', 'hardlink'
+            # F331 review, MEASURED in PowerShell 7.6.6: -ItemType is resolved as a case-insensitive
+            # PREFIX -- d/c Directory, f File, s SymbolicLink, j Junction, h HardLink (no two share a
+            # first letter) -- so `-ItemType J` makes a junction. A NON-LITERAL type may be a link:
+            # its -Value, when given, is judged as a link target (unreadable -> refused).
+            $tl = if ($type) { ([string]$type).ToLowerInvariant() } else { '' }
+            $linkKind = ''
+            if ($tl -and -not (IsResolved $tl)) {
+                if (@(BVals $binding @('Value')).Count -gt 0) { $linkKind = 'symboliclink' }
+            } elseif ($tl) {
+                foreach ($kn in 'symboliclink', 'junction', 'hardlink') { if ($kn.StartsWith($tl)) { $linkKind = $kn; break } }
+            }
+            $isLink = [bool]$linkKind
             $linkTo = $null
             if ($isLink) {
                 $linkTo = @(BVals $binding @('Value')) | Select-Object -First 1
@@ -788,7 +799,7 @@ function Translate-Command([CommandAst]$c) {
             foreach ($p in $paths) {
                 $full = if ($nm) { $p.TrimEnd('/', '\') + '/' + $nm } else { $p }
                 if ($isLink) {
-                    $lnv = if ($type.ToLowerInvariant() -eq 'hardlink') { 'ln' } else { 'ln -s' }
+                    $lnv = if ($linkKind -eq 'hardlink') { 'ln' } else { 'ln -s' }
                     $lines.Add("$lnv -- $(Q $linkTo) $(Q $full)")
                 }
                 if ($isDir) { $lines.Add("mkdir -p $(Q $full)$red") }
