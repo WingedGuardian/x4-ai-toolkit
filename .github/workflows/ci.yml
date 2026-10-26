@@ -763,7 +763,13 @@ jobs:
           #    +1 test_compat                (case-insensitive filesystem)
           #    +1 test_bootstrap_scripts_are_portable (Windows PowerShell 5.1)
           # Windows 57 -> 60 = the same +3 qa_sweep rows. Ceilings: measured + 3.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '330' || '63' }}
+          # MEASURED run 40282437389 at a1d876a: ubuntu 331 (FAILED, 331 > 330), windows 60.
+          # Per grouped skip vs run 39187589960 (327), via run 40233870526 at d231a78 (330):
+          #    +2 test_install_over_existing (no Windows PowerShell 5.1: 39 -> 41)
+          #    +1 test_x4housekeep           (only Windows refuses to rename a dir with an open file)
+          #    +1 test_file_guard_batch      (Windows junction parity, 05dc8a2)
+          # Ubuntu ceiling 331 + 3 = 334; windows unchanged (60 + 3 = 63).
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '334' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         run: uv run --frozen python -m pytest -q -rs
