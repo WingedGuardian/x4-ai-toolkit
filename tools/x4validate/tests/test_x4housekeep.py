@@ -506,6 +506,17 @@ def _created_prefixes():
     return found
 
 
+#: Swept prefixes whose only creator is maintainer-only code that the release zip leaves out (export-ignore).
+#: In an archive install the creator is absent, so its prefix cannot be traced there; a checkout still traces it.
+_MAINTAINER_ONLY_CREATORS = {"x4-tool-audit-pytest-": "tools/x4validate/audit/driver.py"}
+
+
+def _orphans(prefixes, created, repo):
+    """Swept prefixes no creator in this tree makes, excusing a maintainer-only creator ONLY when its file is absent."""
+    return [p for p in prefixes if not any(c.startswith(p) for c in created)
+            and not (p in _MAINTAINER_ONLY_CREATORS and not (repo / _MAINTAINER_ONLY_CREATORS[p]).exists())]
+
+
 def _distinctive(prefix):
     """A name only this toolkit would pick: it says x4. `split_` or `pytest-of-` could be anyone's."""
     return prefix.lower().startswith("x4")
@@ -517,11 +528,16 @@ def test_every_swept_temp_prefix_is_distinctive_and_has_a_creator_in_the_repo():
     prefixes = hk.DEFAULTS["temp_prefixes"]
     generic = [p for p in prefixes if not _distinctive(p)]
     assert not generic, "generic temp prefixes an unrelated project could also use: {}".format(generic)
-    orphan = [p for p in prefixes if not any(c.startswith(p) for c in created)]
+    orphan = _orphans(prefixes, created, REPO)
     assert not orphan, "swept temp prefixes nothing in the repo creates: {}".format(orphan)
     # twins: the predicates can go red
     assert not _distinctive("split_") and not _distinctive("pytest-of-")
     assert not any(c.startswith("x4-no-such-creator-") for c in created)
+    # the maintainer-only excuse holds only while its creator file is absent (the release zip), never in a checkout
+    assert _orphans(["x4-tool-audit-pytest-"], set(), REPO / "no-such-tree") == []
+    assert _orphans(["x4-tool-audit-pytest-"], set(), REPO) == (["x4-tool-audit-pytest-"]
+                                                               if (REPO / _MAINTAINER_ONLY_CREATORS["x4-tool-audit-pytest-"]).exists() else [])
+    assert _orphans(["x4-no-such-creator-"], set(), REPO / "no-such-tree") == ["x4-no-such-creator-"]
 
 
 def test_apply_resolves_the_recycler_at_call_time_so_the_test_fixture_can_intercept_it():
