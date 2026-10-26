@@ -533,6 +533,28 @@ def test_windows_form_write_through_a_link_follows_the_real_target(
 
 
 @pytest.mark.skipif(__import__("os").name != "nt", reason="Windows-form paths exist only on Windows")
+@pytest.mark.parametrize("prefix", ["\\\\?\\", "\\\\.\\", "//?/", "//./"])
+@pytest.mark.parametrize("into,expected", [("reference", "deny"), ("elsewhere", "allow")])
+def test_device_prefixed_write_through_a_link_follows_the_real_target(
+        guard, tmp_path, request, prefix, into, expected):
+    r"""F331 review: only `//?/` and `//./` were stripped before the drive-form link walk, so
+    `\?\C:\...` and `\.\C:\...` through a junction into reference/ stayed ALLOWED (single
+    and batch). Every device spelling must reach the same verdict as the plain one; the twin
+    (a junction to a folder outside every root) stays allowed."""
+    g, r = guard
+    r["X4_MODS"].mkdir(parents=True)
+    real = r["X4_REFERENCE"] / "libraries" if into == "reference" else tmp_path / "elsewhere"
+    real.mkdir(parents=True)
+    _make_link("junction", r["X4_MODS"] / "linked", real, request)
+    plain = str(r["X4_MODS"] / "linked" / "new.xml")
+    path = prefix + (plain if prefix.startswith("\\\\") else plain.replace("\\", "/"))
+    single = g.verdict_for("write", None, None, path, save_qualified=False)
+    bulk = g.write_verdicts([path], deadline=time.monotonic() + 30, save_qualified=False)[0]
+    assert single["decision"] == expected and not single["inert"], (path, single)
+    assert bulk == single, (path, bulk, single)
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows-form paths exist only on Windows")
 @pytest.mark.parametrize("fault", ["realpath", "cygpath"])
 @pytest.mark.parametrize("mode", ["single", "batch"])
 def test_windows_form_link_resolution_failure_is_inert(guard, monkeypatch, tmp_path, request,

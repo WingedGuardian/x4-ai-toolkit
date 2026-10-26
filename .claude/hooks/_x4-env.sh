@@ -551,7 +551,12 @@ x4_canon() {
   #                             x4_canon ///c/x/ref/a.xml
   #
   # The `//?/` form survived only because realpath happens to leave it alone.
+  # The BACKSLASH device forms too (F331 review, MEASURED): x4guard's os.path.abspath turns
+  # `//?/C:/x` into the backslash form, which x4_norm rendered `/?c` -- under no root, so a
+  # write through a junction into reference/ was allowed. Stripped into the drive-form branch.
   case "$p" in
+    '\\'[?.]'\'[Uu][Nn][Cc]'\'*) p="//${p:8}" ;;
+    '\\'[?.]'\'*)            p="${p:4}" ;;
     //[?.]/[Uu][Nn][Cc]/*) p="//${p#//?/???/}" ;;
     //[?.]/*)              p="${p#//?/}" ;;
   esac

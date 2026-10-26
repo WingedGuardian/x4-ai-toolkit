@@ -392,6 +392,8 @@ x4_file_batch() {
     [ -n "$p" ] || return 2
     paths[$i]="$p"; inputs[$i]="$item"
     case "$p" in
+      '\\'[?.]'\'[Uu][Nn][Cc]'\'*) p="//${p:8}" ;;    # F331 review: backslash device forms
+      '\\'[?.]'\'*) p="${p:4}" ;;
       //[?.]/[Uu][Nn][Cc]/*) p="//${p#//?/???/}" ;;
       //[?.]/*) p="${p#//?/}" ;;
     esac
