@@ -6310,6 +6310,18 @@ class TestF331LinkCreationIntoAProtectedRoot(unittest.TestCase):
                 self.assertFalse(f["link_into_protected"], c)
                 self.assertFalse(f["link_target_unresolved"], c)
 
+    def test_TWIN_a_for_loop_variable_named_ln_is_no_ln_command(self):
+        """MEASURED in the F331 replay: `for ln in 3124 3253` from the game folder read as `ln`
+        with a target inside the game -- a false hard deny. A `for` header holds no command."""
+        c = "for ln in 3124 3253; do echo $ln; done"
+        f = FC(c, GAME)
+        self.assertFalse(f["link_into_protected"] or f["link_target_unresolved"], c)
+        self.assertTrue(FC("ln -s 3124 3253", GAME)["link_into_protected"])      # the twin fires
+        # ...and only the HEADER is skipped: a real `ln` whose first operand is the word `in`
+        # still fires beside a loop over a variable named ln.
+        c = "for ln in a; do :; done; ln -s in " + DQ + REF + DQ + " d"
+        self.assertTrue(FC(c, _ELSEWHERE)["link_into_protected"], c)
+
     def test_a_link_placed_inside_reference_is_a_write_there(self):
         """Item 3: the link's own PATH inside a protected root is a write into it."""
         for c in ("ln -s C:/work/src " + DQ + REF + "/lnk" + DQ,

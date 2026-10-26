@@ -5733,6 +5733,19 @@ def _judge_link(target, link, kind, cwd: str, assigns: dict, roots: dict) -> str
     return verdict
 
 
+def _is_for_header(seg: str, cmds: list) -> bool:
+    """Is this segment a `for NAME in WORDS` header? segments() strips the `for` and leaves
+    `NAME in WORDS`, so a loop variable named like a link verb read as one -- MEASURED in the
+    F331 replay: `for ln in 3124 3253` from the game folder was a false hard deny. Scoped to the
+    link rule: the other rules' reading of that segment (the save bridge's blockers among them)
+    is unchanged. Only a segment whose own text follows a `for` keyword in the command counts."""
+    toks = tokens_of(seg)
+    if len(toks) < 2 or toks[1] != "in":
+        return False
+    pat = re.compile(r"(?:^|[\s;&|()])for\s+" + re.escape(seg.strip()))
+    return any(pat.search(c) for c in cmds)
+
+
 def _heredoc_program_links(spliced: str) -> list:
     """The _program_links of each heredoc body a Python interpreter reads as its PROGRAM
     (the same per-heredoc opener rule as _heredoc_program_writes_transcript)."""
@@ -6187,7 +6200,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         copy_t += dests_
         transcript_copy = transcript_copy or _copy_lands_a_transcript(s, dests_, assigns)
         transcript_inline = transcript_inline or _inline_program_writes_transcript(s, c_cwd, assigns)
-        for tgt_, at_, kind_ in _segment_links(s, assigns):            # F331 follow-up
+        for tgt_, at_, kind_ in ([] if _is_for_header(s, all_cmds) else _segment_links(s, assigns)):  # F331
             j_ = _judge_link(tgt_, at_, kind_, c_cwd, assigns, roots)
             link_protected = link_protected or j_ == "protected"
             link_unresolved = link_unresolved or j_ == "unresolved"

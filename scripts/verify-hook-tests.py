@@ -1162,6 +1162,10 @@ MUTANTS = [
      '        return [at for _t, at, _k in link_creations(seg) if at]',
      '        return []',
      'TestF331LinkCreationIntoAProtectedRoot.test_a_link_placed_inside_reference_is_a_write_there'),
+    ("F331 link replay: a `for` header holds no link command",
+     "        for tgt_, at_, kind_ in ([] if _is_for_header(s, all_cmds) else _segment_links(s, assigns)):",
+     "        for tgt_, at_, kind_ in _segment_links(s, assigns):",
+     'TestF331LinkCreationIntoAProtectedRoot.test_TWIN_a_for_loop_variable_named_ln_is_no_ln_command'),
 ]
 
 SHIM = '''
