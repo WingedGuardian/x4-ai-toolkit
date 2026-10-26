@@ -112,9 +112,12 @@ need "$X4_REFERENCE" "icacls-reset-reference" X4_REFERENCE && probe ask "icacls-
 need "$X4_REFERENCE" "icacls-dblslash-reset" X4_REFERENCE && probe ask "icacls-dblslash-reset" "icacls \"$X4_REFERENCE\" //reset //T //C"
 need "$X4_REFERENCE" "icacls-inherit-prefix" X4_REFERENCE && probe ask "icacls-inherit-prefix" "icacls \"$X4_REFERENCE\" /inheritancezzz:r"
 probe ask   "x4refguard-remove"    'python scripts/x4refguard.py remove'
-# F331 follow-up: a link whose TARGET is a protected root is refused; an unreadable target asks.
+# F331 follow-up: a link whose TARGET is a protected root, or cannot be read, is refused.
 need "$X4_REFERENCE" "link-into-reference" X4_REFERENCE && probe deny "link-into-reference" "ln -s \"$X4_REFERENCE\" lnk"
-probe ask   "link-target-unreadable" 'ln -s "$X4_NO_SUCH_LINK_SRC" lnk'
+probe deny  "link-target-unreadable" 'ln -s "$X4_NO_SUCH_LINK_SRC" lnk'
+# The replay's shape: a RELATIVE junction target inside cmd /c after a cd -> deny; absolute twin allowed.
+probe deny  "link-relative-carried" 'cd /c/work && cmd //c mklink /J "..\wt\node_modules" "..\p8\node_modules"'
+probe allow "link-absolute-carried" 'cd /c/work && cmd //c mklink /J "C:\wt\node_modules" "C:\p8\node_modules"'
 
 # --- runtime rules: the harness caps a foreground call at 600000 ms ---------
 # Four separate 10-minute losses in one session came from passing a LARGER value

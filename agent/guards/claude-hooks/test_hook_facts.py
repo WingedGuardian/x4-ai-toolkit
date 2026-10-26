@@ -6221,7 +6221,7 @@ class TestF331LinkCreationIntoAProtectedRoot(unittest.TestCase):
     later write through it land there, and 72 of 72 link-creating commands were ALLOWED. The
     link's TARGET is judged: inside (or above) reference/, the game, the profile or the saves ->
     `link_into_protected` (deny); a target the guard cannot read -> `link_target_unresolved`
-    (ask). Fixture roots only: nothing here creates a link."""
+    (deny with a remedy). Fixture roots only: nothing here creates a link."""
 
     def test_every_shape_aimed_at_each_protected_root_fires(self):
         for name, t in _LINK_TARGETS.items():
@@ -6270,7 +6270,7 @@ class TestF331LinkCreationIntoAProtectedRoot(unittest.TestCase):
                 self.assertFalse(FC(hard, TOOLKIT)["link_into_protected"], hard)
                 self.assertTrue(FC(soft, TOOLKIT)["link_into_protected"], soft)
 
-    def test_a_relative_target_with_no_known_folder_asks(self):
+    def test_a_relative_target_with_no_known_folder_is_refused(self):
         f = FC("ln -s reference lnk", _NO_CWD)
         self.assertTrue(f["link_target_unresolved"])
         self.assertFalse(f["link_into_protected"])
@@ -6283,7 +6283,7 @@ class TestF331LinkCreationIntoAProtectedRoot(unittest.TestCase):
                 f = FC(c, _ELSEWHERE)
                 self.assertTrue(f["link_into_protected"], c)
 
-    def test_an_unreadable_target_asks(self):
+    def test_an_unreadable_target_is_refused(self):
         for c in ('ln -s "$NOPE" lnk', 'ln -s "$(pwd)/x" lnk', "cmd //c mklink /J lnk %SRC%",
                   "cmd //c mklink /J onlyone",
                   'python -c "import os; os.symlink(src, ' + Q + 'l' + Q + ')"',
@@ -6294,6 +6294,19 @@ class TestF331LinkCreationIntoAProtectedRoot(unittest.TestCase):
                 f = FC(c, _ELSEWHERE)
                 self.assertTrue(f["link_target_unresolved"], c)
                 self.assertFalse(f["link_into_protected"], c)
+
+    def test_the_replays_carried_relative_junction_is_unresolved_and_its_absolute_twin_is_not(self):
+        """MEASURED in the F331 replay: worktree node_modules junctions with a RELATIVE target inside
+        `cmd /c` after a `cd` -- a carried command's folder is unknowable, so the target is refused
+        (protect-bash denies with the remedy: write it absolute). The absolute spelling is allowed."""
+        for c in ('cd C:/work/repo && cmd //c mklink /J "..' + BS + 'wt' + BS + 'node_modules" "..' + BS + 'p8' + BS + 'node_modules"',):
+            with self.subTest(c=c):
+                f = FC(c, _ELSEWHERE)
+                self.assertTrue(f["link_target_unresolved"], c)
+                self.assertFalse(f["link_into_protected"], c)
+        c = 'cd C:/work/repo && cmd //c mklink /J "C:' + BS + 'work' + BS + 'wt" "C:' + BS + 'work' + BS + 'p8"'
+        f = FC(c, _ELSEWHERE)
+        self.assertFalse(f["link_target_unresolved"] or f["link_into_protected"], c)
 
     def test_TWIN_a_link_verb_with_nothing_to_link_or_a_mention_is_not(self):
         """Clause: a link-creating COMMAND -- help, a mention, a program's argv data are not."""
@@ -6384,7 +6397,7 @@ class TestF331PowerShellLinkCreation(unittest.TestCase):
             with self.subTest(c=c):
                 self.assertTrue(self.P(c)["writes_reference"], c)
 
-    def test_an_unreadable_powershell_target_asks(self):
+    def test_an_unreadable_powershell_target_is_refused(self):
         f = self.P("New-Item -ItemType Junction -Path " + Q + _w(_LINK_AT) + Q + " -Target $src")
         self.assertTrue(f["link_target_unresolved"] or f["carrier_untranslated"])
         self.assertFalse(f["link_into_protected"])

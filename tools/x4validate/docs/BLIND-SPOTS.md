@@ -11468,7 +11468,7 @@ RESIDUAL (measured, not fixed here):
 * link CREATION -- FIXED, see "Fix 2" below. Still not judged: `git -c core.symlinks=true
   clone` (the link targets live in the cloned tree, not in the command; 4 of 4 still allowed),
   a link call in perl/ruby/node or a script FILE, a Python call through an alias
-  (`from os import symlink`), and a target held in a program variable (asks only when the
+  (`from os import symlink`), and a target held in a program variable (refused only when the
   call's first argument is not a literal). Same mechanism, other target: F221(c), a junction
   to `.claude`, recorded only by user decision 2026-10-06 -- unchanged here.
 * hardlinks: a hardlink to a file in any protected root is the same file under another name; no
@@ -11487,7 +11487,9 @@ judged by its TARGET. Read: `cmd /c mklink` (/J /D /H, plain, Git Bash `//J`), `
 `os.symlink` / `os.link` / `_winapi.CreateJunction` / `Path(...).symlink_to` /
 `.hardlink_to` in `-c` and heredoc programs. A target inside or ABOVE reference/, the game,
 the profile or the saves -> `link_into_protected` (deny, with a remedy); a target the guard
-cannot read -> `link_target_unresolved` (ask, inert). A relative target of a symlink or
+cannot read -> `link_target_unresolved` (deny with a remedy -- write the target as an absolute
+path -- inert-safe; first shipped as an ask, switched per the user's no-prompt rule for command
+hygiene). A relative target of a symlink or
 junction is read from the link's folder as well as the cwd (where a relative JUNCTION target
 is anchored was not measured, so it gets both); a hardlink's from the cwd only. The link
 `mklink`/`fsutil` places is now a write where it lands, as `ln`'s already was. The
@@ -11495,17 +11497,17 @@ PowerShell front end emits `New-Item -ItemType Junction|SymbolicLink|HardLink` a
 `[IO.File]/[IO.Directory]::CreateSymbolicLink` as `ln [-s] -- <target> <path>` (the
 link-path write kept); before, the target was dropped.
 MEASURED, the same 72-row sandbox probe through x4guard: 68 refused (64 deny, 4 `ni -it
-junction ... -t` asks inert -- `-t` is ambiguous to the binder, so the target is unread),
+junction ... -t` refused inert -- `-t` is ambiguous to the binder, so the target is unread),
 4 still allowed (`git core.symlinks` clone). The probe's four `fsutil reparsepoint query`
 rows are a READ, not a link, and stay allowed (they were in the 72 as a control row).
 REPLAY (44,389 historical commands from 224 transcripts; Bash 42,938 and the 183 PowerShell
 commands the translator change can reach, each at two session folders, 86,242 pairs, 0
 errors): 0 loosened. The for-header fix below was re-replayed over the 10,029 Bash commands it
 and the link rule can reach (a `for` or a link word) plus the same 183: 0 loosened. New
-verdicts, every one inspected: 4 distinct commands newly ASK (`link_target_unresolved`) --
+verdicts, every one inspected: 4 distinct commands newly REFUSED (`link_target_unresolved`) --
 three make a node_modules junction with a RELATIVE target inside a `cmd /c` carrier after a
-`cd`, where the carrier's folder is unknowable by design (correct-by-design ask, but a real
-friction cost on that worktree workflow), and one `ln -sf "$p" ...` whose target is
+`cd`, where the carrier's folder is unknowable by design (now a deny whose remedy, an absolute
+target, the agent can take without prompting the user), and one `ln -sf "$p" ...` whose target is
 `$(command -v ...)` output (genuinely unreadable). 3 New-Item junction commands (1 Bash
 `powershell -Command`, 2 PowerShell) gained `ln` in the save bridge's blocker list (stricter
 only). One false hard DENY found and

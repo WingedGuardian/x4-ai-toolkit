@@ -1102,7 +1102,7 @@ def seeds(roots):
         # (`$'$R'`) makes it a literal program named `$R` -- a mutant, not a bypass.
         ("variable command name at the game", "env $R -rf " + QU + g + QU),
         # F331 follow-up: a link CREATED with its target in a protected root (deny), and a link
-        # verb whose target the guard cannot read (ask).
+        # verb whose target the guard cannot read (deny with a remedy: write it absolute).
         ("link into reference", "ln -s " + QU + ref + QU + " lnk"),
         ("link to an unreadable target", "ln -s " + QU + "$F331_NO_SUCH_SRC" + QU + " lnk"),
         # NOT seeded: `cmd //c "cd /d <game> && rd /s /q extensions"`. Its dangerous part
