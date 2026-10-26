@@ -5145,6 +5145,7 @@ class TestInlineInterpreterWriteOntoATranscript(unittest.TestCase):
                              ("python <<'EOF'", w), ("python3 -u - <<-EOF", w),
                              ("node <<'EOF'", "require('fs').appendFileSync('" + t + "','x')"),
                              ("node - <<'EOF'", "require('fs').writeFileSync('" + t + "','x')"),
+                             ("cat <<'EOF' | python -", w),
                              ("cd /srv && python - <<'EOF' > /srv/out.txt",
                               "from pathlib import Path" + self.NL + "Path('" + t + "').write_text('x')"),
                              ("python - <<'EOF'", "open('" + self.W + "','a')")):
@@ -5167,6 +5168,10 @@ class TestInlineInterpreterWriteOntoATranscript(unittest.TestCase):
         """Clause: the body is the interpreter's PROGRAM -- a file being written by cat, or stdin DATA
         for a script / -c program, is not."""
         body = "open('" + self.T + "','a')"
+        # Review of 8957579: a cat heredoc, then an UNRELATED `| python` later in the command,
+        # made every body count as the interpreter's program.
+        c = self._hd("cat > /srv/notes.md <<'EOF'", body) + self.NL + "echo hi | python"
+        self.assertFalse(FC(c, _ELSEWHERE)[self.FACT], c)
         for opener in ("cat > /srv/notes.md <<'EOF'", "python tool.py <<'EOF'",
                        "python -c 'import sys; print(sys.stdin.read())' <<'EOF'", "node tool.js <<'EOF'"):
             c = self._hd(opener, body)

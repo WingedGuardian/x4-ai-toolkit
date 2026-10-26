@@ -11407,10 +11407,13 @@ F326's residual, measured: `python - <<'EOF'` / `open('<T>','a')` / `EOF`, with 
 `writes_host_transcript` false (9 shapes RED). The body is stripped as data and only `-c`/`-e`
 programs were scanned. Fix: the same write-call patterns over a heredoc body the interpreter reads
 as its PROGRAM (`python`, `python -`, `node`, `node -`; never a script's or a `-c` program's stdin
-data). Replay of 42,910 historical Bash commands, committed vs new `hook_facts`: 0 changed facts
+data), judged per heredoc: only a body whose own opening line feeds the interpreter, directly or
+through a pipe on that line (`cat <<EOF | python -`), counts. The first cut used the shared
+heredoc_bodies pipe rule, so a `cat > notes.md` body quoting a transcript write became a program
+whenever any later `| python` appeared (found in review, pinned by a twin). Replay of 42,910 historical Bash commands, committed vs new `hook_facts`: 0 changed facts
 (control: the probe command changes 1). RESIDUAL: a relative target resolves against the session
 directory only, so `cd <tree> && python - <<EOF` with a relative name is not seen; an expanding
-body's `$VAR` target is not resolved; `uv run python -` is not covered.
+body's `$VAR` target is not resolved; `uv run python -` and `{ cat <<EOF ... } | python` are not covered.
 
 **RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`TestInlineInterpreterWriteOntoATranscript`).
 

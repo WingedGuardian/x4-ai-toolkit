@@ -5544,9 +5544,18 @@ def _heredoc_program_writes_transcript(spliced: str, cwd: str) -> bool:
     """4.0.1 batch: the _INLINE_WRITE_TARGETS scan, over a heredoc body that an interpreter
     reads as its PROGRAM (`python - <<'EOF'` / `open('<T>','a')` / `EOF`, `node <<EOF`, or a
     body piped into one). The body was stripped as data, so only -c/-e programs were seen.
-    Same narrow write-call patterns: a body that only READS a transcript stays allowed."""
-    bodies = heredoc_bodies(spliced, sink=lambda sg: _reads_program_from_stdin(_unwrap(sg)))
-    return any(_program_writes_transcript(b, cwd) for b in bodies)
+    Same narrow write-call patterns: a body that only READS a transcript stays allowed.
+    Judged PER HEREDOC (review of 8957579): only a body whose OWN opening line feeds the
+    interpreter -- directly, or through a pipe on that line (`cat <<EOF | python -`) -- is a
+    program. heredoc_bodies' whole-command pipe rule made a `cat > notes.md` body a program
+    whenever any later `| python` appeared. RESIDUAL: `{ cat <<EOF ... } | python` is not seen."""
+    def sink(sg):
+        return _reads_program_from_stdin(_unwrap(sg))
+    for opener, _t, _e, body in _heredoc_walk(spliced)[0]:
+        if _opener_feeds(opener, sink) or _flows_to(opener, sink):
+            if _program_writes_transcript(chr(10).join(body), cwd):
+                return True
+    return False
 
 
 #: I1: a variable that makes a shell run code its `-c` text never shows (startup file, exported
