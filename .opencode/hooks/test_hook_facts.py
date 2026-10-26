@@ -765,6 +765,39 @@ class TestMiscPredicates(unittest.TestCase):
     def test_longjob_merely_NAMED_does_not_fire(self):
         self.assertFalse(F("grep -n 'corpus_sweep' gates/README.md")["longjob_foreground"])
 
+    # a825d86: a Codex shell call (x4guard sets the TOP-LEVEL x4_execution_host) yields a
+    # running session instead of Claude Bash's foreground timeout, so the two Claude
+    # scheduling facts do not apply to it. One test per clause; every other host keeps them.
+    @staticmethod
+    def _host(command, host, timeout=0, where="top"):
+        payload = {"tool_input": {"command": command, "timeout": timeout}}
+        if where == "top":
+            payload["x4_execution_host"] = host
+        else:
+            payload["tool_input"]["x4_execution_host"] = host
+        return H.facts(payload, ROOTS)
+
+    def test_a_codex_shell_long_job_is_not_a_foreground_long_job(self):
+        self.assertFalse(self._host("uv run python gates/corpus_sweep.py", "codex")["longjob_foreground"])
+
+    def test_a_codex_shell_is_not_held_to_the_bash_timeout_cap(self):
+        self.assertFalse(self._host("sleep 1", "codex", timeout=900000)["timeout_over_cap"])
+
+    def test_TWIN_only_the_codex_host_is_exempt_from_the_scheduling_facts(self):
+        """Clause: the host is exactly "codex". Claude, generic, empty and a near miss keep both."""
+        for host in ("claude", "generic", "", "Codex", "codex2"):
+            with self.subTest(host=host):
+                self.assertTrue(self._host("uv run python gates/corpus_sweep.py", host)["longjob_foreground"])
+                self.assertTrue(self._host("sleep 1", host, timeout=900000)["timeout_over_cap"])
+
+    def test_TWIN_the_command_payload_cannot_claim_the_codex_host(self):
+        """Clause: TOP-LEVEL payload context, which only the adapter writes. tool_input is the
+        model's own arguments, so naming the host there exempts nothing."""
+        self.assertTrue(self._host("uv run python gates/corpus_sweep.py", "codex",
+                                   where="tool_input")["longjob_foreground"])
+        self.assertTrue(self._host("sleep 1", "codex", timeout=900000,
+                                   where="tool_input")["timeout_over_cap"])
+
 
 class TestPreviouslyUnprobedRules(unittest.TestCase):
     """Every rule that a code review found had NO probe at all, or only one.

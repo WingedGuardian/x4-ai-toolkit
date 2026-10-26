@@ -210,16 +210,53 @@ MUTANTS = [
      "test_truncate_into_reference"),
     ("a find WITHOUT -delete is not", 'deletes = "-delete" in toks', "deletes = True",
      "test_a_find_that_does_NOT_delete_is_not_a_delete"),
+    # Anchors re-cut for a825d86, which put `not codex_async_shell and` in front of the cap.
     ("a non-int timeout still counts",
-     '"timeout_over_cap": _as_ms(timeout) > (7200000 if background is True else 600000),',
-     '"timeout_over_cap": isinstance(timeout, int) and timeout > (7200000 if background is True else 600000),',
+     '"timeout_over_cap": not codex_async_shell and _as_ms(timeout) > (7200000 if background is True else 600000),',
+     '"timeout_over_cap": not codex_async_shell and isinstance(timeout, int) and timeout > (7200000 if background is True else 600000),',
      "test_a_float_over_the_cap_fires"),
     # 2026-10-02: a background call has its own 2 h cap. The mutant drops it, so the
     # foreground cap judges background calls again -- the false deny that was fixed.
     ("a background call has the background cap",
-     '"timeout_over_cap": _as_ms(timeout) > (7200000 if background is True else 600000),',
-     '"timeout_over_cap": _as_ms(timeout) > 600000,',
+     '"timeout_over_cap": not codex_async_shell and _as_ms(timeout) > (7200000 if background is True else 600000),',
+     '"timeout_over_cap": not codex_async_shell and _as_ms(timeout) > 600000,',
      "test_a_BACKGROUND_call_has_the_background_cap"),
+    # a825d86: a Codex shell call is exempt from the two Claude scheduling facts. One mutant
+    # per clause: each fact's exemption, the exact host value, and where the host is read.
+    ("a Codex shell is not held to the Bash timeout cap",
+     '"timeout_over_cap": not codex_async_shell and _as_ms(timeout) > (7200000 if background is True else 600000),',
+     '"timeout_over_cap": _as_ms(timeout) > (7200000 if background is True else 600000),',
+     "test_a_codex_shell_is_not_held_to_the_bash_timeout_cap"),
+    ("a Codex shell long job is not a foreground long job",
+     '"longjob_foreground": longjob and background is not True and not codex_async_shell,',
+     '"longjob_foreground": longjob and background is not True,',
+     "test_a_codex_shell_long_job_is_not_a_foreground_long_job"),
+    ("only the codex host is exempt",
+     'codex_async_shell = payload.get("x4_execution_host") == "codex"',
+     'codex_async_shell = bool(payload.get("x4_execution_host") or True)',
+     "test_TWIN_only_the_codex_host_is_exempt_from_the_scheduling_facts"),
+    ("the host is read from the payload top level, never tool_input",
+     'codex_async_shell = payload.get("x4_execution_host") == "codex"',
+     'codex_async_shell = (payload.get("x4_execution_host") or inp.get("x4_execution_host")) == "codex"',
+     "test_TWIN_the_command_payload_cannot_claim_the_codex_host"),
+    # 8957579 / 2359217: an interpreter reading a heredoc as its PROGRAM is scanned for a
+    # transcript write. The scan itself, and each way a body can feed the interpreter.
+    ("a heredoc program is scanned for a transcript write",
+     "    transcript_inline = _heredoc_program_writes_transcript(spliced, base)",
+     "    transcript_inline = False",
+     "test_a_heredoc_program_writing_a_transcript_fires"),
+    ("only a body that feeds the interpreter is its program",
+     "        if _opener_feeds(opener, sink) or _flows_to(opener, sink):",
+     "        if True:",
+     "test_TWIN_a_heredoc_that_is_not_an_interpreter_program_is_not"),
+    ("a heredoc on the interpreter's own line feeds it",
+     "        if _opener_feeds(opener, sink) or _flows_to(opener, sink):",
+     "        if _flows_to(opener, sink):",
+     "test_a_heredoc_program_writing_a_transcript_fires"),
+    # NOT MUTATED: dropping `or _flows_to(opener, sink)` is EQUIVALENT today (MEASURED: the
+    # mutant survived the whole file, 0 failed). On the opener line alone _flows_to tests the
+    # piped-in subset of the very segments _opener_feeds already tests, so it can never add a
+    # verdict; `cat <<'EOF' | python -` is caught by _opener_feeds (its `python -` segment).
     # NOT MUTATED: the bool guard in _as_ms is BEHAVIOURALLY EQUIVALENT today --
     # float(True) is 1.0, which is under the cap either way, so removing it cannot
     # change a verdict. Kept as a guard because Python treats True as an int and a
