@@ -517,6 +517,19 @@ fi
 # calling icacls) is not seen -- this stops accidents, not intent.
 on lifts_reference_deny && ask "This LIFTS the OS delete/write protection on reference/ (the read-only unpacked base game). Lifting a protection is the user's step -- confirm only if they asked for it: $COMMAND"
 
+# === DENY — creating a LINK into a protected root (F331 follow-up) ===
+# A junction, symlink or hardlink whose TARGET is inside (or above) reference/, the game install,
+# the profile or the saves turns every later write through it into a write there, while the
+# shell rules judge that write by the link's own path. MEASURED: 72 of 72 such link-creating
+# commands were allowed. A DENY with a remedy: there is always a link-free way to do the work.
+# A link verb whose target the guard cannot read ASKS -- an inability, like an untranslated part.
+on link_into_protected && deny "BLOCKED: this creates a link (junction, symlink or hardlink) whose TARGET is inside -- or above -- a protected folder: reference/, the game install, the X4 profile or its saves. Every later write through that link would land in the protected folder. Point the link somewhere outside those folders, or copy what you need into your mod folder instead. Command: $COMMAND"
+if on link_target_unresolved; then
+  _X4_UNRELAXED=1
+  ask "This creates a link (junction, symlink or hardlink) whose TARGET the guard cannot read (a variable, a substitution, or a program value), so it cannot tell whether the link points into reference/, the game, the profile or the saves -- and every later write through such a link lands there. Write the target literally, or confirm only if you know where it points: $COMMAND"
+  x4_guard_check_inert
+fi
+
 # === CONFIRM — rm targeting the game, profile, reference, mods, or toolkit ===
 # ADVISORY since 2026-10-02 (user): 54 hook prompts in 5 weeks, 54 approved, 0 refused --
 # an ask that is always approved protects nothing and trains approval. The game install

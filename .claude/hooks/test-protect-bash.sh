@@ -112,6 +112,9 @@ need "$X4_REFERENCE" "icacls-reset-reference" X4_REFERENCE && probe ask "icacls-
 need "$X4_REFERENCE" "icacls-dblslash-reset" X4_REFERENCE && probe ask "icacls-dblslash-reset" "icacls \"$X4_REFERENCE\" //reset //T //C"
 need "$X4_REFERENCE" "icacls-inherit-prefix" X4_REFERENCE && probe ask "icacls-inherit-prefix" "icacls \"$X4_REFERENCE\" /inheritancezzz:r"
 probe ask   "x4refguard-remove"    'python scripts/x4refguard.py remove'
+# F331 follow-up: a link whose TARGET is a protected root is refused; an unreadable target asks.
+need "$X4_REFERENCE" "link-into-reference" X4_REFERENCE && probe deny "link-into-reference" "ln -s \"$X4_REFERENCE\" lnk"
+probe ask   "link-target-unreadable" 'ln -s "$X4_NO_SUCH_LINK_SRC" lnk'
 
 # --- runtime rules: the harness caps a foreground call at 600000 ms ---------
 # Four separate 10-minute losses in one session came from passing a LARGER value
@@ -136,6 +139,7 @@ probe allow "or-operator"         'a || b; echo $?'
 probe allow "append-durable"      'cat x >> KNOWLEDGEBASE.md'
 probe allow "plain-ls"            'ls -la'
 probe allow "x4refguard-status"   'python scripts/x4refguard.py status'
+probe allow "link-elsewhere"      'ln -s /c/work/src /c/work/lnk'
 need "$X4_REFERENCE" "icacls-read-reference" X4_REFERENCE && probe allow "icacls-read-reference" "icacls \"$X4_REFERENCE\""
 need "$X4_REFERENCE" "icacls-dblslash-save" X4_REFERENCE && probe allow "icacls-dblslash-save" "icacls \"$X4_REFERENCE\" //save acl.txt //T"
 need "$X4_REFERENCE" "icacls-inh-rejected" X4_REFERENCE && probe allow "icacls-inh-rejected" "icacls \"$X4_REFERENCE\" /inheritanc:r"
