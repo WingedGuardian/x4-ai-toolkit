@@ -592,6 +592,13 @@ Field by field:
 - `run_cwd`: `"neutral"` (the default, and what you want) runs your adapter in an EMPTY scratch
   folder, exactly like an agent that starts hooks somewhere unrelated. An adapter that ignores
   the payload's working directory then fails the relative-path cases, as it would in real use.
+- `execution_host` (optional): the host name your adapter passes to the guards with a shell call
+  (x4guard `verdict_for(..., execution_host=...)`). The guards' shell policy is host-aware in one
+  place: for `"codex"`, whose shell yields a running session, Claude Bash's foreground long-job
+  and timeout-cap rules do not apply. Where your adapter's shell verdict differs from the Claude
+  hook's, the engine re-runs the guards on that payload WITH this host; the case agrees only if
+  that verdict equals your adapter's, and is printed as `HOST CONTRACT` (READ:
+  `scripts/x4conformance.py`, `host_contract_divergence`). Leave it out unless your adapter sends it.
 - `env`: added to the environment your adapter runs with. Each case already runs with the
   sandbox's `X4_TOOLKIT`, `X4_GAME`, `X4_REFERENCE` and friends -- pass them through to x4guard
   untouched (inheriting your environment does that).

@@ -263,6 +263,83 @@ def test_K3_a_read_only_check_may_ask_where_the_native_hook_backs_a_save_up(refe
     assert xc.summarise(rows, n_total=2, buckets={"replayed": 2}, gaps={}, min_cases=1)[0] == rc
 
 
+@pytest.mark.parametrize("reference,host,adapter,rc", [
+    ("deny", "allow", "allow", xc.RC_OK),          # the guards WITH the host say what the adapter says
+    ("deny", "advise", "advise", xc.RC_OK),
+    # Twins: the host-aware verdict must EQUAL the adapter's; no host verdict, no excuse.
+    ("deny", "deny", "allow", xc.RC_DISAGREE),
+    ("deny", "advise", "allow", xc.RC_DISAGREE),
+    ("deny", None, "allow", xc.RC_DISAGREE),
+    ("deny", "inert", "inert", xc.RC_DISAGREE),
+    ("deny", "error", "error", xc.RC_DISAGREE),
+])
+def test_a825d86_a_host_contract_difference_agrees_only_when_the_hosted_guards_agree(reference, host, adapter, rc):
+    row = {"label": "h0", "kind": "shell-bash", "reference": reference, "adapter": adapter, "text": None}
+    if host is not None:
+        row["reference_host"] = host
+    got, text = xc.summarise(_res(1) + [row], n_total=2, buckets={"replayed": 2}, gaps={}, min_cases=1)
+    assert got == rc, text
+    assert ("HOST CONTRACT h0" in text) == (rc == xc.RC_OK)
+
+
+def test_the_codex_profile_declares_its_execution_host_and_the_claude_one_does_not():
+    assert CODEX["execution_host"] == "codex"
+    assert "execution_host" not in CLAUDE
+
+
+@pytest.mark.parametrize("bad", ["", 1, ["codex"]])
+def test_a_malformed_execution_host_is_a_profile_error(tmp_path, bad):
+    raw = json.loads((REPO / "scripts/conformance-profiles/codex.json").read_text(encoding="utf-8"))
+    raw["execution_host"] = bad
+    raw["cases"] = {k: dict(v, payload=str((REPO / "scripts/conformance-profiles" / v["payload"]).resolve()))
+                    for k, v in raw["cases"].items()}
+    p = tmp_path / "p.json"
+    p.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(xc.ProfileError, match="execution_host"):
+        xc.load_profile(str(p), REPO)
+    raw["execution_host"] = "codex"                    # twin: the same profile, well-formed, loads
+    p.write_text(json.dumps(raw), encoding="utf-8")
+    assert xc.load_profile(str(p), REPO)["execution_host"] == "codex"
+
+
+def _fake_replay(monkeypatch, tmp_path, adapter="allow"):
+    seen = []
+
+    def ref(row, root):
+        seen.append(row["payload"])
+        return ("allow" if row["payload"].get("x4_execution_host") == "codex" else "deny"), ""
+    monkeypatch.setattr(xc, "reference_verdict_detail", ref)
+    monkeypatch.setattr(xc, "adapter_verdict", lambda *a, **k: (adapter, None))
+    run = tmp_path / "run"; run.mkdir(exist_ok=True)
+    monkeypatch.setattr(xc, "neutral_run_dir", lambda root: run)
+    return seen
+
+
+@pytest.mark.parametrize("kind", ["shell-bash", "shell-powershell"])
+def test_replay_rejudges_a_differing_shell_case_with_the_profile_host_at_the_payload_top_level(
+        monkeypatch, tmp_path, kind):
+    seen = _fake_replay(monkeypatch, tmp_path)
+    row = {"label": "x", "kind": kind, "hook": "protect-bash.sh",
+           "payload": {"tool_name": "Bash", "tool_input": {"command": "bash build-effective.sh"}}}
+    (r,) = xc.replay([row], CODEX, None, REPO, workers=1)
+    assert r["reference"] == "deny" and r["reference_host"] == "allow" and xc.host_contract_divergence(r)
+    assert seen[-1]["x4_execution_host"] == "codex" and "x4_execution_host" not in seen[-1]["tool_input"]
+    assert "x4_execution_host" not in row["payload"]          # the dump row itself is untouched
+
+
+def test_TWIN_replay_never_rejudges_without_a_host_a_difference_or_a_shell(monkeypatch, tmp_path):
+    shell = {"label": "x", "kind": "shell-bash", "hook": "protect-bash.sh",
+             "payload": {"tool_name": "Bash", "tool_input": {"command": "ls"}}}
+    _fake_replay(monkeypatch, tmp_path)
+    assert "reference_host" not in xc.replay([shell], CLAUDE, None, REPO, workers=1)[0]   # no host
+    _fake_replay(monkeypatch, tmp_path, adapter="deny")
+    assert "reference_host" not in xc.replay([shell], CODEX, None, REPO, workers=1)[0]    # they agree
+    edit = {"label": "e", "kind": "edit", "hook": "protect-files.sh",
+            "payload": {"tool_name": "Edit", "tool_input": {"file_path": "a.xml"}}}
+    _fake_replay(monkeypatch, tmp_path)
+    assert "reference_host" not in xc.replay([edit], CODEX, None, REPO, workers=1)[0]     # not a shell
+
+
 def test_buckets_that_do_not_sum_to_the_total_are_an_engine_error():
     with pytest.raises(AssertionError):
         xc.summarise(_res(3), n_total=5, buckets={"replayed": 3}, gaps={}, min_cases=1)

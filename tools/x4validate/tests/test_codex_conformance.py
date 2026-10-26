@@ -122,10 +122,19 @@ def test_every_replayable_case_agrees(conformance_dump):
     drift = [(res["label"], row["got"], res["reference"]) for row, res in zip(todo, results)
              if res["reference"] != row["got"]
              and not (res["reference"] == "inert" and row["got"] in ("ask", "deny"))]   # inert = normalised ask/deny
+    # a825d86: a Codex shell is judged with the Codex host contract (no Claude foreground long-job
+    # or timeout-cap fact). Accepted only where the guards, re-run WITH execution_host=codex,
+    # give exactly the adapter's verdict (xc.host_contract_divergence) -- never by phrase.
+    hosted = [(r["label"], r["kind"], r["reference"], r["reference_host"], r["adapter"]) for r in results
+              if xc.host_contract_divergence(r)]
     diffs = [(r["label"], r["kind"], r["reference"], r["adapter"], r["text"]) for r in results
-             if r["reference"] != r["adapter"]]
-    print(f"replayed {len(results)}; replay drift vs the live harness verdict: {len(drift)}")
+             if r["reference"] != r["adapter"] and not xc.host_contract_divergence(r)]
+    print(f"replayed {len(results)}; replay drift vs the live harness verdict: {len(drift)}; "
+          f"host-contract divergences: {hosted}")
     assert not diffs, "\n".join(map(str, diffs))     # PER ITEM, never a total
+    # The contract is EXERCISED through the full chain, not merely tolerated: the corpus holds a
+    # foreground long-job case the Claude hook denies, and the Codex chain must let it run.
+    assert any(r[1] == "shell-bash" and r[2] == "deny" and r[4] in ("allow", "advise") for r in hosted), hosted
     # R7-3: the guards re-run NOW must still say what the harness recorded at decide() time; a
     # drift means the reference verdict is not the one the harness judged (it was only printed).
     assert not drift, "\n".join(f"DRIFT {d}" for d in drift)

@@ -23,6 +23,7 @@
     "jq"
   ],
   "run_cwd": "neutral",
+  "execution_host": "codex",
   "timeout_s": 180,
   "env": {
     "X4_PYTHON": "{PYTHON}"
