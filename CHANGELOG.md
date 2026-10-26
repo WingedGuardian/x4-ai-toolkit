@@ -7,6 +7,10 @@
 - The Bash/PowerShell guard now refuses an inline `python -c` / `node -e` program whose own write call (`open(..., 'a'/'w')`, `Path(...).write_text`, `appendFileSync`, `shutil.copy`/`os.replace` destination) targets a host session transcript, as it already refused `echo >> <transcript>`. Reading a transcript, or writing another file beside a read, is unchanged: over 42,557 historical commands no verdict changed (F326).
 - RETENTION.md shared policy updated in step with the Skyrim toolkit (user ruling 2026-10-24): save backups named under Forever; a Rolling tool store row; Toolkit temp limited to the toolkit's own name prefixes, never `pytest-of-<user>`.
 - Shared preservation core pinned to 221292e: incomplete local prompts refuse, and unknown surfaces cannot discard declared save work or claim evaluated coverage through a prompt.
+- `scripts/test-hooks.sh` no longer leaves paths too long for the Windows Recycle Bin in its sandbox: the long-path backup probe sizes its fixture to the sandbox and removes it and its backups in the same run, and a new probe fails if any path left behind sits more than 140 characters inside the sandbox. Kept or killed conformance runs had left 272-293-character paths (F327).
+- `scripts/build-release.sh` now applies the version check to a tag named `tags/vX.Y.Z` or `refs/tags/vX.Y.Z` too; both spellings skipped it as a dry run before, and the bundle is named after the short tag (F328).
+- The guard now also refuses a heredoc program fed to python/node on stdin (`python - <<'EOF'`, `node <<EOF`, or a body piped into one) whose own write call targets a host session transcript, the same narrow patterns as `python -c`. Reads stay allowed; over 42,910 historical Bash commands no verdict changed (F329).
+- The PowerShell guard reads a string constant piped into a bare `iex` (`'Get-ChildItem' | iex`) as it reads `iex 'Get-ChildItem'`, instead of refusing it as not completely evaluated. `'rm -r <game>' | iex` still reaches the delete rules; any other upstream stays refused (F330).
 
 ## v4.0.0 — 2026-10-21
 
