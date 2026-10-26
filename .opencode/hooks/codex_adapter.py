@@ -136,7 +136,9 @@ def translate(payload: dict, event: str, *, shell: str) -> list[tuple]:
         cmd = ti.get("command")
         if not isinstance(cmd, str):
             raise patch_paths.PatchParseError("Bash payload carries no command string")
-        calls = [("shell", shell, cmd, None, "shell command")]
+        # Native Codex labels exec_command as Bash and may omit its yield options.
+        # Preserve the host contract, not a fabricated Claude background flag.
+        calls = [("shell", shell, cmd, None, "shell command", {"execution_host": "codex"})]
         found = patch_paths.shell_patch(cmd)
         if found is not None:
             body, cd = found

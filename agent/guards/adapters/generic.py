@@ -27,8 +27,9 @@ class TranscriptRefused(ValueError):
     pass
 
 
-def judge(calls, qualified, deadline):
-    verdicts = [x4guard.verdict_for(kind, shell, command, path, deadline=deadline, save_qualified=qualified)
+def judge(calls, qualified, deadline, execution_host=""):
+    verdicts = [x4guard.verdict_for(kind, shell, command, path, deadline=deadline, save_qualified=qualified,
+                                   execution_host=execution_host)
                 for kind, shell, command, path, _label in calls]
     worst = dict(max(verdicts, key=lambda verdict: (bool(verdict.get("inert")), x4guard.RANK[verdict["decision"]])))
     notes = [verdict["context"] for verdict in verdicts if verdict.get("context")]
@@ -154,7 +155,7 @@ def main(argv=None):
             # parser defaults provenance to "known"). Unknown means relative mutation targets
             # are refused rather than resolved against the wrong folder.
             known_cwd = bool(action.cwd) and action.provenance.get("execution_cwd_known", True) is not False
-            output = save_policy.batch(payload, calls, lambda qualified: judge(calls, qualified, deadline),
+            output = save_policy.batch(payload, calls, lambda qualified: judge(calls, qualified, deadline, action.host),
                                        deadline, action.host, args.preview, execution_cwd_known=known_cwd)
     except TranscriptRefused as exc:
         # A structured refusal like every other decision here (exit 0; adapters block on it).

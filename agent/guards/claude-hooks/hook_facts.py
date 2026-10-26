@@ -5546,6 +5546,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     cmd = inp.get("command") or ""
     timeout = inp.get("timeout", 0)
     background = inp.get("run_in_background", False)
+    # Adapter-owned context: Codex exec_command yields a running session instead
+    # of Claude Bash's foreground timeout. Native Codex hooks can relabel it Bash
+    # and omit yield_time_ms, so absence of Claude's flag is not foreground proof.
+    # Command text and tool_input cannot opt into this host scheduling contract.
+    codex_async_shell = payload.get("x4_execution_host") == "codex"
     del _UNTRANSLATED[:]
     _WIN_DIALECT.clear()
     _BRACE_WORDS.clear()                # C1: per call, like the two above
@@ -6384,8 +6389,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # A BACKGROUND call has its own cap: 7200000 ms (READ: the Bash tool description,
         # 2026-10-02). Judged by the foreground cap, a 25-minute background job was denied
         # by a message telling it to run in the background. `is True`, as for longjob below.
-        "timeout_over_cap": _as_ms(timeout) > (7200000 if background is True else 600000),
-        "longjob_foreground": longjob and background is not True,
+        "timeout_over_cap": not codex_async_shell and _as_ms(timeout) > (7200000 if background is True else 600000),
+        "longjob_foreground": longjob and background is not True and not codex_async_shell,
         # THE LAST WHOLE-COMMAND AND-OF-INDEPENDENT-PREDICATES RULE IN THIS FILE,
         # and it hard-denied PROSE. It tested `cmd`/`ncmd` -- the RAW text rather
         # than `body` -- so a comment or a quoted string naming the tool, the

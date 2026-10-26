@@ -266,13 +266,15 @@ def is_agent_settings(path: str | None) -> bool:
 
 
 def guard_payload(kind: str, shell: str | None, command: str | None, path: str | None,
-                  content: str | None = None, edit: dict | None = None, patch: bool = False) -> dict:
+                  content: str | None = None, edit: dict | None = None, patch: bool = False,
+                  execution_host: str = "") -> dict:
     if kind == "shell":
         # `cwd` at the TOP level, where Claude Code and Codex put it: a relative operand is judged
         # from the caller's directory, so `check` and the hooks agree (lane F). The Codex adapter
         # has already entered the payload's cwd, so this is the Codex session cwd too.
         return {"tool_name": "PowerShell" if shell == "powershell" else "Bash",
-                "tool_input": {"command": command}, "cwd": os.getcwd()}
+                "tool_input": {"command": command}, "cwd": os.getcwd(),
+                "x4_execution_host": execution_host}
     if content is not None:
         # The file's WHOLE new content (a whole-file write tool, `--content`): exactly a Claude Code
         # Write, so every rule judges it as the reference hooks do (FX-G5 item 10).
@@ -405,12 +407,13 @@ GUARDS_OFF_NOTE = ("X4 GUARDS OFF (X4_GUARD=off at launch): every guard verdict 
 
 def verdict_for(kind: str, shell: str | None, command: str | None, path: str | None,
                 deadline: float | None = None, content: str | None = None,
-                edit: dict | None = None, patch: bool = False, save_qualified=None) -> dict:
+                edit: dict | None = None, patch: bool = False, save_qualified=None,
+                execution_host: str = "") -> dict:
     """The verdict, plus spec 5.7's escape hatch: with X4_GUARD exactly "off" the guards turn a
     deny/ask into an advisory naming what it would have been (they read the variable
     themselves), and this says GUARDS OFF on every verdict -- a would-be allow included. An inert
     verdict stays an inert deny: a guard that could not run judged nothing to relax."""
-    v = _verdict(kind, shell, command, path, deadline, content, edit, patch, save_qualified)
+    v = _verdict(kind, shell, command, path, deadline, content, edit, patch, save_qualified, execution_host)
     if os.environ.get("X4_GUARD") != "off" or v["inert"]:
         return v
     v = dict(v)
@@ -422,7 +425,8 @@ def verdict_for(kind: str, shell: str | None, command: str | None, path: str | N
 
 def _verdict(kind: str, shell: str | None, command: str | None, path: str | None,
              deadline: float | None = None, content: str | None = None,
-             edit: dict | None = None, patch: bool = False, save_qualified=None) -> dict:
+             edit: dict | None = None, patch: bool = False, save_qualified=None,
+             execution_host: str = "") -> dict:
     """A relative path is resolved from the CALLER's working directory (Codex apply_patch paths
     are relative). A delete is judged as the stricter of a write and an `rm -rf --` of that path:
     recursive, because the path may be a directory. No protect-bash rule distinguishes it from
@@ -437,7 +441,8 @@ def _verdict(kind: str, shell: str | None, command: str | None, path: str | None
         options = {} if save_qualified is None else {"save_qualified": save_qualified}
         return run_guard(script, payload, deadline, budget, **options)
     if kind == "shell":
-        return check("protect-bash.sh", guard_payload(kind, shell, command, None), deadline, budget)
+        return check("protect-bash.sh", guard_payload(kind, shell, command, None,
+                     execution_host=execution_host), deadline, budget)
     path = os.path.abspath(path)
     parts = [check("protect-files.sh", guard_payload("write", None, command, path, content, edit, patch),
                        deadline, budget)]
