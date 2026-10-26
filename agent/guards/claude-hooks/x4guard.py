@@ -414,6 +414,10 @@ def verdict_for(kind: str, shell: str | None, command: str | None, path: str | N
     themselves), and this says GUARDS OFF on every verdict -- a would-be allow included. An inert
     verdict stays an inert deny: a guard that could not run judged nothing to relax."""
     v = _verdict(kind, shell, command, path, deadline, content, edit, patch, save_qualified, execution_host)
+    return _annotate_guards_off(v)
+
+
+def _annotate_guards_off(v: dict) -> dict:
     if os.environ.get("X4_GUARD") != "off" or v["inert"]:
         return v
     v = dict(v)
@@ -421,6 +425,86 @@ def verdict_for(kind: str, shell: str | None, command: str | None, path: str | N
         v["decision"] = "advise"
     v["context"] = GUARDS_OFF_NOTE + ("\n\n" + v["context"] if v.get("context") else "")
     return v
+
+
+
+def write_verdicts(paths: list[str], *, deadline: float, save_qualified: bool) -> list[dict]:
+    """Path-only writes in one backend AFTER whole-action save qualification.
+
+    A complete framed reply is mandatory. Faults refuse the whole request.
+    Content-bearing and mixed actions retain the ordinary backend. This helper
+    neither discovers nor preserves saves; the caller must do so first.
+    """
+    guards = ["protect-files.sh"]
+    def failed(reason):
+        return [_inert(reason, guards) for _ in paths]
+    if not paths:
+        return []
+    if save_qualified is not True and save_qualified is not False:
+        return failed("bulk writes require whole-action save qualification")
+    if TIMEOUT_ERROR:
+        return failed(TIMEOUT_ERROR)
+    if any("\0" in p for p in paths):
+        return failed("NUL in a file path")
+    # Legacy sed/grep are line sensitive. Keep their exact behavior for LF/CR
+    # filenames and share the original deadline, rather than guessing.
+    if any("\n" in p or "\r" in p for p in paths):
+        return [verdict_for("write", None, None, p, deadline=deadline,
+                            save_qualified=save_qualified) for p in paths]
+    target = HERE / "protect-files.sh"
+    if not target.is_file():
+        return failed("guard script missing: protect-files.sh")
+    if not _deployed() and not os.environ.get("X4_TOOLKIT"):
+        return failed("bulk guard cannot find the configured toolkit roots")
+    bash, why = resolve_bash()
+    if not bash:
+        return failed(why)
+    remaining = deadline - _clock()
+    if remaining <= 0:
+        return failed("bulk file check: the caller's shared deadline was already spent")
+    fields = [str(len(paths))]
+    for path in paths:
+        path = os.path.abspath(path)
+        fields += [path, json.dumps(guard_payload("write", None, None, path))]
+    payload = ("\0".join(fields) + "\0").encode("utf-8")
+    argv = [bash, str(target), "--harness-policy-backend", "--batch"]
+    if save_qualified:
+        argv.append("--save-qualified")
+    # Framing is part of the caller's budget too.
+    remaining = deadline - _clock()
+    if remaining <= 0:
+        return failed("bulk file check: the caller's shared deadline was spent framing the request")
+    try:
+        rc, out, err = _run_bounded(argv, payload,
+                                   dict(os.environ, X4_GUARD_CHECK="1"), remaining)
+    except OSError as exc:
+        return failed(f"bulk file guard could not start: {exc}")
+    if rc is None:
+        return failed("bulk file guard timed out: the caller's shared deadline ran out")
+    if rc != 0:
+        detail = err.decode("utf-8", "replace").strip()[-300:]
+        return failed(f"bulk file guard exited {rc}: {detail}")
+    try:
+        frame = out.decode("utf-8").split("\0")
+        if frame[:2] != ["X4FILE1", str(len(paths))] or frame[-1] != "" or len(frame) != 3 * len(paths) + 3:
+            raise ValueError("incomplete or malformed bulk file verdicts")
+        verdicts = []
+        for i in range(len(paths)):
+            decision, reason, context = frame[2+3*i:5+3*i]
+            if decision not in RANK:
+                raise ValueError("unrecognized bulk file decision")
+            if decision in ("deny", "ask") and (not reason or NOT_CHECKED.search(reason)):
+                raise ValueError(f"bulk file guard could not check a path: {reason}")
+            if decision in ("allow", "advise") and reason:
+                raise ValueError("malformed bulk file reason")
+            if decision == "allow" and context or decision == "advise" and not context:
+                raise ValueError("malformed bulk file context")
+            v = {"v": 1, "decision": decision, "reason": reason or None,
+                 "context": context or None, "inert": False, "guards": guards}
+            verdicts.append(_annotate_guards_off(v))
+        return verdicts
+    except (UnicodeError, ValueError) as exc:
+        return failed(str(exc))
 
 
 def _verdict(kind: str, shell: str | None, command: str | None, path: str | None,

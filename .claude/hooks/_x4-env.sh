@@ -449,6 +449,10 @@ x4_acf_buildid() {
 # by every guard, and F93 is the entry about a shared helper quietly re-scoping the rules
 # above it -- so this may cost less, and must not decide differently.
 x4_norm() {
+  printf '%s' "$1" | x4_norm_stream
+}
+# Shared sed program for single paths and line-safe bulk streams.
+x4_norm_stream() {
   # Lowercase, backslash -> slash, drive dialect unified, repeated separators
   # collapsed, THEN dot segments resolved.
   #
@@ -486,7 +490,7 @@ x4_norm() {
   # Python wrote INTO x4-paths.env through `x4-paths.env.`, `x4-paths.env ` and
   # `x4-paths.env::$DATA`, and every guard compared them equal to nothing. Twin of
   # hook_facts._win_alias -- the same conservative superset, on every platform.
-  printf '%s' "$1" | sed -E 'y/ABCDEFGHIJKLMNOPQRSTUVWXYZ\\/abcdefghijklmnopqrstuvwxyz\//
+  sed -E 'y/ABCDEFGHIJKLMNOPQRSTUVWXYZ\\/abcdefghijklmnopqrstuvwxyz\//
 s#^//[?.]/unc/#//#
 s#^//[?.]/##
 s#(^|[^a-z0-9])([a-z]):/#\1/\2/#g
@@ -521,7 +525,7 @@ x4_winpath() {
   [ "$need" = 1 ] || return 0
   _X4_WP="$(printf '%s' "$1" | sed -E 's#([^/\\]):[^/\\]+([/\\]|$)#\1\2#g
 s#([^/\\]):$#\1#
-s#([^/\\]*[^/\\. ])[. ]+([/\\]|$)#\1\2#g')"
+s#([^/\\]*[^/\\. ])[. ]+([/\\]|$)#\1\2#g')" || { _X4_CANON_ERROR=1; return 1; }
   case "$_X4_WP" in *~[0-9]*) ;; *) return 0 ;; esac
   command -v cygpath >/dev/null 2>&1 || return 0
   d="$_X4_WP"
@@ -537,7 +541,7 @@ s#([^/\\]*[^/\\. ])[. ]+([/\\]|$)#\1\2#g')"
 # target compare equal). Uses realpath -m when available (no need for the file to exist);
 # falls back to the raw path otherwise. Then normalized for case/slash-insensitive compare.
 x4_canon() {
-  x4_winpath "$1"
+  x4_winpath "$1" || return 1
   local p="$_X4_WP"
   # STRIPPED BEFORE realpath, not after. `realpath -m` rewrites `//./X` to `//X`, which
   # x4_norm then renders `///c/...` -- under no root -- so the ordering fix written
@@ -587,13 +591,14 @@ x4_canon() {
 _X4_CK=()                 # cache keys
 _X4_CV=()                 # cache values
 _X4_CANON_RESULT=""       # the out-parameter
+_X4_CANON_ERROR=""        # bulk callers refuse a failed canonicalization
 x4_canon_memo() {
   local i=0 n=${#_X4_CK[@]}
   while [ "$i" -lt "$n" ]; do
     if [ "${_X4_CK[$i]}" = "$1" ]; then _X4_CANON_RESULT="${_X4_CV[$i]}"; return 0; fi
     i=$((i+1))
   done
-  _X4_CANON_RESULT="$(x4_canon "$1")"
+  if ! _X4_CANON_RESULT="$(x4_canon "$1")"; then _X4_CANON_ERROR=1; fi
   _X4_CK[$n]="$1"; _X4_CV[$n]="$_X4_CANON_RESULT"
 }
 x4_under() {

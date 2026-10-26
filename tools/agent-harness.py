@@ -28,9 +28,17 @@ class TranscriptRefused(ValueError):
 
 
 def judge(calls, qualified, deadline, execution_host=""):
-    verdicts = [x4guard.verdict_for(kind, shell, command, path, deadline=deadline, save_qualified=qualified,
+    # Save scope is qualified once, over the WHOLE action, before this call.
+    # Only path-only write batches use the shared file backend.
+    if qualified is not None and len(calls) > 1 and all(
+            kind == "write" and shell is None and command is None
+            for kind, shell, command, path, label in calls):
+        verdicts = x4guard.write_verdicts([path for kind, shell, command, path, label in calls],
+                                         deadline=deadline, save_qualified=qualified)
+    else:
+        verdicts = [x4guard.verdict_for(kind, shell, command, path, deadline=deadline, save_qualified=qualified,
                                    execution_host=execution_host)
-                for kind, shell, command, path, _label in calls]
+                    for kind, shell, command, path, _label in calls]
     worst = dict(max(verdicts, key=lambda verdict: (bool(verdict.get("inert")), x4guard.RANK[verdict["decision"]])))
     notes = [verdict["context"] for verdict in verdicts if verdict.get("context")]
     if notes:

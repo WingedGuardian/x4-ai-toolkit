@@ -257,6 +257,15 @@ after parsing and working-directory selection. Leave separate host/adapter
 startup and cleanup headroom and qualify the real transport under load. The
 legacy timing derivation below does not describe this neutral deadline.
 
+Path-only file write batches share one file-policy backend after whole-action
+save qualification. Every path is evaluated by the same rules as a single write;
+an incomplete reply, failed normalization or expired deadline refuses the whole
+request. This does not execute the writes or relax save preservation and bulk-save
+approval. Mixed operations, deletes/moves and content-bearing native edits keep
+their existing policy path. LF/CR filenames use the ordinary backend under the
+same shared deadline. Qualify throughput with the actual path set and host;
+single-file timings do not establish bulk capacity.
+
 ### Legacy policy-preview compatibility
 
 `x4guard.py` remains available in `.claude/hooks/`, `.codex/hooks/` and

@@ -15,20 +15,15 @@ JQ="${JQ:-jq}"
 case "$0" in */*|*\\*) HOOK_DIR="${0%[/\\]*}" ;; *) HOOK_DIR=. ;; esac
 . "$HOOK_DIR/_x4-env.sh"
 
-INPUT=$(x4_hook_input)
-x4_require_input "$INPUT" "X4 GUARD INERT: this hook received NO INPUT, so it checked nothing. Allowing silently is how five hooks sat dead for weeks while their suites passed. Confirm only if you know why the payload is missing."
-
-# Is jq actually usable? A BROKEN jq made every verdict below print nothing, and empty
-# stdout from a hook means ALLOW -- so the guard failed open, silently, exactly like
-# F79. protect-bash.sh gained this fallback in bccffc1; this file never did.
-x4_resolve_python; PY="$X4_PY"   # shared: refuses a misconfigured X4_PYTHON
-
+# Binary batch frames must be read before command substitution (which drops NULs).
+_X4_FILE_BATCH=0
+_X4_BATCH_NP=""
+_X4_BATCH_LINKED=""
+_X4_WORK_SUBS=(.claude/hooks .claude/skills .claude/agents .claude/commands .claude/plans .claude/backups .claude/memory .claude/projects tools bin scripts dev dist)
+[ "${1:-}" = --harness-policy-backend ] && [ "${2:-}" = --batch ] && _X4_FILE_BATCH=1
+x4_resolve_python; PY="$X4_PY"
 _harness_save_qualified=0
-if [ -n "$PY" ] && [ "${1:-}" != --harness-policy-backend ]; then
-  x4_save_dispatch files
-  exit 0
-fi
-[ "${2:-}" = --save-qualified ] && _harness_save_qualified=1
+[ "${2:-}" = --save-qualified ] || [ "${3:-}" = --save-qualified ] && _harness_save_qualified=1
 
 emit() {   # emit <deny|ask|advise> <reason>
   # X4_GUARD=off (spec 5.7): a deny or an ask becomes an advisory that names what it would
@@ -36,6 +31,11 @@ emit() {   # emit <deny|ask|advise> <reason>
   # (R1-F2). See x4_guard_relax in _x4-env.sh.
   x4_guard_relax protect-files.sh "$1" "$2"
   set -- "$_x4_rk" "$_x4_rr"
+  if [ "$_X4_FILE_BATCH" = 1 ]; then
+    _B_KIND="$1"
+    if [ "$1" = advise ]; then _B_CONTEXT="$2"; else _B_REASON="$2"; fi
+    return 0
+  fi
   if [ "$JQ_OK" = 1 ]; then
     if [ "$1" = "advise" ]; then
       "$JQ" -n --arg r "$2" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$r}}'
@@ -58,43 +58,7 @@ sys.stdout.buffer.write(json.dumps({"hookSpecificOutput": h}).encode("utf-8"))'
   fi
 }
 
-# ONE jq process: the read itself is the health check (AUDIT-2026-09-24 HK-4). A
-# separate `jq -e .` probe first was a second process on every Edit/Write. jq exits
-# non-zero when it is missing, broken, OR handed an unreadable payload -- and in every
-# one of those cases the python reader below runs and tells the last two apart, so an
-# UNREADABLE payload still reaches the refusal (MEASURED 2026-09-05: it once did not).
-# JQ_OK records whether jq worked, for emit().
-JQ_OK=0
-if FILE_PATH=$(printf '%s' "$INPUT" | "$JQ" -r '.tool_input.file_path // .tool_input.notebook_path // empty' 2>/dev/null); then
-  JQ_OK=1; FP_OK=1
-elif [ -n "$PY" ]; then
-  FILE_PATH=$(X4_IN="$INPUT" "$PY" -c 'import json, os, sys
-try:
-    sys.stdout.write((json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("file_path") or (json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("notebook_path") or "")
-except Exception:
-    sys.exit(9)')
-  FP_OK=$?
-  [ "$FP_OK" -eq 0 ] && FP_OK=1 || FP_OK=0
-else
-  FP_OK=0
-fi
-
-# An EMPTY path and an UNREADABLE payload are different facts, and conflating them is
-# how a guard reports success over nothing. Only the first is an allow.
-if [ "$FP_OK" != 1 ]; then
-  VERDICT=1; _X4_UNRELAXED=1     # an inability: never relaxed below ask (R1-F2)
-  emit ask "X4 GUARD: could not read the file path from this payload (no working jq or python), so NO rule below was evaluated. This is not a clean pass. Confirm only if you know the edit is safe."
-  x4_guard_check_inert
-  exit 0
-fi
-[ -z "$FILE_PATH" ] && exit 0
-# The path AS WINDOWS OPENS IT, before any rule reads it (FX-G2 item 3): `x4-paths.env.`,
-# `x4-paths.env::$DATA`, `<ref>./libraries/x`, `C:/PROGRA~2/.../X4FOUN~1/...` each ARE the
-# protected file, and every NAME test below (the config name, `X4 Foundations/`, `.cat`) reads
-# the path as written. MEASURED: 11 of 17 such writes were allowed. See x4_winpath.
-x4_winpath "$FILE_PATH"; FILE_PATH="$_X4_WP"
-
-deny() { VERDICT=1; emit deny "$1"; exit 0; }
+deny() { VERDICT=1; emit deny "$1"; }
 # advise <reason> -- ALLOW, and explain to CLAUDE. Added 2026-08-29 when the user
 # turned off the content.xml confirmation: the reminder is still worth having, the
 # INTERRUPTION is not. A prompt spends the user's attention; an advisory spends mine.
@@ -115,14 +79,29 @@ flush_advice() {
   [ -n "$ADVICE" ] || return 0
   emit advise "$ADVICE"
 }
-trap flush_advice EXIT
 advise() { if [ -n "$ADVICE" ]; then ADVICE="$ADVICE
 $1"; else ADVICE="$1"; fi; }
-ask()  { VERDICT=1; emit ask "$1"; exit 0; }
+ask()  { VERDICT=1; emit ask "$1"; }
 
+
+# Same case-insensitive EREs as the legacy grep calls, without a process per
+# ordinary path. Preserve grep's line semantics for unusual LF/CR filenames.
+x4_file_name_match() {
+  local nm=0 rc
+  case "$FILE_PATH" in
+    *$'\n'*|*$'\r'*) printf '%s\n' "$FILE_PATH" | grep -qiE "$1"; return $? ;;
+  esac
+  shopt -q nocasematch && nm=1
+  shopt -s nocasematch
+  [[ "$FILE_PATH" =~ $1 ]]; rc=$?
+  [ "$nm" = 1 ] || shopt -u nocasematch
+  return "$rc"
+}
+
+x4_file_policy() {
 # === HARD BLOCK — read-only reference data (unpacked base game, never edit) ===
 # X4_REFERENCE defaults to $X4_TOOLKIT/reference, so this covers the default layout too.
-x4_under "$FILE_PATH" "$X4_REFERENCE" && deny "BLOCKED: reference/ is read-only unpacked base game data — never edit. Make a diff patch in your mod instead."
+x4_under "$FILE_PATH" "$X4_REFERENCE" && { deny "BLOCKED: reference/ is read-only unpacked base game data — never edit. Make a diff patch in your mod instead."; return 0; }
 
 # === HARD BLOCK — the toolkit's PATH CONFIG (v4.0 release review R1-F1 / R1-P1, ruling 3) ===
 # Every guard reads its roots from x4-paths.env. An agent that could write it could point
@@ -139,7 +118,7 @@ _x4_cfgname=0
 if [ "$_x4_cfgname" = 1 ]; then
   x4_cfg_candidates
   while IFS= read -r _cf; do
-    [ -n "$_cf" ] && x4_under "$FILE_PATH" "$_cf" && { x4_cfg_why "$FILE_PATH"; deny "$_x4_cfg_why"; }
+    [ -n "$_cf" ] && x4_under "$FILE_PATH" "$_cf" && { x4_cfg_why "$FILE_PATH"; deny "$_x4_cfg_why"; return 0; }
   done <<EOF
 $_x4_cfg_paths
 EOF
@@ -157,10 +136,10 @@ case "$FILE_PATH" in
       _x4_sg="$(printf '%s' "$INPUT" | "$PY" "$HOOK_DIR/settings_guard.py" --path "$FILE_PATH" 2>/dev/null)"
       _x4_sgrc=$?
       [ "$_x4_sgrc" = 0 ] || _x4_sg="BLOCKED: the settings-file check could not run (exit $_x4_sgrc), so this write to $FILE_PATH was not judged. Retry; if it persists, the user should edit the file."
-      [ -n "$_x4_sg" ] && deny "$_x4_sg"
+      [ -n "$_x4_sg" ] && { deny "$_x4_sg"; return 0; }
     else
       case "$(printf '%s' "$FILE_PATH" | tr 'A-Z\\' 'a-z/')" in
-        */.claude/settings*.json) deny "BLOCKED: no Python was found, so the guard cannot check what this write leaves in $FILE_PATH, a Claude Code settings file whose env reaches every hook. Set X4_PYTHON (or put python on PATH) and retry." ;;
+        */.claude/settings*.json) deny "BLOCKED: no Python was found, so the guard cannot check what this write leaves in $FILE_PATH, a Claude Code settings file whose env reaches every hook. Set X4_PYTHON (or put python on PATH) and retry."; return 0 ;;
       esac
     fi ;;
 esac
@@ -168,9 +147,9 @@ esac
 # === HARD BLOCK — CAT/DAT archive files (use bin/xrcat / XRCatTool only) ===
 # Scoped 2026-08-29: only where X4 keeps archives. `.dat` is a generic extension --
 # this denied editing another game's save in Documents, which is not ours to block.
-if echo "$FILE_PATH" | grep -qiE '\.(cat|dat)$'; then
+if x4_file_name_match '\.(cat|dat)$'; then
   for _r in "${X4_GAME:-}" "${X4_EXTENSIONS:-}" "${X4_MODS:-}" "${X4_TOOLKIT:-}"; do
-    x4_under "$FILE_PATH" "$_r" && deny "BLOCKED: cannot write .cat/.dat archives directly. Use bin/xrcat (XRCatTool) to pack/unpack."
+    x4_under "$FILE_PATH" "$_r" && { deny "BLOCKED: cannot write .cat/.dat archives directly. Use bin/xrcat (XRCatTool) to pack/unpack."; return 0; }
   done
 fi
 
@@ -183,7 +162,7 @@ fi
 # because this advisory exited and would have bypassed the prompt the user kept; since
 # advisories accumulate (F84) the confirmation below is reached on its own and wins.
 if true; then
-  echo "$FILE_PATH" | grep -qiE '(^|[/\\])content\.xml$' && advise "MOD MANIFEST: $FILE_PATH controls what this mod loads, its id, version and dependencies. A wrong id makes every dependent mod report MISSING, and `save=\"1\"` bakes the mod into save files. Allowed without confirmation (user decision 2026-08-29) -- so check the change yourself rather than expecting a prompt."
+  x4_file_name_match '(^|[/\\])content\.xml$' && advise "MOD MANIFEST: $FILE_PATH controls what this mod loads, its id, version and dependencies. A wrong id makes every dependent mod report MISSING, and `save=\"1\"` bakes the mod into save files. Allowed without confirmation (user decision 2026-08-29) -- so check the change yourself rather than expecting a prompt."
 fi
 
 # === ADVISORY — editing the DEPLOYED .claude/ instead of its source (2026-09-13) ===
@@ -228,7 +207,7 @@ fi
 # -- every ordinary edit -- costs no subprocess. Only a READ-ONLY file pays one python
 # call, which asks x4lock ITSELF whether it manages it, so there is one manifest, not two.
 # `-w` honours the Windows read-only attribute under Git Bash (MEASURED 2026-10-03, with an
-# unlocked control, in C:/, C:\ and /c/ spellings). ABOVE the whitelist: its `exit 0`s
+# unlocked control, in C:/, C:\ and /c/ spellings). ABOVE the whitelist: its `return 0`s
 # would make an advisory placed under it unreachable (F84); flush_advice still emits it.
 if [ -f "$FILE_PATH" ] && [ ! -w "$FILE_PATH" ] && [ -n "$PY" ]; then
   _lk=""
@@ -253,13 +232,13 @@ fi
 # -- a base-game file -- matched the whitelist and exited 0 before the game-install HARD
 # BLOCK was reached. A whitelist decided on text the filesystem does not resolve that
 # way is a whitelist for a different file.
-_NP="$(x4_norm "$FILE_PATH")"
+_NP="${_X4_BATCH_NP:-$(x4_norm "$FILE_PATH")}"
 # H1 (v4.0 release review): a HOST SESSION TRANSCRIPT is written by the host alone. The save
 # guard reads the user's typed save approvals from it, so an agent write there could forge
 # one -- and `*.claude/projects/*` is whitelisted below for the memory notes beside it.
 case "$_NP" in
   */.claude/projects/*.jsonl|*/.codex/sessions/*.jsonl)
-    deny "BLOCKED: $FILE_PATH is a host session transcript. The host alone writes it, and the save guard reads the user's typed save approvals from it -- an agent edit could forge one. Leave it to the host." ;;
+    deny "BLOCKED: $FILE_PATH is a host session transcript. The host alone writes it, and the save guard reads the user's typed save approvals from it -- an agent edit could forge one. Leave it to the host."; return 0 ;;
 esac
 # M1: the same trees RELOCATED by the host's own variables ($CLAUDE_CONFIG_DIR/projects,
 # $CODEX_HOME/sessions). Only paid when a variable is set and the path ends in .jsonl.
@@ -267,9 +246,9 @@ case "$_NP" in
   *.jsonl)
     for _tv in "${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR/projects}" "${CODEX_HOME:+$CODEX_HOME/sessions}"; do
       [ -n "$_tv" ] || continue
-      _tn="$(x4_norm "$_tv")"
+      _tn="$(x4_norm "$_tv")" || _X4_CANON_ERROR=1
       case "$_NP" in
-        "${_tn%/}"/*) deny "BLOCKED: $FILE_PATH is a host session transcript (relocated tree). The host alone writes it, and the save guard reads the user's typed save approvals from it -- an agent edit could forge one. Leave it to the host." ;;
+        "${_tn%/}"/*) deny "BLOCKED: $FILE_PATH is a host session transcript (relocated tree). The host alone writes it, and the save guard reads the user's typed save approvals from it -- an agent edit could forge one. Leave it to the host."; return 0 ;;
       esac
     done ;;
 esac
@@ -306,7 +285,7 @@ case "$_NP" in
     for _nr in "$_nr1" "$_nr2"; do
       [ -n "$_nr" ] || continue
       x4_canon_memo "$_nr"
-      [ "$_nfc" = "${_X4_CANON_RESULT%/}/$_nrel" ] && exit 0
+      [ "$_nfc" = "${_X4_CANON_RESULT%/}/$_nrel" ] && return 0
     done ;;
 esac
 # dev/ and dist/ are the documented mod workspace; they MUST be whitelisted before the
@@ -318,20 +297,28 @@ esac
 # subshell) per root on every Edit/Write, most of this hook's latency (AUDIT-2026-09-24
 # HK-4). The two agree unless a subdirectory is itself a SYMLINK, which realpath would
 # resolve elsewhere; for that one case the full x4_under still runs.
+# Both workspace branches below only allow. Test the configured mod root first
+# so an ordinary mod file need not traverse unrelated toolkit subdirectories.
+# All hard blocks, transcript checks and advisories above still run first.
+x4_under "$FILE_PATH" "${X4_MODS:-}" && return 0
 x4_canon_memo "$X4_TOOLKIT"; _tkc="${_X4_CANON_RESULT%/}"
 x4_canon_memo "$FILE_PATH";  _fpc="$_X4_CANON_RESULT"
-for sub in .claude/hooks .claude/skills .claude/agents .claude/commands .claude/plans .claude/backups .claude/memory .claude/projects tools bin scripts dev dist; do
-  if [ -L "$X4_TOOLKIT/${sub%%/*}" ] || [ -L "$X4_TOOLKIT/$sub" ]; then
-    x4_under "$FILE_PATH" "$X4_TOOLKIT/$sub" && exit 0
+for sub in "${_X4_WORK_SUBS[@]}"; do
+  _x4_linked=0
+  if [ "$_X4_FILE_BATCH" = 1 ]; then
+    case "$_X4_BATCH_LINKED" in *"|$sub|"*) _x4_linked=1 ;; esac
+  elif [ -L "$X4_TOOLKIT/${sub%%/*}" ] || [ -L "$X4_TOOLKIT/$sub" ]; then
+    _x4_linked=1
+  fi
+  if [ "$_x4_linked" = 1 ]; then
+    x4_under "$FILE_PATH" "$X4_TOOLKIT/$sub" && return 0
     continue
   fi
-  case "$_fpc" in "$_tkc/$sub"|"$_tkc/$sub"/*) exit 0 ;; esac
+  case "$_fpc" in "$_tkc/$sub"|"$_tkc/$sub"/*) return 0 ;; esac
 done
-# Mod sources may live outside the toolkit entirely (X4_MODS); same reasoning.
-x4_under "$FILE_PATH" "${X4_MODS:-}" && exit 0
 case "$_NP" in
   *.claude/hooks/*|*.claude/skills/*|*.claude/agents/*|*.claude/commands/*|\
-  *.claude/plans/*|*.claude/backups/*|*.claude/memory/*|*.claude/projects/*) exit 0 ;;
+  *.claude/plans/*|*.claude/backups/*|*.claude/memory/*|*.claude/projects/*) return 0 ;;
 esac
 
 # NOTE: the "ask" rules below run BEFORE the game-install block, so the deploy target
@@ -341,12 +328,12 @@ esac
 # even for a manifest inside dev/ or X4_MODS.)
 
 # === CONFIRMATION — user profile files (saves, config, active mod list) ===
-x4_under "$FILE_PATH" "$X4_PROFILE" && [ "$_harness_save_qualified" != 1 ] && ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"
+x4_under "$FILE_PATH" "$X4_PROFILE" && [ "$_harness_save_qualified" != 1 ] && { ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"; return 0; }
 # Saves first: the message must name what is actually at risk.
-x4_under "$FILE_PATH" "${X4_SAVES:-}" && [ "$_harness_save_qualified" != 1 ] && ask "EDITING A SAVE GAME: $FILE_PATH -- saves are not reproducible and there is no undo. Confirm?"
+x4_under "$FILE_PATH" "${X4_SAVES:-}" && [ "$_harness_save_qualified" != 1 ] && { ask "EDITING A SAVE GAME: $FILE_PATH -- saves are not reproducible and there is no undo. Confirm?"; return 0; }
 # A profile path the X4_PROFILE variable does not name still confirms -- BEFORE the
 # Documents advisory below, or it would only be advised (the profile lives in Documents).
-echo "$FILE_PATH" | grep -qiE 'Egosoft[/\\]X4[/\\]' && [ "$_harness_save_qualified" != 1 ] && ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"
+x4_file_name_match 'Egosoft[/\\]X4[/\\]' && [ "$_harness_save_qualified" != 1 ] && { ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"; return 0; }
 # ...and the rest of Documents: game settings, other games, personal files. ADVISORY since
 # 2026-10-02 (user: an ask that is always approved protects nothing). advise() accumulates
 # and never exits, so every rule below still applies.
@@ -367,8 +354,8 @@ x4_mods_are_separate() {
   return 0
 }
 if x4_under "$FILE_PATH" "$X4_EXTENSIONS"; then
-  x4_mods_are_separate     && deny "BLOCKED: $FILE_PATH is a DEPLOYED copy; the live extensions/ folder is overwritten on every deploy. Edit the source under $X4_MODS and redeploy."
-  ask "EDITING DEPLOYED MOD: $FILE_PATH -- the live extensions/ folder is overwritten on each deploy; edit the source instead. Confirm?"
+  x4_mods_are_separate     && { deny "BLOCKED: $FILE_PATH is a DEPLOYED copy; the live extensions/ folder is overwritten on every deploy. Edit the source under $X4_MODS and redeploy."; return 0; }
+  ask "EDITING DEPLOYED MOD: $FILE_PATH -- the live extensions/ folder is overwritten on each deploy; edit the source instead. Confirm?"; return 0
 fi
 
 # === HARD BLOCK — game installation files (base-game content that isn't the toolkit) ===
@@ -380,8 +367,148 @@ _GR="${X4_GAME:-$X4_TOOLKIT}"; _GR="${_GR%[/\\]}"
 # it to X4_GAME sent an agent in the separate layout to write a file nothing reads.
 _GAME_DENY="BLOCKED: $FILE_PATH is in the game installation. Notes and personal preferences -> ${X4_TOOLKIT%[/\\]}/KNOWLEDGEBASE.local.md. Game/engine facts -> $_GR/KNOWLEDGEBASE.md (x4lock keeps it read-only: python \"$X4_TOOLKIT/scripts/x4lock.py\" unlock \"$_GR/KNOWLEDGEBASE.md\", edit, then relock with x4lock.py lock). Mod files -> your mod folder (dev/ or X4_MODS), then deploy. (Legacy notes file, still writable: $_GR/X4-NOTES.md.)"
 if [ -n "${X4_GAME:-}" ] && x4_under "$FILE_PATH" "$X4_GAME"; then
-  deny "$_GAME_DENY"
+  deny "$_GAME_DENY"; return 0
 fi
-echo "$FILE_PATH" | grep -qiE 'X4 Foundations[/\\]' && deny "$_GAME_DENY"
+x4_file_name_match 'X4 Foundations[/\\]' && { deny "$_GAME_DENY"; return 0; }
 
-exit 0
+return 0
+
+}
+
+# Internal transport, used only after whole-action save qualification.
+x4_file_batch() {
+  local count i j p extra n item
+  IFS= read -r -d '' count || return 2
+  case "$count" in ''|*[!0-9]*) return 2 ;; esac
+  [ "$count" -gt 0 ] && [ "$count" -le 100000 ] || return 2
+  local paths=() inputs=() lexical=() canon_inputs=() canonical=()
+  for ((i=0; i<count; i++)); do
+    IFS= read -r -d '' p || return 2
+    IFS= read -r -d '' item || return 2
+    [ -n "$p" ] || return 2
+    case "$p" in *$'\n'*|*$'\r'*) return 2 ;; esac
+    x4_winpath "$p" || return 2
+    p="$_X4_WP"
+    [ -n "$p" ] || return 2
+    paths[$i]="$p"; inputs[$i]="$item"
+    case "$p" in
+      //[?.]/[Uu][Nn][Cc]/*) p="//${p#//?/???/}" ;;
+      //[?.]/*) p="${p#//?/}" ;;
+    esac
+    canon_inputs[$i]="$p"
+  done
+  extra=""
+  if IFS= read -r -d '' extra || [ -n "$extra" ]; then return 2; fi
+  i=0
+  local normalized
+  normalized="$(set -o pipefail; printf '%s\n' "${paths[@]}" | x4_norm_stream)" || return 2
+  while IFS= read -r p; do lexical[$i]="$p"; i=$((i+1)); done <<< "$normalized"
+  [ "$i" = "$count" ] || return 2
+
+  # x4_canon uses realpath only for POSIX-absolute inputs. Bound argv size
+  # for Windows; on failure use precisely the legacy per-path fallback.
+  if command -v realpath >/dev/null 2>&1; then
+    for ((i=0; i<count; i+=32)); do
+      local positions=() values=() resolved=()
+      for ((j=i; j<count && j<i+32; j++)); do
+        case "${canon_inputs[$j]}" in
+          /*) positions[${#positions[@]}]="$j"; values[${#values[@]}]="${canon_inputs[$j]}" ;;
+        esac
+      done
+      [ "${#values[@]}" -gt 0 ] || continue
+      if p="$(realpath -m -- "${values[@]}" 2>/dev/null)"; then
+        while IFS= read -r item; do resolved[${#resolved[@]}]="$item"; done <<< "$p"
+        [ "${#resolved[@]}" = "${#positions[@]}" ] || return 2
+        for ((j=0; j<${#positions[@]}; j++)); do canon_inputs[${positions[$j]}]="${resolved[$j]}"; done
+      else
+        for ((j=0; j<${#positions[@]}; j++)); do
+          n="${positions[$j]}"
+          canon_inputs[$n]="$(realpath -m -- "${values[$j]}" 2>/dev/null || printf '%s' "${values[$j]}")"
+        done
+      fi
+    done
+  fi
+  i=0
+  normalized="$(set -o pipefail; printf '%s\n' "${canon_inputs[@]}" | x4_norm_stream)" || return 2
+  while IFS= read -r p; do canonical[$i]="$p"; i=$((i+1)); done <<< "$normalized"
+  [ "$i" = "$count" ] || return 2
+
+  # Cache roots + CURRENT file only: Bash 3.2's indexed cache would otherwise
+  # grow quadratically. Roots and filesystem are stable during one check.
+  for p in "$X4_REFERENCE" "$X4_GAME" "$X4_MODS" "$X4_TOOLKIT" \
+           "$X4_EXTENSIONS" "$X4_PROFILE" "$X4_SAVES" "$X4_DOCUMENTS"; do
+    [ -z "$p" ] || x4_canon_memo "$p"
+  done
+  local keys=("${_X4_CK[@]}") vals=("${_X4_CV[@]}")
+  [ -z "$_X4_CANON_ERROR" ] || return 2
+  # These directory identities are stable for the same check as the root
+  # canonical cache. Probe once, retaining the symlink-specific policy path.
+  local sub
+  for sub in "${_X4_WORK_SUBS[@]}"; do
+    if [ -L "$X4_TOOLKIT/${sub%%/*}" ] || [ -L "$X4_TOOLKIT/$sub" ]; then
+      _X4_BATCH_LINKED="$_X4_BATCH_LINKED|$sub|"
+    fi
+  done
+  printf 'X4FILE1\0%s\0' "$count"
+  for ((i=0; i<count; i++)); do
+    FILE_PATH="${paths[$i]}"; INPUT="${inputs[$i]}"
+    _X4_CK=("${keys[@]}" "$FILE_PATH"); _X4_CV=("${vals[@]}" "${canonical[$i]}")
+    _X4_BATCH_NP="${lexical[$i]}"
+    VERDICT=""; ADVICE=""; _X4_UNRELAXED=""; _B_KIND=allow; _B_REASON=""; _B_CONTEXT=""
+    x4_file_policy
+    [ -z "$_X4_CANON_ERROR" ] || return 2
+    flush_advice
+    printf '%s\0%s\0%s\0' "$_B_KIND" "$_B_REASON" "$_B_CONTEXT"
+  done
+}
+
+if [ "$_X4_FILE_BATCH" = 1 ]; then
+  x4_file_batch
+  exit $?
+fi
+
+INPUT=$(x4_hook_input)
+x4_require_input "$INPUT" "X4 GUARD INERT: this hook received NO INPUT, so it checked nothing. Allowing silently is how five hooks sat dead for weeks while their suites passed. Confirm only if you know why the payload is missing."
+if [ -n "$PY" ] && [ "${1:-}" != --harness-policy-backend ]; then
+  x4_save_dispatch files
+  exit 0
+fi
+trap flush_advice EXIT
+# ONE jq process: the read itself is the health check (AUDIT-2026-09-24 HK-4). A
+# separate `jq -e .` probe first was a second process on every Edit/Write. jq exits
+# non-zero when it is missing, broken, OR handed an unreadable payload -- and in every
+# one of those cases the python reader below runs and tells the last two apart, so an
+# UNREADABLE payload still reaches the refusal (MEASURED 2026-09-05: it once did not).
+# JQ_OK records whether jq worked, for emit().
+JQ_OK=0
+if FILE_PATH=$(printf '%s' "$INPUT" | "$JQ" -r '.tool_input.file_path // .tool_input.notebook_path // empty' 2>/dev/null); then
+  JQ_OK=1; FP_OK=1
+elif [ -n "$PY" ]; then
+  FILE_PATH=$(X4_IN="$INPUT" "$PY" -c 'import json, os, sys
+try:
+    sys.stdout.write((json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("file_path") or (json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("notebook_path") or "")
+except Exception:
+    sys.exit(9)')
+  FP_OK=$?
+  [ "$FP_OK" -eq 0 ] && FP_OK=1 || FP_OK=0
+else
+  FP_OK=0
+fi
+
+# An EMPTY path and an UNREADABLE payload are different facts, and conflating them is
+# how a guard reports success over nothing. Only the first is an allow.
+if [ "$FP_OK" != 1 ]; then
+  VERDICT=1; _X4_UNRELAXED=1     # an inability: never relaxed below ask (R1-F2)
+  emit ask "X4 GUARD: could not read the file path from this payload (no working jq or python), so NO rule below was evaluated. This is not a clean pass. Confirm only if you know the edit is safe."
+  x4_guard_check_inert
+  exit 0
+fi
+[ -z "$FILE_PATH" ] && exit 0
+# The path AS WINDOWS OPENS IT, before any rule reads it (FX-G2 item 3): `x4-paths.env.`,
+# `x4-paths.env::$DATA`, `<ref>./libraries/x`, `C:/PROGRA~2/.../X4FOUN~1/...` each ARE the
+# protected file, and every NAME test below (the config name, `X4 Foundations/`, `.cat`) reads
+# the path as written. MEASURED: 11 of 17 such writes were allowed. See x4_winpath.
+x4_winpath "$FILE_PATH"; FILE_PATH="$_X4_WP"
+
+
+x4_file_policy
