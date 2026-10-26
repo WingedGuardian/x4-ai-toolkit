@@ -802,6 +802,17 @@ function Translate-Command([CommandAst]$c) {
         'invoke-expression' {
             $cb = Bound $binding @('Command')
             $ast = if ($null -ne $cb) { $cb.Value } else { $null }
+            # 4.0.1 batch: `'<text>' | iex` runs <text> exactly as `iex '<text>'` does, and was
+            # refused as unreadable. Only a lone string CONSTANT (nothing expanded) piped straight
+            # into a bare iex (a two-element pipeline) is read; any other upstream stays unreadable.
+            if ($null -eq $ast -and @($c.CommandElements).Count -eq 1 -and $c.Parent -is [PipelineAst]) {
+                $els = @($c.Parent.PipelineElements)
+                if ($els.Count -eq 2 -and [object]::ReferenceEquals($els[1], $c) -and
+                    $els[0] -is [CommandExpressionAst] -and $els[0].Redirections.Count -eq 0 -and
+                    $els[0].Expression -is [StringConstantExpressionAst]) {
+                    $ast = $els[0].Expression
+                }
+            }
             foreach ($l in (Translate-Code $ast "Invoke-Expression" $c.Extent.Text)) { $lines.Add($l) }
             return $lines
         }

@@ -405,6 +405,10 @@ memory or from another session -- a remembered id was stale within a day here.
 | F324 | The session-start temp sweep reached pytest's machine-wide `pytest-of-<user>` and listed seven generic prefixes | **DEFECT (measured)** · PRE-ARC | RED tests on `ea22bd4`: shared-root, prefix-shape and recycler-binding controls; opt-out twin | FIXED 2026-10-25 - own prefixes only, x4-prefixed creators, recycler resolved at call time |
 | F325 | build-release.sh built a vX.Y.Z tag whose CHANGELOG opened with `## Unreleased` | **DEFECT (measured)** · PRE-ARC | Fixture tag v4.0.1: rc 0 before, 3 refusal cases + 2 twins after | FIXED 2026-10-25 - the tag must head the CHANGELOG and match pyproject |
 | F326 | An inline `python -c`/`node -e` write onto a host transcript was allowed | **DEFECT (measured)** · PRE-ARC | every probed inline shape allowed where `echo >>` denied; replay 0 of 42,557 changed | FIXED 2026-10-25 - the write call's own literal target is judged |
+| F327 | Hook-suite sandboxes left paths too long for the Recycle Bin | **DEFECT (measured)** · PRE-ARC | 6 kept sandboxes at 288-293 chars; new depth probe red at 177, green at 120 | FIXED 2026-10-26 - sandbox-sized fixture, same-run removal, depth probe |
+| F328 | build-release.sh skipped the version check for `tags/` and `refs/tags/` spellings | **DEFECT (measured)** · PRE-ARC | 6 fixture cases red before, green after; archive failure ruled out as the refuser | FIXED 2026-10-26 - strip the prefix before matching |
+| F329 | A heredoc program fed to python/node could write a host transcript | **DEFECT (measured)** · PRE-ARC | 9 heredoc shapes allowed before; replay 0 of 42,910 changed | FIXED 2026-10-26 - the same write-call patterns over an interpreter's stdin program |
+| F330 | `'<literal>' \| iex` was refused as not completely evaluated | **DEFECT (measured)** · PRE-ARC | 2 benign forms refused, 2 delete twins; replay 0 of 10 iex rows changed | FIXED 2026-10-26 - a lone constant piped into a bare iex is read as `iex '<literal>'` |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11362,3 +11366,65 @@ registered: an inline program deleting inside reference/ is allowed with a relat
 path (F290 accepted residual), so cwd resolution is not the gap there.
 
 **RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`TestInlineInterpreterWriteOntoATranscript`).
+
+## F327 - Hook-suite sandboxes left paths too long for the Recycle Bin · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-10-26
+
+MEASURED 2026-10-25/26: six `.test-sandbox/conf-<pid>/hooks.*` trees kept by killed conformance
+dumps (scripts/x4conformance.py keeps the sandbox for replay and removes it only when the run
+ends) held paths of 288-293 characters with the worktree prefix, beyond what the Windows Recycle
+Bin takes. The deepest were the HK-5 long-path probe's fixed 180-character source directory and
+its bounded backup. Backup names embed the whole flattened source path, so every backup's full
+path carries the sandbox prefix twice.
+
+Fix: the HK-5 padding is sized to the sandbox (source ~210 chars, still past the hook's 180-char
+bound; the probe now asserts the bounded `~` name), and the probe drops its fixture and backup at
+once; the backup section drops its own backups when it ends (same-run scratch). New probe: the
+deepest path left in the sandbox is at most 140 characters past it. MEASURED RED at 177 (the
+hk3dotdot backup) on the first run, GREEN at 120. READ: the x4housekeep temp sweep takes only
+immediate children of the system temp directory with toolkit prefixes, so it never meets a
+`.test-sandbox` tree; a configured task root holding one would go to the shell's delete, where an
+item the bin cannot take is a failure row or the user's own too-big prompt. RESIDUAL: the
+backup hook's bounded name (`<cksum>~<150-char tail>`) still makes a real backup path
+`backups dir + ~186` characters; a deep install can exceed 260 there. Not changed here.
+
+**RE-DERIVED BY:** scripts/test-hooks.sh (the HK-5 probe and the deepest-path probe).
+
+## F328 - The tag gate skipped `tags/` and `refs/tags/` spellings · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-10-26
+
+F325's check matched only a bare `vX.Y.Z`, so `build-release.sh tags/v4.0.1` and
+`refs/tags/v4.0.1`, the same tag, printed "not a vX.Y.Z tag" and went on. MEASURED RED: all six
+fixture cases failed; the two refusal cases had first passed only because `git archive` then
+failed on the slashed bundle name and also exited 2 with REFUSING, so the test now pins the
+version check's own message. Fix: strip `refs/tags/` or `tags/` before matching, and name the
+bundle after the short tag.
+
+**RE-DERIVED BY:** tools/x4validate/tests/test_build_release.py.
+
+## F329 - A heredoc program could write a host transcript · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-10-26
+
+F326's residual, measured: `python - <<'EOF'` / `open('<T>','a')` / `EOF`, with python3, py,
+`<<-`, an unquoted delimiter, node, and a body piped into the interpreter, gave
+`writes_host_transcript` false (9 shapes RED). The body is stripped as data and only `-c`/`-e`
+programs were scanned. Fix: the same write-call patterns over a heredoc body the interpreter reads
+as its PROGRAM (`python`, `python -`, `node`, `node -`; never a script's or a `-c` program's stdin
+data), judged per heredoc: only a body whose own opening line feeds the interpreter, directly or
+through a pipe on that line (`cat <<EOF | python -`), counts. The first cut used the shared
+heredoc_bodies pipe rule, so a `cat > notes.md` body quoting a transcript write became a program
+whenever any later `| python` appeared (found in review, pinned by a twin). Replay of 42,910 historical Bash commands, committed vs new `hook_facts`: 0 changed facts
+(control: the probe command changes 1). RESIDUAL: a relative target resolves against the session
+directory only, so `cd <tree> && python - <<EOF` with a relative name is not seen; an expanding
+body's `$VAR` target is not resolved; `uv run python -` and `{ cat <<EOF ... } | python` are not covered.
+
+**RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`TestInlineInterpreterWriteOntoATranscript`).
+
+## F330 - A literal piped into iex was refused as not completely evaluated · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-10-26
+
+MEASURED: `'Get-ChildItem' | iex` was denied "Shell scope could not be completely evaluated"
+while `iex 'Get-ChildItem'` was translated. A bare Invoke-Expression has no `-Command` binding, and
+its pipeline input was reported as unreadable text. Fix, narrow: a lone string constant piped
+straight into a bare iex (a two-element pipeline) is read exactly as `iex '<text>'`, so
+`'rm -r <game>' | iex` reaches the delete rules (twin). Expansions, several strings, a command's
+output and a longer pipeline stay unreadable (twins). Replay: 10 of 44,361 historical commands
+name iex or Invoke-Expression; 0 changed (control: the probe command changes).
+
+**RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`TestHK1PowerShellFrontEnd`).

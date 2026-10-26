@@ -5473,16 +5473,88 @@ def _inline_program_writes_transcript(seg: str, cwd: str, assigns: dict) -> bool
         texts = [seg] + list(resolve_variants(seg, assigns))
     else:
         return False
-    for text in texts:
-        for pattern in _INLINE_WRITE_TARGETS:
-            for m in pattern.finditer(text or ""):
-                mode = m.groupdict().get("m")
-                if mode is not None and not any(ch in mode for ch in "wax+"):
-                    continue
-                raw = m.group("p").replace(chr(92) * 2, "/").replace(chr(92), "/")
-                path = join_cwd(cwd, raw) if cwd else raw
-                if _is_transcript(path or raw, raw):
-                    return True
+    return any(_program_writes_transcript(text, cwd) for text in texts)
+
+
+def _program_writes_transcript(text: str, cwd: str) -> bool:
+    """Does this interpreter program text hold a WRITE call (_INLINE_WRITE_TARGETS) whose own
+    target is a host transcript?"""
+    for pattern in _INLINE_WRITE_TARGETS:
+        for m in pattern.finditer(text or ""):
+            mode = m.groupdict().get("m")
+            if mode is not None and not any(ch in mode for ch in "wax+"):
+                continue
+            raw = m.group("p").replace(chr(92) * 2, "/").replace(chr(92), "/")
+            path = join_cwd(cwd, raw) if cwd else raw
+            if _is_transcript(path or raw, raw):
+                return True
+    return False
+
+
+#: Python options whose VALUE is the next word (`-W ignore`, `-X utf8`); node's are below.
+_PY_VALUE_OPTS = ("-W", "-X")
+_NODE_VALUE_OPTS = ("-r", "--require", "--import", "--loader", "--experimental-loader")
+
+
+def _reads_program_from_stdin(seg: str) -> bool:
+    """Is this python/node invocation's PROGRAM its stdin? Yes for `python`, `python -`,
+    `py -3.12 -`, `node`, `node -`; no once a -c/-m/-e/-p program or a script name appears
+    (then stdin is that program's DATA). Stops at the first redirection or operator word."""
+    toks = [t for t, _q in tokens(seg)]
+    k = _verb_at(seg)
+    if k is None or k >= len(toks):
+        return False
+    name = _verb_name(toks[k])
+    if name in _PYTHONS and name != "uv":
+        py = True
+    elif name in _NODES:
+        py = False
+    else:
+        return False
+    skip = False
+    for t in toks[k + 1:]:
+        if skip:
+            skip = False
+            continue
+        if not t or t[0] in "<>|&;" or re.match(r"\d+[<>]", t):
+            break
+        if t == "-":
+            return True
+        if t == "--":
+            continue
+        if py:
+            if t in _PY_VALUE_OPTS:
+                skip = True
+                continue
+            if re.fullmatch(r"-[A-Za-z]+", t) and not t.startswith(("-W", "-X")) and ("c" in t or "m" in t):
+                return False
+        else:
+            if t in ("-e", "--eval", "-p", "--print") or t.startswith(("--eval=", "--print=")):
+                return False
+            if t in _NODE_VALUE_OPTS:
+                skip = True
+                continue
+        if t.startswith("-"):
+            continue
+        return False
+    return True
+
+
+def _heredoc_program_writes_transcript(spliced: str, cwd: str) -> bool:
+    """4.0.1 batch: the _INLINE_WRITE_TARGETS scan, over a heredoc body that an interpreter
+    reads as its PROGRAM (`python - <<'EOF'` / `open('<T>','a')` / `EOF`, `node <<EOF`, or a
+    body piped into one). The body was stripped as data, so only -c/-e programs were seen.
+    Same narrow write-call patterns: a body that only READS a transcript stays allowed.
+    Judged PER HEREDOC (review of 8957579): only a body whose OWN opening line feeds the
+    interpreter -- directly, or through a pipe on that line (`cat <<EOF | python -`) -- is a
+    program. heredoc_bodies' whole-command pipe rule made a `cat > notes.md` body a program
+    whenever any later `| python` appeared. RESIDUAL: `{ cat <<EOF ... } | python` is not seen."""
+    def sink(sg):
+        return _reads_program_from_stdin(_unwrap(sg))
+    for opener, _t, _e, body in _heredoc_walk(spliced)[0]:
+        if _opener_feeds(opener, sink) or _flows_to(opener, sink):
+            if _program_writes_transcript(chr(10).join(body), cwd):
+                return True
     return False
 
 
@@ -5841,7 +5913,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
     search_seg, git_all = False, False
     transcript_copy = False             # M1, see _copy_lands_a_transcript
-    transcript_inline = False           # H1 follow-up, see _inline_program_writes_transcript
+    # H1 follow-up, see _inline_program_writes_transcript; a heredoc PROGRAM is judged once,
+    # against the session directory (4.0.1, see _heredoc_program_writes_transcript).
+    transcript_inline = _heredoc_program_writes_transcript(spliced, base)
     # The save bridge supplies its single authoritative folder enumeration. This
     # parser stays independently importable and does not discover filesystem roots.
     save_folders = [norm(str(folder)) for folder in protected_save_folders]

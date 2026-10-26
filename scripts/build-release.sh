@@ -230,12 +230,16 @@ git rev-parse -q --verify "$REF^{}" >/dev/null || die "no such ref: $REF"
 # with `## Unreleased`, its pyproject still at the previous version, built and verified
 # (MEASURED 2026-10-25, probing the Skyrim toolkit's release-review finding). Read AT THE
 # REF, like everything else here. A ref that is not vX.Y.Z is a dry run and says so.
-if printf '%s' "$REF" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-  _ver="${REF#v}"
+# `tags/vX.Y.Z` and `refs/tags/vX.Y.Z` name the SAME tag: matching only the bare spelling
+# let either one skip this check as a "dry run" (4.0.1 batch). The short name is also the
+# bundle's name, so a slashed spelling no longer becomes a path git archive cannot create.
+TAG="${REF#refs/tags/}"; TAG="${TAG#tags/}"
+if printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+  _ver="${TAG#v}"
   _top="$(git show "$REF:CHANGELOG.md" 2>/dev/null | tr -d '\r' | grep -m1 '^## ')"
   case "$_top" in
-    "## $REF"|"## $REF "*) ;;
-    *) die "$REF: CHANGELOG.md at the ref opens with '${_top:-no ## heading}', not '## $REF'. Rename the Unreleased section to the release heading, commit, and re-tag." ;;
+    "## $TAG"|"## $TAG "*) ;;
+    *) die "$REF: CHANGELOG.md at the ref opens with '${_top:-no ## heading}', not '## $TAG'. Rename the Unreleased section to the release heading, commit, and re-tag." ;;
   esac
   _pv="$(git show "$REF:tools/x4validate/pyproject.toml" 2>/dev/null | tr -d '\r' \
         | sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
@@ -254,7 +258,7 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 mkdir -p dist || die "cannot create dist/"
-OUT="dist/${NAME_PREFIX}-${REF}.zip"
+OUT="dist/${NAME_PREFIX}-${TAG}.zip"
 git archive --format=zip "$REF" -o "$OUT" || die "git archive failed"
 echo "built $OUT"
 verify "$OUT" "$REF" || { echo "the bundle does not match $REF — not shippable." >&2; exit 1; }
