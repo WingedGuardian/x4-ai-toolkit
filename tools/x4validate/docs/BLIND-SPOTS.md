@@ -11514,9 +11514,34 @@ only). One false hard DENY found and
 fixed before commit: `for ln in 3124 3253` from the game folder read as an `ln` (segments()
 leaves `ln in ...` after stripping `for`); the link rule now skips a `for` header. Dropping
 the header for every rule instead measured 18 loosened save-bridge rows, so it was not shipped.
+Review of the link fix (2026-10-26), each RED first, then fixed:
+* `New-Item -ItemType` takes a case-insensitive PREFIX (MEASURED, PowerShell 7.6.6, in a temp
+  folder: d/c Directory, f File, s SymbolicLink -- privilege error, i.e. attempted -- j/Junc
+  Junction, h HardLink; `l`/`x` rejected). Only exact names were links, so `-ItemType J` made an
+  unjudged junction. The translator now resolves the prefix; a NON-LITERAL `-ItemType $t` with a
+  -Value has that value judged as a link target (unreadable -> refused); with no -Value there is
+  nothing to link to.
+* Device prefixes (protect-files, this entry's first fix): only `//?/` and `//./` were stripped
+  before the drive-form link walk, and x4guard's `os.path.abspath` turns even those into the
+  BACKSLASH form -- so `\\?\C:\...` and `\\.\C:\...` through a junction into reference/ were
+  ALLOWED in single and batch (8 of 8 forms red incl. the forward spellings via x4guard). Both
+  readers now strip the backslash forms into the drive branch. 0 of 12,563 historical file-tool
+  paths carry a device prefix, so no historical verdict can change. RESIDUAL: an admin-share UNC
+  spelling of a local drive (`\\localhost\c$\...`) is not mapped to its drive and not walked.
+* `ln -s "$PWD/src"` / `${PWD}` were refused as unreadable; `$PWD` is now the segment's own
+  folder when that is known. `$(git rev-parse --show-toplevel)/...` stays unreadable (refused,
+  remedy: write it absolute).
+* The `for` header was matched by TEXT, so a real `ln in <ref>/a.xml .` spelled like an earlier
+  `for ln in <ref>/a.xml .` header was skipped; it is now flagged by segment POSITION.
+* RESIDUAL (accepted): a link call's name inside a Python STRING (`print('os.symlink(')`) is
+  read as a call -- a false refusal, not a bypass.
+Replay of the final code over the reachable population (10,029 Bash commands with a `for` or a
+link word, the 183 PowerShell): 0 loosened; the same 4 refused commands as before, nothing new.
 **RE-DERIVED BY:** agent/guards/claude-hooks/test_hook_facts.py
-(`TestF331LinkCreationIntoAProtectedRoot`, `TestF331PowerShellLinkCreation`); 37 mutants in
-scripts/verify-hook-tests.py ("F331 link").
+(`TestF331LinkCreationIntoAProtectedRoot`, `TestF331PowerShellLinkCreation`);
+tools/x4validate/tests/test_file_guard_batch.py
+(`test_device_prefixed_write_through_a_link_follows_the_real_target`); 40 mutants in
+scripts/verify-hook-tests.py ("F331 link", "F331 review").
 
 **RE-DERIVED BY:** tools/x4validate/tests/test_file_guard_batch.py
 (`test_windows_form_write_through_a_link_follows_the_real_target`,
