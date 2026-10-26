@@ -3885,6 +3885,31 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
         inner = "Remove-Item -Recurse " + REF
         self.assertTrue(self.P("iex " + Q + inner + Q)["rm_targets_reference"])
 
+    def test_a_literal_piped_into_iex_is_read_like_iex_of_it(self):
+        """4.0.1 batch: `'Get-ChildItem' | iex` was refused as "Shell scope could not be completely
+        evaluated" -- a bare iex reading its pipeline was unreadable text -- while `iex 'Get-ChildItem'`
+        was translated. A lone string constant piped straight in is now read the same way."""
+        for c in (Q + "Get-ChildItem" + Q + " | iex", DQ + "Get-ChildItem" + DQ + " | Invoke-Expression"):
+            with self.subTest(c=c):
+                f = self.P(c)
+                self.assertFalse(f.get("carrier_untranslated") or f.get("powershell_error"), (c, f))
+
+    def test_TWIN_a_delete_piped_into_iex_is_still_judged(self):
+        """Twin: reading the literal must reach the delete rules, not merely clear the refusal."""
+        for inner in ("rm -r " + DQ + GAME + DQ, "Remove-Item -Recurse " + REF):
+            c = Q + inner + Q + " | iex"
+            with self.subTest(c=c):
+                f = self.P(c)
+                self.assertTrue(f["rm_hits_game"] or f["rm_targets_reference"], (c, f))
+
+    def test_TWIN_any_other_upstream_of_iex_stays_unreadable(self):
+        """Clause: a lone CONSTANT, piped straight into a BARE iex. Expansions, several strings,
+        a command's output and a longer pipeline are not read."""
+        for c in (DQ + "rm -r $env:X4_NOPE" + DQ + " | iex", Q + "a" + Q + "," + Q + "b" + Q + " | iex",
+                  "Get-Content x.ps1 | iex", Q + "ls" + Q + " | iex | Out-Null"):
+            with self.subTest(c=c):
+                self.assertTrue(self.P(c).get("carrier_untranslated"), c)
+
     def test_hygiene_rules_apply_too(self):
         self.assertTrue(self.P("git add -A")["git_add_all"])
 
