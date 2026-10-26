@@ -3895,12 +3895,27 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
                 self.assertFalse(f.get("carrier_untranslated") or f.get("powershell_error"), (c, f))
 
     def test_TWIN_a_delete_piped_into_iex_is_still_judged(self):
-        """Twin: reading the literal must reach the delete rules, not merely clear the refusal."""
-        for inner in ("rm -r " + DQ + GAME + DQ, "Remove-Item -Recurse " + REF):
+        """Twin: reading the literal must reach the delete rules, not merely clear the refusal.
+        Spelled with PowerShell's own cmdlet, so the delete binds on every platform."""
+        for inner in ("Remove-Item -Recurse " + DQ + GAME + DQ, "ri -r " + DQ + GAME + DQ,
+                      "Remove-Item -Recurse " + REF):
             c = Q + inner + Q + " | iex"
             with self.subTest(c=c):
                 f = self.P(c)
                 self.assertTrue(f["rm_hits_game"] or f["rm_targets_reference"], (c, f))
+
+    def test_TWIN_an_rm_piped_into_iex_is_judged_or_refused_never_allowed(self):
+        """`rm` is a PowerShell alias of Remove-Item ONLY on Windows; PowerShell on Linux/macOS
+        drops it, so `rm` there is the native /bin/rm, which StaticParameterBinder binds as an
+        application with no -Path: the translation is refused as unreadable (MEASURED, ubuntu
+        CI run 40282437389: carrier_untranslated, rm_hits_game False). Either way never a
+        silent allow: a judged delete on Windows, a fail-closed refusal elsewhere."""
+        c = Q + "rm -r " + DQ + GAME + DQ + Q + " | iex"
+        f = self.P(c)
+        if os.name == "nt":
+            self.assertTrue(f["rm_hits_game"], (c, f))
+        else:
+            self.assertTrue(f["rm_hits_game"] or f.get("carrier_untranslated"), (c, f))
 
     def test_TWIN_any_other_upstream_of_iex_stays_unreadable(self):
         """Clause: a lone CONSTANT, piped straight into a BARE iex. Expansions, several strings,
