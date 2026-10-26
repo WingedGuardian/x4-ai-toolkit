@@ -263,23 +263,86 @@ def test_K3_a_read_only_check_may_ask_where_the_native_hook_backs_a_save_up(refe
     assert xc.summarise(rows, n_total=2, buckets={"replayed": 2}, gaps={}, min_cases=1)[0] == rc
 
 
-@pytest.mark.parametrize("reference,host,adapter,rc", [
-    ("deny", "allow", "allow", xc.RC_OK),          # the guards WITH the host say what the adapter says
-    ("deny", "advise", "advise", xc.RC_OK),
+SCHED = ["longjob_foreground"]
+
+
+@pytest.mark.parametrize("reference,host,adapter,delta,rc", [
+    # the guards WITH the host say what the adapter says, and ONLY a scheduling fact moved
+    ("deny", "allow", "allow", SCHED, xc.RC_OK),
+    ("deny", "advise", "advise", ["timeout_over_cap"], xc.RC_OK),
+    ("deny", "allow", "allow", ["longjob_foreground", "timeout_over_cap"], xc.RC_OK),
     # Twins: the host-aware verdict must EQUAL the adapter's; no host verdict, no excuse.
-    ("deny", "deny", "allow", xc.RC_DISAGREE),
-    ("deny", "advise", "allow", xc.RC_DISAGREE),
-    ("deny", None, "allow", xc.RC_DISAGREE),
-    ("deny", "inert", "inert", xc.RC_DISAGREE),
-    ("deny", "error", "error", xc.RC_DISAGREE),
+    ("deny", "deny", "allow", SCHED, xc.RC_DISAGREE),
+    ("deny", "advise", "allow", SCHED, xc.RC_DISAGREE),
+    ("deny", None, "allow", SCHED, xc.RC_DISAGREE),
+    ("deny", "inert", "inert", SCHED, xc.RC_DISAGREE),
+    ("deny", "error", "error", SCHED, xc.RC_DISAGREE),
+    # Twins (review F1): STRUCTURAL -- the facts that moved must be a non-empty subset of the
+    # two scheduling facts. A delete/write fact moving with the host is never a host contract.
+    ("deny", "allow", "allow", ["rm_targets_reference"], xc.RC_DISAGREE),
+    ("deny", "allow", "allow", ["longjob_foreground", "rm_hits_game"], xc.RC_DISAGREE),
+    ("deny", "allow", "allow", [], xc.RC_DISAGREE),
+    ("deny", "allow", "allow", None, xc.RC_DISAGREE),
 ])
-def test_a825d86_a_host_contract_difference_agrees_only_when_the_hosted_guards_agree(reference, host, adapter, rc):
+def test_a825d86_a_host_contract_difference_agrees_only_when_the_hosted_guards_agree(
+        reference, host, adapter, delta, rc):
     row = {"label": "h0", "kind": "shell-bash", "reference": reference, "adapter": adapter, "text": None}
     if host is not None:
         row["reference_host"] = host
+        row["host_fact_delta"] = delta
     got, text = xc.summarise(_res(1) + [row], n_total=2, buckets={"replayed": 2}, gaps={}, min_cases=1)
     assert got == rc, text
     assert ("HOST CONTRACT h0" in text) == (rc == xc.RC_OK)
+
+
+def test_the_host_contract_facts_are_exactly_the_two_claude_scheduling_facts():
+    assert xc.HOST_SCHEDULING_FACTS == frozenset({"longjob_foreground", "timeout_over_cap"})
+
+
+def _hooks_root(tmp_path, old=None, new=None):
+    """A toolkit root whose .claude/hooks holds this repo's hook_facts.py (optionally mutated)."""
+    hooks = tmp_path / "tk" / ".claude" / "hooks"
+    hooks.mkdir(parents=True)
+    src = (REPO / ".claude/hooks/hook_facts.py").read_text(encoding="utf-8")
+    if old is not None:
+        assert src.count(old) == 1, old
+        src = src.replace(old, new)
+    (hooks / "hook_facts.py").write_text(src, encoding="utf-8", newline="")
+    return tmp_path / "tk"
+
+
+def _delta_row(tmp_path, command):
+    ref = (tmp_path / "ref").as_posix()
+    return {"label": "d", "kind": "shell-bash", "hook": "protect-bash.sh", "cwd": tmp_path.as_posix(),
+            "env": {"X4_REFERENCE": ref, "X4_TOOLKIT": (tmp_path / "tk").as_posix()},
+            "payload": {"tool_name": "Bash", "tool_input": {"command": command}}}
+
+
+def test_the_fact_delta_of_a_long_job_is_the_scheduling_fact_alone(tmp_path):
+    root = _hooks_root(tmp_path)
+    long_job = _delta_row(tmp_path, "uv run python gates/corpus_sweep.py")
+    assert xc.host_fact_delta(long_job, root, "codex") == ["longjob_foreground"]
+    assert xc.host_fact_delta(_delta_row(tmp_path, "ls"), root, "codex") == []
+
+
+def test_TWIN_a_host_flip_that_moves_a_DELETE_fact_is_rejected(tmp_path):
+    """Review F1: a future `and not codex_async_shell` on a delete rule must not pass as an
+    informational HOST CONTRACT. Planted in a copy of the real hook_facts.py."""
+    old = '"rm_targets_reference": '
+    root = _hooks_root(tmp_path, old, '"rm_targets_reference": (not codex_async_shell) and ')
+    row = _delta_row(tmp_path, "rm -rf " + (tmp_path / "ref" / "libraries").as_posix())
+    delta = xc.host_fact_delta(row, root, "codex")
+    assert delta == ["rm_targets_reference"], delta
+    r = {"label": "m", "kind": "shell-bash", "reference": "deny", "adapter": "allow",
+         "reference_host": "allow", "host_fact_delta": delta}
+    assert not xc.host_contract_divergence(r)
+
+
+def test_TWIN_a_hook_facts_that_cannot_answer_gives_no_delta(tmp_path):
+    nl = chr(10)
+    root = _hooks_root(tmp_path, "def main() -> int:",
+                       "def main() -> int:" + nl + "    return 3" + nl * 3 + "def _unused() -> int:")
+    assert xc.host_fact_delta(_delta_row(tmp_path, "ls"), root, "codex") is None
 
 
 def test_the_codex_profile_declares_its_execution_host_and_the_claude_one_does_not():
@@ -310,6 +373,7 @@ def _fake_replay(monkeypatch, tmp_path, adapter="allow"):
         return ("allow" if row["payload"].get("x4_execution_host") == "codex" else "deny"), ""
     monkeypatch.setattr(xc, "reference_verdict_detail", ref)
     monkeypatch.setattr(xc, "adapter_verdict", lambda *a, **k: (adapter, None))
+    monkeypatch.setattr(xc, "host_fact_delta", lambda row, root, host: ["longjob_foreground"])
     run = tmp_path / "run"; run.mkdir(exist_ok=True)
     monkeypatch.setattr(xc, "neutral_run_dir", lambda root: run)
     return seen
@@ -323,6 +387,7 @@ def test_replay_rejudges_a_differing_shell_case_with_the_profile_host_at_the_pay
            "payload": {"tool_name": "Bash", "tool_input": {"command": "bash build-effective.sh"}}}
     (r,) = xc.replay([row], CODEX, None, REPO, workers=1)
     assert r["reference"] == "deny" and r["reference_host"] == "allow" and xc.host_contract_divergence(r)
+    assert r["host_fact_delta"] == ["longjob_foreground"]
     assert seen[-1]["x4_execution_host"] == "codex" and "x4_execution_host" not in seen[-1]["tool_input"]
     assert "x4_execution_host" not in row["payload"]          # the dump row itself is untouched
 

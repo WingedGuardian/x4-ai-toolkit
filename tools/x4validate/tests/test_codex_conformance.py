@@ -46,6 +46,8 @@ PWSH = shutil.which("pwsh") or shutil.which("powershell")
 BASH = os.environ.get("X4_BASH") or shutil.which("bash")
 RANK = {"allow": 0, "advise": 1, "ask": 2, "deny": 3, "inert": 4}
 EXTRAS = FIX.parent / "conformance_extra.yaml"
+#: The dump cases where the Codex host contract (a825d86) legitimately changes the verdict.
+HOST_CONTRACT_CASES = {"#117 invoking a long job in the foreground still denies"}
 WORKERS = 6
 
 pytestmark = pytest.mark.skipif(not (PWSH and BASH and shutil.which("jq")),
@@ -132,9 +134,11 @@ def test_every_replayable_case_agrees(conformance_dump):
     print(f"replayed {len(results)}; replay drift vs the live harness verdict: {len(drift)}; "
           f"host-contract divergences: {hosted}")
     assert not diffs, "\n".join(map(str, diffs))     # PER ITEM, never a total
-    # The contract is EXERCISED through the full chain, not merely tolerated: the corpus holds a
-    # foreground long-job case the Claude hook denies, and the Codex chain must let it run.
-    assert any(r[1] == "shell-bash" and r[2] == "deny" and r[4] in ("allow", "advise") for r in hosted), hosted
+    # PINNED (review F1): the host-contract set is EXACTLY the one foreground long-job case the
+    # Claude hook denies and the Codex chain lets run. A new member (another rule that moved
+    # with the host) or a missing one (the exemption stopped reaching the guards) fails here.
+    assert {h[0] for h in hosted} == HOST_CONTRACT_CASES, hosted
+    assert all(h[1] == "shell-bash" and h[2] == "deny" and h[4] == "allow" for h in hosted), hosted
     # R7-3: the guards re-run NOW must still say what the harness recorded at decide() time; a
     # drift means the reference verdict is not the one the harness judged (it was only printed).
     assert not drift, "\n".join(f"DRIFT {d}" for d in drift)

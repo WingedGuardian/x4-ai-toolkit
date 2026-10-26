@@ -223,7 +223,12 @@ A shell request carries the actual executing shell and the complete command:
 {"api_version":1,"host":"future-coder","tool":"shell","surface":"shell","cwd":"<absolute-toolkit-root>","session_id":"session-1","tool_call_id":"call-2","shell":"powershell","command":"Get-Content -LiteralPath 'dev/mymod/content.xml'"}
 ```
 
-Use `"shell":"bash"` for Bash. Parse the complete JSON reply and its inner
+Use `"shell":"bash"` for Bash. Send your host's own name in `host`, never
+`"codex"` unless the shell really is Codex's: `"host":"codex"` ASSERTS that the
+shell call does not block -- it returns a running session -- so the guards drop
+Claude Bash's "long job in the foreground" and "timeout above the cap" rules for
+it (every other shell rule still applies). A host whose shell blocks until the
+command ends must not claim it. Parse the complete JSON reply and its inner
 `result`: integer `api_version: 1`, `decision` (`allow`, `ask`, `deny`),
 `evaluation`, `preservation`, `validation`, text `reason`, and text-array
 `warnings`. Keep the returned `transactions`. Normal X4 replies also have
@@ -597,8 +602,10 @@ Field by field:
   place: for `"codex"`, whose shell yields a running session, Claude Bash's foreground long-job
   and timeout-cap rules do not apply. Where your adapter's shell verdict differs from the Claude
   hook's, the engine re-runs the guards on that payload WITH this host; the case agrees only if
-  that verdict equals your adapter's, and is printed as `HOST CONTRACT` (READ:
-  `scripts/x4conformance.py`, `host_contract_divergence`). Leave it out unless your adapter sends it.
+  that verdict equals your adapter's AND the only rule facts the host moved are those two
+  scheduling facts, and is printed as `HOST CONTRACT` (READ: `scripts/x4conformance.py`,
+  `host_contract_divergence`). Declaring `"codex"` asserts your shell does not block (see Action
+  v1 above). Leave it out unless your adapter sends it.
 - `env`: added to the environment your adapter runs with. Each case already runs with the
   sandbox's `X4_TOOLKIT`, `X4_GAME`, `X4_REFERENCE` and friends -- pass them through to x4guard
   untouched (inheriting your environment does that).
