@@ -376,3 +376,26 @@ def test_a_ref_that_is_not_a_version_tag_still_builds(tmp_path):
                        text=True, timeout=120)
     assert p.returncode == 0, p.stdout + p.stderr
     assert "not a vX.Y.Z" in p.stdout
+
+
+@pytest.mark.parametrize("ref", ["tags/v4.0.1", "refs/tags/v4.0.1"])
+@pytest.mark.parametrize("heading,version,ok", [
+    ("## Unreleased", "4.0.1", False),            # the notes do not name the tag
+    ("## v4.0.1 - 2026-10-25", "4.0.0", False),   # the package names another version
+    ("## v4.0.1 - 2026-10-25", "4.0.1", True),    # twin: both agree, and the long spelling builds
+])
+def test_a_version_tag_spelled_as_a_full_ref_is_still_checked(tmp_path, ref, heading, version, ok):
+    """4.0.1 batch: the gate matched only a bare `vX.Y.Z`, so `tags/v4.0.1` and `refs/tags/v4.0.1` --
+    the same tag -- skipped the CHANGELOG/pyproject check as a "dry run" and built."""
+    _needs(SCRIPT.is_file(), "no scripts/build-release.sh (dev-only script) - not checked")
+    r = _release_repo(tmp_path, heading, version)
+    p = subprocess.run([_bash(), "scripts/build-release.sh", ref], cwd=str(r), capture_output=True,
+                       text=True, timeout=120)
+    if ok:
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert "not a vX.Y.Z" not in p.stdout, p.stdout
+        assert (r / "dist" / "X4.Foundations.AI.Assistant.Toolkit-v4.0.1.zip").is_file(), p.stdout
+    else:
+        # The VERSION check must be what refused: a later `git archive` failure on the slashed
+        # name also exits 2 with REFUSING, which made the first draft of this test pass on the bug.
+        assert p.returncode == 2 and "at the ref" in p.stderr, p.stdout + p.stderr
