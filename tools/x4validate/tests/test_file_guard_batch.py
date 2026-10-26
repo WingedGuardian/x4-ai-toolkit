@@ -285,10 +285,12 @@ def test_batch_probes_stable_working_roots_once(guard, monkeypatch, tmp_path):
     hooks = tmp_path / "count-hooks"
     shutil.copytree(g.HERE, hooks, ignore=shutil.ignore_patterns("__pycache__"))
     script = hooks / "_x4-env.sh"
+    # Counts link probes of the TOOLKIT working roots only: F331's per-path link walk
+    # (x4_win_has_link) probes each path's own components, a different and intended cost.
     script.write_text(script.read_text(encoding="utf-8") + """
 _X4_TEST_L_COUNT=0
 [() {
-  if [[ "$1" = "-L" ]]; then _X4_TEST_L_COUNT=$((_X4_TEST_L_COUNT+1)); fi
+  if [[ "$1" = "-L" && "$2" == "$X4_TOOLKIT"/* ]]; then _X4_TEST_L_COUNT=$((_X4_TEST_L_COUNT+1)); fi
   builtin [ "$@"
 }
 trap 'printf "LINK_PROBES=%s\\\\n" "$_X4_TEST_L_COUNT" >&2' EXIT
@@ -328,6 +330,90 @@ def test_windows_junction_matches_single_policy(guard, monkeypatch, tmp_path):
     assert bulk == [g.verdict_for("write", None, None, p, save_qualified=False) for p in paths]
     assert not any(v["inert"] for v in bulk)
 
+
+
+def _make_link(kind, link, target, request):
+    """A junction or directory symlink made by THIS test, in its own tmp dir, removed at
+    teardown (the link only: os.rmdir on a link never touches the target)."""
+    import os
+    import subprocess
+    if kind == "junction":
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True)
+        assert r.returncode == 0, (r.stdout, r.stderr)
+    elif kind == "symlink":
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("native Windows symlink privilege unavailable (no Developer Mode)")
+            raise
+    else:
+        link.mkdir(parents=True)
+    request.addfinalizer(lambda: os.rmdir(link) if link.exists() or link.is_symlink() else None)
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows-form paths exist only on Windows")
+@pytest.mark.parametrize("kind", ["junction", "symlink", "plain-dir"])
+# toolkit-dev reaches only reference/: a WHOLE toolkit working subfolder that is itself a link
+# is whitelisted by design (the `_X4_BATCH_LINKED` branch), and only the hard blocks above the
+# whitelist -- reference/ among them -- outrank it. The same holds for POSIX forms (F331 residual).
+@pytest.mark.parametrize("where,root,expected", [
+    ("mods", "X4_REFERENCE", "deny"), ("mods", "X4_GAME", "deny"), ("mods", "X4_PROFILE", "ask"),
+    ("toolkit-dev", "X4_REFERENCE", "deny")])
+def test_windows_form_write_through_a_link_follows_the_real_target(
+        guard, monkeypatch, tmp_path, request, kind, where, root, expected):
+    """F331: a Windows-form path (what Write/Edit always send on Windows) never reached
+    realpath, so `<toolkit>\\dev\\x.xml` with `dev` a junction into reference/ was judged as
+    the toolkit file it is spelled as -- ALLOW in single and batch alike. The verdict must
+    follow the real target. The plain-dir twin pins that a non-link path is unchanged."""
+    g, r = guard
+    real = r[root] / "libraries" if root != "X4_PROFILE" else r[root]
+    real.mkdir(parents=True)
+    if where == "mods":
+        link = r["X4_MODS"] / "linked"
+        r["X4_MODS"].mkdir(parents=True)
+    else:
+        toolkit = tmp_path / "tk"
+        toolkit.mkdir()
+        monkeypatch.setenv("X4_TOOLKIT", str(toolkit))
+        link = toolkit / "dev"
+    _make_link(kind, link, real, request)
+    path = str(link / "new.xml")
+    single = g.verdict_for("write", None, None, path, save_qualified=False)
+    bulk = g.write_verdicts([path, str(r["X4_REFERENCE"] / "direct.xml")],
+                            deadline=time.monotonic() + 30, save_qualified=False)
+    assert bulk[0] == single, (bulk[0], single)
+    assert bulk[1]["decision"] == "deny"
+    want = "allow" if kind == "plain-dir" else expected
+    assert single["decision"] == want and not single["inert"], single
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows-form paths exist only on Windows")
+@pytest.mark.parametrize("fault", ["realpath", "cygpath"])
+@pytest.mark.parametrize("mode", ["single", "batch"])
+def test_windows_form_link_resolution_failure_is_inert(guard, monkeypatch, tmp_path, request,
+                                                      mode, fault):
+    """F331 fail-closed twin: if resolving a Windows-form path through its link fails (either
+    step), the verdict is an inert refusal -- never the unresolved spelling's verdict (an allow
+    here, since the spelling is inside the mods root)."""
+    import shutil
+    g, r = guard
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    r["X4_MODS"].mkdir(parents=True)
+    _make_link("junction", r["X4_MODS"] / "linked", elsewhere, request)
+    hooks = tmp_path / "realpath-fault-hooks"
+    shutil.copytree(g.HERE, hooks, ignore=shutil.ignore_patterns("__pycache__"))
+    script = hooks / "_x4-env.sh"
+    script.write_text(script.read_text(encoding="utf-8") +
+                      f"\n{fault}() {{ return 1; }}\n", encoding="utf-8")
+    monkeypatch.setattr(g, "HERE", hooks)
+    path = str(r["X4_MODS"] / "linked" / "a.xml")
+    if mode == "single":
+        v = g.verdict_for("write", None, None, path, save_qualified=False)
+    else:
+        v = g.write_verdicts([path], deadline=time.monotonic() + 10, save_qualified=False)[0]
+    assert v["inert"] and v["decision"] == "deny", v
 
 
 def test_root_normalizer_failure_refuses_batch(guard, monkeypatch, tmp_path):
