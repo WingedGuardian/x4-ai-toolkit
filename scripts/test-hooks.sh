@@ -448,14 +448,22 @@ printf '%s' "$(fj "$TK/.claude/hooks/../../dev/mymod/libraries/hk3dotdot.xml")" 
 # AUDIT-2026-09-24 HK-5: a source path longer than a filename may be flattened into a
 # name cp cannot create. Deep ON PURPOSE, so this probe does not depend on how long the
 # sandbox path happens to be -- that dependence is what made "backup created" a flake.
-_LP="$TK/dev/$(printf 'm%.0s' $(seq 1 90))/$(printf 'n%.0s' $(seq 1 90))"
+# 4.0.1: the padding is SIZED to the sandbox (source ~210 chars, past the hook's 180-char bound
+# whatever the prefix), not a fixed 180 extra chars: those left source paths and bounded backups
+# of 272-293 chars, which the Windows Recycle Bin cannot take, in every sandbox a killed or
+# kept run left behind. The probe also removes its own fixture and backup at once (same-run
+# scratch), and the "deepest path" probe at the end of this file pins both.
+_lpn=$((210 - ${#TK} - 20)); [ "$_lpn" -lt 40 ] && _lpn=40
+_LP="$TK/dev/$(printf 'm%.0s' $(seq 1 "$_lpn"))"
 mkdir -p "$_LP" && echo '<diff/>' > "$_LP/hk5longpath.xml"
 _lp_out="$(printf '%s' "$(fj "$_LP/hk5longpath.xml")" | bash "$HOOKS/backup-before-edit.sh" 2>/dev/null)"
-if [ -z "$_lp_out" ] && [ "$(ls "$TK/.claude/backups/" 2>/dev/null | grep -c 'hk5longpath.xml')" -ge 1 ]; then
+# `~` marks the bounded branch: a probe whose source was too SHORT to reach it proves nothing.
+if [ -z "$_lp_out" ] && [ "$(ls "$TK/.claude/backups/" 2>/dev/null | grep -c '~.*hk5longpath.xml')" -ge 1 ]; then
   ok "a path too long to flatten into one filename is still backed up"
 else
-  no "long-path source: no backup (or the hook asked): ${_lp_out:0:120}"
+  no "long-path source: no BOUNDED backup (or the hook asked): ${_lp_out:0:120}"
 fi
+rm -f "$TK/.claude/backups/"*hk5longpath.xml.*; rm -rf "$_LP"
 # Must stay anchored to the toolkit even with CLAUDE_PROJECT_DIR unset.
 mkdir -p "$SBX_TMP/elsewhere"
 ( unset CLAUDE_PROJECT_DIR X4_TOOLKIT; export X4_BACKUPS="$TK/.claude/backups"; cd "$SBX_TMP/elsewhere" \
@@ -463,6 +471,10 @@ mkdir -p "$SBX_TMP/elsewhere"
 [ -d "$SBX_TMP/elsewhere/.claude/backups" ] \
   && no "backups scattered into the cwd when CLAUDE_PROJECT_DIR is unset" \
   || ok "backups stay anchored to the toolkit"
+# A backup's NAME is its flattened source path, sandbox prefix included, so its full path holds
+# that prefix TWICE (MEASURED 2026-10-26: the hk3dotdot backup sat 177 chars past the sandbox).
+# This section's backups are this run's own scratch and nothing below reads them: drop them now.
+rm -f "$TK/.claude/backups/"*__*
 
 echo; echo "=== check-reference-version.sh ==="
 printf '"AppState"\n{\n\t"buildid"\t\t"99999999"\n}\n' > "$SBX_TMP/acf"
@@ -552,7 +564,7 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
   "a substituted argument in a cd is untouched"
 
 
-EXPECT=319
+EXPECT=320
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
@@ -1388,6 +1400,17 @@ _hk(){ printf '{"tool_name":"Write","tool_input":{"file_path":%s,"content":%s}}'
 decide deny   protect-files.sh "$(_hk 'X4_GUARD=off')"                                    "H4a: X4_GUARD in a hooks COMMAND of a settings file"
 decide allow  protect-files.sh "$(_hk 'FOO=1')"                                           "TWIN H4a: an ordinary hooks command"
 unset X4_GAME X4_REFERENCE X4_TOOLKIT CLAUDE_PROJECT_DIR; eval "$_g4save"
+
+# 4.0.1: no path the suite leaves in its sandbox may be deep enough that the Recycle Bin cannot
+# take it once the sandbox prefix (C:/Users/<u>/Projects/<worktree>/.test-sandbox/conf-<pid>/
+# hooks.XXXXXX, ~80-100 chars) is added: MEASURED 2026-10-25, kept sandboxes held 272-293-char
+# paths from the HK-5 fixture. Relative to $SBX_TMP, so the bound does not move with the prefix.
+_deep="$(find "$SBX_TMP" 2>/dev/null | awk -v n="${#SBX_TMP}" '{l=length($0)-n; if (l>m) {m=l; p=$0}} END {print m+0 " " p}')"
+if [ "${_deep%% *}" -le 140 ]; then
+  ok "the deepest path left in the sandbox is ${_deep%% *} chars past it (<= 140)"
+else
+  no "a path ${_deep%% *} chars deep inside the sandbox is too long for the Recycle Bin once prefixed: ${_deep#* }"
+fi
 
 # THE CALLER-DIRECTORY CHECK RUNS LAST (reviewer E, minor): it sat above every section added
 # since, so a probe below it that leaked a path into the caller's directory went unseen.
