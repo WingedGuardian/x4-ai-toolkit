@@ -1309,6 +1309,12 @@ else
   esac
 fi
 if [ -n "$_bk_saved" ]; then export X4_BACKUPS="$_bk_saved"; else unset X4_BACKUPS; fi
+# The bk2 backup's NAME is its flattened source path, sandbox prefix included, so its depth past
+# the sandbox GROWS with the prefix: 124 chars on the plain ubuntu leg, 171 in the cold legs,
+# whose sandbox nests under .test-sandbox/cold.X/checkout/ (MEASURED, CI run 40282437389 -- the
+# "deepest path" probe at the end of this file went red there). Nothing below reads this
+# section's files, and this run made them: drop them now, as the HK-3/HK-5 backups are.
+rm -rf "$_bkd"
 
 # =============================================================================
 # X4_GUARD IN A CLAUDE CODE SETTINGS FILE (user decision 2026-10-05: "Block X4_GUARD there")
@@ -1404,7 +1410,10 @@ unset X4_GAME X4_REFERENCE X4_TOOLKIT CLAUDE_PROJECT_DIR; eval "$_g4save"
 # 4.0.1: no path the suite leaves in its sandbox may be deep enough that the Recycle Bin cannot
 # take it once the sandbox prefix (C:/Users/<u>/Projects/<worktree>/.test-sandbox/conf-<pid>/
 # hooks.XXXXXX, ~80-100 chars) is added: MEASURED 2026-10-25, kept sandboxes held 272-293-char
-# paths from the HK-5 fixture. Relative to $SBX_TMP, so the bound does not move with the prefix.
+# paths from the HK-5 fixture. Relative to $SBX_TMP, so the bound does not move with the prefix
+# -- EXCEPT for a file whose NAME embeds that prefix (a backup's flattened source path): its depth
+# grows with the prefix, so this probe goes red on it in the longer, nested cold-leg sandboxes
+# (CI run 40282437389: 171). Every section drops such backups before it ends.
 _deep="$(find "$SBX_TMP" 2>/dev/null | awk -v n="${#SBX_TMP}" '{l=length($0)-n; if (l>m) {m=l; p=$0}} END {print m+0 " " p}')"
 if [ "${_deep%% *}" -le 140 ]; then
   ok "the deepest path left in the sandbox is ${_deep%% *} chars past it (<= 140)"
