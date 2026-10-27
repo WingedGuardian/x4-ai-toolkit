@@ -409,7 +409,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F328 | build-release.sh skipped the version check for `tags/` and `refs/tags/` spellings | **DEFECT (measured)** · PRE-ARC | 6 fixture cases red before, green after; archive failure ruled out as the refuser | FIXED 2026-10-26 - strip the prefix before matching |
 | F329 | A heredoc program fed to python/node could write a host transcript | **DEFECT (measured)** · PRE-ARC | 9 heredoc shapes allowed before; replay 0 of 42,910 changed | FIXED 2026-10-26 - the same write-call patterns over an interpreter's stdin program |
 | F330 | `'<literal>' \| iex` was refused as not completely evaluated | **DEFECT (measured)** · PRE-ARC | 2 benign forms refused, 2 delete twins; replay 0 of 10 iex rows changed | FIXED 2026-10-26 - a lone constant piped into a bare iex is read as `iex '<literal>'` |
-| F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay: 75 of 91,550 commands advise -> ask, 0 other facts changed | CHANGED 2026-10-26 (user) - rm_in_game asks; install/extensions wholesale and reference/ stay deny |
+| F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay 2026-10-27: 53 of 53,662 game-root commands advise -> ask, 110 stay advise, 0 other facts changed | CHANGED 2026-10-26, NARROWED 2026-10-27 (user) - rm_deployed_mod asks once per command naming every mod; other game-install deletes advise; install/extensions wholesale and reference/ stay deny |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11430,7 +11430,7 @@ name iex or Invoke-Expression; 0 changed (control: the probe command changes).
 
 **RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`TestHK1PowerShellFrontEnd`).
 
-## F332 - A delete inside the game install only advised · **POLICY DRIFT (read)** · PRE-ARC · confidence 95% · CHANGED 2026-10-26
+## F332 - A delete inside the game install only advised · **POLICY DRIFT (read)** · PRE-ARC · confidence 95% · CHANGED 2026-10-26 · NARROWED 2026-10-27
 
 READ: bd45eef (2026-10-02, user decision "an ask I always approve protects nothing"; 54 of 54
 hook asks approved, 14 of them X4-folder deletes) turned `rm_in_x4_dir` from ask into an advisory
@@ -11449,4 +11449,19 @@ Recycle-Bin call, 2 extensions/ + game .claude/, 7 game .claude/, 4 New mods/, 2
 paths); 0 commands had any existing fact change. Caveat: a Recycle-Bin delete asks too, as it
 advised before; the guard does not tell a recycle from a destroy.
 
-**RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`test_deleting_inside_the_game_install_fires_rm_in_game` and twins), scripts/test-hooks.sh (deployed-mod rows).
+SUPERSEDED IN PART 2026-10-27 (user, narrowing): only removing a DEPLOYED MOD asks -- a folder
+directly under the game's extensions/, or anything inside one. `rm_in_game` is replaced by
+`rm_deployed_mod` plus `rm_deployed_mod_names`: ONE ask per command, naming every mod it touches,
+deduplicated by mod folder and capped at 10 ("and N more"); a filtered `find` over extensions/
+itself (`-delete` or `| xargs rm`) is named "<any mod the find matches>". Every other delete in
+the game install (game-root files, the game's .claude/, New mods/) goes back to the bd45eef
+advisory. Path tags on the 75 rows above put 43 in extensions/ (READ, not a re-run). MEASURED
+re-run 2026-10-27 (ba370f9 = bd45eef-era facts vs 844389a, the 53,662 of 91,824 unique historical
+commands that name the game root or ran in it, all 987 PowerShell ones included): delete verdict
+advise -> ask 53 (38 Bash, 15 PowerShell; the most-named mod appears in 8, the
+next in 5), advise -> advise 110, deny -> deny 4, 0 loosened, 0 existing facts
+changed, 0 errors. MEASURED probes:
+rm_deployed_mod_names = "a, b, c" for `rm -rf ext/a ext/b/x ext/c ext/a/y`, a Remove-Item list and
+`find ext/a ext/b ext/c ... | xargs rm`.
+
+**RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`test_removing_a_deployed_mod_fires_rm_deployed_mod`, `test_one_command_names_EVERY_deployed_mod_once` and twins), scripts/test-hooks.sh (deployed-mod rows, game-root twins, the single-ask probe).
