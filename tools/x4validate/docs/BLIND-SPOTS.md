@@ -411,6 +411,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F330 | `'<literal>' \| iex` was refused as not completely evaluated | **DEFECT (measured)** · PRE-ARC | 2 benign forms refused, 2 delete twins; replay 0 of 10 iex rows changed | FIXED 2026-10-26 - a lone constant piped into a bare iex is read as `iex '<literal>'` |
 | F331 | A Windows-form write through a junction was judged as the path spelled, not the file reached | **DEFECT (measured)** · PRE-ARC | 24 of 24 Windows-form junction writes allowed (reference/game/profile/saves); 72 of 72 link-creating commands allowed; replay 0 of 3,447 changed | FIXED 2026-10-26 - protect-files resolves a drive-form path through its links, fail closed; link CREATION into a protected root refused by its target (protect-bash); Bash-channel writes through pre-existing links, hardlinks to existing files and trusted linked toolkit folders stay residual |
 | F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay 2026-10-27: 53 of 53,662 game-root commands advise -> ask, 110 stay advise, 0 other facts changed | CHANGED 2026-10-26, NARROWED 2026-10-27 (user) - rm_deployed_mod asks once per command naming every mod; other game-install deletes advise; install/extensions wholesale and reference/ stay deny |
+| F333 | Three deployed-mod delete shapes the shell guard does not read: a python `shutil.rmtree` literal, a path through a junction to `extensions/`, and a root held in an unknown variable | **OPEN LIMIT (measured)** · PRE-ARC | release review of the 4.0.1 deployed-mod rule (2026-10-27): each allowed at a1d876a, ba370f9 and the merged head alike, in sandbox roots | open; see entry |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11583,3 +11584,18 @@ rm_deployed_mod_names = "a, b, c" for `rm -rf ext/a ext/b/x ext/c ext/a/y`, a Re
 `find ext/a ext/b ext/c ... | xargs rm`.
 
 **RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`test_removing_a_deployed_mod_fires_rm_deployed_mod`, `test_one_command_names_EVERY_deployed_mod_once` and twins), scripts/test-hooks.sh (deployed-mod rows, game-root twins, the single-ask probe).
+
+## F333 - Three deployed-mod delete shapes the shell guard does not read · **OPEN LIMIT (measured)** · PRE-ARC · confidence 85%
+
+Found by the release review of the 4.0.1 deployed-mod rule (F332). MEASURED in sandbox stand-in
+roots: each of these removes a deployed mod and is ALLOWED, identically at a1d876a, at ba370f9 and
+at the merged head, so no 4.0.1 change caused or loosened it:
+(a) `python -c "shutil.rmtree(r'<game>/extensions/<mod>')"`: inline-program deletes are judged
+only for the transcript and link rules, not as deletes (the F290 opaque-program class);
+(b) `rm -rf <junction-to-extensions>/<mod>`: the shell channel compares paths as written and does
+not follow links (F331 records the same gap for writes; link CREATION into the game install is
+refused since F331);
+(c) `rm -rf "$UNKNOWN/.../X4 Foundations/extensions/<mod>"`: the game-root name backstop is anchored
+at the end of the path, so it does not match a mod path beneath it.
+UNMEASURED (inferred from the code): the extensions path is derived from the game root only, so a
+setup with `X4_EXTENSIONS` set and no `X4_GAME` would not fire the deployed-mod ask.
