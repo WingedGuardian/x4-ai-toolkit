@@ -47,7 +47,9 @@ BASH = os.environ.get("X4_BASH") or shutil.which("bash")
 RANK = {"allow": 0, "advise": 1, "ask": 2, "deny": 3, "inert": 4}
 EXTRAS = FIX.parent / "conformance_extra.yaml"
 #: The dump cases where the Codex host contract (a825d86) legitimately changes the verdict.
-HOST_CONTRACT_CASES = {"#117 invoking a long job in the foreground still denies"}
+#: Pinned by case NAME: the "#N " prefix is the case's position in the corpus and moves
+#: whenever cases are added ahead of it (#117 became #120 in 4.0.1).
+HOST_CONTRACT_CASES = {"invoking a long job in the foreground still denies"}
 WORKERS = 6
 
 pytestmark = pytest.mark.skipif(not (PWSH and BASH and shutil.which("jq")),
@@ -137,7 +139,8 @@ def test_every_replayable_case_agrees(conformance_dump):
     # PINNED (review F1): the host-contract set is EXACTLY the one foreground long-job case the
     # Claude hook denies and the Codex chain ADVISES. A new member (another rule that moved
     # with the host) or a missing one (the exemption stopped reaching the guards) fails here.
-    assert {h[0] for h in hosted} == HOST_CONTRACT_CASES, hosted
+    assert {h[0].split(" ", 1)[1] if h[0].startswith("#") else h[0] for h in hosted} \
+        == HOST_CONTRACT_CASES, hosted
     # user 2026-10-26: under Codex the long job is ADVISED, not silently allowed
     assert all(h[1] == "shell-bash" and h[2] == "deny" and h[4] == "advise" for h in hosted), hosted
     # R7-3: the guards re-run NOW must still say what the harness recorded at decide() time; a

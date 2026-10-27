@@ -294,12 +294,22 @@ MUTANTS = [
      "    transcript_inline = _heredoc_program_writes_transcript(spliced, base)",
      "    transcript_inline = False",
      "test_a_heredoc_program_writing_a_transcript_fires"),
+    # Anchored on the transcript scan's own sink line: the opener test also appears in the
+    # F331 link heredoc scan, so the bare line matched twice (rc5, 2026-10-27).
     ("only a body that feeds the interpreter is its program",
+     "        return _reads_program_from_stdin(_unwrap(sg))\n"
+     "    for opener, _t, _e, body in _heredoc_walk(spliced)[0]:\n"
      "        if _opener_feeds(opener, sink) or _flows_to(opener, sink):",
+     "        return _reads_program_from_stdin(_unwrap(sg))\n"
+     "    for opener, _t, _e, body in _heredoc_walk(spliced)[0]:\n"
      "        if True:",
      "test_TWIN_a_heredoc_that_is_not_an_interpreter_program_is_not"),
     ("a heredoc on the interpreter's own line feeds it",
+     "        return _reads_program_from_stdin(_unwrap(sg))\n"
+     "    for opener, _t, _e, body in _heredoc_walk(spliced)[0]:\n"
      "        if _opener_feeds(opener, sink) or _flows_to(opener, sink):",
+     "        return _reads_program_from_stdin(_unwrap(sg))\n"
+     "    for opener, _t, _e, body in _heredoc_walk(spliced)[0]:\n"
      "        if _flows_to(opener, sink):",
      "test_a_heredoc_program_writing_a_transcript_fires"),
     # NOT MUTATED: dropping `or _flows_to(opener, sink)` is EQUIVALENT today (MEASURED: the
