@@ -765,6 +765,70 @@ class TestMiscPredicates(unittest.TestCase):
     def test_longjob_merely_NAMED_does_not_fire(self):
         self.assertFalse(F("grep -n 'corpus_sweep' gates/README.md")["longjob_foreground"])
 
+    # a825d86: a Codex shell call (x4guard sets the TOP-LEVEL x4_execution_host) yields a
+    # running session instead of Claude Bash's foreground timeout, so the two Claude
+    # scheduling facts do not apply to it. One test per clause; every other host keeps them.
+    @staticmethod
+    def _host(command, host, timeout=0, where="top"):
+        payload = {"tool_input": {"command": command, "timeout": timeout}}
+        if where == "top":
+            payload["x4_execution_host"] = host
+        else:
+            payload["tool_input"]["x4_execution_host"] = host
+        return H.facts(payload, ROOTS)
+
+    def test_a_codex_shell_long_job_is_not_a_foreground_long_job(self):
+        self.assertFalse(self._host("uv run python gates/corpus_sweep.py", "codex")["longjob_foreground"])
+
+    def test_a_codex_shell_is_not_held_to_the_bash_timeout_cap(self):
+        self.assertFalse(self._host("sleep 1", "codex", timeout=900000)["timeout_over_cap"])
+
+    def test_TWIN_only_the_codex_host_is_exempt_from_the_scheduling_facts(self):
+        """Clause: the host is exactly "codex". Claude, generic, empty and a near miss keep both."""
+        for host in ("claude", "generic", "", "Codex", "codex2"):
+            with self.subTest(host=host):
+                self.assertTrue(self._host("uv run python gates/corpus_sweep.py", host)["longjob_foreground"])
+                self.assertTrue(self._host("sleep 1", host, timeout=900000)["timeout_over_cap"])
+                # ...and never the Codex ADVISORY facts instead (2026-10-26 user decision)
+                self.assertFalse(self._host("uv run python gates/corpus_sweep.py", host)["longjob_codex"])
+                self.assertFalse(self._host("sleep 1", host, timeout=900000)["timeout_over_cap_codex"])
+
+    def test_TWIN_the_command_payload_cannot_claim_the_codex_host(self):
+        """Clause: TOP-LEVEL payload context, which only the adapter writes. tool_input is the
+        model's own arguments, so naming the host there exempts nothing."""
+        self.assertTrue(self._host("uv run python gates/corpus_sweep.py", "codex",
+                                   where="tool_input")["longjob_foreground"])
+        self.assertTrue(self._host("sleep 1", "codex", timeout=900000,
+                                   where="tool_input")["timeout_over_cap"])
+
+    # 2026-10-26 (user): the Codex exemption is not SILENT -- the same command under a Codex
+    # shell sets an advisory fact (longjob_codex / timeout_over_cap_codex) instead of the deny.
+    def test_a_codex_shell_long_job_is_ADVISED(self):
+        self.assertTrue(self._host("uv run python gates/corpus_sweep.py", "codex")["longjob_codex"])
+
+    def test_a_codex_shell_over_the_cap_is_ADVISED(self):
+        self.assertTrue(self._host("sleep 1", "codex", timeout=900000)["timeout_over_cap_codex"])
+
+    def test_TWIN_a_codex_shell_without_a_long_job_or_over_cap_timeout_is_not_advised(self):
+        """Clauses: a long job (a name merely mentioned is not one) / a timeout above the cap."""
+        for c in ("ls", "grep -n 'corpus_sweep' gates/README.md"):
+            with self.subTest(c=c):
+                self.assertFalse(self._host(c, "codex")["longjob_codex"], c)
+        self.assertFalse(self._host("sleep 1", "codex", timeout=600000)["timeout_over_cap_codex"])
+        self.assertFalse(self._host("sleep 1", "codex", timeout=0)["timeout_over_cap_codex"])
+
+    def test_TWIN_a_backgrounded_codex_long_job_is_not_advised(self):
+        """Clause: `background is not True` -- a job already in the background needs no note."""
+        payload = {"tool_input": {"command": "uv run python gates/corpus_sweep.py",
+                                  "run_in_background": True}, "x4_execution_host": "codex"}
+        self.assertFalse(H.facts(payload, ROOTS)["longjob_codex"])
+
+    def test_TWIN_the_codex_advisory_needs_the_TOP_LEVEL_host(self):
+        self.assertFalse(self._host("uv run python gates/corpus_sweep.py", "codex",
+                                    where="tool_input")["longjob_codex"])
+        self.assertFalse(self._host("sleep 1", "codex", timeout=900000,
+                                    where="tool_input")["timeout_over_cap_codex"])
+
 
 class TestPreviouslyUnprobedRules(unittest.TestCase):
     """Every rule that a code review found had NO probe at all, or only one.
@@ -906,6 +970,75 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
 
     def test_deleting_an_unrelated_temp_file_does_not_fire(self):
         self.assertFalse(F(D + " -f /c/tmp/scratch.txt")["rm_in_x4_dir"])
+
+    # --- 2026-10-27 (user, narrowing 2026-10-26): removing a DEPLOYED MOD asks, ONCE per
+    # command, naming every mod (rm_deployed_mod / rm_deployed_mod_names). Every other X4
+    # directory delete keeps the rm_in_x4_dir advisory.
+    def test_removing_a_deployed_mod_fires_rm_deployed_mod(self):
+        for c in (D + ' -rf "' + GAME + '/extensions/deployed"',
+                  D + ' -f "' + GAME + '/extensions/deployed/ext_01.cat"',
+                  "DST=" + Q + GAME + "/extensions/deployed" + Q + "; " + D + " -rf " + DQ + "$DST" + DQ,
+                  'find "' + GAME + '/extensions/deployed" -delete',
+                  'mv "' + GAME + '/extensions/deployed" /c/tmp/old',
+                  D + ' -rf "$X4_GAME/extensions/deployed"'):
+            with self.subTest(c=c):
+                f = F(c)
+                self.assertTrue(f["rm_deployed_mod"], c)
+                self.assertEqual(f["rm_deployed_mod_names"], "deployed", c)
+
+    def test_TWIN_other_game_install_deletes_are_not_a_deployed_mod(self):
+        """Clause: under extensions/ -- a game-root file, the game's .claude/ and New mods/
+        keep the rm_in_x4_dir ADVISORY; extensions/ itself is the rm_hits_game deny."""
+        for c in (D + ' -f "' + GAME + '/notes.txt"', D + ' -rf "' + GAME + '/.claude/backups/x"',
+                  D + ' -rf "' + GAME + '/New mods/x"'):
+            with self.subTest(c=c):
+                f = F(c)
+                self.assertFalse(f["rm_deployed_mod"], c)
+                self.assertTrue(f["rm_in_x4_dir"], c)
+        f = F(D + ' -rf "' + GAME + '/extensions"')
+        self.assertTrue(f["rm_hits_game"])
+
+    def test_TWIN_rm_deployed_mod_is_silent_outside_the_game_and_for_non_deletes(self):
+        for c in (D + ' -rf "' + ROOTS["mods"] + '/mymod"', D + ' -f "' + TOOLKIT + '/notes.md"',
+                  D + " -f /c/tmp/scratch.txt",
+                  "cp -r " + DQ + ROOTS["mods"] + "/m" + DQ + " " + DQ + GAME + "/extensions/m" + DQ,
+                  'ls -la "' + GAME + '/extensions"',
+                  "python dev/_tools/deploy.py mymod", "uv run python dev/_tools/deploy.py mymod --apply"):
+            with self.subTest(c=c):
+                f = F(c)
+                self.assertFalse(f["rm_deployed_mod"], c)
+                self.assertEqual(f["rm_deployed_mod_names"], "", c)
+
+    def test_rm_deployed_mod_also_reads_a_powershell_delete(self):
+        f = H.facts({"tool_name": "PowerShell", "tool_input": {
+            "command": "Remove-Item -Recurse " + DQ + GAME + "/extensions/deployed" + DQ}}, ROOTS)
+        self.assertTrue(f["rm_deployed_mod"], f)
+
+    def test_one_command_names_EVERY_deployed_mod_once(self):
+        """User 2026-10-27: one prompt per command, never per file -- deduplicated by mod folder."""
+        E = GAME + "/extensions/"
+        for tool, c in (("Bash", D + ' -rf "' + E + 'a" "' + E + 'b/x" "' + E + 'c" "' + E + 'a/y"'),
+                        ("PowerShell", "Remove-Item -Recurse " + DQ + E + "a" + DQ + ", " + DQ + E + "b/x"
+                         + DQ + ", " + DQ + E + "c" + DQ),
+                        ("Bash", "find " + Q + E + "a" + Q + " " + Q + E + "b" + Q + " " + Q + E + "c" + Q
+                         + " -name " + Q + "*.bak" + Q + " | xargs " + D + " -f")):
+            with self.subTest(tool=tool, c=c):
+                f = H.facts({"tool_name": tool, "tool_input": {"command": c}}, ROOTS)
+                self.assertEqual(f["rm_deployed_mod_names"], "a, b, c", c)
+
+    def test_a_filtered_find_over_extensions_names_any_matching_mod(self):
+        E = GAME + "/extensions"
+        for c in ("find " + Q + E + Q + " -name " + Q + "*.bak" + Q + " | xargs " + D + " -f",
+                  "find " + Q + E + Q + " -name " + Q + "*.bak" + Q + " -delete"):
+            with self.subTest(c=c):
+                f = F(c)
+                self.assertTrue(f["rm_deployed_mod"], c)
+                self.assertEqual(f["rm_deployed_mod_names"], "<any mod the find matches>", c)
+
+    def test_the_mod_list_is_CAPPED_at_ten(self):
+        c = D + " -rf " + " ".join(DQ + GAME + "/extensions/m%02d" % i + DQ for i in range(12))
+        self.assertEqual(F(c)["rm_deployed_mod_names"],
+                         ", ".join("m%02d" % i for i in range(10)) + " and 2 more")
 
     # --- the profile-by-name measurement trap
     def test_grepping_the_profile_by_name_fires(self):
@@ -3895,12 +4028,27 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
                 self.assertFalse(f.get("carrier_untranslated") or f.get("powershell_error"), (c, f))
 
     def test_TWIN_a_delete_piped_into_iex_is_still_judged(self):
-        """Twin: reading the literal must reach the delete rules, not merely clear the refusal."""
-        for inner in ("rm -r " + DQ + GAME + DQ, "Remove-Item -Recurse " + REF):
+        """Twin: reading the literal must reach the delete rules, not merely clear the refusal.
+        Spelled with PowerShell's own cmdlet, so the delete binds on every platform."""
+        for inner in ("Remove-Item -Recurse " + DQ + GAME + DQ, "ri -r " + DQ + GAME + DQ,
+                      "Remove-Item -Recurse " + REF):
             c = Q + inner + Q + " | iex"
             with self.subTest(c=c):
                 f = self.P(c)
                 self.assertTrue(f["rm_hits_game"] or f["rm_targets_reference"], (c, f))
+
+    def test_TWIN_an_rm_piped_into_iex_is_judged_or_refused_never_allowed(self):
+        """`rm` is a PowerShell alias of Remove-Item ONLY on Windows; PowerShell on Linux/macOS
+        drops it, so `rm` there is the native /bin/rm, which StaticParameterBinder binds as an
+        application with no -Path: the translation is refused as unreadable (MEASURED, ubuntu
+        CI run 40282437389: carrier_untranslated, rm_hits_game False). Either way never a
+        silent allow: a judged delete on Windows, a fail-closed refusal elsewhere."""
+        c = Q + "rm -r " + DQ + GAME + DQ + Q + " | iex"
+        f = self.P(c)
+        if os.name == "nt":
+            self.assertTrue(f["rm_hits_game"], (c, f))
+        else:
+            self.assertTrue(f["rm_hits_game"] or f.get("carrier_untranslated"), (c, f))
 
     def test_TWIN_any_other_upstream_of_iex_stays_unreadable(self):
         """Clause: a lone CONSTANT, piped straight into a BARE iex. Expansions, several strings,
@@ -5908,6 +6056,14 @@ class TestGOutSubstitutedVerb(unittest.TestCase):
             with self.subTest(c=c):
                 f = FC(c, _ELSEWHERE)
                 self.assertTrue(f["rm_in_x4_dir"] and not f["verb_unresolved"], c)
+
+    def test_a_substituted_verb_on_a_deployed_mod_is_rm_deployed_mod(self):
+        """2026-10-27 (user): removing a deployed mod ASKS; a substituted verb that may be rm is
+        judged as `rm` would be. Below the game root but outside extensions/ it stays advisory."""
+        for c in ("$(echo rm) -rf " + DQ + GAME + "/extensions/m" + DQ, BT + "echo rm" + BT + " -rf " + DQ + GAME + "/extensions/m/x" + DQ):
+            with self.subTest(c=c):
+                self.assertEqual(FC(c, _ELSEWHERE)["rm_deployed_mod_names"], "m", c)
+        self.assertFalse(FC("$(echo rm) -rf " + DQ + GAME + "/libraries" + DQ, _ELSEWHERE)["rm_deployed_mod"])
 
     def test_a_prefix_ASSIGNMENT_does_not_hide_the_verb(self):
         """FX-G5 / reviewer J2 item 3 (MEASURED: allowed): an earlier token holding `$(` refused

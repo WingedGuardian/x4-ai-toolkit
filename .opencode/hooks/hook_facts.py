@@ -6227,6 +6227,38 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         not any(hit(named, k, conservative=True) for k in _wipe_keys)
         and any(hit(seeded, k, conservative=True) for k in _wipe_keys)
         for named, seeded in gitwipe_pairs)
+
+    # 2026-10-27 (user, narrowing 2026-10-26): a delete that removes a DEPLOYED MOD -- a
+    # folder directly under the game's extensions/, or anything inside one -- ASKS, ONCE per
+    # command, naming every mod it touches. Every other delete in the game install keeps the
+    # rm_in_x4_dir advisory (bd45eef); extensions/ itself stays the rm_hits_game hard block.
+    # Same operand channels as rm_in_x4_dir's game clause. Names are lower-cased by norm().
+    _g = norm(roots.get("game") or "")
+    _ext = _g + "/extensions/" if _g else ""
+
+    def _deployed_mods(ops, filtered=False):
+        # prep() already substituted a root variable ($X4_GAME, F154) and, for an unresolved
+        # operand, `path` IS its resolved text -- so an unknown mod name stays as written.
+        names = []
+        for path, _unres, _raw in ops:
+            if not _ext:
+                break
+            n = norm(path)
+            if n.startswith(_ext):
+                seg = n[len(_ext):].split("/")[0]
+                if seg == "${xargs_item}":
+                    # `find <extensions> ... | xargs rm`: each found entry, any mod
+                    names.append("<any mod the find matches>")
+                elif seg:
+                    names.append(seg)
+            elif filtered and n == _ext[:-1]:
+                # a FILTERED find over extensions/ itself reaches into any mod it matches
+                names.append("<any mod the find matches>")
+        return names
+
+    _mods = list(dict.fromkeys(_deployed_mods(rm_t + mv_src + subst_rm_t)
+                               + _deployed_mods(scoped_rm_t, filtered=True)))
+    _mod_list = ", ".join(_mods[:10]) + (f" and {len(_mods) - 10} more" if len(_mods) > 10 else "")
     result = {
         "command": cmd,
         "timeout": timeout,
@@ -6285,6 +6317,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         "rm_in_x4_dir": any(hit(rm_t + mv_src + scoped_rm_t, k, conservative=True) for k in
                             ("game", "profile", "mods", "toolkit")) or rm_named_game
                         or hit(subst_rm_t, "game"),
+        # 2026-10-27 (user): removing a DEPLOYED MOD asks -- one prompt per command, naming
+        # every mod (first 10, then "and N more"). See _deployed_mods above.
+        "rm_deployed_mod": bool(_mods),
+        "rm_deployed_mod_names": _mod_list,
         "rm_saves": hit(rm_t + mv_src + scoped_rm_t, "saves", conservative=True),
         # The PROFILE keeps a confirmation when rm_in_x4_dir became an advisory (user,
         # 2026-10-02): a bad content.xml or save="1" can damage saves.
@@ -6465,6 +6501,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # by a message telling it to run in the background. `is True`, as for longjob below.
         "timeout_over_cap": not codex_async_shell and _as_ms(timeout) > (7200000 if background is True else 600000),
         "longjob_foreground": longjob and background is not True and not codex_async_shell,
+        # 2026-10-26 (user): under a Codex shell the two facts above are not silently dropped --
+        # the same conditions set these, which protect-bash.sh ADVISES on (fine if the shell
+        # yields a running session; otherwise background it or shorten it).
+        "longjob_codex": longjob and background is not True and codex_async_shell,
+        "timeout_over_cap_codex": codex_async_shell and _as_ms(timeout) > (7200000 if background is True else 600000),
         # THE LAST WHOLE-COMMAND AND-OF-INDEPENDENT-PREDICATES RULE IN THIS FILE,
         # and it hard-denied PROSE. It tested `cmd`/`ncmd` -- the RAW text rather
         # than `body` -- so a comment or a quoted string naming the tool, the

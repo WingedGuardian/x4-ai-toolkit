@@ -387,12 +387,25 @@ decide deny  protect-bash.sh "$(cj "rm -rf '$X4_GAME'")"   "deleting the install
 # through to a confirmation. It does not: extensions/ WHOLESALE is still a hard block.
 # Only a path INSIDE it falls to the confirm, which is the verdict CLAUDE.md assigns to
 # deleting in an X4 directory, and it is recoverable by redeploying from dev/.
+# 2026-10-02 made that confirm an advisory (bd45eef); 2026-10-27 (user) removing a DEPLOYED
+# MOD asks again (rm_deployed_mod), ONCE per command naming every mod; every other delete in
+# the game install, mod sources and the toolkit stays an advisory.
 decide deny  protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions'")"   "extensions/ WHOLESALE is still a hard block"
-decide advise protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions/deployed'")"   "ONE deployed mod confirms, it is not a hard block"
-decide advise protect-bash.sh "$(cj "rm -f '$X4_GAME/extensions/deployed/ext_01.cat'")"   "one file inside a deployed mod confirms"
+decide ask   protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions/deployed'")"   "ONE deployed mod confirms, it is not a hard block"
+decide ask   protect-bash.sh "$(cj "rm -f '$X4_GAME/extensions/deployed/ext_01.cat'")"   "one file inside a deployed mod confirms"
 # ...and with the destination in a VARIABLE, which is the form that exposed this and the
 # form no probe used before.
-decide advise protect-bash.sh "$(cj "DST='$X4_GAME/extensions/deployed'; rm -rf \"\$DST\"")"   "a variable deploy destination confirms, not blocks"
+decide ask   protect-bash.sh "$(cj "DST='$X4_GAME/extensions/deployed'; rm -rf \"\$DST\"")"   "a variable deploy destination confirms, not blocks"
+decide advise protect-bash.sh "$(cj "rm -f '$X4_GAME/notes.txt'")"   "TWIN: a game-root file outside extensions/ keeps the advisory"
+decide advise protect-bash.sh "$(cj "rm -rf '$X4_GAME/.claude/backups/x'")"   "TWIN: the game's .claude/ keeps the advisory"
+decide ask   protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions/a' '$X4_GAME/extensions/b/x' '$X4_GAME/extensions/c'")"   "several deployed mods in one command confirm"
+# ...ONCE, naming every mod (user 2026-10-27): one prompt per command, never per file.
+_mm=$(cj "rm -rf '$X4_GAME/extensions/a' '$X4_GAME/extensions/b/x' '$X4_GAME/extensions/c' '$X4_GAME/extensions/a/y'" | bash "$HOOKS/protect-bash.sh" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
+if [ "$(printf '%s' "$_mm" | grep -c 'CONFIRM REMOVING DEPLOYED MOD')" = 1 ] && printf '%s' "$_mm" | grep -q ': a, b, c\. One answer'; then
+  ok "several deployed mods: ONE ask whose reason names a, b, c once"
+else
+  no "several deployed mods: ONE ask whose reason names a, b, c once -- got: ${_mm:0:300}"
+fi
 # --- rule 3: the long-job rule must see an INVOCATION, not a mention -----------
 # MEASURED 2026-08-30: 125 of its 144 hits merely NAMED a job. It denied this session's
 # own analysis script (the name sat in a regex literal) and the write of the PLAN that
@@ -564,7 +577,7 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
   "a substituted argument in a cd is untouched"
 
 
-EXPECT=320
+EXPECT=324
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
@@ -1309,6 +1322,12 @@ else
   esac
 fi
 if [ -n "$_bk_saved" ]; then export X4_BACKUPS="$_bk_saved"; else unset X4_BACKUPS; fi
+# The bk2 backup's NAME is its flattened source path, sandbox prefix included, so its depth past
+# the sandbox GROWS with the prefix: 124 chars on the plain ubuntu leg, 171 in the cold legs,
+# whose sandbox nests under .test-sandbox/cold.X/checkout/ (MEASURED, CI run 40282437389 -- the
+# "deepest path" probe at the end of this file went red there). Nothing below reads this
+# section's files, and this run made them: drop them now, as the HK-3/HK-5 backups are.
+rm -rf "$_bkd"
 
 # =============================================================================
 # X4_GUARD IN A CLAUDE CODE SETTINGS FILE (user decision 2026-10-05: "Block X4_GUARD there")
@@ -1404,7 +1423,10 @@ unset X4_GAME X4_REFERENCE X4_TOOLKIT CLAUDE_PROJECT_DIR; eval "$_g4save"
 # 4.0.1: no path the suite leaves in its sandbox may be deep enough that the Recycle Bin cannot
 # take it once the sandbox prefix (C:/Users/<u>/Projects/<worktree>/.test-sandbox/conf-<pid>/
 # hooks.XXXXXX, ~80-100 chars) is added: MEASURED 2026-10-25, kept sandboxes held 272-293-char
-# paths from the HK-5 fixture. Relative to $SBX_TMP, so the bound does not move with the prefix.
+# paths from the HK-5 fixture. Relative to $SBX_TMP, so the bound does not move with the prefix
+# -- EXCEPT for a file whose NAME embeds that prefix (a backup's flattened source path): its depth
+# grows with the prefix, so this probe goes red on it in the longer, nested cold-leg sandboxes
+# (CI run 40282437389: 171). Every section drops such backups before it ends.
 _deep="$(find "$SBX_TMP" 2>/dev/null | awk -v n="${#SBX_TMP}" '{l=length($0)-n; if (l>m) {m=l; p=$0}} END {print m+0 " " p}')"
 if [ "${_deep%% *}" -le 140 ]; then
   ok "the deepest path left in the sandbox is ${_deep%% *} chars past it (<= 140)"

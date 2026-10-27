@@ -525,7 +525,16 @@ on lifts_reference_deny && ask "This LIFTS the OS delete/write protection on ref
 # or two existing saves it backed up and verified first (user policy 2026-10-18). Three or
 # more, or a wildcard, need typed approval; anything the backup cannot cover still asks.
 on rm_in_profile && [ "$_harness_save_qualified" != 1 ] && ask "DELETING IN YOUR X4 PROFILE (mod list, config, saves) -- not reproducible. Confirm: $COMMAND"
-on rm_in_x4_dir && advise "This deletes files in an X4 directory (game extensions, mod sources or the toolkit). Make sure it is what you meant -- check git status afterwards, and redeploy if you removed a deployed mod by mistake. Command: $COMMAND"
+# 2026-10-27 (user): removing a DEPLOYED MOD (a folder in the game's extensions/, or
+# anything inside one) ASKS -- ONE prompt per command, naming every mod it touches. Every
+# other X4-directory delete keeps the bd45eef advisory below.
+_t="${FACTS_NL#*
+rm_deployed_mod_names	}"
+RM_MODS="${_t%%
+*}"
+_rm_mod=0; on rm_deployed_mod && _rm_mod=1
+on rm_deployed_mod && ask "CONFIRM REMOVING DEPLOYED MOD(S) from the game's extensions/: $RM_MODS. One answer covers this whole command. Command: $COMMAND"
+on rm_in_x4_dir && [ "$_rm_mod" != 1 ] && advise "This deletes files in an X4 directory (game files, mod sources or the toolkit). Make sure it is what you meant -- check git status afterwards, and redeploy if you removed a deployed mod by mistake. Command: $COMMAND"
 
 # === CONFIRM — destructive git inside an X4 directory ===
 # git IGNORES the read-only attribute. MEASURED 2026-09-04: `git checkout HEAD~1 -- f`
@@ -800,5 +809,11 @@ Prefer  run_in_background: true  — up to 2 h (default 30 min), and it re-invok
 Proceed in the foreground only if you have scoped it down (e.g. --limit=N).
 Command: $COMMAND"
 fi
+
+# --- the same two, under a CODEX shell: advised, never silently dropped ---------
+# 2026-10-26 (user). A Codex shell call returns a running session instead of blocking, so
+# the Claude Bash deny above does not apply (a825d86); hook_facts sets these instead.
+on timeout_over_cap_codex && advise "CODEX SHELL, TIMEOUT OVER THE BASH CAP (${TIMEOUT_MS}ms): fine if this Codex shell yields a running session; otherwise run it in the background or shorten it. Command: $COMMAND"
+on longjob_codex && advise "CODEX SHELL, KNOWN LONG JOB (corpus_sweep ~2100s, perf_guard ~600s+, build-effective.sh ~100-200s): fine if this Codex shell yields a running session; otherwise run it in the background or scope it down (e.g. --limit=N). Command: $COMMAND"
 
 exit 0

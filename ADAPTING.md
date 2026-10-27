@@ -223,7 +223,12 @@ A shell request carries the actual executing shell and the complete command:
 {"api_version":1,"host":"future-coder","tool":"shell","surface":"shell","cwd":"<absolute-toolkit-root>","session_id":"session-1","tool_call_id":"call-2","shell":"powershell","command":"Get-Content -LiteralPath 'dev/mymod/content.xml'"}
 ```
 
-Use `"shell":"bash"` for Bash. Parse the complete JSON reply and its inner
+Use `"shell":"bash"` for Bash. Send your host's own name in `host`, never
+`"codex"` unless the shell really is Codex's: `"host":"codex"` ASSERTS that the
+shell call does not block -- it returns a running session -- so the guards turn
+Claude Bash's "long job in the foreground" and "timeout above the cap" denials
+into ADVISORIES for it (allowed, with a note; every other shell rule still
+applies). A host whose shell blocks until the command ends must not claim it. Parse the complete JSON reply and its inner
 `result`: integer `api_version: 1`, `decision` (`allow`, `ask`, `deny`),
 `evaluation`, `preservation`, `validation`, text `reason`, and text-array
 `warnings`. Keep the returned `transactions`. Normal X4 replies also have
@@ -592,6 +597,16 @@ Field by field:
 - `run_cwd`: `"neutral"` (the default, and what you want) runs your adapter in an EMPTY scratch
   folder, exactly like an agent that starts hooks somewhere unrelated. An adapter that ignores
   the payload's working directory then fails the relative-path cases, as it would in real use.
+- `execution_host` (optional): the host name your adapter passes to the guards with a shell call
+  (x4guard `verdict_for(..., execution_host=...)`). The guards' shell policy is host-aware in one
+  place: for `"codex"`, whose shell yields a running session, Claude Bash's foreground long-job
+  and timeout-cap rules ADVISE instead of denying. Where your adapter's shell verdict differs
+  from the Claude hook's, the engine re-runs the guards on that payload WITH this host; the case
+  agrees only if that verdict equals your adapter's AND the only rule facts the host moved are
+  those scheduling facts (`longjob_foreground`, `timeout_over_cap` and their Codex advisory
+  forms `longjob_codex`, `timeout_over_cap_codex`), and is printed as `HOST CONTRACT` (READ: `scripts/x4conformance.py`,
+  `host_contract_divergence`). Declaring `"codex"` asserts your shell does not block (see Action
+  v1 above). Leave it out unless your adapter sends it.
 - `env`: added to the environment your adapter runs with. Each case already runs with the
   sandbox's `X4_TOOLKIT`, `X4_GAME`, `X4_REFERENCE` and friends -- pass them through to x4guard
   untouched (inheriting your environment does that).

@@ -34,6 +34,11 @@ Profile format v1 (scripts/conformance-profiles/<name>.json; ADAPTING.md explain
   host runs a different hook entry there (Codex: codex-entry.sh, not the Windows-only .ps1);
   requires: [programs];  run_cwd: "neutral" (an empty scratch dir; default) | "case" (the row's
   cwd);  timeout_s;  env: {VAR: value};
+  execution_host: NAME (optional) -- the host context the agent's adapter hands the guards with a
+  shell call (x4guard `execution_host`, read by hook_facts as the payload's TOP-LEVEL
+  x4_execution_host). The guards' policy is host-aware there (Codex: the Claude Bash scheduling
+  facts do not apply), so a shell case where the adapter differs from the Claude reference is
+  re-judged by the guards WITH that host; it agrees only if THAT verdict equals the adapter's;
   cases: {KIND: {payload: FILE relative to the profile | "row", set: {json-pointer: template},
           env: {VAR: value}}} for KIND in shell-bash, shell-powershell, edit, write;
   unsupported: {KIND: why} -- a GAP printed on every run; cases + unsupported cover all four kinds;
@@ -118,6 +123,9 @@ def load_profile(spec: str, root: Path) -> dict:
         raise ProfileError(f"profile {path}: output needs format \"json\"|\"text\" and a rules list")
     if not isinstance(out.get("exit_codes", {"0": "decode"}), dict):
         raise ProfileError(f"profile {path}: output.exit_codes must be an object")
+    host = prof.get("execution_host")
+    if host is not None and not (isinstance(host, str) and host):
+        raise ProfileError(f"profile {path}: execution_host must be a non-empty string")
     prof["_dir"] = str(path.parent)
     prof["_path"] = str(path)
     return prof
@@ -323,6 +331,75 @@ def _backup_only_divergence(r) -> bool:
             and BACKUP_ONLY in (r.get("text") or ""))
 
 
+#: The ONLY facts a host contract may move (a825d86): Claude Bash's two foreground scheduling
+#: facts, and (user 2026-10-26) the two Codex-scoped ADVISORY facts the same conditions set
+#: under a Codex shell instead -- so a long job there is advised, never silently dropped.
+HOST_SCHEDULING_FACTS = frozenset({"longjob_foreground", "timeout_over_cap",
+                                   "longjob_codex", "timeout_over_cap_codex"})
+#: hook_facts' root packet: the same names and order protect-bash.sh's emit_roots sends.
+_ROOT_ENV = (("game", "X4_GAME"), ("profile", "X4_PROFILE"), ("reference", "X4_REFERENCE"),
+             ("config", "X4_CONFIG"), ("toolkit", "X4_TOOLKIT"), ("mods", "X4_MODS"),
+             ("documents", "X4_DOCUMENTS"), ("saves", "X4_SAVES"))
+
+
+def _facts_lines(root: Path, payload: dict, env: dict, cwd: str):
+    """{fact: value} from <root>/.claude/hooks/hook_facts.py on one payload, or None when it
+    gave no complete answer (non-zero exit, no sentinel, a timeout, cannot start)."""
+    hf = Path(root) / ".claude" / "hooks" / "hook_facts.py"
+    head = "".join(f"{name}\t{env.get(var, '')}\n" for name, var in _ROOT_ENV) + "--X4-ROOTS-END--"
+    try:
+        r = subprocess.run([sys.executable, str(hf)], input=(head + json.dumps(payload)).encode("utf-8"),
+                           capture_output=True, env=env, cwd=cwd, timeout=REFERENCE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    lines = r.stdout.decode("utf-8", "replace").split("\n")
+    if "__X4_COMMAND__" not in lines:
+        return None
+    out = {}
+    for ln in lines[:lines.index("__X4_COMMAND__")]:
+        k, sep, v = ln.partition("\t")
+        if not sep:
+            return None
+        out[k] = v
+    return out
+
+
+def host_fact_delta(row: dict, root: Path, host: str):
+    """The sorted fact NAMES that differ between hook_facts on the row's payload as it is and
+    the same payload carrying `x4_execution_host: host` at the top level -- the structural
+    evidence of what the host changed, compared as fact values, never as reason phrases.
+    None when either run gave no complete answer. Roots come from the row's env, as
+    protect-bash.sh's emit_roots sends them (its X4_PROFILE fallback is not reproduced; the
+    roots are identical in both runs, so only the host can move a fact)."""
+    env, cwd = _env(row), _row_cwd(row, Path(root))
+    payload = row.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    plain = _facts_lines(root, payload, env, cwd)
+    hosted = _facts_lines(root, dict(payload, x4_execution_host=host), env, cwd)
+    if plain is None or hosted is None:
+        return None
+    return sorted(k for k in set(plain) | set(hosted) if plain.get(k) != hosted.get(k))
+
+
+def host_contract_divergence(r) -> bool:
+    """a825d86: the guards' policy for a shell call depends on the host that will EXECUTE it
+    (hook_facts: a Codex shell yields a running session, so Claude Bash's foreground long-job
+    and timeout-cap facts do not apply). The reference is the Claude hook, so it judges with
+    Claude's contract. A difference is accepted only when BOTH hold:
+      * the guards, re-run on the same payload WITH the profile's execution_host
+        (`reference_host`, set by replay), give exactly the adapter's verdict; and
+      * STRUCTURALLY (review F1), the facts that moved with the host (`host_fact_delta`) are a
+        NON-EMPTY subset of HOST_SCHEDULING_FACTS -- so a host exemption that ever reached a
+        delete or write rule is a disagreement, never an informational HOST CONTRACT."""
+    host, delta = r.get("reference_host"), r.get("host_fact_delta")
+    return (host is not None and r["reference"] != r["adapter"] and host == r["adapter"]
+            and host not in ("inert", "error", "unreadable")
+            and isinstance(delta, list) and bool(delta) and set(delta) <= HOST_SCHEDULING_FACTS)
+
+
 def summarise(results, n_total, buckets, gaps, min_cases) -> tuple:
     """(exit code, report). Buckets must account for every case; disagreements are listed PER ITEM."""
     assert sum(buckets.values()) == n_total, f"buckets {buckets} do not sum to the {n_total} cases"
@@ -340,8 +417,15 @@ def summarise(results, n_total, buckets, gaps, min_cases) -> tuple:
                          f"{r.get('reference_why') or r['reference']}"[:600])
         lines.append(f"CANNOT EVALUATE: {len(broken)} of {len(results)} replayed case(s) have no reference verdict")
         return RC_ERROR, "\n".join(lines)
-    bad = [r for r in results if r["reference"] != r["adapter"] and not _backup_only_divergence(r)]
+    bad = [r for r in results if r["reference"] != r["adapter"] and not _backup_only_divergence(r)
+           and not host_contract_divergence(r)]
     backup_only = [r for r in results if r["reference"] != r["adapter"] and _backup_only_divergence(r)]
+    for r in results:
+        if host_contract_divergence(r):
+            lines.append(f"HOST CONTRACT {r['label']} [{r['kind']}]: the Claude hook says {r['reference']}; "
+                         f"the guards with this agent's execution host say {r['reference_host']}, "
+                         f"as the adapter does, and only {', '.join(r['host_fact_delta'])} moved "
+                         f"-- counted as agreeing")
     if backup_only:
         lines.append(f"{len(backup_only)} replayed case(s) change a save the native hook backs up first: "
                      "this adapter judges through a read-only check, which cannot, so it ASKS where the "
@@ -647,12 +731,21 @@ def replay(rows, profile, argv, root, workers=4) -> list:
     todo = [r for r in rows if (r.get("kind") or classify(r)) in profile["cases"]]
     run_dir = neutral_run_dir(root)
 
+    host = profile.get("execution_host")
+
     def one(row):
         ref, ref_why = reference_verdict_detail(row, root)
         got, text = adapter_verdict(row, profile, argv, root, run_dir)
         label = row.get("label") or row.get("id")
-        return {"label": f"#{row['n']} {label}" if row.get("n") else label, "kind": row.get("kind") or classify(row),
-                "hook": row.get("hook"), "reference": ref, "reference_why": ref_why, "adapter": got, "text": text}
+        kind = row.get("kind") or classify(row)
+        out = {"label": f"#{row['n']} {label}" if row.get("n") else label, "kind": kind,
+               "hook": row.get("hook"), "reference": ref, "reference_why": ref_why, "adapter": got, "text": text}
+        if host and kind.startswith("shell-") and ref != got and isinstance(row.get("payload"), dict):
+            # Only where they differ: the guards again, given the host context the adapter gives them.
+            hosted = dict(row, payload=dict(row["payload"], x4_execution_host=host))
+            out["reference_host"] = reference_verdict_detail(hosted, root)[0]
+            out["host_fact_delta"] = host_fact_delta(row, root, host)
+        return out
     try:
         with ThreadPoolExecutor(max(1, int(workers))) as ex:
             return list(ex.map(one, todo))

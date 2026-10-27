@@ -1,4 +1,7 @@
-"""Judge command data only: Codex yielding execution is not Claude foreground Bash."""
+"""Judge command data only: Codex yielding execution is not Claude foreground Bash.
+
+2026-10-26 (user): not SILENTLY -- a Codex long job is ADVISED (allowed, with a note), where
+Claude and generic hosts keep the deny."""
 import json
 import subprocess
 import sys
@@ -14,10 +17,11 @@ def test_codex_long_job_does_not_require_claude_background_flag(tmp_path, comman
     payload = native('bash_powershell', tk, command=command)
     payload['tool_input']['workdir'] = str(tk)
     decision, reason = run_adapter(env, payload, shell='bash')
-    assert decision in ('allow', 'advise'), reason
+    assert decision == 'advise', reason
+    assert 'CODEX SHELL, KNOWN LONG JOB' in reason and 'running session' in reason, reason
 
 
-@pytest.mark.parametrize('host,want', [('codex', 'allow'), ('claude', 'deny'), ('generic', 'deny')])
+@pytest.mark.parametrize('host,want', [('codex', 'allow'), ('claude', 'deny'), ('generic', 'deny')])  # Action v1: allow + advisory
 def test_neutral_entry_preserves_host_scheduling_contract(tmp_path, host, want):
     tmp, tk, env = make_sandbox(tmp_path)
     action = dict(api_version=1, host=host, tool='shell', surface='shell', shell='bash',
@@ -30,6 +34,9 @@ def test_neutral_entry_preserves_host_scheduling_contract(tmp_path, host, want):
     assert data['result']['decision'] == want, data
     if want == 'deny':
         assert 'LONG JOB IN THE FOREGROUND' in data['result']['reason']
+    else:
+        note = json.dumps(data)
+        assert 'CODEX SHELL, KNOWN LONG JOB' in note and 'LONG JOB IN THE FOREGROUND' not in note, data
 
 
 def test_codex_long_job_still_checks_destructive_command(tmp_path):

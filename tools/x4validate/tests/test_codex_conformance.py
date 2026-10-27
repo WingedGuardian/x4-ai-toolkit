@@ -46,6 +46,8 @@ PWSH = shutil.which("pwsh") or shutil.which("powershell")
 BASH = os.environ.get("X4_BASH") or shutil.which("bash")
 RANK = {"allow": 0, "advise": 1, "ask": 2, "deny": 3, "inert": 4}
 EXTRAS = FIX.parent / "conformance_extra.yaml"
+#: The dump cases where the Codex host contract (a825d86) legitimately changes the verdict.
+HOST_CONTRACT_CASES = {"#117 invoking a long job in the foreground still denies"}
 WORKERS = 6
 
 pytestmark = pytest.mark.skipif(not (PWSH and BASH and shutil.which("jq")),
@@ -122,10 +124,22 @@ def test_every_replayable_case_agrees(conformance_dump):
     drift = [(res["label"], row["got"], res["reference"]) for row, res in zip(todo, results)
              if res["reference"] != row["got"]
              and not (res["reference"] == "inert" and row["got"] in ("ask", "deny"))]   # inert = normalised ask/deny
+    # a825d86: a Codex shell is judged with the Codex host contract (no Claude foreground long-job
+    # or timeout-cap fact). Accepted only where the guards, re-run WITH execution_host=codex,
+    # give exactly the adapter's verdict (xc.host_contract_divergence) -- never by phrase.
+    hosted = [(r["label"], r["kind"], r["reference"], r["reference_host"], r["adapter"]) for r in results
+              if xc.host_contract_divergence(r)]
     diffs = [(r["label"], r["kind"], r["reference"], r["adapter"], r["text"]) for r in results
-             if r["reference"] != r["adapter"]]
-    print(f"replayed {len(results)}; replay drift vs the live harness verdict: {len(drift)}")
+             if r["reference"] != r["adapter"] and not xc.host_contract_divergence(r)]
+    print(f"replayed {len(results)}; replay drift vs the live harness verdict: {len(drift)}; "
+          f"host-contract divergences: {hosted}")
     assert not diffs, "\n".join(map(str, diffs))     # PER ITEM, never a total
+    # PINNED (review F1): the host-contract set is EXACTLY the one foreground long-job case the
+    # Claude hook denies and the Codex chain ADVISES. A new member (another rule that moved
+    # with the host) or a missing one (the exemption stopped reaching the guards) fails here.
+    assert {h[0] for h in hosted} == HOST_CONTRACT_CASES, hosted
+    # user 2026-10-26: under Codex the long job is ADVISED, not silently allowed
+    assert all(h[1] == "shell-bash" and h[2] == "deny" and h[4] == "advise" for h in hosted), hosted
     # R7-3: the guards re-run NOW must still say what the harness recorded at decide() time; a
     # drift means the reference verdict is not the one the harness judged (it was only printed).
     assert not drift, "\n".join(f"DRIFT {d}" for d in drift)

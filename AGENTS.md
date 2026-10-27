@@ -158,8 +158,9 @@ prove the workdir. Reads stay allowed; script effects keep the documented covera
 
 ### Requires confirmation
 - Changes to non-save user-profile files (`Documents\Egosoft\X4\`); a `content.xml` edit is only ADVISED
-- Deleting other files in the X4 profile; other deletes in an X4 directory get an
-  advisory, not a prompt
+- Deleting other files in the X4 profile, or removing a deployed mod (anything in a folder
+  under the game's `extensions\`); other deletes in an X4 directory get an advisory
+- Removing several deployed mods: do it in ONE command, so the user answers one prompt
 - `git -C "<X4 folder>" clean` / `reset --hard` (the folder named): it deletes untracked files
 
 Recognized mutations of one or two existing saves first preserve a permanent verified
