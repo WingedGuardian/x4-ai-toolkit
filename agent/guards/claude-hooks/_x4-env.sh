@@ -551,20 +551,75 @@ x4_canon() {
   #                             x4_canon ///c/x/ref/a.xml
   #
   # The `//?/` form survived only because realpath happens to leave it alone.
+  # The BACKSLASH device forms too (F331 review, MEASURED): x4guard's os.path.abspath turns
+  # `//?/C:/x` into the backslash form, which x4_norm rendered `/?c` -- under no root, so a
+  # write through a junction into reference/ was allowed. Stripped into the drive-form branch.
   case "$p" in
+    '\\'[?.]'\'[Uu][Nn][Cc]'\'*) p="//${p:8}" ;;
+    '\\'[?.]'\'*)            p="${p:4}" ;;
     //[?.]/[Uu][Nn][Cc]/*) p="//${p#//?/???/}" ;;
     //[?.]/*)              p="${p#//?/}" ;;
   esac
   # Only canonicalize POSIX-absolute paths (Linux/macOS, and Git-Bash "/c/..."). A Windows
   # "C:\..." path must NOT be fed to realpath (no leading "/" -> treated as relative -> mangled);
-  # it falls through to pure string normalization instead.
+  # it is normalized as a string, and only under Git Bash resolved through a link (F331, below).
   # $p, NOT $1. Reading the original here discarded the strip above -- the branch tested
   # the unstripped path and realpath was handed it too, so the device form still came out
   # as ///c/... and a write into reference/ was still allowed.
   case "$p" in
     /*) command -v realpath >/dev/null 2>&1 && p="$(realpath -m -- "$p" 2>/dev/null || printf '%s' "$p")" ;;
+    [A-Za-z]:[/\\]*|[A-Za-z]:)
+      # F331: a WINDOWS-form path -- what Write/Edit send on Windows -- never reached realpath,
+      # so `<toolkit>\dev\x.xml` with `dev` a JUNCTION into reference/ was judged as the toolkit
+      # file it is spelled as: ALLOW, single and batch alike. Any user can make a junction (no
+      # privilege), and no guard refuses making one. See x4_win_follow. Both sides of every
+      # x4_under come through here, so a configured root behind a link resolves the same way.
+      case "${OSTYPE:-}" in
+        msys*|cygwin*)
+          p="$(x4_norm "$p")" || return 1
+          x4_win_has_link "$p" || { printf '%s' "$p"; return 0; }
+          x4_win_follow "$p"; return ;;
+      esac ;;
   esac
   x4_norm "$p"
+}
+# F331 helpers, Git Bash only (OSTYPE msys, or cygwin from Git Bash 5.3 -- MEASURED 2026-10-26).
+# x4_win_has_link N: N is an x4_norm'd drive path (/c/...). True when an EXISTING component of it
+# is a link (`-L` is true for a junction under Git Bash, MEASURED). Builtins only, so the common
+# case -- no link anywhere -- costs no process and returns exactly the lexical form as before.
+# `..` was already resolved LEXICALLY by x4_norm, which is how Windows itself opens the path.
+# _X4_NOLINK memoises directories already seen to exist and not be links, so a batch of paths
+# sharing a tree stats each shared prefix once (MEASURED: without it, 3589 paths ran 21 s -> 36 s
+# under a 2%-CPU cap). An associative array is safe here: only Git Bash (bash >= 4) runs this,
+# never macOS's bash 3.2.
+case "${OSTYPE:-}" in msys*|cygwin*) declare -A _X4_NOLINK=() 2>/dev/null ;; esac
+x4_win_has_link() {
+  local cur="$1" rest="" c
+  # Climb to the deepest prefix already known link-free; only what lies below it is probed.
+  while [ -n "$cur" ] && [ -z "${_X4_NOLINK[$cur]:-}" ]; do
+    rest="${cur##*/}${rest:+/$rest}"; cur="${cur%/*}"
+  done
+  while [ -n "$rest" ]; do
+    c="${rest%%/*}"
+    if [ "$c" = "$rest" ]; then rest=""; else rest="${rest#*/}"; fi
+    cur="$cur/$c"
+    [ -n "${_X4_NOLINK[$cur]:-}" ] && continue
+    [ -L "$cur" ] && return 0
+    [ -e "$cur" ] || return 1     # nothing under a missing component can be a link
+    _X4_NOLINK[$cur]=1
+  done
+  return 1
+}
+# x4_win_follow N -> N resolved through its links, normalised. realpath alone is not enough: it
+# reports a followed link's target in MOUNT form (`C:/Users/<u>/AppData/Local/Temp/x` came back
+# `/tmp/x`, MEASURED) while a link-free root stays /c/..., so cygpath -m maps it back to the drive
+# form first. FAIL CLOSED: any failure returns non-zero, which every caller refuses on -- never
+# the unresolved spelling's verdict.
+x4_win_follow() {
+  local r w
+  r="$(realpath -m -- "$1" 2>/dev/null)" && [ -n "$r" ] || return 1
+  w="$(cygpath -m -- "$r" 2>/dev/null)" && [ -n "$w" ] || return 1
+  x4_norm "$w"
 }
 # x4_under FILE DIR -> 0 (true) if FILE is inside DIR or equals it; false if DIR empty.
 #

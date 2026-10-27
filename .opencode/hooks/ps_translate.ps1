@@ -775,8 +775,33 @@ function Translate-Command([CommandAst]$c) {
             $nm = @(BVals $binding @('Name')) | Select-Object -First 1
             $type = (@(BVals $binding @('ItemType')) | Select-Object -First 1)
             $isDir = ([IO.Path]::GetFileName($raw.Replace('\', '/')).ToLowerInvariant() -in 'md', 'mkdir') -or ($type -and $type.ToLowerInvariant() -eq 'directory')
+            # F331 follow-up: a LINK item carries a TARGET (-Value, alias -Target), and every later
+            # write through the link lands there. It was emitted as an append to the link path
+            # alone, so no rule saw the target: it now travels as `ln`, which the Bash half judges
+            # by its target. An unreadable or missing target stays a variable -> the hook asks.
+            # F331 review, MEASURED in PowerShell 7.6.6: -ItemType is resolved as a case-insensitive
+            # PREFIX -- d/c Directory, f File, s SymbolicLink, j Junction, h HardLink (no two share a
+            # first letter) -- so `-ItemType J` makes a junction. A NON-LITERAL type may be a link:
+            # its -Value, when given, is judged as a link target (unreadable -> refused).
+            $tl = if ($type) { ([string]$type).ToLowerInvariant() } else { '' }
+            $linkKind = ''
+            if ($tl -and -not (IsResolved $tl)) {
+                if (@(BVals $binding @('Value')).Count -gt 0) { $linkKind = 'symboliclink' }
+            } elseif ($tl) {
+                foreach ($kn in 'symboliclink', 'junction', 'hardlink') { if ($kn.StartsWith($tl)) { $linkKind = $kn; break } }
+            }
+            $isLink = [bool]$linkKind
+            $linkTo = $null
+            if ($isLink) {
+                $linkTo = @(BVals $binding @('Value')) | Select-Object -First 1
+                if ($null -eq $linkTo -or "$linkTo" -eq '') { $linkTo = UVar 'PS_LINK_TARGET' }
+            }
             foreach ($p in $paths) {
                 $full = if ($nm) { $p.TrimEnd('/', '\') + '/' + $nm } else { $p }
+                if ($isLink) {
+                    $lnv = if ($linkKind -eq 'hardlink') { 'ln' } else { 'ln -s' }
+                    $lines.Add("$lnv -- $(Q $linkTo) $(Q $full)")
+                }
                 if ($isDir) { $lines.Add("mkdir -p $(Q $full)$red") }
                 elseif (IsSet $binding 'Force') { $lines.Add(": > $(Q $full)$red") }
                 else { $lines.Add(": >> $(Q $full)$red") }
@@ -1256,6 +1281,17 @@ function Translate-Member([InvokeMemberExpressionAst]$m) {
         $tt = TypeTail $tn
         if ($FILE_STATIC_TAILS -notcontains $tt -or ($tt -eq 'file' -and $member -eq 'open')) {
             return @(DotNet-Call $tn $member @($m.Arguments) $m.Extent.Text)
+        }
+        # F331 follow-up: CreateSymbolicLink(path, pathToTarget) made a link with its target
+        # dropped (read as a `create`, a truncation of the link path). Now `ln -s`, judged by
+        # its target, and the link path stays a write where it lands.
+        if ($member -eq 'createsymboliclink') {
+            if ($a.Count -lt 2) {
+                Unknown "[$($m.Expression.TypeName.FullName)]::$($m.Member.Extent.Text)() with no path the guard can read"
+                return @()
+            }
+            $to = if ($null -eq $a[1] -or "$($a[1])" -eq '') { UVar 'PS_LINK_TARGET' } else { $a[1] }
+            return @(": >> $(Q $a[0])", "ln -s -- $(Q $to) $(Q $a[0])")
         }
         $kind = switch -regex ($member) {
             '^(delete|deletefile|deletedirectory)$' { 'rm' ; break }

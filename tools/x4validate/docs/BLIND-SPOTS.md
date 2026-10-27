@@ -409,6 +409,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F328 | build-release.sh skipped the version check for `tags/` and `refs/tags/` spellings | **DEFECT (measured)** · PRE-ARC | 6 fixture cases red before, green after; archive failure ruled out as the refuser | FIXED 2026-10-26 - strip the prefix before matching |
 | F329 | A heredoc program fed to python/node could write a host transcript | **DEFECT (measured)** · PRE-ARC | 9 heredoc shapes allowed before; replay 0 of 42,910 changed | FIXED 2026-10-26 - the same write-call patterns over an interpreter's stdin program |
 | F330 | `'<literal>' \| iex` was refused as not completely evaluated | **DEFECT (measured)** · PRE-ARC | 2 benign forms refused, 2 delete twins; replay 0 of 10 iex rows changed | FIXED 2026-10-26 - a lone constant piped into a bare iex is read as `iex '<literal>'` |
+| F331 | A Windows-form write through a junction was judged as the path spelled, not the file reached | **DEFECT (measured)** · PRE-ARC | 24 of 24 Windows-form junction writes allowed (reference/game/profile/saves); 72 of 72 link-creating commands allowed; replay 0 of 3,447 changed | FIXED 2026-10-26 - protect-files resolves a drive-form path through its links, fail closed; link CREATION into a protected root refused by its target (protect-bash); Bash-channel writes through pre-existing links, hardlinks to existing files and trusted linked toolkit folders stay residual |
 | F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay 2026-10-27: 53 of 53,662 game-root commands advise -> ask, 110 stay advise, 0 other facts changed | CHANGED 2026-10-26, NARROWED 2026-10-27 (user) - rm_deployed_mod asks once per command naming every mod; other game-install deletes advise; install/extensions wholesale and reference/ stay deny |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
@@ -11429,6 +11430,123 @@ output and a longer pipeline stay unreadable (twins). Replay: 10 of 44,361 histo
 name iex or Invoke-Expression; 0 changed (control: the probe command changes).
 
 **RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`TestHK1PowerShellFrontEnd`).
+
+## F331 - A Windows-form write through a junction was judged as the path spelled, not the file reached · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-10-26 (protect-files; link creation 2026-10-26; residuals below)
+
+Found by the release review of 05dc8a2; present before it. MEASURED in sandbox roots (a temp
+toolkit, game, reference, profile and saves): a JUNCTION at `<toolkit>/dev`, inside the mods root,
+or in an unwhitelisted folder, pointing into reference/, the game install, the profile or the
+saves, let Write/Edit through `<link>/new.xml` in the Windows form (`C:\...` and `C:/...`):
+ALLOW in the single and batch backends alike, 24 of 24 rows. x4_canon fed only POSIX-absolute
+paths to realpath, so the drive form was compared as written.
+
+Can an agent make the link? MEASURED, policy backend: 72 of 72 link-creating commands were
+ALLOWED (`cmd /c mklink /J|/D|/H`, `ln -s`, `ln`, `fsutil hardlink create`, python `os.symlink`,
+`_winapi.CreateJunction`, `os.link`, `git -c core.symlinks=true clone`, PowerShell
+`New-Item -ItemType Junction|SymbolicLink|HardLink`, `ni -it junction`,
+`[IO.Directory]::CreateSymbolicLink`, each aimed at reference/, the game, the profile and the
+saves). A junction and a hardlink need no privilege; a symlink failed with WinError 1314 on the
+reference machine (no Developer Mode).
+
+OS layer: x4refguard's deny ACE held through a junction and a hardlink (MEASURED on a sandbox
+dir carrying the same ACE: create and overwrite via the junction refused, write via the hardlink
+refused; making the hardlink itself succeeded). So reference/ WITH x4refguard applied was not
+writable this way; the game install, profile and saves have no OS layer.
+
+Fix, narrow (protect-files.sh / `_x4-env.sh`): under Git Bash a Windows-form path is first
+normalised as before, then walked component by component with the `-L` builtin (true for a
+junction, MEASURED). Only a path that crosses a link pays `realpath -m` plus `cygpath -m`
+(realpath reports a followed target in MOUNT form, `/tmp/...` for `%TEMP%`, MEASURED, while a
+link-free root stays `/c/...`). The batch backend runs the same walk on its normalised paths.
+A failed resolution refuses: inert in single (`X4 GUARD INERT`), exit 2 in batch. A memo of
+link-free prefixes keeps the batch cost down: 3589 paths, 2%-CPU cap, 22 s -> 26 s; single
+Write median 565 -> 619 ms under the same cap. Git Bash 5.3 reports OSTYPE=cygwin, so both
+msys* and cygwin* take this branch.
+
+RESIDUAL (measured, not fixed here):
+* the Bash/PowerShell channel: `echo > <link>/x`, `cp`, `Set-Content` through the same junctions
+  were ALLOWED in every form, /c/... included -- hook_facts compares paths lexically (36 of 36).
+* link CREATION -- FIXED, see "Fix 2" below. Still not judged: `git -c core.symlinks=true
+  clone` (the link targets live in the cloned tree, not in the command; 4 of 4 still allowed),
+  a link call in perl/ruby/node or a script FILE, a Python call through an alias
+  (`from os import symlink`), and a target held in a program variable (refused only when the
+  call's first argument is not a literal). Same mechanism, other target: F221(c), a junction
+  to `.claude`, recorded only by user decision 2026-10-06 -- unchanged here.
+* hardlinks: a hardlink to a file in any protected root is the same file under another name; no
+  path rule can see it (12 of 12 allowed in every channel).
+* a toolkit working subfolder that is ITSELF a link (`_X4_BATCH_LINKED`) is whitelisted through
+  it by design: `<toolkit>/dev` as a junction into the game folder is allowed (MEASURED,
+  `test_batch_linked_toolkit_subfolder_decides_like_single`), and so would a missing subfolder
+  (`dist`) an agent makes a junction (INFERRED from the same branch);
+  only the hard blocks above the whitelist (reference/, config, archives, transcripts) outrank it.
+
+REPLAY: 3,447 distinct historical Write/Edit/MultiEdit/NotebookEdit paths (624 X4 transcripts), old vs new batch backend under the machine's configured roots: 0 changed, 0 loosened, 0 inert; 200 sampled Bash commands: 0 changed (protect-bash calls none of the changed helpers). Control: a sandbox junction into a stand-in reference changed allow -> deny.
+
+Fix 2, link CREATION (protect-bash / hook_facts, ps_translate): a link-creating command is
+judged by its TARGET. Read: `cmd /c mklink` (/J /D /H, plain, Git Bash `//J`), `ln` (`-s`,
+`-t DIR`, `--target-directory[=]`, one operand), `fsutil hardlink create`, and Python
+`os.symlink` / `os.link` / `_winapi.CreateJunction` / `Path(...).symlink_to` /
+`.hardlink_to` in `-c` and heredoc programs. A target inside or ABOVE reference/, the game,
+the profile or the saves -> `link_into_protected` (deny, with a remedy); a target the guard
+cannot read -> `link_target_unresolved` (deny with a remedy -- write the target as an absolute
+path -- inert-safe; first shipped as an ask, switched per the user's no-prompt rule for command
+hygiene). A relative target of a symlink or
+junction is read from the link's folder as well as the cwd (where a relative JUNCTION target
+is anchored was not measured, so it gets both); a hardlink's from the cwd only. The link
+`mklink`/`fsutil` places is now a write where it lands, as `ln`'s already was. The
+PowerShell front end emits `New-Item -ItemType Junction|SymbolicLink|HardLink` and
+`[IO.File]/[IO.Directory]::CreateSymbolicLink` as `ln [-s] -- <target> <path>` (the
+link-path write kept); before, the target was dropped.
+MEASURED, the same 72-row sandbox probe through x4guard: 68 refused (64 deny, 4 `ni -it
+junction ... -t` refused inert -- `-t` is ambiguous to the binder, so the target is unread),
+4 still allowed (`git core.symlinks` clone). The probe's four `fsutil reparsepoint query`
+rows are a READ, not a link, and stay allowed (they were in the 72 as a control row).
+REPLAY (44,389 historical commands from 224 transcripts; Bash 42,938 and the 183 PowerShell
+commands the translator change can reach, each at two session folders, 86,242 pairs, 0
+errors): 0 loosened. The for-header fix below was re-replayed over the 10,029 Bash commands it
+and the link rule can reach (a `for` or a link word) plus the same 183: 0 loosened. New
+verdicts, every one inspected: 4 distinct commands newly REFUSED (`link_target_unresolved`) --
+three make a node_modules junction with a RELATIVE target inside a `cmd /c` carrier after a
+`cd`, where the carrier's folder is unknowable by design (now a deny whose remedy, an absolute
+target, the agent can take without prompting the user), and one `ln -sf "$p" ...` whose target is
+`$(command -v ...)` output (genuinely unreadable). 3 New-Item junction commands (1 Bash
+`powershell -Command`, 2 PowerShell) gained `ln` in the save bridge's blocker list (stricter
+only). One false hard DENY found and
+fixed before commit: `for ln in 3124 3253` from the game folder read as an `ln` (segments()
+leaves `ln in ...` after stripping `for`); the link rule now skips a `for` header. Dropping
+the header for every rule instead measured 18 loosened save-bridge rows, so it was not shipped.
+Review of the link fix (2026-10-26), each RED first, then fixed:
+* `New-Item -ItemType` takes a case-insensitive PREFIX (MEASURED, PowerShell 7.6.6, in a temp
+  folder: d/c Directory, f File, s SymbolicLink -- privilege error, i.e. attempted -- j/Junc
+  Junction, h HardLink; `l`/`x` rejected). Only exact names were links, so `-ItemType J` made an
+  unjudged junction. The translator now resolves the prefix; a NON-LITERAL `-ItemType $t` with a
+  -Value has that value judged as a link target (unreadable -> refused); with no -Value there is
+  nothing to link to.
+* Device prefixes (protect-files, this entry's first fix): only `//?/` and `//./` were stripped
+  before the drive-form link walk, and x4guard's `os.path.abspath` turns even those into the
+  BACKSLASH form -- so `\\?\C:\...` and `\\.\C:\...` through a junction into reference/ were
+  ALLOWED in single and batch (8 of 8 forms red incl. the forward spellings via x4guard). Both
+  readers now strip the backslash forms into the drive branch. 0 of 12,563 historical file-tool
+  paths carry a device prefix, so no historical verdict can change. RESIDUAL: an admin-share UNC
+  spelling of a local drive (`\\localhost\c$\...`) is not mapped to its drive and not walked.
+* `ln -s "$PWD/src"` / `${PWD}` were refused as unreadable; `$PWD` is now the segment's own
+  folder when that is known. `$(git rev-parse --show-toplevel)/...` stays unreadable (refused,
+  remedy: write it absolute).
+* The `for` header was matched by TEXT, so a real `ln in <ref>/a.xml .` spelled like an earlier
+  `for ln in <ref>/a.xml .` header was skipped; it is now flagged by segment POSITION.
+* RESIDUAL (accepted): a link call's name inside a Python STRING (`print('os.symlink(')`) is
+  read as a call -- a false refusal, not a bypass.
+Replay of the final code over the reachable population (10,029 Bash commands with a `for` or a
+link word, the 183 PowerShell): 0 loosened; the same 4 refused commands as before, nothing new.
+**RE-DERIVED BY:** agent/guards/claude-hooks/test_hook_facts.py
+(`TestF331LinkCreationIntoAProtectedRoot`, `TestF331PowerShellLinkCreation`);
+tools/x4validate/tests/test_file_guard_batch.py
+(`test_device_prefixed_write_through_a_link_follows_the_real_target`); 40 mutants in
+scripts/verify-hook-tests.py ("F331 link", "F331 review").
+
+**RE-DERIVED BY:** tools/x4validate/tests/test_file_guard_batch.py
+(`test_windows_form_write_through_a_link_follows_the_real_target`,
+`test_windows_form_link_resolution_failure_is_inert`).
 
 ## F332 - A delete inside the game install only advised · **POLICY DRIFT (read)** · PRE-ARC · confidence 95% · CHANGED 2026-10-26 · NARROWED 2026-10-27
 

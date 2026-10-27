@@ -543,9 +543,10 @@ def blank_single_quoted(s: str) -> str:
     return "".join(out)
 
 
-def segments(cmd: str) -> list[str]:
+def segments(cmd: str, raw: bool = False) -> list[str]:
     """Split on shell separators that are OUTSIDE quotes. A `|` inside grep -E 'a|b'
-    is not a pipeline."""
+    is not a pipeline. `raw`: the same pieces before _unwrap (reserved words kept), one per
+    segment, in the same order."""
     parts, buf, chars = [], [], list(_scan(cmd))
     i = 0
     while i < len(chars):
@@ -581,6 +582,8 @@ def segments(cmd: str) -> list[str]:
         buf.append(c)
         i += 1
     parts.append("".join(buf))
+    if raw:
+        return [p for p in parts if p.strip()]
     return [_unwrap(p) for p in parts if p.strip()]
 
 
@@ -3097,6 +3100,10 @@ _TOUCH_VALUE_OPTS = {"-d", "--date", "-r", "--reference", "-t"}
 
 def modify_targets(seg: str) -> list[str]:
     v = verb(seg)
+    if _verb_name(v).lower() in ("mklink", "fsutil"):
+        # F331 follow-up: the LINK a cmd `mklink` / `fsutil hardlink create` places is a write
+        # where it lands, exactly as `ln`'s is below. MEASURED: neither was any write before.
+        return [at for _t, at, _k in link_creations(seg) if at]
     if v not in ("touch", "chmod", "chown", "chgrp", "ln"):
         return []
     toks = tokens(seg)
@@ -5558,6 +5565,210 @@ def _heredoc_program_writes_transcript(spliced: str, cwd: str) -> bool:
     return False
 
 
+# ------------------------------------------------------------- link creation (F331)
+#: F331 follow-up (release review of 4.0.1): a link CREATED into a protected root lets every
+#: later write through it land there, and the Bash-channel write rules compare paths
+#: lexically. MEASURED: 72 of 72 link-creating commands aimed at reference/, the game, the
+#: profile and the saves were ALLOWED. The link's TARGET is judged here; the link's own PATH
+#: is a write where it is placed (modify_targets), as `ln` already was.
+_LINK_KEYS = ("reference", "game", "profile", "saves")
+_MKLINK_SWITCH = re.compile(r"^/{1,2}([dhjDHJ])$")
+#: A Python program's link call, the TARGET as its first argument. Only these spellings:
+#: a bare `symlink(` / `link(` after `from os import ...` is not seen (residual, F331).
+_PY_LINK_CALLS = (
+    (re.compile(r"\bos\.symlink\(\s*(?:src\s*=\s*)?"), "symbolic"),
+    (re.compile(r"\bos\.link\(\s*(?:src\s*=\s*)?"), "hard"),
+    (re.compile(r"\b_winapi\.CreateJunction\(\s*"), "junction"),
+    (re.compile(r"\.symlink_to\(\s*(?:target\s*=\s*)?"), "symbolic"),
+    (re.compile(r"\.hardlink_to\(\s*(?:target\s*=\s*)?"), "hard"),
+)
+_PWD_REF = re.compile(r"\$\{PWD\}|\$PWD(?![A-Za-z0-9_])")
+_PY_STR = re.compile(r"""[rRbBuU]{0,2}(['"])(?P<p>[^'"]*)\1""")
+#: The link literal of `Path(<lit>).symlink_to(...)`, ending right where the call begins.
+_PY_LINK_RECEIVER = re.compile(r"""Path\(\s*[rRbBuU]{0,2}(['"])(?P<p>[^'"]*)\1\s*\)\s*$""")
+
+
+def _ln_link_operands(seg: str) -> tuple:
+    """`ln`'s (targets, link-or-directory or None, symbolic?). GNU forms: `ln T L`, `ln T`
+    (a link in the cwd), `ln T... DIR`, `ln -t DIR T...` / `--target-directory[=]DIR`."""
+    vi = _verb_word(seg)[1]
+    if vi is None:
+        return [], None, False
+    ops, sym, tdir, after_dd = [], False, None, False
+    toks = tokens(seg)[vi + 1:]
+    i = 0
+    while i < len(toks):
+        t, q = toks[i]
+        i += 1
+        if not after_dd and t in ("<", ">", ">>", ">|", "&>"):
+            i += 1
+            continue
+        if not q and (t.startswith(("<", ">")) or re.match(r"^\d+>", t)):
+            continue
+        if after_dd or not t.startswith("-") or t == "-":
+            ops.append(t)
+            continue
+        if t == "--":
+            after_dd = True
+        elif t.startswith("--"):
+            name, eq, val = t.partition("=")
+            if name == "--symbolic":
+                sym = True
+            elif name in ("--target-directory", "--suffix"):
+                if not eq:
+                    val = toks[i][0] if i < len(toks) else ""
+                    i += 1
+                if name == "--target-directory":
+                    tdir = val
+        else:
+            flags = t[1:]
+            for k, ch in enumerate(flags):
+                if ch == "s":
+                    sym = True
+                elif ch in "tS":
+                    val = flags[k + 1:]
+                    if not val:
+                        val = toks[i][0] if i < len(toks) else ""
+                        i += 1
+                    if ch == "t":
+                        tdir = val
+                    break
+    if tdir is not None:
+        return ops, tdir, sym
+    if len(ops) == 1:
+        return ops, None, sym
+    return ops[:-1], (ops[-1] if ops else None), sym
+
+
+def link_creations(seg: str) -> list:
+    """The links this SHELL segment creates: (target, link-or-None, kind), kind in
+    symbolic/hard/junction. A link verb whose target cannot be read is (None, None, kind)."""
+    v = _verb_name(verb(seg)).lower()
+    if v == "ln":
+        targets, at, sym = _ln_link_operands(seg)
+        return [(t, at, "symbolic" if sym else "hard") for t in targets]
+    if v == "mklink":
+        kind, ops = "symbolic", []
+        for t in _operands(seg, include_flags=True):
+            m = _MKLINK_SWITCH.match(t)
+            if m:
+                kind = {"d": "symbolic", "h": "hard", "j": "junction"}[m.group(1).lower()]
+            else:
+                ops.append(t)
+        if not ops:
+            return []
+        return [(ops[1], ops[0], kind)] if len(ops) == 2 else [(None, None, kind)]
+    if v == "fsutil":
+        ops = _operands(seg)
+        if [o.lower() for o in ops[:2]] != ["hardlink", "create"]:
+            return []
+        return [(ops[3], ops[2], "hard")] if len(ops) >= 4 else [(None, None, "hard")]
+    return []
+
+
+def _program_links(text: str) -> list:
+    """The links a Python program text creates (_PY_LINK_CALLS): (target, link, kind), the
+    target None when its first argument is not a string literal."""
+    out = []
+    for pattern, kind in _PY_LINK_CALLS:
+        for m in pattern.finditer(text or ""):
+            lit = _PY_STR.match(text, m.end())
+            target = lit.group("p") if lit else None
+            link = None
+            if kind != "hard" and lit:
+                rest = text[lit.end():]
+                if m.group(0).startswith("."):
+                    r = _PY_LINK_RECEIVER.search(text[:m.start()])
+                    link = r.group("p") if r else None
+                else:
+                    second = re.match(r"\s*,\s*(?:dst\s*=\s*)?", rest)
+                    lit2 = _PY_STR.match(rest, second.end()) if second else None
+                    link = lit2.group("p") if lit2 else None
+            fold = (lambda s: s.replace(chr(92) * 2, "/").replace(chr(92), "/") if s else s)
+            out.append((fold(target), fold(link), kind))
+    return out
+
+
+def _segment_links(seg: str, assigns: dict) -> list:
+    """Every link a segment creates: a shell link verb, or a python -c program's link call
+    (read in every resolved variant of the segment, like the transcript check)."""
+    out = link_creations(seg)
+    name = _verb_name(verb(seg))
+    if name in _PYTHONS and name != "uv":
+        for v in [seg] + list(resolve_variants(seg, assigns)):
+            for row in _program_links(_python_literal_source(v)):
+                if row not in out:
+                    out.append(row)
+    return out
+
+
+def _judge_link(target, link, kind, cwd: str, assigns: dict, roots: dict) -> str:
+    """'protected' when the TARGET is inside, or an ancestor of, a protected root; 'unresolved'
+    when it cannot be read; '' otherwise. A RELATIVE symlink target is read from the link's own
+    folder as well as from the cwd -- the OS resolves it from the link. A junction's too: where
+    a relative junction target is anchored was not measured, so it gets both readings. Only a
+    HARDLINK's target -- an existing file the call opens -- is read from the cwd alone."""
+    if target is None:
+        return "unresolved"
+    if cwd and "PWD" not in assigns:
+        # F331 review: `$PWD` / `${PWD}` IS the segment's folder, which is known here.
+        target = _PWD_REF.sub(lambda _m: cwd, target)
+        link = _PWD_REF.sub(lambda _m: cwd, link) if link else link
+    prot = [roots[k] for k in _LINK_KEYS if roots.get(k)]
+    verdict = ""
+    for rv in resolve_variants(target, assigns):
+        r = subst_root_var(rv, roots)
+        if has_unresolved(r):
+            if any(norm(p) in norm(r) for p in prot) or any(k in root_vars_named(r) for k in _LINK_KEYS):
+                return "protected"
+            verdict = "unresolved"
+            continue
+        cands = [join_cwd(cwd, r)]
+        if kind != "hard" and not is_abs(r) and link:
+            for lv in resolve_variants(link, assigns):
+                lp = subst_root_var(lv, roots)
+                if has_unresolved(lp):
+                    continue
+                lp = join_cwd(cwd, lp)
+                if lp:
+                    cands += [join_cwd(lp, r), join_cwd(posixpath.dirname(norm(lp)), r)]
+        cands = [c for c in cands if c]
+        if not cands:
+            verdict = "unresolved"
+            continue
+        if any(under(c, p) or contains_root(c, p) for c in cands for p in prot):
+            return "protected"
+    return verdict
+
+
+def _for_headers(cmd: str) -> list:
+    """For each segment segments(cmd) returns, in order: is it a `for NAME in WORDS` header?
+    segments() strips the `for` and leaves `NAME in WORDS`, so a loop variable named like a
+    link verb read as one -- MEASURED in the F331 replay: `for ln in 3124 3253` from the game
+    folder was a false hard deny. Judged by POSITION, never by text (review of 3e4b4fd: a real
+    `ln in <ref> .` spelled like an earlier header was skipped too). Read only by the link
+    rule; every other rule's reading of the header is unchanged."""
+    out = []
+    for piece in segments(cmd, raw=True):
+        words = piece.replace("(", " ").replace("{", " ").split()
+        while words and words[0] in RESERVED and words[0] != "for":
+            words = words[1:]
+        out.append(bool(words) and words[0] == "for")
+    return out
+
+
+def _heredoc_program_links(spliced: str) -> list:
+    """The _program_links of each heredoc body a Python interpreter reads as its PROGRAM
+    (the same per-heredoc opener rule as _heredoc_program_writes_transcript)."""
+    def sink(sg):
+        return _reads_program_from_stdin(_unwrap(sg)) and _verb_name(verb(_unwrap(sg))) in _PYTHONS
+    out = []
+    for opener, _t, _e, body in _heredoc_walk(spliced)[0]:
+        if _opener_feeds(opener, sink) or _flows_to(opener, sink):
+            out += _program_links(chr(10).join(body))
+    return out
+
+
 #: I1: a variable that makes a shell run code its `-c` text never shows (startup file, exported
 #: function, xtrace prompt, zsh's dot-dir), named ANYWHERE in the command -- a prefix, `env`,
 #: `export`/`declare`/a plain assignment, `printf -v`, PowerShell `$env:` (whose translation
@@ -5715,6 +5926,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # computed above: a command name arriving through a variable (`RM=rm; $RM -rf ...`)
     # otherwise reaches no verb-keyed rule at all, hard blocks included.
     seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect = [], [], [], [], []
+    seg_for = []                        # F331: is THIS segment a `for` header (_for_headers)?
     base = session_cwd(payload)
     # A carried command (bash -c, a heredoc fed to a shell, $(...)) is walked on its own,
     # so it cannot see a `cd` made around it. When nothing anywhere changes directory it
@@ -5732,6 +5944,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         bare = cwd_lanes(c, roots=roots)
         physical = cwd_lanes(c, base if (top or not moves) else "", seeded=True,
                              roots=roots, physical=True) if evidence is not None else []
+        heads = _for_headers(c)
         for k, (s, ds) in enumerate(tracked):
             uds = bare[k][1] if k < len(bare) else [""]
             rs = resolve_verb(s, assigns)
@@ -5740,6 +5953,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             pds = physical[k][1] if physical else [""] * len(ds)
             for d, ud, pd in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds)):
                 seg_dialect.append(dialects.get(c, "bash"))
+                seg_for.append(k < len(heads) and heads[k])
                 seg_cwd.append((rs, d))
                 seg_prev.append(prev)
                 unseeded.append(ud)
@@ -5916,6 +6130,13 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # H1 follow-up, see _inline_program_writes_transcript; a heredoc PROGRAM is judged once,
     # against the session directory (4.0.1, see _heredoc_program_writes_transcript).
     transcript_inline = _heredoc_program_writes_transcript(spliced, base)
+    # F331 follow-up: a link a command creates, judged by its TARGET (see _judge_link); a heredoc
+    # PROGRAM's links once, against the session directory, like the transcript check above.
+    link_protected = link_unresolved = False
+    for tgt_, at_, kind_ in _heredoc_program_links(spliced):
+        j_ = _judge_link(tgt_, at_, kind_, base, {}, roots)
+        link_protected = link_protected or j_ == "protected"
+        link_unresolved = link_unresolved or j_ == "unresolved"
     # The save bridge supplies its single authoritative folder enumeration. This
     # parser stays independently importable and does not discover filesystem roots.
     save_folders = [norm(str(folder)) for folder in protected_save_folders]
@@ -5923,8 +6144,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                                          for folder in protected_save_folders}
     save_mentions = [re.compile(re.escape(folder) + r"(?=$|[/\s\"'`<>);,*?\[\]{}$])")
                      for folder in save_spellings if folder]
-    for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0] in zip(
-            seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect):
+    for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0], is_for_ in zip(
+            seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect, seg_for):
         if (save_folders and evidence is not None and not execution_context
                 and verb(s) not in SAVE_MODELLED_VERBS and not _carries_program_text(s)
                 and not _save_read_only_program(s)):
@@ -5993,7 +6214,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         copy_t += dests_
         transcript_copy = transcript_copy or _copy_lands_a_transcript(s, dests_, assigns)
         transcript_inline = transcript_inline or _inline_program_writes_transcript(s, c_cwd, assigns)
-        sed_t += prep(sed_in_place_targets(s), c_cwd, c_old, operation="write")
+        for tgt_, at_, kind_ in ([] if is_for_ else _segment_links(s, assigns)):     # F331
+            j_ = _judge_link(tgt_, at_, kind_, c_cwd, assigns, roots)
+            link_protected = link_protected or j_ == "protected"
+            link_unresolved = link_unresolved or j_ == "unresolved"
+        sed_t +=prep(sed_in_place_targets(s), c_cwd, c_old, operation="write")
         out_t += prep(output_targets(s), c_cwd, c_old, False, operation="write")
         search_files += prep(search_paths(s, require_recursive=False), c_cwd, c_old)
         # UNSEEDED, deliberately (lane F). `git clean -f` / `reset --hard` name no path, so
@@ -6528,6 +6753,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # protection, so an agent's lift is an ASK. Segment-scoped like xrcat_reunpack.
         "lifts_reference_deny": any(_lifts_reference_deny(sg, assigns, roots, _c)
                                     for sg, _c in seg_cwd),
+        # F331 follow-up: a link CREATED with its target in (or above) reference/, the game, the
+        # profile or the saves -- every later write through it lands there -- and a link verb
+        # whose target the guard cannot read.
+        "link_into_protected": link_protected,
+        "link_target_unresolved": link_unresolved,
         "cwd": cwd,
     }
     # Several fields above evaluate glob membership; capture scope AFTER every

@@ -6331,6 +6331,284 @@ class TestF10PowerShellUnreadableCommandName(unittest.TestCase):
         self.assertTrue(f["carrier_untranslated"])
 
 
+def _w(p):
+    """A fixture path in the Windows spelling cmd.exe and Python programs use."""
+    return p.replace("/", BS)
+
+
+#: F331 follow-up: link TARGETS that are protected (one per protected root), an ANCESTOR of one,
+#: and a folder outside every root (the twin).
+_LINK_TARGETS = {"reference": REF, "game": GAME + "/libraries", "profile": PROF,
+                 "saves": PROF + "/save", "ancestor": "C:/Program Files (x86)/Steam/steamapps/common"}
+_LINK_ELSEWHERE = "C:/work/src"
+_LINK_AT = "C:/work/other/lnk"
+
+
+def _link_shapes(t, at=_LINK_AT):
+    """Every link-creating Bash shape, aimed at target *t*, the link at *at*."""
+    py_t, py_at = _w(t), _w(at)
+    return [
+        "cmd //c mklink /J " + DQ + _w(at) + DQ + " " + DQ + _w(t) + DQ,
+        "cmd /c mklink /D " + DQ + _w(at) + DQ + " " + DQ + _w(t) + DQ,
+        "cmd.exe /c mklink /H " + DQ + _w(at) + ".xml" + DQ + " " + DQ + _w(t) + BS + "a.xml" + DQ,
+        "cmd /c " + DQ + "mklink " + _w(at) + " " + _w(t) + BS + "a.xml" + DQ if " " not in t else
+        "cmd /c mklink " + DQ + _w(at) + DQ + " " + DQ + _w(t) + BS + "a.xml" + DQ,
+        "cmd //c mklink //J " + DQ + _w(at) + DQ + " " + DQ + _w(t) + DQ,
+        "ln -s " + DQ + t + DQ + " " + DQ + at + DQ,
+        "ln " + DQ + t + "/a.xml" + DQ + " " + DQ + at + ".xml" + DQ,
+        "ln -sfn " + DQ + t + DQ + " " + DQ + at + DQ,
+        "ln -s -t " + DQ + "C:/work/other" + DQ + " " + DQ + t + DQ,
+        "ln --symbolic --target-directory=C:/work/other " + DQ + t + DQ,
+        "ln -s " + DQ + t + DQ,
+        "fsutil hardlink create " + DQ + _w(at) + ".xml" + DQ + " " + DQ + _w(t) + BS + "a.xml" + DQ,
+        'python -c "import os; os.symlink(r' + Q + py_t + Q + ', r' + Q + py_at + Q + ', True)"',
+        'python3 -c "import os; os.symlink(src=r' + Q + py_t + Q + ', dst=r' + Q + py_at + Q + ')"',
+        'python -c "import os; os.link(r' + Q + py_t + BS + 'a.xml' + Q + ', r' + Q + py_at + '.xml' + Q + ')"',
+        'py -c "import _winapi; _winapi.CreateJunction(r' + Q + py_t + Q + ', r' + Q + py_at + Q + ')"',
+        'python -c "from pathlib import Path; Path(r' + Q + py_at + Q + ').symlink_to(r' + Q + py_t + Q + ', True)"',
+        'python -c "from pathlib import Path; Path(' + Q + at + Q + ').hardlink_to(' + Q + t + '/a.xml' + Q + ')"',
+        "python - <<" + Q + "EOF" + Q + chr(10) + "import os" + chr(10)
+        + "os.symlink(r" + Q + py_t + Q + ", r" + Q + py_at + Q + ")" + chr(10) + "EOF",
+    ]
+
+
+class TestF331LinkCreationIntoAProtectedRoot(unittest.TestCase):
+    """F331 follow-up (release review of 4.0.1): a link created INTO a protected root lets every
+    later write through it land there, and 72 of 72 link-creating commands were ALLOWED. The
+    link's TARGET is judged: inside (or above) reference/, the game, the profile or the saves ->
+    `link_into_protected` (deny); a target the guard cannot read -> `link_target_unresolved`
+    (deny with a remedy). Fixture roots only: nothing here creates a link."""
+
+    def test_every_shape_aimed_at_each_protected_root_fires(self):
+        for name, t in _LINK_TARGETS.items():
+            for c in _link_shapes(t):
+                if name == "ancestor" and "a.xml" in c:
+                    continue            # a hardlink names a FILE in the ancestor, not the ancestor
+                with self.subTest(root=name, c=c):
+                    f = FC(c, _ELSEWHERE)
+                    self.assertTrue(f["link_into_protected"], c)
+
+    def test_TWIN_the_same_shapes_aimed_elsewhere_do_not(self):
+        """Clause: the TARGET is protected -- the verb alone is not a finding."""
+        for c in _link_shapes(_LINK_ELSEWHERE):
+            with self.subTest(c=c):
+                f = FC(c, _ELSEWHERE)
+                self.assertFalse(f["link_into_protected"], c)
+                self.assertFalse(f["link_target_unresolved"], c)
+
+    def test_a_relative_target_resolves_where_it_runs(self):
+        # TOOLKIT holds reference/ in these fixtures.
+        self.assertTrue(FC("ln -s reference lnk", TOOLKIT)["link_into_protected"])
+        self.assertTrue(FC("cmd //c mklink /J lnk reference", TOOLKIT)["link_into_protected"])
+        self.assertFalse(FC("ln -s reference lnk", _ELSEWHERE)["link_into_protected"])    # twin
+        # A RELATIVE symlink target is read from the LINK's folder: dev/../reference.
+        self.assertTrue(FC("ln -s ../reference dev/lnk", TOOLKIT)["link_into_protected"])
+        self.assertTrue(FC("cd dev && ln -s ../reference lnk", TOOLKIT)["link_into_protected"])
+        # ...and from the -t / --target-directory folder the link is placed in.
+        for c in ("ln -s -t dev ../reference", "ln -st dev ../reference",
+                  "ln --symbolic --target-directory=dev ../reference",
+                  "ln --symbolic --target-directory dev ../reference"):
+            self.assertTrue(FC(c, TOOLKIT)["link_into_protected"], c)
+        # ...and in a Python program, from the link literal it names.
+        for c in ('python -c "import os; os.symlink(' + Q + '../reference' + Q + ', ' + Q + 'dev/lnk' + Q + ')"',
+                  'python -c "import _winapi; _winapi.CreateJunction(' + Q + '../reference' + Q + ', ' + Q + 'dev/lnk' + Q + ')"',
+                  'python -c "from pathlib import Path; Path(' + Q + 'dev/lnk' + Q + ').symlink_to(' + Q + '../reference' + Q + ')"'):
+            self.assertTrue(FC(c, TOOLKIT)["link_into_protected"], c)
+
+    def test_TWIN_a_hardlink_target_is_read_from_the_cwd_only(self):
+        """Clause: only a NON-hard link reads a relative target from the link's folder. A hardlink's
+        target is an existing file the call opens, relative to the cwd: dev/../reference/a.xml is
+        not what `ln ../reference/a.xml dev/b.xml` links from the toolkit root."""
+        for hard, soft in (("ln ../reference/a.xml dev/b.xml", "ln -s ../reference/a.xml dev/b.xml"),
+                           ("cmd //c mklink /H " + DQ + "dev" + BS + "b.xml" + DQ + " " + DQ + ".." + BS + "reference" + BS + "a.xml" + DQ,
+                            "cmd //c mklink /D " + DQ + "dev" + BS + "b.xml" + DQ + " " + DQ + ".." + BS + "reference" + BS + "a.xml" + DQ)):
+            with self.subTest(hard=hard):
+                self.assertFalse(FC(hard, TOOLKIT)["link_into_protected"], hard)
+                self.assertTrue(FC(soft, TOOLKIT)["link_into_protected"], soft)
+
+    def test_a_relative_target_with_no_known_folder_is_refused(self):
+        f = FC("ln -s reference lnk", _NO_CWD)
+        self.assertTrue(f["link_target_unresolved"])
+        self.assertFalse(f["link_into_protected"])
+
+    def test_a_root_variable_target_is_its_root(self):
+        for c in ('ln -s "$X4_REFERENCE" lnk', 'ln -s "$X4_PROFILE/save" lnk',
+                  'T="$X4_GAME"; cmd //c mklink /J lnk "$T"',
+                  'ln -s "$X4_REFERENCE/$SUB" lnk'):
+            with self.subTest(c=c):
+                f = FC(c, _ELSEWHERE)
+                self.assertTrue(f["link_into_protected"], c)
+
+    def test_an_unreadable_target_is_refused(self):
+        for c in ('ln -s "$NOPE" lnk', 'ln -s "$(pwd)/x" lnk', "cmd //c mklink /J lnk %SRC%",
+                  "cmd //c mklink /J onlyone",
+                  'python -c "import os; os.symlink(src, ' + Q + 'l' + Q + ')"',
+                  'python -c "import _winapi; _winapi.CreateJunction(os.path.abspath(' + Q + 'x' + Q + '), ' + Q + 'l' + Q + ')"',
+                  "python - <<" + Q + "EOF" + Q + chr(10) + "import os" + chr(10) + "os.symlink(src, " + Q + "l" + Q + ")"
+                  + chr(10) + "EOF"):
+            with self.subTest(c=c):
+                f = FC(c, _ELSEWHERE)
+                self.assertTrue(f["link_target_unresolved"], c)
+                self.assertFalse(f["link_into_protected"], c)
+
+    def test_the_replays_carried_relative_junction_is_unresolved_and_its_absolute_twin_is_not(self):
+        """MEASURED in the F331 replay: worktree node_modules junctions with a RELATIVE target inside
+        `cmd /c` after a `cd` -- a carried command's folder is unknowable, so the target is refused
+        (protect-bash denies with the remedy: write it absolute). The absolute spelling is allowed."""
+        for c in ('cd C:/work/repo && cmd //c mklink /J "..' + BS + 'wt' + BS + 'node_modules" "..' + BS + 'p8' + BS + 'node_modules"',):
+            with self.subTest(c=c):
+                f = FC(c, _ELSEWHERE)
+                self.assertTrue(f["link_target_unresolved"], c)
+                self.assertFalse(f["link_into_protected"], c)
+        c = 'cd C:/work/repo && cmd //c mklink /J "C:' + BS + 'work' + BS + 'wt" "C:' + BS + 'work' + BS + 'p8"'
+        f = FC(c, _ELSEWHERE)
+        self.assertFalse(f["link_target_unresolved"] or f["link_into_protected"], c)
+
+    def test_TWIN_a_link_verb_with_nothing_to_link_or_a_mention_is_not(self):
+        """Clause: a link-creating COMMAND -- help, a mention, a program's argv data are not."""
+        for c in ("ln --help", "ln", "cmd //c mklink", "echo ln -s " + DQ + REF + DQ + " x",
+                  "grep -n mklink " + DQ + REF + "/notes.txt" + DQ,
+                  'python tool.py "os.symlink(' + Q + _w(REF) + Q + ', ' + Q + 'x' + Q + ')"',
+                  'python -c "print(os.symlink.__doc__)"',
+                  "fsutil reparsepoint query " + DQ + _w(REF) + DQ,
+                  "node <<" + Q + "EOF" + Q + chr(10) + "os.symlink(" + Q + REF + Q + ", " + Q + "x" + Q + ")" + chr(10) + "EOF",
+                  "cat > /srv/notes.md <<" + Q + "EOF" + Q + chr(10) + "os.symlink(r" + Q + _w(REF) + Q
+                  + ", r" + Q + "x" + Q + ")" + chr(10) + "EOF"):
+            with self.subTest(c=c):
+                f = FC(c, _ELSEWHERE)
+                self.assertFalse(f["link_into_protected"], c)
+                self.assertFalse(f["link_target_unresolved"], c)
+
+    def test_TWIN_a_for_loop_variable_named_ln_is_no_ln_command(self):
+        """MEASURED in the F331 replay: `for ln in 3124 3253` from the game folder read as `ln`
+        with a target inside the game -- a false hard deny. A `for` header holds no command."""
+        c = "for ln in 3124 3253; do echo $ln; done"
+        f = FC(c, GAME)
+        self.assertFalse(f["link_into_protected"] or f["link_target_unresolved"], c)
+        self.assertTrue(FC("ln -s 3124 3253", GAME)["link_into_protected"])      # the twin fires
+        # ...and only the HEADER is skipped: a real `ln` whose first operand is the word `in`
+        # still fires beside a loop over a variable named ln.
+        c = "for ln in a; do :; done; ln -s in " + DQ + REF + DQ + " d"
+        self.assertTrue(FC(c, _ELSEWHERE)["link_into_protected"], c)
+
+    def test_a_for_header_is_judged_by_position_not_by_text(self):
+        """Review of 3e4b4fd: the header was matched by TEXT, so a real `ln in <ref>/a.xml .` spelled
+        exactly like an earlier `for ln in <ref>/a.xml .` header was skipped too."""
+        c = ("for ln in " + REF + "/a.xml .; do :; done; ln in " + REF + "/a.xml .")
+        self.assertTrue(FC(c, _ELSEWHERE)["link_into_protected"], c)
+        c = "if true; then for ln in " + REF + "/a.xml .; do :; done; fi"
+        self.assertFalse(FC(c, _ELSEWHERE)["link_into_protected"], c)
+
+    def test_PWD_is_the_segments_own_folder(self):
+        """Review: `ln -s "$PWD/src" lnk` was refused as unresolved although the folder is known."""
+        for c in ('ln -s "$PWD/src" lnk', 'ln -s "${PWD}/src" lnk', "ln -s $PWD/src lnk"):
+            with self.subTest(c=c):
+                f = FC(c, _ELSEWHERE)
+                self.assertFalse(f["link_target_unresolved"] or f["link_into_protected"], c)
+        # ...and it is judged: the folder holding reference/, then the cd's folder.
+        self.assertTrue(FC('ln -s "$PWD/reference" lnk', TOOLKIT)["link_into_protected"])
+        self.assertTrue(FC('cd "' + TOOLKIT + '" && ln -s "${PWD}/reference" lnk', _ELSEWHERE)["link_into_protected"])
+        # A substitution stays unreadable (refused with the remedy: write it absolute).
+        self.assertTrue(FC('ln -s "$(git rev-parse --show-toplevel)/x" lnk', _ELSEWHERE)["link_target_unresolved"])
+        # With no known folder, $PWD is unreadable too.
+        self.assertTrue(FC('ln -s "$PWD/src" lnk', _NO_CWD)["link_target_unresolved"])
+
+    def test_a_link_placed_inside_reference_is_a_write_there(self):
+        """Item 3: the link's own PATH inside a protected root is a write into it."""
+        for c in ("ln -s C:/work/src " + DQ + REF + "/lnk" + DQ,
+                  "cmd //c mklink /J " + DQ + _w(REF) + BS + "lnk" + DQ + " C:" + BS + "work",
+                  "fsutil hardlink create " + DQ + _w(REF) + BS + "a.xml" + DQ + " C:" + BS + "w" + BS + "a.xml"):
+            with self.subTest(c=c):
+                self.assertTrue(FC(c, _ELSEWHERE)["writes_reference"], c)
+
+
+@unittest.skipUnless(_PWSH, "no PowerShell on this machine: the PowerShell front-end cannot be "
+                            "exercised here (it fails closed without one)")
+class TestF331PowerShellLinkCreation(unittest.TestCase):
+    """F331 follow-up: New-Item -ItemType Junction|SymbolicLink|HardLink was translated as an
+    append to the LINK path with the target dropped, and [IO.Directory]/[IO.File]::
+    CreateSymbolicLink as a truncation of it -- so no rule saw the target."""
+
+    def P(self, command):
+        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command},
+                        "cwd": _ELSEWHERE}, ROOTS)
+
+    def _shapes(self, t):
+        at = _w(_LINK_AT)
+        return ["New-Item -ItemType Junction -Path " + Q + at + Q + " -Target " + Q + _w(t) + Q,
+                "New-Item -ItemType SymbolicLink -Path " + Q + at + Q + " -Value " + Q + _w(t) + Q,
+                "New-Item -ItemType HardLink -Path " + Q + at + ".xml" + Q + " -Target " + Q + _w(t) + BS + "a.xml" + Q,
+                "New-Item " + Q + at + Q + " -ItemType Junction -Value " + Q + _w(t) + Q,
+                "ni -it junction " + Q + at + Q + " -Target " + Q + _w(t) + Q,
+                "New-Item -ItemType SymbolicLink -Path C:" + BS + "work" + BS + "other -Name lnk -Target " + Q + _w(t) + Q,
+                "[System.IO.Directory]::CreateSymbolicLink(" + Q + at + Q + ", " + Q + _w(t) + Q + ")",
+                "[IO.File]::CreateSymbolicLink(" + Q + at + ".xml" + Q + ", " + Q + _w(t) + BS + "a.xml" + Q + ")",
+                "cmd /c mklink /J " + DQ + at + DQ + " " + DQ + _w(t) + DQ]
+
+    def test_each_powershell_link_shape_aimed_at_a_protected_root_fires(self):
+        for name, t in _LINK_TARGETS.items():
+            for c in self._shapes(t):
+                if name == "ancestor" and "a.xml" in c:
+                    continue            # a hardlink names a FILE in the ancestor, not the ancestor
+                with self.subTest(root=name, c=c):
+                    f = self.P(c)
+                    self.assertFalse(f.get("powershell_error"), c)
+                    self.assertTrue(f["link_into_protected"], c)
+
+    def test_TWIN_the_same_powershell_shapes_aimed_elsewhere_do_not(self):
+        for c in self._shapes(_LINK_ELSEWHERE):
+            with self.subTest(c=c):
+                f = self.P(c)
+                self.assertFalse(f.get("powershell_error"), c)
+                self.assertFalse(f["link_into_protected"], c)
+                self.assertFalse(f["link_target_unresolved"], c)
+
+    def test_a_plain_new_item_is_still_a_file_or_folder_write(self):
+        """Twin of the clause: only a LINK item type carries a target."""
+        f = self.P("New-Item -ItemType File -Path " + Q + _w(REF) + BS + "x.txt" + Q + " -Value " + Q + _w(GAME) + Q)
+        self.assertFalse(f["link_into_protected"])
+        self.assertTrue(f["writes_reference"])
+
+    def test_a_link_placed_inside_reference_stays_a_write_there(self):
+        for c in ("New-Item -ItemType Junction -Path " + Q + _w(REF) + BS + "lnk" + Q + " -Target C:" + BS + "work",
+                  "[IO.Directory]::CreateSymbolicLink(" + Q + _w(REF) + BS + "lnk" + Q + ", " + Q + "C:" + BS + "work" + Q + ")"):
+            with self.subTest(c=c):
+                self.assertTrue(self.P(c)["writes_reference"], c)
+
+    def test_an_item_type_PREFIX_is_the_link_type_powershell_makes(self):
+        """Review (MEASURED in PowerShell 7.6.6): -ItemType resolves a case-insensitive PREFIX --
+        d/c -> Directory, f -> File, s -> SymbolicLink, j/Junc -> Junction, h -> HardLink. Only
+        the exact names were read as links, so `-ItemType J` made a junction nobody judged."""
+        at = _w(_LINK_AT)
+        for it in ("J", "junc", "Ju", "h", "HARD", "s", "Sym", "symboliclink"):
+            c = "New-Item -ItemType " + it + " -Path " + Q + at + Q + " -Value " + Q + _w(REF) + Q
+            with self.subTest(c=c):
+                self.assertTrue(self.P(c)["link_into_protected"], c)
+        # Twins: a directory/file prefix, or a non-type, carries no link target.
+        for it in ("d", "Dir", "c", "f", "File"):
+            c = "New-Item -ItemType " + it + " -Path " + Q + at + Q + " -Value " + Q + _w(REF) + Q
+            with self.subTest(c=c):
+                f = self.P(c)
+                self.assertFalse(f["link_into_protected"] or f["link_target_unresolved"], c)
+
+    def test_a_non_literal_item_type_may_be_a_link(self):
+        """Review: `-ItemType $t` may be a link type. Its -Value is judged as a link target (a
+        protected one is refused); an unreadable value is refused with the remedy; with no -Value
+        there is nothing a link could point at."""
+        at = _w(_LINK_AT)
+        self.assertTrue(self.P("New-Item -ItemType $t -Path " + Q + at + Q + " -Value " + Q + _w(REF) + Q)["link_into_protected"])
+        self.assertTrue(self.P("New-Item -ItemType $t -Path " + Q + at + Q + " -Value $v")["link_target_unresolved"])
+        f = self.P("New-Item -ItemType $t -Path " + Q + at + Q)
+        self.assertFalse(f["link_into_protected"] or f["link_target_unresolved"])
+        f = self.P("New-Item -ItemType $t -Path " + Q + at + Q + " -Value " + Q + "C:" + BS + "work" + BS + "src" + Q)
+        self.assertFalse(f["link_into_protected"] or f["link_target_unresolved"])
+
+    def test_an_unreadable_powershell_target_is_refused(self):
+        f = self.P("New-Item -ItemType Junction -Path " + Q + _w(_LINK_AT) + Q + " -Target $src")
+        self.assertTrue(f["link_target_unresolved"] or f["carrier_untranslated"])
+        self.assertFalse(f["link_into_protected"])
+
+
 def load_tests(loader, standard_tests, pattern):
     """unittest.main() collects TestCase SUBCLASSES ONLY, so every module-level
     `def test_*` in this file was invisible to it.

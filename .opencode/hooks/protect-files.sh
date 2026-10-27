@@ -381,7 +381,7 @@ x4_file_batch() {
   IFS= read -r -d '' count || return 2
   case "$count" in ''|*[!0-9]*) return 2 ;; esac
   [ "$count" -gt 0 ] && [ "$count" -le 100000 ] || return 2
-  local paths=() inputs=() lexical=() canon_inputs=() canonical=()
+  local paths=() inputs=() lexical=() canon_inputs=() canonical=() drive=()
   for ((i=0; i<count; i++)); do
     IFS= read -r -d '' p || return 2
     IFS= read -r -d '' item || return 2
@@ -392,9 +392,13 @@ x4_file_batch() {
     [ -n "$p" ] || return 2
     paths[$i]="$p"; inputs[$i]="$item"
     case "$p" in
+      '\\'[?.]'\'[Uu][Nn][Cc]'\'*) p="//${p:8}" ;;    # F331 review: backslash device forms
+      '\\'[?.]'\'*) p="${p:4}" ;;
       //[?.]/[Uu][Nn][Cc]/*) p="//${p#//?/???/}" ;;
       //[?.]/*) p="${p#//?/}" ;;
     esac
+    # F331: the drive form is resolved through its links below, as x4_canon does.
+    case "$p" in [A-Za-z]:[/\\]*|[A-Za-z]:) drive[$i]=1 ;; esac
     canon_inputs[$i]="$p"
   done
   extra=""
@@ -432,6 +436,15 @@ x4_file_batch() {
   normalized="$(set -o pipefail; printf '%s\n' "${canon_inputs[@]}" | x4_norm_stream)" || return 2
   while IFS= read -r p; do canonical[$i]="$p"; i=$((i+1)); done <<< "$normalized"
   [ "$i" = "$count" ] || return 2
+  # F331: a Windows-form path through a link (a junction) follows it, exactly as x4_canon does
+  # for a single path; a failed resolution refuses the whole request.
+  case "${OSTYPE:-}" in
+    msys*|cygwin*)
+      for ((i=0; i<count; i++)); do
+        [ -n "${drive[$i]:-}" ] && x4_win_has_link "${canonical[$i]}" || continue
+        canonical[$i]="$(x4_win_follow "${canonical[$i]}")" || return 2
+      done ;;
+  esac
 
   # Cache roots + CURRENT file only: Bash 3.2's indexed cache would otherwise
   # grow quadratically. Roots and filesystem are stable during one check.
@@ -510,5 +523,17 @@ fi
 # the path as written. MEASURED: 11 of 17 such writes were allowed. See x4_winpath.
 x4_winpath "$FILE_PATH"; FILE_PATH="$_X4_WP"
 
-
+# F331 fail-closed: x4_canon now resolves a Windows-form path through its links, and a failed
+# resolution must refuse rather than fall back to the spelling (the batch path returns 2 for
+# the same error). The file path is memoised here, so the rules below pay nothing extra; a
+# ROOT that fails later is caught after the rules, where only an allow or advisory can be left.
+x4_canon_inert() {
+  VERDICT=1; _X4_UNRELAXED=1
+  emit ask "X4 GUARD INERT: $FILE_PATH (or a configured root) could not be resolved through its links, so NO rule below was evaluated. Confirm only if you know the edit is safe."
+  x4_guard_check_inert
+  exit 0
+}
+x4_canon_memo "$FILE_PATH"
+[ -z "$_X4_CANON_ERROR" ] || x4_canon_inert
 x4_file_policy
+[ -z "$_X4_CANON_ERROR" ] || [ -n "$VERDICT" ] || x4_canon_inert
