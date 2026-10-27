@@ -6,6 +6,7 @@ validator listed a skip, and MEASURED 2026-10-02 over 50 real edits in 23 dev mo
 carry a routine `--file` skip ("every other check (--file)"), so that advisory would fire on
 every edit. Only a validator that could not run, or a DEGRADED result, is disclosed.
 """
+from ci_workflow import load_ci
 import concurrent.futures
 import json
 import os
@@ -147,7 +148,7 @@ def test_F4_CI_checks_the_lockfile_is_fresh_not_only_frozen():
     (MEASURED by the audit: frozen sync rc 0 on a stale lock, `uv lock --check` rc 1)."""
     from _layout import require_repo
     require_repo(".github/workflows/ci.yml", why="CI configuration is not installed")
-    ci = YAML(typ="safe").load((REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    ci = load_ci(REPO)
     steps = [s for job in ci["jobs"].values() for s in job.get("steps", [])]
     checks = [s for s in steps if "uv lock --check" in str(s.get("run", ""))]
     assert checks, "no CI step runs `uv lock --check`"
@@ -191,7 +192,7 @@ def _ungated_checks(ci) -> list[str]:
 def test_I1_every_CI_check_runs_even_after_an_EARLIER_check_failed():
     from _layout import require_repo
     require_repo(".github/workflows/ci.yml", why="CI configuration is not installed")
-    ci = YAML(typ="safe").load((REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    ci = load_ci(REPO)
     assert _ungated_checks(ci) == []
 
 

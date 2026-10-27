@@ -3781,8 +3781,8 @@ def test_FXB3_every_CI_powershell_install_leg_is_ISOLATED():
     "different existing value"). The in-game and global legs ran on the default key with the
     inherited X4_TOOLKIT. Every step that runs install.ps1 must set its OWN test key under
     X4ToolkitTests and drop X4_TOOLKIT, before its first install.ps1 call."""
-    require_repo(".github/workflows/ci.yml", why="CI installer source is not installed")
-    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    require_repo(".github/workflows/full-qualification.yml", why="CI installer source is not installed")
+    text = (ROOT / ".github" / "workflows" / "full-qualification.yml").read_text(encoding="utf-8")
     # one block per step (no YAML library in the venv): split at each `- name:` item
     blocks = re.split(r"(?m)^\s*- name: ", text)[1:]
     steps = [{"name": b.splitlines()[0], "run": b} for b in blocks
@@ -3807,8 +3807,8 @@ def test_FXB4_every_CI_BASH_install_leg_that_runs_on_Windows_is_ISOLATED_too():
     test seam, refused outside HKCU\\Software\\X4ToolkitTests\\), inherited from the leg. Every
     bash step not gated to Linux must export its OWN key, distinct from every other leg's
     (PowerShell legs included), and drop X4_TOOLKIT, before its first install.sh call."""
-    require_repo(".github/workflows/ci.yml", why="CI installer source is not installed")
-    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    require_repo(".github/workflows/full-qualification.yml", why="CI installer source is not installed")
+    text = (ROOT / ".github" / "workflows" / "full-qualification.yml").read_text(encoding="utf-8")
     blocks = re.split(r"(?m)^\s*- name: ", text)[1:]
     bash_steps = [b for b in blocks if "bash install.sh --method" in b and "shell: bash" in b
                   and not re.search(r"(?m)^\s*if:.*runner\.os == 'Linux'", b)]

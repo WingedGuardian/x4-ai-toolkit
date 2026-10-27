@@ -1,0 +1,785 @@
+name: Full qualification
+on:
+  workflow_call:
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Last successful candidate: Windows 193m35s, Ubuntu 148m36s.
+    # Bound hangs while retaining margin for the existing serial conformance gates.
+    timeout-minutes: 300
+    # Both legs GATE: ubuntu was promoted on 2026-09-09 (the matrix note below records the run
+    # and why). `continue-on-error` stays keyed on `experimental` so demoting a leg is one
+    # visible edit. Ubuntu is the only POSIX evidence: Linux/macOS support is still "best
+    # effort, not device-tested" (README), so a green ubuntu leg is not a device test.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      max-parallel: 2
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            experimental: false
+          - os: ubuntu-latest
+            # ⚠ TWO CHECKS THIS ARC ADDED RUN ONLY HERE, SO ONLY HERE CAN THEY BE
+            # IGNORED. `continue-on-error` above is keyed on this flag, and both
+            # `Install for real (--method global, bash)` and `Cold-clone verification`
+            # are gated `if: runner.os == 'Linux'`. Each is Linux-only for a sound
+            # stated reason (jq on the ubuntu image; `git archive | tar -x`), and
+            # nobody re-scoped THIS flag when they were added -- so the bash
+            # implementation of `--method global`, the exact method whose PowerShell
+            # twin shipped v3.0.0 100% broken because no leg could say so, again has
+            # no leg that can say so. Green that could not go red, one level up.
+            #
+            # NOT FLIPPED HERE ON PURPOSE. CI is observable only on a push, and these
+            # checks have never once been enforced, so flipping blind trades a masked
+            # failure for a red release. The release plan's sequence is: push the
+            # reviewed code to a throwaway `ci/pre-3.1` branch (which the `ci/**`
+            # trigger at the top of this file exists to make fire — it did not,
+            # until 2026-09-07), read the PER-JOB
+            # conclusions (`gh api .../runs/<id>/jobs` -- the run conclusion said
+            # success while ubuntu FAILED in 33994180317), and promote to
+            # `experimental: false` only once ubuntu is observed green on this code.
+            #
+            # ** PROMOTED 2026-09-09. The condition above is met: run 34423… had
+            # tests (ubuntu-latest) = success, per JOB, 25 steps, 0 non-success. **
+            #
+            # It took three rounds to get there, and every one of them is the
+            # argument for this flag going away:
+            #   1. the differential fuzzer exited 2 -- an orphaned control anchor,
+            #      which also masked everything after step 11 for a whole release;
+            #   2. install.ps1 was 100% dead on POSIX, 21 tests red, caught HERE and
+            #      only here, on the leg that cannot fail a build;
+            #   3. the skip ceiling failed a leg that had 1,631 passed and 0 failed.
+            # All three shipped in v3.1.0 while the run said `success`, because
+            # `continue-on-error` turns this leg's verdict into a number nobody reads
+            # -- `gh run watch --exit-status` returned 0 with ubuntu red.
+            #
+            # The two Linux-only checks named above -- `--method global` in bash, and
+            # the cold-clone verification -- are consequently ENFORCED for the first
+            # time. That is the point: a green that could not go red is not a green.
+            experimental: false
+
+    steps:
+      # FULL HISTORY, for the tags (lane H). test_shipped_instruction_hashes pins
+      # scripts/shipped-instruction-hashes.txt to the CLAUDE.md/AGENTS.md of every v[0-9]*
+      # tag, and a depth-1 checkout has no tags -- so that test FAILS here by design
+      # (under CI it refuses to skip), rather than going quiet.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5, peeled commit
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.13
+        run: uv python install 3.13
+
+      # The vendored BaseX jar had NEVER been executed by CI, on any OS. The 24 BaseX
+      # unit tests pass without a JVM because they mock -- test_preflight.py monkeypatches
+      # shutil.which and writes a jar that is literally b"not really a jar, but it is a
+      # file". So a bad jar, a classpath change or an untracked .basexhome would ship
+      # silently: a green that could not have gone red. Java 17 is the MEASURED floor,
+      # read out of the jar itself (Build-Jdk-Spec: 17, bytecode major 61).
+      - name: Install Java 17 (for the BaseX smoke test)
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # SETUP ENDS HERE. Every step above is setup: if one fails, every check below
+      # is meaningless and they all skip (the default). Every step below is an
+      # INDEPENDENT check gated `!cancelled() && steps.setup.outcome == 'success'`, so
+      # one red check (the hook audit, say) no longer silently skips the pytest suite,
+      # its skip ceiling and both cold legs. A failed step still fails the job.
+      # Enforced by test_framework_hardening.py::test_I1_*.
+      - name: Setup complete
+        id: setup
+        shell: bash
+        run: echo setup complete
+
+      # Deliberately not a pytest that skips when java is absent: a skip in CI is
+      # indistinguishable from a pass. This fails loudly. Scope is 3 documents -- it
+      # proves the jar RUNS, not that the corpus is correct.
+      - name: BaseX smoke test (real JVM, real query)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: bash tools/basex/smoke-basex.sh
+
+      # Frozen installation consumes the lock without checking freshness. Check
+      # separately so stale metadata cannot pass merely because installation worked.
+      - name: Check dependency lock freshness
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        working-directory: tools/x4validate
+        run: uv lock --check
+
+      # The hook regression suite. A PreToolUse hook sits in front of every Bash
+      # call, so its two failure modes are both expensive: over-block makes
+      # legitimate work impossible, under-block makes the guard decorative while
+      # you still trust it. Until 2026-08-29 the shipped hooks had NO test at all.
+      # Path-dependent probes SKIP loudly here (no X4 install on a runner) and the
+      # tally names the skip count, so a green cannot mean "nothing was exercised".
+      - name: Hook regression suite
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: bash .claude/hooks/test-protect-bash.sh
+
+      # The three suites that cover this release's central change, and which CI did
+      # not run at all until 2026-09-01: 217 unit tests over the single parse pass,
+      # 135 E2E probes (the only coverage of protect-files.sh, backup-before-edit.sh,
+      # search-scope.sh, the stdin contract and the broken-jq verdict path), and the
+      # mutation gate that proves those tests can fail. All three are pure bash/Python
+      # and need no X4 install, so the reason `gates/` is excluded does not apply.
+      #
+      # They GATE on windows-latest and are informational on ubuntu-latest, matching
+      # this matrix's existing convention: POSIX behaviour of these hooks has never
+      # been measured, and gating on it would assert something unverified.
+      - name: Hook parse-pass unit tests
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: python .claude/hooks/test_hook_facts.py
+
+      # The AUDIT-2026-09-24 hook tests: settings.json matcher coverage for every
+      # file-changing tool, the stdin-from-a-FILE read path, and the PowerShell
+      # front-end END TO END (JSON piped into protect-bash.sh). The PowerShell classes
+      # need pwsh, which the hosted runners ship; without one they SKIP by name.
+      - name: Hook audit tests (matcher coverage, PowerShell front-end E2E)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: python .claude/hooks/test_audit0924_hooks.py
+
+      - name: Hook E2E probe suite
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: bash scripts/test-hooks.sh
+
+      - name: Prove the hook tests can fail (mutation + predicate coverage)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        # 4 workers = the runner's 4 vCPUs. Serial, 298 trials of the 782-test hook file were
+        # still running 4 h into the job's 300-minute limit (ci/v4-rc10); each trial has its
+        # own temp copy.
+        run: python scripts/verify-hook-tests.py --workers 4
+
+      - name: Prove the guard has no syntax bypass (differential fuzzer)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: python scripts/fuzz-guard.py
+
+      # THE INSTALLERS, FOR REAL. Nothing in this workflow ran them until 2026-09-02,
+      # which is why a silent `exit 1` in `--method global`, an unaccounted unpack, a
+      # setup.sh that could not fail, and two installers deleting the user's own config
+      # all shipped unnoticed. A smoke run asserts the ARTIFACT, never the exit code
+      # alone -- a build is verified by what it produced.
+      - name: Install for real (bash) and check the artifacts
+        id: install_sh
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ISOLATED (FX-B4, reviewer I): no `if:`, so on the Windows runner install.sh writes
+          # X4_TOOLKIT through scripts/x4-userenv.ps1 -- the runner's REAL HKCU\Environment, which
+          # persists into later steps. That script honours the installers' test seam instead
+          # (refused outside X4ToolkitTests); on Linux nothing reads it.
+          export X4_INSTALL_ENV_REGKEY='HKCU\Software\X4ToolkitTests\ci-sh-separate'
+          unset X4_TOOLKIT
+          TK="$RUNNER_TEMP/tk-sh"
+          # A REAL SETUP. Without a virtualenv in the source, the venv assertions
+          # below describe a situation that cannot arise, and the collision grep
+          # that used to stand here could never match -- a green with no reachable
+          # red. uv sync creates one, so there is now something that COULD travel.
+          ( cd tools/x4validate && uv sync --frozen >/dev/null 2>&1 ) || true
+          test -d tools/x4validate/.venv || { echo "no source venv: the venv assertions below would be vacuous"; exit 1; }
+          # A SENTINEL, because "is there a venv in the destination" is the WRONG
+          # question: install.sh runs setup.sh there (install.sh:710) and setup.sh runs
+          # `uv sync` (setup.sh:76), so a destination venv is what a CORRECT install
+          # produces. The old assertion could not pass in any configuration.
+          # What must not happen is the SOURCE's venv travelling -- it hardlinks from a
+          # shared cache and its pyvenv.cfg and Scripts shims embed absolute paths. A
+          # freshly built venv cannot contain this file; a copied one must.
+          echo "source-venv sentinel" > tools/x4validate/.venv/.X4_SOURCE_VENV_SENTINEL
+          bash install.sh --method separate --toolkit "$TK" --yes
+          test -f "$TK/x4-paths.env" || { echo "no x4-paths.env at the toolkit root"; exit 1; }
+          test ! -e "$TK/.claude/x4-paths.env" || { echo "a fresh install wrote the 3.x .claude/x4-paths.env"; exit 1; }
+          test -d "$TK/tools/x4validate"     || { echo "no tools/x4validate"; exit 1; }
+          test -d "$TK/mods"                 || { echo "no mods/ (x4live extension)"; exit 1; }
+          # A VENV MUST NOT TRAVEL. The source has one (asserted above), so this
+          # is a real question with a reachable wrong answer: it goes red if the
+          # copy-time exclusion AND both prunes were removed.
+          #
+          # It does NOT isolate which of the three did the work, and saying so
+          # matters -- what isolates copy-time exclusion is a stubbed cp counting
+          # invocations that name a pruned path (0 on both platforms), which CI
+          # cannot observe. test_installers_agree.py pins that construct instead.
+          test ! -e "$TK/tools/x4validate/.venv/.X4_SOURCE_VENV_SENTINEL" || {
+            echo "the SOURCE virtualenv travelled into the destination (sentinel found)"; exit 1; }
+          # ...and the destination must HAVE one, or setup.sh silently did not run and
+          # the sentinel check above would be vacuous -- a green with no reachable red.
+          test -d "$TK/tools/x4validate/.venv" || {
+            echo "no destination venv: setup.sh did not run, so the sentinel check proved nothing"; exit 1; }
+          # The config bash cannot source is the failure the escaping exists to stop.
+          ( set -a; . "$TK/x4-paths.env" ) || { echo "x4-paths.env does not source"; exit 1; }
+
+          # DIRECTION: a second install over the same toolkit must REFUSE without the
+          # flag. This is the defect that overwrote a developer's game folder.
+          if bash install.sh --method separate --toolkit "$TK" --yes; then
+            echo "installing over an existing install was ALLOWED without --over-existing"; exit 1
+          fi
+
+          # ...and with the flag it proceeds AND keeps the user's own settings in the
+          # LIVE file. `grep -r` over .claude/ is NOT the test: the .bak satisfies it
+          # whether or not the live config kept anything.
+          printf '\nX4_NEXUS_KEY="CI_MARKER"\n' >> "$TK/x4-paths.env"
+          # The upgrade path, with a virtualenv on BOTH sides -- the exact
+          # arrangement that used to break it. uv hardlinks package files from a
+          # shared cache, so once both trees are synced the same file has the same
+          # inode in each and a recursive copy refuses, hundreds of times, part
+          # way through, and `set -e` kills the script before the config restore.
+          #
+          # The collision grep below is BELT-AND-BRACES, not an independent check:
+          # the destination is pruned BEFORE the copy now, so the collision is no
+          # longer reachable and the grep cannot go red on its own. It stays
+          # because it costs nothing and names the historical failure exactly.
+          ( cd "$TK/tools/x4validate" && uv sync --frozen >/dev/null 2>&1 ) || true
+          set +e
+          bash install.sh --method separate --toolkit "$TK" --over-existing --yes \
+            > "$RUNNER_TEMP/upgrade.log" 2>&1
+          up_rc=$?
+          set -e
+          cat "$RUNNER_TEMP/upgrade.log"
+          test "$up_rc" = "0" || { echo "the --over-existing upgrade failed"; exit 1; }
+          if grep -q "are the same file" "$RUNNER_TEMP/upgrade.log"; then
+            echo "the upgrade copy hit a hardlink collision -- a venv travelled"; exit 1
+          fi
+          grep -q CI_MARKER "$TK/x4-paths.env" || {
+            echo "a re-install reverted the LIVE user config"; exit 1; }
+          echo "installer smoke OK"
+
+      # TWO legs, and the difference between them is the point. The pwsh 7 leg is
+      # what ran before, and it could not see the defect that shipped: Windows
+      # PowerShell 5.1 splits a native argument containing double quotes at the
+      # first space, and 7.x does not. The destination here CONTAINS A SPACE,
+      # which is what a stock Steam install looks like and what the README's own
+      # command produces.
+      - name: Install for real (Windows PowerShell 5.1, spaced path)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Windows' }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # ISOLATED from the earlier steps (FX-B2, CI on da93d2d): a runner keeps HKCU across
+          # steps, so the bash leg's X4_TOOLKIT write reached this one as a "different
+          # existing value". Each leg gets its own test key (the installers' seam) and no
+          # inherited X4_TOOLKIT.
+          $env:X4_INSTALL_ENV_REGKEY = 'HKCU\Software\X4ToolkitTests\ci-ps51'
+          Remove-Item -LiteralPath env:X4_TOOLKIT -ErrorAction SilentlyContinue
+          $tk = Join-Path $env:RUNNER_TEMP 'tk ps51'
+          & .\install.ps1 -Method separate -Toolkit $tk -Yes
+          if ($LASTEXITCODE -ne 0) { Write-Error "the 5.1 install failed (exit $LASTEXITCODE)" }
+          foreach ($p in @('x4-paths.env','tools\x4validate','mods')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $tk $p))) { Write-Error "missing: $p" }
+          }
+          if (Test-Path -LiteralPath (Join-Path $tk '.claude\x4-paths.env')) { Write-Error 'a fresh install wrote the 3.x .claude\x4-paths.env' }
+          # A FILE COUNT, because the failure produced a half-install of ~243
+          # files that still carried x4-paths.env and tools/x4validate -- so
+          # every existence check above passed straight through it.
+          $n = (Get-ChildItem -Recurse -File -LiteralPath $tk).Count
+          if ($n -lt 1000) { Write-Error "only $n files: this is a half-install, not an install" }
+          Write-Host "5.1 installer smoke OK ($n files, destination contains a space)"
+
+      - name: Install for real (PowerShell) and check the artifacts
+        id: install_ps
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:X4_INSTALL_ENV_REGKEY = 'HKCU\Software\X4ToolkitTests\ci-ps7'   # isolated: see the 5.1 leg
+          Remove-Item -LiteralPath env:X4_TOOLKIT -ErrorAction SilentlyContinue
+          $tk = Join-Path $env:RUNNER_TEMP 'tk-ps'
+          & .\install.ps1 -Method separate -Toolkit $tk -Yes
+          if ($LASTEXITCODE -ne 0) { Write-Error "the pwsh install failed (exit $LASTEXITCODE)" }
+          foreach ($p in @('x4-paths.env','tools\x4validate','mods')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $tk $p))) { Write-Error "missing: $p" }
+          }
+          if (Test-Path -LiteralPath (Join-Path $tk '.claude\x4-paths.env')) { Write-Error 'a fresh install wrote the 3.x .claude\x4-paths.env' }
+
+          # DIRECTION, mirrored from the bash leg. Two legs claiming to test the same
+          # contract while testing different things is how a released claim goes false
+          # with nothing turning red -- which is exactly what happened to the config
+          # backup: fixed in bash, absent in PowerShell, and the CHANGELOG said "both".
+          & .\install.ps1 -Method separate -Toolkit $tk -Yes
+          if ($LASTEXITCODE -eq 0) { Write-Error 'installing over an existing install was ALLOWED without -OverExisting' }
+
+          Add-Content -LiteralPath (Join-Path $tk 'x4-paths.env') -Value 'X4_NEXUS_KEY="CI_MARKER"'
+          & .\install.ps1 -Method separate -Toolkit $tk -OverExisting -Yes
+          if ($LASTEXITCODE -ne 0) { Write-Error 'the -OverExisting upgrade failed' }
+          if (-not ((Get-Content -Raw -LiteralPath (Join-Path $tk 'x4-paths.env')) -match 'CI_MARKER')) {
+            Write-Error 'a re-install reverted the LIVE user config'
+          }
+          Write-Host 'installer smoke OK'
+
+      # THE OTHER TWO METHODS. Every installer step above this line runs `separate`,
+      # and only `separate` -- 8 invocations, one method. So `global` and `in-game`
+      # had no reachable failing branch at all, which is how `-Method global` shipped
+      # in v3.0.0 100% broken: it threw on EVERY run, on 5.1 and 7 alike, and no leg
+      # could have said so. A green that could not have gone red is decoration.
+      #
+      # Each leg asserts the ARTIFACT and then the DIRECTION, mirroring the separate
+      # legs: install, prove what landed, prove a re-install REFUSES without the
+      # opt-in flag, prove the flag lets it through.
+      #
+      # CLAUDE_CONFIG_DIR redirects the global destination away from the runner's own
+      # ~/.claude. It is the ONLY thing that does: the method falls back to
+      # $HOME/.claude (install.sh) and %USERPROFILE%/.claude (install.ps1), so
+      # redirecting one without the other leaves the fallback live.
+
+      - name: Install for real (--method global, bash) and check the gate
+        # Linux only, deliberately: this arm requires jq, which is guaranteed on the
+        # ubuntu image. Asserting its presence on the Windows image would gate the
+        # release on an assumption about someone else's runner. install.ps1's global
+        # arm needs no jq and is covered on Windows below, so both implementations of
+        # the arm are exercised -- just not both on both.
+        if: ${{ !cancelled() && steps.install_sh.outcome == 'success' && runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null || { echo "jq is missing on the ubuntu image, so this leg's premise is gone"; exit 1; }
+          TK="$RUNNER_TEMP/tk-sh"                       # installed by the separate leg above
+          test -d "$TK/.claude/skills" || { echo "the separate leg did not run; nothing to install FROM"; exit 1; }
+          export CLAUDE_CONFIG_DIR="$RUNNER_TEMP/globalhome"
+          rm -rf "$CLAUDE_CONFIG_DIR"; mkdir -p "$CLAUDE_CONFIG_DIR"
+          bash install.sh --method global --toolkit "$TK" --yes
+          # ARTIFACTS, not the exit code. A method that copied nothing must not read as
+          # installed -- both installers grew that exact refusal after doing exactly that.
+          n=$(find "$CLAUDE_CONFIG_DIR/skills" -maxdepth 1 -name 'x4-*' -type d | wc -l)
+          test "$n" -ge 5 || { echo "only $n x4-* skills installed"; exit 1; }
+          test -f "$CLAUDE_CONFIG_DIR/settings.json" || { echo "no settings.json"; exit 1; }
+          jq -e '.env.X4_TOOLKIT' "$CLAUDE_CONFIG_DIR/settings.json" >/dev/null || {
+            echo "settings.json has no X4_TOOLKIT: the env merge did not happen"; exit 1; }
+          # A pre-existing file must survive a REFUSED run untouched.
+          echo 'must survive' > "$CLAUDE_CONFIG_DIR/skills/x4-mine.md"
+
+          # DIRECTION: a second global install over pre-existing x4-* skills must
+          # REFUSE. This method force-overwrote them with no prompt and no backup, and
+          # keeps no backup of skills even now -- so the refusal IS the protection.
+          if bash install.sh --method global --toolkit "$TK" --yes; then
+            echo "a global install over existing x4-* skills was ALLOWED without --over-existing"; exit 1
+          fi
+          grep -q 'must survive' "$CLAUDE_CONFIG_DIR/skills/x4-mine.md" || {
+            echo "the refused run still modified a pre-existing file"; exit 1; }
+
+          bash install.sh --method global --toolkit "$TK" --over-existing --yes
+          echo "global installer smoke OK ($n x4-* skills)"
+
+      - name: Install for real (-Method global, PowerShell) and check the gate
+        if: ${{ !cancelled() && steps.install_ps.outcome == 'success' && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # FX-B3 (reviewer F M4): isolated like the two separate legs -- its own test key and no
+          # inherited X4_TOOLKIT (HKCU persists across steps; see the 5.1 leg).
+          $env:X4_INSTALL_ENV_REGKEY = 'HKCU\Software\X4ToolkitTests\ci-ps-global'
+          Remove-Item -LiteralPath env:X4_TOOLKIT -ErrorAction SilentlyContinue
+          $tk = Join-Path $env:RUNNER_TEMP 'tk-ps'      # installed by the separate leg above
+          if (-not (Test-Path -LiteralPath (Join-Path $tk '.claude/skills'))) {
+            Write-Error 'the separate leg did not run; nothing to install FROM' }
+          # BOTH the primary and the fallback. install.ps1 reads CLAUDE_CONFIG_DIR and
+          # then %USERPROFILE%/.claude, so setting one leaves the other live.
+          $hc = Join-Path $env:RUNNER_TEMP 'globalhome-ps'
+          if (Test-Path -LiteralPath $hc) { Remove-Item -Recurse -Force -LiteralPath $hc }
+          New-Item -ItemType Directory -Force -Path $hc | Out-Null
+          $env:CLAUDE_CONFIG_DIR = $hc
+
+          & .\install.ps1 -Method global -Toolkit $tk -Yes
+          if ($LASTEXITCODE -ne 0) { Write-Error "the global install failed (exit $LASTEXITCODE)" }
+          $n = @(Get-ChildItem -Directory -LiteralPath (Join-Path $hc 'skills') -Filter 'x4-*').Count
+          if ($n -lt 5) { Write-Error "only $n x4-* skills installed" }
+          $sj = Join-Path $hc 'settings.json'
+          if (-not (Test-Path -LiteralPath $sj)) { Write-Error 'no settings.json' }
+          if (-not ((Get-Content -Raw -LiteralPath $sj | ConvertFrom-Json).env.X4_TOOLKIT)) {
+            Write-Error 'settings.json has no X4_TOOLKIT: the env merge did not happen' }
+
+          # DIRECTION. Until this release the global arm reached NO gate: -OverExisting
+          # was consulted only on the copy-to-destination path, which this method never
+          # takes, so it silently replaced a user's own edited x4-* skills.
+          $mine = Join-Path $hc 'skills/x4-mine.md'
+          Set-Content -LiteralPath $mine -Value 'must survive'
+          & .\install.ps1 -Method global -Toolkit $tk -Yes
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error 'a global install over existing x4-* skills was ALLOWED without -OverExisting' }
+          if ((Get-Content -Raw -LiteralPath $mine) -notmatch 'must survive') {
+            Write-Error 'the refused run still modified a pre-existing file' }
+          & .\install.ps1 -Method global -Toolkit $tk -OverExisting -Yes
+          if ($LASTEXITCODE -ne 0) { Write-Error 'the -OverExisting global upgrade failed' }
+          Write-Host "global installer smoke OK ($n x4-* skills)"
+
+      - name: Install for real (--method in-game, bash) and check the gate
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A FAKE game folder, named EXPLICITLY. --game must be named: an auto-detected
+          # destination with --yes is refused outright, which is the rule that exists
+          # because an auto-detected install once wrote 1,642 files into a real Steam
+          # install and exited 0.
+          # ISOLATED like the separate bash leg (FX-B4): no `if:`, so it runs on Windows too.
+          export X4_INSTALL_ENV_REGKEY='HKCU\Software\X4ToolkitTests\ci-sh-ingame'
+          unset X4_TOOLKIT
+          GAME="$RUNNER_TEMP/fakegame-sh"
+          rm -rf "$GAME"; mkdir -p "$GAME/extensions"
+          for n in 01 02 03 04 05 06 07 08 09; do : > "$GAME/$n.cat"; done
+          bash install.sh --method in-game --game "$GAME" --yes
+          test -f "$GAME/x4-paths.env" || { echo "no x4-paths.env in the game folder"; exit 1; }
+          test ! -e "$GAME/.claude/x4-paths.env" || { echo "a fresh install wrote the 3.x .claude/x4-paths.env"; exit 1; }
+          test -d "$GAME/tools/x4validate"     || { echo "no tools/x4validate"; exit 1; }
+          test -d "$GAME/.claude/hooks"        || { echo "no .claude/hooks: in-game is the layout that HAS the guards"; exit 1; }
+          # The .cat files must still be there. For every user of this method the
+          # destination IS a real game install, and installing may not disturb it.
+          test -f "$GAME/01.cat" || { echo "the installer disturbed the game's own files"; exit 1; }
+          if bash install.sh --method in-game --game "$GAME" --yes; then
+            echo "an in-game install over an existing one was ALLOWED without --over-existing"; exit 1
+          fi
+          bash install.sh --method in-game --game "$GAME" --over-existing --yes
+          echo "in-game installer smoke OK"
+
+      - name: Install for real (-Method in-game, PowerShell) and check the gate
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # FX-B3 (reviewer F M4): isolated like the two separate legs (see the 5.1 leg).
+          $env:X4_INSTALL_ENV_REGKEY = 'HKCU\Software\X4ToolkitTests\ci-ps-ingame'
+          Remove-Item -LiteralPath env:X4_TOOLKIT -ErrorAction SilentlyContinue
+          $game = Join-Path $env:RUNNER_TEMP 'fakegame-ps'
+          if (Test-Path -LiteralPath $game) { Remove-Item -Recurse -Force -LiteralPath $game }
+          New-Item -ItemType Directory -Force -Path (Join-Path $game 'extensions') | Out-Null
+          foreach ($n in '01','02','03','04','05','06','07','08','09') {
+            Set-Content -LiteralPath (Join-Path $game ($n + '.cat')) -Value '' }
+          & .\install.ps1 -Method in-game -Game $game -Yes
+          if ($LASTEXITCODE -ne 0) { Write-Error "the in-game install failed (exit $LASTEXITCODE)" }
+          foreach ($p in @('x4-paths.env','.claude/hooks','tools/x4validate','mods')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $game $p))) { Write-Error "missing: $p" }
+          }
+          if (Test-Path -LiteralPath (Join-Path $game '.claude/x4-paths.env')) { Write-Error 'a fresh install wrote the 3.x .claude/x4-paths.env' }
+          if (-not (Test-Path -LiteralPath (Join-Path $game '01.cat'))) {
+            Write-Error "the installer disturbed the game's own files" }
+          & .\install.ps1 -Method in-game -Game $game -Yes
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error 'an in-game install over an existing one was ALLOWED without -OverExisting' }
+          & .\install.ps1 -Method in-game -Game $game -OverExisting -Yes
+          if ($LASTEXITCODE -ne 0) { Write-Error 'the -OverExisting in-game upgrade failed' }
+          Write-Host 'in-game installer smoke OK'
+
+      # -rs NAMES every skip, and the budget makes a silent-skip regression LOUD.
+      # MEASURED 2026-09-01: 125 tests skipped because they looked for a `dev/`
+      # directory that does not exist in this repo -- the game extension ships at
+      # `mods/` -- and the total collapsed them into one number nobody reads. They
+      # guarded a Lua contract whose violation hangs X4 and needs a force-kill.
+      # The stamper was extended this round to cover BOTH lua files and was then
+      # invoked by nothing -- not here, and not by scripts/run-gates.sh, which
+      # discovers gates/*.py only. A fix that runs nowhere is not a fix: the
+      # defect it addressed (an engine_probe.lua change shipping undetected) could
+      # recur unchanged. --check recomputes and compares; it writes nothing.
+      - name: The shipped lua BUILD stamps are current
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        working-directory: tools/x4validate
+        run: uv run --frozen python scripts/stamp-mod-build.py --check
+
+      # Codex's OWN policy checker proves .codex/rules/x4.rules parses and that every rule's
+      # match/not_match examples hold (tests/test_codex_rules.py). Pinned: the measurements
+      # behind the Codex adapter are for 0.160.0, and a new Codex must not move them unseen.
+      # Without it those tests SKIP (counted), which would be a dormant check on CI.
+      - name: Install the Codex CLI (pinned) for the .rules checks
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: npm i -g @openai/codex@0.160.0
+
+      - name: Run the suite with NO game installed
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        working-directory: tools/x4validate
+        # X4_MAX_SKIPS turns the skip COUNT into a failure instead of a number nobody
+        # reads. Deliberately generous: a runner with no X4 and fewer optional deps
+        # legitimately skips more than a configured machine, and a ceiling that cries
+        # wolf is one people learn to ignore. It is set to catch the failure that
+        # actually happened -- 125 tests going silently dormant at once -- not to police
+        # normal environmental variation.
+        env:
+          # PER-OS, because the single number was calibrated on ONE platform and had
+          # never run on the other. The 43 recorded below was MEASURED on a Windows
+          # clone with every X4_* variable cleared; the first CI run that actually
+          # executed this leg (33777842225, 2026-09-03, over 74 unpushed commits)
+          # measured ubuntu at 53 and windows at 42. So the ceiling was simultaneously
+          # too low where it ran and untested where it mattered -- a bound that could
+          # not go red on Linux and could not stay green there either.
+          #
+          # POSIX legitimately skips more, and all 53 were read rather than assumed:
+          # 16 need a configured X4 install (corpus_sweep, qa_sweep), 12 are dev-only
+          # docs/scripts, 10 need a real reference tree, 5 need a case-insensitive
+          # filesystem, 4 are platform-specific, 6 are registry/fixture/path-shape.
+          # None is a test silently dormant, which is the only thing this ceiling is
+          # for -- 125 went dormant at once, once, and that is the shape it must catch.
+          #
+          # Headroom stays small on purpose. A ceiling far above the real floor cannot
+          # detect a dormant block, so windows keeps its measured floor + 3 and ubuntu
+          # + 2.
+          #
+          # RAISED 2026-09-05, 45 -> 49 / 55 -> 59, because the arc's own tests pushed
+          # the floor past the ceiling and this leg would have gone RED on push.
+          #
+          # The floor was re-measured against a REAL CLONE with every X4_* cleared and
+          # the roots ASSERTED to resolve to None -- not `git archive`, which leaves no
+          # .git and adds ~6 "not a git checkout" skips CI never sees. That instrument
+          # was then validated rather than trusted: run against the exact commit CI run
+          # 33777842225 measured, it returned 42 skips -- CI-windows' own figure, to the
+          # test. So the machine difference is ZERO and the whole delta is ours.
+          #
+          # Windows floor is now 46, and all four added skips are accounted for, each
+          # +1, buckets summing to the total:
+          #   qa_sweep import 8 -> 9 (test_UNSWEPT... loads it via import_gate)
+          #   test_changed_cli      snapshots_dir() refused with no registry
+          #   test_effective_scope  docs/BLIND-SPOTS.md is not in this repo at all
+          #   test_every_gate_can_fail  gates/oracle.py refuses without a configured X4
+          # None is a test gone dormant, which is the only thing this ceiling is for.
+          #
+          # Ubuntu's 57 is INFERRED, not measured -- there is no Linux box here. The
+          # inference is narrow: all four causes are platform-neutral (a missing install,
+          # a missing registry, a file absent from the repo), none touches case
+          # sensitivity, path shape or a platform-specific tool, and the Windows
+          # reproduction was exact. If CI reports otherwise, take CI's number.
+          #
+          # RAISED 2026-09-06 (49 -> 56 windows, 59 -> 67 ubuntu) BEFORE the v3.1.0
+          # push, because the old ceiling would have failed CI on a CEILING rather than
+          # on a defect -- and on the windows leg, which is the one that gates.
+          #
+          # MEASURED cold at 53 on Windows by `scripts/verify-cold.sh`, which is the
+          # ONLY instrument here that can be believed: it REFUSES to run until it has
+          # proved registry/game_extensions/reference all resolve to None. Two cheaper
+          # "cold" setups were tried first and BOTH were fully configured --
+          # `env -u X4_*` gave 14 skips (falls through $X4_TOOLKIT to x4-paths.env,
+          # CLAUDE.md #26), and pointing X4_TOOLKIT at an empty directory still
+          # resolved every root. A CI runner IS genuinely cold, because
+          # `x4-paths.env` is gitignored and never checked out.
+          #
+          # ATTRIBUTED, not just raised. The 53 breaks down per file, and the four
+          # largest are all "no game / not this repo" causes that hold identically on a
+          # runner: conftest 9, corpus_sweep_crash_detection 8, blind_spots_ids 7,
+          # next_blind_spot_id 5 (the last two because docs/BLIND-SPOTS.md is not in
+          # the public repo at all), then 24 across fifteen files. Only THREE skipping
+          # files were touched by this arc (every_gate_can_fail 2, lockstep_gate 2,
+          # line_ending_pin 1), so most of the rise predates it. None is a test gone
+          # dormant, which is the only thing this ceiling is for.
+          #
+          # Headroom is +3 over the measurement, the same margin the 46 -> 49 pair
+          # used. Ubuntu stays INFERRED: the one run that measured both had ubuntu 11
+          # above windows (53 vs 42, run 33777842225), so measurement + 11 + 3.
+          #
+          # ** RE-MEASURED 2026-09-07, twice more after the review rounds: windows
+          # cold is 57, not 53 and not the 56 this comment said an hour ago. **
+          # Real headroom against the 59 below is therefore +2, not +3. Still safe,
+          # and CI's own floor is LOWER than this figure: `verify-cold.sh` runs from
+          # a `git archive` extract with no `.git` and no tags, so the git-dependent
+          # tests skip there and will NOT skip on a real checkout (measured near 54). The whole +3 is `tests/test_build_release.py`, attributed
+          # per file by diffing the two verify-cold runs rather than by reading the
+          # totals: 3 of its 4 tests need a git checkout carrying the v3.0.0 tag, and
+          # a `git archive` extract is neither a repo nor tagged, so they skip for the
+          # same "not this repo" reason as blind_spots_ids and next_blind_spot_id.
+          # Nothing else moved -- every other file is byte-identical in both runs.
+          #
+          # ⚠ THE OLD 56 WAS EXACTLY AT THE MEASUREMENT, so the gating Windows leg had
+          # ZERO headroom and one further skip would have failed the release on a
+          # CEILING rather than on a defect -- which is the failure this pair already
+          # had once, and the reason the margin is stated rather than assumed. New
+          # pair: windows 56 + 3 = 59, ubuntu 56 + 11 + 3 = 70.
+          # ** Re-read the per-JOB conclusion after the first push and take CI's
+          # numbers over these. ** `gh api .../runs/<id>/jobs` -- never the run
+          # conclusion, which reported success while ubuntu FAILED in run 33994180317.
+          #
+          # ** RE-MEASURED 2026-09-09 from run 34421093364, and it happened AGAIN. **
+          # OBSERVED: windows 59, ubuntu 71. So ubuntu failed this step on the CEILING
+          # with 1,631 passed and ZERO failed, and windows sat at exactly 59 of 59 --
+          # the identical zero-headroom state this comment describes two paragraphs up
+          # and calls "the reason the margin is stated rather than assumed". Twice now,
+          # the same way: the numbers were INFERRED (56 + 11) instead of read off a run.
+          #
+          # Both breaches shipped in v3.1.0 unseen, because this step never executed --
+          # the fuzzer failed at step 11 and everything after it was skipped.
+          #
+          # Every one of ubuntu's 71 was CLASSIFIED before raising anything, buckets
+          # summing to 71 of 71, so this is not a ceiling raised to silence a signal:
+          #    38  no X4 install and no reference tree on the runner
+          #    12  Windows-only behaviour, correctly skipped on Linux
+          #    18  a dev-only file absent from the public mirror
+          #     3  no registry configured, so the guard has nothing to guard
+          # None is a test going dormant, which is the 125-at-once failure this ceiling
+          # exists to catch. The skips are what a bare runner legitimately produces.
+          #
+          # MEASURED + 3, the established margin, and MEASURED means read off a run:
+          #    windows  59 + 3 = 62
+          #    ubuntu   71 + 3 = 74
+          # Ubuntu is no longer inferred from windows. If either leg moves again, read
+          # the per-JOB number and classify the skips before touching these.
+          #
+          # ** LOWERED 2026-09-15, 74 -> 68 ubuntu and 62 -> 56 windows. ** The floor
+          # had FALLEN, so the old pair had grown 9 of slack on each leg -- room for
+          # tests to go dormant unseen, which is the one thing this ceiling is for.
+          # Read off run 34929189538 (ccd454f), per job: ubuntu 65, windows 53, and
+          # attributed PER FILE against run 34421093364, identically on both legs:
+          #    -13  test_blind_spots_ids 7, test_next_blind_spot_id 5,
+          #         test_effective_scope 1 -- docs/BLIND-SPOTS.md ships in this repo now
+          #     +8  conftest 3 (qa_sweep import), claude_md_budget 1, deploy_parity 1,
+          #         ffinames 1, recon_buckets_are_vanilla_attested 1 -- each a check
+          #         that needs a configured X4, reference tree or game root
+          # All 65 classified, buckets summing to 65 of 65:
+          #    49  no X4 install, reference tree, game root or registry on the runner
+          #    12  Windows-only behaviour or a case-insensitive filesystem (ubuntu only)
+          #     4  tag v3.0.0 absent from the depth-1 checkout (see the scrub job)
+          # Windows is the same 49 + 4 = 53. None is a test gone dormant.
+          #    windows  53 + 3 = 56
+          #    ubuntu   65 + 3 = 68
+          #
+          # ** RAISED 2026-10-02 (lane D, Layer 2 on reference/), 68 -> 122 ubuntu and
+          # 56 -> 59 windows. ** One new bucket per leg, counted by COLLECTION of the three
+          # new files (each test id's skipif reason), not yet read off a CI run -- re-read
+          # the per-job -rs output on the first run and correct these if they differ:
+          #    54  NTFS deny (x4refguard): Windows-only mechanism -- ubuntu only
+          #        (test_x4refguard 13, test_x4refguard_behaviour 38, test_unpack_reference_layer2 3)
+          #     3  real chmod semantics of the POSIX branch -- windows only (test_x4refguard)
+          #    windows  56 + 3 = 59
+          #    ubuntu   68 + 54 = 122
+          #
+          # ** RAISED 2026-10-02 (lane H, installers), 122 -> 132 ubuntu, windows 59
+          # unchanged. ** INFERRED from the tests' skipif reasons, NOT read off a run --
+          # re-read the per-job -rs output on the first run and correct these:
+          #    +14 ubuntu  the user environment lives in the registry on Windows only
+          #                (test_install_over_existing: 5 registry tests x 2 installers,
+          #                the x4-userenv round trip 1, its seam refusal 3)
+          #     +4 windows POSIX shell profile (2 parametrised + 2)
+          #     -4 both    the tag v3.0.0 bucket above: this job now checks out with
+          #                fetch-depth: 0, so test_build_release finds its tag
+          #    windows  59 - 4 + 4 = 59
+          #    ubuntu   122 - 4 + 14 = 132
+          #
+          # ** RE-SET 2026-10-04 (Plan 3 CI-fix lane): 132 -> 144 ubuntu, 59 -> 56 windows. **
+          # MEASURED base = run 37172347642 (ci/plan2 @ 1147709), the per-job -rs lists summed
+          # by their [N] counts: ubuntu 139, windows 53 (the ubuntu leg FAILED on 139 > 132).
+          # The lane-H estimate above was 7 short on ubuntu. Deltas from this lane, DERIVED from
+          # skipif reasons, NOT yet read off a run -- confirm both on the next run:
+          #     +2 ubuntu  NTFS ACLs: the Windows mechanism (test_x4refguard: a real
+          #                foreign-owner refusal twin + the real /setowner form)
+          #      0 windows the x4refguard / Layer 2 tests that errored on the elevated runner
+          #                now take ownership of their own scratch tree; if that ever fails
+          #                they SKIP (counted) and this ceiling goes red, as it should
+          #    windows  53 + 0 + 3 = 56
+          #    ubuntu   139 + 2 + 3 = 144
+          #
+          # ** ITEMISED 2026-10-04 (v4.0.0 review R7-11: "the +3 is unexplained"). ** In every
+          # pair above the trailing +3 is HEADROOM, not a skip: the margin set 2026-09-07 so that
+          # one new legitimate skip fails on review of this comment, not on a release push. It
+          # stands for no test. The ONLY skip-count deltas are the itemised lines. FX-I adds:
+          #     +1 ubuntu  test_effective_unreadable::test_a_store_REACHED_THROUGH_a_UNC_path_opens
+          #                ("UNC paths are a Windows spelling"); on windows it RUNS where the local
+          #                admin share is reachable, else it skips -- a GitHub runner is expected
+          #                to reach \\localhost\D$, UNVERIFIED until the next run
+          #    windows  53 + 0 + 0 + 3 = 56
+          #    ubuntu   139 + 2 + 1 + 3 = 145
+          # Re-measure both legs per JOB on the next run and replace these with what CI read.
+          # RE-MEASURED 2026-10-08, run 37746049392 at fbf5641: ubuntu had
+          # 4,773 passed, 203 skipped, zero failed tests; 203 exceeded 145.
+          # Compared every grouped skip with run 37172347642 (139 skips).
+          # All +64 are native Windows exclusions: bash resolver +7,
+          # config spellings +15, UNC +1, installers +24 (PS5.1 +6,
+          # display/MSYS +2, rendering +4, registry seam +6, registry +6),
+          # toolkit binding +1, unpack path spellings +4, doctor +9
+          # (streams +3, WSL stubs +6), NTFS guard +3. Other changes only
+          # clarify existing skip reasons. Preserve the established +3 margin.
+          # READ 2026-10-10 (reviewer M-5) off run 37846813450 at a38e3cf, per job:
+          # windows 54 skipped, ubuntu 204 (the cold clone also 204). So windows sits at
+          # 54 + 2 = 56, ubuntu at 204 + 2 = 206: each leg has 2 of headroom, not 3.
+          # Maintainer's decision 2026-10-10: leave both until the next CI run, then set
+          # each to that run's per-job measured count + 3 and itemise the change here.
+          # DONE 2026-10-12 off run 38287706366 at 040069a, per job, item by item vs
+          # 37846813450: windows 54 -> 57 = +2 test_case_alias_vpaths (issue #6's Linux
+          # case-fold tests; a case-insensitive filesystem cannot hold two spellings) and
+          # +1 test_adapting_doc checkout twin; ubuntu 204 -> 205 = that same twin. The
+          # twin was a REGRESSION, not a skip: since FX-H2 an `agent/` dir alone reads as
+          # an install, so it skipped instead of testing; fixed (real git checkout), -1
+          # each. FX-H10 adds +1 on ubuntu (git there ignores dubious ownership, so that
+          # control cannot bite). Expected next run: windows 56, ubuntu 205; ceilings +3.
+          # MEASURED run 38306816644 at 46238fc: ubuntu 205 (as expected); windows 57, not
+          # 56 -- the FX-H10 ownership control also cannot bite on the windows runner (+1),
+          # every other row as itemised above. Windows ceiling set to 57 + 3 = 60.
+          # MEASURED run 39187589960 at 2955ebb, per job, every grouped skip compared with
+          # run 38483595938 at b88e425 (ubuntu 205, windows 57). Ubuntu 205 -> 327 (FAILED,
+          # 327 > 208); every +122 is a platform gate on a test added since b88e425:
+          #   +34 test_codex_execution_cwd   (Windows native cwd/drive/workdir cases)
+          #   +33 test_install_over_existing (no Windows PowerShell 5.1: 6 -> 39)
+          #   +20 test_codex_shell_option_context (Windows native execution-cwd contract)
+          #   +11 test_shared_save_policy    (provider/extended-drive/Git Bash/MSYS spellings)
+          #    +9 test_codex_adapter_mutants (native Windows entry chain, kernel32 since 8bdaa55)
+          #    +6 test_save_scope_compat     (Windows drive namespace parsing)
+          #    +4 test_codex_wrapper         (Windows PowerShell deadline/cancellation)
+          #    +3 conftest qa_sweep          (needs an X4 install: 12 -> 15, on BOTH legs)
+          #    +1 test_compat                (case-insensitive filesystem)
+          #    +1 test_bootstrap_scripts_are_portable (Windows PowerShell 5.1)
+          # Windows 57 -> 60 = the same +3 qa_sweep rows. Ceilings: measured + 3.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '330' || '63' }}
+          # No .pyc from CI: a stale cache cannot then masquerade as the source.
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: uv run --frozen python -m pytest -q -rs
+
+      # THE COLD CHECK, WIRED. `scripts/verify-cold.sh` is named in five documents
+      # (CLAUDE.md, REVIEW-SCOPE.md, SUBAGENT-BRIEF.md, TRUST.md, CHANGELOG.md) and
+      # in five test files -- and until now it was RUN by nothing. One test reads
+      # its SOURCE to check the CLI matrix; none executes it. Every other mention is
+      # prose. `smoke-basex.sh` exists for the same reason and has been wired since
+      # it was written.
+      #
+      # It is the check that has lied most: verifying "like a fresh clone" by hand
+      # produced a confident green THREE TIMES IN A ROW on one release, because path
+      # resolution falls through to $X4_TOOLKIT and a configured machine masquerades
+      # as a clean one. What that hid was fatal for every new user -- gates resolve
+      # paths at IMPORT time and a SystemExit during pytest COLLECTION aborts the
+      # whole session. The script refuses to run until it has PROVEN
+      # registry/game_extensions/reference are all None, which is the load-bearing
+      # part and the reason it cannot be replaced by `env -u`.
+      #
+      # Linux only: it clones committed objects with Git metadata into an isolated
+      # checkout and runs there. No private config travels; the cold precondition
+      # still refuses any resolved X4 path. The Windows leg covers the same suite.
+      # If it should gate
+      # on Windows too, that is a deliberate widening, not an oversight.
+      - name: Cold-clone verification (the check that has lied most)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Linux' }}
+        shell: bash
+        run: bash tools/x4validate/scripts/verify-cold.sh
+
+      # THE RELEASE ZIP'S POPULATION (FX-H2 / I-1): `git archive`, no .git -- what a user
+      # extracts and installs in place. F262 swapped this leg for the clone above when three
+      # tests needed Git metadata, which hid the failing population instead of fixing it.
+      # The extract sits inside this checkout, so the script sets GIT_CEILING_DIRECTORIES and
+      # REFUSES unless git can no longer see any repository (else this passes vacuously).
+      - name: Cold-archive verification (the release zip, no Git metadata)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Linux' }}
+        shell: bash
+        run: bash tools/x4validate/scripts/verify-cold.sh --archive
+
+  full-required:
+    name: Full qualification required
+    needs: [tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: WingedGuardian/modding-agent-harness/.github/actions/ci-policy@38bf2cb8da9d4add2fa3c71341d641fafd265368 # v1 policy API
+        with:
+          profile: x4
+          mode: verify
+          required-jobs: '["tests"]'
+          needs-json: ${{ toJSON(needs) }}

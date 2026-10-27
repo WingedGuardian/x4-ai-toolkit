@@ -800,3 +800,7 @@ MIT — see [LICENSE](LICENSE). X4: Foundations is a trademark of Egosoft GmbH.
 - [Claude Code](https://claude.ai/code) by Anthropic, [Codex](https://github.com/openai/codex) by OpenAI, [OpenCode](https://opencode.ai)
 - x4validate built on [lxml](https://lxml.de/); mod metadata via the [Nexus Mods API](https://api-docs.nexusmods.com/)
 - Sibling project: [skyrimvr-claude-toolkit](https://github.com/WingedGuardian/skyrimvr-claude-toolkit)
+
+## Development CI
+
+Use draft pull requests for fast feedback, then mark ready for full qualification. See the [CI workflow](docs/ci-workflow.md).
