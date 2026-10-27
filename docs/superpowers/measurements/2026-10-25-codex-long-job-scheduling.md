@@ -51,3 +51,17 @@ Limits: these tests establish adapter and wrapper behavior, not a guarantee that
 every future Codex version invokes hooks. Existing host-enforcement warnings and
 manual Action v1 checks still apply. The separate BaseX build encountered a Java
 memory cap and then Windows recycle failures; neither is this scheduling defect.
+
+## SUPERSEDED IN PART 2026-10-26 (user decision): advised, not silently dropped
+
+The repair above made the two scheduling facts disappear for a Codex shell, so a
+long job there was allowed with no word. User decision 2026-10-26: under
+`codex_async_shell` the same conditions now set two advisory facts,
+`longjob_codex` and `timeout_over_cap_codex`, and protect-bash.sh ADVISES
+("fine if this Codex shell yields a running session; otherwise run it in the
+background or shorten it"). Claude and generic hosts keep the deny. The
+"Acceptance" line above ("pass through ... without fabricating a Claude flag")
+still holds; "no denial" now means an allow WITH an advisory. The conformance
+host contract for the Claude long-job row is now deny -> advise, and its
+structural check admits exactly these four facts (scripts/x4conformance.py,
+HOST_SCHEDULING_FACTS).

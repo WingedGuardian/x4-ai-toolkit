@@ -6465,6 +6465,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # by a message telling it to run in the background. `is True`, as for longjob below.
         "timeout_over_cap": not codex_async_shell and _as_ms(timeout) > (7200000 if background is True else 600000),
         "longjob_foreground": longjob and background is not True and not codex_async_shell,
+        # 2026-10-26 (user): under a Codex shell the two facts above are not silently dropped --
+        # the same conditions set these, which protect-bash.sh ADVISES on (fine if the shell
+        # yields a running session; otherwise background it or shorten it).
+        "longjob_codex": longjob and background is not True and codex_async_shell,
+        "timeout_over_cap_codex": codex_async_shell and _as_ms(timeout) > (7200000 if background is True else 600000),
         # THE LAST WHOLE-COMMAND AND-OF-INDEPENDENT-PREDICATES RULE IN THIS FILE,
         # and it hard-denied PROSE. It tested `cmd`/`ncmd` -- the RAW text rather
         # than `body` -- so a comment or a quoted string naming the tool, the

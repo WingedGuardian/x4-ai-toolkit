@@ -789,6 +789,9 @@ class TestMiscPredicates(unittest.TestCase):
             with self.subTest(host=host):
                 self.assertTrue(self._host("uv run python gates/corpus_sweep.py", host)["longjob_foreground"])
                 self.assertTrue(self._host("sleep 1", host, timeout=900000)["timeout_over_cap"])
+                # ...and never the Codex ADVISORY facts instead (2026-10-26 user decision)
+                self.assertFalse(self._host("uv run python gates/corpus_sweep.py", host)["longjob_codex"])
+                self.assertFalse(self._host("sleep 1", host, timeout=900000)["timeout_over_cap_codex"])
 
     def test_TWIN_the_command_payload_cannot_claim_the_codex_host(self):
         """Clause: TOP-LEVEL payload context, which only the adapter writes. tool_input is the
@@ -797,6 +800,34 @@ class TestMiscPredicates(unittest.TestCase):
                                    where="tool_input")["longjob_foreground"])
         self.assertTrue(self._host("sleep 1", "codex", timeout=900000,
                                    where="tool_input")["timeout_over_cap"])
+
+    # 2026-10-26 (user): the Codex exemption is not SILENT -- the same command under a Codex
+    # shell sets an advisory fact (longjob_codex / timeout_over_cap_codex) instead of the deny.
+    def test_a_codex_shell_long_job_is_ADVISED(self):
+        self.assertTrue(self._host("uv run python gates/corpus_sweep.py", "codex")["longjob_codex"])
+
+    def test_a_codex_shell_over_the_cap_is_ADVISED(self):
+        self.assertTrue(self._host("sleep 1", "codex", timeout=900000)["timeout_over_cap_codex"])
+
+    def test_TWIN_a_codex_shell_without_a_long_job_or_over_cap_timeout_is_not_advised(self):
+        """Clauses: a long job (a name merely mentioned is not one) / a timeout above the cap."""
+        for c in ("ls", "grep -n 'corpus_sweep' gates/README.md"):
+            with self.subTest(c=c):
+                self.assertFalse(self._host(c, "codex")["longjob_codex"], c)
+        self.assertFalse(self._host("sleep 1", "codex", timeout=600000)["timeout_over_cap_codex"])
+        self.assertFalse(self._host("sleep 1", "codex", timeout=0)["timeout_over_cap_codex"])
+
+    def test_TWIN_a_backgrounded_codex_long_job_is_not_advised(self):
+        """Clause: `background is not True` -- a job already in the background needs no note."""
+        payload = {"tool_input": {"command": "uv run python gates/corpus_sweep.py",
+                                  "run_in_background": True}, "x4_execution_host": "codex"}
+        self.assertFalse(H.facts(payload, ROOTS)["longjob_codex"])
+
+    def test_TWIN_the_codex_advisory_needs_the_TOP_LEVEL_host(self):
+        self.assertFalse(self._host("uv run python gates/corpus_sweep.py", "codex",
+                                    where="tool_input")["longjob_codex"])
+        self.assertFalse(self._host("sleep 1", "codex", timeout=900000,
+                                    where="tool_input")["timeout_over_cap_codex"])
 
 
 class TestPreviouslyUnprobedRules(unittest.TestCase):

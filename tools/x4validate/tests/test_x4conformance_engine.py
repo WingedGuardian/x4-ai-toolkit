@@ -271,6 +271,8 @@ SCHED = ["longjob_foreground"]
     ("deny", "allow", "allow", SCHED, xc.RC_OK),
     ("deny", "advise", "advise", ["timeout_over_cap"], xc.RC_OK),
     ("deny", "allow", "allow", ["longjob_foreground", "timeout_over_cap"], xc.RC_OK),
+    ("deny", "advise", "advise", ["longjob_codex", "longjob_foreground"], xc.RC_OK),
+    ("deny", "advise", "advise", ["longjob_codex", "rm_in_game"], xc.RC_DISAGREE),
     # Twins: the host-aware verdict must EQUAL the adapter's; no host verdict, no excuse.
     ("deny", "deny", "allow", SCHED, xc.RC_DISAGREE),
     ("deny", "advise", "allow", SCHED, xc.RC_DISAGREE),
@@ -296,7 +298,8 @@ def test_a825d86_a_host_contract_difference_agrees_only_when_the_hosted_guards_a
 
 
 def test_the_host_contract_facts_are_exactly_the_two_claude_scheduling_facts():
-    assert xc.HOST_SCHEDULING_FACTS == frozenset({"longjob_foreground", "timeout_over_cap"})
+    assert xc.HOST_SCHEDULING_FACTS == frozenset({"longjob_foreground", "timeout_over_cap",
+                                                  "longjob_codex", "timeout_over_cap_codex"})
 
 
 def _hooks_root(tmp_path, old=None, new=None):
@@ -321,7 +324,8 @@ def _delta_row(tmp_path, command):
 def test_the_fact_delta_of_a_long_job_is_the_scheduling_fact_alone(tmp_path):
     root = _hooks_root(tmp_path)
     long_job = _delta_row(tmp_path, "uv run python gates/corpus_sweep.py")
-    assert xc.host_fact_delta(long_job, root, "codex") == ["longjob_foreground"]
+    # the deny fact goes, the Codex ADVISORY fact comes (user 2026-10-26): never silently
+    assert xc.host_fact_delta(long_job, root, "codex") == ["longjob_codex", "longjob_foreground"]
     assert xc.host_fact_delta(_delta_row(tmp_path, "ls"), root, "codex") == []
 
 

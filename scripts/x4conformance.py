@@ -331,8 +331,11 @@ def _backup_only_divergence(r) -> bool:
             and BACKUP_ONLY in (r.get("text") or ""))
 
 
-#: The ONLY facts a host contract may move (a825d86): Claude Bash's foreground scheduling rules.
-HOST_SCHEDULING_FACTS = frozenset({"longjob_foreground", "timeout_over_cap"})
+#: The ONLY facts a host contract may move (a825d86): Claude Bash's two foreground scheduling
+#: facts, and (user 2026-10-26) the two Codex-scoped ADVISORY facts the same conditions set
+#: under a Codex shell instead -- so a long job there is advised, never silently dropped.
+HOST_SCHEDULING_FACTS = frozenset({"longjob_foreground", "timeout_over_cap",
+                                   "longjob_codex", "timeout_over_cap_codex"})
 #: hook_facts' root packet: the same names and order protect-bash.sh's emit_roots sends.
 _ROOT_ENV = (("game", "X4_GAME"), ("profile", "X4_PROFILE"), ("reference", "X4_REFERENCE"),
              ("config", "X4_CONFIG"), ("toolkit", "X4_TOOLKIT"), ("mods", "X4_MODS"),

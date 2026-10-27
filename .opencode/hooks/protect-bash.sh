@@ -801,4 +801,10 @@ Proceed in the foreground only if you have scoped it down (e.g. --limit=N).
 Command: $COMMAND"
 fi
 
+# --- the same two, under a CODEX shell: advised, never silently dropped ---------
+# 2026-10-26 (user). A Codex shell call returns a running session instead of blocking, so
+# the Claude Bash deny above does not apply (a825d86); hook_facts sets these instead.
+on timeout_over_cap_codex && advise "CODEX SHELL, TIMEOUT OVER THE BASH CAP (${TIMEOUT_MS}ms): fine if this Codex shell yields a running session; otherwise run it in the background or shorten it. Command: $COMMAND"
+on longjob_codex && advise "CODEX SHELL, KNOWN LONG JOB (corpus_sweep ~2100s, perf_guard ~600s+, build-effective.sh ~100-200s): fine if this Codex shell yields a running session; otherwise run it in the background or scope it down (e.g. --limit=N). Command: $COMMAND"
+
 exit 0

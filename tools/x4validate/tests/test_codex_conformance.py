@@ -135,10 +135,11 @@ def test_every_replayable_case_agrees(conformance_dump):
           f"host-contract divergences: {hosted}")
     assert not diffs, "\n".join(map(str, diffs))     # PER ITEM, never a total
     # PINNED (review F1): the host-contract set is EXACTLY the one foreground long-job case the
-    # Claude hook denies and the Codex chain lets run. A new member (another rule that moved
+    # Claude hook denies and the Codex chain ADVISES. A new member (another rule that moved
     # with the host) or a missing one (the exemption stopped reaching the guards) fails here.
     assert {h[0] for h in hosted} == HOST_CONTRACT_CASES, hosted
-    assert all(h[1] == "shell-bash" and h[2] == "deny" and h[4] == "allow" for h in hosted), hosted
+    # user 2026-10-26: under Codex the long job is ADVISED, not silently allowed
+    assert all(h[1] == "shell-bash" and h[2] == "deny" and h[4] == "advise" for h in hosted), hosted
     # R7-3: the guards re-run NOW must still say what the harness recorded at decide() time; a
     # drift means the reference verdict is not the one the harness judged (it was only printed).
     assert not drift, "\n".join(f"DRIFT {d}" for d in drift)

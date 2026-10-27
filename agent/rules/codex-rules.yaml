@@ -76,3 +76,5 @@
 - {id: recursive-grep-workspace, source: protect-bash.sh, anchor: "WRONG SCOPE: recursive text search rooted", verdict: deny, bucket: hook_only, reason: "path-scoped: the workspace or game root"}
 - {id: timeout-above-cap, source: protect-bash.sh, anchor: "TIMEOUT ABOVE THE CAP", verdict: deny, bucket: hook_only, reason: "reads a Claude Code tool parameter; no Codex analogue"}
 - {id: long-job-foreground, source: protect-bash.sh, anchor: "LONG JOB IN THE FOREGROUND", verdict: deny, bucket: hook_only, reason: "reads a Claude Code tool parameter (run_in_background); no Codex analogue"}
+- {id: codex-timeout-over-cap, source: protect-bash.sh, anchor: "CODEX SHELL, TIMEOUT OVER THE BASH CAP", fact: timeout_over_cap_codex, verdict: advise, bucket: hook_only, reason: "host-scoped (Codex shell, user 2026-10-26); an advisory has no Codex rule form"}
+- {id: codex-long-job, source: protect-bash.sh, anchor: "CODEX SHELL, KNOWN LONG JOB", fact: longjob_codex, verdict: advise, bucket: hook_only, reason: "host-scoped (Codex shell, user 2026-10-26); an advisory has no Codex rule form"}
