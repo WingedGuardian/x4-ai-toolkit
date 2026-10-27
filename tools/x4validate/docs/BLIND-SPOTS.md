@@ -409,6 +409,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F328 | build-release.sh skipped the version check for `tags/` and `refs/tags/` spellings | **DEFECT (measured)** · PRE-ARC | 6 fixture cases red before, green after; archive failure ruled out as the refuser | FIXED 2026-10-26 - strip the prefix before matching |
 | F329 | A heredoc program fed to python/node could write a host transcript | **DEFECT (measured)** · PRE-ARC | 9 heredoc shapes allowed before; replay 0 of 42,910 changed | FIXED 2026-10-26 - the same write-call patterns over an interpreter's stdin program |
 | F330 | `'<literal>' \| iex` was refused as not completely evaluated | **DEFECT (measured)** · PRE-ARC | 2 benign forms refused, 2 delete twins; replay 0 of 10 iex rows changed | FIXED 2026-10-26 - a lone constant piped into a bare iex is read as `iex '<literal>'` |
+| F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay: 75 of 91,550 commands advise -> ask, 0 other facts changed | CHANGED 2026-10-26 (user) - rm_in_game asks; install/extensions wholesale and reference/ stay deny |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11428,3 +11429,24 @@ output and a longer pipeline stay unreadable (twins). Replay: 10 of 44,361 histo
 name iex or Invoke-Expression; 0 changed (control: the probe command changes).
 
 **RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`TestHK1PowerShellFrontEnd`).
+
+## F332 - A delete inside the game install only advised · **POLICY DRIFT (read)** · PRE-ARC · confidence 95% · CHANGED 2026-10-26
+
+READ: bd45eef (2026-10-02, user decision "an ask I always approve protects nothing"; 54 of 54
+hook asks approved, 14 of them X4-folder deletes) turned `rm_in_x4_dir` from ask into an advisory
+for every X4 directory at once: the game install, extensions/, mod sources and the toolkit. It was
+a deliberate verdict change, not a deploy exemption and not a defect in the predicate; no
+BLIND-SPOTS row recorded it, and the workspace CLAUDE.md kept saying that deleting inside an X4
+directory asks. The install itself and extensions/ wholesale stayed hard blocks (`rm_hits_game`).
+User decision 2026-10-26: a delete INSIDE the game install asks again. New fact `rm_in_game`
+(the same operands and resolution as rm_in_x4_dir's game clause, substituted verbs included);
+protect-bash.sh asks on it and keeps the advisory for mod sources and the toolkit only.
+reference/ stays deny. A script run (`python dev/_tools/deploy.py ...`) is not a shell delete and
+is unaffected (twin). MEASURED replay (hook_facts old vs new, 91,550 unique historical commands:
+89,272 Bash + 361 PowerShell with a delete token, 1,917 PowerShell without one skipped): 75
+gain rm_in_game, all 75 previously advised by rm_in_x4_dir (36 extensions/, 5 extensions/ via a
+Recycle-Bin call, 2 extensions/ + game .claude/, 7 game .claude/, 4 New mods/, 21 other game-root
+paths); 0 commands had any existing fact change. Caveat: a Recycle-Bin delete asks too, as it
+advised before; the guard does not tell a recycle from a destroy.
+
+**RE-DERIVED BY:** .claude/hooks/test_hook_facts.py (`test_deleting_inside_the_game_install_fires_rm_in_game` and twins), scripts/test-hooks.sh (deployed-mod rows).
