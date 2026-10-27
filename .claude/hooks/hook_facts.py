@@ -6285,6 +6285,12 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         "rm_in_x4_dir": any(hit(rm_t + mv_src + scoped_rm_t, k, conservative=True) for k in
                             ("game", "profile", "mods", "toolkit")) or rm_named_game
                         or hit(subst_rm_t, "game"),
+        # 2026-10-26 (user): a delete INSIDE the game install -- extensions/ and deployed mods
+        # included -- ASKS again (rm_in_x4_dir made it an advisory on 2026-10-02, bd45eef).
+        # The same operands and resolution as rm_in_x4_dir's game clause; the install itself
+        # stays the rm_hits_game hard block, mod sources and the toolkit stay advisories.
+        "rm_in_game": hit(rm_t + mv_src + scoped_rm_t, "game", conservative=True)
+                      or hit(subst_rm_t, "game"),
         "rm_saves": hit(rm_t + mv_src + scoped_rm_t, "saves", conservative=True),
         # The PROFILE keeps a confirmation when rm_in_x4_dir became an advisory (user,
         # 2026-10-02): a bad content.xml or save="1" can damage saves.

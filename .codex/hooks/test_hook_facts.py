@@ -971,6 +971,32 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
     def test_deleting_an_unrelated_temp_file_does_not_fire(self):
         self.assertFalse(F(D + " -f /c/tmp/scratch.txt")["rm_in_x4_dir"])
 
+    # --- 2026-10-26 (user): a delete INSIDE the game install, extensions/ included, ASKS
+    # (rm_in_game); mod sources and the toolkit keep the rm_in_x4_dir advisory.
+    def test_deleting_inside_the_game_install_fires_rm_in_game(self):
+        for c in (D + ' -rf "' + GAME + '/extensions/deployed"',
+                  D + ' -f "' + GAME + '/extensions/deployed/ext_01.cat"',
+                  "DST=" + Q + GAME + "/extensions/deployed" + Q + "; " + D + " -rf " + DQ + "$DST" + DQ,
+                  D + ' -f "' + GAME + '/notes.txt"',
+                  'find "' + GAME + '/extensions/deployed" -delete',
+                  'mv "' + GAME + '/extensions/deployed" /c/tmp/old'):
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["rm_in_game"], c)
+
+    def test_TWIN_rm_in_game_is_silent_outside_the_game_and_for_non_deletes(self):
+        for c in (D + ' -rf "' + ROOTS["mods"] + '/mymod"', D + ' -f "' + TOOLKIT + '/notes.md"',
+                  D + " -f /c/tmp/scratch.txt",
+                  "cp -r " + DQ + ROOTS["mods"] + "/m" + DQ + " " + DQ + GAME + "/extensions/m" + DQ,
+                  'ls -la "' + GAME + '/extensions"',
+                  "python dev/_tools/deploy.py mymod", "uv run python dev/_tools/deploy.py mymod --apply"):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["rm_in_game"], c)
+
+    def test_rm_in_game_also_reads_a_powershell_delete(self):
+        f = H.facts({"tool_name": "PowerShell", "tool_input": {
+            "command": "Remove-Item -Recurse " + DQ + GAME + "/extensions/deployed" + DQ}}, ROOTS)
+        self.assertTrue(f["rm_in_game"], f)
+
     # --- the profile-by-name measurement trap
     def test_grepping_the_profile_by_name_fires(self):
         self.assertTrue(F('grep -i somemod "' + PROF + '/content.xml"')["profile_search_by_name"])
@@ -5987,6 +6013,13 @@ class TestGOutSubstitutedVerb(unittest.TestCase):
             with self.subTest(c=c):
                 f = FC(c, _ELSEWHERE)
                 self.assertTrue(f["rm_in_x4_dir"] and not f["verb_unresolved"], c)
+
+    def test_a_substituted_verb_below_the_game_root_is_rm_in_game(self):
+        """2026-10-26 (user): a delete inside the game install ASKS; a substituted verb that may
+        be rm is judged as `rm` would be, so it asks too (it advised before, as rm did)."""
+        for c in ("$(echo rm) -rf " + DQ + GAME + "/libraries" + DQ, BT + "echo rm" + BT + " -rf " + DQ + GAME + "/x" + DQ):
+            with self.subTest(c=c):
+                self.assertTrue(FC(c, _ELSEWHERE)["rm_in_game"], c)
 
     def test_a_prefix_ASSIGNMENT_does_not_hide_the_verb(self):
         """FX-G5 / reviewer J2 item 3 (MEASURED: allowed): an earlier token holding `$(` refused

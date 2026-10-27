@@ -387,12 +387,14 @@ decide deny  protect-bash.sh "$(cj "rm -rf '$X4_GAME'")"   "deleting the install
 # through to a confirmation. It does not: extensions/ WHOLESALE is still a hard block.
 # Only a path INSIDE it falls to the confirm, which is the verdict CLAUDE.md assigns to
 # deleting in an X4 directory, and it is recoverable by redeploying from dev/.
+# 2026-10-02 made that confirm an advisory (bd45eef); 2026-10-26 (user) it ASKS again inside
+# the game install (rm_in_game), while mod sources and the toolkit stay advisories.
 decide deny  protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions'")"   "extensions/ WHOLESALE is still a hard block"
-decide advise protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions/deployed'")"   "ONE deployed mod confirms, it is not a hard block"
-decide advise protect-bash.sh "$(cj "rm -f '$X4_GAME/extensions/deployed/ext_01.cat'")"   "one file inside a deployed mod confirms"
+decide ask   protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions/deployed'")"   "ONE deployed mod confirms, it is not a hard block"
+decide ask   protect-bash.sh "$(cj "rm -f '$X4_GAME/extensions/deployed/ext_01.cat'")"   "one file inside a deployed mod confirms"
 # ...and with the destination in a VARIABLE, which is the form that exposed this and the
 # form no probe used before.
-decide advise protect-bash.sh "$(cj "DST='$X4_GAME/extensions/deployed'; rm -rf \"\$DST\"")"   "a variable deploy destination confirms, not blocks"
+decide ask   protect-bash.sh "$(cj "DST='$X4_GAME/extensions/deployed'; rm -rf \"\$DST\"")"   "a variable deploy destination confirms, not blocks"
 # --- rule 3: the long-job rule must see an INVOCATION, not a mention -----------
 # MEASURED 2026-08-30: 125 of its 144 hits merely NAMED a job. It denied this session's
 # own analysis script (the name sat in a regex literal) and the write of the PLAN that

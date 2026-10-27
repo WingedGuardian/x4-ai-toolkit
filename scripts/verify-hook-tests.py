@@ -265,6 +265,19 @@ MUTANTS = [
      '"timeout_over_cap_codex": codex_async_shell and _as_ms(timeout) > (7200000 if background is True else 600000),',
      '"timeout_over_cap_codex": codex_async_shell,',
      "test_TWIN_a_codex_shell_without_a_long_job_or_over_cap_timeout_is_not_advised"),
+    # 2026-10-26 (user): a delete INSIDE the game install asks (rm_in_game).
+    ("a delete inside the game install is rm_in_game",
+     '"rm_in_game": hit(rm_t + mv_src + scoped_rm_t, "game", conservative=True)',
+     '"rm_in_game": False',
+     "test_deleting_inside_the_game_install_fires_rm_in_game"),
+    ("rm_in_game is the game root only, not mods or the toolkit",
+     '"rm_in_game": hit(rm_t + mv_src + scoped_rm_t, "game", conservative=True)',
+     '"rm_in_game": any(hit(rm_t + mv_src + scoped_rm_t, k, conservative=True) for k in ("game", "mods", "toolkit"))',
+     "test_TWIN_rm_in_game_is_silent_outside_the_game_and_for_non_deletes"),
+    ("a substituted verb below the game root is rm_in_game",
+     '                      or hit(subst_rm_t, "game"),\n        "rm_saves"',
+     '                      ,\n        "rm_saves"',
+     "test_a_substituted_verb_below_the_game_root_is_rm_in_game"),
     # 8957579 / 2359217: an interpreter reading a heredoc as its PROGRAM is scanned for a
     # transcript write. The scan itself, and each way a body can feed the interpreter.
     ("a heredoc program is scanned for a transcript write",
