@@ -979,7 +979,10 @@ class TestRRPreArcBash(_RR):
             ("allow", "t=$(mktemp -d); rm -rf \"$t\""),
             ("allow", "rsync -a --delete ./a/ ./b/"),
             ("allow", "touch ./x.txt && chmod +x ./s.sh"),
-            ("allow", "ln -s '" + Rf + "/libraries' ./lib"),
+            # F331 (4.0.1): a link INTO reference is refused at creation -- the shell channel does
+            # not follow links, so a later write through ./lib would land in reference unseen.
+            ("deny", "ln -s '" + Rf + "/libraries' ./lib"),
+            ("allow", "ln -s 'C:/work/src' ./lib"),     # twin: an absolute target elsewhere (no cwd here)
             ("allow", "robocopy ./a ./b //MIR"),
             ("advise", "rsync -a ./mod/ '" + self.Gf + "/extensions/amod/'"),
         ], tool="Bash")

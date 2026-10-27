@@ -590,23 +590,29 @@ x4_canon() {
 # `..` was already resolved LEXICALLY by x4_norm, which is how Windows itself opens the path.
 # _X4_NOLINK memoises directories already seen to exist and not be links, so a batch of paths
 # sharing a tree stats each shared prefix once (MEASURED: without it, 3589 paths ran 21 s -> 36 s
-# under a 2%-CPU cap). An associative array is safe here: only Git Bash (bash >= 4) runs this,
-# never macOS's bash 3.2.
-case "${OSTYPE:-}" in msys*|cygwin*) declare -A _X4_NOLINK=() 2>/dev/null ;; esac
+# under a 2%-CPU cap). It is a newline-delimited string, not an associative array: the file is
+# sourced by every hook on every platform, and macOS's bash 3.2 has no `declare -A`. The quoted
+# "$1" inside the case pattern is matched literally, so glob characters in a path are inert.
+_X4_NOLINK='
+'
+_x4_nolink_has() { case "$_X4_NOLINK" in *"
+$1
+"*) return 0 ;; esac; return 1; }
 x4_win_has_link() {
   local cur="$1" rest="" c
   # Climb to the deepest prefix already known link-free; only what lies below it is probed.
-  while [ -n "$cur" ] && [ -z "${_X4_NOLINK[$cur]:-}" ]; do
+  while [ -n "$cur" ] && ! _x4_nolink_has "$cur"; do
     rest="${cur##*/}${rest:+/$rest}"; cur="${cur%/*}"
   done
   while [ -n "$rest" ]; do
     c="${rest%%/*}"
     if [ "$c" = "$rest" ]; then rest=""; else rest="${rest#*/}"; fi
     cur="$cur/$c"
-    [ -n "${_X4_NOLINK[$cur]:-}" ] && continue
+    _x4_nolink_has "$cur" && continue
     [ -L "$cur" ] && return 0
     [ -e "$cur" ] || return 1     # nothing under a missing component can be a link
-    _X4_NOLINK[$cur]=1
+    _X4_NOLINK="$_X4_NOLINK$cur
+"
   done
   return 1
 }

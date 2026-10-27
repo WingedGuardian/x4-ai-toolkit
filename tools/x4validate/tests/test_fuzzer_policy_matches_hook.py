@@ -56,7 +56,14 @@ def test_no_predicate_is_silently_unfuzzed():
     for name in BRIDGE:
         assert 'facts.get("%s")' % name in save_policy, (
             "%s is exempt as save-bridge input, but save_policy.py no longer reads it" % name)
-    METADATA = {"command", "cwd", "timeout", "background", "from_powershell"} | BRIDGE
+    # `rm_deployed_mod_names` (4.0.1, F332) is the LABEL text of the rm_deployed_mod ask --
+    # the mods it names -- not a rule of its own. Exempt only while protect-bash.sh reads it.
+    LABELS = {"rm_deployed_mod_names"}
+    hook = (m.HOOKS / "protect-bash.sh").read_text(encoding="utf-8")
+    for name in LABELS:
+        assert "\n%s\t" % name in hook, (
+            "%s is exempt as message text, but protect-bash.sh no longer reads it" % name)
+    METADATA = {"command", "cwd", "timeout", "background", "from_powershell"} | BRIDGE | LABELS
     unmapped = sorted(names - set(policy) - METADATA)
     assert not unmapped, (
         "these facts are computed but carry no verdict, so the fuzzer cannot test them "
