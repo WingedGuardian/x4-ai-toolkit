@@ -387,14 +387,25 @@ decide deny  protect-bash.sh "$(cj "rm -rf '$X4_GAME'")"   "deleting the install
 # through to a confirmation. It does not: extensions/ WHOLESALE is still a hard block.
 # Only a path INSIDE it falls to the confirm, which is the verdict CLAUDE.md assigns to
 # deleting in an X4 directory, and it is recoverable by redeploying from dev/.
-# 2026-10-02 made that confirm an advisory (bd45eef); 2026-10-26 (user) it ASKS again inside
-# the game install (rm_in_game), while mod sources and the toolkit stay advisories.
+# 2026-10-02 made that confirm an advisory (bd45eef); 2026-10-27 (user) removing a DEPLOYED
+# MOD asks again (rm_deployed_mod), ONCE per command naming every mod; every other delete in
+# the game install, mod sources and the toolkit stays an advisory.
 decide deny  protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions'")"   "extensions/ WHOLESALE is still a hard block"
 decide ask   protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions/deployed'")"   "ONE deployed mod confirms, it is not a hard block"
 decide ask   protect-bash.sh "$(cj "rm -f '$X4_GAME/extensions/deployed/ext_01.cat'")"   "one file inside a deployed mod confirms"
 # ...and with the destination in a VARIABLE, which is the form that exposed this and the
 # form no probe used before.
 decide ask   protect-bash.sh "$(cj "DST='$X4_GAME/extensions/deployed'; rm -rf \"\$DST\"")"   "a variable deploy destination confirms, not blocks"
+decide advise protect-bash.sh "$(cj "rm -f '$X4_GAME/notes.txt'")"   "TWIN: a game-root file outside extensions/ keeps the advisory"
+decide advise protect-bash.sh "$(cj "rm -rf '$X4_GAME/.claude/backups/x'")"   "TWIN: the game's .claude/ keeps the advisory"
+decide ask   protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions/a' '$X4_GAME/extensions/b/x' '$X4_GAME/extensions/c'")"   "several deployed mods in one command confirm"
+# ...ONCE, naming every mod (user 2026-10-27): one prompt per command, never per file.
+_mm=$(cj "rm -rf '$X4_GAME/extensions/a' '$X4_GAME/extensions/b/x' '$X4_GAME/extensions/c' '$X4_GAME/extensions/a/y'" | bash "$HOOKS/protect-bash.sh" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
+if [ "$(printf '%s' "$_mm" | grep -c 'CONFIRM REMOVING DEPLOYED MOD')" = 1 ] && printf '%s' "$_mm" | grep -q ': a, b, c\. One answer'; then
+  ok "several deployed mods: ONE ask whose reason names a, b, c once"
+else
+  no "several deployed mods: ONE ask whose reason names a, b, c once -- got: ${_mm:0:300}"
+fi
 # --- rule 3: the long-job rule must see an INVOCATION, not a mention -----------
 # MEASURED 2026-08-30: 125 of its 144 hits merely NAMED a job. It denied this session's
 # own analysis script (the name sat in a regex literal) and the write of the PLAN that
@@ -566,7 +577,7 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
   "a substituted argument in a cd is untouched"
 
 
-EXPECT=320
+EXPECT=324
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written

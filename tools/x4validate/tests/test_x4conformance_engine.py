@@ -272,7 +272,7 @@ SCHED = ["longjob_foreground"]
     ("deny", "advise", "advise", ["timeout_over_cap"], xc.RC_OK),
     ("deny", "allow", "allow", ["longjob_foreground", "timeout_over_cap"], xc.RC_OK),
     ("deny", "advise", "advise", ["longjob_codex", "longjob_foreground"], xc.RC_OK),
-    ("deny", "advise", "advise", ["longjob_codex", "rm_in_game"], xc.RC_DISAGREE),
+    ("deny", "advise", "advise", ["longjob_codex", "rm_deployed_mod"], xc.RC_DISAGREE),
     # Twins: the host-aware verdict must EQUAL the adapter's; no host verdict, no excuse.
     ("deny", "deny", "allow", SCHED, xc.RC_DISAGREE),
     ("deny", "advise", "allow", SCHED, xc.RC_DISAGREE),

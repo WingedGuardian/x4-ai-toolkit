@@ -525,11 +525,16 @@ on lifts_reference_deny && ask "This LIFTS the OS delete/write protection on ref
 # or two existing saves it backed up and verified first (user policy 2026-10-18). Three or
 # more, or a wildcard, need typed approval; anything the backup cannot cover still asks.
 on rm_in_profile && [ "$_harness_save_qualified" != 1 ] && ask "DELETING IN YOUR X4 PROFILE (mod list, config, saves) -- not reproducible. Confirm: $COMMAND"
-# 2026-10-26 (user): a delete INSIDE the game install (extensions/ and deployed mods included)
-# ASKS again; mod sources and the toolkit keep the advisory below.
-_rm_in_game=0; on rm_in_game && _rm_in_game=1
-on rm_in_game && ask "DELETING INSIDE THE X4 GAME INSTALL (extensions/ and deployed mods included). Confirm: $COMMAND"
-on rm_in_x4_dir && [ "$_rm_in_game" != 1 ] && advise "This deletes files in an X4 directory (mod sources or the toolkit). Make sure it is what you meant -- check git status afterwards. Command: $COMMAND"
+# 2026-10-27 (user): removing a DEPLOYED MOD (a folder in the game's extensions/, or
+# anything inside one) ASKS -- ONE prompt per command, naming every mod it touches. Every
+# other X4-directory delete keeps the bd45eef advisory below.
+_t="${FACTS_NL#*
+rm_deployed_mod_names	}"
+RM_MODS="${_t%%
+*}"
+_rm_mod=0; on rm_deployed_mod && _rm_mod=1
+on rm_deployed_mod && ask "CONFIRM REMOVING DEPLOYED MOD(S) from the game's extensions/: $RM_MODS. One answer covers this whole command. Command: $COMMAND"
+on rm_in_x4_dir && [ "$_rm_mod" != 1 ] && advise "This deletes files in an X4 directory (game files, mod sources or the toolkit). Make sure it is what you meant -- check git status afterwards, and redeploy if you removed a deployed mod by mistake. Command: $COMMAND"
 
 # === CONFIRM — destructive git inside an X4 directory ===
 # git IGNORES the read-only attribute. MEASURED 2026-09-04: `git checkout HEAD~1 -- f`

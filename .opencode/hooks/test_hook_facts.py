@@ -971,31 +971,74 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
     def test_deleting_an_unrelated_temp_file_does_not_fire(self):
         self.assertFalse(F(D + " -f /c/tmp/scratch.txt")["rm_in_x4_dir"])
 
-    # --- 2026-10-26 (user): a delete INSIDE the game install, extensions/ included, ASKS
-    # (rm_in_game); mod sources and the toolkit keep the rm_in_x4_dir advisory.
-    def test_deleting_inside_the_game_install_fires_rm_in_game(self):
+    # --- 2026-10-27 (user, narrowing 2026-10-26): removing a DEPLOYED MOD asks, ONCE per
+    # command, naming every mod (rm_deployed_mod / rm_deployed_mod_names). Every other X4
+    # directory delete keeps the rm_in_x4_dir advisory.
+    def test_removing_a_deployed_mod_fires_rm_deployed_mod(self):
         for c in (D + ' -rf "' + GAME + '/extensions/deployed"',
                   D + ' -f "' + GAME + '/extensions/deployed/ext_01.cat"',
                   "DST=" + Q + GAME + "/extensions/deployed" + Q + "; " + D + " -rf " + DQ + "$DST" + DQ,
-                  D + ' -f "' + GAME + '/notes.txt"',
                   'find "' + GAME + '/extensions/deployed" -delete',
-                  'mv "' + GAME + '/extensions/deployed" /c/tmp/old'):
+                  'mv "' + GAME + '/extensions/deployed" /c/tmp/old',
+                  D + ' -rf "$X4_GAME/extensions/deployed"'):
             with self.subTest(c=c):
-                self.assertTrue(F(c)["rm_in_game"], c)
+                f = F(c)
+                self.assertTrue(f["rm_deployed_mod"], c)
+                self.assertEqual(f["rm_deployed_mod_names"], "deployed", c)
 
-    def test_TWIN_rm_in_game_is_silent_outside_the_game_and_for_non_deletes(self):
+    def test_TWIN_other_game_install_deletes_are_not_a_deployed_mod(self):
+        """Clause: under extensions/ -- a game-root file, the game's .claude/ and New mods/
+        keep the rm_in_x4_dir ADVISORY; extensions/ itself is the rm_hits_game deny."""
+        for c in (D + ' -f "' + GAME + '/notes.txt"', D + ' -rf "' + GAME + '/.claude/backups/x"',
+                  D + ' -rf "' + GAME + '/New mods/x"'):
+            with self.subTest(c=c):
+                f = F(c)
+                self.assertFalse(f["rm_deployed_mod"], c)
+                self.assertTrue(f["rm_in_x4_dir"], c)
+        f = F(D + ' -rf "' + GAME + '/extensions"')
+        self.assertTrue(f["rm_hits_game"])
+
+    def test_TWIN_rm_deployed_mod_is_silent_outside_the_game_and_for_non_deletes(self):
         for c in (D + ' -rf "' + ROOTS["mods"] + '/mymod"', D + ' -f "' + TOOLKIT + '/notes.md"',
                   D + " -f /c/tmp/scratch.txt",
                   "cp -r " + DQ + ROOTS["mods"] + "/m" + DQ + " " + DQ + GAME + "/extensions/m" + DQ,
                   'ls -la "' + GAME + '/extensions"',
                   "python dev/_tools/deploy.py mymod", "uv run python dev/_tools/deploy.py mymod --apply"):
             with self.subTest(c=c):
-                self.assertFalse(F(c)["rm_in_game"], c)
+                f = F(c)
+                self.assertFalse(f["rm_deployed_mod"], c)
+                self.assertEqual(f["rm_deployed_mod_names"], "", c)
 
-    def test_rm_in_game_also_reads_a_powershell_delete(self):
+    def test_rm_deployed_mod_also_reads_a_powershell_delete(self):
         f = H.facts({"tool_name": "PowerShell", "tool_input": {
             "command": "Remove-Item -Recurse " + DQ + GAME + "/extensions/deployed" + DQ}}, ROOTS)
-        self.assertTrue(f["rm_in_game"], f)
+        self.assertTrue(f["rm_deployed_mod"], f)
+
+    def test_one_command_names_EVERY_deployed_mod_once(self):
+        """User 2026-10-27: one prompt per command, never per file -- deduplicated by mod folder."""
+        E = GAME + "/extensions/"
+        for tool, c in (("Bash", D + ' -rf "' + E + 'a" "' + E + 'b/x" "' + E + 'c" "' + E + 'a/y"'),
+                        ("PowerShell", "Remove-Item -Recurse " + DQ + E + "a" + DQ + ", " + DQ + E + "b/x"
+                         + DQ + ", " + DQ + E + "c" + DQ),
+                        ("Bash", "find " + Q + E + "a" + Q + " " + Q + E + "b" + Q + " " + Q + E + "c" + Q
+                         + " -name " + Q + "*.bak" + Q + " | xargs " + D + " -f")):
+            with self.subTest(tool=tool, c=c):
+                f = H.facts({"tool_name": tool, "tool_input": {"command": c}}, ROOTS)
+                self.assertEqual(f["rm_deployed_mod_names"], "a, b, c", c)
+
+    def test_a_filtered_find_over_extensions_names_any_matching_mod(self):
+        E = GAME + "/extensions"
+        for c in ("find " + Q + E + Q + " -name " + Q + "*.bak" + Q + " | xargs " + D + " -f",
+                  "find " + Q + E + Q + " -name " + Q + "*.bak" + Q + " -delete"):
+            with self.subTest(c=c):
+                f = F(c)
+                self.assertTrue(f["rm_deployed_mod"], c)
+                self.assertEqual(f["rm_deployed_mod_names"], "<any mod the find matches>", c)
+
+    def test_the_mod_list_is_CAPPED_at_ten(self):
+        c = D + " -rf " + " ".join(DQ + GAME + "/extensions/m%02d" % i + DQ for i in range(12))
+        self.assertEqual(F(c)["rm_deployed_mod_names"],
+                         ", ".join("m%02d" % i for i in range(10)) + " and 2 more")
 
     # --- the profile-by-name measurement trap
     def test_grepping_the_profile_by_name_fires(self):
@@ -6014,12 +6057,13 @@ class TestGOutSubstitutedVerb(unittest.TestCase):
                 f = FC(c, _ELSEWHERE)
                 self.assertTrue(f["rm_in_x4_dir"] and not f["verb_unresolved"], c)
 
-    def test_a_substituted_verb_below_the_game_root_is_rm_in_game(self):
-        """2026-10-26 (user): a delete inside the game install ASKS; a substituted verb that may
-        be rm is judged as `rm` would be, so it asks too (it advised before, as rm did)."""
-        for c in ("$(echo rm) -rf " + DQ + GAME + "/libraries" + DQ, BT + "echo rm" + BT + " -rf " + DQ + GAME + "/x" + DQ):
+    def test_a_substituted_verb_on_a_deployed_mod_is_rm_deployed_mod(self):
+        """2026-10-27 (user): removing a deployed mod ASKS; a substituted verb that may be rm is
+        judged as `rm` would be. Below the game root but outside extensions/ it stays advisory."""
+        for c in ("$(echo rm) -rf " + DQ + GAME + "/extensions/m" + DQ, BT + "echo rm" + BT + " -rf " + DQ + GAME + "/extensions/m/x" + DQ):
             with self.subTest(c=c):
-                self.assertTrue(FC(c, _ELSEWHERE)["rm_in_game"], c)
+                self.assertEqual(FC(c, _ELSEWHERE)["rm_deployed_mod_names"], "m", c)
+        self.assertFalse(FC("$(echo rm) -rf " + DQ + GAME + "/libraries" + DQ, _ELSEWHERE)["rm_deployed_mod"])
 
     def test_a_prefix_ASSIGNMENT_does_not_hide_the_verb(self):
         """FX-G5 / reviewer J2 item 3 (MEASURED: allowed): an earlier token holding `$(` refused

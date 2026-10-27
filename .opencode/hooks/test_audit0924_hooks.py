@@ -851,7 +851,7 @@ class TestRR5ChildrenOfARootDenyLikeTheGlob(_RR):
 
     def test_TWIN_children_inside_one_mod_advise_not_deny(self):
         # ask -> advise 2026-10-02 (user: X4-folder deletes are advisories; 0 of 14 prompts refused);
-        # advise -> ask 2026-10-26 (user: a delete INSIDE the game install asks, rm_in_game).
+        # advise -> ask 2026-10-27 (user: removing a DEPLOYED MOD asks once, rm_deployed_mod).
         # The twin still holds its point: one mod's children never reach the root's HARD deny.
         self.expect([("ask", "gci '" + self.G + BS + "extensions" + BS + "amod' | Remove-Item -Recurse")])
 
@@ -945,7 +945,7 @@ class TestRRPreArcBash(_RR):
         self.expect([
             ("deny", "echo '" + Rf + "' | xargs rm -rf"),
             ("deny", "printf '%s' '" + Gf + "' | xargs -0 rm -rf"),
-            ("ask", "find '" + Gf + "/extensions' -name '*.bak' | xargs rm -f"),    # 2026-10-26: rm_in_game
+            ("ask", "find '" + Gf + "/extensions' -name '*.bak' | xargs rm -f"),    # 2026-10-27: rm_deployed_mod
             ("deny", "for f in '" + Rf + "'/*; do rm -rf \"$f\"; done"),
             ("deny", "for d in build '" + Gf + "'; do rm -rf \"$d\"; done"),
             ("deny", "t=$(realpath -m '" + Rf + "/libraries'); rm -rf \"$t\""),
@@ -956,12 +956,12 @@ class TestRRPreArcBash(_RR):
         Rf, Gf, G = self.Rf, self.Gf, self.G
         self.expect([
             ("deny", "rsync -a --delete empty/ '" + Gf + "/'"),
-            ("ask", "rsync -a --delete ./mod/ '" + Gf + "/extensions/amod/'"),    # 2026-10-26: rm_in_game
+            ("ask", "rsync -a --delete ./mod/ '" + Gf + "/extensions/amod/'"),    # 2026-10-27: rm_deployed_mod
             ("deny", "ln -sf /dev/null '" + Rf + "/libraries/w.xml'"),
             ("deny", "touch '" + Rf + "/libraries/w.xml'"),
             ("deny", "chmod 000 '" + Rf + "/libraries'"),
             ("deny", "robocopy C:/empty '" + Gf + "' //MIR"),
-            ("ask", "robocopy ./mod '" + Gf + "/extensions/amod' /MIR"),    # 2026-10-26: rm_in_game
+            ("ask", "robocopy ./mod '" + Gf + "/extensions/amod' /MIR"),    # 2026-10-27: rm_deployed_mod
         ], tool="Bash")
         self.expect([
             ("deny", "robocopy C:\\empty '" + G + "' /MIR"),
