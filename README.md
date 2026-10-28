@@ -231,6 +231,9 @@ See [`tools/x4validate/README.md`](tools/x4validate/README.md) for the verb list
 tiers behind each answer.
 
 ### Skills & subagents
+- `/find-session` — find the past agent session where something was discussed, down to the
+  passage, and resume it; asks which one you meant when several match. Needs obra/episodic-memory
+  installed separately (the skill says so if it is missing and never installs it).
 - `/x4-balance` — ground a stat or balance change in measured values before proposing it:
   the three-values rule (vanilla, effective, proposed) and the in-sector vs out-of-sector check.
 - `/x4-cli-reference` — the exact subcommands, flags and defaults of every toolkit CLI,
