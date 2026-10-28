@@ -22,7 +22,7 @@ spec.loader.exec_module(pa)
 @pytest.fixture
 def case(tmp_path, monkeypatch):
     _, tk, env = make_sandbox(tmp_path)
-    path = tmp_path / "profile/content.xml"
+    path = tmp_path / "profile/config.xml"
     path.write_text('<content enabled="false"/>\n', encoding="utf-8")
     patch = f'*** Begin Patch\n*** Update File: {path}\n@@\n-<content enabled="false"/>\n+<content enabled="true"/>\n*** End Patch'
     transcript = tmp_path / "native.jsonl"
@@ -172,3 +172,40 @@ def test_backup_failure_never_consumes(case, monkeypatch):
     pending = prepare(case)[1]
     result = adapter.pre_tool_use(case[0], "powershell", time.monotonic() + 10)
     assert result["decision"] == "ask" and not pending[1].exists()
+
+
+def test_modlist_update_needs_no_grant_but_delete_still_asks(case, tmp_path):
+    payload, _, _, _, _, transcript, env = case
+    target = tmp_path / "profile/content.xml"
+    target.write_text('<content/>\n', encoding='utf-8')
+    transcript_for(case, "no token needed for authorized mod activation")
+    patch = f'*** Begin Patch\n*** Update File: {target}\n@@\n-<content/>\n+<content sync="false"/>\n*** End Patch'
+    p = native("apply_patch_update", tmp_path, command=patch)
+    p.update(session_id="session-one", transcript_path=str(transcript))
+    decision, reason = run_adapter(env, p)
+    assert decision in ("allow", "advise"), reason
+    p['tool_input']['command'] = f'*** Begin Patch\n*** Delete File: {target}\n*** End Patch'
+    decision, reason = run_adapter(env, p)
+    assert decision in ("ask", "deny"), reason
+
+
+def test_nested_modlist_name_is_not_exempt(case, tmp_path):
+    target = tmp_path / 'profile/nested/content.xml'
+    target.parent.mkdir()
+    target.write_text('<content/>\n')
+    patch = f'*** Begin Patch\n*** Update File: {target}\n@@\n-<content/>\n+<content sync="false"/>\n*** End Patch'
+    p = native("apply_patch_update", tmp_path, command=patch)
+    decision, reason = run_adapter(case[6], p)
+    assert decision in ("ask", "deny"), reason
+
+
+def test_legacy_backend_modlist_ask_is_advisory(case):
+    payload, calls, verdict, roots = case[:4]
+    target = Path(roots['profile']) / 'content.xml'
+    target.write_text('<content/>\n')
+    original = calls[0][3]
+    payload['tool_input']['command'] = payload['tool_input']['command'].replace(original, str(target))
+    calls[0] = ('write', None, None, str(target), f'update {target}')
+    verdict['reason'] = verdict['reason'].replace(original, str(target))
+    result, pending = prepare(case)
+    assert result['decision'] == 'advise' and pending is None

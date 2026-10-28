@@ -152,11 +152,9 @@ run_layout(){ # run_layout <name> <toolkit> <game>
   decide deny  protect-files.sh "$(fj "$GAME/.claude/hooks/../../libraries/wares.xml")" \
     "a .. out of a whitelisted .claude/hooks/ still reaches the game block"
   decide advise protect-files.sh "$(fj "$TK/dev/mymod/content.xml")"        "content.xml manifest"
-  # The PROFILE's own content.xml is the mod enable/disable list and the Steam
-  # Workshop toggle. Turning the manifest prompt into an advisory (2026-08-29)
-  # nearly bypassed the profile confirmation for it: the advisory exits 0, so it
-  # short-circuited a rule the user had explicitly kept. It must still ASK.
-  decide ask   protect-files.sh "$(fj "$SBX_TMP/profile/content.xml")"          "profile content.xml still confirms"
+  # User ruling 2026-10-28: routine mod-list updates are advisory. Later hard
+  # blocks still run; other profile edits and destructive shell actions still ask.
+  decide advise protect-files.sh "$(fj "$SBX_TMP/profile/content.xml")"       "profile mod-list edit is advisory"
   # ...and a DEPLOYED mod's manifest must still reach the extensions rule below the
   # advisory. MEASURED 2026-08-30 (F84): an advisory that exits makes every rule under
   # it unreachable, so this manifest was advised and never confirmed.

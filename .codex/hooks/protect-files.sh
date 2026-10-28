@@ -158,9 +158,8 @@ fi
 # dev/ or X4_MODS. (Before this it was below the whitelist, so mod manifests in the working
 # dirs were silently allowed — contradicting the documented safety rule.)
 # The profile's own manifest is the mod enable/disable list and the Steam Workshop
-# toggle, and the profile CONFIRMATION below owns it. That used to need a guard here,
-# because this advisory exited and would have bypassed the prompt the user kept; since
-# advisories accumulate (F84) the confirmation below is reached on its own and wins.
+# toggle. Its canonical root path now receives a separate advisory below; other
+# profile files still confirm. Advisories accumulate and never mask later blocks.
 if true; then
   x4_file_name_match '(^|[/\\])content\.xml$' && advise "MOD MANIFEST: $FILE_PATH controls what this mod loads, its id, version and dependencies. A wrong id makes every dependent mod report MISSING, and `save=\"1\"` bakes the mod into save files. Allowed without confirmation (user decision 2026-08-29) -- so check the change yourself rather than expecting a prompt."
 fi
@@ -328,12 +327,23 @@ esac
 # even for a manifest inside dev/ or X4_MODS.)
 
 # === CONFIRMATION — user profile files (saves, config, active mod list) ===
-x4_under "$FILE_PATH" "$X4_PROFILE" && [ "$_harness_save_qualified" != 1 ] && { ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"; return 0; }
+# Routine mod activation is part of an authorized install, not a second approval
+# ceremony (user ruling 2026-10-28). Only the canonical root mod-list qualifies;
+# other profile files and nested/symlinked lookalikes retain their policy. Do not
+# return here: save roots and game-install hard blocks below must still run.
+_profile_modlist=0
+if [ -n "${X4_PROFILE:-}" ]; then
+  x4_canon_memo "$X4_PROFILE"; _profile_root="${_X4_CANON_RESULT%/}"
+  x4_canon_memo "$FILE_PATH"
+  [ "$_X4_CANON_RESULT" = "$_profile_root/content.xml" ] && _profile_modlist=1
+fi
+[ "$_profile_modlist" = 1 ] && advise "UPDATING THE MOD ENABLE/DISABLE LIST: $FILE_PATH -- carry out the authorized mod decision; preserve unrelated entries. No separate granular approval is required."
+x4_under "$FILE_PATH" "$X4_PROFILE" && [ "$_harness_save_qualified" != 1 ] && [ "$_profile_modlist" != 1 ] && { ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"; return 0; }
 # Saves first: the message must name what is actually at risk.
 x4_under "$FILE_PATH" "${X4_SAVES:-}" && [ "$_harness_save_qualified" != 1 ] && { ask "EDITING A SAVE GAME: $FILE_PATH -- saves are not reproducible and there is no undo. Confirm?"; return 0; }
 # A profile path the X4_PROFILE variable does not name still confirms -- BEFORE the
 # Documents advisory below, or it would only be advised (the profile lives in Documents).
-x4_file_name_match 'Egosoft[/\\]X4[/\\]' && [ "$_harness_save_qualified" != 1 ] && { ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"; return 0; }
+x4_file_name_match 'Egosoft[/\\]X4[/\\]' && [ "$_harness_save_qualified" != 1 ] && [ "$_profile_modlist" != 1 ] && { ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"; return 0; }
 # ...and the rest of Documents: game settings, other games, personal files. ADVISORY since
 # 2026-10-02 (user: an ask that is always approved protects nothing). advise() accumulates
 # and never exits, so every rule below still applies.
