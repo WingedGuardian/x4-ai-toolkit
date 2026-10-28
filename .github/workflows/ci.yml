@@ -805,14 +805,14 @@ jobs:
         shell: bash
         run: bash tools/x4validate/scripts/verify-cold.sh --archive
 
-  # THE MUTATION GATE, SHARDED (4.0.1). It ran as a step of `tests` until ci/v4.0.1-rc6, where
-  # it was still running 5 h 20 m into that job's 360-minute limit: 288 mutants plus two trials
-  # per predicate, each trial a full run of a hook test file that had gone 41 s -> 75 s. Every
-  # mutant, and each predicate's False/True pair, lands in exactly ONE shard
-  # (verify-hook-tests.py shard_groups), so the gate passes only when all four shards pass on
-  # both OSes. Changing the shard count: edit `shard` AND the `/4` in the run line together.
   hook-mutation:
     name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/4)
+    # THE MUTATION GATE, SHARDED (4.0.1). It ran as a step of `tests` until ci/v4.0.1-rc6, where
+    # it was still running 5 h 20 m into that job's 360-minute limit: 288 mutants plus two trials
+    # per predicate, each trial a full run of a hook test file that had gone 41 s -> 75 s. Every
+    # mutant, and each predicate's False/True pair, lands in exactly ONE shard
+    # (verify-hook-tests.py shard_groups), so the gate passes only when all four shards pass on
+    # both OSes. Changing the shard count: edit `shard` AND the `/4` in the run line together.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 240
     strategy:

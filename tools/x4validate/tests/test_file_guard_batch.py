@@ -493,7 +493,14 @@ def _make_link(kind, link, target, request):
             raise
     else:
         link.mkdir(parents=True)
-    request.addfinalizer(lambda: os.rmdir(link) if link.exists() or link.is_symlink() else None)
+    # The link only. os.rmdir takes a Windows junction or directory symlink, but on POSIX a
+    # symlink is not a directory to rmdir (NotADirectoryError, ci/v4.0.1-rc7 ubuntu): unlink it.
+    def _remove():
+        if link.is_symlink() and os.name != "nt":
+            os.unlink(link)
+        elif link.exists() or link.is_symlink():
+            os.rmdir(link)
+    request.addfinalizer(_remove)
 
 
 @pytest.mark.skipif(__import__("os").name != "nt", reason="Windows-form paths exist only on Windows")
