@@ -31,6 +31,7 @@
 
 # --- Runtime backups (generated as Claude edits files) ---
 .claude/backups/
+.claude/profile-approvals/
 
 # ============================================================
 # NEVER COMMIT EGOSOFT GAME DATA (copyright) — these are the

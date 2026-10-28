@@ -50,6 +50,7 @@ for _p in (HERE, HERE.parent / "claude-hooks"):         # rendered tree, then th
 import x4guard                     # noqa: E402  (sibling module; path set above)
 import patch_paths                 # noqa: E402
 import save_policy                 # noqa: E402
+import profile_approval            # noqa: E402
 
 BANNER = "X4 GUARDS LIVE (codex hooks v1) — shell commands and apply_patch are checked (input typed into a running shell is not)."
 EVENTS = {"session_start": "SessionStart", "pre_tool_use": "PreToolUse", "post_tool_use": "PostToolUse"}
@@ -327,12 +328,17 @@ def pre_tool_use(payload: dict, shell: str, deadline: float) -> dict:
         return aggregate([inert(f"the patch could not be read ({e}), so its paths were never checked")])
     verdict = save_policy.batch(payload, calls,
         lambda qualified: aggregate(judge(calls, deadline, qualified)), deadline, "codex")
+    verdict, pending = profile_approval.prepare(payload, calls, verdict, deadline)
     if verdict["decision"] in ("allow", "advise"):
         ops = _ops_for_backup(payload)
         if ops:
             b = run_backups(ops[0], ops[1], deadline)
             if b is not None:
                 verdict = b
+        if pending is not None and verdict["decision"] in ("allow", "advise"):
+            refused = profile_approval.consume(pending)
+            if refused is not None:
+                verdict = refused
     return verdict
 
 
