@@ -132,4 +132,6 @@ release/nexus/
 /KNOWLEDGEBASE.pre-4.0-*.md
 # Private neutral runtime state: telemetry, permanent saves and upgrade journals.
 .modding-agent-harness/
+# Session charters: each session's first prompt, goal and open items (private, per install).
+.agent-sessions/
 housekeep-session.txt
