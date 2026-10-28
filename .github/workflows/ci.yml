@@ -196,13 +196,8 @@ jobs:
         shell: bash
         run: bash scripts/test-hooks.sh
 
-      - name: Prove the hook tests can fail (mutation + predicate coverage)
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        shell: bash
-        # 4 workers = the runner's 4 vCPUs. Serial, 298 trials of the 782-test hook file were
-        # still running 4 h into the job's 300-minute limit (ci/v4-rc10); each trial has its
-        # own temp copy.
-        run: python scripts/verify-hook-tests.py --workers 4
+      # The mutation gate ("Prove the hook tests can fail") runs in its own sharded job,
+      # hook-mutation, below: inside this job it alone outgrew the 360-minute limit.
 
       - name: Prove the guard has no syntax bypass (differential fuzzer)
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -809,6 +804,33 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Linux' }}
         shell: bash
         run: bash tools/x4validate/scripts/verify-cold.sh --archive
+
+  # THE MUTATION GATE, SHARDED (4.0.1). It ran as a step of `tests` until ci/v4.0.1-rc6, where
+  # it was still running 5 h 20 m into that job's 360-minute limit: 288 mutants plus two trials
+  # per predicate, each trial a full run of a hook test file that had gone 41 s -> 75 s. Every
+  # mutant, and each predicate's False/True pair, lands in exactly ONE shard
+  # (verify-hook-tests.py shard_groups), so the gate passes only when all four shards pass on
+  # both OSes. Changing the shard count: edit `shard` AND the `/4` in the run line together.
+  hook-mutation:
+    name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/4)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        id: checkout
+        with:
+          persist-credentials: false
+
+      - name: Prove the hook tests can fail (mutation + predicate coverage)
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        shell: bash
+        # 4 workers = the runner's 4 vCPUs; each trial has its own temp copy.
+        run: python scripts/verify-hook-tests.py --workers 4 --shard ${{ matrix.shard }}/4
 
   scrub:
     name: no personal data in tracked files

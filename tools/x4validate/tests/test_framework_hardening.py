@@ -160,7 +160,7 @@ def test_F4_CI_checks_the_lockfile_is_fresh_not_only_frozen():
 #: both cold legs. Each job therefore names the steps that are SETUP (their failure makes
 #: every later step meaningless, so they keep the default) and every later step must run
 #: on `!cancelled()` gated on that setup -- or on a named earlier step it really needs.
-_SETUP_MARKER = {"tests": "setup", "scrub": "checkout"}
+_SETUP_MARKER = {"tests": "setup", "scrub": "checkout", "hook-mutation": "checkout"}
 
 
 def _ungated_checks(ci) -> list[str]:
@@ -200,7 +200,8 @@ def test_I1_TWIN_the_gate_check_can_fail():
     a conditional setup step, a missing marker."""
     def wf(tests_steps, scrub_steps=None):
         return {"jobs": {"tests": {"steps": tests_steps},
-                         "scrub": {"steps": scrub_steps or [{"uses": "co", "id": "checkout"}]}}}
+                         "scrub": {"steps": scrub_steps or [{"uses": "co", "id": "checkout"}]},
+                         "hook-mutation": {"steps": [{"uses": "co", "id": "checkout"}]}}}
     ok = "${{ !cancelled() && steps.setup.outcome == 'success' }}"
     setup = [{"uses": "co"}, {"name": "setup", "id": "setup", "run": "true"}]
     assert _ungated_checks(wf(setup + [{"name": "a", "if": ok}])) == []

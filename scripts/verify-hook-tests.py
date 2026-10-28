@@ -1432,12 +1432,36 @@ def evaluate_source(source):
                 "seconds": time.monotonic()-started}
 
 
+def _shard_arg(text: str) -> tuple:
+    try:
+        k, n = (int(x) for x in text.split("/"))
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected K/N, e.g. 2/4")
+    if not 1 <= k <= n:
+        raise argparse.ArgumentTypeError("K must be between 1 and N")
+    return k, n
+
+
+def shard_groups(n_mutants: int, keys: list, k: int, n: int) -> set:
+    """The trial keys of shard k of n. One group per mutant and one per predicate (its False
+    AND True trials together, because a predicate's verdict reads both), dealt round-robin,
+    so every group lands in exactly one shard and the shards' union is the whole population."""
+    groups = [["mutation:" + str(i)] for i in range(n_mutants)]
+    groups += [["predicate:%s:%s" % (key, v) for v in ("False", "True")] for key in keys]
+    return {t for g in groups[k - 1::n] for t in g}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, choices=range(1,9), default=1)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--sample", type=int, help="benchmark N evenly spaced trials; exit 3, never a release pass")
+    parser.add_argument("--shard", type=_shard_arg, metavar="K/N",
+                        help="run only shard K of N (1-based): every mutant, and each predicate's "
+                             "False/True pair, lands in exactly one shard; all N must pass")
     args = parser.parse_args(argv)
+    if args.shard and args.sample is not None:
+        parser.error("--shard and --sample do not combine")
     def inputs():
         return {str(p.relative_to(REPO)):hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in [Path(__file__).resolve(),*[HOOKS/f for f in FILES]]}
@@ -1511,6 +1535,17 @@ def main(argv=None) -> int:
         cases += [("predicate:"+k+":"+v, pristine+SHIM.format(key=k,val=v))
                   for k in keys for v in ("False","True")]
         population = len(cases)
+        # CI SHARDS (4.0.1): the whole population took ~2 h 10 m on 4 workers at 228 mutants and
+        # was still running 5 h 20 m into the 360-minute job at 288 (ci/v4.0.1-rc6), because each
+        # trial's hook file went 41 s -> 75 s (the PowerShell link tests start one pwsh per shape).
+        if args.shard:
+            mine = shard_groups(len(MUTANTS), keys, *args.shard)
+            cases = [c for c in cases if c[0] in mine]
+            if not cases:
+                print("REFUSING: shard %d/%d holds no trial -- an empty shard would pass "
+                      "having examined nothing" % args.shard, file=sys.stderr)
+                return 2
+            print(f"shard {args.shard[0]}/{args.shard[1]}: {len(cases)} of {population} trials\n")
         if args.sample is not None:
             if not 1 <= args.sample <= population:
                 parser.error("--sample must be between 1 and the trial population")
@@ -1542,9 +1577,13 @@ def main(argv=None) -> int:
             return 3
 
         bad = 0
+        n_mut = n_keys = 0
         print(f"{'MUTATION':<42} {'target test':<12} verdict")
         print("-" * 78)
         for i, (label, old, new, tgt) in enumerate(MUTANTS):
+            if "mutation:" + str(i) not in results:
+                continue                    # another shard's trial
+            n_mut += 1
             if pristine.count(old) != 1:
                 print(f"{label:<42} {'-':<12} *** DID NOT APPLY "
                       f"({pristine.count(old)} matches) -- the mutant is stale ***")
@@ -1588,6 +1627,9 @@ def main(argv=None) -> int:
         gaps = 0
         srcs = test_sources(source)
         for k in keys:
+            if "predicate:" + k + ":False" not in results:
+                continue                    # another shard's pair
+            n_keys += 1
             row = []
             for val in ("False", "True"):
                 target.write_text(pristine + SHIM.format(key=k, val=val),
@@ -1607,8 +1649,11 @@ def main(argv=None) -> int:
         target.write_text(pristine, encoding="utf-8", newline="")
 
     print("-" * 78)
-    print(f"mutations not caught by their target test: {bad} of {len(MUTANTS)}")
-    print(f"predicates with a coverage gap:            {gaps} of {len(keys)}")
+    if args.shard:
+        print(f"shard {args.shard[0]}/{args.shard[1]} only -- the verdict covers ALL shards only "
+              f"when every one of the {args.shard[1]} passes")
+    print(f"mutations not caught by their target test: {bad} of {n_mut}")
+    print(f"predicates with a coverage gap:            {gaps} of {n_keys}")
     print("  fires?   = predicate pinned FALSE, so a must-FIRE test must break")
     print("  silent?  = predicate pinned TRUE,  so a must-NOT-fire test NAMING it must break")
     return 1 if (bad or gaps) else 0
