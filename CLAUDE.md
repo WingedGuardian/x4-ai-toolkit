@@ -10,6 +10,16 @@ Keep your learned facts in `KNOWLEDGEBASE.local.md`; toolkit updates preserve it
 Read it each session, including its `## My preferences` section. Imported legacy
 notes remain evidence to review; do not turn unclassified notes into standing orders.
 
+## Game launch approval
+
+Reconfirm immediately before launch if preparation or other work delayed an earlier approval; consent is time-sensitive.
+
+Before every agent-initiated game launch or restart, ask for approval of that specific next launch and wait for the user's answer. This includes normal, menu-only, headless, private/background, probe, smoke and E2E runs.
+
+Name the game, mode, desktop/focus impact and test profile/save. For each headless session, ask which desktop to use; never carry a prior session's choice forward.
+
+Development, deployment or test-plan approval, batches of tests, resource exemptions, previous launches and "continue" do not authorize a launch. No automatic retries or launches hidden inside test scripts. Without launch-specific confirmation, continue offline work.
+
 ## What This Is
 
 An AI-assisted X4 (v7.x–v9.x) modding workspace. The goal is coordinated multi-file XML

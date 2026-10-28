@@ -29,6 +29,10 @@ mod work.
 
 ## 1. Route before building
 
+Before each game launch or restart, obtain fresh approval for that specific next launch. This includes menu-only, headless and private/background tests. State the game, desktop and test profile/save. General approval to prepare or run tests, previous sessions and "continue" do not satisfy this launch gate. Wait for the answer; do not hide a launch or automatic retry in a helper.
+
+If preparation or other work delays an approved launch, ask again immediately before starting it. Approval is time-sensitive.
+
 Does a probe already instrument this surface? Extending one costs nothing and inherits its proven
 wiring.
 
