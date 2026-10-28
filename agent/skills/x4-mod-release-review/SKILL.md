@@ -150,8 +150,9 @@ the final go. Then:
 2. Write the release record in a folder **outside the mod's own folder**, so it is never packed. Use
    the same place every release, e.g. `releases\{mod_name}\{version}\` beside `dev\`. Ask the author
    once if they have no such place. It holds:
-   - `SHIPPED-MANIFEST.json`: every packed file with sha256 and size, status `packed` (the author
-     confirms the upload; the next Phase 0 checks it)
+   - `SHIPPED-MANIFEST.json`: every packed file with sha256 and size, status `shipped`. Once the
+     package is handed over, **treat it as published**: record it as the current version and the next
+     baseline without waiting for the author to confirm the upload. The next Phase 0 checks it
    - a copy of the unpacked release (this is the next release's baseline)
    - `REVIEW-RECORD.md`: the baseline used, the author-tested set, every finding with its answer
 3. A clean review is necessary, not sufficient. The upload itself is the author's step.
