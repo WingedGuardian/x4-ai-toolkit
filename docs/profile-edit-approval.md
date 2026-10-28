@@ -1,5 +1,13 @@
 # Codex profile edit approval
 
+Routine updates to the configured profile's root `content.xml` are advisory,
+following the user's October 28, 2026 ruling: installing/enabling a mod does not
+need an additional fingerprint confirmation. This does not authorize unsolicited
+mod changes. Backups still run. Deleting the file, other profile settings, saves,
+and nested or redirected lookalikes retain their existing protection. Shell
+commands touching the profile remain conservative; use the normal patch tool.
+The exact-grant mechanism below applies to other eligible profile XML edits.
+
 Codex's adapter renders ordinary confirmation requests as blocking denials.
 Previously no reply could satisfy a non-save profile request. The adapter now
 offers an exact, single-use approval for one `apply_patch` update of one existing
