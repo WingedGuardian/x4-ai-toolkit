@@ -463,8 +463,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--cross-mod-only", action="store_true",
                   help="only report pairs from DIFFERENT sources (skip a mod's own paint variants)")
     p.add_argument("--candidate", help="restrict to pairs involving this mod folder")
+    from . import _geometrycli
+    _geometrycli.arguments(p)
 
     args = p.parse_args(argv)
+    if args.geometry is None and (args.geometry_against or args.geometry_overlay or
+                                 args.geometry_alias or args.geometry_json or
+                                 args.geometry_samples != 4096 or args.geometry_limit != 32):
+        p.error("geometry options require --geometry MACRO_VPATH")
+    if args.geometry is not None and (args.candidate or args.cross_mod_only or args.threshold != 0.85):
+        p.error("stats filters do not apply to geometry; choose --geometry-against paths")
     ref = Path(args.reference) if args.reference else _merge.Config().reference
     # No --ext-dir: EVERY configured root (the set the engine loads); the game root
     # must still be configured -- without it there is no install to model.
@@ -477,6 +485,8 @@ def main(argv: list[str] | None = None) -> int:
         print(_compat.ext_dir_only_note(ext), file=sys.stderr)
 
     unreadable: list = []
+    if args.geometry is not None:
+        return _geometrycli.run(args, ref, ext)
     notes: list[str] = []
     vectors = _collect_all(ref, ext, unreadable, notes=notes)
     for n in notes:

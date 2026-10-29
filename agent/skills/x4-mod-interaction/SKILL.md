@@ -12,6 +12,15 @@ Run tools via uv from the tool dir:
 `cd {{TOOLKIT}}/tools/x4validate && uv run <tool> <args>`
 (tools: `x4compat`, `x4xref`, `x4stats`, `x4similar`; all read-only, no game changes.)
 
+For **shared render hulls**, stats similarity is not geometry evidence.
+`x4similar --geometry MACRO_VPATH --geometry-against MACRO_VPATH --geometry-json`
+is experimental and requires the optional `geometry` extra. Read the generated
+CLI reference and `tools/x4validate/docs/GEOMETRY.md` first. Inspect resolution
+scope, the part manifest and null/partial reasons: structural macro attachments,
+pivots/Euler offsets and animated ancestry are not yet qualified. A partial score
+cannot establish a whole-hull negative, and no real-hull variant threshold or
+removal verdict is qualified. Candidate overlays are explicitly hypothetical.
+
 ## Pipeline (run in order; stop early if the question is narrow)
 
 1. **Mechanical — `x4compat check <mod-folder>`** (candidate mode). Reports HARD (same node

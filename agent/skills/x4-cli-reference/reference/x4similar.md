@@ -5,6 +5,9 @@
 ```text
 usage: x4similar [-h] [--version] [--reference REFERENCE] [--ext-dir EXT_DIR]
                  [--threshold THRESHOLD] [--cross-mod-only] [--candidate CANDIDATE]
+                 [--geometry MACRO_VPATH] [--geometry-against MACRO_VPATH]
+                 [--geometry-overlay DIR] [--geometry-alias NAME=DIR] [--geometry-json]
+                 [--geometry-samples N] [--geometry-limit N]
 
 Advisory fuzzy same-ship detection across the ships base, DLC and installed mods define, scored at
 their EFFECTIVE values (base + DLC + the enabled mods in load order, so a <diff>-patched ship
@@ -22,4 +25,17 @@ options:
   --cross-mod-only      only report pairs from DIFFERENT sources (skip a mod's own paint variants)
   --candidate CANDIDATE
                         restrict to pairs involving this mod folder
+  --geometry MACRO_VPATH
+                        experimental geometry candidate; bypass stats class/purpose filters
+  --geometry-against MACRO_VPATH
+                        explicit comparison macro (repeat); otherwise scan the installed ship
+                        inventory
+  --geometry-overlay DIR
+                        append isolated candidate root after active overlays; never installs it
+  --geometry-alias NAME=DIR
+                        explicit hypothetical extension namespace for candidate assets
+  --geometry-json       versioned geometry report on stdout
+  --geometry-samples N  area-weighted surface samples per hull, 128..16384 (default 4096)
+  --geometry-limit N    refuse inventories larger than N (default 32, maximum 256); never silently
+                        shortlist
 ```

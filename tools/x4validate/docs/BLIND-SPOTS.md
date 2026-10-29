@@ -1,5 +1,18 @@
 # BLIND-SPOTS.md — the narrowing-point register
 
+## 2026-10-29 — Geometry qualification scope · OPEN LIMIT
+
+`x4similar --geometry` separates numeric stats from experimental render-surface
+evidence. MEASURED: the new reader matched the inspected importer's coordinates
+and triangle indices on 52/52 selected real LOD0 files; this is not a full-format
+or assembly certificate. Macro-connected structural attachments, pivots, Euler
+offsets and animated ancestry are reported unresolved; their decoded subset can
+have only a separate partial score, with null whole-hull geometry score. Genuine
+old/new render exports, real-hull threshold calibration, fuzzy shared parts and
+large-inventory retrieval remain unqualified. Initial real mismatch runs hit a
+0.75 GiB cap; no result from a killed run supports a negative. See `GEOMETRY.md`,
+the authored `scripts/qualify-geometry.py` controls and `tests/test_geometry.py`.
+
 **Why this file exists.** Three tool defects were found in four days (root-`<replace>` drop 08-08,
 nested-patch door 08-11, depth-1 flatten 08-11) and **all three were found reactively** — by pointing
 a tool at a new question and noticing the answer smelled wrong. If usage is the discovery method,

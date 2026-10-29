@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `x4similar --geometry` adds opt-in experimental render-surface comparison with
+  separate versioned JSON, explicit source/part coverage, bounded XMF reads and
+  area-weighted bidirectional triangle-surface overlap. Stats behavior is unchanged.
+  Incomplete assemblies return null whole-hull scores; real-hull thresholds,
+  structural attachments and some transforms remain unqualified. Install the
+  optional `geometry` extra; see `tools/x4validate/docs/GEOMETRY.md`.
+
 - Updating the mod enable/disable list -- the profile's ROOT `content.xml` -- is now advisory instead of asking (user ruling 2026-10-28): enabling or disabling a mod you were asked to install needs no second confirmation. Backups still run. Deleting that file, every other profile file, saves, a `content.xml` in a subfolder or behind a link, and shell commands touching the profile still ask.
 - Codex: a non-save profile XML edit that the guard asks about can now be approved once. Codex cannot show an ask, so the hook prints the patch and a `PROFILE_EDIT_APPROVAL <digest>` line that binds the session, the file, its current bytes and the exact patch; replying with that line approves that one edit (24-hour expiry, used once, refused if the file changed). Agent messages, tool output and a generic yes approve nothing. Details and limits: `docs/profile-edit-approval.md`.
 - Agents now ask for approval before EVERY game launch or restart they start -- menu-only, headless, probe and test runs included -- naming the game, mode, desktop and test profile or save; earlier approvals, test plans and "continue" do not count (instructions and the `x4-probe` skill).

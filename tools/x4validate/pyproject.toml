@@ -18,6 +18,14 @@ x4debug = "x4validate._debugcli:main"
 x4save = "x4validate._savecli:main"
 x4live = "x4validate._livecli:main"
 
+[project.optional-dependencies]
+geometry = [
+    "numpy>=2.2,<3",
+    "scipy>=1.15,<2",
+    "trimesh>=4.6,<5",
+    "rtree>=1.4,<2",
+]
+
 [dependency-groups]
 # pywin32 is DEV-ONLY and Windows-ONLY. The live-query channel (x4live query/ramp)
 # needs it; every other subcommand does not, and the marker keeps the ubuntu CI job
