@@ -115,7 +115,7 @@ def test_shell_heredoc_patch_is_judged_by_its_paths(sandbox):
 
 def test_profile_ask_becomes_deny_with_approval_text(sandbox):
     tmp, tk, env = sandbox
-    patch = f"*** Begin Patch\n*** Update File: {tmp / 'profile' / 'content.xml'}\n@@\n-a\n+b\n*** End Patch"
+    patch = f"*** Begin Patch\n*** Update File: {tmp / 'profile' / 'config.xml'}\n@@\n-a\n+b\n*** End Patch"
     d, reason = run(env, native("apply_patch_update", tk, command=patch))
     assert d == "ask" and reason.startswith("NEEDS YOUR APPROVAL:")
     assert reason.rstrip().endswith("Ask the user; do not retry until they agree.")

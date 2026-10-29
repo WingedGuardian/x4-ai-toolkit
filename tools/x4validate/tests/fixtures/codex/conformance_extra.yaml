@@ -110,10 +110,17 @@
   claude: [{path: "{TK}/reference/libraries/x.xml"}]
   expect: deny
 
-- id: profile-manifest-asks
+# 4.0.1 (user ruling 2026-10-28): the profile ROOT content.xml -- the mod enable/disable
+# list -- is advisory; every other profile file still asks (twin below).
+- id: profile-modlist-advises
   fixture: apply_patch_update
   command: "*** Begin Patch\n*** Update File: {TMP}/profile/content.xml\n@@\n-a\n+b\n*** End Patch"
   claude: [{path: "{TMP}/profile/content.xml"}]
+  expect: advise
+- id: profile-config-asks
+  fixture: apply_patch_update
+  command: "*** Begin Patch\n*** Update File: {TMP}/profile/config.xml\n@@\n-a\n+b\n*** End Patch"
+  claude: [{path: "{TMP}/profile/config.xml"}]
   expect: ask
 
 # Lane F: a RELATIVE shell operand is judged from the payload cwd, on both chains. The Claude

@@ -11,7 +11,7 @@
     },
     "codex_adapter.py": {
       "source": ".opencode/hooks/codex_adapter.py",
-      "sha256": "6051c02bcf8094e4f1d4892ef2bf858d7010312cecafdfe12af43fce06dc5b06"
+      "sha256": "49a220169239aaea8c2797f49948b21f246a033e21926bcf93b1dc09f90b8e3d"
     },
     "patch_paths.py": {
       "source": ".opencode/hooks/patch_paths.py",

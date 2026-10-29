@@ -139,7 +139,7 @@ def test_a_relative_bash_workdir_resolves_against_the_payload_directory(sandbox)
 
 def test_an_ask_is_a_deny_that_says_ask_the_user(sandbox):
     tmp, tk, env = sandbox
-    v = run(env, call(tk, "write", {"filePath": str(tmp / "profile" / "content.xml"), "content": "x"}))
+    v = run(env, call(tk, "write", {"filePath": str(tmp / "profile" / "config.xml"), "content": "x"}))
     assert v["decision"] == "deny" and not v["inert"], v
     assert v["reason"].startswith("NEEDS YOUR APPROVAL: ")
     assert v["reason"].endswith("Ask the user; do not retry until they agree.")

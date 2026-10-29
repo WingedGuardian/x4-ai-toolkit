@@ -22,6 +22,7 @@ def test_fixture_tracks_the_actual_generated_native_runtime():
 
 def test_constructor_has_its_native_dependencies_without_selected_opencode(tmp_path):
     source = _agent_source(tmp_path)
-    for name in ("opencode_config.py", "opencode_adapter.py", "codex_adapter.py", "patch_paths.py", "save_policy.py"):
+    for name in ("opencode_config.py", "opencode_adapter.py", "codex_adapter.py", "patch_paths.py", "save_policy.py",
+                 "profile_approval.py"):   # codex_adapter imports it (dc3aac1)
         assert (source / ".opencode/hooks" / name).is_file(), name
     assert (source / ".opencode/plugins/x4guard.js").is_file()

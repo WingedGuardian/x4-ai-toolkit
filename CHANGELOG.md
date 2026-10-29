@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Updating the mod enable/disable list -- the profile's ROOT `content.xml` -- is now advisory instead of asking (user ruling 2026-10-28): enabling or disabling a mod you were asked to install needs no second confirmation. Backups still run. Deleting that file, every other profile file, saves, a `content.xml` in a subfolder or behind a link, and shell commands touching the profile still ask.
+- Codex: a non-save profile XML edit that the guard asks about can now be approved once. Codex cannot show an ask, so the hook prints the patch and a `PROFILE_EDIT_APPROVAL <digest>` line that binds the session, the file, its current bytes and the exact patch; replying with that line approves that one edit (24-hour expiry, used once, refused if the file changed). Agent messages, tool output and a generic yes approve nothing. Details and limits: `docs/profile-edit-approval.md`.
+- Agents now ask for approval before EVERY game launch or restart they start -- menu-only, headless, probe and test runs included -- naming the game, mode, desktop and test profile or save; earlier approvals, test plans and "continue" do not count (instructions and the `x4-probe` skill).
+- `x4-mod-release-review`: a package handed over for upload is recorded as shipped (`SHIPPED-MANIFEST.json` status `shipped`) and becomes the next review's baseline without waiting for the author to confirm the upload.
 - The PowerShell guard starts PowerShell with telemetry and the update check turned off (`POWERSHELL_TELEMETRY_OPTOUT=1`, `POWERSHELL_UPDATECHECK=Off`): both are network calls at startup, and the guard starts PowerShell once per command it parses. On a slow network a stalled start reaches the 10 s cap and the command is refused as unreadable.
 - Neutral Action v1 path-only write batches reuse one file-policy process instead of
   starting a Bash guard for every file. Every path still receives the shared single-file

@@ -66,7 +66,7 @@ def p_relative_to_cwd(tmp, tk, env, tree):
 
 
 def p_profile_ask(tmp, tk, env, tree):
-    patch = f"*** Begin Patch\n*** Update File: {tmp / 'profile' / 'content.xml'}\n@@\n-a\n+b\n*** End Patch"
+    patch = f"*** Begin Patch\n*** Update File: {tmp / 'profile' / 'config.xml'}\n@@\n-a\n+b\n*** End Patch"
     return chain(tree, native("apply_patch_update", tk, command=patch), env)[0]
 
 

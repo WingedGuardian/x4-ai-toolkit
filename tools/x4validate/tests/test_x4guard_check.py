@@ -91,8 +91,11 @@ def test_write_path_with_spaces_and_backslashes(sandbox):
 def test_manifest_advises_and_profile_asks(sandbox):
     tmp, tk, env = sandbox
     _, adv, _ = check(env, "--kind", "write", "--path", str(tk / "dev" / "mymod" / "content.xml"))
-    _, ask, _ = check(env, "--kind", "write", "--path", str(tmp / "profile" / "content.xml"))
+    _, ask, _ = check(env, "--kind", "write", "--path", str(tmp / "profile" / "config.xml"))
+    # 4.0.1 (user ruling 2026-10-28): the profile root content.xml, the mod list, only advises.
+    _, modlist, _ = check(env, "--kind", "write", "--path", str(tmp / "profile" / "content.xml"))
     assert adv["decision"] == "advise" and ask["decision"] == "ask"
+    assert modlist["decision"] == "advise", modlist
 
 
 def test_check_has_no_side_effects(sandbox):

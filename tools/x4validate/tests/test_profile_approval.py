@@ -9,6 +9,10 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
+from _layout import require_repo
+require_repo("agent/guards/claude-hooks/profile_approval.py", module_level=True,
+             why="the profile approval SOURCE this suite loads")
+
 from codex_testlib import REPO, make_sandbox, native, run_adapter
 
 SOURCE = REPO / "agent/guards/claude-hooks"
