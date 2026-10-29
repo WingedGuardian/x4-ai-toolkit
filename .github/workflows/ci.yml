@@ -764,7 +764,12 @@ jobs:
           #    +1 test_x4housekeep           (only Windows refuses to rename a dir with an open file)
           #    +1 test_file_guard_batch      (Windows junction parity, 05dc8a2)
           # Ubuntu ceiling 331 + 3 = 334; windows unchanged (60 + 3 = 63).
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '334' || '63' }}
+          # MEASURED ci/v4.0.1-rc8 (run 40714956151, 30e8e88): ubuntu 355 (FAILED, 355 > 334),
+          # windows 60. Per grouped skip vs run 39541688798 (b9bab53, 330): +24
+          # test_file_guard_batch "Windows-form paths exist only on Windows" (c3812a8, 36a5535,
+          # F331: they run on the windows leg) and the +1 junction parity counted above.
+          # Ubuntu ceiling 355 + 3 = 358; windows unchanged (63).
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '358' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         run: uv run --frozen python -m pytest -q -rs
