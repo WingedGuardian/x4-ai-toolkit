@@ -19,6 +19,7 @@ SAMPLES = 4096
 TOLERANCES = (0.015, 0.03, 0.06)
 WEIGHTS = (0.25, 0.5, 0.25)
 MAX_TRIANGLE_TESTS = 20_000_000
+DISTANCE_BATCH = 2048
 
 
 def sample(mesh: Mesh, count=SAMPLES, seed=0):
@@ -64,7 +65,7 @@ def surface_distances(surface, points, work=None):
 
     A nearest vertex gives an upper bound. Every closer surface triangle must
     intersect its radius cube, so the R-tree query cannot omit a closer face.
-    Stream that complete candidate set in batches of 256 instead of concatenating
+    Stream that complete candidate set through a fixed buffer instead of concatenating
     every point's candidates (which can allocate gigabytes on a large mismatch).
     A work-budget refusal is UNRESOLVED, never a partial distance or a zero score.
     """
@@ -76,29 +77,39 @@ def surface_distances(surface, points, work=None):
         target = cKDTree(surface.vertices[np.unique(surface.faces)])
         surface._cache["geometry_vertex_tree"] = target
     radii = target.query(points, workers=1)[0]
-    result = []
+    result = np.full(len(points), np.inf)
     tree = surface.triangles_tree
-    for point, radius in zip(points, radii):
+    pending_faces, pending_points = [], []
+    def flush():
+        if not pending_faces:
+            return
+        triangles = surface.vertices[surface.faces[pending_faces]]
+        queries = points[pending_points]
+        closest = trimesh.triangles.closest_point(triangles, queries)
+        distances = np.linalg.norm(closest-queries, axis=1)
+        if not np.isfinite(distances).all():
+            raise GeometryError("non-finite point-to-triangle distance")
+        np.minimum.at(result, pending_points, distances)
+        pending_faces.clear()
+        pending_points.clear()
+    for number, (point, radius) in enumerate(zip(points, radii)):
         radius += 1e-10
         candidates = tree.intersection(np.concatenate([point-radius, point+radius]))
-        best = float("inf")
         while True:
-            ids = list(itertools.islice(candidates, 256))
+            ids = list(itertools.islice(candidates, DISTANCE_BATCH-len(pending_faces)))
             if not ids:
                 break
             work[0] += len(ids)
             if work[0] > MAX_TRIANGLE_TESTS:
                 raise GeometryError("exact surface-distance work budget exceeded")
-            triangles = surface.vertices[surface.faces[ids]]
-            closest = trimesh.triangles.closest_point(triangles, np.broadcast_to(point, (len(ids), 3)))
-            distances = np.linalg.norm(closest-point, axis=1)
-            if not np.isfinite(distances).all():
-                raise GeometryError("non-finite point-to-triangle distance")
-            best = min(best, float(distances.min()))
-        if not np.isfinite(best):
-            raise GeometryError("empty surface-distance candidate set")
-        result.append(best)
-    return np.asarray(result)
+            pending_faces.extend(ids)
+            pending_points.extend([number]*len(ids))
+            if len(pending_faces) == DISTANCE_BATCH:
+                flush()
+    flush()
+    if not np.isfinite(result).all():
+        raise GeometryError("empty surface-distance candidate set")
+    return result
 
 
 def _coverage(a, b, surface_a=None, surface_b=None, work=None, directed=None):

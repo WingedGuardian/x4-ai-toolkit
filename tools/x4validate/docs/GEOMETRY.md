@@ -94,7 +94,7 @@ Global optimality is unproved, especially on symmetric or rearranged assemblies.
 Final distances go from samples to the **other triangle surface**, not vertices
 or its point samples. A nearest vertex bounds an R-tree query that enumerates
 every triangle box intersecting that radius cube. Candidate triangles stream in
-batches of 256. A shared budget of 20 million triangle tests refuses the entire
+batches of at most 2048 across query points. A shared budget of 20 million triangle tests refuses the entire
 pair on exhaustion, never publishing a truncated distance as a complete one.
 Inverse orthogonal queries reuse one spatial index per hull across hypotheses.
 
@@ -129,6 +129,13 @@ Use the workspace resource runner for large comparisons. Initial real mismatch
 attempts exceeded a 0.75 GiB job cap; streamed candidates and spatial-index reuse
 address the allocations, while work exhaustion remains unresolved. A killed job
 is not a completed benchmark or a shape result.
+
+MEASURED after bounded cross-query batching: six selected real component-surface
+pairs at 512 samples per hull completed in 4.46–14.38 seconds per pair. The serial
+decoder, synthetic, real-pair and stats-baseline qualification took 153.9 seconds;
+the resource runner reported 400 MB peak job memory under a 0.75 GiB cap. Binary
+cache use was 12,598,120 bytes. These Windows measurements are not a full-inventory
+performance qualification, and per-hull extraction timings were not isolated.
 
 Outstanding: genuine old/new render-export controls (including 7.x/9.x), complete
 structural attachments and pivot/Euler/animation semantics, fuzzy shared-part

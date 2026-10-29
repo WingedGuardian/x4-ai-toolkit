@@ -323,13 +323,15 @@ def test_contained_partial_not_identity():
     assert result["verdict"] == "unresolved"
 
 
-def test_bounded_distance_matches_independent_bruteforce():
-    from x4validate._geometry_score import surface_distances
+@pytest.mark.parametrize("batch", [3, 2048])
+def test_bounded_distance_matches_independent_bruteforce(monkeypatch, batch):
+    from x4validate import _geometry_score
+    monkeypatch.setattr(_geometry_score, "DISTANCE_BATCH", batch)
     m = tetra()
     mesh = trimesh.Trimesh(vertices=m.vertices, faces=m.faces, process=False)
     points = np.random.default_rng(4).normal(size=(32, 3))*4
     expected = trimesh.proximity.closest_point_naive(mesh, points)[1]
-    np.testing.assert_allclose(surface_distances(mesh, points), expected, atol=1e-12)
+    np.testing.assert_allclose(_geometry_score.surface_distances(mesh, points), expected, atol=1e-12)
 
 
 def test_distance_budget_refuses_instead_of_truncating(monkeypatch):
