@@ -772,7 +772,10 @@ jobs:
           X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '358' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
-        run: uv run --frozen python -m pytest -q -rs
+        # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar
+        # geometry code would ship with its tests never run here. The cold legs below install
+        # WITHOUT the extra, so the no-numpy path (plain x4similar) is still exercised.
+        run: uv run --frozen --extra geometry python -m pytest -q -rs
 
       # THE COLD CHECK, WIRED. `scripts/verify-cold.sh` is named in five documents
       # (CLAUDE.md, REVIEW-SCOPE.md, SUBAGENT-BRIEF.md, TRUST.md, CHANGELOG.md) and
