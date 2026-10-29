@@ -65,6 +65,11 @@ def run(args, reference, ext):
         world = World(config, overlays, aliases, _merge.GAME_ROOT if _merge.is_configured_reference(reference) else None,
                       pose=args.geometry_pose)
         notes, unreadable = [], []
+        # A mod the engine leaves out is not in any assembled tree; say so (every ACTIVE-scope
+        # caller must: tests/test_active_exclusions_disclosed.py). Text: stderr; JSON: `notes`.
+        left_out = _registry.dropped_note(active)
+        if left_out:
+            notes.append(f"NOT in the geometry tree (the engine does not load it): {left_out}")
         candidates = [(v, v, None) for v in args.geometry_against]
         inventory_scope = "explicit macro paths"
         if not candidates:
