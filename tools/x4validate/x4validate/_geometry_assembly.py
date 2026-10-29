@@ -226,7 +226,7 @@ def assemble(world, macro_path, label=None):
                             transform(pivot.find("offset"))
                             result.pose_notes.append(f"{part_id}: pivot reparameterizes bind geometry; animated pivot not evaluated")
                         declarations = part if part.find("lods") is not None else provider
-                        lods = [int(l.get("index")) for l in declarations.findall("lods/lod")]
+                        lods = [int(l.get("index", "")) for l in declarations.findall("lods/lod")]   # absent -> ValueError
                         if len(lods) != len(set(lods)) or any(i < 0 or i > 31 for i in lods):
                             raise GeometryError("invalid/duplicate LOD index")
                         lod = min(lods) if lods else 0

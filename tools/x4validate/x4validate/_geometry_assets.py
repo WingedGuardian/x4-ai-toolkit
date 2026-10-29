@@ -88,15 +88,26 @@ class Assembly:
     attachments: list = field(default_factory=list)
     pose_notes: list = field(default_factory=list)
     seconds: float = 0.0
+    #: (vertices, triangles) of a mesh freed by release(); None once verify() finds drift.
+    released: tuple | None = None
+
+    def release(self):
+        """Free a scored candidate's mesh (each may hold ~144 MB of arrays; keeping every one
+        until the end made memory grow with --geometry-limit). Its counts are kept for report()."""
+        if self.mesh is not None:
+            self.released = (len(self.mesh.vertices), len(self.mesh.faces))
+            self.mesh = None
 
     def report(self):
-        return dict(label=self.label, status="partial" if self.mesh is not None and self.unresolved else
-                    "unresolved" if self.mesh is None else "complete",
+        has = self.mesh is not None or self.released is not None
+        counts = ((len(self.mesh.vertices), len(self.mesh.faces)) if self.mesh is not None
+                  else self.released or (0, 0))
+        return dict(label=self.label, status="partial" if has and self.unresolved else
+                    "unresolved" if not has else "complete",
                     included=self.included, excluded=self.excluded, unresolved=self.unresolved,
                     attachments=self.attachments, pose_notes=self.pose_notes, seconds=self.seconds,
                     receipts=self.receipts, scope=self.scope, assembly=ASSEMBLY_VERSION,
-                    vertices=0 if self.mesh is None else len(self.mesh.vertices),
-                    triangles=0 if self.mesh is None else len(self.mesh.faces))
+                    vertices=counts[0], triangles=counts[1])
 
 
 class World:
@@ -304,7 +315,7 @@ class World:
         for root, stamp in self.catalog_stamps.items():
             if stamp != self.catalog_stamp(root):
                 assembly.unresolved.append(f"catalog input drift: {root.name}")
-                assembly.mesh = None
+                assembly.mesh = assembly.released = None
         # Check actual bytes/effective trees again, bypassing the per-run cache.
         for receipt in assembly.receipts:
             try:
@@ -319,4 +330,4 @@ class World:
                     raise GeometryError("input bytes changed during extraction")
             except (GeometryError, OSError, ValueError, etree.XMLSyntaxError) as exc:
                 assembly.unresolved.append(f"input drift/recheck failed: {exc}")
-                assembly.mesh = None
+                assembly.mesh = assembly.released = None

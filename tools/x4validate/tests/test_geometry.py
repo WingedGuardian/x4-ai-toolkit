@@ -226,6 +226,45 @@ def test_effective_geometry_source_patch(tmp_path):
     assert a.mesh is None and "missing/data/main-lod0.xmf" in str(a.unresolved)
 
 
+def test_a_lod_without_an_index_is_unresolved_not_a_traceback(tmp_path):
+    """4.0.1 review: int(None) raised TypeError, which no except clause catches."""
+    world, put = fixture(tmp_path)
+    path = tmp_path/"assets/hull.xml"
+    put("assets/hull.xml", path.read_text().replace('<part name="main"/>', '<part name="main"><lods><lod/></lods></part>'))
+    a = world.assemble("assets/ship_macro.xml")
+    assert a.mesh is None and a.unresolved, a.unresolved
+
+
+def test_a_released_mesh_keeps_its_report_until_drift(tmp_path, monkeypatch):
+    """4.0.1 review: a scored candidate's mesh is freed (memory grew with --geometry-limit);
+    its report keeps the counts and status, and later drift still nulls it."""
+    world, _ = fixture(tmp_path)
+    a = world.assemble("assets/ship_macro.xml")
+    before = a.report()
+    a.release()
+    assert a.mesh is None and a.report() == before and before["status"] == "complete"
+    original = world.binary
+    monkeypatch.setattr(world, "binary", lambda value, record=True: original(value, record) + (b"" if record else b"drift"))
+    world.verify(a)
+    assert a.released is None and a.report()["status"] == "unresolved" and a.report()["vertices"] == 0
+
+
+def test_cli_text_names_what_it_did_not_compare(tmp_path, monkeypatch, capsys):
+    """4.0.1 review: the inventory's left-out mods and unparseable macros reached JSON only."""
+    fixture(tmp_path)
+    from x4validate import _effective
+    monkeypatch.setattr(_effective, "active_mods", lambda scan: [])
+    def collect(ref, ext, unreadable, notes=None):
+        unreadable.append("broken/ship_macro.xml")
+        notes.append("NOT layered onto any ship (the engine does not load it): somemod")
+        return []
+    monkeypatch.setattr(_similarity, "_collect_all", collect)
+    rc = _similarity.main(["--reference", str(tmp_path), "--ext-dir", str(tmp_path), "--geometry", "assets/ship_macro.xml"])
+    err = capsys.readouterr().err
+    assert rc == 3                                # zero candidates scored
+    assert "NOT COMPARED" in err and "broken/ship_macro.xml" in err and "somemod" in err, err
+
+
 def test_missing_lod_labels_fallback(tmp_path):
     world, put = fixture(tmp_path)
     path = tmp_path/"assets/hull.xml"
@@ -387,7 +426,7 @@ def test_cli_null_extraction_report(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(_effective, "active_mods", lambda scan: [])
     args = ["--reference", str(tmp_path), "--ext-dir", str(tmp_path),
             "--geometry", "missing.xml", "--geometry-against", "assets/ship_macro.xml", "--geometry-json"]
-    assert _similarity.main(args) == 0
+    assert _similarity.main(args) == 3          # nothing scored is a non-answer (4.0.1 review)
     report = json.loads(capsys.readouterr().out)
     assert report["pairs"][0]["geometry_score"] is None
     assert report["coverage"] == dict(total=1, scored=0, partial=0, unresolved=1, shortlisted=1, excluded=0)

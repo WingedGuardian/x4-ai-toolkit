@@ -26,7 +26,9 @@ options:
   --candidate CANDIDATE
                         restrict to pairs involving this mod folder
   --geometry MACRO_VPATH
-                        experimental geometry candidate; bypass stats class/purpose filters
+                        experimental geometry candidate; without --geometry-against it is compared
+                        with the installed ship_* macros that carry <properties> (the stats
+                        inventory, without its class/purpose filters)
   --geometry-against MACRO_VPATH
                         explicit comparison macro (repeat); otherwise scan the installed ship
                         inventory

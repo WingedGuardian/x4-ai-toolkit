@@ -10,7 +10,7 @@ import time
 
 def arguments(parser):
     parser.add_argument("--geometry", metavar="MACRO_VPATH",
-                        help="experimental geometry candidate; bypass stats class/purpose filters")
+                        help="experimental geometry candidate; without --geometry-against it is compared with the installed ship_* macros that carry <properties> (the stats inventory, without its class/purpose filters)")
     parser.add_argument("--geometry-against", action="append", default=[], metavar="MACRO_VPATH",
                         help="explicit comparison macro (repeat); otherwise scan the installed ship inventory")
     parser.add_argument("--geometry-overlay", action="append", default=[], metavar="DIR",
@@ -98,10 +98,13 @@ def run(args, reference, ext):
             shared = {p["payload_sha256"] for p in subject.included} & {p["payload_sha256"] for p in other.included}
             rows.append(dict(candidate=label, shared_exact_mesh_payloads=sorted(shared),
                              shared_parts_scope="exact mesh bytes only; not assembled-hull or fuzzy part equivalence", **result))
+            if other is not subject:
+                other.release()          # scored: only its counts and receipts are needed now
         for obj in objects:
             world.verify(obj)
         assemblies = [a.report() for a in objects]
-        if any(a.mesh is None and any("drift" in reason for reason in a.unresolved) for a in objects):
+        if any(a.mesh is None and a.released is None and any("drift" in reason for reason in a.unresolved)
+               for a in objects):
             for row in rows:
                 row.pop("partial_geometry_score", None)
                 row.update(geometry_score=None, status="unresolved", reason="run input drift; see assembly receipts")
@@ -155,7 +158,15 @@ def run(args, reference, ext):
                 owners = sorted({r.get("owner") for r in assembly["receipts"] if r.get("owner")})
                 print(f"    mesh owners: {', '.join(owners) or 'none'}; pose={args.geometry_pose}; LODs={sorted({p['lod'] for p in assembly['included']})}")
             print("Use --geometry-json for source hashes, part inventory, LOD, transforms, dimensions and directed distances.")
-        return 0
+            for note in notes:
+                print(f"  {note}", file=sys.stderr)
+            if unreadable:
+                # A null or low score is a negative, and a negative needs its denominator.
+                print(f"\n  NOT COMPARED — {len(unreadable)} macro file(s) would not parse:", file=sys.stderr)
+                for u in unreadable:
+                    print(f"   - {u}", file=sys.stderr)
+        # 4. Nothing scored is a non-answer, never an OK (the toolkit's exit-3 contract).
+        return 0 if report["coverage"]["scored"] or report["coverage"]["partial"] else 3
     except (GeometryError, OSError, ValueError) as exc:
         print(f"geometry unresolved: {exc}", file=sys.stderr)
         return 2

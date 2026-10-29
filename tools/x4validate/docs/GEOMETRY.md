@@ -12,11 +12,15 @@ uv run --extra geometry x4similar --geometry assets/units/size_l/macros/candidat
 ```
 
 Arguments are game virtual paths, not macro names. Repeat `--geometry-against`
-for explicit comparisons. Without it, the installed ship-definition inventory is
-used without stats class/purpose filters. More than `--geometry-limit` candidates
+for explicit comparisons. Without it, the stats inventory is used without its
+class/purpose filters: installed `ship_*` macros that carry `<properties>`; other
+macros are not candidates. More than `--geometry-limit` candidates
 (default 32, maximum 256) refuse; there is no hidden shortlist. Disabled-only
 inventory entries remain unresolved rather than resolving against an active
-mod's same-named definition. Unreadable inventory files are named separately.
+mod's same-named definition. Unreadable inventory files and mods the engine does
+not load are named separately (stderr in text mode, `unreadable_inventory` and
+`notes` in JSON). A run that scores no pair at all, not even partially, exits 3: a
+non-answer, never an OK.
 
 `--geometry-overlay DIR` appends an isolated candidate **last**. This is an
 explicit hypothetical model, not its predicted eventual installation order.
@@ -147,7 +151,8 @@ confusion count is reported. This cutoff is not a real-ship classification optio
 
 No game launch, full extraction or persistent geometry database is required. The
 per-run binary and merged-XML caches are each bounded at 128 MiB; arrays and indexes are
-additional memory. Mesh bytes, effective XML and catalog sets are rechecked after
+additional memory. A candidate's mesh is freed once its pair is scored, so peak memory
+is the subject plus one candidate, not the whole inventory. Mesh bytes, effective XML and catalog sets are rechecked after
 extraction and before CLI publication. There is no persistent cache to become
 silently stale, and no coarse search or retrieval-recall claim.
 
