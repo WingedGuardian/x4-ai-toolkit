@@ -469,7 +469,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     if args.geometry is None and (args.geometry_against or args.geometry_overlay or
                                  args.geometry_alias or args.geometry_json or
-                                 args.geometry_samples != 4096 or args.geometry_limit != 32):
+                                 args.geometry_samples != 4096 or args.geometry_limit != 32 or args.geometry_pose != "strict"):
         p.error("geometry options require --geometry MACRO_VPATH")
     if args.geometry is not None and (args.candidate or args.cross_mod_only or args.threshold != 0.85):
         p.error("stats filters do not apply to geometry; choose --geometry-against paths")

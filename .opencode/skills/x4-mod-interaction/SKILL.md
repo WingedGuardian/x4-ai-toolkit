@@ -18,8 +18,10 @@ For **shared render hulls**, stats similarity is not geometry evidence.
 `x4similar --geometry MACRO_VPATH --geometry-against MACRO_VPATH --geometry-json`
 is experimental and requires the optional `geometry` extra. Read the generated
 CLI reference and `tools/x4validate/docs/GEOMETRY.md` first. Inspect resolution
-scope, the part manifest and null/partial reasons: structural macro attachments,
-pivots/Euler offsets and animated ancestry are not yet qualified. A partial score
+  scope, the part manifest and null/partial reasons. Recursive structural
+  attachments are supported. `--geometry-pose bind` explicitly uses declared XML
+  offsets and mesh bind geometry; runtime animation/deployment and general Euler
+  parsing remain unqualified. Default strict mode retains pose refusals. A partial score
 cannot establish a whole-hull negative, and no real-hull variant threshold or
 removal verdict is qualified. Candidate overlays are explicitly hypothetical.
 

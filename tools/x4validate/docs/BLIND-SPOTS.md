@@ -1,5 +1,16 @@
 # BLIND-SPOTS.md — the narrowing-point register
 
+## 2026-10-29 — Recursive XML-bind geometry · PARTIAL QUALIFICATION
+
+Supersedes the structural-attachment limitation below for the explicit
+`--geometry-pose bind` model. MEASURED: four selected real hulls are complete in
+that model; independent Blender frames account for 960/960 declared instances
+(682 included, 278 excluded), with no missing/unexpected frames. This is numeric
+bind-transform evidence, not runtime rendering. Strict mode retains animation
+and pose refusals. General Euler parsing, animation/deployment, old/new exports,
+real-hull classification and inventory recall remain OPEN. A work-budget refusal
+is unresolved, never a negative. See `GEOMETRY.md` and assembly tests.
+
 ## 2026-10-29 — Geometry qualification scope · OPEN LIMIT
 
 `x4similar --geometry` separates numeric stats from experimental render-surface

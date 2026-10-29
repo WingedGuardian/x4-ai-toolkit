@@ -122,7 +122,7 @@ def test_effect_exclusion_and_animation_refusal(tmp_path):
     put("assets/hull.xml", path.read_text().replace('<parts>', '<animations/><parts>'))
     a = world.assemble("assets/ship_macro.xml")
     assert a.mesh is not None and a.report()["status"] == "partial"
-    assert "animated" in a.unresolved[0]
+    assert any("animated" in reason for reason in a.unresolved)
 
 
 def test_pivot_refuses(tmp_path):
@@ -339,6 +339,23 @@ def test_distance_budget_refuses_instead_of_truncating(monkeypatch):
     monkeypatch.setattr(_geometry_score, "MAX_TRIANGLE_TESTS", 0)
     with pytest.raises(GeometryError, match="work budget"):
         compare(tetra(), tetra(), 128)
+
+
+def test_box_budget_refuses_independently(monkeypatch):
+    from x4validate import _geometry_score
+    monkeypatch.setattr(_geometry_score, "MAX_BOX_TESTS", 0)
+    with pytest.raises(GeometryError, match="bounding-box work budget"):
+        compare(tetra(), tetra(), 128)
+
+
+def test_box_pruning_keeps_exact_distances_on_curved_mesh():
+    from x4validate._geometry_score import surface_distances
+    mesh = trimesh.creation.icosphere(subdivisions=2)
+    points = np.random.default_rng(11).normal(size=(40, 3))*3
+    expected = trimesh.proximity.closest_point_naive(mesh, points)[1]
+    work = [0, 0]
+    np.testing.assert_allclose(surface_distances(mesh, points, work), expected, atol=1e-12)
+    assert work[0] < work[1]
 
 
 def test_unreferenced_vertex_is_not_a_surface_bound():

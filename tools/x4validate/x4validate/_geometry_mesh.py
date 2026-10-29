@@ -43,7 +43,10 @@ def validate(mesh: Mesh) -> Mesh:
     if (v.ndim != 2 or v.shape[1] != 3 or not len(v) or
             f.ndim != 2 or f.shape[1] != 3 or not len(f)):
         raise GeometryError("empty or invalid triangle mesh")
-    if len(v) > MAX_ITEMS or len(f) * 3 > MAX_ITEMS:
+    # MAX_ITEMS bounds EACH serialized XMF buffer in decode(). An assembly can
+    # legitimately combine more than one index buffer; retain a separate finite
+    # in-memory mesh bound rather than reapply the wire-buffer limit to the sum.
+    if len(v) > MAX_ITEMS or len(f) > MAX_ITEMS:
         raise GeometryError("mesh item budget exceeded")
     if not np.isfinite(v).all() or not np.issubdtype(f.dtype, np.integer):
         raise GeometryError("non-finite positions or noninteger indices")

@@ -19,6 +19,7 @@ SAMPLES = 4096
 TOLERANCES = (0.015, 0.03, 0.06)
 WEIGHTS = (0.25, 0.5, 0.25)
 MAX_TRIANGLE_TESTS = 20_000_000
+MAX_BOX_TESTS = 100_000_000
 DISTANCE_BATCH = 2048
 
 
@@ -70,6 +71,8 @@ def surface_distances(surface, points, work=None):
     A work-budget refusal is UNRESOLVED, never a partial distance or a zero score.
     """
     work = [0] if work is None else work
+    if len(work) == 1:
+        work.append(0)
     target = surface._cache["geometry_vertex_tree"]
     if target is None:
         # Only referenced vertices lie on the target surface. An unused vertex
@@ -85,23 +88,38 @@ def surface_distances(surface, points, work=None):
             return
         triangles = surface.vertices[surface.faces[pending_faces]]
         queries = points[pending_points]
+        work[1] += len(triangles)
+        if work[1] > MAX_BOX_TESTS:
+            raise GeometryError("surface bounding-box work budget exceeded")
+        # A triangle cannot be nearer than its AABB. The Euclidean lower bound
+        # removes cube-corner false positives without excluding a possible
+        # nearest surface. Padding makes the floating-point comparison conservative.
+        delta = np.maximum(np.maximum(triangles.min(axis=1)-queries, queries-triangles.max(axis=1)), 0)
+        upper = radii[pending_points]*(1+1e-12)+1e-10
+        keep = np.einsum('ij,ij->i', delta, delta) <= upper*upper
+        triangles, queries = triangles[keep], queries[keep]
+        ids = np.asarray(pending_points)[keep]
+        work[0] += len(triangles)
+        if work[0] > MAX_TRIANGLE_TESTS:
+            raise GeometryError("exact surface-distance work budget exceeded")
+        if not len(triangles):
+            pending_faces.clear()
+            pending_points.clear()
+            return
         closest = trimesh.triangles.closest_point(triangles, queries)
         distances = np.linalg.norm(closest-queries, axis=1)
         if not np.isfinite(distances).all():
             raise GeometryError("non-finite point-to-triangle distance")
-        np.minimum.at(result, pending_points, distances)
+        np.minimum.at(result, ids, distances)
         pending_faces.clear()
         pending_points.clear()
     for number, (point, radius) in enumerate(zip(points, radii)):
-        radius += 1e-10
+        radius = radius*(1+1e-12)+1e-10
         candidates = tree.intersection(np.concatenate([point-radius, point+radius]))
         while True:
             ids = list(itertools.islice(candidates, DISTANCE_BATCH-len(pending_faces)))
             if not ids:
                 break
-            work[0] += len(ids)
-            if work[0] > MAX_TRIANGLE_TESTS:
-                raise GeometryError("exact surface-distance work budget exceeded")
             pending_faces.extend(ids)
             pending_points.extend([number]*len(ids))
             if len(pending_faces) == DISTANCE_BATCH:
@@ -172,7 +190,7 @@ def compare(a: Mesh, b: Mesh, count=SAMPLES, seed=0):
     pb, cb, rb, ab = _prepare(b, count, seed)
     surface_b = trimesh.Trimesh(vertices=(b.vertices-cb)/rb, faces=b.faces, process=False)
     surface_a = trimesh.Trimesh(vertices=(a.vertices-ca)/ra, faces=a.faces, process=False)
-    work = [0]
+    work = [0, 0]
     def finish(determinant):
         best = None
         for rotation, translation in _align(pa, pb, aa, ab, determinant):
@@ -209,6 +227,7 @@ def compare(a: Mesh, b: Mesh, count=SAMPLES, seed=0):
                 samples_a=len(pa), samples_b=len(pb), seed=seed,
                 discarded_zero_area_faces_a=degenerate_a, discarded_zero_area_faces_b=degenerate_b,
                 triangle_distance_tests=work[0], triangle_distance_budget=MAX_TRIANGLE_TESTS,
+                bounding_box_tests=work[1], bounding_box_budget=MAX_BOX_TESTS,
                 overlap=rows, distances_a_to_b=distribution(da), distances_b_to_a=distribution(db),
                 size_a=np.ptp(a.vertices[np.unique(a.faces)], axis=0).tolist(),
                 size_b=np.ptp(b.vertices[np.unique(b.faces)], axis=0).tolist(),

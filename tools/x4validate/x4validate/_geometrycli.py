@@ -18,6 +18,8 @@ def arguments(parser):
     parser.add_argument("--geometry-alias", action="append", default=[], metavar="NAME=DIR",
                         help="explicit hypothetical extension namespace for candidate assets")
     parser.add_argument("--geometry-json", action="store_true", help="versioned geometry report on stdout")
+    parser.add_argument("--geometry-pose", choices=("strict", "bind"), default="strict",
+                        help="strict refuses unqualified animation/pivots (default strict); bind compares declared XML bind geometry, not an animation state")
     parser.add_argument("--geometry-samples", type=int, default=4096, metavar="N",
                         help="area-weighted surface samples per hull, 128..16384 (default 4096)")
     parser.add_argument("--geometry-limit", type=int, default=32, metavar="N",
@@ -37,7 +39,7 @@ def run(args, reference, ext):
     except ImportError as exc:
         print(f"geometry unavailable: {exc}; install with uv sync --extra geometry", file=sys.stderr)
         return 2
-    from . import _compat, _effective, _merge, _registry, _similarity
+    from . import _compat, _effective, _merge, _registry, _similarity, _freshness
     if not 128 <= args.geometry_samples <= 16384 or not 1 <= args.geometry_limit <= 256:
         print("error: geometry samples must be 128..16384, limit 1..256", file=sys.stderr)
         return 2
@@ -60,7 +62,8 @@ def run(args, reference, ext):
         if any(p not in overlays for p in aliases.values()):
             raise GeometryError("each geometry alias must name an explicit --geometry-overlay root")
         config = _merge.Config(reference=reference)
-        world = World(config, overlays, aliases, _merge.GAME_ROOT if _merge.is_configured_reference(reference) else None)
+        world = World(config, overlays, aliases, _merge.GAME_ROOT if _merge.is_configured_reference(reference) else None,
+                      pose=args.geometry_pose)
         notes, unreadable = [], []
         candidates = [(v, v, None) for v in args.geometry_against]
         inventory_scope = "explicit macro paths"
@@ -104,7 +107,10 @@ def run(args, reference, ext):
                 row.update(geometry_score=None, status="unresolved", reason="run input drift; see assembly receipts")
         source_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
                          (Path(__file__), Path(__file__).with_name("_geometry_mesh.py"),
-                          Path(__file__).with_name("_geometry_assets.py"), Path(__file__).with_name("_geometry_score.py"))}
+                          Path(__file__).with_name("_geometry_assets.py"), Path(__file__).with_name("_geometry_score.py"),
+                          Path(__file__).with_name("_geometry_assembly.py"))}
+        source_hashes.update({name: hashlib.sha256(Path(_freshness.__file__).with_name(name).read_bytes()).hexdigest()
+                              for name in _freshness.ENGINE_SOURCES})
         report = dict(schema="x4similar.geometry/1", candidate=args.geometry,
                       inventory_scope=inventory_scope, resolution_scope=world.scope,
                       decoder=DECODER_VERSION, scorer=SCORER_VERSION,
@@ -117,11 +123,12 @@ def run(args, reference, ext):
                                     unresolved=sum(r["status"] == "unresolved" for r in rows),
                                     shortlisted=len(candidates), excluded=0),
                       assemblies=assemblies, pairs=rows, cache_bytes=world.cache_bytes,
+                      xml_cache_bytes=world.xml_cache_bytes,
                       seconds=time.perf_counter()-started,
                       limitations=["EXPERIMENTAL; no qualified real-hull classification threshold",
                                    "Scores describe shape only, never mod redundancy or removal safety",
                                    "Explicit candidate overlays are hypothetical, not active installations",
-                                   "Partial assemblies cannot support whole-hull negatives",
+                                   "Partial assemblies cannot support whole-hull negatives; bind geometry does not certify a runtime animation state",
                                    "No persistent cache; no coarse shortlist or search recall claim"])
         if args.geometry_json:
             print(json.dumps(report, indent=2, allow_nan=False))
@@ -143,8 +150,10 @@ def run(args, reference, ext):
                       f"{len(assembly['excluded'])} excluded / {len(assembly['unresolved'])} unresolved")
                 for reason in assembly["unresolved"]:
                     print(f"    {reason}")
+                for note in assembly["pose_notes"]:
+                    print(f"    POSE: {note}")
                 owners = sorted({r.get("owner") for r in assembly["receipts"] if r.get("owner")})
-                print(f"    mesh owners: {', '.join(owners) or 'none'}; pose=rest; LODs={sorted({p['lod'] for p in assembly['included']})}")
+                print(f"    mesh owners: {', '.join(owners) or 'none'}; pose={args.geometry_pose}; LODs={sorted({p['lod'] for p in assembly['included']})}")
             print("Use --geometry-json for source hashes, part inventory, LOD, transforms, dimensions and directed distances.")
         return 0
     except (GeometryError, OSError, ValueError) as exc:

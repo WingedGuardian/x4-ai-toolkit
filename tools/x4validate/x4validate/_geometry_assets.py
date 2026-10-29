@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+import copy
 import re
 
 import numpy as np
@@ -16,10 +17,10 @@ from scipy.spatial.transform import Rotation
 from . import _cat, _merge
 from ._geometry_mesh import MAX_BYTES, GeometryError, Mesh, decode, digest, validate
 
-ASSEMBLY_VERSION = "rest-component-1"
+ASSEMBLY_VERSION = "recursive-bind-2"
 MAX_PARTS = 128
-MAX_TRIANGLES = 1_000_000
-MAX_ASSEMBLED_VERTICES = 2_000_000
+MAX_TRIANGLES = 2_000_000
+MAX_ASSEMBLED_VERTICES = 4_000_000
 
 
 def safe_path(value):
@@ -34,16 +35,29 @@ def transform(node):
     out = np.eye(4)
     if node is None:
         return out
-    unknown = {c.tag for c in node if isinstance(c.tag, str)}-{"position", "quaternion", "scale"}
+    unknown = {c.tag for c in node if isinstance(c.tag, str)}-{"position", "quaternion", "rotation", "scale"}
     if unknown:
         raise GeometryError(f"unsupported transform elements: {sorted(unknown)}")
-    for tag in ("position", "quaternion", "scale"):
+    for tag in ("position", "quaternion", "rotation", "scale"):
         if len(node.findall(tag)) > 1:
             raise GeometryError(f"duplicate {tag} transform")
     p = node.find("position")
     if p is not None:
         out[:3, 3] = [float(p.get(k, 0)) for k in "xyz"]
     q = node.find("quaternion")
+    e = node.find("rotation")
+    if q is not None and e is not None:
+        raise GeometryError("ambiguous quaternion and Euler transform")
+    if e is not None:
+        # Roll only: the native quaternion frame's forward Z axis. Its equivalent
+        # Blender Y rotation has the opposite sign under Egosoft's Y/Z basis swap.
+        # No mixed-axis Euler order is inferred from this single-axis mapping.
+        if set(e.attrib)-{"yaw", "pitch", "roll"}:
+            raise GeometryError("unsupported Euler attributes")
+        yaw, pitch, roll = [float(e.get(k, "0")) for k in ("yaw", "pitch", "roll")]
+        if not np.isfinite([yaw, pitch, roll]).all() or yaw != 0 or pitch != 0:
+            raise GeometryError("unqualified mixed-axis Euler transform (roll-only supported)")
+        out[:3, :3] = Rotation.from_rotvec([0., 0., np.deg2rad(roll % 360)]).as_matrix()
     if q is not None:
         quat = np.array([float(q.get(k, 1 if k == "qw" else 0)) for k in ("qx", "qy", "qz", "qw")])
         if not np.isfinite(quat).all() or np.linalg.norm(quat) < 1e-12:
@@ -71,11 +85,15 @@ class Assembly:
     unresolved: list = field(default_factory=list)
     receipts: list = field(default_factory=list)
     scope: dict = field(default_factory=dict)
+    attachments: list = field(default_factory=list)
+    pose_notes: list = field(default_factory=list)
+    seconds: float = 0.0
 
     def report(self):
         return dict(label=self.label, status="partial" if self.mesh is not None and self.unresolved else
                     "unresolved" if self.mesh is None else "complete",
                     included=self.included, excluded=self.excluded, unresolved=self.unresolved,
+                    attachments=self.attachments, pose_notes=self.pose_notes, seconds=self.seconds,
                     receipts=self.receipts, scope=self.scope, assembly=ASSEMBLY_VERSION,
                     vertices=0 if self.mesh is None else len(self.mesh.vertices),
                     triangles=0 if self.mesh is None else len(self.mesh.faces))
@@ -88,7 +106,10 @@ class World:
     namespaces, never guessed from asset names. Cache is per run, <=128 MiB; no
     persistent derived artifact can silently become stale.
     """
-    def __init__(self, config, overlays=(), aliases=None, game=None):
+    def __init__(self, config, overlays=(), aliases=None, game=None, pose="strict"):
+        if pose not in ("strict", "bind"):
+            raise GeometryError("geometry pose must be strict or bind")
+        self.pose = pose
         self.config, self.overlays = config, tuple(overlays)
         self.roots = [config.reference, *config.dlc_dirs(), *self.overlays]
         self.aliases = {k.lower(): Path(v) for k, v in (aliases or {}).items()}
@@ -100,11 +121,14 @@ class World:
                 self.game_version = int(version)
         self.catalogs, self.receipts, self.cache = {}, [], {}
         self.catalog_stamps = {}
+        self.xml_cache = {}
+        self.xml_cache_bytes = 0
         self.cache_bytes = 0
         self.scope = dict(resolution="explicit ordered base+DLC+overlays",
                           sources=[str(p) for p in self.roots],
                           aliases={k: str(v) for k, v in self.aliases.items()},
-                          pose="rest; animated structural assemblies unresolved",
+                          pose=pose,
+                          pose_definition="XML offsets and mesh bind geometry; animation tracks not evaluated",
                           appearance="materials/textures and collision compatibility not compared",
                           cache="per-run byte cache; 128 MiB; no persistent artifact")
         self.scope["game_version"] = self.game_version
@@ -232,6 +256,10 @@ class World:
     def xml(self, vpath):
         vpath = safe_path(vpath)
         vpath = self.xml_namespace(vpath)
+        if vpath in self.xml_cache:
+            tree, receipt = self.xml_cache[vpath]
+            self.receipts.append(receipt)
+            return copy.deepcopy(tree)
         result = _merge.build_effective(vpath, self.config, extra_overlays=list(self.overlays))
         if result.tree is None or result.skipped:
             raise GeometryError(f"incomplete XML merge {vpath}: {result.skipped}")
@@ -241,6 +269,9 @@ class World:
         receipt = dict(path=vpath, storage="merged-xml", sha256=digest(raw),
                        contributors=result.sources)
         self.receipts.append(receipt)
+        if self.xml_cache_bytes+len(raw) <= MAX_BYTES:
+            self.xml_cache[vpath] = copy.deepcopy(result.tree), receipt
+            self.xml_cache_bytes += len(raw)
         return result.tree
 
     def xml_namespace(self, vpath):
@@ -257,110 +288,16 @@ class World:
             raise GeometryError(f"component {name}: missing/ambiguous exact index entry; wildcard discovery unqualified")
         return safe_path(entries[0].get("value"))+".xml"
 
+    def macro_path(self, name):
+        root = self.xml("index/macros.xml")
+        entries = [e for e in root.iter("entry") if e.get("name", "").lower() == name.lower()]
+        if len(entries) != 1 or not entries[0].get("value"):
+            raise GeometryError(f"macro {name}: missing/ambiguous exact index entry")
+        return safe_path(entries[0].get("value"))+".xml"
+
     def assemble(self, macro_path, label=None):
-        assembly = Assembly(label or macro_path, scope=self.scope.copy())
-        start = len(self.receipts)
-        try:
-            root = self.xml(macro_path)
-            macros = root.findall("macro")
-            if len(macros) != 1:
-                raise GeometryError("expected exactly one macro")
-            macro = macros[0]
-            link = macro.find("component")
-            if link is None or not link.get("ref"):
-                raise GeometryError("macro lacks component reference")
-            for c in macro.findall("connections/connection"):
-                child = c.find("macro")
-                if child is not None:
-                    # Whole ship assembly needs macro-connected fixed modules.
-                    # They are not silently classified as fitted equipment.
-                    assembly.unresolved.append(f"macro-connected part role/assembly unqualified: {child.get('ref')}")
-            path = self.component_path(link.get("ref"))
-            tree = self.xml(path)
-            components = [c for c in tree.findall("component") if c.get("name", "").lower() == link.get("ref").lower()]
-            if len(components) != 1:
-                raise GeometryError("indexed component absent/ambiguous in merged file")
-            comp = components[0]
-            source = comp.find("source")
-            if source is None or not source.get("geometry"):
-                raise GeometryError("component lacks geometry source")
-            geometry = safe_path(source.get("geometry"))
-            connections = comp.findall("connections/connection")
-            parents, instances = {}, []
-            for c in connections:
-                for part in c.findall("parts/part"):
-                    name = part.get("name")
-                    if not name:
-                        raise GeometryError("missing render part name")
-                    parents.setdefault(name, []).append(c)
-                    instances.append((name, c, part))
-            def parent_connection(name):
-                matches = list({id(c): c for c in parents.get(name, [])}.values())
-                if len(matches) != 1:
-                    raise GeometryError(f"missing/ambiguous render parent {name}")
-                return matches[0]
-            def matrix(c, seen=()):
-                if id(c) in seen or len(seen) > MAX_PARTS:
-                    raise GeometryError("cyclic/excessive render hierarchy")
-                parent = c.get("parent")
-                return (matrix(parent_connection(parent), (*seen, id(c))) if parent else np.eye(4)) @ transform(c.find("offset"))
-            vertices, faces, offset, triangles = [], [], 0, 0
-            if len(instances) > MAX_PARTS:
-                raise GeometryError("assembly part budget exceeded")
-            for name, c, part in instances:
-                materials = [m.get("ref", "").lower() for m in part.findall("lods/lod/materials/material")]
-                if materials and all("effects" in m for m in materials):
-                    assembly.excluded.append(dict(part=name, reason="effect-only materials"))
-                    continue
-                try:
-                    # Any animation along a structural part's ancestry makes the
-                    # whole-hull verdict unresolved; rest geometry can still score.
-                    ancestor, visited = c, set()
-                    while ancestor is not None:
-                        if id(ancestor) in visited:
-                            raise GeometryError("cyclic render hierarchy")
-                        visited.add(id(ancestor))
-                        if ancestor.find("animations") is not None:
-                            assembly.unresolved.append(f"animated structural ancestry: {name}")
-                        ancestor = parent_connection(ancestor.get("parent")) if ancestor.get("parent") else None
-                    if part.find("pivot") is not None:
-                        raise GeometryError("pivot convention not independently qualified")
-                    lods = [int(l.get("index")) for l in part.findall("lods/lod")]
-                    if len(lods) != len(set(lods)) or any(lod < 0 or lod > 31 for lod in lods):
-                        raise GeometryError("invalid/duplicate LOD index")
-                    lod = min(lods) if lods else 0
-                    if lod != 0:
-                        assembly.unresolved.append(f"LOD0 absent for {name}; fallback LOD{lod}")
-                    mesh_path = geometry+"/"+name+f"-lod{lod}.xmf"
-                    mesh = decode(self.binary(mesh_path))
-                    if offset+len(mesh.vertices) > MAX_ASSEMBLED_VERTICES:
-                        raise GeometryError("assembled vertex budget exceeded")
-                    mat = matrix(c) @ transform(part.find("offset"))
-                    points = mesh.vertices @ mat[:3, :3].T+mat[:3, 3]
-                    triangles += len(mesh.faces)
-                    if triangles > MAX_TRIANGLES:
-                        raise GeometryError("assembled triangle budget exceeded")
-                    vertices.append(points)
-                    # Serialized uint16 indices are local to each part. Assembly
-                    # offsets must widen before addition (NumPy 2 refuses overflow).
-                    faces.append(mesh.faces.astype(np.int64)+offset)
-                    offset += len(points)
-                    assembly.included.append(dict(part=name, lod=lod, mesh=mesh_path,
-                                                  payload_sha256=self.receipts[-1]["sha256"],
-                                                  owner=self.receipts[-1].get("owner"),
-                                                  vertices=len(points), triangles=len(mesh.faces),
-                                                  transform=mat.tolist(), role="component render part"))
-                except (GeometryError, ValueError, OSError, etree.XMLSyntaxError) as exc:
-                    assembly.unresolved.append(f"{name}: {exc}")
-            if vertices:
-                assembly.mesh = validate(Mesh(np.concatenate(vertices), np.concatenate(faces)))
-            else:
-                assembly.unresolved.append("no decoded structural surfaces")
-        except (GeometryError, ValueError, OSError, etree.XMLSyntaxError) as exc:
-            assembly.unresolved.append(str(exc))
-        assembly.receipts = self.receipts[start:].copy()
-        self.verify(assembly)
-        return assembly
+        from ._geometry_assembly import assemble
+        return assemble(self, macro_path, label)
 
     def verify(self, assembly):
         """Recheck byte/catalog receipts, including after a long pair comparison."""

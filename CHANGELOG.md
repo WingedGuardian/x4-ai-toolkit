@@ -2,11 +2,17 @@
 
 ## Unreleased
 
+- Geometry comparison supports bounded recursive structural attachments, shared
+  render-part references and an explicit `--geometry-pose bind` projection.
+  Independent Blender controls qualify selected bind transforms; runtime poses
+  and real-hull thresholds remain unqualified. Conservative bounding-box pruning
+  retains exact surface distances with separate bounded work accounting.
+
 - `x4similar --geometry` adds opt-in experimental render-surface comparison with
   separate versioned JSON, explicit source/part coverage, bounded XMF reads and
   area-weighted bidirectional triangle-surface overlap. Stats behavior is unchanged.
   Incomplete assemblies return null whole-hull scores; real-hull thresholds,
-  structural attachments and some transforms remain unqualified. Install the
+  runtime poses and general Euler parsing remain unqualified. Install the
   optional `geometry` extra; see `tools/x4validate/docs/GEOMETRY.md`.
 
 - Updating the mod enable/disable list -- the profile's ROOT `content.xml` -- is now advisory instead of asking (user ruling 2026-10-28): enabling or disabling a mod you were asked to install needs no second confirmation. Backups still run. Deleting that file, every other profile file, saves, a `content.xml` in a subfolder or behind a link, and shell commands touching the profile still ask.

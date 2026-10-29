@@ -59,20 +59,43 @@ The independent XUMF subset reader accepts v3 little-endian triangle lists,
 float32 XYZ/XYZW or half-float XYZW positions, supported interleaved element
 layouts, 16/32-bit indices, and raw/zlib buffers. It validates offsets, strides,
 counts, payload overlap, decompression bounds, indices and finite positions.
-Limits: 128 MiB input/expanded bytes per mesh, 4 million buffer items, 128 part
-instances, 2 million assembled vertices and 1 million assembled triangles. Empty/all-degenerate geometry refuses.
+Limits: 128 MiB input/expanded bytes per mesh, 4 million buffer items, 512 render
+instances, 128 macro instances, depth 16, 4 million assembled vertices and
+2 million assembled triangles. Empty/all-degenerate geometry refuses.
 Mixed zero-area faces are excluded from scoring with explicit counts.
 
 Native XYZ, quaternion offsets, uniform scale and repeated transformed instances
-are supported. Parent ambiguity, missing parents and cycles refuse. Pose is rest;
+are supported. Parent ambiguity, missing parents and cycles refuse. Pose is explicit;
 an explicitly declared LOD fallback makes the assembly partial. Effect-only
 material references are excluded; appearance and collision/JCS are not compared.
 
-**Unqualified extraction:** macro-connected structural attachments are individually
-inventoried as unresolved, not silently called equipment. Pivots, Euler `rotation`
-offsets and animated structural ancestry are unqualified. Missing exact component
-index entries, including wildcard-only/unindexed components, remain unresolved.
-Many real ships therefore have component-surface evidence but no whole-hull score.
+Recursive structural attachments use the parent connector frame multiplied by
+the inverse child connector frame, including parent part offsets. Shared
+`component.part` references inherit mesh data, not provider placement. Equipment
+classes are excluded explicitly. Virtual leaves are excluded only after their
+actual absence of render source, parts and structural children is established;
+irrelevant virtual anchors are not validated or repaired. Missing/ambiguous exact
+index entries, missing physical ports and cycles remain unresolved.
+
+`--geometry-pose strict` is the default: animation ancestry, pivots, shared-part
+runtime state and non-half-turn Euler poses remain unresolved where applicable.
+`--geometry-pose bind` explicitly compares declared XML offsets and mesh bind
+geometry without evaluating animation tracks, deployment or runtime state.
+Pivot reparameterization and consumer reference placement have independent
+Blender/importer arithmetic controls. Roll-only Euler projection is supported;
+yaw/pitch, mixed quaternion/Euler declarations and nonfinite values refuse.
+Roll arithmetic matches equivalent Egosoft-exported quaternions in Blender;
+the game's Euler parser has not been tested. Bind completeness describes this
+declared model, not every runtime pose. Add `--geometry-pose bind` to the example
+command above only when this projection answers the comparison question.
+
+MEASURED privately: four selected ship assemblies resolve completely in bind
+mode. Independent Blender hierarchies account for all 960 declared render frames:
+682 included and 278 excluded, no missing/unexpected frames. Thirty-three physical
+attachment anchors coincide within 1.12e-7 in Blender. This checks numeric XML-bind
+transforms, not complete rendered images or engine animation behavior. Separate
+authored controls exercise exporter quaternions, roll equivalents, child connector
+inversion, pivots and references.
 
 Private qualification matched the inspected Blender importer's parsing coordinates
 and triangle indices on **52/52 selected real LOD0 meshes**, with zero coordinate
@@ -94,8 +117,11 @@ Global optimality is unproved, especially on symmetric or rearranged assemblies.
 Final distances go from samples to the **other triangle surface**, not vertices
 or its point samples. A nearest vertex bounds an R-tree query that enumerates
 every triangle box intersecting that radius cube. Candidate triangles stream in
-batches of at most 2048 across query points. A shared budget of 20 million triangle tests refuses the entire
-pair on exhaustion, never publishing a truncated distance as a complete one.
+batches of at most 2048 across query points. A conservative Euclidean distance
+lower bound to each triangle bounding box removes impossible candidates before
+exact evaluation. Shared budgets of 100 million bounding-box candidates and
+20 million exact triangle tests refuse the entire pair on exhaustion, never
+publishing a truncated distance as a complete one.
 Inverse orthogonal queries reuse one spatial index per hull across hypotheses.
 
 At normalized tolerances 0.015, 0.03 and 0.06, measure both directed fractions
@@ -120,7 +146,7 @@ confusion count is reported. This cutoff is not a real-ship classification optio
 ## Costs, freshness and outstanding qualification
 
 No game launch, full extraction or persistent geometry database is required. The
-per-run byte cache is bounded at 128 MiB; decoded arrays and spatial indexes are
+per-run binary and merged-XML caches are each bounded at 128 MiB; arrays and indexes are
 additional memory. Mesh bytes, effective XML and catalog sets are rechecked after
 extraction and before CLI publication. There is no persistent cache to become
 silently stale, and no coarse search or retrieval-recall claim.
@@ -136,9 +162,13 @@ decoder, synthetic, real-pair and stats-baseline qualification took 153.9 second
 the resource runner reported 400 MB peak job memory under a 0.75 GiB cap. Binary
 cache use was 12,598,120 bytes. These Windows measurements are not a full-inventory
 performance qualification, and per-hull extraction timings were not isolated.
+Those component-only measurements predate recursive bind assembly. The later
+four-hull bind run required a 1.5 GiB job cap; a 0.75 GiB cap is not qualified for
+complete assemblies. Individual extraction and pair timings are retained in the
+private qualification receipts.
 
 Outstanding: genuine old/new render-export controls (including 7.x/9.x), complete
-structural attachments and pivot/Euler/animation semantics, fuzzy shared-part
+engine runtime animation/deployment and general Euler semantics, fuzzy shared-part
 explanations, large-inventory recall/performance and a real-hull threshold. A low
 experimental overlap cannot prove uniqueness. Equipment, jobs, behavior, visual
 appearance and collision compatibility remain separate questions.
