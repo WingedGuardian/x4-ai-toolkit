@@ -1274,6 +1274,10 @@ MUTANTS = [
      '    if cwd and "PWD" not in assigns:',
      '    if "PWD" not in assigns:',
      'TestF331LinkCreationIntoAProtectedRoot.test_PWD_is_the_segments_own_folder'),
+    ("4.0.1: the translator's PowerShell starts without network calls",
+     'input=text.encode("utf-8"), capture_output=True, timeout=timeout, env=env,',
+     'input=text.encode("utf-8"), capture_output=True, timeout=timeout,',
+     'TestPowerShellStartsWithoutNetworkCalls.test_telemetry_and_update_check_are_off_and_the_env_is_kept'),
 ]
 
 SHIM = '''

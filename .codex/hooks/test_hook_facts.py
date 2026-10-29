@@ -4143,6 +4143,34 @@ class TestHK1TranslationBudget(unittest.TestCase):
         self.assertEqual(self.calls, [H._PS_CALL_CAP_S, H._PS_CALL_CAP_S])
 
 
+class TestPowerShellStartsWithoutNetworkCalls(unittest.TestCase):
+    """4.0.1: the translator's PowerShell runs with telemetry and the update check OFF (each a
+    network call at startup, paid once per parsed command), and keeps the rest of the env."""
+
+    def test_telemetry_and_update_check_are_off_and_the_env_is_kept(self):
+        import subprocess as sp
+        import types
+        seen = []
+
+        def fake_run(args, **kw):
+            seen.append(kw.get("env"))
+            raise sp.TimeoutExpired(args, kw["timeout"])
+        saved = (H.subprocess, H._pwsh_exe)
+        H.subprocess = types.SimpleNamespace(run=fake_run, TimeoutExpired=sp.TimeoutExpired,
+                                             SubprocessError=sp.SubprocessError)
+        H._pwsh_exe = lambda: "pwsh"          # no PowerShell needed: the call is stubbed
+        H._PS_CACHE.clear()
+        try:
+            H._translate_ps("Get-Date", 1.0)
+        finally:
+            H.subprocess, H._pwsh_exe = saved
+            H._PS_CACHE.clear()
+        env = seen[0]
+        self.assertEqual(env.get("POWERSHELL_TELEMETRY_OPTOUT"), "1")
+        self.assertEqual(env.get("POWERSHELL_UPDATECHECK"), "Off")
+        self.assertEqual(env.get("PATH"), os.environ.get("PATH"))     # twin: nothing else dropped
+
+
 class TestHK1UnknownCmdletMarker(unittest.TestCase):
     """ps_translate.ps1 hands an unmodelled, possibly-writing cmdlet to this side as
     `x4-unknown-cmdlet <Name> <args>`; only here are the roots known (review item 6)."""

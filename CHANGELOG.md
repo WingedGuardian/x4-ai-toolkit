@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The PowerShell guard starts PowerShell with telemetry and the update check turned off (`POWERSHELL_TELEMETRY_OPTOUT=1`, `POWERSHELL_UPDATECHECK=Off`): both are network calls at startup, and the guard starts PowerShell once per command it parses. On a slow network a stalled start reaches the 10 s cap and the command is refused as unreadable.
 - Neutral Action v1 path-only write batches reuse one file-policy process instead of
   starting a Bash guard for every file. Every path still receives the shared single-file
   policy, after whole-action save qualification and within the existing deadline.

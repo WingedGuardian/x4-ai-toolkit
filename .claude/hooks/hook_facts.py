@@ -4756,11 +4756,17 @@ def _translate_ps(text: str, timeout: float = _PS_CALL_CAP_S) -> tuple:
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ps_translate.ps1")
     if not os.path.isfile(script):
         return None, [], "ps_translate.ps1 is missing beside hook_facts.py"
+    # No telemetry or update check: each is a network call at PowerShell startup, and a hook
+    # pays the startup once per command it parses. (4.0.1: ci/v4.0.1-rc7 and -rc8 each had a
+    # ~40 s window on the ubuntu runner where every translation hit the 10 s cap; the probe
+    # on that image measured the slowest of 60 calls at 3.23 s with them on, 1.14 s off. The
+    # window's cause is NOT established; this removes one candidate.)
+    env = dict(os.environ, POWERSHELL_TELEMETRY_OPTOUT="1", POWERSHELL_UPDATECHECK="Off")
     try:
         p = subprocess.run(
             [exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
              "-File", script],
-            input=text.encode("utf-8"), capture_output=True, timeout=timeout,
+            input=text.encode("utf-8"), capture_output=True, timeout=timeout, env=env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError) as exc:
         return None, [], "PowerShell could not be run (%s)" % type(exc).__name__
