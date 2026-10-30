@@ -87,6 +87,10 @@ an experimental score is not a probability or a mod-removal recommendation.
 XML uses the toolkit's effective merge. Binary reads resolve explicit namespaces,
 nested overrides, case-insensitive paths, loose-over-packed precedence, later
 catalogs, and configured base archive ranges. They never use basename fallback.
+Configured DLC reference folders may contain XML only; binary lookup also checks
+the matching installed DLC folder/catalogs, after the reference copy and before
+lower-priority owners. This fallback never substitutes an installed mod for an
+explicit candidate alias. Binary receipts name the physical `binary_root`.
 Malformed/ambiguous catalogs refuse. Nonmatching version catalogs are named as
 ignored; matching or unknown-version catalogs are unsupported and refuse.
 

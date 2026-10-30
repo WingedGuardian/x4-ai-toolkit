@@ -128,6 +128,28 @@ def test_catalog_recheck_error_is_a_structured_refusal(tmp_path, monkeypatch):
     assert any(f['code'] == 'input_drift' for f in a.findings)
 
 
+@pytest.mark.parametrize('namespaced', [False, True])
+def test_text_only_dlc_reference_falls_back_to_installed_catalog(tmp_path, namespaced):
+    from x4validate._geometry_assets import World
+    from test_geometry import pack
+    reference, game = tmp_path/'reference', tmp_path/'game'
+    reference.mkdir(); (game/'extensions/ego_dlc_test').mkdir(parents=True)
+    dlc = reference/'extensions/ego_dlc_test'
+    dlc.mkdir(parents=True)
+    class Config:
+        def __init__(self): self.reference = reference
+        def dlc_dirs(self): return [dlc]
+    # Same namespace, XML-only reference. Installed binary must remain visible.
+    pack(game/'extensions/ego_dlc_test', 1, xmf(), 'assets/body.xmf')
+    w = World(Config(), game=game)
+    path = ('extensions/ego_dlc_test/' if namespaced else '')+'assets/body.xmf'
+    assert w.binary(path) == xmf()
+    assert w.receipts[-1]['binary_root'] == str(game/'extensions/ego_dlc_test')
+    # A reference payload still wins over its installed fallback.
+    (dlc/'assets').mkdir(); (dlc/'assets/body.xmf').write_bytes(b'reference')
+    assert w.binary(path, record=False) == b'reference'
+
+
 def test_partless_animated_ancestor_stays_unqualified(tmp_path):
     world, put = setup_child(tmp_path)
     p = tmp_path/'assets/hull.xml'

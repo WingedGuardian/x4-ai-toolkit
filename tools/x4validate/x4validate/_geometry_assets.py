@@ -145,7 +145,8 @@ class World:
         self.pose = pose
         self.io = dict(binary_requests=0, storage_reads=0, storage_bytes=0, mesh_decodes=0)
         self.config, self.overlays = config, tuple(overlays)
-        self.roots = [config.reference, *config.dlc_dirs(), *self.overlays]
+        self.dlc_roots = tuple(config.dlc_dirs())
+        self.roots = [config.reference, *self.dlc_roots, *self.overlays]
         self.aliases = {k.lower(): Path(v) for k, v in (aliases or {}).items()}
         self.game = game
         self.game_version = None
@@ -167,6 +168,8 @@ class World:
                           cache="per-run byte cache; 128 MiB; no persistent artifact")
         self.scope["game_version"] = self.game_version
         self.scope["ignored_version_catalogs"] = []
+        self.scope["binary_dlc_fallbacks"] = {str(p): str(self.game/"extensions"/p.name)
+                                               for p in self.dlc_roots} if self.game is not None else {}
 
     def _catalog(self, root):
         if root not in self.catalogs:
@@ -244,7 +247,7 @@ class World:
                 raise GeometryError("loose asset grew beyond byte budget")
             self.io["storage_reads"] += 1
             self.io["storage_bytes"] += len(data)
-            return data, dict(owner=root.name, path=path, storage="loose")
+            return data, dict(owner=root.name, path=path, storage="loose", binary_root=str(root))
         member = self._catalog(root).get(path.lower())
         if member is None:
             return None
@@ -253,7 +256,7 @@ class World:
         data = _cat.read_member(member)
         self.io["storage_reads"] += 1
         self.io["storage_bytes"] += len(data)
-        return data, dict(owner=root.name, path=member.path,
+        return data, dict(owner=root.name, path=member.path, binary_root=str(root),
                                              storage=member.cat_path.name)
 
     def binary_choices(self, value):
@@ -271,12 +274,28 @@ class World:
             # Nested binary replacements, then owner. Never fall back to another
             # owner's same-basename mesh.
             choices = [(p, value) for p in reversed(self.overlays) if p != owner]
-            choices.append((owner, rel))
+            choices.extend((p, rel) for p in self.binary_roots(owner))
         else:
-            choices = [(p, value) for p in reversed(self.roots)]
+            choices = [(p, value) for root in reversed(self.roots) for p in self.binary_roots(root)]
             if self.game is not None:
                 choices.append((self.game, value))
         return choices
+
+    def binary_roots(self, root):
+        """A configured DLC's XML reference may be text-only.
+
+        Its matching installed DLC remains a binary provider. This fallback is
+        restricted to configured DLC roots, never an arbitrary candidate alias.
+        """
+        yield root
+        if self.game is None or root not in self.dlc_roots:
+            return
+        parent = self.game/"extensions"
+        matches = [p for p in parent.iterdir() if p.is_dir() and p.name.lower() == root.name.lower()] if parent.is_dir() else []
+        if len(matches) > 1:
+            raise GeometryError(f"ambiguous installed DLC binary root {root.name}")
+        if matches and matches[0].resolve() != root.resolve():
+            yield matches[0]
 
     def trace_binary(self, value):
         """Name every considered loose path/catalog; never basename-fallback."""
