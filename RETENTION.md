@@ -103,6 +103,10 @@ link.
 
 ## Running it
 
+Optional backup preservation on secondary storage: [cold backup archive](docs/BACKUP-ARCHIVE.md).
+It is opt-in, verifies every archived byte, retains unknown usefulness indefinitely,
+and requires a separate evidence-backed, exactly approved plan for permanent pruning.
+
 ```bash
 cp x4-housekeep.json.example x4-housekeep.json      # then list your own folders in it
 python scripts/x4housekeep.py                       # report: changes nothing

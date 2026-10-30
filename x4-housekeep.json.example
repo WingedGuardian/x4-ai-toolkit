@@ -1,5 +1,6 @@
 {
   "_comment": "Copy to x4-housekeep.json and edit. Paths are relative to the toolkit folder or absolute. See RETENTION.md.",
+  "backup_archive": {"enabled": false},
   "agent_output": [],
   "nested_task_roots": [],
   "live_roots": [],
