@@ -359,15 +359,31 @@ def _ops_for_backup(payload: dict, strict=False):
     return None
 
 
+def sentinel_note(tool_name: str, timeout: float) -> str:
+    """The save sentinel's report after any call ('' when nothing changed without a backup). Advisory: a failure
+    to run is disclosed, never silent."""
+    out, err = _run_hook("save-sentinel.sh", {"hook_event_name": "PostToolUse", "tool_name": tool_name or "unknown",
+                                              "tool_input": {}}, timeout)
+    if err:
+        return f"SAVE SENTINEL DID NOT RUN: {err}"
+    try:
+        _dec, reason, ctx = x4guard.parse_hook_output(out or "")
+    except ValueError:
+        return "SAVE SENTINEL DID NOT RUN: unreadable hook output"
+    return ctx or reason or ""
+
+
 def post_tool_use(payload: dict, deadline: float) -> dict:
+    sentinel = sentinel_note(str(payload.get("tool_name", "")), max(0.0, deadline - time.monotonic()))
     try:
         affected = _ops_for_backup(payload, strict=True)
     except patch_paths.PatchParseError as e:
-        return {"decision": "advise", "context": f"X4 VALIDATION DID NOT RUN: the patch could not be read ({e})."}
+        note = f"X4 VALIDATION DID NOT RUN: the patch could not be read ({e})."
+        return {"decision": "advise", "context": bounded(note, [("", sentinel)] if sentinel else [])}
+    notes = [sentinel] if sentinel else []
     if affected is None:
-        return {"decision": "allow"}
+        return {"decision": "advise", "context": notes[0]} if notes else {"decision": "allow"}
     ops, base = affected
-    notes = []
     for op, p in ops:
         if op not in VALIDATE_OPS:
             continue
