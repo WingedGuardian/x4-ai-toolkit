@@ -16,7 +16,7 @@ Only contested vpaths need building
 Measured on the live modlist: of 9,138 base+DLC vpaths, only **1,522 are overlaid
 by any mod**; another 1,783 mod vpaths are new files. So 3,305 vpaths need a
 build_effective call and the remaining 7,616 base documents are already their own
-effective form and are hardlinked verbatim. At ~0.01 s/vpath that is about
+effective form and are symlinked/copied verbatim. At ~0.01 s/vpath that is about
 a minute, not the hours a naive "merge everything" would cost.
 
 Usage:  cd tools/x4validate && uv run python ../basex/build-effective.py --out DIR
@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -149,7 +149,7 @@ def main(argv=None) -> int:
     if args.limit:
         contested = set(sorted(contested)[:args.limit])
     print(f"vpaths: {len(contested)} contested (merge required), "
-          f"{len(untouched)} base-only (hardlinked where loose)")
+          f"{len(untouched)} base-only (copied verbatim)")
 
     written = 0
     merge_skips: list[str] = []
@@ -196,9 +196,7 @@ def main(argv=None) -> int:
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             if src.is_file():
-                # Immutable reference input; never duplicate a whole source tree.
-                # A cross-volume/permission refusal is accounted, not a copy fallback.
-                os.link(src, target)
+                shutil.copyfile(src, target)
             else:
                 pk = _packed_source(v)
                 data = _cat.read_path(pk[0], pk[1]) if pk else None
@@ -209,7 +207,7 @@ def main(argv=None) -> int:
                 copied_packed += 1
             copied += 1
         except OSError as exc:
-            failures.append(f"{v}: staging failed ({exc})")
+            failures.append(f"{v}: copy failed ({exc})")
 
     total_secs = time.time() - t0
     enum = enumeration_report(config, base)
@@ -221,8 +219,7 @@ def main(argv=None) -> int:
         "counts": {
             "contested": len(contested),
             "merged_written": written,
-            "untouched_hardlinked": copied-copied_packed,
-            "untouched_materialized": copied_packed,
+            "untouched_copied": copied,
             "documents_total": written + copied,
             "failures": len(failures),
             "merge_skips": len(merge_skips),
@@ -244,7 +241,7 @@ def main(argv=None) -> int:
         print("  !! source(s) that contributed NOTHING: "
               + ", ".join(enum["sources_contributing_nothing"]))
     print(f"merged  {written} vpaths in {merged_secs:.1f}s")
-    print(f"staged  {copied} base-only documents ({copied-copied_packed} hardlinked, {copied_packed} materialized from catalogs)")
+    print(f"copied  {copied} base-only documents ({copied_packed} materialized from catalogs)")
     print(f"TOTAL   {written + copied} documents in {total_secs:.1f}s")
     if merge_skips:
         print(f"  !! {len(merge_skips)} overlay(s) could not be parsed and are MISSING "
