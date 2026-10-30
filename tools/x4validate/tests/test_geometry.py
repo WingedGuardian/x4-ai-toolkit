@@ -285,7 +285,7 @@ def test_compression_bomb_refuses():
 
 @pytest.mark.parametrize("version,known,refuses", [(800, 900, False), (900, 900, True), (800, None, True)])
 def test_version_catalog_is_not_a_silent_gap(tmp_path, version, known, refuses):
-    (tmp_path/f"ext_v{version}.cat").write_text("")
+    (tmp_path/f"ext_v{version}.cat").write_text("absent.xmf 0 0 d41d8cd98f00b204e9800998ecf8427e\n")
     world = World(_merge.Config(reference=tmp_path, include_packed_dlc=False))
     world.game_version = known
     if refuses:

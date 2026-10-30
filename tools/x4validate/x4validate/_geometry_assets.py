@@ -156,6 +156,7 @@ class World:
                 self.game_version = int(version)
         self.catalogs, self.receipts, self.cache = {}, [], {}
         self.catalog_stamps = {}
+        self.unqualified_catalogs = {}
         self.xml_cache = {}
         self.xml_cache_bytes = 0
         self.cache_bytes = 0
@@ -168,21 +169,27 @@ class World:
                           cache="per-run byte cache; 128 MiB; no persistent artifact")
         self.scope["game_version"] = self.game_version
         self.scope["ignored_version_catalogs"] = []
+        self.scope["unqualified_version_catalogs"] = []
         self.scope["binary_dlc_fallbacks"] = {str(p): str(self.game/"extensions"/p.name)
                                                for p in self.dlc_roots} if self.game is not None else {}
 
     def _catalog(self, root):
         if root not in self.catalogs:
             stamp = self.catalog_stamp(root)
-            # Version-gated catalogs are unsupported by the shared reader. Refuse
-            # rather than let its warning turn a partial asset set into a verdict.
+            # Enumerate unsupported catalogs too. Their payloads remain unqualified,
+            # but an unrelated path must not hide every lower-priority provider.
+            unqualified = []
             for p in self.catalog_paths(root):
                 if _cat._VERSION_CAT_RE.match(p.name):
                     version = int(re.search(r"v(\d+)\.cat$", p.name, re.I).group(1))
                     if self.game_version is None or version == self.game_version:
-                        raise GeometryError(f"matching/unknown-version catalog requires qualification: {root.name}/{p.name}")
-                    self.scope["ignored_version_catalogs"].append(dict(owner=root.name, catalog=p.name,
-                                                                       reason=f"v{version} does not match {self.game_version}"))
+                        members = {m.path.lower() for m in _cat._read_index(p, False)}
+                        unqualified.append((p.name, members))
+                        self.scope["unqualified_version_catalogs"].append(dict(owner=root.name,
+                            catalog=p.name, members=len(members), resolution="refuse requested members"))
+                    else:
+                        self.scope["ignored_version_catalogs"].append(dict(owner=root.name, catalog=p.name,
+                            reason=f"v{version} does not match {self.game_version}"))
             cats = _cat.build_mod_vfs(root, xml_only=False)
             if root == self.game:
                 for p in self.catalog_paths(root):
@@ -198,6 +205,7 @@ class World:
             if stamp != self.catalog_stamp(root):
                 raise GeometryError(f"catalog set drifted while indexing {root.name}")
             self.catalog_stamps[root] = stamp
+            self.unqualified_catalogs[root] = unqualified
         return self.catalogs[root]
 
     @staticmethod
@@ -249,6 +257,9 @@ class World:
             self.io["storage_bytes"] += len(data)
             return data, dict(owner=root.name, path=path, storage="loose", binary_root=str(root))
         member = self._catalog(root).get(path.lower())
+        for catalog, members in self.unqualified_catalogs[root]:
+            if path.lower() in members:
+                raise GeometryError(f"matching/unknown-version catalog requires qualification: {root.name}/{catalog}: {path}")
         if member is None:
             return None
         if member.size > MAX_BYTES:

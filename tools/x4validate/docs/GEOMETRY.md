@@ -92,7 +92,9 @@ the matching installed DLC folder/catalogs, after the reference copy and before
 lower-priority owners. This fallback never substitutes an installed mod for an
 explicit candidate alias. Binary receipts name the physical `binary_root`.
 Malformed/ambiguous catalogs refuse. Nonmatching version catalogs are named as
-ignored; matching or unknown-version catalogs are unsupported and refuse.
+ignored. Matching or unknown-version catalogs are enumerated; a requested member
+refuses because its payload semantics are unsupported. Unrelated members do not
+block lower-priority binary providers.
 
 The independent XUMF subset reader accepts v3 little-endian triangle lists,
 float32 XYZ/XYZW or half-float XYZW positions, supported interleaved element
