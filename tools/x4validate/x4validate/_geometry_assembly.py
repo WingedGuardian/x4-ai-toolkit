@@ -55,14 +55,38 @@ def referenced_part(world, part, geometry):
 
 class Frames:
     """Component-local connector/part frames, including parent part offsets."""
-    def __init__(self, component):
+    def __init__(self, component, max_parts=None):
         self.connections = component.findall("connections/connection")
         self.parts, self.cache = {}, {}
+        count = 0
         for c in self.connections:
             for p in c.findall("parts/part"):
+                count += 1
+                if max_parts is not None and count > max_parts:
+                    raise GeometryError("component parent-index part budget exceeded")
                 if not p.get("name"):
                     raise GeometryError("missing render part name")
                 self.parts.setdefault(p.get("name"), []).append((c, p))
+
+    def parent(self, connection):
+        """One conservative resolver for frames and ancestry.
+
+        Group-relative engine semantics are not independently qualified. Keep
+        refusing repeated names, but expose raw groups and stable XML locations.
+        Provider component.part references deliberately use a separate resolver.
+        """
+        name = connection.get("parent")
+        if not name:
+            return None
+        matches = self.parts.get(name, [])
+        if len(matches) != 1:
+            candidates = [dict(connection=c.get("name"), group=c.get("group"),
+                               path=c.getroottree().getpath(p)) for c, p in matches[:16]]
+            raise GeometryError(f"missing/ambiguous render parent {name}; "
+                                f"consumer_group={connection.get('group')!r}; candidates={candidates!r}; "
+                                f"candidate_count={len(matches)}; omitted_candidates={max(0, len(matches)-16)}; "
+                                "group-relative lookup unqualified")
+        return matches[0]
 
     def frame(self, connection, seen=()):
         key = id(connection)
@@ -73,10 +97,7 @@ class Frames:
         parent = connection.get("parent")
         matrix = np.eye(4)
         if parent:
-            matches = self.parts.get(parent, [])
-            if len(matches) != 1:
-                raise GeometryError(f"missing/ambiguous render parent {parent}")
-            c, p = matches[0]
+            c, p = self.parent(connection)
             matrix = self.frame(c, (*seen, key)) @ transform(p.find("offset"))
         result = matrix @ transform(connection.find("offset"))
         self.cache[key] = result
@@ -213,10 +234,7 @@ def assemble(world, macro_path, label=None):
                             if not parent:
                                 ancestor = None
                             else:
-                                matches = frames.parts.get(parent, [])
-                                if len(matches) != 1:
-                                    raise GeometryError(f"missing/ambiguous render parent {parent}")
-                                ancestor = matches[0][0]
+                                ancestor = frames.parent(ancestor)[0]
                         pivot = part.find("pivot")
                         if pivot is not None:
                             if world.pose == "strict":

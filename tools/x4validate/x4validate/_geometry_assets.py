@@ -90,6 +90,19 @@ class Assembly:
     seconds: float = 0.0
     #: (vertices, triangles) of a mesh freed by release(); None once verify() finds drift.
     released: tuple | None = None
+    scene: object | None = None
+    findings: list = field(default_factory=list)
+    graph: list = field(default_factory=list)
+    assets: list = field(default_factory=list)
+    stages: dict = field(default_factory=dict)
+    budgets: dict = field(default_factory=dict)
+    metrics: dict = field(default_factory=dict)
+    assembly_version: str = ASSEMBLY_VERSION
+
+    def finding(self, instance, code, message, stage, **details):
+        self.findings.append(dict(instance=instance, code=code, message=str(message),
+                                  stage=stage, **details))
+        self.unresolved.append(f"{instance}: {message}")
 
     def release(self):
         """Free a scored candidate's mesh (each may hold ~144 MB of arrays; keeping every one
@@ -97,17 +110,26 @@ class Assembly:
         if self.mesh is not None:
             self.released = (len(self.mesh.vertices), len(self.mesh.faces))
             self.mesh = None
+        if self.scene is not None:
+            self.metrics["scene"] = self.scene.telemetry()
+            self.released = self.scene.counts()
+            self.scene.release()
+            self.scene = None
 
     def report(self):
-        has = self.mesh is not None or self.released is not None
-        counts = ((len(self.mesh.vertices), len(self.mesh.faces)) if self.mesh is not None
+        if self.scene is not None:
+            self.metrics["scene"] = self.scene.telemetry()
+        has = self.mesh is not None or self.scene is not None or self.released is not None
+        counts = (self.scene.counts() if self.scene is not None else
+                  (len(self.mesh.vertices), len(self.mesh.faces)) if self.mesh is not None
                   else self.released or (0, 0))
-        return dict(label=self.label, status="partial" if has and self.unresolved else
+        return dict(label=self.label, status="audited" if self.stages.get("audit") == "passed" and self.stages.get("verification") == "passed" else "partial" if has and self.unresolved else
                     "unresolved" if not has else "complete",
                     included=self.included, excluded=self.excluded, unresolved=self.unresolved,
                     attachments=self.attachments, pose_notes=self.pose_notes, seconds=self.seconds,
-                    receipts=self.receipts, scope=self.scope, assembly=ASSEMBLY_VERSION,
-                    vertices=counts[0], triangles=counts[1])
+                    receipts=self.receipts, scope=self.scope, assembly=self.assembly_version,
+                    vertices=counts[0], triangles=counts[1], findings=self.findings,
+                    graph=self.graph, assets=self.assets, stages=self.stages, budgets=self.budgets, metrics=self.metrics)
 
 
 class World:
@@ -121,6 +143,7 @@ class World:
         if pose not in ("strict", "bind"):
             raise GeometryError("geometry pose must be strict or bind")
         self.pose = pose
+        self.io = dict(binary_requests=0, storage_reads=0, storage_bytes=0, mesh_decodes=0)
         self.config, self.overlays = config, tuple(overlays)
         self.roots = [config.reference, *config.dlc_dirs(), *self.overlays]
         self.aliases = {k.lower(): Path(v) for k, v in (aliases or {}).items()}
@@ -219,21 +242,23 @@ class World:
                 data = stream.read(MAX_BYTES+1)
             if len(data) > MAX_BYTES:
                 raise GeometryError("loose asset grew beyond byte budget")
+            self.io["storage_reads"] += 1
+            self.io["storage_bytes"] += len(data)
             return data, dict(owner=root.name, path=path, storage="loose")
         member = self._catalog(root).get(path.lower())
         if member is None:
             return None
         if member.size > MAX_BYTES:
             raise GeometryError("packed asset byte budget exceeded")
-        return _cat.read_member(member), dict(owner=root.name, path=member.path,
+        data = _cat.read_member(member)
+        self.io["storage_reads"] += 1
+        self.io["storage_bytes"] += len(data)
+        return data, dict(owner=root.name, path=member.path,
                                              storage=member.cat_path.name)
 
-    def binary(self, value, record=True):
+    def binary_choices(self, value):
+        """Ordered exact VFS candidates, shared by reads and refusal diagnostics."""
         value = safe_path(value)
-        if value in self.cache and record:
-            data, receipt = self.cache[value]
-            self.receipts.append(receipt)
-            return data
         parts = value.split("/")
         if len(parts) > 2 and parts[0].lower() == "extensions":
             folder, rel = parts[1].lower(), "/".join(parts[2:])
@@ -251,6 +276,32 @@ class World:
             choices = [(p, value) for p in reversed(self.roots)]
             if self.game is not None:
                 choices.append((self.game, value))
+        return choices
+
+    def trace_binary(self, value):
+        """Name every considered loose path/catalog; never basename-fallback."""
+        rows = []
+        for root, path in self.binary_choices(value):
+            row = dict(owner=root.name, root=str(root), requested=path,
+                       catalogs=[p.name for p in self.catalog_paths(root)])
+            try:
+                found = self._raw(root, path)
+                row["status"] = "absent" if found is None else "present"
+                if found is not None:
+                    row["provider"] = found[1]
+            except (GeometryError, OSError, ValueError) as exc:
+                row.update(status="unsupported", reason=str(exc))
+            rows.append(row)
+        return rows
+
+    def binary(self, value, record=True):
+        self.io["binary_requests"] += 1
+        value = safe_path(value)
+        if value in self.cache and record:
+            data, receipt = self.cache[value]
+            self.receipts.append(receipt)
+            return data
+        choices = self.binary_choices(value)
         for root, path in choices:
             found = self._raw(root, path)
             if found is not None:
@@ -306,16 +357,25 @@ class World:
             raise GeometryError(f"macro {name}: missing/ambiguous exact index entry")
         return safe_path(entries[0].get("value"))+".xml"
 
-    def assemble(self, macro_path, label=None):
+    def assemble(self, macro_path, label=None, *, instanced=False, audit=False, max_instances=512):
+        if instanced or audit:
+            from ._geometry_graph import build
+            return build(self, macro_path, label, audit=audit, max_instances=max_instances)
         from ._geometry_assembly import assemble
         return assemble(self, macro_path, label)
 
     def verify(self, assembly):
         """Recheck byte/catalog receipts, including after a long pair comparison."""
         for root, stamp in self.catalog_stamps.items():
-            if stamp != self.catalog_stamp(root):
-                assembly.unresolved.append(f"catalog input drift: {root.name}")
+            try:
+                if stamp != self.catalog_stamp(root):
+                    raise GeometryError(f"catalog input drift: {root.name}")
+            except (GeometryError, OSError, ValueError) as exc:
+                assembly.finding(str(root), "input_drift", f"catalog input drift/recheck failed: {exc}", "verification")
                 assembly.mesh = assembly.released = None
+                if assembly.scene is not None:
+                    assembly.scene.release()
+                    assembly.scene = None
         # Check actual bytes/effective trees again, bypassing the per-run cache.
         for receipt in assembly.receipts:
             try:
@@ -329,5 +389,11 @@ class World:
                 if current != receipt["sha256"]:
                     raise GeometryError("input bytes changed during extraction")
             except (GeometryError, OSError, ValueError, etree.XMLSyntaxError) as exc:
-                assembly.unresolved.append(f"input drift/recheck failed: {exc}")
+                assembly.finding(receipt["path"], "input_drift", f"input drift/recheck failed: {exc}", "verification")
                 assembly.mesh = assembly.released = None
+                if assembly.scene is not None:
+                    assembly.scene.release()
+                    assembly.scene = None
+        if any(f["code"] == "input_drift" for f in assembly.findings):
+            assembly.stages["verification"] = "failed"
+            assembly.stages["comparison"] = "unavailable"

@@ -9,6 +9,10 @@ import time
 
 
 def arguments(parser):
+    parser.add_argument("--geometry-audit", action="store_true",
+                        help="audit only the requested structural asset graph; no comparison inventory or scoring")
+    parser.add_argument("--geometry-max-instances", type=int, default=512, metavar="N",
+                        help="declared render-instance budget, 1..2048 (default 512); exhaustion reports an incomplete graph")
     parser.add_argument("--geometry", metavar="MACRO_VPATH",
                         help="experimental geometry candidate; without --geometry-against it is compared with the installed ship_* macros that carry <properties> (the stats inventory, without its class/purpose filters)")
     parser.add_argument("--geometry-against", action="append", default=[], metavar="MACRO_VPATH",
@@ -35,13 +39,17 @@ def run(args, reference, ext):
         import rtree
         from ._geometry_assets import World
         from ._geometry_mesh import GeometryError, DECODER_VERSION
-        from ._geometry_score import compare, SCORER_VERSION
+        from ._geometry_score import compare_scenes, SCENE_SCORER_VERSION as SCORER_VERSION
     except ImportError as exc:
         print(f"geometry unavailable: {exc}; install with uv sync --extra geometry", file=sys.stderr)
         return 2
     from . import _compat, _effective, _merge, _registry, _similarity, _freshness
-    if not 128 <= args.geometry_samples <= 16384 or not 1 <= args.geometry_limit <= 256:
-        print("error: geometry samples must be 128..16384, limit 1..256", file=sys.stderr)
+    if (not 128 <= args.geometry_samples <= 16384 or not 1 <= args.geometry_limit <= 256
+            or not 1 <= args.geometry_max_instances <= 2048):
+        print("error: geometry samples must be 128..16384, limit 1..256, instances 1..2048", file=sys.stderr)
+        return 2
+    if args.geometry_audit and (args.geometry_against or args.geometry_samples != 4096 or args.geometry_limit != 32):
+        print("error: geometry audit rejects comparison paths, samples and candidate limits", file=sys.stderr)
         return 2
     try:
         aliases = {}
@@ -72,13 +80,14 @@ def run(args, reference, ext):
             notes.append(f"NOT in the geometry tree (the engine does not load it): {left_out}")
         candidates = [(v, v, None) for v in args.geometry_against]
         inventory_scope = "explicit macro paths"
-        if not candidates:
+        if not candidates and not args.geometry_audit:
             vectors = _similarity._collect_all(reference, ext, unreadable, notes=notes)
             candidates = [(v.vpath, f"{v.macro_name} [{v.source}]", v.source) for v in vectors]
             inventory_scope = "installed ship definitions; active resolution; disabled-only entries unresolved"
         if len(candidates) > args.geometry_limit:
             raise GeometryError(f"{len(candidates)} candidates exceed --geometry-limit {args.geometry_limit}; choose explicit --geometry-against paths or raise the bound (max 256)")
-        subject = world.assemble(args.geometry)
+        subject = world.assemble(args.geometry, instanced=True, audit=args.geometry_audit,
+                                 max_instances=args.geometry_max_instances)
         rows, assemblies, objects = [], [subject.report()], [subject]
         active_names = {m["folder"] for m, _ in ordered}
         for path, label, owner in candidates:
@@ -86,14 +95,14 @@ def run(args, reference, ext):
                 rows.append(dict(candidate=label, geometry_score=None, status="unresolved",
                                  reason="disabled inventory source requires separate hypothetical resolution"))
                 continue
-            other = world.assemble(path, label)
+            other = world.assemble(path, label, instanced=True, max_instances=args.geometry_max_instances)
             objects.append(other)
             assemblies.append(other.report())
-            if subject.mesh is None or other.mesh is None:
+            if subject.scene is None or other.scene is None:
                 result = dict(geometry_score=None, status="unresolved", reason="extraction unavailable; see assembly manifest")
             else:
                 try:
-                    result = compare(subject.mesh, other.mesh, args.geometry_samples)
+                    result = compare_scenes(subject.scene, other.scene, args.geometry_samples)
                 except (GeometryError, ValueError, MemoryError) as exc:
                     result = dict(geometry_score=None, status="unresolved", reason=f"scoring refused: {exc}")
                 if (subject.unresolved or other.unresolved) and result.get("geometry_score") is not None:
@@ -108,18 +117,19 @@ def run(args, reference, ext):
         for obj in objects:
             world.verify(obj)
         assemblies = [a.report() for a in objects]
-        if any(a.mesh is None and a.released is None and any("drift" in reason for reason in a.unresolved)
-               for a in objects):
+        if any(any(f["code"] == "input_drift" for f in a.findings) for a in objects):
             for row in rows:
                 row.pop("partial_geometry_score", None)
                 row.update(geometry_score=None, status="unresolved", reason="run input drift; see assembly receipts")
         source_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
                          (Path(__file__), Path(__file__).with_name("_geometry_mesh.py"),
                           Path(__file__).with_name("_geometry_assets.py"), Path(__file__).with_name("_geometry_score.py"),
-                          Path(__file__).with_name("_geometry_assembly.py"))}
+                          Path(__file__).with_name("_geometry_assembly.py"),
+                          Path(__file__).with_name("_geometry_graph.py"), Path(__file__).with_name("_geometry_scene.py"))}
         source_hashes.update({name: hashlib.sha256(Path(_freshness.__file__).with_name(name).read_bytes()).hexdigest()
                               for name in _freshness.ENGINE_SOURCES})
-        report = dict(schema="x4similar.geometry/1", candidate=args.geometry,
+        report = dict(schema="x4similar.geometry/2", candidate=args.geometry,
+                      mode="audit" if args.geometry_audit else "compare",
                       inventory_scope=inventory_scope, resolution_scope=world.scope,
                       decoder=DECODER_VERSION, scorer=SCORER_VERSION,
                       dependencies=dict(numpy=numpy.__version__, scipy=scipy.__version__,
@@ -132,6 +142,7 @@ def run(args, reference, ext):
                                     shortlisted=len(candidates), excluded=0),
                       assemblies=assemblies, pairs=rows, cache_bytes=world.cache_bytes,
                       xml_cache_bytes=world.xml_cache_bytes,
+                      io=world.io,
                       seconds=time.perf_counter()-started,
                       limitations=["EXPERIMENTAL; no qualified real-hull classification threshold",
                                    "Scores describe shape only, never mod redundancy or removal safety",
@@ -171,6 +182,8 @@ def run(args, reference, ext):
                 for u in unreadable:
                     print(f"   - {u}", file=sys.stderr)
         # 4. Nothing scored is a non-answer, never an OK (the toolkit's exit-3 contract).
+        if args.geometry_audit:
+            return 0 if subject.stages.get("audit") == "passed" and subject.stages.get("verification") == "passed" else 3
         return 0 if report["coverage"]["scored"] or report["coverage"]["partial"] else 3
     except (GeometryError, OSError, ValueError) as exc:
         print(f"geometry unresolved: {exc}", file=sys.stderr)

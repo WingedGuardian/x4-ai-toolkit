@@ -5,9 +5,10 @@
 ```text
 usage: x4similar [-h] [--version] [--reference REFERENCE] [--ext-dir EXT_DIR]
                  [--threshold THRESHOLD] [--cross-mod-only] [--candidate CANDIDATE]
-                 [--geometry MACRO_VPATH] [--geometry-against MACRO_VPATH]
-                 [--geometry-overlay DIR] [--geometry-alias NAME=DIR] [--geometry-json]
-                 [--geometry-pose {strict,bind}] [--geometry-samples N] [--geometry-limit N]
+                 [--geometry-audit] [--geometry-max-instances N] [--geometry MACRO_VPATH]
+                 [--geometry-against MACRO_VPATH] [--geometry-overlay DIR]
+                 [--geometry-alias NAME=DIR] [--geometry-json] [--geometry-pose {strict,bind}]
+                 [--geometry-samples N] [--geometry-limit N]
 
 Advisory fuzzy same-ship detection across the ships base, DLC and installed mods define, scored at
 their EFFECTIVE values (base + DLC + the enabled mods in load order, so a <diff>-patched ship
@@ -25,6 +26,11 @@ options:
   --cross-mod-only      only report pairs from DIFFERENT sources (skip a mod's own paint variants)
   --candidate CANDIDATE
                         restrict to pairs involving this mod folder
+  --geometry-audit      audit only the requested structural asset graph; no comparison inventory
+                        or scoring
+  --geometry-max-instances N
+                        declared render-instance budget, 1..2048 (default 512); exhaustion reports
+                        an incomplete graph
   --geometry MACRO_VPATH
                         experimental geometry candidate; without --geometry-against it is compared
                         with the installed ship_* macros that carry <properties> (the stats

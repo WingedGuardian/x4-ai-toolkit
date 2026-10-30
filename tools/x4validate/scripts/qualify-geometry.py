@@ -4,6 +4,7 @@ Run with the geometry extra installed. No game assets, caches or file writes.
 The frozen synthetic cutoff is an experiment, NOT a qualified real-hull label.
 """
 import json
+import argparse
 import hashlib
 from pathlib import Path
 
@@ -13,7 +14,8 @@ import trimesh
 from scipy.spatial.transform import Rotation
 
 from x4validate._geometry_mesh import Mesh
-from x4validate._geometry_score import compare, SCORER_VERSION, TOLERANCES, WEIGHTS
+from x4validate._geometry_score import compare, compare_scenes, SCORER_VERSION, SCENE_SCORER_VERSION, TOLERANCES, WEIGHTS
+from x4validate._geometry_scene import Scene
 
 
 def hull(seed):
@@ -51,6 +53,18 @@ def cases(seed):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--instanced', action='store_true', help='qualify the versioned instanced surface scorer')
+    args = parser.parse_args()
+    def score(a, b, **kwargs):
+        if not args.instanced:
+            return compare(a, b, **kwargs)
+        sa, sb = Scene.from_mesh(a), Scene.from_mesh(b)
+        try:
+            return compare_scenes(sa, sb, **kwargs)
+        finally:
+            sa.release()
+            sb.release()
     rows = []
     # Parameters are fixed in source before running either split. Labels derive
     # from construction, not the resulting score; never relabel a failed case.
@@ -58,8 +72,8 @@ def main():
     for split, seed in (("calibration", 2), ("heldout", 17)):
         a, controls = cases(seed)
         for name, positive, b in controls:
-            result = compare(a, b, count=1024, seed=0)
-            repeat = compare(a, b, count=1024, seed=1)
+            result = score(a, b, count=1024, seed=0)
+            repeat = score(a, b, count=1024, seed=1)
             rows.append(dict(split=split, name=name, positive=positive,
                              predicted=result["geometry_score"] >= cutoff,
                              repeat_score=repeat["geometry_score"],
@@ -71,16 +85,17 @@ def main():
         confusion[split] = {key: sum(r["positive"] == truth and r["predicted"] == predicted for r in selected)
                             for key, truth, predicted in (("tp", True, True), ("fn", True, False),
                                                          ("fp", False, True), ("tn", False, False))}
-    print(json.dumps(dict(schema="x4similar.synthetic-qualification/1", scorer=SCORER_VERSION,
+    print(json.dumps(dict(schema="x4similar.synthetic-qualification/1", scorer=SCENE_SCORER_VERSION if args.instanced else SCORER_VERSION,
                           implementation_sha256={p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
                               [Path(__file__), Path(__file__).parents[1]/"x4validate/_geometry_score.py",
-                               Path(__file__).parents[1]/"x4validate/_geometry_mesh.py"]},
+                               Path(__file__).parents[1]/"x4validate/_geometry_mesh.py",
+                               Path(__file__).parents[1]/"x4validate/_geometry_scene.py"]},
                           dependencies=dict(numpy=np.__version__, scipy=scipy.__version__, trimesh=trimesh.__version__),
                           tolerances=TOLERANCES, weights=WEIGHTS, samples=1024,
                           provisional_synthetic_cutoff=cutoff, confusion=confusion, pairs=rows,
                           limitation="Authored synthetic controls only; no real-hull threshold or historical-version claim"),
                      indent=2, allow_nan=False))
-    return 0
+    return 1 if any(c['fn'] or c['fp'] for c in confusion.values()) else 0
 
 
 if __name__ == "__main__":

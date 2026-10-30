@@ -15,6 +15,7 @@ import trimesh
 from ._geometry_mesh import GeometryError, Mesh, validate
 
 SCORER_VERSION = "surface-overlap-experimental-1"
+SCENE_SCORER_VERSION = "surface-overlap-instanced-2"
 SAMPLES = 4096
 TOLERANCES = (0.015, 0.03, 0.06)
 WEIGHTS = (0.25, 0.5, 0.25)
@@ -175,6 +176,46 @@ def _align(a, b, axes_a, axes_b, determinant):
                 break
         candidates.append((rotation, translation))
     return candidates
+
+
+def compare_scenes(a, b, count=SAMPLES, seed=0):
+    """The existing alignment/coverage model over complete instanced surfaces.
+
+    Instance-weighted sampling is a new deterministic sequence, explicitly
+    versioned; it must never be passed off as identical legacy sample points.
+    """
+    started = time.perf_counter()
+    pa, ca, ra, aa, size_a, discarded_a = a.prepare(count, seed)
+    pb, cb, rb, ab, size_b, discarded_b = b.prepare(count, seed)
+    work = [0, 0]
+    def finish(determinant):
+        best = None
+        for rotation, translation in _align(pa, pb, aa, ab, determinant):
+            directed_a = b.distances(pa @ rotation+translation, cb, rb, work)
+            directed_b = a.distances((pb-translation) @ rotation.T, ca, ra, work)
+            result = _coverage(pa @ rotation+translation, pb, directed=(directed_a, directed_b))
+            if best is None or result[0] > best[0][0]:
+                best = result, rotation, translation
+        return best
+    proper, rotation, translation = finish(1)
+    mirrored, _, _ = finish(-1)
+    score, rows, da, db = proper
+    def distribution(values):
+        return dict(median=float(np.median(values)), p95=float(np.quantile(values, .95)), maximum=float(values.max()))
+    return dict(status="experimental", geometry_score=score, scorer=SCENE_SCORER_VERSION,
+        calibration="unqualified: no real-hull variant threshold", verdict="unresolved", score_is_probability=False,
+        samples_a=len(pa), samples_b=len(pb), seed=seed,
+        discarded_zero_area_faces_a=discarded_a, discarded_zero_area_faces_b=discarded_b,
+        triangle_distance_tests=work[0], triangle_distance_budget=MAX_TRIANGLE_TESTS,
+        bounding_box_tests=work[1], bounding_box_budget=MAX_BOX_TESTS,
+        overlap=rows, distances_a_to_b=distribution(da), distances_b_to_a=distribution(db),
+        size_a=size_a.tolist(), size_b=size_b.tolist(), uniform_scale_a_to_b=rb/ra,
+        transform=dict(convention="row XYZ: ((p-center_a)/radius_a) @ rotation + translation; target normalized",
+                       center_a=ca.tolist(), center_b=cb.tolist(), radius_a=ra, radius_b=rb,
+                       rotation=rotation.tolist(), translation=translation.tolist(), determinant=float(np.linalg.det(rotation))),
+        mirrored_score=mirrored[0], mirrored_variant=mirrored[0] > score+5,
+        alignment="bounded PCA permutations + trimmed ICP; global optimum unproved",
+        seconds=time.perf_counter()-started)
 
 
 def compare(a: Mesh, b: Mesh, count=SAMPLES, seed=0):

@@ -466,8 +466,12 @@ def main(argv: list[str] | None = None) -> int:
     from . import _geometrycli
     _geometrycli.arguments(p)
 
-    args = p.parse_args(argv)
-    if args.geometry is None and (args.geometry_against or args.geometry_overlay or
+    supplied = list(argv) if argv is not None else sys.argv[1:]
+    args = p.parse_args(supplied)
+    if args.geometry_audit and any(v.split('=', 1)[0] in
+            {'--geometry-against', '--geometry-samples', '--geometry-limit'} for v in supplied):
+        p.error("geometry audit rejects comparison paths, samples and candidate limits")
+    if args.geometry is None and (any(v.startswith('--geometry-') for v in supplied) or args.geometry_audit or args.geometry_max_instances != 512 or args.geometry_against or args.geometry_overlay or
                                  args.geometry_alias or args.geometry_json or
                                  args.geometry_samples != 4096 or args.geometry_limit != 32 or args.geometry_pose != "strict"):
         p.error("geometry options require --geometry MACRO_VPATH")
