@@ -8,6 +8,12 @@ toolkit; `scripts/x4housekeep.py` implements the parts a tool can.
 <!-- shared-policy:begin -->
 ## Shared policy (identical in the Skyrim and X4 toolkits -- change both)
 
+### Certainty before removal
+
+Age, size, an idle timer, a filename and a completed-task marker trigger review; none proves that unique bytes are obsolete. Housekeep retires a payload only when it re-proves an identical retained copy or a verified lossless replacement, or the operator has explicitly declared those exact bytes obsolete with a reason and evidence. Unknown usefulness is kept indefinitely. Failed or stale proof leaves the source in place.
+
+This applies to ordinary cleanup and both archive tiers. Older plans do not bypass the apply-time checks. A backup vault is optional and disabled by default; its permanent pruning always needs a separate exact-plan approval.
+
 ### Classes
 
 | Class | What | Rule |
@@ -15,11 +21,11 @@ toolkit; `scripts/x4housekeep.py` implements the parts a tool can.
 | **Forever** | Saves and every copy of them, save backups included; every other backup store and its manifests (anything under a folder named `*backup*`) except the rolling tool stores below; known-good baselines; audit logs; folders a person labelled by hand | Never removed by a tool. A person decides. |
 | **Evidence** | Findings, READMEs, receipts (`.md`, `.json`, `.jsonl`), small logs; every file a project doc links to | Kept. They are small, and docs point at them. |
 | **Recreatable** | A byte-identical copy of a file that is still live (a fixture copy of a game master) | Removed as soon as it is idle: the live file is the copy. |
-| **Build output** | Compiler intermediates inside build folders (`.obj .pch .lib .ilk .iobj .ipdb .tlog .idb`) | Removed once idle. Binaries and debug symbols (`.dll .exe .pdb`) are kept. |
+| **Build output** | Compiler intermediates inside build folders | Review candidates only. Removal requires an explicit content-bound obsolete decision. Build products and active work remain protected. |
 | **Duplicate** | The same bytes at several agent-output paths | Stored once: hard links to one read-only copy. Every path keeps working. |
-| **Rolling** | Per-launch log captures, snapshot folders, scratch test beds | Compressed after 7 days, removed after 90; a snapshot that repeats the one before is removed; a scratch bed is removed by name when its task is done. |
-| **Rolling tool store** | A tool's own rotating snapshots of the files it watches (script, config and knowledgebase snapshots), even under a `*backup*` folder. Each toolkit's checklist names its stores and their numbers | Kept by age or count, always with the newest copy; the rest goes to the Recycle Bin. |
-| **Toolkit temp** | Directories the toolkit's own code and tests make in the system temp dir, by the toolkit's own name prefixes only (never a folder every project shares, such as pytest's `pytest-of-<user>`), and, where a toolkit keeps them, the batches a rolling tool store retires into `.claude/retired/` | Recycled by the session-start sweep once nothing in them changed for 24 hours (a retired batch: 10 minutes) and no process holds a file open inside. |
+| **Rolling** | Per-launch logs, snapshot folders, named scratch beds | Compression requires a verified lossless replacement. Snapshots require an identical retained generation. Unique logs and scratch need explicit content-bound obsolete decisions; age alone never deletes them. |
+| **Rolling tool store** | Configured rolling snapshots, including stores under backup folders | Housekeep removes only a byte-identical repeated generation with an unchanged retained copy; newest and distinct generations stay. Separate producer rotation is outside this housekeep command. |
+| **Toolkit temp** | Leftover workspaces explicitly declared disposable by their producer when newly created | Name, ownership and age alone are insufficient. Require a producer disposition receipt or explicit content-bound obsolete decision, then the ordinary protection, inactivity and in-use checks. Legacy unmarked workspaces stay. |
 
 ### The toolkit cleans up after itself
 
@@ -76,8 +82,8 @@ link.
   runs and other projects' runs are preserved. A caller's `--basetemp` must name
   a new directory; existing output is refused before pytest can wipe it.
 
-- **Automatic Temp cleanup requires ownership.** Only a receipt written when this
-  toolkit creates a directory grants ownership. Legacy unmarked directories,
+- **Automatic Temp cleanup requires producer-declared disposability.** Only a receipt written when this
+  toolkit creates an empty directory declares it disposable (version 2). A legacy version-1 ownership receipt alone is insufficient. Legacy unmarked directories,
   matching names alone and other projects' pytest runs are left alone. High-volume
   QA and pytest producers write receipts; other unmarked scratch remains manual.
   Receipts are checked against both the canonical toolkit and directory paths.
@@ -119,3 +125,20 @@ python scripts/x4housekeep.py apply plan.json [--only link,gzip]
 
 `apply` runs the classes in a fixed order (recreatable, build, link, gzip, launch, snapshot, scratch) and prints
 every refusal with its reason. A refusal is not an error to work around: re-run `plan`.
+
+### Explicit obsolete decisions
+
+Use top-level `obsolete_items` for unique ordinary cleanup candidates. Each key is an exact absolute path:
+
+```json
+"obsolete_items": {
+  "/absolute/retired-item": {
+    "basis": "operator-confirmed-obsolete",
+    "reason": "Explain why this specific state is no longer needed",
+    "evidence": "Reviewed receipt, replacement or operator decision",
+    "content_hash": "<current housekeep content hash>"
+  }
+}
+```
+
+Files use BLAKE2b-128; directory generations use the SHA256 manifest digest returned by `housekeep_backups.content_hash(path)`. Record the decision only after review, never generate declarations merely to clear a report. Changed content invalidates it. Saves, tracked/linked evidence, pins and active work remain protected.

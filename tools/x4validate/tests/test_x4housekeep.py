@@ -16,6 +16,40 @@ from pathlib import Path
 
 import pytest
 
+@pytest.mark.parametrize("kind", ["scratch", "launch", "build"])
+def test_age_and_class_alone_do_not_prove_obsolescence(tree, kind):
+    root = 'out'
+    relative = {"scratch":"scratch/item.log", "launch":"launches/launch-20200101-000000/item.log",
+                "build":root+"/task/build/item.obj"}[kind]
+    p = write(tree/relative, b"unique bytes", days=400)
+    cfg = cfg_for(tree, scratch=['scratch'], launch_logs=['launches'])
+    assert not planned(hk.plan(cfg, only={kind}), kind)
+    declare_obsolete(cfg, p if kind == "build" else p.parent)
+    doc = hk.plan(cfg, only={kind})
+    assert planned(doc, kind)
+    action = next(a for a in doc["actions"] if a["class"] == kind)
+    cfg["obsolete_items"].clear()
+    assert hk.check(action, cfg, hk.Guard(cfg), time.time())
+
+def test_snapshot_retirement_requires_unchanged_retained_copy(tree):
+    for stamp in ("20260101_000000", "20260102_000000", "20260103_000000"):
+        write(tree/"snaps"/stamp/"data.bin", b"equal", days=400)
+    cfg = cfg_for(tree, legacy_snapshots=['snaps'])
+    action = next(a for a in hk.plan(cfg, only={"snapshot"})["actions"] if a["class"] == "snapshot")
+    assert not hk.check(action, cfg, hk.Guard(cfg), time.time())
+    kept = __import__("pathlib").Path(action["duplicate_of"])/"data.bin"
+    kept.write_bytes(b"other")
+    assert hk.check(action, cfg, hk.Guard(cfg), time.time())
+
+def test_snapshot_directories_are_part_of_redundancy_proof(tree):
+    for stamp in ("20260101_000000", "20260102_000000", "20260103_000000"):
+        write(tree/"snaps"/stamp/"data.bin", b"equal", days=400)
+    cfg = cfg_for(tree, legacy_snapshots=['snaps'])
+    action = next(a for a in hk.plan(cfg, only={"snapshot"})["actions"] if a["class"] == "snapshot")
+    (__import__("pathlib").Path(action["path"])/"unique-empty-directory").mkdir()
+    assert hk.check(action, cfg, hk.Guard(cfg), time.time())
+
+
 REPO = Path(__file__).resolve().parents[3]
 _spec = importlib.util.spec_from_file_location("x4housekeep", REPO / "scripts" / "x4housekeep.py")
 hk = importlib.util.module_from_spec(_spec)
@@ -40,6 +74,17 @@ def blob(seed, size=2 * MB):
 
 def key(p):
     return os.path.normcase(str(p))
+
+
+def declare_obsolete(cfg, *paths):
+    for p in paths:
+        before = {q:(q.stat().st_atime_ns,q.stat().st_mtime_ns) for q in ([p,*p.rglob('*')] if p.is_dir() else [p])}
+        cfg.setdefault('obsolete_items', {})[str(p)] = dict(basis='operator-confirmed-obsolete',
+            reason='fixture owner retired this payload', evidence='explicit test disposition',
+            content_hash=hk.certainty.content_hash(p))
+        for q, stamps in before.items():
+            os.utime(q, ns=stamps)
+    return cfg
 
 
 def planned(doc, cls=None):
@@ -189,6 +234,7 @@ def test_named_forever_baselines_and_audit_records_survive_whole_folder_cleanup(
     protected = write(tree / "out/protected" / special, b"evidence")
     write(tree / "out/plain" / ordinary, b"evidence")
     cfg = cfg_for(tree, scratch=["out/protected", "out/plain"])
+    declare_obsolete(cfg, tree/'out/plain')
     assert hk.Guard(cfg).why_protected(protected), special
     doc = hk.plan(cfg, only={"scratch"})
     assert planned(doc, "scratch") == {key(tree / "out/plain")}
@@ -289,6 +335,7 @@ def test_a_scratch_folder_holding_a_save_or_a_backup_is_never_planned(tree):
     write(tree / "scratchB" / "known-good-backups" / "w.xml", b"bk")
     write(tree / "scratchC" / "plain" / "w.xml", b"x")                       # twin: nothing protected inside
     cfg = cfg_for(tree, scratch=["scratchA", "scratchB", "scratchC"])
+    declare_obsolete(cfg, tree/'scratchC')
     doc = hk.plan(cfg)
     assert planned(doc, "scratch") == {key(tree / "scratchC")}
     # apply re-proves it: a plan forged before the save appeared is refused, not executed
@@ -302,7 +349,7 @@ def test_a_relative_scratch_path_is_the_toolkit_roots_never_the_cwd(tree, monkey
     elsewhere = tree / "cwd"
     write(elsewhere / "scratch" / "keep.txt", b"y")
     monkeypatch.chdir(elsewhere)
-    doc = hk.plan(cfg_for(tree, scratch=["scratch"]))
+    doc = hk.plan(declare_obsolete(cfg_for(tree, scratch=["scratch"]), tree/'scratch'))
     assert planned(doc, "scratch") == {key(tree / "scratch")}, "resolved against the cwd"
 
 
@@ -313,6 +360,7 @@ def test_whole_folder_cleanup_keeps_recently_written_content(tree, kind):
     idle_name = "idle" if kind == "scratch" else "launches/launch-20200102-000000"
     idle = write(tree / idle_name / "old.log", b"old")
     cfg = cfg_for(tree, **({"scratch": [name, idle_name]} if kind == "scratch" else {"launch_logs": ["launches"]}))
+    declare_obsolete(cfg, active.parent, idle.parent)
     doc = hk.plan(cfg)
     assert key(active.parent) not in planned(doc, kind)
     assert key(idle.parent) in planned(doc, kind)
@@ -333,6 +381,7 @@ def test_a_launch_folder_holding_a_backup_is_never_recycled_or_gzipped(tree):
     write(tree / "launches" / old / "backups" / "x.log", blob("bk", 100_000))
     write(tree / "launches2" / old / "logs" / "x.log", blob("lg", 100_000))  # twin: no backup folder
     cfg = cfg_for(tree, launch_logs=["launches", "launches2"])
+    declare_obsolete(cfg, tree/'launches2'/old)
     doc = hk.plan(cfg)
     assert planned(doc, "launch") == {key(tree / "launches2" / old)}
     cfg2 = cfg_for(tree, launch_logs=["launches", "launches2"], recycle_after_days=10 ** 6)   # gzip age instead
@@ -369,8 +418,8 @@ def tdir(temp, name, days=3):
     (d / "sub" / "f.txt").write_text("x", encoding="utf-8")
     owner = next(parent.parent for parent in d.parents if parent.name == "temp")
     (d / ".x4-temp-owner.json").write_text(json.dumps({
-        "v": 1, "toolkit": os.path.normcase(os.path.realpath(owner)),
-        "directory": os.path.normcase(os.path.realpath(d))}), encoding="utf-8")
+        "v": 2, "toolkit": os.path.normcase(os.path.realpath(owner)),
+        "directory": os.path.normcase(os.path.realpath(d)), "purpose":"disposable temporary workspace"}), encoding="utf-8")
     return stale(d, days)
 
 

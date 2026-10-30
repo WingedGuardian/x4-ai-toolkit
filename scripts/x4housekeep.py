@@ -52,6 +52,10 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+import importlib.util
+_BACKUP_SPEC = importlib.util.spec_from_file_location('housekeep_cold_helper', Path(__file__).with_name('housekeep_backups.py'))
+certainty = importlib.util.module_from_spec(_BACKUP_SPEC)
+_BACKUP_SPEC.loader.exec_module(certainty)
 from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -69,6 +73,7 @@ def is_save(low: str) -> bool:
 
 CLASSES = ("recreatable", "build", "link", "gzip", "launch", "snapshot", "scratch")
 DEFAULTS = {
+    "obsolete_items": {},            # exact bytes + explicit reason/evidence; never age alone
     "backup_archive": {},            # opt-in cold backups; docs/BACKUP-ARCHIVE.md
     "agent_output": [],               # task-folder roots (relative to the toolkit root, or absolute)
     "nested_task_roots": [],          # roots one level down whose children are task folders of their own
@@ -262,6 +267,8 @@ def protected_inside(guard: "Guard", target: Path) -> str:
     """The first Forever reason for a whole-folder (or single-file) action: the target itself, or any file under it.
     A launch, snapshot or scratch folder holding a save, a backup folder or a tracked file is never recycled whole."""
     target = Path(target)
+    if target.is_dir() and (target/'.housekeep-keep').exists():
+        return 'pinned (.housekeep-keep)'
     why = guard.why_protected(target / "_" if target.is_dir() else target)   # the folder's OWN name counts too
     if why:
         return why
@@ -373,6 +380,11 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
         rows[row] = rows.get(row, 0) + n
 
     def act(action, row):
+        if action['class'] in {'build', 'launch', 'scratch', 'expire'}:
+            why = certainty.obsolete_reason(action['path'], cfg, action.get('hash'))
+            if why:
+                count('kept: '+why, action['bytes'])
+                return
         if only and action["class"] not in only:
             count("kept: class not requested (--only)", action["bytes"])
         else:
@@ -502,23 +514,30 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
         stamps = sorted((e for e in os.scandir(root) if e.is_dir() and STAMP_RE.match(e.name)),
                         key=lambda e: e.name)
         prev = None
+        prev_path = None
         for i, e in enumerate(stamps):
             p = Path(e.path)
             files = sorted(walk_files(p))
-            sig = sorted((str(f.relative_to(p)).lower(), f.stat().st_size, blake(f)) for f in files)
+            why = next((certainty.rolling_protection(f, guard) for f in [p, *files] if certainty.rolling_protection(f, guard)), '')
+            if why:
+                count("kept: protected ({})".format(why), sum(f.stat().st_size for f in files))
+                continue
+            sig = certainty.snapshot_signature(p, blake)
             size = sum(s for _, s, _ in sig)
             if newest_mtime(p) > now - cfg["active_hours"] * 3600:
                 count("kept: snapshot folder active", size)
                 continue
-            why = protected_inside(guard, p) if sig == prev and i != len(stamps) - 1 else ""
+            why = ""  # all rolling-store protections were checked before hashing
             if why:
                 count("kept: protected ({})".format(why), size)
             elif sig == prev and i != len(stamps) - 1:
-                act({"class": "snapshot", "path": str(p), "bytes": size, "fingerprint": fingerprint(p)},
+                act({"class": "snapshot", "path": str(p), "bytes": size, "fingerprint": fingerprint(p),
+                     "duplicate_of": str(prev_path), "duplicate_signature": certainty.digest(sig)},
                     "plan: snapshot repeating the previous one -> Recycle Bin")
             else:
                 count("kept: snapshot with distinct content (or the newest)", size)
                 prev = sig
+                prev_path = p
 
     # ---- named scratch folders
     for s in (cfg["scratch"] if wants("scratch") else []):
@@ -657,13 +676,20 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
         if p.stat().st_nlink != 1 or c.stat().st_nlink != 1 + memo.links.get(_key(c), 0):
             return "hard-link ownership changed or is unqualified"
     if action["class"] in ("launch", "snapshot", "scratch"):
-        why = protected_inside(guard, p)
+        why = "" if action['class'] == 'snapshot' else protected_inside(guard, p)
         if why:
             return "protected ({})".format(why)
         if fingerprint(p) != action["fingerprint"]:
             return "folder changed since the plan"
         if newest_mtime(p) > now - cfg["active_hours"] * 3600:
             return "folder is active"
+    if action['class'] == 'snapshot':
+        try:
+            return certainty.snapshot_refusal(action, cfg, guard, blake)
+        except (OSError, ValueError) as exc:
+            return 'snapshot retained-copy proof failed: '+str(exc)
+    if action['class'] in {'build', 'launch', 'scratch', 'expire'}:
+        return certainty.obsolete_reason(p, cfg, action.get('hash'))
     return ""
 
 
@@ -696,7 +722,7 @@ def compress(action) -> Path:
     with gzip.open(gz, "rb") as f:
         for b in iter(lambda: f.read(1 << 20), b""):
             d.update(b)
-    if d.hexdigest() != action["hash"]:
+    if d.hexdigest() != action["hash"] or blake(src) != action["hash"]:
         recycle([gz])                                             # our own bad output -- still the bin, never a delete
         raise OSError("gzip round trip does not reproduce the original")
     st = src.stat()
@@ -742,6 +768,28 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
                 print("  FAILED   {:<11} {}  ({})".format(cls, a["path"], e))
                 failed += 1
         if to_recycle:
+            ready = []
+            for a in to_recycle:
+                try:
+                    if a['class'] == 'gzip':
+                        d = hashlib.blake2b(digest_size=16)
+                        with gzip.open(a['path']+'.gz', 'rb') as stream:
+                            for block in iter(lambda:stream.read(1<<20), b''):
+                                d.update(block)
+                        why = '' if blake(Path(a['path'])) == a['hash'] == d.hexdigest() else 'gzip replacement/source changed'
+                    else:
+                        why = check(a, cfg, guard, time.time(), _Memo())
+                    if a['class'] == 'snapshot' and any(
+                            other['path'] == a.get('duplicate_of') for other in plan_doc['actions']):
+                        why = 'retained snapshot is also scheduled for removal'
+                except (OSError, ValueError) as exc:
+                    why = 'final replacement proof failed: '+str(exc)
+                if why:
+                    print('  REFUSED  {}  ({})'.format(a['path'], why))
+                    failed += 1
+                else:
+                    ready.append(a)
+            to_recycle = ready
             res = recycler([a["path"] for a in to_recycle])
             for a in to_recycle:
                 err = res.get(a["path"], "no result reported")
@@ -814,6 +862,7 @@ def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler
     now = time.time() if now is None else now
     cutoff = now - cfg["temp_after_hours"] * 3600
     rows = {"recycled": 0, "kept: changed recently": 0, "kept: in use": 0,
+            "kept: disposability unverified": 0,
             "kept: ownership unverified": 0, "kept: protected": 0, "kept: no Recycle Bin on this OS": 0,
             "failed": 0}
     ready = []
@@ -826,8 +875,12 @@ def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler
         return {"rows": rows, "failed": [str(exc)], "temp": str(temp)}
     for p, _why in candidates:
         try:
-            if not owns_temp(p, cfg["root"]):
+            explicit = not certainty.obsolete_reason(p, cfg)
+            if not owns_temp(p, cfg["root"]) and not explicit:
                 rows["kept: ownership unverified"] += 1
+                continue
+            if not certainty.disposable_temp(p, cfg['root']) and not explicit:
+                rows['kept: disposability unverified'] += 1
                 continue
             if protected_inside(guard, p):
                 rows["kept: protected"] += 1
@@ -881,7 +934,7 @@ def session(cfg, state: Path) -> int:
     res = sweep_temp(cfg)
     notes = []
     try:
-        import housekeep_backups
+        housekeep_backups = certainty
         note = housekeep_backups.periodic_note(cfg)
         if note:
             notes.append(note)
@@ -990,7 +1043,7 @@ def main(argv) -> int:
         return 2
     cmd = args.pop(0) if args else "report"
     if cmd == "backups":
-        import housekeep_backups
+        housekeep_backups = certainty
         guard = Guard(cfg)
         def protect_backup(path):
             # The opt-in vault preserves backup/baseline bytes before local retirement.
