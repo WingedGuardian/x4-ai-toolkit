@@ -36,6 +36,8 @@ def referenced_part(world, part, geometry):
             raise GeometryError("cyclic/excessive/invalid render-part reference")
         chain.append(ref)
         owner, name = ref.split(".", 1)
+        if not owner or not name:
+            raise GeometryError(f"render-part reference {ref!r} names no component or part")
         path = world.component_path(owner)
         root = world.xml(path)
         components = [c for c in root.findall("component") if c.get("name", "").lower() == owner.lower()]

@@ -286,3 +286,44 @@ def test_audit_rejects_explicit_comparison_options_even_defaults(option):
     with pytest.raises(SystemExit) as exc:
         _similarity.main(['--geometry', 'ship.xml', '--geometry-audit', *option])
     assert exc.value.code == 2
+
+
+# --- f4a52e9 review (4.0.1): each was MEASURED wrong before its fix --------------------------
+def _audit(tmp_path, monkeypatch, capsys, json_out=True):
+    from x4validate import _effective, _similarity
+    monkeypatch.setattr(_effective, "active_mods", lambda scan: [])
+    rc = _similarity.main(["--reference", str(tmp_path), "--ext-dir", str(tmp_path), "--geometry",
+                           "assets/ship_macro.xml", "--geometry-audit"] + (["--geometry-json"] if json_out else []))
+    out = capsys.readouterr()
+    return rc, (json.loads(out.out) if json_out else out.out)
+
+
+def test_an_audit_that_examines_nothing_is_not_a_pass(tmp_path, monkeypatch, capsys):
+    """A component with a source but no parts read `passed` with 0 instances visited, rc 0."""
+    _, put = fixture(tmp_path)
+    put("assets/hull.xml", '<components><component name="hull"><source geometry="assets/hull_data"/></component></components>')
+    rc, report = _audit(tmp_path, monkeypatch, capsys)
+    stages = report["assemblies"][0]["stages"]
+    assert stages["assets"]["status"] == "empty" and stages["audit"] == "failed" and rc == 3, stages
+
+
+def test_TWIN_an_audit_of_a_decodable_part_still_passes(tmp_path, monkeypatch, capsys):
+    fixture(tmp_path)
+    rc, report = _audit(tmp_path, monkeypatch, capsys)
+    assert report["assemblies"][0]["stages"]["audit"] == "passed" and rc == 0
+
+
+def test_a_render_reference_with_no_part_name_is_refused_not_a_traceback(tmp_path, monkeypatch, capsys):
+    """ref="prov." matched a nameless provider part, then None reached the mesh path: TypeError."""
+    _, put = fixture(tmp_path)
+    put("index/components.xml", '<index><entry name="hull" value="assets/hull"/><entry name="prov" value="assets/prov"/></index>')
+    put("assets/prov.xml", '<components><component name="prov"><source geometry="assets/hull_data"/><connections><connection name="x"><parts><part/></parts></connection></connections></component></components>')
+    put("assets/hull.xml", '<components><component name="hull"><source geometry="assets/hull_data"/><connections><connection name="c"><parts><part name="main" ref="prov."/></parts></connection></connections></component></components>')
+    rc, report = _audit(tmp_path, monkeypatch, capsys)
+    assert rc == 3 and "names no component or part" in json.dumps(report), report["assemblies"][0].get("findings")
+
+
+def test_text_audit_states_its_verdict(tmp_path, monkeypatch, capsys):
+    fixture(tmp_path)
+    rc, out = _audit(tmp_path, monkeypatch, capsys, json_out=False)
+    assert rc == 0 and "AUDIT" in out and "passed" in out and "1 of 1 instances decoded" in out, out

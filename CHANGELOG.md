@@ -15,7 +15,14 @@
   runtime poses and general Euler parsing remain unqualified. Install the
   optional `geometry` extra; see `tools/x4validate/docs/GEOMETRY.md`. A run that
   scores nothing exits 3; text output names unreadable and left-out inventory;
-  each candidate's mesh is freed once scored.
+  each candidate's scene is freed once scored.
+- `x4similar --geometry-audit` checks one ship's structural asset graph without comparing
+  it (every placement, render part and declared LOD; `--geometry-max-instances` bounds it).
+  It exits 0 only when every visited asset decodes and verifies, and 3 when nothing was
+  examined or anything failed. Comparison now scores instanced scenes
+  (`surface-overlap-instanced-2`, JSON schema `x4similar.geometry/2`): scores are not
+  comparable with schema /1, and a row is `partial` (whole-hull score null) when any
+  declared LOD mesh of a part is missing.
 
 - Updating the mod enable/disable list -- the profile's ROOT `content.xml` -- is now advisory instead of asking (user ruling 2026-10-28): enabling or disabling a mod you were asked to install needs no second confirmation. Backups still run. Deleting that file, every other profile file, saves, a `content.xml` in a subfolder or behind a link, and shell commands touching the profile still ask.
 - Codex: a non-save profile XML edit that the guard asks about can now be approved once. Codex cannot show an ask, so the hook prints the patch and a `PROFILE_EDIT_APPROVAL <digest>` line that binds the session, the file, its current bytes and the exact patch; replying with that line approves that one edit (24-hour expiry, used once, refused if the file changed). Agent messages, tool output and a generic yes approve nothing. Details and limits: `docs/profile-edit-approval.md`.

@@ -152,7 +152,14 @@ def run(args, reference, ext):
         if args.geometry_json:
             print(json.dumps(report, indent=2, allow_nan=False))
         else:
-            print(f"EXPERIMENTAL geometry: {args.geometry}; {report['coverage']}")
+            if args.geometry_audit:
+                assets = subject.stages.get("assets") or {}
+                print(f"EXPERIMENTAL geometry AUDIT: {args.geometry}: {subject.stages.get('audit')}; "
+                      f"assets {assets.get('status')} ({assets.get('decoded_instances')} of "
+                      f"{assets.get('visited_instances')} instances decoded); "
+                      f"verification {subject.stages.get('verification')}")
+            else:
+                print(f"EXPERIMENTAL geometry: {args.geometry}; {report['coverage']}")
             for row in rows:
                 score = row.get("geometry_score")
                 display = f"{score:.2f}/100" if score is not None else "null"

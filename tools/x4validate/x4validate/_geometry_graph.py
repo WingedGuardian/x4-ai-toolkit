@@ -202,7 +202,8 @@ def build(world, macro_path, label=None, *, audit=False, max_instances=512):
                 fail(instance, f"LOD0 absent; fallback LOD{lod}", "assets", "lod_fallback")
         except FAILURES as exc:
             fail(instance, exc, "assets")
-    result.stages["assets"] = dict(status="passed" if exhaustive and all(a["status"] == "decoded" for a in result.assets) else "incomplete" if not exhaustive else "failed",
+    result.stages["assets"] = dict(status="empty" if exhaustive and not result.assets else
+        "passed" if exhaustive and all(a["status"] == "decoded" for a in result.assets) else "incomplete" if not exhaustive else "failed",
         visited_instances=len(result.assets), decoded_instances=sum(a["status"] == "decoded" for a in result.assets),
         decoded_unique_payloads=len(decoded), unresolved_instances=sum(a["status"] != "decoded" for a in result.assets),
         declared_lod_references=sum(len(a.get("lod_audit", [])) for a in result.assets),
