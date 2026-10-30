@@ -9,13 +9,7 @@ notes remain evidence to review; do not turn unclassified notes into standing or
 
 ## Game launch approval
 
-Reconfirm immediately before launch if preparation or other work delayed an earlier approval; consent is time-sensitive.
-
-Before every agent-initiated game launch or restart, ask for approval of that specific next launch and wait for the user's answer. This includes normal, menu-only, headless, private/background, probe, smoke and E2E runs.
-
-Name the game, mode, desktop/focus impact and test profile/save. For each headless session, ask which desktop to use; never carry a prior session's choice forward.
-
-Development, deployment or test-plan approval, batches of tests, resource exemptions, previous launches and "continue" do not authorize a launch. No automatic retries or launches hidden inside test scripts. Without launch-specific confirmation, continue offline work.
+Before every game launch or restart you start (normal, menu-only, headless, background, probe, smoke, E2E), ask approval for that specific launch and wait. Name the game, mode, desktop/focus impact and test profile/save; for each headless session ask which desktop, never reusing a prior choice. Approval of development, deployment, test plans or batches, resource exemptions, earlier launches and "continue" do not count; no automatic retries or launches inside test scripts. If work delays an approved launch, reconfirm just before it. Without approval, continue offline work.
 
 ## What This Is
 
@@ -144,8 +138,6 @@ the complete canonical paths, logical count and command hash. Never split a batc
 evade this policy. Missing preservation or evaluation is a refusal, not permission.
 
 ### General
-- One mod = one named folder, never a mega-file
-- `reference\` is never edited — it is source-of-truth for base game XML
 - **Deletions go to the Recycle Bin / Trash, always** (Windows: `Microsoft.VisualBasic.FileIO.FileSystem`
   `DeleteFile`/`DeleteDirectory` with `SendToRecycleBin`; Linux: `gio trash`; macOS: Finder Trash).
   A permanent delete needs the user's OK for that deletion. Report what went and what failed.
@@ -156,10 +148,9 @@ evade this policy. Missing preservation or evaluation is a refusal, not permissi
   load probes idle and time-boxed. The game and work the user directs are exempt. Hard floor: the
   system drive keeps min(pagefile, 50 GB) free, other drives min(5%, 50 GB). Raise a concern only
   when a job could reach a floor; never terminate another session's processes.
-  Memory limits refer to **physical RAM**: admission leaves 20% available. Commit uses a fixed
-  512 MiB reserve after job reservations, never a percentage; stop our job below 256 MiB commit
-  for 10 seconds or 128 MiB immediately. Physical-RAM emergency stops remain 2 GiB/10 seconds
-  and 1 GiB immediately. User-directed work is exempt from admission shares, not emergency floors.
+  Memory means **physical RAM**: admission leaves 20% available; commit keeps a fixed 512 MiB
+  after reservations (never a percentage). Stop our job below 256 MiB commit or 2 GiB RAM for
+  10 s, or 128 MiB / 1 GiB at once. User-directed work is exempt from shares, not those floors.
 
 ### Iteration snapshots (standing process)
 Before experimenting on a working state, snapshot it to `.claude\backups\known-good-<name>\`.
@@ -192,8 +183,7 @@ tool wins** — stated as a reason, never as an apology.
 Provenance travels with the value: a guessed field must never occupy the same slot, in the same
 grammar, as a verified one, and nothing derived from a guess may be promoted into a confident
 state. That applies to our own output too — a report, a registry row and a knowledgebase line
-each carry their tier or they do not ship. The registry once stored a GUESSED Nexus id beside
-`settled: stable`, so "is my copy the old version?" could not be answered from it at all.
+each carry their tier or they do not ship.
 
 ## Core Principle: Do Your Homework (Due Diligence Before Acting)
 
