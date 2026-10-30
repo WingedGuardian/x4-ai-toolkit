@@ -158,6 +158,35 @@ def transactions(root):
     return list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
+@pytest.mark.parametrize('kind', ['literal-batch', 'reference', 'expanding', 'relative'])
+def test_native_codex_dollar_paths_prove_only_literal_absolute_targets(tmp_path,kind):
+    require_native_codex(REPO)
+    if not (shutil.which('pwsh') or shutil.which('powershell')):
+        pytest.skip('PowerShell parser unavailable')
+    tmp, root, env, _files = prepare(tmp_path)
+    env['X4_CODEX_SHELL']='powershell'
+    parent=Path(env['X4_REFERENCE']) if kind=='reference' else tmp/'outside'/'$Recycle.Bin'
+    parent.mkdir(parents=True,exist_ok=True)
+    targets=[parent/(prefix+str(i)) for i in range(8) for prefix in ('$R','$I')]
+    for target in targets:
+        target.write_bytes(b'guard-only fixture; never delete')
+    quote='"' if kind=='expanding' else "'"
+    paths=[str(p) if kind!='relative' else p.name for p in targets]
+    command='\n'.join('Remove-Item -LiteralPath '+quote+p+quote+' -Force' for p in paths)
+    payload=native('bash_powershell',root,command=command)
+    payload['tool_input'].pop('workdir',None)  # observed missing execution workdir contract
+    decision,reason=run_adapter(env,payload)
+    if kind=='literal-batch':
+        assert decision in ('allow','advise'), (decision,reason)
+    elif kind=='reference':
+        assert decision=='deny', (decision,reason)
+        assert 'reference' in reason.lower() and 'INERT' not in reason, reason
+    else:
+        assert decision=='inert' and 'not allowed' in reason, (decision,reason)
+    assert all(p.read_bytes()==b'guard-only fixture; never delete' for p in targets)
+    assert not transactions(root)
+
+
 @pytest.mark.parametrize("host", ["codex", "opencode"])
 @pytest.mark.parametrize("count", [1, 3])
 def test_rendered_hosts_preserve_opaque_named_saves_or_refuse_bulk(tmp_path, host, count):
