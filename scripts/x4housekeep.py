@@ -25,8 +25,8 @@ and anything under a folder whose name
 contains "backup"; git-tracked files; every file a project doc links to; and any task folder written to within
 `active_hours` (another session is probably still working there).
 
-Removal goes to the Recycle Bin, never a permanent delete, with no exceptions (Windows: the shell's own delete with
-FOF_ALLOWUNDO). An item too big for the bin gets Windows' own "delete permanently?" prompt; "No" leaves it in place.
+Cross-run retirement uses the Recycle Bin (Windows: FOF_ALLOWUNDO). Unrecyclable items stay in place;
+there is no automatic permanent fallback. Same-run owned staging may be cleaned by its creator.
 The bin frees no disk space until it is emptied; that is the user's call. A file the bin refuses is reported
 FAILED and left in place. Duplicates are not removed at all: they become NTFS hard links to one copy, marked
 read-only so an in-place edit cannot silently change every path at once.
@@ -34,7 +34,7 @@ read-only so an in-place edit cannot silently change every path at once.
 Accounting: `report` and `plan` print every scanned byte in exactly one row, the rows sum to the total, and the
 row of bytes it leaves alone prints even at zero.
 
-Exit: 0 ok Ã‚Â· 1 an action was refused or failed Ã‚Â· 2 bad usage or config.
+Exit: 0 ok ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· 1 an action was refused or failed ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· 2 bad usage or config.
 """
 
 from __future__ import annotations
@@ -182,12 +182,13 @@ def fingerprint(folder: Path):
 
 def tracked_files(root: Path) -> set:
     try:
-        out = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, timeout=120)
+        out = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, timeout=120,
+                             **NO_WINDOW)
     except (OSError, subprocess.SubprocessError) as exc:
         raise OSError("could not inspect tracked-file protection") from exc
     if out.returncode != 0:
         if b"not a git repository" in out.stderr:
-            return set()  # silent-ok: an archive or synthetic non-Git root has no tracked files
+            return set()  # archive/synthetic roots have no Git tracked files
         raise OSError("git tracked-file protection failed (exit {})".format(out.returncode))
     return {_key(root / p) for p in out.stdout.decode("utf-8", "replace").split("\0") if p}
 
@@ -625,7 +626,11 @@ def bin_refusal(p) -> str:
     if longest > MAX_BIN_PATH:
         return "left in place: a path is longer than {} characters (the bin would ask to delete it)".format(MAX_BIN_PATH)
     cap = bin_capacity(s)
-    if cap is not None and size > cap:
+    if cap is None:
+        return "left in place: Recycle Bin capacity could not be verified"
+    if cap <= 0:
+        return "left in place: this volume disables recycling"
+    if size > cap:
         return "left in place: {:.1f} GiB is bigger than this drive's Recycle Bin ({:.1f} GiB)".format(
             size / GIB, cap / GIB)
     return ""
@@ -915,14 +920,14 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
 
     return {"created": now, "root": str(cfg["root"]), "actions": actions, "rows": rows,
             "large_pins": [[str(p), b] for p,b in plan_pins], "agent_total": agent_total,
-            "coverage": {"state": "accounted_with_holds" if held else "complete",
+            "coverage": {"state": "accounted_with_holds" if held or archive_review.get("state")=="partial" else "complete",
                          "classes_requested": sorted(only or CLASSES),
                          "agent_output_requested": wants("recreatable", "build", "link", "archive"),
                          "agent_output_roots": [str(_abs(cfg, r)) for r in cfg["agent_output"]],
                          "targets_inspected": len(all_tasks), "targets_held": len(held),
                          "archive_inventory": archive_inventory,
                          "archive_review": archive_review,
-                         "held": held, "unmeasured_held_bytes": bool(held)}}
+                         "held": held, "unmeasured_held_bytes": bool(held or archive_review.get("state")=="partial")}}
 
 
 def print_coverage(doc):
@@ -937,6 +942,12 @@ def print_coverage(doc):
     if archive:
         print("archive inventory: {} candidates inspected, {} candidates held, {} roots held".format(
             archive["candidates_inspected"], archive["candidates_held"], archive["roots_held"]))
+    review = coverage.get("archive_review", {})
+    if review:
+        print("ordinary archive review: {}; {} ZIP(s) inspected; {} held branch(es); {}".format(
+            review["state"],len(review["rows"]),len(review["held"]),review["root"]))
+        for item in review["held"]:
+            print("  HELD ARCHIVES {} ({})".format(item["path"],item["reason"]))
     if coverage["held"]:
         print("Byte totals exclude held targets; their sizes are unknown and they have no cleanup actions.")
         for item in coverage["held"]:
@@ -976,6 +987,8 @@ def recycle(paths) -> dict:
     # the bin and would be destroyed instead. FOF_WANTNUKEWARNING (0x4000) brings exactly that prompt back while
     # FOF_NOCONFIRMATION (0x10) still skips "move to the Recycle Bin?". FOF_ALLOWUNDO (0x40) is the Recycle Bin.
     # The user's answer is the only way anything is ever permanently deleted; "No" leaves the item in place.
+    # NOERRORUI suppresses error dialogs; WANTNUKEWARNING still guards permanent fallback.
+    # https://learn.microsoft.com/windows/win32/api/shellapi/ns-shellapi-shfileopstructw
     script = (
         "Add-Type -TypeDefinition @'\n"
         "using System; using System.Runtime.InteropServices;\n"
@@ -985,7 +998,7 @@ def recycle(paths) -> dict:
         "  public bool fAnyOperationsAborted; public IntPtr hNameMappings; public string lpszProgressTitle; }\n"
         " [DllImport(\"shell32.dll\", CharSet = CharSet.Unicode)] static extern int SHFileOperationW(ref Op op);\n"
         " public static string Recycle(string p) {\n"
-        "  var op = new Op { wFunc = 3, pFrom = p + \"\\0\\0\", fFlags = 0x4000 | 0x40 | 0x10 | 0x200 | 0x4 };\n"
+        "  var op = new Op { wFunc = 3, pFrom = p + \"\\0\\0\", fFlags = 0x4000 | 0x40 | 0x10 | 0x200 | 0x4 | 0x400 };\n"
         "  int rc = SHFileOperationW(ref op);\n"
         "  if (op.fAnyOperationsAborted) return \"declined: left in place\";\n"
         "  return rc == 0 ? \"\" : \"shell error 0x\" + rc.ToString(\"X\"); } }\n"
@@ -1389,7 +1402,7 @@ def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler
 def worktree_count(root: Path) -> int | None:
     try:
         out = subprocess.run(["git", "-C", str(root), "worktree", "list", "--porcelain"], capture_output=True,
-                             text=True, timeout=30)
+                             text=True, timeout=30, **NO_WINDOW)
     except (OSError, subprocess.SubprocessError) as exc:
         raise OSError("could not count worktrees") from exc
     if out.returncode:
@@ -1533,6 +1546,9 @@ def main(argv) -> int:
         print("housekeep: {}".format(e), file=sys.stderr)
         return 2
     cmd = args.pop(0) if args else "report"
+    if cmd == "version" and not args:
+        print(cleanup_code_sha256())
+        return 0
     if cmd == "backups":
         housekeep_backups = certainty
         guard = Guard(cfg)
