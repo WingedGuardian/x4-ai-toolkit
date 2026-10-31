@@ -91,3 +91,82 @@ def test_a_failure_is_disclosed_never_silent(world, monkeypatch, capsys):
     assert mod.main() == 0
     out = json.loads(capsys.readouterr().out)
     assert out["hookSpecificOutput"]["additionalContext"].startswith("SAVE SENTINEL DID NOT RUN")
+
+
+# --- optional save locks (user ruling 2026-10-31): Windows calls replaced with recorders, no real ACL changes ---
+def _fake_locks(mod, tk, monkeypatch, elevated=False):
+    lock = mod.save_policy.core(str(tk), "save_lock")
+    files = []
+    monkeypatch.setattr(lock, "supported", lambda: True)
+    monkeypatch.setattr(lock, "is_elevated", lambda: elevated)
+    monkeypatch.setattr(lock, "user_sid", lambda: "S-1-5-21-1")
+    monkeypatch.setattr(lock, "status_map", lambda folder, exts: {})
+    monkeypatch.setattr(lock, "is_locked", lambda p: True)
+    monkeypatch.setattr(lock, "lock_folder", lambda p, sid: None)
+    monkeypatch.setattr(lock, "lock_file", lambda p, sid: files.append(os.path.basename(p)))
+    return files
+
+
+def _switch(mod, tk, enabled):
+    s = mod.lock_switch(str(tk))
+    s.parent.mkdir(parents=True, exist_ok=True)
+    s.write_text(json.dumps({"enabled": enabled}), encoding="utf-8")
+
+
+def _old(path):
+    path.write_bytes(b"x")
+    os.utime(path, (500.0, 500.0))
+
+
+def test_locking_off_locks_nothing(world, monkeypatch):
+    mod, roots, saves, tk = world
+    files = _fake_locks(mod, tk, monkeypatch)
+    _old(saves / "save_001.xml.gz")
+    mod.report(roots, now=1000.0)
+    mod.report(roots, now=1010.0)
+    assert files == []
+
+
+def test_locking_on_locks_settled_saves_once_and_leaves_rotating_slots(world, monkeypatch):
+    mod, roots, saves, tk = world
+    files = _fake_locks(mod, tk, monkeypatch)
+    for name in ("save_001.xml.gz", "autosave_01.xml.gz", "quicksave.xml.gz"):
+        _old(saves / name)
+    _switch(mod, tk, True)
+    text, loud = mod.report(roots, now=1000.0)
+    assert files == ["save_001.xml.gz"] and not loud, text
+    files.clear()
+    mod.report(roots, now=1010.0)
+    assert files == []
+
+
+def test_switching_locking_off_is_raised_once(world, monkeypatch):
+    mod, roots, saves, tk = world
+    _fake_locks(mod, tk, monkeypatch)
+    _switch(mod, tk, True)
+    mod.report(roots, now=1000.0)
+    _switch(mod, tk, False)
+    text, loud = mod.report(roots, now=1010.0)
+    assert loud and "switched OFF" in text
+    assert "switched OFF" not in mod.report(roots, now=1020.0)[0]
+
+
+def test_an_elevated_agent_is_warned_while_locking_is_on(world, monkeypatch):
+    mod, roots, saves, tk = world
+    _fake_locks(mod, tk, monkeypatch, elevated=True)
+    _switch(mod, tk, True)
+    text, loud = mod.report(roots, now=1000.0)
+    assert loud and "runs as administrator" in text
+    assert "runs as administrator" not in mod.report(roots, now=1010.0)[0]
+
+
+def test_the_switch_lives_in_the_protected_harness_state(world):
+    """save_policy refuses any agent change under <toolkit>/.modding-agent-harness ("neutral harness state is
+    protected"), which is what keeps the switch the user's alone."""
+    mod, roots, saves, tk = world
+    switch = mod.lock_switch(str(tk))
+    assert switch.parent == tk / ".modding-agent-harness"
+    for op in ("write", "delete", "move"):
+        _, plan, _, _ = mod.save_policy.resolve(str(tk), roots, [{"path": str(switch), "operation": op,
+                                                                  "literal": True, "scope": "file"}])
+        assert "neutral harness state is protected" in plan.unresolved, op

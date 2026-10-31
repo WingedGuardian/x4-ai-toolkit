@@ -8,6 +8,11 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 # tests and for a user who only wants the config; the installers do not pass it.
 _I_CONFIG_ONLY=0
 [ "${1:-}" = "--config-only" ] && _I_CONFIG_ONLY=1
+# --save-lock / --no-save-lock: answer the optional save-lock question (section 6) without being asked.
+_I_SAVE_LOCK=""
+for _a in "$@"; do
+  case "$_a" in --save-lock) _I_SAVE_LOCK=yes ;; --no-save-lock) _I_SAVE_LOCK=no ;; esac
+done
 echo "=== X4 AI Assistant Toolkit setup ==="
 echo "Toolkit root: $ROOT"
 echo
@@ -194,6 +199,37 @@ if [ "$OS" = "windows" ]; then
   echo "       setx X4_NEXUS_KEY \"<your-key>\"          (or add it to x4-paths.env)"
 else
   echo "       export X4_NEXUS_KEY=\"<your-key>\"        (add to your shell rc, or to x4-paths.env)"
+fi
+
+# --- 6. Save locks (optional, user ruling 2026-10-31) -----------------------
+# Windows refuses any delete or change of a locked save, from any program running as you. Off unless chosen;
+# asked only when a person is at the terminal on Windows and neither flag was given (Enter = no).
+echo
+_sl_switch="$ROOT/.modding-agent-harness/save-lock.json"
+if [ -f "$_sl_switch" ] && grep -q '"enabled": true' "$_sl_switch" 2>/dev/null; then
+  ok "save locks: ON (already). Only an elevated prompt switches them off: python tools/agent-harness.py save-lock off"
+elif [ "$OS" != "windows" ]; then
+  [ "$_I_SAVE_LOCK" = yes ] && warn "--save-lock: save locks need Windows (NTFS); not applied."
+else
+  if [ -z "$_I_SAVE_LOCK" ] && [ -t 0 ]; then
+    echo "6) Save locks (optional, recommended): Windows itself refuses to delete or change your saves, so no agent,"
+    echo "   script or tool can damage one. New saves, autosaves and quicksaves still work. Unlocking a save later"
+    echo "   needs an administrator prompt. The locks outlast the toolkit: before removing it, run"
+    echo "   python tools/agent-harness.py save-lock off from an administrator prompt."
+    read -r -p "   Lock your saves? (y/N) " _sl_answer || _sl_answer=""
+    case "$_sl_answer" in y|Y|yes|YES|Yes) _I_SAVE_LOCK=yes ;; *) _I_SAVE_LOCK=no ;; esac
+  fi
+  if [ "$_I_SAVE_LOCK" = yes ]; then
+    if [ -z "${_py:-}" ]; then
+      fail "save locks: they need Python 3 on PATH. Install it and re-run: bash setup.sh --save-lock"
+    elif "$_py" "$ROOT/tools/agent-harness.py" save-lock on; then
+      ok "save locks: ON (new saves are locked once they settle)"
+    else
+      fail "save locks were NOT (fully) applied (above). Check: python tools/agent-harness.py save-lock status"
+    fi
+  else
+    echo "6) Save locks: OFF. python tools/agent-harness.py save-lock on (or bash setup.sh --save-lock) switches them on."
+  fi
 fi
 
 echo
