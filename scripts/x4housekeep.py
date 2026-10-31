@@ -1010,8 +1010,15 @@ def recycle(paths) -> dict:
         " else { [Console]::Out.WriteLine('ERR' + [char]9 + $p + [char]9 + $e) } }")
     # The list goes on stdin: under -Command, trailing arguments are NOT $args -- PowerShell appends them to the
     # command text and runs them (measured: $args.Count == 0). A list file would be one more thing to delete.
-    out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], input="\n".join(paths),
-                         capture_output=True, text=True, encoding="utf-8", timeout=3600, **NO_WINDOW)
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], input="\n".join(paths),
+                             capture_output=True, text=True, encoding="utf-8", timeout=3600, **NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Unknown outcome per path: report each one by what is on disk now, never as recycled.
+        why = "recycle call failed ({}: {})".format(type(exc).__name__, exc)
+        result = {p: (why if os.path.exists(p) else why + "; path is gone") for p in paths}
+        result.update(refused)
+        return result
     silent = "no result reported" + (" (powershell: {})".format(out.stderr.strip()[:300]) if out.stderr.strip() else "")
     result = {p: silent for p in paths}
     for line in out.stdout.splitlines():

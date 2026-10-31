@@ -902,3 +902,21 @@ def test_the_tool_never_deletes_permanently():
         assert call not in src, call
     flags = re.findall(r"fFlags = ([^}]+?) \}", src)
     assert len(flags) == 1 and {"0x4000", "0x40"} <= set(re.findall(r"0x[0-9A-Fa-f]+", flags[0])), flags
+
+
+_REAL_RECYCLE = hk.recycle  # captured at import, before the autouse fixture replaces it
+
+
+@pytest.mark.skipif(os.name != "nt", reason="recycle() is Windows-only")
+@pytest.mark.parametrize("exc", [subprocess.TimeoutExpired("powershell", 3600), FileNotFoundError("powershell")])
+def test_a_failed_recycle_call_is_reported_per_path_not_raised(tmp_path, monkeypatch, exc):
+    item = tmp_path / "item.bin"
+    item.write_bytes(b"x")
+    monkeypatch.setattr(hk, "bin_refusal", lambda p: "")
+    def broken(*_a, **_k):
+        raise exc
+    monkeypatch.setattr(hk.subprocess, "run", broken)
+    result = _REAL_RECYCLE([item])
+    assert list(result) == [str(item)]
+    assert result[str(item)].startswith("recycle call failed (" + type(exc).__name__)
+    assert item.read_bytes() == b"x"
