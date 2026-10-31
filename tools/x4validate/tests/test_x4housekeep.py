@@ -16,6 +16,61 @@ from pathlib import Path
 
 import pytest
 
+
+def test_a_failed_task_is_held_whole_and_independent_tasks_are_still_measured(tmp_path, monkeypatch):
+    write(tmp_path / "out" / "held" / "unique.bin", b"unique")
+    write(tmp_path / "out" / "healthy" / "keep.bin", b"kept")
+    cfg = cfg_for(tmp_path)
+    original = hk.newest_mtime
+    def inspect(path):
+        if path.name == "held":
+            raise OSError("symbolic link or reparse point inside cleanup target")
+        return original(path)
+    monkeypatch.setattr(hk, "newest_mtime", inspect)
+    doc = hk.plan(cfg)
+    assert doc["coverage"]["state"] == "accounted_with_holds"
+    assert doc["coverage"]["targets_inspected"] == 1
+    assert doc["coverage"]["targets_held"] == 1
+    assert doc["coverage"]["held"][0]["path"] == str(tmp_path / "out" / "held")
+    assert doc["coverage"]["held"][0]["bytes"] is None
+    assert sum(doc["rows"].values()) == 4
+    assert not doc["actions"]
+    hk.print_coverage(doc)
+
+
+def test_missing_agent_output_root_is_named_and_never_reported_as_scanned(tmp_path):
+    doc = hk.plan(cfg_for(tmp_path))
+    assert doc["coverage"]["targets_inspected"] == 0
+    assert doc["coverage"]["targets_held"] == 1
+    assert doc["coverage"]["held"][0]["path"] == str(tmp_path / "out")
+    assert doc["rows"] == {} and doc["actions"] == []
+
+
+def test_unrequested_agent_output_is_explicit_in_plan_coverage(tmp_path, capsys):
+    doc = hk.plan(cfg_for(tmp_path), only={"snapshot"})
+    assert doc["coverage"]["classes_requested"] == ["snapshot"]
+    assert not doc["coverage"]["agent_output_requested"]
+    hk.print_coverage(doc)
+    assert "class-limited plan" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real Windows junction contract")
+def test_real_junction_holds_its_entire_task_without_visiting_target(tmp_path):
+    write(tmp_path / "out" / "held" / "unique.bin", b"unique")
+    outside = write(tmp_path / "outside" / "keep.bin", b"external")
+    write(tmp_path / "out" / "healthy" / "keep.bin", b"kept")
+    cfg = cfg_for(tmp_path)
+    junction = tmp_path / "out" / "held" / "node_modules"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), str(outside.parent)],
+                   check=True, capture_output=True)
+    doc = hk.plan(cfg)
+    assert doc["coverage"]["targets_inspected"] == 1
+    assert doc["coverage"]["targets_held"] == 1
+    assert str(junction) in doc["coverage"]["held"][0]["reason"]
+    assert sum(doc["rows"].values()) == 4
+    assert not doc["actions"]
+    assert outside.read_bytes() == b"external" and junction.is_dir()
+
 @pytest.mark.parametrize("failure", ["exit", "launch", "timeout"])
 @pytest.mark.parametrize("query,label", [("tracked_files", "tracked-file protection"), ("worktree_count", "worktree")])
 def test_git_failures_refuse_protection_and_inventory(tmp_path, monkeypatch, failure, query, label):

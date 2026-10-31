@@ -282,7 +282,7 @@ def protected_inside(guard: "Guard", target: Path) -> str:
 
 # --------------------------------------------------------------------------- task folders
 
-def task_folders(cfg):
+def task_folders(cfg, held=None):
     """[(path, state)] under every agent_output root; state is "idle", "active" or "loose".
 
     A folder directly in a root is a task folder, judged active as a whole. A folder named in nested_task_roots
@@ -291,23 +291,37 @@ def task_folders(cfg):
     rewrites). Making an append-only log read-only would break its next write, and a log appended once a week
     walks straight through the activity gate."""
     out = []
+    held = [] if held is None else held
     cutoff = time.time() - cfg["active_hours"] * 3600
     nested = {_key(_abs(cfg, n)) for n in cfg["nested_task_roots"]}
 
     def visit(folder: Path):
         for e in sorted(os.scandir(folder), key=lambda e: e.name):
             p = Path(e.path)
-            if e.is_dir(follow_symlinks=False) and _key(p) in nested:
-                visit(p)
-            elif e.is_dir(follow_symlinks=False):
-                out.append((p, "active" if newest_mtime(p) > cutoff else "idle"))
-            else:
-                out.append((p, "loose"))
+            try:
+                info = p.lstat()
+                if p.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+                    raise OSError("symbolic link or reparse point is not a cleanup target: {}".format(p))
+                if e.is_dir(follow_symlinks=False) and _key(p) in nested:
+                    visit(p)
+                elif e.is_dir(follow_symlinks=False):
+                    out.append((p, "active" if newest_mtime(p) > cutoff else "idle"))
+                else:
+                    out.append((p, "loose"))
+            except OSError as exc:
+                held.append({"path": str(p), "reason": str(exc), "bytes": None})
 
     for r in cfg["agent_output"]:
         root = _abs(cfg, r)
-        if root.is_dir():
+        try:
+            info = root.lstat()
+            if root.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+                raise OSError("configured root is a symbolic link or reparse point")
+            if not root.is_dir():
+                raise OSError("configured root is not a directory")
             visit(root)
+        except OSError as exc:
+            held.append({"path": str(root), "reason": str(exc), "bytes": None})
     return out
 
 
@@ -393,7 +407,8 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
             count(row, action["bytes"])
 
     # ---- agent output: recreatable, build, link
-    tasks = task_folders(cfg) if wants("recreatable", "build", "link") else []
+    held = []
+    tasks = task_folders(cfg, held) if wants("recreatable", "build", "link") else []
     live = live_index(cfg) if tasks else {}
     live_hash = {}
     by_size = {}
@@ -555,7 +570,25 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
             act({"class": "scratch", "path": str(p), "bytes": fp[1], "fingerprint": fp},
                 "plan: named scratch folder -> Recycle Bin")
 
-    return {"created": now, "root": str(cfg["root"]), "actions": actions, "rows": rows}
+    return {"created": now, "root": str(cfg["root"]), "actions": actions, "rows": rows,
+            "coverage": {"state": "accounted_with_holds" if held else "complete",
+                         "classes_requested": sorted(only or CLASSES),
+                         "agent_output_requested": wants("recreatable", "build", "link"),
+                         "agent_output_roots": [str(_abs(cfg, r)) for r in cfg["agent_output"]],
+                         "targets_inspected": len(tasks), "targets_held": len(held),
+                         "held": held, "unmeasured_held_bytes": bool(held)}}
+
+
+def print_coverage(doc):
+    coverage = doc["coverage"]
+    if not coverage["agent_output_requested"]:
+        print("Agent-output inspection was not requested (--only); this is a class-limited plan.")
+    print("target inventory: {} inspected, {} held; {}".format(
+        coverage["targets_inspected"], coverage["targets_held"], coverage["state"]))
+    if coverage["held"]:
+        print("Byte totals exclude held targets; their sizes are unknown and they have no cleanup actions.")
+        for item in coverage["held"]:
+            print("  HELD {} ({})".format(item["path"], item["reason"]))
 
 
 def print_rows(rows: dict, title: str):
@@ -1018,6 +1051,7 @@ def user_level(cfg):
 
 def report(cfg) -> int:
     doc = plan(cfg)
+    print_coverage(doc)
     print_rows(doc["rows"], "agent output + rolling stores")
     by = {}
     for a in doc["actions"]:
@@ -1086,6 +1120,7 @@ def main(argv) -> int:
     if cmd == "plan" and len(args) == 2 and args[0] == "-o":
         doc = plan(cfg, only=only)
         Path(args[1]).write_text(json.dumps(doc, indent=1), encoding="utf-8")
+        print_coverage(doc)
         print_rows(doc["rows"], "plan")
         print("{} action(s) written to {}".format(len(doc["actions"]), args[1]))
         return 0
