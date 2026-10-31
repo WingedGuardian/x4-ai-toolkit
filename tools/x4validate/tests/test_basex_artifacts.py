@@ -99,6 +99,40 @@ def test_database_receipts_cannot_be_created_inside_reference(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_creation_receipt_honors_configured_dbpath_and_refuses_existing_db(tmp_path):
+    home = tmp_path / "basex"
+    home.mkdir()
+    storage = tmp_path / "separate-databases"
+    (home / ".basex").write_text(f"DBPATH = {storage}\n")
+    marker = a.declare_database("x4eff", proof=ready, artifact_root=tmp_path)
+    assert json.loads(marker.read_text())["path"] == str(storage / "x4eff")
+    (storage / "x4eff").mkdir(parents=True)
+    with pytest.raises(OSError, match="still exists after DROP DB"):
+        a.declare_database("x4eff", proof=ready, artifact_root=tmp_path)
+
+
+def test_generated_database_receipt_can_follow_a_changed_storage_location(tmp_path):
+    marker = a.declare_database("x4eff", proof=ready, artifact_root=tmp_path)
+    storage = tmp_path / "new-storage"
+    (tmp_path / "basex/.basex").write_text(f"DBPATH = {storage}\n")
+    a.declare_database("x4eff", proof=ready, artifact_root=tmp_path)
+    assert json.loads(marker.read_text())["path"] == str(storage / "x4eff")
+
+
+def test_coverage_revocation_refuses_a_dbpath_inside_reference_before_drop(tmp_path):
+    root = tmp_path / "artifacts"
+    home = root / "basex"
+    home.mkdir(parents=True)
+    ref = tmp_path / "reference"
+    (ref / "libraries").mkdir(parents=True)
+    (ref / "libraries/wares.xml").write_text("<wares/>")
+    (home / ".basex").write_text(f"DBPATH = {ref}\n")
+    coverage = home / "coverage-x4eff.json"
+    coverage.write_text('{"old": "licence"}')
+    assert a.main(["--artifact-root", str(root), "--reference", str(ref), str(coverage)]) == 2
+    assert coverage.read_text() == '{"old": "licence"}'
+
+
 def test_only_exact_generated_metadata_slots_qualify(tmp_path):
     directory = tmp_path / "basex"
     directory.mkdir()
@@ -156,7 +190,8 @@ def test_failure_is_reported_and_never_falls_back(tmp_path, monkeypatch, capsys)
     assert d["failed"][0]["path"] == str(out) and out.exists()
 
 
-def test_native_database_rebuild_keeps_only_the_current_generation(tmp_path):
+@pytest.mark.parametrize("redirected", [False, True])
+def test_native_database_rebuild_keeps_only_the_current_generation(tmp_path, redirected):
     import shutil
     import subprocess
     java = shutil.which("java")
@@ -183,15 +218,27 @@ def test_native_database_rebuild_keeps_only_the_current_generation(tmp_path):
     # confirms that its database path is in this isolated scratch home.
     info = run("-c", "INFO")
     assert str(home).replace(chr(92), "/").lower() in info.replace(chr(92), "/").lower(), info
+    data = home / "data"
+    if redirected:
+        import re
+        data = root / "redirected-data"
+        cfg = home / ".basex"
+        content, replaced = re.subn(r"^DBPATH = .*$", lambda match: "DBPATH = " + str(data),
+                                    cfg.read_text(encoding="utf-8"), flags=re.M)
+        assert replaced == 1
+        cfg.write_text(content, encoding="utf-8")
+        info = run("-c", "INFO")
+        assert str(data).replace(chr(92), "/").lower() in info.replace(chr(92), "/").lower(), info
     for _ in range(2):
         marker = a.declare_database("x4raw", proof=ready, artifact_root=root)
-        assert marker.is_file() and not (home / "data/x4raw").exists()
+        assert marker.is_file() and not (data / "x4raw").exists()
+        assert json.loads(marker.read_text())["path"] == str(data / "x4raw")
         run("-c", "CREATE DB x4raw <fixture/>")
         assert run("-q", "count(collection('x4raw'))").strip() == "1"
-        assert {p.name for p in (home / "data").iterdir() if p.is_dir()} == {"x4raw"}
+        assert {p.name for p in data.iterdir() if p.is_dir()} == {"x4raw"}
         run("-c", "DROP DB x4raw")
-        assert not (home / "data/x4raw").exists()
-    assert not list(home.rglob("*.zip")), "native rebuild created a backup"
+        assert not (data / "x4raw").exists()
+    assert not list(root.rglob("*.zip")), "native rebuild created a backup"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction contract")

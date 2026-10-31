@@ -7,6 +7,7 @@ Database directories are deliberately absent: BaseX itself owns DROP DB/locking.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -136,17 +137,31 @@ def prepare_output(path, kind, *, proof, sources=()):
     (path / RECEIPT).write_text(json.dumps(receipt(path, kind)) + "\n", encoding="utf-8")
 
 
+def database_target(artifact_root, db, sources=()):
+    root = plain(artifact_root)
+    # Share preflight's DBPATH resolver: the native engine honors .basex even
+    # when its databases are stored somewhere other than beside the jar.
+    spec = importlib.util.spec_from_file_location("_basex_disposal_preflight", ARTIFACT_ROOT / "preflight.py")
+    preflight = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(preflight)
+    data = preflight._dbpath(root / "basex")
+    if not data.is_absolute():
+        data = root / "basex" / data
+    target = plain(data / db)
+    for source in sources:
+        s = Path(source).absolute()
+        if target == s or target in s.parents or s in target.parents:
+            raise OSError(f"BaseX output overlaps an input source: {target}")
+    return target
+
+
 def declare_database(db, *, proof, artifact_root=ARTIFACT_ROOT, sources=()):
     """Declare before native CREATE DB, outside the database's private format."""
     if db not in {"x4raw", "x4eff"}:
         raise ValueError("not a toolkit-owned BaseX database")
     proof()
     root = plain(artifact_root)
-    target = plain(root / "basex/data" / db)
-    for source in sources:
-        s = Path(source).absolute()
-        if target == s or target in s.parents or s in target.parents:
-            raise OSError(f"BaseX output overlaps an input source: {target}")
+    target = database_target(root, db, sources)
     try:
         target.lstat()
     except FileNotFoundError:
@@ -155,8 +170,11 @@ def declare_database(db, *, proof, artifact_root=ARTIFACT_ROOT, sources=()):
         raise OSError(f"database still exists after DROP DB; refusing creation receipt: {target}")
     marker = plain(root / "basex" / f"disposition-{db}.json")
     value = receipt(target, "database")
-    if marker.exists() and json.loads(marker.read_text(encoding="utf-8")) != value:
-        raise OSError(f"unexpected database disposition metadata: {marker}")
+    if marker.exists():
+        previous = json.loads(marker.read_text(encoding="utf-8"))
+        old_path = previous.get("path") if isinstance(previous, dict) else None
+        if not isinstance(old_path, str) or Path(old_path).name != db or previous != receipt(Path(old_path), "database"):
+            raise OSError(f"unexpected database disposition metadata: {marker}")
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps(value) + "\n", encoding="utf-8")
     print(json.dumps({"creation_receipt": str(marker), "database": db}))
@@ -180,6 +198,12 @@ def main(argv=None):
             declare_database(args.declare_db, artifact_root=args.artifact_root, proof=proof,
                              sources=(config.reference,))
         else:
+            root = plain(args.artifact_root)
+            # This licence revocation is before native DROP DB in both builders.
+            # Qualify the actual configured database path before permitting it.
+            for db in ("x4raw", "x4eff"):
+                if root / "basex" / f"coverage-{db}.json" in [plain(p) for p in args.paths]:
+                    database_target(root, db, (config.reference,))
             dispose(args.paths, artifact_root=args.artifact_root, proof=proof,
                     sources=(config.reference,))
     except (OSError, ValueError, RuntimeError) as exc:

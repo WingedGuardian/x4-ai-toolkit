@@ -269,13 +269,13 @@ def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script
     spec.loader.exec_module(resolver)
     bash = resolver.find_bash()
     assert bash, "this shell-driver control requires Bash"
-    import shutil
     here = tmp_path / "tools/basex"
     base = here / "basex"
     base.mkdir(parents=True)
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    shutil.copyfile(PKG.parents[1] / "scripts/x4basex_artifacts.py", scripts / "x4basex_artifacts.py")
+    os.link(PKG.parents[1] / "scripts/x4basex_artifacts.py", scripts / "x4basex_artifacts.py")
+    os.link(BASEX / "preflight.py", here / "preflight.py")
     db = "x4raw" if script == "build-corpus.sh" else "x4eff"
     coverage = base / f"coverage-{db}.json"
     content = "invalid metadata" if disposal_fails else '{"old": "licence"}'
