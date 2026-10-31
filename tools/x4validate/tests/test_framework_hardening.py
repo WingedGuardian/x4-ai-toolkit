@@ -160,7 +160,8 @@ def test_F4_CI_checks_the_lockfile_is_fresh_not_only_frozen():
 #: both cold legs. Each job therefore names the steps that are SETUP (their failure makes
 #: every later step meaningless, so they keep the default) and every later step must run
 #: on `!cancelled()` gated on that setup -- or on a named earlier step it really needs.
-_SETUP_MARKER = {"tests": "setup", "scrub": "checkout", "hook-mutation": "checkout"}
+_SETUP_MARKER = {"tests": "setup", "cold-clone": "setup", "cold-archive": "setup", "scrub": "checkout",
+                 "hook-mutation": "checkout"}
 
 
 def _ungated_checks(ci) -> list[str]:
