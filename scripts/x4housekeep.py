@@ -73,6 +73,7 @@ def is_save(low: str) -> bool:
 
 CLASSES = ("recreatable", "build", "link", "gzip", "launch", "snapshot", "scratch")
 DEFAULTS = {
+    "recycle_bin_warn_gib": 10,       # read-only Windows aggregate; 0 disables warning
     "obsolete_items": {},            # exact bytes + explicit reason/evidence; never age alone
     "backup_archive": {},            # opt-in cold backups; docs/BACKUP-ARCHIVE.md
     "agent_output": [],               # task-folder roots (relative to the toolkit root, or absolute)
@@ -972,6 +973,9 @@ def session(cfg, state: Path) -> int:
     except OSError:
         notes.append("disk inventory unavailable")
         r["failed"] += 1
+    bin_note = certainty.recycle_bin_note(cfg)
+    if bin_note:
+        notes.append(bin_note)
     state.parent.mkdir(parents=True, exist_ok=True)
     body = (("[x4 disk] " + "; ".join(notes) + " -- python scripts/x4housekeep.py report\n")
             if notes else "").encode("utf-8")
