@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -367,6 +368,46 @@ def _agents_md_note(repo_root: Path, root: Path) -> str:
 CODEX_DOC_BUDGET = 32768
 
 
+#: Guard code reaches a game root only once CI has passed on the exact commit (user rule 2026-10-31:
+#: an unreviewed guard change was deployed 13 minutes after its commit and let wrapped-shell deletes
+#: of reference/ through). Review is still a human/agent step; CI is the part a script can prove.
+GUARD_SOURCES = (".claude/hooks", ".claude/settings.json", ".codex", "agent/guards", "tools/x4_harness")
+
+
+def is_guard(name: str) -> bool:
+    """A deployed path that decides what an agent may do: hook code, hook config, Codex rules."""
+    parts = PurePosixPath(name).parts
+    return "hooks" in parts or "rules" in parts or name in ("settings.json", ".codex/hooks.json")
+
+
+def guard_evidence(repo_root: Path) -> str | None:
+    """None when the guard code at HEAD is CI-proven, else why not. Published (on origin/master)
+    counts as proven: master is pushed only after a green CI round. Anything else asks GitHub for a
+    successful CI run on HEAD itself; no answer is a refusal, never a pass."""
+    def git(*a):
+        return subprocess.run(["git", "-C", str(repo_root), *a], capture_output=True, text=True)
+    head = git("rev-parse", "HEAD")
+    if head.returncode:
+        return "no git HEAD to check"
+    sha = head.stdout.strip()
+    dirty = git("status", "--porcelain", "--untracked-files=all", "--", *GUARD_SOURCES)
+    if dirty.returncode or dirty.stdout.strip():
+        return "guard sources differ from HEAD (uncommitted or untracked changes)"
+    if git("merge-base", "--is-ancestor", sha, "origin/master").returncode == 0:
+        return None
+    try:
+        r = subprocess.run(["gh", "run", "list", "--commit", sha, "--workflow", "CI", "--json", "conclusion",
+                            "--limit", "50"], cwd=repo_root, capture_output=True, text=True, timeout=60)
+        runs = json.loads(r.stdout) if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return f"could not ask GitHub for CI on {sha[:8]} ({type(exc).__name__}: {exc})"
+    if runs is None:
+        return f"could not ask GitHub for CI on {sha[:8]} ({(r.stderr or '').strip()[:200]})"
+    if any(run.get("conclusion") == "success" for run in runs):
+        return None
+    return f"no successful CI run for {sha[:8]} (and it is not on origin/master)"
+
+
 def _deploy_one(repo_root: Path, dest: Path, spec, args) -> tuple[int, list[str]]:
     """Plan (and with --apply, write) one target. Returns (rc, names in the plan)."""
     actions = plan(repo_root, dest, set(args.force), spec=spec)
@@ -445,6 +486,9 @@ def main(argv: list[str] | None = None) -> int:
                                    "configured game root's); its parent is the codex root")
     ap.add_argument("--root", help="the root to deploy into (default: the configured game "
                                    "root); the claude tree goes to <root>/.claude")
+    ap.add_argument("--unverified-guards", metavar="REASON",
+                    help="deploy changed guard code without CI proof (e.g. an emergency revert to an "
+                         "earlier CI-green version); the reason is printed")
     ap.add_argument("--repo", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
@@ -492,6 +536,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"REFUSING: --force names file(s) not in the deployment: {unknown_force}",
               file=sys.stderr)
         return 2
+
+    if args.apply:
+        guards = sorted({a.name for spec, dest in jobs for a in plan(repo_root, dest, set(args.force), spec=spec)
+                         if a.kind in (CREATE, UPDATE) and is_guard(a.name)})
+        if guards:
+            why = guard_evidence(repo_root)
+            if why and not args.unverified_guards:
+                print(f"REFUSING: this deploy changes guard code ({', '.join(guards)}) and {why}. Guard "
+                      "changes go live only after review and a green CI run on the exact commit. Nothing "
+                      "was written. Push it to a ci/ branch first, or pass --unverified-guards REASON.",
+                      file=sys.stderr)
+                return 2
+            if why:
+                print(f"DEPLOYING UNVERIFIED GUARD CODE ({why}): {args.unverified_guards}", file=sys.stderr)
 
     rc = 0
     for spec, dest in jobs:
