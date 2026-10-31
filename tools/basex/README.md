@@ -1,5 +1,13 @@
 # BaseX — XQuery over the X4 corpus
 
+Generated BaseX databases and staging/merged trees are disposable caches. Rebuild
+with the supplied scripts: do not copy, back up or recycle the previous database.
+The scripts use native `DROP DB` and checked permanent workspace disposal after
+verifying current inputs. New workspaces get creation-time disposition receipts;
+unknown files, links, invalid receipts and disposal failures stop the build.
+Manifests and coverage still gate freshness and negative claims. Keep logs and
+hand-written evidence outside disposable cache directories.
+
 A **discovery** instrument. It answers *"where does this appear, what values exist,
 who mentions X?"* across every XML file the game and your mods ship — base game,
 all DLC, loose mod files and **packed** ones — in about a second.

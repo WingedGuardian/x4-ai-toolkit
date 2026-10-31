@@ -59,7 +59,7 @@ echo "== preflight =="
 # succeeded. The manifest is written by build-effective.py itself (line ~242),
 # so its ABSENCE is the honest signal that the builder never finished -- but
 # only if a survivor cannot masquerade as it.
-(cd "$X4VALIDATE" && uv run python "$HERE/../../scripts/x4recycle.py" "$EFF/tree" "$MANIFEST")
+(cd "$X4VALIDATE" && uv run python "$HERE/../../scripts/x4basex_artifacts.py" --artifact-root "$HERE" "$EFF/tree" "$MANIFEST")
 
 echo "== serializing the effective tree =="
 BUILD_RC=0
@@ -98,8 +98,9 @@ cd "$BASEX_DIR"
 # be dropped; left in place, a build that dies from here on (BaseX rejecting an input
 # exits 1 below; an interrupt) leaves that licence beside a partial database, and ask.py
 # certifies negatives over it. Absent coverage means no negative is ever certified.
-(cd "$X4VALIDATE" && uv run python "$HERE/../../scripts/x4recycle.py" "$BASEX_DIR/coverage-$DB.json")
+(cd "$X4VALIDATE" && uv run python "$HERE/../../scripts/x4basex_artifacts.py" --artifact-root "$HERE" "$BASEX_DIR/coverage-$DB.json")
 java -cp BaseX.jar org.basex.BaseX -c "DROP DB $DB" >/dev/null 2>&1 || true
+(cd "$X4VALIDATE" && uv run python "$HERE/../../scripts/x4basex_artifacts.py" --artifact-root "$HERE" --declare-db "$DB")
 
 BUILD_LOG="$(mktemp)"
 java -cp BaseX.jar org.basex.BaseX -c "
@@ -119,7 +120,7 @@ rm -f "$BUILD_LOG"
 
 # The serialized tree is large and reproducible; the DB is the durable artifact.
 if [ "${KEEP_EFF:-0}" != "1" ]; then
-  (cd "$X4VALIDATE" && uv run python "$HERE/../../scripts/x4recycle.py" "$EFF/tree")
+  (cd "$X4VALIDATE" && uv run python "$HERE/../../scripts/x4basex_artifacts.py" --artifact-root "$HERE" "$EFF/tree")
   echo "serialized tree discarded (KEEP_EFF=1 to keep it); manifest retained"
 fi
 

@@ -59,7 +59,11 @@ def test_build_effective_refuses_and_keeps_the_previous_tree(builder, tmp_path, 
     assert str(ref) in err
 
 
-def test_TWIN_build_effective_over_a_minimal_reference_still_builds(builder, tmp_path, capsys):
+def test_TWIN_build_effective_over_a_minimal_reference_still_builds(builder, tmp_path, capsys, monkeypatch):
+    import x4recycle
+    def forbid(*args, **kwargs):
+        raise AssertionError("BaseX rebuild must not recycle generated artifacts")
+    monkeypatch.setattr(x4recycle, "_native_recycle", forbid)
     ref = tmp_path / "reference"
     (ref / "libraries").mkdir(parents=True)
     (ref / "libraries" / "wares.xml").write_bytes(b"<wares><ware id='ore'/></wares>")
@@ -67,16 +71,18 @@ def test_TWIN_build_effective_over_a_minimal_reference_still_builds(builder, tmp
     rc = builder.main(["--out", str(tree), "--reference", str(ref)])
     assert rc == 0, capsys.readouterr()
     assert (tree / "libraries" / "wares.xml").is_file()
+    assert builder.main(["--out", str(tree), "--reference", str(ref)]) == 0
+    assert (tree / "libraries" / "wares.xml").is_file()
 
 
-def test_existing_build_recycle_refusal_stops_before_rebuild(builder, tmp_path, monkeypatch, capsys):
+def test_existing_build_disposal_refusal_stops_before_rebuild(builder, tmp_path, monkeypatch, capsys):
     ref = tmp_path / "reference"
     (ref / "libraries").mkdir(parents=True)
     (ref / "libraries/wares.xml").write_bytes(b"<wares/>")
     tree = _previous_build(tmp_path)
-    def refuse(paths):
+    def refuse(*args, **kwargs):
         raise OSError("declined")
-    monkeypatch.setattr(builder, "recycle_or_raise", refuse)
+    monkeypatch.setattr(builder, "prepare_output", refuse)
     assert builder.main(["--out", str(tree), "--reference", str(ref)]) == 2
     assert "declined" in capsys.readouterr().err
     assert (tree / "libraries/wares.xml").read_bytes() == b"<wares><ware id='kept'/></wares>"

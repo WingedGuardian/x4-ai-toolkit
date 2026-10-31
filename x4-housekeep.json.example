@@ -1,14 +1,22 @@
 {
   "_comment": "Copy to x4-housekeep.json and edit. Paths are relative to the toolkit folder or absolute. See RETENTION.md.",
   "obsolete_items": {},
-  "backup_archive": {"enabled": false},
+  "recycle_bin_warn_gib": 10,
+  "backup_archive": {
+    "enabled": false
+  },
   "agent_output": [],
   "nested_task_roots": [],
   "live_roots": [],
   "launch_logs": [],
   "legacy_snapshots": [],
   "scratch": [],
-  "evidence_docs": ["CLAUDE.md", "AGENTS.md", "KNOWLEDGEBASE.md", "KNOWLEDGEBASE.local.md"],
+  "evidence_docs": [
+    "CLAUDE.md",
+    "AGENTS.md",
+    "KNOWLEDGEBASE.md",
+    "KNOWLEDGEBASE.local.md"
+  ],
   "protected_globs": [],
   "active_hours": 48,
   "min_bytes": 1048576,
@@ -18,5 +26,17 @@
   "temp_after_hours": 24,
   "sweep_every_hours": 6,
   "codex_sessions_warn_gib": 5,
-  "worktrees_warn": 10
+  "worktrees_warn": 10,
+  "archive_enabled": false,
+  "archive_root": "",
+  "archive_retention_days": 90,
+  "archive_review_days": 30,
+  "archive_review_seconds": 15,
+  "archive_roots": {},
+  "archive_after_days": 14,
+  "min_idle_days": 7,
+  "read_veto_hours": 48,
+  "budget_gib": 0,
+  "pin_warn_gib": 1,
+  "approved_sha256": ""
 }

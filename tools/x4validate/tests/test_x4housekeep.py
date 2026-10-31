@@ -16,6 +16,195 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.mark.parametrize("shared", [True, False])
+def test_live_input_links_are_kept_without_content_reads_but_real_copies_qualify(tmp_path, monkeypatch, shared):
+    live = write(tmp_path / "Data/input.bin", b"identical")
+    staged = tmp_path / "out/task/input.bin"
+    staged.parent.mkdir(parents=True)
+    if shared:
+        os.link(live, staged)
+    else:
+        write(staged, b"identical")
+    cfg = cfg_for(tmp_path, live_roots=["Data"], min_bytes=1, active_hours=0)
+    reads = []
+    original = hk.blake
+    def observed(path, *args, **kwargs):
+        reads.append(os.fspath(path))
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(hk, "blake", observed)
+    doc = hk.plan(cfg)
+    if shared:
+        assert doc["actions"] == []
+        assert reads == []
+    else:
+        assert [a["class"] for a in doc["actions"]] == ["recreatable"]
+        assert os.fspath(staged) in reads
+
+
+@pytest.mark.parametrize("protection", ["tracked", "linked"])
+def test_external_repository_output_keeps_its_own_protected_evidence(tmp_path, protection):
+    root = tmp_path / "toolkit"
+    root.mkdir()
+    external = tmp_path / "external"
+    first = write(external / "reports/task-a/input file.bin", b"identical")
+    second = write(external / "reports/task-b/input file.bin", b"identical")
+    subprocess.run(["git", "init", "-q", str(external)], check=True, capture_output=True)
+    doc = external / "CLAUDE.md"
+    doc.write_text("[evidence](reports/task-a/input file.bin)")
+    if protection == "tracked":
+        subprocess.run(["git", "-C", str(external), "add", "--", "reports/task-a/input file.bin"],
+                       check=True, capture_output=True)
+    cfg = cfg_for(root)
+    cfg.update(agent_output=[str(external / "reports")], evidence_docs=[str(doc)] if protection == "linked" else [],
+               min_bytes=1, active_hours=0)
+    guard = hk.Guard(cfg)
+    assert guard.why_protected(first) == ("git-tracked" if protection == "tracked" else "linked evidence")
+    result = hk.plan(cfg, guard)
+    assert not result["actions"]
+    assert first.read_bytes() == second.read_bytes() == b"identical"
+
+
+def test_a_failed_task_is_held_whole_and_independent_tasks_are_still_measured(tmp_path, monkeypatch):
+    write(tmp_path / "out" / "held" / "unique.bin", b"unique")
+    write(tmp_path / "out" / "healthy" / "keep.bin", b"kept")
+    cfg = cfg_for(tmp_path)
+    original = hk.newest_mtime
+    def inspect(path):
+        if path.name == "held":
+            raise OSError("symbolic link or reparse point inside cleanup target")
+        return original(path)
+    monkeypatch.setattr(hk, "newest_mtime", inspect)
+    doc = hk.plan(cfg)
+    assert doc["coverage"]["state"] == "accounted_with_holds"
+    assert doc["coverage"]["targets_inspected"] == 1
+    assert doc["coverage"]["targets_held"] == 1
+    assert doc["coverage"]["held"][0]["path"] == str(tmp_path / "out" / "held")
+    assert doc["coverage"]["held"][0]["bytes"] is None
+    assert sum(doc["rows"].values()) == 4
+    assert not doc["actions"]
+    hk.print_coverage(doc)
+
+
+def test_missing_agent_output_root_is_named_and_never_reported_as_scanned(tmp_path):
+    doc = hk.plan(cfg_for(tmp_path))
+    assert doc["coverage"]["targets_inspected"] == 0
+    assert doc["coverage"]["targets_held"] == 1
+    assert doc["coverage"]["held"][0]["path"] == str(tmp_path / "out")
+    assert doc["rows"] == {} and doc["actions"] == []
+
+
+def test_unrequested_agent_output_is_explicit_in_plan_coverage(tmp_path, capsys):
+    doc = hk.plan(cfg_for(tmp_path), only={"snapshot"})
+    assert doc["coverage"]["classes_requested"] == ["snapshot"]
+    assert not doc["coverage"]["agent_output_requested"]
+    hk.print_coverage(doc)
+    assert "class-limited plan" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real Windows junction contract")
+def test_real_junction_holds_its_entire_task_without_visiting_target(tmp_path):
+    write(tmp_path / "out" / "held" / "unique.bin", b"unique")
+    outside = write(tmp_path / "outside" / "keep.bin", b"external")
+    write(tmp_path / "out" / "healthy" / "keep.bin", b"kept")
+    cfg = cfg_for(tmp_path)
+    junction = tmp_path / "out" / "held" / "node_modules"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), str(outside.parent)],
+                   check=True, capture_output=True)
+    doc = hk.plan(cfg)
+    assert doc["coverage"]["targets_inspected"] == 1
+    assert doc["coverage"]["targets_held"] == 1
+    assert str(junction) in doc["coverage"]["held"][0]["reason"]
+    assert sum(doc["rows"].values()) == 4
+    assert not doc["actions"]
+    assert outside.read_bytes() == b"external" and junction.is_dir()
+
+@pytest.mark.parametrize("failure", ["exit", "launch", "timeout"])
+@pytest.mark.parametrize("query,label", [("tracked_files", "tracked-file protection"), ("worktree_count", "worktree")])
+def test_git_failures_refuse_protection_and_inventory(tmp_path, monkeypatch, failure, query, label):
+    def broken(*args, **kwargs):
+        if failure == "launch":
+            raise OSError("cannot start git")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("git", 30)
+        text = kwargs.get("text", False)
+        return subprocess.CompletedProcess(args[0], 3221225794,
+            stdout="" if text else b"", stderr="" if text else b"")
+    monkeypatch.setattr(hk.subprocess, "run", broken)
+    with pytest.raises(OSError, match=label):
+        getattr(hk, query)(tmp_path)
+
+
+def test_git_non_repository_is_distinct_from_git_failure(tmp_path, monkeypatch):
+    def nonrepo(*args, **kwargs):
+        text = kwargs.get("text", False)
+        err = "fatal: not a git repository"
+        return subprocess.CompletedProcess(args[0], 128,
+            stdout="" if text else b"", stderr=err if text else err.encode())
+    monkeypatch.setattr(hk.subprocess, "run", nonrepo)
+    assert hk.tracked_files(tmp_path) == set()
+    assert hk.worktree_count(tmp_path) is None
+
+
+def test_git_success_counts_tracked_paths_and_worktrees(tmp_path, monkeypatch):
+    def success(*args, **kwargs):
+        out = "worktree /main\n\nworktree /lane\n" if kwargs.get("text") else b"keep.txt\0"
+        return subprocess.CompletedProcess(args[0], 0, stdout=out, stderr="")
+    monkeypatch.setattr(hk.subprocess, "run", success)
+    assert len(hk.tracked_files(tmp_path)) == 1
+    assert hk.worktree_count(tmp_path) == 1
+
+
+def test_session_preflight_failure_never_claims_a_recycle_attempt(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    cfg = cfg_for(tmp_path)
+    cfg.update(sweep_every_hours=0, daily_enabled=False, recycle_bin_warn_gib=0,
+               free_floor_gib=0)
+    monkeypatch.delenv("X4_HOUSEKEEP_SWEEP", raising=False)
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    monkeypatch.setattr(hk.tempfile, "gettempdir", lambda: str(temp))
+    monkeypatch.setattr(hk, "dir_size", lambda *args: 0)
+    monkeypatch.setattr(hk, "recycle", lambda *args: pytest.fail("recycler reached after failed protection"))
+    def protection_failed(*args):
+        raise OSError("git tracked-file protection failed (exit 3221225794)")
+    def inventory_failed(*args):
+        raise OSError("git worktree inventory failed (exit 3221225794)")
+    monkeypatch.setattr(hk, "tracked_files", protection_failed)
+    monkeypatch.setattr(hk, "worktree_count", inventory_failed)
+    monkeypatch.setattr(hk.certainty, "periodic_note", lambda cfg: "")
+    if hasattr(hk, "_daily_module"):
+        monkeypatch.setattr(hk, "_daily_module", lambda: SimpleNamespace(due=lambda cfg: "disabled"))
+    state = tmp_path / "startup-note.txt"
+    assert hk.session(cfg, state) == 1
+    note = state.read_text(encoding="utf-8")
+    assert "temp cleanup skipped; no recycling attempted" in note
+    assert "git tracked-file protection failed (exit 3221225794)" in note
+    assert "worktree inventory unavailable: git worktree inventory failed (exit 3221225794)" in note
+    assert "could not be recycled" not in note
+    assert "moved 0 leftover" not in note
+
+
+def test_session_reports_large_recycle_bin_without_emptying_it(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    cfg = cfg_for(tmp_path)
+    cfg.update(recycle_bin_warn_gib=10,worktrees_warn=10**6,codex_sessions_warn_gib=10**6,
+               free_floor_gib=0,sweep_every_hours=0)
+    monkeypatch.delenv('X4_HOUSEKEEP_SWEEP',raising=False)
+    monkeypatch.setattr(hk,'sweep_temp',lambda cfg:dict(rows={'recycled':0,'failed':0,
+        'kept: no Recycle Bin on this OS':0},failed=[]))
+    monkeypatch.setattr(hk,'dir_size',lambda *args:0)
+    monkeypatch.setattr(hk,'worktree_count',lambda *args:0)
+    monkeypatch.setattr(hk.certainty,'recycle_bin_usage',lambda:dict(bytes=12*1024**3,items=7))
+    monkeypatch.setattr(hk,'recycle',lambda *args:(_ for _ in ()).throw(AssertionError('report must not empty bin')))
+    if hasattr(hk,'_daily_module'):
+        monkeypatch.setattr(hk,'_daily_module',lambda:SimpleNamespace(due=lambda cfg:'disabled'))
+    state=tmp_path/'session-note.txt'
+    assert hk.session(cfg,state)==0
+    assert 'Recycle Bin is 12.0 GiB logical (7 items)' in state.read_text(encoding='utf-8')
+    assert 'review and empty deliberately' in state.read_text(encoding='utf-8')
+
+
 @pytest.mark.parametrize("kind", ["scratch", "launch", "build"])
 def test_age_and_class_alone_do_not_prove_obsolescence(tree, kind):
     root = 'out'
@@ -425,6 +614,7 @@ def tdir(temp, name, days=3):
 
 def sweep_cfg(tmp_path):
     cfg = cfg_for(tmp_path)
+    cfg['recycle_bin_warn_gib'] = 0  # no real user-bin inventory in unit fixtures
     cfg["temp_prefixes"] = ["x4qa_", "x4-pytest-batch-"]
     return cfg
 

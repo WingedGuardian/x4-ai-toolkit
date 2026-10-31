@@ -134,3 +134,5 @@ release/nexus/
 # Private neutral runtime state: telemetry, permanent saves and upgrade journals.
 .modding-agent-harness/
 housekeep-session.txt
+/tools/basex/basex/disposition-x4raw.json
+/tools/basex/basex/disposition-x4eff.json
