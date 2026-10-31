@@ -183,21 +183,21 @@ def evidence_links(cfg) -> set:
     file is never planned for anything."""
     links = set()
     reference_chars = 0
-    prefixes = []
-    for r in cfg["agent_output"]:
-        try:
-            rel = os.path.relpath(os.path.abspath(str(_abs(cfg, r))), os.path.abspath(str(cfg["root"])))
-        except ValueError:
-            continue  # silent-ok: cross-drive output has no relative evidence-link spelling
-        if rel.split(os.sep)[0] != "..":
-            prefixes.append(re.escape(rel.replace("\\", "/")))
-    if not prefixes:
+    roots = [_abs(cfg, r) for r in cfg["agent_output"]]
+    if not roots:
         return links
-    start_re = re.compile("(?:{})/".format("|".join(prefixes)), re.I if os.name == "nt" else 0)
     for doc in cfg["evidence_docs"]:
         p = _abs(cfg, doc)
         if not p.is_file():
             continue
+        prefixes = []
+        for root in roots:
+            prefixes.append(re.escape(str(root).replace("\\", "/")))
+            try:
+                prefixes.append(re.escape(os.path.relpath(root, p.parent).replace("\\", "/")))
+            except ValueError:
+                pass  # Cross-drive documents can still use the absolute spelling.
+        start_re = re.compile("(?:{})/".format("|".join(prefixes)), re.I if os.name == "nt" else 0)
         text = p.read_text(encoding="utf-8", errors="replace")
         # This is conservative reference discovery, not a Markdown parser. Keep
         # every plausible line-bounded destination, including spaces and balanced
@@ -218,7 +218,8 @@ def evidence_links(cfg) -> set:
                             reference_chars += len(candidate)
                             if reference_chars > 8 * 1024 * 1024:
                                 raise OSError("evidence references exceed the safe discovery byte bound; cleanup refused")
-                            links.add(_key(cfg["root"] / candidate))
+                            q = Path(candidate)
+                            links.add(_key(q if q.is_absolute() else p.parent / q))
                         if len(links) > 50000:
                             raise OSError("evidence references exceed the safe discovery bound; cleanup refused")
     return links
@@ -230,6 +231,25 @@ class Guard:
     def __init__(self, cfg):
         self.cfg = cfg
         self.tracked = tracked_files(cfg["root"])
+        # Output may live in a different repository; the toolkit's index says
+        # nothing about its tracked evidence. Missing/link roots stay held by
+        # inventory rather than being traversed for Git discovery.
+        seen = {_key(cfg["root"])}
+        roots = [*cfg["agent_output"], *cfg["launch_logs"], *cfg["legacy_snapshots"],
+                 *cfg["scratch"], *cfg.get("archive_roots", {})]
+        for value in roots:
+            root = _abs(cfg, value)
+            if _key(root) in seen or root.is_relative_to(cfg["root"]):
+                continue
+            seen.add(_key(root))
+            try:
+                info = root.lstat()
+            except FileNotFoundError:
+                continue
+            if root.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+                continue
+            if root.is_dir():
+                self.tracked.update(tracked_files(root))
         self.links = evidence_links(cfg)
         self.globs = [g.lower() for g in cfg["protected_globs"]]
 
