@@ -873,7 +873,7 @@ def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler
         guard = Guard(cfg)
     except OSError as exc:
         rows["failed"] = 1
-        return {"rows": rows, "failed": [str(exc)], "temp": str(temp)}
+        return {"rows": rows, "failed": [str(exc)], "temp": str(temp), "preflight_error": str(exc)}
     for p, _why in candidates:
         try:
             explicit = not certainty.obsolete_reason(p, cfg)
@@ -942,10 +942,12 @@ def session(cfg, state: Path) -> int:
     except (OSError, ValueError) as exc:
         notes.append("cold backup review unavailable: {}".format(exc))
     r = res["rows"]
-    if r["recycled"] or r["failed"]:
+    if res.get("preflight_error"):
+        notes.append("temp cleanup skipped; no recycling attempted")
+    elif r["recycled"] or r["failed"]:
         notes.append("moved {} leftover temp dir(s) to the Recycle Bin{}".format(
-            r["recycled"], "; {} could not be recycled and were LEFT IN PLACE (ask the user before any permanent "
-                           "delete)".format(r["failed"]) if r["failed"] else ""))
+            r["recycled"], "; {} check/recycling failure(s); affected items LEFT IN PLACE".format(
+                r["failed"]) if r["failed"] else ""))
     if r["kept: no Recycle Bin on this OS"]:
         notes.append("{} leftover toolkit temp dir(s) kept: x4housekeep recycles on Windows only".format(
             r["kept: no Recycle Bin on this OS"]))
@@ -962,8 +964,8 @@ def session(cfg, state: Path) -> int:
         wt = worktree_count(cfg["root"])
         if wt is not None and wt > cfg["worktrees_warn"]:
             notes.append("{} git worktrees (git worktree list)".format(wt))
-    except OSError:
-        notes.append("worktree inventory unavailable")
+    except OSError as exc:
+        notes.append("worktree inventory unavailable: {}".format(exc))
         r["failed"] += 1
     floor = cfg["free_floor_gib"]
     try:
