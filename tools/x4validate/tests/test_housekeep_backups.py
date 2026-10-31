@@ -192,6 +192,29 @@ def test_failed_nas_verification_keeps_every_source(setup, monkeypatch):
     assert list((Path(cfg['backup_archive']['destination'])/'objects').glob('*.partial'))
 
 
+def test_a_refusal_after_a_recycle_still_reports_it(setup, capsys):
+    source, cfg, recycler = setup
+    doc = b.plan(cfg)
+    plan = Path(cfg['root'])/'plan.json'
+    plan.write_text(json.dumps(doc))
+    real, calls = b.verify_object, []
+    def second_generation_fails(*args, **kwargs):
+        calls.append(1)
+        if len(calls) > 2:  # generation 1 verifies .partial then the object
+            raise b.Refused('injected failure on generation 2')
+        return real(*args, **kwargs)
+    b.verify_object = second_generation_fails
+    try:
+        assert b.main(['apply', str(plan), '--approved-plan-sha256', b.digest(doc)], cfg, recycler) == 2
+    finally:
+        b.verify_object = real
+    out = capsys.readouterr().out
+    assert 'BACKUP ARCHIVE REFUSED: injected failure on generation 2' in out
+    done = json.loads(out.split('recycled unless an error is shown):', 1)[1])
+    assert [r['recycled'] for r in done] == [True]
+    assert not Path(done[0]['source']).exists()
+
+
 @pytest.mark.parametrize('protected', ['save', 'pin', 'repository', 'tracked'])
 def test_protected_generation_is_named_and_kept(setup, protected):
     source, cfg, _ = setup

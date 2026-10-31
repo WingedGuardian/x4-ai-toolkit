@@ -306,12 +306,14 @@ def write_json(path, value):
         stream.write('\n')
 
 
-def apply(doc, cfg, recycler, approved_sha256, protect=lambda p: ''):
+def apply(doc, cfg, recycler, approved_sha256, protect=lambda p: '', result=None):
+    """Rows are appended to `result` as each generation finishes, so a caller can
+    still report what was already recycled when a later generation refuses."""
     c = settings(cfg)
     if not c['enabled'] or digest(doc) != approved_sha256 or doc.get('config_sha256') != digest(c) or doc.get('kind') != 'cold-backup-archive':
         raise Refused('exact plan/config approval mismatch')
     dest = plain_path(c['destination'])
-    result = []
+    result = [] if result is None else result
     for source in {a['source'] for a in doc['actions']}:
         reserve = doc.get('local_reserves', {}).get(source, [])
         if len(reserve) < c['keep_local']:
@@ -603,6 +605,7 @@ def main(argv, cfg, recycler, protect=lambda p: ''):
     q.add_argument('receipt')
     q.add_argument('--to', required=True)
     a = p.parse_args(argv)
+    done = []
     try:
         if a.command in ('report', 'plan'):
             doc = plan(cfg, protect)
@@ -610,7 +613,7 @@ def main(argv, cfg, recycler, protect=lambda p: ''):
                 Path(a.output).write_text(json.dumps(doc, indent=2)+'\n', encoding='utf-8')
             print(json.dumps(dict(plan=doc, approval_sha256=digest(doc)), indent=2))
         elif a.command == 'apply':
-            rows = apply(json.loads(Path(a.plan).read_text(encoding='utf-8')), cfg, recycler, a.approved_plan_sha256, protect)
+            rows = apply(json.loads(Path(a.plan).read_text(encoding='utf-8')), cfg, recycler, a.approved_plan_sha256, protect, done)
             print(json.dumps(rows, indent=2))
             return int(any(not r['recycled'] for r in rows))
         elif a.command == 'prune-plan':
@@ -629,4 +632,7 @@ def main(argv, cfg, recycler, protect=lambda p: ''):
         return 0
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
         print('BACKUP ARCHIVE REFUSED: '+str(exc))
+        if done:
+            print('Completed before the refusal (archived; recycled unless an error is shown):')
+            print(json.dumps(done, indent=2))
         return 2
