@@ -34,7 +34,7 @@ read-only so an in-place edit cannot silently change every path at once.
 Accounting: `report` and `plan` print every scanned byte in exactly one row, the rows sum to the total, and the
 row of bytes it leaves alone prints even at zero.
 
-Exit: 0 ok · 1 an action was refused or failed · 2 bad usage or config.
+Exit: 0 ok Ã‚Â· 1 an action was refused or failed Ã‚Â· 2 bad usage or config.
 """
 
 from __future__ import annotations
@@ -71,8 +71,21 @@ def is_save(low: str) -> bool:
     return "/egosoft/x4/" in low or ("/save/" in low and low.endswith((".xml.gz", ".xml")))
 
 
-CLASSES = ("recreatable", "build", "link", "gzip", "launch", "snapshot", "scratch")
+CLASSES = ("recreatable", "build", "link", "gzip", "launch", "snapshot", "scratch", "archive", "expire")
 DEFAULTS = {
+    # Optional task archiving: first-output/code approval precedes any archive action.
+    'archive_enabled': False,
+    'archive_root': '',
+    'archive_retention_days': 90,
+    'archive_review_days': 30,
+    'archive_review_seconds': 15,
+    'archive_roots': {},
+    'archive_after_days': 14,
+    'min_idle_days': 7,
+    'read_veto_hours': 48,
+    'budget_gib': 0,
+    'pin_warn_gib': 1,
+    'approved_sha256': '',
     "recycle_bin_warn_gib": 10,       # read-only Windows aggregate; 0 disables warning
     "obsolete_items": {},            # exact bytes + explicit reason/evidence; never age alone
     "backup_archive": {},            # opt-in cold backups; docs/BACKUP-ARCHIVE.md
@@ -110,6 +123,7 @@ DEFAULTS = {
 LAUNCH_RE = re.compile(r"^launch-(\d{8})-(\d{6})$")
 STAMP_RE = re.compile(r"^(\d{8})_(\d{6})$")
 GIB = 1024 ** 3
+DAY = 86400
 
 
 # --------------------------------------------------------------------------- config and paths
@@ -126,6 +140,9 @@ def load_config(path: Path | None) -> dict:
     elif path:
         raise ValueError("config not found: {}".format(p))
     cfg["root"] = Path(cfg.get("root") or TOOLKIT_ROOT)
+    if not cfg["archive_root"]:
+        cfg["archive_root"] = str(cfg["root"] / ".claude" / "archive")
+    cfg["archive_root"] = str(_abs(cfg, cfg["archive_root"]))
     return cfg
 
 
@@ -139,11 +156,8 @@ def _key(p) -> str:
 
 
 def blake(path, chunk=1 << 20) -> str:
-    d = hashlib.blake2b(digest_size=16)
-    with open(path, "rb") as f:
-        for b in iter(lambda: f.read(chunk), b""):
-            d.update(b)
-    return d.hexdigest()
+    """A current content proof; never rewind a concurrent writer's timestamps."""
+    return _archive_module()._retirement_hash(Path(path), float('inf'), chunk)
 
 
 def newest_mtime(folder: Path) -> float:
@@ -369,6 +383,283 @@ def walk_files(target: Path, include_dirs=False):
             yield Path(dp) / f
 
 
+
+KEEP_PIN, CLOSED_MARK = ".housekeep-keep", ".housekeep-closed"
+_READS_RECORDED = {}
+_ARCHIVE_MODULE = None
+NO_WINDOW = {"creationflags": 0x08000000} if os.name=="nt" else {}
+RECYCLE_BATCH = 500
+MAX_BIN_PATH = 259
+
+
+def activity(folder: Path) -> tuple:
+    """Newest write/read, measured over the strict source set."""
+    w = r = 0.0
+    for p in walk_files(folder):
+        st = p.stat()
+        w, r = max(w, st.st_mtime), max(r, st.st_atime)
+    return w, r
+
+
+def newest_activity(folder: Path) -> float:
+    return max(activity(folder))
+
+
+def reads_recorded(folder: Path) -> bool:
+    """Measure using owned scratch on the same volume; never backdate source files."""
+    return _archive_module().reads_recorded(folder, _READS_RECORDED)
+
+
+def live_state_tokens(cfg) -> set:
+    """Backticked names in the `## Live state` block of the instruction files: work a session is still holding."""
+    toks = set()
+    for doc in ("CLAUDE.md", "AGENTS.md"):
+        try:
+            text = (cfg["root"] / doc).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        m = re.search(r"^## Live state.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
+        if m:                                   # entry lines only: the block's own instructions name example paths
+            entries = "\n".join(ln for ln in m.group(1).splitlines() if ln.lstrip().startswith(("- ", "* ")))
+            toks |= {t.replace("\\", "/").rstrip("/").lower() for t in re.findall(r"`([^`\n]+)`", entries)}
+    return toks
+
+
+def rb_job_cwds() -> list:
+    p = Path(os.path.expanduser("~")) / ".claude" / "tools" / "resource-budget" / "ledger.json"
+    try:
+        return [_key(e["cwd"]) for e in json.loads(p.read_text(encoding="utf-8")).get("entries", []) if e.get("cwd")]
+    except (OSError, ValueError, AttributeError, TypeError):
+        return []
+
+
+def is_done(task: Path, idle_days: float, tokens: set, cwds: list, guard) -> str:
+    """'' when `task` is finished work; otherwise why it is still in use or must stay. idle_days is measured by the
+    caller. Written-recently is the weakest signal (a read leaves no mtime), so every other gate is independent."""
+    if (task / KEEP_PIN).exists():
+        return "pinned (.housekeep-keep)"
+    name = task.name.lower()
+    path = str(task).replace("\\", "/").lower()
+    if any(t == name or path.endswith("/" + t) or t.endswith("/" + name) or (len(t) > 8 and t in path)
+           for t in tokens):
+        return "named in the Live state block"
+    k = _key(task)
+    if any(c == k or c.startswith(k + os.sep) for c in cwds):
+        return "a running rb job works here"
+    for dp, dirs, files in os.walk(task):
+        if ".git" in dirs or ".git" in files:
+            return "a git repository"
+        for f in files:
+            if fnmatch.fnmatch(f.lower(), 'owned-session*.json') or fnmatch.fnmatch(f.lower(), '*ownership*.json'):
+                # Legacy receipts have no common release schema. A dead/reused PID, age or an
+                # unqualified `released` field cannot prove that the owner's work is finished.
+                return "holds an ownership receipt without qualified release proof"
+            if is_save(str(Path(dp)/f).replace(chr(92),"/").lower()) or f.lower().endswith((".ess",".skse")):
+                return "holds a save"
+            why = guard.why_protected(os.path.join(dp, f))
+            if why in {"save","known-good baseline","audit record","protected_globs"}:
+                return "holds "+why
+    return ""
+
+
+def archive_facts(folder):
+    """One bounded-memory metadata pass for fingerprint and write/read activity."""
+    n = size = 0
+    wrote = read = 0.0
+    for p in walk_files(folder):
+        st = p.stat()
+        n += 1
+        size += st.st_size
+        wrote, read = max(wrote, st.st_mtime), max(read, st.st_atime)
+    return [n, size, round(wrote, 3)], wrote, read
+
+
+def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tuple:
+    """([action], rows) for every done folder due: closed first, then by age; over budget, down to min_idle_days."""
+    tokens, cwds = live_state_tokens(cfg), rb_job_cwds()
+    held = [] if held is None else held
+    inventory = {} if inventory is None else inventory
+    inventory.update(roots=[str(_abs(cfg, r)) for r in cfg["archive_roots"]], roots_held=0,
+                     candidates_inspected=0, candidates_held=0)
+    # from_root: the folder lives under archive_roots, which the file-level loop never scans, so its kept bytes are
+    # counted here; agent_output folders that stay are counted by that loop instead (rows must sum to the scan).
+    cands = [(t, cfg["archive_after_days"], False) for t, s in tasks if s != "loose"]
+    for root, days in cfg["archive_roots"].items():
+        r = _abs(cfg, root)
+        try:
+            st = r.lstat()
+            if r.is_symlink() or getattr(st, "st_file_attributes", 0) & 0x400:
+                raise OSError("archive root is a symbolic link or reparse point")
+            if not r.is_dir():
+                raise OSError("archive root is not a directory")
+            cands += [(Path(e.path), days, True) for e in os.scandir(r) if e.is_dir(follow_symlinks=False)]
+        except OSError as exc:
+            inventory["roots_held"] += 1
+            held.append({"path": str(r), "reason": str(exc), "bytes": None, "scope": "archive"})
+    inventory["candidates_requested"] = len(cands)
+    info, total = [], 0
+    actions, rows, pins = [], {}, []
+
+    def keep(row, n, from_root):
+        if from_root:
+            rows[row] = rows.get(row, 0) + n
+
+    for t, days, from_root in cands:
+        try:
+            fp, wrote, read = archive_facts(t)
+        except OSError as exc:
+            inventory["candidates_held"] += 1
+            held.append({"path": str(t), "reason": str(exc), "bytes": None, "scope": "archive"})
+            continue
+        inventory["candidates_inspected"] += 1
+        total += fp[1]
+        if (t / "ARCHIVED.md").exists() and fp[1] < 1 << 20:
+            keep("kept: already archived (stub only)", fp[1], from_root)
+            continue
+        idle = (now - wrote) / DAY if wrote else 0.0           # idleness: writes
+        if read > now - cfg["read_veto_hours"] * 3600:         # but anything reading here right now blocks it
+            keep("kept: archive folder read within read_veto_hours", fp[1], from_root)
+            continue
+        closed = (t / CLOSED_MARK).exists()
+        if not closed and not reads_recorded(t.parent):        # no read signal on this drive: only explicit "done"
+            keep("kept: archive needs .housekeep-closed (this drive does not record reads)", fp[1], from_root)
+            continue
+        info.append((not closed, -idle, t, days, fp, idle, closed, from_root))
+    info.sort(key=lambda x: (x[0], x[1]))
+    measured = total
+    over = cfg["budget_gib"] and total > cfg["budget_gib"] * GIB
+    for _, _, t, days, fp, idle, closed, from_root in info:
+        if (t / KEEP_PIN).exists() and fp[1] >= cfg["pin_warn_gib"] * GIB:
+            pins.append((t, fp[1]))
+        # The budget lowers the bar for agent_output only; an archive_roots entry's own age is the user's number.
+        due = closed or idle >= days or (over and not from_root and idle >= cfg["min_idle_days"])
+        if not due or idle < cfg["min_idle_days"] and not closed:
+            keep("kept: archive folder not due yet", fp[1], from_root)
+            continue
+        why = is_done(t, idle, tokens, cwds, guard)
+        if why:
+            keep("kept: archive folder not done ({})".format(why), fp[1], from_root)
+            continue
+        label = re.sub(r"[^\w.-]+", "_", t.parent.name) or "root"
+        action = {"class": "archive", "path": str(t), "bytes": fp[1], "fingerprint": list(fp),
+                  "nas": str(Path(cfg["archive_root"]) / label), "idle_days": round(idle, 1),
+                  "closed": closed}
+        why = _archive_module().archive_scope(action, cfg)
+        if why:
+            keep("kept: archive scope ("+why+")",fp[1],from_root)
+            continue
+        actions.append(action)
+        if over:
+            total -= fp[1]
+            over = total > cfg["budget_gib"] * GIB
+    return actions, rows, pins, measured
+
+
+def archive_protection(guard, path):
+    """A source-group label 'backups' is not an eternal veto on an explicitly obsolete ZIP.
+    Every independent save, baseline, tracked, linked and custom protection still applies."""
+    why = guard.why_protected(path)
+    if why != 'backup folder':
+        return why
+    k = _key(path)
+    if k in guard.tracked:
+        return 'git-tracked'
+    if k in guard.links:
+        return 'linked evidence'
+    if any(fnmatch.fnmatch(str(path).replace('\\','/').lower(), g) for g in guard.globs):
+        return 'protected_globs'
+    return ''
+
+
+def review_archives(cfg, guard=None):
+    guard = Guard(cfg) if guard is None else guard
+    root = Path(cfg['archive_root'] or Path(cfg['root'])/'.claude/archive')
+    if not root.is_absolute():
+        root = Path(cfg['root'])/root
+    try:
+        root.lstat()
+        certainty.plain_path(root)
+        if not root.is_relative_to(Path(cfg['root'])):
+            guard.tracked.update(tracked_files(root))
+    except FileNotFoundError as exc:
+        if not str(root).startswith(('\\\\','//')):
+            return dict(state='absent',root=str(root),rows=[],held=[])
+        return dict(state='partial',root=str(root),rows=[],held=[dict(path=str(root),reason=str(exc))])
+    except (OSError, ValueError) as exc:
+        return dict(state='partial',root=str(root),rows=[],held=[dict(path=str(root),reason=str(exc))])
+    return _archive_module().review_archives(dict(cfg,archive_root=str(root)),
+                                             protect=lambda p:archive_protection(guard,p))
+
+
+def _archive_module():
+    """The shared archive helper, cached only for this process."""
+    global _ARCHIVE_MODULE
+    if _ARCHIVE_MODULE is None:
+        spec = importlib.util.spec_from_file_location("housekeep_archive", Path(__file__).with_name("housekeep_archive.py"))
+        _ARCHIVE_MODULE = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_ARCHIVE_MODULE)
+    return _ARCHIVE_MODULE
+
+
+def bin_refusal(p) -> str:
+    """'' when the Recycle Bin can take `p` without asking; otherwise why it would prompt (and so is left alone)."""
+    s = os.path.abspath(str(p))
+    if s.startswith("\\\\") or _drive_type(s) == 4:                    # DRIVE_REMOTE: a share has no Recycle Bin
+        return "left in place: network location (no Recycle Bin)"
+    longest = len(s)
+    size = 0
+    if os.path.isdir(s):
+        for dp, _, fn in os.walk(s):
+            for f in fn:
+                q = os.path.join(dp, f)
+                longest = max(longest, len(q))
+                try:
+                    size += os.stat(q).st_size
+                except OSError:
+                    pass
+    else:
+        try:
+            size = os.stat(s).st_size
+        except OSError:
+            pass
+    if longest > MAX_BIN_PATH:
+        return "left in place: a path is longer than {} characters (the bin would ask to delete it)".format(MAX_BIN_PATH)
+    cap = bin_capacity(s)
+    if cap is not None and size > cap:
+        return "left in place: {:.1f} GiB is bigger than this drive's Recycle Bin ({:.1f} GiB)".format(
+            size / GIB, cap / GIB)
+    return ""
+
+
+def _drive_type(path: str) -> int:
+    try:
+        import ctypes
+        return ctypes.windll.kernel32.GetDriveTypeW(os.path.splitdrive(path)[0] + "\\")
+    except (OSError, AttributeError):
+        return 0
+
+
+def bin_capacity(path: str):
+    """This volume's Recycle Bin size limit in bytes (0 if it deletes immediately); None when it cannot be read."""
+    try:
+        import ctypes
+        import winreg
+        buf = ctypes.create_unicode_buffer(64)
+        if not ctypes.windll.kernel32.GetVolumeNameForVolumeMountPointW(os.path.splitdrive(path)[0] + "\\", buf, 64):
+            return None
+        guid = buf.value[buf.value.index("{"):buf.value.index("}") + 1]
+        key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket\Volume" + "\\" + guid
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            try:
+                if winreg.QueryValueEx(k, "NukeOnDelete")[0]:
+                    return 0
+            except OSError:
+                pass
+            return int(winreg.QueryValueEx(k, "MaxCapacity")[0]) * 1024 * 1024
+    except (OSError, ValueError, AttributeError, ImportError):
+        return None
+
+
 # --------------------------------------------------------------------------- planning
 
 def live_index(cfg):
@@ -406,6 +697,7 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
     """Every action, with the hash it was planned on. `only` (a set of CLASSES) skips the scans no requested class
     needs -- the launch watcher plans gzip/launch without hashing every agent-output file -- and counts a planned
     action of an unrequested class as kept, so the rows still sum to what was scanned."""
+    cfg = dict(cfg, archive_root=str(_abs(cfg,cfg['archive_root'] or '.claude/archive')))
     now = time.time() if now is None else now
     guard = guard or Guard(cfg)
     actions, rows = [], {}
@@ -428,7 +720,23 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
 
     # ---- agent output: recreatable, build, link
     held = []
-    tasks = task_folders(cfg, held) if wants("recreatable", "build", "link") else []
+    all_tasks = task_folders(cfg, held) if wants("recreatable", "build", "link", "archive") else []
+    # ---- archive first: a folder going to the NAS whole is not also picked over file by file
+    archived = set()
+    plan_pins, agent_total = [], None
+    archive_inventory = {}
+    if cfg["archive_enabled"] and wants("archive"):
+        arch, arch_rows, plan_pins, agent_total = archive_selection(cfg, guard, all_tasks, now,
+                                                                 held=held, inventory=archive_inventory)
+        for k, v in arch_rows.items():
+            count(k, v)
+        for a in arch:
+            act(a, "plan: done folder -> zip to NAS, verify, payload to Recycle Bin")
+            archived.add(_key(a["path"]))
+    held_keys = [_key(item["path"]) for item in held]
+    all_tasks = [(t, s) for t, s in all_tasks
+                 if not any(_key(t) == k or _key(t).startswith(k + os.sep) for k in held_keys)]
+    tasks = [(t, s) for t, s in all_tasks if _key(t) not in archived] if wants("recreatable", "build", "link") else []
     live = live_index(cfg) if tasks else {}
     live_hash = {}
     by_size = {}
@@ -581,6 +889,15 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
                 prev = sig
                 prev_path = p
 
+    # ---- ordinary archives are reviewed independently of age-based retention settings
+    archive_review = review_archives(cfg, guard) if wants('expire') else {}
+    for row in archive_review.get('rows', []):
+        if row['state']=='review retirement' and archive_review['state']=='complete':
+            act({'class':'expire','path':row['path'],'bytes':row['bytes'],'mtime':row['mtime'],
+                 'hash':row['content_hash']}, 'plan: archive has exact obsolete decision -> Recycle Bin')
+        else:
+            count('kept: archive '+row['reason'], row['bytes'])
+
     # ---- named scratch folders
     for s in (cfg["scratch"] if wants("scratch") else []):
         p = _abs(cfg, s)                     # relative to the toolkit root, like every other configured path -- never the cwd
@@ -597,20 +914,29 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
                 "plan: named scratch folder -> Recycle Bin")
 
     return {"created": now, "root": str(cfg["root"]), "actions": actions, "rows": rows,
+            "large_pins": [[str(p), b] for p,b in plan_pins], "agent_total": agent_total,
             "coverage": {"state": "accounted_with_holds" if held else "complete",
                          "classes_requested": sorted(only or CLASSES),
-                         "agent_output_requested": wants("recreatable", "build", "link"),
+                         "agent_output_requested": wants("recreatable", "build", "link", "archive"),
                          "agent_output_roots": [str(_abs(cfg, r)) for r in cfg["agent_output"]],
-                         "targets_inspected": len(tasks), "targets_held": len(held),
+                         "targets_inspected": len(all_tasks), "targets_held": len(held),
+                         "archive_inventory": archive_inventory,
+                         "archive_review": archive_review,
                          "held": held, "unmeasured_held_bytes": bool(held)}}
 
 
 def print_coverage(doc):
-    coverage = doc["coverage"]
+    coverage = doc.get("coverage")
+    if coverage is None:
+        return  # Legacy receipts do not establish an inventory denominator.
     if not coverage["agent_output_requested"]:
         print("Agent-output inspection was not requested (--only); this is a class-limited plan.")
     print("target inventory: {} inspected, {} held; {}".format(
         coverage["targets_inspected"], coverage["targets_held"], coverage["state"]))
+    archive = coverage.get("archive_inventory")
+    if archive:
+        print("archive inventory: {} candidates inspected, {} candidates held, {} roots held".format(
+            archive["candidates_inspected"], archive["candidates_held"], archive["roots_held"]))
     if coverage["held"]:
         print("Byte totals exclude held targets; their sizes are unknown and they have no cleanup actions.")
         for item in coverage["held"]:
@@ -636,10 +962,15 @@ def recycle(paths) -> dict:
     paths = [str(p) for p in paths]
     if not paths:
         return {}
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        raise AssertionError("tests must inject a fake recycler")
     if os.name != "nt":
         raise RuntimeError("Recycle Bin removal is implemented for Windows only")
+    # 2026-10-29: items the bin cannot take made Windows pop "delete permanently?" dialogs on the user's desktop during
+    # an unattended run. Those items are never handed to the shell: they stay where they are and are reported.
+    refused = {p: bin_refusal(p) for p in paths}
+    refused = {p: why for p, why in refused.items() if why}
+    paths = [p for p in paths if p not in refused]
+    if not paths:
+        return refused
     # The shell's own delete, NOT Microsoft.VisualBasic's DeleteDirectory(..., 'OnlyErrorDialogs', ...): that UI option
     # suppresses confirmations, and the confirmation it suppresses is the one Windows shows when an item is too big for
     # the bin and would be destroyed instead. FOF_WANTNUKEWARNING (0x4000) brings exactly that prompt back while
@@ -667,7 +998,7 @@ def recycle(paths) -> dict:
     # The list goes on stdin: under -Command, trailing arguments are NOT $args -- PowerShell appends them to the
     # command text and runs them (measured: $args.Count == 0). A list file would be one more thing to delete.
     out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], input="\n".join(paths),
-                         capture_output=True, text=True, encoding="utf-8", timeout=3600)
+                         capture_output=True, text=True, encoding="utf-8", timeout=3600, **NO_WINDOW)
     silent = "no result reported" + (" (powershell: {})".format(out.stderr.strip()[:300]) if out.stderr.strip() else "")
     result = {p: silent for p in paths}
     for line in out.stdout.splitlines():
@@ -677,6 +1008,7 @@ def recycle(paths) -> dict:
     for p in paths:                     # the bin's word is not the proof: the path must actually be gone
         if result[p] is None and os.path.exists(p):
             result[p] = "still present after a reported recycle"
+    result.update(refused)
     return result
 
 
@@ -735,6 +1067,40 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
             return "canonical copy is protected"
         if p.stat().st_nlink != 1 or c.stat().st_nlink != 1 + memo.links.get(_key(c), 0):
             return "hard-link ownership changed or is unqualified"
+    if action["class"] == "archive":
+        why = _archive_module().archive_scope(action, cfg)
+        if why:
+            return why
+        if list(fingerprint(p)) != list(action["fingerprint"]):
+            return "folder changed since the plan"
+        wrote, read = activity(p)
+        if read > now - cfg["read_veto_hours"] * 3600:
+            return "something read here since the plan"
+        if (now - wrote) / DAY < cfg["min_idle_days"] and not (p/CLOSED_MARK).is_file():
+            return "something wrote here since the plan"
+        why = is_done(p, action["idle_days"], live_state_tokens(cfg), rb_job_cwds(), guard)
+        if why:
+            return "no longer done ({})".format(why)
+        if not cfg["archive_enabled"]:
+            return "archiving is off"
+        return ""
+    if action["class"] == "expire":
+        root = Path(cfg['archive_root'] or Path(cfg['root'])/'.claude/archive')
+        certainty.plain_path(p)
+        if not p.resolve().is_relative_to(root.resolve()) or p.suffix.lower()!='.zip':
+            return 'archive is outside configured archive root'
+        if not root.is_relative_to(Path(cfg['root'])):
+            guard.tracked.update(tracked_files(root))
+        why = archive_protection(guard, p)
+        if why:
+            return 'protected ('+why+')'
+        st = p.stat()
+        if st.st_nlink!=1 or st.st_mtime != action["mtime"] or st.st_size != action["bytes"]:
+            return "archive zip changed since the plan"
+        actual = _archive_module()._retirement_hash(p,time.monotonic()+cfg['archive_review_seconds'])
+        if actual!=action.get('hash'):
+            return 'archive bytes changed since the plan; create a new plan'
+        return certainty.obsolete_reason(p, cfg, actual)
     if action["class"] in ("launch", "snapshot", "scratch"):
         why = "" if action['class'] == 'snapshot' else protected_inside(guard, p)
         if why:
@@ -790,43 +1156,90 @@ def compress(action) -> Path:
     return gz
 
 
-def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = None) -> int:
-    # Resolved at CALL time: a def-time default would be the real recycle() even where a test replaced it.
+def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = None, deadline: float | None = None,
+          summary: bool = False):
+    """Do exactly the plan, re-checking each action. `deadline` (epoch): no new action starts after it; the rest is
+    counted as deferred for the next run. summary=True returns {"gib", "failed", "deferred"} instead of an exit code.
+    Archive payloads go to the bin in batches at the end of the class, not one shell call per folder."""
     recycler = recycle if recycler is None else recycler
+    if any(a['class'] in {'archive','expire'} and (not only or a['class'] in only) for a in plan_doc['actions']):
+        if cfg.get('approved_sha256') != cleanup_code_sha256():
+            print('REFUSED: archive cleanup version has not been approved after first-output review: '+cleanup_code_sha256())
+            return {'gib':0,'failed':1,'deferred':0} if summary else 1
     now = time.time() if now is None else now
     guard = Guard(cfg)
     memo = _Memo()
     order = [c for c in CLASSES if not only or c in only]
-    failed = 0
+    failed = deferred = 0
     totals = {}
     for cls in order:
         acts = [a for a in plan_doc["actions"] if a["class"] == cls]
         if not acts:
             continue
         to_recycle, done = [], 0
+        archived = []                       # (action, record) awaiting the batched recycle of their payload
         for a in acts:
+            if deadline is not None and time.time() > deadline:
+                deferred += 1
+                continue
             try:
                 why = check(a, cfg, guard, now, memo)
-            except OSError as exc:
-                why = "could not recheck candidate: {}".format(exc)
+            except (OSError, ValueError, TimeoutError) as exc:
+                why = 'candidate could not be rechecked: '+str(exc)
+            except Exception as exc:
+                if type(exc).__name__ != 'ArchiveError':
+                    raise
+                why = 'archive proof failed: '+str(exc)
             if why:
                 print("  REFUSED  {:<11} {}  ({})".format(cls, a["path"], why))
                 failed += 1
                 continue
             try:
                 if cls == "link":
-                    canonical_key = _key(a["canonical"])
+                    canonical_key = _key(a['canonical'])
                     link(a, 1 + memo.links.get(canonical_key, 0))
                     memo.links[canonical_key] = memo.links.get(canonical_key, 0) + 1
                     done += a["bytes"]
                 elif cls == "gzip":
                     compress(a)
                     to_recycle.append(a)
+                elif cls == "archive":
+                    ha = _archive_module()
+                    k = _key(a["path"]) + os.sep
+                    extra = [x for x in guard.tracked | guard.links if x.startswith(k)]
+                    archived.append((a, ha.archive_folder(Path(a["path"]), Path(a["nas"]), None, extra)))
                 else:
                     to_recycle.append(a)
-            except OSError as e:
+            except Exception as e:          # OSError, or the archive module's ArchiveError: local folder untouched
+                if not isinstance(e, OSError) and type(e).__name__ != "ArchiveError":
+                    raise
                 print("  FAILED   {:<11} {}  ({})".format(cls, a["path"], e))
                 failed += 1
+        if archived:
+            ha = _archive_module()
+            ready_archives = []
+            for a, rec in archived:
+                try:
+                    ha.verify_source(Path(a['path']), rec)
+                    ready_archives.append((a, rec))
+                except (OSError, ValueError, ha.ArchiveError) as exc:
+                    print('  REFUSED  archive {} ({})'.format(a['path'], exc))
+                    failed += 1
+            archived = ready_archives
+            victims = [str(v) for _, rec in archived for v in rec["victims"]]
+            res = {}
+            for i in range(0, len(victims), RECYCLE_BATCH):
+                res.update(recycler(victims[i:i + RECYCLE_BATCH]))
+            for a, rec in archived:
+                left = {v: res.get(str(v), "no result reported") for v in rec["victims"]}
+                left = {str(v): e for v, e in left.items() if e}
+                if left:
+                    ha.note_leftovers(Path(a["path"]), left)
+                    print("  PARTIAL  {:<11} {}  ({} item(s) left in place: {}; zip is complete: {})".format(
+                        cls, a["path"], len(left), next(iter(left.values())), rec["zip"]))
+                    failed += 1
+                else:
+                    done += a["bytes"]
         if to_recycle:
             ready = []
             for a in to_recycle:
@@ -850,7 +1263,10 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
                 else:
                     ready.append(a)
             to_recycle = ready
-            res = recycler([a["path"] for a in to_recycle])
+            paths = [a["path"] for a in to_recycle]
+            res = {}
+            for i in range(0, len(paths), RECYCLE_BATCH):
+                res.update(recycler(paths[i:i + RECYCLE_BATCH]))
             for a in to_recycle:
                 err = res.get(a["path"], "no result reported")
                 if err:
@@ -860,7 +1276,10 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
                     done += a["bytes"]
         totals[cls] = done
         print("  {:<11} {:>4} action(s), {:.2f} GiB done".format(cls, len(acts), done / GIB))
-    print("applied: {:.2f} GiB; {} refused/failed".format(sum(totals.values()) / GIB, failed))
+    print("applied: {:.2f} GiB; {} refused/failed; {} deferred (deadline)".format(
+        sum(totals.values()) / GIB, failed, deferred))
+    if summary:
+        return {"gib": sum(totals.values()) / GIB, "failed": failed, "deferred": deferred}
     return 1 if failed else 0
 
 
@@ -1000,6 +1419,12 @@ def session(cfg, state: Path) -> int:
             notes.append(note)
     except (OSError, ValueError) as exc:
         notes.append("cold backup review unavailable: {}".format(exc))
+    try:
+        note = _archive_module().periodic_note(cfg, lambda:review_archives(cfg))
+        if note:
+            notes.append(note)
+    except (OSError, ValueError) as exc:
+        notes.append('task archive review unavailable: {}'.format(exc))
     r = res["rows"]
     if res.get("preflight_error"):
         notes.append("temp cleanup skipped; no recycling attempted")
@@ -1157,6 +1582,16 @@ def main(argv) -> int:
         return apply(json.loads(Path(args[0]).read_text(encoding="utf-8")), cfg, only)
     print(__doc__.split("\n\n")[1], file=sys.stderr)
     return 2
+
+
+
+def cleanup_code_sha256():
+    """All code that decides ordinary housekeep archive/retirement behavior."""
+    d = hashlib.sha256()
+    here = Path(__file__).resolve().parent
+    for name in ("x4housekeep.py", "housekeep_archive.py", "housekeep_backups.py"):
+        d.update(name.encode()+b"\0"+(here/name).read_bytes())
+    return d.hexdigest()
 
 
 if __name__ == "__main__":
