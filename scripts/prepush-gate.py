@@ -114,7 +114,16 @@ class Gate:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--base", default="")
+    ap.add_argument("--root", type=Path, default=None,
+                    help="the checkout to gate (default: this script's repo); the hook passes the tree being pushed")
     a = ap.parse_args(argv)
+    global REPO, PKG
+    if a.root is not None:
+        REPO = a.root.resolve()
+        PKG = REPO / "tools" / "x4validate"
+        if not (PKG / "tests").is_dir():
+            print("prepush-gate: {} is not an X4 toolkit checkout (no tools/x4validate/tests)".format(REPO))
+            return 2
     if subprocess.run(["uv", "--version"], capture_output=True).returncode != 0:
         print("prepush-gate: uv is not on PATH; the suite runs through `uv run --frozen`")
         return 2
