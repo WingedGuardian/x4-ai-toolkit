@@ -17,6 +17,31 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.parametrize("shared", [True, False])
+def test_live_input_links_are_kept_without_content_reads_but_real_copies_qualify(tmp_path, monkeypatch, shared):
+    live = write(tmp_path / "Data/input.bin", b"identical")
+    staged = tmp_path / "out/task/input.bin"
+    staged.parent.mkdir(parents=True)
+    if shared:
+        os.link(live, staged)
+    else:
+        write(staged, b"identical")
+    cfg = cfg_for(tmp_path, live_roots=["Data"], min_bytes=1, active_hours=0)
+    reads = []
+    original = hk.blake
+    def observed(path, *args, **kwargs):
+        reads.append(os.fspath(path))
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(hk, "blake", observed)
+    doc = hk.plan(cfg)
+    if shared:
+        assert doc["actions"] == []
+        assert reads == []
+    else:
+        assert [a["class"] for a in doc["actions"]] == ["recreatable"]
+        assert os.fspath(staged) in reads
+
+
 @pytest.mark.parametrize("protection", ["tracked", "linked"])
 def test_external_repository_output_keeps_its_own_protected_evidence(tmp_path, protection):
     root = tmp_path / "toolkit"

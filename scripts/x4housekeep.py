@@ -444,7 +444,8 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
     for task, state in tasks:
         for f in walk_files(task):
             try:
-                size = f.stat().st_size
+                st = f.stat()
+                size = st.st_size
             except OSError as exc:
                 raise OSError("candidate could not be inspected: {}".format(f)) from exc
             if state == "loose":
@@ -456,6 +457,11 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
             why = guard.why_protected(f)
             if why:
                 count("kept: protected ({})".format(why), size)
+                continue
+            if st.st_nlink != 1:
+                # Already shared bytes cannot be reclaimed by recycling this
+                # name. Do not hash live game inputs or qualify their ownership.
+                count("kept: pre-existing hard links (ownership unqualified)", size)
                 continue
             if is_build(f, cfg):
                 act({"class": "build", "path": str(f), "bytes": size, "hash": blake(f),
