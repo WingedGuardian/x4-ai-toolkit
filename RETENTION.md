@@ -102,6 +102,17 @@ link.
 
 ## X4 checklist
 
+- **BaseX generated caches do not need backup generations or recycling.** Use the
+  builders' native `DROP DB` for `x4raw`/`x4eff` and checked permanent disposal via
+  `scripts/x4basex_artifacts.py` for generated staging/effective trees and stale
+  cache licences. Inputs are checked now. New tree and database generations get
+  disposition receipts before creation; database receipts stay outside BaseX's
+  private data format. Recognized canonical XML-only legacy workspaces are
+  covered by the explicit BaseX cache-disposal decision, without inventing old
+  creation receipts. Custom unreceipted workspaces, links and unexpected files
+  stay. Failure stops the build; it never falls back to the Bin or a backup copy.
+  Keep hand-written findings and logs outside disposable cache directories.
+
 - **Pytest has its own disposable directory per invocation.** Both the main and
   BaseX suites avoid pytest's shared numbered-directory cleanup. Legacy unmarked
   runs and other projects' runs are preserved. A caller's `--basetemp` must name

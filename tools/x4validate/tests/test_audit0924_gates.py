@@ -246,8 +246,8 @@ def test_bx2_a_config_FAILURE_refuses_instead_of_guessing(monkeypatch, tmp_path,
 # ============================================================================ BX-3 (build scripts)
 
 @pytest.mark.parametrize("script", ["build-corpus.sh", "build-effective.sh"])
-@pytest.mark.parametrize("recycle_fails", [False, True])
-def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script, recycle_fails, tmp_path):
+@pytest.mark.parametrize("disposal_fails", [False, True])
+def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script, disposal_fails, tmp_path):
     import os
     import shlex
     import subprocess
@@ -261,29 +261,38 @@ def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script
             break
         pos += len(line)
     assert drop > 0, f"{script}: no DROP DB found -- the fixture premise moved"
-    revoke = re.search(r'^\(cd .*x4recycle\.py.*coverage-.*$', text[:drop], re.M)
-    assert revoke, f"{script}: no recoverable coverage revocation before DROP DB"
+    revoke = re.search(r'^\(cd .*x4basex_artifacts\.py.*coverage-.*$', text[:drop], re.M)
+    assert revoke, f"{script}: no checked coverage revocation before DROP DB"
     assert "set -euo pipefail" in text[:drop]
     spec = importlib.util.spec_from_file_location("gitbash_for_bx3", PKG.parents[1] / "scripts/gitbash.py")
     resolver = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(resolver)
     bash = resolver.find_bash()
     assert bash, "this shell-driver control requires Bash"
-    coverage = tmp_path / "coverage-test.json"
-    coverage.write_text("old licence")
-    fake_bin = tmp_path / "fake-bin"
-    if recycle_fails:
-        fake_bin.write_text("cannot be a directory")
+    import shutil
+    here = tmp_path / "tools/basex"
+    base = here / "basex"
+    base.mkdir(parents=True)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copyfile(PKG.parents[1] / "scripts/x4basex_artifacts.py", scripts / "x4basex_artifacts.py")
+    db = "x4raw" if script == "build-corpus.sh" else "x4eff"
+    coverage = base / f"coverage-{db}.json"
+    content = "invalid metadata" if disposal_fails else '{"old": "licence"}'
+    coverage.write_text(content)
+    reference = tmp_path / "reference/libraries"
+    reference.mkdir(parents=True)
+    (reference / "wares.xml").write_text("<wares/>")
     witness = tmp_path / "drop-witness"
-    env = dict(os.environ, X4_RECYCLE_TEST_ROOT=str(tmp_path),
-               X4_RECYCLE_TEST_BIN=str(fake_bin), PYTEST_CURRENT_TEST="bx3-seam")
+    env = dict(os.environ, X4_REFERENCE=str(reference.parent), PYTEST_CURRENT_TEST="bx3-seam")
     quote = lambda value: shlex.quote(Path(value).as_posix())
     setup = "\n".join([
         "set -euo pipefail",
-        "HERE=" + quote(BASEX),
-        "BASEX_DIR=" + quote(tmp_path),
+        "HERE=" + quote(here),
+        "BASEX_DIR=" + quote(base),
+        "REFERENCE=" + quote(reference.parent),
         "X4VALIDATE=" + quote(PKG),
-        "DB=test",
+        "DB=" + db,
         'uv() { shift; shift; ' + quote(sys.executable) + ' "$@"; }',
         "java() { printf dropped > " + quote(witness) + "; }",
     ])
@@ -291,13 +300,13 @@ def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script
                      if "DROP DB" in line and not line.lstrip().startswith("#"))
     run = subprocess.run([bash, "-c", setup + "\n" + revoke.group() + "\n" + drop_line],
                          env=env, capture_output=True, text=True, timeout=30)
-    if recycle_fails:
-        assert run.returncode != 0 and coverage.read_text() == "old licence", run.stderr
+    if disposal_fails:
+        assert run.returncode != 0 and coverage.read_text() == content, run.stderr
         assert not witness.exists(), "DROP DB ran after failed coverage revocation"
     else:
         assert run.returncode == 0 and witness.read_text() == "dropped", run.stderr
         assert not coverage.exists()
-        assert [p.read_text() for p in fake_bin.iterdir()] == ["old licence"]
+        assert not (tmp_path / "fake-bin").exists()
 
 
 # ============================================================================ BX-4 (coverage.py)

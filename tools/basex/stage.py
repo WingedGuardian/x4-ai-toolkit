@@ -43,7 +43,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from x4recycle import recycle_or_raise
+from x4basex_artifacts import prepare_output
 
 from lxml import etree
 
@@ -213,7 +213,10 @@ def main(argv=None) -> int:
               "out of the index.", file=sys.stderr)
         return 2
     try:
-        recycle_or_raise([out])
+        def inputs_available():
+            if not ext_dir.is_dir():
+                raise OSError(f"packed-content input directory is unavailable: {ext_dir}")
+        prepare_output(out, "stage", proof=inputs_available, sources=(ext_dir,))
     except (OSError, RuntimeError) as exc:
         print(f"REFUSING: {exc}", file=sys.stderr)
         return 2

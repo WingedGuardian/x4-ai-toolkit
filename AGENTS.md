@@ -177,6 +177,13 @@ evade this policy. Missing preservation or evaluation is a refusal, not permissi
   `DeleteFile`/`DeleteDirectory` with `SendToRecycleBin`; Linux: `gio trash`; macOS: Finder Trash).
   A permanent delete needs the user's OK for that deletion. Report what went and what failed.
   The guards judge a move to the trash exactly as a delete (same blocks and confirmations).
+- **BaseX generated caches are disposable:** use the builders' checked
+  `scripts/x4basex_artifacts.py` cleanup for staging/merged trees, and BaseX's
+  native `DROP DB` for `x4raw`/`x4eff`. Do not copy, back up or recycle database
+  generations before rebuilding. Verify inputs now; new workspaces receive a
+  producer disposition receipt at creation. Keep manifests/coverage current and
+  preserve refusal/lock failures. This specific cache rule overrides the generic
+  recycle default; source XML, logs and hand-written evidence are not caches.
 - Retention: `RETENTION.md`, `scripts/x4housekeep.py`. `cleanupPeriodDays`: user settings only.
 - **Resources: limit work you start yourself** (test suites, corpus builds, load tests, parallel
   agents): together at most 40% of CPU and 25% of RAM, low priority, at most eight test workers;

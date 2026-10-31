@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from x4recycle import recycle_or_raise
+from x4basex_artifacts import prepare_output
 
 from lxml import etree
 
@@ -114,7 +114,7 @@ def enumeration_report(config: _merge.Config, base: dict[str, str]) -> dict:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--out", required=True, help="output tree (previous tree recycled and recreated)")
+    p.add_argument("--out", required=True, help="disposable generated tree (checked and recreated)")
     p.add_argument("--reference", default=None)
     p.add_argument("--limit", type=int, default=0, help="build only N contested vpaths (smoke test)")
     args = p.parse_args(argv)
@@ -134,12 +134,12 @@ def main(argv=None) -> int:
 
     out = Path(args.out)
     try:
-        recycle_or_raise([out])
+        prepare_output(out, "effective",
+                       proof=lambda: _effective.require_base_documents(config, "rebuild the effective tree"),
+                       sources=(config.reference, *overlays))
     except (OSError, RuntimeError) as exc:
         print(f"REFUSING: {exc}", file=sys.stderr)
         return 2
-    out.mkdir(parents=True)
-
     t0 = time.time()
     # Enumeration lives in the package (`_modfiles.overlay_vpaths`) so the engine
     # freshness axis watches it (AUDIT-2026-09-24 FR-2); an overlay whose catalog
