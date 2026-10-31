@@ -96,7 +96,10 @@ class Gate:
         self.failed = []
         self.t0 = time.time()
 
-    def step(self, name, cmd, cwd=REPO, check=None):
+    def step(self, name, cmd, cwd=None, check=None):
+        # cwd resolves at CALL time: a `cwd=REPO` default was bound at import, so --root never reached the hook-test
+        # steps and the snapshot copy looked for .claude/hooks beside itself (another session's push, 2026-10-31).
+        cwd = cwd or REPO
         t = time.time()
         print("== {}".format(name), flush=True)
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
