@@ -455,3 +455,94 @@ def test_a_named_dest_that_does_not_exist_is_REFUSED(repo, tmp_path, capsys):
     d = tmp_path / "typo" / ".claude"
     assert dep.main(["--repo", str(repo), "--dest", str(d), "--apply"]) == 2
     assert not d.exists() and "--dest" in capsys.readouterr().err
+
+
+# --- guard code goes live only once CI-proven (user rule 2026-10-31) ---------------------------
+
+_REAL_EVIDENCE = dep.guard_evidence  # captured before the autouse stub below
+
+
+@pytest.fixture(autouse=True)
+def _guards_proven(monkeypatch):
+    """Scratch repos have no CI: every other test deploys as if the guard code were proven."""
+    monkeypatch.setattr(dep, "guard_evidence", lambda repo_root: None)
+
+
+def test_unproven_guard_code_is_refused_and_nothing_is_written(repo, dest, monkeypatch, capsys):
+    _commit(repo, "hooks/h.sh", b"echo hi\n")
+    monkeypatch.setattr(dep, "guard_evidence", lambda repo_root: "no successful CI run for abc")
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
+    assert not (dest / "hooks" / "h.sh").exists()
+    assert "hooks/h.sh" in capsys.readouterr().err
+
+
+def test_the_override_deploys_unproven_guard_code_and_says_so(repo, dest, monkeypatch, capsys):
+    _commit(repo, "hooks/h.sh", b"echo hi\n")
+    monkeypatch.setattr(dep, "guard_evidence", lambda repo_root: "no successful CI run for abc")
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply",
+                     "--unverified-guards", "revert to CI-green"]) == 0
+    assert (dest / "hooks" / "h.sh").read_bytes() == b"echo hi\n"
+    assert "DEPLOYING UNVERIFIED GUARD CODE" in capsys.readouterr().err
+
+
+def test_a_deploy_without_guard_changes_never_asks_for_proof(repo, dest, monkeypatch):
+    _commit(repo, "hooks/h.sh", b"echo hi\n")
+    (dest / "hooks").mkdir()
+    (dest / "hooks" / "h.sh").write_bytes(b"echo hi\n")
+    _commit(repo, "skills/a/SKILL.md", b"v1\n")
+    monkeypatch.setattr(dep, "guard_evidence", lambda repo_root: pytest.fail("asked for proof"))
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 0
+
+
+def test_a_dry_run_never_asks_for_proof(repo, dest, monkeypatch):
+    _commit(repo, "hooks/h.sh", b"echo hi\n")
+    monkeypatch.setattr(dep, "guard_evidence", lambda repo_root: pytest.fail("asked for proof"))
+    assert dep.main(["--repo", str(repo), "--dest", str(dest)]) == 0
+
+
+@pytest.mark.parametrize("name, guard", [("hooks/h.sh", True), (".codex/hooks/x.py", True),
+                                         (".codex/hooks.json", True), ("settings.json", True),
+                                         (".codex/rules/x.rules", True), ("skills/a/SKILL.md", False),
+                                         (".agents/skills/a/SKILL.md", False)])
+def test_which_paths_count_as_guard_code(name, guard):
+    assert dep.is_guard(name) is guard
+
+
+def _gh(monkeypatch, stdout="[]", rc=0, raises=None):
+    real = subprocess.run
+    def fake(cmd, *a, **k):
+        if cmd[0] != "gh":
+            return real(cmd, *a, **k)
+        if raises:
+            raise raises
+        return subprocess.CompletedProcess(cmd, rc, stdout=stdout, stderr="gh: not logged in")
+    monkeypatch.setattr(dep.subprocess, "run", fake)
+
+
+def test_evidence_published_on_origin_master_is_proof(repo, monkeypatch):
+    _commit(repo, "hooks/h.sh", b"echo hi\n")
+    _git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _gh(monkeypatch, raises=AssertionError("GitHub asked although HEAD is published"))
+    assert _REAL_EVIDENCE(repo) is None
+
+
+def test_evidence_a_green_ci_run_on_head_is_proof(repo, monkeypatch):
+    _commit(repo, "hooks/h.sh", b"echo hi\n")
+    _gh(monkeypatch, stdout='[{"conclusion": "failure"}, {"conclusion": "success"}]')
+    assert _REAL_EVIDENCE(repo) is None
+
+
+@pytest.mark.parametrize("gh", [dict(stdout='[{"conclusion": "failure"}]'), dict(stdout="[]"),
+                                dict(rc=1), dict(raises=FileNotFoundError("gh")),
+                                dict(stdout="not json")])
+def test_evidence_no_green_run_or_no_answer_is_a_refusal(repo, monkeypatch, gh):
+    _commit(repo, "hooks/h.sh", b"echo hi\n")
+    _gh(monkeypatch, **gh)
+    assert _REAL_EVIDENCE(repo)
+
+
+def test_evidence_uncommitted_guard_edits_are_a_refusal(repo, monkeypatch):
+    _commit(repo, "hooks/h.sh", b"echo hi\n")
+    _git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+    (repo / ".claude" / "hooks" / "h.sh").write_bytes(b"echo edited\n")
+    assert "differ from HEAD" in _REAL_EVIDENCE(repo)

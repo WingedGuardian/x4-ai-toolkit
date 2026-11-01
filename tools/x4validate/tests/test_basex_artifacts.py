@@ -203,7 +203,7 @@ def test_native_database_rebuild_keeps_only_the_current_generation(tmp_path, red
     root = tmp_path / "fixture"
     home = root / "basex"
     home.mkdir(parents=True)
-    os.link(jar, home / "BaseX.jar")
+    shutil.copyfile(jar, home / "BaseX.jar")  # a copy: CI keeps the repo and temp on different drives
     (home / ".basexhome").write_bytes(b"")
     env = {k: v for k, v in os.environ.items()
            if k not in {"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS"}}

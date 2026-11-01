@@ -152,17 +152,14 @@ the complete canonical paths, logical count and command hash. Never split a batc
 evade this policy. Missing preservation or evaluation is a refusal, not permission.
 
 ### General
-- **Deletions go to the Recycle Bin / Trash, always** (Windows: `Microsoft.VisualBasic.FileIO.FileSystem`
-  `DeleteFile`/`DeleteDirectory` with `SendToRecycleBin`; Linux: `gio trash`; macOS: Finder Trash).
-  A permanent delete needs the user's OK for that deletion. Report what went and what failed.
-  The guards judge a move to the trash exactly as a delete (same blocks and confirmations).
-- **BaseX generated caches are disposable:** use the builders' checked
-  `scripts/x4basex_artifacts.py` cleanup for staging/merged trees, and BaseX's
-  native `DROP DB` for `x4raw`/`x4eff`. Do not copy, back up or recycle database
-  generations before rebuilding. Verify inputs now; new workspaces receive a
-  producer disposition receipt at creation. Keep manifests/coverage current and
-  preserve refusal/lock failures. This specific cache rule overrides the generic
-  recycle default; source XML, logs and hand-written evidence are not caches.
+- **Delete by certainty.** Delete permanently only what is proven rebuildable now and was marked
+  disposable by its producer at creation (BaseX caches: the builders' own cleanup and `DROP DB`;
+  never run `scripts/x4basex_artifacts.py` by hand). Anything that could be the only copy goes to
+  the Recycle Bin / Trash (Windows: `Microsoft.VisualBasic.FileIO.FileSystem` `DeleteFile`/
+  `DeleteDirectory` with `SendToRecycleBin`; Linux: `gio trash`; macOS: Finder Trash). Unknown
+  value is kept. Any other permanent delete needs the user's OK; a failed recycle never falls back
+  to one. Report what was deleted, recycled and failed. The guards judge a move to the trash
+  exactly as a delete.
 - Retention: `RETENTION.md`, `scripts/x4housekeep.py`. `cleanupPeriodDays`: user settings only.
 - **Resources: limit work you start yourself** (test suites, corpus builds, load tests, parallel
   agents): together at most 40% of CPU and 25% of RAM, low priority, at most eight test workers;

@@ -250,6 +250,7 @@ def test_bx2_a_config_FAILURE_refuses_instead_of_guessing(monkeypatch, tmp_path,
 def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script, disposal_fails, tmp_path):
     import os
     import shlex
+    import shutil
     import subprocess
     text = (BASEX / script).read_text(encoding="utf-8")
     # The first DROP DB on a line that is not a COMMENT: issue #10 added a comment naming
@@ -274,8 +275,10 @@ def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script
     base.mkdir(parents=True)
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    os.link(PKG.parents[1] / "scripts/x4basex_artifacts.py", scripts / "x4basex_artifacts.py")
-    os.link(BASEX / "preflight.py", here / "preflight.py")
+    # Copies, not hard links: CI keeps the repo and temp on different drives (WinError 17), and a
+    # hard link would let a write in scratch reach the repo file.
+    shutil.copyfile(PKG.parents[1] / "scripts/x4basex_artifacts.py", scripts / "x4basex_artifacts.py")
+    shutil.copyfile(BASEX / "preflight.py", here / "preflight.py")
     db = "x4raw" if script == "build-corpus.sh" else "x4eff"
     coverage = base / f"coverage-{db}.json"
     content = "invalid metadata" if disposal_fails else '{"old": "licence"}'

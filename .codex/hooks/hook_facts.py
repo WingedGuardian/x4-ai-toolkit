@@ -880,7 +880,7 @@ def _has_brace_expansion(m: str) -> bool:
     return False
 
 
-def tokens(seg: str, *, literal_expansions: dict | None = None) -> list[tuple[str, bool]]:
+def tokens(seg: str) -> list[tuple[str, bool]]:
     """(text, was_quoted) per token. Quotes are stripped from the text; a
     backslash-escaped space JOINS, which is why `X4\\ Foundations` must stay one token
     -- the bash tokeniser split it and the game-delete block stopped firing.
@@ -888,7 +888,6 @@ def tokens(seg: str, *, literal_expansions: dict | None = None) -> list[tuple[st
     A word whose unquoted part holds a brace expansion is recorded in _BRACE_WORDS (C1)."""
     out, buf, quoted, started = [], [], False, False
     mbuf = []                               # buf with every quoted/escaped char as NUL
-    xbuf = []                               # only expansion-active characters survive
     q = ""
     i = 0
 
@@ -896,11 +895,6 @@ def tokens(seg: str, *, literal_expansions: dict | None = None) -> list[tuple[st
         text = "".join(buf)
         if "{" in mbuf and _has_brace_expansion("".join(mbuf)):
             _BRACE_WORDS.add(text)
-        if literal_expansions is not None:
-            # Same dequoted spelling can occur both literally and dynamically.
-            # Never let one occurrence qualify another occurrence's unknown value.
-            literal_expansions[text] = (literal_expansions.get(text, True)
-                                        and not has_unresolved(''.join(xbuf)))
         out.append((text, quoted))
 
     while i < len(seg):
@@ -913,21 +907,18 @@ def tokens(seg: str, *, literal_expansions: dict | None = None) -> list[tuple[st
                 i += 1
                 buf.append(seg[i])
                 mbuf.append(chr(0))
-                xbuf.append(chr(0))
             else:
                 buf.append(c)
                 mbuf.append(chr(0))
-                xbuf.append(chr(0) if q == "'" else c)
         elif c in "\"'":
             # ANSI-C / locale quoting: `$'rm'` and `$"rm"` are the word `rm`. The `$`
             # is a quoting SIGIL, not part of the name. Without this the token was
             # `$rm` AND flagged quoted, so verb()'s `if quoted: return t` handed every
             # verb-keyed rule a name no rule has ever heard of -- a total bypass.
-            dollar = bool(buf) and buf[-1] == "$" and mbuf[-1] == "$"
+            dollar = bool(buf) and buf[-1] == "$"
             if dollar:
                 buf.pop()
                 mbuf.pop()
-                xbuf.pop()
             if dollar and c == chr(39):
                 # $'...' -- take the WHOLE run and decode it. Popping the sigil was
                 # only half the job: inside a single-quoted run this loop appends
@@ -946,7 +937,6 @@ def tokens(seg: str, *, literal_expansions: dict | None = None) -> list[tuple[st
                 dec = _ansi_c_decode(''.join(body))
                 buf.append(dec)
                 mbuf.extend(chr(0) * len(dec))
-                xbuf.extend(chr(0) * len(dec))
                 quoted = started = True
                 i = j + 1
                 continue
@@ -956,18 +946,15 @@ def tokens(seg: str, *, literal_expansions: dict | None = None) -> list[tuple[st
             i += 1
             buf.append(seg[i])          # \<space> joins; \x keeps x
             mbuf.append(chr(0))         # an escaped `{` / `,` is literal (C1)
-            xbuf.append(chr(0))
             started = True
         elif c.isspace():
             if started:
                 emit()
             buf, quoted, started = [], False, False
             mbuf = []
-            xbuf = []
         else:
             buf.append(c)
             mbuf.append(c)
-            xbuf.append(c)
             started = True
         i += 1
     if started:
@@ -6068,14 +6055,6 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     segs = [s for s, _ in seg_cwd]
     cwd = seg_cwd[-1][1] if seg_cwd else ""
 
-    literal_expansions = {}
-
-    def literal_dollar_path(path):
-        # Only a plain absolute path whose dollars were all quoted/escaped.
-        # Pattern membership and relative execution scope remain unqualified.
-        return ('$' in path and literal_expansions.get(path, False) and is_abs(path)
-                and not any(char in path for char in '*?[]{}'))
-
     def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file", copy_sources=None):
         """(path resolved where it runs, unresolvable?, the token as written). A whole
         array reference -- a for-loop variable, `"${A[@]}"` -- yields one entry PER
@@ -6091,14 +6070,13 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         `c_old` is the segment's directory WITHOUT the session seed (lane F); see below."""
         out = []
         for p in paths:
-            literal = literal_dollar_path(p)
             # expand=False: resolved exactly as before this lane -- loop words and
             # `$(...)` values are not substituted, so such an operand stays unresolved.
             # C6 (v4.0 release review): EVERY value here too. One resolve() judged
             # `> "${NOPE:+x}<reference>/libraries/wares.xml"` as the alternate only -- ADVISED
             # where the plain path denies (broken since FX-G5 47d06cd; 0801a1a fixed the
             # other rules only). resolve_variants' first value is the plain resolve().
-            rs = [p] if literal else (resolve_all(p, assigns) if expand else resolve_variants(p, plain_assigns))
+            rs = resolve_all(p, assigns) if expand else resolve_variants(p, plain_assigns)
             for r in rs:
                 # A LEADING ROOT VARIABLE IS ITS ROOT, for every operand (FX-G2 items 1-2,
                 # v4.0.0 delta review). Only `cd` (R2-P1) and the icacls rule substituted it,
@@ -6109,8 +6087,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                 # "$X4_TOOLKIT/x4-paths.env" were ALLOWED (34 of 40 probes) while the literal
                 # path was refused. The variable NAME identifies the root (ROOT_VARS); a root
                 # that is not configured is left unsubstituted, exactly as before.
-                r = r if literal else subst_root_var(r, roots)
-                unres = not literal and has_unresolved(r)
+                r = subst_root_var(r, roots)
+                unres = has_unresolved(r)
                 # PARSE DEBRIS IS NOT JOINED ONTO THE SESSION SEED (lane F). `c_old` is the
                 # directory this segment had before the seed existed; a token carrying a
                 # quote, a paren, a redirect or a pipe character, or naming a Windows
@@ -6129,7 +6107,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                     physical = physical_join("" if execution_context else physical_cwd, r,
                                              posix_bash=posix_bash)
                     row = {"operation": operation, "path": physical, "dialect": cur_dialect[0],
-                                     "raw": r, "unresolved": unres or not physical or (not literal and has_unresolved(physical))
+                                     "raw": r, "unresolved": unres or not physical or has_unresolved(physical)
                                      or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical))
                                      # C1: an unquoted brace-expanded word names SEVERAL paths
                                      # (or none), never the one literal path written here.
@@ -6138,13 +6116,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                     if copy_sources is not None:
                         sources = []
                         for source in copy_sources:
-                            source_literal = literal_dollar_path(source)
-                            for resolved in ([source] if source_literal else resolve_all(source, assigns)):
-                                resolved = resolved if source_literal else subst_root_var(resolved, roots)
+                            for resolved in resolve_all(source, assigns):
+                                resolved = subst_root_var(resolved, roots)
                                 placed = physical_join(physical_cwd, resolved, posix_bash=posix_bash)
-                                sources.append({"path": placed, "unresolved": not placed
-                                                or (not source_literal and (has_unresolved(resolved) or has_unresolved(placed)))
-                                                or bool(_DEBRIS.search(resolved))
+                                sources.append({"path": placed, "unresolved": not placed or has_unresolved(resolved)
+                                                or has_unresolved(placed) or bool(_DEBRIS.search(resolved))
                                                 or source in _BRACE_WORDS or resolved in _BRACE_WORDS})
                         row["copy_sources"] = sources
                     evidence.append(row)
@@ -6176,8 +6152,6 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                      for folder in save_spellings if folder]
     for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0], is_for_ in zip(
             seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect, seg_for):
-        literal_expansions = {}
-        tokens(s, literal_expansions=literal_expansions)
         if (save_folders and evidence is not None and not execution_context
                 and verb(s) not in SAVE_MODELLED_VERBS and not _carries_program_text(s)
                 and not _save_read_only_program(s)):
@@ -6332,8 +6306,6 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # replay: 2 historical rows, both a user-defined PowerShell function called with
     # relative names from the game root -- each would have become a new prompt.
     for (s, _c), c_old in zip(seg_cwd, unseeded):
-        literal_expansions = {}
-        tokens(s, literal_expansions=literal_expansions)
         if verb(s) == "x4-unknown-cmdlet":
             ops = prep(_operands(s), c_old, c_old)
             if any(hit(ops, k, conservative=True)
@@ -6352,8 +6324,6 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # name that is a ROOT variable (`"$X4_GAME/X4.exe"`) is a known program, not this case.
     program_dynamic = False
     for (s, _c), c_old in zip(seg_cwd, unseeded):
-        literal_expansions = {}
-        tokens(s, literal_expansions=literal_expansions)
         if not _dynamic_program(s):
             continue
         if not has_unresolved(subst_root_var(resolve(_verb_token(s), assigns), roots)):
