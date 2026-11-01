@@ -29,6 +29,7 @@ usage: x4fresh status [-h]
 options:
   -h, --help            show this help message and exit
   --only {effective,xref,x4raw,x4eff} [{effective,xref,x4raw,x4eff} ...]
+                        limit to these artifacts (default: all of effective, xref, x4raw, x4eff)
 ```
 
 ## `x4fresh rebuild`
@@ -41,6 +42,7 @@ usage: x4fresh rebuild [-h]
 options:
   -h, --help            show this help message and exit
   --only {effective,xref,x4raw,x4eff} [{effective,xref,x4raw,x4eff} ...]
+                        limit to these artifacts (default: all of effective, xref, x4raw, x4eff)
   --auto                unattended mode (session start): effective + xref only, defers while a
                         listed process runs, never retries the same failure
   --note NOTE           with --auto: write the outcome here for the next session start to print
@@ -57,4 +59,5 @@ usage: x4fresh accept [-h]
 options:
   -h, --help            show this help message and exit
   --only {effective,xref,x4raw,x4eff} [{effective,xref,x4raw,x4eff} ...]
+                        limit to these artifacts (default: all of effective, xref, x4raw, x4eff)
 ```

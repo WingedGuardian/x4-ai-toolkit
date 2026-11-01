@@ -61,6 +61,18 @@ def test_render_puts_the_directive_first_and_names_every_non_fresh_artifact():
     assert fc.render([fc.Status("effective", "FRESH")]).splitlines()[0] == "x4fresh: all 1 artifact(s) FRESH"
 
 
+@pytest.mark.parametrize("cmd", [["status"], ["rebuild"], ["rebuild", "--auto"], ["accept"]])
+def test_an_unconfigured_machine_refuses_every_subcommand_with_rc_2(monkeypatch, capsys, cmd):
+    """rc 2 = "not set up", the contract every toolkit CLI keeps. `status` once answered rc 5 with four
+    UNKNOWNs here instead; a CHECK that is called would have been the wrong thing to stub."""
+    monkeypatch.setattr(fc, "state_dir", lambda: None)
+    called = []
+    monkeypatch.setattr(fc, "CHECKS", {n: (lambda n=n: called.append(n) or fc.Status(n, "FRESH")) for n in fc.ORDER})
+    assert fc.main(cmd) == 2
+    assert called == []
+    assert "not configured" in capsys.readouterr().err
+
+
 def test_status_exit_code_is_0_only_when_everything_is_fresh(monkeypatch, sd, capsys):
     monkeypatch.setattr(fc, "CHECKS", {n: (lambda n=n: fc.Status(n, "FRESH")) for n in fc.ORDER})
     assert fc.main(["status"]) == 0

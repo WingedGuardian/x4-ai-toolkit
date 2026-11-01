@@ -46,7 +46,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from x4validate import __version__, _effective, _freshness, _mutation, _registry, _xref
+from x4validate import __version__, _effective, _freshness, _mutation, _paths, _registry, _xref
 
 PKG_ROOT = Path(__file__).resolve().parent.parent          # tools/x4validate
 TOOLKIT_ROOT = PKG_ROOT.parent.parent                       # repo root
@@ -280,7 +280,7 @@ def _load_accepted(sd: Path | None) -> dict:
         data = json.loads(_accepted_path(sd).read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
-        return {}
+        return {}  # silent-ok: no/unreadable accept list = nothing accepted, so every loss is reported (fails loud)
 
 
 def _mark_accepted(s: Status, accepted: dict) -> Status:
@@ -302,7 +302,7 @@ def _rebuilding_targets(sd: Path) -> set[str] | None:
         data = json.loads((sd / "rebuilding.json").read_text(encoding="utf-8"))
         return {n for n in data.get("targets", []) if n in ORDER}
     except (OSError, ValueError, AttributeError):
-        return None
+        return None  # silent-ok: None = unknown targets; the caller then reports EVERY artifact as REBUILDING
 
 
 def status(only=ORDER, holding_lock: bool = False) -> list[Status]:
@@ -361,6 +361,7 @@ def render(results: list[Status]) -> str:
 # --------------------------------------------------------------------------- rebuild
 
 def _wrapper(name: str) -> list[str]:
+    # env-ok: a per-machine runtime switch (job wrapper argv), not a configured location
     raw = os.environ.get("X4_JOB_WRAPPER", "").strip()
     if not raw:
         return []
@@ -374,12 +375,17 @@ def builder(name: str) -> list[str]:
     if name in ("effective", "xref"):
         mod, fn = {"effective": ("x4validate._effectivecli", "main"), "xref": ("x4validate._xref", "main")}[name]
         return [sys.executable, "-c", f"import sys; from {mod} import {fn}; sys.exit({fn}(['build']))"]
+    # env-ok: an interpreter override for the builders, not a configured data location
     bash = os.environ.get("X4_BASH") or shutil.which("bash")
     if bash and "system32" in bash.lower():   # WSL's bash: a different filesystem view; never the builder's
         bash = None
-    git_bash = r"C:\Program Files\Git\bin\bash.exe"
-    if not bash and os.name == "nt" and os.path.isfile(git_bash):
-        bash = git_bash
+    git = shutil.which("git")
+    if not bash and os.name == "nt" and git:
+        # Git for Windows: <Git>/cmd/git.exe (or <Git>/bin/git.exe) beside <Git>/bin/bash.exe. Derived from
+        # the git on PATH, never a hardcoded install location.
+        cand = Path(git).resolve().parent.parent / "bin" / "bash.exe"
+        if cand.is_file():
+            bash = str(cand)
     if not bash:
         raise FileNotFoundError("no bash for the BaseX builders (set X4_BASH)")
     script = {"x4raw": "build-corpus.sh", "x4eff": "build-effective.sh"}[name]
@@ -491,6 +497,7 @@ def _dirty_engine_sources() -> list[str]:
 
 def _running_deferring_processes() -> list[str] | None:
     # X4.exe on Windows, X4 for the native Linux build (review finding 9).
+    # env-ok: a per-machine runtime switch (process names to defer for), not a configured location
     want = [p.strip().lower() for p in os.environ.get("X4_FRESH_DEFER_WHILE", "X4.exe;X4").split(";") if p.strip()]
     try:
         if os.name == "nt":
@@ -500,7 +507,7 @@ def _running_deferring_processes() -> list[str] | None:
             out = subprocess.run(["ps", "-A", "-o", "comm="], capture_output=True, text=True, timeout=20)
             names = {Path(ln.strip()).name.lower() for ln in out.stdout.splitlines() if ln.strip()}
     except (OSError, subprocess.SubprocessError):
-        return None
+        return None  # silent-ok: None = could not list processes; the caller DEFERS and says so in the note
     if out.returncode != 0 or not names:
         return None
     return [w for w in want if w in names]
@@ -514,7 +521,7 @@ def _load_memo(sd: Path) -> dict:
     try:
         return json.loads(_memo_path(sd).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
+        return {}  # silent-ok: no/unreadable memo = no remembered failure, so the build is attempted (one retry at most)
 
 
 def _write_note(p: Path, text: str) -> None:
@@ -529,6 +536,7 @@ def rebuild(only=ORDER, auto: bool = False, note: Path | None = None) -> int:
     if sd is None:
         print("x4fresh: REFUSING: the registry location is not configured (set X4_MODS)", file=sys.stderr)
         return 2
+    # env-ok: the session-start opt-out switch, not a configured location
     if auto and os.environ.get("X4_FRESH_AUTO", "").lower() == "off":
         return 0
     lock = BuildLock(sd / "x4fresh.lock")
@@ -627,6 +635,10 @@ def _prune_logs(logs: Path, keep: int = 5) -> None:
 
 # --------------------------------------------------------------------------- CLI
 
+ONLY_HELP = f"limit to these artifacts (default: all of {', '.join(ORDER)})"
+
+
+@_paths.refuses_unconfigured
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="x4fresh", description=__doc__.split("\n\n")[0],
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -634,9 +646,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     ps = sub.add_parser("status", help="one verdict per artifact; exit 0 all FRESH and complete, 3 all FRESH "
                                        "but some known INCOMPLETE (dropped/unparsed input), 5 otherwise")
-    ps.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER))
+    ps.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER), help=ONLY_HELP)
     pr = sub.add_parser("rebuild", help="rebuild what is not FRESH, one at a time, under a lock")
-    pr.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER))
+    pr.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER), help=ONLY_HELP)
     pr.add_argument("--auto", action="store_true",
                     help="unattended mode (session start): effective + xref only, defers while a "
                          "listed process runs, never retries the same failure")
@@ -645,8 +657,13 @@ def main(argv: list[str] | None = None) -> int:
                          "(empty when everything is fresh); default <registry>/x4fresh/session-note.txt")
     pa = sub.add_parser("accept", help="record each artifact's CURRENT losses (dropped/unparsed input) as "
                                        "known; the session note then stays quiet until that set changes")
-    pa.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER))
+    pa.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER), help=ONLY_HELP)
     args = p.parse_args(argv)
+    if state_dir() is None:
+        # Cold machine: every subcommand refuses with rc 2 ("not set up"), the toolkit-wide contract.
+        # `status` used to answer rc 5 with four UNKNOWNs here -- a verdict about artifacts that cannot exist.
+        print("x4fresh: REFUSING: the registry location is not configured (set X4_MODS)", file=sys.stderr)
+        return 2
     if args.cmd == "status":
         results = status(tuple(args.only))
         print(render(results))
