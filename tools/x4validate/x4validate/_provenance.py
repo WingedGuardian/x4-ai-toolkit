@@ -116,3 +116,63 @@ class Recorder:
 
     def _implicit_attr(self, el: etree._Element, attr: str) -> list[Origin]:
         return list(self.elem_chain(el))
+
+    # --- own-record lookup (no ancestor fallback) -------------------------------
+
+    def own_chain(self, el: etree._Element) -> list[Origin] | None:
+        """The chain recorded for *el* itself, or None. Unlike elem_chain, never inherited:
+        a descendant of an added subtree has no own record, so it is not reported twice."""
+        return self._elem.get(el)
+
+    def own_attr_chains(self, el: etree._Element) -> dict[str, list[Origin]]:
+        """Attribute chains recorded on *el* itself, by attribute name."""
+        return {a: c for (e, a), c in self._attr.items() if e is el}
+
+
+def _fmt_origin(o: Origin) -> str:
+    # The default origin reads "base base" through Origin.short(); say it once.
+    return o.source if o.op == BASE else o.short()
+
+
+def _comment_safe(text: str) -> str:
+    # "--" is illegal inside an XML comment, and a mod folder name may contain it.
+    while "--" in text:
+        text = text.replace("--", "- -")
+    return text
+
+
+def annotate_tree(tree: etree._Element, rec: Recorder) -> tuple[list[str], int]:
+    """Insert a provenance comment before every node an overlay changed; return the
+    header lines (root-level records and removals, which have no node to sit before)
+    and the number of annotated nodes.
+
+    Reported: a node's OWN record (added / replaced / union-touched) and its own attribute
+    records, each only when the surviving value did not come from the default origin.
+    Descendants of an added subtree inherit their root's record and are not repeated.
+    Limits, inherited from the Recorder: attribute history inside a REPLACED subtree is
+    dropped at the replace, and a full-file override resets every node to its origin.
+    """
+    default = rec.default_origin
+    notes: list[tuple[etree._Element, str]] = []
+    for el in tree.iter():
+        if not isinstance(el.tag, str):          # comments / processing instructions
+            continue
+        parts = []
+        own = rec.own_chain(el)
+        if own and own[-1] != default:
+            parts.append(" -> ".join(_fmt_origin(o) for o in own))
+        for attr, chain in sorted(rec.own_attr_chains(el).items()):
+            if chain and chain[-1] != default:
+                parts.append(f"@{attr}: " + " -> ".join(_fmt_origin(o) for o in chain))
+        if parts:
+            notes.append((el, _comment_safe("; ".join(parts))))
+    header: list[str] = []
+    # Collect first, insert after: inserting while iterating would change the walk.
+    for el, text in notes:
+        if el is tree:
+            header.append(_comment_safe(f"<{el.tag}>: {text}"))
+        else:
+            el.addprevious(etree.Comment(f" prov: {text} "))
+    for path, origin in rec.removed:
+        header.append(_comment_safe(f"removed: {path} ({_fmt_origin(origin)})"))
+    return header, len(notes)

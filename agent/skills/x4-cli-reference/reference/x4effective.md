@@ -122,7 +122,7 @@ options:
 ## `x4effective dump`
 
 ```text
-usage: x4effective dump [-h] [--reference REFERENCE] [--chain] vpath
+usage: x4effective dump [-h] [--reference REFERENCE] [--chain] [--annotate] vpath
 
 positional arguments:
   vpath                 path inside the game tree, e.g. libraries/wares.xml
@@ -133,6 +133,11 @@ options:
                         unpacked base+DLC tree to build from (default: the configured reference
                         tree)
   --chain               also print the file-level source chain
+  --annotate            mark every node an overlay changed with a comment naming the mod, op and
+                        patch line (removals listed in a header); implies --chain. Records who WON
+                        each node, not who introduced it (a root replace re-supplies vanilla nodes
+                        as its own, F64), and keeps no attribute history inside a replaced subtree
+                        (F338)
 ```
 
 ## `x4effective sql`

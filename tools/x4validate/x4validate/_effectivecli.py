@@ -25,7 +25,7 @@ from pathlib import Path
 from lxml import etree
 
 from x4validate import __version__, _effective, _merge, _paths, _registry
-from x4validate._provenance import Recorder
+from x4validate._provenance import Recorder, annotate_tree
 from x4validate._effective import (
     BUILDABLE_KINDS,
     LIBRARY_REGISTRIES,
@@ -198,6 +198,12 @@ def main(argv: list[str] | None = None) -> int:
     du.add_argument("--reference", default=str(_merge.REFERENCE),
                     help="unpacked base+DLC tree to build from (default: the configured reference tree)")
     du.add_argument("--chain", action="store_true", help="also print the file-level source chain")
+    du.add_argument("--annotate", action="store_true",
+                    help="mark every node an overlay changed with a comment naming the mod, op and "
+                         "patch line (removals listed in a header); implies --chain. Records who WON "
+                         "each node, not who introduced it (a root replace re-supplies vanilla nodes "
+                         "as its own, F64), and keeps no attribute history inside a replaced subtree "
+                         "(F338)")
 
     sq = sub.add_parser("sql", help="read-only SELECT against the store")
     sq.add_argument("query", help="one read-only SELECT or WITH statement (anything else is refused)")
@@ -895,7 +901,7 @@ def _cmd_dump(args) -> int:
         print(f"<!-- note: '{note_folder}' is an installed MOD, not a DLC, so that is "
               f"a disk path, not a game vpath;")
         print(f"     interpreted as logical vpath '{note_alt}' -->")
-    if args.chain:
+    if args.chain or args.annotate:
         print(f"<!-- sources: {', '.join(res.sources)} -->")
         if "base" not in res.sources and _effective.base_has(cfg, vpath):
             print(f"<!-- note: base+DLC ALSO supply {vpath}; "
@@ -917,6 +923,12 @@ def _cmd_dump(args) -> int:
             print("       " + str(item))
         print("     The engine cannot read them either, so what it loads differs from"
               " what this shows. -->")
+    if args.annotate:
+        header, n_nodes = annotate_tree(res.tree, rec)
+        print(f"<!-- node provenance: {n_nodes} node(s) changed by an overlay; removals: "
+              f"{len(rec.removed)} -->")
+        for line in header:
+            print(f"<!-- {line} -->")
     print(etree.tostring(res.tree, pretty_print=True, encoding="unicode"))
     # rc 3 == DEGRADED, the toolkit contract: a tree was produced, but not over the
     # whole population. Never 0 -- "could not check part of it" is not a pass.

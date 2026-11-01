@@ -436,6 +436,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F331 | A Windows-form write through a junction was judged as the path spelled, not the file reached | **DEFECT (measured)** · PRE-ARC | 24 of 24 Windows-form junction writes allowed (reference/game/profile/saves); 72 of 72 link-creating commands allowed; replay 0 of 3,447 changed | FIXED 2026-10-26 - protect-files resolves a drive-form path through its links, fail closed; link CREATION into a protected root refused by its target (protect-bash); Bash-channel writes through pre-existing links, hardlinks to existing files and trusted linked toolkit folders stay residual |
 | F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay 2026-10-27: 53 of 53,662 game-root commands advise -> ask, 110 stay advise, 0 other facts changed | CHANGED 2026-10-26, NARROWED 2026-10-27 (user) - rm_deployed_mod asks once per command naming every mod; other game-install deletes advise; install/extensions wholesale and reference/ stay deny |
 | F333 | Three deployed-mod delete shapes the shell guard does not read: a python `shutil.rmtree` literal, a path through a junction to `extensions/`, and a root held in an unknown variable | **OPEN LIMIT (measured)** · PRE-ARC | release review of the 4.0.1 deployed-mod rule (2026-10-27): each allowed at a1d876a, ba370f9 and the merged head alike, in sandbox roots | open; see entry |
+| F338 | `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree | **SCOPE LIMIT (read)** · IN-ARC | `_provenance.Recorder.elem_replaced` drops the old subtree's attribute records (by design); a root `<replace>` re-supplies every vanilla node as its own (the F64 shape). Real-data run 2026-11-01 on `aiscripts/order.fight.escort.xml` (base + 5 mods): 109 annotated nodes, all attributed to a mod and op line | documented in `--help`; not fixed |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11623,3 +11624,16 @@ refused since F331);
 at the end of the path, so it does not match a mod path beneath it.
 UNMEASURED (inferred from the code): the extensions path is derived from the game root only, so a
 setup with `X4_EXTENSIONS` set and no `X4_GAME` would not fire the deployed-mod ask.
+
+## F338 - `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree · **SCOPE LIMIT (read)** · IN-ARC · confidence 95%
+
+Added with `--annotate` (2026-11-01, #15). READ `_provenance.Recorder`: `elem_replaced` moves the
+old element's chain onto the new one but deletes every attribute record keyed on the old subtree
+(documented there as intended: chains restart at an element replace), and `full_override` clears
+all records and makes the overriding file the default origin. So an annotation can only say who
+supplied the surviving node or value, and after an element replace it cannot show which mod set an
+attribute inside it earlier. A root `<replace>` of a whole document re-supplies vanilla nodes as the
+replacing mod's own, which is the F64 shape (who WON, never who INTRODUCED). MEASURED on real data
+the same day: `aiscripts/order.fight.escort.xml` (base + 5 mods) gave 109 annotated nodes, every one
+attributed to a mod and an op line that matches its patch file (e.g. fs_colossus at lines 3 and 10).
+Stated in `--help`; not a defect to fix.

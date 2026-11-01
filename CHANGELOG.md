@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `x4effective dump <vpath> --annotate` marks every node an overlay changed with a comment
+  naming the mod, op and patch line (attributes as `@attr: base -> modA replace-attr:7`),
+  lists removals in a header, and implies `--chain`. It answers "which mod rewrote this
+  node?" for merged scripts without reading every diff. Reports who WON each node, not who
+  introduced it; attribute history inside a replaced subtree is not kept (F338). (#15)
+
 - Geometry comparison supports bounded recursive structural attachments, shared
   render-part references and an explicit `--geometry-pose bind` projection.
   Independent Blender controls qualify selected bind transforms; runtime poses
