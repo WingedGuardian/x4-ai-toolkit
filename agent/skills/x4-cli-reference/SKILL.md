@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-12 CLIs, 50 subcommands.
+12 CLIs, 51 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -32,6 +32,7 @@ Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `-
 | | `dump` | live effective XML for ANY vpath (incl. md/, aiscripts/) |
 | | `sql` | read-only SELECT against the store |
 | | `coverage` | what this store DOES and does not index (so a negative can carry its denominator) |
+| | `find` | entities whose in-game NAME contains TEXT (resolves {page,id} to English) |
 | **`x4fresh`** | | x4fresh -- is every derived artifact current, and rebuild the ones that are not. |
 | | `status` | one verdict per artifact; exit 0 only if all are FRESH |
 | | `rebuild` | rebuild what is not FRESH, one at a time, under a lock |

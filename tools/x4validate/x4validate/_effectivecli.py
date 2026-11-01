@@ -205,6 +205,14 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("coverage", help="what this store DOES and does not index "
                                     "(so a negative can carry its denominator)")
 
+    fd = sub.add_parser("find", help="entities whose in-game NAME contains TEXT (resolves {page,id} to English)")
+    fd.add_argument("text", help="part of the name the player sees, e.g. 'M0' or 'omega' (case-insensitive)")
+    fd.add_argument("--kind", default="macro", help="entity kind to search (default: %(default)s)")
+    fd.add_argument("--class", dest="klass", default=None,
+                    help="only entities of this class, e.g. ship_xl (the store's class column)")
+    fd.add_argument("--limit", type=int, default=50,
+                    help="rows to print; the total is still counted (default: %(default)s)")
+
     args = p.parse_args(argv)
     db = Path(args.db) if args.db else _registry.require(
         effective_db(), "the effective-store location",
@@ -303,7 +311,65 @@ def _read_store(con, args) -> int:
         return _cmd_sql(con, args)
     if args.cmd == "coverage":
         return _cmd_coverage(con, args)
+    if args.cmd == "find":
+        return _cmd_find(con, args)
     return 2
+
+
+#: Name-bearing properties searched by `find`, in display priority order.
+NAME_PROPS = ("identification.name", "identification.basename", "identification.shortname", "@name")
+
+
+def _cmd_find(con, args) -> int:
+    """Match TEXT against resolved display names. A zero carries its denominator; an unresolvable name
+    is counted and shown as written, never dropped (it is still searchable by its raw text)."""
+    from x4validate import _text
+    needle = (args.text or "").strip().lower()
+    if not needle:
+        print("refusing: an empty name matches everything; pass part of a name", file=sys.stderr)
+        return 2
+    if _reject_unknown_kind(con, args.kind):
+        return 2
+    texts = _text.load(con)
+    if not texts:
+        print("this store has no display-text table (built before `find` existed, or with no t-files): "
+              "rebuild with `uv run x4effective build`", file=sys.stderr)
+        return 2
+    res = _text.Resolver(texts)
+    sql = ("SELECT e.name, e.klass, e.origin, a.prop, a.value FROM entities e JOIN attrs a "
+           "ON a.entity_id = e.id WHERE e.kind = ? AND a.prop IN ({})".format(",".join("?" * len(NAME_PROPS))))
+    params: list = [args.kind, *NAME_PROPS]
+    if args.klass:
+        sql += " AND e.klass = ?"
+        params.append(args.klass)
+    named: dict[str, dict] = {}
+    statuses: dict[str, int] = {}
+    for name, klass, origin, prop, raw in con.execute(sql, params):
+        shown, status = res.value(raw or "")
+        entry = named.setdefault(name, {"klass": klass, "origin": origin, "names": {}, "status": "ok"})
+        entry["names"][prop] = (shown, raw)
+        if status not in ("ok", "literal"):
+            entry["status"] = status
+    for e in named.values():
+        statuses[e["status"]] = statuses.get(e["status"], 0) + 1
+    hits = []
+    for name, e in sorted(named.items()):
+        for prop in NAME_PROPS:
+            if prop in e["names"]:
+                shown, raw = e["names"][prop]
+                if needle in shown.lower() or needle in raw.lower():
+                    hits.append((name, e, prop, shown))
+                    break
+    for name, e, prop, shown in hits[:args.limit if args.limit > 0 else None]:
+        flag = "" if e["status"] == "ok" else f"  [{e['status']} reference]"
+        print(f"{name}\t{e['klass'] or ''}\t{e['origin']}\t{shown}{flag}")
+    unresolved = sum(n for s, n in statuses.items() if s != "ok")
+    scope = f"{args.kind}" + (f" class {args.klass}" if args.klass else "")
+    print(f"\n{len(hits)} match(es) for {args.text!r} among {len(named)} named {scope} entit(ies); "
+          f"{len(named) - unresolved} fully resolved, {unresolved} with an unresolvable reference "
+          "(matched on their raw text)" + (f"; showing {args.limit}" if 0 < args.limit < len(hits) else ""),
+          file=sys.stderr)
+    return 0 if hits else 1
 
 
 def _known_kinds(con) -> list[str]:

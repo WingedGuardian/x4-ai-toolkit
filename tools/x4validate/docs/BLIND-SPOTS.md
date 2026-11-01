@@ -437,6 +437,9 @@ memory or from another session -- a remembered id was stale within a day here.
 | F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay 2026-10-27: 53 of 53,662 game-root commands advise -> ask, 110 stay advise, 0 other facts changed | CHANGED 2026-10-26, NARROWED 2026-10-27 (user) - rm_deployed_mod asks once per command naming every mod; other game-install deletes advise; install/extensions wholesale and reference/ stay deny |
 | F333 | Three deployed-mod delete shapes the shell guard does not read: a python `shutil.rmtree` literal, a path through a junction to `extensions/`, and a root held in an unknown variable | **OPEN LIMIT (measured)** · PRE-ARC | release review of the 4.0.1 deployed-mod rule (2026-10-27): each allowed at a1d876a, ba370f9 and the merged head alike, in sandbox roots | open; see entry |
 | F334 | `x4housekeep report` crashed on a name Windows lists but cannot reach (trailing `.`/space), and its scratchpad size row could never pass a junction | **DEFECT (measured)** · PRE-ARC | real report: FileNotFoundError on 2 such names; after the fix the row reads `>= 3.16 GiB` with 2 names and 6 links named; delete/move paths already failed closed (4 sites read) | FIXED 2026-10-31 - report rows give a lower bound naming what was not counted; delete paths unchanged |
+| F335 | A diff op whose `sel` ends in `/text()` is not applied by `_merge`, and nothing reports it | **OPEN LIMIT (measured)** · PRE-ARC | toy t-file: `replace .../t[@id='4']/text()` leaves the old text, node replace applies; corpus x4raw 2026-11-01: 0 of 22,457 `@sel` contain `text()` (two query shapes) | open; no installed mod uses it; see entry |
+| F336 | The BaseX builders swallow a refused `DROP DB` (`>/dev/null 2>&1 \|\| true`), so a reader holding the DB turns into a confusing receipt refusal | **OPEN LIMIT (measured)** · PRE-ARC | M2 2026-11-01, private DBPATH: with a reader attached `DROP DB` rc 1 "opened by another process", reader unaffected (3\|3); control without reader: DROP + ALTER rc 0 | open; fails CLOSED (declare_database refuses); see entry |
+| F337 | OpenCode runs no session-start canary, so the KB note, housekeep sweep and x4fresh auto-rebuild never start there | **OPEN LIMIT (read)** · PRE-ARC | `opencode_plugin.mjs:427-439` session path renders preferences only (`opencode.py:234`); Claude and Codex both run session-canary.sh | open; see entry |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11646,3 +11649,36 @@ Shape, every site that walks then stats (read 2026-10-31, the population is thes
 Tests (`tools/x4validate/tests/test_x4housekeep.py`, Windows-only, red at ae96ff50): a typed raise from the walk, the report's lower
 bound, a junction not followed, a task held whole. The fixture creates and removes the names through the
 `\\?\` prefix, the only spelling that keeps them.
+
+## F335 - `_merge` does not apply a diff op whose selector ends in `/text()` · **OPEN LIMIT (measured)** · PRE-ARC · confidence 90%
+
+Found 2026-11-01 while writing the `x4effective find` tests. MEASURED on a toy t-file: `<replace
+sel="//page[@id='20101']/t[@id='4']/text()">New</replace>` leaves the old text in the merged tree, while
+the node form `<replace sel="//page[@id='20101']/t[@id='4']"><t id="4">New</t></replace>` applies. Nothing
+reports the skipped op, which is the "narrows the data and reports success" shape. RFC 5261 allows a
+`text()` target; whether the X4 ENGINE applies one is UNMEASURED.
+Population: x4raw 2026-11-01 (stale by one mod, whose new file has no `text()`): **0 of 22,457 `@sel`
+attributes contain `text()`**, by an `ends-with` query over replace/add/remove and a `contains` query
+over every `@sel` (control non-zero). No installed mod is affected today. Open: either apply `text()`
+targets in `_merge` or report them as unapplied, after measuring what the engine does with one.
+
+## F336 - the BaseX builders hide a refused `DROP DB` · **OPEN LIMIT (measured)** · PRE-ARC · confidence 90%
+
+`build-corpus.sh:92` and `build-effective.sh:102` run `DROP DB $DB >/dev/null 2>&1 || true`. MEASURED
+2026-11-01 (M2) in a private `-Dorg.basex.DBPATH` (refused to run unless BaseX reported that path): while
+another process holds the database in a query, `DROP DB` returns rc 1 with "Database 't1' is opened by
+another process." and the reader finishes with the correct result; `ALTER DB t1_next t1` is refused while
+`t1` exists. Without a reader both succeed (control). So a build that starts while `ask.py` is reading
+drops nothing, then `x4basex_artifacts.py --declare-db` refuses ("database still exists after DROP DB")
+and the build stops: it fails CLOSED, but the message names the receipt, not the reader. This is also the
+basis for a build-then-swap design: a swap blocked by a reader is refused atomically and can retry.
+
+## F337 - OpenCode has no session-start canary · **OPEN LIMIT (read)** · PRE-ARC · confidence 85%
+
+READ 2026-11-01: OpenCode's only session-start path is `experimental.chat.system.transform`
+(`tools/modding_harness/opencode_plugin.mjs:427-439`), which runs only when `KNOWLEDGEBASE.local.md`
+exists and renders preferences (`agent/guards/adapters/opencode.py:234`). It never runs
+`session-canary.sh`, so on OpenCode the irreplaceable-file canary, the uncommitted-KB note, the
+housekeep sweep and the `x4fresh` auto-rebuild (2026-11-01) do not start. Claude runs the script directly;
+Codex runs it from `session_start()` (`agent/guards/adapters/codex.py:399-404`). Not measured in a live
+OpenCode session.

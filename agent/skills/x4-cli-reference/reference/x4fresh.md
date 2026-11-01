@@ -33,11 +33,14 @@ options:
 ```text
 usage: x4fresh rebuild [-h]
                        [--only {effective,xref,x4raw,x4eff} [{effective,xref,x4raw,x4eff} ...]]
-                       [--auto]
+                       [--auto] [--note NOTE]
 
 options:
   -h, --help            show this help message and exit
   --only {effective,xref,x4raw,x4eff} [{effective,xref,x4raw,x4eff} ...]
   --auto                unattended mode (session start): effective + xref only, defers while a
                         listed process runs, never retries the same failure
+  --note NOTE           with --auto: write the outcome here for the next session start to print
+                        (empty when everything is fresh); default <registry>/x4fresh/session-
+                        note.txt
 ```

@@ -755,6 +755,7 @@ CREATE TABLE entities(id INTEGER PRIMARY KEY, kind TEXT, name TEXT, klass TEXT,
 CREATE TABLE attrs(entity_id INTEGER REFERENCES entities(id), prop TEXT,
                    value TEXT, value_num REAL, origin TEXT, chain TEXT);
 CREATE TABLE removed(vpath TEXT, node_path TEXT, source TEXT, op_line INTEGER);
+CREATE TABLE texts(page TEXT, t TEXT, text TEXT, PRIMARY KEY(page, t));
 CREATE INDEX idx_ent_kind_klass ON entities(kind, klass);
 CREATE INDEX idx_ent_name ON entities(name);
 CREATE INDEX idx_attr_entity ON attrs(entity_id);
@@ -819,6 +820,9 @@ class _SkipCount:
 #: adding one without listing it here fails loudly rather than silently.
 #: Derived, never re-typed: every flat registry, plus the two per-file kinds.
 BUILDABLE_KINDS = tuple(LIBRARY_REGISTRIES) + ("macro", "component")
+#: Merged in this order into the `texts` table, the later overriding: neutral, then English. The engine
+#: opens exactly these two (KB #29: 21 of 21 t-file opens are l044, plus the neutral 0001.xml).
+TEXT_VPATHS = ("t/0001.xml", "t/0001-l044.xml")
 
 
 def build(config: _merge.Config | None = None, db_path: Path | None = None,
@@ -953,6 +957,26 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
                          f"{sum(1 for e in entities if e.kind == 'component')} components")
         progress(f"components: {sum(1 for e in entities if e.kind == 'component')}")
 
+    # Display text: the MERGED neutral t-file overlaid by the English one (English wins, as
+    # gates/oracle_reverse.py orders them; many mods put English in 0001.xml). Raw strings, resolved at
+    # query time by _text.Resolver -- the store holds what the files say, not an interpretation of it.
+    texts: dict[tuple[str, str], str] = {}
+    for vpath in TEXT_VPATHS:
+        ov = touchers_for(vpath, touch, folder_to_path)
+        try:
+            tree, _rec, dropped = _merge_one(vpath, config, ov)
+        except etree.LxmlError as exc:
+            skipped.add(vpath, exc)
+            continue
+        skipped.add_overlay(vpath, dropped)
+        if tree is None:
+            continue
+        for page in tree.iter("page"):
+            for t in page.iter("t"):
+                if page.get("id") is not None and t.get("id") is not None:
+                    texts[(page.get("id"), t.get("id"))] = t.text or ""
+    progress(f"texts: {len(texts)} display string(s) from {', '.join(TEXT_VPATHS)}")
+
     if skipped.n:
         progress(f"skipped {skipped.n} unparseable file(s); e.g. {skipped.samples[0]}")
     if skipped.dropped:
@@ -971,13 +995,14 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
                  f"e.g. {truncated_props[0]}. Raise MAX_PROP_DEPTH.")
     _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
               dropped_overlays=skipped.dropped,
-              dropped_samples=skipped.dropped_samples)
+              dropped_samples=skipped.dropped_samples, texts=texts)
     progress(f"wrote {len(entities)} entities to {db_path}")
     return db_path
 
 
 def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
-              dropped_overlays: int = 0, dropped_samples: list[str] | None = None):
+              dropped_overlays: int = 0, dropped_samples: list[str] | None = None,
+              texts: dict[tuple[str, str], str] | None = None):
     # PID-qualified: two concurrent builds used to pick the SAME `<db>.tmp`, so
     # they raced on os.replace and BOTH died with a raw PermissionError
     # (WinError 32). Build-then-atomically-replace already keeps the store safe
@@ -1053,6 +1078,8 @@ def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
             con.executemany("INSERT INTO entities VALUES(?,?,?,?,?,?,?)", ent_rows)
             con.executemany("INSERT INTO attrs VALUES(?,?,?,?,?,?)", attr_rows)
             con.executemany("INSERT INTO removed VALUES(?,?,?,?)", removed)
+            con.executemany("INSERT INTO texts VALUES(?,?,?)",
+                            [(p, t, v) for (p, t), v in (texts or {}).items()])
             con.commit()
         finally:
             con.close()
