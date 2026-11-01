@@ -141,6 +141,18 @@ if [ -n "$HK" ] && [ -n "$_x4_hkpy" ] && [ "${X4_HOUSEKEEP_SWEEP:-}" != off ] \
    && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
   ( "$_x4_hkpy" -B "$HK" session "$HK_NOTE" </dev/null >/dev/null 2>&1 & )
 fi
+
+# Derived stores (x4fresh). Same shape and the same guards as the sweep above, plus X4_FRESH_AUTO=off: show the
+# previous run's note (empty when everything was fresh), then start `x4fresh rebuild --auto` DETACHED. All the
+# checks (lock, a game running, a mutation gate, a repeat failure) run inside it, never in this hook's budget.
+XF_NOTE="$HOOK_DIR/../x4fresh-session.txt"
+[ -s "$XF_NOTE" ] && cat "$XF_NOTE"
+XF=""
+[ -f "${X4_TOOLKIT:-}/scripts/x4fresh_session.py" ] && XF="$X4_TOOLKIT/scripts/x4fresh_session.py"
+if [ -n "$XF" ] && [ -n "$_x4_hkpy" ] && [ "${X4_HOUSEKEEP_SWEEP:-}" != off ] && [ "${X4_FRESH_AUTO:-}" != off ] \
+   && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
+  ( "$_x4_hkpy" -B "$XF" "$XF_NOTE" </dev/null >/dev/null 2>&1 & )
+fi
 )"
 
 # The canary lives in the toolkit, not beside the hooks: it is a tool, and it needs the

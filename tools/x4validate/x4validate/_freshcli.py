@@ -270,6 +270,11 @@ def builder(name: str) -> list[str]:
         mod, fn = {"effective": ("x4validate._effectivecli", "main"), "xref": ("x4validate._xref", "main")}[name]
         return [sys.executable, "-c", f"import sys; from {mod} import {fn}; sys.exit({fn}(['build']))"]
     bash = os.environ.get("X4_BASH") or shutil.which("bash")
+    if bash and "system32" in bash.lower():   # WSL's bash: a different filesystem view; never the builder's
+        bash = None
+    git_bash = r"C:\Program Files\Git\bin\bash.exe"
+    if not bash and os.name == "nt" and os.path.isfile(git_bash):
+        bash = git_bash
     if not bash:
         raise FileNotFoundError("no bash for the BaseX builders (set X4_BASH)")
     script = {"x4raw": "build-corpus.sh", "x4eff": "build-effective.sh"}[name]
@@ -349,14 +354,14 @@ def _load_memo(sd: Path) -> dict:
         return {}
 
 
-def _write_note(sd: Path, text: str) -> None:
-    p = sd / "session-note.txt"
+def _write_note(p: Path, text: str) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
     tmp.write_bytes(text.encode("utf-8"))
     os.replace(tmp, p)
 
 
-def rebuild(only=ORDER, auto: bool = False) -> int:
+def rebuild(only=ORDER, auto: bool = False, note: Path | None = None) -> int:
     sd = state_dir()
     if sd is None:
         print("x4fresh: REFUSING: the registry location is not configured (set X4_MODS)", file=sys.stderr)
@@ -368,12 +373,12 @@ def rebuild(only=ORDER, auto: bool = False) -> int:
         print("x4fresh: a rebuild is already running (lock held); nothing started")
         return 0
     try:
-        return _rebuild_locked(sd, only, auto)
+        return _rebuild_locked(sd, only, auto, note or sd / "session-note.txt")
     finally:
         lock.release()
 
 
-def _rebuild_locked(sd: Path, only, auto: bool) -> int:
+def _rebuild_locked(sd: Path, only, auto: bool, note: Path) -> int:
     targets = [n for n in only if not auto or n in AUTO_SET]
     before = {s.name: s for s in status(ORDER)}
     lines, failed = [], False
@@ -429,7 +434,7 @@ def _rebuild_locked(sd: Path, only, auto: bool) -> int:
     report = "\n".join([head] + lines + render(final).splitlines()[1:])
     print(report)
     if auto:
-        _write_note(sd, report + "\n" if left or failed or any("DEFERRED" in ln for ln in lines) else "")
+        _write_note(note, report + "\n" if left or failed or any("DEFERRED" in ln for ln in lines) else "")
     return 1 if failed else 0
 
 
@@ -458,12 +463,15 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--auto", action="store_true",
                     help="unattended mode (session start): effective + xref only, defers while a "
                          "listed process runs, never retries the same failure")
+    pr.add_argument("--note", type=Path,
+                    help="with --auto: write the outcome here for the next session start to print "
+                         "(empty when everything is fresh); default <registry>/x4fresh/session-note.txt")
     args = p.parse_args(argv)
     if args.cmd == "status":
         results = status(tuple(args.only))
         print(render(results))
         return 0 if all(s.state == "FRESH" for s in results) else 5
-    return rebuild(tuple(args.only), auto=args.auto)
+    return rebuild(tuple(args.only), auto=args.auto, note=args.note)
 
 
 if __name__ == "__main__":
