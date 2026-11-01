@@ -847,9 +847,21 @@ def _sidecar(target: Path) -> Path:
 
 
 def stamp_sidecar(target: Path, fp: dict) -> None:
-    """For artifacts that are not databases (the x4xref TSV). Payload untouched."""
-    _sidecar(target).write_text(json.dumps(fp, separators=(",", ":")),
-                                encoding="utf-8")
+    """For artifacts that are not databases (the x4xref TSV). Payload untouched.
+
+    Replaced, not rewritten in place: a stamp half-written by a killed build would read as UNKNOWN
+    and, worse, could be paired with the previous artifact."""
+    p = _sidecar(target)
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_bytes(json.dumps(fp, separators=(",", ":")).encode("utf-8"))
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass  # silent-ok: best effort; the original exception is what the caller needs
+        raise
 
 
 def read_sidecar(target: Path) -> dict | None:

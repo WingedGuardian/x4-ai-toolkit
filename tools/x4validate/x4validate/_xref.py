@@ -25,6 +25,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import os
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -204,14 +205,33 @@ def build_index(reference: Path, ext_dir: Path,
 _HEADER = ["kind", "name", "source", "file", "cue", "line", "target"]
 
 
-def write_tsv(rows: list[XrefRow], path: Path) -> Path:
+def replace_write(path: Path, data: bytes) -> Path:
+    """Write `data` to `path` so a reader sees the old file or the new one, never a partial one.
+
+    Same pattern as the effective store (`_effective._write_db`): a PID-qualified temp beside the target,
+    then `os.replace`. A build killed mid-write leaves the previous artifact intact plus an orphan
+    `<name>.<pid>.tmp` (reported, never auto-swept: pid liveness on Windows is not a safe guess)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f, delimiter="\t")
-        w.writerow(_HEADER)
-        for r in rows:
-            w.writerow([r.kind, r.name, r.source, r.file, r.cue, r.line, r.target])
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass  # silent-ok: best effort; the original exception is what the caller needs
+        raise
     return path
+
+
+def write_tsv(rows: list[XrefRow], path: Path) -> Path:
+    buf = io.StringIO(newline="")
+    w = csv.writer(buf, delimiter="\t")
+    w.writerow(_HEADER)
+    for r in rows:
+        w.writerow([r.kind, r.name, r.source, r.file, r.cue, r.line, r.target])
+    return replace_write(path, buf.getvalue().encode("utf-8"))
 
 
 class IndexUnreadable(ValueError):
@@ -487,8 +507,8 @@ def main(argv: list[str] | None = None) -> int:
         # Written UNCONDITIONALLY, empty file included. A sidecar left over from
         # an earlier build would otherwise attach stale exclusions to a clean
         # index — a wrong denominator is not safer than none.
-        _sidecar(out).write_text(
-            "".join(str(u) + "\n" for u in unreadable), encoding="utf-8")
+        replace_write(_sidecar(out),
+                      "".join(str(u) + "\n" for u in unreadable).encode("utf-8"))
         # WHEN this index was true. Its whole purpose is to make "nobody calls X"
         # admissible, and a negative from a superseded world is not admissible.
         _mutation.refuse_if_mutating("build the md/aiscript xref index")
