@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `$CLAUDE_PROJECT_DIR/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-11 CLIs, 48 subcommands.
+11 CLIs, 49 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -61,9 +61,10 @@ Run a CLI from `$CLAUDE_PROJECT_DIR/tools/x4validate` as `uv run <cli> ...`. The
 | | `mark` | mark a mod as custom-edited (for /x4-update-mod) |
 | | `changed` | localise a moved content fingerprint: WHICH mod changed, and how |
 | | `snapshot` | record the current mod vector as a cheap baseline (~0.1s), for the gap between expensive rebuilds |
-| **`x4save`** | | Read an X4 savegame: what is baked into it, and what it references that the live tree no longer defines. |
+| **`x4save`** | | Read an X4 savegame: what is baked into it, what it references that the live tree no longer defines, and its MD variables. |
 | | `info` | header: build, playtime, and the SAVE-BAKED extensions |
 | | `check` | macro references the live tree no longer defines |
+| | `vars` | MD cue variables whose name matches a pattern, with their owning script/cue (pass a save NAME, not a path into the save folder) |
 | **`x4similar`** | | Advisory fuzzy same-ship detection across the ships base, DLC and installed mods define, scored at their EFFECTIVE values (base + DLC + the enabled mods in load order, so a <diff>-patched ship carries its patched numbers). |
 | **`x4stats`** | | Advisory numeric comparison of mod content vs the effective game. |
 | | `wares` | compare a candidate mod's wares to same-group peers |

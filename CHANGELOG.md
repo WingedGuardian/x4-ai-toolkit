@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `x4save vars <pattern> [save]` prints every named MD cue variable whose name matches a
+  regex, with its owning script/cue path, type and value: an integer the engine stored
+  without a value reads `0 (absent)`, a typeless value `null`, a table `table#<id>` (not
+  expanded, F339). The footer gives the decompressed bytes scanned, and no match exits 1
+  as an absence with that denominator. Pass a save NAME (e.g. `save_020`) so the command
+  names no save-folder path. (#16)
+
 - `x4effective dump <vpath> --annotate` marks every node an overlay changed with a comment
   naming the mod, op and patch line (attributes as `@attr: base -> modA replace-attr:7`),
   lists removals in a header, and implies `--chain`. It answers "which mod rewrote this
