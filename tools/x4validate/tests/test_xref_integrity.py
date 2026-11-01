@@ -92,6 +92,7 @@ def test_valid_header_only_and_bom_are_structurally_valid(tmp_path):
 @pytest.mark.parametrize('field,value', [
     ('reference_path', ['unexpected-list']), ('reference_path', 123),
     ('content', []), ('engine', {}), ('detail', ['invalid']), ('detail', [{}]),
+    ('roots', 'not-a-list'), ('roots', [1]),
 ])
 def test_malformed_freshness_refused_without_traceback(tmp_path, capsys, field, value):
     path, _ = built(tmp_path)
@@ -103,6 +104,20 @@ def test_malformed_freshness_refused_without_traceback(tmp_path, capsys, field, 
     assert _xref.main(['who-calls', 'find_station', '--tsv', str(path)]) == 2
     err = capsys.readouterr().err
     assert 'rebuild' in err.lower() and 'Traceback' not in err
+
+
+def test_check_index_is_the_query_paths_verdict(tmp_path):
+    """x4fresh and the query path share check_index: a fresh signed build reads fresh and signed,
+    a tampered one raises one of INDEX_UNREADABLE (never a traceback type outside it)."""
+    path, ref = built(tmp_path)
+    rows, signed, excl, verdict = _xref.check_index(path)
+    assert rows and len(rows) == len(_xref.read_tsv(path))
+    assert (signed, excl, verdict.fresh) == (True, True, True)
+    (ref/'md/a.xml').write_text('<mdscript name="changed"/>')
+    assert _xref.check_index(path)[3].fresh is False
+    path.write_text(HEADER)
+    with pytest.raises(_xref.INDEX_UNREADABLE):
+        _xref.check_index(path)
 
 
 def test_an_INCOMPLETE_index_negative_is_DEGRADED_rc_3_never_0(tmp_path, capsys, monkeypatch):

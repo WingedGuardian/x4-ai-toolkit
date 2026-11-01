@@ -225,6 +225,50 @@ def replace_write(path: Path, data: bytes) -> Path:
     return path
 
 
+#: Every exception `check_index` can raise for a damaged or unreadable index. A caller that catches
+#: less turns a damaged index into a traceback; one that catches more hides a bug.
+INDEX_UNREADABLE = (OSError, ValueError, TypeError, AttributeError, KeyError)
+
+
+def check_index(tsv: Path):
+    """Read and verify an index: (rows, signed, exclusions_signed, freshness Verdict).
+
+    Raises one of INDEX_UNREADABLE when the index or its sidecars are damaged (integrity mismatch,
+    malformed stamp). Shared by the query path and `x4fresh status`, so both judge an index the same
+    way. Moved verbatim from main(); behaviour is pinned by tests/test_xref_integrity.py."""
+    body = tsv.read_bytes()
+    rows = _parse_tsv(body, tsv)
+    _stored = _freshness.read_sidecar(tsv)
+    signed = bool(_stored and _stored.get('artifact_sha256'))
+    if signed and _stored['artifact_sha256'] != hashlib.sha256(body).hexdigest():
+        raise IndexUnreadable(f'{tsv}: artifact integrity mismatch; rebuild the xref index')
+    exclusions_signed = bool(_stored and _stored.get('exclusions_sha256'))
+    if exclusions_signed and _stored['exclusions_sha256'] != hashlib.sha256(_sidecar(tsv).read_bytes()).hexdigest():
+        raise IndexUnreadable(f'{tsv}: exclusions integrity mismatch; rebuild the xref index')
+    if _stored and ('roots' in _stored and (not isinstance(_stored['roots'], list)
+            or not all(isinstance(r, str) for r in _stored['roots']))):
+        raise IndexUnreadable(f'{tsv}: invalid roots in freshness sidecar; rebuild the xref index')
+    if _stored:
+        for field in ('reference_path', 'content', 'engine', 'reference',
+                      'artifact_sha256', 'exclusions_sha256'):
+            value = _stored.get(field)
+            if value is not None and not isinstance(value, str):
+                raise IndexUnreadable(f'{tsv}: invalid {field} in freshness sidecar; rebuild the xref index')
+        detail = _stored.get('detail')
+        if detail is not None and (not isinstance(detail, list)
+                or not all(isinstance(r, dict) and isinstance(r.get('folder'), str)
+                           and isinstance(r.get('root', ''), str) for r in detail)):
+            raise IndexUnreadable(f'{tsv}: invalid detail in freshness sidecar; rebuild the xref index')
+    _roots = ([Path(r) for r in _stored["roots"]] if _stored and _stored.get("roots")
+              else index_roots(_registry.GAME_EXTENSIONS))
+    _ref_then = (Path(_stored["reference_path"])
+                 if _stored and _stored.get("reference_path") else None)
+    _stale = _freshness.compare(
+        _stored, _freshness.fingerprint(_merge.Config(reference=_ref_then), _roots),
+        engine_dependent=False)
+    return rows, signed, exclusions_signed, _stale
+
+
 def write_tsv(rows: list[XrefRow], path: Path) -> Path:
     buf = io.StringIO(newline="")
     w = csv.writer(buf, delimiter="\t")
@@ -554,37 +598,8 @@ def main(argv: list[str] | None = None) -> int:
     # ("nobody listens to this event"), which is precisely the claim a stale
     # index gets wrong -- a mod added since the build is simply not in it.
     try:
-        body = tsv.read_bytes()
-        rows = _parse_tsv(body, tsv)
-        _stored = _freshness.read_sidecar(tsv)
-        signed = bool(_stored and _stored.get('artifact_sha256'))
-        if signed and _stored['artifact_sha256'] != hashlib.sha256(body).hexdigest():
-            raise IndexUnreadable(f'{tsv}: artifact integrity mismatch; rebuild the xref index')
-        exclusions_signed = bool(_stored and _stored.get('exclusions_sha256'))
-        if exclusions_signed and _stored['exclusions_sha256'] != hashlib.sha256(_sidecar(tsv).read_bytes()).hexdigest():
-            raise IndexUnreadable(f'{tsv}: exclusions integrity mismatch; rebuild the xref index')
-        if _stored and ('roots' in _stored and (not isinstance(_stored['roots'], list)
-                or not all(isinstance(r, str) for r in _stored['roots']))):
-            raise IndexUnreadable(f'{tsv}: invalid roots in freshness sidecar; rebuild the xref index')
-        if _stored:
-            for field in ('reference_path', 'content', 'engine', 'reference',
-                          'artifact_sha256', 'exclusions_sha256'):
-                value = _stored.get(field)
-                if value is not None and not isinstance(value, str):
-                    raise IndexUnreadable(f'{tsv}: invalid {field} in freshness sidecar; rebuild the xref index')
-            detail = _stored.get('detail')
-            if detail is not None and (not isinstance(detail, list)
-                    or not all(isinstance(r, dict) and isinstance(r.get('folder'), str)
-                               and isinstance(r.get('root', ''), str) for r in detail)):
-                raise IndexUnreadable(f'{tsv}: invalid detail in freshness sidecar; rebuild the xref index')
-        _roots = ([Path(r) for r in _stored["roots"]] if _stored and _stored.get("roots")
-                  else index_roots(_registry.GAME_EXTENSIONS))
-        _ref_then = (Path(_stored["reference_path"])
-                     if _stored and _stored.get("reference_path") else None)
-        _stale = _freshness.compare(
-            _stored, _freshness.fingerprint(_merge.Config(reference=_ref_then), _roots),
-            engine_dependent=False)
-    except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
+        rows, signed, exclusions_signed, _stale = check_index(tsv)
+    except INDEX_UNREADABLE as exc:
         print(f'index unreadable: {tsv}: {exc}; rebuild with uv run x4xref build', file=sys.stderr)
         return 2
     if not signed or not exclusions_signed:
