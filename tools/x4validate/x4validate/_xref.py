@@ -209,8 +209,10 @@ def replace_write(path: Path, data: bytes) -> Path:
     """Write `data` to `path` so a reader sees the old file or the new one, never a partial one.
 
     Same pattern as the effective store (`_effective._write_db`): a PID-qualified temp beside the target,
-    then `os.replace`. A build killed mid-write leaves the previous artifact intact plus an orphan
-    `<name>.<pid>.tmp` (reported, never auto-swept: pid liveness on Windows is not a safe guess)."""
+    then `os.replace`. A kill mid-write leaves THIS file intact plus an orphan `<name>.<pid>.tmp`
+    (reported, never auto-swept: pid liveness on Windows is not a safe guess). The index is three files
+    (TSV, exclusions, stamp), each replaced on its own: a kill BETWEEN them pairs a new file with an old
+    stamp, which the reader's SHA-256 check refuses -- fail closed, rebuild needed, never a wrong answer."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
@@ -538,6 +540,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"REFUSING: {exc}", file=sys.stderr)
             return 2
         rows = build_index(ref, ext, unreadable)
+        # BEFORE anything is replaced (review 2026-11-01): checked only at the stamp, a mutation gate
+        # left a NEW index paired with the OLD stamp -- unreadable, where the old index was fine.
+        _mutation.refuse_if_mutating("build the md/aiscript xref index")
         write_tsv(rows, out)
         # THE SIDECAR THE QUERY PATH READS, WHICH NOTHING HAS EVER WRITTEN.
         # `_exclusions()` renders "EXCEPT N file(s) that would not parse" from

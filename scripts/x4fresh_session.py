@@ -31,7 +31,9 @@ def main(argv: list[str]) -> int:
     if len(argv) != 1:
         print(__doc__, file=sys.stderr)
         return 2
-    note = Path(argv[0])
+    # Absolute BEFORE handing it on: `uv run --directory` changes the working directory, and a relative
+    # note would land inside tools/x4validate (review 2026-11-01, finding 11).
+    note = Path(argv[0]).resolve()
     if os.environ.get("X4_FRESH_AUTO", "").lower() == "off":
         return 0
     uv = shutil.which("uv")

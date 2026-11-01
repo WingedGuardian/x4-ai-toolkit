@@ -995,14 +995,16 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
                  f"e.g. {truncated_props[0]}. Raise MAX_PROP_DEPTH.")
     _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
               dropped_overlays=skipped.dropped,
-              dropped_samples=skipped.dropped_samples, texts=texts)
+              dropped_samples=skipped.dropped_samples, texts=texts,
+              skipped_files=skipped.n, skipped_samples=skipped.samples)
     progress(f"wrote {len(entities)} entities to {db_path}")
     return db_path
 
 
 def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
               dropped_overlays: int = 0, dropped_samples: list[str] | None = None,
-              texts: dict[tuple[str, str], str] | None = None):
+              texts: dict[tuple[str, str], str] | None = None,
+              skipped_files: int = 0, skipped_samples: list[str] | None = None):
     # PID-qualified: two concurrent builds used to pick the SAME `<db>.tmp`, so
     # they raced on os.replace and BOTH died with a raw PermissionError
     # (WinError 32). Build-then-atomically-replace already keeps the store safe
@@ -1055,6 +1057,11 @@ def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
                 # was built over work that did not happen.
                 ("dropped_overlays", str(dropped_overlays)),
                 ("dropped_overlay_samples", json.dumps(dropped_samples or [])),
+                # And the other loss: whole files that could not be merged at all, so they contribute
+                # NO rows (a base t-file among them takes the display text with it). Printed at build
+                # time only, until 2026-11-01 -- so nothing read later could say the store was short.
+                ("skipped_files", str(skipped_files)),
+                ("skipped_file_samples", json.dumps([str(s) for s in (skipped_samples or [])])),
             ])
             # WHEN this store was true, not just how much it holds. Without it the
             # store cannot tell a current answer from one about a superseded world —

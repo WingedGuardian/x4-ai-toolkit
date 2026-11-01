@@ -54,7 +54,10 @@ BASEX_ROOT = PKG_ROOT.parent / "basex"                      # tools/basex
 ORDER = ("effective", "xref", "x4raw", "x4eff")
 AUTO_SET = ("effective", "xref")
 STATES = ("FRESH", "STALE", "UNKNOWN", "MISSING", "REBUILDING")
-WARN_RE = re.compile(r"\bWARNING\b|\bNOT INDEXED\b|\bINCOMPLETE\b|\bERROR\b")
+# `skipped N unparseable file(s)` is the effective build's whole-file loss line and carries none of the
+# other words (review 2026-11-01, finding 1): without it a build that lost files read "REBUILT, FRESH".
+WARN_RE = re.compile(r"\bWARNING\b|\bNOT INDEXED\b|\bINCOMPLETE\b|\bERROR\b|\bskipped \d+ unparseable\b")
+MAX_LISTED = 5   # per list in a report; the hook output that carries it is bounded
 
 
 @dataclass
@@ -64,6 +67,7 @@ class Status:
     reasons: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)      # what the artifact does NOT include
     orphans: list[Path] = field(default_factory=list)   # temp files a killed build left behind
+    incomplete: int = 0                                 # items the artifact is known to be missing
 
 
 # --------------------------------------------------------------------------- where things live
@@ -141,7 +145,7 @@ def _status_effective() -> Status:
     if not db.is_file():
         return Status("effective", "MISSING", [f"no store at {db}"], orphans=orphans)
     try:
-        con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+        con = sqlite3.connect(_effective._sqlite_ro_uri(db.resolve()), uri=True)
         try:
             verdict = _effective.store_freshness(con)
             meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
@@ -149,17 +153,30 @@ def _status_effective() -> Status:
             con.close()
     except sqlite3.Error as exc:
         return Status("effective", "UNKNOWN", [f"store unreadable: {exc}"], orphans=orphans)
-    notes = []
-    dropped = int(meta.get("dropped_overlays") or 0)
-    if dropped:
+    notes: list[str] = []
+    lost = 0
+    for count_key, sample_key, what in (
+            ("dropped_overlays", "dropped_overlay_samples",
+             "overlay(s) could not be read and are NOT in the store; values they would set read as base"),
+            ("skipped_files", "skipped_file_samples",
+             "file(s) could not be merged at all and contribute NO rows")):
+        raw = meta.get(count_key)
         try:
-            samples = json.loads(meta.get("dropped_overlay_samples") or "[]")
+            n = int(raw or 0)
+        except ValueError:
+            notes.append(f"unreadable {count_key} in the store's metadata ({raw!r}): completeness unknown")
+            lost += 1
+            continue
+        if not n:
+            continue
+        lost += n
+        try:
+            samples = json.loads(meta.get(sample_key) or "[]")
         except ValueError:
             samples = []
-        notes.append(f"{dropped} overlay(s) could not be read and are NOT in the store; values they "
-                     "would set read as base:")
-        notes.extend("  - " + s.split(":", 1)[0] for s in samples)
-    return Status("effective", _classify(verdict), verdict.reasons, notes, orphans)
+        notes.append(f"{n} {what}" + (f" (first {min(len(samples), MAX_LISTED)}):" if samples else ""))
+        notes.extend("  - " + str(s).split(":", 1)[0] for s in samples[:MAX_LISTED])
+    return Status("effective", _classify(verdict), verdict.reasons, notes, orphans, incomplete=lost)
 
 
 def _status_xref() -> Status:
@@ -171,14 +188,29 @@ def _status_xref() -> Status:
     if not tsv.is_file():
         return Status("xref", "MISSING", [f"no index at {tsv}"], orphans=orphans)
     try:
-        _rows, signed, excl, verdict = _xref.check_index(tsv)
+        rows, signed, excl, verdict = _xref.check_index(tsv)
     except _xref.INDEX_UNREADABLE as exc:
         return Status("xref", "UNKNOWN", [f"index unreadable: {exc}"], orphans=orphans)
     reasons = list(verdict.reasons)
     if not (signed and excl):
         reasons.append("index integrity unavailable (unsigned): absence cannot be certified")
     state = _classify(verdict) if verdict.fresh is False else ("FRESH" if signed and excl else "UNKNOWN")
-    return Status("xref", state, reasons, orphans=orphans)
+    # What the index does not hold -- the same two facts its own queries print (review finding 2).
+    notes: list[str] = []
+    lost = 0
+    try:
+        excluded = [ln for ln in _xref._sidecar(tsv).read_text(encoding="utf-8").splitlines() if ln.strip()]
+    except OSError:
+        excluded = []
+    if excluded:
+        lost += len(excluded)
+        notes.append(f"{len(excluded)} file(s) would not parse and are NOT INDEXED (first "
+                     f"{min(len(excluded), MAX_LISTED)}):")
+        notes.extend("  - " + e for e in excluded[:MAX_LISTED])
+    if _xref.coverage_incomplete(rows):
+        lost += 1
+        notes.append("the index holds fewer DLC than are installed: its queries answer DEGRADED (exit 3)")
+    return Status("xref", state, reasons, notes, orphans, incomplete=lost)
 
 
 def _load_staleness():
@@ -219,15 +251,39 @@ CHECKS = {"effective": _status_effective, "xref": _status_xref,
           "x4raw": lambda: _status_basex("x4raw"), "x4eff": lambda: _status_basex("x4eff")}
 
 
+def check(name: str) -> Status:
+    """One artifact's verdict. ANY failure of the check itself is UNKNOWN, never a traceback that skips
+    the verdict, the failure memo and the session note (review 2026-11-01, finding 5)."""
+    try:
+        return CHECKS[name]()
+    except Exception as exc:  # noqa: BLE001 -- a check that cannot run is a non-answer, said as one
+        return Status(name, "UNKNOWN", [f"freshness check failed ({type(exc).__name__}: {exc})"])
+
+
+def _rebuilding_targets(sd: Path) -> set[str] | None:
+    """What the lock holder said it would rebuild, or None (unknown: treat every artifact as in play)."""
+    try:
+        data = json.loads((sd / "rebuilding.json").read_text(encoding="utf-8"))
+        return {n for n in data.get("targets", []) if n in ORDER}
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def status(only=ORDER, holding_lock: bool = False) -> list[Status]:
     """`holding_lock`: the caller IS the rebuild. The lock then reads as held from here too (an OS lock
-    refuses a second handle even in the same process), and must not be reported as someone else's."""
+    refuses a second handle even in the same process), and must not be reported as someone else's.
+
+    While another process rebuilds, only the artifacts IT is rebuilding read REBUILDING; the rest keep
+    their real state (an --auto rebuild never touches BaseX, so a stale x4eff must still say STALE).
+    Probing the lock takes it for an instant: a rebuild starting in that instant sees "already running"
+    and exits 0 -- the next session start retries it."""
     sd = state_dir()
     locked = not holding_lock and bool(sd) and BuildLock(sd / "x4fresh.lock").held_elsewhere()
+    in_play = _rebuilding_targets(sd) if locked else set()
     out = []
     for name in only:
-        s = CHECKS[name]()
-        if locked and s.state != "FRESH":
+        s = check(name)
+        if locked and s.state != "FRESH" and (in_play is None or name in in_play):
             s.reasons.insert(0, f"a rebuild is running (lock held: {sd / 'x4fresh.lock'})")
             s.state = "REBUILDING"
         out.append(s)
@@ -242,6 +298,10 @@ def render(results: list[Status]) -> str:
         lines.append("x4fresh: NOT CURRENT: " + ", ".join(f"{s.name} {s.state}" for s in bad)
                      + " -- run `x4fresh rebuild`" if any(s.state != "REBUILDING" for s in bad)
                      else "x4fresh: rebuild in progress: " + ", ".join(s.name for s in bad))
+    elif any(s.incomplete for s in results):
+        # Fresh is about WHEN, not HOW MUCH: a current store that dropped input is not "clean".
+        lines.append(f"x4fresh: all {len(results)} artifact(s) FRESH, but INCOMPLETE: "
+                     + ", ".join(f"{s.name} ({s.incomplete} missing)" for s in results if s.incomplete))
     else:
         lines.append(f"x4fresh: all {len(results)} artifact(s) FRESH")
     for s in results:
@@ -251,7 +311,9 @@ def render(results: list[Status]) -> str:
         if s.orphans:
             lines.append(f"      {len(s.orphans)} orphan temp file(s) from a build that did not finish "
                          "(safe to delete by hand once no build is running):")
-            lines.extend(f"        {p}" for p in s.orphans)
+            lines.extend(f"        {p}" for p in s.orphans[:MAX_LISTED])
+            if len(s.orphans) > MAX_LISTED:
+                lines.append(f"        ... and {len(s.orphans) - MAX_LISTED} more beside it")
     return "\n".join(lines)
 
 
@@ -283,15 +345,68 @@ def builder(name: str) -> list[str]:
     return [bash, str(BASEX_ROOT / script)]
 
 
+class _ChildTree:
+    """Tie the builder's process tree to THIS process's life (review 2026-11-01, finding 6).
+
+    The build lock is released by the OS when x4fresh dies -- but a builder it started would keep
+    running, and the next --auto would start a second concurrent build (the 17% x4eff loss the lock
+    exists to prevent). Windows: a job object with KILL_ON_JOB_CLOSE; the OS closes our handle when we
+    die, which kills the tree. Linux: PR_SET_PDEATHSIG. Elsewhere: unavailable, said in the log."""
+
+    def __init__(self):
+        self.job = None
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.CreateJobObjectW.restype = wintypes.HANDLE
+            job = k32.CreateJobObjectW(None, None)
+
+            class _Basic(ctypes.Structure):
+                _fields_ = [("a", ctypes.c_int64), ("b", ctypes.c_int64), ("LimitFlags", wintypes.DWORD),
+                            ("c", ctypes.c_size_t), ("d", ctypes.c_size_t), ("e", wintypes.DWORD),
+                            ("f", ctypes.c_size_t), ("g", wintypes.DWORD), ("h", wintypes.DWORD)]
+
+            class _Ext(ctypes.Structure):
+                _fields_ = [("Basic", _Basic), ("Io", ctypes.c_uint64 * 6), ("p", ctypes.c_size_t),
+                            ("j", ctypes.c_size_t), ("pp", ctypes.c_size_t), ("pj", ctypes.c_size_t)]
+            info = _Ext()
+            info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if job and k32.SetInformationJobObject(wintypes.HANDLE(job), 9, ctypes.byref(info),
+                                                   ctypes.sizeof(info)):
+                self.job, self.k32, self.wintypes = job, k32, wintypes
+
+    def popen_kwargs(self) -> dict:
+        if os.name == "nt" or not sys.platform.startswith("linux"):
+            return {}
+
+        def _die_with_parent():
+            import ctypes
+            import signal
+            ctypes.CDLL(None).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+        return {"preexec_fn": _die_with_parent}
+
+    def adopt(self, proc) -> bool:
+        if not self.job:
+            return sys.platform.startswith("linux")
+        return bool(self.k32.AssignProcessToJobObject(self.wintypes.HANDLE(self.job),
+                                                      self.wintypes.HANDLE(int(proc._handle))))
+
+
 def _run(name: str, log: Path) -> tuple[int, list[str]]:
     argv = _wrapper(name) + builder(name)
     warnings: list[str] = []
     log.parent.mkdir(parents=True, exist_ok=True)
+    tree = _ChildTree()
     with open(log, "w", encoding="utf-8", errors="replace") as fh:
         fh.write("$ " + " ".join(argv) + "\n")
         fh.flush()
         proc = subprocess.Popen(argv, cwd=str(PKG_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
+                                stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                                **tree.popen_kwargs())
+        if not tree.adopt(proc):
+            fh.write("x4fresh: NOTE: the builder is not tied to x4fresh's life on this platform; if x4fresh "
+                     "is killed, the build lock frees while the builder may still run\n")
         for line in proc.stdout:
             fh.write(line)
             if WARN_RE.search(line):
@@ -319,18 +434,23 @@ def _deferred(auto: bool) -> str | None:
 
 def _dirty_engine_sources() -> list[str]:
     rels = [str(Path("tools/x4validate/x4validate") / Path(p).name) for p in _freshness.ENGINE_SOURCES]
+    if not (TOOLKIT_ROOT / ".git").exists():
+        return []  # an installed toolkit, not a checkout: nothing to be dirty against
+    # A CHECKOUT whose git cannot answer (not on PATH, "dubious ownership", a timeout) is NOT clean:
+    # it defers (review 2026-11-01, finding 4 -- this returned "clean" on every git failure).
     try:
         out = subprocess.run(["git", "-C", str(TOOLKIT_ROOT), "status", "--porcelain", "--", *rels],
                              capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return []  # not a git checkout (an installed toolkit): nothing to be dirty against
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [f"<git could not check: {type(exc).__name__}>"]
     if out.returncode != 0:
-        return []
+        return [f"<git could not check: rc {out.returncode}>"]
     return [ln[3:].strip() for ln in out.stdout.splitlines() if ln.strip()]
 
 
 def _running_deferring_processes() -> list[str] | None:
-    want = [p.strip().lower() for p in os.environ.get("X4_FRESH_DEFER_WHILE", "X4.exe").split(";") if p.strip()]
+    # X4.exe on Windows, X4 for the native Linux build (review finding 9).
+    want = [p.strip().lower() for p in os.environ.get("X4_FRESH_DEFER_WHILE", "X4.exe;X4").split(";") if p.strip()]
     try:
         if os.name == "nt":
             out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=20)
@@ -375,15 +495,19 @@ def rebuild(only=ORDER, auto: bool = False, note: Path | None = None) -> int:
         print("x4fresh: a rebuild is already running (lock held); nothing started")
         return 0
     try:
-        return _rebuild_locked(sd, only, auto, note or sd / "session-note.txt")
+        targets = [n for n in only if not auto or n in AUTO_SET]
+        # Tells a concurrent `status` which artifacts are actually in play (review finding 7).
+        _write_note(sd / "rebuilding.json", json.dumps({"targets": targets, "auto": auto, "pid": os.getpid()}))
+        return _rebuild_locked(sd, targets, auto, (note or sd / "session-note.txt").resolve())
     finally:
+        with contextlib.suppress(OSError):
+            (sd / "rebuilding.json").unlink()
         lock.release()
 
 
-def _rebuild_locked(sd: Path, only, auto: bool, note: Path) -> int:
-    targets = [n for n in only if not auto or n in AUTO_SET]
+def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
     before = {s.name: s for s in status(ORDER, holding_lock=True)}
-    lines, failed = [], False
+    lines, failed, unclean = [], False, False
     why = _deferred(auto)
     if why:
         lines.append(f"DEFERRED, nothing rebuilt: {why}")
@@ -406,16 +530,17 @@ def _rebuild_locked(sd: Path, only, auto: bool, note: Path) -> int:
             rc, warnings = _run(name, log)
         except (OSError, ValueError) as exc:
             rc, warnings = -1, [f"could not start the builder: {exc}"]
-        after = CHECKS[name]()
-        dropped = sum(1 for n in after.notes if n.startswith("  - "))
+        after = check(name)
         if rc not in (0, 3) or after.state != "FRESH":
             failed = True
             memo[name] = {"reasons": key, "rc": rc, "when": time.strftime("%Y-%m-%d %H:%M")}
             lines.append(f"{name}: FAILED rc {rc}, now {after.state} (log: {log})")
         else:
             memo.pop(name, None)
-            verdict = "BUILT WITH {} DROPS".format(dropped) if dropped else (
+            # The count is the artifact's OWN (meta), never the number of sample lines (capped at 10).
+            verdict = f"BUILT WITH {after.incomplete} DROPS" if after.incomplete else (
                 "BUILT WITH WARNINGS" if warnings or rc == 3 else "REBUILT, FRESH")
+            unclean = unclean or verdict != "REBUILT, FRESH"
             lines.append(f"{name}: {verdict} (log: {log})")
         lines.extend(f"    {w}" for w in warnings[:8])
         if len(warnings) > 8:
@@ -436,7 +561,11 @@ def _rebuild_locked(sd: Path, only, auto: bool, note: Path) -> int:
     report = "\n".join([head] + lines + render(final).splitlines()[1:])
     print(report)
     if auto:
-        _write_note(note, report + "\n" if left or failed or any("DEFERRED" in ln for ln in lines) else "")
+        # ANY outcome other than a clean rebuild reaches the next session start -- a drop or a warning
+        # included (review finding 2: those went only to stdout, which the launcher discards).
+        noteworthy = left or failed or unclean or any(s.incomplete for s in final) or \
+            any("DEFERRED" in ln or "NOT RETRIED" in ln for ln in lines)
+        _write_note(note, report + "\n" if noteworthy else "")
     return 1 if failed else 0
 
 
@@ -458,7 +587,8 @@ def main(argv: list[str] | None = None) -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
-    ps = sub.add_parser("status", help="one verdict per artifact; exit 0 only if all are FRESH")
+    ps = sub.add_parser("status", help="one verdict per artifact; exit 0 all FRESH and complete, 3 all FRESH "
+                                       "but some known INCOMPLETE (dropped/unparsed input), 5 otherwise")
     ps.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER))
     pr = sub.add_parser("rebuild", help="rebuild what is not FRESH, one at a time, under a lock")
     pr.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER))
@@ -472,7 +602,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         results = status(tuple(args.only))
         print(render(results))
-        return 0 if all(s.state == "FRESH" for s in results) else 5
+        if not all(s.state == "FRESH" for s in results):
+            return 5
+        return 3 if any(s.incomplete for s in results) else 0
     return rebuild(tuple(args.only), auto=args.auto, note=args.note)
 
 
