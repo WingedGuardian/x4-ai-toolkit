@@ -91,6 +91,14 @@ def test_find_matches_what_the_player_reads(db, capsys, query, expect):
     assert "among 4 named macro entit(ies)" in err
 
 
+def test_a_match_on_the_internal_id_still_shows_the_in_game_name(db, capsys):
+    """MEASURED on the live store: `find mothership` matched the macro id and printed the id again,
+    where the player's name ("M0") is the whole point of the command."""
+    assert _effectivecli.main(["--db", str(db), "find", "mothership"]) == 0
+    rows = [ln.split("\t") for ln in capsys.readouterr()[0].splitlines() if ln.strip()]
+    assert rows == [["ship_xen_xl_mothership_01_b_macro", "ship_xl", "base", "M0"]]
+
+
 def test_the_comment_is_not_the_name(db, capsys):
     """'military' is in M0's author comment, which the game never shows."""
     assert _effectivecli.main(["--db", str(db), "find", "military"]) == 1

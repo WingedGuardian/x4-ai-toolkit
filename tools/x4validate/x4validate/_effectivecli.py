@@ -354,12 +354,11 @@ def _cmd_find(con, args) -> int:
         statuses[e["status"]] = statuses.get(e["status"], 0) + 1
     hits = []
     for name, e in sorted(named.items()):
-        for prop in NAME_PROPS:
-            if prop in e["names"]:
-                shown, raw = e["names"][prop]
-                if needle in shown.lower() or needle in raw.lower():
-                    hits.append((name, e, prop, shown))
-                    break
+        # Match on ANY name-bearing property (the id included), but always DISPLAY the best player-facing
+        # one: a hit on the macro id must still show "M0", which is the point of the command.
+        if any(needle in shown.lower() or needle in raw.lower() for shown, raw in e["names"].values()):
+            best = next(p for p in NAME_PROPS if p in e["names"])
+            hits.append((name, e, best, e["names"][best][0]))
     for name, e, prop, shown in hits[:args.limit if args.limit > 0 else None]:
         flag = "" if e["status"] == "ok" else f"  [{e['status']} reference]"
         print(f"{name}\t{e['klass'] or ''}\t{e['origin']}\t{shown}{flag}")
