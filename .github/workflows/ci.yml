@@ -769,7 +769,11 @@ jobs:
           # test_file_guard_batch "Windows-form paths exist only on Windows" (c3812a8, 36a5535,
           # F331: they run on the windows leg) and the +1 junction parity counted above.
           # Ubuntu ceiling 355 + 3 = 358; windows unchanged (63).
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '358' || '63' }}
+          # MEASURED ci/v4.0.1-rc16 (run 41250663724, 77b30480): ubuntu 366 (FAILED, 366 > 358),
+          # windows 60. The +8 are Windows-only housekeep/archive/BaseX tests added in
+          # 2610489..77b30480 (junction, UNC, recycler and child-process contracts; 2 are
+          # "recycle() is Windows-only", 73c799a2). Ubuntu ceiling 366 + 3 = 369; windows 63.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '369' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar

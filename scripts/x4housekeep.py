@@ -188,7 +188,7 @@ def tracked_files(root: Path) -> set:
         raise OSError("could not inspect tracked-file protection") from exc
     if out.returncode != 0:
         if b"not a git repository" in out.stderr:
-            return set()  # archive/synthetic roots have no Git tracked files
+            return set()  # silent-ok: an archive or synthetic non-Git root has no tracked files
         raise OSError("git tracked-file protection failed (exit {})".format(out.returncode))
     return {_key(root / p) for p in out.stdout.decode("utf-8", "replace").split("\0") if p}
 
@@ -211,7 +211,7 @@ def evidence_links(cfg) -> set:
             try:
                 prefixes.append(re.escape(os.path.relpath(root, p.parent).replace("\\", "/")))
             except ValueError:
-                pass  # Cross-drive documents can still use the absolute spelling.
+                pass  # silent-ok: cross-drive documents can still use the absolute spelling
         start_re = re.compile("(?:{})/".format("|".join(prefixes)), re.I if os.name == "nt" else 0)
         text = p.read_text(encoding="utf-8", errors="replace")
         # This is conservative reference discovery, not a Markdown parser. Keep
@@ -260,7 +260,7 @@ class Guard:
             try:
                 info = root.lstat()
             except FileNotFoundError:
-                continue
+                continue  # silent-ok: a configured root that does not exist holds nothing to protect
             if root.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
                 continue
             if root.is_dir():
@@ -436,7 +436,7 @@ def live_state_tokens(cfg) -> set:
         try:
             text = (cfg["root"] / doc).read_text(encoding="utf-8")
         except OSError:
-            continue
+            continue  # silent-ok: a missing/unreadable instruction file names no live work; idle and activity gates still apply
         m = re.search(r"^## Live state.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
         if m:                                   # entry lines only: the block's own instructions name example paths
             entries = "\n".join(ln for ln in m.group(1).splitlines() if ln.lstrip().startswith(("- ", "* ")))
@@ -449,7 +449,7 @@ def rb_job_cwds() -> list:
     try:
         return [_key(e["cwd"]) for e in json.loads(p.read_text(encoding="utf-8")).get("entries", []) if e.get("cwd")]
     except (OSError, ValueError, AttributeError, TypeError):
-        return []
+        return []  # silent-ok: no readable rb ledger = no rb jobs known; idle and activity gates still apply
 
 
 def is_done(task: Path, idle_days: float, tokens: set, cwds: list, guard) -> str:
@@ -605,7 +605,7 @@ def review_archives(cfg, guard=None):
             return dict(state='absent',root=str(root),rows=[],held=[])
         return dict(state='partial',root=str(root),rows=[],held=[dict(path=str(root),reason=str(exc))])
     except (OSError, ValueError) as exc:
-        return dict(state='partial',root=str(root),rows=[],held=[dict(path=str(root),reason=str(exc))])
+        return dict(state='partial',root=str(root),rows=[],held=[dict(path=str(root),reason=str(exc))])  # silent-ok: reported as partial, with the reason
     return _archive_module().review_archives(dict(cfg,archive_root=str(root)),
                                              protect=lambda p:archive_protection(guard,p))
 
@@ -635,12 +635,12 @@ def bin_refusal(p) -> str:
                 try:
                     size += os.stat(q).st_size
                 except OSError:
-                    pass
+                    pass  # silent-ok: an unstattable file is undercounted; worst case the shell shows its too-big prompt, never a silent delete
     else:
         try:
             size = os.stat(s).st_size
         except OSError:
-            pass
+            pass  # silent-ok: as above: an undercount can only surface the too-big prompt
     if longest > MAX_BIN_PATH:
         return "left in place: a path is longer than {} characters (the bin would ask to delete it)".format(MAX_BIN_PATH)
     cap = bin_capacity(s)
@@ -659,7 +659,7 @@ def _drive_type(path: str) -> int:
         import ctypes
         return ctypes.windll.kernel32.GetDriveTypeW(os.path.splitdrive(path)[0] + "\\")
     except (OSError, AttributeError):
-        return 0
+        return 0  # silent-ok: DRIVE_UNKNOWN: bin_capacity() then cannot verify and bin_refusal() refuses
 
 
 def bin_capacity(path: str):
@@ -677,10 +677,10 @@ def bin_capacity(path: str):
                 if winreg.QueryValueEx(k, "NukeOnDelete")[0]:
                     return 0
             except OSError:
-                pass
+                pass  # silent-ok: no NukeOnDelete value: fall through to MaxCapacity
             return int(winreg.QueryValueEx(k, "MaxCapacity")[0]) * 1024 * 1024
     except (OSError, ValueError, AttributeError, ImportError):
-        return None
+        return None  # silent-ok: None = capacity unverified, which bin_refusal() treats as a refusal
 
 
 # --------------------------------------------------------------------------- planning
