@@ -3,18 +3,21 @@
 # `x4fresh`
 
 ```text
-usage: x4fresh [-h] [--version] {status,rebuild} ...
+usage: x4fresh [-h] [--version] {status,rebuild,accept} ...
 
 x4fresh -- is every derived artifact current, and rebuild the ones that are not.
 
 positional arguments:
-  {status,rebuild}
-    status          one verdict per artifact; exit 0 only if all are FRESH
-    rebuild         rebuild what is not FRESH, one at a time, under a lock
+  {status,rebuild,accept}
+    status              one verdict per artifact; exit 0 all FRESH and complete, 3 all FRESH but
+                        some known INCOMPLETE (dropped/unparsed input), 5 otherwise
+    rebuild             rebuild what is not FRESH, one at a time, under a lock
+    accept              record each artifact's CURRENT losses (dropped/unparsed input) as known;
+                        the session note then stays quiet until that set changes
 
 options:
-  -h, --help        show this help message and exit
-  --version         show program's version number and exit
+  -h, --help            show this help message and exit
+  --version             show program's version number and exit
 ```
 
 ## `x4fresh status`
@@ -43,4 +46,15 @@ options:
   --note NOTE           with --auto: write the outcome here for the next session start to print
                         (empty when everything is fresh); default <registry>/x4fresh/session-
                         note.txt
+```
+
+## `x4fresh accept`
+
+```text
+usage: x4fresh accept [-h]
+                      [--only {effective,xref,x4raw,x4eff} [{effective,xref,x4raw,x4eff} ...]]
+
+options:
+  -h, --help            show this help message and exit
+  --only {effective,xref,x4raw,x4eff} [{effective,xref,x4raw,x4eff} ...]
 ```

@@ -264,7 +264,8 @@ def test_fresh_but_incomplete_is_never_reported_clean(monkeypatch, sd, capsys):
                                        for n in fc.ORDER})
     assert fc.main(["status"]) == 3
     head = capsys.readouterr().out.splitlines()[0]
-    assert head == "x4fresh: all 4 artifact(s) FRESH, but INCOMPLETE: effective (8 missing)"
+    assert head == ("x4fresh: all 4 artifact(s) FRESH, but INCOMPLETE: effective (8 missing) -- review, "
+                    "then `x4fresh accept` if this loss is known and acceptable")
 
 
 def test_auto_puts_a_drop_in_the_session_note(sd, monkeypatch):
@@ -344,6 +345,70 @@ def _alive(pid: int) -> bool:
                              capture_output=True, text=True).stdout
         return f'"{pid}"' in out
     return Path(f"/proc/{pid}").exists() and "Z" not in Path(f"/proc/{pid}/stat").read_text().split()[2]
+
+
+# --------------------------------------------------------------------------- accepted losses (user decision 2026-11-01)
+
+EIGHT = [f"dropped assets/structures/defence/macros/tmp/d{i}.xml <- vro/assets/.../d{i}.xml" for i in range(8)]
+
+
+def _lossy(keys):
+    return lambda: fc.Status("effective", "FRESH", incomplete=len(keys), loss_keys=list(keys))
+
+
+def test_accepting_known_losses_quiets_status_but_still_lists_them(sd, monkeypatch, capsys):
+    monkeypatch.setattr(fc, "CHECKS", dict({n: FRESH(n) for n in fc.ORDER}, effective=_lossy(EIGHT)))
+    assert fc.main(["status"]) == 3                                     # before: incomplete, said so
+    assert fc.main(["accept"]) == 0
+    capsys.readouterr()
+    assert fc.main(["status"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "x4fresh: all 4 artifact(s) FRESH (8 known loss(es), accepted)"
+    assert "8 known loss(es) accepted" in out[1]
+
+
+@pytest.mark.parametrize("change", ["one more", "one fixed"])
+def test_any_change_to_an_accepted_loss_set_is_news_again(sd, monkeypatch, capsys, change):
+    monkeypatch.setattr(fc, "CHECKS", dict({n: FRESH(n) for n in fc.ORDER}, effective=_lossy(EIGHT)))
+    assert fc.main(["accept"]) == 0
+    now = EIGHT + ["dropped new.xml <- mod/new.xml"] if change == "one more" else EIGHT[1:]
+    monkeypatch.setitem(fc.CHECKS, "effective", _lossy(now))
+    capsys.readouterr()
+    assert fc.main(["status"]) == 3
+    assert "but INCOMPLETE: effective" in capsys.readouterr().out.splitlines()[0]
+
+
+def test_auto_note_is_silent_for_accepted_losses_and_speaks_for_new_ones(sd, monkeypatch):
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=_lossy(EIGHT)))
+    _fake_builder(monkeypatch, built, "pass")
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "accepted-losses.json").write_text(json.dumps({"effective": {"keys": sorted(EIGHT), "when": "d"}}))
+    assert fc.rebuild(auto=True) == 0
+    assert (sd / "session-note.txt").read_text(encoding="utf-8") == ""
+    built.clear()
+    built2 = _world(monkeypatch, before, dict(before, effective=_lossy(EIGHT + ["dropped x <- y"])))
+    _fake_builder(monkeypatch, built2, "pass")
+    assert fc.rebuild(auto=True) == 0
+    assert "BUILT WITH 9 DROPS" in (sd / "session-note.txt").read_text(encoding="utf-8")
+
+
+def test_accept_refuses_a_stale_artifact_and_one_that_cannot_list_its_losses(sd, monkeypatch, capsys):
+    monkeypatch.setattr(fc, "CHECKS", dict({n: FRESH(n) for n in fc.ORDER}, xref=STALE("xref"),
+                                           effective=lambda: fc.Status("effective", "FRESH", incomplete=8)))
+    assert fc.main(["accept"]) == 2
+    out = capsys.readouterr().out
+    assert "xref: NOT accepted: it is STALE" in out
+    assert "effective: NOT accepted: this build does not list its losses" in out
+
+
+def test_the_store_records_every_loss_by_identity_uncapped():
+    sc = fc._effective._SkipCount()
+    for i in range(25):
+        sc.add_overlay(f"a/{i}.xml", [f"vro/a/{i}.xml: malformed XML"])
+    sc.add("t/0001-l044.xml", ValueError("bad"))
+    assert len(sc.dropped_samples) == 10 and len(sc.keys) == 26
+    assert "dropped a/3.xml <- vro/a/3.xml" in sc.keys and "unmerged t/0001-l044.xml" in sc.keys
 
 
 def test_logs_are_pruned_to_the_newest_five_per_artifact(tmp_path):

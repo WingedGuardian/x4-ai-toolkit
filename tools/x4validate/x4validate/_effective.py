@@ -803,15 +803,20 @@ class _SkipCount:
         self.samples: list[str] = []
         self.dropped = 0
         self.dropped_samples: list[str] = []
+        # EVERY loss by identity, uncapped (the samples stop at 10): what lets a reader tell "the same
+        # known losses as last time" from "a new one" -- `x4fresh accept` compares exact sets.
+        self.keys: set[str] = set()
 
     def add(self, vpath: str, exc: Exception):
         self.n += 1
+        self.keys.add(f"unmerged {vpath}")
         if len(self.samples) < 10:
             self.samples.append(f"{vpath}: {exc}")
 
     def add_overlay(self, vpath: str, whys: list[str]):
         for why in whys:
             self.dropped += 1
+            self.keys.add(f"dropped {vpath} <- {why.split(': ', 1)[0]}")
             if len(self.dropped_samples) < 10:
                 self.dropped_samples.append(f"{vpath}: {why}")
 
@@ -996,7 +1001,7 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
     _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
               dropped_overlays=skipped.dropped,
               dropped_samples=skipped.dropped_samples, texts=texts,
-              skipped_files=skipped.n, skipped_samples=skipped.samples)
+              skipped_files=skipped.n, skipped_samples=skipped.samples, loss_keys=skipped.keys)
     progress(f"wrote {len(entities)} entities to {db_path}")
     return db_path
 
@@ -1004,7 +1009,8 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
 def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
               dropped_overlays: int = 0, dropped_samples: list[str] | None = None,
               texts: dict[tuple[str, str], str] | None = None,
-              skipped_files: int = 0, skipped_samples: list[str] | None = None):
+              skipped_files: int = 0, skipped_samples: list[str] | None = None,
+              loss_keys: set[str] | None = None):
     # PID-qualified: two concurrent builds used to pick the SAME `<db>.tmp`, so
     # they raced on os.replace and BOTH died with a raw PermissionError
     # (WinError 32). Build-then-atomically-replace already keeps the store safe
@@ -1062,6 +1068,7 @@ def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
                 # time only, until 2026-11-01 -- so nothing read later could say the store was short.
                 ("skipped_files", str(skipped_files)),
                 ("skipped_file_samples", json.dumps([str(s) for s in (skipped_samples or [])])),
+                ("loss_keys", json.dumps(sorted(loss_keys or []))),
             ])
             # WHEN this store was true, not just how much it holds. Without it the
             # store cannot tell a current answer from one about a superseded world —

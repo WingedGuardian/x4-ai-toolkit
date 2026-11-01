@@ -68,6 +68,8 @@ class Status:
     notes: list[str] = field(default_factory=list)      # what the artifact does NOT include
     orphans: list[Path] = field(default_factory=list)   # temp files a killed build left behind
     incomplete: int = 0                                 # items the artifact is known to be missing
+    loss_keys: list[str] | None = None                  # WHICH items, by identity (None: cannot say)
+    accepted: str | None = None                         # when the user accepted exactly this loss set
 
 
 # --------------------------------------------------------------------------- where things live
@@ -176,7 +178,12 @@ def _status_effective() -> Status:
             samples = []
         notes.append(f"{n} {what}" + (f" (first {min(len(samples), MAX_LISTED)}):" if samples else ""))
         notes.extend("  - " + str(s).split(":", 1)[0] for s in samples[:MAX_LISTED])
-    return Status("effective", _classify(verdict), verdict.reasons, notes, orphans, incomplete=lost)
+    try:
+        keys = json.loads(meta["loss_keys"]) if "loss_keys" in meta else None
+    except ValueError:
+        keys = None
+    return Status("effective", _classify(verdict), verdict.reasons, notes, orphans, incomplete=lost,
+                  loss_keys=keys if lost else [])
 
 
 def _status_xref() -> Status:
@@ -207,10 +214,12 @@ def _status_xref() -> Status:
         notes.append(f"{len(excluded)} file(s) would not parse and are NOT INDEXED (first "
                      f"{min(len(excluded), MAX_LISTED)}):")
         notes.extend("  - " + e for e in excluded[:MAX_LISTED])
-    if _xref.coverage_incomplete(rows):
+    gap = _xref.coverage_incomplete(rows)
+    if gap:
         lost += 1
         notes.append("the index holds fewer DLC than are installed: its queries answer DEGRADED (exit 3)")
-    return Status("xref", state, reasons, notes, orphans, incomplete=lost)
+    keys = sorted(f"not-indexed {e}" for e in excluded) + (["dlc-coverage-gap"] if gap else [])
+    return Status("xref", state, reasons, notes, orphans, incomplete=lost, loss_keys=keys)
 
 
 def _load_staleness():
@@ -260,6 +269,33 @@ def check(name: str) -> Status:
         return Status(name, "UNKNOWN", [f"freshness check failed ({type(exc).__name__}: {exc})"])
 
 
+def _accepted_path(sd: Path) -> Path:
+    return sd / "accepted-losses.json"
+
+
+def _load_accepted(sd: Path | None) -> dict:
+    if sd is None:
+        return {}
+    try:
+        data = json.loads(_accepted_path(sd).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _mark_accepted(s: Status, accepted: dict) -> Status:
+    """A loss set IDENTICAL to the accepted one is known and accepted; any difference -- a file added OR
+    removed -- is news. An artifact that cannot list its losses (an older store) is never accepted."""
+    entry = accepted.get(s.name) or {}
+    if s.incomplete and s.loss_keys is not None and sorted(s.loss_keys) == entry.get("keys"):
+        s.accepted = entry.get("when", "?")
+    return s
+
+
+def _unaccepted(results: list[Status]) -> list[Status]:
+    return [s for s in results if s.incomplete and not s.accepted]
+
+
 def _rebuilding_targets(sd: Path) -> set[str] | None:
     """What the lock holder said it would rebuild, or None (unknown: treat every artifact as in play)."""
     try:
@@ -280,9 +316,10 @@ def status(only=ORDER, holding_lock: bool = False) -> list[Status]:
     sd = state_dir()
     locked = not holding_lock and bool(sd) and BuildLock(sd / "x4fresh.lock").held_elsewhere()
     in_play = _rebuilding_targets(sd) if locked else set()
+    accepted = _load_accepted(sd)
     out = []
     for name in only:
-        s = check(name)
+        s = _mark_accepted(check(name), accepted)
         if locked and s.state != "FRESH" and (in_play is None or name in in_play):
             s.reasons.insert(0, f"a rebuild is running (lock held: {sd / 'x4fresh.lock'})")
             s.state = "REBUILDING"
@@ -298,14 +335,18 @@ def render(results: list[Status]) -> str:
         lines.append("x4fresh: NOT CURRENT: " + ", ".join(f"{s.name} {s.state}" for s in bad)
                      + " -- run `x4fresh rebuild`" if any(s.state != "REBUILDING" for s in bad)
                      else "x4fresh: rebuild in progress: " + ", ".join(s.name for s in bad))
-    elif any(s.incomplete for s in results):
+    elif _unaccepted(results):
         # Fresh is about WHEN, not HOW MUCH: a current store that dropped input is not "clean".
         lines.append(f"x4fresh: all {len(results)} artifact(s) FRESH, but INCOMPLETE: "
-                     + ", ".join(f"{s.name} ({s.incomplete} missing)" for s in results if s.incomplete))
+                     + ", ".join(f"{s.name} ({s.incomplete} missing)" for s in _unaccepted(results))
+                     + " -- review, then `x4fresh accept` if this loss is known and acceptable")
     else:
-        lines.append(f"x4fresh: all {len(results)} artifact(s) FRESH")
+        known = sum(s.incomplete for s in results if s.accepted)
+        lines.append(f"x4fresh: all {len(results)} artifact(s) FRESH"
+                     + (f" ({known} known loss(es), accepted)" if known else ""))
     for s in results:
-        lines.append(f"  {s.name:<10} {s.state}")
+        lines.append(f"  {s.name:<10} {s.state}"
+                     + (f"  ({s.incomplete} known loss(es) accepted {s.accepted}; listed below)" if s.accepted else ""))
         lines.extend(f"      {r}" for r in s.reasons)
         lines.extend(f"      {n}" for n in s.notes)
         if s.orphans:
@@ -530,7 +571,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
             rc, warnings = _run(name, log)
         except (OSError, ValueError) as exc:
             rc, warnings = -1, [f"could not start the builder: {exc}"]
-        after = check(name)
+        after = _mark_accepted(check(name), _load_accepted(sd))
         if rc not in (0, 3) or after.state != "FRESH":
             failed = True
             memo[name] = {"reasons": key, "rc": rc, "when": time.strftime("%Y-%m-%d %H:%M")}
@@ -538,9 +579,13 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
         else:
             memo.pop(name, None)
             # The count is the artifact's OWN (meta), never the number of sample lines (capped at 10).
-            verdict = f"BUILT WITH {after.incomplete} DROPS" if after.incomplete else (
-                "BUILT WITH WARNINGS" if warnings or rc == 3 else "REBUILT, FRESH")
-            unclean = unclean or verdict != "REBUILT, FRESH"
+            if after.accepted:
+                # The SAME losses the user accepted: still said, never called clean, but not news.
+                verdict = f"REBUILT, FRESH ({after.incomplete} known loss(es), accepted {after.accepted})"
+            else:
+                verdict = f"BUILT WITH {after.incomplete} DROPS" if after.incomplete else (
+                    "BUILT WITH WARNINGS" if warnings or rc == 3 else "REBUILT, FRESH")
+                unclean = unclean or verdict != "REBUILT, FRESH"
             lines.append(f"{name}: {verdict} (log: {log})")
         lines.extend(f"    {w}" for w in warnings[:8])
         if len(warnings) > 8:
@@ -563,7 +608,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
     if auto:
         # ANY outcome other than a clean rebuild reaches the next session start -- a drop or a warning
         # included (review finding 2: those went only to stdout, which the launcher discards).
-        noteworthy = left or failed or unclean or any(s.incomplete for s in final) or \
+        noteworthy = left or failed or unclean or _unaccepted(final) or \
             any("DEFERRED" in ln or "NOT RETRIED" in ln for ln in lines)
         _write_note(note, report + "\n" if noteworthy else "")
     return 1 if failed else 0
@@ -598,14 +643,49 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--note", type=Path,
                     help="with --auto: write the outcome here for the next session start to print "
                          "(empty when everything is fresh); default <registry>/x4fresh/session-note.txt")
+    pa = sub.add_parser("accept", help="record each artifact's CURRENT losses (dropped/unparsed input) as "
+                                       "known; the session note then stays quiet until that set changes")
+    pa.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER))
     args = p.parse_args(argv)
     if args.cmd == "status":
         results = status(tuple(args.only))
         print(render(results))
         if not all(s.state == "FRESH" for s in results):
             return 5
-        return 3 if any(s.incomplete for s in results) else 0
+        return 3 if _unaccepted(results) else 0
+    if args.cmd == "accept":
+        return accept(tuple(args.only))
     return rebuild(tuple(args.only), auto=args.auto, note=args.note)
+
+
+def accept(only=ORDER) -> int:
+    """Record the losses of each FRESH artifact as known. A user decision, never automatic: it is what
+    lets a permanent, understood loss stop repeating at every session start without hiding a NEW one."""
+    sd = state_dir()
+    if sd is None:
+        print("x4fresh: REFUSING: the registry location is not configured (set X4_MODS)", file=sys.stderr)
+        return 2
+    data = _load_accepted(sd)
+    rc = 0
+    for s in status(only):
+        if s.state != "FRESH":
+            print(f"{s.name}: NOT accepted: it is {s.state}; rebuild first, then accept what the fresh build lost")
+            rc = 2
+            continue
+        if s.incomplete and s.loss_keys is None:
+            print(f"{s.name}: NOT accepted: this build does not list its losses by name; rebuild first")
+            rc = 2
+            continue
+        keys = sorted(s.loss_keys or [])
+        data[s.name] = {"keys": keys, "when": time.strftime("%Y-%m-%d")}
+        print(f"{s.name}: accepted {len(keys)} known loss(es)" + (":" if keys else ""))
+        for k in keys[:MAX_LISTED]:
+            print(f"    {k}")
+        if len(keys) > MAX_LISTED:
+            print(f"    ... and {len(keys) - MAX_LISTED} more (all recorded in {_accepted_path(sd)})")
+    sd.mkdir(parents=True, exist_ok=True)
+    _write_note(_accepted_path(sd), json.dumps(data, indent=1))
+    return rc
 
 
 if __name__ == "__main__":
