@@ -219,9 +219,11 @@ CHECKS = {"effective": _status_effective, "xref": _status_xref,
           "x4raw": lambda: _status_basex("x4raw"), "x4eff": lambda: _status_basex("x4eff")}
 
 
-def status(only=ORDER) -> list[Status]:
+def status(only=ORDER, holding_lock: bool = False) -> list[Status]:
+    """`holding_lock`: the caller IS the rebuild. The lock then reads as held from here too (an OS lock
+    refuses a second handle even in the same process), and must not be reported as someone else's."""
     sd = state_dir()
-    locked = bool(sd) and BuildLock(sd / "x4fresh.lock").held_elsewhere()
+    locked = not holding_lock and bool(sd) and BuildLock(sd / "x4fresh.lock").held_elsewhere()
     out = []
     for name in only:
         s = CHECKS[name]()
@@ -380,7 +382,7 @@ def rebuild(only=ORDER, auto: bool = False, note: Path | None = None) -> int:
 
 def _rebuild_locked(sd: Path, only, auto: bool, note: Path) -> int:
     targets = [n for n in only if not auto or n in AUTO_SET]
-    before = {s.name: s for s in status(ORDER)}
+    before = {s.name: s for s in status(ORDER, holding_lock=True)}
     lines, failed = [], False
     why = _deferred(auto)
     if why:
@@ -423,7 +425,7 @@ def _rebuild_locked(sd: Path, only, auto: bool, note: Path) -> int:
     memo_tmp = _memo_path(sd).with_suffix(f".{os.getpid()}.tmp")
     memo_tmp.write_text(json.dumps(memo, indent=1), encoding="utf-8")
     os.replace(memo_tmp, _memo_path(sd))
-    final = status(ORDER)
+    final = status(ORDER, holding_lock=True)
     left = [s for s in final if s.state != "FRESH"]
     if auto:
         skipped = [s.name for s in left if s.name not in AUTO_SET]

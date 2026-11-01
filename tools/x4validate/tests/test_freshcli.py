@@ -167,7 +167,12 @@ def test_auto_rebuilds_only_effective_and_xref_and_says_what_it_left(sd, monkeyp
     _fake_builder(monkeypatch, built, "pass")
     assert fc.rebuild(auto=True) == 0
     assert built == {"effective", "xref"}
-    assert "not rebuilt unattended" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "not rebuilt unattended" in out
+    # The final status runs while THIS process holds the lock; that must not read as another rebuild.
+    # (MEASURED 2026-11-01 end to end: the report said "rebuild in progress: x4raw, x4eff".)
+    assert "REBUILDING" not in out and "rebuild in progress" not in out
+    assert out.splitlines()[0] == "x4fresh: NOT CURRENT: x4raw STALE, x4eff STALE -- run `x4fresh rebuild`"
 
 
 @pytest.mark.parametrize("why", ["deferring while running: x4.exe", "could not list running processes"])
