@@ -102,6 +102,91 @@ def test_unrequested_agent_output_is_explicit_in_plan_coverage(tmp_path, capsys)
     assert "class-limited plan" in capsys.readouterr().out
 
 
+_EXTENDED = "\\\\?\\"  # the Win32 extended-length prefix: the only spelling that keeps a trailing dot/space
+
+
+@pytest.fixture
+def odd_names():
+    """Create files Windows lists but cannot reach by their normal path ('x.txt.', 'y.txt '), and remove them
+    again through the extended prefix (a plain rmtree cannot, so pytest's own cleanup would leave them)."""
+    made = []
+
+    def make(folder: Path):
+        folder.mkdir(parents=True, exist_ok=True)
+        for name in ("x.txt.", "y.txt "):
+            full = _EXTENDED + str(folder.resolve()) + "\\" + name
+            with open(full, "wb") as f:
+                f.write(b"odd")
+            made.append(full)
+        assert sorted(os.listdir(folder))[-2:] == ["x.txt.", "y.txt "], "fixture did not create the odd names"
+        return folder
+
+    yield make
+    for full in made:
+        try:
+            os.remove(full)
+        except OSError:
+            pass  # silent-ok: best-effort teardown of the fixture's own files
+
+
+@pytest.mark.skipif(os.name != "nt", reason="trailing dot/space names exist only on Windows")
+def test_unaddressable_name_raises_a_typed_oserror_from_walk(tmp_path, odd_names):
+    folder = odd_names(tmp_path / "t")
+    with pytest.raises(hk.Unaddressable) as info:
+        list(hk.walk_files(folder))
+    assert isinstance(info.value, OSError), "delete paths rely on it staying an OSError (fail closed)"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="trailing dot/space names exist only on Windows")
+def test_report_survives_unaddressable_names_and_says_the_total_is_a_lower_bound(tmp_path, odd_names,
+                                                                               monkeypatch, capsys):
+    home, temp = tmp_path / "home", tmp_path / "temp"
+    write(home / ".claude" / "projects" / "a.jsonl", b"12345")
+    cfg = cfg_for(tmp_path)  # before the odd names: cfg_for's own backdating walk cannot stat them either
+    odd_names(temp / "claude" / "session" / "scratchpad")
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(hk.tempfile, "gettempdir", lambda: str(temp))
+    hk.user_level(cfg)
+    out = capsys.readouterr().out
+    line = next(l for l in out.splitlines() if "<temp>/claude" in l)
+    assert line.lstrip().startswith(">= 0.00 GiB (lower bound: 2 unaddressable name(s)"), line
+    assert "x.txt." in line or "y.txt " in line
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real Windows junction contract")
+def test_report_size_does_not_follow_a_junction_and_says_so(tmp_path, monkeypatch, capsys):
+    home, temp = tmp_path / "home", tmp_path / "temp"
+    write(temp / "claude" / "s" / "own.bin", b"1234")
+    outside = write(tmp_path / "elsewhere" / "big.bin", b"x" * 4096)
+    cfg = cfg_for(tmp_path)
+    junction = temp / "claude" / "s" / "dev"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), str(outside.parent)],
+                   check=True, capture_output=True)
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(hk.tempfile, "gettempdir", lambda: str(temp))
+    assert hk.dir_size_counted(temp / "claude") == (4, [], [junction])
+    hk.user_level(cfg)
+    line = next(l for l in capsys.readouterr().out.splitlines() if "<temp>/claude" in l)
+    assert "lower bound: 1 link(s) not followed" in line and str(junction) in line, line
+    assert outside.read_bytes() == b"x" * 4096
+
+
+@pytest.mark.skipif(os.name != "nt", reason="trailing dot/space names exist only on Windows")
+def test_a_task_holding_an_unaddressable_name_is_held_whole_and_nothing_is_planned(tmp_path, odd_names):
+    write(tmp_path / "out" / "odd" / "unique.bin", b"unique")
+    write(tmp_path / "out" / "healthy" / "keep.bin", b"kept")
+    cfg = cfg_for(tmp_path)  # before the odd names: cfg_for's own backdating walk cannot stat them either
+    odd_names(tmp_path / "out" / "odd" / "deep")
+    for d in (tmp_path / "out" / "odd" / "deep", tmp_path / "out" / "odd", tmp_path / "out"):
+        old = time.time() - 10 * 86400
+        os.utime(d, (old, old))
+    doc = hk.plan(cfg)
+    assert doc["coverage"]["targets_held"] == 1
+    assert doc["coverage"]["held"][0]["path"] == str(tmp_path / "out" / "odd")
+    assert "not addressable" in doc["coverage"]["held"][0]["reason"]
+    assert not doc["actions"]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="real Windows junction contract")
 def test_real_junction_holds_its_entire_task_without_visiting_target(tmp_path):
     write(tmp_path / "out" / "held" / "unique.bin", b"unique")

@@ -436,6 +436,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F331 | A Windows-form write through a junction was judged as the path spelled, not the file reached | **DEFECT (measured)** · PRE-ARC | 24 of 24 Windows-form junction writes allowed (reference/game/profile/saves); 72 of 72 link-creating commands allowed; replay 0 of 3,447 changed | FIXED 2026-10-26 - protect-files resolves a drive-form path through its links, fail closed; link CREATION into a protected root refused by its target (protect-bash); Bash-channel writes through pre-existing links, hardlinks to existing files and trusted linked toolkit folders stay residual |
 | F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay 2026-10-27: 53 of 53,662 game-root commands advise -> ask, 110 stay advise, 0 other facts changed | CHANGED 2026-10-26, NARROWED 2026-10-27 (user) - rm_deployed_mod asks once per command naming every mod; other game-install deletes advise; install/extensions wholesale and reference/ stay deny |
 | F333 | Three deployed-mod delete shapes the shell guard does not read: a python `shutil.rmtree` literal, a path through a junction to `extensions/`, and a root held in an unknown variable | **OPEN LIMIT (measured)** · PRE-ARC | release review of the 4.0.1 deployed-mod rule (2026-10-27): each allowed at a1d876a, ba370f9 and the merged head alike, in sandbox roots | open; see entry |
+| F334 | `x4housekeep report` crashed on a name Windows lists but cannot reach (trailing `.`/space), and its scratchpad size row could never pass a junction | **DEFECT (measured)** · PRE-ARC | real report: FileNotFoundError on 2 such names; after the fix the row reads `>= 3.16 GiB` with 2 names and 6 links named; delete/move paths already failed closed (4 sites read) | FIXED 2026-10-31 - report rows give a lower bound naming what was not counted; delete paths unchanged |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11623,3 +11624,25 @@ refused since F331);
 at the end of the path, so it does not match a mod path beneath it.
 UNMEASURED (inferred from the code): the extensions path is derived from the game root only, so a
 setup with `X4_EXTENSIONS` set and no `X4_GAME` would not fire the deployed-mod ask.
+
+## F334 - housekeep report crashed on unaddressable names and never measured past a junction · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-10-31
+
+MEASURED 2026-10-31: `x4housekeep.py report` died with `FileNotFoundError` in `walk_files` -> `lstat` on
+`y2.txt.` in an old agent scratchpad. Windows lists names ending in `.` or a space, but the normal Win32 path
+strips that character, so `os.listdir` returns the name and `os.lstat` on it raises (both measured on the real
+file). A second, older gap sat behind it: the `<temp>/claude` row used `walk_files`, which raises on any link,
+and that tree holds 6 junctions, so the row had never produced a number on this machine.
+
+Shape, every site that walks then stats (read 2026-10-31, the population is these four files):
+- REPORT-ONLY `user_level` / `dir_size`: crashed. FIXED: `dir_size_counted` skips unaddressable names and does
+  not descend links, and the row prints `>= N GiB (lower bound: ...)` naming the first of each.
+- DELETE/MOVE `walk_files` callers in `x4housekeep.py` (`task_folders`, `sweep_temp`, `check`): already failed
+  closed (the OSError holds the task or counts `failed`); now raise the typed `Unaddressable(OSError)` so the held
+  reason says what happened. Behaviour unchanged, asserted by test.
+- `housekeep_archive.py:65`: fails closed (OSError -> `failed`). Unchanged.
+- `housekeep_backups.py:218` (`inventory` `p.stat()`): fails closed, caught at `:259` and `:424`. Unchanged.
+  `plain_path` skips the lstat for such a name (`exists()` is False) but the stat that follows raises.
+
+Tests (`tools/x4validate/tests/test_x4housekeep.py`, Windows-only, red at ae96ff50): a typed raise from the walk, the report's lower
+bound, a junction not followed, a task held whole. The fixture creates and removes the names through the
+`\\?\` prefix, the only spelling that keeps them.
