@@ -268,7 +268,9 @@ class _PSE2E(unittest.TestCase):
                 self.assert_scope_refusal(command, tool)
             else:
                 got, reason = self.verdict_with(command, tool)
-                self.assertEqual(got, want, command)
+                # The reason travels in the failure message: a deny seen once under gate load (2026-11-01,
+                # Get-FileHash/Test-Path pair) left no evidence of WHICH deny it was.
+                self.assertEqual(got, want, command + chr(10) + "  reason: " + (reason or "(none)"))
                 if want == "deny":
                     # T2: the POLICY's deny, never an engine failure that also says deny.
                     self.assertFalse(engine_failure(reason), (command, reason))
