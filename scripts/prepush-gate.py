@@ -16,7 +16,8 @@ Steps, each red on its own:
      front-end E2E) and the hook regression suite (.claude/hooks/);
   3. collection: `pytest --collect-only` of tools/x4validate/tests imports every module;
   4. the tests for the files this push changes (`git diff --name-only BASE...HEAD`): a changed test file runs itself;
-     a changed module under tools/x4validate/x4validate/ or scripts/ runs every tests/test_*<its stem>*.py.
+     a changed module under tools/x4validate/x4validate/ or scripts/ runs every tests/test_*<its stem>*.py; and every
+     test file whose text names a changed file's basename runs, since that is the test that goes red on it.
 
 BASE defaults to the branch's upstream, else the merge-base with origin/master. Exit 0 = passed, 1 = a step failed,
 2 = could not run. Prints each step's seconds so growth is seen; over 15 minutes it says so.
@@ -73,6 +74,27 @@ def changed_files(base):
     return [l.replace("\\", "/") for l in _git("diff", "--name-only", base + "...HEAD").splitlines() if l.strip()]
 
 
+def referencing_tests(changed):
+    """Every test file whose TEXT names a changed file's basename.
+
+    Stem matching alone missed the Skyrim toolkit's CI run 41254615914 (3 deterministic reds on all 8 legs): the
+    push changed workflow and build files, and the tests asserting on them by name shared no stem with them. A test
+    that spells the changed file is the one that goes red on it, so select by reference as well.
+    """
+    names = {Path(p).name for p in changed if not re.fullmatch(r"tools/x4validate/tests/test_[^/]+\.py", p)}
+    if not names:
+        return []
+    out = []
+    for f in sorted((PKG / "tests").glob("test_*.py")):
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if any(n in text for n in names):
+            out.append(f.relative_to(REPO).as_posix())
+    return out
+
+
 def tests_for(changed):
     """Repo-relative test files for the changed paths (only files that exist)."""
     want = []
@@ -84,6 +106,7 @@ def tests_for(changed):
             stem = Path(p).stem.replace("-", "_")
             want.extend(Path(f).relative_to(REPO).as_posix()
                         for f in glob.glob(str(PKG / "tests" / ("test_*" + stem + "*.py"))))
+    want.extend(referencing_tests(changed))
     out = []
     for t in want:
         if t not in out and (REPO / t).is_file():
