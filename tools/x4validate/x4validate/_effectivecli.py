@@ -25,7 +25,7 @@ from pathlib import Path
 from lxml import etree
 
 from x4validate import __version__, _effective, _merge, _paths, _registry
-from x4validate._provenance import Recorder, annotate_tree
+from x4validate._provenance import Recorder, annotate_tree, comment_safe
 from x4validate._effective import (
     BUILDABLE_KINDS,
     LIBRARY_REGISTRIES,
@@ -201,9 +201,9 @@ def main(argv: list[str] | None = None) -> int:
     du.add_argument("--annotate", action="store_true",
                     help="mark every node an overlay changed with a comment naming the mod, op and "
                          "patch line (removals listed in a header); implies --chain. Records who WON "
-                         "each node, not who introduced it (a root replace re-supplies vanilla nodes "
-                         "as its own, F64), and keeps no attribute history inside a replaced subtree "
-                         "(F338)")
+                         "each node, not who introduced it (F64); after a whole-file replace no node "
+                         "is annotated and the header names the replacing mod; no attribute history "
+                         "is kept inside a replaced subtree (F338)")
 
     sq = sub.add_parser("sql", help="read-only SELECT against the store")
     sq.add_argument("query", help="one read-only SELECT or WITH statement (anything else is refused)")
@@ -902,7 +902,7 @@ def _cmd_dump(args) -> int:
               f"a disk path, not a game vpath;")
         print(f"     interpreted as logical vpath '{note_alt}' -->")
     if args.chain or args.annotate:
-        print(f"<!-- sources: {', '.join(res.sources)} -->")
+        print(f"<!-- {comment_safe('sources: ' + ', '.join(res.sources))} -->")
         if "base" not in res.sources and _effective.base_has(cfg, vpath):
             print(f"<!-- note: base+DLC ALSO supply {vpath}; "
                   f"sources show which WON, not which introduced it -->")
@@ -920,7 +920,7 @@ def _cmd_dump(args) -> int:
         print("<!-- INCOMPLETE: " + str(len(res.skipped)) + " overlay(s) could not be"
               " read and are NOT in this tree.")
         for item in res.skipped:
-            print("       " + str(item))
+            print("       " + comment_safe(str(item)))
         print("     The engine cannot read them either, so what it loads differs from"
               " what this shows. -->")
     if args.annotate:

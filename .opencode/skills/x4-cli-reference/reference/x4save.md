@@ -12,8 +12,9 @@ positional arguments:
   {info,check,vars}
     info             header: build, playtime, and the SAVE-BAKED extensions
     check            macro references the live tree no longer defines
-    vars             MD cue variables whose name matches a pattern, with their owning script/cue
-                     (pass a save NAME, not a path into the save folder)
+    vars             named variables whose name matches a pattern: MD cue variables, AI-script and
+                     blackboard values, each labelled with where it lives (pass a save NAME, not a
+                     path into the save folder)
 
 options:
   -h, --help         show this help message and exit
@@ -51,8 +52,8 @@ options:
 usage: x4save vars [-h] pattern [save]
 
 positional arguments:
-  pattern     regular expression matched case-insensitively against the variable name, e.g.
-              allFactions or xssm_
+  pattern     regular expression matched case-insensitively against the variable name, with and
+              without its stored leading $, e.g. allFactions or ^xssm_
   save        save name, e.g. save_020, or a path (default: newest)
 
 options:

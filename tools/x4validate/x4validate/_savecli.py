@@ -32,10 +32,15 @@ it names 37 items where the log names one.
 
 WHAT `vars` READS. Mod options live in MD cue variables. MEASURED layout of a 9.0 save:
 <md> > <script name> > nested <cue name>/<library name> > <vars> > <value name type value>.
-The engine OMITS value= for a zero integer, so "absent" is printed as "0 (absent)" -- read as
-empty it would invert an on/off flag. A value with no type is null; a table is stored by
-reference id and is printed as table#<id>, not expanded. Pass a save NAME: a path into the
-save folder makes the save-protection guard treat the command as an opaque program (an ask).
+The same <value> element also holds AI-script variables (<aidirector> > <entity id> > <script
+name> > <vars>, ~90% of a save's named values) and entity blackboards; every row says which it
+is, so an AI-script variable never reads as an MD cue path. The engine OMITS value= for a zero
+integer (MEASURED), printed "0 (absent)" -- read as empty it would invert an on/off flag; for
+other numeric types the same rule is INFERRED and printed "0 (absent, inferred)". A value with no
+type is null. Tables, lists and groups are stored by reference id and printed type#<id>, not
+expanded, so their contents are not searched. Rows are streamed, never accumulated. Pass a save
+NAME: a path into the save folder makes the save-protection guard treat the command as an opaque
+program (an ask).
 
 THREE THINGS THAT MADE THIS WRONG BEFORE IT WAS RIGHT, all enforced below:
   1. `macro=` is NOT always a macro reference. On <connection> it mirrors the
@@ -138,7 +143,7 @@ def extract_refs(path: Path) -> Counter:
 
 @dataclass(frozen=True)
 class VarRow:
-    """One named MD variable: where it lives, its name, declared type, display value."""
+    """One named variable: where it lives, its name, declared type, display value."""
     where: str
     name: str
     type: str
@@ -147,49 +152,78 @@ class VarRow:
 
 @dataclass
 class VarScan:
-    rows: list[VarRow]
+    rows: list[VarRow]          # empty when an on_row callback consumed them
     scanned_bytes: int          # decompressed bytes read: the denominator for a zero
+    count: int = 0              # matches, whether kept or streamed
 
 
 #: MD containers whose name= forms the variable's location (MEASURED layout of a 9.0 save:
 #: <md> > <script name> > nested <cue name>/<library name> > <vars> > <value>).
 _VAR_SCOPES = ("script", "cue", "library")
+#: Types stored by REFERENCE to a container serialised elsewhere in the save (MEASURED on a
+#: 9.0 save: table, list and group all carry value="<id>"). Shown as type#id, never expanded.
+_REF_TYPES = ("table", "list", "group")
+#: The engine omits value= for a zero. MEASURED for integer (mod on/off flags read back as
+#: their defaults); INFERRED for these other numeric types, so they are labelled as such.
+_NUMERIC_INFERRED = ("float", "largeint", "largefloat", "time", "length", "money",
+                     "hitpoints", "angle")
 
 
 def _var_display(attrs: dict) -> tuple[str, str]:
     typ = attrs.get("type", "")
     if not typ:
         return "", "null"                       # no type attribute: the value is null
-    if typ == "table":
-        return typ, f"table#{attrs.get('value', '?')}"   # stored by reference, not expanded
+    if typ in _REF_TYPES:
+        return typ, f"{typ}#{attrs.get('value', '?')}"
     if "value" not in attrs:
-        # The engine omits value= for a zero; reading "absent" as empty would invert a flag.
-        return typ, "0 (absent)" if typ in ("integer", "float", "largeint") else "(absent)"
+        if typ == "integer":
+            return typ, "0 (absent)"            # read as empty it would invert a flag
+        if typ in _NUMERIC_INFERRED:
+            return typ, "0 (absent, inferred)"
+        return typ, "(absent)"
     return typ, attrs["value"]
 
 
-def extract_vars(path: Path, pattern: str) -> VarScan:
-    """Every NAMED <value> whose name matches *pattern* (regex, case-insensitive), with the
-    script/cue path that owns it. Values outside MD cues are reported, labelled with their
-    container, rather than dropped. Anonymous <value> children (list items) are not variables.
-    Streams like extract_refs; a truncated or malformed save raises SaveUnreadable."""
+def _var_where(stack: list[tuple[str, dict]]) -> str:
+    tags = [tag for tag, _ in stack]
+    if "md" in tags:
+        inner = stack[tags.index("md") + 1:]
+        scopes = [a.get("name", "") for tag, a in inner if tag in _VAR_SCOPES and a.get("name")]
+        return "/".join(scopes) if scopes else "(md, no named cue)"
+    if "aidirector" in tags:
+        script = next((a.get("name", "?") for tag, a in reversed(stack) if tag == "script"), "?")
+        entity = next((a.get("id", "?") for tag, a in reversed(stack) if tag == "entity"), "?")
+        return f"(aiscript {script} on entity {entity})"
+    container = next((tag for tag, _ in reversed(stack) if tag != "vars"), "?")
+    return f"(outside MD cues: {container})"
+
+
+def extract_vars(path: Path, pattern: str, on_row=None) -> VarScan:
+    """Every NAMED <value> whose name matches *pattern* (regex, case-insensitive, tried both
+    with and without the stored leading '$'), with where it lives: an MD script/cue path, an
+    AI-director script and its entity, or the container of anything else (never dropped).
+    Anonymous <value> elements are not variables. With *on_row*, rows are streamed to it and
+    not kept. Streams like extract_refs; a truncated or malformed save raises SaveUnreadable."""
     rx = re.compile(pattern, re.IGNORECASE)
     rows: list[VarRow] = []
-    stack: list[tuple[str, str]] = []           # (element name, name attr) for every open element
+    stack: list[tuple[str, dict]] = []          # (element name, {name, id}) per open element
     parser = expat.ParserCreate()
     scanned = 0
+    count = 0
 
     def start(name, attrs):
-        if name == "value" and attrs.get("name") and rx.search(attrs["name"]):
-            scopes = [n for tag, n in stack if tag in _VAR_SCOPES and n]
-            if scopes:
-                where = "/".join(scopes)
-            else:
-                container = next((tag for tag, _ in reversed(stack) if tag != "vars"), "?")
-                where = f"(outside MD cues: {container})"
+        nonlocal count
+        vname = attrs.get("name") if name == "value" else None
+        if vname and (rx.search(vname) or rx.search(vname.lstrip("$"))):
             typ, val = _var_display(attrs)
-            rows.append(VarRow(where, attrs["name"], typ, val))
-        stack.append((name, attrs.get("name", "")))
+            row = VarRow(_var_where(stack), vname, typ, val)
+            count += 1
+            if on_row is None:
+                rows.append(row)
+            else:
+                on_row(row)
+        keep = {k: attrs[k] for k in ("name", "id") if k in attrs}
+        stack.append((name, keep))
 
     def end(name):
         stack.pop()
@@ -211,21 +245,23 @@ def extract_vars(path: Path, pattern: str) -> VarScan:
             parser.Parse(b"", True)
     except (OSError, EOFError, gzip.BadGzipFile, zlib.error, expat.ExpatError) as exc:
         raise SaveUnreadable(f"{path}: decompression/XML parse failed ({exc})") from exc
-    return VarScan(rows, scanned)
+    return VarScan(rows, scanned, count)
 
 
 def cmd_vars(path: Path, pattern: str, out=None) -> int:
     out = sys.stdout if out is None else out
-    scan = extract_vars(path, pattern)
     print(f"save: {path}", file=out)
-    for r in scan.rows:
+
+    def emit(r: VarRow) -> None:
         print(f"  {r.where}  {r.name}  {r.type or '-'}  {r.value}", file=out)
-    if not scan.rows:
-        print(f"NO MATCH over {scan.scanned_bytes:,} decompressed bytes for /{pattern}/ "
-              "(absence of the key in this save, not a value)", file=out)
+
+    scan = extract_vars(path, pattern, on_row=emit)
+    if not scan.count:
+        print(f"NO MATCH over {scan.scanned_bytes:,} decompressed bytes for /{pattern}/: no named "
+              "variable matched (table, list and group contents are not searched)", file=out)
         return 1
-    print(f"{len(scan.rows)} match(es) over {scan.scanned_bytes:,} decompressed bytes. "
-          "Tables are shown as references (table#id), not expanded.", file=out)
+    print(f"{scan.count} match(es) over {scan.scanned_bytes:,} decompressed bytes. Tables, lists "
+          "and groups are shown as references (type#id), not expanded.", file=out)
     return 0
 
 def _attr(block: str, tag: str, name: str) -> str:
@@ -412,10 +448,12 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("--limit", type=int, default=40, help="names to print (default 40)")
 
     pv = sub.add_parser("vars",
-                        help="MD cue variables whose name matches a pattern, with their owning "
-                             "script/cue (pass a save NAME, not a path into the save folder)")
+                        help="named variables whose name matches a pattern: MD cue variables, AI-script "
+                             "and blackboard values, each labelled with where it lives (pass a save "
+                             "NAME, not a path into the save folder)")
     pv.add_argument("pattern", help="regular expression matched case-insensitively against the "
-                                    "variable name, e.g. allFactions or xssm_")
+                                    "variable name, with and without its stored leading $, e.g. "
+                                    "allFactions or ^xssm_")
     pv.add_argument("save", nargs="?", help="save name, e.g. save_020, or a path "
                                             "(default: newest)")
 

@@ -155,3 +155,55 @@ def test_dump_cli_without_annotate_prints_no_node_provenance(tmp_path, monkeypat
     out = capsys.readouterr().out
     assert rc == 0
     assert "replace-attr" not in out
+
+
+def test_whole_file_replace_is_named_in_the_header():
+    """Review item 5: fails if a root replace leaves the tree looking like untouched vanilla
+    (no node is annotated after full_override, so the header must say where they came from)."""
+    tree, rec = _tree(), Recorder()
+    _merge.apply_diff(tree, _diff(b'<replace sel="/aiscript"><aiscript name="t2"><actions/></aiscript></replace>'),
+                      recorder=rec, source="modR")
+    header, _ = annotate_tree(tree, rec)
+    assert any("unannotated nodes come from: modR replace-root:1" in h for h in header)
+
+
+def test_removals_listed_before_a_whole_file_replace_are_flagged():
+    """Review item 6: fails if a removal recorded before a whole-file replace is listed as if
+    it still applied, with nothing saying it may predate the replace."""
+    tree, rec = _tree(), Recorder()
+    _merge.apply_diff(tree, _diff(b'<remove sel="//wait"/>'), recorder=rec, source="modA")
+    _merge.apply_diff(tree, _diff(b'<replace sel="/aiscript"><aiscript name="t2"><actions/></aiscript></replace>'),
+                      recorder=rec, source="modR")
+    header, _ = annotate_tree(tree, rec)
+    assert any("may predate" in h and "modR replace-root:1" in h for h in header)
+
+
+def test_attribute_removed_after_replace_is_not_annotated_as_present():
+    """Review item 7: fails if an attribute the element no longer has is still annotated."""
+    tree, rec = _tree(), Recorder()
+    _merge.apply_diff(tree, _diff(b'<replace sel="//do_if/@chance">80</replace>'),
+                      recorder=rec, source="modA")
+    _merge.apply_diff(tree, _diff(b'<remove sel="//do_if/@chance"/>'), recorder=rec, source="modB")
+    annotate_tree(tree, rec)
+    assert all("@chance" not in c for c in _comments(tree))
+
+
+def test_dump_sources_line_is_comment_safe(tmp_path, monkeypatch, capsys):
+    """Review item 9: fails if a mod folder name containing '--' is printed raw into the
+    sources comment, which makes the dumped XML not well-formed."""
+    ref = tmp_path / "ref"
+    (ref / "aiscripts").mkdir(parents=True)
+    (ref / "aiscripts" / "t.xml").write_bytes(etree.tostring(_tree()))
+    mod = tmp_path / "my--mod"
+    (mod / "aiscripts").mkdir(parents=True)
+    (mod / "aiscripts" / "t.xml").write_bytes(
+        b'<diff><replace sel="//do_if/@chance">80</replace></diff>')
+    monkeypatch.setattr(_effectivecli, "active_mods", lambda: [])
+    monkeypatch.setattr(_effectivecli, "touchers_for", lambda *a, **k: [mod])
+    rc = _effectivecli.main(["--db", str(tmp_path / "x.sqlite"), "dump", "aiscripts/t.xml",
+                             "--reference", str(ref), "--annotate"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    for line in out.splitlines():
+        if line.startswith("<!--"):
+            assert "--" not in line[4:-3], line

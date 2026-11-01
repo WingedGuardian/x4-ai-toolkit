@@ -436,8 +436,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F331 | A Windows-form write through a junction was judged as the path spelled, not the file reached | **DEFECT (measured)** · PRE-ARC | 24 of 24 Windows-form junction writes allowed (reference/game/profile/saves); 72 of 72 link-creating commands allowed; replay 0 of 3,447 changed | FIXED 2026-10-26 - protect-files resolves a drive-form path through its links, fail closed; link CREATION into a protected root refused by its target (protect-bash); Bash-channel writes through pre-existing links, hardlinks to existing files and trusted linked toolkit folders stay residual |
 | F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay 2026-10-27: 53 of 53,662 game-root commands advise -> ask, 110 stay advise, 0 other facts changed | CHANGED 2026-10-26, NARROWED 2026-10-27 (user) - rm_deployed_mod asks once per command naming every mod; other game-install deletes advise; install/extensions wholesale and reference/ stay deny |
 | F333 | Three deployed-mod delete shapes the shell guard does not read: a python `shutil.rmtree` literal, a path through a junction to `extensions/`, and a root held in an unknown variable | **OPEN LIMIT (measured)** · PRE-ARC | release review of the 4.0.1 deployed-mod rule (2026-10-27): each allowed at a1d876a, ba370f9 and the merged head alike, in sandbox roots | open; see entry |
-| F338 | `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree | **SCOPE LIMIT (read)** · IN-ARC | `_provenance.Recorder.elem_replaced` drops the old subtree's attribute records (by design); a root `<replace>` re-supplies every vanilla node as its own (the F64 shape). Real-data run 2026-11-01 on `aiscripts/order.fight.escort.xml` (base + 5 mods): 109 annotated nodes, all attributed to a mod and op line | documented in `--help`; not fixed |
-| F339 | `x4save vars` prints MD tables as `table#<id>` and does not expand them | **SCOPE LIMIT (measured)** · IN-ARC | a 9.0 save stores a table variable as a reference id resolved elsewhere in the save; on save_020 the KUDA config cue alone holds 3 such tables (`$byShipId`, `$defaultOrdersByShipId`, `$lxl_isStrictMaintainDistance`) | stated in output and `--help`; expansion is a follow-up |
+| F338 | `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree | **SCOPE LIMIT (read)** · IN-ARC | `_provenance.Recorder.elem_replaced` drops the old subtree's attribute records (by design); after a whole-file replace (`full_override`) no node has a record, so none is annotated and the header names the replacing origin instead. Real-data run 2026-11-01 on `aiscripts/order.fight.escort.xml` (base + 5 mods): 109 annotated nodes, all attributed to a mod and op line | documented in `--help`; not fixed |
+| F339 | `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them | **SCOPE LIMIT (measured)** · IN-ARC | a 9.0 save stores a table variable as a reference id resolved elsewhere in the save; on save_020 the KUDA config cue alone holds 3 such tables (`$byShipId`, `$defaultOrdersByShipId`, `$lxl_isStrictMaintainDistance`) | stated in output and `--help`; expansion is a follow-up |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11633,18 +11633,22 @@ old element's chain onto the new one but deletes every attribute record keyed on
 (documented there as intended: chains restart at an element replace), and `full_override` clears
 all records and makes the overriding file the default origin. So an annotation can only say who
 supplied the surviving node or value, and after an element replace it cannot show which mod set an
-attribute inside it earlier. A root `<replace>` of a whole document re-supplies vanilla nodes as the
-replacing mod's own, which is the F64 shape (who WON, never who INTRODUCED). MEASURED on real data
+attribute inside it earlier. After a whole-file replace (VRO's dominant idiom) NO node carries a
+record: the annotation header says "unannotated nodes come from: <mod> replace-root", and any
+removal listed is flagged as possibly predating that replace (review finding, 2026-11-01). This is
+the F64 shape (who WON, never who INTRODUCED). MEASURED on real data
 the same day: `aiscripts/order.fight.escort.xml` (base + 5 mods) gave 109 annotated nodes, every one
 attributed to a mod and an op line that matches its patch file (e.g. fs_colossus at lines 3 and 10).
 Stated in `--help`; not a defect to fix.
 
-## F339 - `x4save vars` prints MD tables as `table#<id>` and does not expand them · **SCOPE LIMIT (measured)** · IN-ARC · confidence 90%
+## F339 - `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them · **SCOPE LIMIT (measured)** · IN-ARC · confidence 90%
 
 Added with `x4save vars` (2026-11-01, #16). A 9.0 save stores a table-typed MD variable as
 `<value name="$t" type="table" value="1433"/>`, a reference to a table serialised elsewhere in the
 save. `vars` prints such a value as `table#1433` and says so in its footer, so a table is never shown
-as a bare number or as empty; it does not follow the reference. MEASURED on save_020: the KUDA AI
+as a bare number or as empty; it does not follow the reference. The same holds for `type="list"` and
+`type="group"`, which a code review found stored the same way (save_020: 114,254 lists and 135,548
+groups, every one with `value=<id>`); their contents are not searched, and a NO MATCH says so. MEASURED on save_020: the KUDA AI
 tweaks config cue (`kuertee_aait/kAAIT2/kAAIT2_Config`) holds 3 tables beside its scalar options,
 and every scalar option was read directly (8 `*_allFactions` integers, each `0 (absent)`). The
 serialised form of table contents was not located in this pass, so expanding them is a follow-up.

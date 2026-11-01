@@ -135,9 +135,9 @@ options:
   --chain               also print the file-level source chain
   --annotate            mark every node an overlay changed with a comment naming the mod, op and
                         patch line (removals listed in a header); implies --chain. Records who WON
-                        each node, not who introduced it (a root replace re-supplies vanilla nodes
-                        as its own, F64), and keeps no attribute history inside a replaced subtree
-                        (F338)
+                        each node, not who introduced it (F64); after a whole-file replace no node
+                        is annotated and the header names the replacing mod; no attribute history
+                        is kept inside a replaced subtree (F338)
 ```
 
 ## `x4effective sql`

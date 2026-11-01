@@ -31,12 +31,19 @@ _DOC = b"""<?xml version="1.0" encoding="UTF-8"?>
 <value name="$xssm_isAvoidHighRisk" type="integer" value="1"/>
 <value name="$xssm_isAvoidHighRisk_allFactions" type="integer"/>
 <value name="$label" type="string" value="xssm_note"/>
-<value name="$items" type="list"><value type="integer" value="5"/></value>
+<value name="$items" type="list" value="57502"/>
+<value name="$grp" type="group" value="125265"/>
+<value name="$delay" type="time"/>
+<value name="$obj" type="component"/>
 </vars>
 </cue>
 </cue>
 </script>
+<value name="$mdloose" type="integer" value="3"/>
 </md>
+<aidirector><entity id="[0x14718]"><script id="1" name="build.buildstorage" label="loop">
+<vars><value name="$buildmodule" type="component" value="[0x14714]"/></vars>
+</script></entity></aidirector>
 </savegame>
 """
 
@@ -72,11 +79,50 @@ def test_pattern_matches_names_case_insensitively_not_values(tmp_path):
     assert names == ["$xssm_isAvoidHighRisk", "$xssm_isAvoidHighRisk_allFactions"]
 
 
-def test_unnamed_list_items_are_not_reported(tmp_path):
-    """Fails if anonymous <value> children of a list are reported as variables."""
-    rows = _savecli.extract_vars(_save(tmp_path), "").rows
-    assert all(r.name for r in rows)
-    assert [r.name for r in rows if r.name == "$items"] == ["$items"]
+def test_anonymous_values_are_not_reported(tmp_path):
+    """Fails if a <value> with no name attribute is reported as a variable."""
+    doc = b'<savegame><md><script name="s"><cue name="c"><vars><value type="integer" value="5"/></vars></cue></script></md></savegame>'
+    assert _savecli.extract_vars(_save(tmp_path, doc), "").rows == []
+
+
+def test_list_and_group_are_shown_as_references(tmp_path):
+    """Review item 3: fails if a list/group id prints as a bare number (real saves store
+    both by reference, e.g. type="list" value="57502")."""
+    got = {r.name: r.value for r in _savecli.extract_vars(_save(tmp_path), "items|grp").rows}
+    assert got == {"$items": "list#57502", "$grp": "group#125265"}
+
+
+def test_absent_values_are_labelled_by_type(tmp_path):
+    """Review item 4: fails if a numeric type other than integer reads as plain '(absent)'
+    or a non-numeric type reads as zero."""
+    got = {r.name: r.value for r in _savecli.extract_vars(_save(tmp_path), "delay|obj").rows}
+    assert got == {"$delay": "0 (absent, inferred)", "$obj": "(absent)"}
+
+
+def test_aiscript_variables_are_labelled_with_script_and_entity(tmp_path):
+    """Review item 1: fails if an AI-director script variable is printed as an MD cue path."""
+    rows = {r.name: r.where for r in _savecli.extract_vars(_save(tmp_path), "buildmodule").rows}
+    assert rows == {"$buildmodule": "(aiscript build.buildstorage on entity [0x14718])"}
+
+
+def test_md_value_outside_a_named_cue_is_labelled(tmp_path):
+    """Fails if an MD value with no named cue/script is reported as outside MD."""
+    rows = {r.name: r.where for r in _savecli.extract_vars(_save(tmp_path), "mdloose").rows}
+    assert rows == {"$mdloose": "(md, no named cue)"}
+
+
+def test_anchored_pattern_matches_the_name_without_its_dollar(tmp_path):
+    """Review item 2a: fails if '^xssm' matches nothing because stored names start with '$'."""
+    names = [r.name for r in _savecli.extract_vars(_save(tmp_path), "^xssm_").rows]
+    assert names == ["$xssm_isAvoidHighRisk", "$xssm_isAvoidHighRisk_allFactions"]
+
+
+def test_streaming_callback_keeps_no_rows_but_counts(tmp_path):
+    """Review item 10: fails if the streaming path still accumulates every row in memory."""
+    seen = []
+    scan = _savecli.extract_vars(_save(tmp_path), "isAvoid", on_row=seen.append)
+    assert [r.value for r in seen] == ["1", "0 (absent)"]
+    assert scan.rows == [] and scan.count == 2
 
 
 def test_values_outside_md_cues_are_reported_with_their_container(tmp_path):
@@ -121,7 +167,8 @@ def test_cli_no_match_says_absence_of_key_rc1(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert f"NO MATCH over {len(_DOC):,} decompressed bytes" in out
-    assert "absence of the key" in out
+    assert "no named variable matched" in out
+    assert "table, list and group contents are not searched" in out
 
 
 def test_cli_bad_regex_is_a_refusal_rc2(tmp_path, capsys):
