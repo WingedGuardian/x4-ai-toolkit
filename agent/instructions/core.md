@@ -355,17 +355,17 @@ may claim. Flags and subcommands: the generated `x4-cli-reference` skill.
 | values of attribute X across the corpus? | **BaseX** (`tools\basex\ask.py`) | `grep -r` over `reference\` (60 GB) |
 | who references / calls / listens to X? | **BaseX**, or **x4xref** for MD+aiscript cues | recursive grep |
 | the LIVE value, and which mod set it? | **x4effective** | `reference\` (vanilla only) |
-| do this mod's selectors resolve? | **x4validate** (`--tier b` for cross-mod) | eyeballing the diff |
+| do this mod's selectors resolve? | **x4validate** (`--tier b` for cross-mod or a staged mod; Tier A sees vanilla only) | eyeballing the diff |
 | **is my new MD/aiscript SCHEMA-valid?** | **`x4validate <mod> --update`**: the schema pass is GATED behind it (~102 s `md.xsd` compile); `--xsd-fast` skips it but loses "element not expected" (element-ORDERING errors) | a default run (it says `OK: no issues found` unchecked); hand-rolled lxml |
 | **what did the ENGINE complain about?** | **x4debug triage** | `grep \| sort \| uniq -c` (cannot see what it dropped) |
 | **did we PREDICT what the engine hit?** | **x4debug crosscheck** | comparing TOTALS (different populations) |
 | collides with the modlist / who wins? | **x4compat** | guessing at load order |
 | near-duplicate of a ship I own? | **x4similar** | — |
-| **does this vpath exist LIVE, and WHO supplies it?** | **`x4effective dump --chain <vpath>`** (rc 0 names every source, rc 1 absent) | `_effective.base_has` (base+DLC only: a mod's file reads ABSENT) |
+| **does this vpath exist LIVE, and WHO supplies it?** | **`x4effective dump --chain <vpath>`** (rc 0 names every source, rc 1 absent; `--annotate` marks which mod changed each node) | `_effective.base_has` (base+DLC only: a mod's file reads ABSENT) |
 | installed / updates / abandoned? | **x4modlist** | the profile `content.xml` (a DECISION LOG) |
 | a mod's numbers vs the live tree? | **x4stats** (advisory, never a verdict) | a vanilla number quoted as effective |
 | what changed between two mod versions? | **x4diff** | `diff -rq` (line endings swamp it) |
-| what a savegame bakes in and references? | **x4save** | assuming dangling refs (the engine deletes them silently) |
+| what a savegame bakes in and references, or a mod's setting in it? | **x4save** (`vars <pattern> <save name>`) | assuming dangling refs (the engine deletes them silently) |
 | the RUNNING game's state? | **x4live** (needs the game running) | inferring it from files on disk |
 | **does a file with this NAME exist?** | a file-NAME search (glob/find) | a CONTENT search (a file need not contain its own name) |
 | find text in one known area | a CONTENT search (ripgrep) | `grep -r` via the shell |
