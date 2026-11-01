@@ -447,6 +447,11 @@ _ALL_CELLS: list[Cell] = [
     Cell("x4debug", "baseline", ["baseline", "--dest", str(_sandbox_dir() / "baseline")],
          expect=(0, 2), findings_ok=True),
     Cell("x4effective", "coverage", ["coverage"], expect=(0, 1, 3), findings_ok=True),
+    # `find` exits 1 for no hit and 2 when the store predates its texts table (it says "rebuild").
+    Cell("x4effective", "find", ["find", "mothership", "--limit", "5"], expect=(0, 1, 2),
+         findings_ok=True),
+    # `status` is read-only: 0 all fresh, 3 fresh with unaccepted losses, 5 anything else.
+    Cell("x4fresh", "status", ["status"], expect=(0, 3, 5), findings_ok=True, wants="x4fresh:"),
 
     # ---- SLOW: real builds, redirected at throwaway outputs --------------
     # These exercise the real code path end to end. They are excluded by default
@@ -582,6 +587,14 @@ UNSWEPT: dict[tuple[str, str], str] = {
         "the user may have paused, and without it the cell exits 2 and proves nothing. "
         "Covered offline by tests/test_livecli.py, tests/test_livepipe_e2e.py and "
         "tests/test_modlua_rearm.py.",
+    # x4fresh's two WRITES. Its read half, `status`, IS swept.
+    ("x4fresh", "rebuild"):
+        "rebuilds the SHARED derived artifacts in place (it has no sandbox redirect for all "
+        "four), and the x4effective/x4xref build cells already sweep the builders it runs. "
+        "Lock, deferral, wrapper, failure memo and note are covered by tests/test_freshcli.py.",
+    ("x4fresh", "accept"):
+        "writes the user's accepted-losses decision; a sweep must never record one on their "
+        "behalf. Covered by the accept tests in tests/test_freshcli.py.",
 }
 
 
