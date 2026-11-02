@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bulk file checks no longer run out of their deadline on Windows. The save-scope pass resolved
+  the same paths about 18 times each, so a 3,589-path action was refused unchecked after 40 s
+  (it failed safe). Each spelling now resolves once per read, and that action takes 13-21 s.
+
 - `x4save vars <pattern> [save]` prints every named variable whose name matches a regex
   (tried with and without the stored `$`), labelled with where it lives: an MD script/cue
   path, `(aiscript <script> on entity <id>)`, or another container. An integer the engine

@@ -866,3 +866,69 @@ def test_LINUX_powershell_paths_are_windows_dialect_and_resolve_on_posix(posix_f
 ])
 def test_LINUX_cmd_carrier_paths_are_windows_dialect_and_bash_paths_are_not(posix_facts, tool, command, want):
     assert _posix_rows(posix_facts, tool, command) == want
+
+
+def _count_resolutions(install, monkeypatch):
+    """Count real path resolutions through the pinned core, at the function that touches disk."""
+    profiles = policy.core(install[0], "profiles")
+    seen, real = [], profiles._resolved
+    monkeypatch.setattr(profiles, "_resolved", lambda path: (seen.append(os.fspath(path)), real(path))[1])
+    return seen
+
+
+def _outside_rows(install, count):
+    return [{"path": str(install[0] / f"dev/mod/ship-{i}.xml"), "operation": "write"} for i in range(count)]
+
+
+def test_resolve_resolves_each_extra_path_at_most_once(install, monkeypatch):
+    # The 3589-path bulk action spent its whole deadline here: about 18 realpaths per path.
+    seen = _count_resolutions(install, monkeypatch)
+    policy.resolve(install[0], install[1], _outside_rows(install, 1))
+    one = len(seen)
+    seen.clear()
+    policy.resolve(install[0], install[1], _outside_rows(install, 41))
+    assert len(seen) - one <= 40, (one, len(seen))
+
+
+def test_resolve_does_not_remember_paths_between_reads(install, monkeypatch):
+    # recheck re-resolves after preservation on purpose: a memo outliving one read would blind it.
+    seen = _count_resolutions(install, monkeypatch)
+    rows = _outside_rows(install, 1)
+    policy.resolve(install[0], install[1], rows)
+    first = len(seen)
+    assert first
+    seen.clear()
+    policy.resolve(install[0], install[1], rows)
+    assert len(seen) == first
+
+
+@pytest.mark.parametrize("deadline", [None, 0.0])
+def test_resolve_restores_the_core_on_every_exit(install, deadline):
+    preservation = policy.core(install[0], "preservation")
+    original = preservation.canonical
+    if deadline is None:
+        policy.resolve(install[0], install[1], _outside_rows(install, 1))
+    else:
+        with pytest.raises(TimeoutError):
+            policy.resolve(install[0], install[1], _outside_rows(install, 1), deadline)
+    assert preservation.canonical is original
+
+
+def test_resolve_keeps_each_path_distinct_at_any_batch_position(install):
+    # A memo keyed too coarsely would answer for the wrong path: every position must stay itself.
+    root, roots, files = install
+    rows = _outside_rows(install, 6)
+    rows.insert(3, {"path": str(files[0]), "operation": "write"})
+    store = policy.core(root, "workspace").save_store(root, policy.resolve(root, roots, [])[0])
+    rows.append({"path": str(store.root / "x"), "operation": "write"})
+    plan = policy.resolve(root, roots, rows)[1]
+    assert [m.path for m in plan.mutations] == [str(files[0])]
+    assert "permanent save store is protected" in plan.unresolved
+
+
+def test_resolve_keeps_a_sibling_of_the_save_folder_out_of_it(install):
+    # Same parent as the save folder, different answer: a memo keyed on the folder would merge them.
+    root, roots, _files = install
+    sibling = Path(roots["profile"]) / "not-a-save.xml.gz"
+    plan = policy.resolve(root, roots, [{"path": str(sibling), "operation": "write"}])[1]
+    assert not plan.mutations
