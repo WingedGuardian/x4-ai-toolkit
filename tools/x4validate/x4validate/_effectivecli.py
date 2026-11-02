@@ -901,7 +901,7 @@ def _cmd_dump(args) -> int:
         print(f"<!-- note: '{note_folder}' is an installed MOD, not a DLC, so that is "
               f"a disk path, not a game vpath;")
         print(f"     interpreted as logical vpath '{note_alt}' -->")
-    if args.chain or args.annotate:
+    if args.chain or getattr(args, "annotate", False):
         print(f"<!-- {comment_safe('sources: ' + ', '.join(res.sources))} -->")
         if "base" not in res.sources and _effective.base_has(cfg, vpath):
             print(f"<!-- note: base+DLC ALSO supply {vpath}; "
@@ -923,7 +923,7 @@ def _cmd_dump(args) -> int:
             print("       " + comment_safe(str(item)))
         print("     The engine cannot read them either, so what it loads differs from"
               " what this shows. -->")
-    if args.annotate:
+    if getattr(args, "annotate", False):
         header, n_nodes = annotate_tree(res.tree, rec)
         print(f"<!-- node provenance: {n_nodes} node(s) changed by an overlay; removals: "
               f"{len(rec.removed)} -->")
