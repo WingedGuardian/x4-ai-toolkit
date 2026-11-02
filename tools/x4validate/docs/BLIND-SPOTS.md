@@ -440,6 +440,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F335 | A diff op whose `sel` ends in `/text()` is not applied by `_merge`, and nothing reports it | **OPEN LIMIT (measured)** · PRE-ARC | toy t-file: `replace .../t[@id='4']/text()` leaves the old text, node replace applies; corpus x4raw 2026-11-01: 0 of 22,457 `@sel` contain `text()` (two query shapes) | open; no installed mod uses it; see entry |
 | F336 | The BaseX builders swallow a refused `DROP DB` (`>/dev/null 2>&1 \|\| true`), so a reader holding the DB turns into a confusing receipt refusal | **OPEN LIMIT (measured)** · PRE-ARC | M2 2026-11-01, private DBPATH: with a reader attached `DROP DB` rc 1 "opened by another process", reader unaffected (3\|3); control without reader: DROP + ALTER rc 0 | open; fails CLOSED (declare_database refuses); see entry |
 | F337 | OpenCode runs no session-start canary, so the KB note, housekeep sweep and x4fresh auto-rebuild never start there | **OPEN LIMIT (read)** · PRE-ARC | `opencode_plugin.mjs:427-439` session path renders preferences only (`opencode.py:234`); Claude and Codex both run session-canary.sh | open; see entry |
+| F340 | The bulk-file guard runs out of its 40 s deadline on a 3,589-path batch at ordinary desk load and refuses it unchecked (fails closed) | **OPEN (measured)** · PRE-ARC | 12 of 12 timed runs on this machine, including the pre-arc tree; ~12.8 ms/path; 64% of a 2,000-path profile is `profiles._resolved`, ~20 calls per path | open; see entry |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11682,3 +11683,26 @@ exists and renders preferences (`agent/guards/adapters/opencode.py:234`). It nev
 housekeep sweep and the `x4fresh` auto-rebuild (2026-11-01) do not start. Claude runs the script directly;
 Codex runs it from `session_start()` (`agent/guards/adapters/codex.py:399-404`). Not measured in a live
 OpenCode session.
+
+## F340 - Bulk-file guard exceeds its 40 s deadline at desk load · **OPEN (measured)** · PRE-ARC · confidence 90%
+
+MEASURED 2026-11-01, one Windows desktop (28 logical CPUs), 20-33% CPU from other work:
+`test_generic_file_batch.py::test_complete_3589_path_action` failed 12 of 12 timed runs: 4 on ci/v4.0.1-rc17
+(dba17d80, without this lane's changes) and 4 on this lane, both below-normal priority, and 4 on this lane at normal
+priority. All 12 ended at 40.3-40.7 s with `GUARD INERT`, a deny that checked nothing. So it fails closed; the cost is
+a refused batch, not an unguarded write. A run at the gate's own `--cpu 36` was never admitted, so that setting is
+UNMEASURED.
+
+Scaling, one run per size, normal priority: 128 paths 1.58 s, 500 3.99 s, 1,000 9.11 s, 2,000 24.39 s, 3,000 38.42 s
+(all allowed, not inert). INFERRED, not measured: at 12.81 ms/path, 3,589 paths would need about 46 s.
+
+Profile of a 2,000-path batch (26.6 s under cProfile): `profiles.canonical` -> `profiles._resolved` was called 40,008
+times, about 20 per path, and `Path.resolve` under it took 17.09 s (64%).
+
+The same test passed on GitHub CI at rc17 (READ: that run's conclusion), and another session reported it passing
+inside its own local gate run (not re-measured), so I think the outcome depends on load and machine, not on a logic
+fault. Why it runs slower here than there is unmeasured.
+
+Not fixed. `_resolved` is reviewed save-protection code, and a plain cache could mask a link swapped between two checks
+in one pass, so any fix needs its own review of which calls may share an answer. The test only reaches a push's
+pre-push gate when the push changes a file it names (`agent-harness.py`, `modding-harness.lock.json`).
