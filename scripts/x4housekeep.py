@@ -1481,8 +1481,8 @@ def session(cfg, state: Path) -> int:
         note = housekeep_backups.periodic_note(cfg)
         if note:
             notes.append(note)
-    except (OSError, ValueError) as exc:
-        notes.append("cold backup review unavailable: {}".format(exc))
+    except (OSError, ValueError, KeyError, TypeError) as exc:     # a malformed vault record is KeyError/TypeError
+        notes.append("cold backup review unavailable: {}: {}".format(type(exc).__name__, exc))
     try:
         note = _archive_module().periodic_note(cfg, lambda:review_archives(cfg))
         if note:

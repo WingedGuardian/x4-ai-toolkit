@@ -980,3 +980,22 @@ def test_apply_refuses_actions_outside_the_configured_roots(tree):
     assert "outside" in hk.check(foreign_live, cfg, guard, time.time())
     sibling = write(tree / "out-evil" / "t" / "01.cat", blob("catalog"))      # string-prefix sibling of "out"
     assert "outside" in hk.check(dict(base, path=str(sibling), task=str(sibling.parent)), cfg, guard, time.time())
+
+
+def test_session_reports_a_malformed_vault_record_instead_of_crashing(tmp_path, monkeypatch):
+    """A vault record missing `files` raises KeyError in housekeep_backups.review(); the session note must name it."""
+    cfg = sweep_cfg(tmp_path)
+    cfg.update(codex_sessions_warn_gib=10 ** 6, worktrees_warn=10 ** 6, free_floor_gib=0, sweep_every_hours=0)
+    vault = tmp_path / "vault"
+    (vault / "records").mkdir(parents=True)
+    rid = "a" * 64
+    (vault / "records" / (rid + ".json")).write_text(json.dumps(dict(id=rid, object_id=rid)), encoding="utf-8")
+    cfg["backup_archive"] = dict(enabled=True, destination=str(vault))
+    monkeypatch.setattr(hk.tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setattr(hk, "recycle", FakeBin(tmp_path))
+    monkeypatch.setattr(hk, "_has_bin", lambda: True)
+    state = tmp_path / "note.txt"
+    hk.session(cfg, state)
+    note = state.read_text(encoding="utf-8")
+    assert "cold backup review unavailable" in note and "files" in note
