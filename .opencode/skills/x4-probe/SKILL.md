@@ -132,6 +132,28 @@ Cue triggering is a runtime fact no schema expresses. Confirm which event actual
 situation you are testing - some fire only on a save load and are silent on a new game, with no
 error and no trace.
 
+### MD cue timing: three measured rules
+
+Each of these cost a play session, and each was copied from an earlier probe that "worked" (it
+had the same latent defects; its results simply never exercised them). MEASURED in-engine,
+2026-11-01, from debug.txt timestamps:
+
+1. **Child cues start with the parent's TRIGGER, not after its delay.** A child cue is enabled as
+   soon as the parent's conditions are met, and its own `<delay>` starts then. A `<delay>` on the
+   parent does not hold children back: children with shorter delays ran before the parent's
+   actions had set their variables ("Property lookup failed"). Put setup in a parent with NO
+   delay, and count every child delay from the parent's trigger.
+2. **`checkinterval` + `reset_cue cue="this"` re-fires at once.** A "1 s" sampler built that way
+   took 120 samples in about 0.4 s. It is not a timer.
+3. **A cue whose only conditions are `check_value` is evaluated ONCE when enabled.** If false then,
+   it never fires (about 1,000 vanilla cues use that shape as a one-shot gate). The working timed
+   loop is the vanilla shape: **no conditions + `<delay>` + `reset_cue cue="this"`**, with the
+   test inside the actions (`md/crisis_xenon_khaak_combo.xml`, CheckConditions).
+
+**Make the sampler prove its own timing:** record `player.age` on every sample and mark the run
+VOID when a gap is far below the intended interval. Exclude the first sample, whose gap is a
+partial tick.
+
 ## 5. State what makes a run VOID - before running it
 
 Write the preconditions down, log them, and read them first. **A run that fails its precondition is
@@ -221,6 +243,8 @@ check, not the last.
 | a "no X" arm that merely omits X | Generated loadouts supply their own. Remove it explicitly. |
 | a default validate run | The schema pass is behind `--update` |
 | reporting only to the debug log | Nobody reads it during play |
+| a parent `<delay>` "so the children wait" | Children start with the parent's trigger; their delays count from it (timing rules above) |
+| a sampler built from `checkinterval` + `reset_cue`, or gated by a `check_value` condition | The first re-fires at once, the second checks once. Use no conditions + `<delay>` + `reset_cue`, and log `player.age` per sample |
 
 ## Red flags - stop
 

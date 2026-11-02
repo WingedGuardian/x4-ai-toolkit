@@ -440,6 +440,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F335 | A diff op whose `sel` ends in `/text()` is not applied by `_merge`, and nothing reports it | **OPEN LIMIT (measured)** · PRE-ARC | toy t-file: `replace .../t[@id='4']/text()` leaves the old text, node replace applies; corpus x4raw 2026-11-01: 0 of 22,457 `@sel` contain `text()` (two query shapes) | open; no installed mod uses it; see entry |
 | F336 | The BaseX builders swallow a refused `DROP DB` (`>/dev/null 2>&1 \|\| true`), so a reader holding the DB turns into a confusing receipt refusal | **OPEN LIMIT (measured)** · PRE-ARC | M2 2026-11-01, private DBPATH: with a reader attached `DROP DB` rc 1 "opened by another process", reader unaffected (3\|3); control without reader: DROP + ALTER rc 0 | open; fails CLOSED (declare_database refuses); see entry |
 | F337 | OpenCode runs no session-start canary, so the KB note, housekeep sweep and x4fresh auto-rebuild never start there | **OPEN LIMIT (read)** · PRE-ARC | `opencode_plugin.mjs:427-439` session path renders preferences only (`opencode.py:234`); Claude and Codex both run session-canary.sh | open; see entry |
+| F338 | `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree | **SCOPE LIMIT (read)** · IN-ARC | `_provenance.Recorder.elem_replaced` drops the old subtree's attribute records (by design); after a whole-file replace (`full_override`) no node has a record, so none is annotated and the header names the replacing origin instead. Real-data run 2026-11-01 on `aiscripts/order.fight.escort.xml` (base + 5 mods): 109 annotated nodes, all attributed to a mod and op line | documented in `--help`; not fixed |
+| F339 | `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them | **SCOPE LIMIT (measured)** · IN-ARC | a 9.0 save stores a table variable as a reference id resolved elsewhere in the save; on save_020 the KUDA config cue alone holds 3 such tables (`$byShipId`, `$defaultOrdersByShipId`, `$lxl_isStrictMaintainDistance`) | stated in output and `--help`; expansion is a follow-up |
 | F340 | The bulk-file guard runs out of its 40 s deadline on a 3,589-path batch at ordinary desk load and refuses it unchecked (fails closed) | **OPEN (measured)** · PRE-ARC | 12 of 12 timed runs on this machine, including the pre-arc tree; ~12.8 ms/path; 64% of a 2,000-path profile is `profiles._resolved`, ~20 calls per path | open; see entry |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
@@ -11683,6 +11685,33 @@ exists and renders preferences (`agent/guards/adapters/opencode.py:234`). It nev
 housekeep sweep and the `x4fresh` auto-rebuild (2026-11-01) do not start. Claude runs the script directly;
 Codex runs it from `session_start()` (`agent/guards/adapters/codex.py:399-404`). Not measured in a live
 OpenCode session.
+
+## F338 - `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree · **SCOPE LIMIT (read)** · IN-ARC · confidence 95%
+
+Added with `--annotate` (2026-11-01, #15). READ `_provenance.Recorder`: `elem_replaced` moves the
+old element's chain onto the new one but deletes every attribute record keyed on the old subtree
+(documented there as intended: chains restart at an element replace), and `full_override` clears
+all records and makes the overriding file the default origin. So an annotation can only say who
+supplied the surviving node or value, and after an element replace it cannot show which mod set an
+attribute inside it earlier. After a whole-file replace (VRO's dominant idiom) NO node carries a
+record: the annotation header says "unannotated nodes come from: <mod> replace-root", and any
+removal listed is flagged as possibly predating that replace (review finding, 2026-11-01). This is
+the F64 shape (who WON, never who INTRODUCED). MEASURED on real data
+the same day: `aiscripts/order.fight.escort.xml` (base + 5 mods) gave 109 annotated nodes, every one
+attributed to a mod and an op line that matches its patch file (e.g. fs_colossus at lines 3 and 10).
+Stated in `--help`; not a defect to fix.
+
+## F339 - `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them · **SCOPE LIMIT (measured)** · IN-ARC · confidence 90%
+
+Added with `x4save vars` (2026-11-01, #16). A 9.0 save stores a table-typed MD variable as
+`<value name="$t" type="table" value="1433"/>`, a reference to a table serialised elsewhere in the
+save. `vars` prints such a value as `table#1433` and says so in its footer, so a table is never shown
+as a bare number or as empty; it does not follow the reference. The same holds for `type="list"` and
+`type="group"`, which a code review found stored the same way (save_020: 114,254 lists and 135,548
+groups, every one with `value=<id>`); their contents are not searched, and a NO MATCH says so. MEASURED on save_020: the KUDA AI
+tweaks config cue (`kuertee_aait/kAAIT2/kAAIT2_Config`) holds 3 tables beside its scalar options,
+and every scalar option was read directly (8 `*_allFactions` integers, each `0 (absent)`). The
+serialised form of table contents was not located in this pass, so expanding them is a follow-up.
 
 ## F340 - Bulk-file guard exceeds its 40 s deadline at desk load · **OPEN (measured)** · PRE-ARC · confidence 90%
 

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- `x4save vars <pattern> [save]` prints every named variable whose name matches a regex
+  (tried with and without the stored `$`), labelled with where it lives: an MD script/cue
+  path, `(aiscript <script> on entity <id>)`, or another container. An integer the engine
+  stored without a value reads `0 (absent)` (other numeric types `0 (absent, inferred)`), a
+  typeless value `null`, and tables, lists and groups `type#<id>` (not expanded or searched,
+  F339). Rows stream; the footer gives the decompressed bytes scanned, and no match exits 1
+  naming what was not searched. Pass a save NAME (e.g. `save_020`). (#16)
+
+- `x4effective dump <vpath> --annotate` marks every node an overlay changed with a comment
+  naming the mod, op and patch line (attributes as `@attr: base -> modA replace-attr:7`),
+  lists removals in a header, and implies `--chain`. It answers "which mod rewrote this
+  node?" for merged scripts without reading every diff. Reports who WON each node, not who
+  introduced it; after a whole-file replace no node is annotated and the header names the
+  replacing mod; attribute history inside a replaced subtree is not kept (F338). (#15)
+  This adds display helpers to `_provenance.py`, an engine source, so the effective store,
+  BaseX `x4eff` and x4xref report STALE until rebuilt; the rebuild changes no answers.
+
 - Geometry comparison supports bounded recursive structural attachments, shared
   render-part references and an explicit `--geometry-pose bind` projection.
   Independent Blender controls qualify selected bind transforms; runtime poses

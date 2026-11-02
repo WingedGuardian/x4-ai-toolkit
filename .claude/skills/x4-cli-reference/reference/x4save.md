@@ -3,19 +3,22 @@
 # `x4save`
 
 ```text
-usage: x4save [-h] [--version] {info,check} ...
+usage: x4save [-h] [--version] {info,check,vars} ...
 
-Read an X4 savegame: what is baked into it, and what it references that the live tree no longer
-defines.
+Read an X4 savegame: what is baked into it, what it references that the live tree no longer
+defines, and its MD variables.
 
 positional arguments:
-  {info,check}
-    info        header: build, playtime, and the SAVE-BAKED extensions
-    check       macro references the live tree no longer defines
+  {info,check,vars}
+    info             header: build, playtime, and the SAVE-BAKED extensions
+    check            macro references the live tree no longer defines
+    vars             named variables whose name matches a pattern: MD cue variables, AI-script and
+                     blackboard values, each labelled with where it lives (pass a save NAME, not a
+                     path into the save folder)
 
 options:
-  -h, --help    show this help message and exit
-  --version     show program's version number and exit
+  -h, --help         show this help message and exit
+  --version          show program's version number and exit
 ```
 
 ## `x4save info`
@@ -41,4 +44,18 @@ positional arguments:
 options:
   -h, --help     show this help message and exit
   --limit LIMIT  names to print (default 40)
+```
+
+## `x4save vars`
+
+```text
+usage: x4save vars [-h] pattern [save]
+
+positional arguments:
+  pattern     regular expression matched case-insensitively against the variable name, with and
+              without its stored leading $, e.g. allFactions or ^mymod_
+  save        save name, e.g. save_020, or a path (default: newest)
+
+options:
+  -h, --help  show this help message and exit
 ```
