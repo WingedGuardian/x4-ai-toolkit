@@ -786,29 +786,29 @@ jobs:
       # their own jobs now (cold-clone, cold-archive below) and run beside this one: a run is as long as its
       # slowest job, not its queue (owner ruling 2026-10-31).
 
-  # THE COLD CHECK, WIRED. `scripts/verify-cold.sh` is named in five documents
-  # (CLAUDE.md, REVIEW-SCOPE.md, SUBAGENT-BRIEF.md, TRUST.md, CHANGELOG.md) and
-  # in five test files -- and until 2026-09 it was RUN by nothing. One test reads
-  # its SOURCE to check the CLI matrix; none executes it. Every other mention is
-  # prose. `smoke-basex.sh` exists for the same reason and has been wired since
-  # it was written.
-  #
-  # It is the check that has lied most: verifying "like a fresh clone" by hand
-  # produced a confident green THREE TIMES IN A ROW on one release, because path
-  # resolution falls through to $X4_TOOLKIT and a configured machine masquerades
-  # as a clean one. What that hid was fatal for every new user -- gates resolve
-  # paths at IMPORT time and a SystemExit during pytest COLLECTION aborts the
-  # whole session. The script refuses to run until it has PROVEN
-  # registry/game_extensions/reference are all None, which is the load-bearing
-  # part and the reason it cannot be replaced by `env -u`.
-  #
-  # Linux only: it clones committed objects with Git metadata into an isolated
-  # checkout and runs there. No private config travels; the cold precondition
-  # still refuses any resolved X4 path. The Windows `tests` leg covers the same
-  # suite. If it should gate on Windows too, that is a deliberate widening, not
-  # an oversight. The setup mirrors the `tests` job's (uv, Python 3.13, Java 17
-  # for the BaseX tests, the pinned Codex CLI for the .rules checks) so the suite
-  # it runs in the cold tree sees the environment it saw as a step there.
+    # THE COLD CHECK, WIRED. `scripts/verify-cold.sh` is named in five documents
+    # (CLAUDE.md, REVIEW-SCOPE.md, SUBAGENT-BRIEF.md, TRUST.md, CHANGELOG.md) and
+    # in five test files -- and until 2026-09 it was RUN by nothing. One test reads
+    # its SOURCE to check the CLI matrix; none executes it. Every other mention is
+    # prose. `smoke-basex.sh` exists for the same reason and has been wired since
+    # it was written.
+    #
+    # It is the check that has lied most: verifying "like a fresh clone" by hand
+    # produced a confident green THREE TIMES IN A ROW on one release, because path
+    # resolution falls through to $X4_TOOLKIT and a configured machine masquerades
+    # as a clean one. What that hid was fatal for every new user -- gates resolve
+    # paths at IMPORT time and a SystemExit during pytest COLLECTION aborts the
+    # whole session. The script refuses to run until it has PROVEN
+    # registry/game_extensions/reference are all None, which is the load-bearing
+    # part and the reason it cannot be replaced by `env -u`.
+    #
+    # Linux only: it clones committed objects with Git metadata into an isolated
+    # checkout and runs there. No private config travels; the cold precondition
+    # still refuses any resolved X4 path. The Windows `tests` leg covers the same
+    # suite. If it should gate on Windows too, that is a deliberate widening, not
+    # an oversight. The setup mirrors the `tests` job's (uv, Python 3.13, Java 17
+    # for the BaseX tests, the pinned Codex CLI for the .rules checks) so the suite
+    # it runs in the cold tree sees the environment it saw as a step there.
   cold-clone:
     name: cold-clone verification (ubuntu-latest)
     runs-on: ubuntu-latest
@@ -846,11 +846,11 @@ jobs:
         shell: bash
         run: bash tools/x4validate/scripts/verify-cold.sh
 
-  # THE RELEASE ZIP'S POPULATION (FX-H2 / I-1): `git archive`, no .git -- what a user
-  # extracts and installs in place. F262 swapped this leg for the clone above when three
-  # tests needed Git metadata, which hid the failing population instead of fixing it.
-  # The extract sits inside this checkout, so the script sets GIT_CEILING_DIRECTORIES and
-  # REFUSES unless git can no longer see any repository (else this passes vacuously).
+    # THE RELEASE ZIP'S POPULATION (FX-H2 / I-1): `git archive`, no .git -- what a user
+    # extracts and installs in place. F262 swapped this leg for the clone above when three
+    # tests needed Git metadata, which hid the failing population instead of fixing it.
+    # The extract sits inside this checkout, so the script sets GIT_CEILING_DIRECTORIES and
+    # REFUSES unless git can no longer see any repository (else this passes vacuously).
   cold-archive:
     name: cold-archive verification (ubuntu-latest)
     runs-on: ubuntu-latest

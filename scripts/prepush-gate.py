@@ -82,6 +82,10 @@ def referencing_tests(changed):
     that spells the changed file is the one that goes red on it, so select by reference as well.
     """
     names = {Path(p).name for p in changed if not re.fullmatch(r"tools/x4validate/tests/test_[^/]+\.py", p)}
+    # A test can also reach a workflow through its folder (a glob of .github/workflows), naming no file: this missed
+    # test_workflow_ownership on the 2026-11-02 cold-job comment, red on all four legs of CI run 41399417477.
+    if any(p.startswith(".github/workflows/") for p in changed):
+        names.add(".github/workflows")
     if not names:
         return []
     out = []
