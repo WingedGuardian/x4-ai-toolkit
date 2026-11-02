@@ -104,8 +104,8 @@ class Nodes(Recorder):
         super().attr_set(el, attr, origin)
         self.created.add(self.element_id(el) + "/@" + attr)
 
-    def full_override(self, origin):
-        super().full_override(origin)
+    def full_override(self, origin, *args, **kwargs):
+        super().full_override(origin, *args, **kwargs)
         self.pending_root = True
 
     def final_paths(self, tree):

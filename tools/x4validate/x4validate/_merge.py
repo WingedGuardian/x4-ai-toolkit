@@ -1001,7 +1001,7 @@ def apply_overlay(
         # same script filename is inert for the same reason.
         return tree, "script(inert)"
     if recorder is not None:
-        recorder.full_override(Origin(source, "full-override"))
+        recorder.full_override(Origin(source, "full-override"), had_base=tree is not None)
     return oroot, "full"  # full-file override (asset files, or no/other base)
 
 
@@ -1049,6 +1049,8 @@ def _build_owned(owner_name: str, rel: str, vpath: str,
         if oroot is not None and (owner_is_dlc or oroot.tag != "diff"):
             tree = oroot
             sources.append(f"{owner_dir.name}:owner")
+            if recorder is not None:
+                recorder.owner = owner_dir.name       # display only: annotate_tree names it
 
     for odir in overlay_dirs:
         if odir is owner_dir:

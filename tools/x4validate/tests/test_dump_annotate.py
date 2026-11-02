@@ -207,3 +207,56 @@ def test_dump_sources_line_is_comment_safe(tmp_path, monkeypatch, capsys):
     for line in out.splitlines():
         if line.startswith("<!--"):
             assert "--" not in line[4:-3], line
+
+
+def test_first_layer_with_no_base_is_the_sole_provider_not_a_replacement():
+    """Fails if a mod-only file's header says it REPLACED a whole file, or flags later removals as possibly
+    predating a replace when no earlier layer existed (the first layer had tree=None)."""
+    rec = Recorder()
+    tree, mode = _merge.apply_overlay(None, _tree(), "aiscripts/new.xml", "modOnly", recorder=rec)
+    assert mode == "full"
+    _merge.apply_diff(tree, _diff(b'<remove sel="//wait"/>'), recorder=rec, source="modB")
+    header, _ = annotate_tree(tree, rec)
+    joined = "\n".join(header)
+    assert "modOnly" in joined and "sole provider" in joined and "no earlier layer" in joined
+    assert "history before it is gone" not in joined and "may predate" not in joined
+    assert any(h.startswith("removed:") and "modB" in h for h in header)
+
+
+def test_a_full_override_of_an_existing_tree_still_says_whole_file_replace():
+    """Twin of the sole-provider case: with a tree already in place the old wording stands."""
+    rec = Recorder()
+    _merge.apply_overlay(_tree(), _tree(), "aiscripts/t.xml", "modR", recorder=rec)
+    header, _ = annotate_tree(_tree(), rec)
+    joined = "\n".join(header)
+    assert "whole-file replace" in joined and "sole provider" not in joined
+
+
+def test_a_second_full_override_over_a_sole_provider_is_a_replace():
+    """The sole-provider wording must not outlive a later layer that replaces that file."""
+    rec = Recorder()
+    tree, _m = _merge.apply_overlay(None, _tree(), "aiscripts/new.xml", "modOnly", recorder=rec)
+    _merge.apply_overlay(tree, _tree(), "aiscripts/new.xml", "modLate", recorder=rec)
+    header, _ = annotate_tree(tree, rec)
+    joined = "\n".join(header)
+    assert "modLate" in joined and "whole-file replace" in joined and "sole provider" not in joined
+
+
+def test_nested_path_names_the_owner_of_the_unannotated_nodes(tmp_path):
+    """Fails if a nested extensions/<owner>/... dump leaves its unannotated nodes reading as 'base': the owner's
+    file is the base there and was never recorded."""
+    owner = tmp_path / "ownermod"
+    (owner / "aiscripts").mkdir(parents=True)
+    (owner / "aiscripts" / "t.xml").write_bytes(etree.tostring(_tree()))
+    patcher = tmp_path / "patcher"
+    (patcher / "extensions" / "ownermod" / "aiscripts").mkdir(parents=True)
+    (patcher / "extensions" / "ownermod" / "aiscripts" / "t.xml").write_bytes(
+        b'<diff><replace sel="//do_if/@chance">80</replace></diff>')
+    (tmp_path / "ref").mkdir()
+    rec = Recorder()
+    res = _merge.build_effective("extensions/ownermod/aiscripts/t.xml", _merge.Config(reference=tmp_path / "ref"),
+                                 extra_overlays=[owner, patcher], recorder=rec)
+    assert res.tree is not None
+    header, n = annotate_tree(res.tree, rec)
+    assert n == 1 and any("ownermod" in h and "owner" in h and "unannotated" in h for h in header), header
+    assert rec.default_origin.op == "base"          # display-only: the recorded answers did not change

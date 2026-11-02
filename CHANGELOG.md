@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `x4effective dump --annotate` words a file that no earlier layer supplied (mod-only or DLC-only) as its
+  "sole provider", not a "whole-file replace", and no longer flags its removals as possibly predating one.
+  For a nested `extensions/<owner>/...` path the header now names the owner mod instead of leaving the
+  unannotated nodes to read as "base". Display only; no merged value changes. This touches `_merge.py` and
+  `_provenance.py`, engine sources, so the effective store, BaseX `x4eff` and x4xref report STALE until rebuilt.
+
 - `x4housekeep` no longer reads an unreadable or malformed live-work source as "no live work". An existing
   but unreadable `CLAUDE.md`/`AGENTS.md`, or a malformed resource-budget ledger, now keeps every archive
   candidate for that run and names the reason (plan coverage `held`; `apply` refuses). A missing file or
