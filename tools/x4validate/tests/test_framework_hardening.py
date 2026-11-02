@@ -201,6 +201,8 @@ def test_I1_TWIN_the_gate_check_can_fail():
     a conditional setup step, a missing marker."""
     def wf(tests_steps, scrub_steps=None):
         return {"jobs": {"tests": {"steps": tests_steps},
+                         "cold-clone": {"steps": [{"name": "s", "id": "setup"}]},
+                         "cold-archive": {"steps": [{"name": "s", "id": "setup"}]},
                          "scrub": {"steps": scrub_steps or [{"uses": "co", "id": "checkout"}]},
                          "hook-mutation": {"steps": [{"uses": "co", "id": "checkout"}]}}}
     ok = "${{ !cancelled() && steps.setup.outcome == 'success' }}"
