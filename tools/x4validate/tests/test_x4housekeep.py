@@ -831,7 +831,8 @@ def test_session_runs_at_most_once_per_interval_and_writes_a_note(tmp_path, monk
     os.utime(state, (time.time() - 7 * 3600,) * 2)           # twin: the last sweep was 7 hours ago
     hk.session(cfg, state)
     assert not left.exists()
-    assert state.read_text(encoding="utf-8").startswith("[x4 disk] moved 1 leftover temp dir(s) to the Recycle Bin")
+    note = state.read_text(encoding="utf-8")
+    assert note.startswith("[x4 disk] run `python scripts/x4housekeep.py report` -- moved 1 leftover temp dir(s)")
 
 
 def test_a_dir_the_bin_refuses_is_left_in_place_and_named(tmp_path):
@@ -999,3 +1000,16 @@ def test_session_reports_a_malformed_vault_record_instead_of_crashing(tmp_path, 
     hk.session(cfg, state)
     note = state.read_text(encoding="utf-8")
     assert "cold backup review unavailable" in note and "files" in note
+
+
+def test_the_session_note_leads_with_the_instruction_and_is_capped_with_the_cut_stated():
+    head = "[x4 disk] run `python scripts/x4housekeep.py report` -- "
+    assert hk.format_note([]) == ""
+    assert hk.format_note(["one", "two"]) == head + "one; two\n"
+    long = hk.format_note(["x" * 30000, "tail-note"])
+    assert long.startswith(head) and long.endswith("\n")
+    assert len(long) <= hk.NOTE_MAX < 10000
+    assert "more characters cut" in long and "tail-note" not in long
+    cut = int(long.split("... [")[1].split(" more")[0])
+    kept = long[len(head):].split("... [")[0]
+    assert len(kept) + cut == 30000 + len("; ") + len("tail-note")      # nothing lost without being counted

@@ -1463,6 +1463,22 @@ def worktree_count(root: Path) -> int | None:
     return max(0, sum(1 for line in out.stdout.splitlines() if line.startswith("worktree ")) - 1)
 
 
+NOTE_MAX = 4000   # the harness files hook output past ~10,000 characters and shows the model only the head
+
+
+def format_note(notes) -> str:
+    """The session-start line: the instruction FIRST, then the findings, cut (and saying by how much) at NOTE_MAX."""
+    if not notes:
+        return ""
+    head = "[x4 disk] run `python scripts/x4housekeep.py report` -- "
+    body = "; ".join(notes)
+    room = NOTE_MAX - len(head) - 1
+    if len(body) > room:
+        keep = room - 60
+        body = body[:keep] + "... [{} more characters cut; the report has them]".format(len(body) - keep)
+    return head + body + "\n"
+
+
 def session(cfg, state: Path) -> int:
     """The session-start job: sweep the toolkit's temp dirs, then write a one-line note for the next banner when
     something needs the user (free space near the floor, Codex sessions or worktrees past their threshold).
@@ -1527,9 +1543,7 @@ def session(cfg, state: Path) -> int:
     if bin_note:
         notes.append(bin_note)
     state.parent.mkdir(parents=True, exist_ok=True)
-    body = (("[x4 disk] " + "; ".join(notes) + " -- python scripts/x4housekeep.py report\n")
-            if notes else "").encode("utf-8")
-    state.write_bytes(body)
+    state.write_bytes(format_note(notes).encode("utf-8"))
     return 1 if r["failed"] else 0
 
 
