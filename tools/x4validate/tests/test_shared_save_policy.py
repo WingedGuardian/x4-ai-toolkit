@@ -932,3 +932,13 @@ def test_resolve_keeps_a_sibling_of_the_save_folder_out_of_it(install):
     sibling = Path(roots["profile"]) / "not-a-save.xml.gz"
     plan = policy.resolve(root, roots, [{"path": str(sibling), "operation": "write"}])[1]
     assert not plan.mutations
+
+
+def test_resolve_keeps_a_same_named_file_elsewhere_out_of_the_save_folder(install):
+    # Same filename, different folder: a memo keyed on the name would give the save the outside
+    # file's identity, and the save would lose its backup.
+    root, roots, files = install
+    rows = [{"path": str(root / "dev" / files[0].name), "operation": "write"},
+            {"path": str(files[0]), "operation": "write"}]
+    plan = policy.resolve(root, roots, rows)[1]
+    assert [m.path for m in plan.mutations] == [str(files[0])]

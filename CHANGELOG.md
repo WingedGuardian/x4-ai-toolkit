@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Bulk file checks no longer run out of their deadline on Windows. The save-scope pass resolved
+- A 3,589-path file check no longer runs out of its 40 s deadline on Windows. The save-scope pass resolved
   the same paths about 18 times each, so a 3,589-path action was refused unchecked after 40 s
   (it failed safe). Each spelling now resolves once per read, and that action takes 13-21 s.
 
