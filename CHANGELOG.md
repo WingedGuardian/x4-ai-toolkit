@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `x4housekeep` no longer reads an unreadable or malformed live-work source as "no live work". An existing
+  but unreadable `CLAUDE.md`/`AGENTS.md`, or a malformed resource-budget ledger, now keeps every archive
+  candidate for that run and names the reason (plan coverage `held`; `apply` refuses). A missing file or
+  ledger still means nothing is known.
+
 - `x4housekeep apply` now re-proves that each action's path (and a recreatable copy's live file) is still inside
   the configured roots, resolved at directory boundaries. A plan made under another config, or edited by hand,
   is refused per action instead of acted on because its hashes matched.

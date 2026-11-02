@@ -1020,3 +1020,36 @@ def test_the_tool_source_has_no_mojibake():
     text = (REPO / "scripts" / "x4housekeep.py").read_bytes().decode("utf-8")
     stray = sorted({c for c in text if ord(c) > 127 and c != "\u00b7"})
     assert not stray, [hex(ord(c)) for c in stray]
+
+
+def _ledger(tmp_path, monkeypatch, text=None):
+    home = tmp_path / "home"
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    if text is not None:
+        write(home / ".claude" / "tools" / "resource-budget" / "ledger.json", text.encode("utf-8"))
+
+
+def test_a_missing_rb_ledger_is_nothing_known_but_a_bad_one_blocks(tmp_path, monkeypatch):
+    _ledger(tmp_path, monkeypatch)
+    assert hk.rb_job_cwds() == []                                          # missing: no jobs known
+    _ledger(tmp_path, monkeypatch, json.dumps({"entries": [{"cwd": str(tmp_path / "job")}]}))
+    assert hk.rb_job_cwds() == [hk._key(tmp_path / "job")]                 # twin: a readable ledger is used
+    for bad in ("{not json", "[]", json.dumps({"entries": 5}), json.dumps({"entries": [7]}),
+                json.dumps({"entries": [{"cwd": 3}]})):
+        _ledger(tmp_path, monkeypatch, bad)
+        with pytest.raises(hk.LiveStateUnknown):
+            hk.rb_job_cwds()
+
+
+def test_an_unreadable_instruction_file_blocks_but_a_missing_one_names_no_live_work(tree):
+    cfg = cfg_for(tree)
+    (tree / "CLAUDE.md").write_text("## Live state\n- `souls-run`\n", encoding="utf-8")
+    assert hk.live_state_tokens(cfg) == {"souls-run"}                      # AGENTS.md missing: fine
+    (tree / "AGENTS.md").mkdir()                                           # exists but cannot be read as a file
+    with pytest.raises(hk.LiveStateUnknown):
+        hk.live_state_tokens(cfg)
+    (tree / "AGENTS.md").rmdir()
+    (tree / "AGENTS.md").write_bytes(b"\xff\xfe\x00bad")                   # exists, not UTF-8
+    with pytest.raises(hk.LiveStateUnknown):
+        hk.live_state_tokens(cfg)

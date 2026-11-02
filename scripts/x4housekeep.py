@@ -411,15 +411,21 @@ def reads_recorded(folder: Path) -> bool:
     return _archive_module().reads_recorded(folder, _READS_RECORDED)
 
 
+class LiveStateUnknown(OSError):
+    """A source of 'work is still live' (instruction file, rb ledger) exists but cannot be read: unknown, not idle."""
+
+
 def live_state_tokens(cfg) -> set:
     """Backticked names in the `## Live state` block of the instruction files: work a session is still holding."""
     toks = set()
     for doc in ("CLAUDE.md", "AGENTS.md"):
         try:
             text = (cfg["root"] / doc).read_text(encoding="utf-8")
-        except OSError:
-            continue  # silent-ok: a missing/unreadable instruction file names no live work; idle and activity gates still apply
-        m = re.search(r"^## Live state.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
+        except FileNotFoundError:
+            continue  # silent-ok: a MISSING instruction file names no live work (an existing unreadable one raises below)
+        except (OSError, ValueError) as exc:
+            raise LiveStateUnknown("instruction file {} exists but cannot be read ({})".format(doc, exc)) from exc
+        m =re.search(r"^## Live state.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
         if m:                                   # entry lines only: the block's own instructions name example paths
             entries = "\n".join(ln for ln in m.group(1).splitlines() if ln.lstrip().startswith(("- ", "* ")))
             toks |= {t.replace("\\", "/").rstrip("/").lower() for t in re.findall(r"`([^`\n]+)`", entries)}
@@ -429,9 +435,14 @@ def live_state_tokens(cfg) -> set:
 def rb_job_cwds() -> list:
     p = Path(os.path.expanduser("~")) / ".claude" / "tools" / "resource-budget" / "ledger.json"
     try:
-        return [_key(e["cwd"]) for e in json.loads(p.read_text(encoding="utf-8")).get("entries", []) if e.get("cwd")]
-    except (OSError, ValueError, AttributeError, TypeError):
-        return []  # silent-ok: no readable rb ledger = no rb jobs known; idle and activity gates still apply
+        cwds = [e["cwd"] for e in json.loads(p.read_text(encoding="utf-8")).get("entries", []) if e.get("cwd")]
+        if not all(isinstance(c, str) for c in cwds):
+            raise TypeError("an entry's cwd is not a string")
+        return [_key(c) for c in cwds]
+    except FileNotFoundError:
+        return []  # silent-ok: no rb ledger at all = no rb jobs known (an existing unreadable one raises below)
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        raise LiveStateUnknown("rb ledger {} exists but is unreadable or malformed ({})".format(p, exc)) from exc
 
 
 def is_done(task: Path, idle_days: float, tokens: set, cwds: list, guard) -> str:
@@ -477,8 +488,12 @@ def archive_facts(folder):
 
 def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tuple:
     """([action], rows) for every done folder due: closed first, then by age; over budget, down to min_idle_days."""
-    tokens, cwds = live_state_tokens(cfg), rb_job_cwds()
     held = [] if held is None else held
+    try:
+        tokens, cwds, unknown = live_state_tokens(cfg), rb_job_cwds(), ""
+    except LiveStateUnknown as exc:        # unknown is not idle: every folder stays this run, and the reason is reported
+        tokens, cwds, unknown = set(), [], str(exc)
+        held.append({"path": "(live-work state)", "reason": unknown, "bytes": None, "scope": "archive"})
     inventory = {} if inventory is None else inventory
     inventory.update(roots=[str(_abs(cfg, r)) for r in cfg["archive_roots"]], roots_held=0,
                      candidates_inspected=0, candidates_held=0)
@@ -537,7 +552,7 @@ def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tupl
         if not due or idle < cfg["min_idle_days"] and not closed:
             keep("kept: archive folder not due yet", fp[1], from_root)
             continue
-        why = is_done(t, idle, tokens, cwds, guard)
+        why = ("live-work state unknown: " + unknown) if unknown else is_done(t, idle, tokens, cwds, guard)
         if why:
             keep("kept: archive folder not done ({})".format(why), fp[1], from_root)
             continue
@@ -1142,7 +1157,10 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
             return "something read here since the plan"
         if (now - wrote) / DAY < cfg["min_idle_days"] and not (p/CLOSED_MARK).is_file():
             return "something wrote here since the plan"
-        why = is_done(p, action["idle_days"], live_state_tokens(cfg), rb_job_cwds(), guard)
+        try:
+            why = is_done(p, action["idle_days"], live_state_tokens(cfg), rb_job_cwds(), guard)
+        except LiveStateUnknown as exc:
+            return "live-work state unknown, archiving blocked this run ({})".format(exc)
         if why:
             return "no longer done ({})".format(why)
         if not cfg["archive_enabled"]:

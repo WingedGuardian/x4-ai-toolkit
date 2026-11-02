@@ -396,6 +396,33 @@ class Selection(DoneTest):
         self.assertEqual([], self.plan_expire(30, 90))
         self.assertEqual([], self.plan_expire(400, 0))
 
+    def test_unreadable_live_state_keeps_every_folder_and_says_why(self):
+        self.task("idle-month", mtime=time.time() - 30 * DAY)
+        self.assertEqual(["idle-month"], self.plan_paths()[0])               # twin: with live state known it archives
+
+        def unknown(*_a):
+            raise h.LiveStateUnknown("cannot read AGENTS.md")
+        with patch.object(h, "rb_job_cwds", lambda: []), patch.object(h, "live_state_tokens", unknown), \
+                patch.object(h, "reads_recorded", lambda folder: True):
+            doc = h.plan(self.cfg, only={"archive"})
+        self.assertEqual([], doc["actions"])
+        held = doc["coverage"]["held"]
+        self.assertTrue(any("cannot read AGENTS.md" in h_["reason"] for h_ in held), held)
+        self.assertTrue(doc["coverage"]["unmeasured_held_bytes"])
+
+    def test_apply_refuses_when_live_state_is_unreadable(self):
+        self.task("idle-month", mtime=time.time() - 30 * DAY)
+        with patch.object(h, "rb_job_cwds", lambda: []), patch.object(h, "live_state_tokens", lambda c: set()), \
+                patch.object(h, "reads_recorded", lambda folder: True):
+            action = h.plan(self.cfg, only={"archive"})["actions"][0]
+
+            def unknown():
+                raise h.LiveStateUnknown("ledger is malformed")
+            with patch.object(h, "rb_job_cwds", unknown):
+                why = h.check(action, self.cfg, h.Guard(self.cfg), time.time())
+        self.assertIn("ledger is malformed", why)
+
 
 if __name__ == "__main__":
     unittest.main()
+
