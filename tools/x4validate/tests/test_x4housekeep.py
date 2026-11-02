@@ -963,3 +963,20 @@ class TestVolumeWithNoBinRegistryKey:
             raise PermissionError("denied")
         monkeypatch.setattr(winreg, "OpenKey", denied)
         assert hk.bin_capacity(str(tmp_path)) is None
+
+
+def test_apply_refuses_actions_outside_the_configured_roots(tree):
+    """A plan made under another config (or hand-edited) must not be acted on just because its hashes match."""
+    out = write(tree / "out" / "t" / "01.cat", blob("catalog"))
+    stray = write(tree / "elsewhere" / "t" / "01.cat", blob("catalog"))
+    other_live = write(tree / "other-game" / "01.cat", blob("catalog"))
+    cfg = cfg_for(tree)
+    guard = hk.Guard(cfg)
+    base = next(a for a in hk.plan(cfg)["actions"] if a["class"] == "recreatable" and key(a["path"]) == key(out))
+    assert hk.check(base, cfg, guard, time.time()) == ""                      # twin: the genuine action passes
+    outside = dict(base, path=str(stray), task=str(stray.parent))
+    assert "outside" in hk.check(outside, cfg, guard, time.time())
+    foreign_live = dict(base, live=str(other_live))
+    assert "outside" in hk.check(foreign_live, cfg, guard, time.time())
+    sibling = write(tree / "out-evil" / "t" / "01.cat", blob("catalog"))      # string-prefix sibling of "out"
+    assert "outside" in hk.check(dict(base, path=str(sibling), task=str(sibling.parent)), cfg, guard, time.time())

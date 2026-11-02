@@ -1085,12 +1085,26 @@ class _Memo:
         return self.newest[k]
 
 
+# the config list each class is planned from; apply re-proves containment against the CURRENT config
+ACTION_ROOTS = {"recreatable": "agent_output", "build": "agent_output", "link": "agent_output",
+                "gzip": "launch_logs", "launch": "launch_logs", "snapshot": "legacy_snapshots", "scratch": "scratch"}
+
+
+def _under(path, roots) -> bool:
+    """True when `path` resolves inside one of `roots` (resolved Path ancestry, so "out-evil" is not under "out")."""
+    q = Path(path).resolve()
+    return any(q.is_relative_to(Path(r).resolve()) for r in roots)
+
+
 def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> str:
     """'' when the action may run; otherwise why it is refused. Everything plan() decided is re-proved here."""
     memo = memo or _Memo()
     p = Path(action["path"])
     if not p.exists():
         return "gone since the plan"
+    scope = ACTION_ROOTS.get(action["class"])
+    if scope and not _under(p, [_abs(cfg, r) for r in cfg[scope]]):
+        return "path is outside the configured {}; create a new plan".format(scope)
     if action["class"] in ("recreatable", "build", "link", "gzip"):
         why = guard.why_protected(p)
         if why:
@@ -1103,6 +1117,8 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
         if memo.task_newest(action["task"]) > now - cfg["active_hours"] * 3600:
             return "task folder written to since the plan (active)"
     if action["class"] == "recreatable":
+        if not _under(action["live"], [_abs(cfg, r) for r in cfg["live_roots"]]):
+            return "live file is outside the configured live roots; create a new plan"
         if not Path(action["live"]).is_file() or memo.hash(action["live"]) != action["hash"]:
             return "live file no longer identical"
     if action["class"] == "link":
