@@ -370,6 +370,8 @@ _ALL_CELLS: list[Cell] = [
          expect=(0, 1, 3), findings_ok=True, wants="examined"),
     # a non-save must be rc 2 -- a NON-ANSWER, never a clean result.
     Cell("x4save", "refuses a non-save", ["info", "pyproject.toml"], expect=(2,)),
+    # a pattern nothing matches must say NO MATCH with what it read, rc 1, never an empty success.
+    Cell("x4save", "vars (no match)", ["vars", "zz_no_such_variable_xyzzy"], expect=(1,), wants="NO MATCH"),
     # ---- x4live ---------------------------------------------------------
     # These read a dump written by an in-game probe, so "no dump present" (rc 2)
     # is a legitimate state on a machine that has never run one -- what is NOT
