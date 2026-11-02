@@ -920,3 +920,46 @@ def test_a_failed_recycle_call_is_reported_per_path_not_raised(tmp_path, monkeyp
     assert list(result) == [str(item)]
     assert result[str(item)].startswith("recycle call failed (" + type(exc).__name__)
     assert item.read_bytes() == b"x"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Recycle Bin registry contract")
+class TestVolumeWithNoBinRegistryKey:
+    """2026-11-02: master's CI failed 'Recycle Bin capacity could not be verified' during a toolkit upgrade on a runner
+    drive whose bin had never been configured; a real user's second drive looks the same."""
+
+    @pytest.fixture
+    def no_key(self, monkeypatch):
+        import winreg
+        def missing(*_a, **_k):
+            raise FileNotFoundError("no such key")
+        monkeypatch.setattr(winreg, "OpenKey", missing)
+
+    def test_a_fixed_drive_gets_the_small_assumed_limit(self, tmp_path, no_key):
+        cap = hk.bin_capacity(str(tmp_path))
+        total = hk.shutil.disk_usage(tmp_path.anchor).total
+        assert cap == min(hk.GIB, total // 100) and cap > 0
+
+    def test_a_small_item_is_admitted_and_a_large_one_stays(self, tmp_path, no_key, monkeypatch):
+        item = tmp_path / "item.bin"
+        item.write_bytes(b"12345")
+        monkeypatch.setattr(hk, "_unconfigured_capacity", lambda root: 5)
+        assert hk.bin_refusal(item) == ""
+        item.write_bytes(b"123456")
+        assert "bigger than" in hk.bin_refusal(item)
+
+    @pytest.mark.parametrize("drive_type", [0, 2, 4, 5])  # unknown, removable, remote, optical
+    def test_any_other_drive_type_stays_unverified(self, tmp_path, no_key, monkeypatch, drive_type):
+        monkeypatch.setattr(hk, "_drive_type", lambda path: drive_type)
+        assert hk.bin_capacity(str(tmp_path)) is None
+
+    def test_a_bin_that_will_not_answer_stays_unverified(self, tmp_path, no_key, monkeypatch):
+        monkeypatch.setattr(hk, "_drive_type", lambda path: 3)
+        monkeypatch.setattr(hk.shutil, "disk_usage", lambda root: pytest.fail("no limit without a bin answer"))
+        assert hk._unconfigured_capacity("Q:\\") is None
+
+    def test_a_registry_error_other_than_absence_stays_unverified(self, tmp_path, monkeypatch):
+        import winreg
+        def denied(*_a, **_k):
+            raise PermissionError("denied")
+        monkeypatch.setattr(winreg, "OpenKey", denied)
+        assert hk.bin_capacity(str(tmp_path)) is None

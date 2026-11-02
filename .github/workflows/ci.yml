@@ -773,7 +773,9 @@ jobs:
           # windows 60. The +8 are Windows-only housekeep/archive/BaseX tests added in
           # 2610489..77b30480 (junction, UNC, recycler and child-process contracts; 2 are
           # "recycle() is Windows-only", 73c799a2). Ubuntu ceiling 366 + 3 = 369; windows 63.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '369' || '63' }}
+          # 2026-11-02: rc18 measured ubuntu 366 (run 41468293954, d4f29cb4); +8 TestVolumeWithNoBinRegistryKey
+          # (winreg, Windows-only) = 374; ceiling 374 + 3 = 377; windows 63.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '377' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar

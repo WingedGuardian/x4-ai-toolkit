@@ -654,7 +654,11 @@ def bin_capacity(path: str):
             return None
         guid = buf.value[buf.value.index("{"):buf.value.index("}") + 1]
         key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket\Volume" + "\\" + guid
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+        try:
+            k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key)
+        except FileNotFoundError:
+            return _unconfigured_capacity(os.path.splitdrive(path)[0] + "\\")
+        with k:
             try:
                 if winreg.QueryValueEx(k, "NukeOnDelete")[0]:
                     return 0
@@ -662,6 +666,28 @@ def bin_capacity(path: str):
                 pass  # silent-ok: no NukeOnDelete value: fall through to MaxCapacity
             return int(winreg.QueryValueEx(k, "MaxCapacity")[0]) * 1024 * 1024
     except (OSError, ValueError, AttributeError, ImportError):
+        return None  # silent-ok: None = capacity unverified, which bin_refusal() treats as a refusal
+
+
+def _unconfigured_capacity(root: str):
+    """A volume with no BitBucket registry key has never had its bin configured (a hosted CI runner's D:, a new drive).
+    A fixed drive whose bin answers a query may recycle up to a deliberately small assumed limit, far below Windows'
+    unpublished default; anything larger stays in place. Other drive types and a failed query stay unverified (None)."""
+    DRIVE_FIXED = 3
+    if _drive_type(root) != DRIVE_FIXED:
+        return None
+    try:
+        import ctypes
+        info_type = certainty._recycle_bin_info_type(ctypes.sizeof(ctypes.c_void_p))
+        info = info_type()
+        info.cbSize = ctypes.sizeof(info)
+        query = ctypes.WinDLL("shell32").SHQueryRecycleBinW
+        query.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(info_type)]
+        query.restype = ctypes.c_int32
+        if query(root, ctypes.byref(info)) != 0:
+            return None
+        return min(GIB, shutil.disk_usage(root).total // 100)
+    except (OSError, ValueError, AttributeError):
         return None  # silent-ok: None = capacity unverified, which bin_refusal() treats as a refusal
 
 
