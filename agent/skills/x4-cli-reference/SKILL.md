@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-11 CLIs, 49 subcommands.
+11 CLIs, 50 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -61,6 +61,7 @@ Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `-
 | | `mark` | mark a mod as custom-edited (for /x4-update-mod) |
 | | `changed` | localise a moved content fingerprint: WHICH mod changed, and how |
 | | `snapshot` | record the current mod vector as a cheap baseline (~0.1s), for the gap between expensive rebuilds |
+| | `downloads` | read the manifests inside downloaded archives and compare them with what is installed: newer, same, older, not installed. Read-only |
 | **`x4save`** | | Read an X4 savegame: what is baked into it, what it references that the live tree no longer defines, and its MD variables. |
 | | `info` | header: build, playtime, and the SAVE-BAKED extensions |
 | | `check` | macro references the live tree no longer defines |

@@ -408,6 +408,9 @@ _ALL_CELLS: list[Cell] = [
     # could honour that: it wrote to the DEFAULT registry regardless.
     Cell("x4modlist", "ingest", ["--registry", _sandbox_registry(), "ingest"],
          expect=(0, 1), findings_ok=True),
+    # A folder that does not exist must refuse, and the path never reaches an archive.
+    Cell("x4modlist", "downloads (missing folder)", ["--registry", _sandbox_registry(),
+                                                    "downloads", "no-such-folder-xyzzy"], expect=(2,)),
     Cell("x4modlist", "snapshot", ["--registry", _sandbox_registry(),
                                    "snapshot", "--label", "qa-sweep"], expect=(0,)),
     Cell("x4modlist", "tracked", ["--registry", _sandbox_registry(),

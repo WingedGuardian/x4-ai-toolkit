@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `x4modlist downloads DIR...` reads the manifests inside downloaded `.zip`, `.7z` and `.rar` archives, without extracting anything to disk, and compares them by manifest id with what is installed: newer, same, older, not installed, undetermined, or `DIFFERENT-ID-SAME-FOLDER`, where installing would land on a different mod. A 0-byte or broken archive is listed as a non-answer with its reason, and totals show that every archive was accounted for. `.7z` and `.rar` need 7-Zip; without it they are listed as unreadable.
+
 - `x4save vars <pattern> [save]` prints every named variable whose name matches a regex
   (tried with and without the stored `$`), labelled with where it lives: an MD script/cue
   path, `(aiscript <script> on entity <id>)`, or another container. An integer the engine
