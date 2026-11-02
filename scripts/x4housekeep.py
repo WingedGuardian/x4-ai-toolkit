@@ -34,7 +34,7 @@ read-only so an in-place edit cannot silently change every path at once.
 Accounting: `report` and `plan` print every scanned byte in exactly one row, the rows sum to the total, and the
 row of bytes it leaves alone prints even at zero.
 
-Exit: 0 ok ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· 1 an action was refused or failed ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· 2 bad usage or config.
+Exit: 0 ok · 1 an action was refused or failed · 2 bad usage or config.
 """
 
 from __future__ import annotations

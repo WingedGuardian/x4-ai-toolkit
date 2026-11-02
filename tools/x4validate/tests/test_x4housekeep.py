@@ -1013,3 +1013,10 @@ def test_the_session_note_leads_with_the_instruction_and_is_capped_with_the_cut_
     cut = int(long.split("... [")[1].split(" more")[0])
     kept = long[len(head):].split("... [")[0]
     assert len(kept) + cut == 30000 + len("; ") + len("tail-note")      # nothing lost without being counted
+
+
+def test_the_tool_source_has_no_mojibake():
+    """The docstring's separator was once re-encoded into a run of Latin-1 debris; the only non-ASCII allowed is U+00B7."""
+    text = (REPO / "scripts" / "x4housekeep.py").read_bytes().decode("utf-8")
+    stray = sorted({c for c in text if ord(c) > 127 and c != "\u00b7"})
+    assert not stray, [hex(ord(c)) for c in stray]
