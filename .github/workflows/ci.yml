@@ -773,7 +773,10 @@ jobs:
           # windows 60. The +8 are Windows-only housekeep/archive/BaseX tests added in
           # 2610489..77b30480 (junction, UNC, recycler and child-process contracts; 2 are
           # "recycle() is Windows-only", 73c799a2). Ubuntu ceiling 366 + 3 = 369; windows 63.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '369' || '63' }}
+          # MEASURED ci/fresh-lookup (run 41526027347, 3f5dff2c): ubuntu 370 (FAILED, 370 > 369).
+          # Per row vs run 41419011197 (8f8736d1, 366): +4 test_x4housekeep (F334): 3 "trailing dot/space
+          # names exist only on Windows", 1 "real Windows junction contract". Ubuntu ceiling 370 + 3 = 373.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '373' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar
