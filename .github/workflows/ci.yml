@@ -781,39 +781,110 @@ jobs:
         # WITHOUT the extra, so the no-numpy path (plain x4similar) is still exercised.
         run: uv run --frozen --extra geometry python -m pytest -q -rs
 
-      # THE COLD CHECK, WIRED. `scripts/verify-cold.sh` is named in five documents
-      # (CLAUDE.md, REVIEW-SCOPE.md, SUBAGENT-BRIEF.md, TRUST.md, CHANGELOG.md) and
-      # in five test files -- and until now it was RUN by nothing. One test reads
-      # its SOURCE to check the CLI matrix; none executes it. Every other mention is
-      # prose. `smoke-basex.sh` exists for the same reason and has been wired since
-      # it was written.
-      #
-      # It is the check that has lied most: verifying "like a fresh clone" by hand
-      # produced a confident green THREE TIMES IN A ROW on one release, because path
-      # resolution falls through to $X4_TOOLKIT and a configured machine masquerades
-      # as a clean one. What that hid was fatal for every new user -- gates resolve
-      # paths at IMPORT time and a SystemExit during pytest COLLECTION aborts the
-      # whole session. The script refuses to run until it has PROVEN
-      # registry/game_extensions/reference are all None, which is the load-bearing
-      # part and the reason it cannot be replaced by `env -u`.
-      #
-      # Linux only: it clones committed objects with Git metadata into an isolated
-      # checkout and runs there. No private config travels; the cold precondition
-      # still refuses any resolved X4 path. The Windows leg covers the same suite.
-      # If it should gate
-      # on Windows too, that is a deliberate widening, not an oversight.
+      # The two COLD verifications (verify-cold.sh, plain and --archive) used to end this job on Linux: 47 and 61
+      # minutes AFTER its 48-minute suite (run ci/v4.0.1-rc15), 156 of the job's 167 minutes in series. They are
+      # their own jobs now (cold-clone, cold-archive below) and run beside this one: a run is as long as its
+      # slowest job, not its queue (owner ruling 2026-10-31).
+
+    # THE COLD CHECK, WIRED. `scripts/verify-cold.sh` is named in five documents
+    # (CLAUDE.md, REVIEW-SCOPE.md, SUBAGENT-BRIEF.md, TRUST.md, CHANGELOG.md) and
+    # in five test files -- and until 2026-09 it was RUN by nothing. One test reads
+    # its SOURCE to check the CLI matrix; none executes it. Every other mention is
+    # prose. `smoke-basex.sh` exists for the same reason and has been wired since
+    # it was written.
+    #
+    # It is the check that has lied most: verifying "like a fresh clone" by hand
+    # produced a confident green THREE TIMES IN A ROW on one release, because path
+    # resolution falls through to $X4_TOOLKIT and a configured machine masquerades
+    # as a clean one. What that hid was fatal for every new user -- gates resolve
+    # paths at IMPORT time and a SystemExit during pytest COLLECTION aborts the
+    # whole session. The script refuses to run until it has PROVEN
+    # registry/game_extensions/reference are all None, which is the load-bearing
+    # part and the reason it cannot be replaced by `env -u`.
+    #
+    # Linux only: it clones committed objects with Git metadata into an isolated
+    # checkout and runs there. No private config travels; the cold precondition
+    # still refuses any resolved X4 path. The Windows `tests` leg covers the same
+    # suite. If it should gate on Windows too, that is a deliberate widening, not
+    # an oversight. The setup mirrors the `tests` job's (uv, Python 3.13, Java 17
+    # for the BaseX tests, the pinned Codex CLI for the .rules checks) so the suite
+    # it runs in the cold tree sees the environment it saw as a step there.
+  cold-clone:
+    name: cold-clone verification (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5, peeled commit
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.13
+        run: uv python install 3.13
+
+      - name: Install Java 17 (for the BaseX tests)
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install the Codex CLI (pinned) for the .rules checks
+        run: npm i -g @openai/codex@0.160.0
+
+      - name: Setup complete
+        id: setup
+        shell: bash
+        run: echo setup complete
+
       - name: Cold-clone verification (the check that has lied most)
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Linux' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: bash
         run: bash tools/x4validate/scripts/verify-cold.sh
 
-      # THE RELEASE ZIP'S POPULATION (FX-H2 / I-1): `git archive`, no .git -- what a user
-      # extracts and installs in place. F262 swapped this leg for the clone above when three
-      # tests needed Git metadata, which hid the failing population instead of fixing it.
-      # The extract sits inside this checkout, so the script sets GIT_CEILING_DIRECTORIES and
-      # REFUSES unless git can no longer see any repository (else this passes vacuously).
+    # THE RELEASE ZIP'S POPULATION (FX-H2 / I-1): `git archive`, no .git -- what a user
+    # extracts and installs in place. F262 swapped this leg for the clone above when three
+    # tests needed Git metadata, which hid the failing population instead of fixing it.
+    # The extract sits inside this checkout, so the script sets GIT_CEILING_DIRECTORIES and
+    # REFUSES unless git can no longer see any repository (else this passes vacuously).
+  cold-archive:
+    name: cold-archive verification (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5, peeled commit
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.13
+        run: uv python install 3.13
+
+      - name: Install Java 17 (for the BaseX tests)
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install the Codex CLI (pinned) for the .rules checks
+        run: npm i -g @openai/codex@0.160.0
+
+      - name: Setup complete
+        id: setup
+        shell: bash
+        run: echo setup complete
+
       - name: Cold-archive verification (the release zip, no Git metadata)
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Linux' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: bash
         run: bash tools/x4validate/scripts/verify-cold.sh --archive
 

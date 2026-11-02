@@ -53,7 +53,7 @@ usage: x4save vars [-h] pattern [save]
 
 positional arguments:
   pattern     regular expression matched case-insensitively against the variable name, with and
-              without its stored leading $, e.g. allFactions or ^xssm_
+              without its stored leading $, e.g. allFactions or ^mymod_
   save        save name, e.g. save_020, or a path (default: newest)
 
 options:

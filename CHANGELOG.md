@@ -20,6 +20,8 @@
   node?" for merged scripts without reading every diff. Reports who WON each node, not who
   introduced it; after a whole-file replace no node is annotated and the header names the
   replacing mod; attribute history inside a replaced subtree is not kept (F338). (#15)
+  This adds display helpers to `_provenance.py`, an engine source, so the effective store,
+  BaseX `x4eff` and x4xref report STALE until rebuilt; the rebuild changes no answers.
 
 - Geometry comparison supports bounded recursive structural attachments, shared
   render-part references and an explicit `--geometry-pose bind` projection.

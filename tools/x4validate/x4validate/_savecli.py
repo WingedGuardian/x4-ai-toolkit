@@ -453,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
                              "NAME, not a path into the save folder)")
     pv.add_argument("pattern", help="regular expression matched case-insensitively against the "
                                     "variable name, with and without its stored leading $, e.g. "
-                                    "allFactions or ^xssm_")
+                                    "allFactions or ^mymod_")
     pv.add_argument("save", nargs="?", help="save name, e.g. save_020, or a path "
                                             "(default: newest)")
 
