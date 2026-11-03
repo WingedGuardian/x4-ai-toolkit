@@ -230,7 +230,15 @@ def test_removing_the_search_cell_is_reported_as_a_finding(monkeypatch):
 
 def test_the_find_cell_accepts_every_exit_find_documents():
     """x4effective find: 0 a match, 1 none, 3 nothing to search (and 2 for an older store). A cell that lists fewer reads a
-    documented answer as a defect of the tool."""
-    qa = _qa()
-    cell = next(c for c in qa.CELLS if c.tool == "x4effective" and c.label == "find")
-    assert {0, 1, 2, 3} <= set(cell.expect)
+    documented answer as a defect of the tool. Read from the source: importing the gate needs a configured install, and
+    this needs nothing."""
+    import ast
+
+    from _layout import require_repo
+    require_repo("tools/x4validate/gates/qa_sweep.py", why="the gates are not installed")
+    tree = ast.parse((ROOT / "gates" / "qa_sweep.py").read_text(encoding="utf-8"))
+    cells = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "Cell"
+             and [getattr(a, "value", None) for a in n.args[:2]] == ["x4effective", "find"]]
+    assert len(cells) == 1
+    expect = next(k.value for k in cells[0].keywords if k.arg == "expect")
+    assert {0, 1, 2, 3} <= set(ast.literal_eval(expect))
