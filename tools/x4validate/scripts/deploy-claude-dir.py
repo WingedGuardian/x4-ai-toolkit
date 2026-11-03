@@ -404,6 +404,10 @@ def guard_evidence(repo_root: Path) -> str | None:
         top = git("rev-parse", "--show-toplevel")
     except OSError:
         return NO_COMMIT
+    # A checkout git refuses (dubious ownership, a damaged .git) answers with the same nonzero as no checkout at all; it
+    # is not a release zip, and a zip's advice is to use the override.
+    if top.returncode and (Path(repo_root) / ".git").exists():
+        return f"this is a git checkout, but git could not read it ({(top.stderr or '').strip()[:200]})"
     # The toplevel, not just "is there a HEAD": a zip unpacked inside the game root's own repository sees that HEAD.
     if top.returncode or (os.path.normcase(os.path.realpath(top.stdout.strip()))
                           != os.path.normcase(os.path.realpath(repo_root))):
@@ -425,6 +429,10 @@ def guard_evidence(repo_root: Path) -> str | None:
     if isinstance(runs, list):
         conclusions = {run.get("conclusion") for run in runs if isinstance(run, dict)}
         if "success" in conclusions:
+            red = sorted(conclusions & CI_RED)
+            if red:          # a re-run or a flaky leg: the success is the proof, and the red run is still worth a look
+                print(f"NOTE: CI on {sha[:8]} has both a success and {', '.join(red)}; accepted on the success.",
+                      file=sys.stderr)
             return None
         if conclusions & CI_RED:
             return f"CI failed on {sha[:8]} and has no successful run on it, whether or not it is on origin/master"
@@ -575,7 +583,8 @@ def main(argv: list[str] | None = None) -> int:
             if why and not args.unverified_guards:
                 remedy = ("If this copy came from a release you trust, re-run with --unverified-guards REASON, "
                           "naming the release." if why == NO_COMMIT else
-                          "Push it to a ci/ branch first, or pass --unverified-guards REASON.")
+                          "Fix what git says first, or pass --unverified-guards REASON." if "git could not read" in why
+                          else "Push it to a ci/ branch first, or pass --unverified-guards REASON.")
                 print(f"REFUSING: this deploy changes guard code ({', '.join(guards)}) and {why}. Guard "
                       f"changes go live only after review and a green CI run on the exact commit. Nothing "
                       f"was written. {remedy}", file=sys.stderr)

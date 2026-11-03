@@ -320,17 +320,20 @@ class Selection(DoneTest):
         self.assertEqual([], self.plan_paths()[0])
 
     def test_housekeep_hashing_does_not_count_as_a_read(self):
-        # Asserted on the restore call itself: a filesystem that does not record reads (CI runners) would let a
-        # missing restore pass unseen if we only compared access times.
+        # Asserted on the open itself: a filesystem that does not record reads (CI runners) would let an ordinary open
+        # pass unseen if we only compared access times. test_x4housekeep_stub_and_sniff.py measures it where reads are
+        # recorded. Nothing may be written to undo a read: `report` says it changes nothing.
         f = self.d / "x.bin"
         touch(f, mtime=time.time() - 30 * DAY)
-        st = os.stat(f)
-        calls = []
-        real = os.utime
-        with patch.object(h.os, "utime", lambda *a, **k: (calls.append((a, k)), real(*a, **k))[1]):
-            h.blake(f)
-        self.assertIn(((f,), {"ns": (st.st_atime_ns, st.st_mtime_ns)}), calls)
-        self.assertEqual(st.st_atime_ns, os.stat(f).st_atime_ns)
+        opened = []
+        real = ha.open_unrecorded
+        h._archive_module().open_unrecorded = lambda p: (opened.append(p), real(p))[1]
+        try:
+            with patch.object(h.os, "utime", side_effect=AssertionError("a read time was written back")):
+                h.blake(f)
+        finally:
+            h._archive_module().open_unrecorded = real
+        self.assertEqual(opened, [f])
 
     def test_nothing_below_min_idle_even_over_budget(self):
         # A root configured with a shorter age than min_idle_days must still wait min_idle_days.

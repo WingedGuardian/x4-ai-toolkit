@@ -8,7 +8,7 @@ Agent work piles up bytes that carry no information: copies of game files made a
 intermediates, the same log copied into ten evidence folders, launch logs nobody prunes, snapshot folders
 that repeat the one before. The policy this tool implements is RETENTION.md; read that first.
 
-    python scripts/x4housekeep.py [report]            what is where, by class (changes nothing)
+    python scripts/x4housekeep.py [report]            what is where, by class (changes nothing, read times included)
     python scripts/x4housekeep.py plan -o plan.json   every action, with the hash it was planned on
             [--only CLASS[,CLASS]]                   (skips the scans no listed class needs)
     python scripts/x4housekeep.py apply plan.json     re-check each action, then do exactly those
@@ -84,29 +84,18 @@ def is_save(low: str) -> bool:
 
 
 def _holds_savegame(path) -> bool:
-    """Does this XML or gzipped XML open with X4's <savegame> root? Protection only, so a false positive keeps a file.
-    Unreadable or corrupt content is ordinary content here: every removal path still has its own read of it. The read
-    time is put back, or a plan's own look would trip the read veto on the next one."""
-    p = Path(path)
+    """Does this file open with X4's <savegame> root, plain or gzipped, whatever it is called? Protection only, so a false
+    positive keeps a file. Bounded: at most two sniff sizes read, and one decompressed, from any file; a truncated gzip
+    still answers. The read is not recorded (open_unrecorded) and writes nothing. Unreadable or corrupt content is
+    ordinary content here: every removal path still has its own read of it."""
     try:
-        before = p.stat()
-        with p.open("rb") as raw:
-            magic = raw.read(2)
-            raw.seek(0)
-            if magic == b"\x1f\x8b":
-                with gzip.open(raw, "rb") as stream:
-                    head = stream.read(SAVE_SNIFF_BYTES)
-            else:
-                head = raw.read(SAVE_SNIFF_BYTES)
-    except (OSError, EOFError, zlib.error):
+        with _archive_module().open_unrecorded(path) as raw:
+            head = raw.read(SAVE_SNIFF_BYTES * 2)
+        if head[:2] == b"\x1f\x8b":
+            head = zlib.decompressobj(wbits=31).decompress(head, SAVE_SNIFF_BYTES)
+    except (OSError, zlib.error):
         return False  # silent-ok: not readable as XML; an unreadable file is held by its removal path's own proof
-    try:
-        after = p.stat()
-        if (before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns):
-            os.utime(p, ns=(before.st_atime_ns, after.st_mtime_ns))
-    except OSError:
-        pass  # silent-ok: conservative: a read veto may remain; never fake idleness (a read-only copy refuses utime)
-    return bool(SAVE_ROOT.match(head))
+    return bool(SAVE_ROOT.match(head[:SAVE_SNIFF_BYTES]))
 
 
 CLASSES = ("recreatable", "build", "link", "gzip", "launch", "snapshot", "scratch", "archive", "expire")
@@ -318,7 +307,7 @@ class Guard:
     def why_protected(self, path) -> str:
         p = str(path)
         low = p.replace("\\", "/").lower()
-        if is_save(low) or (low.endswith((".xml.gz", ".xml")) and _holds_savegame(p)):
+        if is_save(low) or _holds_savegame(p):
             return "save"
         # Folder names BELOW the configured root only: a root that itself sits under ".../backups/..." must not
         # make every file look protected (or, read the other way, make the rule meaningless).
@@ -566,12 +555,35 @@ def archive_facts(folder):
     return [n, size, round(wrote, 3)], wrote, read
 
 
-def _only_kept_evidence(folder: Path) -> bool:
-    """A stub plus exactly what archiving leaves local: their total can pass 1 MiB, and that is not new work."""
+def _kept_extra(guard, folder) -> list:
+    """Files under `folder` that archiving leaves in place wherever they sit: git-tracked, or linked from a project doc."""
+    k = _key(folder) + os.sep
+    return [x for x in guard.tracked | guard.links if x.startswith(k)]
+
+
+def stub_state(folder: Path, guard) -> str:
+    """'' when an archived folder holds only its stub and what archiving keeps (`_kept_extra` included, the set archiving
+    itself used). Otherwise what else is there, in words. Such a folder is never archived again, since a second archive
+    of it can only fail: what is left is a recycle that did not finish, or work done since, and which it is decides
+    whether it is also in the zip. By name: the names are in the stub's record; hashing every leftover at every plan
+    would cost more than a person comparing the one folder this names."""
     ha = _archive_module()
-    kept = ha.keep_local(folder)
-    return all(os.path.normcase(str(f)) in kept or f == folder / ha.STUB or f == folder / CLOSED_MARK
-               for f in walk_files(folder))
+    kept = ha.keep_local(folder, _kept_extra(guard, folder))
+    rest = [f for f in walk_files(folder) if os.path.normcase(str(f)) not in kept
+            and f != folder / ha.STUB and f != folder / CLOSED_MARK]
+    if not rest:
+        return ""
+    try:
+        text = (folder / ha.STUB).read_text(encoding="utf-8")
+        named = set(json.loads(text.rsplit("<!-- ", 1)[1].split(" -->", 1)[0])["source_hashes"])
+    except (OSError, ValueError, IndexError, KeyError, TypeError):
+        return "{}: has an {} but its record cannot be read, and {} other item(s) are here: nothing shows any of them " \
+               "is in a zip; kept, not archived again".format(folder, ha.STUB, len(rest))
+    new = [f for f in rest if f.relative_to(folder).as_posix() not in named]
+    return ("{}: archived, but {} item(s) are still here: {} named in its zip (a recycle that did not finish, or edited "
+            "since: compare before removing them), {} NOT in it (possibly the only copy{}); kept, not archived again"
+            ).format(folder, len(rest), len(rest) - len(new), len(new),
+                     ", e.g. {}".format(new[0].relative_to(folder).as_posix()) if new else "")
 
 
 def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tuple:
@@ -585,7 +597,7 @@ def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tupl
         held.append({"path": "(live-work state)", "reason": unknown, "bytes": None, "scope": "archive"})
     inventory = {} if inventory is None else inventory
     inventory.update(roots=[str(_abs(cfg, r)) for r in cfg["archive_roots"]], roots_held=0,
-                     candidates_inspected=0, candidates_held=0, job_ledger_note=ledger_note)
+                     candidates_inspected=0, candidates_held=0, job_ledger_note=ledger_note, stub_notes=[])
     # from_root: the folder lives under archive_roots, which the file-level loop never scans, so its kept bytes are
     # counted here; agent_output folders that stay are counted by that loop instead (rows must sum to the scan).
     cands = [(t, cfg["archive_after_days"], False) for t, s in tasks if s != "loose"]
@@ -621,8 +633,17 @@ def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tupl
         # Before any other hold: the note is about what a pin costs, whatever else keeps the folder this run.
         if (t / KEEP_PIN).exists() and fp[1] >= cfg["pin_warn_gib"] * GIB:
             pins.append((t, fp[1]))
-        if (t / "ARCHIVED.md").exists() and (fp[1] < 1 << 20 or _only_kept_evidence(t)):
-            keep("kept: already archived (stub only)", fp[1], from_root)
+        if (t / "ARCHIVED.md").exists():
+            try:
+                state = stub_state(t, guard)
+            except OSError as exc:
+                inventory["candidates_held"] += 1
+                held.append({"path": str(t), "reason": str(exc), "bytes": None, "scope": "archive"})
+                continue
+            if state:
+                inventory["stub_notes"].append(state)
+            keep("kept: archived, other items still here" if state else "kept: already archived (stub only)",
+                 fp[1], from_root)
             continue
         idle = (now - wrote) / DAY if wrote else 0.0           # idleness: writes
         if read > now - cfg["read_veto_hours"] * 3600:         # but anything reading here right now blocks it
@@ -712,8 +733,9 @@ def _is_link(path) -> bool:
     return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
 
 
-def landing_refusal(p) -> str:
-    """'' when `p` really lives where it is spelled; otherwise why it is left in place.
+def landing_refusal(p, on_a_share="no Recycle Bin") -> str:
+    """'' when `p` really lives where it is spelled; otherwise why it is left in place. `on_a_share` is why that matters
+    to the caller.
 
     MEASURED 2026-10-31: the shell's delete destroys a file on a network share silently (rc 0, no dialog), and a SUBST
     drive or a volume with no letter has no bin either, so this refusal is the only protection there. A drive letter
@@ -722,7 +744,7 @@ def landing_refusal(p) -> str:
     realpath expands those. No answer means keep."""
     s = os.path.abspath(str(p))
     if s.startswith("\\\\"):
-        return "left in place: network location (no Recycle Bin)"
+        return "left in place: network location ({})".format(on_a_share)
     part = s
     while True:
         try:
@@ -745,7 +767,7 @@ def landing_refusal(p) -> str:
     if os.path.normcase(os.path.splitdrive(real)[0]) != os.path.normcase(os.path.splitdrive(s)[0]):
         return "left in place: this path really lands on another volume ({})".format(real)
     if _drive_type(s) == 4 or _drive_type(real) == 4:                  # DRIVE_REMOTE: a share has no Recycle Bin
-        return "left in place: network location (no Recycle Bin)"
+        return "left in place: network location ({})".format(on_a_share)
     return ""
 
 
@@ -1137,6 +1159,8 @@ def print_coverage(doc):
             archive["candidates_inspected"], archive["candidates_held"], archive["roots_held"]))
         if archive.get("job_ledger_note"):
             print("  NOTE " + archive["job_ledger_note"])
+        for note in archive.get("stub_notes", []):
+            print("  NOTE " + note)
     for path, size in doc.get("large_pins", []):
         print("pinned with .housekeep-keep: {:.2f} GiB  {}".format(size / GIB, path))
     review = coverage.get("archive_review", {})
@@ -1274,7 +1298,8 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
     p = Path(action["path"])
     if not p.exists():
         return "gone since the plan"
-    why = landing_refusal(p)       # before any work is done, and whichever recycler ends up holding it
+    # Before any work is done, and whichever recycler ends up holding it.
+    why = landing_refusal(p, *(["hard links stay on local volumes"] if action["class"] == "link" else []))
     if why:
         return why
     scope = ACTION_ROOTS.get(action["class"])
@@ -1426,6 +1451,10 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
             continue
         to_recycle, done = [], 0
         archived = []                       # (action, record) awaiting the batched recycle of their payload
+        if cls == "archive":                # read again now: the plan's note may be days old, and this run acts on it
+            ledger_note = job_cwds(cfg)[1]
+            if ledger_note:
+                print("  NOTE " + ledger_note)
         for a in acts:
             if deadline is not None and time.time() > deadline:
                 deferred += 1
@@ -1455,9 +1484,8 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
                     to_recycle.append(a)
                 elif cls == "archive":
                     ha = _archive_module()
-                    k = _key(a["path"]) + os.sep
-                    extra = [x for x in guard.tracked | guard.links if x.startswith(k)]
-                    archived.append((a, ha.archive_folder(Path(a["path"]), Path(a["nas"]), None, extra)))
+                    archived.append((a, ha.archive_folder(Path(a["path"]), Path(a["nas"]), None,
+                                                          _kept_extra(guard, a["path"]))))
                 else:
                     to_recycle.append(a)
             except Exception as e:          # OSError, or the archive module's ArchiveError: local folder untouched

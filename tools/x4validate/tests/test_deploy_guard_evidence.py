@@ -62,7 +62,8 @@ def test_github_is_asked_first_even_for_a_published_commit(repo, monkeypatch, ca
     asked = _gh(monkeypatch, stdout='[{"conclusion": "success"}]')
     assert dep.guard_evidence(repo) is None
     assert asked and "--commit" in asked[0]
-    assert "origin/master" not in capsys.readouterr().err       # no fallback, no note
+    err = capsys.readouterr().err
+    assert "origin/master" not in err and "NOTE" not in err     # no fallback, no note
 
 
 def test_a_red_commit_on_master_is_not_proof(repo, monkeypatch):
@@ -72,9 +73,12 @@ def test_a_red_commit_on_master_is_not_proof(repo, monkeypatch):
     assert why and "failed" in why
 
 
-def test_failure_then_success_on_the_commit_is_proof(repo, monkeypatch):
+def test_failure_then_success_on_the_commit_is_proof_and_says_so(repo, monkeypatch, capsys):
+    """A success beats a red run on the same commit (a re-run, or a flaky leg), and the deploy says it saw both."""
     _gh(monkeypatch, stdout='[{"conclusion": "failure"}, {"conclusion": "success"}]')
     assert dep.guard_evidence(repo) is None
+    err = capsys.readouterr().err
+    assert "NOTE" in err and "failure" in err and "success" in err
 
 
 @pytest.mark.parametrize("gh", [dict(stdout="[]"), dict(rc=1), dict(raises=FileNotFoundError("gh")),
@@ -148,6 +152,30 @@ def test_committed_versions_survive_git_vanishing_or_hanging(repo, monkeypatch):
     monkeypatch.setattr(dep.subprocess, "run", fake)
     assert dep.committed_versions(repo, ".claude/hooks/h.sh") == []
     assert calls
+
+
+def test_a_real_checkout_git_cannot_read_is_not_a_release_zip(repo, tmp_path, capsys):
+    """rc != 0 from rev-parse was read as "no checkout", so a damaged or refused repository was told it was a zip install,
+    and the zip's advice is to use the override. REAL git on a REAL damaged repository."""
+    (repo / ".git" / "HEAD").write_bytes(b"not a ref\n")
+    why = dep.guard_evidence(repo)
+    assert why and "not a git checkout" not in why and "git could not read" in why
+    dest = _deployable(tmp_path, repo)
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
+    err = capsys.readouterr().err
+    assert "Fix what git says" in err and "ci/ branch" not in err and "naming the release" not in err
+
+
+def test_dubious_ownership_is_said_as_itself(repo, monkeypatch):
+    """Git refuses a repository another account owns; the same rc as "no repository" with a different sentence."""
+    real = subprocess.run
+
+    def fake(cmd, *a, **k):
+        if cmd[0] == "git" and "--show-toplevel" in cmd:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: detected dubious ownership in repository at 'x'\n")
+        return real(cmd, *a, **k)
+    monkeypatch.setattr(dep.subprocess, "run", fake)
+    assert "dubious ownership" in dep.guard_evidence(repo)
 
 
 def test_a_zip_install_is_told_what_to_do_not_to_push(tmp_path, capsys):

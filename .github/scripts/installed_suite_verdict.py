@@ -11,6 +11,9 @@ that run into a verdict that cannot pass on nothing.
 IT REFUSES TO PASS WHEN:
   * the tree under test has an `agent/` or a `.git` (it would not be an installed copy), or lacks the
     files an install always carries (the check is on the tree, not on how it was made);
+  * the junit file does not name that tree: the suite step runs with
+    `-o junit_suite_name=installed-copy:<root>`, because the tree and the counts come from two arguments and
+    a junit file from any other copy would otherwise pass as this one's;
   * the junit file is missing or unreadable, or holds fewer than --min-tests test cases, or fewer than
     --min-passed passes (a suite that collected a handful, or skipped itself, is not a green suite);
   * ANY test failed or errored;
@@ -30,12 +33,14 @@ from pathlib import Path
 #: Files an install always carries. Their absence means the tree is not an install of this toolkit.
 INSTALL_MARKERS = ("install.sh", "setup.sh", "x4-paths.env", "tools/x4validate/pyproject.toml",
                    "tools/x4validate/tests/_layout.py")
+SUITE_PREFIX = "installed-copy:"
 
 
 def tally(junit: Path) -> dict:
     """Counts by test CASE (not by the suite attributes, which an interrupted run can leave stale)."""
     tree = ET.parse(junit)
-    out = {"total": 0, "passed": 0, "failed": 0, "errors": 0, "skipped": 0, "bad": []}
+    out = {"total": 0, "passed": 0, "failed": 0, "errors": 0, "skipped": 0, "bad": [],
+           "suites": sorted({s.get("name", "") for s in tree.getroot().iter("testsuite")})}
     for case in tree.getroot().iter("testcase"):
         out["total"] += 1
         kinds = {child.tag for child in case}
@@ -73,6 +78,12 @@ def verdict(junit, root, min_tests: int, min_passed: int, max_skips: int) -> tup
     except ET.ParseError as exc:
         problems.append("junit file %s is unreadable (%s)" % (junit, exc))
         return problems, None
+    ran_on = [n[len(SUITE_PREFIX):] for n in counts["suites"] if n.startswith(SUITE_PREFIX)]
+    if not ran_on:
+        problems.append("junit file %s names no tree (run the suite with -o junit_suite_name=%s<root>): nothing ties "
+                        "its counts to %s" % (junit, SUITE_PREFIX, root))
+    elif any(Path(n).resolve() != root.resolve() for n in ran_on):
+        problems.append("junit file %s is from %s, not the tree under judgement (%s)" % (junit, ", ".join(ran_on), root))
     if counts["total"] < min_tests:
         problems.append("only %d test case(s) in the junit file, fewer than the floor of %d: the suite collected "
                         "next to nothing" % (counts["total"], min_tests))

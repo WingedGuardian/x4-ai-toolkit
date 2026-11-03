@@ -109,6 +109,9 @@ The shared freshness implementation includes profile enable decisions in the
 content axis. Rebuild after installing, removing, updating, enabling or disabling
 mods; a fingerprint is not a full byte hash of every game/archive file.
 
+Both builders record the fingerprint before their first read and stamp that, so a world
+that moved while one ran reads STALE afterwards, however it was started.
+
 Rebuild with `build-corpus.sh` / `build-effective.sh`; inspect without rebuilding:
 
 ```bash

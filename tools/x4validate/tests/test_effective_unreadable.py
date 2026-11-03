@@ -1,7 +1,7 @@
 """Store failures are actionable rc 2; user SQL mistakes remain rc 1."""
 import sqlite3
 import pytest
-from x4validate import _effective, _effectivecli, _freshness
+from x4validate import _closedpipe, _effective, _effectivecli, _freshness
 
 
 def store(path):
@@ -84,9 +84,8 @@ def test_a_BROKEN_PIPE_is_not_relabelled_store_unreadable(tmp_path, capsys, monk
     unreadable ... Rebuild' -- sending the user to rebuild a healthy store."""
     path = store(tmp_path/'ok.sqlite')
     def pipe(con, args):
-        raise BrokenPipeError(32, 'Broken pipe')
+        raise _closedpipe.OutputClosed(32, 'Broken pipe')
     monkeypatch.setattr(_effectivecli, '_cmd_ls', pipe)
-    monkeypatch.setattr(_effectivecli, '_quiet_stdout', lambda: None)
     rc = _effectivecli.main(['--db', str(path), 'ls', 'ware'])
     err = capsys.readouterr().err
     assert 'unreadable' not in err, err
@@ -129,3 +128,30 @@ def test_a_store_REACHED_THROUGH_a_UNC_path_opens(tmp_path, capsys):
         pytest.skip('no reachable local admin share -- not checked')
     assert _effectivecli.main(['--db', unc, 'ls', 'ware']) == 0
     assert 'ore' in capsys.readouterr().out
+
+
+def _coverage_truncated_line(path, capsys):
+    assert _effectivecli.main(['--db', str(path), 'coverage']) in (0, 3)
+    return [ln for ln in capsys.readouterr().out.splitlines() if 'truncated props' in ln]
+
+
+def test_coverage_says_unknown_for_a_store_with_no_truncation_field(tmp_path, capsys):
+    """An older store never counted them: "0 (none -- every property subtree was indexed)" was a claim about nothing."""
+    path = store(tmp_path / 'old.sqlite')
+    con = sqlite3.connect(path)
+    con.execute("DELETE FROM meta WHERE key LIKE 'truncated%'")
+    con.commit()
+    con.close()
+    line = _coverage_truncated_line(path, capsys)
+    assert len(line) == 1 and 'unknown' in line[0] and 'every property subtree' not in line[0], line
+
+
+def test_coverage_still_says_zero_for_a_store_that_counted_zero(tmp_path, capsys):
+    """The twin."""
+    path = store(tmp_path / 'new.sqlite')
+    con = sqlite3.connect(path)
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('truncated_props', '0')")
+    con.commit()
+    con.close()
+    line = _coverage_truncated_line(path, capsys)
+    assert len(line) == 1 and 'every property subtree was indexed' in line[0], line

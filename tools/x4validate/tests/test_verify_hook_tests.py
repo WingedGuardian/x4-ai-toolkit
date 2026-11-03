@@ -140,6 +140,8 @@ def test_the_check_refuses_when_the_hooks_cannot_be_read(monkeypatch, tmp_path):
 
 def test_the_prepush_gate_runs_the_check():
     """A list entry and not a mention: prose in the gate would satisfy a substring."""
+    from _layout import require_repo
+    require_repo("scripts/prepush-gate.py", why="the pre-push gate is export-ignored: a maintainer's tool")
     spec_ = importlib.util.spec_from_file_location("prepush_gate_t", ROOT / "scripts" / "prepush-gate.py")
     gate = importlib.util.module_from_spec(spec_)
     spec_.loader.exec_module(gate)
