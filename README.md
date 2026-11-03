@@ -156,7 +156,7 @@ cannot tell those apart. Exit 1 when there is a decision to make, 0 when the por
 ### The cross-mod interaction suite — how does a mod behave against everything else installed?
 Validating a mod in isolation isn't the same question as "how does this play with my other 40
 mods?" No published tool answers that for X4 — the interaction suite does, reading packed mods
-(e.g. VRO) as well as loose ones:
+(e.g. a large overhaul) as well as loose ones:
 - **`x4compat`** — collision detection over the *effective* tree: two mods editing the same node
   (one silently loses), defining the same registry id, or fully overriding the same file. A
   candidate mode answers "what would break if I added this mod?" before you install it.
@@ -810,7 +810,7 @@ unavailable evidence and its own coverage, and never changes your registry.
 - *"What does this Nexus mod do, and are there known 9.0 issues, before I edit it?"*
 
 **Interaction analysis**
-- *"Before I add this weapon mod — does it conflict with anything I have, and is it balanced for VRO?"*
+- *"Before I add this weapon mod — does it conflict with anything I have, and is it balanced for my overhaul?"*
 - *"Why does my death-alternative mod stop the vanilla eject sequence, and what would happen if I added an escape-pod mod too?"*
 
 If it involves X4 XML, diff patches, MD/Lua scripts, the economy, or mod files, ask. The agent has
