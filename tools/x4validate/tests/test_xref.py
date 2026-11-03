@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from lxml import etree
 
 from x4validate import _xref
@@ -113,6 +116,36 @@ def test_tsv_round_trip(tmp_path):
     back = _xref.read_tsv(p)
     assert len(back) == len(rows)
     assert {(r.kind, r.name) for r in back} == {(r.kind, r.name) for r in rows}
+
+
+def test_a_write_killed_mid_way_leaves_the_previous_index_intact(tmp_path, monkeypatch):
+    """A build that dies while writing used to leave a TRUNCATED index in place of a valid one (the
+    file was opened 'w' over the old one). Now the old bytes survive and no temp is left behind."""
+    p = tmp_path / "xref.tsv"
+    _xref.write_tsv(_rows(ATD_LIKE), p)
+    before = p.read_bytes()
+
+    def dies(src, dst):
+        assert Path(src).read_bytes(), "the temp must be fully written before the swap"
+        raise KeyboardInterrupt("killed at the swap")
+
+    monkeypatch.setattr(_xref.os, "replace", dies)
+    with pytest.raises(KeyboardInterrupt):
+        _xref.write_tsv(_rows(ATD_LIKE)[:1], p)
+    assert p.read_bytes() == before
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["xref.tsv"]
+
+
+def test_a_freshness_stamp_is_replaced_never_left_half_written(tmp_path, monkeypatch):
+    from x4validate import _freshness
+    target = tmp_path / "xref.tsv"
+    _freshness.stamp_sidecar(target, {"content": "a", "engine": "b"})
+    before = (tmp_path / "xref.tsv.freshness.json").read_bytes()
+    monkeypatch.setattr(_freshness.os, "replace", lambda s, d: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError):
+        _freshness.stamp_sidecar(target, {"content": "c", "engine": "d"})
+    assert (tmp_path / "xref.tsv.freshness.json").read_bytes() == before
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["xref.tsv.freshness.json"]
 
 
 def test_aiscript_uses_script_name_as_context():

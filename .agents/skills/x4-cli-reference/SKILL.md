@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-11 CLIs, 50 subcommands.
+12 CLIs, 54 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -32,6 +32,11 @@ Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `-
 | | `dump` | live effective XML for ANY vpath (incl. md/, aiscripts/) |
 | | `sql` | read-only SELECT against the store |
 | | `coverage` | what this store DOES and does not index (so a negative can carry its denominator) |
+| | `find` | entities whose in-game NAME contains TEXT (resolves {page,id} to English) |
+| **`x4fresh`** | | x4fresh -- is every derived artifact current, and rebuild the ones that are not. |
+| | `status` | one verdict per artifact; exit 0 all FRESH and complete, 3 all FRESH but some known INCOMPLETE (dropped/unparsed input), 5 otherwise |
+| | `rebuild` | rebuild what is not FRESH, one at a time, under a lock |
+| | `accept` | record each artifact's CURRENT losses (dropped/unparsed input) as known; the session note then stays quiet until that set changes |
 | **`x4live`** | | Read what the running engine saw, out of the profile's uidata.xml, and diff it against our model. |
 | | `dump` | what the probe captured, with its denominators |
 | | `extensions` | the engine's extension list, diffed PER ITEM |

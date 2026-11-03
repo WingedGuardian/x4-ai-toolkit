@@ -78,7 +78,7 @@ def test_every_skill_and_settings_is_generated():
     assert ".claude/skills/x4-mod-release-review/SKILL.md" in skills
     assert ".claude/skills/find-session/SKILL.md" in skills
     assert ".claude/settings.json" in out
-    assert sum(p.startswith(".claude/skills/x4-cli-reference/reference/") for p in out) == 11
+    assert sum(p.startswith(".claude/skills/x4-cli-reference/reference/") for p in out) == 12
 
 
 def test_tokens_are_rendered_everywhere():

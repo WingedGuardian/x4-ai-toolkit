@@ -775,7 +775,11 @@ jobs:
           # "recycle() is Windows-only", 73c799a2). Ubuntu ceiling 366 + 3 = 369; windows 63.
           # 2026-11-02: rc18 measured ubuntu 366 (run 41468293954, d4f29cb4); +8 TestVolumeWithNoBinRegistryKey
           # (winreg, Windows-only) = 374; ceiling 374 + 3 = 377; windows 63.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '377' || '63' }}
+          # MEASURED ci/fresh-lookup (run 41526027347, 3f5dff2c): ubuntu 370 (FAILED, 370 > 369).
+          # Per row vs run 41419011197 (8f8736d1, 366): +4 test_x4housekeep (F334): 3 "trailing dot/space
+          # names exist only on Windows", 1 "real Windows junction contract". Ubuntu ceiling 370 + 3 = 373.
+          # Both deltas above apply on top of 366: 366 + 4 + 8 = 378; ceiling 378 + 3 = 381; windows 63.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '381' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar

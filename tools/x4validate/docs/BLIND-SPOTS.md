@@ -436,8 +436,13 @@ memory or from another session -- a remembered id was stale within a day here.
 | F331 | A Windows-form write through a junction was judged as the path spelled, not the file reached | **DEFECT (measured)** · PRE-ARC | 24 of 24 Windows-form junction writes allowed (reference/game/profile/saves); 72 of 72 link-creating commands allowed; replay 0 of 3,447 changed | FIXED 2026-10-26 - protect-files resolves a drive-form path through its links, fail closed; link CREATION into a protected root refused by its target (protect-bash); Bash-channel writes through pre-existing links, hardlinks to existing files and trusted linked toolkit folders stay residual |
 | F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay 2026-10-27: 53 of 53,662 game-root commands advise -> ask, 110 stay advise, 0 other facts changed | CHANGED 2026-10-26, NARROWED 2026-10-27 (user) - rm_deployed_mod asks once per command naming every mod; other game-install deletes advise; install/extensions wholesale and reference/ stay deny |
 | F333 | Three deployed-mod delete shapes the shell guard does not read: a python `shutil.rmtree` literal, a path through a junction to `extensions/`, and a root held in an unknown variable | **OPEN LIMIT (measured)** · PRE-ARC | release review of the 4.0.1 deployed-mod rule (2026-10-27): each allowed at a1d876a, ba370f9 and the merged head alike, in sandbox roots | open; see entry |
+| F334 | `x4housekeep report` crashed on a name Windows lists but cannot reach (trailing `.`/space), and its scratchpad size row could never pass a junction | **DEFECT (measured)** · PRE-ARC | real report: FileNotFoundError on 2 such names; after the fix the row reads `>= 3.16 GiB` with 2 names and 6 links named; delete/move paths already failed closed (4 sites read) | FIXED 2026-10-31 - report rows give a lower bound naming what was not counted; delete paths unchanged |
+| F335 | A diff op whose `sel` ends in `/text()` is not applied by `_merge`, and nothing reports it | **OPEN LIMIT (measured)** · PRE-ARC | toy t-file: `replace .../t[@id='4']/text()` leaves the old text, node replace applies; corpus x4raw 2026-11-01: 0 of 22,457 `@sel` contain `text()` (two query shapes) | open; no installed mod uses it; see entry |
+| F336 | The BaseX builders swallow a refused `DROP DB` (`>/dev/null 2>&1 \|\| true`), so a reader holding the DB turns into a confusing receipt refusal | **OPEN LIMIT (measured)** · PRE-ARC | M2 2026-11-01, private DBPATH: with a reader attached `DROP DB` rc 1 "opened by another process", reader unaffected (3\|3); control without reader: DROP + ALTER rc 0 | open; fails CLOSED (declare_database refuses); see entry |
+| F337 | OpenCode runs no session-start canary, so the KB note, housekeep sweep and x4fresh auto-rebuild never start there | **OPEN LIMIT (read)** · PRE-ARC | `opencode_plugin.mjs:427-439` session path renders preferences only (`opencode.py:234`); Claude and Codex both run session-canary.sh | open; see entry |
 | F338 | `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree | **SCOPE LIMIT (read)** · IN-ARC | `_provenance.Recorder.elem_replaced` drops the old subtree's attribute records (by design); after a whole-file replace (`full_override`) no node has a record, so none is annotated and the header names the replacing origin instead. Real-data run 2026-11-01 on `aiscripts/order.fight.escort.xml` (base + 5 mods): 109 annotated nodes, all attributed to a mod and op line | documented in `--help`; not fixed |
 | F339 | `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them | **SCOPE LIMIT (measured)** · IN-ARC | a 9.0 save stores a table variable as a reference id resolved elsewhere in the save; on save_020 the KUDA config cue alone holds 3 such tables (`$byShipId`, `$defaultOrdersByShipId`, `$lxl_isStrictMaintainDistance`) | stated in output and `--help`; expansion is a follow-up |
+| F340 | The bulk-file guard runs out of its 40 s deadline on a 3,589-path batch at ordinary desk load and refuses it unchecked (fails closed) | **OPEN (measured)** · PRE-ARC | 12 of 12 timed runs on this machine, including the pre-arc tree; ~12.8 ms/path; 64% of a 2,000-path profile is `profiles._resolved`, ~20 calls per path | open; see entry |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11626,6 +11631,61 @@ at the end of the path, so it does not match a mod path beneath it.
 UNMEASURED (inferred from the code): the extensions path is derived from the game root only, so a
 setup with `X4_EXTENSIONS` set and no `X4_GAME` would not fire the deployed-mod ask.
 
+## F334 - housekeep report crashed on unaddressable names and never measured past a junction · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-10-31
+
+MEASURED 2026-10-31: `x4housekeep.py report` died with `FileNotFoundError` in `walk_files` -> `lstat` on
+`y2.txt.` in an old agent scratchpad. Windows lists names ending in `.` or a space, but the normal Win32 path
+strips that character, so `os.listdir` returns the name and `os.lstat` on it raises (both measured on the real
+file). A second, older gap sat behind it: the `<temp>/claude` row used `walk_files`, which raises on any link,
+and that tree holds 6 junctions, so the row had never produced a number on this machine.
+
+Shape, every site that walks then stats (read 2026-10-31, the population is these four files):
+- REPORT-ONLY `user_level` / `dir_size`: crashed. FIXED: `dir_size_counted` skips unaddressable names and does
+  not descend links, and the row prints `>= N GiB (lower bound: ...)` naming the first of each.
+- DELETE/MOVE `walk_files` callers in `x4housekeep.py` (`task_folders`, `sweep_temp`, `check`): already failed
+  closed (the OSError holds the task or counts `failed`); now raise the typed `Unaddressable(OSError)` so the held
+  reason says what happened. Behaviour unchanged, asserted by test.
+- `housekeep_archive.py:65`: fails closed (OSError -> `failed`). Unchanged.
+- `housekeep_backups.py:218` (`inventory` `p.stat()`): fails closed, caught at `:259` and `:424`. Unchanged.
+  `plain_path` skips the lstat for such a name (`exists()` is False) but the stat that follows raises.
+
+Tests (`tools/x4validate/tests/test_x4housekeep.py`, Windows-only, red at ae96ff50): a typed raise from the walk, the report's lower
+bound, a junction not followed, a task held whole. The fixture creates and removes the names through the
+`\\?\` prefix, the only spelling that keeps them.
+
+## F335 - `_merge` does not apply a diff op whose selector ends in `/text()` · **OPEN LIMIT (measured)** · PRE-ARC · confidence 90%
+
+Found 2026-11-01 while writing the `x4effective find` tests. MEASURED on a toy t-file: `<replace
+sel="//page[@id='20101']/t[@id='4']/text()">New</replace>` leaves the old text in the merged tree, while
+the node form `<replace sel="//page[@id='20101']/t[@id='4']"><t id="4">New</t></replace>` applies. Nothing
+reports the skipped op, which is the "narrows the data and reports success" shape. RFC 5261 allows a
+`text()` target; whether the X4 ENGINE applies one is UNMEASURED.
+Population: x4raw 2026-11-01 (stale by one mod, whose new file has no `text()`): **0 of 22,457 `@sel`
+attributes contain `text()`**, by an `ends-with` query over replace/add/remove and a `contains` query
+over every `@sel` (control non-zero). No installed mod is affected today. Open: either apply `text()`
+targets in `_merge` or report them as unapplied, after measuring what the engine does with one.
+
+## F336 - the BaseX builders hide a refused `DROP DB` · **OPEN LIMIT (measured)** · PRE-ARC · confidence 90%
+
+`build-corpus.sh:92` and `build-effective.sh:102` run `DROP DB $DB >/dev/null 2>&1 || true`. MEASURED
+2026-11-01 (M2) in a private `-Dorg.basex.DBPATH` (refused to run unless BaseX reported that path): while
+another process holds the database in a query, `DROP DB` returns rc 1 with "Database 't1' is opened by
+another process." and the reader finishes with the correct result; `ALTER DB t1_next t1` is refused while
+`t1` exists. Without a reader both succeed (control). So a build that starts while `ask.py` is reading
+drops nothing, then `x4basex_artifacts.py --declare-db` refuses ("database still exists after DROP DB")
+and the build stops: it fails CLOSED, but the message names the receipt, not the reader. This is also the
+basis for a build-then-swap design: a swap blocked by a reader is refused atomically and can retry.
+
+## F337 - OpenCode has no session-start canary · **OPEN LIMIT (read)** · PRE-ARC · confidence 85%
+
+READ 2026-11-01: OpenCode's only session-start path is `experimental.chat.system.transform`
+(`tools/modding_harness/opencode_plugin.mjs:427-439`), which runs only when `KNOWLEDGEBASE.local.md`
+exists and renders preferences (`agent/guards/adapters/opencode.py:234`). It never runs
+`session-canary.sh`, so on OpenCode the irreplaceable-file canary, the uncommitted-KB note, the
+housekeep sweep and the `x4fresh` auto-rebuild (2026-11-01) do not start. Claude runs the script directly;
+Codex runs it from `session_start()` (`agent/guards/adapters/codex.py:399-404`). Not measured in a live
+OpenCode session.
+
 ## F338 - `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree · **SCOPE LIMIT (read)** · IN-ARC · confidence 95%
 
 Added with `--annotate` (2026-11-01, #15). READ `_provenance.Recorder`: `elem_replaced` moves the
@@ -11652,3 +11712,31 @@ groups, every one with `value=<id>`); their contents are not searched, and a NO 
 tweaks config cue (`kuertee_aait/kAAIT2/kAAIT2_Config`) holds 3 tables beside its scalar options,
 and every scalar option was read directly (8 `*_allFactions` integers, each `0 (absent)`). The
 serialised form of table contents was not located in this pass, so expanding them is a follow-up.
+
+## F340 - Bulk-file guard exceeds its 40 s deadline at desk load · **OPEN (measured)** · PRE-ARC · confidence 90%
+
+MEASURED 2026-11-01, one Windows desktop (28 logical CPUs), 20-33% CPU from other work:
+`test_generic_file_batch.py::test_complete_3589_path_action` failed 12 of 12 timed runs: 4 on ci/v4.0.1-rc17
+(dba17d80, without this lane's changes) and 4 on this lane, both below-normal priority, and 4 on this lane at normal
+priority. All 12 ended at 40.3-40.7 s with `GUARD INERT`, a deny that checked nothing. So it fails closed; the cost is
+a refused batch, not an unguarded write. A run at the gate's own `--cpu 36` was never admitted, so that setting is
+UNMEASURED.
+
+Scaling, one run per size, normal priority: 128 paths 1.58 s, 500 3.99 s, 1,000 9.11 s, 2,000 24.39 s, 3,000 38.42 s
+(all allowed, not inert). INFERRED, not measured: at 12.81 ms/path, 3,589 paths would need about 46 s.
+
+Profile of a 2,000-path batch (26.6 s under cProfile): `profiles.canonical` -> `profiles._resolved` was called 40,008
+times, about 20 per path, and `Path.resolve` under it took 17.09 s (64%).
+
+The same test passed on GitHub CI at rc17 and at 8f8736d1 (READ: those runs' conclusions), and another session reported
+it passing inside its own local gate run (not re-measured), so I think the outcome depends on load and machine, not on
+a logic fault. But CI has no real margin either. MEASURED 2026-11-02, run 41526027347 (3f5dff2c, windows-latest): the
+`[None]` case failed at 40.87 s with a correct `allow`, not inert; the other 3 cases passed. That whole suite took
+6,401 s against 5,822 s at 8f8736d1, and this lane changes no file the guard's check path reads, so I think it was a
+slower runner. The test's clock also includes process start-up while the guard's own 40 s deadline starts inside the
+process (READ: `tools/agent-harness.py:160`), so a guard that met its deadline can still fail the test. Expect this test
+to fail CI intermittently until the guard is faster.
+
+Not fixed. `_resolved` is reviewed save-protection code, and a plain cache could mask a link swapped between two checks
+in one pass, so any fix needs its own review of which calls may share an answer. The test only reaches a push's
+pre-push gate when the push changes a file it names (`agent-harness.py`, `modding-harness.lock.json`).

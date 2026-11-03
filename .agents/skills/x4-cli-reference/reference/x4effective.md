@@ -4,12 +4,12 @@
 
 ```text
 usage: x4effective [-h] [--version] [--db DB]
-                   {build,ls,show,attr,who-sets,diff-mod,dump,sql,coverage} ...
+                   {build,ls,show,attr,who-sets,diff-mod,dump,sql,coverage,find} ...
 
 Browse the effective merged values of every X4 entity, with provenance.
 
 positional arguments:
-  {build,ls,show,attr,who-sets,diff-mod,dump,sql,coverage}
+  {build,ls,show,attr,who-sets,diff-mod,dump,sql,coverage,find}
     build               (re)build the effective store
     ls                  list entities of a kind
     show                all props + provenance for one entity
@@ -20,6 +20,7 @@ positional arguments:
     sql                 read-only SELECT against the store
     coverage            what this store DOES and does not index (so a negative can carry its
                         denominator)
+    find                entities whose in-game NAME contains TEXT (resolves {page,id} to English)
 
 options:
   -h, --help            show this help message and exit
@@ -159,4 +160,19 @@ usage: x4effective coverage [-h]
 
 options:
   -h, --help  show this help message and exit
+```
+
+## `x4effective find`
+
+```text
+usage: x4effective find [-h] [--kind KIND] [--class KLASS] [--limit LIMIT] text
+
+positional arguments:
+  text           part of the name the player sees, e.g. 'M0' or 'omega' (case-insensitive)
+
+options:
+  -h, --help     show this help message and exit
+  --kind KIND    entity kind to search (default: macro)
+  --class KLASS  only entities of this class, e.g. ship_xl (the store's class column)
+  --limit LIMIT  rows to print; the total is still counted (default: 50)
 ```

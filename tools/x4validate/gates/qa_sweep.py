@@ -370,8 +370,9 @@ _ALL_CELLS: list[Cell] = [
          expect=(0, 1, 3), findings_ok=True, wants="examined"),
     # a non-save must be rc 2 -- a NON-ANSWER, never a clean result.
     Cell("x4save", "refuses a non-save", ["info", "pyproject.toml"], expect=(2,)),
-    # a pattern nothing matches must say NO MATCH with what it read, rc 1, never an empty success.
-    Cell("x4save", "vars (no match)", ["vars", "zz_no_such_variable_xyzzy"], expect=(1,), wants="NO MATCH"),
+    # A name no save holds: exit 1, and the absence must state what it searched (a match on a real name prints 10,000+ rows).
+    Cell("x4save", "vars (no match states its denominator)", ["vars", "^__qa_no_such_var__$"], expect=(1,),
+         wants="NO MATCH over"),
     # ---- x4live ---------------------------------------------------------
     # These read a dump written by an in-game probe, so "no dump present" (rc 2)
     # is a legitimate state on a machine that has never run one -- what is NOT
@@ -452,6 +453,11 @@ _ALL_CELLS: list[Cell] = [
     Cell("x4debug", "baseline", ["baseline", "--dest", str(_sandbox_dir() / "baseline")],
          expect=(0, 2), findings_ok=True),
     Cell("x4effective", "coverage", ["coverage"], expect=(0, 1, 3), findings_ok=True),
+    # `find` exits 1 for no hit and 2 when the store predates its texts table (it says "rebuild").
+    Cell("x4effective", "find", ["find", "mothership", "--limit", "5"], expect=(0, 1, 2),
+         findings_ok=True),
+    # `status` is read-only: 0 all fresh, 3 fresh with unaccepted losses, 5 anything else.
+    Cell("x4fresh", "status", ["status"], expect=(0, 3, 5), findings_ok=True, wants="x4fresh:"),
 
     # ---- SLOW: real builds, redirected at throwaway outputs --------------
     # These exercise the real code path end to end. They are excluded by default
@@ -587,6 +593,14 @@ UNSWEPT: dict[tuple[str, str], str] = {
         "the user may have paused, and without it the cell exits 2 and proves nothing. "
         "Covered offline by tests/test_livecli.py, tests/test_livepipe_e2e.py and "
         "tests/test_modlua_rearm.py.",
+    # x4fresh's two WRITES. Its read half, `status`, IS swept.
+    ("x4fresh", "rebuild"):
+        "rebuilds the SHARED derived artifacts in place (it has no sandbox redirect for all "
+        "four), and the x4effective/x4xref build cells already sweep the builders it runs. "
+        "Lock, deferral, wrapper, failure memo and note are covered by tests/test_freshcli.py.",
+    ("x4fresh", "accept"):
+        "writes the user's accepted-losses decision; a sweep must never record one on their "
+        "behalf. Covered by the accept tests in tests/test_freshcli.py.",
 }
 
 

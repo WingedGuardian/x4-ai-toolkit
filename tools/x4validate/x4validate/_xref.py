@@ -25,6 +25,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import os
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -204,14 +205,79 @@ def build_index(reference: Path, ext_dir: Path,
 _HEADER = ["kind", "name", "source", "file", "cue", "line", "target"]
 
 
-def write_tsv(rows: list[XrefRow], path: Path) -> Path:
+def replace_write(path: Path, data: bytes) -> Path:
+    """Write `data` to `path` so a reader sees the old file or the new one, never a partial one.
+
+    Same pattern as the effective store (`_effective._write_db`): a PID-qualified temp beside the target,
+    then `os.replace`. A kill mid-write leaves THIS file intact plus an orphan `<name>.<pid>.tmp`
+    (reported, never auto-swept: pid liveness on Windows is not a safe guess). The index is three files
+    (TSV, exclusions, stamp), each replaced on its own: a kill BETWEEN them pairs a new file with an old
+    stamp, which the reader's SHA-256 check refuses -- fail closed, rebuild needed, never a wrong answer."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f, delimiter="\t")
-        w.writerow(_HEADER)
-        for r in rows:
-            w.writerow([r.kind, r.name, r.source, r.file, r.cue, r.line, r.target])
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass  # silent-ok: best effort; the original exception is what the caller needs
+        raise
     return path
+
+
+#: Every exception `check_index` can raise for a damaged or unreadable index. A caller that catches
+#: less turns a damaged index into a traceback; one that catches more hides a bug.
+INDEX_UNREADABLE = (OSError, ValueError, TypeError, AttributeError, KeyError)
+
+
+def check_index(tsv: Path):
+    """Read and verify an index: (rows, signed, exclusions_signed, freshness Verdict).
+
+    Raises one of INDEX_UNREADABLE when the index or its sidecars are damaged (integrity mismatch,
+    malformed stamp). Shared by the query path and `x4fresh status`, so both judge an index the same
+    way. Moved verbatim from main(); behaviour is pinned by tests/test_xref_integrity.py."""
+    body = tsv.read_bytes()
+    rows = _parse_tsv(body, tsv)
+    _stored = _freshness.read_sidecar(tsv)
+    signed = bool(_stored and _stored.get('artifact_sha256'))
+    if signed and _stored['artifact_sha256'] != hashlib.sha256(body).hexdigest():
+        raise IndexUnreadable(f'{tsv}: artifact integrity mismatch; rebuild the xref index')
+    exclusions_signed = bool(_stored and _stored.get('exclusions_sha256'))
+    if exclusions_signed and _stored['exclusions_sha256'] != hashlib.sha256(_sidecar(tsv).read_bytes()).hexdigest():
+        raise IndexUnreadable(f'{tsv}: exclusions integrity mismatch; rebuild the xref index')
+    if _stored and ('roots' in _stored and (not isinstance(_stored['roots'], list)
+            or not all(isinstance(r, str) for r in _stored['roots']))):
+        raise IndexUnreadable(f'{tsv}: invalid roots in freshness sidecar; rebuild the xref index')
+    if _stored:
+        for field in ('reference_path', 'content', 'engine', 'reference',
+                      'artifact_sha256', 'exclusions_sha256'):
+            value = _stored.get(field)
+            if value is not None and not isinstance(value, str):
+                raise IndexUnreadable(f'{tsv}: invalid {field} in freshness sidecar; rebuild the xref index')
+        detail = _stored.get('detail')
+        if detail is not None and (not isinstance(detail, list)
+                or not all(isinstance(r, dict) and isinstance(r.get('folder'), str)
+                           and isinstance(r.get('root', ''), str) for r in detail)):
+            raise IndexUnreadable(f'{tsv}: invalid detail in freshness sidecar; rebuild the xref index')
+    _roots = ([Path(r) for r in _stored["roots"]] if _stored and _stored.get("roots")
+              else index_roots(_registry.GAME_EXTENSIONS))
+    _ref_then = (Path(_stored["reference_path"])
+                 if _stored and _stored.get("reference_path") else None)
+    _stale = _freshness.compare(
+        _stored, _freshness.fingerprint(_merge.Config(reference=_ref_then), _roots),
+        engine_dependent=False)
+    return rows, signed, exclusions_signed, _stale
+
+
+def write_tsv(rows: list[XrefRow], path: Path) -> Path:
+    buf = io.StringIO(newline="")
+    w = csv.writer(buf, delimiter="\t")
+    w.writerow(_HEADER)
+    for r in rows:
+        w.writerow([r.kind, r.name, r.source, r.file, r.cue, r.line, r.target])
+    return replace_write(path, buf.getvalue().encode("utf-8"))
 
 
 class IndexUnreadable(ValueError):
@@ -474,6 +540,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"REFUSING: {exc}", file=sys.stderr)
             return 2
         rows = build_index(ref, ext, unreadable)
+        # BEFORE anything is replaced (review 2026-11-01): checked only at the stamp, a mutation gate
+        # left a NEW index paired with the OLD stamp -- unreadable, where the old index was fine.
+        _mutation.refuse_if_mutating("build the md/aiscript xref index")
         write_tsv(rows, out)
         # THE SIDECAR THE QUERY PATH READS, WHICH NOTHING HAS EVER WRITTEN.
         # `_exclusions()` renders "EXCEPT N file(s) that would not parse" from
@@ -487,8 +556,8 @@ def main(argv: list[str] | None = None) -> int:
         # Written UNCONDITIONALLY, empty file included. A sidecar left over from
         # an earlier build would otherwise attach stale exclusions to a clean
         # index — a wrong denominator is not safer than none.
-        _sidecar(out).write_text(
-            "".join(str(u) + "\n" for u in unreadable), encoding="utf-8")
+        replace_write(_sidecar(out),
+                      "".join(str(u) + "\n" for u in unreadable).encode("utf-8"))
         # WHEN this index was true. Its whole purpose is to make "nobody calls X"
         # admissible, and a negative from a superseded world is not admissible.
         _mutation.refuse_if_mutating("build the md/aiscript xref index")
@@ -534,37 +603,8 @@ def main(argv: list[str] | None = None) -> int:
     # ("nobody listens to this event"), which is precisely the claim a stale
     # index gets wrong -- a mod added since the build is simply not in it.
     try:
-        body = tsv.read_bytes()
-        rows = _parse_tsv(body, tsv)
-        _stored = _freshness.read_sidecar(tsv)
-        signed = bool(_stored and _stored.get('artifact_sha256'))
-        if signed and _stored['artifact_sha256'] != hashlib.sha256(body).hexdigest():
-            raise IndexUnreadable(f'{tsv}: artifact integrity mismatch; rebuild the xref index')
-        exclusions_signed = bool(_stored and _stored.get('exclusions_sha256'))
-        if exclusions_signed and _stored['exclusions_sha256'] != hashlib.sha256(_sidecar(tsv).read_bytes()).hexdigest():
-            raise IndexUnreadable(f'{tsv}: exclusions integrity mismatch; rebuild the xref index')
-        if _stored and ('roots' in _stored and (not isinstance(_stored['roots'], list)
-                or not all(isinstance(r, str) for r in _stored['roots']))):
-            raise IndexUnreadable(f'{tsv}: invalid roots in freshness sidecar; rebuild the xref index')
-        if _stored:
-            for field in ('reference_path', 'content', 'engine', 'reference',
-                          'artifact_sha256', 'exclusions_sha256'):
-                value = _stored.get(field)
-                if value is not None and not isinstance(value, str):
-                    raise IndexUnreadable(f'{tsv}: invalid {field} in freshness sidecar; rebuild the xref index')
-            detail = _stored.get('detail')
-            if detail is not None and (not isinstance(detail, list)
-                    or not all(isinstance(r, dict) and isinstance(r.get('folder'), str)
-                               and isinstance(r.get('root', ''), str) for r in detail)):
-                raise IndexUnreadable(f'{tsv}: invalid detail in freshness sidecar; rebuild the xref index')
-        _roots = ([Path(r) for r in _stored["roots"]] if _stored and _stored.get("roots")
-                  else index_roots(_registry.GAME_EXTENSIONS))
-        _ref_then = (Path(_stored["reference_path"])
-                     if _stored and _stored.get("reference_path") else None)
-        _stale = _freshness.compare(
-            _stored, _freshness.fingerprint(_merge.Config(reference=_ref_then), _roots),
-            engine_dependent=False)
-    except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
+        rows, signed, exclusions_signed, _stale = check_index(tsv)
+    except INDEX_UNREADABLE as exc:
         print(f'index unreadable: {tsv}: {exc}; rebuild with uv run x4xref build', file=sys.stderr)
         return 2
     if not signed or not exclusions_signed:

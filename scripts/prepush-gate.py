@@ -118,6 +118,29 @@ def tests_for(changed):
     return out
 
 
+# Tests that read what is DEPLOYED on this machine, not only the tree being pushed. Guard code may only be deployed
+# after green CI, so running them here made any branch that changes agent/ unpushable: the gate wanted the deploy, the
+# deploy wanted CI, CI wanted the push. Excluded, and said so on every run. What still covers them:
+#   deploy parity: CI SKIPS it (no game root). deploy-claude-dir.py re-checks its own files after --apply; x4doctor and
+#     the release gates check on demand. NOTHING checks routinely between deploys.
+#   routing: CI RUNS it against the shipped CLAUDE.md/AGENTS.md. Only the game root's own CLAUDE.md goes unchecked here,
+#     and the deploy script does not write that file.
+DEPLOYED_STATE_TESTS = [
+    "tests/test_deploy_parity.py::test_the_real_trees",
+    "tests/test_routing_coverage.py::test_the_live_file_routes_every_cli",
+]
+
+
+def deployed_state_args(rel):
+    """--deselect arguments for the deployed-state tests in `rel`, each announced as NOT CHECKED."""
+    args = []
+    for node in DEPLOYED_STATE_TESTS:
+        if node.split("::")[0] in rel:
+            print("   NOT CHECKED here (reads deployed state; run after deploying): " + node)
+            args += ["--deselect", node]
+    return args
+
+
 class Gate:
     def __init__(self):
         self.failed = []
@@ -189,7 +212,8 @@ def main(argv=None) -> int:
         rel = [str(Path(f).relative_to("tools/x4validate").as_posix()) for f in files]
         print("   tests for changed files: " + ", ".join(rel))
         g.step("changed-file tests ({} files)".format(len(rel)),
-               ["uv", "run", "--frozen", "python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider", *rel], cwd=PKG)
+               ["uv", "run", "--frozen", "python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                *deployed_state_args(rel), *rel], cwd=PKG)
     total = time.time() - g.t0
     if g.failed:
         print("prepush-gate: FAILED ({}) in {:.0f}s -- fix before pushing; CI would have gone red on it".format(

@@ -360,11 +360,29 @@ def task_folders(cfg, held=None):
     return out
 
 
+class Unaddressable(OSError):
+    """A name the directory listing returned but its path cannot reach.
+
+    Windows lists names ending in '.' or ' ' (e.g. 'y2.txt.'), but the normal Win32 path strips the trailing
+    character, so lstat raises FileNotFoundError on a file that exists. It stays an OSError on purpose: every
+    DELETE/MOVE path already fails closed on OSError (task held, sweep counts it failed). Only report-only
+    callers catch it, and they must say what they could not measure (dir_size_counted)."""
+
+    def __init__(self, path):
+        super().__init__("name listed but not addressable by its path (trailing dot or space?): {}".format(path))
+        self.path = path
+
+
 def walk_files(target: Path, include_dirs=False):
     def failed(error):
         raise error
     def linked(path):
-        info = path.lstat()
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            if path is target:
+                raise
+            raise Unaddressable(path) from None
         return path.is_symlink() or bool(getattr(info, "st_file_attributes", 0) & 0x400)
     if linked(target):
         raise OSError("symbolic link or reparse point is not a cleanup target: {}".format(target))
@@ -1571,6 +1589,49 @@ def dir_size(p: Path) -> int:
     return sum(f.stat().st_size for f in walk_files(p) if f.exists()) if p.exists() else 0
 
 
+def dir_size_counted(p: Path):
+    """REPORT-ONLY size: (bytes, unaddressable paths, links not followed). Never for anything that deletes.
+
+    Links and reparse points are NOT descended (their bytes live elsewhere) and unaddressable names are
+    skipped; both are RETURNED so the caller can say the total is a lower bound instead of the whole."""
+    if not p.exists():
+        return 0, [], []
+    total, skipped, links = 0, [], []
+    stack = [p]
+    while stack:
+        with os.scandir(stack.pop()) as entries:
+            for e in entries:
+                q = Path(e.path)
+                try:
+                    info = q.lstat()
+                except FileNotFoundError:
+                    skipped.append(q)
+                    continue
+                if q.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+                    links.append(q)
+                elif stat.S_ISDIR(info.st_mode):
+                    stack.append(q)
+                else:
+                    total += info.st_size
+    return total, skipped, links
+
+
+def _size_line(p: Path):
+    """'N.NN GiB' for a report row, or an UNMEASURED/lower-bound statement. Never a bare 0 on failure."""
+    try:
+        size, skipped, links = dir_size_counted(p)
+    except OSError as exc:
+        return "UNMEASURED ({})".format(exc)
+    gaps = []
+    if skipped:
+        gaps.append("{} unaddressable name(s) not counted, e.g. {}".format(len(skipped), skipped[0]))
+    if links:
+        gaps.append("{} link(s) not followed, e.g. {}".format(len(links), links[0]))
+    if gaps:
+        return ">= {:.2f} GiB (lower bound: {})".format(size / GIB, "; ".join(gaps))
+    return "{:>9.2f} GiB".format(size / GIB)
+
+
 def user_level(cfg):
     home = Path(os.environ.get("USERPROFILE") or os.path.expanduser("~"))
     temp = Path(tempfile.gettempdir())
@@ -1579,7 +1640,7 @@ def user_level(cfg):
             ("<temp>/claude (scratchpads)", temp / "claude")]
     print("user level (report only -- these are the agents' own stores):")
     for label, p in rows:
-        print("  {:>9.2f} GiB  {}".format(dir_size(p) / GIB, label))
+        print("  {}  {}".format(_size_line(p), label))
     for label, sp in (("user", home / ".claude" / "settings.json"),
                       ("project", cfg["root"] / ".claude" / "settings.json"),
                       ("project local", cfg["root"] / ".claude" / "settings.local.json")):
