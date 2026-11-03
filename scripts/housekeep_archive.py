@@ -303,10 +303,49 @@ def reads_recorded(folder, cache):
         return False
 
 
+_K32 = None
+
+
+def open_unrecorded(path):
+    """A binary read stream whose read the volume does not record, so housekeeping's own look cannot trip its read veto
+    on the next run, and no timestamp is written afterwards to undo it: `report` says it changes nothing, and that is
+    only true if nothing is put back. Windows: a handle with last-access updates frozen (SetFileTime -1, documented for
+    exactly this). POSIX: O_NOATIME, which only a file's owner may ask for. Where neither is available this is an
+    ordinary read, and the veto may then hold the file a while longer: the conservative direction."""
+    if os.name == 'nt':
+        global _K32
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+        if _K32 is None:
+            k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            k32.CreateFileW.restype = wintypes.HANDLE
+            k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            k32.SetFileTime.argtypes = [wintypes.HANDLE, wintypes.LPVOID, ctypes.POINTER(wintypes.FILETIME),
+                                        wintypes.LPVOID]
+            k32.CloseHandle.argtypes = [wintypes.HANDLE]
+            _K32 = k32
+        # GENERIC_READ | FILE_WRITE_ATTRIBUTES (SetFileTime needs it; a read-only file allows it), share everything,
+        # OPEN_EXISTING. A folder or a name this cannot open falls through, and open() below reports it as usual.
+        handle = _K32.CreateFileW(str(path), 0x80000000 | 0x100, 7, None, 3, 0x80, None)
+        if handle not in (None, wintypes.HANDLE(-1).value):
+            frozen = wintypes.FILETIME(0xFFFFFFFF, 0xFFFFFFFF)
+            if _K32.SetFileTime(handle, None, ctypes.byref(frozen), None):
+                return os.fdopen(msvcrt.open_osfhandle(handle, os.O_RDONLY), 'rb')
+            _K32.CloseHandle(handle)
+    elif hasattr(os, 'O_NOATIME'):
+        try:
+            return os.fdopen(os.open(str(path), os.O_RDONLY | os.O_NOATIME), 'rb')
+        except PermissionError:
+            pass  # silent-ok: not this file's owner: an ordinary read below, which may record itself
+    return open(path, 'rb')
+
+
 def _retirement_hash(path, deadline, chunk=1024*1024):
     before = path.stat()
     d = hashlib.blake2b(digest_size=16)
-    with path.open('rb') as stream:
+    with open_unrecorded(path) as stream:
         for block in iter(lambda: stream.read(chunk), b''):
             if time.monotonic() > deadline:
                 raise TimeoutError('archive review time budget reached')
@@ -314,10 +353,6 @@ def _retirement_hash(path, deadline, chunk=1024*1024):
     after = path.stat()
     if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
         raise ArchiveError('archive changed during proof')
-    try:
-        os.utime(path, ns=(before.st_atime_ns, after.st_mtime_ns))
-    except OSError:
-        pass
     return d.hexdigest()
 
 

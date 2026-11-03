@@ -185,6 +185,21 @@ def test_a_partial_prune_tombstones_what_went_and_keeps_what_did_not(vault):
     assert [Path(o["path"]) for o in retry["objects"]] == [second]
 
 
+def test_a_recycle_that_reports_failure_for_a_path_really_gone_still_tombstones_it(vault):
+    """x4housekeep.recycle: a failed shell call reports "...; path is gone". With no tombstone that archive read as a failed
+    checksum for ever, and its "vault verification incomplete" blocked every later prune plan."""
+    cfg, rows, records, recycle = _archived_and_declared(vault)
+    doc = b.prune_plan(cfg)
+
+    def reports_gone(paths):
+        recycle(paths)
+        return {p: "recycle call failed (TimeoutExpired: x); path is gone" for p in paths}
+    with pytest.raises(b.Refused, match="backup recycling incomplete"):
+        b.prune(doc, cfg, b.digest(doc), recycler=reports_gone)
+    assert len(list((Path(cfg["backup_archive"]["destination"]) / "retired").glob("*.json"))) == 2
+    assert {row["state"] for row in b.review(cfg)} == {"retired"}, "no permanent failed row for what really went"
+
+
 def test_a_fully_failed_prune_writes_no_tombstone(vault):
     cfg, rows, records, recycle = _archived_and_declared(vault)
     doc = b.prune_plan(cfg)

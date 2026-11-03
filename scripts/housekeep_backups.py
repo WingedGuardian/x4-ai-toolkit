@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -65,17 +66,15 @@ def content_hash(path):
 
 
 def _local_sha256(path):
-    """As ordinary housekeep's blake: its own proof read is not user activity."""
-    p = Path(path)
-    before = p.stat()
-    result = file_hash(p)
-    after = p.stat()
-    if (before.st_size, before.st_mtime_ns, before.st_ino) == (after.st_size, after.st_mtime_ns, after.st_ino):
-        try:
-            os.utime(p, ns=(before.st_atime_ns, after.st_mtime_ns))
-        except OSError:
-            pass  # Conservative: a read veto may remain; never fake idleness.
-    return result
+    """As ordinary housekeep's blake: its own proof read is not user activity, and no timestamp is written to say so."""
+    spec = importlib.util.spec_from_file_location('housekeep_archive_reads', Path(__file__).with_name('housekeep_archive.py'))
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    h = hashlib.sha256()
+    with helper.open_unrecorded(path) as stream:
+        while block := stream.read(1024 * 1024):
+            h.update(block)
+    return h.hexdigest()
 
 
 def obsolete_reason(path, cfg, expected_hash=None):
@@ -483,7 +482,9 @@ def prune(doc, cfg, approved_sha256, recycler=None):
     # Tombstone what actually went, before reporting what did not. An archive already in the Bin with no tombstone reads
     # as a failed checksum for ever, and its "vault verification incomplete" then blocks every later prune plan.
     # Never invalidate restore receipts for an archive the recycler refused.
-    refused = {Path(p).stem for p in failures}
+    # What the recycler reported but is really gone (its call failed after the move) counts as gone: only bytes still on
+    # disk may hold a tombstone back.
+    refused = {Path(p).stem for p in failures if os.path.lexists(p)}
     for row in doc['records']:
         if row['archive_stem'] in refused:
             continue
