@@ -219,7 +219,7 @@ def test_kept_files_beside_a_stub_whose_record_cannot_be_read_are_not_quiet(tmp_
     cfg, t, now = _archived(tmp_path, **{"notes.md": b"old\n"})
     (t / "ARCHIVED.md").write_text("# Archived, record gone\n", encoding="utf-8")
     notes = _notes(cfg, now)
-    assert len(notes) == 1 and "record cannot be read" in notes[0], notes
+    assert len(notes) == 1 and "record cannot be read" in notes[0] and "1 other item(s)" in notes[0], notes
 
 
 def test_a_stub_whose_record_cannot_be_read_says_so_and_stays(tmp_path):
