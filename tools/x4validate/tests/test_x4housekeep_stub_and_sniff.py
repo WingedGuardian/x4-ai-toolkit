@@ -135,6 +135,92 @@ def test_new_work_beside_a_stub_is_named_as_possibly_the_only_copy(tmp_path):
     assert len(notes) == 1 and "1 NOT in it" in notes[0] and "later.bin" in notes[0], notes
 
 
+def _archived(tmp_path, **files):
+    root = tmp_path / "r"
+    cfg = mkcfg(root)
+    t = task(root, payload=b"p" * (3 << 20), **files)
+    now = time.time()
+    assert hk.apply(hk.plan(cfg, now=now), cfg, recycler=moving_bin(root), now=now) == 0
+    return cfg, t, now
+
+
+def _notes(cfg, now):
+    return hk.plan(cfg, now=now + LATER)["coverage"]["archive_inventory"]["stub_notes"]
+
+
+@pytest.mark.parametrize("name", ["findings.md", "results.json", "run.log", "README", "README.txt", "rows.jsonl"])
+def test_a_new_small_top_level_file_beside_a_stub_gets_a_note(tmp_path, name):
+    """The kept patterns hid these: keep_local filtered them out before the record was looked at."""
+    cfg, t, now = _archived(tmp_path)
+    (t / name).write_bytes(b"NEW WORK\n")
+    notes = _notes(cfg, now)
+    assert len(notes) == 1 and "1 NOT in it" in notes[0] and name in notes[0], notes
+
+
+def test_TWIN_kept_and_unchanged_stays_quiet(tmp_path):
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old notes\n", "results.json": b"{}", "README": b"r"})
+    assert (t / "notes.md").exists() and (t / "results.json").exists(), "the control: archiving kept them"
+    assert _notes(cfg, now) == []
+
+
+def test_a_kept_file_edited_after_the_archive_gets_a_note(tmp_path):
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old notes\n", "results.json": b"{}"})
+    (t / "notes.md").write_bytes(b"EDITED after the archive\n")
+    notes = _notes(cfg, now)
+    assert len(notes) == 1 and "1 kept but edited since" in notes[0] and "notes.md" in notes[0], notes
+    assert "NOT in it" in notes[0] and "0 NOT in it" in notes[0], notes
+    assert (t / "notes.md").read_bytes() == b"EDITED after the archive\n", "nothing is deleted or changed"
+
+
+def test_TWIN_a_tracked_top_level_file_stays_quiet_whatever_its_bytes(tmp_path):
+    """git holds it; only the pattern-kept files are compared."""
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old\n"})
+    (t / "notes.md").write_bytes(b"edited, but tracked\n")
+    guard = hk.Guard(cfg)
+    assert "edited since" in hk.stub_state(t, guard), "the control: untracked, it is noted"
+    guard.tracked.add(hk._key(t / "notes.md"))
+    assert hk.stub_state(t, guard) == ""
+
+
+def test_the_comparison_reads_a_bounded_amount_and_says_what_it_skipped(tmp_path, monkeypatch):
+    cfg, t, now = _archived(tmp_path, **{"a.md": b"a" * 2000, "b.md": b"b" * 2000, "c.md": b"c" * 2000})
+    monkeypatch.setattr(hk, "STUB_COMPARE_BYTES", 3000)
+    read = []
+    real = hk.certainty._local_sha256
+    monkeypatch.setattr(hk.certainty, "_local_sha256", lambda p: read.append(Path(p).name) or real(p))
+    state = hk.stub_state(t, hk.Guard(cfg))
+    assert read == ["a.md"], "stops at the budget"
+    assert "2 kept but not compared" in state, state
+
+
+def test_TWIN_the_comparison_read_is_not_recorded(tmp_path, monkeypatch):
+    """A plan's own look must not trip the read veto: the same unrecorded stream the sniff uses."""
+    cfg, t, now = _archived(tmp_path, **{"a.md": b"a"})
+    calls = []
+    reads = hk.certainty._reads_helper()
+    real = reads.open_unrecorded
+    monkeypatch.setattr(reads, "open_unrecorded", lambda p: calls.append(Path(p).name) or real(p))
+    assert hk.stub_state(t, hk.Guard(cfg)) == ""
+    assert calls == ["a.md"]
+
+
+def test_a_stub_with_no_kept_file_reads_neither_its_record_nor_a_hash(tmp_path, monkeypatch):
+    """The common case costs what it did."""
+    cfg, t, now = _archived(tmp_path)
+    monkeypatch.setattr(hk.certainty, "_local_sha256", lambda p: pytest.fail("hashed " + str(p)))
+    real = Path.read_text
+    monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: pytest.fail("read " + str(self))
+                        if self.name == "ARCHIVED.md" else real(self, *a, **k))
+    assert hk.stub_state(t, hk.Guard(cfg)) == ""
+
+
+def test_kept_files_beside_a_stub_whose_record_cannot_be_read_are_not_quiet(tmp_path):
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old\n"})
+    (t / "ARCHIVED.md").write_text("# Archived, record gone\n", encoding="utf-8")
+    notes = _notes(cfg, now)
+    assert len(notes) == 1 and "record cannot be read" in notes[0], notes
+
+
 def test_a_stub_whose_record_cannot_be_read_says_so_and_stays(tmp_path):
     root = tmp_path / "r"
     cfg = mkcfg(root)
