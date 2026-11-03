@@ -447,6 +447,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F342 | On Windows a closed pipe is `OSError` EINVAL, not `BrokenPipeError`, so `x4effective ls ware \| head` ended in a traceback and rc 1 | **DEFECT (measured)** · PRE-ARC | found by the 4.1 fix lane on a throwaway store; real `x4effective ls ware \| head -n 1` rc 0, no traceback, unpiped control 202 lines | FIXED 2026-11-03 - EINVAL counts as a closed pipe only when it carries no filename |
 | F343 | `x4effective find` resolves names from the store's merged text table, which lacked 12 of 75,168 entries that plain t-files define | **OPEN (measured)** · IN-ARC | release review probe over its scratch store: 12 of 75,168 distinct (page, id) entries in plain t-files absent from the table; page 90105 among them | open; cause not established; a name that depends on one reads as an unresolved reference, never silently as absent |
 | F344 | The save sentinel decides whether the game wrote a change from the game's session window; it cannot separate writers inside a window, and a crashed session leaves no stamp | **SCOPE LIMIT (measured on fake timestamps only)** · IN-ARC | the fix lane's tests drive the window with fabricated timestamps; no in-game session was run | stated in the CHANGELOG; the window comes from `uidata.xml`'s modification time |
+| F345 | `bin_refusal` judged the drive letter of the absolute path, so a path under a junction or symlink to a network share looked recyclable and Windows' shell then destroys such files silently | **DEFECT (measured)** · IN-ARC | release review: an ancestor junction to a UNC path passed; fix lane: real junctions, 6 classes of path, 2 arms each | FIXED 2026-11-03 - every existing component is checked for a link and `realpath` has the last word |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11812,3 +11813,18 @@ LIMITS (reported by the fix lane):
 * A session that ends in a crash writes no new `uidata.xml`; the lane's reading is that a never-seen-running crash can
   raise the alarm once, and that a restored old stamp (Steam Cloud) does too. Both are INFERRED.
 * MEASURED only with fabricated timestamps. No in-game session was run for this release.
+
+## F345 - Housekeeping judged where a path lands by its spelling, not by where it goes · **DEFECT (measured)** · IN-ARC · confidence 90% · FIXED 2026-11-03
+
+Found by the 4.1.0 release review of `dfaabcd9` (probe with fake recyclers). `x4housekeep.bin_refusal` compared the drive
+letter of `os.path.abspath(path)`. A path reached through an ancestor junction or symlink to a UNC share kept a local drive
+letter and passed, and the Windows shell does not recycle a file on a network share: it destroys it silently, so unique
+bytes could be lost by a retirement the policy says goes to the Recycle Bin.
+
+Fix (`65122d74`): `landing_refusal` checks every existing component of the path for a link or reparse point, lets
+`realpath` have the last word (a drive or volume that differs, or a network location), and asks for the drive type of both
+spellings; the policy text names SUBST and removable volumes as kept in place too. A path that cannot be established is kept. The fix lane
+reports it MEASURED with real junctions: six classes of path, two arms each. An 8.3 short name or a case difference is
+the only difference allowed through. The policy text was changed to say this (RETENTION.md rule 2).
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_x4housekeep_safety.py`.
