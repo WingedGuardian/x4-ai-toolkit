@@ -446,6 +446,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F341 | A mod edited while `x4effective build` or `x4xref build` ran was stamped as already absorbed, so the store read FRESH with the old values | **DEFECT (measured)** · PRE-ARC (exposure IN-ARC) | release review probe `probe_race2`: an edit during the build left the new world's fingerprint over the old values, FRESH until the next change | FIXED 2026-11-03 - both fingerprint before their first mod read; x4fresh compares the world's digest around each builder |
 | F342 | On Windows a closed pipe is `OSError` EINVAL, not `BrokenPipeError`, so `x4effective ls ware \| head` ended in a traceback and rc 1 | **DEFECT (measured)** · PRE-ARC | found by the 4.1 fix lane on a throwaway store; real `x4effective ls ware \| head -n 1` rc 0, no traceback, unpiped control 202 lines | FIXED 2026-11-03 - EINVAL counts as a closed pipe only when it carries no filename |
 | F343 | `x4effective find` resolves names from the store's merged text table, which lacked 12 of 75,168 entries that plain t-files define | **OPEN (measured)** · IN-ARC | release review probe over its scratch store: 12 of 75,168 distinct (page, id) entries in plain t-files absent from the table; page 90105 among them | open; cause not established; a name that depends on one reads as an unresolved reference, never silently as absent |
+| F344 | The save sentinel decides whether the game wrote a change from the game's session window; it cannot separate writers inside a window, and a crashed session leaves no stamp | **SCOPE LIMIT (measured on fake timestamps only)** · IN-ARC | the fix lane's tests drive the window with fabricated timestamps; no in-game session was run | stated in the CHANGELOG; the window comes from `uidata.xml`'s modification time |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11795,3 +11796,19 @@ the limit shows up as a labelled row, not as a silent absence. What it cannot do
 
 To close it: find which merge step omits the 12 entries (compare the plain-file population with the table per provider),
 then fix the merge or document the rule. Do not widen `find` to guess.
+
+## F344 - The save sentinel's game-session window is a timestamp heuristic · **SCOPE LIMIT (measured on fake timestamps only)** · IN-ARC · confidence 80%
+
+A play session between two sentinel looks used to raise a loud false alarm, because the game was checked only at the look
+(`492a9cbd`). A change is now noted to the agent only when its own timestamp (for a removal, its folder's) falls inside a
+session: X4 running now, or since the last look and before `uidata.xml`, which X4 rewrites at every exit. A change made
+with the game closed still raises the user, including one right after a session, a restored old stamp, and anything in a
+folder only the toolkit watches.
+
+LIMITS (reported by the fix lane):
+* The window comes from `uidata.xml`'s modification time. Inside a window the sentinel cannot tell the game from
+  anything else, so a change made by another program while the game runs, or before it exits, looks like the game's. It
+  still reaches the agent; the user is not raised.
+* A session that ends in a crash writes no new `uidata.xml`; the lane's reading is that a never-seen-running crash can
+  raise the alarm once, and that a restored old stamp (Steam Cloud) does too. Both are INFERRED.
+* MEASURED only with fabricated timestamps. No in-game session was run for this release.
