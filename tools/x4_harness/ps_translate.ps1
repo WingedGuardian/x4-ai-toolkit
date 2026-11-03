@@ -140,51 +140,14 @@ function Flatten($ast) {
     return @(($bits -join '/'))
 }
 
-# AN ENVIRONMENT VARIABLE THIS COMMAND ASSIGNS (4.1.0 P1). `$P=<reference>; Remove-Item $P` was read and
-# the same with `$env:P` was not. Each command is translated twice when one is assigned: once as below,
-# with the variable unknown, and once with it read like `$P` (EnvIsValue). The second adds lines and
-# replaces none, so `$env:X4_REFERENCE` still names its root whatever this command assigned to it.
-$script:EnvIsValue = $false
-function EnvRead([string]$key) {
-    return ($key -like 'env:*') -and -not ($script:EnvIsValue -and $script:AssignAll.ContainsKey($key))
-}
-# A value assigned from another assigned variable (`$env:B="$env:A/x"`) was read with A unknown.
-function EnvExpanded($vals) {
-    if (-not $script:EnvIsValue) { return $vals }
-    return @(@($vals) | ForEach-Object {
-        $s = [string]$_
-        foreach ($depth in 1..4) {
-            $next = [regex]::Replace($s, "$SOH([^$STX]*)$STX", [Text.RegularExpressions.MatchEvaluator]{
-                param($m)
-                $held = $script:Assign['env:' + $m.Groups[1].Value.ToLowerInvariant()]
-                if ($null -ne $held -and @($held).Count -eq 1) { [string]@($held)[0] } else { $m.Value }
-            })
-            if ($next -eq $s) { break }
-            $s = $next
-        }
-        $s
-    })
-}
-function BothReadings([scriptblock]$make) {
-    $was = $script:EnvIsValue
-    $script:EnvIsValue = $false
-    $got = @(& $make)
-    if (@($script:AssignAll.Keys | Where-Object { $_ -like 'env:*' }).Count -gt 0) {
-        $script:EnvIsValue = $true
-        foreach ($l in @(& $make)) { if ($got -notcontains $l) { $got += $l } }
-    }
-    $script:EnvIsValue = $was
-    return $got
-}
-
 function VarValue([VariableExpressionAst]$v) {
     $name = $v.VariablePath.UserPath
     $key = $name.ToLowerInvariant()
     if ($key -eq 'home') { return @(UVar 'HOME' $false) }
-    if (EnvRead $key) { return @(UVar $name $false) }
+    if ($key -like 'env:*') { return @(UVar $name $false) }
     if ($key -eq 'pwd') { return @('.') }
     if ($key -eq 'null' -or $key -eq 'true' -or $key -eq 'false') { return @('') }
-    if ($script:Assign.ContainsKey($key) -and $null -ne $script:Assign[$key]) { return (EnvExpanded $script:Assign[$key]) }
+    if ($script:Assign.ContainsKey($key) -and $null -ne $script:Assign[$key]) { return $script:Assign[$key] }
     # A variable holding COMMAND OUTPUT (`$t = Join-Path ...`, `$d = Get-Item ...`, a
     # foreach loop variable) or the pipeline item: resolved to the paths it holds when
     # they can be read statically, so it denies exactly as the literal spelling does.
@@ -360,14 +323,14 @@ function Resolve-Target1($e) {
     if ($e -is [VariableExpressionAst]) {
         $name = $e.VariablePath.UserPath
         $k = $name.ToLowerInvariant()
-        if ((EnvRead $k) -or $k -eq 'home' -or $k -eq 'pwd' -or $k -eq 'null') { return (RT $true @(VarValue $e)) }
+        if ($k -like 'env:*' -or $k -eq 'home' -or $k -eq 'pwd' -or $k -eq 'null') { return (RT $true @(VarValue $e)) }
         if ($k -eq '_' -or $k -eq 'psitem') {
             $up = ItemSource $e
             if ($null -ne $up -and $up.known) { return $up }
             return (RT $false @(UVar 'PS_PIPELINE_ITEM'))
         }
         if ($script:Assign.ContainsKey($k) -and $null -ne $script:Assign[$k]) {
-            $v = @(EnvExpanded $script:Assign[$k]); return (RT (-not (AnyOpaque $v)) $v)
+            $v = @($script:Assign[$k]); return (RT (-not (AnyOpaque $v)) $v)
         }
         # Assigned more than once (a loop body, an if/else): the UNION of every value --
         # known only when all of them are. Reading one would under-report the targets.
@@ -1435,14 +1398,13 @@ function Translate-Text([string]$src) {
     $out = New-Object Collections.Generic.List[string]
     $nodes = $ast.FindAll({ param($x) $x -is [CommandAst] -or $x -is [InvokeMemberExpressionAst] }, $true)
     foreach ($n in ($nodes | Sort-Object { $_.Extent.StartOffset })) {
-        $got = BothReadings { if ($n -is [CommandAst]) { Translate-Command $n } else { Translate-Member $n } }
+        $got = if ($n -is [CommandAst]) { Translate-Command $n } else { Translate-Member $n }
         foreach ($l in $got) { if ($l) { $out.Add($l) } }
     }
     # A redirect on a bare expression (`'x' > <p>`) has no CommandAst to ride on.
     foreach ($e in $ast.FindAll({ param($x) $x -is [CommandExpressionAst] -and $x.Redirections.Count -gt 0 }, $true)) {
-        foreach ($r in (BothReadings { Redirs $e })) {
-            if ($r) { $out.Add(':' + $r) }
-        }
+        $r = Redirs $e
+        if ($r) { $out.Add(':' + $r) }
     }
     return $out
 }

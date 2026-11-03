@@ -1533,6 +1533,15 @@ MUTANTS = [
     ('G-M3: a configured root that is the game layout stays the hard block alone',
      '    if _other_ext == "/" or _other_ext == _ext:', '    if _other_ext == "/":',
      'TestPreviouslyUnprobedRules.test_TWIN_a_configured_root_that_is_the_game_layout_stays_the_hard_block'),
+    # --- 4.1.0 R2-C1: the folder a cd through a root variable lands in, with an assignment around it. ---
+    ('R2-C1: a cd through a root variable lands in that root, assigned or not',
+     '        cands = [subst_root_var(r, roots) for r in resolve_variants(ops[0], assigns)]',
+     '        cands = list(resolve_variants(ops[0], assigns))',
+     'TestHK1PowerShellFrontEnd.test_assigning_a_root_variable_does_not_move_a_cd_through_it'),
+    ('R2-C1: a cd to an unknown name keeps the root it left',
+     '                    cwd = physical_join(cwd, tgt) if physical else join_cwd(cwd, tgt)',
+     '                    cwd = "" if has_unresolved(tgt) else physical_join(cwd, tgt) if physical else join_cwd(cwd, tgt)',
+     'TestHK1PowerShellFrontEnd.test_an_unrelated_assigned_variable_does_not_leave_the_root'),
     # --- F10 (v4.0): a command name the guard cannot identify (variable, substitution,
     # cmd %R%/!R!). One mutant per clause; each target names its own class.
     ('F10: an unknown command name contributes its readings',

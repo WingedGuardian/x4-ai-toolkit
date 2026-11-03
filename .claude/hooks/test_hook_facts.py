@@ -4115,41 +4115,85 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
     def test_an_env_root_variable_names_its_root(self):
         self.assertTrue(self.P("Remove-Item $env:X4_REFERENCE/x")["rm_targets_reference"])
 
-    # 4.1.0 P1: `$P=<path>` was read and `$env:P=<path>` was not. A second reading of each command
-    # and not a replacement: `$env:X4_REFERENCE` still names its root whatever it was assigned.
-    def test_an_assigned_env_variable_resolves_like_a_local_one(self):
+    # 4.1.0 R2-C1. A second translation pass read an assigned `$env:` like `$P` (P1), and its lines went in between the
+    # first pass's. The rules read `cd` in order, so a second-pass `cd` REPLACED the real one and later relative paths
+    # were judged in the wrong folder: an ordinary default-value idiom went deny -> ALLOW. The pass is gone, so an
+    # `$env:` stays a name. Each row below lost its flag with the pass in place (MEASURED at 88dc7936).
+    ROOT_VARIABLE_ROWS = (("X4_SAVES", "Remove-Item a.xml.gz", "rm_saves"),
+                          ("X4_REFERENCE", "Remove-Item x -Recurse", "rm_targets_reference"),
+                          ("X4_GAME", "Remove-Item extensions -Recurse", "rm_hits_game"))
+
+    def test_assigning_a_root_variable_does_not_move_a_cd_through_it(self):
+        for var, verb, flag in self.ROOT_VARIABLE_ROWS:
+            for shape in ("if (-not $env:V) {$env:V=<fb>}; Set-Location $env:V; <verb>",
+                          "$env:V=<fb>; $env:V=<other>; Set-Location $env:V; <verb>",
+                          "Set-Location $env:V; <verb>; $env:V=<fb>",
+                          "$env:V=<fb>; cd $env:V; <verb>"):
+                c = shape.replace("$env:V", "$env:" + var).replace("<verb>", verb) \
+                    .replace("<fb>", Q + "C:/fallback" + Q).replace("<other>", Q + "C:/other" + Q)
+                with self.subTest(c=c):
+                    self.assertTrue(self.P(c)[flag], c)
+
+    def test_TWIN_with_no_assignment_a_cd_through_the_root_variable_already_fired(self):
+        for var, verb, flag in self.ROOT_VARIABLE_ROWS:
+            c = "Set-Location $env:" + var + "; " + verb
+            self.assertTrue(self.P(c)[flag], c)
+
+    def test_TWIN_with_no_cd_the_relative_path_is_not_in_the_root(self):
+        for var, verb, flag in self.ROOT_VARIABLE_ROWS:
+            c = "if (-not $env:" + var + ") {$env:" + var + "=" + Q + "C:/fallback" + Q + "}; " + verb
+            self.assertFalse(self.P(c)[flag], c)
+
+    def test_TWIN_a_cd_to_the_assigned_value_itself_is_not_the_root(self):
+        for var, verb, flag in self.ROOT_VARIABLE_ROWS:
+            c = "$env:" + var + "=" + Q + "C:/fallback" + Q + "; Set-Location C:/fallback; " + verb
+            self.assertFalse(self.P(c)[flag], c)
+
+    def test_an_unrelated_assigned_variable_does_not_leave_the_root(self):
+        at = "Set-Location " + Q + REF + Q + "; "
+        d = "$env:D=" + Q + "C:/safe" + Q + "; "
+        for head in (at + d + "Push-Location $env:D; Pop-Location; ",
+                     at + d + "Set-Location $env:D; Set-Location " + Q + REF + Q + "; ",
+                     at + d,
+                     at + "foreach ($i in 1,2) {" + d + "Push-Location $env:D; Pop-Location}; "):
+            for tail, flag in (("Remove-Item x", "rm_targets_reference"), ("Set-Content out.txt y", "writes_reference"),
+                               (Q + "y" + Q + " > out.txt", "writes_reference")):
+                with self.subTest(c=head + tail):
+                    self.assertTrue(self.P(head + tail)[flag], head + tail)
+
+    def test_TWIN_outside_the_root_the_same_lines_fire_nothing(self):
+        at = "Set-Location C:/work; $env:D=" + Q + "C:/safe" + Q + "; "
+        for tail, flag in (("Remove-Item x", "rm_targets_reference"), ("Set-Content out.txt y", "writes_reference"),
+                           (Q + "y" + Q + " > out.txt", "writes_reference")):
+            self.assertFalse(self.P(at + "Push-Location $env:D; Pop-Location; " + tail)[flag], tail)
+
+    def test_an_assigned_env_variable_translates_once_as_a_name(self):
+        """The structural form: a second pass reintroduced in any shape adds a line here."""
+        for c, sh in (("$env:D=" + Q + "C:/safe" + Q + "; Set-Location $env:D", 'cd "${D}"'),
+                      ("$env:D=" + Q + "C:/safe" + Q + "; Push-Location $env:D", 'cd "${D}"'),
+                      ("$env:D=" + Q + "C:/safe" + Q + "; Remove-Item -Recurse $env:D/x", 'rm -rf "${D}"/x'),
+                      ("$env:D=" + Q + "C:/safe" + Q + "; " + Q + "y" + Q + " > " + DQ + "$env:D/x" + DQ, ': > "${D}"/x'),
+                      ("$env:D=" + Q + "C:/safe" + Q + "; Set-Content " + DQ + "$env:D/x" + DQ + " y", ': > "${D}"/x')):
+            with self.subTest(c=c):
+                self.assertEqual(H.powershell_to_sh(c)[0], sh)
+
+    def test_TWIN_a_local_variable_is_still_read_as_its_value(self):
+        self.assertEqual(H.powershell_to_sh("$D=" + Q + "C:/safe" + Q + "; Set-Location $D")[0], "cd C:/safe")
+
+    def test_KNOWN_GAP_an_env_variable_this_command_assigned_is_not_read_as_its_value(self):
+        """Pre-existing and accepted for 4.1.0: `$P=<path>` is read and `$env:P=<path>` is not. Reading it was P1, and it
+        cost the regression above. If this row goes red the gap was closed: drop the row and its BLIND-SPOTS entry."""
         for c in ("$env:P=" + Q + REF + Q + "; Remove-Item -Recurse $env:P",
-                  "$Env:p=" + Q + REF + Q + "; Remove-Item -Recurse $env:P",
-                  "$env:P=" + Q + REF + Q + "; Remove-Item -Recurse " + DQ + "$env:P/libraries" + DQ,
-                  "$env:P=" + Q + REF + Q + "; Remove-Item -Recurse (Join-Path $env:P libraries)",
-                  "$env:P=" + Q + REF + Q + "; Get-ChildItem $env:P | Remove-Item",
-                  "$env:P=" + Q + REF + Q + "; cd $env:P; Remove-Item -Recurse libraries",
-                  "$env:A=" + Q + REF + Q + "; $env:B=" + DQ + "$env:A/x" + DQ + "; Remove-Item $env:B",
-                  "$env:A=" + Q + REF + Q + "; $t=" + DQ + "$env:A/x" + DQ + "; Remove-Item $t",
-                  "$env:A=" + Q + REF + Q + "; $t=" + DQ + "$env:A/x" + DQ + "; Remove-Item " + DQ + "$t/y" + DQ,
-                  "$env:P=" + Q + "/tmp/x" + Q + "; $env:P=" + Q + REF + Q + "; Remove-Item -Recurse $env:P",
-                  "$env:C=" + Q + "Remove-Item -Recurse " + REF + Q + "; Invoke-Expression $env:C"):
+                  "$env:P=" + Q + REF + Q + "; cd $env:P; Remove-Item -Recurse libraries"):
             with self.subTest(c=c):
-                self.assertTrue(self.P(c)["rm_targets_reference"], c)
-
-    def test_an_assigned_env_variable_in_a_string_reaches_the_deployed_mod_ask(self):
-        c = "$env:G=" + Q + GAME + Q + "; Remove-Item -Recurse " + DQ + "$env:G" + BS + "extensions" + BS + "mymod" + DQ
-        f = self.P(c)
-        self.assertTrue(f["rm_deployed_mod"], c)
-        self.assertEqual(f["rm_deployed_mod_names"], "mymod")
-
-    def test_a_write_through_an_assigned_env_variable_is_a_write(self):
-        for c in ("$env:P=" + Q + REF + Q + "; Set-Content " + DQ + "$env:P/x" + DQ + " y",
-                  "$env:P=" + Q + REF + Q + "; " + Q + "y" + Q + " > " + DQ + "$env:P/x" + DQ):
-            with self.subTest(c=c):
-                self.assertTrue(self.P(c)["writes_reference"], c)
+                self.assertFalse(self.P(c)["rm_targets_reference"], c)
 
     def test_TWIN_a_reassigned_root_variable_still_names_its_root(self):
         c = "$env:X4_REFERENCE=" + Q + "/tmp/x" + Q + "; Remove-Item $env:X4_REFERENCE/x"
         self.assertTrue(self.P(c)["rm_targets_reference"], c)
 
     def test_TWIN_another_env_variable_is_no_opaque_value(self):
-        """Only the variable this command assigned turns into a value. Another stays a name, with no ask."""
+        """An environment variable stays a name, with no ask."""
         c = "$env:A=" + Q + "/tmp/x" + Q + "; Remove-Item -Recurse $env:OTHER/y"
         self.assertFalse(self.P(c)["carrier_untranslated"], c)
 
