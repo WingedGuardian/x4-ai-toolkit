@@ -47,7 +47,7 @@ physical allocation. Report permanent deletions, recycling and failures separate
 | **Evidence** | Findings, READMEs, receipts (`.md`, `.json`, `.jsonl`), small logs; every file a project doc links to | Kept. They are small, and docs point at them. |
 | **Recreatable** | A byte-identical copy of a file that is still live (a fixture copy of a game master) | Removed as soon as it is idle: the live file is the copy. |
 | **Build output** | Compiler intermediates inside build folders | Review candidates only. Removal requires an explicit content-bound obsolete decision. Build products and active work remain protected. |
-| **Finished work** | A task folder that is done: no write for 7 days, no read for 48 hours, not named in the instruction file's Live state block, not pinned with `.housekeep-keep`, no save or git repository/worktree, no ownership receipt without qualified release proof. A session can mark it done early with `.housekeep-closed`; independent holds still apply. | Zipped to the archive folder, the zip read back and checked, a short `ARCHIVED.md` (with a restore command) left behind, then the bulk recycled. The archive is local by default; another drive or a NAS is optional, never assumed. Archive age triggers review only; unique archives stay until explicitly declared obsolete. |
+| **Finished work** | A task folder that is done: no write for `archive_after_days` (default 14; down to `min_idle_days`, default 7, while agent output is over `budget_gib`), no read for `read_veto_hours` (default 48), not named in the instruction file's Live state block, not pinned with `.housekeep-keep`, no save, backup folder or git repository/worktree, no ownership receipt without qualified release proof. A session can mark it done early with `.housekeep-closed`; independent holds still apply. | Zipped to the archive folder, the zip read back and checked, a short `ARCHIVED.md` (with a restore command) left behind, then the bulk recycled. Top-level `README*`, `.md`, `.json`, `.jsonl` and `.log` files under 1 MiB stay local as well as in the zip; every other file then lives only in the zip. The archive is local by default; another drive or a NAS is optional, never assumed. Archive age triggers review only; unique archives stay until explicitly declared obsolete. |
 | **Duplicate** | The same bytes at several agent-output paths | Stored once: hard links to one read-only copy. Every path keeps working. |
 | **Rolling** | Per-launch logs, snapshot folders, named scratch beds | Compression requires a verified lossless replacement. Snapshots require an identical retained generation. Unique logs and scratch need explicit content-bound obsolete decisions; age alone never deletes them. |
 | **Rolling tool store** | Configured rolling snapshots, including stores under backup folders | Retire only a byte-identical repeated generation after re-proving the retained copy. Newest and distinct generations stay. |
@@ -74,12 +74,14 @@ again. So:
 1. **Report, plan, apply -- never one step.** The plan records each file's hash; apply re-checks it and refuses
    anything that changed.
 2. **Recycle Bin (or Trash) by default.** Permanent eligibility requires both gates above, except same-run scratch.
-   An item too big for the Bin, a network item without a recycling route, or unknown/disabled Bin capacity stays
-   in place and is reported in-session. Any exact-item permanent-deletion decision belongs to the user; cleanup
+   An item too big for the Bin, a network item without a recycling route, a path that really lands elsewhere (through
+   a junction or symlink, or on a SUBST drive), a removable volume, a machine policy that disables recycling, or
+   unknown/disabled Bin capacity stays in place and is reported in-session. Windows' shell destroys a file on a network
+   share silently, so this refusal is the only protection there. Any exact-item permanent-deletion decision belongs to the user; cleanup
    never silently falls back to it. Recycling frees no disk space until the Bin is deliberately emptied.
-3. **Leave active work alone.** Task archival checks whole-task write/read activity, pins, Live state,
-   resource-job ownership, ownership receipts and repository/save protections. Recent reads independently veto
-   archival. If read recording cannot be proven with same-run owned scratch on the same volume, only an explicitly
+3. **Leave active work alone.** Task archival checks whole-task write/read activity, pins, Live state, a configured
+   job ledger (`job_ledger`; one that cannot be read is announced and does not hold archiving), ownership receipts and
+   repository/save/backup-folder protections. Recent reads independently veto archival. If read recording cannot be proven with same-run owned scratch on the same volume, only an explicitly
    closed folder can qualify. A closure bypasses write-age only; it does not bypass the independent hold gates.
 4. **Never touch a git-tracked file**, and never hard-link to a live game file.
 5. **Accounting must sum.** Every scanned byte lands in exactly one row; the row of bytes left alone prints even
@@ -91,6 +93,11 @@ again. So:
    what, which approved version, where the log is -- before it starts. No background service or scheduled task, no
    window or focus change, and no unattended permanent-deletion prompt: an item the bin cannot
    take stays where it is and is reported.
+
+   **The one exception to rules 6 and 7 is the toolkit temp sweep** (above). Session start launches it detached, with no
+   announcement and no approved version, and the next session start reports what it did. It touches only workspaces the
+   toolkit's own producer declared disposable when it created them, after the protection, inactivity and in-use
+   checks, and only ever moves them to the Recycle Bin. Each toolkit's checklist names how to turn it off.
 
 ### Where agent output goes
 
@@ -107,7 +114,8 @@ Cleanup is the second line of defence; writing less is the first:
 - **One build folder per task.** Regenerated outputs overwrite, or keep the newest two.
 - **Close the task.** Keep the README and receipts; retire bulk only after replacement or obsolescence proof, and write
   `.housekeep-closed`. A multi-GB folder that is genuinely needed later gets `.housekeep-keep` and one README line
-  saying why; the daily note names every pinned folder over 1 GiB.
+  saying why; `report` and `plan` name every pinned folder over `pin_warn_gib` (default 1 GiB), as does the optional
+  daily note.
 - **Budget.** Agent output has a size budget (`budget_gib`); over it, finished work is archived oldest first, and
   the optional daily runner reports measured logical growth separately from physical drive usage.
 
@@ -170,7 +178,9 @@ and both shared archive helpers. The local pin tests alone do not prove that the
   location. Tests use a fake recycler and cannot invoke the real Recycle Bin.
 
 - **The user profile is Forever.** Everything under `Documents\Egosoft\X4\<profile-id>\` -- saves
-  (`save\*.xml.gz`), `content.xml`, UI data -- is never planned, wherever a copy of it sits.
+  (`save\*.xml.gz`), `content.xml`, UI data -- is never planned. A save is also recognised wherever a copy sits: by the
+  game's names (`save_NNN`, `quicksave`, `autosave_NN`) or by a `<savegame>` root, whatever it was renamed to. Other
+  profile files are recognised only under that folder.
 - **Per-edit backups** (`.claude/backups/<stamp>__<path>`, written by `backup-before-edit.sh`) have no age-out and
   are Forever under the shared policy: they are often the only copy of a file's earlier state. `report` shows
   their size; pruning them is the user's decision. `known-good-*` baselines, `AUDIT_LOG.txt` and `GUARDS-OFF.log`
@@ -208,8 +218,9 @@ python scripts/x4housekeep.py apply plan.json [--only link,gzip]
 `python scripts/x4housekeep.py sweep-temp` runs the temp sweep by hand. The session-start hook runs
 `x4housekeep.py session <hooks>/../housekeep-session.txt` detached and shows that file's line at the next start.
 
-`apply` runs the classes in a fixed order (recreatable, build, link, gzip, launch, snapshot, scratch) and prints
-every refusal with its reason. A refusal is not an error to work around: re-run `plan`.
+`apply` runs the classes in a fixed order (recreatable, build, link, gzip, launch, snapshot, scratch, archive, expire)
+and prints every refusal with its reason. A refusal is not an error to work around: re-run `plan`.
+Set `job_ledger` to a resource-job ledger if your tooling keeps one (`{"entries": [{"cwd": ...}]}`); the default is none.
 
 ### Explicit obsolete decisions
 

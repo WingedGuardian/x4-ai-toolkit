@@ -38,5 +38,6 @@
   "read_veto_hours": 48,
   "budget_gib": 0,
   "pin_warn_gib": 1,
+  "job_ledger": "",
   "approved_sha256": ""
 }

@@ -237,7 +237,7 @@ class DoneTest(Base):
 
     def test_rb_cwd_blocks(self):
         t = self.task()
-        self.assertIn("rb job", self.done(t, cwds=[h._key(t / "build")]))
+        self.assertIn("running job", self.done(t, cwds=[h._key(t / "build")]))
 
     def test_git_folder_never(self):
         t = self.task()
@@ -280,7 +280,7 @@ class Selection(DoneTest):
     reads = True          # the probe's answer, pinned: CI runners may not record last-access times
 
     def plan_paths(self):
-        with patch.object(h, "rb_job_cwds", lambda: []), patch.object(h, "live_state_tokens", lambda c: set()), \
+        with patch.object(h, "job_cwds", lambda c: ([], "")), patch.object(h, "live_state_tokens", lambda c: set()), \
                 patch.object(h, "reads_recorded", lambda folder: self.reads):
             doc = h.plan(self.cfg, only={"archive"})
         return [Path(a["path"]).name for a in doc["actions"]], doc
@@ -402,7 +402,7 @@ class Selection(DoneTest):
 
         def unknown(*_a):
             raise h.LiveStateUnknown("cannot read AGENTS.md")
-        with patch.object(h, "rb_job_cwds", lambda: []), patch.object(h, "live_state_tokens", unknown), \
+        with patch.object(h, "job_cwds", lambda c: ([], "")), patch.object(h, "live_state_tokens", unknown), \
                 patch.object(h, "reads_recorded", lambda folder: True):
             doc = h.plan(self.cfg, only={"archive"})
         self.assertEqual([], doc["actions"])
@@ -412,15 +412,15 @@ class Selection(DoneTest):
 
     def test_apply_refuses_when_live_state_is_unreadable(self):
         self.task("idle-month", mtime=time.time() - 30 * DAY)
-        with patch.object(h, "rb_job_cwds", lambda: []), patch.object(h, "live_state_tokens", lambda c: set()), \
+        with patch.object(h, "job_cwds", lambda c: ([], "")), patch.object(h, "live_state_tokens", lambda c: set()), \
                 patch.object(h, "reads_recorded", lambda folder: True):
             action = h.plan(self.cfg, only={"archive"})["actions"][0]
 
-            def unknown():
-                raise h.LiveStateUnknown("ledger is malformed")
-            with patch.object(h, "rb_job_cwds", unknown):
+            def unknown(*_a):
+                raise h.LiveStateUnknown("cannot read AGENTS.md")
+            with patch.object(h, "live_state_tokens", unknown):
                 why = h.check(action, self.cfg, h.Guard(self.cfg), time.time())
-        self.assertIn("ledger is malformed", why)
+        self.assertIn("cannot read AGENTS.md", why)
 
 
 if __name__ == "__main__":

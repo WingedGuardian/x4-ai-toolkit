@@ -136,5 +136,10 @@ release/nexus/
 # Session charters: each session's first prompt, goal and open items (private, per install).
 .agent-sessions/
 housekeep-session.txt
+# What the session-start jobs write beside the hooks and under the default archive root. All of it is per machine;
+# an archive holds whatever a task folder held.
+.claude/diag/
+.claude/archive/
+.claude/x4fresh-session.txt
 /tools/basex/basex/disposition-x4raw.json
 /tools/basex/basex/disposition-x4eff.json

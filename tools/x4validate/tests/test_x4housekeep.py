@@ -1107,24 +1107,17 @@ def test_the_tool_source_has_no_mojibake():
     assert not stray, [hex(ord(c)) for c in stray]
 
 
-def _ledger(tmp_path, monkeypatch, text=None):
-    home = tmp_path / "home"
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setenv("HOME", str(home))
-    if text is not None:
-        write(home / ".claude" / "tools" / "resource-budget" / "ledger.json", text.encode("utf-8"))
-
-
-def test_a_missing_rb_ledger_is_nothing_known_but_a_bad_one_blocks(tmp_path, monkeypatch):
-    _ledger(tmp_path, monkeypatch)
-    assert hk.rb_job_cwds() == []                                          # missing: no jobs known
-    _ledger(tmp_path, monkeypatch, json.dumps({"entries": [{"cwd": str(tmp_path / "job")}]}))
-    assert hk.rb_job_cwds() == [hk._key(tmp_path / "job")]                 # twin: a readable ledger is used
+def test_a_missing_job_ledger_is_nothing_known_and_a_bad_one_is_announced_not_a_hold(tmp_path):
+    cfg = {"root": tmp_path, "job_ledger": str(tmp_path / "ledger.json")}
+    assert hk.job_cwds(cfg) == ([], "")                                    # missing: no jobs known
+    write(tmp_path / "ledger.json", json.dumps({"entries": [{"cwd": str(tmp_path / "job")}]}).encode("utf-8"))
+    assert hk.job_cwds(cfg) == ([hk._key(tmp_path / "job")], "")           # twin: a readable ledger is used
     for bad in ("{not json", "[]", json.dumps({"entries": 5}), json.dumps({"entries": [7]}),
                 json.dumps({"entries": [{"cwd": 3}]})):
-        _ledger(tmp_path, monkeypatch, bad)
-        with pytest.raises(hk.LiveStateUnknown):
-            hk.rb_job_cwds()
+        write(tmp_path / "ledger.json", bad.encode("utf-8"))
+        cwds, note = hk.job_cwds(cfg)
+        assert cwds == [] and "running jobs were not checked" in note
+    assert hk.job_cwds({"root": tmp_path, "job_ledger": ""}) == ([], "")   # none configured
 
 
 def test_an_unreadable_instruction_file_blocks_but_a_missing_one_names_no_live_work(tree):

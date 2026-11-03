@@ -12,7 +12,7 @@ that repeat the one before. The policy this tool implements is RETENTION.md; rea
     python scripts/x4housekeep.py plan -o plan.json   every action, with the hash it was planned on
             [--only CLASS[,CLASS]]                   (skips the scans no listed class needs)
     python scripts/x4housekeep.py apply plan.json     re-check each action, then do exactly those
-            [--only CLASS[,CLASS]]                   (recreatable, build, link, gzip, launch, snapshot, scratch)
+            [--only CLASS[,CLASS]]                   (recreatable, build, link, gzip, launch, snapshot, scratch, archive, expire)
     python scripts/x4housekeep.py sweep-temp          recycle the toolkit's own stale temp dirs (see "temp sweep")
     python scripts/x4housekeep.py session STATE.txt   sweep-temp, then write the session-start disk note to STATE.txt
     --config FILE   default <toolkit>/x4-housekeep.json (x4-housekeep.json.example ships)
@@ -20,8 +20,8 @@ that repeat the one before. The policy this tool implements is RETENTION.md; rea
 Two passes, never one: `plan` decides, `apply` re-verifies. An action whose file changed since it was planned
 (size, hash, a newer write in its task folder) is REFUSED, not re-decided -- run `plan` again.
 
-What it never touches, whatever the config says: saves (save/*.xml.gz; anything under Documents/Egosoft/X4)
-and anything under a folder whose name
+What it never touches, whatever the config says: saves (save/*.xml.gz; anything under Documents/Egosoft/X4; a
+copy anywhere, by the game's save names or a <savegame> root) and anything under a folder whose name
 contains "backup"; git-tracked files; every file a project doc links to; and any task folder written to within
 `active_hours` (another session is probably still working there).
 
@@ -51,6 +51,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 from pathlib import Path
 import importlib.util
 _BACKUP_SPEC = importlib.util.spec_from_file_location('housekeep_cold_helper', Path(__file__).with_name('housekeep_backups.py'))
@@ -65,10 +66,47 @@ TOOLKIT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = TOOLKIT_ROOT / "x4-housekeep.json"
 
 
+#: The names the game gives a save. RETENTION.md's Forever class is "saves and every copy of them", and a copy is usually
+#: not under a folder called save/. Exact stems only: "save_notes.xml" and "my_quicksave.xml.gz" are not saves by name.
+SAVE_NAME = re.compile(r"^(?:save_\d+|quicksave|autosave_\d+)\.xml(?:\.gz)?$")
+#: The ROOT element, not the word: optional BOM, XML declaration and comments, then <savegame. "<savegame-like/>" or a
+#: mention deeper in some other document is not a save.
+SAVE_ROOT = re.compile(rb"(?:\xef\xbb\xbf)?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<savegame[\s>/]", re.S)
+SAVE_SNIFF_BYTES = 4096
+
+
 def is_save(low: str) -> bool:
-    """An X4 save, or anything in the user profile (Documents/Egosoft/X4/<id>/ holds saves, content.xml and UI
-    data). `low` is the lower-cased path with forward slashes."""
-    return "/egosoft/x4/" in low or ("/save/" in low and low.endswith((".xml.gz", ".xml")))
+    """An X4 save by its path, or anything in the user profile (Documents/Egosoft/X4/<id>/ holds saves, content.xml and
+    UI data). `low` is the lower-cased path with forward slashes. A renamed copy has no such name: _holds_savegame
+    reads its first bytes."""
+    return ("/egosoft/x4/" in low or ("/save/" in low and low.endswith((".xml.gz", ".xml")))
+            or bool(SAVE_NAME.match(low.rsplit("/", 1)[-1])))
+
+
+def _holds_savegame(path) -> bool:
+    """Does this XML or gzipped XML open with X4's <savegame> root? Protection only, so a false positive keeps a file.
+    Unreadable or corrupt content is ordinary content here: every removal path still has its own read of it. The read
+    time is put back, or a plan's own look would trip the read veto on the next one."""
+    p = Path(path)
+    try:
+        before = p.stat()
+        with p.open("rb") as raw:
+            magic = raw.read(2)
+            raw.seek(0)
+            if magic == b"\x1f\x8b":
+                with gzip.open(raw, "rb") as stream:
+                    head = stream.read(SAVE_SNIFF_BYTES)
+            else:
+                head = raw.read(SAVE_SNIFF_BYTES)
+    except (OSError, EOFError, zlib.error):
+        return False  # silent-ok: not readable as XML; an unreadable file is held by its removal path's own proof
+    try:
+        after = p.stat()
+        if (before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns):
+            os.utime(p, ns=(before.st_atime_ns, after.st_mtime_ns))
+    except OSError:
+        pass  # silent-ok: conservative: a read veto may remain; never fake idleness (a read-only copy refuses utime)
+    return bool(SAVE_ROOT.match(head))
 
 
 CLASSES = ("recreatable", "build", "link", "gzip", "launch", "snapshot", "scratch", "archive", "expire")
@@ -89,6 +127,9 @@ DEFAULTS = {
     "recycle_bin_warn_gib": 10,       # read-only Windows aggregate; 0 disables warning
     "obsolete_items": {},            # exact bytes + explicit reason/evidence; never age alone
     "backup_archive": {},            # opt-in cold backups; docs/BACKUP-ARCHIVE.md
+    # Optional: a resource-job ledger ({"entries": [{"cwd": ...}]}) naming folders a running job works in. "" = none.
+    # Only ever a hold on archiving: a ledger that cannot be read is announced and archiving goes on (RETENTION.md).
+    "job_ledger": "",
     "agent_output": [],               # task-folder roots (relative to the toolkit root, or absolute)
     "nested_task_roots": [],          # roots one level down whose children are task folders of their own
     "live_roots": [],                 # a byte-identical copy of a file here is "recreatable" (the game folder)
@@ -160,10 +201,16 @@ def blake(path, chunk=1 << 20) -> str:
     return _archive_module()._retirement_hash(Path(path), float('inf'), chunk)
 
 
-def newest_mtime(folder: Path) -> float:
-    newest = folder.stat().st_mtime
+def newest_mtime(folder: Path, own=()) -> float:
+    """The newest write in `folder`. `own` holds the keys of folders this run itself changed: recycling a file bumps its
+    folder's mtime, which is this run's write and no one else's. Only that folder's OWN stamp is skipped, so a new file
+    inside it, or any other folder, still counts."""
+    newest = 0.0 if _key(folder) in own else folder.stat().st_mtime
     for path in walk_files(folder, include_dirs=True):
-        newest = max(newest, path.stat().st_mtime)
+        st = path.stat()
+        if stat.S_ISDIR(st.st_mode) and _key(path) in own:
+            continue
+        newest = max(newest, st.st_mtime)
     return newest
 
 
@@ -271,7 +318,7 @@ class Guard:
     def why_protected(self, path) -> str:
         p = str(path)
         low = p.replace("\\", "/").lower()
-        if is_save(low):
+        if is_save(low) or (low.endswith((".xml.gz", ".xml")) and _holds_savegame(p)):
             return "save"
         # Folder names BELOW the configured root only: a root that itself sits under ".../backups/..." must not
         # make every file look protected (or, read the other way, make the rule meaningless).
@@ -354,6 +401,9 @@ def task_folders(cfg, held=None):
                 raise OSError("configured root is a symbolic link or reparse point")
             if not root.is_dir():
                 raise OSError("configured root is not a directory")
+            why = landing_refusal(root)      # apply would refuse each of its actions anyway: say so once, here
+            if why:
+                raise OSError(why)
             visit(root)
         except OSError as exc:
             held.append({"path": str(root), "reason": str(exc), "bytes": None})
@@ -430,7 +480,7 @@ def reads_recorded(folder: Path) -> bool:
 
 
 class LiveStateUnknown(OSError):
-    """A source of 'work is still live' (instruction file, rb ledger) exists but cannot be read: unknown, not idle."""
+    """A source of 'work is still live' (the instruction files) exists but cannot be read: unknown, not idle."""
 
 
 def live_state_tokens(cfg) -> set:
@@ -450,17 +500,23 @@ def live_state_tokens(cfg) -> set:
     return toks
 
 
-def rb_job_cwds() -> list:
-    p = Path(os.path.expanduser("~")) / ".claude" / "tools" / "resource-budget" / "ledger.json"
+def job_cwds(cfg) -> tuple:
+    """([folder keys], note) from the configured job ledger. An optional convenience of one machine's tooling, not the
+    toolkit's record of what is live, so a ledger that cannot be read does not stop archiving: the note says the check
+    did not run. Every other hold on a folder (read veto, pins, Live state, writes) is independent of it."""
+    value = cfg.get("job_ledger") or ""
+    if not value:
+        return [], ""
+    p = _abs(cfg, os.path.expanduser(str(value)))
     try:
         cwds = [e["cwd"] for e in json.loads(p.read_text(encoding="utf-8")).get("entries", []) if e.get("cwd")]
         if not all(isinstance(c, str) for c in cwds):
             raise TypeError("an entry's cwd is not a string")
-        return [_key(c) for c in cwds]
+        return [_key(c) for c in cwds], ""
     except FileNotFoundError:
-        return []  # silent-ok: no rb ledger at all = no rb jobs known (an existing unreadable one raises below)
+        return [], ""  # silent-ok: no ledger written yet = no jobs known
     except (OSError, ValueError, AttributeError, TypeError) as exc:
-        raise LiveStateUnknown("rb ledger {} exists but is unreadable or malformed ({})".format(p, exc)) from exc
+        return [], "job ledger {} could not be read ({}); running jobs were not checked".format(p, type(exc).__name__)
 
 
 def is_done(task: Path, idle_days: float, tokens: set, cwds: list, guard) -> str:
@@ -475,10 +531,16 @@ def is_done(task: Path, idle_days: float, tokens: set, cwds: list, guard) -> str
         return "named in the Live state block"
     k = _key(task)
     if any(c == k or c.startswith(k + os.sep) for c in cwds):
-        return "a running rb job works here"
+        return "a running job works here"
+    # The Forever class, judged from the task down: a source root the operator configured may itself be called
+    # "backups" (archive_roots), but a backup folder inside a task, or a task named for one, is never archived.
+    if "backup" in name:
+        return "holds backup folder"
     for dp, dirs, files in os.walk(task):
         if ".git" in dirs or ".git" in files:
             return "a git repository"
+        if any("backup" in d.lower() for d in dirs):
+            return "holds backup folder"
         for f in files:
             if fnmatch.fnmatch(f.lower(), 'owned-session*.json') or fnmatch.fnmatch(f.lower(), '*ownership*.json'):
                 # Legacy receipts have no common release schema. A dead/reused PID, age or an
@@ -504,17 +566,26 @@ def archive_facts(folder):
     return [n, size, round(wrote, 3)], wrote, read
 
 
+def _only_kept_evidence(folder: Path) -> bool:
+    """A stub plus exactly what archiving leaves local: their total can pass 1 MiB, and that is not new work."""
+    ha = _archive_module()
+    kept = ha.keep_local(folder)
+    return all(os.path.normcase(str(f)) in kept or f == folder / ha.STUB or f == folder / CLOSED_MARK
+               for f in walk_files(folder))
+
+
 def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tuple:
     """([action], rows) for every done folder due: closed first, then by age; over budget, down to min_idle_days."""
     held = [] if held is None else held
+    cwds, ledger_note = job_cwds(cfg)
     try:
-        tokens, cwds, unknown = live_state_tokens(cfg), rb_job_cwds(), ""
+        tokens, unknown = live_state_tokens(cfg), ""
     except LiveStateUnknown as exc:        # unknown is not idle: every folder stays this run, and the reason is reported
-        tokens, cwds, unknown = set(), [], str(exc)
+        tokens, unknown = set(), str(exc)
         held.append({"path": "(live-work state)", "reason": unknown, "bytes": None, "scope": "archive"})
     inventory = {} if inventory is None else inventory
     inventory.update(roots=[str(_abs(cfg, r)) for r in cfg["archive_roots"]], roots_held=0,
-                     candidates_inspected=0, candidates_held=0)
+                     candidates_inspected=0, candidates_held=0, job_ledger_note=ledger_note)
     # from_root: the folder lives under archive_roots, which the file-level loop never scans, so its kept bytes are
     # counted here; agent_output folders that stay are counted by that loop instead (rows must sum to the scan).
     cands = [(t, cfg["archive_after_days"], False) for t, s in tasks if s != "loose"]
@@ -547,7 +618,10 @@ def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tupl
             continue
         inventory["candidates_inspected"] += 1
         total += fp[1]
-        if (t / "ARCHIVED.md").exists() and fp[1] < 1 << 20:
+        # Before any other hold: the note is about what a pin costs, whatever else keeps the folder this run.
+        if (t / KEEP_PIN).exists() and fp[1] >= cfg["pin_warn_gib"] * GIB:
+            pins.append((t, fp[1]))
+        if (t / "ARCHIVED.md").exists() and (fp[1] < 1 << 20 or _only_kept_evidence(t)):
             keep("kept: already archived (stub only)", fp[1], from_root)
             continue
         idle = (now - wrote) / DAY if wrote else 0.0           # idleness: writes
@@ -563,8 +637,6 @@ def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tupl
     measured = total
     over = cfg["budget_gib"] and total > cfg["budget_gib"] * GIB
     for _, _, t, days, fp, idle, closed, from_root in info:
-        if (t / KEEP_PIN).exists() and fp[1] >= cfg["pin_warn_gib"] * GIB:
-            pins.append((t, fp[1]))
         # The budget lowers the bar for agent_output only; an archive_roots entry's own age is the user's number.
         due = closed or idle >= days or (over and not from_root and idle >= cfg["min_idle_days"])
         if not due or idle < cfg["min_idle_days"] and not closed:
@@ -635,27 +707,75 @@ def _archive_module():
     return _ARCHIVE_MODULE
 
 
-def bin_refusal(p) -> str:
-    """'' when the Recycle Bin can take `p` without asking; otherwise why it would prompt (and so is left alone)."""
+def _is_link(path) -> bool:
+    info = os.lstat(path)
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+
+
+def landing_refusal(p) -> str:
+    """'' when `p` really lives where it is spelled; otherwise why it is left in place.
+
+    MEASURED 2026-10-31: the shell's delete destroys a file on a network share silently (rc 0, no dialog), and a SUBST
+    drive or a volume with no letter has no bin either, so this refusal is the only protection there. A drive letter
+    says nothing about where a path lands once a junction or symlink sits on the way, so every existing component is
+    checked and realpath has the last word. Only a case or 8.3 short-name difference may remain (GitHub's RUNNER~1);
+    realpath expands those. No answer means keep."""
     s = os.path.abspath(str(p))
-    if s.startswith("\\\\") or _drive_type(s) == 4:                    # DRIVE_REMOTE: a share has no Recycle Bin
+    if s.startswith("\\\\"):
         return "left in place: network location (no Recycle Bin)"
+    part = s
+    while True:
+        try:
+            if _is_link(part):
+                return "left in place: {} is a link or reparse point; this path lands somewhere else".format(part)
+        except (FileNotFoundError, NotADirectoryError):
+            pass  # silent-ok: not there (yet); only what exists can redirect, and the shell reports a missing item
+        except OSError as exc:
+            return "left in place: where this path lands could not be established ({})".format(exc)
+        parent = os.path.dirname(part)
+        if parent == part:
+            break
+        part = parent
+    try:
+        real = os.path.realpath(s)
+    except (OSError, ValueError) as exc:
+        return "left in place: where this path lands could not be established ({})".format(exc)
+    if real.startswith("\\\\"):
+        return "left in place: this path really lands on a network location or a volume with no drive letter ({})".format(real)
+    if os.path.normcase(os.path.splitdrive(real)[0]) != os.path.normcase(os.path.splitdrive(s)[0]):
+        return "left in place: this path really lands on another volume ({})".format(real)
+    if _drive_type(s) == 4 or _drive_type(real) == 4:                  # DRIVE_REMOTE: a share has no Recycle Bin
+        return "left in place: network location (no Recycle Bin)"
+    return ""
+
+
+def bin_refusal(p) -> str:
+    """'' when the Recycle Bin can take `p` without asking; otherwise why it would prompt or destroy it (left alone)."""
+    why = landing_refusal(p)
+    if why:
+        return why
+    s = os.path.abspath(str(p))
     longest = len(s)
     size = 0
-    if os.path.isdir(s):
-        for dp, _, fn in os.walk(s):
-            for f in fn:
-                q = os.path.join(dp, f)
-                longest = max(longest, len(q))
-                try:
-                    size += os.stat(q).st_size
-                except OSError:
-                    pass  # silent-ok: an unstattable file is undercounted; worst case the shell shows its too-big prompt, never a silent delete
-    else:
-        try:
+    try:
+        if os.path.isdir(s):
+            def failed(error):
+                raise error
+            for dp, dirs, fn in os.walk(s, onerror=failed):
+                for name in dirs + fn:
+                    q = os.path.join(dp, name)
+                    longest = max(longest, len(q))
+                    if _is_link(q):
+                        return "left in place: {} inside it is a link or reparse point".format(q)
+                for f in fn:
+                    size += os.stat(os.path.join(dp, f)).st_size
+        else:
             size = os.stat(s).st_size
-        except OSError:
-            pass  # silent-ok: as above: an undercount can only surface the too-big prompt
+    except FileNotFoundError:
+        if os.path.lexists(s):      # something inside vanished or cannot be addressed: its size is not known
+            return "left in place: its size could not be measured (a name inside cannot be reached)"
+    except OSError as exc:
+        return "left in place: its size could not be measured ({})".format(exc)
     if longest > MAX_BIN_PATH:
         return "left in place: a path is longer than {} characters (the bin would ask to delete it)".format(MAX_BIN_PATH)
     cap = bin_capacity(s)
@@ -678,10 +798,24 @@ def _drive_type(path: str) -> int:
 
 
 def bin_capacity(path: str):
-    """This volume's Recycle Bin size limit in bytes (0 if it deletes immediately); None when it cannot be read."""
+    """This volume's Recycle Bin size limit in bytes (0 if it deletes immediately); None when it cannot be read.
+
+    Two things outrank the per-volume key. The NoRecycleFiles policy makes every delete on the machine permanent. And
+    only a fixed volume has a bin to go to: Windows keeps BitBucket\\Volume\\{guid} for a USB stick it has seen, so the
+    key on a removable drive is stale evidence, not proof."""
+    DRIVE_FIXED = 3
     try:
         import ctypes
         import winreg
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(hive, r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer") as k:
+                    if winreg.QueryValueEx(k, "NoRecycleFiles")[0]:
+                        return 0
+            except FileNotFoundError:
+                continue  # silent-ok: no such policy key or value: this hive sets nothing
+        if _drive_type(os.path.splitdrive(path)[0] + "\\") != DRIVE_FIXED:
+            return None
         buf = ctypes.create_unicode_buffer(64)
         if not ctypes.windll.kernel32.GetVolumeNameForVolumeMountPointW(os.path.splitdrive(path)[0] + "\\", buf, 64):
             return None
@@ -1001,6 +1135,10 @@ def print_coverage(doc):
     if archive:
         print("archive inventory: {} candidates inspected, {} candidates held, {} roots held".format(
             archive["candidates_inspected"], archive["candidates_held"], archive["roots_held"]))
+        if archive.get("job_ledger_note"):
+            print("  NOTE " + archive["job_ledger_note"])
+    for path, size in doc.get("large_pins", []):
+        print("pinned with .housekeep-keep: {:.2f} GiB  {}".format(size / GIB, path))
     review = coverage.get("archive_review", {})
     if review:
         print("ordinary archive review: {}; {} ZIP(s) inspected; {} held branch(es); {}".format(
@@ -1100,9 +1238,10 @@ def _set_readonly(path):
 class _Memo:
     """Per-apply caches: a live master is hashed once, not once per copy of it; a task folder is walked once."""
 
-    def __init__(self):
+    def __init__(self, own=None):
         self.hashes, self.newest = {}, {}
         self.links = {}  # only canonical links successfully created by THIS apply
+        self.own = set() if own is None else own  # folders THIS apply changed (newest_mtime skips their own stamp)
 
     def hash(self, path):
         st = os.stat(path)
@@ -1114,7 +1253,7 @@ class _Memo:
     def task_newest(self, task):
         k = _key(task)
         if k not in self.newest:
-            self.newest[k] = newest_mtime(Path(task))
+            self.newest[k] = newest_mtime(Path(task), self.own)
         return self.newest[k]
 
 
@@ -1135,6 +1274,9 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
     p = Path(action["path"])
     if not p.exists():
         return "gone since the plan"
+    why = landing_refusal(p)       # before any work is done, and whichever recycler ends up holding it
+    if why:
+        return why
     scope = ACTION_ROOTS.get(action["class"])
     if scope and not _under(p, [_abs(cfg, r) for r in cfg[scope]]):
         return "path is outside the configured {}; create a new plan".format(scope)
@@ -1176,7 +1318,7 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
         if (now - wrote) / DAY < cfg["min_idle_days"] and not (p/CLOSED_MARK).is_file():
             return "something wrote here since the plan"
         try:
-            why = is_done(p, action["idle_days"], live_state_tokens(cfg), rb_job_cwds(), guard)
+            why = is_done(p, action["idle_days"], live_state_tokens(cfg), job_cwds(cfg)[0], guard)
         except LiveStateUnknown as exc:
             return "live-work state unknown, archiving blocked this run ({})".format(exc)
         if why:
@@ -1256,6 +1398,12 @@ def compress(action) -> Path:
     return gz
 
 
+def _expected_refusal(exc) -> bool:
+    """A failure that means "leave it and say so" rather than a bug: the helper modules load under their own names, so
+    their ArchiveError is matched by name (a test may hold a second copy of the module)."""
+    return isinstance(exc, (OSError, ValueError)) or type(exc).__name__ == "ArchiveError"
+
+
 def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = None, deadline: float | None = None,
           summary: bool = False):
     """Do exactly the plan, re-checking each action. `deadline` (epoch): no new action starts after it; the rest is
@@ -1299,9 +1447,11 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
                     canonical_key = _key(a['canonical'])
                     link(a, 1 + memo.links.get(canonical_key, 0))
                     memo.links[canonical_key] = memo.links.get(canonical_key, 0) + 1
+                    memo.own.add(_key(Path(a["path"]).parent))
                     done += a["bytes"]
                 elif cls == "gzip":
                     compress(a)
+                    memo.own.add(_key(Path(a["path"]).parent))
                     to_recycle.append(a)
                 elif cls == "archive":
                     ha = _archive_module()
@@ -1351,11 +1501,13 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
                                 d.update(block)
                         why = '' if blake(Path(a['path'])) == a['hash'] == d.hexdigest() else 'gzip replacement/source changed'
                     else:
-                        why = check(a, cfg, guard, time.time(), _Memo())
+                        why = check(a, cfg, guard, time.time(), _Memo(memo.own))
                     if a['class'] == 'snapshot' and any(
                             other['path'] == a.get('duplicate_of') for other in plan_doc['actions']):
                         why = 'retained snapshot is also scheduled for removal'
-                except (OSError, ValueError) as exc:
+                except Exception as exc:
+                    if not _expected_refusal(exc):
+                        raise
                     why = 'final replacement proof failed: '+str(exc)
                 if why:
                     print('  REFUSED  {}  ({})'.format(a['path'], why))
@@ -1373,6 +1525,7 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
                     print("  FAILED   {:<11} {}  (Recycle Bin: {})".format(cls, a["path"], err))
                     failed += 1
                 else:
+                    memo.own.add(_key(Path(a["path"]).parent))
                     done += a["bytes"]
         totals[cls] = done
         print("  {:<11} {:>4} action(s), {:.2f} GiB done".format(cls, len(acts), done / GIB))
@@ -1593,7 +1746,11 @@ def dir_size_counted(p: Path):
     """REPORT-ONLY size: (bytes, unaddressable paths, links not followed). Never for anything that deletes.
 
     Links and reparse points are NOT descended (their bytes live elsewhere) and unaddressable names are
-    skipped; both are RETURNED so the caller can say the total is a lower bound instead of the whole."""
+    skipped; both are RETURNED so the caller can say the total is a lower bound instead of the whole.
+
+    The size comes from the directory listing, with no stat per entry: this walks every agent's scratchpad (MEASURED
+    2026-11-03, 200,847 objects, warm cache: the whole report took 32.9 s with two stats per entry, 18.4 s without). On
+    Windows that size can lag for a file open right now, which a report can bear."""
     if not p.exists():
         return 0, [], []
     total, skipped, links = 0, [], []
@@ -1601,16 +1758,18 @@ def dir_size_counted(p: Path):
     while stack:
         with os.scandir(stack.pop()) as entries:
             for e in entries:
-                q = Path(e.path)
-                try:
-                    info = q.lstat()
-                except FileNotFoundError:
-                    skipped.append(q)
+                if os.name == "nt" and e.name.endswith((".", " ")):
+                    skipped.append(Path(e.path))   # Win32 strips that character, so the path reaches another name
                     continue
-                if q.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
-                    links.append(q)
+                try:
+                    info = e.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    skipped.append(Path(e.path))
+                    continue
+                if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                    links.append(Path(e.path))
                 elif stat.S_ISDIR(info.st_mode):
-                    stack.append(q)
+                    stack.append(e.path)
                 else:
                     total += info.st_size
     return total, skipped, links
@@ -1675,6 +1834,16 @@ def report(cfg) -> int:
 
 
 def main(argv) -> int:
+    try:
+        return _main(argv)
+    except Exception as exc:
+        if not _expected_refusal(exc):
+            raise
+        print("housekeep: REFUSED: {}. Nothing beyond what is printed above was done.".format(exc), file=sys.stderr)
+        return 1
+
+
+def _main(argv) -> int:
     args = list(argv)
     cfg_path = None
     if "--config" in args:
