@@ -10,21 +10,32 @@ from pathlib import Path
 
 import pytest
 
+from _layout import installed_layout, require_repo
 from codex_testlib import REPO
 
 
 @pytest.fixture
 def candidate(tmp_path):
     root = tmp_path / "candidate"
-    spec = importlib.util.spec_from_file_location(
-        "batch_candidate_generator", REPO / "tools/x4validate/scripts/gen-agent-trees.py")
-    generator = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(generator)
-    for relative, content in generator.generate(REPO).items():
-        if relative == "tools/agent-harness.py" or relative.startswith("tools/x4_harness/"):
-            target = root / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8", newline="\n")
+    if installed_layout() and not (REPO / "agent").is_dir():
+        # D-C2: an install has no `agent/` for the generator to read, but it ships the files the
+        # generator renders from it (tools/agent-harness.py, tools/x4_harness/), and those are the
+        # ones a user's agent runs. In a checkout they are generated afresh, as before.
+        require_repo("tools/agent-harness.py", "tools/x4_harness", why="the generic harness")
+        (root / "tools").mkdir(parents=True)
+        shutil.copy2(REPO / "tools/agent-harness.py", root / "tools/agent-harness.py")
+        shutil.copytree(REPO / "tools/x4_harness", root / "tools/x4_harness",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+    else:
+        spec = importlib.util.spec_from_file_location(
+            "batch_candidate_generator", REPO / "tools/x4validate/scripts/gen-agent-trees.py")
+        generator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(generator)
+        for relative, content in generator.generate(REPO).items():
+            if relative == "tools/agent-harness.py" or relative.startswith("tools/x4_harness/"):
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8", newline="\n")
     shutil.copytree(REPO / "tools/modding_harness", root / "tools/modding_harness",
                     ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(REPO / "tools/modding-harness.lock.json", root / "tools/modding-harness.lock.json")

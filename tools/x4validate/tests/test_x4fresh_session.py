@@ -12,8 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from _layout import claude_hooks_source
+
 REPO = Path(__file__).resolve().parents[3]
-HOOK_SRC = REPO / "agent" / "guards" / "claude-hooks"
 _spec = importlib.util.spec_from_file_location("x4fresh_session", REPO / "scripts" / "x4fresh_session.py")
 xs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(xs)
@@ -30,7 +31,7 @@ MARKER = "import sys\nopen(sys.argv[-1] + '.launched', 'w').write(' '.join(sys.a
 
 def _tree(tmp_path):
     hooks = tmp_path / "proj" / ".claude" / "hooks"
-    shutil.copytree(HOOK_SRC, hooks)
+    shutil.copytree(claude_hooks_source(REPO, "the session hooks under test"), hooks)   # D-C2: an install runs its .claude/hooks
     tk = tmp_path / "tk"
     (tk / "scripts").mkdir(parents=True)
     (tk / "scripts" / "x4fresh_session.py").write_text(MARKER, encoding="utf-8")

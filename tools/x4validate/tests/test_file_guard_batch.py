@@ -4,11 +4,12 @@ import time
 
 import pytest
 
+from _layout import claude_hooks_source
 from codex_testlib import REPO
 
 
 def load_guard():
-    path = REPO / "agent/guards/claude-hooks/x4guard.py"
+    path = claude_hooks_source(why="the guard under test") / "x4guard.py"
     spec = importlib.util.spec_from_file_location("batch_guard", path)
     guard = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(guard)
