@@ -451,6 +451,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F346 | Plain `x4refguard status` samples the tree, so after a killed `remove` it can read `protected` while about 2,000 of 40,006 objects have lost their deny | **OPEN LIMIT (measured)** · PRE-ARC | killed a real `icacls` on a 40,006-object tree: a killed `remove` left the root denied and a sample read `protected` | open by design: `--full` walks every object; `apply` and `remove` always verify the full walk and re-running finishes an interrupted one |
 | F347 | The hook mutation gate refused on 5 stale anchors, so the mutants added with the carrier-reading commits never ran | **DEFECT (measured)** · IN-ARC | release review: 5 of 344 anchors stale across `85442321`, `f9435d4b`, `158f8a18`; first run of the new rows: 21 of 150 survived | FIXED 2026-11-03 - anchors re-cut; `--check-anchors` runs without trials in the unit suite and the pre-push gate |
 | F348 | The guards read `$X4_EXTENSIONS` and an assigned `$env:` as additive readings; several spellings of both are not read | **OPEN LIMIT (measured)** · IN-ARC | replay: 45 PowerShell commands that assign `$env:` changed 0; 620 others, 155 sampled, changed 0 | open; see entry |
+| F349 | The installed toolkit's own test suite was never run in CI: on a fresh install it had 74 errors and 64 failures while SETUP_PROMPT.txt promised none | **DEFECT (measured)** · PRE-ARC | whole suite on a fresh install: 5,821 passed, 64 failed, 74 errors, 534 skipped of 6,493 | FIXED 2026-11-03 - tests read what an install ships or skip with a counted reason; CI gained an installed-copy job |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11883,3 +11884,28 @@ NOT READ (the lane's list, not re-run here):
 Also untouched in this release: a false deny on an escaped backtick in a commit message's link text, and link creation
 by `tmux if-shell`, `.CreateAsSymbolicLink`, `cp -s`/`-l`/`-al`, `rsync --link-dest`, `subst`, `mount --bind`, and
 node, perl or ruby (all reported by the review, none re-run here).
+
+## F349 - The installed copy's test suite was never run, and was red · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-03
+
+`SETUP_PROMPT.txt` tells a new user to run the suite in their installed toolkit and promises no failures. CI ran the suite
+only on a checkout. The release review found four modules that fail on an install (`test_file_guard_batch` 67 errors,
+`test_generic_file_batch` 7 errors, `test_x4fresh_session` 6 failures, `test_x4housekeep::test_every_swept_temp_prefix`
+1 failure); the test lane then ran the WHOLE suite on a fresh install. MEASURED, before the fix: 5,821 passed, 64 failed,
+74 errors, 534 skipped, of 6,493 (the four counts add up to it). The test lane counted 54 of the 138 failures and errors as beyond the four modules
+the review named.
+
+Cause: tests that read `agent/` or the git index, which an install does not ship. Fix (`3141c4b3`, `62379de9`, `81a295b8`
+and others; `_layout.claude_hooks_source` and `codex_hooks_template` are the new lookups): those tests read what the
+install does ship, or skip with a counted reason; CI gained an `installed-copy` job that installs the toolkit, runs the
+suite and hands the junit file to `.github/scripts/installed_suite_verdict.py`, which fails on any failure, error or mass
+skip. After the fix, the 16 changed modules ran 535 passed, 80 skipped and 1 failed; the one failure, conformance toy case
+66, also fails in a checkout, so it is not an install defect.
+
+RESIDUAL: the job's skip ceiling (`--max-skips 896`) is DERIVED from the local count, not measured on CI; replace it with
+the first CI run's count plus 3. The `test_codex_wrapper` and deploy-parity tests depend on a real `HOME` and a configured
+game root.
+
+VERIFIER NOTE: a first attribution to the install was wrong. A run under a changed `HOME` made 12 `test_codex_wrapper`
+tests fail because `py -3` needs the real profile; that read as an install defect until the environment was held constant.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_installed_suite_verdict.py`.
