@@ -273,9 +273,9 @@ def test_7zip_failure_is_a_reason_not_a_crash(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("name,expected", [
-    ("options_helper_1.32.zip 2089 1.32 2026-10-30T18-12Z kslDldtFQ.zip", (2089, "1.32", "2026-10-30")),
-    ("Faction Hud V1.00 2515 1 2026-10-25T19-24Z kslDldtfD(1).zip", (2515, "1", "2026-10-25")),
-    ("CPSDO Modpack VRO 7.04-1505-7-04-1729465116.rar", (1505, "7-04", "2024-10-20")),
+    ("sample_helper_1.32.zip 2089 1.32 2026-10-30T18-12Z kslDldtFQ.zip", (2089, "1.32", "2026-10-30")),
+    ("Sample Overlay V1.00 2515 1 2026-10-25T19-24Z kslDldtfD(1).zip", (2515, "1", "2026-10-25")),
+    ("Sample Modpack Example 7.04-1505-7-04-1729465116.rar", (1505, "7-04", "2024-10-20")),
     ("Follow Me-3093-1-0.7z", None),
     ("plain.zip", None),
 ])
