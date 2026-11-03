@@ -452,6 +452,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F347 | The hook mutation gate refused on 5 stale anchors, so the mutants added with the carrier-reading commits never ran | **DEFECT (measured)** · IN-ARC | release review: 5 of 344 anchors stale across `85442321`, `f9435d4b`, `158f8a18`; first run of the new rows: 21 of 150 survived (the review's count); at this commit the table holds 445 anchors, all of which `--check-anchors` finds exactly once | FIXED 2026-11-03 - anchors re-cut; `--check-anchors` runs without trials in the unit suite and the pre-push gate |
 | F348 | The deployed-mod ask reads `$X4_EXTENSIONS` as an additive reading and several spellings are not read; a PowerShell `$env:` variable the command assigns stays a name (a second translation pass that read it was removed), `Pop-Location` is not modelled and a reassigned `$P` is judged against its first value | **OPEN LIMIT (measured)** · IN-ARC | the guards lane's replay old against new: 0 weaker verdicts over 2,893 test rows, 6,797 Bash commands, 200 PowerShell commands and 11,550 probes; the three PowerShell gaps probed at this commit | open; `test_KNOWN_GAP_an_env_variable_this_command_assigned_is_not_read_as_its_value` pins the first |
 | F349 | The installed toolkit's own test suite was never run in CI: on a fresh install it had 74 errors and 64 failures while SETUP_PROMPT.txt promised none | **DEFECT (measured)** · PRE-ARC | whole suite on a fresh install: 5,821 passed, 64 failed, 74 errors, 534 skipped of 6,493 | FIXED 2026-11-03 - tests read what an install ships or skip with a counted reason; CI gained an installed-copy job |
+| F350 | A save-lock folder's identity compares its path, file id and the low 32 bits of its volume; ReFS was not measured | **SCOPE LIMIT (measured on one NTFS folder)** · IN-ARC | one NTFS folder read under Python 3.10.10 and 3.12.10: `st_dev` differs between them, its low 32 bits and `st_ino` do not | FIXED for NTFS 2026-11-03 in the pinned core; ReFS unmeasured, a mismatch fails by refusing |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11989,3 +11990,26 @@ VERIFIER NOTE: a first attribution to the install was wrong. A run under a chang
 tests fail because `py -3` needs the real profile; that read as an install defect until the environment was held constant.
 
 **RE-DERIVED BY:** `tools/x4validate/tests/test_installed_suite_verdict.py`.
+
+## F350 - Save-lock folder identity across Python versions and volumes · **SCOPE LIMIT (measured on one NTFS folder)** · IN-ARC · confidence 85% · FIXED 2026-11-03 for NTFS
+
+`save-lock off` accounts for every folder the locks were applied to, so the shared core records each one when it locks it,
+as the folder's path, `st_dev` and `st_ino`. `off` then compares each record with the folder it finds. A record that no
+longer matches means the folder moved: `off` stays on and says so (`off --forget-missing` once that is dealt with).
+
+DEFECT FOUND AND FIXED (the saves lane): Python 3.12 reports an NTFS volume serial in 64 bits and earlier versions only its
+low 32. A record written by one Python and read by another therefore never matched, so `off` after a Python upgrade read
+every folder as moved and refused. MEASURED 2026-11-03 on one NTFS folder: `st_dev` differs between Python 3.10.10 and
+3.12.10, while its low 32 bits and `st_ino` do not. The pinned core (`7c4cc26`) compares the path, the file id and the low
+32 bits of the volume, and a record may hold either form (`save_lock._same_folder`, READ).
+
+NOT MEASURED: ReFS, and any volume or filesystem other than the one NTFS folder. Whether a Python version reports a
+different file id or low 32 bits there is unknown. If it does, the failure is the safe one (READ, `turn_off`: a folder
+that is not where it was keeps the switch on): `off` refuses and names the folder, and the way forward is
+`off --forget-missing`.
+
+**NO RE-DERIVATION: no test in this repository pins the volume comparison; the core's own tests live in the core's repository and were not re-run for this entry.**
+
+Related, from the same lane: a lock rule that names another account no longer counts as locking the current user, so
+locking adds the user's own rule and `status` does not count that save as protected; a hand-made deny rule naming a group
+is not read as binding, so locking fails loudly instead of reporting protection that is not there.
