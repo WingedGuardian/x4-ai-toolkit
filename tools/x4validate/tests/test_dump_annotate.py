@@ -260,3 +260,31 @@ def test_nested_path_names_the_owner_of_the_unannotated_nodes(tmp_path):
     header, n = annotate_tree(res.tree, rec)
     assert n == 1 and any("ownermod" in h and "owner" in h and "unannotated" in h for h in header), header
     assert rec.default_origin.op == "base"          # display-only: the recorded answers did not change
+
+
+def test_a_dlc_owner_is_called_a_dlc_not_a_mod(tmp_path, monkeypatch):
+    """The header said "the owner mod's file" for extensions/ego_dlc_*/...: a wrong noun in a line whose job is
+    to say where the nodes came from. Only a PACKED DLC reaches the owner path (an unpacked one is ordinary
+    reference content, see _nested_target), so that is the case set up here."""
+    monkeypatch.setattr(_merge.Config, "packed_dlc_names", lambda self: {"ego_dlc_foo"})
+    owner = tmp_path / "ego_dlc_foo"
+    (owner / "aiscripts").mkdir(parents=True)
+    (owner / "aiscripts" / "t.xml").write_bytes(etree.tostring(_tree()))
+    patcher = tmp_path / "patcher"
+    (patcher / "extensions" / "ego_dlc_foo" / "aiscripts").mkdir(parents=True)
+    (patcher / "extensions" / "ego_dlc_foo" / "aiscripts" / "t.xml").write_bytes(
+        b'<diff><replace sel="//do_if/@chance">80</replace></diff>')
+    (tmp_path / "ref").mkdir()
+    rec = Recorder()
+    res = _merge.build_effective("extensions/ego_dlc_foo/aiscripts/t.xml", _merge.Config(reference=tmp_path / "ref"),
+                                 extra_overlays=[owner, patcher], recorder=rec)
+    assert res.tree is not None
+    header, _n = annotate_tree(res.tree, rec)
+    joined = "\n".join(header)
+    assert "ego_dlc_foo (the owner DLC's file" in joined and "owner mod" not in joined
+
+
+def test_a_third_party_owner_is_still_called_a_mod(tmp_path):
+    rec = Recorder(owner="ownermod")
+    header, _n = annotate_tree(_tree(), rec)
+    assert "ownermod (the owner mod's file" in "\n".join(header)
