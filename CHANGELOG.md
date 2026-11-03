@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Shared preservation core pinned to e0851b8: each path resolves once per read-only pass, in the core itself. X4 uses it instead of its own wrapper, and a 3,589-path file check takes about 15-18 s.
+
 - `x4save vars <pattern> | head` exits quietly (rc 0) when the reader closes the pipe; it was reported as
   "decompression/XML parse failed (Broken pipe)", rc 2, as if the save were broken. A save that fails
   partway after rows were printed now ends with an `INCOMPLETE` line on stderr, and the help states that

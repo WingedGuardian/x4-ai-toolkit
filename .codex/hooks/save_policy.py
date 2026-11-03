@@ -18,7 +18,6 @@ import re
 import sys
 import subprocess
 import time
-from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -140,31 +139,8 @@ def _scope_prefix(path):
 OPAQUE = "unmodelled"
 
 
-@contextmanager
-def _one_read_canonical(preservation):
-    """Resolve each spelling once for one read-only pass over the evidence.
-
-    The pinned core's contains/protects re-resolve both operands on every call, about 18
-    realpaths per path here, and a 3589-path action spent its whole deadline on it. The memo
-    holds the same assumption as the batch guard's root cache: links are stable during one
-    check. It lives for one read only, so a recheck after preservation resolves afresh. A
-    failed resolution is not remembered. The core's own logic runs unchanged."""
-    original = preservation.canonical
-    memo = {}
-    def canonical(path):
-        key = os.fspath(path)
-        if key not in memo:
-            memo[key] = original(path)
-        return memo[key]
-    preservation.canonical = canonical
-    try:
-        yield
-    finally:
-        preservation.canonical = original
-
-
 def resolve(root, roots, evidence, deadline=None):
-    with _one_read_canonical(core(root, "preservation")):
+    with core(root, "preservation").one_read():
         return _resolve(root, roots, evidence, deadline)
 
 
