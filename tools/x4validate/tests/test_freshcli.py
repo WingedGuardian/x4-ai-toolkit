@@ -26,6 +26,23 @@ def sd(tmp_path, monkeypatch):
 
 # --------------------------------------------------------------------------- status
 
+@pytest.fixture(autouse=True)
+def _no_stub_basex_module_left_behind():
+    """These tests point x4fresh at stub BaseX scripts, and importing one leaves it in sys.modules. A later test in
+    the same process then got the stub: `module 'staleness' has no attribute 'Verdict'`, 14 failures in the pre-push
+    gate, whose order differs from CI's alphabetical one."""
+    names = ("staleness", "preflight")
+    modules = {n: sys.modules.get(n) for n in names}
+    path = list(sys.path)
+    yield
+    sys.path[:] = path
+    for name, module in modules.items():
+        if module is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
+
+
 def test_a_missing_store_is_MISSING_and_its_orphans_are_listed(tmp_path, monkeypatch):
     db = tmp_path / "effective.sqlite"
     (tmp_path / "effective.sqlite.4242.tmp").write_bytes(b"x")

@@ -65,7 +65,7 @@ def test_each_mutation_gets_its_own_directory_and_bytes(tmp_path,monkeypatch):
     monkeypatch.setattr(vht,"HOOKS",tmp_path);monkeypatch.setattr(vht,"FILES",["hook_facts.py"])
     monkeypatch.setattr(vht,"wait_for_dispatch",lambda:None)
     seen=[]
-    def run(work):
+    def run(work,tests=()):
         seen.append((str(work),(work/"hook_facts.py").read_text(encoding="utf-8")))
         return 1,{"Target.test_x"},42
     monkeypatch.setattr(vht,"run",run)

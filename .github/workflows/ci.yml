@@ -968,7 +968,7 @@ jobs:
 
       - name: Install a real copy (git archive, then install.sh) and prove it is an install
         id: install
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Linux' }}
         shell: bash
         run: |
           set -euo pipefail

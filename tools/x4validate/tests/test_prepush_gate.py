@@ -101,7 +101,10 @@ def test_the_gate_is_not_shipped_and_nothing_that_ships_needs_it():
     listed = subprocess.run(["git", "-C", str(REPO), "grep", "-l", "prepush-gate", "--", ":(exclude)scripts/prepush-gate.py",
                              ":(exclude)tools/x4validate/tests/test_prepush_gate.py"],
                             capture_output=True, text=True)
-    users = [p for p in listed.stdout.splitlines() if p != ".gitattributes"]
+    # Allowed by name: the CHANGELOG only describes it, and test_verify_hook_tests.py skips on an install
+    # (require_repo), so neither makes an installed copy look for the gate.
+    allowed = {".gitattributes", "CHANGELOG.md", "tools/x4validate/tests/test_verify_hook_tests.py"}
+    users = [p for p in listed.stdout.splitlines() if p not in allowed]
     # Anything naming it must itself be outside the bundle (export-ignored), or an installed copy would look for it.
     shipped = []
     for p in users:
