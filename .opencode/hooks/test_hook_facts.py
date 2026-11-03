@@ -6703,7 +6703,8 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
                                "env -vS " + self.inner(t), "env -S" + self.inner(t),
                                "env --split-string=" + self.inner(t), "env --split-string " + self.inner(t),
                                "env -S " + Q + self.DEL.strip() + Q + " " + Q + t + Q, "sudo env -S " + self.inner(t),
-                               "env -i env -S " + self.inner(t), "env -u X -S " + self.inner(t)])
+                               "env -i env -S " + self.inner(t), "env -u X -S " + self.inner(t),
+                               "env A=1 -S " + self.inner(t), "env --unset X -S " + self.inner(t)])
 
     def test_a_value_option_at_the_end_of_an_env_cluster(self):
         self.caught(lambda t: ["env -iu X " + self.plain(t), "env -iC /tmp " + self.plain(t)])
@@ -6733,7 +6734,8 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
             "tmux if-shell " + self.inner(t) + " " + Q + Q, "tmux send-keys " + self.inner(t) + " Enter",
             "tmux send -t x " + self.inner(t) + " Enter", "tmux -L s new -d " + self.inner(t), "tmux -c " + self.inner(t),
             "tmux new-session -d " + self.plain(t), "tmux new -- " + self.plain(t),
-            "tmux ls " + Q + ";" + Q + " run " + self.inner(t)])
+            "tmux ls " + Q + ";" + Q + " run " + self.inner(t), "tmux -2 new -d " + self.inner(t),
+            "tmux splitw 30 " + self.inner(t)])
 
     def test_TWIN_tmux_ordinary_forms(self):
         self.quiet("tmux ls", "tmux attach -t x", "tmux new -s dev", "tmux kill-session -t x",
@@ -6747,12 +6749,14 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
             "parallel -j4 " + self.DEL + "::: " + Q + t + Q, "parallel -j 4 " + self.DEL + "::: " + Q + t + Q,
             "parallel " + Q + self.DEL + "{1}" + Q + " ::: " + Q + t + Q, "parallel ::: " + self.inner(t),
             "parallel " + self.DEL + Q + t + Q + " ::: a", "parallel -k " + self.DEL + "::: a " + Q + t + Q + " b",
+            "parallel " + Q + self.DEL + "{}; ls" + Q + " ::: " + Q + t + Q,
             "echo " + Q + t + Q + " | parallel " + self.DEL.strip(), "echo " + self.inner(t) + " | parallel"])
 
     def test_TWIN_parallel_ordinary_forms(self):
         self.quiet("parallel echo ::: a", "parallel echo ::: a b c", "parallel " + Q + "echo {}" + Q + " ::: a",
                    "parallel -j4 gzip ::: a.txt", "cat l | parallel gzip", "parallel " + self.DEL + "::: /tmp/x",
-                   "parallel echo ::: " + Q + REF + Q, "parallel cat ::: " + Q + REF + "/a.xml" + Q)
+                   "parallel echo ::: " + Q + REF + Q, "parallel cat ::: " + Q + REF + "/a.xml" + Q,
+                   "parallel " + self.DEL + ":::: " + Q + REF + "/list.txt" + Q)
 
     def test_busybox_and_sibling_runners(self):
         self.caught(lambda t: ["busybox " + self.plain(t), "busybox sh -c " + self.inner(t), "busybox ash -c " + self.inner(t),
@@ -6842,7 +6846,9 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
                                "printf -vP %s " + Q + t + Q + "; " + self.DEL + ref,
                                "printf -v P " + Q + t + Q + "; " + self.DEL + ref,
                                "printf -v P -- %s " + Q + t + Q + "; " + self.DEL + ref,
-                               "printf -v P " + Q + "%s/%s" + Q + " " + Q + t + Q + " x; " + self.DEL + ref])
+                               "printf -v P " + Q + "%s/%s" + Q + " " + Q + t + Q + " x; " + self.DEL + ref,
+                               "printf 2>/dev/null -v P %s " + Q + t + Q + "; " + self.DEL + ref,
+                               "printf -v P %s " + Q + t + Q + "; " + self.DEL + DQ + "${P}" + DQ])
 
     def test_read_from_a_here_string_assigns(self):
         ref = DQ + "$P" + DQ
@@ -6853,7 +6859,8 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
         ref = DQ + "$P" + DQ
         self.quiet("printf -v P %s /tmp/x; " + self.DEL + ref, "printf -v P %s " + Q + REF + Q + "; echo " + ref,
                    "printf -v P %d 3; echo $P", "printf " + Q + "%s" + Q + " -v", "read -r P <<< /tmp/x; " + self.DEL + ref,
-                   "read -r a b", "read P")
+                   "read -r a b", "read P", "printf %s x; mytool -v P %s " + Q + REF + Q + "; " + self.DEL + ref,
+                   "printf -v " + Q + "(" + Q + " %s /tmp/x; echo " + Q + "ok" + Q + "; " + self.DEL + DQ + "$P" + DQ)
 
     def test_mapfile_evals_its_callback(self):
         self.caught(lambda t: ["mapfile -C " + Q + self.DEL.strip() + Q + " -c 1 <<< " + Q + t + Q,
@@ -6883,6 +6890,10 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
     def test_zsh_flags_read_the_variables_value(self):
         self.caught(lambda t: ["zsh -c " + Q + "X=" + t + "; " + self.DEL + w + Q
                                for w in ("$=X", "$~X", "$^X", "${=X}", "${~X}", "${^X}")])
+
+    def test_a_flagged_brace_is_the_whole_value(self):
+        """Only `${=X}` with a tail shows the difference: `$X}/extensions` is not the game's folder."""
+        self.assertTrue(F("X=" + DQ + GAME + DQ + "; " + self.DEL + "${=X}/extensions")["rm_hits_game"])
 
     def test_TWIN_zsh_flags_and_dollar_dash_in_ordinary_text(self):
         self.quiet("echo $-", "[[ $- == *i* ]] && echo i", "sed -i " + Q + "s/$-/x/" + Q + " /tmp/f", "grep " + Q + "x$-y" + Q + " f",
@@ -6978,6 +6989,9 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
                 self.assertFalse(f["carriers_truncated"], c)
         # a range opens no brace word, so a leading brace is stripped as it always was
         self.assertEqual(H.segments("{1..3} x"), ["1..3} x"])
+        # ...and so does a comma with no closing brace: it was never a brace expansion
+        H._BRACE_WORDS.clear()
+        self.assertEqual(H.segments("{a,b x"), ["a,b x"])
 
     def test_a_not_found_handler_is_read_once(self):
         c = "command_not_found_handle(){ :; }; a b c d e f g h i j"
@@ -7015,10 +7029,12 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
                     "read -n 1 P" + here, "read -aP" + here)
 
     def test_su_session_command(self):
-        self.caught("su --session-command " + self.inner(REF), "su --session-command=" + self.inner(REF))
+        self.caught("su --session-command " + self.inner(REF), "su --session-command=" + self.inner(REF),
+                    "su -c -- " + self.inner(REF), "su -c" + self.inner(REF))
 
     def test_every_loopback_spelling_is_this_machine(self):
-        for host in ("0", "2130706433", "0x7f.1", "0177.0.0.1", "127.1", "::ffff:127.0.0.1", "[::1]", "::1", "0.0.0.0"):
+        for host in ("0", "2130706433", "0x7f.1", "0177.0.0.1", "127.1", "::ffff:127.0.0.1", "[::1]", "::1", "0.0.0.0",
+                     "0::1", "::", "ssh://localhost", "ssh://me@127.0.0.1", "ssh://localhost:22", "127.0.0.1:22"):
             with self.subTest(host=host):
                 self.caught("ssh " + host + " " + self.plain(REF))
 
@@ -7036,6 +7052,34 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
         for c in ("ssh -o BatchMode=yes host ls", "ssh -o ProxyCommand=" + Q + "nc %h %p" + Q + " host ls"):
             with self.subTest(c=c):
                 self.assertFalse(F(c)["rm_targets_reference"], c)
+
+    # --- 4.1.0, D-C1: each of these is a mutant of the carrier code that nothing could catch.
+    def test_this_computers_own_name_is_this_machine(self):
+        import socket
+        name = socket.gethostname()
+        self.caught("ssh " + name + " " + self.plain(REF), "ssh me@" + name.upper() + " " + self.plain(REF))
+
+    def test_a_glob_name_and_a_carrier_reading_in_one_segment(self):
+        """Both read the same segment, so one must not replace the other."""
+        self.caught("exec -a x ev?l " + self.inner(REF))
+
+    CD_READING = "tmux run " + Q + "cd /tmp && ls" + Q
+    SESSION_DELETE = "bash -c " + Q + D + " -rf extensions" + Q
+
+    def test_TWIN_a_reading_of_one_call_is_not_a_reading_of_the_next(self):
+        """The same text typed by itself in the next call does change directory."""
+        typed = self.SESSION_DELETE + "; bash -c " + Q + "cd /tmp && ls" + Q
+        before = FC(typed, GAME)
+        F(self.CD_READING)
+        after = FC(typed, GAME)
+        self.assertFalse(before["rm_in_x4_dir"] or before["rm_hits_game"], "a real cd drops the session directory")
+        self.assertEqual((before["rm_in_x4_dir"], before["rm_hits_game"]), (after["rm_in_x4_dir"], after["rm_hits_game"]))
+
+    def test_a_cd_nested_inside_a_reading_keeps_the_session_directory(self):
+        base = FC(self.SESSION_DELETE, GAME)
+        nested = FC(self.SESSION_DELETE + "; tmux run " + DQ + "bash -c " + Q + "cd /tmp && ls" + Q + DQ, GAME)
+        self.assertTrue(base["rm_hits_game"] or base["rm_in_x4_dir"])
+        self.assertEqual((base["rm_hits_game"], base["rm_in_x4_dir"]), (nested["rm_hits_game"], nested["rm_in_x4_dir"]))
 
 
 def load_tests(loader, standard_tests, pattern):
