@@ -363,7 +363,7 @@ def _alive(pid: int) -> bool:
 
 # --------------------------------------------------------------------------- accepted losses (user decision 2026-11-01)
 
-EIGHT = [f"dropped assets/structures/defence/macros/tmp/d{i}.xml <- vro/assets/.../d{i}.xml" for i in range(8)]
+EIGHT = [f"dropped assets/structures/defence/macros/tmp/d{i}.xml <- samplemod/assets/.../d{i}.xml" for i in range(8)]
 
 
 def _lossy(keys):
@@ -419,10 +419,10 @@ def test_accept_refuses_a_stale_artifact_and_one_that_cannot_list_its_losses(sd,
 def test_the_store_records_every_loss_by_identity_uncapped():
     sc = fc._effective._SkipCount()
     for i in range(25):
-        sc.add_overlay(f"a/{i}.xml", [f"vro/a/{i}.xml: malformed XML"])
+        sc.add_overlay(f"a/{i}.xml", [f"samplemod/a/{i}.xml: malformed XML"])
     sc.add("t/0001-l044.xml", ValueError("bad"))
     assert len(sc.dropped_samples) == 10 and len(sc.keys) == 26
-    assert "dropped a/3.xml <- vro/a/3.xml" in sc.keys and "unmerged t/0001-l044.xml" in sc.keys
+    assert "dropped a/3.xml <- samplemod/a/3.xml" in sc.keys and "unmerged t/0001-l044.xml" in sc.keys
 
 
 def test_logs_are_pruned_to_the_newest_five_per_artifact(tmp_path):

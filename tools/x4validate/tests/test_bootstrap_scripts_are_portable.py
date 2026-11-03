@@ -35,7 +35,14 @@ BOOTSTRAP = ["install.ps1"]
 def _tracked_ps1() -> list[pathlib.Path]:
     out = subprocess.run(["git", "ls-files", "*.ps1"], cwd=ROOT,
                          capture_output=True, text=True, check=False)
-    return [ROOT / n for n in out.stdout.split() if n]
+    listed = [ROOT / n for n in out.stdout.split() if n]
+    if listed or (ROOT / ".git").exists():
+        return listed
+    # 4.1 review M13: an INSTALLED toolkit has no git index, so "tracked" was always empty there and the
+    # 5.1 parse check skipped with "no tracked .ps1 files" while install.ps1 sat in the folder. With no
+    # .git at the root, the shipped scripts are the .ps1 files on disk (never a venv or an unpacked tree).
+    skip = {".venv", "reference", "node_modules", "__pycache__", ".test-sandbox"}
+    return sorted(p for p in ROOT.rglob("*.ps1") if not skip & set(p.relative_to(ROOT).parts))
 
 
 def non_ascii(data: bytes) -> list:
@@ -89,7 +96,7 @@ def test_the_ascii_check_stays_silent_on_pure_ascii(tmp_path):
                          [pytest.param(None, id="none-tracked")])
 def test_every_tracked_ps1_parses_under_windows_powershell(script):
     if script is None:
-        pytest.skip("no tracked .ps1 files")
+        pytest.skip("no .ps1 files to parse here: git lists none and none were found on disk")
     cmd = ("$e=$null; $null=[System.Management.Automation.Language.Parser]::ParseFile("
            f"'{script.as_posix()}',[ref]$null,[ref]$e); "
            "if($e.Count){ $e | ForEach-Object { $_.Message }; exit 1 } else { exit 0 }")

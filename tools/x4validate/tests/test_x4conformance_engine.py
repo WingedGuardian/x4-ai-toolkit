@@ -75,7 +75,8 @@ def test_a_missing_profile_file_is_a_profile_error(tmp_path):
 def _shipped_hook_script(key):
     """The script the SHIPPED Codex PreToolUse hook runs under `command` (POSIX) or
     `commandWindows` -- what a real host executes, which conformance must replay."""
-    tmpl = json.loads((REPO / "agent/targets/codex/hooks.json.tmpl").read_text(encoding="utf-8"))
+    from _layout import codex_hooks_template   # D-C2: an install reads the copy it renders from
+    tmpl = json.loads(codex_hooks_template(REPO).read_text(encoding="utf-8"))
     (hook,) = [h for g in tmpl["hooks"]["PreToolUse"] for h in g["hooks"]]
     return next(w for w in hook[key].replace("\\", "/").replace('"', " ").split() if "codex-entry." in w).rsplit("/", 1)[1]
 

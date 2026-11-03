@@ -13,7 +13,7 @@ from _layout import require_repo
 require_repo("agent/guards/claude-hooks/profile_approval.py", module_level=True,
              why="the profile approval SOURCE this suite loads")
 
-from codex_testlib import REPO, make_sandbox, native, run_adapter
+from codex_testlib import ENGINE_FAILURES as ENGINE, REPO, assert_policy_refusal, make_sandbox, native, run_adapter
 
 SOURCE = REPO / "agent/guards/claude-hooks"
 sys.path.insert(0, str(SOURCE))
@@ -71,7 +71,9 @@ def test_exact_grant_once(case):
     verdict, pending = prepare(case)
     assert verdict["decision"] == "allow" and pending
     assert pa.consume(pending) is None
-    assert pa.consume(pending)["decision"] == "deny"
+    replay = pa.consume(pending)
+    # M10: name WHY it denied -- the receipt already exists -- not merely that it did
+    assert replay["decision"] == "deny" and "not consumed safely (FileExistsError)" in replay["reason"], replay
     assert prepare(case)[0]["decision"] == "ask"
 
 
@@ -112,7 +114,8 @@ def test_changed_bytes_before_and_after_prepare_refuse(case):
     pending = prepare(case)[1]
     Path(case[4]["path"]).write_text("changed")
     assert prepare(case)[1] is None
-    assert pa.consume(pending)["decision"] == "deny"
+    refused = pa.consume(pending)
+    assert refused["decision"] == "deny" and "not consumed safely (ValueError)" in refused["reason"], refused
     assert not pending[1].exists()
 
 
@@ -190,7 +193,7 @@ def test_modlist_update_needs_no_grant_but_delete_still_asks(case, tmp_path):
     assert decision in ("allow", "advise"), reason
     p['tool_input']['command'] = f'*** Begin Patch\n*** Delete File: {target}\n*** End Patch'
     decision, reason = run_adapter(env, p)
-    assert decision in ("ask", "deny"), reason
+    assert_policy_refusal(decision, reason, "DELETING IN YOUR X4 PROFILE")      # M10: the policy's own words
 
 
 def test_nested_modlist_name_is_not_exempt(case, tmp_path):
@@ -199,8 +202,14 @@ def test_nested_modlist_name_is_not_exempt(case, tmp_path):
     target.write_text('<content/>\n')
     patch = f'*** Begin Patch\n*** Update File: {target}\n@@\n-<content/>\n+<content sync="false"/>\n*** End Patch'
     p = native("apply_patch_update", tmp_path, command=patch)
+    # M10: with no transcript the adapter answered "approval could not be verified (OSError)" -- a
+    # fail-closed ask that passed this test without the nested name ever being judged. Give it a
+    # readable transcript holding no token, so the only refusal left is "this edit needs approval".
+    transcript_for(case, "no token here")
+    p.update(session_id="session-one", transcript_path=str(case[5]))
     decision, reason = run_adapter(case[6], p)
-    assert decision in ("ask", "deny"), reason
+    assert_policy_refusal(decision, reason, "Approve this exact profile update once", "PROFILE_EDIT_APPROVAL",
+                          engine_failures=ENGINE + ("could not be verified",))
 
 
 def test_legacy_backend_modlist_ask_is_advisory(case):

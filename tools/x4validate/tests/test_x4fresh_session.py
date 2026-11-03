@@ -13,8 +13,9 @@ from pathlib import Path
 import pytest
 from _layout import require_repo
 
+from _layout import claude_hooks_source
+
 REPO = Path(__file__).resolve().parents[3]
-HOOK_SRC = REPO / "agent" / "guards" / "claude-hooks"
 _spec = importlib.util.spec_from_file_location("x4fresh_session", REPO / "scripts" / "x4fresh_session.py")
 xs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(xs)
@@ -35,7 +36,7 @@ LAUNCH_WAIT = 10
 def _tree(tmp_path):
     require_repo("agent/guards/claude-hooks", why="copies the hook source")
     hooks = tmp_path / "proj" / ".claude" / "hooks"
-    shutil.copytree(HOOK_SRC, hooks)
+    shutil.copytree(claude_hooks_source(REPO, "the session hooks under test"), hooks)   # D-C2: an install runs its .claude/hooks
     tk = tmp_path / "tk"
     (tk / "scripts").mkdir(parents=True)
     (tk / "scripts" / "x4fresh_session.py").write_text(MARKER, encoding="utf-8")

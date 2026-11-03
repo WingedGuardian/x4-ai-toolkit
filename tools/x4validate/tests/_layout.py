@@ -190,6 +190,37 @@ def require_repo(*rel: str, why: str = "", module_level: bool = False, root: Pat
     pytest.skip(reason, allow_module_level=module_level)
 
 
+def claude_hooks_source(root: Path = ROOT, why: str = "") -> Path:
+    """The directory of Claude guard hooks this layout can test.
+
+    D-C2 (4.1 release review): a test that loaded the guard from `agent/guards/claude-hooks`
+    ERRORED on an installed toolkit, which ships no `agent/`. An install does ship the same
+    files rendered into `.claude/hooks`, and that copy is what its user's agent actually runs, so
+    the check keeps running there instead of disappearing:
+      * `agent/guards/claude-hooks` exists (a checkout, or the release zip extracted in place)
+        -> that, exactly as before;
+      * a checkout that LOST it -> that path anyway, so the test fails, as it should;
+      * an installed layout without it -> `.claude/hooks`, or a counted REPO-ONLY skip when this
+        install did not select the Claude target either."""
+    src = Path(root) / "agent" / "guards" / "claude-hooks"
+    if src.is_dir() or not installed_layout(root):
+        return src
+    require_repo(".claude/hooks", why=why or "the Claude hooks (this install did not select the Claude target)",
+                 root=root)
+    return Path(root) / ".claude" / "hooks"
+
+
+def codex_hooks_template(root: Path = ROOT) -> Path:
+    """The frozen Codex hooks.json template this layout can read (D-C2): `agent/targets/codex/` in a
+    checkout (or wherever `agent/` is present), and in an installed layout the byte-identical copy the
+    installer renders from, `tools/x4_harness/codex-hooks.json.tmpl`, which every install ships."""
+    src = Path(root) / "agent" / "targets" / "codex" / "hooks.json.tmpl"
+    if src.is_file() or not installed_layout(root):
+        return src
+    require_repo("tools/x4_harness/codex-hooks.json.tmpl", why="the frozen Codex hook template", root=root)
+    return Path(root) / "tools" / "x4_harness" / "codex-hooks.json.tmpl"
+
+
 def runtime_instructions(root: Path = ROOT) -> list[Path]:
     """All present instructions, plus every instruction required by the selected runtime."""
     root = Path(root)

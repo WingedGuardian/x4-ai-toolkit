@@ -528,8 +528,7 @@ def test_real_shell_hook_batches_saves_and_retains_other_denials(install):
     assert all(f.exists() for f in files)
 
 
-ENGINE_FAILURES = ("policy engine failed", "X4 save dispatcher", "GUARD INERT", "did not return a complete decision",
-                   "preservation/policy failed")
+from codex_testlib import ENGINE_FAILURES   # one list, shared with assert_policy_refusal (4.1 review M10)
 
 
 def assert_scope_refusal(hso, *needles):

@@ -9,6 +9,7 @@ predicate class A's same-named test mentions.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -148,3 +149,44 @@ def test_the_prepush_gate_runs_the_check():
 def test_only_refuses_a_filter_that_matches_nothing(monkeypatch):
     monkeypatch.setattr(vht, "MUTANTS", [("a label", "x", "y", "test_a")])
     assert vht.main(["--only", "no such label"]) == 2
+
+
+# ------------------------------- M14 (4.1 review): the CI shard matrix against the `/N` in its run line
+def _ci_shard_config():
+    """(matrix shard list, [N of every `--shard K/N` in the hook-mutation job's run lines])"""
+    import re
+
+    from ruamel.yaml import YAML
+    ci = YAML(typ="safe").load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    job = ci["jobs"]["hook-mutation"]
+    runs = [str(s.get("run", "")) for s in job["steps"]]
+    ns = [int(n) for r in runs for n in re.findall(r"--shard\s+\$\{\{\s*matrix\.shard\s*\}\}/(\d+)", r)]
+    return list(job["strategy"]["matrix"]["shard"]), ns
+
+
+def test_the_ci_shard_matrix_is_exactly_the_N_its_run_line_divides_by():
+    """ci.yml says 'edit `shard` AND the `/4` in the run line together' and nothing enforced it:
+    matrix [1,2,3] with `/4` silently never runs shard 4 (a quarter of the mutants), and [1..5] with
+    `/4` runs a shard that main() refuses. The gate passes only when ALL N shards ran."""
+    from _layout import require_repo
+    require_repo(".github/workflows/ci.yml", why="CI configuration is not installed")
+    shards, ns = _ci_shard_config()
+    assert len(ns) == 1, "expected exactly one `--shard ${{ matrix.shard }}/N` run line, found %r" % ns
+    n = ns[0]
+    assert shards == list(range(1, n + 1)), "matrix shard %r is not 1..%d (the /%d in the run line)" % (shards, n, n)
+    # every shard is non-empty against the REAL mutant population, so none can pass on nothing
+    assert len(vht.MUTANTS) >= n
+    for k in shards:
+        assert vht.shard_groups(len(vht.MUTANTS), [], k, n), k
+
+
+def test_TWIN_the_shard_matrix_check_goes_red_on_a_mismatch(monkeypatch):
+    """One twin per clause: a matrix short of the divisor, a matrix beyond it, a missing run line."""
+    import pytest
+
+    from _layout import require_repo
+    require_repo(".github/workflows/ci.yml", why="CI configuration is not installed")
+    for shards, ns in (([1, 2, 3], [4]), ([1, 2, 3, 4, 5], [4]), ([1, 2, 3, 4], []), ([1, 2, 3, 4], [4, 4])):
+        monkeypatch.setattr(sys.modules[__name__], "_ci_shard_config", lambda s=shards, n=ns: (s, n))
+        with pytest.raises(AssertionError):
+            test_the_ci_shard_matrix_is_exactly_the_N_its_run_line_divides_by()

@@ -167,3 +167,19 @@ def run_adapter(env, payload, event="pre_tool_use", shell="powershell", adapter=
     lines = r.stdout.decode("utf-8").splitlines()
     assert r.returncode == 0 and len(lines) == 1 and lines[0].startswith("X4OK"), (r.returncode, r.stdout, r.stderr)
     return parse_output(lines[0][len("X4OK"):].encode("utf-8"))
+
+
+#: What a guard says when the ENGINE failed and the verdict is only a fail-closed deny/ask wearing a
+#: policy's face (4.1 review M10). A test that expects a policy refusal must not accept these.
+ENGINE_FAILURES = ("policy engine failed", "X4 save dispatcher", "GUARD INERT", "did not return a complete decision",
+                   "preservation/policy failed")
+
+
+def assert_policy_refusal(decision, reason, *needles, engine_failures=ENGINE_FAILURES):
+    """`decision` is a refusal (ask or deny) AND `reason` is the POLICY's answer: no engine-failure
+    phrase, and every needle present. Asserting the decision alone passes when the engine crashed."""
+    assert decision in ("ask", "deny"), (decision, reason)
+    assert not any(failure in reason for failure in engine_failures), reason
+    assert needles, "name what the policy's own reason must say"
+    for needle in needles:
+        assert needle in reason, (needle, reason)

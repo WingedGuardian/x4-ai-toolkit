@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from _layout import installed_layout
+
 
 @pytest.mark.parametrize("shared", [True, False])
 def test_live_input_links_are_kept_without_content_reads_but_real_copies_qualify(tmp_path, monkeypatch, shared):
@@ -823,7 +825,15 @@ def _created_prefixes():
     import re
     pat = re.compile(r"""(?:mkdtemp|TemporaryDirectory)\(\s*prefix=["']([^"']+)["']""")
     found = set()
-    for root in (REPO / "tools" / "x4validate", REPO / "scripts", REPO / "agent" / "guards" / "claude-hooks"):
+    roots = [REPO / "tools" / "x4validate", REPO / "scripts", REPO / "agent" / "guards" / "claude-hooks"]
+    if not roots[2].is_dir() and installed_layout():
+        # D-C2: an install has no `agent/`; the same hook files are rendered into each selected
+        # agent's tree, which is where the creators of these prefixes live there. A checkout that
+        # LOST agent/ keeps the old root and fails below, as it should.
+        roots[2:] = [REPO / d for d in (".claude/hooks", ".codex/hooks", ".opencode/hooks", "tools/x4_harness")]
+    for root in roots:
+        if not root.is_dir():
+            continue
         for f in root.rglob("*.py"):
             if ".venv" not in f.parts:
                 found.update(pat.findall(f.read_text(encoding="utf-8", errors="replace")))
