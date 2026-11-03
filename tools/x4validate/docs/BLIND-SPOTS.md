@@ -11728,9 +11728,14 @@ Scaling, one run per size, normal priority: 128 paths 1.58 s, 500 3.99 s, 1,000 
 Profile of a 2,000-path batch (26.6 s under cProfile): `profiles.canonical` -> `profiles._resolved` was called 40,008
 times, about 20 per path, and `Path.resolve` under it took 17.09 s (64%).
 
-The same test passed on GitHub CI at rc17 (READ: that run's conclusion), and another session reported it passing
-inside its own local gate run (not re-measured), so I think the outcome depends on load and machine, not on a logic
-fault. Why it runs slower here than there is unmeasured.
+The same test passed on GitHub CI at rc17 and at 8f8736d1 (READ: those runs' conclusions), and another session reported
+it passing inside its own local gate run (not re-measured), so I think the outcome depends on load and machine, not on
+a logic fault. But CI has no real margin either. MEASURED 2026-11-02, run 41526027347 (3f5dff2c, windows-latest): the
+`[None]` case failed at 40.87 s with a correct `allow`, not inert; the other 3 cases passed. That whole suite took
+6,401 s against 5,822 s at 8f8736d1, and this lane changes no file the guard's check path reads, so I think it was a
+slower runner. The test's clock also includes process start-up while the guard's own 40 s deadline starts inside the
+process (READ: `tools/agent-harness.py:160`), so a guard that met its deadline can still fail the test. Expect this test
+to fail CI intermittently until the guard is faster.
 
 Not fixed. `_resolved` is reviewed save-protection code, and a plain cache could mask a link swapped between two checks
 in one pass, so any fix needs its own review of which calls may share an answer. The test only reaches a push's
