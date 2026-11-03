@@ -539,6 +539,10 @@ def main(argv: list[str] | None = None) -> int:
         except _effective.EmptyReference as exc:
             print(f"REFUSING: {exc}", file=sys.stderr)
             return 2
+        # BEFORE the first read (release review 4.1.0, T1): stamped after the walk, a mod edited during the
+        # build left an index of the old files under the new world's digest, FRESH forever.
+        _mutation.refuse_if_mutating("build the md/aiscript xref index")
+        _fp = _freshness.fingerprint(_merge.Config(reference=ref), index_roots(ext))
         rows = build_index(ref, ext, unreadable)
         # BEFORE anything is replaced (review 2026-11-01): checked only at the stamp, a mutation gate
         # left a NEW index paired with the OLD stamp -- unreadable, where the old index was fine.
@@ -561,7 +565,6 @@ def main(argv: list[str] | None = None) -> int:
         # WHEN this index was true. Its whole purpose is to make "nobody calls X"
         # admissible, and a negative from a superseded world is not admissible.
         _mutation.refuse_if_mutating("build the md/aiscript xref index")
-        _fp = _freshness.fingerprint(_merge.Config(reference=ref), index_roots(ext))
         # The roots are RECORDED so the check compares against the world this index was
         # built over -- `build --ext-dir X` used to read STALE forever, because the query
         # side always fingerprinted the game-root extensions instead (FR-3).

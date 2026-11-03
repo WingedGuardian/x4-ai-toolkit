@@ -27,6 +27,11 @@ def plain(path):
         except FileNotFoundError:
             continue
         if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            if part != path:
+                # About how the toolkit is reached, not about the cache, and the user can change that.
+                raise OSError(f"BaseX disposal refuses a link/reparse point: {part}, above {path}. "
+                              f"Remedy: run this from the real location, {os.path.realpath(path)}, "
+                              "not through the link")
             raise OSError(f"BaseX disposal refuses a link/reparse point: {part}")
     if path == Path(path.anchor) or path == Path.home().absolute():
         raise OSError(f"BaseX disposal refuses a root/home: {path}")

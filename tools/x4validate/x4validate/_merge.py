@@ -1051,6 +1051,7 @@ def _build_owned(owner_name: str, rel: str, vpath: str,
             sources.append(f"{owner_dir.name}:owner")
             if recorder is not None:
                 recorder.owner = owner_dir.name       # display only: annotate_tree names it
+                recorder.owner_is_dlc = owner_is_dlc
 
     for odir in overlay_dirs:
         if odir is owner_dir:

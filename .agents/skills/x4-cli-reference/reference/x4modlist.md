@@ -31,7 +31,8 @@ positional arguments:
     snapshot            record the current mod vector as a cheap baseline (~0.1s), for the gap
                         between expensive rebuilds
     downloads           read the manifests inside downloaded archives and compare them with what
-                        is installed: newer, same, older, not installed. Read-only
+                        is installed: newer, same, older, not installed. Read-only. Exit 3 when
+                        anything was unreadable or a manifest unusable
 
 options:
   -h, --help            show this help message and exit
@@ -220,6 +221,7 @@ positional arguments:
 options:
   -h, --help   show this help message and exit
   --recursive  also scan subfolders (default: top level only)
-  --all        also list mods that match what is installed, and older copies
+  --all        also list mods that match what is installed, older copies, and archives with no
+               manifest
   --json       print the whole report as JSON
 ```

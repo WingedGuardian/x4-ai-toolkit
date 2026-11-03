@@ -46,6 +46,7 @@ class Recorder:
     # DISPLAY ONLY (annotate_tree): the last whole-file layer replaced nothing / the owner mod of a nested path.
     sole_provider: bool = False
     owner: str = ""
+    owner_is_dlc: bool = False
     # Element proxies are held strongly => identity-stable for the tree's lifetime.
     _elem: dict = field(default_factory=dict)   # etree._Element -> list[Origin]
     _attr: dict = field(default_factory=dict)   # (etree._Element, attr) -> list[Origin]
@@ -189,7 +190,8 @@ def annotate_tree(tree: etree._Element, rec: Recorder) -> tuple[list[str], int]:
     elif rec.owner:
         # A nested extensions/<owner>/... path: the owner's file is the base and is not a recorded layer, so
         # its nodes would otherwise read as game "base".
-        header.append(comment_safe(f"unannotated nodes come from: {rec.owner} (the owner mod's file; "
+        noun = "DLC" if rec.owner_is_dlc else "mod"
+        header.append(comment_safe(f"unannotated nodes come from: {rec.owner} (the owner {noun}'s file; "
                                    f"the nested patches below were applied over it)"))
     # Collect first, insert after: inserting while iterating would change the walk.
     for el, text in notes:

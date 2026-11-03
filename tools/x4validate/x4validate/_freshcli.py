@@ -9,19 +9,27 @@ Four artifacts answer questions about the live modlist, and each one describes t
 
 `status` asks each artifact's OWN freshness check (the same code its readers use) and prints one verdict
 per artifact: FRESH, STALE (with the reason), UNKNOWN (freshness cannot be established -- never read as
-fresh), MISSING, or REBUILDING (another x4fresh holds the build lock). It also lists what the last build
-could NOT include (the store's dropped overlays) and orphan temp files a killed build left behind.
+fresh), MISSING, REBUILDING (another x4fresh holds the build lock), or NOT-BUILT (a BaseX database that was
+never built, on a machine with no BaseX or Java to build it: optional, so it is not counted as not current).
+It also lists what the last build could NOT include (the store's dropped overlays, skipped files, truncated
+property subtrees) and orphan temp files a killed build left behind. Exit: 0 all FRESH and complete, 3 all
+FRESH but some known INCOMPLETE, 5 otherwise; a NOT-BUILT artifact counts only when named with --only.
 
 `rebuild` runs the builders ONE AT A TIME (two concurrent builds once cost x4eff 17% of its documents),
 under an OS lock that the operating system releases if the holder dies, so a crashed build never leaves a
 stale lock (MEASURED 2026-11-01: 3 of 3 hard kills released it at once). Every builder's WARNING lines are
-carried to the final summary: a build that dropped input ends "BUILT WITH N DROPS", never "fresh".
+carried to the final summary: a build that dropped input ends "BUILT WITH N DROPS", never "fresh". Any
+rebuild defers while a mutation gate is editing the engine or engine sources are uncommitted. Exit: 0 every
+requested artifact is FRESH; 1 a builder failed; 5 nothing failed but one is still not FRESH (deferred, lock
+held, a gate started meanwhile, or NOT-BUILT and named with --only).
 
 `rebuild --auto` is what a session start launches in the background. It only rebuilds the effective store
 and the xref index: the BaseX builders drop their database for the length of the build, so they are never
-started unattended (reported instead). It defers while a listed process runs (X4_FRESH_DEFER_WHILE,
-default X4.exe), while a mutation gate is editing the engine, or while engine sources are uncommitted, and
-it does not retry a build that already failed against the same inputs.
+started unattended (reported instead). It also defers while a listed process runs (X4_FRESH_DEFER_WHILE,
+default X4.exe;X4), and it does not retry a build that already failed against the same inputs (reasons and
+the world's digest). It exits 0 unless a builder failed: the note carries the rest, not the exit code. The
+note reads "did not complete" from the start of the run until its outcome replaces it, and it is empty only
+when everything this machine can build is FRESH and complete (a NOT-BUILT artifact is named in one note).
 
 Optional environment:
     X4_JOB_WRAPPER        JSON list prefixed to every builder command; "{name}" becomes x4fresh-<artifact>
@@ -46,18 +54,31 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from x4validate import __version__, _effective, _freshness, _mutation, _paths, _registry, _xref
+from x4validate import __version__, _effective, _freshness, _merge, _mutation, _paths, _registry, _xref
 
 PKG_ROOT = Path(__file__).resolve().parent.parent          # tools/x4validate
 TOOLKIT_ROOT = PKG_ROOT.parent.parent                       # repo root
 BASEX_ROOT = PKG_ROOT.parent / "basex"                      # tools/basex
 ORDER = ("effective", "xref", "x4raw", "x4eff")
 AUTO_SET = ("effective", "xref")
-STATES = ("FRESH", "STALE", "UNKNOWN", "MISSING", "REBUILDING")
+NOT_BUILT = "NOT-BUILT"
+STATES = ("FRESH", "STALE", "UNKNOWN", "MISSING", "REBUILDING", NOT_BUILT)
+# Holds the session note from the start of an --auto run until its outcome replaces it, so a run that dies
+# cannot leave the previous run's empty note to read as "everything is fine". scripts/x4fresh_session.py
+# spells the same prefix (it is stdlib-only and cannot import this).
+NOTE_PENDING = ("x4fresh: NOT CHECKED: the session-start check started but has not reported: it is still "
+                "running, or it died. Run `x4fresh status` from tools/x4validate.\n")
 # `skipped N unparseable file(s)` is the effective build's whole-file loss line and carries none of the
 # other words (review 2026-11-01, finding 1): without it a build that lost files read "REBUILT, FRESH".
 WARN_RE = re.compile(r"\bWARNING\b|\bNOT INDEXED\b|\bINCOMPLETE\b|\bERROR\b|\bskipped \d+ unparseable\b")
 MAX_LISTED = 5   # per list in a report; the hook output that carries it is bounded
+# A line that only SUMMARISES the losses the store lists by identity. `accepted` compares those identities,
+# so these say nothing new once the sets match; any OTHER warning is outside what the user accepted.
+LOSS_SUMMARY_RE = re.compile(r"\bWARNING: \d+ overlay\(s\) could not be read\b"
+                             r"|\bskipped \d+ unparseable\b"
+                             r"|\bWARNING: \d+ property subtree\(s\) hit\b"
+                             r"|\bNOT INDEXED\b.*\d+ file\(s\) would not parse\b")
+MOVED_STAMP = "moved-during-build"   # never equals a digest, so a reader compares it and reads STALE
 
 
 @dataclass
@@ -161,7 +182,9 @@ def _status_effective() -> Status:
             ("dropped_overlays", "dropped_overlay_samples",
              "overlay(s) could not be read and are NOT in the store; values they would set read as base"),
             ("skipped_files", "skipped_file_samples",
-             "file(s) could not be merged at all and contribute NO rows")):
+             "file(s) could not be merged at all and contribute NO rows"),
+            ("truncated_props", "truncated_prop_samples",
+             "property subtree(s) were deeper than the build's depth guard and are NOT indexed")):
         raw = meta.get(count_key)
         try:
             n = int(raw or 0)
@@ -230,11 +253,35 @@ def _load_staleness():
     return mod
 
 
+def _basex_unbuildable() -> str | None:
+    """Why this machine cannot build a BaseX database, in one line, or None (it can, or we cannot tell: a
+    preflight that fails to run is a non-answer, and "cannot be built" must not be a guess). Uses
+    tools/basex/preflight.py, the check the builders themselves refuse on."""
+    try:
+        spec = importlib.util.spec_from_file_location("x4fresh_basex_preflight", BASEX_ROOT / "preflight.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod    # its dataclasses and annotations resolve through sys.modules
+        spec.loader.exec_module(mod)
+        problems = mod.check(["java", "jar"], BASEX_ROOT / "basex")
+    except Exception:  # noqa: BLE001  # silent-ok: None keeps the MISSING verdict, whose advice names the builder
+        return None
+    return problems[0].splitlines()[0] if problems else None
+
+
+def _not_built(name: str, why: str) -> Status:
+    return Status(name, NOT_BUILT, [f"never built here, and this machine cannot build it: {why} "
+                                    "Optional: only the BaseX queries need it (setup: tools/basex/README.md)."])
+
+
 def _status_basex(name: str) -> Status:
     cov = BASEX_ROOT / "basex" / f"coverage-{name}.json"
     if not (BASEX_ROOT / "staleness.py").is_file():
-        return Status(name, "UNKNOWN", [f"no BaseX tooling at {BASEX_ROOT}"])
+        return (Status(name, "UNKNOWN", [f"no BaseX freshness check at {BASEX_ROOT}, but a coverage report exists"])
+                if cov.is_file() else _not_built(name, f"no BaseX tooling at {BASEX_ROOT}."))
     if not cov.is_file():
+        why = _basex_unbuildable()
+        if why:
+            return _not_built(name, why)
         return Status(name, "MISSING", [f"no coverage report at {cov}: never built, or the last build "
                                         "did not finish"])
     try:
@@ -286,7 +333,8 @@ def _load_accepted(sd: Path | None) -> dict:
 def _mark_accepted(s: Status, accepted: dict) -> Status:
     """A loss set IDENTICAL to the accepted one is known and accepted; any difference -- a file added OR
     removed -- is news. An artifact that cannot list its losses (an older store) is never accepted."""
-    entry = accepted.get(s.name) or {}
+    entry = accepted.get(s.name)
+    entry = entry if isinstance(entry, dict) else {}
     if s.incomplete and s.loss_keys is not None and sorted(s.loss_keys) == entry.get("keys"):
         s.accepted = entry.get("when", "?")
     return s
@@ -301,7 +349,7 @@ def _rebuilding_targets(sd: Path) -> set[str] | None:
     try:
         data = json.loads((sd / "rebuilding.json").read_text(encoding="utf-8"))
         return {n for n in data.get("targets", []) if n in ORDER}
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, TypeError):
         return None  # silent-ok: None = unknown targets; the caller then reports EVERY artifact as REBUILDING
 
 
@@ -312,7 +360,7 @@ def status(only=ORDER, holding_lock: bool = False) -> list[Status]:
     While another process rebuilds, only the artifacts IT is rebuilding read REBUILDING; the rest keep
     their real state (an --auto rebuild never touches BaseX, so a stale x4eff must still say STALE).
     Probing the lock takes it for an instant: a rebuild starting in that instant sees "already running"
-    and exits 0 -- the next session start retries it."""
+    and starts nothing (exit 5 by hand; --auto exits 0 and the next session start retries it)."""
     sd = state_dir()
     locked = not holding_lock and bool(sd) and BuildLock(sd / "x4fresh.lock").held_elsewhere()
     in_play = _rebuilding_targets(sd) if locked else set()
@@ -329,7 +377,10 @@ def status(only=ORDER, holding_lock: bool = False) -> list[Status]:
 
 def render(results: list[Status]) -> str:
     """Directive first (a long report is truncated from the tail), inventory after."""
-    bad = [s for s in results if s.state != "FRESH"]
+    bad = [s for s in results if s.state not in ("FRESH", NOT_BUILT)]
+    unbuilt = [s.name for s in results if s.state == NOT_BUILT]
+    built = len(results) - len(unbuilt)
+    also = f"; not built on this machine: {', '.join(unbuilt)}" if unbuilt else ""
     lines = []
     if bad:
         lines.append("x4fresh: NOT CURRENT: " + ", ".join(f"{s.name} {s.state}" for s in bad)
@@ -337,13 +388,15 @@ def render(results: list[Status]) -> str:
                      else "x4fresh: rebuild in progress: " + ", ".join(s.name for s in bad))
     elif _unaccepted(results):
         # Fresh is about WHEN, not HOW MUCH: a current store that dropped input is not "clean".
-        lines.append(f"x4fresh: all {len(results)} artifact(s) FRESH, but INCOMPLETE: "
+        lines.append(f"x4fresh: all {built} artifact(s) FRESH, but INCOMPLETE: "
                      + ", ".join(f"{s.name} ({s.incomplete} missing)" for s in _unaccepted(results))
-                     + " -- review, then `x4fresh accept` if this loss is known and acceptable")
+                     + " -- review, then `x4fresh accept` if this loss is known and acceptable" + also)
+    elif not built and unbuilt:
+        lines.append(f"x4fresh: nothing to report on: not built on this machine: {', '.join(unbuilt)}")
     else:
         known = sum(s.incomplete for s in results if s.accepted)
-        lines.append(f"x4fresh: all {len(results)} artifact(s) FRESH"
-                     + (f" ({known} known loss(es), accepted)" if known else ""))
+        lines.append(f"x4fresh: all {built} artifact(s) FRESH"
+                     + (f" ({known} known loss(es), accepted)" if known else "") + also)
     for s in results:
         lines.append(f"  {s.name:<10} {s.state}"
                      + (f"  ({s.incomplete} known loss(es) accepted {s.accepted}; listed below)" if s.accepted else ""))
@@ -519,9 +572,35 @@ def _memo_path(sd: Path) -> Path:
 
 def _load_memo(sd: Path) -> dict:
     try:
-        return json.loads(_memo_path(sd).read_text(encoding="utf-8"))
+        data = json.loads(_memo_path(sd).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}  # silent-ok: no/unreadable memo = no remembered failure, so the build is attempted (one retry at most)
+    # The same for a memo that parses to the wrong shape: it remembers nothing, it must not crash the run.
+    return {k: v for k, v in data.items() if isinstance(v, dict)} if isinstance(data, dict) else {}
+
+
+def _world_digest() -> str | None:
+    """Both freshness axes of the installed world right now, or None when that cannot be established."""
+    try:
+        cfg = _merge.Config()
+        fp = _freshness.fingerprint(cfg, _effective._ext_root(cfg))
+    except Exception:  # noqa: BLE001  # silent-ok: None = a non-answer; the caller says "could not be compared"
+        return None
+    return f"{fp['content']}/{fp['engine']}" if fp.get("content") else None
+
+
+def _revoke_basex_stamp(name: str) -> str | None:
+    """BaseX stamps at the END of its build, so a world that moved during it reads FRESH under the new digest.
+    ask.py reads the coverage file, never x4fresh, so the correction goes there: every other key survives,
+    and the content axis can no longer match. Returns why it could not, or None."""
+    cov = BASEX_ROOT / "basex" / f"coverage-{name}.json"
+    try:
+        data = json.loads(cov.read_text(encoding="utf-8"))
+        data["fingerprint"]["content"] = MOVED_STAMP
+        _write_note(cov, json.dumps(data, indent=2))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
 
 
 def _write_note(p: Path, text: str) -> None:
@@ -531,7 +610,8 @@ def _write_note(p: Path, text: str) -> None:
     os.replace(tmp, p)
 
 
-def rebuild(only=ORDER, auto: bool = False, note: Path | None = None) -> int:
+def rebuild(only=ORDER, auto: bool = False, note: Path | None = None, named: bool = False) -> int:
+    """`named`: the artifacts were asked for with --only, so a NOT-BUILT one among them counts."""
     sd = state_dir()
     if sd is None:
         print("x4fresh: REFUSING: the registry location is not configured (set X4_MODS)", file=sys.stderr)
@@ -542,19 +622,38 @@ def rebuild(only=ORDER, auto: bool = False, note: Path | None = None) -> int:
     lock = BuildLock(sd / "x4fresh.lock")
     if not lock.acquire():
         print("x4fresh: a rebuild is already running (lock held); nothing started")
-        return 0
+        return 0 if auto else 5
     try:
         targets = [n for n in only if not auto or n in AUTO_SET]
         # Tells a concurrent `status` which artifacts are actually in play (review finding 7).
         _write_note(sd / "rebuilding.json", json.dumps({"targets": targets, "auto": auto, "pid": os.getpid()}))
-        return _rebuild_locked(sd, targets, auto, (note or sd / "session-note.txt").resolve())
+        note = (note or sd / "session-note.txt").resolve()
+        if auto:
+            _write_note(note, NOTE_PENDING)
+        return _rebuild_locked(sd, targets, auto, note, named=named)
     finally:
         with contextlib.suppress(OSError):
             (sd / "rebuilding.json").unlink()
         lock.release()
 
 
-def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
+def _not_built_path(sd: Path) -> Path:
+    return sd / "not-built-noted.json"
+
+
+def _note_not_built_once(sd: Path, final: list[Status]) -> list[str]:
+    """Which NOT-BUILT artifacts the session note has already named. Records the current set, so one that
+    gets built and is later lost again is news again. Unreadable: named again, the loud direction."""
+    try:
+        told = json.loads(_not_built_path(sd).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        told = []  # silent-ok: nothing remembered means it is named again, once more
+    now = sorted(s.name for s in final if s.state == NOT_BUILT)
+    _write_note(_not_built_path(sd), json.dumps(now))
+    return [n for n in now if isinstance(told, list) and n in told]
+
+
+def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = False) -> int:
     before = {s.name: s for s in status(ORDER, holding_lock=True)}
     lines, failed, unclean = [], False, False
     why = _deferred(auto)
@@ -564,10 +663,20 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
     for name in targets if not why else []:
         s = before[name]
         if s.state == "FRESH":
+            memo.pop(name, None)     # fixed by hand since: an older failure says nothing about the next one
             continue
-        key = " | ".join(s.reasons)
+        if s.state == NOT_BUILT:
+            if named:
+                lines.append(f"{name}: NOT BUILT: nothing started; {s.reasons[0] if s.reasons else ''}")
+            continue
+        world_before = _world_digest()
+        # The reasons alone are not "the same inputs": MISSING and UNKNOWN carry no digest, so a mod could
+        # change and the same words would suppress the retry forever (review T10).
+        key = " | ".join(s.reasons) + f" @ {world_before}"
         if auto and memo.get(name, {}).get("reasons") == key:
-            lines.append(f"{name}: NOT RETRIED: it failed against these same inputs at "
+            what = ("against these same inputs" if world_before is not None
+                    else "and its inputs could not be compared since")
+            lines.append(f"{name}: NOT RETRIED: it failed {what} at "
                          f"{memo[name].get('when')} (rc {memo[name].get('rc')}); run `x4fresh rebuild` "
                          "by hand after fixing the cause")
             continue
@@ -579,6 +688,13 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
             rc, warnings = _run(name, log)
         except (OSError, ValueError) as exc:
             rc, warnings = -1, [f"could not start the builder: {exc}"]
+        world_after = _world_digest()
+        moved = world_before is not None and world_after is not None and world_before != world_after
+        if moved and name not in AUTO_SET:
+            why_not = _revoke_basex_stamp(name)
+            if why_not:
+                lines.append(f"{name}: its stamp could not be revoked ({why_not}): it may read FRESH over a moved world")
+                unclean = True
         after = _mark_accepted(check(name), _load_accepted(sd))
         if rc not in (0, 3) or after.state != "FRESH":
             failed = True
@@ -587,7 +703,8 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
         else:
             memo.pop(name, None)
             # The count is the artifact's OWN (meta), never the number of sample lines (capped at 10).
-            if after.accepted:
+            outside = [w for w in warnings if not LOSS_SUMMARY_RE.search(w)]
+            if after.accepted and not outside:
                 # The SAME losses the user accepted: still said, never called clean, but not news.
                 verdict = f"REBUILT, FRESH ({after.incomplete} known loss(es), accepted {after.accepted})"
             else:
@@ -595,6 +712,14 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
                     "BUILT WITH WARNINGS" if warnings or rc == 3 else "REBUILT, FRESH")
                 unclean = unclean or verdict != "REBUILT, FRESH"
             lines.append(f"{name}: {verdict} (log: {log})")
+        if world_before is None or world_after is None:
+            unclean = True
+            lines.append(f"{name}: the installed world's digest could not be compared around this build, "
+                         "so a change during it cannot be ruled out")
+        elif moved:
+            unclean = True
+            lines.append(f"{name}: the installed world MOVED during this build [{world_before} -> {world_after}]: "
+                         "a mod, the reference or the engine changed while it ran, so rebuild once that settles")
         lines.extend(f"    {w}" for w in warnings[:8])
         if len(warnings) > 8:
             lines.append(f"    ... {len(warnings) - 8} more warning line(s) in the log")
@@ -604,7 +729,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
     memo_tmp.write_text(json.dumps(memo, indent=1), encoding="utf-8")
     os.replace(memo_tmp, _memo_path(sd))
     final = status(ORDER, holding_lock=True)
-    left = [s for s in final if s.state != "FRESH"]
+    left = [s for s in final if s.state not in ("FRESH", NOT_BUILT)]
     if auto:
         skipped = [s.name for s in left if s.name not in AUTO_SET]
         if skipped:
@@ -616,10 +741,18 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
     if auto:
         # ANY outcome other than a clean rebuild reaches the next session start -- a drop or a warning
         # included (review finding 2: those went only to stdout, which the launcher discards).
+        told = _note_not_built_once(sd, final)
+        shown = [s for s in final if s.name not in told]
         noteworthy = left or failed or unclean or _unaccepted(final) or \
-            any("DEFERRED" in ln or "NOT RETRIED" in ln for ln in lines)
-        _write_note(note, report + "\n" if noteworthy else "")
-    return 1 if failed else 0
+            any("DEFERRED" in ln or "NOT RETRIED" in ln for ln in lines) or \
+            any(s.state == NOT_BUILT for s in shown)
+        rendered = render(shown).splitlines()
+        _write_note(note, "\n".join(rendered[:1] + lines + rendered[1:]) + "\n" if noteworthy else "")
+        return 1 if failed else 0
+    if failed:
+        return 1
+    still = [s for s in final if s.name in targets and s.state != "FRESH" and (named or s.state != NOT_BUILT)]
+    return 5 if still else 0
 
 
 def _prune_logs(logs: Path, keep: int = 5) -> None:
@@ -646,33 +779,38 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     ps = sub.add_parser("status", help="one verdict per artifact; exit 0 all FRESH and complete, 3 all FRESH "
                                        "but some known INCOMPLETE (dropped/unparsed input), 5 otherwise")
-    ps.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER), help=ONLY_HELP)
-    pr = sub.add_parser("rebuild", help="rebuild what is not FRESH, one at a time, under a lock")
-    pr.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER), help=ONLY_HELP)
+    ps.add_argument("--only", nargs="+", choices=ORDER, default=None, help=ONLY_HELP)
+    pr = sub.add_parser("rebuild", help="rebuild what is not FRESH, one at a time, under a lock; exit 0 every "
+                                        "requested artifact is FRESH, 1 a builder failed, 5 still not FRESH "
+                                        "(deferred, lock held, gate started); --auto: 0 unless a builder failed")
+    pr.add_argument("--only", nargs="+", choices=ORDER, default=None, help=ONLY_HELP)
     pr.add_argument("--auto", action="store_true",
                     help="unattended mode (session start): effective + xref only, defers while a "
                          "listed process runs, never retries the same failure")
     pr.add_argument("--note", type=Path,
                     help="with --auto: write the outcome here for the next session start to print "
-                         "(empty when everything is fresh); default <registry>/x4fresh/session-note.txt")
+                         "(reads 'did not complete' until the run reports; empty only when everything this "
+                         "machine can build is fresh); default <registry>/x4fresh/session-note.txt")
     pa = sub.add_parser("accept", help="record each artifact's CURRENT losses (dropped/unparsed input) as "
                                        "known; the session note then stays quiet until that set changes")
-    pa.add_argument("--only", nargs="+", choices=ORDER, default=list(ORDER), help=ONLY_HELP)
+    pa.add_argument("--only", nargs="+", choices=ORDER, default=None, help=ONLY_HELP)
     args = p.parse_args(argv)
+    named = args.only is not None
+    only = tuple(args.only) if named else ORDER
     if state_dir() is None:
         # Cold machine: every subcommand refuses with rc 2 ("not set up"), the toolkit-wide contract.
         # `status` used to answer rc 5 with four UNKNOWNs here -- a verdict about artifacts that cannot exist.
         print("x4fresh: REFUSING: the registry location is not configured (set X4_MODS)", file=sys.stderr)
         return 2
     if args.cmd == "status":
-        results = status(tuple(args.only))
+        results = status(only)
         print(render(results))
-        if not all(s.state == "FRESH" for s in results):
+        if not all(s.state == "FRESH" or (s.state == NOT_BUILT and not named) for s in results):
             return 5
         return 3 if _unaccepted(results) else 0
     if args.cmd == "accept":
-        return accept(tuple(args.only))
-    return rebuild(tuple(args.only), auto=args.auto, note=args.note)
+        return accept(only)
+    return rebuild(only, auto=args.auto, note=args.note, named=named)
 
 
 def accept(only=ORDER) -> int:
@@ -685,6 +823,9 @@ def accept(only=ORDER) -> int:
     data = _load_accepted(sd)
     rc = 0
     for s in status(only):
+        if s.state == NOT_BUILT:
+            print(f"{s.name}: nothing to accept: it is not built on this machine")
+            continue
         if s.state != "FRESH":
             print(f"{s.name}: NOT accepted: it is {s.state}; rebuild first, then accept what the fresh build lost")
             rc = 2

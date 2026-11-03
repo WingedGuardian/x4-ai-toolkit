@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _layout import require_repo
 
 REPO = Path(__file__).resolve().parents[3]
 HOOK_SRC = REPO / "agent" / "guards" / "claude-hooks"
@@ -26,9 +27,13 @@ if not BASH and os.path.isfile(GW):
     BASH = GW
 needs_bash = pytest.mark.skipif(not BASH, reason="no Git Bash -- the shell hook is NOT checked here")
 MARKER = "import sys\nopen(sys.argv[-1] + '.launched', 'w').write(' '.join(sys.argv[1:]))\n"
+# One wait, for a launch and for its absence alike: a negative that gives up sooner than the positive is allowed
+# to take would pass on a slow machine whether or not the launch was stopped.
+LAUNCH_WAIT = 10
 
 
 def _tree(tmp_path):
+    require_repo("agent/guards/claude-hooks", why="copies the hook source")
     hooks = tmp_path / "proj" / ".claude" / "hooks"
     shutil.copytree(HOOK_SRC, hooks)
     tk = tmp_path / "tk"
@@ -67,7 +72,7 @@ def test_the_previous_runs_note_is_shown_at_session_start(tmp_path):
 def test_it_launches_the_toolkits_launcher_with_the_note_path(tmp_path):
     hooks, env = _tree(tmp_path)
     _run(hooks, env)
-    flag = _launched(hooks, 10)
+    flag = _launched(hooks, LAUNCH_WAIT)
     assert flag, "the launcher was not started"
     assert Path(flag.read_text(encoding="utf-8").split()[-1]).name == "x4fresh-session.txt"
 
@@ -84,7 +89,7 @@ def test_each_opt_out_stops_the_launch(tmp_path, off):
     else:
         env[key] = val
     _run(hooks, env)
-    assert not _launched(hooks, 2), f"{key} did not stop the launch"
+    assert not _launched(hooks, LAUNCH_WAIT), f"{key} did not stop the launch"
 
 
 @needs_bash
@@ -94,7 +99,7 @@ def test_it_never_runs_the_launcher_beside_the_hooks(tmp_path):
     (tmp_path / "proj" / "scripts" / "x4fresh_session.py").write_text(MARKER, encoding="utf-8")
     env["X4_TOOLKIT"] = str(tmp_path / "no-toolkit-here")
     _run(hooks, env)
-    assert not _launched(hooks, 2), "the launcher beside the hooks was started"
+    assert not _launched(hooks, LAUNCH_WAIT), "the launcher beside the hooks was started"
 
 
 def test_the_launcher_runs_x4fresh_auto_in_the_toolkits_environment(tmp_path):
@@ -115,3 +120,94 @@ def test_the_launcher_honours_auto_off(tmp_path, monkeypatch):
     monkeypatch.setenv("X4_FRESH_AUTO", "off")
     monkeypatch.setattr(xs.subprocess, "run", lambda *a, **k: pytest.fail("ran with X4_FRESH_AUTO=off"))
     assert xs.main([str(tmp_path / "n.txt")]) == 0
+
+
+class _Done:
+    def __init__(self, returncode, stderr=""):
+        self.returncode, self.stderr = returncode, stderr
+
+
+def _launch(monkeypatch, tmp_path, run):
+    monkeypatch.setattr(xs.shutil, "which", lambda name: "uv")
+    monkeypatch.delenv("X4_FRESH_AUTO", raising=False)
+    monkeypatch.setattr(xs.subprocess, "run", run)
+    note = tmp_path / "n.txt"
+    return note, xs.main([str(note)])
+
+
+def test_the_launcher_writes_did_not_complete_before_starting(tmp_path, monkeypatch):
+    """A launcher killed in `uv run` must not leave the previous run's empty note to read as fine."""
+    seen = []
+    note = tmp_path / "n.txt"
+    note.write_text("", encoding="utf-8")
+
+    def run(*a, **k):
+        seen.append(note.read_text(encoding="utf-8"))
+        return _Done(0)
+    _launch(monkeypatch, tmp_path, run)
+    assert seen and seen[0].startswith(xs.PENDING)
+
+
+def test_a_nonzero_exit_with_no_report_says_so_in_the_note(tmp_path, monkeypatch):
+    note, rc = _launch(monkeypatch, tmp_path, lambda *a, **k: _Done(2, "x4fresh: REFUSING: not configured\n"))
+    text = note.read_text(encoding="utf-8")
+    assert rc == 2 and "rc 2" in text and "REFUSING: not configured" in text
+    assert not text.startswith(xs.PENDING)
+
+
+def test_a_nonzero_exit_keeps_the_report_x4fresh_wrote(tmp_path, monkeypatch):
+    """Twin: rc 1 with a report is x4fresh's own account of a failed build, far better than a bare rc."""
+    def run(*a, **k):
+        (tmp_path / "n.txt").write_text("x4fresh: NOT CURRENT: xref STALE\n", encoding="utf-8")
+        return _Done(1)
+    note, rc = _launch(monkeypatch, tmp_path, run)
+    assert rc == 1 and note.read_text(encoding="utf-8") == "x4fresh: NOT CURRENT: xref STALE\n"
+
+
+def test_a_clean_exit_leaves_the_empty_note_alone(tmp_path, monkeypatch):
+    def run(*a, **k):
+        (tmp_path / "n.txt").write_text("", encoding="utf-8")
+        return _Done(0)
+    note, rc = _launch(monkeypatch, tmp_path, run)
+    assert rc == 0 and note.read_text(encoding="utf-8") == ""
+
+
+def test_a_launch_that_cannot_start_says_so_in_the_note(tmp_path, monkeypatch):
+    def run(*a, **k):
+        raise OSError("no such file")
+    note, rc = _launch(monkeypatch, tmp_path, run)
+    assert rc == 2 and "could not start" in note.read_text(encoding="utf-8")
+
+
+def test_the_launcher_and_x4fresh_agree_on_the_pending_text():
+    """The launcher is stdlib-only and cannot import it, so the two spellings are pinned together."""
+    from x4validate import _freshcli
+    assert _freshcli.NOTE_PENDING.startswith(xs.PENDING)
+
+
+@needs_bash
+@pytest.mark.parametrize("off", ["X4_FRESH_AUTO", "X4_HOUSEKEEP_SWEEP"])
+def test_a_note_that_nothing_will_refresh_says_so(tmp_path, off):
+    """With the launch switched off the note is an old run's forever, and it read like this session's."""
+    hooks, env = _tree(tmp_path)
+    env[off] = "off"
+    (hooks.parent / "x4fresh-session.txt").write_text("x4fresh: NOT CURRENT: x4eff STALE\n", encoding="utf-8")
+    out = _run(hooks, env)
+    assert "x4fresh: NOT CURRENT: x4eff STALE" in out
+    assert f"{off}=off" in out and "earlier run" in out
+
+
+@needs_bash
+def test_a_note_about_to_be_refreshed_carries_no_such_line(tmp_path):
+    """Twin: launching this session, so the note is simply the last run's outcome."""
+    hooks, env = _tree(tmp_path)
+    (hooks.parent / "x4fresh-session.txt").write_text("x4fresh: NOT CURRENT: x4eff STALE\n", encoding="utf-8")
+    out = _run(hooks, env)
+    assert "x4fresh: NOT CURRENT: x4eff STALE" in out and "earlier run" not in out
+
+
+@needs_bash
+def test_no_note_no_line_with_the_launch_off(tmp_path):
+    hooks, env = _tree(tmp_path)
+    env["X4_FRESH_AUTO"] = "off"
+    assert "earlier run" not in _run(hooks, env)

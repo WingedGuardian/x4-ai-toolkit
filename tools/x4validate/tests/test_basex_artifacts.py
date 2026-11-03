@@ -255,3 +255,33 @@ def test_junction_inside_cache_preserves_both_cache_and_target(tmp_path):
     with pytest.raises(OSError, match="link/reparse"):
         a.dispose([out], proof=ready)
     assert p.read_text() == "<unique/>" and out.exists()
+
+
+def test_a_link_above_the_toolkit_names_the_remedy(tmp_path):
+    """plain() refuses any reparse point on the way down. For an ANCESTOR that is a property of where the toolkit
+    is reached from, not of the cache, and "refuses" alone leaves the user nothing to do."""
+    if os.name != "nt":
+        pytest.skip("uses an NTFS junction")
+    import subprocess
+    real = tmp_path / "real"
+    (real / "cache").mkdir(parents=True)
+    link = tmp_path / "linked"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(real)], check=True, capture_output=True)
+    with pytest.raises(OSError) as hit:
+        a.plain(link / "cache")
+    text = str(hit.value)
+    assert "link/reparse" in text and "real location" in text and str(real / "cache") in text
+
+
+def test_the_link_itself_is_refused_without_the_ancestor_remedy(tmp_path):
+    """Twin: disposal AT a link is refused because of what it is; moving the toolkit would not change that."""
+    if os.name != "nt":
+        pytest.skip("uses an NTFS junction")
+    import subprocess
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "linked"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(real)], check=True, capture_output=True)
+    with pytest.raises(OSError) as hit:
+        a.plain(link)
+    assert "link/reparse" in str(hit.value) and "real location" not in str(hit.value)

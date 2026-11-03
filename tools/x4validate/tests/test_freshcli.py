@@ -20,6 +20,7 @@ def sd(tmp_path, monkeypatch):
     monkeypatch.setattr(fc, "state_dir", lambda: d)
     monkeypatch.delenv("X4_JOB_WRAPPER", raising=False)
     monkeypatch.delenv("X4_FRESH_AUTO", raising=False)
+    monkeypatch.setattr(fc, "_world_digest", lambda: "world")
     return d
 
 
@@ -109,7 +110,8 @@ def test_a_second_rebuild_while_locked_starts_nothing(sd, monkeypatch, capsys):
     assert held.acquire()
     monkeypatch.setattr(fc, "_run", lambda *a: pytest.fail("a builder ran while the lock was held"))
     try:
-        assert fc.rebuild() == 0
+        assert fc.rebuild() == 5, "nothing was rebuilt, so a by-hand rebuild must not read as success"
+        assert fc.rebuild(auto=True) == 0, "--auto: the running build owns the outcome and the note"
     finally:
         held.release()
     assert "already running" in capsys.readouterr().out
@@ -433,3 +435,423 @@ def test_logs_are_pruned_to_the_newest_five_per_artifact(tmp_path):
     assert sorted(p.name for p in logs.glob("effective-*")) == [f"effective-2026110{i}-000000.log"
                                                                for i in range(3, 8)]
     assert (logs / "xref-20261101-000000.log").exists()
+
+
+# --------------------------------------------------------------------------- the world moved during a build
+
+def _moving_world(monkeypatch, *digests):
+    """_world_digest answers each of `digests` in turn, then repeats the last."""
+    seq = list(digests)
+    monkeypatch.setattr(fc, "_world_digest", lambda: seq.pop(0) if len(seq) > 1 else seq[0])
+
+
+def test_a_build_the_world_moved_under_is_reported_and_is_a_failure(sd, monkeypatch, capsys):
+    """The artifact's own stamp reads STALE after the fix; x4fresh must also SAY why, and not read as clean."""
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "pass")
+    _moving_world(monkeypatch, "a", "b")
+    assert fc.rebuild(("effective",)) == 1
+    out = capsys.readouterr().out
+    assert "effective: the installed world MOVED during this build [a -> b]" in out
+
+
+def test_no_move_no_line_the_control(sd, monkeypatch, capsys):
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=FRESH("effective")))
+    _fake_builder(monkeypatch, built, "pass")
+    assert fc.rebuild(("effective",)) == 0
+    assert "MOVED" not in capsys.readouterr().out
+
+
+def test_a_digest_that_cannot_be_compared_is_said_never_read_as_no_move(sd, monkeypatch, capsys):
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=FRESH("effective")))
+    _fake_builder(monkeypatch, built, "pass")
+    monkeypatch.setattr(fc, "_world_digest", lambda: None)
+    assert fc.rebuild(("effective",), auto=True) == 0
+    assert "could not be compared" in (sd / "session-note.txt").read_text(encoding="utf-8")
+
+
+def test_a_basex_stamp_taken_after_a_moved_build_is_revoked(sd, monkeypatch, tmp_path, capsys):
+    """BaseX stamps at the END of its build, so it reads FRESH over a moved world. Its readers (ask.py) look
+    at the coverage file, not at x4fresh, so the correction has to land THERE."""
+    (tmp_path / "bx" / "basex").mkdir(parents=True)
+    cov = tmp_path / "bx" / "basex" / "coverage-x4eff.json"
+    cov.write_text(json.dumps({"status": "complete", "fingerprint": {"content": "new", "engine": "e"}}), encoding="utf-8")
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path / "bx")
+
+    def reads_its_stamp():
+        data = json.loads(cov.read_text(encoding="utf-8"))
+        ok = data["fingerprint"]["content"] == "new"
+        return fc.Status("x4eff", "FRESH") if ok else fc.Status("x4eff", "STALE", ["content changed"])
+    built = _world(monkeypatch, {n: FRESH(n) for n in fc.ORDER}, {n: FRESH(n) for n in fc.ORDER})
+    monkeypatch.setitem(fc.CHECKS, "x4eff", lambda: fc.Status("x4eff", "STALE", ["old"]) if "x4eff" not in built
+                        else reads_its_stamp())
+    _fake_builder(monkeypatch, built, "pass")
+    _moving_world(monkeypatch, "a", "b")
+    assert fc.rebuild(("x4eff",)) == 1
+    out = capsys.readouterr().out
+    assert "x4eff: FAILED rc 0, now STALE" in out and "MOVED" in out
+    data = json.loads(cov.read_text(encoding="utf-8"))
+    assert data["status"] == "complete", "every other key of the coverage report must survive"
+    assert data["fingerprint"]["content"] == fc.MOVED_STAMP
+
+
+def test_world_digest_is_a_non_answer_when_the_roots_are_unknown(monkeypatch):
+    monkeypatch.setattr(fc._merge, "Config", lambda *a, **k: object())
+    monkeypatch.setattr(fc._effective, "_ext_root", lambda cfg: None)
+    monkeypatch.setattr(fc._freshness, "fingerprint", lambda *a, **k: {"content": None, "engine": "e"})
+    assert fc._world_digest() is None
+    monkeypatch.setattr(fc._freshness, "fingerprint", lambda *a, **k: {"content": "c", "engine": "e"})
+    assert fc._world_digest() == "c/e"
+
+    def boom(*a, **k):
+        raise OSError("gone")
+    monkeypatch.setattr(fc._freshness, "fingerprint", boom)
+    assert fc._world_digest() is None
+
+
+# --------------------------------------------------------------------------- accepted means EVERY warning is accepted
+
+def _accepted_rebuild(sd, monkeypatch, code):
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=_lossy(EIGHT)))
+    _fake_builder(monkeypatch, built, code)
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "accepted-losses.json").write_text(json.dumps({"effective": {"keys": sorted(EIGHT), "when": "d"}}))
+    assert fc.rebuild(auto=True) == 0
+    return (sd / "session-note.txt").read_text(encoding="utf-8")
+
+
+def test_a_new_warning_after_an_accept_reaches_the_note(sd, monkeypatch):
+    note = _accepted_rebuild(sd, monkeypatch, "print('  WARNING: a brand new kind of loss')")
+    assert "WARNING: a brand new kind of loss" in note
+    assert "BUILT WITH 8 DROPS" in note and "accepted d" not in note.splitlines()[1]
+
+
+@pytest.mark.parametrize("line", ["  WARNING: 8 overlay(s) could not be read and were left OUT of it",
+                                  "  skipped 8 unparseable file(s); e.g. t/0001-l044.xml",
+                                  "  WARNING: 8 property subtree(s) hit the depth-64 guard and were NOT indexed",
+                                  "  NOT INDEXED - 8 file(s) would not parse; any answer excludes them"])
+def test_a_warning_that_only_summarises_the_accepted_loss_stays_quiet(sd, monkeypatch, line):
+    """Each twin keeps one summary line in the allowed set: without it, an accept could never quiet a build."""
+    assert _accepted_rebuild(sd, monkeypatch, f"print({line!r})") == ""
+
+
+def test_a_summary_line_is_only_quiet_while_the_loss_set_still_matches(sd, monkeypatch):
+    """The line alone never quiets anything: a changed key set is news even with the same wording."""
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=_lossy(EIGHT + ["dropped new <- m"])))
+    _fake_builder(monkeypatch, built, "print('  WARNING: 9 overlay(s) could not be read')")
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "accepted-losses.json").write_text(json.dumps({"effective": {"keys": sorted(EIGHT), "when": "d"}}))
+    assert fc.rebuild(auto=True) == 0
+    assert "BUILT WITH 9 DROPS" in (sd / "session-note.txt").read_text(encoding="utf-8")
+
+
+def test_truncated_property_subtrees_count_as_a_loss_of_the_store(tmp_path, monkeypatch):
+    db = _store(tmp_path, truncated_props=12, truncated_prop_samples=json_list(["a.xml: x.y", "b.xml: z"]),
+                loss_keys=json_list(["truncated a.xml: x.y", "truncated b.xml: z"]))
+    monkeypatch.setattr(fc._effective, "effective_db", lambda: db)
+    s = fc._status_effective()
+    assert s.incomplete == 12
+    assert s.notes[0].startswith("12 property subtree(s)")
+    assert "  - a.xml" in s.notes
+    assert s.loss_keys == ["truncated a.xml: x.y", "truncated b.xml: z"]
+
+
+def test_a_store_with_no_truncation_key_has_no_truncation_loss(tmp_path, monkeypatch):
+    """An older store: this key absent reads 0, as the two older loss keys do (its engine axis is stale anyway)."""
+    monkeypatch.setattr(fc._effective, "effective_db", lambda: _store(tmp_path))
+    assert fc._status_effective().incomplete == 0
+
+
+# --------------------------------------------------------------------------- rebuild's exit code (review T3)
+
+def test_a_deferred_rebuild_by_hand_is_not_a_success(sd, monkeypatch, capsys):
+    before = {n: STALE(n) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    monkeypatch.setattr(fc, "_deferred", lambda auto: "engine sources have uncommitted changes: x")
+    _fake_builder(monkeypatch, built, "pass")
+    assert fc.rebuild(("effective",)) == 5
+    assert not built
+    assert fc.rebuild(("effective",), auto=True) == 0, "twin: --auto keeps 0, the note carries it"
+    assert "DEFERRED" in capsys.readouterr().out
+
+
+def test_a_deferral_with_everything_requested_fresh_is_still_a_success(sd, monkeypatch):
+    before = {n: FRESH(n) for n in fc.ORDER}
+    _world(monkeypatch, before, before)
+    monkeypatch.setattr(fc, "_deferred", lambda auto: "a game is running")
+    assert fc.rebuild(("effective",)) == 0
+
+
+def test_a_mutation_gate_skip_by_hand_is_not_a_success(sd, monkeypatch, capsys):
+    before = {n: (STALE(n) if n == "xref" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "pass")
+    monkeypatch.setattr(fc._mutation, "active", lambda: Path("marker"))
+    assert fc.rebuild(("xref",)) == 5
+    assert not built and "SKIPPED" in capsys.readouterr().out
+    assert fc.rebuild(("xref",), auto=True) == 0
+
+
+def test_only_the_requested_artifacts_decide_the_exit_code(sd, monkeypatch):
+    before = {n: (STALE(n) if n == "x4eff" else FRESH(n)) for n in fc.ORDER}
+    _world(monkeypatch, before, before)
+    assert fc.rebuild(("effective",)) == 0
+    assert fc.rebuild(("x4eff",)) != 0
+
+
+def test_a_builder_failure_stays_rc_1_by_hand_and_under_auto(sd, monkeypatch):
+    before = {n: (STALE(n) if n == "xref" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "import sys; sys.exit(1)")
+    assert fc.rebuild(("xref",)) == 1
+    (sd / "last-failures.json").write_text("{}", encoding="utf-8")   # else --auto rightly does not retry it
+    assert fc.rebuild(("xref",), auto=True) == 1
+
+
+# --------------------------------------------------------------------------- the note cannot read "fine" by accident (T4)
+
+def test_a_run_that_dies_leaves_did_not_complete_never_an_empty_note(sd, monkeypatch):
+    def dies(*a, **k):
+        raise RuntimeError("killed in the middle")
+    monkeypatch.setattr(fc, "_rebuild_locked", dies)
+    note = sd / "session-note.txt"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("", encoding="utf-8")                 # the previous run was clean
+    with pytest.raises(RuntimeError):
+        fc.rebuild(auto=True)
+    assert note.read_text(encoding="utf-8").startswith(fc.NOTE_PENDING)
+
+
+def test_a_run_that_finishes_overwrites_the_pending_note(sd, monkeypatch):
+    before = {n: FRESH(n) for n in fc.ORDER}
+    _world(monkeypatch, before, before)
+    assert fc.rebuild(auto=True) == 0
+    assert (sd / "session-note.txt").read_text(encoding="utf-8") == ""
+
+
+def test_the_pending_note_is_on_disk_while_the_build_runs(sd, monkeypatch):
+    seen = []
+    real = fc._rebuild_locked
+
+    def spy(sd_, targets, auto, note, **k):
+        seen.append(note.read_text(encoding="utf-8"))
+        return real(sd_, targets, auto, note, **k)
+    monkeypatch.setattr(fc, "_rebuild_locked", spy)
+    before = {n: FRESH(n) for n in fc.ORDER}
+    _world(monkeypatch, before, before)
+    fc.rebuild(auto=True)
+    assert seen and seen[0].startswith(fc.NOTE_PENDING)
+
+
+def test_a_rebuild_by_hand_never_touches_the_note(sd, monkeypatch):
+    before = {n: FRESH(n) for n in fc.ORDER}
+    _world(monkeypatch, before, before)
+    note = sd / "session-note.txt"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("OLD", encoding="utf-8")
+    assert fc.rebuild() == 0
+    assert note.read_text(encoding="utf-8") == "OLD"
+
+
+@pytest.mark.parametrize("memo", ['["not a dict"]', '"text"', '7', 'null', '{"effective": "not a dict"}',
+                                  '{"effective": ["x"]}', '{broken'])
+def test_a_malformed_memo_means_nothing_remembered_never_a_crash(sd, monkeypatch, memo):
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=FRESH("effective")))
+    _fake_builder(monkeypatch, built, "pass")
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "last-failures.json").write_text(memo, encoding="utf-8")
+    assert fc.rebuild(auto=True) == 0
+    assert "effective" in built, "the build was not attempted"
+
+
+@pytest.mark.parametrize("data", ['["x"]', '{"effective": "not a dict"}', '{"effective": 7}'])
+def test_a_malformed_accept_list_accepts_nothing_never_a_crash(sd, monkeypatch, data):
+    monkeypatch.setattr(fc, "CHECKS", dict({n: FRESH(n) for n in fc.ORDER}, effective=_lossy(EIGHT)))
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "accepted-losses.json").write_text(data, encoding="utf-8")
+    assert fc.main(["status"]) == 3
+
+
+# --------------------------------------------------------------------------- NOT-BUILT (T5)
+
+def _no_basex(reason="java is not on PATH."):
+    return lambda n: (lambda: fc.Status(n, fc.NOT_BUILT, [f"never built here, and it cannot be: {reason}"]))
+
+
+def _public_machine(monkeypatch):
+    nb = _no_basex()
+    return {n: (nb(n) if n in ("x4raw", "x4eff") else FRESH(n)) for n in fc.ORDER}
+
+
+def test_status_basex_never_built_without_java_is_not_built(tmp_path, monkeypatch):
+    (tmp_path / "staleness.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
+    monkeypatch.setattr(fc, "_basex_unbuildable", lambda: "java is not on PATH.")
+    s = fc._status_basex("x4raw")
+    assert s.state == fc.NOT_BUILT and "java is not on PATH" in " ".join(s.reasons)
+
+
+def test_status_basex_never_built_with_a_toolchain_is_still_missing(tmp_path, monkeypatch):
+    """Twin: this machine CAN build it, so `x4fresh rebuild` is the right advice and it is not current."""
+    (tmp_path / "staleness.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
+    monkeypatch.setattr(fc, "_basex_unbuildable", lambda: None)
+    assert fc._status_basex("x4raw").state == "MISSING"
+
+
+def test_status_basex_once_built_is_never_not_built(tmp_path, monkeypatch):
+    """Twin: the toolchain going away does not make an existing index stop being judged."""
+    (tmp_path / "staleness.py").write_text("raise RuntimeError('judged')", encoding="utf-8")
+    (tmp_path / "basex").mkdir()
+    (tmp_path / "basex" / "coverage-x4raw.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
+    monkeypatch.setattr(fc, "_basex_unbuildable", lambda: "java is not on PATH.")
+    assert fc._status_basex("x4raw").state == "UNKNOWN"
+
+
+def test_status_basex_with_no_tooling_at_all_is_not_built(tmp_path, monkeypatch):
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path / "nothing-here")
+    s = fc._status_basex("x4eff")
+    assert s.state == fc.NOT_BUILT and "no BaseX tooling" in " ".join(s.reasons)
+
+
+def test_unbuildable_comes_from_the_real_preflight(tmp_path, monkeypatch):
+    """The real preflight.py, not a stub: an empty BaseX folder has no jar on any machine."""
+    src = fc.BASEX_ROOT / "preflight.py"
+    if not src.is_file():
+        pytest.skip("no tools/basex/preflight.py in this layout")
+    (tmp_path / "preflight.py").write_bytes(src.read_bytes())
+    (tmp_path / "basex").mkdir()
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
+    why = fc._basex_unbuildable()
+    assert why and "\n" not in why and ("java" in why or "BaseX.jar" in why)
+
+
+def test_a_preflight_that_cannot_run_is_not_read_as_unbuildable(tmp_path, monkeypatch):
+    """A non-answer about the toolchain keeps MISSING: claiming "cannot be built" would be a guess."""
+    (tmp_path / "preflight.py").write_text("raise RuntimeError('broken')", encoding="utf-8")
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
+    assert fc._basex_unbuildable() is None
+
+
+def test_render_does_not_call_not_built_not_current_or_suggest_a_rebuild(monkeypatch):
+    out = fc.render([fc.Status("effective", "FRESH"), fc.Status("xref", "FRESH"),
+                     fc.Status("x4raw", fc.NOT_BUILT, ["r"]), fc.Status("x4eff", fc.NOT_BUILT, ["r"])])
+    assert out.splitlines()[0].startswith("x4fresh: all 2 artifact(s) FRESH; not built on this machine: x4raw, x4eff")
+    assert "NOT CURRENT" not in out and "x4fresh rebuild" not in out
+    twin = fc.render([fc.Status("effective", "STALE", ["moved"]), fc.Status("x4raw", fc.NOT_BUILT, ["r"])])
+    assert twin.splitlines()[0] == "x4fresh: NOT CURRENT: effective STALE -- run `x4fresh rebuild`"
+
+
+def test_status_exit_0_on_a_public_machine_5_when_asked_for_the_unbuilt_one(sd, monkeypatch, capsys):
+    monkeypatch.setattr(fc, "CHECKS", _public_machine(monkeypatch))
+    assert fc.main(["status"]) == 0
+    assert fc.main(["status", "--only", "x4raw"]) == 5
+    assert fc.main(["status", "--only", "effective"]) == 0
+
+
+def test_rebuild_never_runs_a_builder_that_cannot_succeed(sd, monkeypatch, capsys):
+    checks = _public_machine(monkeypatch)
+    built = _world(monkeypatch, checks, checks)
+    _fake_builder(monkeypatch, built, "pass")
+    assert fc.main(["rebuild"]) == 0
+    assert not built
+    capsys.readouterr()
+    assert fc.main(["rebuild", "--only", "x4raw"]) == 5, "it was asked for by name and is not there"
+    assert not built
+    assert "x4raw: NOT BUILT" in capsys.readouterr().out
+
+
+def test_the_session_note_names_not_built_once(sd, monkeypatch):
+    checks = _public_machine(monkeypatch)
+    _world(monkeypatch, checks, checks)
+    assert fc.rebuild(auto=True) == 0
+    first = (sd / "session-note.txt").read_text(encoding="utf-8")
+    assert "x4raw" in first and "x4eff" in first and "NOT CURRENT" not in first
+    assert "not rebuilt unattended" not in first
+    assert fc.rebuild(auto=True) == 0
+    assert (sd / "session-note.txt").read_text(encoding="utf-8") == "", "reported twice"
+
+
+def test_a_later_problem_note_does_not_repeat_the_not_built_rows(sd, monkeypatch):
+    checks = _public_machine(monkeypatch)
+    _world(monkeypatch, checks, checks)
+    assert fc.rebuild(auto=True) == 0
+    _world(monkeypatch, dict(checks, xref=STALE("xref")), dict(checks, xref=STALE("xref")))
+    monkeypatch.setattr(fc, "_deferred", lambda auto: "a game is running")
+    assert fc.rebuild(auto=True) == 0
+    note = (sd / "session-note.txt").read_text(encoding="utf-8")
+    assert "xref STALE" in note and "x4raw" not in note
+
+
+def test_not_built_is_reported_again_after_it_was_built_and_lost(sd, monkeypatch):
+    checks = _public_machine(monkeypatch)
+    _world(monkeypatch, checks, checks)
+    fc.rebuild(auto=True)
+    fresh = {n: FRESH(n) for n in fc.ORDER}
+    _world(monkeypatch, fresh, fresh)
+    fc.rebuild(auto=True)
+    _world(monkeypatch, checks, checks)
+    fc.rebuild(auto=True)
+    assert "x4raw" in (sd / "session-note.txt").read_text(encoding="utf-8")
+
+
+def test_accept_is_not_refused_by_an_artifact_that_cannot_exist_here(sd, monkeypatch, capsys):
+    monkeypatch.setattr(fc, "CHECKS", _public_machine(monkeypatch))
+    assert fc.main(["accept"]) == 0
+    assert "x4raw: nothing to accept" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- the failure memo names its inputs (T10)
+
+CONSTANT = lambda n: (lambda: fc.Status(n, "MISSING", [f"no store at /x/{n}"]))   # noqa: E731
+
+
+def test_a_constant_reason_with_moved_inputs_is_retried(sd, monkeypatch):
+    """`MISSING` carries no digest, so the reason alone stayed identical and it was never retried."""
+    before = {n: (CONSTANT(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "import sys; sys.exit(1)")
+    assert fc.rebuild(auto=True) == 1
+    built.clear()
+    monkeypatch.setattr(fc, "_world_digest", lambda: "moved")
+    assert fc.rebuild(auto=True) == 1
+    assert built == {"effective"}, "a mod changed and the build was still not retried"
+
+
+def test_a_constant_reason_with_the_same_inputs_is_not_retried_the_twin(sd, monkeypatch):
+    before = {n: (CONSTANT(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "import sys; sys.exit(1)")
+    assert fc.rebuild(auto=True) == 1
+    built.clear()
+    assert fc.rebuild(auto=True) == 0
+    assert not built
+
+
+def test_inputs_that_cannot_be_compared_are_not_called_the_same_inputs(sd, monkeypatch):
+    monkeypatch.setattr(fc, "_world_digest", lambda: None)
+    before = {n: (CONSTANT(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "import sys; sys.exit(1)")
+    fc.rebuild(auto=True)
+    fc.rebuild(auto=True)
+    note = (sd / "session-note.txt").read_text(encoding="utf-8")
+    assert "NOT RETRIED" in note and "same inputs" not in note and "could not be compared" in note
+
+
+def test_an_artifact_seen_fresh_clears_its_memo(sd, monkeypatch):
+    before = {n: (CONSTANT(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "import sys; sys.exit(1)")
+    fc.rebuild(auto=True)
+    fresh = {n: FRESH(n) for n in fc.ORDER}
+    _world(monkeypatch, fresh, fresh)
+    fc.rebuild(auto=True)
+    assert "effective" not in json.loads((sd / "last-failures.json").read_text(encoding="utf-8"))

@@ -119,3 +119,76 @@ def test_a_store_without_the_text_table_says_rebuild_never_zero(db, capsys):
     con.close()
     assert _effectivecli.main(["--db", str(db), "find", "m0"]) == 2
     assert "rebuild" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- release review 4.1.0: T13
+
+def _insert_unnamed(db, kind, n=3):
+    con = sqlite3.connect(db)
+    for i in range(n):
+        con.execute("INSERT INTO entities VALUES(?,?,?,?,?,?,?)",
+                    (9000 + i, kind, f"thing_{i}", "k", "libraries/ships.xml", "base", None))
+    con.commit()
+    con.close()
+
+
+def _duplicate_entity(db, name, vpath):
+    """A second entity with the same (kind, name), as the live store has 34 macros with."""
+    con = sqlite3.connect(db)
+    eid, kind, klass, origin = con.execute("SELECT id, kind, klass, origin FROM entities WHERE name=?", (name,)).fetchone()
+    con.execute("INSERT INTO entities VALUES(?,?,?,?,?,?,?)", (8000, kind, name, klass, vpath, origin, None))
+    con.execute("INSERT INTO attrs SELECT 8000, prop, value, value_num, origin, chain FROM attrs WHERE entity_id=?", (eid,))
+    con.commit()
+    con.close()
+
+
+def test_a_kind_with_no_names_points_at_the_kinds_that_have_them(db, capsys):
+    """`find X --kind ship` over a kind that carries no name property searched nothing and said "0 match(es)
+    among 0 named", exit 1: an absence, for what was a non-answer."""
+    _insert_unnamed(db, "ship")
+    assert _effectivecli.main(["--db", str(db), "find", "omega", "--kind", "ship"]) == 3
+    err = capsys.readouterr().err
+    assert "0 of 3 ship entit(ies) carry a name" in err
+    assert "--kind macro" in err and "macro (4)" in err
+
+
+def test_a_class_filter_that_matches_nothing_is_the_same_non_answer(db, capsys):
+    """Twin of the kind clause."""
+    assert _effectivecli.main(["--db", str(db), "find", "omega", "--class", "no_such_class"]) == 3
+    err = capsys.readouterr().err
+    assert "0 of 0 macro class no_such_class entit(ies)" in err
+
+
+def test_a_real_zero_over_named_entities_stays_an_absence_rc_1(db, capsys):
+    """Twin: names were searched and none matched. That IS an answer, with its denominator."""
+    assert _effectivecli.main(["--db", str(db), "find", "zzzz-nothing"]) == 1
+    err = capsys.readouterr().err
+    assert "0 match(es)" in err and "among 4 named" in err and "carry a name" not in err
+
+
+def test_a_kind_where_no_kind_has_names_says_that(db, capsys):
+    con = sqlite3.connect(db)
+    con.execute("DELETE FROM attrs")
+    con.commit()
+    con.close()
+    assert _effectivecli.main(["--db", str(db), "find", "omega"]) == 3
+    assert "no kind in this store carries a name" in capsys.readouterr().err
+
+
+def test_entities_sharing_an_id_are_each_listed_and_counted(db, capsys):
+    """They were keyed by name, so a second entity vanished from the rows and from the denominator."""
+    _duplicate_entity(db, "ship_renamed_macro", "assets/other/ship_renamed_macro.xml")
+    assert _effectivecli.main(["--db", str(db), "find", "shiny"]) == 0
+    out, err = capsys.readouterr()
+    rows = [ln.split("\t") for ln in out.splitlines() if ln.strip()]
+    assert [r[0] for r in rows] == ["ship_renamed_macro", "ship_renamed_macro"]
+    assert "assets/other/ship_renamed_macro.xml" in out
+    assert all("shares this id" in r[-1] for r in rows)
+    assert "2 match(es)" in err and "among 5 named" in err and "1 id(s) are on more than one entity" in err
+
+
+def test_a_unique_id_carries_no_duplicate_noise(db, capsys):
+    """Twin; the exact row shape is pinned by test_a_match_on_the_internal_id_still_shows_the_in_game_name."""
+    assert _effectivecli.main(["--db", str(db), "find", "shiny"]) == 0
+    out, err = capsys.readouterr()
+    assert "shares this id" not in out and "more than one entity" not in err

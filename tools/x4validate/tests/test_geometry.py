@@ -453,3 +453,32 @@ def test_cli_supported_and_partial_geometry_contract(tmp_path, monkeypatch, caps
     assert len(row["shared_exact_mesh_payloads"]) == 1
     assert row["verdict"] == "unresolved"
     assert set(report["dependencies"]) == {"numpy", "scipy", "trimesh", "rtree"}
+
+
+@pytest.mark.parametrize("cov,rc", [
+    (dict(total=4, scored=1, partial=0, unresolved=3), 3),    # mostly unresolved: the review's RED
+    (dict(total=2, scored=1, partial=0, unresolved=1), 3),    # half is not most
+    (dict(total=3, scored=2, partial=0, unresolved=1), 0),
+    (dict(total=3, scored=0, partial=2, unresolved=1), 0),    # partial counts as answered, with its own label
+    (dict(total=1, scored=1, partial=0, unresolved=0), 0),
+    (dict(total=1, scored=0, partial=0, unresolved=1), 3),
+    (dict(total=0, scored=0, partial=0, unresolved=0), 3),
+])
+def test_compare_exit_needs_most_pairs_answered(cov, rc):
+    from x4validate import _geometrycli
+    assert _geometrycli.compare_exit(cov) == rc
+
+
+@pytest.mark.parametrize("missing,rc", [(3, 3), (1, 3), (0, 0)])
+def test_cli_exit_follows_the_share_of_pairs_answered(tmp_path, monkeypatch, capsys, missing, rc):
+    """The real command, not just the helper: one good pair among `missing` that cannot resolve."""
+    world, put = fixture(tmp_path)
+    from x4validate import _effective
+    monkeypatch.setattr(_effective, "active_mods", lambda scan: [])
+    args = ["--reference", str(tmp_path), "--ext-dir", str(tmp_path), "--geometry", "assets/ship_macro.xml",
+            "--geometry-samples", "128", "--geometry-json", "--geometry-against", "assets/ship_macro.xml"]
+    for i in range(missing):
+        args += ["--geometry-against", f"assets/missing_{i}.xml"]
+    assert _similarity.main(args) == rc
+    report = json.loads(capsys.readouterr().out)
+    assert report["coverage"]["total"] == missing + 1 and report["coverage"]["unresolved"] == missing

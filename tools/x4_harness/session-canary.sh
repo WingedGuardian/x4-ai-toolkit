@@ -146,7 +146,16 @@ fi
 # previous run's note (empty when everything was fresh), then start `x4fresh rebuild --auto` DETACHED. All the
 # checks (lock, a game running, a mutation gate, a repeat failure) run inside it, never in this hook's budget.
 XF_NOTE="$HOOK_DIR/../x4fresh-session.txt"
-[ -s "$XF_NOTE" ] && cat "$XF_NOTE"
+if [ -s "$XF_NOTE" ]; then
+  cat "$XF_NOTE"
+  # Nothing will refresh it while a launch switch is off: say so, or an old run's note reads like this session's.
+  for _x4_xf_switch in X4_FRESH_AUTO X4_HOUSEKEEP_SWEEP; do
+    eval "_x4_xf_val=\${$_x4_xf_switch:-}"
+    case "$_x4_xf_val" in
+      [Oo][Ff][Ff]) echo "[x4 fresh] that note is from an earlier run: $_x4_xf_switch=off stops it being refreshed. Run \`x4fresh status\` for now." ;;
+    esac
+  done
+fi
 XF=""
 [ -f "${X4_TOOLKIT:-}/scripts/x4fresh_session.py" ] && XF="$X4_TOOLKIT/scripts/x4fresh_session.py"
 if [ -n "$XF" ] && [ -n "$_x4_hkpy" ] && [ "${X4_HOUSEKEEP_SWEEP:-}" != off ] && [ "${X4_FRESH_AUTO:-}" != off ] \

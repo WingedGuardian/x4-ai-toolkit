@@ -20,8 +20,8 @@ macros are not candidates. More than `--geometry-limit` candidates
 inventory entries remain unresolved rather than resolving against an active
 mod's same-named definition. Unreadable inventory files and mods the engine does
 not load are named separately (stderr in text mode, `unreadable_inventory` and
-`notes` in JSON). A run that scores no pair at all, not even partially, exits 3: a
-non-answer, never an OK.
+`notes` in JSON). A run that answers no more than half of its pairs, even partially,
+exits 3 and says how many it answered: a non-answer about the rest, never an OK.
 
 `--geometry-overlay DIR` appends an isolated candidate **last**. This is an
 explicit hypothetical model, not its predicted eventual installation order.
