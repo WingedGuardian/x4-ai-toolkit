@@ -32,10 +32,10 @@ Run a CLI from `$CLAUDE_PROJECT_DIR/tools/x4validate` as `uv run <cli> ...`. The
 | | `dump` | live effective XML for ANY vpath (incl. md/, aiscripts/) |
 | | `sql` | read-only SELECT against the store |
 | | `coverage` | what this store DOES and does not index (so a negative can carry its denominator) |
-| | `find` | entities whose in-game NAME contains TEXT (resolves {page,id} to English) |
+| | `find` | entities whose in-game NAME contains TEXT (resolves {page,id} to English); exit 0 a match, 1 none among the names searched, 3 nothing to search |
 | **`x4fresh`** | | x4fresh -- is every derived artifact current, and rebuild the ones that are not. |
 | | `status` | one verdict per artifact; exit 0 all FRESH and complete, 3 all FRESH but some known INCOMPLETE (dropped/unparsed input), 5 otherwise |
-| | `rebuild` | rebuild what is not FRESH, one at a time, under a lock |
+| | `rebuild` | rebuild what is not FRESH, one at a time, under a lock; exit 0 every requested artifact is FRESH, 1 a builder failed, 5 still not FRESH (deferred, lock held, gate started); --auto: 0 unless a builder failed |
 | | `accept` | record each artifact's CURRENT losses (dropped/unparsed input) as known; the session note then stays quiet until that set changes |
 | **`x4live`** | | Read what the running engine saw, out of the profile's uidata.xml, and diff it against our model. |
 | | `dump` | what the probe captured, with its denominators |
@@ -66,7 +66,7 @@ Run a CLI from `$CLAUDE_PROJECT_DIR/tools/x4validate` as `uv run <cli> ...`. The
 | | `mark` | mark a mod as custom-edited (for /x4-update-mod) |
 | | `changed` | localise a moved content fingerprint: WHICH mod changed, and how |
 | | `snapshot` | record the current mod vector as a cheap baseline (~0.1s), for the gap between expensive rebuilds |
-| | `downloads` | read the manifests inside downloaded archives and compare them with what is installed: newer, same, older, not installed. Read-only |
+| | `downloads` | read the manifests inside downloaded archives and compare them with what is installed: newer, same, older, not installed. Read-only. Exit 3 when anything was unreadable or a manifest unusable |
 | **`x4save`** | | Read an X4 savegame: what is baked into it, what it references that the live tree no longer defines, and its MD variables. |
 | | `info` | header: build, playtime, and the SAVE-BAKED extensions |
 | | `check` | macro references the live tree no longer defines |

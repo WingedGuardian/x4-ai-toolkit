@@ -11,7 +11,9 @@ positional arguments:
   {status,rebuild,accept}
     status              one verdict per artifact; exit 0 all FRESH and complete, 3 all FRESH but
                         some known INCOMPLETE (dropped/unparsed input), 5 otherwise
-    rebuild             rebuild what is not FRESH, one at a time, under a lock
+    rebuild             rebuild what is not FRESH, one at a time, under a lock; exit 0 every
+                        requested artifact is FRESH, 1 a builder failed, 5 still not FRESH
+                        (deferred, lock held, gate started); --auto: 0 unless a builder failed
     accept              record each artifact's CURRENT losses (dropped/unparsed input) as known;
                         the session note then stays quiet until that set changes
 
@@ -46,8 +48,9 @@ options:
   --auto                unattended mode (session start): effective + xref only, defers while a
                         listed process runs, never retries the same failure
   --note NOTE           with --auto: write the outcome here for the next session start to print
-                        (empty when everything is fresh); default <registry>/x4fresh/session-
-                        note.txt
+                        (reads 'did not complete' until the run reports; empty only when
+                        everything this machine can build is fresh); default
+                        <registry>/x4fresh/session-note.txt
 ```
 
 ## `x4fresh accept`

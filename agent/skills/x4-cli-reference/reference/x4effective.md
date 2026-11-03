@@ -20,7 +20,8 @@ positional arguments:
     sql                 read-only SELECT against the store
     coverage            what this store DOES and does not index (so a negative can carry its
                         denominator)
-    find                entities whose in-game NAME contains TEXT (resolves {page,id} to English)
+    find                entities whose in-game NAME contains TEXT (resolves {page,id} to English);
+                        exit 0 a match, 1 none among the names searched, 3 nothing to search
 
 options:
   -h, --help            show this help message and exit
