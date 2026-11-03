@@ -30,6 +30,20 @@ def arguments(parser):
                         help="refuse inventories larger than N (default 32, maximum 256); never silently shortlist")
 
 
+def compare_exit(coverage: dict) -> int:
+    """0 only when most pairs got an answer, partial ones included. A run scoring one pair of thirty is not an
+    OK about the thirty: a comparison left mostly unresolved is the toolkit's exit-3 non-answer."""
+    answered = coverage["scored"] + coverage["partial"]
+    return 0 if answered and answered * 2 > coverage["total"] else 3
+
+
+def compare_exit(coverage: dict) -> int:
+    """0 only when most pairs got an answer, partial ones included. A run scoring one pair of thirty is not an
+    OK about the thirty: a comparison left mostly unresolved is the toolkit's exit-3 non-answer."""
+    answered = coverage["scored"] + coverage["partial"]
+    return 0 if answered and answered * 2 > coverage["total"] else 3
+
+
 def run(args, reference, ext):
     started = time.perf_counter()
     try:
@@ -188,10 +202,15 @@ def run(args, reference, ext):
                 print(f"\n  NOT COMPARED — {len(unreadable)} macro file(s) would not parse:", file=sys.stderr)
                 for u in unreadable:
                     print(f"   - {u}", file=sys.stderr)
-        # 4. Nothing scored is a non-answer, never an OK (the toolkit's exit-3 contract).
+        # 4. Nothing scored, or most of it unresolved, is a non-answer, never an OK (the exit-3 contract).
         if args.geometry_audit:
             return 0 if subject.stages.get("audit") == "passed" and subject.stages.get("verification") == "passed" else 3
-        return 0 if report["coverage"]["scored"] or report["coverage"]["partial"] else 3
+        code = compare_exit(report["coverage"])
+        if code:
+            cov = report["coverage"]
+            print(f"MOSTLY UNRESOLVED: {cov['scored'] + cov['partial']} of {cov['total']} pair(s) got an answer: "
+                  "this does not cover the candidates asked about.", file=sys.stderr)
+        return code
     except (GeometryError, OSError, ValueError) as exc:
         print(f"geometry unresolved: {exc}", file=sys.stderr)
         return 2
