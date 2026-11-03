@@ -449,7 +449,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F344 | The save sentinel decides whether the game wrote a change from the signs of a session (X4 running, or an exit that shows); it cannot separate writers inside the window, and a crashed session leaves no exit | **SCOPE LIMIT (stamps measured on four profiles; no session run)** · IN-ARC | the last exit of 4 profiles and one whole-profile copy, read by stat; tests drive the rest with fabricated timestamps | stated in the CHANGELOG; an exit needs `uidata.xml` moved, an exit-set file within 30 s of it, and the profile not rewritten whole; more than 10 changes in a folder always raise the user |
 | F345 | `bin_refusal` judged the drive letter of the absolute path, so a path under a junction or symlink to a network share looked recyclable and Windows' shell then destroys such files silently | **DEFECT (measured)** · IN-ARC | release review: an ancestor junction to a UNC path passed; fix lane: real junctions, 6 classes of path, 2 arms each | FIXED 2026-11-03 - every existing component is checked for a link and `realpath` has the last word |
 | F346 | Plain `x4refguard status` samples the tree, so after a killed `remove` it can read `protected` while about 2,000 of 40,006 objects have lost their deny | **OPEN LIMIT (measured)** · PRE-ARC | killed a real `icacls` on a 40,006-object tree: a killed `remove` left the root denied and a sample read `protected` | open by design: `--full` walks every object; `apply` and `remove` always verify the full walk and re-running finishes an interrupted one |
-| F347 | The hook mutation gate refused on 5 stale anchors, so the mutants added with the carrier-reading commits never ran | **DEFECT (measured)** · IN-ARC | release review: 5 of 344 anchors stale across `85442321`, `f9435d4b`, `158f8a18`; first run of the new rows: 21 of 150 survived | FIXED 2026-11-03 - anchors re-cut; `--check-anchors` runs without trials in the unit suite and the pre-push gate |
+| F347 | The hook mutation gate refused on 5 stale anchors, so the mutants added with the carrier-reading commits never ran | **DEFECT (measured)** · IN-ARC | release review: 5 of 344 anchors stale across `85442321`, `f9435d4b`, `158f8a18`; first run of the new rows: 21 of 150 survived (the review's count); at this commit the table holds 445 anchors, all of which `--check-anchors` finds exactly once | FIXED 2026-11-03 - anchors re-cut; `--check-anchors` runs without trials in the unit suite and the pre-push gate |
 | F348 | The guards read `$X4_EXTENSIONS` and an assigned `$env:` as additive readings; several spellings of both are not read | **OPEN LIMIT (measured)** · IN-ARC | replay: 45 PowerShell commands that assign `$env:` changed 0; 620 others, 155 sampled, changed 0 | open; see entry |
 | F349 | The installed toolkit's own test suite was never run in CI: on a fresh install it had 74 errors and 64 failures while SETUP_PROMPT.txt promised none | **DEFECT (measured)** · PRE-ARC | whole suite on a fresh install: 5,821 passed, 64 failed, 74 errors, 534 skipped of 6,493 | FIXED 2026-11-03 - tests read what an install ships or skip with a counted reason; CI gained an installed-copy job |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
@@ -11905,9 +11905,14 @@ commits had never executed. Once they did, 21 of the 150 new rows survived on th
 as an equivalent mutant (`a.ipv4_mapped` survives on Python 3.12.4 and later, so it was removed).
 
 Fix: `b3d0b188` re-cut the five anchors and added `--check-anchors`, which finds a stale anchor with no trial, in the unit
-suite and in the pre-push gate; `385fd6e5` adds mutants for the carrier code that had none; `--only REGEX` runs chosen
-mutants. The fix lane reports 429 unique anchors and a `--only` run of 167 of 167 caught. The hook-mutation trial count
-went from 426 to 511; the lane's estimate is about 52 minutes per shard, which nobody timed.
+suite and in the pre-push gate; `385fd6e5` adds mutants for the carrier code that had none; `adda0609` adds 14 for the
+save-lock ask; `--only REGEX` runs chosen mutants. The fix lane reported a `--only` run of 167 of 167 caught.
+
+COUNTED at this commit (the module imported at the base `d0843965` and here, 2026-11-03): the table went from 344 to 445
+anchors, 102 labels added and 1 dropped (`carrier: a mapped IPv6 address reads as its IPv4 address`, the equivalent mutant described above);
+`verify-hook-tests.py --check-anchors` reports "445 mutant anchors each appear exactly once and name one test". The trial
+population is 529: 445 mutants and a False and a True trial for each of 42 predicates (`len(MUTANTS) + 2 * 42`). An earlier
+draft's "86 added" matches neither count and is withdrawn. The lane's estimate of about 52 minutes per shard was never timed.
 
 RESIDUAL: `ps_translate.ps1` has no mutant table. The lane's one-off trials caught 10 of 10, and a table is not built.
 
