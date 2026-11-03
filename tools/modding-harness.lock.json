@@ -1,7 +1,7 @@
 {
   "v": 1,
   "project": "modding-agent-harness",
-  "revision": "e0851b86bdb3b6fc82e37ce04e274818168e29f7",
+  "revision": "fe88f0ab92162f6fbeaee135d5c6fad713d70980",
   "api_version": 1,
   "files": {
     "tools/modding_harness/LICENSE": "07a5c5e4aac6c4eda67565a716c8f4967dc318abe03098e5dee6a8fa7672d619",
