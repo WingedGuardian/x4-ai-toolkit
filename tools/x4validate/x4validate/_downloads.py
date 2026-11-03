@@ -322,7 +322,11 @@ def cmd_downloads(args) -> int:
         print(f"error: not a folder: {', '.join(missing)}", file=sys.stderr)
         return 2
     installed = list(_registry.mods("installed"))
-    active_ids = {m["id"].lower() for m in _registry.mods("active")}
+    active = _registry.mods("active")
+    active_ids = {m["id"].lower() for m in active}
+    left_out = _registry.dropped_note(active)
+    if left_out:
+        print(f"NOT counted as active (the engine does not load it): {left_out}", file=sys.stderr)
     if not installed:
         print("error: no installed mods were found, so nothing can be compared. "
               "Run `x4validate --paths` to see where the tool is looking.", file=sys.stderr)
