@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from _layout import installed_layout, require_repo
-from codex_testlib import REPO
+from codex_testlib import REPO, assert_policy_refusal
 
 
 @pytest.fixture
@@ -82,6 +82,8 @@ def test_complete_3589_path_action(candidate, forbidden):
     assert elapsed < 40, (elapsed, reply)
     assert reply["result"]["evaluation"] == "evaluated" and not reply["inert"], reply
     assert reply["result"]["decision"] == ("allow" if forbidden is None else "deny"), reply
+    if forbidden is not None:                                           # M10: the policy's deny, not a failure
+        assert_policy_refusal("deny", reply["result"]["reason"], "reference/ is read-only")
     assert reply["result"]["preservation"] == "not_required" and not reply["transactions"]
     assert not (root / "dev").exists(), "a guard check must not execute declared writes"
 
@@ -100,6 +102,10 @@ def test_one_two_save_preservation_and_bulk_refusal(candidate):
         assert reply["result"]["preservation"] == "verified" and reply["transactions"], reply
     three, _ = check(members)
     assert three["result"]["decision"] in ("ask", "deny") and not three["transactions"], three
+    # M10: the refusal must be the POLICY's (3 saves need a typed human approval), not an engine
+    # failure that fails closed and so also reads "deny"
+    assert three["result"]["evaluation"] == "evaluated" and not three["inert"], three
+    assert_policy_refusal(three["result"]["decision"], three["result"]["reason"], "human approval required")
     assert [p.read_bytes() for p in members] == [f"fixture save {i}".encode() for i in range(3)]
 
 
@@ -109,3 +115,17 @@ def test_mixed_actions_keep_existing_policy(candidate):
     forbidden = Path(env["X4_REFERENCE"]) / "forbidden.xml"
     reply, _ = check([allowed, forbidden], ["write", "delete"])
     assert reply["result"]["decision"] == "deny" and not reply["inert"], reply
+    assert reply["result"]["evaluation"] == "evaluated", reply          # M10: judged, not failed closed
+    assert_policy_refusal(reply["result"]["decision"], reply["result"]["reason"], "reference/ is read-only")
+
+
+def test_a_refusal_check_goes_red_on_an_engine_failure_and_on_a_missing_reason():
+    """M10 twin: the helper the deny-expecting tests lean on can fail. A deny wearing an engine
+    failure's reason, a deny with the wrong reason, and a non-refusal are each rejected."""
+    assert_policy_refusal("deny", "BLOCKED: reference/ is read-only", "read-only")
+    for decision, reason in (("deny", "X4 GUARD INERT: could not check read-only"),
+                             ("deny", "something unrelated"), ("allow", "reference/ is read-only")):
+        with pytest.raises(AssertionError):
+            assert_policy_refusal(decision, reason, "read-only")
+    with pytest.raises(AssertionError):
+        assert_policy_refusal("deny", "anything")                      # no needle named: refuses to be vacuous
