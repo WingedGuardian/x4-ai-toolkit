@@ -195,6 +195,8 @@ Command and file guards (the Bash and PowerShell channel judges paths by how the
   the change is reported once access returns, but the user is not raised.
 
 Save locks and the sentinel (locks are off unless you turn them on):
+- The save-store guard resolves each path once per check. A link swapped by another process during that check can turn
+  a deny into an allow. The same race already exists between any check and the command after it.
 - What X4 shows when it tries to overwrite a locked numbered save slot has not been measured.
 - The elevated `unlock` and `off` paths were not run end to end for this release. Try them on a throwaway folder before relying on locks.
 - `save-lock.json` and `save-lock-folders.json` can be deleted by anything that can delete from their parent folder, and a program run through an inline `python -c` is opaque to the guard that asks before the locks change.
