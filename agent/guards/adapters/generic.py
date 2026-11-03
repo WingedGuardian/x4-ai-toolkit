@@ -46,6 +46,69 @@ def judge(calls, qualified, deadline, execution_host=""):
     return worst
 
 
+def save_lock_folders(profile):
+    """The watched save folders, and each folder under a .protect-saves marker that holds saves."""
+    import save_sentinel
+    found = [str(f) for f in profile.save_roots]
+    for top in save_sentinel.marked_folders(ROOT):
+        for folder, _dirs, names in os.walk(top):
+            if any(n.lower().endswith(profile.extensions) for n in names):
+                found.append(folder)
+    return list(dict.fromkeys(found))
+
+
+def save_lock_command(args):
+    """status / on / off / unlock for the optional OS save locks. A save is backed up into the permanent store
+    before it is unlocked, and nothing is unlocked when that backup fails."""
+    import save_sentinel
+    lock = save_policy.core(ROOT, "save_lock")
+    if (args.action == "unlock") != bool(args.target):
+        return {"decision": "refused", "reason": "save-lock unlock takes one save or folder; the others take none"}
+    deadline = time.monotonic() + 40
+    roots = save_policy.read_roots(deadline)
+    profile = save_policy.core(ROOT, "profiles").GameProfile("x4", save_sentinel.save_folders(roots),
+                                                           save_sentinel.EXTENSIONS)
+    switch = save_sentinel.lock_switch(ROOT)
+    try:
+        if args.action == "status":
+            rows = []
+            for folder in save_lock_folders(profile):
+                state = lock.status_map(folder, profile.extensions)
+                rows.append({"folder": folder, "folder_locked": lock.is_locked(folder),
+                             "saves": len(state), "locked": sum(state.values())})
+            return {"enabled": bool(lock.read_config(switch).get("enabled")), "elevated": lock.is_elevated(),
+                    "folders": rows}
+        if args.action == "on":
+            done = lock.turn_on(switch, save_lock_folders(profile), profile.extensions)
+            return {"enabled": True, "folders": [{"folder": f, "locked_now": n, "left_unlocked": s}
+                                                 for f, n, s in done]}
+        if args.action == "off":
+            lifted = lock.turn_off(switch, save_lock_folders(profile), profile.extensions)
+            return {"enabled": False, "locks_lifted": lifted, "note": "the saves are plain files again"}
+        sid = lock.user_sid()
+        target = Path(args.target)
+        if target.is_dir():
+            paths = [target] + [p for p in target.iterdir()
+                                if p.is_file() and p.name.lower().endswith(profile.extensions)]
+            for p in paths:
+                lock.unlock(p, sid)
+            return {"unlocked": [str(p) for p in paths]}
+        if not target.name.lower().endswith(profile.extensions):
+            return {"decision": "refused", "reason": "not a save: " + str(target)}
+
+        def backup(paths):
+            store = save_policy.core(ROOT, "workspace").save_store(ROOT, profile)
+            manifest = store.backup([profile.members(target)], {"profile": "x4", "host": "user-unlock"}, deadline)
+            if not manifest:
+                raise OSError("the backup recorded nothing")
+        done = lock.backup_then_unlock(target, [], sid, backup)
+        return {"backed_up_and_unlocked": [str(p) for p in done]}
+    except lock.Unsupported as e:
+        return {"decision": "unsupported", "reason": str(e)}
+    except (PermissionError, OSError) as e:
+        return {"decision": "refused", "reason": str(e)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -62,6 +125,12 @@ def main(argv=None):
     coverage = sub.add_parser("coverage")
     coverage.add_argument("--session-id", required=True)
     sub.add_parser("save-list")
+    # Optional OS save locks (user ruling 2026-10-31; modding_harness/save_lock.py): Windows refuses any delete or
+    # change of a locked save. `on` refused from an elevated prompt; `off` and `unlock` need one. `off` lifts every
+    # lock: the locks outlast the toolkit and ordinary Windows tools cannot lift them, so run it before removing it.
+    locks = sub.add_parser("save-lock")
+    locks.add_argument("action", choices=("status", "on", "off", "unlock"))
+    locks.add_argument("target", nargs="?")
     restore = sub.add_parser("save-restore")
     restore.add_argument("transaction")
     destination = restore.add_mutually_exclusive_group()
@@ -102,6 +171,9 @@ def main(argv=None):
                 generated_paths=(".codex/hooks.json",))
         elif args.command == "coverage":
             output = save_policy.core(ROOT, "telemetry").Telemetry(ROOT).report(args.session_id)
+        elif args.command == "save-lock":
+            output = save_lock_command(args)
+            exit_status = {"refused": 2, "unsupported": 3}.get(output.get("decision"), 0)
         elif args.command in ("save-list", "save-restore"):
             deadline = time.monotonic() + 40
             roots = save_policy.read_roots(deadline)

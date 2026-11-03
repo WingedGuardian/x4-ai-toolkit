@@ -199,11 +199,13 @@ def _written(p: dict) -> list[str]:
 
 def post(p: dict) -> dict:
     deadline = time.monotonic() + core.budget_s()
+    sentinel = core.sentinel_note(str(p.get("tool", "") or p.get("tool_name", "")), core.budget_s() / 2)
     try:
         paths = _written(p)
     except (Unreadable, patch_paths.PatchParseError) as e:
-        return _out("advise", context=f"X4 VALIDATION DID NOT RUN: {e}.")
-    notes = []
+        note = f"X4 VALIDATION DID NOT RUN: {e}."
+        return _out("advise", context=core.bounded(note, [("", sentinel)] if sentinel else []))
+    notes = [sentinel] if sentinel else []
     for ap in paths:
         out, err = core._run_hook("x4validate-on-edit.sh",
                                   {"hook_event_name": "PostToolUse", "tool_name": "Write",

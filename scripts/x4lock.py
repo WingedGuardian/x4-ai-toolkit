@@ -431,7 +431,7 @@ def _claude_definition(path: Path) -> bool:
             return True  # Unknown config cannot waive the older native demand.
         hooks = json.loads(raw).get("hooks", {})
         names = ("protect-bash.sh", "protect-files.sh", "x4guard.py", "x4validate-on-edit.sh",
-                 "session-canary.sh", "check-reference-version.sh", "backup-before-edit.sh")
+                 "session-canary.sh", "check-reference-version.sh", "backup-before-edit.sh", "save-sentinel.sh")
         for groups in hooks.values():
             for group in groups:
                 for hook in group.get("hooks", []):

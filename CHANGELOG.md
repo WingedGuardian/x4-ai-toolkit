@@ -50,6 +50,22 @@
   This adds display helpers to `_provenance.py`, an engine source, so the effective store,
   BaseX `x4eff` and x4xref report STALE until rebuilt; the rebuild changes no answers.
 
+- Save sentinel (PostToolUse): after every tool call, reports any save modified or
+  removed with no backup taken first, whatever changed it, including scripts the
+  pre-call guard cannot read. It never blocks; while X4 runs the note goes to the
+  agent only.
+
+- Optional save locks (Windows, user ruling 2026-10-31):
+  `python tools/agent-harness.py save-lock status|on|off|unlock`. While on, NTFS
+  deny rules make Windows refuse any delete, overwrite, rename or recycle of a
+  locked save from any program running as the user; only an elevated `unlock`
+  (which backs the save up first) or `off` lifts them; `off` lifts every lock. The
+  locks outlast the toolkit, so run `off` before removing it. Autosave and quicksave
+  slots stay unlocked; the sentinel locks each new save once it settles. Off
+  unless chosen: `setup.sh` asks when run interactively (`--save-lock` /
+  `--no-save-lock`), and `on` is refused from an elevated prompt. The switch lives
+  in `.modding-agent-harness/`, which the save guard already keeps from agents.
+
 - Geometry comparison supports bounded recursive structural attachments, shared
   render-part references and an explicit `--geometry-pose bind` projection.
   Independent Blender controls qualify selected bind transforms; runtime poses

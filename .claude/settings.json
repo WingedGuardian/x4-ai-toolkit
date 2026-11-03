@@ -62,6 +62,16 @@
             "statusMessage": "x4validate (advisory)..."
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell|Edit|Write|NotebookEdit|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/save-sentinel.sh\"",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "SessionStart": [
