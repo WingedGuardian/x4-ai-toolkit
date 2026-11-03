@@ -13,7 +13,8 @@ positional arguments:
                         some known INCOMPLETE (dropped/unparsed input), 5 otherwise
     rebuild             rebuild what is not FRESH, one at a time, under a lock; exit 0 every
                         requested artifact is FRESH, 1 a builder failed, 5 still not FRESH
-                        (deferred, lock held, gate started); --auto: 0 unless a builder failed
+                        (deferred, lock held, gate started, world moved); --auto: 0 unless a
+                        builder failed
     accept              record each artifact's CURRENT losses (dropped/unparsed input) as known;
                         the session note then stays quiet until that set changes
 

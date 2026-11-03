@@ -35,7 +35,7 @@ Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `-
 | | `find` | entities whose in-game NAME contains TEXT (resolves {page,id} to English); exit 0 a match, 1 none among the names searched, 3 nothing to search |
 | **`x4fresh`** | | x4fresh -- is every derived artifact current, and rebuild the ones that are not. |
 | | `status` | one verdict per artifact; exit 0 all FRESH and complete, 3 all FRESH but some known INCOMPLETE (dropped/unparsed input), 5 otherwise |
-| | `rebuild` | rebuild what is not FRESH, one at a time, under a lock; exit 0 every requested artifact is FRESH, 1 a builder failed, 5 still not FRESH (deferred, lock held, gate started); --auto: 0 unless a builder failed |
+| | `rebuild` | rebuild what is not FRESH, one at a time, under a lock; exit 0 every requested artifact is FRESH, 1 a builder failed, 5 still not FRESH (deferred, lock held, gate started, world moved); --auto: 0 unless a builder failed |
 | | `accept` | record each artifact's CURRENT losses (dropped/unparsed input) as known; the session note then stays quiet until that set changes |
 | **`x4live`** | | Read what the running engine saw, out of the profile's uidata.xml, and diff it against our model. |
 | | `dump` | what the probe captured, with its denominators |
