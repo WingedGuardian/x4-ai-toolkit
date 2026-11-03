@@ -199,6 +199,28 @@ def test_a_note_that_nothing_will_refresh_says_so(tmp_path, off):
 
 
 @needs_bash
+@pytest.mark.parametrize("off", ["X4_FRESH_AUTO", "X4_HOUSEKEEP_SWEEP"])
+@pytest.mark.parametrize("spelling", ["OFF", "Off"])
+def test_the_note_and_the_launch_agree_on_any_spelling_of_off(tmp_path, off, spelling):
+    """The note matched OFF and the launch did not, so the note said nothing would refresh while a launcher started."""
+    hooks, env = _tree(tmp_path)
+    env[off] = spelling
+    (hooks.parent / "x4fresh-session.txt").write_text("x4fresh: NOT CURRENT: x4eff STALE\n", encoding="utf-8")
+    out = _run(hooks, env)
+    assert f"{off}=off" in out and "earlier run" in out
+    assert _launched(hooks, LAUNCH_WAIT) is None
+
+
+@needs_bash
+def test_TWIN_a_value_that_only_contains_off_is_not_off(tmp_path):
+    hooks, env = _tree(tmp_path)
+    env["X4_FRESH_AUTO"] = "offline"
+    (hooks.parent / "x4fresh-session.txt").write_text("x4fresh: NOT CURRENT: x4eff STALE\n", encoding="utf-8")
+    assert "earlier run" not in _run(hooks, env)
+    assert _launched(hooks, LAUNCH_WAIT)
+
+
+@needs_bash
 def test_a_note_about_to_be_refreshed_carries_no_such_line(tmp_path):
     """Twin: launching this session, so the note is simply the last run's outcome."""
     hooks, env = _tree(tmp_path)
