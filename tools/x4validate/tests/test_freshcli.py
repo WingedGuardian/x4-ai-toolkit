@@ -20,6 +20,7 @@ def sd(tmp_path, monkeypatch):
     monkeypatch.setattr(fc, "state_dir", lambda: d)
     monkeypatch.delenv("X4_JOB_WRAPPER", raising=False)
     monkeypatch.delenv("X4_FRESH_AUTO", raising=False)
+    monkeypatch.setattr(fc, "_world_digest", lambda: "world")
     return d
 
 
@@ -433,3 +434,78 @@ def test_logs_are_pruned_to_the_newest_five_per_artifact(tmp_path):
     assert sorted(p.name for p in logs.glob("effective-*")) == [f"effective-2026110{i}-000000.log"
                                                                for i in range(3, 8)]
     assert (logs / "xref-20261101-000000.log").exists()
+
+
+# --------------------------------------------------------------------------- the world moved during a build
+
+def _moving_world(monkeypatch, *digests):
+    """_world_digest answers each of `digests` in turn, then repeats the last."""
+    seq = list(digests)
+    monkeypatch.setattr(fc, "_world_digest", lambda: seq.pop(0) if len(seq) > 1 else seq[0])
+
+
+def test_a_build_the_world_moved_under_is_reported_and_is_a_failure(sd, monkeypatch, capsys):
+    """The artifact's own stamp reads STALE after the fix; x4fresh must also SAY why, and not read as clean."""
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "pass")
+    _moving_world(monkeypatch, "a", "b")
+    assert fc.rebuild(("effective",)) == 1
+    out = capsys.readouterr().out
+    assert "effective: the installed world MOVED during this build [a -> b]" in out
+
+
+def test_no_move_no_line_the_control(sd, monkeypatch, capsys):
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=FRESH("effective")))
+    _fake_builder(monkeypatch, built, "pass")
+    assert fc.rebuild(("effective",)) == 0
+    assert "MOVED" not in capsys.readouterr().out
+
+
+def test_a_digest_that_cannot_be_compared_is_said_never_read_as_no_move(sd, monkeypatch, capsys):
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=FRESH("effective")))
+    _fake_builder(monkeypatch, built, "pass")
+    monkeypatch.setattr(fc, "_world_digest", lambda: None)
+    assert fc.rebuild(("effective",), auto=True) == 0
+    assert "could not be compared" in (sd / "session-note.txt").read_text(encoding="utf-8")
+
+
+def test_a_basex_stamp_taken_after_a_moved_build_is_revoked(sd, monkeypatch, tmp_path, capsys):
+    """BaseX stamps at the END of its build, so it reads FRESH over a moved world. Its readers (ask.py) look
+    at the coverage file, not at x4fresh, so the correction has to land THERE."""
+    (tmp_path / "bx" / "basex").mkdir(parents=True)
+    cov = tmp_path / "bx" / "basex" / "coverage-x4eff.json"
+    cov.write_text(json.dumps({"status": "complete", "fingerprint": {"content": "new", "engine": "e"}}), encoding="utf-8")
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path / "bx")
+
+    def reads_its_stamp():
+        data = json.loads(cov.read_text(encoding="utf-8"))
+        ok = data["fingerprint"]["content"] == "new"
+        return fc.Status("x4eff", "FRESH") if ok else fc.Status("x4eff", "STALE", ["content changed"])
+    built = _world(monkeypatch, {n: FRESH(n) for n in fc.ORDER}, {n: FRESH(n) for n in fc.ORDER})
+    monkeypatch.setitem(fc.CHECKS, "x4eff", lambda: fc.Status("x4eff", "STALE", ["old"]) if "x4eff" not in built
+                        else reads_its_stamp())
+    _fake_builder(monkeypatch, built, "pass")
+    _moving_world(monkeypatch, "a", "b")
+    assert fc.rebuild(("x4eff",)) == 1
+    out = capsys.readouterr().out
+    assert "x4eff: FAILED rc 0, now STALE" in out and "MOVED" in out
+    data = json.loads(cov.read_text(encoding="utf-8"))
+    assert data["status"] == "complete", "every other key of the coverage report must survive"
+    assert data["fingerprint"]["content"] == fc.MOVED_STAMP
+
+
+def test_world_digest_is_a_non_answer_when_the_roots_are_unknown(monkeypatch):
+    monkeypatch.setattr(fc._merge, "Config", lambda *a, **k: object())
+    monkeypatch.setattr(fc._effective, "_ext_root", lambda cfg: None)
+    monkeypatch.setattr(fc._freshness, "fingerprint", lambda *a, **k: {"content": None, "engine": "e"})
+    assert fc._world_digest() is None
+    monkeypatch.setattr(fc._freshness, "fingerprint", lambda *a, **k: {"content": "c", "engine": "e"})
+    assert fc._world_digest() == "c/e"
+
+    def boom(*a, **k):
+        raise OSError("gone")
+    monkeypatch.setattr(fc._freshness, "fingerprint", boom)
+    assert fc._world_digest() is None

@@ -46,7 +46,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from x4validate import __version__, _effective, _freshness, _mutation, _paths, _registry, _xref
+from x4validate import __version__, _effective, _freshness, _merge, _mutation, _paths, _registry, _xref
 
 PKG_ROOT = Path(__file__).resolve().parent.parent          # tools/x4validate
 TOOLKIT_ROOT = PKG_ROOT.parent.parent                       # repo root
@@ -58,6 +58,7 @@ STATES = ("FRESH", "STALE", "UNKNOWN", "MISSING", "REBUILDING")
 # other words (review 2026-11-01, finding 1): without it a build that lost files read "REBUILT, FRESH".
 WARN_RE = re.compile(r"\bWARNING\b|\bNOT INDEXED\b|\bINCOMPLETE\b|\bERROR\b|\bskipped \d+ unparseable\b")
 MAX_LISTED = 5   # per list in a report; the hook output that carries it is bounded
+MOVED_STAMP = "moved-during-build"   # never equals a digest, so a reader compares it and reads STALE
 
 
 @dataclass
@@ -524,6 +525,30 @@ def _load_memo(sd: Path) -> dict:
         return {}  # silent-ok: no/unreadable memo = no remembered failure, so the build is attempted (one retry at most)
 
 
+def _world_digest() -> str | None:
+    """Both freshness axes of the installed world right now, or None when that cannot be established."""
+    try:
+        cfg = _merge.Config()
+        fp = _freshness.fingerprint(cfg, _effective._ext_root(cfg))
+    except Exception:  # noqa: BLE001  # silent-ok: None = a non-answer; the caller says "could not be compared"
+        return None
+    return f"{fp['content']}/{fp['engine']}" if fp.get("content") else None
+
+
+def _revoke_basex_stamp(name: str) -> str | None:
+    """BaseX stamps at the END of its build, so a world that moved during it reads FRESH under the new digest.
+    ask.py reads the coverage file, never x4fresh, so the correction goes there: every other key survives,
+    and the content axis can no longer match. Returns why it could not, or None."""
+    cov = BASEX_ROOT / "basex" / f"coverage-{name}.json"
+    try:
+        data = json.loads(cov.read_text(encoding="utf-8"))
+        data["fingerprint"]["content"] = MOVED_STAMP
+        _write_note(cov, json.dumps(data, indent=2))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
 def _write_note(p: Path, text: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
@@ -575,10 +600,18 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
             lines.append(f"{name}: SKIPPED: a mutation gate started meanwhile")
             continue
         log = sd / "logs" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        world_before = _world_digest()
         try:
             rc, warnings = _run(name, log)
         except (OSError, ValueError) as exc:
             rc, warnings = -1, [f"could not start the builder: {exc}"]
+        world_after = _world_digest()
+        moved = world_before != world_after
+        if moved and name not in AUTO_SET:
+            why_not = _revoke_basex_stamp(name)
+            if why_not:
+                lines.append(f"{name}: its stamp could not be revoked ({why_not}): it may read FRESH over a moved world")
+                unclean = True
         after = _mark_accepted(check(name), _load_accepted(sd))
         if rc not in (0, 3) or after.state != "FRESH":
             failed = True
@@ -595,6 +628,14 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
                     "BUILT WITH WARNINGS" if warnings or rc == 3 else "REBUILT, FRESH")
                 unclean = unclean or verdict != "REBUILT, FRESH"
             lines.append(f"{name}: {verdict} (log: {log})")
+        if world_before is None or world_after is None:
+            unclean = True
+            lines.append(f"{name}: the installed world's digest could not be compared around this build, "
+                         "so a change during it cannot be ruled out")
+        elif moved:
+            unclean = True
+            lines.append(f"{name}: the installed world MOVED during this build [{world_before} -> {world_after}]: "
+                         "a mod, the reference or the engine changed while it ran, so rebuild once that settles")
         lines.extend(f"    {w}" for w in warnings[:8])
         if len(warnings) > 8:
             lines.append(f"    ... {len(warnings) - 8} more warning line(s) in the log")

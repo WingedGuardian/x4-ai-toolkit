@@ -855,6 +855,12 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
     # existing store exactly as it was.
     n_base, n_dlc = require_base_documents(config, "build the effective store")
     progress(f"reference: {n_base} base + {n_dlc} DLC XML document(s) enumerated")
+    # WHEN this store is true: the world BEFORE the first read (release review 4.1.0, T1). Taken at the
+    # write, a mod edited during the build left old values under the new world's digest: FRESH forever.
+    # Taken here, the same edit reads STALE, which is the safe direction. The engine axis is hashed here
+    # too, so a mutation gate must be refused here as well as at the write.
+    _mutation.refuse_if_mutating("build the effective store")
+    stamp = _freshness.fingerprint(config, _ext_root(config))
     not_loaded: list[str] = []
     mods = active_mods(dirs, not_loaded, config)
     for msg in not_loaded:
@@ -1001,7 +1007,8 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
     _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
               dropped_overlays=skipped.dropped,
               dropped_samples=skipped.dropped_samples, texts=texts,
-              skipped_files=skipped.n, skipped_samples=skipped.samples, loss_keys=skipped.keys)
+              skipped_files=skipped.n, skipped_samples=skipped.samples, loss_keys=skipped.keys,
+              stamp=stamp)
     progress(f"wrote {len(entities)} entities to {db_path}")
     return db_path
 
@@ -1010,7 +1017,7 @@ def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
               dropped_overlays: int = 0, dropped_samples: list[str] | None = None,
               texts: dict[tuple[str, str], str] | None = None,
               skipped_files: int = 0, skipped_samples: list[str] | None = None,
-              loss_keys: set[str] | None = None):
+              loss_keys: set[str] | None = None, stamp: dict | None = None):
     # PID-qualified: two concurrent builds used to pick the SAME `<db>.tmp`, so
     # they raced on os.replace and BOTH died with a raw PermissionError
     # (WinError 32). Build-then-atomically-replace already keeps the store safe
@@ -1075,7 +1082,8 @@ def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
             # the exact failure that let BaseX's x4eff serve pre-merge-fix values for
             # eleven days (140 of 194 engine thrust rows wrong).
             _mutation.refuse_if_mutating("build the effective store")
-            _freshness.stamp_sqlite(con, _freshness.fingerprint(config, _ext_root(config)))
+            _freshness.stamp_sqlite(con, stamp if stamp is not None
+                                    else _freshness.fingerprint(config, _ext_root(config)))
             con.executemany("INSERT INTO mods VALUES(?,?,?,?,?,?,?)", [
                 (m["folder"], m["id"], m["name"], m["version"], order_rank[m["folder"]],
                  int(m["enabled"]), int(_cat.is_packed(p))) for m, p in ordered])
