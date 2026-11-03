@@ -1021,6 +1021,89 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
                 self.assertTrue(f["rm_deployed_mod"], c)
                 self.assertEqual(f["rm_deployed_mod_names"], "deployed", c)
 
+    # 4.1.0 G-M3: the ask saw the game root's layout only. `$X4_EXTENSIONS` is a READING, not a
+    # ROOT_VARS entry: as written the command keeps every verdict it has.
+    EXT_ROOTS = dict(ROOTS, extensions="D:/elsewhere/live-mods")
+
+    def test_the_extensions_variable_names_a_deployed_mod(self):
+        for c in (D + " -rf " + DQ + "$X4_EXTENSIONS/mymod" + DQ, D + " -rf $X4_EXTENSIONS/mymod",
+                  D + " -rf " + DQ + "${X4_EXTENSIONS}/mymod" + DQ,
+                  "cd " + DQ + "$X4_EXTENSIONS" + DQ + " && " + D + " -rf mymod",
+                  "bash -c " + Q + D + " -rf " + DQ + "$X4_EXTENSIONS/mymod" + DQ + Q,
+                  D + " -rf " + DQ + "$X4_GAME_EXTENSIONS/mymod" + DQ):
+            for roots, key in ((ROOTS, "game layout"), (self.EXT_ROOTS, "configured")):
+                with self.subTest(c=c, roots=key):
+                    f = F(c, roots=roots)
+                    self.assertTrue(f["rm_deployed_mod"], c)
+                    self.assertEqual(f["rm_deployed_mod_names"], "mymod", c)
+
+    def test_a_separately_configured_extensions_root_is_a_deployed_mod_root(self):
+        ext = "D:/elsewhere/live-mods"
+        for c in (D + " -rf " + DQ + ext + "/mymod" + DQ, D + " -rf " + DQ + "D:" + BS + "elsewhere" + BS + "live-mods" + BS + "mymod" + DQ,
+                  "cd " + DQ + ext + DQ + " && " + D + " -rf mymod", "mv " + DQ + ext + "/mymod" + DQ + " /tmp/old",
+                  'find "' + ext + '/mymod" -delete', "DST=" + Q + ext + "/mymod" + Q + "; " + D + " -rf " + DQ + "$DST" + DQ):
+            with self.subTest(c=c):
+                f = F(c, roots=self.EXT_ROOTS)
+                self.assertTrue(f["rm_deployed_mod"], c)
+                self.assertEqual(f["rm_deployed_mod_names"], "mymod", c)
+
+    def test_the_game_layout_still_counts_beside_a_configured_root(self):
+        f = F(D + ' -rf "' + GAME + '/extensions/deployed"', roots=self.EXT_ROOTS)
+        self.assertEqual(f["rm_deployed_mod_names"], "deployed")
+
+    def test_all_of_a_separately_configured_root_names_every_mod(self):
+        for c in (D + " -rf " + DQ + "D:/elsewhere/live-mods" + DQ, D + " -rf " + DQ + "$X4_EXTENSIONS" + DQ):
+            with self.subTest(c=c):
+                f = F(c, roots=self.EXT_ROOTS)
+                self.assertTrue(f["rm_deployed_mod"], c)
+                self.assertEqual(f["rm_deployed_mod_names"], "<every mod in the extensions folder>", c)
+        f = F('find "D:/elsewhere/live-mods" -name x -delete', roots=self.EXT_ROOTS)
+        self.assertEqual(f["rm_deployed_mod_names"], "<any mod the find matches>")
+
+    def test_all_of_the_game_layout_stays_the_hard_block_through_the_variable(self):
+        f = F(D + " -rf " + DQ + "$X4_EXTENSIONS" + DQ)
+        self.assertTrue(f["rm_hits_game"])
+        self.assertFalse(f["rm_deployed_mod"])
+
+    def test_TWIN_near_the_extensions_root_is_not_a_deployed_mod(self):
+        for c in (D + " -rf " + DQ + "D:/elsewhere/live-mods-old/mymod" + DQ, D + " -rf D:/elsewhere/other",
+                  "ls " + DQ + "$X4_EXTENSIONS/mymod" + DQ, "cp x " + DQ + "D:/tmp/y" + DQ,
+                  D + " -rf " + DQ + "$X4_EXTENSIONSX/mymod" + DQ,
+                  "X4_EXTENSIONS=/tmp/x; echo " + DQ + "$X4_EXTENSIONS" + DQ):
+            with self.subTest(c=c):
+                self.assertFalse(F(c, roots=self.EXT_ROOTS)["rm_deployed_mod"], c)
+
+    def test_TWIN_a_command_that_assigns_the_variable_deletes_under_its_own_value(self):
+        for c in ("X4_EXTENSIONS=/tmp/x; " + D + " -rf " + DQ + "$X4_EXTENSIONS/mymod" + DQ,
+                  "X4_EXTENSIONS=/tmp/x bash -c " + Q + D + " -rf " + DQ + "$X4_EXTENSIONS/mymod" + DQ + Q):
+            with self.subTest(c=c):
+                self.assertFalse(F(c, roots=self.EXT_ROOTS)["rm_deployed_mod"], c)
+
+    def test_TWIN_an_extensions_root_that_is_the_filesystem_root_names_nothing(self):
+        roots = dict(ROOTS, extensions="/")
+        self.assertFalse(F(D + " -rf /tmp/x", roots=roots)["rm_deployed_mod"])
+
+    def test_TWIN_a_configured_root_that_is_the_game_layout_stays_the_hard_block(self):
+        roots = dict(ROOTS, extensions=GAME + "/extensions")
+        f = F(D + ' -rf "' + GAME + '/extensions"', roots=roots)
+        self.assertTrue(f["rm_hits_game"])
+        self.assertFalse(f["rm_deployed_mod"])
+
+    def test_TWIN_a_longer_variable_name_is_another_variable(self):
+        """With a trailing slash on the root, the name's tail would land inside it."""
+        roots = dict(ROOTS, extensions="D:/elsewhere/live-mods/")
+        self.assertFalse(F("cat x; ls " + DQ + "$X4_EXTENSIONSX/mymod" + DQ + "; mv " + DQ + "$X4_EXTENSIONSX/mymod" + DQ + " /tmp/y",
+                           roots=roots)["rm_deployed_mod"])
+
+    def test_TWIN_the_variable_as_a_program_stays_an_unknown_program(self):
+        """The reason this is a reading: as a ROOT_VARS entry it would have become a known program."""
+        c = DQ + "$X4_EXTENSIONS/x.sh" + DQ + " " + Q + REF + Q
+        self.assertTrue(F(c)["program_dynamic_protected"])
+
+    def test_TWIN_a_root_that_cannot_be_written_into_a_reading_is_skipped(self):
+        roots = dict(ROOTS, extensions="D:/a$b/mods")
+        self.assertFalse(F(D + " -rf " + DQ + "$X4_EXTENSIONS/mymod" + DQ, roots=roots)["rm_deployed_mod"])
+
     def test_TWIN_other_game_install_deletes_are_not_a_deployed_mod(self):
         """Clause: under extensions/ -- a game-root file, the game's .claude/ and New mods/
         keep the rm_in_x4_dir ADVISORY; extensions/ itself is the rm_hits_game deny."""
@@ -4032,6 +4115,54 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
     def test_an_env_root_variable_names_its_root(self):
         self.assertTrue(self.P("Remove-Item $env:X4_REFERENCE/x")["rm_targets_reference"])
 
+    # 4.1.0 P1: `$P=<path>` was read and `$env:P=<path>` was not. A second reading of each command
+    # and not a replacement: `$env:X4_REFERENCE` still names its root whatever it was assigned.
+    def test_an_assigned_env_variable_resolves_like_a_local_one(self):
+        for c in ("$env:P=" + Q + REF + Q + "; Remove-Item -Recurse $env:P",
+                  "$Env:p=" + Q + REF + Q + "; Remove-Item -Recurse $env:P",
+                  "$env:P=" + Q + REF + Q + "; Remove-Item -Recurse " + DQ + "$env:P/libraries" + DQ,
+                  "$env:P=" + Q + REF + Q + "; Remove-Item -Recurse (Join-Path $env:P libraries)",
+                  "$env:P=" + Q + REF + Q + "; Get-ChildItem $env:P | Remove-Item",
+                  "$env:P=" + Q + REF + Q + "; cd $env:P; Remove-Item -Recurse libraries",
+                  "$env:A=" + Q + REF + Q + "; $env:B=" + DQ + "$env:A/x" + DQ + "; Remove-Item $env:B",
+                  "$env:A=" + Q + REF + Q + "; $t=" + DQ + "$env:A/x" + DQ + "; Remove-Item $t",
+                  "$env:A=" + Q + REF + Q + "; $t=" + DQ + "$env:A/x" + DQ + "; Remove-Item " + DQ + "$t/y" + DQ,
+                  "$env:P=" + Q + "/tmp/x" + Q + "; $env:P=" + Q + REF + Q + "; Remove-Item -Recurse $env:P",
+                  "$env:C=" + Q + "Remove-Item -Recurse " + REF + Q + "; Invoke-Expression $env:C"):
+            with self.subTest(c=c):
+                self.assertTrue(self.P(c)["rm_targets_reference"], c)
+
+    def test_an_assigned_env_variable_in_a_string_reaches_the_deployed_mod_ask(self):
+        c = "$env:G=" + Q + GAME + Q + "; Remove-Item -Recurse " + DQ + "$env:G" + BS + "extensions" + BS + "mymod" + DQ
+        f = self.P(c)
+        self.assertTrue(f["rm_deployed_mod"], c)
+        self.assertEqual(f["rm_deployed_mod_names"], "mymod")
+
+    def test_a_write_through_an_assigned_env_variable_is_a_write(self):
+        for c in ("$env:P=" + Q + REF + Q + "; Set-Content " + DQ + "$env:P/x" + DQ + " y",
+                  "$env:P=" + Q + REF + Q + "; " + Q + "y" + Q + " > " + DQ + "$env:P/x" + DQ):
+            with self.subTest(c=c):
+                self.assertTrue(self.P(c)["writes_reference"], c)
+
+    def test_TWIN_a_reassigned_root_variable_still_names_its_root(self):
+        c = "$env:X4_REFERENCE=" + Q + "/tmp/x" + Q + "; Remove-Item $env:X4_REFERENCE/x"
+        self.assertTrue(self.P(c)["rm_targets_reference"], c)
+
+    def test_TWIN_another_env_variable_is_no_opaque_value(self):
+        """Only the variable this command assigned turns into a value. Another stays a name, with no ask."""
+        c = "$env:A=" + Q + "/tmp/x" + Q + "; Remove-Item -Recurse $env:OTHER/y"
+        self.assertFalse(self.P(c)["carrier_untranslated"], c)
+
+    def test_TWIN_an_assignment_nothing_deletes_through(self):
+        for c in ("$env:P=" + Q + "/tmp/x" + Q + "; Remove-Item -Recurse $env:P",
+                  "$env:PYTHONPATH=" + Q + REF + Q + "; python x.py",
+                  "$env:P=" + Q + REF + Q + "; Get-ChildItem $env:P",
+                  "$env:P=" + Q + REF + Q + "; Remove-Item /tmp/x",
+                  "$env:Q=" + Q + REF + Q + "; Remove-Item -Recurse $env:P"):
+            with self.subTest(c=c):
+                f = self.P(c)
+                self.assertFalse(f["rm_targets_reference"] or f["writes_reference"], c)
+
     def test_set_content_is_a_write(self):
         self.assertTrue(self.P("Set-Content -Path " + Q + REF + "/a.xml" + Q + " -Value x")
                         ["writes_reference"])
@@ -6738,7 +6869,8 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
                                "env -vS " + self.inner(t), "env -S" + self.inner(t),
                                "env --split-string=" + self.inner(t), "env --split-string " + self.inner(t),
                                "env -S " + Q + self.DEL.strip() + Q + " " + Q + t + Q, "sudo env -S " + self.inner(t),
-                               "env -i env -S " + self.inner(t), "env -u X -S " + self.inner(t)])
+                               "env -i env -S " + self.inner(t), "env -u X -S " + self.inner(t),
+                               "env A=1 -S " + self.inner(t), "env --unset X -S " + self.inner(t)])
 
     def test_a_value_option_at_the_end_of_an_env_cluster(self):
         self.caught(lambda t: ["env -iu X " + self.plain(t), "env -iC /tmp " + self.plain(t)])
@@ -6768,7 +6900,8 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
             "tmux if-shell " + self.inner(t) + " " + Q + Q, "tmux send-keys " + self.inner(t) + " Enter",
             "tmux send -t x " + self.inner(t) + " Enter", "tmux -L s new -d " + self.inner(t), "tmux -c " + self.inner(t),
             "tmux new-session -d " + self.plain(t), "tmux new -- " + self.plain(t),
-            "tmux ls " + Q + ";" + Q + " run " + self.inner(t)])
+            "tmux ls " + Q + ";" + Q + " run " + self.inner(t), "tmux -2 new -d " + self.inner(t),
+            "tmux splitw 30 " + self.inner(t)])
 
     def test_TWIN_tmux_ordinary_forms(self):
         self.quiet("tmux ls", "tmux attach -t x", "tmux new -s dev", "tmux kill-session -t x",
@@ -6782,12 +6915,14 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
             "parallel -j4 " + self.DEL + "::: " + Q + t + Q, "parallel -j 4 " + self.DEL + "::: " + Q + t + Q,
             "parallel " + Q + self.DEL + "{1}" + Q + " ::: " + Q + t + Q, "parallel ::: " + self.inner(t),
             "parallel " + self.DEL + Q + t + Q + " ::: a", "parallel -k " + self.DEL + "::: a " + Q + t + Q + " b",
+            "parallel " + Q + self.DEL + "{}; ls" + Q + " ::: " + Q + t + Q,
             "echo " + Q + t + Q + " | parallel " + self.DEL.strip(), "echo " + self.inner(t) + " | parallel"])
 
     def test_TWIN_parallel_ordinary_forms(self):
         self.quiet("parallel echo ::: a", "parallel echo ::: a b c", "parallel " + Q + "echo {}" + Q + " ::: a",
                    "parallel -j4 gzip ::: a.txt", "cat l | parallel gzip", "parallel " + self.DEL + "::: /tmp/x",
-                   "parallel echo ::: " + Q + REF + Q, "parallel cat ::: " + Q + REF + "/a.xml" + Q)
+                   "parallel echo ::: " + Q + REF + Q, "parallel cat ::: " + Q + REF + "/a.xml" + Q,
+                   "parallel " + self.DEL + ":::: " + Q + REF + "/list.txt" + Q)
 
     def test_busybox_and_sibling_runners(self):
         self.caught(lambda t: ["busybox " + self.plain(t), "busybox sh -c " + self.inner(t), "busybox ash -c " + self.inner(t),
@@ -6877,7 +7012,9 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
                                "printf -vP %s " + Q + t + Q + "; " + self.DEL + ref,
                                "printf -v P " + Q + t + Q + "; " + self.DEL + ref,
                                "printf -v P -- %s " + Q + t + Q + "; " + self.DEL + ref,
-                               "printf -v P " + Q + "%s/%s" + Q + " " + Q + t + Q + " x; " + self.DEL + ref])
+                               "printf -v P " + Q + "%s/%s" + Q + " " + Q + t + Q + " x; " + self.DEL + ref,
+                               "printf 2>/dev/null -v P %s " + Q + t + Q + "; " + self.DEL + ref,
+                               "printf -v P %s " + Q + t + Q + "; " + self.DEL + DQ + "${P}" + DQ])
 
     def test_read_from_a_here_string_assigns(self):
         ref = DQ + "$P" + DQ
@@ -6888,7 +7025,8 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
         ref = DQ + "$P" + DQ
         self.quiet("printf -v P %s /tmp/x; " + self.DEL + ref, "printf -v P %s " + Q + REF + Q + "; echo " + ref,
                    "printf -v P %d 3; echo $P", "printf " + Q + "%s" + Q + " -v", "read -r P <<< /tmp/x; " + self.DEL + ref,
-                   "read -r a b", "read P")
+                   "read -r a b", "read P", "printf %s x; mytool -v P %s " + Q + REF + Q + "; " + self.DEL + ref,
+                   "printf -v " + Q + "(" + Q + " %s /tmp/x; echo " + Q + "ok" + Q + "; " + self.DEL + DQ + "$P" + DQ)
 
     def test_mapfile_evals_its_callback(self):
         self.caught(lambda t: ["mapfile -C " + Q + self.DEL.strip() + Q + " -c 1 <<< " + Q + t + Q,
@@ -6918,6 +7056,10 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
     def test_zsh_flags_read_the_variables_value(self):
         self.caught(lambda t: ["zsh -c " + Q + "X=" + t + "; " + self.DEL + w + Q
                                for w in ("$=X", "$~X", "$^X", "${=X}", "${~X}", "${^X}")])
+
+    def test_a_flagged_brace_is_the_whole_value(self):
+        """Only `${=X}` with a tail shows the difference: `$X}/extensions` is not the game's folder."""
+        self.assertTrue(F("X=" + DQ + GAME + DQ + "; " + self.DEL + "${=X}/extensions")["rm_hits_game"])
 
     def test_TWIN_zsh_flags_and_dollar_dash_in_ordinary_text(self):
         self.quiet("echo $-", "[[ $- == *i* ]] && echo i", "sed -i " + Q + "s/$-/x/" + Q + " /tmp/f", "grep " + Q + "x$-y" + Q + " f",
@@ -7013,6 +7155,9 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
                 self.assertFalse(f["carriers_truncated"], c)
         # a range opens no brace word, so a leading brace is stripped as it always was
         self.assertEqual(H.segments("{1..3} x"), ["1..3} x"])
+        # ...and so does a comma with no closing brace: it was never a brace expansion
+        H._BRACE_WORDS.clear()
+        self.assertEqual(H.segments("{a,b x"), ["a,b x"])
 
     def test_a_not_found_handler_is_read_once(self):
         c = "command_not_found_handle(){ :; }; a b c d e f g h i j"
@@ -7050,10 +7195,12 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
                     "read -n 1 P" + here, "read -aP" + here)
 
     def test_su_session_command(self):
-        self.caught("su --session-command " + self.inner(REF), "su --session-command=" + self.inner(REF))
+        self.caught("su --session-command " + self.inner(REF), "su --session-command=" + self.inner(REF),
+                    "su -c -- " + self.inner(REF), "su -c" + self.inner(REF))
 
     def test_every_loopback_spelling_is_this_machine(self):
-        for host in ("0", "2130706433", "0x7f.1", "0177.0.0.1", "127.1", "::ffff:127.0.0.1", "[::1]", "::1", "0.0.0.0"):
+        for host in ("0", "2130706433", "0x7f.1", "0177.0.0.1", "127.1", "::ffff:127.0.0.1", "[::1]", "::1", "0.0.0.0",
+                     "0::1", "::", "ssh://localhost", "ssh://me@127.0.0.1", "ssh://localhost:22", "127.0.0.1:22"):
             with self.subTest(host=host):
                 self.caught("ssh " + host + " " + self.plain(REF))
 
@@ -7071,6 +7218,34 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
         for c in ("ssh -o BatchMode=yes host ls", "ssh -o ProxyCommand=" + Q + "nc %h %p" + Q + " host ls"):
             with self.subTest(c=c):
                 self.assertFalse(F(c)["rm_targets_reference"], c)
+
+    # --- 4.1.0, D-C1: each of these is a mutant of the carrier code that nothing could catch.
+    def test_this_computers_own_name_is_this_machine(self):
+        import socket
+        name = socket.gethostname()
+        self.caught("ssh " + name + " " + self.plain(REF), "ssh me@" + name.upper() + " " + self.plain(REF))
+
+    def test_a_glob_name_and_a_carrier_reading_in_one_segment(self):
+        """Both read the same segment, so one must not replace the other."""
+        self.caught("exec -a x ev?l " + self.inner(REF))
+
+    CD_READING = "tmux run " + Q + "cd /tmp && ls" + Q
+    SESSION_DELETE = "bash -c " + Q + D + " -rf extensions" + Q
+
+    def test_TWIN_a_reading_of_one_call_is_not_a_reading_of_the_next(self):
+        """The same text typed by itself in the next call does change directory."""
+        typed = self.SESSION_DELETE + "; bash -c " + Q + "cd /tmp && ls" + Q
+        before = FC(typed, GAME)
+        F(self.CD_READING)
+        after = FC(typed, GAME)
+        self.assertFalse(before["rm_in_x4_dir"] or before["rm_hits_game"], "a real cd drops the session directory")
+        self.assertEqual((before["rm_in_x4_dir"], before["rm_hits_game"]), (after["rm_in_x4_dir"], after["rm_hits_game"]))
+
+    def test_a_cd_nested_inside_a_reading_keeps_the_session_directory(self):
+        base = FC(self.SESSION_DELETE, GAME)
+        nested = FC(self.SESSION_DELETE + "; tmux run " + DQ + "bash -c " + Q + "cd /tmp && ls" + Q + DQ, GAME)
+        self.assertTrue(base["rm_hits_game"] or base["rm_in_x4_dir"])
+        self.assertEqual((base["rm_hits_game"], base["rm_in_x4_dir"]), (nested["rm_hits_game"], nested["rm_in_x4_dir"]))
 
 
 def load_tests(loader, standard_tests, pattern):

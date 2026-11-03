@@ -23,6 +23,16 @@ read a mutated file and shipped it.
 
 Exit 0 if both pass, 1 if either finds a hole, 2 if the baseline is not green (in which
 case neither result means anything and no verdict is given).
+
+Two narrower runs, neither of which is ever a release pass:
+
+  --check-anchors  no trials at all: every mutant's anchor appears exactly once and every target
+                   names one test. A stale anchor refuses the whole gate at the start of its CI
+                   run (5 of them did at the 4.1.0 candidate), so this is cheap enough for the
+                   pre-push gate and the unit suite.
+  --only REGEX     the mutants whose label matches, run against their target test's class only,
+                   and no predicate pairs. For the code you just changed; exit 3 when all are
+                   caught. The whole table still runs on CI.
 """
 from __future__ import annotations
 
@@ -173,7 +183,8 @@ MUTANTS = [
     # matching and the harness said so rather than passing -- the third orphaned anchor
     # this session, and the third time refusing beat reporting a clean run.
     ("wrapper verbs are seen through",
-     "        if name in WRAPPERS:", "        if False:",
+     "        if name in WRAPPERS:\n            seen_wrapper = True",
+     "        if False:\n            seen_wrapper = True",
      "test_sees_through_a_wrapper"),
     ("dot-segment canonicalisation", "s = posixpath.normpath(s)", "s = s",
      "test_dot_segment_is_canonicalised"),
@@ -271,7 +282,7 @@ MUTANTS = [
      '"rm_deployed_mod": bool(_mods),', '"rm_deployed_mod": False,',
      "test_removing_a_deployed_mod_fires_rm_deployed_mod"),
     ("only a path under extensions/ is a deployed mod",
-     "            if n.startswith(_ext):", '            if n.startswith(_g + "/"):',
+     "                if n.startswith(root):", '                if n.startswith(_g + "/"):',
      "test_TWIN_other_game_install_deletes_are_not_a_deployed_mod"),
     ("several targets name each mod ONCE",
      "    _mods = list(dict.fromkeys(_deployed_mods(", "    _mods = list((_deployed_mods(",
@@ -283,7 +294,7 @@ MUTANTS = [
      "_deployed_mods(rm_t + mv_src + subst_rm_t)", "_deployed_mods(rm_t + mv_src)",
      "test_a_substituted_verb_on_a_deployed_mod_is_rm_deployed_mod"),
     ("a filtered find over extensions/ reaches any mod",
-     "            elif filtered and n == _ext[:-1]:", "            elif False:",
+     "                elif filtered and n == root[:-1]:", "                elif False:",
      "test_a_filtered_find_over_extensions_names_any_matching_mod"),
     ("find | xargs over extensions/ reaches any mod",
      '                if seg == "${xargs_item}":', "                if False:",
@@ -526,8 +537,8 @@ MUTANTS = [
      '_GIT_ADD_VERBS = ("add",)',
      "test_git_stage_dash_A"),
     ("a carrier argument is resolved",
-     "                    out.extend(resolve_variants(toks[i + 1][0], assignments(cmd)))",
-     "                    out.append(toks[i + 1][0])",
+     "                    out.extend(resolve_variants(toks[_shell_text_at(toks, i + 1, t)][0], assignments(cmd)))",
+     "                    out.append(toks[_shell_text_at(toks, i + 1, t)][0])",
      "test_a_command_carried_in_a_variable"),
     ("the durable rule needs a python interpreter",
      "            and _verb_name(verb(sg)) in _PYTHONS",
@@ -1015,8 +1026,8 @@ MUTANTS = [
      "    if True:",
      "test_ANY_writing_git_config_or_a_moved_HOME_forces_the_clean"),
     ("K-C1: a shell -c carrier carries every value",
-     "                    out.extend(resolve_variants(toks[i + 1][0], assignments(cmd)))",
-     "                    out.append(resolve(toks[i + 1][0], assignments(cmd)))",
+     "                    out.extend(resolve_variants(toks[_shell_text_at(toks, i + 1, t)][0], assignments(cmd)))",
+     "                    out.append(resolve(toks[_shell_text_at(toks, i + 1, t)][0], assignments(cmd)))",
      "test_the_empty_branch_is_judged_again"),
     ("K-C1: eval carries every value",
      '                out.extend(resolve_variants(" ".join(parts), assignments(cmd)))   # FX-G6 / K C1',
@@ -1235,17 +1246,298 @@ MUTANTS = [
     ('carrier: an address outside loopback is another machine',
      '        return n == 0 or n >> 24 == 127', '        return True',
      'TestProgramsThatRunProgramsReview.test_TWIN_addresses_that_are_not_this_machine'),
-    ('carrier: a mapped IPv6 address reads as its IPv4 address',
-     'bool(a.ipv4_mapped and _is_loopback(str(a.ipv4_mapped)))', 'False',
-     'TestProgramsThatRunProgramsReview.test_every_loopback_spelling_is_this_machine'),
+    # No row for `a.ipv4_mapped` in _is_loopback: from Python 3.12.4 on, is_loopback and is_unspecified
+    # read a mapped address themselves, so the mutant survives there. The clause is for 3.10 and 3.11.
     ('carrier: ssh options that run locally',
      '        m = _SSH_LOCAL_COMMAND.fullmatch(value)', '        m = None',
      'TestProgramsThatRunProgramsReview.test_ssh_options_that_run_a_local_command'),
+    # --- the carrier code those rows missed (4.1.0 review D-C1: none of this had ever run). Each row
+    # is one clause. A clause left out is a speed guard the next clause already covers, recorded in
+    # the 4.1.0 lane's report: mutated, it changes no verdict.
+    ('carrier: a brace word is one this command expanded',
+     '    return bool(toks) and toks[0][0] in _BRACE_WORDS', '    return bool(toks)',
+     'TestProgramsThatRunProgramsReview.test_a_brace_range_as_a_word_is_data'),
+    ('carrier: only printf and read assign',
+     '    if v not in ("printf", "read"):' + NL + '        return {}', '    if not v:' + NL + '        return {}',
+     'TestProgramsThatRunPrograms.test_TWIN_builtin_assignments_of_ordinary_values'),
+    ('carrier: read -aNAME names the variable',
+     '            elif t[1] == "a" and len(t) > 2:', '            elif False:',
+     'TestProgramsThatRunProgramsReview.test_read_options_before_the_name'),
+    ('carrier: printf -v NAME',
+     '    if args[:1] == ["-v"]:', '    if False:',
+     'TestProgramsThatRunPrograms.test_printf_v_assigns'),
+    ('carrier: printf -vNAME',
+     '    elif args[:1] and args[0].startswith("-v"):', '    elif False:',
+     'TestProgramsThatRunPrograms.test_printf_v_assigns'),
+    ('carrier: printf -v steps over --',
+     '    if args[:1] == ["--"]:' + NL + '        args = args[1:]' + NL + '    if not args or not re.fullmatch',
+     '    if not args or not re.fullmatch',
+     'TestProgramsThatRunPrograms.test_printf_v_assigns'),
+    ('carrier: a printf -v redirect is not an argument',
+     '    args = _drop_redirects([t for t, _q in tokens(seg)[at + 1:]])' + NL + '    if args[:1] == ["-v"]:',
+     '    args = [t for t, _q in tokens(seg)[at + 1:]]' + NL + '    if args[:1] == ["-v"]:',
+     'TestProgramsThatRunPrograms.test_printf_v_assigns'),
+    ('carrier: a printf -v name must be a name',
+     '    if not args or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):', '    if not args:',
+     'TestProgramsThatRunPrograms.test_TWIN_builtin_assignments_of_ordinary_values'),
+    ('carrier: a later value option keeps its word as the command before it is learned',
+     '                want_value = learned or t not in _LATER_VALUE_OPTS.get(wrapper, ())',
+     '                want_value = True',
+     'TestProgramsThatRunProgramsReview.test_a_later_flags_value_is_still_read_as_the_command'),
+    ('carrier: exec -a is a later value option',
+     '    "exec": frozenset({"-a"}),' + NL, '',
+     'TestProgramsThatRunPrograms.test_a_word_a_new_value_option_would_swallow_is_still_judged'),
+    ('carrier: a glob reaches the dynamic-program test',
+     '    if not t or not (has_unresolved(t) or _glob_program(seg, t)):', '    if not t or not has_unresolved(t):',
+     'TestProgramsThatRunPrograms.test_a_glob_that_may_be_the_delete_itself_is_an_unknown_program'),
+    ('carrier: a glob is dynamic past the plain-word test',
+     '    if w and not has_unresolved(blank_single_quoted(w)) and not _glob_program(seg, t):',
+     '    if w and not has_unresolved(blank_single_quoted(w)):',
+     'TestProgramsThatRunPrograms.test_a_glob_that_may_be_the_delete_itself_is_an_unknown_program'),
+    ('carrier: a shell option walk stops at the first non-option',
+     '        if not _SHELL_OPT_WORD.fullmatch(t):' + NL + '            break', '        if False:' + NL + '            break',
+     'TestProgramsThatRunPrograms.test_a_shell_reads_options_after_c_before_its_text'),
+    ('carrier: a shell with nothing after its options has no text',
+     '    return k if k < len(toks) else j', '    return k',
+     'TestProgramsThatRunProgramsReview.test_TWIN_shell_with_nothing_after_its_option'),
+    ('carrier: a positional word before the program is stepped over',
+     '        if positional > 0:', '        if False:',
+     'TestProgramsThatRunPrograms.test_busybox_and_sibling_runners'),
+    ('carrier: a numeric word before the program is stepped over',
+     '        if numeric and _NUMERIC_WORD.fullmatch(t):', '        if False:',
+     'TestProgramsThatRunPrograms.test_busybox_and_sibling_runners'),
+    ('carrier: watch has value options',
+     '    "watch": ({"-n", "--interval", "-q", "--equexit"}, 0, False),', '    "watch": (frozenset(), 0, False),',
+     'TestProgramsThatRunPrograms.test_watch_runs_its_words_and_its_text'),
+    ('carrier: wsl has value options',
+     '    "wsl": ({"-d", "--distribution", "--distribution-id", "-u", "--user", "--cd", "--shell-type"}, 0, False),',
+     '    "wsl": (frozenset(), 0, False),',
+     'TestProgramsThatRunPrograms.test_wsl_runs_its_words'),
+    ('carrier: chroot takes its directory first',
+     '    "chroot": ({"--userspec", "--groups"}, 1, False),', '    "chroot": ({"--userspec", "--groups"}, 0, False),',
+     'TestProgramsThatRunPrograms.test_busybox_and_sibling_runners'),
+    ('carrier: screen has value options',
+     '    "screen": ({"-S", "-c", "-T", "-h", "-p", "-t", "-e", "-s"}, 0, False),', '    "screen": (frozenset(), 0, False),',
+     'TestProgramsThatRunPrograms.test_busybox_and_sibling_runners'),
+    ('carrier: screen stuff and exec are not the program',
+     '            if v == "screen" and _head(tail[0]) in ("stuff", "exec"):', '            if False:',
+     'TestProgramsThatRunPrograms.test_busybox_and_sibling_runners'),
+    ('carrier: --command= is text',
+     '        if t.startswith(("--command=", "--session-command=")):', '        if False:',
+     'TestProgramsThatRunPrograms.test_su_and_script_run_their_c_text'),
+    ('carrier: a -c cluster is text',
+     'or (not quoted and _DASH_C.match(t))) and following:', 'or False) and following:',
+     'TestProgramsThatRunPrograms.test_su_and_script_run_their_c_text'),
+    ('carrier: su reads options after -c as a shell does',
+     '            k = _shell_text_at([(_head(x), False) for x in following], 0)', '            k = 0',
+     'TestProgramsThatRunProgramsReview.test_su_session_command'),
+    ('carrier: a text glued to -c is text',
+     '        elif t.startswith("-c") and len(t) > 2 and _EVAL_SPLITS.search(t):', '        elif False:',
+     'TestProgramsThatRunProgramsReview.test_su_session_command'),
+    ('carrier: the walk to env sees through a wrapper',
+     '        if name in WRAPPERS:' + NL + '            wrapper = name', '        if False:' + NL + '            wrapper = name',
+     'TestProgramsThatRunProgramsReview.test_env_S_behind_a_wrapper_with_a_value'),
+    ('carrier: env behind any other program is not env',
+     '        elif not (_ASSIGNMENT.match(t) or (wrapper and _WRAPPER_ARG.match(t))):' + NL + '            return []',
+     '        elif not (_ASSIGNMENT.match(t) or (wrapper and _WRAPPER_ARG.match(t))):' + NL + '            pass',
+     'TestProgramsThatRunProgramsReview.test_TWIN_a_program_named_before_a_word_env_is_not_env'),
+    ('carrier: an assignment in env is stepped over',
+     '        if _ASSIGNMENT.match(t):' + NL + '            j += 1' + NL + '            continue' + NL + '        if not t.startswith("-") or t == "-":',
+     '        if not t.startswith("-") or t == "-":',
+     'TestProgramsThatRunPrograms.test_env_S_runs_its_split_text'),
+    ('carrier: env -i env -S',
+     '            if _verb_name(t) == "env":' + NL + '                j += 1', '            if False:' + NL + '                j += 1',
+     'TestProgramsThatRunPrograms.test_env_S_runs_its_split_text'),
+    ('carrier: env --split-string',
+     '            if t.startswith("--s"):', '            if False:',
+     'TestProgramsThatRunPrograms.test_env_S_runs_its_split_text'),
+    ('carrier: env --unset takes a value',
+     '            j += 2 if t in ("--unset", "--chdir") else 1', '            j += 1',
+     'TestProgramsThatRunPrograms.test_env_S_runs_its_split_text'),
+    ('carrier: env -Stext',
+     '                if body[k + 1:]:' + NL + '                    return [" ".join([body[k + 1:]] + words[j + 1:])]',
+     '                if False:' + NL + '                    return [" ".join([body[k + 1:]] + words[j + 1:])]',
+     'TestProgramsThatRunPrograms.test_env_S_runs_its_split_text'),
+    ('carrier: env -u takes a value',
+     '            if c in "uC":', '            if False:',
+     'TestProgramsThatRunPrograms.test_env_S_runs_its_split_text'),
+    ('carrier: an octal host spelling',
+     'int(p, 8) if p[:1] == "0" and len(p) > 1 else int(p, 10)', 'int(p, 10)',
+     'TestProgramsThatRunProgramsReview.test_every_loopback_spelling_is_this_machine'),
+    ('carrier: a hex host spelling',
+     'int(p, 16) if p[:2] in ("0x", "0X") else int(p, 8)', 'int(p, 8)',
+     'TestProgramsThatRunProgramsReview.test_every_loopback_spelling_is_this_machine'),
+    ('carrier: a short address fills its last part',
+     '    return n * 256 ** (5 - len(vals)) + vals[-1]', '    return n * 256 + vals[-1]',
+     'TestProgramsThatRunProgramsReview.test_every_loopback_spelling_is_this_machine'),
+    ('carrier: loopback names',
+     '    if h in _LOOPBACK_NAMES:', '    if False:',
+     'TestProgramsThatRunPrograms.test_ssh_to_this_machine_is_a_local_command'),
+    ('carrier: IPv6 loopback and unspecified',
+     '        return a.is_loopback or a.is_unspecified or bool(', '        return bool(',
+     'TestProgramsThatRunProgramsReview.test_every_loopback_spelling_is_this_machine'),
+    ('carrier: a host in a variable may be this machine',
+     '    if has_unresolved(host):' + NL + '        return True', '    if False:' + NL + '        return True',
+     'TestProgramsThatRunPrograms.test_ssh_to_this_machine_is_a_local_command'),
+    ('carrier: ssh:// is a host spelling',
+     '    if h.startswith("ssh://"):', '    if False:',
+     'TestProgramsThatRunProgramsReview.test_every_loopback_spelling_is_this_machine'),
+    ('carrier: the user and path around a host',
+     '    h = h.rpartition("@")[2].rstrip(".").partition("/")[0]', '    h = h.rstrip(".").partition("/")[0]',
+     'TestProgramsThatRunPrograms.test_ssh_to_this_machine_is_a_local_command'),
+    ('carrier: a bracketed IPv6 host',
+     '    if h.startswith("["):', '    if False:',
+     'TestProgramsThatRunProgramsReview.test_every_loopback_spelling_is_this_machine'),
+    ('carrier: a loopback host with a port',
+     ' or (h.count(":") == 1 and _is_loopback(h.partition(":")[0])):', ':',
+     'TestProgramsThatRunProgramsReview.test_every_loopback_spelling_is_this_machine'),
+    ('carrier: this computer by name',
+     '    return h in {n.lower().partition(".")[0] for n in own if n} or h.partition(".")[0] in {' + NL + '        n.lower() for n in own if n}',
+     '    return False',
+     'TestProgramsThatRunProgramsReview.test_this_computers_own_name_is_this_machine'),
+    ('carrier: ssh has value options',
+     '_SSH_VALUE_OPTS = frozenset(("-" + c) for c in "bcDEeFIiJLlmOopQRSWwBP")', '_SSH_VALUE_OPTS = frozenset()',
+     'TestProgramsThatRunPrograms.test_ssh_to_this_machine_is_a_local_command'),
+    ('carrier: ssh -oOPTION',
+     '        value = t[2:] if t.startswith("-o") and len(t) > 2 else (', '        value = (',
+     'TestProgramsThatRunProgramsReview.test_ssh_options_that_run_a_local_command'),
+    ('carrier: parallel with stdin reads what the producer prints',
+     '        return list(_echo_printf_program(prev)) if prev and _verb_name(verb(prev)) in ("echo", "printf") else []',
+     '        return []',
+     'TestProgramsThatRunPrograms.test_parallel_runs_its_template_over_its_arguments'),
+    ('carrier: a parallel :::: names files, whose names are not arguments',
+     '            in_file = t.startswith("::::")', '            in_file = False',
+     'TestProgramsThatRunPrograms.test_TWIN_parallel_ordinary_forms'),
+    ('carrier: parallel with no template runs each argument',
+     '    if not template:' + NL + '        return [_head(a) for a in args]', '    if False:' + NL + '        return [_head(a) for a in args]',
+     'TestProgramsThatRunPrograms.test_parallel_runs_its_template_over_its_arguments'),
+    ('carrier: a parallel slot takes the argument',
+     '    filled = (_PARALLEL_SLOT.sub(lambda _m: joined_args, opened) if _PARALLEL_SLOT.search(opened)' + NL + '              else opened + " " + joined_args)',
+     '    filled = opened + " " + joined_args',
+     'TestProgramsThatRunPrograms.test_parallel_runs_its_template_over_its_arguments'),
+    ('carrier: parallel has value options',
+     '    "-j", "--jobs", "-P", "--max-procs",', '    "--jobs", "-P", "--max-procs",',
+     'TestProgramsThatRunPrograms.test_parallel_runs_its_template_over_its_arguments'),
+    ('carrier: tmux -c',
+     '        if t == "-c" and i + 1 < len(words):' + NL + '            out.append(_head(words[i + 1]))',
+     '        if False:' + NL + '            out.append(_head(words[i + 1]))',
+     'TestProgramsThatRunPrograms.test_tmux_commands_that_run_a_shell'),
+    ('carrier: tmux global options take a value',
+     '        elif t in _TMUX_GLOBAL_VALUE_OPTS:', '        elif False:',
+     'TestProgramsThatRunPrograms.test_tmux_commands_that_run_a_shell'),
+    ('carrier: a tmux global flag is stepped over',
+     '        elif t.startswith("-"):' + NL + '            i += 1' + NL + '        else:' + NL + '            break' + NL + '    chunk = []',
+     '        else:' + NL + '            break' + NL + '    chunk = []',
+     'TestProgramsThatRunPrograms.test_tmux_commands_that_run_a_shell'),
+    ('carrier: tmux chains with a quoted semicolon',
+     '        if _head(w) != ";":', '        if True:',
+     'TestProgramsThatRunPrograms.test_tmux_commands_that_run_a_shell'),
+    ('carrier: only a tmux command that runs a shell is read',
+     '            if sub in _TMUX_ALIASES or (len(sub) >= 3 and any(f.startswith(sub) for f in _TMUX_RUNS)):', '            if True:',
+     'TestProgramsThatRunPrograms.test_TWIN_tmux_ordinary_forms'),
+    ('carrier: a tmux alias',
+     '            if sub in _TMUX_ALIASES or (len(sub) >= 3', '            if (len(sub) >= 3',
+     'TestProgramsThatRunPrograms.test_tmux_commands_that_run_a_shell'),
+    ('carrier: a tmux command by its prefix',
+     'or (len(sub) >= 3 and any(f.startswith(sub) for f in _TMUX_RUNS)):', ':',
+     'TestProgramsThatRunPrograms.test_tmux_commands_that_run_a_shell'),
+    ('carrier: a number before a tmux shell text is stepped over',
+     '        if not quoted and re.fullmatch(r"[0-9]+%?", t):', '        if False:',
+     'TestProgramsThatRunPrograms.test_tmux_commands_that_run_a_shell'),
+    ('carrier: a quoted tmux word with a command in it is a shell text',
+     '        if quoted and _EVAL_SPLITS.search(t):' + NL + '            out.append(t)', '        if False:' + NL + '            out.append(t)',
+     'TestProgramsThatRunPrograms.test_tmux_commands_that_run_a_shell'),
+    ('carrier: an unquoted tmux tail is argv',
+     '        elif argv_at is None and not quoted:', '        elif False:',
+     'TestProgramsThatRunPrograms.test_tmux_commands_that_run_a_shell'),
+    ('carrier: mapfile -Ctext',
+     '        if t.startswith("-C") and len(t) > 2:', '        if False:',
+     'TestProgramsThatRunPrograms.test_mapfile_evals_its_callback'),
+    ('carrier: a flagged ${ stays a brace',
+     'else "${" if s.startswith("${") else "$"', 'else "$"',
+     'TestProgramsThatRunPrograms.test_a_flagged_brace_is_the_whole_value'),
+    ('carrier: $- is an expansion in a reading',
+     '|' + chr(92) + '$[=~^+](?=[A-Za-z_{])|' + chr(92) + '$-")', '|' + chr(92) + '$[=~^+](?=[A-Za-z_{])")',
+     'TestProgramsThatRunPrograms.test_zsh_flags_and_dollar_dash_are_expansions'),
+    ('carrier: a builtin assignment reaches ${P}',
+     'text = re.sub(r"' + chr(92) + '$' + chr(92) + '{" + name + r"' + chr(92) + '}|' + chr(92) + '$" + name + r"(?![A-Za-z0-9_])",',
+     'text = re.sub(r"' + chr(92) + '$" + name + r"(?![A-Za-z0-9_])",',
+     'TestProgramsThatRunPrograms.test_printf_v_assigns'),
+    ('carrier: env behind a wrapper is a candidate',
+     '    if v == "env" or _env_candidate(seg):', '    if v == "env":',
+     'TestProgramsThatRunProgramsReview.test_env_S_behind_a_wrapper_with_a_value'),
+    ('carrier: exec reaches the value-word reading',
+     '    if "exec" in seg or "sudo" in seg:', '    if "sudo" in seg:',
+     'TestProgramsThatRunPrograms.test_a_word_a_new_value_option_would_swallow_is_still_judged'),
+    ('carrier: sudo reaches the value-word reading',
+     '    if "exec" in seg or "sudo" in seg:', '    if "exec" in seg:',
+     'TestProgramsThatRunPrograms.test_a_word_a_new_value_option_would_swallow_is_still_judged'),
+    ('carrier: a not-found handler also reads from the second word',
+     '            readings = [r for k in (0, 1) if whole[k:] for r in _as_program(whole[k:])]',
+     '            readings = [r for k in (0,) if whole[k:] for r in _as_program(whole[k:])]',
+     'TestProgramsThatRunPrograms.test_a_not_found_handler_may_run_any_command'),
+    ('carrier: a not-found handler reads from the first word',
+     '            readings = [r for k in (0, 1) if whole[k:] for r in _as_program(whole[k:])]',
+     '            readings = [r for k in (1,) if whole[k:] for r in _as_program(whole[k:])]',
+     'TestProgramsThatRunPrograms.test_a_not_found_handler_may_run_any_command'),
+    ('carrier: a carrier word in a glob-named segment keeps both readings',
+     '            carrying[n] = carrying.get(n, []) + list(dict.fromkeys(carried_here))',
+     '            carrying[n] = list(dict.fromkeys(carried_here))',
+     'TestProgramsThatRunProgramsReview.test_a_glob_name_and_a_carrier_reading_in_one_segment'),
+    ('carrier: the reading set is per call',
+     '    _READING_TEXTS.clear()', '    pass',
+     'TestProgramsThatRunProgramsReview.test_TWIN_a_reading_of_one_call_is_not_a_reading_of_the_next'),
+    ('carrier: text inside a reading is a reading',
+     '                        _READING_TEXTS.add(inner)', '                        pass',
+     'TestProgramsThatRunProgramsReview.test_a_cd_nested_inside_a_reading_keeps_the_session_directory'),
+    # --- 4.1.0 G-M3: the deployed-mod ask sees $X4_EXTENSIONS and a separately configured root. ---
+    ('G-M3: the variable reaches the deployed-mod ask',
+     '    text = _extensions_spelled(text)', '    pass',
+     'TestPreviouslyUnprobedRules.test_the_extensions_variable_names_a_deployed_mod'),
+    ('G-M3: the variable means the configured root',
+     '    _EXTENSIONS_ROOT[0] = (roots.get("extensions")' + NL + '                           or (roots["game"]',
+     '    _EXTENSIONS_ROOT[0] = (""' + NL + '                           or (roots["game"]',
+     'TestPreviouslyUnprobedRules.test_all_of_a_separately_configured_root_names_every_mod'),
+    ('G-M3: with none configured it means the game layout',
+     '(roots["game"].rstrip("/" + chr(92)) + "/extensions" if roots.get("game") else "")', '""',
+     'TestPreviouslyUnprobedRules.test_all_of_the_game_layout_stays_the_hard_block_through_the_variable'),
+    ('G-M3: unquoted, the root is quoted',
+     '    return _EXTENSIONS_VAR.sub(lambda m: root if quote.get(m.start()) else _sh_quote(root), text)',
+     '    return _EXTENSIONS_VAR.sub(lambda m: root, text)',
+     'TestPreviouslyUnprobedRules.test_the_extensions_variable_names_a_deployed_mod'),
+    ('G-M3: inside quotes, the root is not quoted again',
+     '    return _EXTENSIONS_VAR.sub(lambda m: root if quote.get(m.start()) else _sh_quote(root), text)',
+     '    return _EXTENSIONS_VAR.sub(lambda m: _sh_quote(root), text)',
+     'TestPreviouslyUnprobedRules.test_the_extensions_variable_names_a_deployed_mod'),
+    ('G-M3: a root this cannot quote gives no reading',
+     ' or any(c in root for c in "' + chr(92) + '"' + "'" + '$`") or _EXTENSIONS_SET', ' or _EXTENSIONS_SET',
+     'TestPreviouslyUnprobedRules.test_TWIN_a_root_that_cannot_be_written_into_a_reading_is_skipped'),
+    ('G-M3: a command that assigns the variable gives no reading',
+     ' or _EXTENSIONS_SET.search(text):', ':',
+     'TestPreviouslyUnprobedRules.test_TWIN_a_command_that_assigns_the_variable_deletes_under_its_own_value'),
+    ('G-M3: the longer name is another variable',
+     '|' + chr(92) + '$X4_(?:GAME_)?EXTENSIONS(?![A-Za-z0-9_])")', '|' + chr(92) + '$X4_(?:GAME_)?EXTENSIONS")',
+     'TestPreviouslyUnprobedRules.test_TWIN_a_longer_variable_name_is_another_variable'),
+    ('G-M3: a configured root is a deployed-mod root',
+     '            for root in (_ext, _other_ext):', '            for root in (_ext,):',
+     'TestPreviouslyUnprobedRules.test_a_separately_configured_extensions_root_is_a_deployed_mod_root'),
+    ('G-M3: the game layout stays a deployed-mod root beside it',
+     '            for root in (_ext, _other_ext):', '            for root in (_other_ext,):',
+     'TestPreviouslyUnprobedRules.test_the_game_layout_still_counts_beside_a_configured_root'),
+    ('G-M3: all of a configured root is asked',
+     '                elif root == _other_ext and n == root[:-1]:', '                elif False:',
+     'TestPreviouslyUnprobedRules.test_all_of_a_separately_configured_root_names_every_mod'),
+    ('G-M3: a root of / names nothing',
+     '    if _other_ext == "/" or _other_ext == _ext:', '    if _other_ext == _ext:',
+     'TestPreviouslyUnprobedRules.test_TWIN_an_extensions_root_that_is_the_filesystem_root_names_nothing'),
+    ('G-M3: a configured root that is the game layout stays the hard block alone',
+     '    if _other_ext == "/" or _other_ext == _ext:', '    if _other_ext == "/":',
+     'TestPreviouslyUnprobedRules.test_TWIN_a_configured_root_that_is_the_game_layout_stays_the_hard_block'),
     # --- F10 (v4.0): a command name the guard cannot identify (variable, substitution,
     # cmd %R%/!R!). One mutant per clause; each target names its own class.
     ('F10: an unknown command name contributes its readings',
-     '            readings = dynamic_program_readings(seg)',
-     '            readings = []',
+     '            readings = dynamic_program_readings(seg)' + NL + '            if readings:' + NL + '                dynamic[n] = readings',
+     '            readings = []' + NL + '            if readings:' + NL + '                dynamic[n] = readings',
      'TestF10DynamicProgramWord.test_the_words_after_an_unknown_name_are_judged_as_a_command'),
     ('F10: a quoted word after an unknown name is read as eval reads it',
      '        for r in (rest, joined):',
@@ -1288,8 +1580,8 @@ MUTANTS = [
      '        if False and any(norm(roots[k]) in norm(o) or k in root_vars_named(o)',
      'TestF10DynamicProgramWord.test_an_unknown_name_given_a_protected_path_asks'),
     ('F10: a ROOT variable naming a program is a known program',
-     '        if not has_unresolved(subst_root_var(resolve(_verb_token(s), assigns), roots)):' + NL + '            continue',
-     '        if False:' + NL + '            continue',
+     '        if (not has_unresolved(subst_root_var(resolve(_verb_token(s), assigns), roots))' + NL,
+     '        if (False' + NL,
      'TestF10DynamicProgramWord.test_TWIN_a_known_name_given_a_protected_path_is_not_this_rule'),
     ('F10: a segment cut inside a substitution is no command position',
      '    return not any(_span_open(x) for x in toks[:k])',
@@ -1522,7 +1814,7 @@ def credited(failed: set, srcs: dict, key: str) -> set:
     return {t for t in failed if names_predicate(srcs.get(t, ""), key)}
 
 
-def run(work: Path):
+def run(work: Path, tests=()):
     # PYTHONDONTWRITEBYTECODE, and it is not hygiene -- without it this gate returns
     # WRONG VERDICTS. CPython invalidates a cached .pyc on (source mtime in SECONDS,
     # source size). Successive mutants are written to the same path within the same
@@ -1541,11 +1833,11 @@ def run(work: Path):
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     for pyc in work.rglob("__pycache__"):
         shutil.rmtree(pyc, ignore_errors=True)
-    p = subprocess.run([sys.executable, "test_hook_facts.py"], cwd=work,
+    p = subprocess.run([sys.executable, "test_hook_facts.py", *tests], cwd=work,
                        capture_output=True, text=True, errors="replace", env=env)
     out = p.stdout + p.stderr
     failed = failed_tests(out)
-    ran = re.search(r"Ran (\d+) tests", out)
+    ran = re.search(r"Ran (\d+) tests?", out)
     return p.returncode, failed, int(ran.group(1)) if ran else -1
 
 
@@ -1605,7 +1897,7 @@ def wait_for_dispatch():
         time.sleep(1)
 
 
-def evaluate_source(source):
+def evaluate_source(source, tests=()):
     wait_for_dispatch()
     with tempfile.TemporaryDirectory(prefix="x4-vht-case-") as td:
         work = Path(td)
@@ -1613,7 +1905,7 @@ def evaluate_source(source):
             shutil.copy2(HOOKS / f, work / f)
         (work / "hook_facts.py").write_text(source, encoding="utf-8", newline="")
         started = time.monotonic()
-        rc, failed, ran = run(work)
+        rc, failed, ran = run(work, tests)
         return {"rc": rc, "failed": sorted(failed), "ran": ran,
                 "seconds": time.monotonic()-started}
 
@@ -1637,6 +1929,45 @@ def shard_groups(n_mutants: int, keys: list, k: int, n: int) -> set:
     return {t for g in groups[k - 1::n] for t in g}
 
 
+def anchor_problems(pristine: str, test_source: str, mutants=None) -> list:
+    """Every reason the mutant table cannot run against this source, without running anything:
+    an anchor that does not appear exactly once, a replacement that changes nothing, a target that
+    does not name exactly one test, or a table with nothing in it."""
+    mutants = MUTANTS if mutants is None else mutants
+    if not mutants:
+        return ["the mutant set is EMPTY, so 0 of 0 uncaught would be a statement about nothing"]
+    idx = test_index(test_source)
+    out = []
+    for label, old, new, tgt in mutants:
+        count = pristine.count(old)
+        if count != 1:
+            out.append("%s: DID NOT APPLY (%d matches) -- stale mutant" % (label, count))
+        if old == new:
+            out.append("%s: the replacement is the anchor, so nothing is mutated" % label)
+        if qualify(tgt, idx)[0] is None:
+            out.append("%s: %s" % (label, qualify(tgt, idx)[1]))
+    return out
+
+
+def check_anchors() -> int:
+    """--check-anchors: the table against the hooks, no trials. 0 clean, 1 a problem, 2 no hooks."""
+    try:
+        pristine = (HOOKS / "hook_facts.py").read_text(encoding="utf-8")
+        source = (HOOKS / "test_hook_facts.py").read_text(encoding="utf-8")
+    except OSError as exc:
+        print("REFUSING: the hooks could not be read (%s)" % type(exc).__name__, file=sys.stderr)
+        return 2
+    problems = anchor_problems(pristine, source)
+    for line in problems:
+        print(line)
+    if problems:
+        print("REFUSING: %d problem(s) in the mutant table of %d, no trial was run"
+              % (len(problems), len(MUTANTS)))
+        return 1
+    print("%d mutant anchors each appear exactly once and name one test; no trial was run" % len(MUTANTS))
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, choices=range(1,9), default=1)
@@ -1645,9 +1976,22 @@ def main(argv=None) -> int:
     parser.add_argument("--shard", type=_shard_arg, metavar="K/N",
                         help="run only shard K of N (1-based): every mutant, and each predicate's "
                              "False/True pair, lands in exactly one shard; all N must pass")
+    parser.add_argument("--check-anchors", action="store_true",
+                        help="check the mutant table against the hooks, run no trial")
+    parser.add_argument("--only", type=re.compile, metavar="REGEX",
+                        help="run the mutants whose label matches, each against its target test's "
+                             "class only, and no predicate pairs; exit 3, never a release pass")
     args = parser.parse_args(argv)
+    if args.check_anchors:
+        return check_anchors()
     if args.shard and args.sample is not None:
         parser.error("--shard and --sample do not combine")
+    if args.only and (args.shard or args.sample is not None):
+        parser.error("--only does not combine with --shard or --sample")
+    selected = {i for i, m in enumerate(MUTANTS) if args.only.search(m[0])} if args.only else None
+    if selected is not None and not selected:
+        print("REFUSING: --only matched no mutant label", file=sys.stderr)
+        return 2
     def inputs():
         return {str(p.relative_to(REPO)):hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in [Path(__file__).resolve(),*[HOOKS/f for f in FILES]]}
@@ -1663,8 +2007,15 @@ def main(argv=None) -> int:
         target = work / "hook_facts.py"
         pristine = target.read_text(encoding="utf-8")
 
-        rc, failed, ran = run(work)
-        if rc != 0 or ran < 20:
+        # --only runs the target classes alone, so the floor is "the class ran at all".
+        floor, base_tests = 20, ()
+        if selected is not None:
+            floor = 1
+            index = test_index((HOOKS / "test_hook_facts.py").read_text(encoding="utf-8"))
+            targets = (qualify(MUTANTS[i][3], index)[0] for i in selected)
+            base_tests = sorted({t.split(".")[0] for t in targets if t})
+        rc, failed, ran = run(work, base_tests)
+        if rc != 0 or ran < floor:
             print(f"REFUSING: baseline is not green (rc={rc}, ran={ran}, "
                   f"{len(failed)} failed). No mutation result would mean anything.",
                   file=sys.stderr)
@@ -1721,6 +2072,9 @@ def main(argv=None) -> int:
         cases += [("predicate:"+k+":"+v, pristine+SHIM.format(key=k,val=v))
                   for k in keys for v in ("False","True")]
         population = len(cases)
+        if selected is not None:
+            cases = [c for c in cases if c[0] in {"mutation:" + str(i) for i in selected}]
+            print(f"--only: {len(cases)} of {population} trials, each against its target test's class\n")
         # CI SHARDS (4.0.1): the whole population took ~2 h 10 m on 4 workers at 228 mutants and
         # was still running 5 h 20 m into the 360-minute job at 288 (ci/v4.0.1-rc6), because each
         # trial's hook file went 41 s -> 75 s (the PowerShell link tests start one pwsh per shape).
@@ -1745,9 +2099,13 @@ def main(argv=None) -> int:
                          and os.environ.get("RUNNER_TEMP"))):
             print("REFUSING: parallel trials require rb.py run (or a GitHub Actions runner)")
             return 2
+        def tests_of(key):
+            if selected is None:
+                return ()
+            return (qualified[MUTANTS[int(key.split(":")[1])][3]].split(".")[0],)
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             values = []
-            for result in pool.map(evaluate_source, [s for _,s in cases]):
+            for result in pool.map(evaluate_source, [s for _,s in cases], [tests_of(k) for k,_ in cases]):
                 values.append(result)
                 print(f"trial {len(values)}/{len(cases)} completed", flush=True)
         results = dict(zip([key for key,_ in cases], values))
@@ -1778,7 +2136,7 @@ def main(argv=None) -> int:
             target.write_text(pristine.replace(old, new), encoding="utf-8", newline="")
             result = results["mutation:"+str(i)]
             rc, failed, ran = result["rc"], set(result["failed"]), result["ran"]
-            if ran < 20:
+            if ran < floor:
                 print(f"{label:<42} {'BROKE':<12} *** broke the suite, proves nothing ***")
                 bad += 1
             elif qualified[tgt] in failed:
@@ -1842,6 +2200,9 @@ def main(argv=None) -> int:
     print(f"predicates with a coverage gap:            {gaps} of {n_keys}")
     print("  fires?   = predicate pinned FALSE, so a must-FIRE test must break")
     print("  silent?  = predicate pinned TRUE,  so a must-NOT-fire test NAMING it must break")
+    if selected is not None:
+        print("--only: %d mutant(s), no predicate pair and no release verdict" % n_mut)
+        return 1 if bad else 3
     return 1 if (bad or gaps) else 0
 
 

@@ -13,7 +13,8 @@ Steps, each red on its own:
   1. the dependency lock is fresh (`uv lock --check`) and the shipped lua BUILD stamps are current
      (`scripts/stamp-mod-build.py --check`), both in tools/x4validate;
   2. the hook test files CI runs whole: the parse-pass unit tests, the audit tests (matcher coverage, PowerShell
-     front-end E2E) and the hook regression suite (.claude/hooks/);
+     front-end E2E) and the hook regression suite (.claude/hooks/), after the mutant table's anchors (no trial is
+     run here, and CI's mutation step refuses outright on one stale anchor);
   3. collection: `pytest --collect-only` of tools/x4validate/tests imports every module;
   4. the tests for the files this push changes (`git diff --name-only BASE...HEAD`): a changed test file runs itself;
      a changed module under tools/x4validate/x4validate/ or scripts/ runs every tests/test_*<its stem>*.py; and every
@@ -45,6 +46,7 @@ def _bash():
 
 
 HOOK_TESTS = [
+    ["python", "scripts/verify-hook-tests.py", "--check-anchors"],
     ["python", ".claude/hooks/test_hook_facts.py"],
     ["python", ".claude/hooks/test_audit0924_hooks.py"],
     [_bash(), ".claude/hooks/test-protect-bash.sh"],
@@ -213,7 +215,7 @@ def main(argv=None) -> int:
     g.step("shipped lua BUILD stamps are current",
            ["uv", "run", "--frozen", "python", "scripts/stamp-mod-build.py", "--check"], cwd=PKG)
     for cmd in HOOK_TESTS:
-        g.step(cmd[-1], cmd)
+        g.step(" ".join(cmd[1:]), cmd)
 
     def collect_check(r):
         if re.search(r"\d+ errors?\b", r.stdout):

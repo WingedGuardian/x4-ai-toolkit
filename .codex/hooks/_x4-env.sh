@@ -996,8 +996,9 @@ x4_emit_guard_roots() {
       [ -n "$candidate" ] && [ -d "$candidate" ] && { profile="$candidate"; break; }
     done
   fi
-  printf 'game\t%s\nprofile\t%s\nreference\t%s\nconfig\t%s\ntoolkit\t%s\nmods\t%s\ndocuments\t%s\nsaves\t%s\n--X4-ROOTS-END--' \
-    "$X4_GAME" "$profile" "$X4_REFERENCE" "${X4_CONFIG:-}" "$X4_TOOLKIT" "$X4_MODS" "${X4_DOCUMENTS:-}" "${X4_SAVES:-}"
+  printf 'game\t%s\nprofile\t%s\nreference\t%s\nconfig\t%s\ntoolkit\t%s\nmods\t%s\ndocuments\t%s\nsaves\t%s\nextensions\t%s\n--X4-ROOTS-END--' \
+    "$X4_GAME" "$profile" "$X4_REFERENCE" "${X4_CONFIG:-}" "$X4_TOOLKIT" "$X4_MODS" "${X4_DOCUMENTS:-}" "${X4_SAVES:-}" \
+    "${X4_EXTENSIONS:-${X4_GAME_EXTENSIONS:-}}"
 }
 
 x4_save_dispatch() {
