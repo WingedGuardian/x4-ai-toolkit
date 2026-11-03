@@ -51,8 +51,12 @@ HOOK_TESTS = [
 ]
 
 
+def _git_result(*args):
+    return subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True)
+
+
 def _git(*args):
-    return subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True).stdout.strip()
+    return _git_result(*args).stdout.strip()
 
 
 def base_rev(explicit):
@@ -69,9 +73,13 @@ def base_rev(explicit):
 
 
 def changed_files(base):
+    """The files the push changes. None when git could not answer: an empty list is the answer "nothing changed"."""
     if not base:
         return []
-    return [l.replace("\\", "/") for l in _git("diff", "--name-only", base + "...HEAD").splitlines() if l.strip()]
+    r = _git_result("diff", "--name-only", base + "...HEAD")
+    if r.returncode:
+        return None
+    return [l.replace("\\", "/") for l in r.stdout.splitlines() if l.strip()]
 
 
 def referencing_tests(changed):
@@ -182,11 +190,20 @@ def main(argv=None) -> int:
         if not (PKG / "tests").is_dir():
             print("prepush-gate: {} is not an X4 toolkit checkout (no tools/x4validate/tests)".format(REPO))
             return 2
+    base = base_rev(a.base)
+    # A bad --base gave an empty diff and "0 changed files, passed": the changed-file tests were the ones that never ran.
+    if a.base and _git_result("rev-parse", "--verify", "-q", a.base + "^{commit}").returncode:
+        print("prepush-gate: --base {} is not a commit here; nothing was checked".format(a.base))
+        return 2
+    changed = changed_files(base)
+    if changed is None:
+        print("prepush-gate: git could not diff {}...HEAD; nothing was checked".format(base))
+        return 2
+    if not base:
+        print("   NOT CHECKED: no base found (no upstream, no origin/master), so no changed-file tests run")
     if subprocess.run(["uv", "--version"], capture_output=True).returncode != 0:
         print("prepush-gate: uv is not on PATH; the suite runs through `uv run --frozen`")
         return 2
-    base = base_rev(a.base)
-    changed = changed_files(base)
     dirty = _git("status", "--porcelain", "--untracked-files=no")
     print("prepush-gate: {} @ {}  base {}  {} changed file(s){}".format(
         _git("rev-parse", "--abbrev-ref", "HEAD"), _git("rev-parse", "--short", "HEAD"), base or "(none)",
