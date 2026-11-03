@@ -445,6 +445,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F340 | The bulk-file guard runs out of its 40 s deadline on a 3,589-path batch at ordinary desk load and refuses it unchecked (fails closed) | **OPEN (measured)** · PRE-ARC | 12 of 12 timed runs on this machine, including the pre-arc tree; ~12.8 ms/path; 64% of a 2,000-path profile is `profiles._resolved`, ~20 calls per path | open; see entry |
 | F341 | A mod edited while `x4effective build` or `x4xref build` ran was stamped as already absorbed, so the store read FRESH with the old values | **DEFECT (measured)** · PRE-ARC (exposure IN-ARC) | release review probe `probe_race2`: an edit during the build left the new world's fingerprint over the old values, FRESH until the next change | FIXED 2026-11-03 - both fingerprint before their first mod read; x4fresh compares the world's digest around each builder |
 | F342 | On Windows a closed pipe is `OSError` EINVAL, not `BrokenPipeError`, so `x4effective ls ware \| head` ended in a traceback and rc 1 | **DEFECT (measured)** · PRE-ARC | found by the 4.1 fix lane on a throwaway store; real `x4effective ls ware \| head -n 1` rc 0, no traceback, unpiped control 202 lines | FIXED 2026-11-03 - EINVAL counts as a closed pipe only when it carries no filename |
+| F343 | `x4effective find` resolves names from the store's merged text table, which lacked 12 of 75,168 entries that plain t-files define | **OPEN (measured)** · IN-ARC | release review probe over its scratch store: 12 of 75,168 distinct (page, id) entries in plain t-files absent from the table; page 90105 among them | open; cause not established; a name that depends on one reads as an unresolved reference, never silently as absent |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11780,3 +11781,17 @@ NOT EXAMINED: `x4save info` and `x4save check` (the fix lane thought they likely
 ran), and every other CLI's behaviour under a closed pipe.
 
 **RE-DERIVED BY:** `tools/x4validate/tests/test_effective_closed_pipe.py`.
+
+## F343 - `x4effective find` cannot resolve a name whose text the merged table lacks · **OPEN (measured)** · IN-ARC · confidence 60% (cause unknown)
+
+`find` resolves `{page,id}` references against the `texts` table the effective store keeps (`_text.py`). MEASURED by the
+release review's probe over its own scratch store: 12 of 75,168 distinct (page, id) entries that PLAIN (non-diff)
+t-files define are absent from that table, page 90105 among them. The review labelled the cause "merged-away text";
+this register did not establish it, and which provider or merge step drops them is OPEN.
+
+Effect, READ in `_cmd_find`: an entity whose name depends on such an entry gets the status `dangling`, is printed with
+`[dangling reference]`, counted in the summary's "unresolvable reference" figure, and still matched on its raw text. So
+the limit shows up as a labelled row, not as a silent absence. What it cannot do is show the player-facing name.
+
+To close it: find which merge step omits the 12 entries (compare the plain-file population with the table per provider),
+then fix the merge or document the rule. Do not widen `find` to guess.
