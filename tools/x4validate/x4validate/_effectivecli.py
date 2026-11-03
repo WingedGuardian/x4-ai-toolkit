@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json as _json
 import argparse
+import errno
 import json
 import sqlite3
 import sys
@@ -263,7 +264,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f'effective store unreadable or incompatible: {db}: {exc}\n'
                   'Rebuild: uv run x4effective build', file=sys.stderr)
             return 2
-    except BrokenPipeError:
+    except OSError as exc:
+        if not _reader_gone(exc):
+            raise
         # The reader went away (`| head`): what was printed was printed. Python's own
         # recipe: point stdout at devnull so the interpreter's exit flush cannot raise again.
         _quiet_stdout()
@@ -276,6 +279,20 @@ def main(argv: list[str] | None = None) -> int:
 class StoreMetadataError(ValueError):
     """The store's freshness metadata is damaged: a STORE failure, unlike a command's own
     ValueError."""
+
+
+def _reader_gone(exc: OSError) -> bool:
+    """A closed pipe is BrokenPipeError on POSIX and EINVAL on Windows. EINVAL alone can mean anything,
+    so it counts only if stdout itself refuses a flush."""
+    if isinstance(exc, BrokenPipeError):
+        return True
+    if exc.errno != errno.EINVAL:
+        return False
+    try:
+        sys.stdout.flush()
+    except OSError:
+        return True
+    return False
 
 
 def _quiet_stdout() -> None:
