@@ -202,8 +202,10 @@ run_layout "separate" "$SBX_TMP/sep/toolkit"         "$SBX_TMP/sep/X4 Foundation
 # even when that root is the game folder and the toolkit is elsewhere ($HOOK_DIR/../.. leg).
 _hk_game="${X4_GAME-}"; _hk_tk="${X4_TOOLKIT-}"
 export X4_GAME="$REPO" X4_TOOLKIT="$SBX_TMP/sep/toolkit"
-decide allow protect-files.sh "$(fj "$REPO/.agent-sessions/s1.md")" "hook-only game root: the hook tree's own .agent-sessions/"
-decide deny  protect-files.sh "$(fj "$REPO/libraries/.agent-sessions/s1.md")" "hook-only game root: deeper is still a game file"
+# Native spelling: a replaying adapter is a native tool, and /c/x there is C:\c\x, not this folder.
+_hk_repo="$(cygpath -m "$REPO" 2>/dev/null || printf '%s' "$REPO")"
+decide allow protect-files.sh "$(fj "$_hk_repo/.agent-sessions/s1.md")" "hook-only game root: the hook tree's own .agent-sessions/"
+decide deny  protect-files.sh "$(fj "$_hk_repo/libraries/.agent-sessions/s1.md")" "hook-only game root: deeper is still a game file"
 export X4_GAME="$_hk_game" X4_TOOLKIT="$_hk_tk"
 
 # The OTHER branch of the same rule, and it must be exercised or the deny above is the

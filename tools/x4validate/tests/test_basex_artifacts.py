@@ -199,7 +199,7 @@ def test_native_database_rebuild_keeps_only_the_current_generation(tmp_path, red
     if not java or not jar.is_file():
         pytest.skip("native lifecycle requires the installed Java/BaseX runtime")
     if getattr(jar.stat(), "st_file_attributes", 0) & 1:
-        pytest.skip("read-only input jar cannot be safely hard-linked into disposable scratch")
+        pytest.skip("read-only input jar: the disposable scratch copy would carry that attribute and could not be cleaned up")
     root = tmp_path / "fixture"
     home = root / "basex"
     home.mkdir(parents=True)

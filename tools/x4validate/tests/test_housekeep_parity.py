@@ -28,7 +28,7 @@ def pair():
         yield roots
 
 
-def test_current_siblings_and_pins_agree(pair):
+def test_synthetic_siblings_and_pins_agree(pair):
     report=parity.compare(*pair)
     assert report['state']=='equal' and report['compared']==report['expected']==4
 
