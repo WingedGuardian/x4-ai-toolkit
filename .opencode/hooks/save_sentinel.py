@@ -11,13 +11,31 @@ same under Documents as Windows reports it (a OneDrive- or policy-redirected Doc
 discovery in _x4-env.sh does not see), and any folder under the toolkit marked with a `.protect-saves` file.
 
 Who wrote it. A change dated inside a game session goes to the agent only; any other raises the user too. A session is
-known two ways: X4 is running at this look, or <profile>/uidata.xml, which X4 truncates at launch and rewrites at every
-exit, moved since the previous look (it then ends the window). A change is judged by its own timestamp (a removal by
-its folder's), so an agent changing a save while the game is closed still alarms, even right after a play session.
-A folder only the toolkit watches is never the game's. Accepted residual, in the quiet direction: a change made by
-something else while the game runs, or between the previous look and the game's exit, reads as the game's (a
-post-call hook cannot tell two writers apart inside one window). In the loud direction: a crash leaves no exit stamp, so
-saves from a crashed session the sentinel never saw running alarm once.
+known two ways: X4 is running at this look, or a look since the last one shows the game's exit. An exit takes all of:
+    - <profile>/uidata.xml moved since the previous look (X4 truncates it at launch and rewrites it at exit; its stamp
+      ends the window);
+    - another file of the exit set (pipelinecache.bin, config.xml, userdata.xml, debug.txt) stamped within EXIT_SPREAD
+      seconds of it, so touching uidata.xml alone is no session;
+    - the profile not rewritten as a whole: fewer than REWRITTEN_FLOOR, or under half, of its other top-level files moved.
+And however the session is known, more than MOST_A_SESSION_CHANGES changes to one save folder in one look are not the
+game's. A change is judged by its own timestamp (a removal by its folder's), so an agent changing a save while the game
+is closed still alarms, even right after a play session. A folder only the toolkit watches is never the game's.
+
+Measured by stat on this machine's profiles, 2026-11-03, no game run. The last exit on each of 4 profiles (a play
+profile, and 3 small ones that look like test runs): pipelinecache.bin 1 to 7 s after uidata.xml, debug.txt under 6 s
+before it, in all 4. The play profile's other files: 5 of 33 moved in the hour before that exit, 16 of 33 in the 30 days
+before it. A real whole-profile copy: 15 of 15 others and 14 of 14 saves within a minute, uidata.xml and userdata.xml
+together. That EVERY exit writes one of the set is inferred from those samples, not proved.
+
+What fools the quiet path. Things read as the game's: a change by something else while X4 runs, or stamped between the
+previous look and a real exit, including one whose stamp was set back into that window (a post-call hook cannot tell two
+writers apart inside one window, and this guards against accidents, not a determined attacker); a script that rewrites
+uidata.xml, a second file of the exit set and at most MOST_A_SESSION_CHANGES saves while leaving most of the profile
+alone; a copy of a profile with fewer than REWRITTEN_FLOOR other files and few saves.
+What alarms although it was the game, once, with no effect on any save: a crash (no exit stamp), a session X4 left
+without touching any of the exit set, more than MOST_A_SESSION_CHANGES saves overwritten or deleted between two looks,
+and a session on a profile where half of the other files have also moved since the last look, as after months with no
+agent running or on a nearly new profile.
 
 Input: the roots packet then the hook payload (the same stdin save_policy.py reads). Output: a PostToolUse JSON
 answer, or nothing.
@@ -29,6 +47,7 @@ import os
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -42,7 +61,12 @@ SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv"}
 GAMES = ("X4.exe",)
 EXTENSIONS = (".xml.gz", ".xml")
 ELEVATED_REPEAT = 12 * 3600   # seconds between "this agent runs elevated" warnings, and repeats of one lock failure
-SESSION_FILES = ("uidata.xml",)   # rewritten by X4 on every exit, in the profile folder above its save folder
+SESSION_FILE = "uidata.xml"       # rewritten by X4 on every exit, in the profile folder above its save folder
+EXIT_COMPANIONS = ("pipelinecache.bin", "config.xml", "userdata.xml", "debug.txt")    # the rest of an exit: any one will do
+EXIT_NAMES = {SESSION_FILE, *EXIT_COMPANIONS}
+EXIT_SPREAD = 30                  # seconds between uidata.xml and a companion; measured under 7 at real exits
+REWRITTEN_FLOOR = 5               # other top-level files that must move, with at least half of them, to read as a copy
+MOST_A_SESSION_CHANGES = 10       # one folder, one look: three autosaves, a quicksave and a few overwritten saves
 SHOWN = 15
 
 
@@ -111,26 +135,60 @@ def game_running():
     return any('"' + g.lower() + '"' in out for g in GAMES)
 
 
+def _stamp(path, default=None):
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return default
+
+
+def _left_exit_marks(profile, stamp):
+    """Did another file of the exit set move with uidata.xml's `stamp`?"""
+    return any(abs(_stamp(os.path.join(profile, name), stamp + EXIT_SPREAD + 1) - stamp) <= EXIT_SPREAD
+               for name in EXIT_COMPANIONS)
+
+
+def _profile_rewritten(profile, since):
+    """Did most of the profile move since `since`? An exit leaves the other files alone; a restore or a sync that does
+    not keep times rewrites them all. A profile that cannot be listed cannot be cleared, so it counts."""
+    try:
+        with os.scandir(profile) as entries:
+            others = [e for e in entries if e.is_file() and e.name not in EXIT_NAMES]
+            moved = sum(1 for e in others if e.stat().st_mtime >= since)
+    except OSError:
+        return True
+    return moved >= REWRITTEN_FLOOR and moved * 2 >= len(others)
+
+
 def session_end(save_folder, since):
-    """When X4 last left the profile above `save_folder`, if that was since `since`. None: no sign of a session."""
-    latest = None
-    for name in SESSION_FILES:
-        try:
-            stamp = os.stat(os.path.join(os.path.dirname(save_folder), name)).st_mtime
-        except OSError:
-            continue
-        latest = stamp if latest is None else max(latest, stamp)
-    return latest if latest is not None and latest >= since else None
+    """When X4 last left the profile above `save_folder`, if that was since `since`. None: no exit shows (see the module
+    docstring for what one takes)."""
+    profile = os.path.dirname(save_folder)
+    stamp = _stamp(os.path.join(profile, SESSION_FILE))
+    if stamp is None or stamp < since:
+        return None
+    if not _left_exit_marks(profile, stamp):
+        return None
+    if _profile_rewritten(profile, since):
+        return None
+    return stamp
+
+
+def _folder_key(path):
+    return os.path.normcase(os.path.abspath(os.path.dirname(path)))
 
 
 def games_doing(sentinel, changes, game_folders, since):
     """The (kind, path) changes dated inside a game session since `since` (see the module docstring)."""
     running = None
     quiet = []
+    counts = Counter(_folder_key(path) for _kind, path in changes)
     for kind, path in changes:
         folder = os.path.dirname(path)
-        if os.path.normcase(os.path.abspath(folder)) not in game_folders:
+        if _folder_key(path) not in game_folders:
             continue                    # a folder only the toolkit watches: the game does not write there
+        if counts[_folder_key(path)] > MOST_A_SESSION_CHANGES:
+            continue                    # a bulk change is never a game session's
         if running is None:
             running = game_running()
         end = None if running else session_end(folder, since)
@@ -172,6 +230,9 @@ def report(roots, now=None):
     if raised:
         text += ("\nThe save guard did not back these up. If a command or script you ran did this, tell the user "
                  "now; a removed file may be in the Recycle Bin.")
+        if any(_folder_key(path) in game_folders for _kind, path in raised):
+            text += ("\nIf X4 was played since the last look and nothing else touched these saves, this can be a false "
+                     "alarm: a crash, or an exit that left no second sign of a session, reads as not the game's.")
     if quiet:
         lines = ["SAVE SENTINEL: {} save file(s) changed while X4 was running or before it last exited, so it may be "
                  "the game itself saving:".format(len(quiet))]
@@ -179,7 +240,7 @@ def report(roots, now=None):
         if len(quiet) > SHOWN:
             lines.append("  ... and {} more".format(len(quiet) - SHOWN))
         text = "\n".join(t for t in [text] + lines if t)
-    return "\n".join(t for t in [text] + notes if t), bool(raised) or lock_loud
+    return "\n".join(t for t in [text] + notes if t), bool(raised) or lock_loud or result.state_lost
 
 
 def lock_switch(root):
