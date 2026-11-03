@@ -2637,6 +2637,27 @@ def _lifts_reference_deny(seg: str, assigns: dict, roots: dict, cwd: str = "") -
     return False
 
 
+def _save_lock_decision(seg: str) -> bool:
+    """Does this segment change the optional save locks? 4.1.0 review F9: on, off and unlock all belong to the user, so
+    an agent's ask, in both directions: `on` makes locks only an elevated prompt can lift. `agent-harness.py save-lock`
+    RUN by an interpreter with any action but status, an action the guard cannot read included; and `setup.sh
+    --save-lock` run by a shell. Accepted residual, as for lifts_reference_deny: an opaque interpreter (`python -c`) is
+    not seen -- this stops accidents, not intent. The switch file itself is kept by the save guard."""
+    toks = [t.lower() for t in tokens_of(seg)]
+    v = _verb_name(verb(seg)).lower()
+    base = lambda t: t.replace(chr(92), "/").rsplit("/", 1)[-1]
+    if v.startswith(("python", "py", "uv", "uvx", "conda", "mamba", "micromamba", "pipx", "poetry", "pdm", "hatch",
+                     "rye", "pixi", "xargs")) or has_unresolved(v):
+        for i, t in enumerate(toks):
+            if base(t) == "agent-harness.py" and toks[i + 1:i + 2] == ["save-lock"]:
+                action = _refguard_action(toks[i + 2:])
+                return "xargs" in toks[:i] or has_unresolved(action) or action in ("on", "off", "unlock")
+    if v in ("bash", "sh", "setup.sh") or has_unresolved(v):
+        at = 0 if v == "setup.sh" else next((i for i, t in enumerate(toks) if base(t) == "setup.sh"), -1)
+        return at >= 0 and "--save-lock" in toks[at:]
+    return False
+
+
 def _refguard_action(args: list) -> str:
     """x4refguard.py's ACTION: its first argument that is not an option (the top-level
     parser takes no options of its own). '' when there is none."""
@@ -7400,6 +7421,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # protection, so an agent's lift is an ASK. Segment-scoped like xrcat_reunpack.
         "lifts_reference_deny": any(_lifts_reference_deny(sg, assigns, roots, _c)
                                     for sg, _c in seg_cwd),
+        # The optional save locks, in either direction, are the user's decision (F9, 4.1.0 review).
+        "save_lock_decision": any(_save_lock_decision(sg) for sg, _c in seg_cwd),
         # F331 follow-up: a link CREATED with its target in (or above) reference/, the game, the
         # profile or the saves -- every later write through it lands there -- and a link verb
         # whose target the guard cannot read.

@@ -54,6 +54,18 @@
   match: [["python", "scripts/x4refguard.py", "remove"], ["python3", "scripts/x4refguard.py", "remove"]]
   not_match: [["python", "scripts/x4refguard.py", "status"], ["python", "scripts/x4refguard.py", "apply"]]
 
+- id: save-lock-decision
+  source: protect-bash.sh
+  anchor: "on save_lock_decision"
+  fact: save_lock_decision
+  verdict: ask
+  bucket: prompt
+  reason: "4.1.0 review F9: the OS save locks are the user's decision, in both directions. The prefix covers the three actions the hook asks on unconditionally; `setup.sh --save-lock` and the unreadable-action forms need parsing, so that half stays hook-only"
+  justification: "This changes the OS save locks (on, off or unlock): only an administrator prompt lifts them, so it is the user's decision. Confirm only if they asked for it."
+  pattern: [["python", "python3", "py"], "tools/agent-harness.py", "save-lock", ["on", "off", "unlock"]]
+  match: [["python", "tools/agent-harness.py", "save-lock", "on"], ["python3", "tools/agent-harness.py", "save-lock", "off"], ["py", "tools/agent-harness.py", "save-lock", "unlock"]]
+  not_match: [["python", "tools/agent-harness.py", "save-lock", "status"], ["python", "tools/agent-harness.py", "save-list"]]
+
 - {id: reunpack-locked, source: protect-bash.sh, anchor: "BLOCKED: reference/ is locked", verdict: deny, bucket: hook_only, reason: "sentinel-gated: only while reference/.unpacked-and-locked exists"}
 - {id: rm-deployed-mod, source: protect-bash.sh, anchor: "on rm_deployed_mod && ask", fact: rm_deployed_mod, verdict: ask, bucket: hook_only, reason: "path-scoped: a deployed mod in the game's extensions/, one prompt per command naming every mod (user 2026-10-27)"}
 - {id: rm-in-x4-dir, source: protect-bash.sh, anchor: "on rm_in_x4_dir", fact: rm_in_x4_dir, bucket: hook_only, reason: "path-scoped (verdict changed ask->advise on 2026-10-02; removing a deployed mod asks via rm-deployed-mod since 2026-10-27)"}
