@@ -444,7 +444,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F339 | `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them | **SCOPE LIMIT (measured)** · IN-ARC | a 9.0 save stores a table variable as a reference id resolved elsewhere in the save; on save_020 the KUDA config cue alone holds 3 such tables (`$byShipId`, `$defaultOrdersByShipId`, `$lxl_isStrictMaintainDistance`) | stated in output and `--help`; expansion is a follow-up |
 | F340 | The bulk-file guard ran out of its 40 s deadline on a 3,589-path batch at ordinary desk load and refused it unchecked (failed closed) | **FIXED (measured on one machine; no CI timing yet)** · PRE-ARC | 12 of 12 timed runs failed on 2026-11-01, including the pre-arc tree; ~12.8 ms/path; 64% of a 2,000-path profile was `profiles._resolved`, ~20 calls per path. After the fix: worst 19.19 s in the release review's run against the 40 s deadline | FIXED 2026-11-03 - each path resolves once per read-only pass, in the shared core; see entry |
 | F341 | A mod edited while `x4effective build` or `x4xref build` ran was stamped as already absorbed, so the store read FRESH with the old values | **DEFECT (measured)** · PRE-ARC (exposure IN-ARC) | release review probe `probe_race2`: an edit during the build left the new world's fingerprint over the old values, FRESH until the next change | FIXED 2026-11-03 - both fingerprint before their first mod read; x4fresh compares the world's digest around each builder |
-| F342 | On Windows a closed pipe is `OSError` EINVAL, not `BrokenPipeError`, so `x4effective ls ware \| head` ended in a traceback and rc 1 | **DEFECT (measured)** · PRE-ARC | found by the 4.1 fix lane on a throwaway store; real `x4effective ls ware \| head -n 1` rc 0, no traceback, unpiped control 202 lines | FIXED 2026-11-03 - EINVAL counts as a closed pipe only when it carries no filename |
+| F342 | On Windows a closed pipe is `OSError` EINVAL, not `BrokenPipeError`, so `x4effective ls ware \| head` ended in a traceback and rc 1; the fix covers `x4effective` and `x4save` only | **DEFECT (measured)** · PRE-ARC | found by the 4.1 fix lane on a throwaway store; real `x4effective ls ware \| head -n 1` rc 0, no traceback, unpiped control 202 lines; `--help` into a closed pipe exits 120 on 10 of the 12 console scripts (housekeeping lane, 2026-11-03) | FIXED 2026-11-03 for `x4effective` and `x4save` (a failed write to stdout is the closed reader, nothing else is); OPEN for the other ten, where only `--help` was measured |
 | F343 | `x4effective find` resolves names from the store's merged text table, which lacked 12 of 75,168 entries that plain t-files define | **OPEN (measured)** · IN-ARC | release review probe over its scratch store: 12 of 75,168 distinct (page, id) entries in plain t-files absent from the table; page 90105 among them | open; cause not established; a name that depends on one reads as an unresolved reference, never silently as absent |
 | F344 | The save sentinel decides whether the game wrote a change from the game's session window; it cannot separate writers inside a window, and a crashed session leaves no stamp | **SCOPE LIMIT (measured on fake timestamps only)** · IN-ARC | the fix lane's tests drive the window with fabricated timestamps; no in-game session was run | stated in the CHANGELOG; the window comes from `uidata.xml`'s modification time |
 | F345 | `bin_refusal` judged the drive letter of the absolute path, so a path under a junction or symlink to a network share looked recyclable and Windows' shell then destroys such files silently | **DEFECT (measured)** · IN-ARC | release review: an ancestor junction to a UNC path passed; fix lane: real junctions, 6 classes of path, 2 arms each | FIXED 2026-11-03 - every existing component is checked for a link and `realpath` has the last word |
@@ -11783,7 +11783,7 @@ RESIDUAL (reported by the fix lane, not fixed): `build-corpus.sh` and `build-eff
 
 **RE-DERIVED BY:** `tools/x4validate/tests/test_freshcli.py`.
 
-## F342 - A closed pipe on Windows was a traceback and rc 1 in `x4effective` · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-03
+## F342 - A closed pipe on Windows was a traceback and rc 1 in `x4effective`; the contract covers two of twelve console tools · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-03 for `x4effective` and `x4save`
 
 Found by the 4.1 fix lane on a throwaway store: `x4effective ls ware | head` ended in an `OSError` traceback with rc 1,
 because the CLI caught only `BrokenPipeError` and Windows reports a closed pipe as EINVAL. `x4save vars` had the
@@ -11796,10 +11796,22 @@ path that returns quietly. The second fix (`fe6a224a`) uses what separates the c
 a filename and a write to stdout does not. Its test uses a real closed pipe. MEASURED on a real run: `x4effective ls ware | head -n 1`
 rc 0 and no traceback; the unpiped control prints 202 lines.
 
-NOT EXAMINED: `x4save info` and `x4save check` (the fix lane thought they likely share the shape; INFERRED, nothing
-ran), and every other CLI's behaviour under a closed pipe.
+The second round (`635424f1`) moved the judgement to where it happens. `_closedpipe.quiet_exit` wraps `main` and treats
+only a failed write to stdout as a closed reader (an EINVAL that names a file is a real failure), and the last flush is
+part of the command. It covers what the first fix missed in `x4effective` (`dump` sat outside the guarded `try`, so a
+traceback and rc 1; `find`, `ls`, `coverage`, `info` and `check` failed at the exit flush with rc 120) and the
+`x4save` subcommands. The test (`test_closed_pipe_cli.py`) runs the real CLI on a real pipe against a throwaway store.
 
-**RE-DERIVED BY:** `tools/x4validate/tests/test_effective_closed_pipe.py`.
+CONTRACT (READ, `_closedpipe.py`): a command that finished keeps the verdict it returned; a command cut off while
+printing exits 0, because what was printed was printed. So a command whose verdict is in the part that was cut off still
+exits 0: `x4save check` cut off before its verdict line exits 0 even if it would have reported a problem.
+
+MEASURED by the housekeeping lane on 2026-11-03: `--help` into a closed pipe exits 120 on 10 of the 12 console scripts
+(the 12 entries of `[project.scripts]` in `pyproject.toml`); only `x4effective` and `x4save` do not. `--help` is the only
+case measured for those ten: whether their other output behaves the same is NOT EXAMINED, and the fix has not been applied
+to them.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_closed_pipe_cli.py`.
 
 ## F343 - `x4effective find` cannot resolve a name whose text the merged table lacks · **OPEN (measured)** · IN-ARC · confidence 60% (cause unknown)
 
