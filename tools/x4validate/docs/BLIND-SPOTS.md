@@ -453,6 +453,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F348 | The deployed-mod ask reads `$X4_EXTENSIONS` as an additive reading and several spellings are not read; a PowerShell `$env:` variable the command assigns stays a name (a second translation pass that read it was removed), `Pop-Location` is not modelled and a reassigned `$P` is judged against its first value | **OPEN LIMIT (measured)** · IN-ARC | the guards lane's replay old against new: 0 weaker verdicts over 2,893 test rows, 6,797 Bash commands, 200 PowerShell commands and 11,550 probes; the three PowerShell gaps probed at this commit | open; `test_KNOWN_GAP_an_env_variable_this_command_assigned_is_not_read_as_its_value` pins the first |
 | F349 | The installed toolkit's own test suite was never run in CI: on a fresh install it had 74 errors and 64 failures while SETUP_PROMPT.txt promised none | **DEFECT (measured)** · PRE-ARC | whole suite on a fresh install: 5,821 passed, 64 failed, 74 errors, 534 skipped of 6,493 | FIXED 2026-11-03 - tests read what an install ships or skip with a counted reason; CI gained an installed-copy job |
 | F350 | A save-lock folder's identity compares its path, file id and the low 32 bits of its volume; ReFS was not measured | **SCOPE LIMIT (measured on one NTFS folder)** · IN-ARC | one NTFS folder read under Python 3.10.10 and 3.12.10: `st_dev` differs between them, its low 32 bits and `st_ino` do not | FIXED for NTFS 2026-11-03 in the pinned core; ReFS unmeasured, a mismatch fails by refusing |
+| F351 | A sentinel look that finds the shared record held compares nothing; the change surfaces one look later | **SCOPE LIMIT (measured)** · IN-ARC | 1,350 parallel looks at the pinned core: 0 found the record held, so that path ran only under a real-lock probe and patched tests | FIXED 2026-11-03: false alarm and lost baseline gone; the delayed report is by design |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12013,3 +12014,18 @@ that is not where it was keeps the switch on): `off` refuses and names the folde
 Related, from the same lane: a lock rule that names another account no longer counts as locking the current user, so
 locking adds the user's own rule and `status` does not count that save as protected; a hand-made deny rule naming a group
 is not read as binding, so locking fails loudly instead of reporting protection that is not there.
+
+## F351 - A held sentinel record delays the report by one look · **SCOPE LIMIT (measured)** · IN-ARC · confidence 80% · FIXED 2026-11-03
+
+All sessions share one sentinel record and hooks run in parallel. A reader that met another look's `os.replace` read
+the record as unreadable, set a new baseline and raised the user: a false alarm that also dropped a real change.
+MEASURED before the fix (the review's parallel probe): 4 at once raised on 40 of 600 looks; after it, 0 of 600, with 3
+at once 0 of 450 and 2 at once 0 of 300. Same machine, not a controlled identical load.
+
+A look that still finds the record held after its retries compares nothing and keeps the baseline, so the change
+surfaces one look later. In the 1,350 parallel looks above none found it held, so that path was exercised by a
+real-lock probe and by patched tests rather than by the load. Two parallel looks can both report one change; that
+this only duplicates and never loses a report is INFERRED. A record held across a session end is reported only once
+a later look also finds it held. The 5-minute stuck limit is a chosen value, not a measured one.
+
+**NO RE-DERIVATION: the parallel counts came from a review probe in private scratch, and the core's own tests live in the core's repository.**
