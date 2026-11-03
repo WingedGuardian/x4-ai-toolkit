@@ -179,21 +179,28 @@ def check(profile, store, state, watch=(), now=None, covered=None):
     return Report(first, tuple(unbacked), tuple(backed), truncated, lost, unread)
 
 
+def _seen_path(path):
+    """A mark beside the record saying a look has been recorded here, so a record later deleted is not a first look."""
+    path = Path(path)
+    return path.with_name(path.name + ".seen")
+
+
 def load_state(path):
-    """The previous look's record. Nothing there is {}, a first look. A record that exists and cannot be read is
-    {"unreadable": True}: still a new baseline, but check() reports it, because changes since the last look are lost."""
+    """The previous look's record. Nothing there, ever, is {}, a first look. A record that cannot be read, or is gone
+    though one was written here, is {"unreadable": True}: still a new baseline, but check() reports it, because changes
+    since the last look are lost. Deleting the mark along with the record reads as a first look."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {}
+        return {"unreadable": True} if _seen_path(path).exists() else {}
     except (OSError, ValueError):
         return {"unreadable": True}
     return data if isinstance(data, dict) and data.get("v") == 1 else {"unreadable": True}
 
 
 def save_state(path, state):
-    """Replace the state atomically. Unlike durable.atomic_json (no-clobber, for immutable records) this is a
-    cache that each look overwrites; losing it only makes the next look a baseline."""
+    """Replace the state atomically, then mark that a record exists. Unlike durable.atomic_json (no-clobber, for
+    immutable records) this is a cache that each look overwrites; losing it makes the next look a disclosed baseline."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_name(".part-" + str(os.getpid()) + "-" + path.name)
@@ -203,6 +210,9 @@ def save_state(path, state):
     finally:
         if part.exists():
             part.unlink()   # same-call scratch this function created
+    seen = _seen_path(path)
+    if not seen.exists():
+        seen.write_bytes(b"")
 
 
 def describe(report, limit=15):
@@ -221,6 +231,6 @@ def describe(report, limit=15):
         lines.append("SAVE SENTINEL: folder(s) that could not be listed, so changes there are not known: "
                      + ", ".join(report.unread))
     if report.state_lost:
-        lines.append("SAVE SENTINEL: the record of the previous look could not be read, so this look is a new baseline "
-                     "and any change since the previous look is not reported.")
+        lines.append("SAVE SENTINEL: the record of the previous look is gone or could not be read, so this look is a new "
+                     "baseline and any change since the previous look is not reported.")
     return "\n".join(lines)

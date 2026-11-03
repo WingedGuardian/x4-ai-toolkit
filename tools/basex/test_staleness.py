@@ -374,3 +374,73 @@ def test_an_EMPTY_extensions_directory_is_ACCEPTED(tmp_path, monkeypatch):
     # A LIST of install roots since AUDIT-2026-09-24 FR-6, the named one first; any other
     # configured roots (profile, workshop) follow and are fingerprinted too.
     assert got_roots[0] == ext
+
+
+# ---------------------------------------------------------------- T1/R2-7: the fingerprint of what the build READ
+
+def _snapshot_then_stamp(tmp_path, move):
+    ref, ext, engine = _fake_tree(tmp_path)
+    cov = tmp_path / "coverage-x4eff.json"
+    cov.write_text(json.dumps({"db": "x4eff", "status": "complete"}))
+    pending = tmp_path / "pending.json"
+    staleness.snapshot(pending, ref, ext, engine, "x4eff")
+    move(ext)
+    staleness.write(cov, ref, ext, engine, taken_before=pending)
+    return staleness.check(cov, ref, ext, engine, "x4eff"), cov, pending
+
+
+def _a_mod_is_added(ext):
+    (ext / "mod_c").mkdir()
+    (ext / "mod_c" / "content.xml").write_bytes(b'<content id="mod_c" version="100"/>')
+
+
+def test_a_world_that_moved_during_the_build_reads_stale(tmp_path):
+    verdict, cov, _ = _snapshot_then_stamp(tmp_path, _a_mod_is_added)
+    assert not verdict.fresh and verdict.determinable
+    assert json.loads(cov.read_text())["status"] == "complete", "the stamp stays additive"
+
+
+def test_a_world_that_held_still_reads_fresh(tmp_path):
+    """The twin."""
+    verdict, _, _ = _snapshot_then_stamp(tmp_path, lambda _ext: None)
+    assert verdict.fresh
+
+
+def test_the_snapshot_is_used_up_by_its_stamp(tmp_path):
+    """A leftover could be stamped onto a later build it says nothing about."""
+    _, _, pending = _snapshot_then_stamp(tmp_path, lambda _ext: None)
+    assert not pending.exists()
+
+
+def test_a_stamp_from_nothing_refuses_rather_than_recomputing(tmp_path):
+    """Recomputing at the end is the original defect, so a missing or wrong snapshot is an error, never a fallback."""
+    ref, ext, engine = _fake_tree(tmp_path)
+    cov = tmp_path / "coverage-x4eff.json"
+    cov.write_text(json.dumps({"db": "x4eff", "status": "complete"}))
+    with pytest.raises(staleness.SnapshotUnusable):
+        staleness.write(cov, ref, ext, engine, taken_before=tmp_path / "never-written.json")
+    other = tmp_path / "other.json"
+    staleness.snapshot(other, ref, ext, engine, "x4raw")
+    with pytest.raises(staleness.SnapshotUnusable):
+        staleness.write(cov, ref, ext, engine, taken_before=other)
+    assert "fingerprint" not in json.loads(cov.read_text()), "a refused stamp writes nothing"
+
+
+def test_the_cli_refuses_an_unusable_snapshot_with_the_stamp_failure_rc(tmp_path, monkeypatch, capsys):
+    ref, ext, engine = _fake_tree(tmp_path)
+    monkeypatch.setattr(staleness, "_defaults", lambda: (ref, ext, engine))
+    cov = tmp_path / "coverage-x4eff.json"
+    cov.write_text("{}")
+    rc = staleness.main(["--write", "--db", "x4eff", "--coverage", str(cov), "--taken-before", str(tmp_path / "none.json")])
+    assert rc == 6 and "cannot stamp" in capsys.readouterr().err
+
+
+def test_the_cli_round_trip(tmp_path, monkeypatch):
+    ref, ext, engine = _fake_tree(tmp_path)
+    monkeypatch.setattr(staleness, "_defaults", lambda: (ref, ext, engine))
+    cov = tmp_path / "coverage-x4eff.json"
+    cov.write_text(json.dumps({"db": "x4eff", "status": "complete"}))
+    pending = tmp_path / "p.json"
+    assert staleness.main(["--snapshot", str(pending), "--db", "x4eff"]) == 0
+    assert staleness.main(["--write", "--db", "x4eff", "--coverage", str(cov), "--taken-before", str(pending)]) == 0
+    assert staleness.main(["--check", "--db", "x4eff", "--coverage", str(cov)]) == 0

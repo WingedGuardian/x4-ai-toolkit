@@ -453,8 +453,8 @@ _ALL_CELLS: list[Cell] = [
     Cell("x4debug", "baseline", ["baseline", "--dest", str(_sandbox_dir() / "baseline")],
          expect=(0, 2), findings_ok=True),
     Cell("x4effective", "coverage", ["coverage"], expect=(0, 1, 3), findings_ok=True),
-    # `find` exits 1 for no hit and 2 when the store predates its texts table (it says "rebuild").
-    Cell("x4effective", "find", ["find", "mothership", "--limit", "5"], expect=(0, 1, 2),
+    # `find` exits 1 for no hit, 2 when the store predates its texts table (it says "rebuild"), 3 nothing to search.
+    Cell("x4effective", "find", ["find", "mothership", "--limit", "5"], expect=(0, 1, 2, 3),
          findings_ok=True),
     # `status` is read-only: 0 all fresh, 3 fresh with unaccepted losses, 5 anything else.
     Cell("x4fresh", "status", ["status"], expect=(0, 3, 5), findings_ok=True, wants="x4fresh:"),

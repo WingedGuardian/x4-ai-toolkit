@@ -22,7 +22,11 @@ while one of them is not where it was.
 Reading: is_locked, is_plain and status_map read the DACL through the Win32 API (SDDL), never icacls text, so a path
 the console code page cannot show or a localized account name cannot mislead them. A read that fails RAISES: "could
 not read" is never "not locked". A rule is ours by its shape (explicit, not inherited, one of the two deny masks,
-whichever SID it names): `off` from another administrator account lifts a rule that names the original user.
+whichever SID it names): `off` from another administrator account lifts a rule that names the original user. Locked is
+a narrower question, "does a rule of ours bind THIS user?": a rule naming someone else leaves this user free to write,
+so locking adds this user's own rule and status does not count that save as protected. A hand-made deny of the same
+shape naming a group this user belongs to reads as not binding; locking it then fails loudly rather than reporting a
+lock.
 
 Unlocking: an elevated token carries the user's SID too, so the deny rule binds an administrator as well and plain
 icacls is refused even elevated (measured 2026-10-30). unlock() switches on SeRestorePrivilege -- held only by an
@@ -50,6 +54,7 @@ from pathlib import Path
 
 SETTLE_S = 180                      # a file written in the last 3 minutes may still be in use by the game
 VERIFY_S = 3600                     # auto_lock re-reads the real ACLs at most hourly
+REPLACE_WAITS = (0.05, 0.1, 0.25, 0.5, None)    # seconds between tries at replacing the record; None: give up
 ROTATING = re.compile(r"^(?:autosave|quicksave)", re.I)
 OWNER_RIGHTS = "*S-1-3-4"
 FILE_DENY = "(DE,WD,AD,WA,WDAC,WO)"
@@ -69,6 +74,7 @@ ELEVATED_WARNING = ("this process runs elevated (as administrator): save locks d
 
 
 _WIN = None
+_ALIASES = {}
 
 
 class Unsupported(RuntimeError):
@@ -105,6 +111,7 @@ def _win():
         adv.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, ctypes.POINTER(w.HANDLE)]
         adv.GetTokenInformation.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.POINTER(w.DWORD)]
         adv.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(w.LPWSTR)]
+        adv.ConvertStringSidToSidW.argtypes = [w.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
         adv.AdjustTokenPrivileges.argtypes = [w.HANDLE, w.BOOL, ctypes.c_void_p, w.DWORD, ctypes.c_void_p,
                                               ctypes.c_void_p]
         adv.GetSecurityInfo.argtypes = [w.HANDLE, ctypes.c_int, w.DWORD, ctypes.c_void_p, ctypes.c_void_p,
@@ -213,10 +220,31 @@ def _is_owner_grant(ace):
     return kind == "A" and "ID" not in flags and sid == "OW"
 
 
-def _sddl_locked(sddl):
-    """A lock rule of ours is present, under any SID. It binds whoever it names, with or without the OWNER RIGHTS rule
-    beside it (an `off` from another account once removed only that one)."""
-    return any(_is_lock_deny(a) for a in _aces(sddl))
+def _alias_sid(alias):
+    """The SID behind a name SDDL uses instead of one (a local account can be "LA", Guests is "BG"). None: no such name."""
+    if alias not in _ALIASES:
+        ctypes, w, adv, k32 = _win()
+        sid, text = ctypes.c_void_p(), w.LPWSTR()
+        found = None
+        if adv.ConvertStringSidToSidW(alias, ctypes.byref(sid)):
+            try:
+                if adv.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+                    found = text.value
+                    k32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+            finally:
+                k32.LocalFree(sid)
+        _ALIASES[alias] = found
+    return _ALIASES[alias]
+
+
+def _names_sid(ace_sid, sid):
+    return ace_sid == sid or (not ace_sid.startswith("S-") and _alias_sid(ace_sid) == sid)
+
+
+def _sddl_binds(sddl, sid):
+    """A lock rule of ours names `sid`, with or without the OWNER RIGHTS rule beside it (an `off` from another account
+    once removed only that one). A rule naming another account binds that account and leaves `sid` free to write."""
+    return any(_is_lock_deny(a) and _names_sid(a[3], sid) for a in _aces(sddl))
 
 
 def _sddl_plain(sddl):
@@ -264,9 +292,9 @@ def _read_sddl(path):
 
 
 def is_locked(path):
-    """True when the path carries this module's deny rule. Raises OSError when the rules cannot be read."""
+    """True when this module's deny rule binds this user. Raises OSError when the rules cannot be read."""
     _require()
-    return _sddl_locked(_read_sddl(path))
+    return _sddl_binds(_read_sddl(path), user_sid())
 
 
 def is_plain(path):
@@ -292,20 +320,23 @@ def _rules_map(folder, extensions):
 
 
 def status_map(folder, extensions):
-    """{save path: locked?} for every save in `folder`. Raises OSError when a save's permissions cannot be read."""
+    """{save path: does a rule bind this user?} for every save in `folder`. Raises OSError when a save's permissions
+    cannot be read."""
     _require()
-    return {path: _sddl_locked(sddl) for path, sddl in _rules_map(folder, extensions).items()}
+    sid = user_sid()
+    return {path: _sddl_binds(sddl, sid) for path, sddl in _rules_map(folder, extensions).items()}
 
 
 def _apply_rule(path, sid, rights, what):
-    """Add a lock rule, then read it back. Locked already is done: the rule itself refuses a second icacls."""
+    """Add a lock rule for `sid`, then read it back. Bound already is done: the rule itself refuses a second icacls. A
+    rule naming someone else does not count: it leaves `sid` free to write."""
     _require()
-    if is_locked(path):
+    if _sddl_binds(_read_sddl(path), sid):
         return
     rc, out = _icacls(str(path), "/deny", "*{}:{}".format(sid, rights), "/grant", OWNER_RIGHTS + ":(R)")
     if rc:
         raise OSError("lock failed for {}{}: {}".format(what, path, out))
-    if not is_locked(path):
+    if not _sddl_binds(_read_sddl(path), sid):
         raise OSError("lock failed for {}{}: icacls reported success but the rule is not there".format(what, path))
 
 
@@ -492,7 +523,14 @@ def _write_record(config, rows, lost):
     part = path.with_name(".part-{}-{}".format(os.getpid(), path.name))
     try:
         part.write_text(json.dumps({"rows": rows, "lost": lost}, indent=0), encoding="utf-8")
-        os.replace(str(part), str(path))
+        for wait in REPLACE_WAITS:
+            try:
+                os.replace(str(part), str(path))
+                break
+            except PermissionError:     # a scanner holding a file just written (seen 2026-11-03 in about 1 test run in 3)
+                if wait is None:
+                    raise
+                time.sleep(wait)
     finally:
         if part.exists():
             part.unlink()                       # same-call scratch this function created
@@ -503,12 +541,24 @@ def _identity(folder):
     return [str(folder), st.st_dev, st.st_ino]
 
 
+def _volume_key(volume):
+    """What every Python agrees on about a volume. 3.12 reports the volume serial in 64 bits and earlier versions only
+    its low 32 (measured 2026-11-03: one NTFS folder, st_dev differs between 3.10.10 and 3.12.10, its low 32 bits and
+    st_ino do not), and a record may hold either form."""
+    return volume & 0xFFFFFFFF if isinstance(volume, int) else volume
+
+
+def _same_folder(row, now):
+    """Is this record row the folder an _identity() call sees now, whichever Python wrote each?"""
+    return row[0] == now[0] and row[2] == now[2] and _volume_key(row[1]) == _volume_key(now[1])
+
+
 def _remember(config, folder):
     """Record a folder this module locked, before the rule goes on, so `off` can account for it if it moves. A new
     folder at an old path is a new row: the old identity's saves are still locked somewhere else."""
     row = _identity(folder)
     rows, lost = _read_record(config)
-    if row not in rows:
+    if not any(_same_folder(old, row) for old in rows):
         _write_record(config, rows + [row], lost)
 
 
@@ -532,8 +582,8 @@ def turn_on(config, folders, extensions, rotating=ROTATING, settle=SETTLE_S):
             raise Unsupported("save locks need a volume that keeps permissions (NTFS); {} has none".format(folder))
     report = []
     for folder in folders:
-        _remember(config, folder)
         try:
+            _remember(config, folder)
             report.append((str(folder),) + tuple(len(x) for x in lock(folder, extensions, rotating, settle)))
         except OSError as e:
             done = sum(r[1] for r in report)
@@ -564,7 +614,7 @@ def turn_off(config, folders=(), extensions=(), forget_missing=False):
     sweep, missing = [str(f) for f in folders], []
     for path, volume, file_id in rows:
         try:
-            same = _identity(path) == [path, volume, file_id]
+            same = _same_folder([path, volume, file_id], _identity(path))
         except OSError:
             same = False
         if same:

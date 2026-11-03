@@ -2640,14 +2640,15 @@ def _lifts_reference_deny(seg: str, assigns: dict, roots: dict, cwd: str = "") -
 def _save_lock_decision(seg: str) -> bool:
     """Does this segment change the optional save locks? 4.1.0 review F9: on, off and unlock all belong to the user, so
     an agent's ask, in both directions: `on` makes locks only an elevated prompt can lift. `agent-harness.py save-lock`
-    RUN by an interpreter with any action but status, an action the guard cannot read included; and `setup.sh
-    --save-lock` run by a shell. Accepted residual, as for lifts_reference_deny: an opaque interpreter (`python -c`) is
-    not seen -- this stops accidents, not intent. The switch file itself is kept by the save guard."""
+    RUN by an interpreter or as a program of its own with any action but status, an action the guard cannot read
+    included; and `setup.sh --save-lock` run by a shell. Accepted residual, as for lifts_reference_deny: an opaque
+    interpreter (`python -c`) is not seen -- this stops accidents, not intent. The switch file itself is kept by the
+    save guard."""
     toks = [t.lower() for t in tokens_of(seg)]
     v = _verb_name(verb(seg)).lower()
     base = lambda t: t.replace(chr(92), "/").rsplit("/", 1)[-1]
-    if v.startswith(("python", "py", "uv", "uvx", "conda", "mamba", "micromamba", "pipx", "poetry", "pdm", "hatch",
-                     "rye", "pixi", "xargs")) or has_unresolved(v):
+    if v == "agent-harness.py" or v.startswith(("python", "py", "uv", "uvx", "conda", "mamba", "micromamba", "pipx", "pipenv",
+                                                "poetry", "pdm", "hatch", "rye", "pixi", "xargs")) or has_unresolved(v):
         for i, t in enumerate(toks):
             if base(t) == "agent-harness.py" and toks[i + 1:i + 2] == ["save-lock"]:
                 action = _refguard_action(toks[i + 2:])

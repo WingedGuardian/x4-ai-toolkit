@@ -154,12 +154,33 @@ def test_a_build_that_dropped_input_is_reported_as_such_never_clean(sd, monkeypa
     assert "REBUILT, FRESH" not in out
 
 
-def test_a_build_that_leaves_the_artifact_stale_is_a_failure(sd, monkeypatch, capsys):
+def test_a_build_that_leaves_the_artifact_stale_is_not_called_clean_and_not_called_failed(sd, monkeypatch, capsys):
+    """The builder said rc 0 and the artifact still reads STALE: the claim is checked, not assumed. The docs say exit 1
+    is "a builder failed" and 5 "nothing failed but one is still not FRESH", and "FAILED rc 0" was neither."""
     before = {n: (STALE(n) if n == "xref" else FRESH(n)) for n in fc.ORDER}
     built = _world(monkeypatch, before, before)      # still stale afterwards
-    _fake_builder(monkeypatch, built, "pass")        # and exits 0: the claim is checked, not assumed
+    _fake_builder(monkeypatch, built, "pass")        # and exits 0
+    assert fc.rebuild(("xref",)) == 5
+    out = capsys.readouterr().out
+    assert "xref: BUILT (rc 0), but now STALE" in out
+    assert "FAILED" not in out
+
+
+def test_a_builder_that_really_failed_is_still_exit_1(sd, monkeypatch, capsys):
+    """The twin."""
+    before = {n: (STALE(n) if n == "xref" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "import sys; sys.exit(7)")
     assert fc.rebuild(("xref",)) == 1
-    assert "xref: FAILED rc 0, now STALE" in capsys.readouterr().out
+    assert "xref: FAILED rc 7, now STALE" in capsys.readouterr().out
+
+
+def test_auto_says_the_same_for_a_clean_build_that_is_not_fresh_and_exits_0(sd, monkeypatch):
+    before = {n: (STALE(n) if n == "xref" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "pass")
+    assert fc.rebuild(("xref",), auto=True) == 0
+    assert "xref: BUILT (rc 0), but now STALE" in (sd / "session-note.txt").read_text(encoding="utf-8")
 
 
 def test_auto_never_retries_a_failure_against_the_same_inputs(sd, monkeypatch, capsys):
@@ -278,8 +299,8 @@ def test_fresh_but_incomplete_is_never_reported_clean(monkeypatch, sd, capsys):
                                        for n in fc.ORDER})
     assert fc.main(["status"]) == 3
     head = capsys.readouterr().out.splitlines()[0]
-    assert head == ("x4fresh: all 4 artifact(s) FRESH, but INCOMPLETE: effective (8 missing) -- review, "
-                    "then `x4fresh accept` if this loss is known and acceptable")
+    assert head.startswith("x4fresh: all 4 artifact(s) FRESH, but INCOMPLETE: effective (8 missing) -- ")
+    assert "Review, then `x4fresh accept` if it is known and acceptable" in head
 
 
 def test_auto_puts_a_drop_in_the_session_note(sd, monkeypatch):
@@ -451,9 +472,10 @@ def test_a_build_the_world_moved_under_is_reported_and_is_a_failure(sd, monkeypa
     built = _world(monkeypatch, before, before)
     _fake_builder(monkeypatch, built, "pass")
     _moving_world(monkeypatch, "a", "b")
-    assert fc.rebuild(("effective",)) == 1
+    assert fc.rebuild(("effective",)) == 5, "nothing failed; the artifact is simply not FRESH"
     out = capsys.readouterr().out
     assert "effective: the installed world MOVED during this build [a -> b]" in out
+    assert "FAILED" not in out
 
 
 def test_no_move_no_line_the_control(sd, monkeypatch, capsys):
@@ -490,9 +512,9 @@ def test_a_basex_stamp_taken_after_a_moved_build_is_revoked(sd, monkeypatch, tmp
                         else reads_its_stamp())
     _fake_builder(monkeypatch, built, "pass")
     _moving_world(monkeypatch, "a", "b")
-    assert fc.rebuild(("x4eff",)) == 1
+    assert fc.rebuild(("x4eff",)) == 5
     out = capsys.readouterr().out
-    assert "x4eff: FAILED rc 0, now STALE" in out and "MOVED" in out
+    assert "x4eff: BUILT (rc 0), but now STALE" in out and "MOVED" in out
     data = json.loads(cov.read_text(encoding="utf-8"))
     assert data["status"] == "complete", "every other key of the coverage report must survive"
     assert data["fingerprint"]["content"] == fc.MOVED_STAMP
@@ -855,3 +877,152 @@ def test_an_artifact_seen_fresh_clears_its_memo(sd, monkeypatch):
     _world(monkeypatch, fresh, fresh)
     fc.rebuild(auto=True)
     assert "effective" not in json.loads((sd / "last-failures.json").read_text(encoding="utf-8"))
+
+
+# --------------------------------------------------------------------------- release review 4.1.0 round 2
+
+WRAPPER_REMARK = "rb: WARNING: disk:C whole-drive decline exceeds estimate 0.0 GiB; unattributed"
+
+
+def _wrapped(monkeypatch, *argv):
+    monkeypatch.setenv("X4_JOB_WRAPPER", json.dumps(list(argv)))
+
+
+def _echoing_builder(monkeypatch, built, *lines):
+    """A builder printing `lines`, and a wrapper that adds nothing to the command: only the lines are under test."""
+    monkeypatch.setattr(fc, "_wrapper", lambda _n: [])
+    _fake_builder(monkeypatch, built, "; ".join(f"print({ln!r})" for ln in lines) or "pass")
+
+
+def _rebuilt_with_accepted_losses(sd, monkeypatch, *lines, wrapper=("py", "-3.12", "C:/tools/rb.py", "run", "--")):
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=_lossy(EIGHT)))
+    monkeypatch.setenv("X4_JOB_WRAPPER", json.dumps(list(wrapper)))
+    _echoing_builder(monkeypatch, built, *lines)
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "accepted-losses.json").write_text(json.dumps({"effective": {"keys": sorted(EIGHT), "when": "d"}}))
+    assert fc.rebuild(auto=True) == 0
+    return (sd / "session-note.txt").read_text(encoding="utf-8")
+
+
+def test_a_wrappers_disk_remark_is_not_a_loss_so_accept_can_quiet_a_rebuild(sd, monkeypatch):
+    """R2-4: rb prints this on any drive decline, so `BUILT WITH 8 DROPS` and a note came back after every accept."""
+    assert _rebuilt_with_accepted_losses(sd, monkeypatch, WRAPPER_REMARK) == ""
+
+
+def test_a_real_warning_beside_a_wrapper_remark_still_reaches_the_note(sd, monkeypatch):
+    note = _rebuilt_with_accepted_losses(sd, monkeypatch, WRAPPER_REMARK, "  WARNING: a brand new kind of loss")
+    assert "WARNING: a brand new kind of loss" in note and "BUILT WITH 8 DROPS" in note
+
+
+@pytest.mark.parametrize("line", ["WARNING: rb: not at the start", "rbx: WARNING: another program", " rb: WARNING: indented"])
+def test_only_a_line_that_starts_with_the_wrappers_own_name_is_the_wrappers(sd, monkeypatch, line):
+    assert line in _rebuilt_with_accepted_losses(sd, monkeypatch, line)
+
+
+def test_with_no_wrapper_configured_nothing_is_set_aside(sd, monkeypatch):
+    """The twin: `rb: ` means nothing without a wrapper called rb."""
+    note = _rebuilt_with_accepted_losses(sd, monkeypatch, WRAPPER_REMARK, wrapper=("other-tool", "--"))
+    assert WRAPPER_REMARK in note
+
+
+def test_the_wrappers_prefixes_come_from_its_own_command(monkeypatch):
+    _wrapped(monkeypatch, "py", "-3.12", "C:/tools/rb.py", "run", "--name", "{name}", "--")
+    assert fc._wrapper_prefixes() == ("py: ", "rb: ")
+    _wrapped(monkeypatch, "C:/bin/throttle.exe", "--cap", "50")
+    assert fc._wrapper_prefixes() == ("throttle: ",)
+    monkeypatch.delenv("X4_JOB_WRAPPER")
+    assert fc._wrapper_prefixes() == ()
+
+
+def test_a_real_wrapper_process_its_remark_in_the_log_and_counted_in_the_report(sd, monkeypatch, capsys, tmp_path):
+    """A REAL wrapper around a REAL builder, the merged stream as x4fresh reads it. A step that narrows must announce it:
+    set aside, never erased."""
+    wrapper = tmp_path / "throttle.py"
+    wrapper.write_text("import subprocess, sys\n"
+                       "print('throttle: WARNING: drive declined', flush=True)\n"
+                       "sys.exit(subprocess.run(sys.argv[2:]).returncode)\n", encoding="utf-8")
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=FRESH("effective")))
+    monkeypatch.setenv("X4_JOB_WRAPPER", json.dumps([sys.executable, str(wrapper), "--"]))
+    _fake_builder(monkeypatch, built, "pass")
+    assert fc.rebuild(("effective",)) == 0
+    out = capsys.readouterr().out
+    assert "effective: REBUILT, FRESH" in out and "1 line(s) from the job wrapper itself" in out
+    log = next((sd / "logs").glob("effective-*.log"))
+    assert "throttle: WARNING: drive declined" in log.read_text(encoding="utf-8")
+
+
+def test_a_failed_build_shows_the_wrappers_lines_because_they_may_be_why(sd, monkeypatch, capsys):
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, before)
+    monkeypatch.setenv("X4_JOB_WRAPPER", json.dumps(["rb", "run", "--"]))
+    monkeypatch.setattr(fc, "_wrapper", lambda _n: [])
+    _fake_builder(monkeypatch, built, "import sys; print('rb: ERROR: stopped at the memory cap'); sys.exit(1)")
+    assert fc.rebuild(("effective",)) == 1
+    assert "rb: ERROR: stopped at the memory cap" in capsys.readouterr().out
+
+
+def test_a_loss_list_accepted_before_truncated_keys_existed_explains_the_mismatch(sd, monkeypatch):
+    """An old accept holds the 8 overlays and cannot hold the property subtrees, listed by name only since 4.1.0."""
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "accepted-losses.json").write_text(json.dumps({"effective": {"keys": sorted(EIGHT), "when": "2026-11-01"}}))
+    keys = sorted(EIGHT) + ["truncated a.xml: x.y", "truncated b.xml: z"]
+    s = fc._mark_accepted(fc.Status("effective", "FRESH", incomplete=10, loss_keys=keys),
+                          json.loads((sd / "accepted-losses.json").read_text()))
+    assert s.accepted is None
+    said = " ".join(s.notes)
+    assert "differs from the 8 loss(es) accepted 2026-11-01: 2 new, 0 no longer lost" in said
+    assert "listed by name only since 4.1.0" in said
+
+
+def test_a_mismatch_with_new_overlays_does_not_blame_the_upgrade(sd):
+    keys = sorted(EIGHT) + ["dropped another.xml"]
+    s = fc._mark_accepted(fc.Status("effective", "FRESH", incomplete=9, loss_keys=keys),
+                          {"effective": {"keys": sorted(EIGHT), "when": "d"}})
+    said = " ".join(s.notes)
+    assert "1 new, 0 no longer lost" in said and "first new: dropped another.xml" in said and "4.1.0" not in said
+
+
+def test_a_matching_list_and_no_list_at_all_explain_nothing(sd):
+    match = fc._mark_accepted(fc.Status("effective", "FRESH", incomplete=8, loss_keys=sorted(EIGHT)),
+                              {"effective": {"keys": sorted(EIGHT), "when": "d"}})
+    assert match.accepted == "d" and match.notes == []
+    fresh = fc._mark_accepted(fc.Status("effective", "FRESH", incomplete=8, loss_keys=sorted(EIGHT)), {})
+    assert fresh.notes == []
+
+
+def test_the_first_run_after_an_upgrade_says_plainly_what_exit_3_means(sd, capsys):
+    head = fc.render([fc.Status("effective", "FRESH", incomplete=18, loss_keys=sorted(EIGHT))]).splitlines()[0]
+    assert "not a build failure" in head and "`x4fresh accept`" in head and "exit 3 until then" in head
+
+
+def test_a_database_on_disk_with_no_coverage_is_not_never_built(tmp_path, monkeypatch):
+    """R2-6: no jar and no coverage used to read "never built here", exit 0, over a database on disk."""
+    (tmp_path / "staleness.py").write_text("", encoding="utf-8")
+    db = tmp_path / "basex" / "data" / "x4raw"
+    db.mkdir(parents=True)
+    (db / "tbl.basex").write_bytes(b"db")
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
+    monkeypatch.setattr(fc, "_basex_unbuildable", lambda: "java is not on PATH.")
+    s = fc._status_basex("x4raw")
+    assert s.state == "MISSING" and "database is on disk" in " ".join(s.reasons)
+    assert "java is not on PATH" in " ".join(s.reasons)
+
+
+def test_an_empty_database_folder_is_still_never_built(tmp_path, monkeypatch):
+    (tmp_path / "staleness.py").write_text("", encoding="utf-8")
+    (tmp_path / "basex" / "data" / "x4raw").mkdir(parents=True)
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
+    monkeypatch.setattr(fc, "_basex_unbuildable", lambda: "java is not on PATH.")
+    assert fc._status_basex("x4raw").state == fc.NOT_BUILT
+
+
+def test_another_databases_folder_does_not_count(tmp_path, monkeypatch):
+    (tmp_path / "staleness.py").write_text("", encoding="utf-8")
+    db = tmp_path / "basex" / "data" / "x4eff"
+    db.mkdir(parents=True)
+    (db / "tbl.basex").write_bytes(b"db")
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
+    monkeypatch.setattr(fc, "_basex_unbuildable", lambda: "java is not on PATH.")
+    assert fc._status_basex("x4raw").state == fc.NOT_BUILT

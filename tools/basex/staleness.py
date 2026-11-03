@@ -20,8 +20,13 @@ before they are committed.
 
 Usage::
 
-    python staleness.py --write --db x4eff     # stamp after a build
-    python staleness.py --check --db x4eff     # exit 5 if stale
+    python staleness.py --snapshot FILE --db x4eff            # before a build's first read of the world
+    python staleness.py --write --db x4eff --taken-before FILE  # stamp what that build read
+    python staleness.py --write --db x4eff                    # stamp the world NOW (by hand: says nothing about a build)
+    python staleness.py --check --db x4eff                    # exit 5 if stale
+
+Why two steps: a fingerprint taken at the END of a build describes the world after it, so a mod changed while it ran
+read FRESH for ever over values from before the change.
 """
 
 from __future__ import annotations
@@ -223,24 +228,54 @@ def check(coverage_path: Path, reference: Path, extensions: Path,
     return Verdict(not reasons, reasons, db)
 
 
+class SnapshotUnusable(ValueError):
+    """A stamp was told to use a pre-build fingerprint that is not there, is damaged, or names another database."""
+
+
+def snapshot(path: Path, reference: Path, extensions: Path, engine_dir: Path, db: str) -> dict:
+    """Record the fingerprint BEFORE a build reads anything; `write(taken_before=path)` stamps it afterwards."""
+    fp = fingerprint(reference, extensions, engine_dir, db)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"db": db, "fingerprint": fp}), encoding="utf-8")
+    os.replace(tmp, path)
+    return fp
+
+
+def _taken_before(path: Path, db: str) -> dict:
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        fp = doc["fingerprint"]
+        if doc["db"] != db or not fp.get("engine"):
+            raise ValueError(f"it is for {doc['db']!r}, or has no engine axis")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise SnapshotUnusable(f"pre-build fingerprint {path} is unusable ({exc})") from exc
+    return fp
+
+
 def write(coverage_path: Path, reference: Path, extensions: Path,
-          engine_dir: Path) -> dict:
+          engine_dir: Path, taken_before: Path | None = None) -> dict:
     """Stamp *coverage_path* in place, preserving every existing key.
 
     Additive on purpose: `status` and `supports_negative_claim` are what make a
     negative admissible at all, and a stamp that dropped them would trade one
     guarantee for another.
+
+    `taken_before`: stamp the snapshot of the world the build read, and use it up (it describes that build and no
+    later one; this process's own hand-off file). Never recomputed if unusable: that is the defect it exists to stop.
     """
+    db = coverage_path.stem.replace("coverage-", "")
+    fp = _taken_before(taken_before, db) if taken_before else fingerprint(reference, extensions, engine_dir, db)
     data = {}
     if coverage_path.is_file():
         try:
             data = json.loads(coverage_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = {}
-    db = coverage_path.stem.replace("coverage-", "")
-    data["fingerprint"] = fingerprint(reference, extensions, engine_dir, db)
+    data["fingerprint"] = fp
     coverage_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    return data["fingerprint"]
+    if taken_before:
+        Path(taken_before).unlink(missing_ok=True)
+    return fp
 
 
 def _defaults() -> tuple[Path, list[Path], Path]:
@@ -381,9 +416,14 @@ def main(argv=None) -> int:
     p.add_argument("--db", required=True, help="x4raw | x4eff")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true", help="stamp after a build")
+    mode.add_argument("--snapshot", metavar="FILE", help="record the fingerprint here, before a build reads anything")
     mode.add_argument("--check", action="store_true", help="exit 5 if stale")
     p.add_argument("--coverage", help="path to coverage-<db>.json")
+    p.add_argument("--taken-before", metavar="FILE",
+                   help="with --write: stamp this --snapshot, the world the build read, instead of the world now")
     args = p.parse_args(argv)
+    if args.taken_before and not args.write:
+        p.error("--taken-before goes with --write")
 
     # `_defaults()` is the EARLIEST thing that can fail, and until 2026-08-24 it sat
     # outside every handler below — so an unconfigured machine got a raw traceback
@@ -396,9 +436,21 @@ def main(argv=None) -> int:
         return _report_unknown(args.db, exc)
     cov = Path(args.coverage) if args.coverage else BASEX_DIR / f"coverage-{args.db}.json"
 
+    if args.snapshot:
+        try:
+            snapshot(Path(args.snapshot), reference, extensions, engine, args.db)
+        except (EngineUnavailable, ImportError, OSError) as exc:
+            print(f"cannot fingerprint {args.db} before building ({exc}): nothing was built.", file=sys.stderr)
+            return 6
+        return 0
+
     if args.write:
         try:
-            fp = write(cov, reference, extensions, engine)
+            fp = write(cov, reference, extensions, engine,
+                       Path(args.taken_before) if args.taken_before else None)
+        except SnapshotUnusable as exc:
+            print(f"cannot stamp {args.db}: {exc}", file=sys.stderr)
+            return 6
         except (EngineUnavailable, ImportError) as exc:
             print(f"cannot stamp {args.db}: x4validate is not importable here "
                   f"({exc}). Run via `uv run` from tools/x4validate.", file=sys.stderr)

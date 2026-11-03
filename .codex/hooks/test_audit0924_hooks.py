@@ -777,10 +777,6 @@ class TestGM3ExtensionsRootE2E(_RR):
         self.assertEqual(verdict, "ask", reason)
         self.assertIn("deployed", reason)
 
-    def test_an_assigned_env_variable(self):
-        self.expect([("deny", "$env:P='" + self.R + "'; Remove-Item -Recurse $env:P"),
-                     ("ask", "$env:G='" + self.G + "'; Remove-Item -Recurse " + '"$env:G' + BS + "extensions" + BS + 'mymod"')])
-
     def test_TWIN_reading_or_a_neighbour_of_the_root(self):
         self.expect([("allow", 'ls "$X4_EXTENSIONS/mymod"'), ("allow", 'rm -rf "' + self.Ef + '-old/mymod"')], "Bash")
 
@@ -792,6 +788,27 @@ class TestGM3ExtensionsVariableGameLayout(_RR):
         verdict, reason = self.verdict_with('rm -rf "$X4_EXTENSIONS/mymod"', "Bash")
         self.assertEqual(verdict, "ask", reason)
         self.assertIn("mymod", reason)
+
+
+class TestR2C1EnvAssignmentKeepsTheFolderE2E(_RR):
+    """4.1.0 R2-C1, through the REAL hook. A second translation pass for an assigned `$env:` put its `cd` after the real
+    one, so the delete was judged in the assigned folder. MEASURED at 88dc7936: the three deny rows allowed. """
+
+    def _rows(self, verb):
+        return ("if (-not $env:V) {$env:V='C:/fallback'}; Set-Location $env:V; " + verb,
+                "Set-Location $env:V; " + verb + "; $env:V='C:/safe'",
+                "$env:V='C:/a'; $env:V='C:/b'; Set-Location $env:V; " + verb)
+
+    def test_the_default_value_idiom_keeps_the_deny(self):
+        for var, verb in (("X4_REFERENCE", "Remove-Item x -Recurse"), ("X4_GAME", "Remove-Item extensions -Recurse")):
+            self.expect([("deny", row.replace("$env:V", "$env:" + var)) for row in self._rows(verb)])
+
+    def test_an_unrelated_variable_does_not_leave_the_root(self):
+        self.expect([("deny", "Set-Location '" + self.R + "'; $env:D='C:/safe'; Push-Location $env:D; Pop-Location; Remove-Item x")])
+
+    def test_TWIN_the_same_lines_outside_every_root(self):
+        self.expect([("allow", "if (-not $env:X4_OTHER) {$env:X4_OTHER='C:/fallback'}; Set-Location $env:X4_OTHER; Remove-Item x -Recurse"),
+                     ("allow", "$env:D='C:/safe'; Push-Location $env:D; Pop-Location; Remove-Item x")])
 
 
 class TestF10DynamicProgramWordE2E(_RR):

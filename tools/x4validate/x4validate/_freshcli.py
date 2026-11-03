@@ -18,10 +18,12 @@ FRESH but some known INCOMPLETE, 5 otherwise; a NOT-BUILT artifact counts only w
 `rebuild` runs the builders ONE AT A TIME (two concurrent builds once cost x4eff 17% of its documents),
 under an OS lock that the operating system releases if the holder dies, so a crashed build never leaves a
 stale lock (MEASURED 2026-11-01: 3 of 3 hard kills released it at once). Every builder's WARNING lines are
-carried to the final summary: a build that dropped input ends "BUILT WITH N DROPS", never "fresh". Any
+carried to the final summary: a build that dropped input ends "BUILT WITH N DROPS", never "fresh". Lines the job
+wrapper prints itself (they start "<its program>: ") stay in the log and are counted, but they are not the build's
+losses. Any
 rebuild defers while a mutation gate is editing the engine or engine sources are uncommitted. Exit: 0 every
 requested artifact is FRESH; 1 a builder failed; 5 nothing failed but one is still not FRESH (deferred, lock
-held, a gate started meanwhile, or NOT-BUILT and named with --only).
+held, a gate started meanwhile, the world moved during its build, or NOT-BUILT and named with --only).
 
 `rebuild --auto` is what a session start launches in the background. It only rebuilds the effective store
 and the xref index: the BaseX builders drop their database for the length of the build, so they are never
@@ -33,7 +35,8 @@ when everything this machine can build is FRESH and complete (a NOT-BUILT artifa
 
 Optional environment:
     X4_JOB_WRAPPER        JSON list prefixed to every builder command; "{name}" becomes x4fresh-<artifact>
-                          (e.g. a resource governor). Unset: builders run directly.
+                          (e.g. a resource governor). Unset: builders run directly. Its own lines are told apart
+                          by "<program>: " at the start of a line, for its first word and any script it names.
     X4_FRESH_DEFER_WHILE  ';'-separated process names that defer --auto (default: X4.exe)
     X4_FRESH_AUTO=off     --auto does nothing
     X4_BASH               bash used for the BaseX builders (default: bash on PATH)
@@ -268,6 +271,14 @@ def _basex_unbuildable() -> str | None:
     return problems[0].splitlines()[0] if problems else None
 
 
+def _database_on_disk(name: str) -> bool:
+    """A BaseX database exists as files under basex/data/<db>. Whatever the coverage report says about it."""
+    try:
+        return any((BASEX_ROOT / "basex" / "data" / name).iterdir())
+    except OSError:
+        return False  # silent-ok: nothing there to find; the caller's "never built" needs no database
+
+
 def _not_built(name: str, why: str) -> Status:
     return Status(name, NOT_BUILT, [f"never built here, and this machine cannot build it: {why} "
                                     "Optional: only the BaseX queries need it (setup: tools/basex/README.md)."])
@@ -280,6 +291,9 @@ def _status_basex(name: str) -> Status:
                 if cov.is_file() else _not_built(name, f"no BaseX tooling at {BASEX_ROOT}."))
     if not cov.is_file():
         why = _basex_unbuildable()
+        if why and _database_on_disk(name):
+            return Status(name, "MISSING", [f"a database is on disk ({BASEX_ROOT / 'basex' / 'data' / name}) with no coverage "
+                                            f"report, so it cannot be judged, and this machine cannot rebuild it: {why}"])
         if why:
             return _not_built(name, why)
         return Status(name, "MISSING", [f"no coverage report at {cov}: never built, or the last build "
@@ -335,8 +349,18 @@ def _mark_accepted(s: Status, accepted: dict) -> Status:
     removed -- is news. An artifact that cannot list its losses (an older store) is never accepted."""
     entry = accepted.get(s.name)
     entry = entry if isinstance(entry, dict) else {}
-    if s.incomplete and s.loss_keys is not None and sorted(s.loss_keys) == entry.get("keys"):
+    keys = entry.get("keys")
+    if s.incomplete and s.loss_keys is not None and sorted(s.loss_keys) == keys:
         s.accepted = entry.get("when", "?")
+    elif s.incomplete and s.loss_keys is not None and isinstance(keys, list):
+        # Said in the artifact's own lines, or "BUILT WITH N DROPS" after an accept reads as if the accept was lost.
+        new = sorted(set(s.loss_keys) - set(keys))
+        s.notes.append(f"differs from the {len(keys)} loss(es) accepted {entry.get('when', '?')}: {len(new)} new, "
+                       f"{len(set(keys) - set(s.loss_keys))} no longer lost"
+                       + (f"; first new: {new[0]}" if new else "")
+                       + ("; property subtrees are listed by name only since 4.1.0, so a list accepted before that "
+                          "cannot hold them" if new and all(k.startswith("truncated ") for k in new) else "")
+                       + "; review, then `x4fresh accept`")
     return s
 
 
@@ -390,7 +414,9 @@ def render(results: list[Status]) -> str:
         # Fresh is about WHEN, not HOW MUCH: a current store that dropped input is not "clean".
         lines.append(f"x4fresh: all {built} artifact(s) FRESH, but INCOMPLETE: "
                      + ", ".join(f"{s.name} ({s.incomplete} missing)" for s in _unaccepted(results))
-                     + " -- review, then `x4fresh accept` if this loss is known and acceptable" + also)
+                     + " -- not a build failure: input the build could not include, and nobody has accepted that loss "
+                       "yet (a first rebuild after an upgrade lands here). Review, then `x4fresh accept` if it is known "
+                       "and acceptable; `status` is exit 3 until then" + also)
     elif not built and unbuilt:
         lines.append(f"x4fresh: nothing to report on: not built on this machine: {', '.join(unbuilt)}")
     else:
@@ -413,7 +439,22 @@ def render(results: list[Status]) -> str:
 
 # --------------------------------------------------------------------------- rebuild
 
-def _wrapper(name: str) -> list[str]:
+def _wrapper_prefixes() -> tuple[str, ...]:
+    """How the job wrapper's OWN lines start: "<program>: ", for its first word and any script or binary it names. Narrow
+    on purpose (a builder's indented "WARNING" never starts this way), since what matches is not read as a loss."""
+    try:
+        argv = _wrapper_argv()
+    except ValueError:
+        return ()  # silent-ok: the builder's start reports this same error; here it means nothing is set aside
+    out: list[str] = []
+    for i, arg in enumerate(argv):
+        path = Path(arg)
+        if i == 0 or path.suffix.lower() in (".py", ".exe", ".cmd", ".bat", ".sh"):
+            out.append(path.stem + ": ")
+    return tuple(out)
+
+
+def _wrapper_argv() -> list[str]:
     # env-ok: a per-machine runtime switch (job wrapper argv), not a configured location
     raw = os.environ.get("X4_JOB_WRAPPER", "").strip()
     if not raw:
@@ -421,7 +462,11 @@ def _wrapper(name: str) -> list[str]:
     argv = json.loads(raw)
     if not (isinstance(argv, list) and all(isinstance(a, str) for a in argv)):
         raise ValueError("X4_JOB_WRAPPER must be a JSON list of strings")
-    return [a.replace("{name}", f"x4fresh-{name}") for a in argv]
+    return argv
+
+
+def _wrapper(name: str) -> list[str]:
+    return [a.replace("{name}", f"x4fresh-{name}") for a in _wrapper_argv()]
 
 
 def builder(name: str) -> list[str]:
@@ -493,9 +538,12 @@ class _ChildTree:
                                                       self.wintypes.HANDLE(int(proc._handle))))
 
 
-def _run(name: str, log: Path) -> tuple[int, list[str]]:
+def _run(name: str, log: Path) -> tuple[int, list[str], list[str]]:
+    """(exit code, the builder's warning lines, the job wrapper's own warning lines). Every line is in the log."""
     argv = _wrapper(name) + builder(name)
     warnings: list[str] = []
+    wrappers: list[str] = []
+    own = _wrapper_prefixes()
     log.parent.mkdir(parents=True, exist_ok=True)
     tree = _ChildTree()
     with open(log, "w", encoding="utf-8", errors="replace") as fh:
@@ -510,9 +558,9 @@ def _run(name: str, log: Path) -> tuple[int, list[str]]:
         for line in proc.stdout:
             fh.write(line)
             if WARN_RE.search(line):
-                warnings.append(line.rstrip())
+                (wrappers if line.startswith(own) else warnings).append(line.rstrip())
         rc = proc.wait()
-    return rc, warnings
+    return rc, warnings, wrappers
 
 
 def _deferred(auto: bool) -> str | None:
@@ -676,7 +724,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
         if auto and memo.get(name, {}).get("reasons") == key:
             what = ("against these same inputs" if world_before is not None
                     else "and its inputs could not be compared since")
-            lines.append(f"{name}: NOT RETRIED: it failed {what} at "
+            lines.append(f"{name}: NOT RETRIED: it did not end FRESH {what} at "
                          f"{memo[name].get('when')} (rc {memo[name].get('rc')}); run `x4fresh rebuild` "
                          "by hand after fixing the cause")
             continue
@@ -685,9 +733,9 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
             continue
         log = sd / "logs" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.log"
         try:
-            rc, warnings = _run(name, log)
+            rc, warnings, wrapper_lines = _run(name, log)
         except (OSError, ValueError) as exc:
-            rc, warnings = -1, [f"could not start the builder: {exc}"]
+            rc, warnings, wrapper_lines = -1, [f"could not start the builder: {exc}"], []
         world_after = _world_digest()
         moved = world_before is not None and world_after is not None and world_before != world_after
         if moved and name not in AUTO_SET:
@@ -696,10 +744,17 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
                 lines.append(f"{name}: its stamp could not be revoked ({why_not}): it may read FRESH over a moved world")
                 unclean = True
         after = _mark_accepted(check(name), _load_accepted(sd))
-        if rc not in (0, 3) or after.state != "FRESH":
+        if rc not in (0, 3):
             failed = True
             memo[name] = {"reasons": key, "rc": rc, "when": time.strftime("%Y-%m-%d %H:%M")}
             lines.append(f"{name}: FAILED rc {rc}, now {after.state} (log: {log})")
+            warnings = wrapper_lines + warnings          # a wrapper's refusal or kill may be WHY it failed
+        elif after.state != "FRESH":
+            # The builder did its work and the artifact still is not current (typically: the world moved during it).
+            # Not "a builder failed", exit 1's documented meaning: this is exit 5, and the note carries it.
+            unclean = True
+            memo[name] = {"reasons": key, "rc": rc, "when": time.strftime("%Y-%m-%d %H:%M")}
+            lines.append(f"{name}: BUILT (rc {rc}), but now {after.state} (log: {log})")
         else:
             memo.pop(name, None)
             # The count is the artifact's OWN (meta), never the number of sample lines (capped at 10).
@@ -720,6 +775,9 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
             unclean = True
             lines.append(f"{name}: the installed world MOVED during this build [{world_before} -> {world_after}]: "
                          "a mod, the reference or the engine changed while it ran, so rebuild once that settles")
+        if wrapper_lines and rc in (0, 3):
+            lines.append(f"{name}: {len(wrapper_lines)} line(s) from the job wrapper itself are in the log, not counted "
+                         f"as losses; first: {wrapper_lines[0]}")
         lines.extend(f"    {w}" for w in warnings[:8])
         if len(warnings) > 8:
             lines.append(f"    ... {len(warnings) - 8} more warning line(s) in the log")
@@ -782,7 +840,8 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--only", nargs="+", choices=ORDER, default=None, help=ONLY_HELP)
     pr = sub.add_parser("rebuild", help="rebuild what is not FRESH, one at a time, under a lock; exit 0 every "
                                         "requested artifact is FRESH, 1 a builder failed, 5 still not FRESH "
-                                        "(deferred, lock held, gate started); --auto: 0 unless a builder failed")
+                                        "(deferred, lock held, gate started, world moved); --auto: 0 unless a "
+                                        "builder failed")
     pr.add_argument("--only", nargs="+", choices=ORDER, default=None, help=ONLY_HELP)
     pr.add_argument("--auto", action="store_true",
                     help="unattended mode (session start): effective + xref only, defers while a "

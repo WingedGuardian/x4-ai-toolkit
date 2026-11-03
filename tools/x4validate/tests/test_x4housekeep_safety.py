@@ -540,13 +540,16 @@ def test_a_stub_folder_is_not_archived_again_because_its_kept_evidence_is_large(
     write(t / ".housekeep-closed", b"")
     for i in range(3):
         write(t / "receipt{}.json".format(i), b"x" * (900 * 1024))
-    other = tmp_path / "out" / "grew-after"                   # the twin: real content beside a stub is still surfaced
+    other = tmp_path / "out" / "grew-after"                   # the twin: real content beside a stub is still surfaced,
+    #                                                           as a note: planned, it could only fail at apply, every run
     write(other / "ARCHIVED.md", b"stub")
     write(other / ".housekeep-closed", b"")
     write(other / "payload" / "new.bin", b"x" * (2 * MB))
     age(tmp_path)
-    names = [Path(a["path"]).name for a in hk.plan(_archive_cfg(tmp_path), only={"archive"})["actions"]]
-    assert names == ["grew-after"]
+    doc = hk.plan(_archive_cfg(tmp_path), only={"archive"})
+    assert doc["actions"] == []
+    notes = doc["coverage"]["archive_inventory"]["stub_notes"]
+    assert len(notes) == 1 and "grew-after" in notes[0], notes
 
 
 # ---------------------------------------------------------------- docs-review M16: the optional job ledger

@@ -78,6 +78,11 @@ STAGE="$HERE/_stage"
 STAGE_WIN="$(winpath "$STAGE")"
 
 echo "== staging packed content =="
+# THE FINGERPRINT OF WHAT THIS BUILD READS, taken before it reads anything (T1, R2-7). Stamped at the end, a mod changed
+# while the build ran read FRESH for ever over the old values. A failure here stops the build: set -e.
+PENDING="$BASEX_DIR/pending-fingerprint-$DB.json"
+(cd "$X4VALIDATE" && uv run python "$HERE/staleness.py" --snapshot "$PENDING" --db "$DB")
+
 (cd "$X4VALIDATE" && uv run python "$HERE/stage.py" --out "$STAGE" --extensions "$EXTENSIONS")
 
 echo
@@ -134,13 +139,13 @@ COVERAGE_RC=0
 # this is the state it left behind. An unstamped index is a FAILURE even though the
 # database itself is fine, because nothing downstream can tell the two apart.
 STAMP_RC=0
-(cd "$X4VALIDATE" && uv run python "$HERE/staleness.py" --write --db "$DB") || STAMP_RC=$?
+(cd "$X4VALIDATE" && uv run python "$HERE/staleness.py" --write --db "$DB" --taken-before "$PENDING") || STAMP_RC=$?
 if [ "$STAMP_RC" -ne 0 ]; then
   echo >&2
   echo "ERROR: $DB was BUILT but its freshness stamp was NOT written (rc $STAMP_RC)." >&2
   echo "       An unstamped index reads STALE forever and every CLI banners it, so this" >&2
   echo "       is a failure even though the database is fine. Re-run just the stamp:" >&2
-  echo "         (cd \"$X4VALIDATE\" && uv run python \"$HERE/staleness.py\" --write --db $DB)" >&2
+  echo "         (cd \"$X4VALIDATE\" && uv run python \"$HERE/staleness.py\" --write --db $DB --taken-before \"$PENDING\")" >&2
   exit 1
 fi
 

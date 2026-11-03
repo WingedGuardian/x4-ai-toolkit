@@ -33,7 +33,7 @@ def _install_tree(base: Path) -> Path:
     return root
 
 
-def _junit(path: Path, passed=0, failed=0, errors=0, skipped=0) -> Path:
+def _junit(path: Path, passed=0, failed=0, errors=0, skipped=0, root=None) -> Path:
     cases = ['<testcase classname="t.m" name="ok%d"/>' % i for i in range(passed)]
     cases += ['<testcase classname="t.m" name="bad%d"><failure message="x">tb</failure></testcase>' % i
               for i in range(failed)]
@@ -41,15 +41,16 @@ def _junit(path: Path, passed=0, failed=0, errors=0, skipped=0) -> Path:
               for i in range(errors)]
     cases += ['<testcase classname="t.m" name="skip%d"><skipped message="why"/></testcase>' % i
               for i in range(skipped)]
-    path.write_text('<?xml version="1.0"?><testsuites><testsuite name="pytest">%s</testsuite></testsuites>'
-                    % "".join(cases), encoding="utf-8")
+    suite = "installed-copy:%s" % root if root is not None else "pytest"
+    path.write_text('<?xml version="1.0"?><testsuites><testsuite name="%s">%s</testsuite></testsuites>'
+                    % (suite, "".join(cases)), encoding="utf-8")
     return path
 
 
 def _verdict(tmp_path, root=None, junit=None, **counts):
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = root or _install_tree(tmp_path)
-    junit = junit or _junit(tmp_path / "j.xml", **counts)
+    junit = junit or _junit(tmp_path / "j.xml", root=root, **counts)
     return isv.verdict(junit, root, min_tests=10, min_passed=8, max_skips=3)
 
 
@@ -105,6 +106,29 @@ def test_TWIN_a_missing_or_unreadable_junit_is_refused(tmp_path):
     assert counts is None and any("unreadable" in p for p in problems), problems
 
 
+def test_TWIN_a_junit_from_another_tree_or_no_tree_is_refused(tmp_path):
+    """The verdict read the tree at --root and the counts from --junit, and nothing tied them together: a junit written by
+    a run of any other copy, a checkout for instance, passed as the install's."""
+    root = _install_tree(tmp_path)
+    other = tmp_path / "another-tree"
+    problems, _ = isv.verdict(_junit(tmp_path / "a.xml", passed=9, root=other), root, 10, 8, 3)
+    assert any("another-tree" in p and "not the tree" in p for p in problems), problems
+    problems, _ = isv.verdict(_junit(tmp_path / "n.xml", passed=9), root, 10, 8, 3)
+    assert any("names no tree" in p for p in problems), problems
+
+
+def test_a_REAL_pytest_run_ties_its_junit_to_the_tree(tmp_path):
+    """The real option, on real pytest: the fixture above is written to agree with the reader."""
+    root = _install_tree(tmp_path)
+    (tmp_path / "test_sample.py").write_text("def test_pass(): pass\n", encoding="utf-8")
+    junit = tmp_path / "real.xml"
+    subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--junitxml", str(junit),
+                    "-o", "junit_suite_name=installed-copy:%s" % root, str(tmp_path / "test_sample.py")],
+                   capture_output=True, timeout=120, cwd=tmp_path)
+    problems, counts = isv.verdict(junit, root, 1, 1, 0)
+    assert counts["passed"] == 1 and problems == [], problems
+
+
 def test_the_reader_agrees_with_a_REAL_pytest_junit_file(tmp_path):
     """The fixture above is written to agree with the reader. A real run is not."""
     (tmp_path / "test_sample.py").write_text(textwrap.dedent("""
@@ -131,12 +155,12 @@ def test_the_reader_agrees_with_a_REAL_pytest_junit_file(tmp_path):
 
 def test_the_command_line_exits_1_with_every_reason_and_0_only_when_clean(tmp_path, capsys):
     root = _install_tree(tmp_path)
-    argv = ["--junit", str(_junit(tmp_path / "ok.xml", passed=10)), "--root", str(root),
+    argv = ["--junit", str(_junit(tmp_path / "ok.xml", passed=10, root=root)), "--root", str(root),
             "--min-tests", "10", "--min-passed", "8", "--max-skips", "3"]
     assert isv.main(argv) == 0
     out = capsys.readouterr().out
     assert "INSTALLED-COPY SUITE OK" in out and "10 passed" in out
-    argv[1] = str(_junit(tmp_path / "bad.xml", passed=2, failed=1, skipped=9))
+    argv[1] = str(_junit(tmp_path / "bad.xml", passed=2, failed=1, skipped=9, root=root))
     assert isv.main(argv) == 1
     err = capsys.readouterr().err
     assert err.count("REFUSED:") == 3, err          # too few passes, a failure, too many skips
@@ -170,6 +194,7 @@ def test_the_ci_leg_builds_a_real_install_runs_its_suite_and_judges_the_junit():
     suite = steps["suite"]["run"]
     assert "uv run --frozen pytest" in suite and "--junitxml=\"$RUNNER_TEMP/installed-suite.xml\"" in suite
     assert "--junit \"$RUNNER_TEMP/installed-suite.xml\"" in verdict["run"], "judges a different file than the suite wrote"
+    assert "-o junit_suite_name=\"installed-copy:$RUNNER_TEMP/installed-toolkit\"" in suite, "the junit must name its tree"
     assert "--root \"$RUNNER_TEMP/installed-toolkit\"" in verdict["run"] and "TK=\"$RUNNER_TEMP/installed-toolkit\"" in install
     # runs after a red suite (so the counts print) and after a cancelled-free setup only
     assert "!cancelled()" in verdict["if"] and "steps.install.outcome == 'success'" in verdict["if"]

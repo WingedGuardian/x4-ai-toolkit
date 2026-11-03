@@ -781,9 +781,22 @@ jobs:
           # Both deltas above apply on top of 366: 366 + 4 + 8 = 378; ceiling 378 + 3 = 381; windows 63.
           # READ 2026-11-03 (4.1 review M15), run 41604483577 at d0843965 (ci/v4.1.0-rc1), per job: ubuntu
           # 6504 passed, 378 skipped. The 381 above was COMPUTED (366 + 4 + 8 + 3), never read off a run; it is
-          # 378 + 3, so it stands and is now measured. Windows 63 is NOT yet read for this head: its job was
-          # still running when this was written. When it finishes, set windows to its skipped count + 3.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '381' || '63' }}
+          # 378 + 3, so it stood. Windows READ at the same head: 60 skipped, 60 + 3 = 63.
+          # 2026-11-03 (4.1 review round 2, R2-I1): raised for the range d0843965..head, 381 -> 418 ubuntu, windows 63
+          # unchanged. DERIVED, NOT READ OFF A RUN: skip markers diffed per test id at both commits (a collection, on
+          # Windows), plus the bodies' own pytest.skip added in the range. When the first run prints it, read it, set
+          # the ceiling to that + 3, and replace this comment.
+          #    378  ubuntu, read at d0843965
+          #    +31  test_x4housekeep_safety: "Windows volumes, junctions and the shell's Recycle Bin"
+          #     +2  test_x4refguard_repair: NTFS ACLs
+          #     +2  test_basex_artifacts_receipt: case-insensitive paths, backslash as a separator
+          #     +2  test_basex_artifacts: pytest.skip("uses an NTFS junction") in the body, no marker to count
+          #    415 + 3 = 418
+          # Not in the sum, each looked at: test_x4fresh_session +4 (needs_bash: ubuntu has bash), test_codex_rules +1
+          # (this job installs codex), test_bootstrap_scripts_are_portable (9 .ps1 files at both commits, no change).
+          # Could add one to EITHER leg: test_x4housekeep_stub_and_sniff's "this volume does not record reads" skip.
+          # Windows then reads 61 at most from this range, inside its 63.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '418' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar
@@ -917,10 +930,11 @@ jobs:
     #
     # THE THREE NUMBERS AT THE BOTTOM. min-tests 6000 and min-passed 5300 are floors under the MEASURED
     # counts of a fresh Windows install (6,493 cases before the D-C2 fixes; about 6,506 after, 5,927 passed, projected from a re-run of the changed modules), so a suite that silently collected a
-    # fraction of itself cannot pass. max-skips 896 is NOT MEASURED ON CI YET: it is an upper bound,
-    # 578 skipped on that Windows install + the 315 more that the `tests` job's ubuntu leg skips than its
-    # windows leg (378 vs 63, run 41604483577) + 3. The first run of this job prints
-    # "INSTALLED-COPY SUITE: ... N skipped"; replace 896 with N + 3 and itemise the change here, as the
+    # fraction of itself cannot pass. max-skips 934 is NOT MEASURED ON CI YET: it is DERIVED, an upper bound,
+    # 578 skipped on that Windows install + 1 (test_the_prepush_gate_runs_the_check, export-ignored script, R2-1)
+    # + the 352 more that the `tests` job's ubuntu leg is projected to skip than its windows leg (415 vs 63: see that
+    # job's X4_MAX_SKIPS comment) + 3. The first run of this job prints
+    # "INSTALLED-COPY SUITE: ... N skipped"; replace 934 with N + 3 and itemise the change here, as the
     # `tests` job does. Until then a ceiling this loose catches a mass dormancy, not a slide.
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -987,7 +1001,8 @@ jobs:
           for v in $(compgen -e | grep '^X4_' || true); do unset "$v"; done
           unset XRCATTOOL
           cd "$RUNNER_TEMP/installed-toolkit/tools/x4validate"
-          uv run --frozen pytest -q -rs --junitxml="$RUNNER_TEMP/installed-suite.xml"
+          # junit_suite_name: the verdict below refuses a junit file that does not name this tree.
+          uv run --frozen pytest -q -rs -o junit_suite_name="installed-copy:$RUNNER_TEMP/installed-toolkit" --junitxml="$RUNNER_TEMP/installed-suite.xml"
 
       # Runs even when the suite step failed, so a red run still prints its counts, and refuses when the
       # junit file is missing. Keep these three numbers in step with the comment at the top of this job.
@@ -998,7 +1013,7 @@ jobs:
           python3 .github/scripts/installed_suite_verdict.py \
             --junit "$RUNNER_TEMP/installed-suite.xml" \
             --root "$RUNNER_TEMP/installed-toolkit" \
-            --min-tests 6000 --min-passed 5300 --max-skips 896
+            --min-tests 6000 --min-passed 5300 --max-skips 934
 
   hook-mutation:
     name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/4)

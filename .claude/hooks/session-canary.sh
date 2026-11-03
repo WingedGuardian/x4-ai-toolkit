@@ -137,7 +137,9 @@ HK_NOTE="$HOOK_DIR/../housekeep-session.txt"
 HK=""
 [ -f "${X4_TOOLKIT:-}/scripts/x4housekeep.py" ] && HK="$X4_TOOLKIT/scripts/x4housekeep.py"
 _x4_hkpy="$(x4_python)"
-if [ -n "$HK" ] && [ -n "$_x4_hkpy" ] && [ "${X4_HOUSEKEEP_SWEEP:-}" != off ] \
+# Any spelling of off, as the note below and both Python launchers read it: OFF started a launcher that then did nothing.
+_x4_switch_off() { case "$1" in [Oo][Ff][Ff]) return 0 ;; esac; return 1; }
+if [ -n "$HK" ] && [ -n "$_x4_hkpy" ] && ! _x4_switch_off "${X4_HOUSEKEEP_SWEEP:-}" \
    && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
   ( "$_x4_hkpy" -B "$HK" session "$HK_NOTE" </dev/null >/dev/null 2>&1 & )
 fi
@@ -151,14 +153,13 @@ if [ -s "$XF_NOTE" ]; then
   # Nothing will refresh it while a launch switch is off: say so, or an old run's note reads like this session's.
   for _x4_xf_switch in X4_FRESH_AUTO X4_HOUSEKEEP_SWEEP; do
     eval "_x4_xf_val=\${$_x4_xf_switch:-}"
-    case "$_x4_xf_val" in
-      [Oo][Ff][Ff]) echo "[x4 fresh] that note is from an earlier run: $_x4_xf_switch=off stops it being refreshed. Run \`x4fresh status\` for now." ;;
-    esac
+    _x4_switch_off "$_x4_xf_val" \
+      && echo "[x4 fresh] that note is from an earlier run: $_x4_xf_switch=off stops it being refreshed. Run \`x4fresh status\` for now."
   done
 fi
 XF=""
 [ -f "${X4_TOOLKIT:-}/scripts/x4fresh_session.py" ] && XF="$X4_TOOLKIT/scripts/x4fresh_session.py"
-if [ -n "$XF" ] && [ -n "$_x4_hkpy" ] && [ "${X4_HOUSEKEEP_SWEEP:-}" != off ] && [ "${X4_FRESH_AUTO:-}" != off ] \
+if [ -n "$XF" ] && [ -n "$_x4_hkpy" ] && ! _x4_switch_off "${X4_HOUSEKEEP_SWEEP:-}" && ! _x4_switch_off "${X4_FRESH_AUTO:-}" \
    && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
   ( "$_x4_hkpy" -B "$XF" "$XF_NOTE" </dev/null >/dev/null 2>&1 & )
 fi

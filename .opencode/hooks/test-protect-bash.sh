@@ -116,6 +116,8 @@ probe ask   "x4refguard-remove"    'python scripts/x4refguard.py remove'
 probe ask   "save-lock-on"         'python tools/agent-harness.py save-lock on'
 probe ask   "save-lock-off"        'python tools/agent-harness.py save-lock off'
 probe ask   "save-lock-setup"      'bash setup.sh --save-lock'
+probe ask   "save-lock-program"    './tools/agent-harness.py save-lock off'
+probe ask   "save-lock-pipenv"     'pipenv run python tools/agent-harness.py save-lock on'
 # F331 follow-up: a link whose TARGET is a protected root, or cannot be read, is refused.
 need "$X4_REFERENCE" "link-into-reference" X4_REFERENCE && probe deny "link-into-reference" "ln -s \"$X4_REFERENCE\" lnk"
 probe deny  "link-target-unreadable" 'ln -s "$X4_NO_SUCH_LINK_SRC" lnk'
@@ -147,6 +149,7 @@ probe allow "append-durable"      'cat x >> KNOWLEDGEBASE.md'
 probe allow "plain-ls"            'ls -la'
 probe allow "x4refguard-status"   'python scripts/x4refguard.py status'
 probe allow "save-lock-status"    'python tools/agent-harness.py save-lock status'
+probe allow "save-lock-program-status" './tools/agent-harness.py save-lock status'
 probe allow "link-elsewhere"      'ln -s /c/work/src /c/work/lnk'
 need "$X4_REFERENCE" "icacls-read-reference" X4_REFERENCE && probe allow "icacls-read-reference" "icacls \"$X4_REFERENCE\""
 need "$X4_REFERENCE" "icacls-dblslash-save" X4_REFERENCE && probe allow "icacls-dblslash-save" "icacls \"$X4_REFERENCE\" //save acl.txt //T"
