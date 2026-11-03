@@ -154,7 +154,7 @@ def test_invalid_receipt_and_wrong_path_are_not_authority(tmp_path):
     d = json.loads(marker.read_text())
     d["path"] = str(tmp_path / "other")
     marker.write_text(json.dumps(d))
-    with pytest.raises(OSError, match="invalid BaseX disposition"):
+    with pytest.raises(OSError, match="BaseX disposition receipt"):
         a.dispose([out], proof=ready)
     assert marker.exists()
 

@@ -38,6 +38,27 @@ def receipt(path, kind):
             "producer": "x4-basex", "disposition": "rebuildable cache; permanent disposal"}
 
 
+def _same_folder(a, b):
+    """One folder, whatever the spelling: case, separators and 8.3 short names are not a different place."""
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _receipt_problem(declared, path, marker):
+    """None when the receipt declares this folder as a stage/effective workspace, else the refusal to raise."""
+    role = declared.get("kind")
+    invalid = OSError(f"invalid BaseX disposition receipt: {marker}")
+    if role not in {"stage", "effective"} or not isinstance(declared.get("path"), str):
+        return invalid
+    if {**declared, "path": str(path)} != receipt(path, role):
+        return invalid
+    if not _same_folder(declared["path"], path):
+        return OSError(
+            f"BaseX disposition receipt {marker} declares {declared['path']}, but this folder is {path}: it was moved or "
+            "renamed, so the receipt does not cover it and it is kept. If it holds only generated XML, move it to the "
+            "Recycle Bin yourself and run the build again; a rebuild writes a new workspace and receipt.")
+    return None
+
+
 def _inspect(path, artifact_root):
     path = plain(path)
     try:
@@ -69,8 +90,9 @@ def _inspect(path, artifact_root):
         if not isinstance(declared, dict):
             raise OSError(f"invalid BaseX disposition receipt: {marker}")
         role = declared.get("kind")
-        if role not in {"stage", "effective"} or declared != receipt(path, role):
-            raise OSError(f"invalid BaseX disposition receipt: {marker}")
+        problem = _receipt_problem(declared, path, marker)
+        if problem:
+            raise problem
         if kind is not None and kind != role:
             raise OSError(f"BaseX disposition kind changed: {path}")
         kind = role
