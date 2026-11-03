@@ -12,18 +12,21 @@ from pathlib import Path
 
 import pytest
 
-from _layout import require_repo
+from _layout import claude_hooks_source, require_repo
 
 REPO = Path(__file__).resolve().parents[3]
-HOOKS = REPO / "agent" / "guards" / "claude-hooks"
+
+
+def _hooks():
+    """The hooks this layout can test: agent/ in a checkout, .claude/hooks on an install (see claude_hooks_source)."""
+    return claude_hooks_source(REPO, why="the save sentinel's Claude hooks")
 
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
-    require_repo("agent/guards/claude-hooks/save_sentinel.py", why="the sentinel source lives in agent/")
     monkeypatch.setenv("X4_NO_KNOWN_FOLDERS", "1")
-    monkeypatch.syspath_prepend(str(HOOKS))
-    spec = importlib.util.spec_from_file_location("x4_save_sentinel_t", HOOKS / "save_sentinel.py")
+    monkeypatch.syspath_prepend(str(_hooks()))
+    spec = importlib.util.spec_from_file_location("x4_save_sentinel_t", _hooks() / "save_sentinel.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     monkeypatch.setattr(mod, "game_running", lambda: False)
@@ -179,6 +182,12 @@ def _stamp(path, when, data=None):
     os.utime(path, (when, when))
 
 
+def _exit(uidata, when, companion="pipelinecache.bin"):
+    """What a real exit leaves: uidata.xml, and within seconds another file of the exit set."""
+    _stamp(uidata, when)
+    _stamp(uidata.parent / companion, when + 1.0, b"x")
+
+
 def _session_world(world):
     """A baseline look at t=1000 over a save and a removable one, stamped before it."""
     mod, roots, saves, tk = world
@@ -195,7 +204,7 @@ def _session_world(world):
 def test_a_save_from_a_play_session_since_the_last_look_is_noted_not_raised(world):
     mod, roots, saves, s, gone, uidata = _session_world(world)
     _stamp(s, 1500.0, b"played")
-    _stamp(uidata, 1600.0)                                         # the game wrote it on the way out, after the save
+    _exit(uidata, 1600.0)                                          # the game wrote it on the way out, after the save
     text, loud = mod.report(roots, now=2000.0)
     assert not loud, text
     assert "modified: " + str(s) in text and "may be the game itself" in text
@@ -211,7 +220,7 @@ def test_TWIN_the_game_closed_for_good_a_change_still_alarms(world):
 
 def test_TWIN_a_change_after_the_play_session_ended_still_alarms(world):
     mod, roots, saves, s, gone, uidata = _session_world(world)
-    _stamp(uidata, 1500.0)
+    _exit(uidata, 1500.0)
     _stamp(s, 1600.0, b"agent")                                    # dated after the game left
     text, loud = mod.report(roots, now=2000.0)
     assert loud and "modified: " + str(s) in text
@@ -219,7 +228,7 @@ def test_TWIN_a_change_after_the_play_session_ended_still_alarms(world):
 
 def test_TWIN_a_restored_file_with_an_old_stamp_still_alarms_after_a_session(world):
     mod, roots, saves, s, gone, uidata = _session_world(world)
-    _stamp(uidata, 1500.0)
+    _exit(uidata, 1500.0)
     _stamp(s, 500.0, b"restored by copy")                          # older than the last look: no game saved this now
     text, loud = mod.report(roots, now=2000.0)
     assert loud and "modified: " + str(s) in text
@@ -227,7 +236,7 @@ def test_TWIN_a_restored_file_with_an_old_stamp_still_alarms_after_a_session(wor
 
 def test_TWIN_a_removal_after_the_play_session_ended_still_alarms(world):
     mod, roots, saves, s, gone, uidata = _session_world(world)
-    _stamp(uidata, 1500.0)
+    _exit(uidata, 1500.0)
     gone.unlink()
     _stamp(saves, 1600.0)                                          # the folder records when
     text, loud = mod.report(roots, now=2000.0)
@@ -238,7 +247,7 @@ def test_a_removal_during_the_play_session_is_noted_not_raised(world):
     mod, roots, saves, s, gone, uidata = _session_world(world)
     gone.unlink()
     _stamp(saves, 1400.0)
-    _stamp(uidata, 1500.0)
+    _exit(uidata, 1500.0)
     text, loud = mod.report(roots, now=2000.0)
     assert not loud and "removed: " + str(gone) in text
 
@@ -246,12 +255,202 @@ def test_a_removal_during_the_play_session_is_noted_not_raised(world):
 def test_mixed_changes_raise_only_the_ones_outside_the_session(world):
     mod, roots, saves, s, gone, uidata = _session_world(world)
     _stamp(gone, 1400.0, b"played")
-    _stamp(uidata, 1500.0)
+    _exit(uidata, 1500.0)
     _stamp(s, 1600.0, b"agent")
     text, loud = mod.report(roots, now=2000.0)
     assert loud and "1 save file(s) changed since the last look with no backup" in text
     head, tail = text.split("may be the game itself")
     assert "modified: " + str(s) in head and "modified: " + str(gone) in tail
+
+
+# --- R2-I3: uidata.xml alone is not a session. Real exits move another file of the exit set within seconds; a touch,
+#     a bulk overwrite and a whole-profile copy must alarm. Measured by stat on real profiles: see save_sentinel.py.
+@pytest.mark.parametrize("companion", ["pipelinecache.bin", "config.xml", "userdata.xml", "debug.txt"])
+def test_any_one_exit_file_beside_uidata_is_the_second_sign(world, companion):
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    _stamp(s, 1500.0, b"played")
+    _stamp(uidata, 1600.0)
+    _stamp(uidata.parent / companion, 1600.0 - mod.EXIT_SPREAD, b"x")
+    text, loud = mod.report(roots, now=2000.0)
+    assert not loud and "may be the game itself" in text
+
+
+def test_a_change_and_a_touch_of_uidata_alone_alarm(world):
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    _stamp(s, 1500.0, b"script")
+    _stamp(uidata, 1600.0)
+    text, loud = mod.report(roots, now=2000.0)
+    assert loud and "modified: " + str(s) in text
+
+
+def test_a_removal_and_a_touch_of_uidata_alone_alarm(world):
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    gone.unlink()
+    _stamp(saves, 1500.0)
+    _stamp(uidata, 1600.0)
+    text, loud = mod.report(roots, now=2000.0)
+    assert loud and "removed: " + str(gone) in text
+
+
+@pytest.mark.parametrize("off_by", [-1.0, 1.0])
+def test_TWIN_an_exit_file_too_far_from_uidata_is_no_second_sign(world, off_by):
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    _stamp(s, 1500.0, b"script")
+    _stamp(uidata, 1600.0)
+    _stamp(uidata.parent / "config.xml", 1600.0 + off_by * (mod.EXIT_SPREAD + 1), b"x")
+    assert mod.report(roots, now=2000.0)[1]
+
+
+def test_TWIN_an_exit_file_moved_with_no_new_uidata_stamp_is_no_session(world):
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    _stamp(s, 1500.0, b"script")
+    _stamp(uidata.parent / "config.xml", 1500.0, b"x")
+    assert mod.report(roots, now=2000.0)[1]
+
+
+def test_TWIN_an_exit_from_before_the_last_look_is_no_session_even_inside_the_clock_slack(world):
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    _exit(uidata, 990.0)                                           # the baseline look was at 1000
+    _stamp(s, 995.0, b"script")                                    # dated_within's slack would still take this
+    assert mod.report(roots, now=2000.0)[1] is True
+
+
+def _many(saves, names):
+    for name in names:
+        _stamp(saves / name, 900.0, b"x")
+
+
+def _session_with_changes(world, count):
+    """A baseline over `count` saves, all then rewritten before a real exit."""
+    mod, roots, saves, tk = world
+    names = ["save_{:03d}.xml.gz".format(i) for i in range(count)]
+    _many(saves, names)
+    uidata = Path(roots["profile"]) / "uidata.xml"
+    _stamp(uidata, 900.0, b"<uidata/>")
+    assert mod.report(roots, now=1000.0) == ("", False)
+    for name in names:
+        _stamp(saves / name, 1500.0, b"changed")
+    return mod, roots, uidata
+
+
+def test_a_typical_play_session_stays_quiet(world):
+    mod, roots, saves, tk = world
+    names = ["autosave_01.xml.gz", "autosave_02.xml.gz", "autosave_03.xml.gz", "quicksave.xml.gz", "save_001.xml.gz",
+             "save_002.xml.gz"]
+    _many(saves, names)
+    uidata = Path(roots["profile"]) / "uidata.xml"
+    _stamp(uidata, 900.0, b"<uidata/>")
+    mod.report(roots, now=1000.0)
+    for i, name in enumerate(names):
+        _stamp(saves / name, 1100.0 + 60 * i, b"played")
+    _exit(uidata, 1600.0)
+    text, loud = mod.report(roots, now=2000.0)
+    assert not loud and "6 save file(s) changed while X4 was running" in text
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_more_saves_than_a_session_changes_alarm_with_the_game_or_without(world, monkeypatch, running):
+    mod, roots, uidata = _session_with_changes(world, world[0].MOST_A_SESSION_CHANGES + 1)
+    _exit(uidata, 1600.0)
+    monkeypatch.setattr(mod, "game_running", lambda: running)
+    text, loud = mod.report(roots, now=2000.0)
+    assert loud and "{} save file(s) changed since the last look".format(mod.MOST_A_SESSION_CHANGES + 1) in text
+    assert "may be the game itself" not in text
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_TWIN_as_many_saves_as_a_session_can_change_stay_quiet(world, monkeypatch, running):
+    mod, roots, uidata = _session_with_changes(world, world[0].MOST_A_SESSION_CHANGES)
+    _exit(uidata, 1600.0)
+    monkeypatch.setattr(mod, "game_running", lambda: running)
+    assert mod.report(roots, now=2000.0)[1] is False
+
+
+def _bystanders(profile, moved, still):
+    for i in range(moved):
+        _stamp(profile / "moved_{}.xml".format(i), 1400.0, b"x")
+    for i in range(still):
+        _stamp(profile / "still_{}.xml".format(i), 900.0, b"x")
+
+
+def test_a_whole_profile_copy_without_its_times_alarms(world):
+    """The shape of a real copy, measured by stat: uidata.xml and userdata.xml written together, as the end of an
+    alphabetical copy, and every other file of the profile moved with them."""
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    _bystanders(uidata.parent, 6, 0)
+    _stamp(s, 1500.0, b"copied")
+    _exit(uidata, 1600.0, companion="userdata.xml")
+    text, loud = mod.report(roots, now=2000.0)
+    assert loud and "modified: " + str(s) in text
+
+
+@pytest.mark.parametrize("moved,still,loud", [(5, 5, True),    # the floor, and exactly half
+                                              (4, 6, False),   # the floor not reached
+                                              (4, 0, False),   # all of them, under the floor: too few to tell
+                                              (5, 6, False),   # the floor, under half
+                                              (6, 6, True)])
+def test_TWIN_a_rewritten_profile_needs_the_floor_and_half_of_its_other_files(world, moved, still, loud):
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    _bystanders(uidata.parent, moved, still)
+    _stamp(s, 1500.0, b"played")
+    _exit(uidata, 1600.0)
+    assert mod.report(roots, now=2000.0)[1] is loud
+
+
+def test_TWIN_the_exit_files_themselves_are_not_bystanders(world):
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    _bystanders(uidata.parent, 0, 5)
+    _stamp(s, 1500.0, b"played")
+    _stamp(uidata, 1600.0)
+    for name in ("pipelinecache.bin", "config.xml", "userdata.xml", "debug.txt"):
+        _stamp(uidata.parent / name, 1600.0, b"x")
+    assert mod.report(roots, now=2000.0)[1] is False
+
+
+def test_a_profile_that_cannot_be_listed_is_no_session(world, monkeypatch):
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    _stamp(s, 1500.0, b"played")
+    _exit(uidata, 1600.0)
+    real = os.scandir
+
+    def refuse(path):
+        if os.path.abspath(path) == os.path.abspath(uidata.parent):
+            raise PermissionError("no")
+        return real(path)
+    monkeypatch.setattr(mod.os, "scandir", refuse)
+    assert mod.report(roots, now=2000.0)[1] is True
+
+
+def test_an_alarm_on_a_game_folder_says_it_can_be_a_false_one_and_a_marked_folder_does_not(world):
+    mod, roots, saves, s, gone, uidata = _session_world(world)
+    _stamp(s, 1500.0, b"script")
+    assert "can be a false alarm" in mod.report(roots, now=2000.0)[0]
+    tk = world[3]
+    kept = tk / "evidence" / "kept"
+    kept.mkdir(parents=True)
+    (kept / mod.MARKER).write_text("kept", encoding="utf-8")
+    k = kept / "save_009.xml.gz"
+    k.write_bytes(b"x")
+    state = tk / ".modding-agent-harness" / "save-sentinel.json"
+    record = json.loads(state.read_text(encoding="utf-8"))
+    record["marked"] = [str(kept)]
+    state.write_text(json.dumps(record), encoding="utf-8")
+    mod.report(roots, now=2010.0)
+    k.unlink()
+    text, loud = mod.report(roots, now=2020.0)
+    assert loud and "removed: " + str(k) in text and "can be a false alarm" not in text
+
+
+def test_a_deleted_record_of_the_last_look_is_raised_to_the_user(world):
+    mod, roots, saves, tk = world
+    s = saves / "save_001.xml.gz"
+    s.write_bytes(b"x")
+    assert mod.report(roots, now=1000.0) == ("", False)
+    (tk / ".modding-agent-harness" / "save-sentinel.json").unlink()
+    _bump(s, b"changed after the record went")
+    text, loud = mod.report(roots, now=1010.0)
+    assert loud and "gone or could not be read" in text
+    assert mod.report(roots, now=1020.0) == ("", False)            # one look's disclosure
 
 
 def test_the_game_never_writes_a_marked_folder_so_a_change_there_alarms_even_while_it_runs(world, monkeypatch):
@@ -281,9 +480,8 @@ def test_a_restored_old_stamp_alarms_even_while_the_game_runs(world, monkeypatch
 
 def test_a_tasklist_that_cannot_be_decoded_cannot_kill_the_look(tmp_path, monkeypatch):
     """game_running unstubbed: the subprocess call is what meets bytes no locale decodes strictly."""
-    require_repo("agent/guards/claude-hooks/save_sentinel.py", why="the sentinel source lives in agent/")
-    monkeypatch.syspath_prepend(str(HOOKS))
-    spec = importlib.util.spec_from_file_location("x4_save_sentinel_t2", HOOKS / "save_sentinel.py")
+    monkeypatch.syspath_prepend(str(_hooks()))
+    spec = importlib.util.spec_from_file_location("x4_save_sentinel_t2", _hooks() / "save_sentinel.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     seen = {}
@@ -371,13 +569,12 @@ def _hook_copy(tmp_path, policy_source):
     hooks = tmp_path / "hooks"
     hooks.mkdir()
     for name in ("save-sentinel.sh", "_x4-env.sh", "save_sentinel.py"):
-        shutil.copy2(HOOKS / name, hooks / name)
+        shutil.copy2(_hooks() / name, hooks / name)
     (hooks / "save_policy.py").write_text(policy_source, encoding="utf-8")
     return hooks
 
 
 def test_a_sentinel_that_dies_before_its_own_handler_still_says_so(tmp_path):
-    require_repo("agent/guards/claude-hooks/save-sentinel.sh", why="the hook source lives in agent/")
     hooks = _hook_copy(tmp_path, "raise ImportError('broken on purpose')\n")
     r = subprocess.run([_bash(), str(hooks / "save-sentinel.sh")], input=b'{"tool_name":"Bash"}', capture_output=True,
                        timeout=120)
@@ -387,7 +584,6 @@ def test_a_sentinel_that_dies_before_its_own_handler_still_says_so(tmp_path):
 
 
 def test_TWIN_a_sentinel_that_answers_is_not_also_reported_as_dead(tmp_path):
-    require_repo("agent/guards/claude-hooks/save-sentinel.sh", why="the hook source lives in agent/")
     hooks = _hook_copy(tmp_path, "def packet(text):\n    return {}, {}\n")
     (hooks / "save_sentinel.py").write_text("import sys\nsys.stdout.write('{}')\n", encoding="utf-8")
     r = subprocess.run([_bash(), str(hooks / "save-sentinel.sh")], input=b'{"tool_name":"Bash"}', capture_output=True,
@@ -416,11 +612,10 @@ def _bash():
 
 def _run_hook(tmp_path, broken=None):
     """save-sentinel.sh from a copy of the hook folder, optionally with one module made to fail on import."""
-    require_repo("agent/guards/claude-hooks/save-sentinel.sh", why="the hook source lives in agent/")
     hooks = tmp_path / "toolkit" / ".claude" / "hooks"
     hooks.mkdir(parents=True)
     for name in ("save-sentinel.sh", "_x4-env.sh", "save_sentinel.py", "save_policy.py", "hook_facts.py"):
-        shutil.copy2(HOOKS / name, hooks / name)
+        shutil.copy2(_hooks() / name, hooks / name)
     shutil.copytree(REPO / "tools" / "modding_harness", tmp_path / "toolkit" / "tools" / "modding_harness",
                     ignore=shutil.ignore_patterns("__pycache__"))
     if broken:
