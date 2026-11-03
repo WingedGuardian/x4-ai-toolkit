@@ -8,6 +8,7 @@ import gzip
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -337,6 +338,83 @@ def test_other_content_is_not_a_save_whatever_its_name(tmp_path, name, data):
     p.parent.mkdir()
     p.write_bytes(data)
     assert guard.why_protected(p) == ""
+
+
+# -------------------------------------------------------------------- R3-M2: the sniff runs last, and never blocks
+
+def _cheap_reason_world(tmp_path):
+    """One file per cheap reason, each with and without save content, under one configured root."""
+    root = tmp_path / "root"
+    cfg = mkcfg(root, protected_globs=["*/glob/*"])
+    rows = {}
+    for label, rel in (("known-good baseline", "known-good-1/f"), ("audit record", "t/audit_log.txt"),
+                       ("backup folder", "my-backups/f"), ("protected_globs", "glob/f"),
+                       ("git-tracked", "t/tracked"), ("linked evidence", "t/linked"), ("", "t/plain")):
+        for content, body in (("save", BODY), ("other", b"not a save")):
+            f = root / "agent" / ("c_" + content) / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(body)
+            rows[(label, content)] = f
+    guard = hk.Guard(cfg)
+    guard.tracked.update(hk._key(rows[("git-tracked", c)]) for c in ("save", "other"))
+    guard.links.update(hk._key(rows[("linked evidence", c)]) for c in ("save", "other"))
+    return guard, rows
+
+
+def test_save_content_outranks_every_cheap_reason_as_it_always_did(tmp_path):
+    """"save" must win: archive_refusal, archive_protection, the cold-backup protect and housekeep_backups each overrule
+    some of the cheap reasons, so returning "backup folder" for a save copy there would let it go."""
+    guard, rows = _cheap_reason_world(tmp_path)
+    for (label, content), f in rows.items():
+        assert guard.why_protected(f) == ("save" if content == "save" else label), (label, content)
+
+
+def test_a_save_copy_in_a_backup_folder_is_never_retired_by_the_callers_that_overrule_the_backup_reason(tmp_path):
+    guard, rows = _cheap_reason_world(tmp_path)
+    assert hk.archive_protection(guard, rows[("backup folder", "save")]) == "save"
+    assert hk.archive_protection(guard, rows[("backup folder", "other")]) == "", "the control: the backup reason alone falls"
+
+
+@pytest.mark.parametrize("label", ["known-good baseline", "audit record", "backup folder", "protected_globs",
+                                   "git-tracked", "linked evidence"])
+def test_a_caller_asking_only_whether_stops_at_the_cheap_reason(tmp_path, monkeypatch, label):
+    guard, rows = _cheap_reason_world(tmp_path)
+    monkeypatch.setattr(hk, "_holds_savegame", lambda _p: pytest.fail("sniffed although a cheap reason already holds it"))
+    assert guard.why_protected(rows[(label, "save")], any_reason=True) == label
+
+
+def test_TWIN_any_reason_still_sniffs_when_nothing_cheap_holds_the_file(tmp_path):
+    guard, rows = _cheap_reason_world(tmp_path)
+    assert guard.why_protected(rows[("", "save")], any_reason=True) == "save"
+    assert guard.why_protected(rows[("", "other")], any_reason=True) == ""
+
+
+def test_any_reason_gives_the_same_verdict_on_every_file(tmp_path):
+    guard, rows = _cheap_reason_world(tmp_path)
+    for key, f in rows.items():
+        assert bool(guard.why_protected(f, any_reason=True)) == bool(guard.why_protected(f)), key
+
+
+def test_a_non_regular_file_is_never_opened_by_the_sniff(tmp_path, monkeypatch):
+    """The Windows half: a FIFO cannot be made here, so the mode is what is faked; the real one is below."""
+    f = tmp_path / "f"
+    f.write_bytes(BODY)
+    assert hk._holds_savegame(f), "the control: the same file, regular, is sniffed"
+    st = os.stat(f)
+    fake = os.stat_result((0o010644,) + tuple(st)[1:])
+    monkeypatch.setattr(hk.os, "stat", lambda *_a, **_k: fake)
+    monkeypatch.setattr(hk._archive_module(), "open_unrecorded", lambda _p: pytest.fail("opened a FIFO"))
+    assert hk._holds_savegame(f) is False
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX only: Windows has no named pipes on the file system")
+def test_a_real_fifo_does_not_block_the_sniff(tmp_path):
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    code = "import sys; sys.path.insert(0, sys.argv[1]); import x4housekeep as hk; print(hk._holds_savegame(sys.argv[2]))"
+    done = subprocess.run([sys.executable, "-c", code, str(REPO / "scripts"), str(fifo)], capture_output=True, text=True,
+                          timeout=30)
+    assert done.stdout.strip() == "False", done.stderr
 
 
 def test_the_sniff_is_bounded_on_a_large_file(tmp_path, monkeypatch):

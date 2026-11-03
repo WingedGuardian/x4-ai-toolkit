@@ -88,8 +88,11 @@ def _holds_savegame(path) -> bool:
     """Does this file open with X4's <savegame> root, plain or gzipped, whatever it is called? Protection only, so a false
     positive keeps a file. Bounded: at most two sniff sizes read, and one decompressed, from any file; a truncated gzip
     still answers. The read is not recorded (open_unrecorded) and writes nothing. Unreadable or corrupt content is
-    ordinary content here: every removal path still has its own read of it."""
+    ordinary content here: every removal path still has its own read of it. Only a regular file is opened: opening a FIFO
+    blocks until a writer comes, and a device or socket holds no save."""
     try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return False
         with _archive_module().open_unrecorded(path) as raw:
             head = raw.read(SAVE_SNIFF_BYTES * 2)
         if head[:2] == b"\x1f\x8b":
@@ -305,11 +308,21 @@ class Guard:
         self.links = evidence_links(cfg)
         self.globs = [g.lower() for g in cfg["protected_globs"]]
 
-    def why_protected(self, path) -> str:
+    def why_protected(self, path, any_reason=False) -> str:
+        """Why this file is Forever, '' if it is not. The content sniff costs a file open, so it runs after the cheap
+        reasons. It still OUTRANKS them: archive_refusal, archive_protection, the cold-backup protect and
+        housekeep_backups overrule some of those reasons, and a copy of a save must not go with them. So only a caller
+        whose verdict is the same whichever reason it gets may pass any_reason=True, stopping at the first one."""
         p = str(path)
         low = p.replace("\\", "/").lower()
-        if is_save(low) or _holds_savegame(p):
+        if is_save(low):
             return "save"
+        why = self._why_by_name(p, low)
+        if why and any_reason:
+            return why
+        return "save" if _holds_savegame(p) else why
+
+    def _why_by_name(self, p, low) -> str:
         # Folder names BELOW the configured root only: a root that itself sits under ".../backups/..." must not
         # make every file look protected (or, read the other way, make the rule meaningless).
         try:
@@ -346,7 +359,7 @@ def protected_inside(guard: "Guard", target: Path) -> str:
     if why:
         return why
     for f in walk_files(target) if target.is_dir() else ():
-        why = guard.why_protected(f)
+        why = guard.why_protected(f, any_reason=True)
         if why:
             return why
     return ""
@@ -1029,7 +1042,7 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
             if state == "active":
                 count("kept: task folder active (written within active_hours)", size)
                 continue
-            why = guard.why_protected(f)
+            why = guard.why_protected(f, any_reason=True)
             if why:
                 count("kept: protected ({})".format(why), size)
                 continue
@@ -1114,7 +1127,7 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
                     if f.suffix.lower() == ".gz" or s < 65536:
                         count("kept: launch log, recent or already compressed", s)
                         continue
-                    fwhy = guard.why_protected(f)
+                    fwhy = guard.why_protected(f, any_reason=True)
                     if fwhy:
                         count("kept: protected ({})".format(fwhy), s)
                         continue
