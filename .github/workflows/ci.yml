@@ -779,6 +779,10 @@ jobs:
           # Per row vs run 41419011197 (8f8736d1, 366): +4 test_x4housekeep (F334): 3 "trailing dot/space
           # names exist only on Windows", 1 "real Windows junction contract". Ubuntu ceiling 370 + 3 = 373.
           # Both deltas above apply on top of 366: 366 + 4 + 8 = 378; ceiling 378 + 3 = 381; windows 63.
+          # READ 2026-11-03 (4.1 review M15), run 41604483577 at d0843965 (ci/v4.1.0-rc1), per job: ubuntu
+          # 6504 passed, 378 skipped. The 381 above was COMPUTED (366 + 4 + 8 + 3), never read off a run; it is
+          # 378 + 3, so it stands and is now measured. Windows 63 is NOT yet read for this head: its job was
+          # still running when this was written. When it finishes, set windows to its skipped count + 3.
           X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '381' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
@@ -893,6 +897,108 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: bash
         run: bash tools/x4validate/scripts/verify-cold.sh --archive
+
+  installed-copy:
+    name: installed-copy suite (ubuntu-latest)
+    # THE SUITE ON A REAL INSTALLED COPY (4.1 review D-C2). SETUP_PROMPT.txt tells every new user to run
+    # `uv run pytest -q` in their installed toolkit and promises "0 failed and 0 errors". An install is
+    # runtime-only: no agent/, no docs/, no .git. Every other job runs a checkout, or a `git archive`
+    # extract that STILL carries agent/ (cold-archive), so for a whole release arc nothing ran the suite in
+    # the shape a user has it, and it was red there: 74 errors and 64 failures, MEASURED on a fresh install
+    # (test_file_guard_batch 67 errors, test_generic_file_batch 7, test_instrument_hygiene 22 failed,
+    # test_installer_custom_settings 12, test_temp_hygiene 5, test_x4fresh_session 6, ...).
+    #
+    # This leg builds the copy the way the README does (git archive, then the REAL install.sh --method
+    # separate, which runs setup.sh and so a fresh `uv sync`), proves it is an install, runs the suite
+    # there, and hands the junit file to .github/scripts/installed_suite_verdict.py, which refuses to pass
+    # on: any failure or error, an agent/ or .git in the tree, a missing or tiny junit file, too few
+    # passes, or more skips than the ceiling. Each clause has a twin in test_installed_suite_verdict.py.
+    # Ubuntu, not Windows: the point is the LAYOUT, and Linux runs it in well under half the minutes.
+    #
+    # THE THREE NUMBERS AT THE BOTTOM. min-tests 6000 and min-passed 5300 are floors under the MEASURED
+    # counts of a fresh Windows install (6,493 cases before the D-C2 fixes; about 6,506 after, 5,927 passed, projected from a re-run of the changed modules), so a suite that silently collected a
+    # fraction of itself cannot pass. max-skips 896 is NOT MEASURED ON CI YET: it is an upper bound,
+    # 578 skipped on that Windows install + the 315 more that the `tests` job's ubuntu leg skips than its
+    # windows leg (378 vs 63, run 41604483577) + 3. The first run of this job prints
+    # "INSTALLED-COPY SUITE: ... N skipped"; replace 896 with N + 3 and itemise the change here, as the
+    # `tests` job does. Until then a ceiling this loose catches a mass dormancy, not a slide.
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      # Depth 1 is enough: `git archive HEAD` needs the tree, not the history.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5, peeled commit
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.13
+        run: uv python install 3.13
+
+      - name: Install Java 17 (for the BaseX tests)
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install the Codex CLI (pinned) for the .rules checks
+        run: npm i -g @openai/codex@0.160.0
+
+      - name: Setup complete
+        id: setup
+        shell: bash
+        run: echo setup complete
+
+      - name: Install a real copy (git archive, then install.sh) and prove it is an install
+        id: install
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in $(compgen -e | grep '^X4_' || true); do unset "$v"; done
+          unset XRCATTOOL
+          SRC="$RUNNER_TEMP/release-zip"
+          TK="$RUNNER_TEMP/installed-toolkit"
+          mkdir -p "$SRC"
+          git archive HEAD | tar -x -C "$SRC"
+          # The premise: the release zip carries agent/ and the install DROPS it. If the zip stopped carrying
+          # it there would be nothing to drop and the checks below would prove nothing.
+          test -d "$SRC/agent" || { echo "the archive has no agent/: this leg's premise is gone"; exit 1; }
+          ( cd "$SRC" && bash install.sh --method separate --toolkit "$TK" --yes --no-env )
+          test ! -e "$TK/agent" || { echo "the install carries agent/: it is not runtime-only"; exit 1; }
+          test ! -e "$TK/.git" || { echo "the install carries a .git"; exit 1; }
+          test -d "$TK/tools/x4validate/.venv" || { echo "no venv: setup.sh did not run"; exit 1; }
+          n=$(find "$TK/tools/x4validate/tests" -maxdepth 1 -name 'test_*.py' | wc -l)
+          test "$n" -ge 300 || { echo "only $n test files in the installed copy"; exit 1; }
+          # The suite's OWN answer: its root is this install and it reads the layout as installed.
+          ( cd "$TK/tools/x4validate" && uv run --frozen python -c "import sys; from pathlib import Path; sys.path.insert(0, 'tests'); import _layout; want = Path(sys.argv[1]).resolve(); assert _layout.ROOT.resolve() == want, (_layout.ROOT, want); assert _layout.installed_layout(), 'the suite reads this tree as a checkout'; print('layout: installed, root', want)" "$TK" )
+
+      - name: Run the installed copy's suite (what SETUP_PROMPT tells a new user to run)
+        id: suite
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -uo pipefail
+          for v in $(compgen -e | grep '^X4_' || true); do unset "$v"; done
+          unset XRCATTOOL
+          cd "$RUNNER_TEMP/installed-toolkit/tools/x4validate"
+          uv run --frozen pytest -q -rs --junitxml="$RUNNER_TEMP/installed-suite.xml"
+
+      # Runs even when the suite step failed, so a red run still prints its counts, and refuses when the
+      # junit file is missing. Keep these three numbers in step with the comment at the top of this job.
+      - name: Verdict (0 failed, 0 errors, floors, skip ceiling, and it really is an install)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: bash
+        run: |
+          python3 .github/scripts/installed_suite_verdict.py \
+            --junit "$RUNNER_TEMP/installed-suite.xml" \
+            --root "$RUNNER_TEMP/installed-toolkit" \
+            --min-tests 6000 --min-passed 5300 --max-skips 896
 
   hook-mutation:
     name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/4)
