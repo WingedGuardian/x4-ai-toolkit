@@ -85,8 +85,8 @@ def test_a_FAILED_stamp_reaches_an_exit(script):
     satisfy the first test completely while still exiting 0.
     """
     body = _strip_comments(_source(script))
-    m = re.search(r"\|\|\s*(\w*RC)=\$\?", body[body.index("staleness.py"):]) \
-        if "staleness.py" in body else None
+    m = re.search(r"\|\|\s*(\w*RC)=\$\?", body[body.index("--write --db"):]) \
+        if "--write --db" in body else None
     assert m, f"{script}: no captured rc to act on (see the twin test)"
     var = m.group(1)
     # the variable must be TESTED, and a failing branch must exit non-zero
@@ -98,6 +98,20 @@ def test_a_FAILED_stamp_reaches_an_exit(script):
     tail = body[tested.end():tested.end() + 600]
     assert re.search(r"\bexit\s+[1-9]", tail), (
         f"{script}: the failing-stamp branch does not exit non-zero within its block")
+
+
+@pytest.mark.parametrize("script,first_read", [("build-corpus.sh", "stage.py"), ("build-effective.sh", "build-effective.py")])
+def test_the_fingerprint_is_taken_before_the_first_read_of_the_world(script, first_read):
+    """T1/R2-7: stamped at the END, a mod edited during the build read FRESH for ever over the old values. x4fresh could
+    revoke that afterwards; running the script directly, as CLAUDE.md says to, nothing did. STRUCTURAL: the running shell
+    needs Java and a corpus; the two halves (snapshot, stamp from it) are behaviour-tested in tools/basex/test_staleness.py."""
+    calls = [ln for ln in _strip_comments(_source(script)).splitlines() if _is_invocation(ln)]
+    snapshot = [i for i, ln in enumerate(calls) if "staleness.py" in ln and "--snapshot" in ln]
+    reads = [i for i, ln in enumerate(calls) if f'"$HERE/{first_read}"' in ln]
+    stamps = [i for i, ln in enumerate(calls) if "staleness.py" in ln and "--write" in ln]
+    assert len(snapshot) == 1 and len(reads) == 1 and len(stamps) == 1, (snapshot, reads, stamps)
+    assert snapshot[0] < reads[0] < stamps[0]
+    assert "--taken-before" in calls[stamps[0]], "a stamp that recomputes at the end is the original defect"
 
 
 def test_the_two_builds_are_NOT_chained_with_and_in_any_guidance():

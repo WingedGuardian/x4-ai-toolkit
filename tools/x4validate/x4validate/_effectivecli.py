@@ -656,9 +656,13 @@ def _cmd_coverage(con, args) -> int:
                 print(f"        - {str(item).split(': ', 1)[0]}")
             if len(items) > 10:
                 print(f"        ... and {len(items) - 10} more")
-    truncated = int(meta.get("truncated_props") or 0)
-    print(f"  truncated props : {truncated}"
-          + ("" if truncated else "   (none -- every property subtree was indexed)"))
+    if "truncated_props" in meta:
+        truncated = int(meta["truncated_props"] or 0)
+        print(f"  truncated props : {truncated}"
+              + ("" if truncated else "   (none -- every property subtree was indexed)"))
+    else:
+        truncated = 0
+        print("  truncated props : unknown   (this store was built before they were counted; rebuild to know)")
     if truncated:
         print(f"      {truncated} property subtree(s) were deeper than the build's depth guard and are NOT "
               "in this store: a query about them answers from absence.")
