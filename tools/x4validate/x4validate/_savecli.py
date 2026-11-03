@@ -265,23 +265,45 @@ def cmd_vars(path: Path, pattern: str, out=None) -> int:
     out = sys.stdout if to_stdout else out
     printed = 0
 
+    def closed_pipe(exc: OSError) -> None:
+        # A closed pipe is EPIPE on POSIX and EINVAL on Windows; any other write error (disk full) stays as is.
+        if exc.errno in (errno.EPIPE, errno.EINVAL):
+            raise BrokenPipeError(errno.EPIPE, "output closed") from exc
+        raise exc
+
     def say(text: str) -> None:
         try:
             print(text, file=out)
         except OSError as exc:
-            # A closed pipe is EPIPE on POSIX and EINVAL on Windows; any other write error (disk full) stays as is.
-            if exc.errno in (errno.EPIPE, errno.EINVAL):
-                raise BrokenPipeError(errno.EPIPE, "output closed") from exc
-            raise
+            closed_pipe(exc)
+
+    def say_flush() -> None:
+        try:
+            out.flush()
+        except OSError as exc:
+            closed_pipe(exc)
 
     def emit(r: VarRow) -> None:
         nonlocal printed
-        say(f"  {r.where}  {r.name}  {r.type or '-'}  {r.value}")
+        # One row, one line: a stored newline must not split a row a reader may be cutting or grepping.
+        row = f"  {r.where}  {r.name}  {r.type or '-'}  {r.value}"
+        say(row.replace("\r", "\\r").replace("\n", "\\n"))
         printed += 1
 
     try:
         say(f"save: {path}")
         scan = extract_vars(path, pattern, on_row=emit)
+        if scan.count:
+            rc = 0
+            say(f"{scan.count} match(es) over {scan.scanned_bytes:,} decompressed bytes. Tables, lists "
+                "and groups are shown as references (type#id), not expanded.")
+        else:
+            rc = 1
+            say(f"NO MATCH over {scan.scanned_bytes:,} decompressed bytes for /{pattern}/: no named "
+                "variable matched (table, list and group contents are not searched)")
+        # HERE, inside the handler: a reader that left while the last rows sat in the buffer fails no print.
+        # Left to the interpreter's exit flush, that failure is "Exception ignored" and rc 120.
+        say_flush()
     except BrokenPipeError:
         # `x4save vars ... | head`: the reader stopped, which is not a broken save. Quiet exit, rc 0.
         if to_stdout:
@@ -292,13 +314,7 @@ def cmd_vars(path: Path, pattern: str, out=None) -> int:
             print(f"INCOMPLETE: {printed} row(s) were printed above before the save failed to read; "
                   "the list is partial, not an answer", file=sys.stderr)
         raise
-    if not scan.count:
-        print(f"NO MATCH over {scan.scanned_bytes:,} decompressed bytes for /{pattern}/: no named "
-              "variable matched (table, list and group contents are not searched)", file=out)
-        return 1
-    print(f"{scan.count} match(es) over {scan.scanned_bytes:,} decompressed bytes. Tables, lists "
-          "and groups are shown as references (type#id), not expanded.", file=out)
-    return 0
+    return rc
 
 def _attr(block: str, tag: str, name: str) -> str:
     m = re.search(rf'<{tag}\b[^>]*?\b{name}="([^"]*)"', block)

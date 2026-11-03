@@ -246,3 +246,73 @@ def test_a_unreadable_save_with_no_rows_printed_has_no_incomplete_line(tmp_path,
     """Twin: nothing was printed, so there is no partial list to disclaim."""
     rc = _savecli.main(["vars", "nomatch_xyz", str(_save(tmp_path, _DOC[:-40]))])
     assert rc == 2 and "INCOMPLETE" not in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- release review 4.1.0: T7
+
+_REAL_CLI = "import sys; from x4validate._savecli import main; sys.exit(main(sys.argv[1:]))"
+
+
+def _pipe_save(tmp_path, rows, tail_mb):
+    import gzip as _gz
+    path = tmp_path / "pipe.xml.gz"
+    with _gz.open(path, "wb", compresslevel=1) as g:
+        g.write(b'<?xml version="1.0"?><savegame><info/><md><script name="s"><cue name="c"><vars>')
+        for i in range(rows):
+            g.write(f'<value name="$match_{i}" type="integer" value="{i}"/>'.encode())
+        g.write(b"</vars></cue></script></md><universe>")
+        pad = b'<x a="1"/>' * 100000
+        for _ in range(tail_mb):
+            g.write(pad)
+        g.write(b"</universe></savegame>")
+    return path
+
+
+@pytest.mark.parametrize("rows,tail_mb,why", [
+    # About 12 KB of rows: the first flush reaches the reader, the rest stays buffered, and the reader leaves
+    # during the long tail. No print fails; only the interpreter's exit flush does (rc 120 until 4.1.0).
+    (420, 30, "exit flush"),
+    # Many rows: the write itself fails mid-scan. The older half of the same contract.
+    (40000, 0, "mid-scan write"),
+])
+def test_a_real_closed_pipe_exits_quietly_rc_0(tmp_path, rows, tail_mb, why):
+    """A REAL pipe, a REAL child, because a stub stdout has no exit flush for the interpreter to fail on."""
+    import subprocess
+    import sys as _sys
+    save = _pipe_save(tmp_path, rows, tail_mb)
+    proc = subprocess.Popen([_sys.executable, "-c", _REAL_CLI, "vars", "match", str(save)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    first = proc.stdout.read(200)
+    proc.stdout.close()                  # `| head` going away
+    err = proc.stderr.read().decode("utf-8", "replace")
+    rc = proc.wait(timeout=120)
+    assert first.startswith(b"save: "), "the control: the reader saw output before it left"
+    assert rc == 0, f"{why}: rc {rc}; stderr: {err}"
+    assert "Exception ignored" not in err and "OSError" not in err and "Traceback" not in err
+
+
+def test_a_reader_that_stays_gets_the_footer_the_twin(tmp_path):
+    import subprocess
+    import sys as _sys
+    save = _pipe_save(tmp_path, 420, 1)
+    done = subprocess.run([_sys.executable, "-c", _REAL_CLI, "vars", "match", str(save)], capture_output=True)
+    assert done.returncode == 0
+    assert b"420 match(es)" in done.stdout
+
+
+def test_a_value_with_a_newline_stays_on_its_row(tmp_path, capsys):
+    doc = (b'<savegame><md><script name="s"><cue name="c"><vars>'
+           b'<value name="$a" type="string" value="line1&#10;line2&#13;end"/>'
+           b'<value name="$plain" type="string" value="one line"/>'
+           b'</vars></cue></script></md></savegame>')
+    assert _savecli.main(["vars", "^(a|plain)$", str(_save(tmp_path, doc))]) == 0
+    rows = [ln for ln in capsys.readouterr().out.splitlines() if "$a" in ln or "$plain" in ln]
+    assert len(rows) == 2, rows
+    assert "line1\\nline2\\rend" in rows[0]
+    assert rows[1].endswith("one line"), "the twin: a value with no newline is printed as it is"
+
+
+def test_the_row_escape_is_display_only(tmp_path):
+    doc = (b'<savegame><md><script name="s"><cue name="c"><vars>'
+           b'<value name="$a" type="string" value="x&#10;y"/></vars></cue></script></md></savegame>')
+    assert "\n" in _savecli.extract_vars(_save(tmp_path, doc), "a").rows[0].value
