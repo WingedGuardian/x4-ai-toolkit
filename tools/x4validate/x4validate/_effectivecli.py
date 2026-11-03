@@ -282,17 +282,11 @@ class StoreMetadataError(ValueError):
 
 
 def _reader_gone(exc: OSError) -> bool:
-    """A closed pipe is BrokenPipeError on POSIX and EINVAL on Windows. EINVAL alone can mean anything,
-    so it counts only if stdout itself refuses a flush."""
+    """A closed pipe is BrokenPipeError on POSIX and EINVAL on Windows. A file operation can also raise EINVAL
+    (a bad name), and that one carries the filename; a write to stdout does not."""
     if isinstance(exc, BrokenPipeError):
         return True
-    if exc.errno != errno.EINVAL:
-        return False
-    try:
-        sys.stdout.flush()
-    except OSError:
-        return True
-    return False
+    return exc.errno == errno.EINVAL and exc.filename is None
 
 
 def _quiet_stdout() -> None:
