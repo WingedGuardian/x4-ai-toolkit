@@ -93,6 +93,58 @@ def test_a_failing_diff_is_a_refusal_not_an_empty_list(checkout, stepless, capsy
     assert ran == []
 
 
+LOUD = "import sys\nprint('FIRST LINE')\nfor i in range(100): print('line', i)\nsys.exit(1)\n"
+
+
+def _kept_path(out):
+    return Path(next(l for l in out.splitlines() if "full output:" in l).split("full output:", 1)[1].strip())
+
+
+def test_a_failed_step_keeps_its_full_output_and_says_where(checkout, capsys, monkeypatch):
+    """The screen shows the last 40 lines. An rc2 failure's traceback fell off that, its temp folder went when the run
+    ended, and a one-off test failure could then never be explained."""
+    gate = _module()
+    monkeypatch.setattr(gate, "REPO", checkout)
+    g = gate.Gate()
+    assert g.step("loud", [sys.executable, "-c", LOUD], cwd=checkout) is False
+    out = capsys.readouterr().out
+    assert "FIRST LINE" not in out, "the control: the screen really does cut this off"
+    kept = _kept_path(out).read_text(encoding="utf-8")
+    assert "FIRST LINE" in kept and "line 99" in kept and "loud" in kept
+
+
+def test_TWIN_two_failed_steps_of_one_run_are_both_kept_and_a_new_run_starts_over(checkout, capsys, monkeypatch):
+    gate = _module()
+    monkeypatch.setattr(gate, "REPO", checkout)
+    g = gate.Gate()
+    g.step("one", [sys.executable, "-c", "import sys; print('ONE'); sys.exit(1)"], cwd=checkout)
+    g.step("two", [sys.executable, "-c", "import sys; print('TWO'); sys.exit(1)"], cwd=checkout)
+    path = _kept_path(capsys.readouterr().out)
+    kept = path.read_text(encoding="utf-8")
+    assert "ONE" in kept and "TWO" in kept
+    gate.Gate().step("three", [sys.executable, "-c", "import sys; print('THREE'); sys.exit(1)"], cwd=checkout)
+    kept = path.read_text(encoding="utf-8")
+    assert "THREE" in kept and "ONE" not in kept
+
+
+def test_TWIN_a_passing_step_keeps_nothing(checkout, capsys, monkeypatch):
+    gate = _module()
+    monkeypatch.setattr(gate, "REPO", checkout)
+    assert gate.Gate().step("quiet", [sys.executable, "-c", "print('fine')"], cwd=checkout) is True
+    assert "full output:" not in capsys.readouterr().out
+    assert not list((checkout / ".git").glob("prepush-gate*"))
+
+
+def test_TWIN_output_that_cannot_be_kept_says_so_and_the_step_still_fails(tmp_path, capsys, monkeypatch):
+    gate = _module()
+    monkeypatch.setattr(gate, "REPO", tmp_path)                 # not a repository: there is no git directory to keep it in
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    g = gate.Gate()
+    assert g.step("loud", [sys.executable, "-c", LOUD], cwd=tmp_path) is False
+    out = capsys.readouterr().out
+    assert "full output NOT kept" in out and "line 99" in out and g.failed == ["loud"]
+
+
 def test_the_gate_is_not_shipped_and_nothing_that_ships_needs_it():
     require_repo(".git", "scripts/prepush-gate.py", why="asks git for the export rule")
     r = subprocess.run(["git", "-C", str(REPO), "check-attr", "export-ignore", "--", "scripts/prepush-gate.py"],

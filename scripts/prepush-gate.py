@@ -155,6 +155,22 @@ class Gate:
     def __init__(self):
         self.failed = []
         self.t0 = time.time()
+        self.kept = False
+
+    def _keep_full_output(self, name, text):
+        """The screen shows the last 40 lines. A test failure's traceback fell off that in rc2 and its temp folder went
+        with the run, so it could never be explained. Kept in the git directory: per worktree, and never tracked."""
+        try:
+            path = _git("rev-parse", "--path-format=absolute", "--git-path", "prepush-gate-failures.log")
+            if not path:
+                raise OSError("no git directory")
+            with open(path, "a" if self.kept else "w", encoding="utf-8", errors="replace") as f:
+                f.write("== {} at {}\n{}\n".format(name, time.strftime("%Y-%m-%d %H:%M:%S"), text))
+        except OSError as e:
+            print("   full output NOT kept: {}".format(e))
+            return
+        self.kept = True
+        print("   full output: {}".format(path))
 
     def step(self, name, cmd, cwd=None, check=None):
         # cwd resolves at CALL time: a `cwd=REPO` default was bound at import, so --root never reached the hook-test
@@ -167,6 +183,7 @@ class Gate:
         ok = r.returncode == 0 and not problems
         if not ok:
             print("\n".join("   " + l for l in (r.stdout + r.stderr).strip().splitlines()[-40:]))
+            self._keep_full_output(name, r.stdout + r.stderr)
             for p in problems:
                 print("   " + p)
             self.failed.append(name)
