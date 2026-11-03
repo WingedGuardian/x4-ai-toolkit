@@ -449,6 +449,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F344 | The save sentinel decides whether the game wrote a change from the game's session window; it cannot separate writers inside a window, and a crashed session leaves no stamp | **SCOPE LIMIT (measured on fake timestamps only)** · IN-ARC | the fix lane's tests drive the window with fabricated timestamps; no in-game session was run | stated in the CHANGELOG; the window comes from `uidata.xml`'s modification time |
 | F345 | `bin_refusal` judged the drive letter of the absolute path, so a path under a junction or symlink to a network share looked recyclable and Windows' shell then destroys such files silently | **DEFECT (measured)** · IN-ARC | release review: an ancestor junction to a UNC path passed; fix lane: real junctions, 6 classes of path, 2 arms each | FIXED 2026-11-03 - every existing component is checked for a link and `realpath` has the last word |
 | F346 | Plain `x4refguard status` samples the tree, so after a killed `remove` it can read `protected` while about 2,000 of 40,006 objects have lost their deny | **OPEN LIMIT (measured)** · PRE-ARC | killed a real `icacls` on a 40,006-object tree: a killed `remove` left the root denied and a sample read `protected` | open by design: `--full` walks every object; `apply` and `remove` always verify the full walk and re-running finishes an interrupted one |
+| F347 | The hook mutation gate refused on 5 stale anchors, so the mutants added with the carrier-reading commits never ran | **DEFECT (measured)** · IN-ARC | release review: 5 of 344 anchors stale across `85442321`, `f9435d4b`, `158f8a18`; first run of the new rows: 21 of 150 survived | FIXED 2026-11-03 - anchors re-cut; `--check-anchors` runs without trials in the unit suite and the pre-push gate |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11845,3 +11846,20 @@ the full walk, and running either again finishes an interrupted one (40,006 of 4
 
 NOT TIMED: a full pass over the whole reference tree. The lane extrapolated about 7 minutes for 510,000 objects from the
 per-100,000 figure; nothing ran at that size.
+
+## F347 - The hook mutation gate refused on stale anchors, so new mutants never ran · **DEFECT (measured)** · IN-ARC · confidence 90% · FIXED 2026-11-03
+
+Found by the 4.1.0 release review: `scripts/verify-hook-tests.py` refuses to run when a mutant's anchor text no longer
+appears in the source, and a refusal runs nothing. MEASURED: 5 of 344 anchors stale in the `hook_facts.py` table across
+`85442321`, `f9435d4b` and `158f8a18`, so all 8 shards of the gate were predicted red and the mutants added in the same
+commits had never executed. Once they did, 21 of the 150 new rows survived on the first run; each was then killed or removed
+as an equivalent mutant (`a.ipv4_mapped` survives on Python 3.12.4 and later, so it was removed).
+
+Fix: `b3d0b188` re-cut the five anchors and added `--check-anchors`, which finds a stale anchor with no trial, in the unit
+suite and in the pre-push gate; `385fd6e5` adds mutants for the carrier code that had none; `--only REGEX` runs chosen
+mutants. The fix lane reports 429 unique anchors and a `--only` run of 167 of 167 caught. The hook-mutation trial count
+went from 426 to 511; the lane's estimate is about 52 minutes per shard, which nobody timed.
+
+RESIDUAL: `ps_translate.ps1` has no mutant table. The lane's one-off trials caught 10 of 10, and a table is not built.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_verify_hook_tests.py`.
