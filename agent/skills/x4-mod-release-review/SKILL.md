@@ -96,7 +96,7 @@ through a new feature, a new default or a new instruction in the description —
 | Save safety | `save="1"` bakes the mod into saves. Changing it, removing wares/macros/MD cues, or renaming ids can break existing saves. Verdict for players mid-game: SAFE / RISKY / DON'T |
 | Dependencies another install may lack | anything patched or referenced from another mod: is it declared? Does the payload reference that mod's content (`if=` guards the selector, not the payload)? **The author's own install has all of these, so their testing cannot catch this class** |
 | Did the author's testing exercise THIS mod's change? | on the author's mod list, does another mod win the same value? `x4effective who-sets` / `x4compat check`. If so, their test ran the other mod's value |
-| Package contents | unpack the `.cat` to a scratch folder and compare with the dev folder: nothing missing, no dev leftovers (test cues, debug logging, backup files), paths mirror the game paths exactly |
+| Package contents | unpack the `.cat` to a scratch folder and compare with the dev folder: nothing missing, no dev leftovers (test cues, debug logging, backup files), paths mirror the game paths exactly; no source or tooling bundle inside the main package (see *Packaging rules*) |
 | Text | t-files are merged across every mod, so page ids must not collide with vanilla or other mods. **The engine opens only the active language's t-file, so the author's test cannot reveal a broken t-file in any other language.** Check each shipped language file statically |
 | Version-specific API | `x4validate <mod> --update` if the game version changed since the last release (the XSD pass and migration notes; exprlint runs on every x4validate run) |
 | Claims | version, changelog and the Nexus/Workshop description match the files; every number re-derived |
@@ -158,6 +158,19 @@ the final go. Then:
 3. A clean review is necessary, not sufficient. The upload itself is the author's step.
 
 Skipping step 2 makes the next release's review start from a download or a full read.
+
+### Packaging rules (mirrors the Skyrim `mod-release-review`)
+
+- **One upload folder.** Everything the author uploads or pastes (the main package, every optional
+  file, any separate source download, the page description, the summary and the changelog text)
+  goes in the same release folder, with plain names. Give the author one path; nothing to upload
+  lives in a build workspace or a second folder.
+- **No source in the main package.** The main download holds only what the game loads plus the
+  player docs. Source code or tooling for a compiled component is its own download, never a folder
+  inside the main package. If its license requires the source to stay available, tell the author
+  not to archive that download while the binary ships.
+- **License notices travel with the binary** they cover, placed beside it rather than at the top
+  level, and the docs point to the separate source download.
 
 ## Red flags
 
