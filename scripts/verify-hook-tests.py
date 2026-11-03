@@ -23,6 +23,16 @@ read a mutated file and shipped it.
 
 Exit 0 if both pass, 1 if either finds a hole, 2 if the baseline is not green (in which
 case neither result means anything and no verdict is given).
+
+Two narrower runs, neither of which is ever a release pass:
+
+  --check-anchors  no trials at all: every mutant's anchor appears exactly once and every target
+                   names one test. A stale anchor refuses the whole gate at the start of its CI
+                   run (5 of them did at the 4.1.0 candidate), so this is cheap enough for the
+                   pre-push gate and the unit suite.
+  --only REGEX     the mutants whose label matches, run against their target test's class only,
+                   and no predicate pairs. For the code you just changed; exit 3 when all are
+                   caught. The whole table still runs on CI.
 """
 from __future__ import annotations
 
@@ -173,7 +183,8 @@ MUTANTS = [
     # matching and the harness said so rather than passing -- the third orphaned anchor
     # this session, and the third time refusing beat reporting a clean run.
     ("wrapper verbs are seen through",
-     "        if name in WRAPPERS:", "        if False:",
+     "        if name in WRAPPERS:\n            seen_wrapper = True",
+     "        if False:\n            seen_wrapper = True",
      "test_sees_through_a_wrapper"),
     ("dot-segment canonicalisation", "s = posixpath.normpath(s)", "s = s",
      "test_dot_segment_is_canonicalised"),
@@ -526,8 +537,8 @@ MUTANTS = [
      '_GIT_ADD_VERBS = ("add",)',
      "test_git_stage_dash_A"),
     ("a carrier argument is resolved",
-     "                    out.extend(resolve_variants(toks[i + 1][0], assignments(cmd)))",
-     "                    out.append(toks[i + 1][0])",
+     "                    out.extend(resolve_variants(toks[_shell_text_at(toks, i + 1, t)][0], assignments(cmd)))",
+     "                    out.append(toks[_shell_text_at(toks, i + 1, t)][0])",
      "test_a_command_carried_in_a_variable"),
     ("the durable rule needs a python interpreter",
      "            and _verb_name(verb(sg)) in _PYTHONS",
@@ -1015,8 +1026,8 @@ MUTANTS = [
      "    if True:",
      "test_ANY_writing_git_config_or_a_moved_HOME_forces_the_clean"),
     ("K-C1: a shell -c carrier carries every value",
-     "                    out.extend(resolve_variants(toks[i + 1][0], assignments(cmd)))",
-     "                    out.append(resolve(toks[i + 1][0], assignments(cmd)))",
+     "                    out.extend(resolve_variants(toks[_shell_text_at(toks, i + 1, t)][0], assignments(cmd)))",
+     "                    out.append(resolve(toks[_shell_text_at(toks, i + 1, t)][0], assignments(cmd)))",
      "test_the_empty_branch_is_judged_again"),
     ("K-C1: eval carries every value",
      '                out.extend(resolve_variants(" ".join(parts), assignments(cmd)))   # FX-G6 / K C1',
@@ -1244,8 +1255,8 @@ MUTANTS = [
     # --- F10 (v4.0): a command name the guard cannot identify (variable, substitution,
     # cmd %R%/!R!). One mutant per clause; each target names its own class.
     ('F10: an unknown command name contributes its readings',
-     '            readings = dynamic_program_readings(seg)',
-     '            readings = []',
+     '            readings = dynamic_program_readings(seg)' + NL + '            if readings:' + NL + '                dynamic[n] = readings',
+     '            readings = []' + NL + '            if readings:' + NL + '                dynamic[n] = readings',
      'TestF10DynamicProgramWord.test_the_words_after_an_unknown_name_are_judged_as_a_command'),
     ('F10: a quoted word after an unknown name is read as eval reads it',
      '        for r in (rest, joined):',
@@ -1288,8 +1299,8 @@ MUTANTS = [
      '        if False and any(norm(roots[k]) in norm(o) or k in root_vars_named(o)',
      'TestF10DynamicProgramWord.test_an_unknown_name_given_a_protected_path_asks'),
     ('F10: a ROOT variable naming a program is a known program',
-     '        if not has_unresolved(subst_root_var(resolve(_verb_token(s), assigns), roots)):' + NL + '            continue',
-     '        if False:' + NL + '            continue',
+     '        if (not has_unresolved(subst_root_var(resolve(_verb_token(s), assigns), roots))' + NL,
+     '        if (False' + NL,
      'TestF10DynamicProgramWord.test_TWIN_a_known_name_given_a_protected_path_is_not_this_rule'),
     ('F10: a segment cut inside a substitution is no command position',
      '    return not any(_span_open(x) for x in toks[:k])',
@@ -1522,7 +1533,7 @@ def credited(failed: set, srcs: dict, key: str) -> set:
     return {t for t in failed if names_predicate(srcs.get(t, ""), key)}
 
 
-def run(work: Path):
+def run(work: Path, tests=()):
     # PYTHONDONTWRITEBYTECODE, and it is not hygiene -- without it this gate returns
     # WRONG VERDICTS. CPython invalidates a cached .pyc on (source mtime in SECONDS,
     # source size). Successive mutants are written to the same path within the same
@@ -1541,11 +1552,11 @@ def run(work: Path):
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     for pyc in work.rglob("__pycache__"):
         shutil.rmtree(pyc, ignore_errors=True)
-    p = subprocess.run([sys.executable, "test_hook_facts.py"], cwd=work,
+    p = subprocess.run([sys.executable, "test_hook_facts.py", *tests], cwd=work,
                        capture_output=True, text=True, errors="replace", env=env)
     out = p.stdout + p.stderr
     failed = failed_tests(out)
-    ran = re.search(r"Ran (\d+) tests", out)
+    ran = re.search(r"Ran (\d+) tests?", out)
     return p.returncode, failed, int(ran.group(1)) if ran else -1
 
 
@@ -1605,7 +1616,7 @@ def wait_for_dispatch():
         time.sleep(1)
 
 
-def evaluate_source(source):
+def evaluate_source(source, tests=()):
     wait_for_dispatch()
     with tempfile.TemporaryDirectory(prefix="x4-vht-case-") as td:
         work = Path(td)
@@ -1613,7 +1624,7 @@ def evaluate_source(source):
             shutil.copy2(HOOKS / f, work / f)
         (work / "hook_facts.py").write_text(source, encoding="utf-8", newline="")
         started = time.monotonic()
-        rc, failed, ran = run(work)
+        rc, failed, ran = run(work, tests)
         return {"rc": rc, "failed": sorted(failed), "ran": ran,
                 "seconds": time.monotonic()-started}
 
@@ -1637,6 +1648,45 @@ def shard_groups(n_mutants: int, keys: list, k: int, n: int) -> set:
     return {t for g in groups[k - 1::n] for t in g}
 
 
+def anchor_problems(pristine: str, test_source: str, mutants=None) -> list:
+    """Every reason the mutant table cannot run against this source, without running anything:
+    an anchor that does not appear exactly once, a replacement that changes nothing, a target that
+    does not name exactly one test, or a table with nothing in it."""
+    mutants = MUTANTS if mutants is None else mutants
+    if not mutants:
+        return ["the mutant set is EMPTY, so 0 of 0 uncaught would be a statement about nothing"]
+    idx = test_index(test_source)
+    out = []
+    for label, old, new, tgt in mutants:
+        count = pristine.count(old)
+        if count != 1:
+            out.append("%s: DID NOT APPLY (%d matches) -- stale mutant" % (label, count))
+        if old == new:
+            out.append("%s: the replacement is the anchor, so nothing is mutated" % label)
+        if qualify(tgt, idx)[0] is None:
+            out.append("%s: %s" % (label, qualify(tgt, idx)[1]))
+    return out
+
+
+def check_anchors() -> int:
+    """--check-anchors: the table against the hooks, no trials. 0 clean, 1 a problem, 2 no hooks."""
+    try:
+        pristine = (HOOKS / "hook_facts.py").read_text(encoding="utf-8")
+        source = (HOOKS / "test_hook_facts.py").read_text(encoding="utf-8")
+    except OSError as exc:
+        print("REFUSING: the hooks could not be read (%s)" % type(exc).__name__, file=sys.stderr)
+        return 2
+    problems = anchor_problems(pristine, source)
+    for line in problems:
+        print(line)
+    if problems:
+        print("REFUSING: %d problem(s) in the mutant table of %d, no trial was run"
+              % (len(problems), len(MUTANTS)))
+        return 1
+    print("%d mutant anchors each appear exactly once and name one test; no trial was run" % len(MUTANTS))
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, choices=range(1,9), default=1)
@@ -1645,9 +1695,22 @@ def main(argv=None) -> int:
     parser.add_argument("--shard", type=_shard_arg, metavar="K/N",
                         help="run only shard K of N (1-based): every mutant, and each predicate's "
                              "False/True pair, lands in exactly one shard; all N must pass")
+    parser.add_argument("--check-anchors", action="store_true",
+                        help="check the mutant table against the hooks, run no trial")
+    parser.add_argument("--only", type=re.compile, metavar="REGEX",
+                        help="run the mutants whose label matches, each against its target test's "
+                             "class only, and no predicate pairs; exit 3, never a release pass")
     args = parser.parse_args(argv)
+    if args.check_anchors:
+        return check_anchors()
     if args.shard and args.sample is not None:
         parser.error("--shard and --sample do not combine")
+    if args.only and (args.shard or args.sample is not None):
+        parser.error("--only does not combine with --shard or --sample")
+    selected = {i for i, m in enumerate(MUTANTS) if args.only.search(m[0])} if args.only else None
+    if selected is not None and not selected:
+        print("REFUSING: --only matched no mutant label", file=sys.stderr)
+        return 2
     def inputs():
         return {str(p.relative_to(REPO)):hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in [Path(__file__).resolve(),*[HOOKS/f for f in FILES]]}
@@ -1663,8 +1726,15 @@ def main(argv=None) -> int:
         target = work / "hook_facts.py"
         pristine = target.read_text(encoding="utf-8")
 
-        rc, failed, ran = run(work)
-        if rc != 0 or ran < 20:
+        # --only runs the target classes alone, so the floor is "the class ran at all".
+        floor, base_tests = 20, ()
+        if selected is not None:
+            floor = 1
+            index = test_index((HOOKS / "test_hook_facts.py").read_text(encoding="utf-8"))
+            targets = (qualify(MUTANTS[i][3], index)[0] for i in selected)
+            base_tests = sorted({t.split(".")[0] for t in targets if t})
+        rc, failed, ran = run(work, base_tests)
+        if rc != 0 or ran < floor:
             print(f"REFUSING: baseline is not green (rc={rc}, ran={ran}, "
                   f"{len(failed)} failed). No mutation result would mean anything.",
                   file=sys.stderr)
@@ -1721,6 +1791,9 @@ def main(argv=None) -> int:
         cases += [("predicate:"+k+":"+v, pristine+SHIM.format(key=k,val=v))
                   for k in keys for v in ("False","True")]
         population = len(cases)
+        if selected is not None:
+            cases = [c for c in cases if c[0] in {"mutation:" + str(i) for i in selected}]
+            print(f"--only: {len(cases)} of {population} trials, each against its target test's class\n")
         # CI SHARDS (4.0.1): the whole population took ~2 h 10 m on 4 workers at 228 mutants and
         # was still running 5 h 20 m into the 360-minute job at 288 (ci/v4.0.1-rc6), because each
         # trial's hook file went 41 s -> 75 s (the PowerShell link tests start one pwsh per shape).
@@ -1745,9 +1818,13 @@ def main(argv=None) -> int:
                          and os.environ.get("RUNNER_TEMP"))):
             print("REFUSING: parallel trials require rb.py run (or a GitHub Actions runner)")
             return 2
+        def tests_of(key):
+            if selected is None:
+                return ()
+            return (qualified[MUTANTS[int(key.split(":")[1])][3]].split(".")[0],)
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             values = []
-            for result in pool.map(evaluate_source, [s for _,s in cases]):
+            for result in pool.map(evaluate_source, [s for _,s in cases], [tests_of(k) for k,_ in cases]):
                 values.append(result)
                 print(f"trial {len(values)}/{len(cases)} completed", flush=True)
         results = dict(zip([key for key,_ in cases], values))
@@ -1778,7 +1855,7 @@ def main(argv=None) -> int:
             target.write_text(pristine.replace(old, new), encoding="utf-8", newline="")
             result = results["mutation:"+str(i)]
             rc, failed, ran = result["rc"], set(result["failed"]), result["ran"]
-            if ran < 20:
+            if ran < floor:
                 print(f"{label:<42} {'BROKE':<12} *** broke the suite, proves nothing ***")
                 bad += 1
             elif qualified[tgt] in failed:
@@ -1842,6 +1919,9 @@ def main(argv=None) -> int:
     print(f"predicates with a coverage gap:            {gaps} of {n_keys}")
     print("  fires?   = predicate pinned FALSE, so a must-FIRE test must break")
     print("  silent?  = predicate pinned TRUE,  so a must-NOT-fire test NAMING it must break")
+    if selected is not None:
+        print("--only: %d mutant(s), no predicate pair and no release verdict" % n_mut)
+        return 1 if bad else 3
     return 1 if (bad or gaps) else 0
 
 

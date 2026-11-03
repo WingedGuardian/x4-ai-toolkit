@@ -11,6 +11,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location("verify_hook_tests", ROOT / "scripts" / "verify-hook-tests.py")
 vht = importlib.util.module_from_spec(spec)
@@ -89,3 +91,60 @@ def test_TWIN_a_shard_beyond_the_population_is_empty_and_the_argument_is_checked
         with pytest.raises(argparse.ArgumentTypeError):
             vht._shard_arg(bad)
     assert vht._shard_arg("2/4") == (2, 4)
+
+
+# --------------------------------------------------- the anchors, with no trial (4.1.0 D-C1)
+# CI's mutation step refused at the 4.1.0 candidate: 5 anchors had gone stale when the code they
+# sat on moved, so every shard would have gone red and the carrier mutants added in the same
+# commits had never run. Nothing short of the 6-hour matrix could say so.
+def _anchor_table():
+    from _layout import require_repo
+    require_repo(".claude/hooks/test_hook_facts.py", why="the hook tests are what the mutants target")
+    hooks = ROOT / ".claude" / "hooks"
+    return ((hooks / "hook_facts.py").read_text(encoding="utf-8"),
+            (hooks / "test_hook_facts.py").read_text(encoding="utf-8"))
+
+
+def test_every_mutant_anchor_applies_and_names_one_test():
+    pristine, source = _anchor_table()
+    assert vht.anchor_problems(pristine, source) == []
+
+
+SOURCE = "class T(unittest.TestCase):\n    def test_a(self):\n        pass\n    def test_b(self):\n        pass\n"
+
+
+def test_each_kind_of_stale_row_is_reported():
+    def problems(*row):
+        return vht.anchor_problems("once twice twice", SOURCE, [row])
+    assert problems("ok", "once", "ONCE", "test_a") == []
+    assert "DID NOT APPLY (0 matches)" in problems("gone", "never", "x", "test_a")[0]
+    assert "DID NOT APPLY (2 matches)" in problems("twin", "twice", "x", "test_a")[0]
+    assert "nothing is mutated" in problems("noop", "once", "once", "test_a")[0]
+    assert "no such test" in problems("target", "once", "x", "test_missing")[0]
+    assert "EMPTY" in vht.anchor_problems("x", SOURCE, [])[0]
+
+
+def test_the_check_refuses_on_a_real_stale_table_and_runs_nothing(monkeypatch, capsys):
+    _anchor_table()
+    monkeypatch.setattr(vht, "MUTANTS", [("stale", "this text is in no hook", "x", "test_nothing")])
+    monkeypatch.setattr(vht, "run", lambda *a, **k: pytest.fail("--check-anchors ran a trial"))
+    assert vht.main(["--check-anchors"]) == 1
+    assert "stale" in capsys.readouterr().out
+
+
+def test_the_check_refuses_when_the_hooks_cannot_be_read(monkeypatch, tmp_path):
+    monkeypatch.setattr(vht, "HOOKS", tmp_path)
+    assert vht.main(["--check-anchors"]) == 2
+
+
+def test_the_prepush_gate_runs_the_check():
+    """A list entry and not a mention: prose in the gate would satisfy a substring."""
+    spec_ = importlib.util.spec_from_file_location("prepush_gate_t", ROOT / "scripts" / "prepush-gate.py")
+    gate = importlib.util.module_from_spec(spec_)
+    spec_.loader.exec_module(gate)
+    assert ["python", "scripts/verify-hook-tests.py", "--check-anchors"] in gate.HOOK_TESTS
+
+
+def test_only_refuses_a_filter_that_matches_nothing(monkeypatch):
+    monkeypatch.setattr(vht, "MUTANTS", [("a label", "x", "y", "test_a")])
+    assert vht.main(["--only", "no such label"]) == 2
