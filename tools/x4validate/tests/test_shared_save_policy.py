@@ -903,15 +903,19 @@ def test_resolve_does_not_remember_paths_between_reads(install, monkeypatch):
 
 
 @pytest.mark.parametrize("deadline", [None, 0.0])
-def test_resolve_restores_the_core_on_every_exit(install, deadline):
-    preservation = policy.core(install[0], "preservation")
-    original = preservation.canonical
+def test_resolve_ends_the_read_on_every_exit(install, monkeypatch, deadline):
+    # A read left open would answer the later preservation checks from stale paths.
+    root, roots, _files = install
     if deadline is None:
-        policy.resolve(install[0], install[1], _outside_rows(install, 1))
+        policy.resolve(root, roots, _outside_rows(install, 1))
     else:
         with pytest.raises(TimeoutError):
-            policy.resolve(install[0], install[1], _outside_rows(install, 1), deadline)
-    assert preservation.canonical is original
+            policy.resolve(root, roots, _outside_rows(install, 1), deadline)
+    seen = _count_resolutions(install, monkeypatch)
+    preservation = policy.core(root, "preservation")
+    preservation.contains(roots["saves"], roots["saves"])
+    preservation.contains(roots["saves"], roots["saves"])
+    assert len(seen) == 4
 
 
 def test_resolve_keeps_each_path_distinct_at_any_batch_position(install):
