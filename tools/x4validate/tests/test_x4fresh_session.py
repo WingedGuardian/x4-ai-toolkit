@@ -115,3 +115,66 @@ def test_the_launcher_honours_auto_off(tmp_path, monkeypatch):
     monkeypatch.setenv("X4_FRESH_AUTO", "off")
     monkeypatch.setattr(xs.subprocess, "run", lambda *a, **k: pytest.fail("ran with X4_FRESH_AUTO=off"))
     assert xs.main([str(tmp_path / "n.txt")]) == 0
+
+
+class _Done:
+    def __init__(self, returncode, stderr=""):
+        self.returncode, self.stderr = returncode, stderr
+
+
+def _launch(monkeypatch, tmp_path, run):
+    monkeypatch.setattr(xs.shutil, "which", lambda name: "uv")
+    monkeypatch.delenv("X4_FRESH_AUTO", raising=False)
+    monkeypatch.setattr(xs.subprocess, "run", run)
+    note = tmp_path / "n.txt"
+    return note, xs.main([str(note)])
+
+
+def test_the_launcher_writes_did_not_complete_before_starting(tmp_path, monkeypatch):
+    """A launcher killed in `uv run` must not leave the previous run's empty note to read as fine."""
+    seen = []
+    note = tmp_path / "n.txt"
+    note.write_text("", encoding="utf-8")
+
+    def run(*a, **k):
+        seen.append(note.read_text(encoding="utf-8"))
+        return _Done(0)
+    _launch(monkeypatch, tmp_path, run)
+    assert seen and seen[0].startswith(xs.PENDING)
+
+
+def test_a_nonzero_exit_with_no_report_says_so_in_the_note(tmp_path, monkeypatch):
+    note, rc = _launch(monkeypatch, tmp_path, lambda *a, **k: _Done(2, "x4fresh: REFUSING: not configured\n"))
+    text = note.read_text(encoding="utf-8")
+    assert rc == 2 and "rc 2" in text and "REFUSING: not configured" in text
+    assert not text.startswith(xs.PENDING)
+
+
+def test_a_nonzero_exit_keeps_the_report_x4fresh_wrote(tmp_path, monkeypatch):
+    """Twin: rc 1 with a report is x4fresh's own account of a failed build, far better than a bare rc."""
+    def run(*a, **k):
+        (tmp_path / "n.txt").write_text("x4fresh: NOT CURRENT: xref STALE\n", encoding="utf-8")
+        return _Done(1)
+    note, rc = _launch(monkeypatch, tmp_path, run)
+    assert rc == 1 and note.read_text(encoding="utf-8") == "x4fresh: NOT CURRENT: xref STALE\n"
+
+
+def test_a_clean_exit_leaves_the_empty_note_alone(tmp_path, monkeypatch):
+    def run(*a, **k):
+        (tmp_path / "n.txt").write_text("", encoding="utf-8")
+        return _Done(0)
+    note, rc = _launch(monkeypatch, tmp_path, run)
+    assert rc == 0 and note.read_text(encoding="utf-8") == ""
+
+
+def test_a_launch_that_cannot_start_says_so_in_the_note(tmp_path, monkeypatch):
+    def run(*a, **k):
+        raise OSError("no such file")
+    note, rc = _launch(monkeypatch, tmp_path, run)
+    assert rc == 2 and "could not start" in note.read_text(encoding="utf-8")
+
+
+def test_the_launcher_and_x4fresh_agree_on_the_pending_text():
+    """The launcher is stdlib-only and cannot import it, so the two spellings are pinned together."""
+    from x4validate import _freshcli
+    assert _freshcli.NOTE_PENDING.startswith(xs.PENDING)
