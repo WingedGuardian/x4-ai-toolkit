@@ -64,7 +64,7 @@ Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `-
 | **`x4save`** | | Read an X4 savegame: what is baked into it, what it references that the live tree no longer defines, and its MD variables. |
 | | `info` | header: build, playtime, and the SAVE-BAKED extensions |
 | | `check` | macro references the live tree no longer defines |
-| | `vars` | named variables whose name matches a pattern: MD cue variables, AI-script and blackboard values, each labelled with where it lives (pass a save NAME, not a path into the save folder) |
+| | `vars` | named variables whose name matches a pattern: MD cue variables, AI-script and blackboard values, each labelled with where it lives (pass a save NAME, not a path into the save folder; only gzipped *.xml.gz saves are read, a plain .xml save is not) |
 | **`x4similar`** | | Advisory fuzzy same-ship detection across the ships base, DLC and installed mods define, scored at their EFFECTIVE values (base + DLC + the enabled mods in load order, so a <diff>-patched ship carries its patched numbers). |
 | **`x4stats`** | | Advisory numeric comparison of mod content vs the effective game. |
 | | `wares` | compare a candidate mod's wares to same-group peers |

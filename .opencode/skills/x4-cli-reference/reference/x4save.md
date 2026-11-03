@@ -14,7 +14,8 @@ positional arguments:
     check            macro references the live tree no longer defines
     vars             named variables whose name matches a pattern: MD cue variables, AI-script and
                      blackboard values, each labelled with where it lives (pass a save NAME, not a
-                     path into the save folder)
+                     path into the save folder; only gzipped *.xml.gz saves are read, a plain .xml
+                     save is not)
 
 options:
   -h, --help         show this help message and exit

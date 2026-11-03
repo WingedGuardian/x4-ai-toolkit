@@ -57,7 +57,9 @@ THREE THINGS THAT MADE THIS WRONG BEFORE IT WAS RIGHT, all enforced below:
 """
 from __future__ import annotations
 
+import errno
 import gzip
+import os
 import re
 import sys
 import zlib
@@ -243,19 +245,53 @@ def extract_vars(path: Path, pattern: str, on_row=None) -> VarScan:
                 scanned += len(chunk)
                 parser.Parse(chunk, False)
             parser.Parse(b"", True)
+    except BrokenPipeError:
+        raise                                   # the reader of on_row's output went away; the save is not at fault
     except (OSError, EOFError, gzip.BadGzipFile, zlib.error, expat.ExpatError) as exc:
         raise SaveUnreadable(f"{path}: decompression/XML parse failed ({exc})") from exc
     return VarScan(rows, scanned, count)
 
 
+def _quiet_stdout() -> None:
+    """After a BrokenPipeError, point fd 1 at the null device so the interpreter's exit-time flush stays silent."""
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        pass  # silent-ok: no real fd 1 to redirect (captured/replaced stdout); the exit is quiet regardless
+
+
 def cmd_vars(path: Path, pattern: str, out=None) -> int:
-    out = sys.stdout if out is None else out
-    print(f"save: {path}", file=out)
+    to_stdout = out is None
+    out = sys.stdout if to_stdout else out
+    printed = 0
+
+    def say(text: str) -> None:
+        try:
+            print(text, file=out)
+        except OSError as exc:
+            # A closed pipe is EPIPE on POSIX and EINVAL on Windows; any other write error (disk full) stays as is.
+            if exc.errno in (errno.EPIPE, errno.EINVAL):
+                raise BrokenPipeError(errno.EPIPE, "output closed") from exc
+            raise
 
     def emit(r: VarRow) -> None:
-        print(f"  {r.where}  {r.name}  {r.type or '-'}  {r.value}", file=out)
+        nonlocal printed
+        say(f"  {r.where}  {r.name}  {r.type or '-'}  {r.value}")
+        printed += 1
 
-    scan = extract_vars(path, pattern, on_row=emit)
+    try:
+        say(f"save: {path}")
+        scan = extract_vars(path, pattern, on_row=emit)
+    except BrokenPipeError:
+        # `x4save vars ... | head`: the reader stopped, which is not a broken save. Quiet exit, rc 0.
+        if to_stdout:
+            _quiet_stdout()
+        return 0
+    except SaveUnreadable:
+        if printed:
+            print(f"INCOMPLETE: {printed} row(s) were printed above before the save failed to read; "
+                  "the list is partial, not an answer", file=sys.stderr)
+        raise
     if not scan.count:
         print(f"NO MATCH over {scan.scanned_bytes:,} decompressed bytes for /{pattern}/: no named "
               "variable matched (table, list and group contents are not searched)", file=out)
@@ -450,7 +486,8 @@ def main(argv: list[str] | None = None) -> int:
     pv = sub.add_parser("vars",
                         help="named variables whose name matches a pattern: MD cue variables, AI-script "
                              "and blackboard values, each labelled with where it lives (pass a save "
-                             "NAME, not a path into the save folder)")
+                             "NAME, not a path into the save folder; only gzipped *.xml.gz saves are "
+                             "read, a plain .xml save is not)")
     pv.add_argument("pattern", help="regular expression matched case-insensitively against the "
                                     "variable name, with and without its stored leading $, e.g. "
                                     "allFactions or ^mymod_")

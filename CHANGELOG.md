@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `x4save vars <pattern> | head` exits quietly (rc 0) when the reader closes the pipe; it was reported as
+  "decompression/XML parse failed (Broken pipe)", rc 2, as if the save were broken. A save that fails
+  partway after rows were printed now ends with an `INCOMPLETE` line on stderr, and the help states that
+  only gzipped `*.xml.gz` saves are read.
+
 - `x4effective dump --annotate` words a file that no earlier layer supplied (mod-only or DLC-only) as its
   "sole provider", not a "whole-file replace", and no longer flags its removals as possibly predating one.
   For a nested `extensions/<owner>/...` path the header now names the owner mod instead of leaving the

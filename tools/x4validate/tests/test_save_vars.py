@@ -187,3 +187,62 @@ def test_sibling_cue_does_not_leak_into_the_next_cues_path(tmp_path):
            b'</script></md></savegame>')
     rows = {r.name: r.where for r in _savecli.extract_vars(_save(tmp_path, doc), "").rows}
     assert rows == {"$a": "s/first", "$b": "s/second"}
+
+
+class _ClosedPipe:
+    """A stdout whose reader went away (`x4save vars ... | head`): the first write raises. POSIX raises
+    BrokenPipeError (EPIPE); Windows raises OSError EINVAL, which is what was MEASURED on this machine."""
+    def __init__(self, exc):
+        self.exc = exc
+
+    def write(self, _s):
+        raise self.exc
+
+    def flush(self):
+        pass
+
+    def fileno(self):
+        raise OSError("no fd")
+
+
+@pytest.mark.parametrize("exc", [BrokenPipeError(32, "Broken pipe"), OSError(22, "Invalid argument")])
+def test_a_closed_pipe_is_a_quiet_exit_not_a_broken_save(tmp_path, monkeypatch, capsys, exc):
+    """Fails if `| head` closing stdout is reported as SaveUnreadable 'decompression/XML parse failed (Broken
+    pipe)' with rc 2 -- the save is fine, the reader just stopped."""
+    monkeypatch.setattr("sys.stdout", _ClosedPipe(exc))
+    rc = _savecli.main(["vars", "isAvoid", str(_save(tmp_path))])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "Broken pipe" not in err and "decompression" not in err and "error:" not in err
+
+
+def test_another_write_error_is_not_mistaken_for_a_closed_pipe(tmp_path, monkeypatch):
+    """Twin: a full disk (ENOSPC) while redirecting to a file is a real failure, never a quiet rc 0 (it surfaces)."""
+    monkeypatch.setattr("sys.stdout", _ClosedPipe(OSError(28, "No space left on device")))
+    with pytest.raises(OSError, match="No space"):
+        _savecli.main(["vars", "isAvoid", str(_save(tmp_path))])
+
+
+def test_extract_vars_lets_a_broken_pipe_through_unconverted(tmp_path):
+    """Twin: a real parse failure is still SaveUnreadable, but a BrokenPipeError from on_row is not one."""
+    def closed(_row):
+        raise BrokenPipeError(32, "Broken pipe")
+    with pytest.raises(BrokenPipeError):
+        _savecli.extract_vars(_save(tmp_path), "isAvoid", on_row=closed)
+    with pytest.raises(_savecli.SaveUnreadable):
+        _savecli.extract_vars(_save(tmp_path, _DOC[:-40]), "isAvoid", on_row=lambda _r: None)
+
+
+def test_a_save_truncated_after_rows_printed_says_incomplete_on_stderr(tmp_path, capsys):
+    """Fails if rows are printed and then only the generic code-2 error follows: the reader must be told the
+    list above is partial."""
+    rc = _savecli.main(["vars", "isAvoid", str(_save(tmp_path, _DOC[:-40]))])
+    cap = capsys.readouterr()
+    assert rc == 2 and "$xssm_isAvoidHighRisk" in cap.out
+    assert "INCOMPLETE" in cap.err and "2 row(s)" in cap.err
+
+
+def test_a_unreadable_save_with_no_rows_printed_has_no_incomplete_line(tmp_path, capsys):
+    """Twin: nothing was printed, so there is no partial list to disclaim."""
+    rc = _savecli.main(["vars", "nomatch_xyz", str(_save(tmp_path, _DOC[:-40]))])
+    assert rc == 2 and "INCOMPLETE" not in capsys.readouterr().err
