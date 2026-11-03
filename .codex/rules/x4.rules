@@ -16,3 +16,11 @@ prefix_rule(
     match = [["python", "scripts/x4refguard.py", "remove"], ["python3", "scripts/x4refguard.py", "remove"]],
     not_match = [["python", "scripts/x4refguard.py", "status"], ["python", "scripts/x4refguard.py", "apply"]],
 )
+
+prefix_rule(
+    pattern = [["python", "python3", "py"], "tools/agent-harness.py", "save-lock", ["on", "off", "unlock"]],
+    decision = "prompt",
+    justification = "This changes the OS save locks (on, off or unlock): only an administrator prompt lifts them, so it is the user's decision. Confirm only if they asked for it. (X4 toolkit rule save-lock-decision)",
+    match = [["python", "tools/agent-harness.py", "save-lock", "on"], ["python3", "tools/agent-harness.py", "save-lock", "off"], ["py", "tools/agent-harness.py", "save-lock", "unlock"]],
+    not_match = [["python", "tools/agent-harness.py", "save-lock", "status"], ["python", "tools/agent-harness.py", "save-list"]],
+)

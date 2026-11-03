@@ -860,6 +860,41 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
     def test_xrcat_unpacking_elsewhere_does_not_fire(self):
         self.assertFalse(F("XRCatTool.exe -in 01.cat -out /c/tmp/out")["xrcat_reunpack"])
 
+    # --- the optional save locks are the user's decision, in both directions (4.1.0 review F9)
+    def test_save_lock_changes_are_the_users_decision(self):
+        for cmd in ('python tools/agent-harness.py save-lock on',
+                    'python tools/agent-harness.py save-lock off',
+                    'python tools/agent-harness.py save-lock off --forget-missing',
+                    'python tools/agent-harness.py save-lock unlock "C:/some save.xml.gz"',
+                    'py -3.12 tools/agent-harness.py save-lock on',
+                    '"$X4_PYTHON" "$X4_TOOLKIT/tools/agent-harness.py" save-lock on',
+                    'uv run python tools/agent-harness.py save-lock on',
+                    r'python "tools\agent-harness.py" save-lock on',
+                    'cd x && python tools/agent-harness.py save-lock on',
+                    'bash -c "python tools/agent-harness.py save-lock on"',
+                    'bash setup.sh --save-lock',
+                    './setup.sh --save-lock',
+                    'sh /c/toolkit/setup.sh --yes --save-lock'):
+            self.assertTrue(F(cmd)["save_lock_decision"], cmd)
+
+    def test_a_save_lock_action_the_guard_cannot_read_is_asked(self):
+        for cmd in ('python tools/agent-harness.py save-lock "$ACTION"',
+                    'echo on | xargs python tools/agent-harness.py save-lock'):
+            self.assertTrue(F(cmd)["save_lock_decision"], cmd)
+
+    def test_TWIN_reading_or_naming_the_save_locks_is_not_a_decision(self):
+        for cmd in ('python tools/agent-harness.py save-lock status',
+                    'python tools/agent-harness.py save-list',
+                    'python tools/agent-harness.py capabilities',
+                    'echo python tools/agent-harness.py save-lock on',
+                    'grep "save-lock on" tools/agent-harness.py',
+                    'python other.py save-lock on',
+                    'bash setup.sh',
+                    'bash setup.sh --no-save-lock',
+                    'bash other.sh --save-lock',
+                    'cat setup.sh --save-lock'):
+            self.assertFalse(F(cmd)["save_lock_decision"], cmd)
+
     # --- lifting the OS deny on reference/ (Plan 2 lanes D+E; D8: only the user lifts it)
     def test_icacls_remove_or_reset_on_reference_fires(self):
         for cmd in ('icacls "' + REF + '" /remove:d *S-1-5-21-1',

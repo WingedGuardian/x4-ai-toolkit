@@ -58,12 +58,15 @@ def save_lock_folders(profile):
 
 
 def save_lock_command(args):
-    """status / on / off / unlock for the optional OS save locks. A save is backed up into the permanent store
-    before it is unlocked, and nothing is unlocked when that backup fails."""
+    """status / on / off / unlock for the optional OS save locks. `unlock <save>` backs the save up into the permanent
+    store first, and unlocks nothing when that backup fails. `unlock <folder>` and `off` only change permissions and
+    back nothing up: they are the way back when a backup cannot be made."""
     import save_sentinel
     lock = save_policy.core(ROOT, "save_lock")
     if (args.action == "unlock") != bool(args.target):
         return {"decision": "refused", "reason": "save-lock unlock takes one save or folder; the others take none"}
+    if args.forget_missing and args.action != "off":
+        return {"decision": "refused", "reason": "--forget-missing goes with save-lock off"}
     deadline = time.monotonic() + 40
     roots = save_policy.read_roots(deadline)
     profile = save_policy.core(ROOT, "profiles").GameProfile("x4", save_sentinel.save_folders(roots),
@@ -83,8 +86,11 @@ def save_lock_command(args):
             return {"enabled": True, "folders": [{"folder": f, "locked_now": n, "left_unlocked": s}
                                                  for f, n, s in done]}
         if args.action == "off":
-            lifted = lock.turn_off(switch, save_lock_folders(profile), profile.extensions)
-            return {"enabled": False, "locks_lifted": lifted, "note": "the saves are plain files again"}
+            lifted = lock.turn_off(switch, save_lock_folders(profile), profile.extensions,
+                                   forget_missing=args.forget_missing)
+            return {"enabled": False, "locks_lifted": lifted,
+                    "note": "every save and folder checked now reads plain"
+                            + (" (folders that were missing were forgotten, not checked)" if args.forget_missing else "")}
         sid = lock.user_sid()
         target = Path(args.target)
         if target.is_dir():
@@ -131,6 +137,8 @@ def main(argv=None):
     locks = sub.add_parser("save-lock")
     locks.add_argument("action", choices=("status", "on", "off", "unlock"))
     locks.add_argument("target", nargs="?")
+    locks.add_argument("--forget-missing", action="store_true",
+                       help="off: stop accounting for locked folders that are no longer where they were")
     restore = sub.add_parser("save-restore")
     restore.add_argument("transaction")
     destination = restore.add_mutually_exclusive_group()

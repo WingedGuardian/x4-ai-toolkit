@@ -517,6 +517,11 @@ fi
 # calling icacls) is not seen -- this stops accidents, not intent.
 on lifts_reference_deny && ask "This LIFTS the OS delete/write protection on reference/ (the read-only unpacked base game). Lifting a protection is the user's step -- confirm only if they asked for it: $COMMAND"
 
+# === CONFIRM — the optional save locks, on or off (4.1.0 review F9) ===
+# `on` makes locks only an elevated prompt can lift, and they also stop the game overwriting a locked slot; `off` and
+# `unlock` lift them. Either way it is the user's decision. Accepted residual as above: an opaque interpreter.
+on save_lock_decision && ask "This changes the OS save locks (on, off or unlock). Locks stop every program, the game included, from changing a locked save, and only an administrator prompt lifts them, so this is the user's decision -- confirm only if they asked for it: $COMMAND"
+
 # === DENY — creating a LINK into a protected root (F331 follow-up) ===
 # A junction, symlink or hardlink whose TARGET is inside (or above) reference/, the game install,
 # the profile or the saves turns every later write through it into a write there, while the

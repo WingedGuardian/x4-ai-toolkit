@@ -15,5 +15,7 @@ if [ -z "$PY" ]; then
   printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"SAVE SENTINEL DID NOT RUN (no Python): saves were not checked after this call."}}'
   exit 0
 fi
-{ x4_emit_guard_roots; printf '%s' "$INPUT"; } | "$PY" "$HOOK_DIR/save_sentinel.py"
+# main() answers for any failure it can catch; this is for one it cannot (an import failing above it).
+{ x4_emit_guard_roots; printf '%s' "$INPUT"; } | "$PY" "$HOOK_DIR/save_sentinel.py" \
+  || printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"SAVE SENTINEL DID NOT RUN (it exited with an error): saves were not checked after this call."}}'
 exit 0

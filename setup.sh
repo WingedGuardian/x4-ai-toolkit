@@ -213,8 +213,10 @@ elif [ "$OS" != "windows" ]; then
 else
   if [ -z "$_I_SAVE_LOCK" ] && [ -t 0 ]; then
     echo "6) Save locks (optional, recommended): Windows itself refuses to delete or change your saves, so no agent,"
-    echo "   script or tool can damage one. New saves, autosaves and quicksaves still work. Unlocking a save later"
-    echo "   needs an administrator prompt. The locks outlast the toolkit: before removing it, run"
+    echo "   script or tool can damage one. That binds X4 too: a locked numbered save slot cannot be overwritten until"
+    echo "   you unlock it. Autosaves, quicksaves and brand-new saves still work. What X4 shows when an overwrite is"
+    echo "   refused has not been measured. Unlocking a save later needs an administrator prompt: python"
+    echo "   tools/agent-harness.py save-lock unlock <save>. The locks outlast the toolkit: before removing it, run"
     echo "   python tools/agent-harness.py save-lock off from an administrator prompt."
     read -r -p "   Lock your saves? (y/N) " _sl_answer || _sl_answer=""
     case "$_sl_answer" in y|Y|yes|YES|Yes) _I_SAVE_LOCK=yes ;; *) _I_SAVE_LOCK=no ;; esac
