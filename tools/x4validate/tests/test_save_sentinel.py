@@ -170,3 +170,50 @@ def test_the_switch_lives_in_the_protected_harness_state(world):
         _, plan, _, _ = mod.save_policy.resolve(str(tk), roots, [{"path": str(switch), "operation": op,
                                                                   "literal": True, "scope": "file"}])
         assert "neutral harness state is protected" in plan.unresolved, op
+
+
+# ------------------------------------------- the hook script, as the host runs it (4.1.0 G-M2)
+def _bash():
+    """Never a bare `bash`: on Windows that is System32's WSL relay (see scripts/gitbash.py)."""
+    spec = importlib.util.spec_from_file_location("_gitbash", REPO / "scripts" / "gitbash.py")
+    gitbash = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gitbash)
+    found = gitbash.find_bash()
+    if not found:
+        pytest.skip("no real (non-WSL) bash on this machine -- not checked")
+    return str(found)
+
+
+def _run_hook(tmp_path, broken=None):
+    """save-sentinel.sh from a copy of the hook folder, optionally with one module made to fail on import."""
+    require_repo("agent/guards/claude-hooks/save-sentinel.sh", why="the hook source lives in agent/")
+    hooks = tmp_path / "toolkit" / ".claude" / "hooks"
+    hooks.mkdir(parents=True)
+    for name in ("save-sentinel.sh", "_x4-env.sh", "save_sentinel.py", "save_policy.py", "hook_facts.py"):
+        shutil.copy2(HOOKS / name, hooks / name)
+    shutil.copytree(REPO / "tools" / "modding_harness", tmp_path / "toolkit" / "tools" / "modding_harness",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    if broken:
+        (hooks / broken).write_text("raise ImportError('planted')\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("X4_", "CLAUDE_"))}
+    env.update(X4_NO_KNOWN_FOLDERS="1", X4_TOOLKIT=str(tmp_path / "toolkit"), X4_SAVES=str(tmp_path / "saves"),
+               X4_PROFILE=str(tmp_path / "profile"), X4_DOCUMENTS=str(tmp_path / "documents"))
+    payload = json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+    return subprocess.run([_bash(), str(hooks / "save-sentinel.sh")], input=payload, capture_output=True,
+                          text=True, encoding="utf-8", env=env, cwd=str(tmp_path), timeout=120)
+
+
+@pytest.mark.parametrize("module", ["save_policy.py", "save_sentinel.py"])
+def test_a_module_that_will_not_import_is_disclosed(tmp_path, module):
+    """The import sits above main()'s try, and the script's exit 0 hid Python's own exit status."""
+    r = _run_hook(tmp_path, broken=module)
+    assert r.returncode == 0                      # advisory: it never fails the call
+    answer = json.loads(r.stdout)["hookSpecificOutput"]
+    assert answer["hookEventName"] == "PostToolUse"
+    assert "SAVE SENTINEL DID NOT RUN" in answer["additionalContext"]
+
+
+def test_TWIN_a_run_that_worked_discloses_nothing(tmp_path):
+    r = _run_hook(tmp_path)
+    assert r.returncode == 0
+    assert "DID NOT RUN" not in r.stdout, r.stdout + r.stderr
