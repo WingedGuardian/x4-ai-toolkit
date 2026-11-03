@@ -370,6 +370,8 @@ _ALL_CELLS: list[Cell] = [
          expect=(0, 1, 3), findings_ok=True, wants="examined"),
     # a non-save must be rc 2 -- a NON-ANSWER, never a clean result.
     Cell("x4save", "refuses a non-save", ["info", "pyproject.toml"], expect=(2,)),
+    # a pattern nothing matches must say NO MATCH with what it read, rc 1, never an empty success.
+    Cell("x4save", "vars (no match)", ["vars", "zz_no_such_variable_xyzzy"], expect=(1,), wants="NO MATCH"),
     # ---- x4live ---------------------------------------------------------
     # These read a dump written by an in-game probe, so "no dump present" (rc 2)
     # is a legitimate state on a machine that has never run one -- what is NOT
@@ -408,6 +410,9 @@ _ALL_CELLS: list[Cell] = [
     # could honour that: it wrote to the DEFAULT registry regardless.
     Cell("x4modlist", "ingest", ["--registry", _sandbox_registry(), "ingest"],
          expect=(0, 1), findings_ok=True),
+    # A folder that does not exist must refuse, and the path never reaches an archive.
+    Cell("x4modlist", "downloads (missing folder)", ["--registry", _sandbox_registry(),
+                                                    "downloads", "no-such-folder-xyzzy"], expect=(2,)),
     Cell("x4modlist", "snapshot", ["--registry", _sandbox_registry(),
                                    "snapshot", "--label", "qa-sweep"], expect=(0,)),
     Cell("x4modlist", "tracked", ["--registry", _sandbox_registry(),

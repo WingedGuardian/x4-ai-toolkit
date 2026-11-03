@@ -1248,6 +1248,9 @@ def main(argv: list[str] | None = None) -> int:
     from x4validate import _changed
     _changed.register(sub)
 
+    from x4validate import _downloads
+    _downloads.register(sub)
+
     args = p.parse_args(argv)
     return args.func(args)
 

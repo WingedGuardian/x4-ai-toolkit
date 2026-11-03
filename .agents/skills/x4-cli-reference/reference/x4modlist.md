@@ -4,12 +4,12 @@
 
 ```text
 usage: x4modlist [-h] [--version] [--registry REGISTRY]
-                 {search,ingest,refresh,dashboard,needs-review,resolve,source,verify,tracked,ignore,mark,changed,snapshot} ...
+                 {search,ingest,refresh,dashboard,needs-review,resolve,source,verify,tracked,ignore,mark,changed,snapshot,downloads} ...
 
 X4 mod-registry triage tool (API-first).
 
 positional arguments:
-  {search,ingest,refresh,dashboard,needs-review,resolve,source,verify,tracked,ignore,mark,changed,snapshot}
+  {search,ingest,refresh,dashboard,needs-review,resolve,source,verify,tracked,ignore,mark,changed,snapshot,downloads}
     search              discover Nexus candidates (names only) with version/date/status, marked
                         have/have?/new against the registry; needs X4_NEXUS_KEY; does not change
                         the registry
@@ -30,6 +30,8 @@ positional arguments:
     changed             localise a moved content fingerprint: WHICH mod changed, and how
     snapshot            record the current mod vector as a cheap baseline (~0.1s), for the gap
                         between expensive rebuilds
+    downloads           read the manifests inside downloaded archives and compare them with what
+                        is installed: newer, same, older, not installed. Read-only
 
 options:
   -h, --help            show this help message and exit
@@ -205,4 +207,19 @@ usage: x4modlist snapshot [-h] [--label LABEL]
 options:
   -h, --help     show this help message and exit
   --label LABEL  short name to append to the file
+```
+
+## `x4modlist downloads`
+
+```text
+usage: x4modlist downloads [-h] [--recursive] [--all] [--json] DIR [DIR ...]
+
+positional arguments:
+  DIR          a folder of downloaded mod archives
+
+options:
+  -h, --help   show this help message and exit
+  --recursive  also scan subfolders (default: top level only)
+  --all        also list mods that match what is installed, and older copies
+  --json       print the whole report as JSON
 ```
