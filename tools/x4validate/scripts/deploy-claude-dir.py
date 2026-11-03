@@ -128,8 +128,11 @@ def committed_versions(repo_root: Path, rel: str) -> list[bytes]:
         return []  # silent-ok: no git means fewer known versions, so MORE refusals
     out: list[bytes] = []
     for rev in revs.stdout.split()[:500]:
-        blob = subprocess.run(["git", "-C", str(repo_root), "show", f"{rev}:{rel}"],
-                              capture_output=True, timeout=60)
+        try:
+            blob = subprocess.run(["git", "-C", str(repo_root), "show", f"{rev}:{rel}"],
+                                  capture_output=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return out  # silent-ok: fewer known versions means MORE refusals, as above
         if blob.returncode == 0:
             out.append(_norm(blob.stdout))
     return out
@@ -380,12 +383,31 @@ def is_guard(name: str) -> bool:
     return "hooks" in parts or "rules" in parts or name in ("settings.json", ".codex/hooks.json")
 
 
+#: Why no commit can be checked at all: an install from a release zip, or no git on PATH. Telling that copy to push to a
+#: ci/ branch would be advice it cannot follow.
+NO_COMMIT = "this toolkit copy is not a git checkout (a release zip, or git cannot run here), so it has no commit to check"
+#: A conclusion that says CI ran on this commit and did not pass. Anything else without a success is no answer.
+CI_RED = {"failure", "timed_out", "startup_failure"}
+
+
 def guard_evidence(repo_root: Path) -> str | None:
-    """None when the guard code at HEAD is CI-proven, else why not. Published (on origin/master)
-    counts as proven: master is pushed only after a green CI round. Anything else asks GitHub for a
-    successful CI run on HEAD itself; no answer is a refusal, never a pass."""
+    """None when the guard code at HEAD is CI-proven, else why not.
+
+    GitHub is asked first, about HEAD itself: a successful run is the proof, and a red one is a refusal even on
+    origin/master, which can hold a red commit. With no answer (gh missing or logged out, or no run for this commit,
+    which is every master commit but a push's last), being an ancestor of origin/master is accepted as the fallback,
+    because master is pushed only after a green CI round. That is an inference about the round, not this commit, so
+    using it prints a NOTE. No answer and not published is a refusal, never a pass."""
     def git(*a):
         return subprocess.run(["git", "-C", str(repo_root), *a], capture_output=True, text=True)
+    try:
+        top = git("rev-parse", "--show-toplevel")
+    except OSError:
+        return NO_COMMIT
+    # The toplevel, not just "is there a HEAD": a zip unpacked inside the game root's own repository sees that HEAD.
+    if top.returncode or (os.path.normcase(os.path.realpath(top.stdout.strip()))
+                          != os.path.normcase(os.path.realpath(repo_root))):
+        return NO_COMMIT
     head = git("rev-parse", "HEAD")
     if head.returncode:
         return "no git HEAD to check"
@@ -393,19 +415,25 @@ def guard_evidence(repo_root: Path) -> str | None:
     dirty = git("status", "--porcelain", "--untracked-files=all", "--", *GUARD_SOURCES)
     if dirty.returncode or dirty.stdout.strip():
         return "guard sources differ from HEAD (uncommitted or untracked changes)"
-    if git("merge-base", "--is-ancestor", sha, "origin/master").returncode == 0:
-        return None
     try:
         r = subprocess.run(["gh", "run", "list", "--commit", sha, "--workflow", "CI", "--json", "conclusion",
                             "--limit", "50"], cwd=repo_root, capture_output=True, text=True, timeout=60)
         runs = json.loads(r.stdout) if r.returncode == 0 else None
+        no_answer = f"could not ask GitHub for CI on {sha[:8]} ({(r.stderr or '').strip()[:200]})"
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        return f"could not ask GitHub for CI on {sha[:8]} ({type(exc).__name__}: {exc})"
-    if runs is None:
-        return f"could not ask GitHub for CI on {sha[:8]} ({(r.stderr or '').strip()[:200]})"
-    if any(run.get("conclusion") == "success" for run in runs):
+        runs, no_answer = None, f"could not ask GitHub for CI on {sha[:8]} ({type(exc).__name__}: {exc})"
+    if isinstance(runs, list):
+        conclusions = {run.get("conclusion") for run in runs if isinstance(run, dict)}
+        if "success" in conclusions:
+            return None
+        if conclusions & CI_RED:
+            return f"CI failed on {sha[:8]} and has no successful run on it, whether or not it is on origin/master"
+        no_answer = f"no successful CI run for {sha[:8]}"
+    if git("merge-base", "--is-ancestor", sha, "origin/master").returncode == 0:
+        print(f"NOTE: {no_answer}. Accepted because {sha[:8]} is an ancestor of origin/master, and master is pushed only "
+              "after a green CI round; CI on this exact commit was not seen.", file=sys.stderr)
         return None
-    return f"no successful CI run for {sha[:8]} (and it is not on origin/master)"
+    return f"{no_answer} (and it is not on origin/master)"
 
 
 def _deploy_one(repo_root: Path, dest: Path, spec, args) -> tuple[int, list[str]]:
@@ -487,8 +515,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--root", help="the root to deploy into (default: the configured game "
                                    "root); the claude tree goes to <root>/.claude")
     ap.add_argument("--unverified-guards", metavar="REASON",
-                    help="deploy changed guard code without CI proof (e.g. an emergency revert to an "
-                         "earlier CI-green version); the reason is printed")
+                    help="deploy changed guard code when neither a successful CI run on HEAD nor HEAD being an "
+                         "ancestor of origin/master (the fallback, printed when used) proves it: e.g. an emergency "
+                         "revert to an earlier CI-green version, or a release zip, which has no commit to check. "
+                         "The reason is printed")
     ap.add_argument("--repo", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
@@ -543,10 +573,12 @@ def main(argv: list[str] | None = None) -> int:
         if guards:
             why = guard_evidence(repo_root)
             if why and not args.unverified_guards:
+                remedy = ("If this copy came from a release you trust, re-run with --unverified-guards REASON, "
+                          "naming the release." if why == NO_COMMIT else
+                          "Push it to a ci/ branch first, or pass --unverified-guards REASON.")
                 print(f"REFUSING: this deploy changes guard code ({', '.join(guards)}) and {why}. Guard "
-                      "changes go live only after review and a green CI run on the exact commit. Nothing "
-                      "was written. Push it to a ci/ branch first, or pass --unverified-guards REASON.",
-                      file=sys.stderr)
+                      f"changes go live only after review and a green CI run on the exact commit. Nothing "
+                      f"was written. {remedy}", file=sys.stderr)
                 return 2
             if why:
                 print(f"DEPLOYING UNVERIFIED GUARD CODE ({why}): {args.unverified_guards}", file=sys.stderr)

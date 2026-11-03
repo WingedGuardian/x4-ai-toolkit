@@ -519,13 +519,6 @@ def _gh(monkeypatch, stdout="[]", rc=0, raises=None):
     monkeypatch.setattr(dep.subprocess, "run", fake)
 
 
-def test_evidence_published_on_origin_master_is_proof(repo, monkeypatch):
-    _commit(repo, "hooks/h.sh", b"echo hi\n")
-    _git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
-    _gh(monkeypatch, raises=AssertionError("GitHub asked although HEAD is published"))
-    assert _REAL_EVIDENCE(repo) is None
-
-
 def test_evidence_a_green_ci_run_on_head_is_proof(repo, monkeypatch):
     _commit(repo, "hooks/h.sh", b"echo hi\n")
     _gh(monkeypatch, stdout='[{"conclusion": "failure"}, {"conclusion": "success"}]')
