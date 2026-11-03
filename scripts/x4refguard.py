@@ -66,7 +66,18 @@ acted on another copy's tree through an inherited X4_REFERENCE); status prints o
 
 `status` samples: the root, the sentinel, and the first file found depth-first in each
 top-level directory -- NOT a census, and it says so on every run. `--full` walks every
-object (slow on Windows: one Get-Acl per object) and says how many it walked.
+object (slow on Windows: one Get-Acl per object, about 80 s per 100,000) and says how many
+it walked. `apply` and `remove` always verify the full walk: a sample passes a tree it
+never looked at.
+
+INTERRUPTED RUNS (Windows). MEASURED 2026-11-03, killing a real icacls on 40,006 objects:
+a killed apply leaves about 3,000 objects denied and the ROOT WITHOUT the deny, since icacls
+writes the root last, so it now reads `partial`, not `absent`. A killed remove leaves the root's
+deny in place and about 2,000 objects without it, and a sample can still read `protected`. Run
+the same command again to finish either way: a repeated icacls propagates again (40,006 of
+40,006; 0 left), so `apply` trusts "already protected" only from a full walk, and `remove` looks
+for stray denies before saying there is nothing to remove. `status` without --full can still
+sample past such a tree.
 
 EXIT CODES (the toolkit's contract)
     0  protected, or the action succeeded AND was verified by re-reading
@@ -98,6 +109,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -303,7 +315,8 @@ def _confirm(root: Path, action: str, yes: bool) -> int | None:
     verb = "protect" if action == "apply" else "lift the protection from"
     print("  %d object(s) (directories + files) under it. This will %s all of them; on "
           "Windows that takes about 8 s per 100,000 objects (MEASURED), longer on a slow "
-          "disk." % (n, verb), file=sys.stderr, flush=True)
+          "disk, and about 80 s per 100,000 more to verify every one." % (n, verb),
+          file=sys.stderr, flush=True)
     if yes:
         return None
     if not _isatty():
@@ -615,6 +628,13 @@ def _win_report(root: Path, full: bool) -> dict:
     explicit = _explicit_denies(root, head)
     r["mask"] = explicit[0] if len(explicit) == 1 else (explicit or None)
     if not explicit:
+        strays = [it["path"] for it in items[1:] if not it.get("error") and _deny_rules(it, explicit_only=False)]
+        if strays and not _deny_rules(head, explicit_only=False):
+            r.update(state="partial", sampled=len(items),
+                     detail="an interrupted apply or remove: the root carries no deny but %d of %d checked "
+                            "object(s) do, e.g. %s. Run apply or remove again to finish it either way" % (
+                                len(strays), len(items), strays[0]))
+            return r
         r.update(state="absent", sampled=len(items),
                  detail="LAYER 2 OFF: reference/ has no deny-delete")
         return r
@@ -627,17 +647,40 @@ def _win_report(root: Path, full: bool) -> dict:
     ok = 1 + sum(1 for it in items[1:] if _child_ok(it))
     r.update(mechanism="icacls-deny %s" % ICACLS_SPEC, sampled=len(items), sample_ok=ok,
              stops=list(_WIN_STOPS), does_not_stop=list(_WIN_GAPS))
+    seen = "walked" if full else "sampled"
     if ok == len(items):
         # R2-d: "N of M sampled" counts the ROOT too, as status's own line does. This said
         # "3 of 3" (children only) where status said "4 of 4" for the same tree.
         r.update(state="protected", detail="deny ACE %d on the root, held by %d of %d "
-                 "sampled object(s), root included" % (EXPECTED_MASK, ok, len(items)))
+                 "%s object(s), root included" % (EXPECTED_MASK, ok, len(items), seen))
     else:
         bad = [it["path"] for it in items[1:] if not _child_ok(it)]
-        r.update(state="partial", detail="the root carries the deny but %d of %d sampled "
-                 "object(s) do not (inheritance cut, or an explicit allow), e.g. %s" % (
-                     len(bad), len(items), bad[0]))
+        r.update(state="partial", detail="the root carries the deny but %d of %d %s "
+                 "object(s) do not (inheritance cut, an explicit allow, or an interrupted run), e.g. %s" % (
+                     len(bad), len(items), seen, bad[0]))
     return r
+
+
+def _icacls_problem(res: subprocess.CompletedProcess) -> str:
+    """'' when icacls reports success, else what it said. The exit code alone is not the answer: MEASURED 2026-11-03,
+    `icacls <missing> /deny ... /C` exits 0, prints "Failed processing 1 files" and writes the reason to stderr. The
+    count is read only where it is English; a localised stdout still has stderr, the exit code and the full walk."""
+    if res.returncode:
+        return "icacls exited %d" % res.returncode
+    if (res.stderr or "").strip():
+        return "icacls reported an error"
+    failed = re.search(r"Failed processing (\d+)", res.stdout or "")
+    if failed and int(failed.group(1)):
+        return "icacls failed on %s item(s)" % failed.group(1)
+    return ""
+
+
+def _win_denied_objects(root: Path) -> tuple[list, list]:
+    """Every object under `root` (root included) still carrying a deny for the user, and every object whose ACL could
+    not be read. The full walk: what a killed propagation leaves behind is by nature not in a sample."""
+    _, items = _acl(list(_walk(root)))
+    denied = [it["path"] for it in items if not it.get("error") and _deny_rules(it, explicit_only=False)]
+    return denied, [it["path"] for it in items if it.get("error")]
 
 
 def _win_apply(root: Path, yes: bool = False) -> int:
@@ -651,21 +694,29 @@ def _win_apply(root: Path, yes: bool = False) -> int:
               file=sys.stderr)
         return 2
     if before["state"] == "protected":
-        print("already protected: %s (%s)" % (root, before["detail"]))
-        return 0
+        # A sample says this about a tree a killed remove left half unprotected, so only a full walk may end it here.
+        whole = _with_heartbeat("checking every object", lambda: _win_report(root, True))
+        if whole["state"] == "protected":
+            print("already protected: %s (%s)" % (root, whole["detail"]))
+            return 0
+        if whole["state"] == "error":
+            print("REFUSED: %s" % whole["detail"], file=sys.stderr)
+            return 2
+        print("the sample read protected but the full walk does not: %s. Repairing." % whole["detail"])
     rc = _confirm(root, "apply", yes)
     if rc is not None:
         return rc
     sid = _user_sid()
     res = _with_heartbeat("applying", lambda: _mutate_run(
         ["icacls", root, "/deny", "*%s:%s" % (sid, ICACLS_SPEC), "/C", "/Q"], root))
-    after = _win_report(root, False)
-    if after["state"] == "protected":
+    problem = _icacls_problem(res)
+    after = _with_heartbeat("verifying every object", lambda: _win_report(root, True))
+    if after["state"] == "protected" and not problem:
         print("Layer 2 applied: %s -- %s" % (root, after["detail"]))
         return 0
-    print("FAILED VERIFICATION: icacls returned %d but the re-read says %s: %s. The tree "
-          "may be PARTIALLY protected.\n  icacls: %s %s" % (
-              res.returncode, after["state"], after["detail"], res.stdout.strip()[:300],
+    print("FAILED VERIFICATION: %s; the full walk says %s: %s. The tree may be PARTIALLY protected; running apply "
+          "again finishes an interrupted one.\n  icacls: %s %s" % (
+              problem or "icacls returned 0", after["state"], after["detail"], res.stdout.strip()[:300],
               res.stderr.strip()[:300]), file=sys.stderr)
     return 1
 
@@ -679,21 +730,31 @@ def _win_remove(root: Path, yes: bool = False) -> int:
               "you mean to." % (root, explicit), file=sys.stderr)
         return 2
     if not explicit:
-        print("nothing to remove: %s carries no deny for your SID" % root)
-        return 0
+        # A killed apply: icacls writes the root last, so stray objects keep a deny nothing visible at the root explains.
+        # An inherited deny on the root itself comes from above it and is not this tool's to lift.
+        denied, unread = _with_heartbeat("checking every object", lambda: _win_denied_objects(root))
+        if _deny_masks(root, item) or not (denied or unread):
+            print("nothing to remove: %s carries no deny for your SID" % root)
+            return 0
+        print("the root carries no deny but %d object(s) under it do (an interrupted run), e.g. %s. Repairing." % (
+            len(denied), (denied or unread)[0]))
     rc = _confirm(root, "remove", yes)
     if rc is not None:
         return rc
     sid = _user_sid()
     res = _with_heartbeat("removing", lambda: _mutate_run(
         ["icacls", root, "/remove:d", "*%s" % sid, "/C", "/Q"], root))
+    problem = _icacls_problem(res)
     left = _explicit_denies(root)
-    if not left:
-        print("Layer 2 lifted: %s" % root)
+    denied, unread = _with_heartbeat("verifying every object", lambda: _win_denied_objects(root))
+    if not (problem or left or denied or unread):
+        print("Layer 2 lifted: %s (every object checked)" % root)
         return 0
-    print("FAILED VERIFICATION: icacls returned %d but the root still carries deny "
-          "mask(s) %s.\n  icacls: %s %s" % (res.returncode, left, res.stdout.strip()[:300],
-                                            res.stderr.strip()[:300]), file=sys.stderr)
+    print("FAILED VERIFICATION: %s; the root carries deny mask(s) %s, %d object(s) still carry a deny for your SID%s and "
+          "%d could not be read%s. Run remove again; a repeated icacls finishes an interrupted one.\n  icacls: %s %s" % (
+              problem or "icacls returned 0", left, len(denied), ", e.g. %s" % denied[0] if denied else "", len(unread),
+              ", e.g. %s" % unread[0] if unread else "", res.stdout.strip()[:300], res.stderr.strip()[:300]),
+          file=sys.stderr)
     return 1
 
 

@@ -958,6 +958,9 @@ def test_R2d_apply_and_status_report_the_SAME_sample_count(protected_cleanup, tr
     a = capsys.readouterr().out
     assert x4refguard.main(["status"]) == 0
     s = capsys.readouterr().out
-    pa = re.findall(r"(\d+) of (\d+) sampled", a)
+    # apply now reports its full walk, status its sample. Both count the ROOT, the convention R2-d fixed.
+    pa = re.findall(r"(\d+) of (\d+) walked", a)
     ps = re.findall(r"(\d+) of (\d+) sampled", s)
-    assert pa and ps and set(pa) == set(ps), (a, s)
+    objects = 1 + sum(1 for _ in protected_cleanup.rglob("*"))
+    assert pa == [(str(objects), str(objects))], (a, s)
+    assert ps and all(ok == n and int(n) <= objects for ok, n in ps), (a, s)
