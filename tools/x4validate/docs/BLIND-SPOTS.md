@@ -442,7 +442,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F337 | OpenCode runs no session-start canary, so the KB note, housekeep sweep and x4fresh auto-rebuild never start there | **OPEN LIMIT (read)** · PRE-ARC | `opencode_plugin.mjs:427-439` session path renders preferences only (`opencode.py:234`); Claude and Codex both run session-canary.sh | open; see entry |
 | F338 | `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree | **SCOPE LIMIT (read)** · IN-ARC | `_provenance.Recorder.elem_replaced` drops the old subtree's attribute records (by design); after a whole-file replace (`full_override`) no node has a record, so none is annotated and the header names the replacing origin instead. Real-data run 2026-11-01 on `aiscripts/order.fight.escort.xml` (base + 5 mods): 109 annotated nodes, all attributed to a mod and op line | documented in `--help`; not fixed |
 | F339 | `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them | **SCOPE LIMIT (measured)** · IN-ARC | a 9.0 save stores a table variable as a reference id resolved elsewhere in the save; on save_020 the KUDA config cue alone holds 3 such tables (`$byShipId`, `$defaultOrdersByShipId`, `$lxl_isStrictMaintainDistance`) | stated in output and `--help`; expansion is a follow-up |
-| F340 | The bulk-file guard runs out of its 40 s deadline on a 3,589-path batch at ordinary desk load and refuses it unchecked (fails closed) | **OPEN (measured)** · PRE-ARC | 12 of 12 timed runs on this machine, including the pre-arc tree; ~12.8 ms/path; 64% of a 2,000-path profile is `profiles._resolved`, ~20 calls per path | open; see entry |
+| F340 | The bulk-file guard ran out of its 40 s deadline on a 3,589-path batch at ordinary desk load and refused it unchecked (failed closed) | **FIXED (measured on one machine; no CI timing yet)** · PRE-ARC | 12 of 12 timed runs failed on 2026-11-01, including the pre-arc tree; ~12.8 ms/path; 64% of a 2,000-path profile was `profiles._resolved`, ~20 calls per path. After the fix: worst 19.19 s in the release review's run against the 40 s deadline | FIXED 2026-11-03 - each path resolves once per read-only pass, in the shared core; see entry |
 | F341 | A mod edited while `x4effective build` or `x4xref build` ran was stamped as already absorbed, so the store read FRESH with the old values | **DEFECT (measured)** · PRE-ARC (exposure IN-ARC) | release review probe `probe_race2`: an edit during the build left the new world's fingerprint over the old values, FRESH until the next change | FIXED 2026-11-03 - both fingerprint before their first mod read; x4fresh compares the world's digest around each builder |
 | F342 | On Windows a closed pipe is `OSError` EINVAL, not `BrokenPipeError`, so `x4effective ls ware \| head` ended in a traceback and rc 1 | **DEFECT (measured)** · PRE-ARC | found by the 4.1 fix lane on a throwaway store; real `x4effective ls ware \| head -n 1` rc 0, no traceback, unpiped control 202 lines | FIXED 2026-11-03 - EINVAL counts as a closed pipe only when it carries no filename |
 | F343 | `x4effective find` resolves names from the store's merged text table, which lacked 12 of 75,168 entries that plain t-files define | **OPEN (measured)** · IN-ARC | release review probe over its scratch store: 12 of 75,168 distinct (page, id) entries in plain t-files absent from the table; page 90105 among them | open; cause not established; a name that depends on one reads as an unresolved reference, never silently as absent |
@@ -11702,7 +11702,7 @@ old element's chain onto the new one but deletes every attribute record keyed on
 (documented there as intended: chains restart at an element replace), and `full_override` clears
 all records and makes the overriding file the default origin. So an annotation can only say who
 supplied the surviving node or value, and after an element replace it cannot show which mod set an
-attribute inside it earlier. After a whole-file replace (VRO's dominant idiom) NO node carries a
+attribute inside it earlier. After a whole-file replace (an idiom some large overhaul mods use for many files) NO node carries a
 record: the annotation header says "unannotated nodes come from: <mod> replace-root", and any
 removal listed is flagged as possibly predating that replace (review finding, 2026-11-01). This is
 the F64 shape (who WON, never who INTRODUCED). MEASURED on real data
@@ -11722,7 +11722,20 @@ tweaks config cue (`kuertee_aait/kAAIT2/kAAIT2_Config`) holds 3 tables beside it
 and every scalar option was read directly (8 `*_allFactions` integers, each `0 (absent)`). The
 serialised form of table contents was not located in this pass, so expanding them is a follow-up.
 
-## F340 - Bulk-file guard exceeds its 40 s deadline at desk load · **OPEN (measured)** · PRE-ARC · confidence 90%
+## F340 - Bulk-file guard exceeds its 40 s deadline at desk load · **FIXED (measured on one machine; no CI timing yet)** · PRE-ARC · confidence 90% · FIXED 2026-11-03 (was OPEN)
+
+SUPERSEDED 2026-11-03: this entry was OPEN and expected the test to fail CI intermittently; it is fixed in the 4.1.0
+range. The save-scope pass resolved the same paths about 18 times each. `97d85dd2` first put a memo around the pinned
+core's functions (MEASURED by that commit: the test took 13-21 s, one resolution per extra path), then `9d360c8b` pinned
+the shared core at a revision whose own read-only pass resolves each path once, so X4 no longer swaps a core function at
+runtime (that commit: at most 17.5 s). The release review measured a worst case of 19.19 s against the 40 s deadline.
+All of these are one development machine at desk load. There is NO CI timing for the fixed code yet: the margin on a
+GitHub runner, which failed this test at 40.87 s before the fix (below), is UNMEASURED. A recheck after preservation still
+resolves afresh, so the hazard named under "Not fixed" below (a link swapped between two checks in one pass) is not
+reintroduced by the memo. The text below is the 2026-11-01/02 record, left as written.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_generic_file_batch.py` (`test_complete_3589_path_action`).
+
 
 MEASURED 2026-11-01, one Windows desktop (28 logical CPUs), 20-33% CPU from other work:
 `test_generic_file_batch.py::test_complete_3589_path_action` failed 12 of 12 timed runs: 4 on ci/v4.0.1-rc17
@@ -11743,10 +11756,10 @@ a logic fault. But CI has no real margin either. MEASURED 2026-11-02, run 415260
 `[None]` case failed at 40.87 s with a correct `allow`, not inert; the other 3 cases passed. That whole suite took
 6,401 s against 5,822 s at 8f8736d1, and this lane changes no file the guard's check path reads, so I think it was a
 slower runner. The test's clock also includes process start-up while the guard's own 40 s deadline starts inside the
-process (READ: `tools/agent-harness.py:160`), so a guard that met its deadline can still fail the test. Expect this test
-to fail CI intermittently until the guard is faster.
+process (READ: `tools/agent-harness.py:160`), so a guard that met its deadline can still fail the test. As of 2026-11-02 the
+expectation was that this test would fail CI intermittently until the guard was faster (superseded above).
 
-Not fixed. `_resolved` is reviewed save-protection code, and a plain cache could mask a link swapped between two checks
+Not fixed at the time of writing (2026-11-02). `_resolved` is reviewed save-protection code, and a plain cache could mask a link swapped between two checks
 in one pass, so any fix needs its own review of which calls may share an answer. The test only reaches a push's
 pre-push gate when the push changes a file it names (`agent-harness.py`, `modding-harness.lock.json`).
 
@@ -11897,7 +11910,7 @@ the review named.
 Cause: tests that read `agent/` or the git index, which an install does not ship. Fix (`3141c4b3`, `62379de9`, `81a295b8`
 and others; `_layout.claude_hooks_source` and `codex_hooks_template` are the new lookups): those tests read what the
 install does ship, or skip with a counted reason; CI gained an `installed-copy` job that installs the toolkit, runs the
-suite and hands the junit file to `.github/scripts/installed_suite_verdict.py`, which fails on any failure, error or mass
+suite and hands the junit file to the verdict script in `.github/scripts`, which fails on any failure, error or mass
 skip. After the fix, the 16 changed modules ran 535 passed, 80 skipped and 1 failed; the one failure, conformance toy case
 66, also fails in a checkout, so it is not an install defect.
 
