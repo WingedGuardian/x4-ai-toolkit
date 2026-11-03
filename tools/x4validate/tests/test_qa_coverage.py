@@ -226,3 +226,11 @@ def test_removing_the_search_cell_is_reported_as_a_finding(monkeypatch):
     monkeypatch.setattr(qa, "CELLS", kept)
     findings, _ = qa.check_coverage()
     assert any("x4modlist search" in f for f in findings), findings
+
+
+def test_the_find_cell_accepts_every_exit_find_documents():
+    """x4effective find: 0 a match, 1 none, 3 nothing to search (and 2 for an older store). A cell that lists fewer reads a
+    documented answer as a defect of the tool."""
+    qa = _qa()
+    cell = next(c for c in qa.CELLS if c.tool == "x4effective" and c.label == "find")
+    assert {0, 1, 2, 3} <= set(cell.expect)

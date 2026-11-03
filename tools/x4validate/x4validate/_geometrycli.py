@@ -37,13 +37,6 @@ def compare_exit(coverage: dict) -> int:
     return 0 if answered and answered * 2 > coverage["total"] else 3
 
 
-def compare_exit(coverage: dict) -> int:
-    """0 only when most pairs got an answer, partial ones included. A run scoring one pair of thirty is not an
-    OK about the thirty: a comparison left mostly unresolved is the toolkit's exit-3 non-answer."""
-    answered = coverage["scored"] + coverage["partial"]
-    return 0 if answered and answered * 2 > coverage["total"] else 3
-
-
 def run(args, reference, ext):
     started = time.perf_counter()
     try:
