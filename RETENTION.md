@@ -204,7 +204,9 @@ run. An unreachable NAS, stale proof, active owner or unqualified Bin route leav
 Archive inventories may include another drive/NAS; logical totals are not C: allocation or immediate recovery.
 
 
-Optional backup preservation on secondary storage: [cold backup archive](docs/BACKUP-ARCHIVE.md).
+Optional backup preservation on secondary storage: the cold backup archive guide, `docs/BACKUP-ARCHIVE.md`.
+That file is in the repository (https://github.com/WingedGuardian/x4-ai-toolkit) and the release zip; an
+installed copy does not carry `docs/`.
 It is opt-in, verifies every archived byte, retains unknown usefulness indefinitely,
 and requires a separate evidence-backed, exactly approved plan for recycling obsolete archives.
 
