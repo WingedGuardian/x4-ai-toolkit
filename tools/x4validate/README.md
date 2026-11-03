@@ -97,6 +97,59 @@ uv run x4debug crosscheck <deployed-mod>   # per-item diff: engine-skipped ops v
 uv run x4debug baseline                    # archive the log with a content fingerprint
 ```
 
+### `x4effective` — look a thing up by its in-game name, and see who changed a node
+
+```bash
+uv run x4effective find M0                      # entities whose in-game NAME contains the text
+uv run x4effective find omega --kind macro --class ship_xl --limit 20
+uv run x4effective dump libraries/wares.xml --annotate   # which mod changed each node
+```
+
+`find TEXT` matches case-insensitively against the name the player reads, resolving `{page,id}` text
+references to English, and always prints the best player-facing name. Exit 0 a match, 1 names were searched and
+none matched, 3 when the filter leaves no entity with a name (it then says how many it covered and which kinds
+do carry names), 2 for an empty text, an unknown kind, or a store built before `find` existed (rebuild it).
+Entities that share an id are each listed, marked and counted. A name that depends on a text entry the store's
+merged text table lacks is shown as an unresolved reference and matched on its raw text (F343).
+
+`dump <vpath> --annotate` marks every node an overlay changed with a comment naming the mod, the op and the
+patch line, lists removals in a header, and implies `--chain`. It reports who WON each node, not who introduced
+it; after a whole-file replace no node is annotated and the header names the replacing mod; attribute history
+inside a replaced subtree is not kept (F338).
+
+### `x4fresh` — is every derived artifact current, and rebuild the ones that are not
+
+```bash
+uv run x4fresh status                  # one verdict per artifact; exit 0 / 3 / 5
+uv run x4fresh rebuild                 # rebuild what is not FRESH, one builder at a time, under a lock
+uv run x4fresh rebuild --only effective xref
+uv run x4fresh accept                  # record each artifact's current losses as known
+```
+
+The four artifacts are `effective` (the `x4effective` store), `xref` (the `x4xref` index), `x4raw` and `x4eff`
+(the BaseX databases). Verdicts: FRESH, STALE (with the reason), UNKNOWN (never read as fresh), MISSING,
+REBUILDING (another x4fresh holds the lock) and NOT-BUILT (a BaseX database never built on a machine with no
+BaseX or Java; optional, counted only when named with `--only`). `status` also lists what the last build could not
+include (overlays it could not read, files it could not merge, property subtrees past the depth guard). Exit codes:
+`status` 0 all FRESH and complete, 3 all FRESH but some input lost, 5 otherwise; `rebuild` 0 every requested
+artifact FRESH, 1 a builder failed, 5 something still not FRESH (deferred, lock held, a gate started meanwhile).
+A rebuild defers while a mutation gate is editing the engine or its sources have uncommitted changes, and a build
+that dropped input ends `BUILT WITH N DROPS`, never `fresh`.
+
+`rebuild --auto` is what a session start launches in the background (Claude Code and Codex hooks). It rebuilds only
+`effective` and `xref`, defers while a listed process runs, does not retry a build that failed against the same
+inputs, and always writes its outcome to a note the next session start prints; the note reads `did not complete`
+until the run reports and is empty only when everything this machine can build is FRESH and complete. Environment
+switches (set in the environment you launch the agent from; `x4-paths.env.example` lists them):
+
+| variable | effect |
+|---|---|
+| `X4_FRESH_AUTO=off` | the session-start launch does nothing |
+| `X4_HOUSEKEEP_SWEEP=off` | stops the temp sweep and this launch |
+| `X4_FRESH_DEFER_WHILE` | `;`-separated process names that defer `--auto` (default `X4.exe;X4`) |
+| `X4_JOB_WRAPPER` | JSON list put in front of every builder command; `{name}` becomes `x4fresh-<artifact>` |
+| `X4_BASH` | the bash used for the BaseX builders (default: bash on `PATH`) |
+
 ### `x4save` — what a savegame bakes in, and what it would silently lose
 
 Unreadable gzip saves, including invalid DEFLATE data, return **2** with the
@@ -105,7 +158,16 @@ path and reason. This is a non-answer; no save is modified.
 ```bash
 uv run x4save info                         # header + the SAVE-BAKED extensions
 uv run x4save check <save>                 # macro refs the live tree no longer defines
+uv run x4save vars <pattern> [save]        # named MD variables whose name matches a regex
 ```
+
+`vars` prints every variable whose name matches the regex (tried with and without the stored `$`),
+labelled with where it lives: an MD script/cue path, `(aiscript <script> on entity <id>)`, or another
+container. An integer the engine stored without a value reads `0 (absent)`, a typeless value `null`, and
+tables, lists and groups `type#<id>` (not expanded or searched, F339). Rows stream; the footer gives the
+decompressed bytes scanned, and no match exits 1 naming what was not searched. Pass a save NAME such as
+`save_020`. Only gzipped `*.xml.gz` saves are read. `x4save vars ... | head` ends quietly when the reader
+closes the pipe.
 
 A save is the only artifact the ENGINE wrote, and it is cheap to read: the largest here
 is 1.28 GB expanded and streams in **2.5s**. Two measured facts drive the output.
@@ -352,6 +414,21 @@ also return **2**; valid stale stores remain readable with their warning.
 Ordinary invalid SELECT queries retain **1**;
 disallowed writes remain refused. Queries never repair or rebuild stores.
 
+### `x4modlist downloads` — what is in my download folders, against what is installed
+
+```sh
+uv run x4modlist downloads <folder> [<folder> ...]     # top level only; --recursive for subfolders
+uv run x4modlist downloads <folder> --all --json       # also SAME / OLDER / no-manifest archives
+```
+
+Read-only. It opens each `.zip`, `.7z` or `.rar` (the last two need 7-Zip), reads every manifest INSIDE it without
+extracting anything, and compares by manifest id with what is installed: NEWER, SAME, OLDER, NOT-INSTALLED,
+UNDETERMINED, or `DIFFERENT-ID-SAME-FOLDER` (installing would land on a different mod). When an id is installed in
+more than one folder each copy is compared and named, and copies that disagree read UNDETERMINED. Every archive ends
+in exactly one of read, no manifest, or unreadable, and the totals are printed. An unreadable archive is a non-answer
+with its reason, not "not a mod"; the exit is 3 when any archive was unreadable or a manifest unusable, because the
+list is then not the whole folder. NEWER is not a recommendation: it compares manifests only.
+
 ### `x4modlist changed` — which mod moved, when a fingerprint does
 
 ```sh
@@ -494,7 +571,9 @@ handled here — it is a secret, not a path, and must never be written to a file
   or labelled `unclassified` and counted — never dropped.
 - `x4validate/_debugcli.py` — `x4debug`: triage / crosscheck / baseline.
 - `x4validate/_savecli.py` — `x4save`: savegame header + save-vs-live-tree
-  reference check. Streams gzip; never builds a tree.
+  reference check, and `vars`. Streams gzip; never builds a tree.
+- `x4validate/_freshcli.py` — `x4fresh`: status / rebuild / accept over the four derived artifacts.
+- `x4validate/_downloads.py` — `x4modlist downloads`: manifests inside archives vs what is installed.
 - `x4validate/_livedump.py` — decodes the in-game probe's payload out of
   `{profile}/uidata.xml`. Owns the THREE escaping layers (XML entities → lua escapes,
   where a tab is `\9` but `\009` before a digit → the probe's own field escaping) and
