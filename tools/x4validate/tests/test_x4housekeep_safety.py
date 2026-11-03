@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
@@ -536,10 +537,12 @@ def test_a_stub_folder_is_not_archived_again_because_its_kept_evidence_is_large(
     # Three kept top-level receipts can pass 1 MiB together. Planning them again only fails at apply, every run.
     monkeypatch.setattr(hk, "reads_recorded", lambda folder: True)
     t = tmp_path / "out" / "archived"
-    write(t / "ARCHIVED.md", b"stub")
     write(t / ".housekeep-closed", b"")
+    hashes = {}
     for i in range(3):
         write(t / "receipt{}.json".format(i), b"x" * (900 * 1024))
+        hashes["receipt{}.json".format(i)] = hashlib.sha256(b"x" * (900 * 1024)).hexdigest()
+    write(t / "ARCHIVED.md", "stub <!-- {} -->".format(json.dumps({"source_hashes": hashes})).encode())
     other = tmp_path / "out" / "grew-after"                   # the twin: real content beside a stub is still surfaced,
     #                                                           as a note: planned, it could only fail at apply, every run
     write(other / "ARCHIVED.md", b"stub")

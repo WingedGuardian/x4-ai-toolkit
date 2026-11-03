@@ -209,7 +209,9 @@ def report(roots, now=None):
     profiles = save_policy.core(root, "profiles")
     workspace = save_policy.core(root, "workspace")
     state_path = Path(root) / ".modding-agent-harness" / "save-sentinel.json"
-    state = sentinel.load_state(state_path)
+    state = sentinel.load_state(state_path, now=now)
+    if state.get("busy"):           # the record is locked just now: nothing to compare with, and it stays the baseline
+        return sentinel.describe(sentinel.check(None, None, state)), False
     if state.get("marked") is None or now - state.get("marked_time", 0) > MARKED_REFRESH:
         state["marked"] = marked_folders(root)
         state["marked_time"] = now
@@ -222,7 +224,11 @@ def report(roots, now=None):
     since = state.get("time", now)
     result = sentinel.check(profile, store, state, watch=state["marked"], now=now)
     notes, lock_loud = lock_notes(root, state, before, profile, now)
-    sentinel.save_state(state_path, state)
+    try:
+        sentinel.save_state(state_path, state)
+    except OSError as exc:          # this look's findings still count; the old record stays the baseline, so at worst
+        notes.append("SAVE SENTINEL: this look could not be recorded ({}), so the next look may repeat it."    # a repeat
+                     .format(type(exc).__name__))
     game_folders = {os.path.normcase(os.path.abspath(f)) for f in profile.save_roots}
     quiet = games_doing(sentinel, result.unbacked, game_folders, since)
     raised = tuple(c for c in result.unbacked if c not in quiet)

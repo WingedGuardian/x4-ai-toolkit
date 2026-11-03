@@ -65,13 +65,24 @@ def content_hash(path):
     return h.hexdigest()
 
 
+_READS_HELPER = None
+
+
+def _reads_helper():
+    """The archive helper, for its unrecorded read; loaded once a process, since a sweep hashes many thousands of files."""
+    global _READS_HELPER
+    if _READS_HELPER is None:
+        spec = importlib.util.spec_from_file_location('housekeep_archive_reads', Path(__file__).with_name('housekeep_archive.py'))
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        _READS_HELPER = helper
+    return _READS_HELPER
+
+
 def _local_sha256(path):
     """As ordinary housekeep's blake: its own proof read is not user activity, and no timestamp is written to say so."""
-    spec = importlib.util.spec_from_file_location('housekeep_archive_reads', Path(__file__).with_name('housekeep_archive.py'))
-    helper = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(helper)
     h = hashlib.sha256()
-    with helper.open_unrecorded(path) as stream:
+    with _reads_helper().open_unrecorded(path) as stream:
         while block := stream.read(1024 * 1024):
             h.update(block)
     return h.hexdigest()

@@ -1,7 +1,7 @@
 {
   "v": 1,
   "project": "modding-agent-harness",
-  "revision": "7c4cc26a588c27e7abaae648604aeb508e103cad",
+  "revision": "1ac319f70ef26df93cfd0c06189f82ba9ac3137d",
   "api_version": 1,
   "files": {
     "tools/modding_harness/LICENSE": "07a5c5e4aac6c4eda67565a716c8f4967dc318abe03098e5dee6a8fa7672d619",
@@ -23,7 +23,7 @@
     "tools/modding_harness/preservation.py": "9e7c183bd12924cf52c43c23b123c0b79f7142c10681fcb43ccc4b229201bdc5",
     "tools/modding_harness/profiles.py": "091e5afb1ae6f7e10657f3bd8317de99a404a4dd44c74b1b6a01b5315dd2321c",
     "tools/modding_harness/save_lock.py": "9a6a7c8127404b5a491a190cb4f719d521c627e2632997e7b01bdba6d5c5c0fc",
-    "tools/modding_harness/sentinel.py": "454cb5a7ec2277adc19b374922ba5caa87d7fd748ffa60d2ec9aeeb5809fd821",
+    "tools/modding_harness/sentinel.py": "463f01629cf9762ed87c4aec01985b5427cf2795213669b41da0b0fdcdf70375",
     "tools/modding_harness/telemetry.py": "fdfd78ad65dd681fe311bf35b459d6969f032edf6b7bde177ec3b76d2e396f40",
     "tools/modding_harness/transport.py": "fa01781cea531e16c26f66ec89ffeea0de023f2ccb5486e59e7a849be0393db5",
     "tools/modding_harness/upgrade.py": "59f3f07378a92f6815e3c83b81d7923fc043b56f3ee694cfb8453c6529ed39f9",

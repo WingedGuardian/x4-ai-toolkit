@@ -8,6 +8,7 @@ import gzip
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -135,6 +136,92 @@ def test_new_work_beside_a_stub_is_named_as_possibly_the_only_copy(tmp_path):
     assert len(notes) == 1 and "1 NOT in it" in notes[0] and "later.bin" in notes[0], notes
 
 
+def _archived(tmp_path, **files):
+    root = tmp_path / "r"
+    cfg = mkcfg(root)
+    t = task(root, payload=b"p" * (3 << 20), **files)
+    now = time.time()
+    assert hk.apply(hk.plan(cfg, now=now), cfg, recycler=moving_bin(root), now=now) == 0
+    return cfg, t, now
+
+
+def _notes(cfg, now):
+    return hk.plan(cfg, now=now + LATER)["coverage"]["archive_inventory"]["stub_notes"]
+
+
+@pytest.mark.parametrize("name", ["findings.md", "results.json", "run.log", "README", "README.txt", "rows.jsonl"])
+def test_a_new_small_top_level_file_beside_a_stub_gets_a_note(tmp_path, name):
+    """The kept patterns hid these: keep_local filtered them out before the record was looked at."""
+    cfg, t, now = _archived(tmp_path)
+    (t / name).write_bytes(b"NEW WORK\n")
+    notes = _notes(cfg, now)
+    assert len(notes) == 1 and "1 NOT in it" in notes[0] and name in notes[0], notes
+
+
+def test_TWIN_kept_and_unchanged_stays_quiet(tmp_path):
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old notes\n", "results.json": b"{}", "README": b"r"})
+    assert (t / "notes.md").exists() and (t / "results.json").exists(), "the control: archiving kept them"
+    assert _notes(cfg, now) == []
+
+
+def test_a_kept_file_edited_after_the_archive_gets_a_note(tmp_path):
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old notes\n", "results.json": b"{}"})
+    (t / "notes.md").write_bytes(b"EDITED after the archive\n")
+    notes = _notes(cfg, now)
+    assert len(notes) == 1 and "1 kept but edited since" in notes[0] and "notes.md" in notes[0], notes
+    assert "NOT in it" in notes[0] and "0 NOT in it" in notes[0], notes
+    assert (t / "notes.md").read_bytes() == b"EDITED after the archive\n", "nothing is deleted or changed"
+
+
+def test_TWIN_a_tracked_top_level_file_stays_quiet_whatever_its_bytes(tmp_path):
+    """git holds it; only the pattern-kept files are compared."""
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old\n"})
+    (t / "notes.md").write_bytes(b"edited, but tracked\n")
+    guard = hk.Guard(cfg)
+    assert "edited since" in hk.stub_state(t, guard), "the control: untracked, it is noted"
+    guard.tracked.add(hk._key(t / "notes.md"))
+    assert hk.stub_state(t, guard) == ""
+
+
+def test_the_comparison_reads_a_bounded_amount_and_says_what_it_skipped(tmp_path, monkeypatch):
+    cfg, t, now = _archived(tmp_path, **{"a.md": b"a" * 2000, "b.md": b"b" * 2000, "c.md": b"c" * 2000})
+    monkeypatch.setattr(hk, "STUB_COMPARE_BYTES", 3000)
+    read = []
+    real = hk.certainty._local_sha256
+    monkeypatch.setattr(hk.certainty, "_local_sha256", lambda p: read.append(Path(p).name) or real(p))
+    state = hk.stub_state(t, hk.Guard(cfg))
+    assert read == ["a.md"], "stops at the budget"
+    assert "2 kept but not compared" in state, state
+
+
+def test_TWIN_the_comparison_read_is_not_recorded(tmp_path, monkeypatch):
+    """A plan's own look must not trip the read veto: the same unrecorded stream the sniff uses."""
+    cfg, t, now = _archived(tmp_path, **{"a.md": b"a"})
+    calls = []
+    reads = hk.certainty._reads_helper()
+    real = reads.open_unrecorded
+    monkeypatch.setattr(reads, "open_unrecorded", lambda p: calls.append(Path(p).name) or real(p))
+    assert hk.stub_state(t, hk.Guard(cfg)) == ""
+    assert calls == ["a.md"]
+
+
+def test_a_stub_with_no_kept_file_reads_neither_its_record_nor_a_hash(tmp_path, monkeypatch):
+    """The common case costs what it did."""
+    cfg, t, now = _archived(tmp_path)
+    monkeypatch.setattr(hk.certainty, "_local_sha256", lambda p: pytest.fail("hashed " + str(p)))
+    real = Path.read_text
+    monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: pytest.fail("read " + str(self))
+                        if self.name == "ARCHIVED.md" else real(self, *a, **k))
+    assert hk.stub_state(t, hk.Guard(cfg)) == ""
+
+
+def test_kept_files_beside_a_stub_whose_record_cannot_be_read_are_not_quiet(tmp_path):
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old\n"})
+    (t / "ARCHIVED.md").write_text("# Archived, record gone\n", encoding="utf-8")
+    notes = _notes(cfg, now)
+    assert len(notes) == 1 and "record cannot be read" in notes[0] and "1 other item(s)" in notes[0], notes
+
+
 def test_a_stub_whose_record_cannot_be_read_says_so_and_stays(tmp_path):
     root = tmp_path / "r"
     cfg = mkcfg(root)
@@ -251,6 +338,83 @@ def test_other_content_is_not_a_save_whatever_its_name(tmp_path, name, data):
     p.parent.mkdir()
     p.write_bytes(data)
     assert guard.why_protected(p) == ""
+
+
+# -------------------------------------------------------------------- R3-M2: the sniff runs last, and never blocks
+
+def _cheap_reason_world(tmp_path):
+    """One file per cheap reason, each with and without save content, under one configured root."""
+    root = tmp_path / "root"
+    cfg = mkcfg(root, protected_globs=["*/glob/*"])
+    rows = {}
+    for label, rel in (("known-good baseline", "known-good-1/f"), ("audit record", "t/audit_log.txt"),
+                       ("backup folder", "my-backups/f"), ("protected_globs", "glob/f"),
+                       ("git-tracked", "t/tracked"), ("linked evidence", "t/linked"), ("", "t/plain")):
+        for content, body in (("save", BODY), ("other", b"not a save")):
+            f = root / "agent" / ("c_" + content) / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(body)
+            rows[(label, content)] = f
+    guard = hk.Guard(cfg)
+    guard.tracked.update(hk._key(rows[("git-tracked", c)]) for c in ("save", "other"))
+    guard.links.update(hk._key(rows[("linked evidence", c)]) for c in ("save", "other"))
+    return guard, rows
+
+
+def test_save_content_outranks_every_cheap_reason_as_it_always_did(tmp_path):
+    """"save" must win: archive_refusal, archive_protection, the cold-backup protect and housekeep_backups each overrule
+    some of the cheap reasons, so returning "backup folder" for a save copy there would let it go."""
+    guard, rows = _cheap_reason_world(tmp_path)
+    for (label, content), f in rows.items():
+        assert guard.why_protected(f) == ("save" if content == "save" else label), (label, content)
+
+
+def test_a_save_copy_in_a_backup_folder_is_never_retired_by_the_callers_that_overrule_the_backup_reason(tmp_path):
+    guard, rows = _cheap_reason_world(tmp_path)
+    assert hk.archive_protection(guard, rows[("backup folder", "save")]) == "save"
+    assert hk.archive_protection(guard, rows[("backup folder", "other")]) == "", "the control: the backup reason alone falls"
+
+
+@pytest.mark.parametrize("label", ["known-good baseline", "audit record", "backup folder", "protected_globs",
+                                   "git-tracked", "linked evidence"])
+def test_a_caller_asking_only_whether_stops_at_the_cheap_reason(tmp_path, monkeypatch, label):
+    guard, rows = _cheap_reason_world(tmp_path)
+    monkeypatch.setattr(hk, "_holds_savegame", lambda _p: pytest.fail("sniffed although a cheap reason already holds it"))
+    assert guard.why_protected(rows[(label, "save")], any_reason=True) == label
+
+
+def test_TWIN_any_reason_still_sniffs_when_nothing_cheap_holds_the_file(tmp_path):
+    guard, rows = _cheap_reason_world(tmp_path)
+    assert guard.why_protected(rows[("", "save")], any_reason=True) == "save"
+    assert guard.why_protected(rows[("", "other")], any_reason=True) == ""
+
+
+def test_any_reason_gives_the_same_verdict_on_every_file(tmp_path):
+    guard, rows = _cheap_reason_world(tmp_path)
+    for key, f in rows.items():
+        assert bool(guard.why_protected(f, any_reason=True)) == bool(guard.why_protected(f)), key
+
+
+def test_a_non_regular_file_is_never_opened_by_the_sniff(tmp_path, monkeypatch):
+    """The Windows half: a FIFO cannot be made here, so the mode is what is faked; the real one is below."""
+    f = tmp_path / "f"
+    f.write_bytes(BODY)
+    assert hk._holds_savegame(f), "the control: the same file, regular, is sniffed"
+    st = os.stat(f)
+    fake = os.stat_result((0o010644,) + tuple(st)[1:])
+    monkeypatch.setattr(hk.os, "stat", lambda *_a, **_k: fake)
+    monkeypatch.setattr(hk._archive_module(), "open_unrecorded", lambda _p: pytest.fail("opened a FIFO"))
+    assert hk._holds_savegame(f) is False
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX only: Windows has no named pipes on the file system")
+def test_a_real_fifo_does_not_block_the_sniff(tmp_path):
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    code = "import sys; sys.path.insert(0, sys.argv[1]); import x4housekeep as hk; print(hk._holds_savegame(sys.argv[2]))"
+    done = subprocess.run([sys.executable, "-c", code, str(REPO / "scripts"), str(fifo)], capture_output=True, text=True,
+                          timeout=30)
+    assert done.stdout.strip() == "False", done.stderr
 
 
 def test_the_sniff_is_bounded_on_a_large_file(tmp_path, monkeypatch):

@@ -59,6 +59,32 @@ def test_failed_archive_recycling_keeps_payload_and_restore_receipts(setup):
     assert (restored/'script.py').exists()
 
 
+def test_hashing_many_files_loads_the_read_helper_once(tmp_path, monkeypatch):
+    """_local_sha256 executed housekeep_archive.py again for every file: about 2 ms a file, on a sweep of many thousands."""
+    import hashlib
+    monkeypatch.setattr(b, "_READS_HELPER", None)
+    loaded = []
+    real = importlib.util.spec_from_file_location
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", lambda *a, **k: loaded.append(a[0]) or real(*a, **k))
+    files = [tmp_path / "a", tmp_path / "b", tmp_path / "c"]
+    for i, f in enumerate(files):
+        f.write_bytes(b"x" * (i + 1))
+    assert [b._local_sha256(f) for f in files] == [hashlib.sha256(f.read_bytes()).hexdigest() for f in files]
+    assert loaded == ["housekeep_archive_reads"]
+
+
+def test_TWIN_the_cached_helper_is_still_what_reads_the_file(tmp_path, monkeypatch):
+    """The read stays unrecorded: the helper's stream is the one used, not a plain open."""
+    f = tmp_path / "a"
+    f.write_bytes(b"x")
+    calls = []
+    cached = b._reads_helper()
+    real = cached.open_unrecorded
+    monkeypatch.setattr(cached, "open_unrecorded", lambda p: calls.append(p) or real(p))
+    b._local_sha256(f)
+    assert calls == [f]
+
+
 def test_obsolescence_is_bound_to_current_content(tmp_path):
     p = tmp_path/"retired.bin"
     p.write_bytes(b"old")

@@ -453,6 +453,96 @@ def test_a_deleted_record_of_the_last_look_is_raised_to_the_user(world):
     assert mod.report(roots, now=1020.0) == ("", False)            # one look's disclosure
 
 
+def _hold_the_record(monkeypatch, tk, reads=True, replaces=False):
+    """The record locked through every retry, as by another look or a scanner. The retries do not wait here."""
+    import time as clock
+    record = tk / ".modding-agent-harness" / "save-sentinel.json"
+    monkeypatch.setattr(clock, "sleep", lambda _s: None)
+    if reads:
+        real_read = Path.read_text
+
+        def read_text(this, *a, **k):
+            if this == record:
+                raise PermissionError(13, "held", str(this))
+            return real_read(this, *a, **k)
+        monkeypatch.setattr(Path, "read_text", read_text)
+    if replaces:
+        real_replace = os.replace
+
+        def replace(a, b):
+            if Path(b) == record:
+                raise PermissionError(13, "held", str(b))
+            return real_replace(a, b)
+        monkeypatch.setattr(os, "replace", replace)
+    return record
+
+
+def test_a_look_that_meets_a_held_record_is_quiet_keeps_the_baseline_and_the_next_look_reports(world, monkeypatch):
+    mod, roots, saves, tk = world
+    s = saves / "save_001.xml.gz"
+    s.write_bytes(b"x")
+    assert mod.report(roots, now=1000.0) == ("", False)
+    _bump(s, b"changed while the record was held")
+    with monkeypatch.context() as held:
+        record = _hold_the_record(held, tk)
+        before = record.read_bytes()
+        held.setattr(mod, "marked_folders", lambda _r: pytest.fail("a look that compares nothing walks nothing"))
+        text, loud = mod.report(roots, now=1010.0)
+    assert not loud
+    assert "held by another process" in text and "could not be read" not in text
+    assert record.read_bytes() == before
+    text, loud = mod.report(roots, now=1020.0)
+    assert loud and "modified: " + str(s) in text, "the change the held look could not see"
+    assert "could not be read" not in text
+
+
+def test_TWIN_a_record_held_past_the_window_is_raised_to_the_user_and_says_so(world, monkeypatch):
+    mod, roots, saves, tk = world
+    (saves / "save_001.xml.gz").write_bytes(b"x")
+    assert mod.report(roots, now=1000.0) == ("", False)
+    with monkeypatch.context() as held:
+        _hold_the_record(held, tk, replaces=True)
+        sentinel = mod.save_policy.core(mod.save_policy.native(roots["toolkit"]), "sentinel")
+        assert mod.report(roots, now=1010.0)[1] is False
+        assert mod.report(roots, now=1010.0 + sentinel.STUCK_AFTER - 1)[1] is False
+        text, loud = mod.report(roots, now=1010.0 + sentinel.STUCK_AFTER)
+    assert loud and "could not be read (it stayed locked" in text, "the alarm reaches the user though the record cannot be replaced"
+    assert "could not be recorded (PermissionError)" in text
+
+
+def test_TWIN_a_corrupt_record_is_raised_at_once_and_says_so(world):
+    mod, roots, saves, tk = world
+    (saves / "save_001.xml.gz").write_bytes(b"x")
+    assert mod.report(roots, now=1000.0) == ("", False)
+    (tk / ".modding-agent-harness" / "save-sentinel.json").write_text("{not json", encoding="utf-8")
+    text, loud = mod.report(roots, now=1010.0)
+    assert loud and "gone or could not be read (its contents are corrupt)" in text
+    assert mod.report(roots, now=1020.0) == ("", False)
+
+
+def test_a_look_that_cannot_record_still_reports_and_the_old_baseline_stays(world, monkeypatch):
+    mod, roots, saves, tk = world
+    s = saves / "save_001.xml.gz"
+    s.write_bytes(b"x")
+    assert mod.report(roots, now=1000.0) == ("", False)
+    _bump(s, b"changed")
+    with monkeypatch.context() as held:
+        _hold_the_record(held, tk, reads=False, replaces=True)
+        text, loud = mod.report(roots, now=1010.0)
+    assert loud and "modified: " + str(s) in text and "could not be recorded (PermissionError)" in text
+    text, loud = mod.report(roots, now=1020.0)
+    assert loud and "modified: " + str(s) in text, "unrecorded, so reported again, never lost"
+    assert mod.report(roots, now=1030.0) == ("", False)
+
+
+def test_TWIN_a_save_state_failure_that_is_not_an_os_error_still_escapes_to_did_not_run(world, monkeypatch):
+    mod, roots, saves, tk = world
+    sentinel = mod.save_policy.core(mod.save_policy.native(roots["toolkit"]), "sentinel")
+    monkeypatch.setattr(sentinel, "save_state", lambda *_a: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        mod.report(roots, now=1000.0)
+
+
 def test_the_game_never_writes_a_marked_folder_so_a_change_there_alarms_even_while_it_runs(world, monkeypatch):
     mod, roots, saves, tk = world
     kept = tk / "evidence" / "kept"

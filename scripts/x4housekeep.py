@@ -73,6 +73,7 @@ SAVE_NAME = re.compile(r"^(?:save_\d+|quicksave|autosave_\d+)\.xml(?:\.gz)?$")
 #: mention deeper in some other document is not a save.
 SAVE_ROOT = re.compile(rb"(?:\xef\xbb\xbf)?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<savegame[\s>/]", re.S)
 SAVE_SNIFF_BYTES = 4096
+STUB_COMPARE_BYTES = 64 << 20   # per stubbed folder and plan: what is read to compare kept files with the stub's record
 
 
 def is_save(low: str) -> bool:
@@ -87,8 +88,11 @@ def _holds_savegame(path) -> bool:
     """Does this file open with X4's <savegame> root, plain or gzipped, whatever it is called? Protection only, so a false
     positive keeps a file. Bounded: at most two sniff sizes read, and one decompressed, from any file; a truncated gzip
     still answers. The read is not recorded (open_unrecorded) and writes nothing. Unreadable or corrupt content is
-    ordinary content here: every removal path still has its own read of it."""
+    ordinary content here: every removal path still has its own read of it. Only a regular file is opened: opening a FIFO
+    blocks until a writer comes, and a device or socket holds no save."""
     try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return False
         with _archive_module().open_unrecorded(path) as raw:
             head = raw.read(SAVE_SNIFF_BYTES * 2)
         if head[:2] == b"\x1f\x8b":
@@ -304,11 +308,21 @@ class Guard:
         self.links = evidence_links(cfg)
         self.globs = [g.lower() for g in cfg["protected_globs"]]
 
-    def why_protected(self, path) -> str:
+    def why_protected(self, path, any_reason=False) -> str:
+        """Why this file is Forever, '' if it is not. The content sniff costs a file open, so it runs after the cheap
+        reasons. It still OUTRANKS them: archive_refusal, archive_protection, the cold-backup protect and
+        housekeep_backups overrule some of those reasons, and a copy of a save must not go with them. So only a caller
+        whose verdict is the same whichever reason it gets may pass any_reason=True, stopping at the first one."""
         p = str(path)
         low = p.replace("\\", "/").lower()
-        if is_save(low) or _holds_savegame(p):
+        if is_save(low):
             return "save"
+        why = self._why_by_name(p, low)
+        if why and any_reason:
+            return why
+        return "save" if _holds_savegame(p) else why
+
+    def _why_by_name(self, p, low) -> str:
         # Folder names BELOW the configured root only: a root that itself sits under ".../backups/..." must not
         # make every file look protected (or, read the other way, make the rule meaningless).
         try:
@@ -345,7 +359,7 @@ def protected_inside(guard: "Guard", target: Path) -> str:
     if why:
         return why
     for f in walk_files(target) if target.is_dir() else ():
-        why = guard.why_protected(f)
+        why = guard.why_protected(f, any_reason=True)
         if why:
             return why
     return ""
@@ -561,29 +575,75 @@ def _kept_extra(guard, folder) -> list:
     return [x for x in guard.tracked | guard.links if x.startswith(k)]
 
 
+def _kept_changes(folder: Path, small: list, hashes: dict) -> tuple:
+    """(new, edited, not compared) among the top-level files archiving keeps, against the stub's record. Bounded: each is
+    under the kept size, and STUB_COMPARE_BYTES a folder is read. Unrecorded, as the plan's own look must not count as use
+    of them. A file that cannot be read cannot be called unchanged."""
+    new, edited, skipped = [], [], []
+    budget = STUB_COMPARE_BYTES
+    for f in sorted(small):
+        expected = hashes.get(f.relative_to(folder).as_posix())
+        if expected is None:
+            new.append(f)
+            continue
+        try:
+            size = f.stat().st_size
+            if size > budget:
+                skipped.append(f)
+                continue
+            budget -= size
+            if certainty._local_sha256(f) != expected:
+                edited.append(f)
+        except OSError:
+            skipped.append(f)
+    return new, edited, skipped
+
+
 def stub_state(folder: Path, guard) -> str:
-    """'' when an archived folder holds only its stub and what archiving keeps (`_kept_extra` included, the set archiving
-    itself used). Otherwise what else is there, in words. Such a folder is never archived again, since a second archive
-    of it can only fail: what is left is a recycle that did not finish, or work done since, and which it is decides
-    whether it is also in the zip. By name: the names are in the stub's record; hashing every leftover at every plan
-    would cost more than a person comparing the one folder this names."""
+    """'' when an archived folder holds only its stub and what archiving keeps, unchanged (`_kept_extra` included, the set
+    archiving itself used, which git or a project doc vouches for whatever its bytes). Otherwise what else is there, in
+    words. Such a folder is never archived again, since a second archive of it can only fail: what is left is a recycle
+    that did not finish, or work done since, and which it is decides whether it is also in the zip. Leftovers are told by
+    name: the names are in the stub's record, and hashing every leftover at every plan would cost more than a person
+    comparing the one folder this names. Files of the kept kinds are hashed (see _kept_changes), since nothing else would
+    tell a kept file from new work under the same patterns."""
     ha = _archive_module()
-    kept = ha.keep_local(folder, _kept_extra(guard, folder))
-    rest = [f for f in walk_files(folder) if os.path.normcase(str(f)) not in kept
-            and f != folder / ha.STUB and f != folder / CLOSED_MARK]
-    if not rest:
+    extra = {os.path.normcase(k) for k in _kept_extra(guard, folder)}
+    kept = ha.keep_local(folder, extra)
+    rest, small = [], []
+    for f in walk_files(folder):
+        if f == folder / ha.STUB or f == folder / CLOSED_MARK:
+            continue
+        key = os.path.normcase(str(f))
+        if key not in kept:
+            rest.append(f)
+        elif key not in extra:
+            small.append(f)
+    if not rest and not small:
         return ""
     try:
         text = (folder / ha.STUB).read_text(encoding="utf-8")
-        named = set(json.loads(text.rsplit("<!-- ", 1)[1].split(" -->", 1)[0])["source_hashes"])
+        hashes = json.loads(text.rsplit("<!-- ", 1)[1].split(" -->", 1)[0])["source_hashes"]
+        named = set(hashes)
     except (OSError, ValueError, IndexError, KeyError, TypeError):
         return "{}: has an {} but its record cannot be read, and {} other item(s) are here: nothing shows any of them " \
-               "is in a zip; kept, not archived again".format(folder, ha.STUB, len(rest))
-    new = [f for f in rest if f.relative_to(folder).as_posix() not in named]
+               "is in a zip; kept, not archived again".format(folder, ha.STUB, len(rest) + len(small))
+    new_kept, edited, skipped = _kept_changes(folder, small, hashes)
+    new = new_kept + [f for f in rest if f.relative_to(folder).as_posix() not in named]
+    named_left = len(rest) + len(new_kept) - len(new)
+    if not named_left and not new and not edited and not skipped:
+        return ""
+    more = ""
+    if edited:
+        more += ", {} kept but edited since (the zip holds the older text, e.g. {})".format(
+            len(edited), edited[0].relative_to(folder).as_posix())
+    if skipped:
+        more += ", {} kept but not compared (over the read budget or unreadable, e.g. {})".format(
+            len(skipped), skipped[0].relative_to(folder).as_posix())
     return ("{}: archived, but {} item(s) are still here: {} named in its zip (a recycle that did not finish, or edited "
-            "since: compare before removing them), {} NOT in it (possibly the only copy{}); kept, not archived again"
-            ).format(folder, len(rest), len(rest) - len(new), len(new),
-                     ", e.g. {}".format(new[0].relative_to(folder).as_posix()) if new else "")
+            "since: compare before removing them), {} NOT in it (possibly the only copy{}){}; kept, not archived again"
+            ).format(folder, named_left + len(new) + len(edited) + len(skipped), named_left, len(new),
+                     ", e.g. {}".format(new[0].relative_to(folder).as_posix()) if new else "", more)
 
 
 def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tuple:
@@ -982,7 +1042,7 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
             if state == "active":
                 count("kept: task folder active (written within active_hours)", size)
                 continue
-            why = guard.why_protected(f)
+            why = guard.why_protected(f, any_reason=True)
             if why:
                 count("kept: protected ({})".format(why), size)
                 continue
@@ -1067,7 +1127,7 @@ def plan(cfg, guard: Guard | None = None, now: float | None = None, only=None) -
                     if f.suffix.lower() == ".gz" or s < 65536:
                         count("kept: launch log, recent or already compressed", s)
                         continue
-                    fwhy = guard.why_protected(f)
+                    fwhy = guard.why_protected(f, any_reason=True)
                     if fwhy:
                         count("kept: protected ({})".format(fwhy), s)
                         continue
