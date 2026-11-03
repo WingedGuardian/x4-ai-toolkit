@@ -72,8 +72,10 @@ was built (Python / lxml). It checks:
 - **References resolve** — ware / macro / `{page,t}` the mod introduces point at real definitions.
 - **Completeness** — a new ware/ship/module's footprint vs a vanilla analogue ("did I forget a spot?").
 
-It also ships **`x4modlist`** (mod-registry triage via the Nexus API) and an **XSD-based
-7.x→9.0 migration checker**.
+It also ships **`x4modlist`** (mod-registry triage via the Nexus API; `x4modlist downloads DIR...`
+reads the manifests inside downloaded `.zip`/`.7z`/`.rar` mods and says which are newer than what is
+installed, extracting nothing), **`x4save`** (`info`, `check`, and `vars <pattern> [save]`, which prints
+the MD variables a save stores and where they live) and an **XSD-based 7.x→9.0 migration checker**.
 
 ```bash
 cd tools/x4validate
@@ -112,6 +114,27 @@ with **per-attribute provenance** (`base → modA replace-attr:12 → modB`), in
 query directly. `show` gives the full record view, `attr` reads one column across everything
 ("all missiles and their damage"), `who-sets` gives the chain (and, for a whole entity, which origins changed its properties), `diff-mod` shows everything a
 mod wins, and `dump` prints the live merged XML for any path.
+`find TEXT` looks entities up by the name the player reads (`find M0`, `find omega --kind macro`), resolving
+the `{page,id}` text references; a zero comes with its denominator, and a filter that leaves no name to search
+exits 3 instead of saying "0 matches". `dump <vpath> --annotate` marks every node an overlay changed with a comment
+naming the mod, op and patch line, so "which mod rewrote this node?" is one command; it reports who WON each
+node, not who introduced it.
+
+### `x4fresh` — are the derived stores current, and rebuild the ones that are not
+The effective store, the xref index and the two BaseX databases (`x4raw`, `x4eff`) each describe the modlist
+as of their last build. `x4fresh status` prints one verdict per artifact (FRESH, STALE with the reason,
+UNKNOWN, MISSING, REBUILDING, or NOT-BUILT for a BaseX database you never built) and lists what the last
+build could not include; `x4fresh rebuild` rebuilds what is not FRESH, one builder at a time; `x4fresh accept`
+records the losses you understand so the note stops repeating them (a changed set speaks again).
+
+At every session start (Claude Code and Codex; OpenCode has no session-start hook) the hook prints the
+previous run's note and starts `x4fresh rebuild --auto` in the background. That run rebuilds only the effective
+store and the xref index (BaseX is never rebuilt unattended), waits while the game runs, and writes a note that
+is empty only when everything this machine can build is fresh and complete. To stop it, set `X4_FRESH_AUTO=off`
+in the environment you start the agent from (`X4_HOUSEKEEP_SWEEP=off` stops it as well, with the temp sweep).
+`X4_FRESH_DEFER_WHILE` (default `X4.exe;X4`) names the processes it waits for and `X4_JOB_WRAPPER` puts a
+resource governor in front of the builders. These are environment switches, not path settings;
+`x4-paths.env.example` lists them. By hand: `cd tools/x4validate && uv run x4fresh status`.
 
 **`x4diff`** does a semantic XML diff between two versions of a mod, with multi-baseline support —
 comparing attributes and element text (shown as `@text()`, pretty-print whitespace ignored), built for separating *your* edits from the author's when recovering personal modifications.
@@ -178,6 +201,10 @@ build measured in minutes, not seconds. BaseX itself is bundled (BSD-3-Clause, 5
 nothing extra to download. See [`tools/basex/README.md`](tools/basex/README.md) for the install, the
 freshness contract and the exit codes, and `tools/basex/QUERIES.md` for worked queries.
 
+The BaseX builders delete their own rebuildable caches permanently: the old databases through BaseX's `DROP DB`,
+and the generated staging trees through `scripts/x4basex_artifacts.py`, with no backup and no Recycle Bin copy
+(an exception to the Recycle Bin rule, limited to these caches; see [RETENTION.md](RETENTION.md)).
+
 ### `x4live` — ask the RUNNING game, instead of quitting to read a log
 
 > ### ⚠ EXPERIMENTAL — use a throwaway save, not one you care about
@@ -233,7 +260,9 @@ tiers behind each answer.
 ### Skills & subagents
 - `/find-session` — find the past agent session where something was discussed, down to the
   passage, and resume it; asks which one you meant when several match. Needs obra/episodic-memory
-  installed separately (the skill says so if it is missing and never installs it).
+  installed separately (the skill says so if it is missing and never installs it). It is available in
+  a session opened in the toolkit folder; the global install (`--method global`) copies only the
+  `x4-*` skills into `~/.claude`, so it is not there.
 - `/x4-balance` — ground a stat or balance change in measured values before proposing it:
   the three-values rule (vanilla, effective, proposed) and the in-sector vs out-of-sector check.
 - `/x4-cli-reference` — the exact subcommands, flags and defaults of every toolkit CLI,
@@ -276,7 +305,13 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
 - **Disk retention** — `scripts/x4housekeep.py` reports output and applies reviewed plans
   through the Recycle Bin. On Windows, session start also sweeps idle Temp directories
   carrying this toolkit's ownership receipt; matching names alone are insufficient.
-  Set `X4_HOUSEKEEP_SWEEP=off` to disable that sweep. See [RETENTION.md](RETENTION.md).
+  Set `X4_HOUSEKEEP_SWEEP=off` to disable that sweep (it also stops the background `x4fresh`
+  rebuild; `X4_FRESH_AUTO=off` stops only the rebuild). Age and size only trigger a review: unique
+  bytes are retired only against a proven identical copy or your explicit, evidence-backed
+  `obsolete_items` entry, and the session note warns when the Recycle Bin passes `recycle_bin_warn_gib`
+  (default 10 GiB). Two opt-in features, both off until you configure them: archiving finished task
+  folders, and a verified cold vault for old backup generations (`x4housekeep backups ...`).
+  See [RETENTION.md](RETENTION.md).
 - **Confidence system** — no guessing; the agent rates confidence and lists assumptions first.
 - **Baseline capture** — `scripts/generate-baseline.sh` records a known-good snapshot (game version, installed-mod hashes, a normalized debug.txt error fingerprint) to diff against later.
 - **Loss canary** — `python scripts/x4canary.py` refuses if a tracked file in a watched
@@ -542,7 +577,8 @@ echo 'export X4_TOOLKIT=/path/to/toolkit' >> ~/.bashrc    # Linux / macOS, by ha
 `--agent opencode` (and `all`, the default) installs an OpenCode target. **Everything about
 OpenCode's behaviour below was READ from its docs and source (v1.18.34, `anomalyco/opencode`),
 not measured against a running OpenCode.** The reading is recorded in
-`docs/superpowers/measurements/2026-10-02-opencode-read.md`.
+`docs/superpowers/measurements/2026-10-02-opencode-read.md` (`docs/` is in the repository and the release
+zip; an installed copy does not carry it).
 
 - **The OpenCode desktop app is not supported.** Its plugin hooks never fire
   ([anomalyco/opencode#38604](https://github.com/anomalyco/opencode/issues/38604), closed as not
