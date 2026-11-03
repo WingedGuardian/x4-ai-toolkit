@@ -349,7 +349,8 @@ def test_post_tool_use_unparseable_patch_says_validation_did_not_run(sandbox):
 
 
 def test_shell_carried_patch_keeps_its_cd_and_reaches_post_validation(sandbox):
-    template = json.loads((REPO / "agent/targets/codex/hooks.json.tmpl").read_text(encoding="utf-8"))
+    from _layout import codex_hooks_template
+    template = json.loads(codex_hooks_template(REPO).read_text(encoding="utf-8"))
     assert any(re.fullmatch(group["matcher"], "Bash") for group in template["hooks"]["PostToolUse"])
     tmp, tk, env = sandbox
     env = fake_validator(tmp, env, tk)

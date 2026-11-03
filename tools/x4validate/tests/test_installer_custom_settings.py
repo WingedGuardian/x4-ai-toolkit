@@ -4,8 +4,26 @@ import subprocess
 
 import pytest
 
-from _layout import require_repo
+from _layout import installed_layout, require_repo
 from test_install_over_existing import ROOT, _fresh, _install, _ok
+
+
+def _codex_hooks_json(dest):
+    """The .codex/hooks.json an install at `dest` renders. A checkout renders it with the generator;
+    an installed toolkit has no `agent/` for the generator (D-C2: 12 tests failed), so it renders the
+    template it ships with the renderer the installer itself uses."""
+    if not (ROOT / "agent").is_dir() and installed_layout(ROOT):
+        import importlib.util
+        require_repo("tools/x4_harness/x4_upgrade_render.py", "tools/x4_harness/codex-hooks.json.tmpl",
+                     why="the Codex hooks.json renderer an install ships")
+        spec = importlib.util.spec_from_file_location("x4_upgrade_render_installed",
+                                                      ROOT / "tools/x4_harness/x4_upgrade_render.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.render_codex((ROOT / "tools/x4_harness/codex-hooks.json.tmpl").read_text(encoding="utf-8"),
+                                   dest)
+    from test_gen_agent_trees import load
+    return load().render_codex_hooks_json(dest)
 
 
 @pytest.mark.parametrize("installer", ["sh", "ps1", "ps51"])
@@ -69,9 +87,8 @@ def test_generic_install_does_not_adopt_or_replace_claude_custom_settings(tmp_pa
 @pytest.mark.parametrize("installer", ["sh", "ps1", "ps51"])
 @pytest.mark.parametrize("customization", ["windows_command", "pre_handler", "post_handler"])
 def test_custom_codex_definitions_refuse_before_any_destination_write(tmp_path, installer, customization):
-    from test_gen_agent_trees import load
     dest = _fresh(tmp_path)
-    settings = json.loads(load().render_codex_hooks_json(dest))
+    settings = json.loads(_codex_hooks_json(dest))
     if customization == "windows_command":
         settings["hooks"]["PreToolUse"][0]["hooks"][0]["commandWindows"] = "personal windows policy"
     else:
@@ -91,9 +108,8 @@ def test_custom_codex_definitions_refuse_before_any_destination_write(tmp_path, 
 
 @pytest.mark.parametrize("installer", ["sh", "ps1", "ps51"])
 def test_semantically_unchanged_codex_definitions_remain_byte_exact_and_readonly(tmp_path, installer):
-    from test_gen_agent_trees import load
     dest = _fresh(tmp_path)
-    settings = json.loads(load().render_codex_hooks_json(dest))
+    settings = json.loads(_codex_hooks_json(dest))
     target = dest / ".codex/hooks.json"
     target.parent.mkdir()
     raw = (json.dumps(settings, sort_keys=True) + "\n").encode("utf-8")

@@ -33,6 +33,27 @@ ih = import_gate("instrument_hygiene")
 NL = chr(10)
 BS = chr(92)
 
+_GRAMMAR = "agent/guards/claude-hooks/hook_facts.py"
+
+
+@pytest.fixture(autouse=True)
+def _a_missing_shell_grammar_is_a_counted_skip_in_an_install(monkeypatch):
+    """D-C2: the census reads the toolkit's shell grammar from `agent/`, which an install does not
+    ship, and refuses with `SystemExit(2)` ("run this maintainer gate from the toolkit checkout").
+    pytest reports a SystemExit as a FAILURE: 22 of this file's tests failed on an installed copy.
+    Only the tests that actually reach the grammar are affected, and only in an installed layout where
+    the file is absent; a checkout that lost it still gets the gate's own refusal."""
+    from _layout import ROOT, installed_layout, require_repo
+    if not installed_layout() or (ROOT / _GRAMMAR).is_file():
+        return
+    real = ih._env.skip
+
+    def skip(what, how):
+        if "shared shell grammar" in what or "hygiene grammar" in what:
+            require_repo(_GRAMMAR, why="the shell grammar the hygiene census parses with")
+        real(what, how)
+    monkeypatch.setattr(ih._env, "skip", skip)
+
 
 # --------------------------------------------------------------------------
 # the contract: every shipped pattern is live, and provably so

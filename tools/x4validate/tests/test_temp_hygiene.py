@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from _layout import claude_hooks_source
+
 REPO = Path(__file__).resolve().parents[3]
 HOOK_SRC = REPO / "agent" / "guards" / "claude-hooks"
 _spec = importlib.util.spec_from_file_location("x4housekeep_hygiene", REPO / "scripts" / "x4housekeep.py")
@@ -89,7 +91,7 @@ def test_qa_sweep_removes_its_sandboxes_at_exit(tmp_path):
 
 def _hook_tree(tmp_path):
     hooks = tmp_path / "proj" / ".claude" / "hooks"
-    shutil.copytree(HOOK_SRC, hooks)
+    shutil.copytree(claude_hooks_source(REPO, "the session hooks under test"), hooks)   # D-C2: an install runs .claude/hooks
     return hooks
 
 
@@ -178,5 +180,7 @@ def test_session_start_never_sweeps_when_the_harness_says_off(tmp_path):
 
 def test_every_hook_harness_sets_the_sweep_opt_out():
     """Tripwire (a substring READ, not a measurement): each non-pytest runner of session-canary.sh carries the opt-out."""
-    for rel in ("agent/guards/claude-hooks/test_audit0924_hooks.py", "scripts/test-hooks.sh"):
-        assert "X4_HOUSEKEEP_SWEEP" in (REPO / rel).read_text(encoding="utf-8"), rel
+    harnesses = (claude_hooks_source(REPO, "the hook harness under test") / "test_audit0924_hooks.py",
+                 REPO / "scripts" / "test-hooks.sh")
+    for path in harnesses:
+        assert "X4_HOUSEKEEP_SWEEP" in path.read_text(encoding="utf-8"), path

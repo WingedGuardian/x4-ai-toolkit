@@ -210,6 +210,17 @@ def claude_hooks_source(root: Path = ROOT, why: str = "") -> Path:
     return Path(root) / ".claude" / "hooks"
 
 
+def codex_hooks_template(root: Path = ROOT) -> Path:
+    """The frozen Codex hooks.json template this layout can read (D-C2): `agent/targets/codex/` in a
+    checkout (or wherever `agent/` is present), and in an installed layout the byte-identical copy the
+    installer renders from, `tools/x4_harness/codex-hooks.json.tmpl`, which every install ships."""
+    src = Path(root) / "agent" / "targets" / "codex" / "hooks.json.tmpl"
+    if src.is_file() or not installed_layout(root):
+        return src
+    require_repo("tools/x4_harness/codex-hooks.json.tmpl", why="the frozen Codex hook template", root=root)
+    return Path(root) / "tools" / "x4_harness" / "codex-hooks.json.tmpl"
+
+
 def runtime_instructions(root: Path = ROOT) -> list[Path]:
     """All present instructions, plus every instruction required by the selected runtime."""
     root = Path(root)
