@@ -3,7 +3,7 @@
 Order is the safety: nothing local is touched until the zip on the NAS has been read back and every member's CRC
 matches what was written from the local bytes. Any failure leaves the local folder exactly as it was.
 
-    python tools/housekeep_archive.py restore <task>/ARCHIVED.md   # put an archived folder back
+    python housekeep_archive.py restore <task>/ARCHIVED.md   # put an archived folder back (run it from this folder)
 """
 import fnmatch
 import hashlib
@@ -18,7 +18,10 @@ from pathlib import Path, PurePosixPath
 
 STUB = "ARCHIVED.md"
 SAVE_EXTS = (".ess", ".skse")
-KEEP_PATTERNS = ("README*", "*.md")      # top-level only, and only under KEEP_MAX_BYTES
+# X4's own save names: the policy's Forever class is "saves and every copy", and a copy is usually not under save/.
+SAVE_NAME = re.compile(r"^(?:save_\d+|quicksave|autosave_\d+)\.xml(?:\.gz)?$")
+# The policy's Evidence class. Top-level only, and only under KEEP_MAX_BYTES; everything stays in the zip regardless.
+KEEP_PATTERNS = ("README*", "*.md", "*.json", "*.jsonl", "*.log")
 KEEP_MAX_BYTES = 1 << 20
 
 
@@ -30,7 +33,8 @@ def is_save(path):
     """Both supported games' saves, plus X4's protected profile subtree."""
     low = str(path).replace('\\','/').lower()
     return (low.endswith(SAVE_EXTS) or '/egosoft/x4/' in low.rstrip('/')+'/'
-            or '/save/' in low and low.endswith(('.xml','.xml.gz')))
+            or '/save/' in low and low.endswith(('.xml','.xml.gz'))
+            or bool(SAVE_NAME.match(low.rsplit('/',1)[-1])))
 
 
 def _plain(path):
@@ -244,12 +248,14 @@ def archive_folder(src: Path, nas_dir: Path, recycler, extra_keep=()) -> dict:
               "source_hashes": hashes, "zip_sha256": verified_zip_hash, "directories": directories,
               "kept_local": sorted(os.path.relpath(k, os.path.normcase(str(src))) for k in keep)}
     (src / STUB).write_text(
-        "# Archived\n\nThis folder's contents were zipped to the NAS by housekeep and verified (every member's CRC "
-        "read back from the NAS copy). Local retirement is a separate step; consult the action receipt "
+        "# Archived\n\nThis folder's contents were zipped by housekeep and verified (every member's CRC and hash read "
+        "back from the archive copy). Local retirement is a separate step; consult the action receipt "
         "and any leftovers listed below for its result.\n\n"
         "- zip: `{zip}`\n- files: {files}\n- bytes: {bytes}\n- date: {date}\n\n"
-        "Restore: `python tools/housekeep_archive.py restore \"{stub}\"`\n\n<!-- {js} -->\n".format(
-            stub=src / STUB, js=json.dumps(record), **record), encoding="utf-8")
+        # Absolute: this helper is byte-identical in two toolkits that keep it in different folders, and a stub is read
+        # from anywhere.
+        "Restore: `python \"{helper}\" restore \"{stub}\"`\n\n<!-- {js} -->\n".format(
+            helper=Path(__file__).resolve(), stub=src / STUB, js=json.dumps(record), **record), encoding="utf-8")
     victims = _victims(src, keep)
     verify_source(src, record)
     record["victims"] = victims

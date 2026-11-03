@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import stat
 import time
 import zipfile
@@ -20,6 +21,13 @@ DAY = 86400
 DEFAULTS = dict(enabled=False, destination="", sources=[], min_age_days=30,
                 keep_local=2, review_days=30, review_seconds=15, obsolete={})
 INTERMEDIATES = {'.obj', '.pch', '.ilk', '.iobj', '.ipdb', '.idb', '.tlog', '.pyc'}
+# X4's own save names: the policy's Forever class is "saves and every copy", and a copy is usually not under save/.
+SAVE_NAME = re.compile(r"^(?:save_\d+|quicksave|autosave_\d+)\.xml(?:\.gz)?$")
+
+
+def _is_save_path(low):
+    return (low.endswith(('.ess', '.skse')) or '/egosoft/x4/' in low or ('/save/' in low and low.endswith(('.xml', '.xml.gz')))
+            or bool(SAVE_NAME.match(low.rsplit('/', 1)[-1])))
 
 
 class Refused(ValueError):
@@ -121,7 +129,7 @@ def snapshot_signature(folder, hasher):
 def rolling_protection(path, guard):
     p = Path(path)
     low = p.as_posix().lower()
-    if low.endswith(('.ess', '.skse')) or '/egosoft/x4/' in low or ('/save/' in low and low.endswith(('.xml', '.xml.gz'))):
+    if _is_save_path(low):
         return 'save/profile'
     key = os.path.normcase(os.path.abspath(p))
     if key in guard.tracked or key in guard.links:
@@ -129,7 +137,10 @@ def rolling_protection(path, guard):
     if p.name.lower() in {'audit_log.txt', 'guards-off.log', '.housekeep-keep'} or any(n.lower().startswith('known-good-') for n in p.parts):
         return 'baseline/audit evidence'
     why = guard.why_protected(p)
-    return '' if why == 'backup folder' else why
+    if why != 'backup folder':
+        return why
+    # why_protected stops at its first reason, so "backup folder" can hide an operator's own glob behind it.
+    return 'protected_globs' if any(fnmatch.fnmatch(low, g) for g in guard.globs) else ''
 
 
 def snapshot_refusal(action, cfg, guard, hasher):
@@ -200,12 +211,13 @@ def settings(cfg):
     return out
 
 
-def inventory(folder, protect=lambda p: '', hasher=file_hash):
-    """Whole directory generation; no silent exclusions from a backup."""
+def inventory(folder, protect=lambda p: '', hasher=_local_sha256):
+    """Whole directory generation; no silent exclusions from a backup. Its own proof read leaves the read time alone,
+    or a plan would veto its own next run ('generation recently read')."""
     root = plain_path(folder)
     rows = []
     newest = root.stat().st_mtime
-    read = root.stat().st_atime
+    read = 0.0                          # file reads only: listing a directory is what this very walk does
     for dp, dirs, files in os.walk(root, followlinks=False, onerror=lambda e: (_ for _ in ()).throw(e)):
         for name in dirs + files:
             p = Path(dp) / name
@@ -217,16 +229,16 @@ def inventory(folder, protect=lambda p: '', hasher=file_hash):
                 raise Refused(f'protected generation: {why}: {p}')
             s = p.stat()
             newest = max(newest, s.st_mtime)
-            read = max(read, s.st_atime)
             if stat.S_ISDIR(s.st_mode):
                 rows.append(dict(path=p.relative_to(root).as_posix()+'/', bytes=0,
                                  sha256=hashlib.sha256(b'').hexdigest(), directory=True))
                 continue
             low = p.as_posix().lower()
-            if low.endswith(('.ess', '.skse')) or ('/save/' in low and low.endswith(('.xml', '.xml.gz'))) or '/egosoft/x4/' in low:
+            if _is_save_path(low):
                 raise Refused('save/profile data needs its separate save policy')
             if not stat.S_ISREG(s.st_mode):
                 raise Refused('non-regular backup member')
+            read = max(read, s.st_atime)
             sha = hasher(p)
             after = p.stat()
             if (s.st_size, s.st_mtime_ns, s.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
@@ -434,7 +446,7 @@ def prune_plan(cfg):
     rows = review(cfg, budget=float('inf'))
     if any(r['state'] in {'failed', 'unavailable', 'deferred'} for r in rows):
         raise Refused('vault verification incomplete; no deletion plan')
-    retire = [r for r in rows if r['state'] == 'review deletion']
+    retire = [dict(r, archive_stem=Path(r['archive']).stem) for r in rows if r['state'] == 'review deletion']
     by_object = {}
     for path in (Path(c['destination']) / 'records').glob('*.json'):
         rec = json.loads(path.read_text(encoding='utf-8'))
@@ -466,14 +478,21 @@ def prune(doc, cfg, approved_sha256, recycler=None):
         results = recycler(removed)
         failures = {p:results.get(p, 'no recycler result') for p in removed
                     if results.get(p, 'no recycler result') is not None}
-        if failures:
-            raise Refused('backup recycling incomplete: {} recycled, {} failed/left in place: {}'.format(
-                len(removed)-len(failures), len(failures), failures))
+    else:
+        failures = {}
+    # Tombstone what actually went, before reporting what did not. An archive already in the Bin with no tombstone reads
+    # as a failed checksum for ever, and its "vault verification incomplete" then blocks every later prune plan.
     # Never invalidate restore receipts for an archive the recycler refused.
+    refused = {Path(p).stem for p in failures}
     for row in doc['records']:
+        if row['archive_stem'] in refused:
+            continue
         tomb = dest / 'retired' / (row['id'] + '.json')
         if not tomb.exists():
             write_json(tomb, dict(row, retired_at=time.time(), approved_plan_sha256=approved_sha256))
+    if failures:
+        raise Refused('backup recycling incomplete: {} recycled, {} failed/left in place: {}'.format(
+            len(removed)-len(failures), len(failures), failures))
     return removed
 
 
