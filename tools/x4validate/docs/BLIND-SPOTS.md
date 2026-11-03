@@ -450,6 +450,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F345 | `bin_refusal` judged the drive letter of the absolute path, so a path under a junction or symlink to a network share looked recyclable and Windows' shell then destroys such files silently | **DEFECT (measured)** · IN-ARC | release review: an ancestor junction to a UNC path passed; fix lane: real junctions, 6 classes of path, 2 arms each | FIXED 2026-11-03 - every existing component is checked for a link and `realpath` has the last word |
 | F346 | Plain `x4refguard status` samples the tree, so after a killed `remove` it can read `protected` while about 2,000 of 40,006 objects have lost their deny | **OPEN LIMIT (measured)** · PRE-ARC | killed a real `icacls` on a 40,006-object tree: a killed `remove` left the root denied and a sample read `protected` | open by design: `--full` walks every object; `apply` and `remove` always verify the full walk and re-running finishes an interrupted one |
 | F347 | The hook mutation gate refused on 5 stale anchors, so the mutants added with the carrier-reading commits never ran | **DEFECT (measured)** · IN-ARC | release review: 5 of 344 anchors stale across `85442321`, `f9435d4b`, `158f8a18`; first run of the new rows: 21 of 150 survived | FIXED 2026-11-03 - anchors re-cut; `--check-anchors` runs without trials in the unit suite and the pre-push gate |
+| F348 | The guards read `$X4_EXTENSIONS` and an assigned `$env:` as additive readings; several spellings of both are not read | **OPEN LIMIT (measured)** · IN-ARC | replay: 45 PowerShell commands that assign `$env:` changed 0; 620 others, 155 sampled, changed 0 | open; see entry |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11863,3 +11864,22 @@ went from 426 to 511; the lane's estimate is about 52 minutes per shard, which n
 RESIDUAL: `ps_translate.ps1` has no mutant table. The lane's one-off trials caught 10 of 10, and a table is not built.
 
 **RE-DERIVED BY:** `tools/x4validate/tests/test_verify_hook_tests.py`.
+
+## F348 - The deployed-mod ask and `$env:` assignments do not cover every spelling · **OPEN LIMIT (measured)** · IN-ARC · confidence 85%
+
+The 4.1.0 guard lane made the deployed-mod ask see `$X4_EXTENSIONS` and a separately configured extensions root (it
+asked only under the game folder before), and made PowerShell `$env:P='<path>'; Remove-Item $env:P` get the same verdict
+as `$P='<path>'` (`5975812d`). Both are additive readings. MEASURED replay over the PowerShell corpus: 45 commands assign
+`$env:` and 0 changed verdict; of the other 620, 155 were sampled and 0 changed.
+
+NOT READ (the lane's list, not re-run here):
+* `${X4_EXTENSIONS:-x}` and `${X4_EXTENSIONS%/}/mymod` are not read as the extensions root.
+* `Set-Item env:P` and `[Environment]::SetEnvironmentVariable` are not read as assignments.
+* In PowerShell, `$env:X4_EXTENSIONS='x'` still reads the real root (Bash lets the assignment win).
+* A separate extensions root feeds only the deployed-mod ask; other rules still use the game folder.
+* A symlinked `extensions` folder is judged by its spelling (the shell channel is lexical through existing links, the
+  pre-arc limit recorded in F331).
+
+Also untouched in this release: a false deny on an escaped backtick in a commit message's link text, and link creation
+by `tmux if-shell`, `.CreateAsSymbolicLink`, `cp -s`/`-l`/`-al`, `rsync --link-dest`, `subst`, `mount --bind`, and
+node, perl or ruby (all reported by the review, none re-run here).
