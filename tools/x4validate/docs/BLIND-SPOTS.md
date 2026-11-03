@@ -446,7 +446,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F341 | A mod edited while `x4effective build` or `x4xref build` ran was stamped as already absorbed, so the store read FRESH with the old values | **DEFECT (measured)** · PRE-ARC (exposure IN-ARC) | release review probe `probe_race2`: an edit during the build left the new world's fingerprint over the old values, FRESH until the next change | FIXED 2026-11-03 - both fingerprint before their first mod read; x4fresh compares the world's digest around each builder |
 | F342 | On Windows a closed pipe is `OSError` EINVAL, not `BrokenPipeError`, so `x4effective ls ware \| head` ended in a traceback and rc 1; the fix covers `x4effective` and `x4save` only | **DEFECT (measured)** · PRE-ARC | found by the 4.1 fix lane on a throwaway store; real `x4effective ls ware \| head -n 1` rc 0, no traceback, unpiped control 202 lines; `--help` into a closed pipe exits 120 on 10 of the 12 console scripts (housekeeping lane, 2026-11-03) | FIXED 2026-11-03 for `x4effective` and `x4save` (a failed write to stdout is the closed reader, nothing else is); OPEN for the other ten, where only `--help` was measured |
 | F343 | `x4effective find` resolves names from the store's merged text table, which lacked 12 of 75,168 entries that plain t-files define | **OPEN (measured)** · IN-ARC | release review probe over its scratch store: 12 of 75,168 distinct (page, id) entries in plain t-files absent from the table; page 90105 among them | open; cause not established; a name that depends on one reads as an unresolved reference, never silently as absent |
-| F344 | The save sentinel decides whether the game wrote a change from the game's session window; it cannot separate writers inside a window, and a crashed session leaves no stamp | **SCOPE LIMIT (measured on fake timestamps only)** · IN-ARC | the fix lane's tests drive the window with fabricated timestamps; no in-game session was run | stated in the CHANGELOG; the window comes from `uidata.xml`'s modification time |
+| F344 | The save sentinel decides whether the game wrote a change from the signs of a session (X4 running, or an exit that shows); it cannot separate writers inside the window, and a crashed session leaves no exit | **SCOPE LIMIT (stamps measured on four profiles; no session run)** · IN-ARC | the last exit of 4 profiles and one whole-profile copy, read by stat; tests drive the rest with fabricated timestamps | stated in the CHANGELOG; an exit needs `uidata.xml` moved, an exit-set file within 30 s of it, and the profile not rewritten whole; more than 10 changes in a folder always raise the user |
 | F345 | `bin_refusal` judged the drive letter of the absolute path, so a path under a junction or symlink to a network share looked recyclable and Windows' shell then destroys such files silently | **DEFECT (measured)** · IN-ARC | release review: an ancestor junction to a UNC path passed; fix lane: real junctions, 6 classes of path, 2 arms each | FIXED 2026-11-03 - every existing component is checked for a link and `realpath` has the last word |
 | F346 | Plain `x4refguard status` samples the tree, so after a killed `remove` it can read `protected` while about 2,000 of 40,006 objects have lost their deny | **OPEN LIMIT (measured)** · PRE-ARC | killed a real `icacls` on a 40,006-object tree: a killed `remove` left the root denied and a sample read `protected` | open by design: `--full` walks every object; `apply` and `remove` always verify the full walk and re-running finishes an interrupted one |
 | F347 | The hook mutation gate refused on 5 stale anchors, so the mutants added with the carrier-reading commits never ran | **DEFECT (measured)** · IN-ARC | release review: 5 of 344 anchors stale across `85442321`, `f9435d4b`, `158f8a18`; first run of the new rows: 21 of 150 survived | FIXED 2026-11-03 - anchors re-cut; `--check-anchors` runs without trials in the unit suite and the pre-push gate |
@@ -11827,21 +11827,43 @@ the limit shows up as a labelled row, not as a silent absence. What it cannot do
 To close it: find which merge step omits the 12 entries (compare the plain-file population with the table per provider),
 then fix the merge or document the rule. Do not widen `find` to guess.
 
-## F344 - The save sentinel's game-session window is a timestamp heuristic · **SCOPE LIMIT (measured on fake timestamps only)** · IN-ARC · confidence 80%
+## F344 - The save sentinel's session signs: a quiet path with named blind spots · **SCOPE LIMIT (stamps measured; no session run)** · IN-ARC · confidence 80%
 
 A play session between two sentinel looks used to raise a loud false alarm, because the game was checked only at the look
 (`492a9cbd`). A change is now noted to the agent only when its own timestamp (for a removal, its folder's) falls inside a
-session: X4 running now, or since the last look and before `uidata.xml`, which X4 rewrites at every exit. A change made
-with the game closed still raises the user, including one right after a session, a restored old stamp, and anything in a
-folder only the toolkit watches.
+session. A session is known two ways: X4 is running at this look, or the look shows an exit. A first version took
+`uidata.xml` moving as the exit, so any program that touched that one file made every later change look like the
+game's; `d2176ac8` replaced it with signs that all have to hold:
+* `uidata.xml` moved since the previous look (X4 truncates it at launch and rewrites it at exit);
+* one of `pipelinecache.bin`, `config.xml`, `userdata.xml` and `debug.txt` is stamped within 30 seconds of it
+  (`EXIT_SPREAD`);
+* the profile was not rewritten as a whole: fewer than 5 (`REWRITTEN_FLOOR`), or under half, of its other top-level files moved.
+However the session is known, more than 10 changes (`MOST_A_SESSION_CHANGES`) to one save folder in one look are not the
+game's and always raise the user. A change made with the game closed, including one right after a session, a restored old
+stamp, and anything in a folder only the toolkit watches, raises the user.
 
-LIMITS (reported by the fix lane):
-* The window comes from `uidata.xml`'s modification time. Inside a window the sentinel cannot tell the game from
-  anything else, so a change made by another program while the game runs, or before it exits, looks like the game's. It
-  still reaches the agent; the user is not raised.
-* A session that ends in a crash writes no new `uidata.xml`; the lane's reading is that a never-seen-running crash can
-  raise the alarm once, and that a restored old stamp (Steam Cloud) does too. Both are INFERRED.
-* MEASURED only with fabricated timestamps. No in-game session was run for this release.
+MEASURED (read by stat on this machine's profiles, 2026-11-03): the last exit on each of 4 profiles (one play profile
+and three that look like test runs) wrote `pipelinecache.bin` 1 to 7 s after `uidata.xml` and `debug.txt` under 6 s
+before it, in all four; on the play profile 5 of 33 other files moved in the hour before that exit and 16 of 33 in the 30
+days before it; one real whole-profile copy moved 15 of 15 other files and 14 of 14 saves within a minute. No game session
+was run for this release, and that EVERY exit writes one of the set is INFERRED from those four samples.
+
+COST OF A FALSE ALARM (read from the code): one message that names itself, with no effect on any save. It fires for a
+crash (no exit stamp), an exit that touches none of the set, more than 10 saves overwritten or deleted between two
+looks, a profile where half of the other files also moved since the last look, as after months with no agent running, and
+the first session on a very small profile.
+
+BLIND SPOTS (the quiet path reads these as the game's): a change by something else while X4 runs; a stamp set back into a
+real window; a script that rewrites `uidata.xml`, a second file of the set and at most 10 saves while leaving most of the
+profile alone; a copy of a profile with fewer than 5 other files and few saves. A post-call hook cannot tell two writers
+apart inside one window. The threat model is accidents and careless scripts, not a determined attacker.
+
+ALSO UNMEASURED OR OPEN (the saves lane's list): ReFS (see the identity entry below, which fails by refusing); a group deny
+rule is not read as binding, so locking fails loudly; if the record of the last look and its `.seen` copy are both deleted
+the next look is a first look, and if `save-lock-folders.json` is deleted nothing is recorded for `off`;
+`sentinel.save_state` replaces its record once, with no retry.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_save_sentinel.py`.
 
 ## F345 - Housekeeping judged where a path lands by its spelling, not by where it goes · **DEFECT (measured)** · IN-ARC · confidence 90% · FIXED 2026-11-03
 
