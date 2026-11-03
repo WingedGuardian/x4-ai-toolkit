@@ -111,6 +111,11 @@ def _append(path: Path, workspace, event: dict) -> None:
         raise ValueError("the ledger file is not a regular file inside the workspace")
     event["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     line = (json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    if path.exists() and path.stat().st_size:
+        with open(str(path), "rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            if fh.read(1) != b"\n":            # a torn last line: end it, or this event joins it and is lost too
+                line = b"\n" + line
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o644)
     try:
         os.write(fd, line)

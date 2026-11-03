@@ -10,8 +10,9 @@ reported: creating a save changes none.
     report = check(profile, store, state, watch=(), now=None)   # -> Report; state is updated in place
     save_state(path, state)
 
-The host decides how loudly to report (a game running may be the writer). Nothing here blocks: a post-call hook
-cannot undo a call, and the store's committed transactions remain the only recovery authority.
+The host decides how loudly to report: the game may be the writer, and dated_within() tells it whether a change's own
+timestamp falls inside a window in which the game ran. Nothing here blocks: a post-call hook cannot undo a call, and
+the store's committed transactions remain the only recovery authority.
 """
 from __future__ import annotations
 
@@ -33,6 +34,8 @@ class Report(NamedTuple):
     unbacked: tuple         # ((kind, path), ...) kind is "modified" or "removed"
     backed_up: tuple        # changes a committed backup covers
     truncated: tuple        # watched folders too large to list fully
+    state_lost: bool = False    # the previous look's record existed and could not be read
+    unread: tuple = ()      # folders (or a drive) that could not be listed: their previous rows are kept, not "removed"
 
 
 def _member(name, extensions):
@@ -40,10 +43,9 @@ def _member(name, extensions):
     return any(low.endswith(ext.lower()) for ext in extensions)
 
 
-def snapshot(roots, extensions, watch=(), limit=WALK_LIMIT):
-    """{key: [size, mtime_ns, path]} for every save member: roots at top level (as games keep them), watched
-    folders recursively. Returns (files, truncated)."""
-    files, truncated = {}, []
+def _scan(roots, extensions, watch, limit):
+    """(files, truncated, unread): `unread` names the folders a listing failed for, so "not listed" is never "gone"."""
+    files, truncated, unread = {}, [], []
 
     def add(path, st):
         files[comparison_key(os.path.abspath(path))] = [st.st_size, st.st_mtime_ns, str(path)]
@@ -54,11 +56,14 @@ def snapshot(roots, extensions, watch=(), limit=WALK_LIMIT):
                 for entry in entries:
                     if _member(entry.name, extensions) and entry.is_file():
                         add(entry.path, entry.stat())
+        except FileNotFoundError:
+            continue                # the folder itself is gone: its saves are gone too, as far as anyone can tell
         except OSError:
-            continue
+            unread.append(str(root))
     for folder in watch:
         seen = 0
-        for parent, _dirs, names in os.walk(folder):
+        failures = []
+        for parent, _dirs, names in os.walk(folder, onerror=failures.append):
             for name in names:
                 seen += 1
                 if _member(name, extensions):
@@ -70,7 +75,42 @@ def snapshot(roots, extensions, watch=(), limit=WALK_LIMIT):
             if seen > limit:
                 truncated.append(str(folder))
                 break
-    return files, tuple(truncated)
+        if any(not isinstance(e, FileNotFoundError) for e in failures):
+            unread.append(str(folder))
+    return files, tuple(truncated), tuple(unread)
+
+
+def snapshot(roots, extensions, watch=(), limit=None):
+    """{key: [size, mtime_ns, path]} for every save member: roots at top level (as games keep them), watched
+    folders recursively. Returns (files, truncated)."""
+    files, truncated, _unread = _scan(roots, extensions, watch, WALK_LIMIT if limit is None else limit)
+    return files, truncated
+
+
+def _carry_unlisted(previous, files, folders):
+    """A member of a folder this look could not list fully keeps its previous row: unknown, not removed."""
+    if folders:
+        tops = [os.path.join(os.path.abspath(f), "") for f in folders]
+        for key, row in previous.items():
+            if key not in files and any(os.path.abspath(row[2]).startswith(top) for top in tops):
+                files[key] = row
+
+
+def _drive_absent(path):
+    """The whole drive is gone (unplugged, unmounted): nothing below it can be judged."""
+    drive = os.path.splitdrive(os.path.abspath(path))[0]
+    return bool(drive) and not os.path.exists(drive + os.sep)
+
+
+def dated_within(kind, path, start, end=None, slack=CLOCK_SLACK):
+    """Does this change's own timestamp fall inside [start, end] (epoch seconds; end None = still open)? A modified
+    file is dated by its mtime and a removed one by its folder's. Anything that cannot be dated is outside, and so
+    is a stamp older than `start`: a program saving now stamps now, so that is a restored or copied file."""
+    try:
+        stamp = os.stat(path if kind == "modified" else os.path.dirname(path)).st_mtime
+    except OSError:
+        return False
+    return stamp >= start - slack and (end is None or stamp <= end + slack)
 
 
 def changes(previous, current):
@@ -114,27 +154,41 @@ def check(profile, store, state, watch=(), now=None, covered=None):
     """Compare the profile's save roots and `watch` folders with the previous look recorded in `state` (a dict,
     updated in place). `covered` may add keys the caller's own (legacy) backup records cover."""
     now = time.time() if now is None else now
-    files, truncated = snapshot(profile.save_roots, profile.extensions, watch)
+    files, truncated, unread = _scan(profile.save_roots, profile.extensions, watch, WALK_LIMIT)
     previous = state.get("files")
     since = state.get("time", now)
     first = not isinstance(previous, dict)
+    lost = bool(state.pop("unreadable", False))
     unbacked, backed = [], []
     if not first:
-        found = changes(previous, files)
+        _carry_unlisted(previous, files, truncated + unread)
+        found = []
+        for kind, path in changes(previous, files):
+            if kind == "removed" and _drive_absent(path):
+                files[comparison_key(os.path.abspath(path))] = previous[comparison_key(os.path.abspath(path))]
+                drive = os.path.splitdrive(os.path.abspath(path))[0]
+                if drive not in unread:
+                    unread += (drive,)
+            else:
+                found.append((kind, path))
         if found:
             keys = backed_up_since(store.root, since) | set(covered or ())
             for kind, path in found:
                 (backed if comparison_key(os.path.abspath(path)) in keys else unbacked).append((kind, path))
     state.update({"v": 1, "time": now, "files": files})
-    return Report(first, tuple(unbacked), tuple(backed), truncated)
+    return Report(first, tuple(unbacked), tuple(backed), truncated, lost, unread)
 
 
 def load_state(path):
+    """The previous look's record. Nothing there is {}, a first look. A record that exists and cannot be read is
+    {"unreadable": True}: still a new baseline, but check() reports it, because changes since the last look are lost."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return {}
-    return data if isinstance(data, dict) and data.get("v") == 1 else {}
+    except (OSError, ValueError):
+        return {"unreadable": True}
+    return data if isinstance(data, dict) and data.get("v") == 1 else {"unreadable": True}
 
 
 def save_state(path, state):
@@ -161,5 +215,12 @@ def describe(report, limit=15):
         if len(report.unbacked) > limit:
             lines.append("  ... and {} more".format(len(report.unbacked) - limit))
     if report.truncated:
-        lines.append("SAVE SENTINEL: watched folder(s) too large to list fully: " + ", ".join(report.truncated))
+        lines.append("SAVE SENTINEL: watched folder(s) too large to list fully, so removals there are not reported: "
+                     + ", ".join(report.truncated))
+    if report.unread:
+        lines.append("SAVE SENTINEL: folder(s) that could not be listed, so changes there are not known: "
+                     + ", ".join(report.unread))
+    if report.state_lost:
+        lines.append("SAVE SENTINEL: the record of the previous look could not be read, so this look is a new baseline "
+                     "and any change since the previous look is not reported.")
     return "\n".join(lines)
