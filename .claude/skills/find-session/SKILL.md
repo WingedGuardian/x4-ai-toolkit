@@ -19,7 +19,7 @@ injected boilerplate, and prints one block per session.
 Use the user's own words for the query, not keywords you extract from them:
 
 ```bash
-python tools/modding_harness/find_session.py "going over my balance tweaks with missiles"
+python $CLAUDE_PROJECT_DIR/tools/modding_harness/find_session.py "going over my balance tweaks with missiles"
 ```
 
 On Windows use the same interpreter the ledger commands print at session start, or `py -3`.
