@@ -454,6 +454,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F349 | The installed toolkit's own test suite was never run in CI: on a fresh install it had 74 errors and 64 failures while SETUP_PROMPT.txt promised none | **DEFECT (measured)** · PRE-ARC | whole suite on a fresh install: 5,821 passed, 64 failed, 74 errors, 534 skipped of 6,493 | FIXED 2026-11-03 - tests read what an install ships or skip with a counted reason; CI gained an installed-copy job |
 | F350 | A save-lock folder's identity compares its path, file id and the low 32 bits of its volume; ReFS was not measured | **SCOPE LIMIT (measured on one NTFS folder)** · IN-ARC | one NTFS folder read under Python 3.10.10 and 3.12.10: `st_dev` differs between them, its low 32 bits and `st_ino` do not | FIXED for NTFS 2026-11-03 in the pinned core; ReFS unmeasured, a mismatch fails by refusing |
 | F351 | A sentinel look that finds the shared record held compares nothing; the change surfaces one look later | **SCOPE LIMIT (measured)** · IN-ARC | 1,350 parallel looks at the pinned core: 0 found the record held, so that path ran only under a real-lock probe and patched tests | FIXED 2026-11-03: false alarm and lost baseline gone; the delayed report is by design |
+| F352 | Callers of the save sniff that only need a yes can label a save copy by its cheap reason in count rows | **SCOPE LIMIT (measured)** · IN-ARC | 5,034 files: verdict differs on 0, reason text on 6, all crafted save copies | OPEN, by design: labels only |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12029,3 +12030,14 @@ this only duplicates and never loses a report is INFERRED. A record held across 
 a later look also finds it held. The 5-minute stuck limit is a chosen value, not a measured one.
 
 **NO RE-DERIVATION: the parallel counts came from a review probe in private scratch, and the core's own tests live in the core's repository.**
+
+## F352 - The save sniff stops early for yes-or-no callers · **SCOPE LIMIT (measured)** · IN-ARC · confidence 90% · OPEN by design
+
+`why_protected` runs its save sniff last, and save content still outranks the cheap reasons by default, because
+several callers overrule a cheap reason such as a backup folder and would otherwise retire a save copy. Only callers
+that never look at which reason they get pass `any_reason=True` and stop at the first cheap reason.
+MEASURED per item over 5,034 files: the default answer differs on 0, the `any_reason` verdict on 0, and the reason
+text on 6, all crafted save copies, which may read for example "backup folder" instead of "save" in a count label.
+The saving reaches only files a cheap reason already holds; unprotected files still pay for the sniff.
+
+**NO RE-DERIVATION: the per-item comparison used a private probe set; the shipped tests pin the ordering, not this count.**
