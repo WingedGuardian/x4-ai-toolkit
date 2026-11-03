@@ -11967,8 +11967,10 @@ node, perl or ruby (all reported by the review, none re-run here).
 only on a checkout. The release review found four modules that fail on an install (`test_file_guard_batch` 67 errors,
 `test_generic_file_batch` 7 errors, `test_x4fresh_session` 6 failures, `test_x4housekeep::test_every_swept_temp_prefix`
 1 failure); the test lane then ran the WHOLE suite on a fresh install. MEASURED, before the fix: 5,821 passed, 64 failed,
-74 errors, 534 skipped, of 6,493 (the four counts add up to it). The test lane counted 54 of the 138 failures and errors as beyond the four modules
-the review named.
+74 errors, 534 skipped, of 6,493 (the four counts add up to it). Failures and errors together are 64 + 74 = 138. The
+review's four modules account for 67 + 7 + 6 + 1 = 81 of them (all 74 errors, and 7 of the 64 failures), so
+138 - 81 = 57 are beyond them (the other 57 failures). The test lane's report said 54; the arithmetic of the counts above
+gives 57, and the run was not re-counted to settle the difference of 3.
 
 Cause: tests that read `agent/` or the git index, which an install does not ship. Fix (`3141c4b3`, `62379de9`, `81a295b8`
 and others; `_layout.claude_hooks_source` and `codex_hooks_template` are the new lookups): those tests read what the
@@ -11977,9 +11979,11 @@ suite and hands the junit file to the verdict script in `.github/scripts`, which
 skip. After the fix, the 16 changed modules ran 535 passed, 80 skipped and 1 failed; the one failure, conformance toy case
 66, also fails in a checkout, so it is not an install defect.
 
-RESIDUAL: the job's skip ceiling (`--max-skips 896`) is DERIVED from the local count, not measured on CI; replace it with
-the first CI run's count plus 3. The `test_codex_wrapper` and deploy-parity tests depend on a real `HOME` and a configured
-game root.
+RESIDUAL: the job's skip ceiling (`--max-skips 934` in `.github/workflows/ci.yml`; 896 when this entry was first written)
+is DERIVED from the local count, not measured on CI; replace it with the first CI run's count plus 3. The ceiling of the
+Linux checkout leg (418) is derived the same way. Removing the Windows-only skips from `test_save_sentinel` took 33 skips
+off an installed run (59 passed, 0 skipped there, by the saves lane). The `test_codex_wrapper` and deploy-parity tests
+depend on a real `HOME` and a configured game root.
 
 VERIFIER NOTE: a first attribution to the install was wrong. A run under a changed `HOME` made 12 `test_codex_wrapper`
 tests fail because `py -3` needs the real profile; that read as an install defect until the environment was held constant.
