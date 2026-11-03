@@ -145,7 +145,7 @@ if [ "$STAMP_RC" -ne 0 ]; then
   echo "ERROR: $DB was BUILT but its freshness stamp was NOT written (rc $STAMP_RC)." >&2
   echo "       An unstamped index reads STALE forever and every CLI banners it, so this" >&2
   echo "       is a failure even though the database is fine. Re-run just the stamp:" >&2
-  echo "         (cd \"$X4VALIDATE\" && uv run python \"$HERE/staleness.py\" --write --db $DB)" >&2
+  echo "         (cd \"$X4VALIDATE\" && uv run python \"$HERE/staleness.py\" --write --db $DB --taken-before \"$PENDING\")" >&2
   exit 1
 fi
 
