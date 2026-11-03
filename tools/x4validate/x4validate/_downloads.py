@@ -7,10 +7,14 @@ disk and no archive member is ever executed.
 
 Every archive ends in exactly one of three states (read, no manifest, unreadable), and the
 totals are printed so a dropped archive would show. An unreadable archive is listed with
-its reason: it is a NON-ANSWER about that file, never "not a mod".
+its reason: it is a NON-ANSWER about that file, never "not a mod". Exit 3 when anything was unreadable or a
+manifest unusable, because the list above is then not the whole folder; an archive with no manifest was read
+and has an answer, so it does not count (--all names those).
 
 A verdict here compares manifests only. NEWER is not a recommendation: this tool does not
 know about holds, local edits beyond the registry's flag, or what the new version does.
+When an id is installed in more than one folder, each copy is compared and named, and copies
+that disagree read UNDETERMINED: this tool does not know which copy the engine uses.
 """
 
 from __future__ import annotations
@@ -130,7 +134,10 @@ def _read_zip(path: Path) -> list[tuple[str, bytes]]:
         raise ArchiveUnreadable("not a readable zip") from exc
     except RuntimeError as exc:  # zipfile raises RuntimeError for a password-protected member
         raise ArchiveUnreadable("password-protected") from exc
-    except (OSError, EOFError, NotImplementedError) as exc:
+    except ArchiveUnreadable:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a malformed name or stream (UnicodeDecodeError, zlib.error, ...)
+        # is a reason about THIS archive; it must not abort the scan of the others.
         raise ArchiveUnreadable(f"zip read failed: {exc.__class__.__name__}") from exc
 
 
@@ -181,15 +188,20 @@ def _top_folder(member: str) -> str | None:
     return parts[-2].lower() if len(parts) >= 2 else None
 
 
-def classify(member: str, manifest: dict, by_id: dict, by_folder: dict) -> tuple[str, dict | None]:
-    """The bucket for one manifest, and the installed mod it was compared with."""
-    inst = by_id.get(manifest["id"].lower())
-    if inst is not None:
-        return compare(manifest, inst), inst
+def classify(member: str, manifest: dict, by_id: dict, by_folder: dict) -> tuple[str, dict | None, list[dict]]:
+    """The bucket for one manifest, the installed mod it was compared with, and, when that id is installed
+    more than once, every copy with its own verdict. Copies that disagree are UNDETERMINED: comparing with
+    whichever came last would state a verdict about one folder as if it were about the mod."""
+    copies = by_id.get(manifest["id"].lower())
+    if copies:
+        verdicts = [{"folder": c["folder"], "version": c.get("version"), "date": c.get("date"),
+                     "bucket": compare(manifest, c)} for c in copies]
+        buckets = {v["bucket"] for v in verdicts}
+        return (buckets.pop() if len(buckets) == 1 else UNDETERMINED), copies[0], verdicts if len(copies) > 1 else []
     inst = by_folder.get(_top_folder(member) or "")
     if inst is not None:
-        return SAME_FOLDER, inst
-    return NOT_INSTALLED, None
+        return SAME_FOLDER, inst, []
+    return NOT_INSTALLED, None, []
 
 
 def _sort_key(row: dict) -> tuple:
@@ -212,7 +224,10 @@ def _registry_flags(registry_path) -> tuple[dict[str, bool], str | None]:
 def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: dict,
          recursive: bool, sevenzip: str | None) -> dict:
     """The whole report as data. Reads only."""
-    by_id = {m["id"].lower(): m for m in installed}
+    by_id: dict[str, list[dict]] = {}
+    for m in sorted(installed, key=lambda r: str(r.get("folder")).lower()):
+        if m.get("id"):
+            by_id.setdefault(m["id"].lower(), []).append(m)
     by_folder = {m["folder"].lower(): m for m in installed}
     archives, other_files = [], 0
     for d in dirs:
@@ -224,7 +239,7 @@ def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: 
                 archives.append(p)
             else:
                 other_files += 1
-    rows, unreadable, no_manifest, bad = [], [], 0, []
+    rows, unreadable, no_manifest, bad = [], [], [], []
     for path in archives:
         try:
             members = read_manifests(path, sevenzip)
@@ -232,7 +247,7 @@ def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: 
             unreadable.append({"file": path.name, "reason": str(exc)})
             continue
         if not members:
-            no_manifest += 1
+            no_manifest.append(path.name)
             continue
         hint = parse_nexus_name(path.name) or {}
         for member, data in members:
@@ -240,10 +255,12 @@ def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: 
             if manifest is None:
                 bad.append({"file": path.name, "member": member})
                 continue
-            bucket, inst = classify(member, manifest, by_id, by_folder)
+            bucket, inst, copies = classify(member, manifest, by_id, by_folder)
             flags = []
+            if copies:
+                flags.append(f"installed {len(copies)} times")
             if inst is not None:
-                key = inst["id"].lower()
+                key = (inst.get("id") or "").lower()
                 if custom.get(key):
                     flags.append("custom")
                 if key not in active_ids:
@@ -257,6 +274,7 @@ def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: 
                 "installed": None if inst is None else {
                     "folder": inst["folder"], "id": inst["id"], "name": inst.get("name"),
                     "version": inst.get("version"), "date": inst.get("date")},
+                "installed_copies": copies,
                 "flags": flags})
     newest: dict[str, dict] = {}
     for row in rows:
@@ -265,7 +283,8 @@ def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: 
             newest[key] = row
     superseded = [r for r in rows if newest[r["id"].lower()] is not r]
     return {"scanned": [str(d) for d in dirs], "recursive": recursive, "archives": len(archives),
-            "other_files": other_files, "no_manifest": no_manifest, "unreadable": unreadable,
+            "other_files": other_files, "no_manifest": len(no_manifest), "no_manifest_files": no_manifest,
+            "unreadable": unreadable,
             "bad_manifests": bad, "rows": sorted(newest.values(), key=lambda r: r["file"].lower()),
             "superseded": superseded, "sevenzip": sevenzip}
 
@@ -276,6 +295,10 @@ def _describe(row: dict) -> str:
     inst = row["installed"]
     if inst:
         here = f" | installed {inst['folder']} [{inst['id']}] v{inst.get('version')} {inst.get('date')}"
+    if row["installed_copies"]:
+        # Each copy with ITS verdict: the one `here` names is not the answer when they disagree.
+        here = " | " + "; ".join(f"installed {c['folder']} v{c['version']} {c['date']}: {c['bucket']}"
+                                 for c in row["installed_copies"])
     flags = "".join(f" [{f}]" for f in row["flags"])
     return f"{link}{row['name']} [{row['id']}] v{row['version']} {row['date']}{here}{flags}"
 
@@ -299,6 +322,11 @@ def _print_report(report: dict, show_all: bool, flag_note: str | None) -> None:
     print(f"\nUNREADABLE: {len(report['unreadable'])} (a non-answer about each file, not a verdict)")
     for u in report["unreadable"]:
         print(f"  {u['file']}: {u['reason']}")
+    if show_all and report["no_manifest_files"]:
+        print(f"\nNO MANIFEST: {report['no_manifest']} (read, and no content.xml within "
+              f"{MAX_MANIFEST_DEPTH} folder levels: not a mod in a shape this tool looks for)")
+        for name in report["no_manifest_files"]:
+            print(f"  {name}")
     if show_all and report["superseded"]:
         print(f"\nOLDER COPIES of a mod listed above: {len(report['superseded'])}")
         for row in report["superseded"]:
@@ -323,7 +351,7 @@ def cmd_downloads(args) -> int:
         return 2
     installed = list(_registry.mods("installed"))
     active = _registry.mods("active")
-    active_ids = {m["id"].lower() for m in active}
+    active_ids = {m["id"].lower() for m in active if m.get("id")}
     left_out = _registry.dropped_note(active)
     if left_out:
         print(f"NOT counted as active (the engine does not load it): {left_out}", file=sys.stderr)
@@ -344,15 +372,21 @@ def cmd_downloads(args) -> int:
     if not report["rows"] and report["unreadable"]:
         print("Nothing was read: every archive with a possible manifest was unreadable.", file=sys.stderr)
         return 3
+    if report["unreadable"] or report["bad_manifests"]:
+        print(f"PARTIAL: {len(report['unreadable'])} unreadable archive(s) and {len(report['bad_manifests'])} "
+              "unusable manifest(s): the comparison above does not cover the whole folder.", file=sys.stderr)
+        return 3
     return 0
 
 
 def register(sub) -> None:
     """Wire `downloads` into `x4modlist`'s parser."""
     p = sub.add_parser("downloads", help="read the manifests inside downloaded archives and "
-                       "compare them with what is installed: newer, same, older, not installed. Read-only")
+                       "compare them with what is installed: newer, same, older, not installed. Read-only. "
+                       "Exit 3 when anything was unreadable or a manifest unusable")
     p.add_argument("dirs", nargs="+", metavar="DIR", help="a folder of downloaded mod archives")
     p.add_argument("--recursive", action="store_true", help="also scan subfolders (default: top level only)")
-    p.add_argument("--all", action="store_true", help="also list mods that match what is installed, and older copies")
+    p.add_argument("--all", action="store_true", help="also list mods that match what is installed, older copies, "
+                   "and archives with no manifest")
     p.add_argument("--json", action="store_true", help="print the whole report as JSON")
     p.set_defaults(func=cmd_downloads)
