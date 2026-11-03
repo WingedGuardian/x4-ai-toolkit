@@ -208,6 +208,7 @@ emit_roots() {
   printf 'mods\t%s\n'       "$X4_MODS"
   printf 'documents\t%s\n'  "${X4_DOCUMENTS:-}"
   printf 'saves\t%s\n'      "${X4_SAVES:-}"
+  printf 'extensions\t%s\n' "${X4_EXTENSIONS:-${X4_GAME_EXTENSIONS:-}}"
   printf -- '--X4-ROOTS-END--'
 }
 

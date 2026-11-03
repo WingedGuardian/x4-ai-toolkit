@@ -986,6 +986,89 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
                 self.assertTrue(f["rm_deployed_mod"], c)
                 self.assertEqual(f["rm_deployed_mod_names"], "deployed", c)
 
+    # 4.1.0 G-M3: the ask saw the game root's layout only. `$X4_EXTENSIONS` is a READING, not a
+    # ROOT_VARS entry: as written the command keeps every verdict it has.
+    EXT_ROOTS = dict(ROOTS, extensions="D:/elsewhere/live-mods")
+
+    def test_the_extensions_variable_names_a_deployed_mod(self):
+        for c in (D + " -rf " + DQ + "$X4_EXTENSIONS/mymod" + DQ, D + " -rf $X4_EXTENSIONS/mymod",
+                  D + " -rf " + DQ + "${X4_EXTENSIONS}/mymod" + DQ,
+                  "cd " + DQ + "$X4_EXTENSIONS" + DQ + " && " + D + " -rf mymod",
+                  "bash -c " + Q + D + " -rf " + DQ + "$X4_EXTENSIONS/mymod" + DQ + Q,
+                  D + " -rf " + DQ + "$X4_GAME_EXTENSIONS/mymod" + DQ):
+            for roots, key in ((ROOTS, "game layout"), (self.EXT_ROOTS, "configured")):
+                with self.subTest(c=c, roots=key):
+                    f = F(c, roots=roots)
+                    self.assertTrue(f["rm_deployed_mod"], c)
+                    self.assertEqual(f["rm_deployed_mod_names"], "mymod", c)
+
+    def test_a_separately_configured_extensions_root_is_a_deployed_mod_root(self):
+        ext = "D:/elsewhere/live-mods"
+        for c in (D + " -rf " + DQ + ext + "/mymod" + DQ, D + " -rf " + DQ + "D:" + BS + "elsewhere" + BS + "live-mods" + BS + "mymod" + DQ,
+                  "cd " + DQ + ext + DQ + " && " + D + " -rf mymod", "mv " + DQ + ext + "/mymod" + DQ + " /tmp/old",
+                  'find "' + ext + '/mymod" -delete', "DST=" + Q + ext + "/mymod" + Q + "; " + D + " -rf " + DQ + "$DST" + DQ):
+            with self.subTest(c=c):
+                f = F(c, roots=self.EXT_ROOTS)
+                self.assertTrue(f["rm_deployed_mod"], c)
+                self.assertEqual(f["rm_deployed_mod_names"], "mymod", c)
+
+    def test_the_game_layout_still_counts_beside_a_configured_root(self):
+        f = F(D + ' -rf "' + GAME + '/extensions/deployed"', roots=self.EXT_ROOTS)
+        self.assertEqual(f["rm_deployed_mod_names"], "deployed")
+
+    def test_all_of_a_separately_configured_root_names_every_mod(self):
+        for c in (D + " -rf " + DQ + "D:/elsewhere/live-mods" + DQ, D + " -rf " + DQ + "$X4_EXTENSIONS" + DQ):
+            with self.subTest(c=c):
+                f = F(c, roots=self.EXT_ROOTS)
+                self.assertTrue(f["rm_deployed_mod"], c)
+                self.assertEqual(f["rm_deployed_mod_names"], "<every mod in the extensions folder>", c)
+        f = F('find "D:/elsewhere/live-mods" -name x -delete', roots=self.EXT_ROOTS)
+        self.assertEqual(f["rm_deployed_mod_names"], "<any mod the find matches>")
+
+    def test_all_of_the_game_layout_stays_the_hard_block_through_the_variable(self):
+        f = F(D + " -rf " + DQ + "$X4_EXTENSIONS" + DQ)
+        self.assertTrue(f["rm_hits_game"])
+        self.assertFalse(f["rm_deployed_mod"])
+
+    def test_TWIN_near_the_extensions_root_is_not_a_deployed_mod(self):
+        for c in (D + " -rf " + DQ + "D:/elsewhere/live-mods-old/mymod" + DQ, D + " -rf D:/elsewhere/other",
+                  "ls " + DQ + "$X4_EXTENSIONS/mymod" + DQ, "cp x " + DQ + "D:/tmp/y" + DQ,
+                  D + " -rf " + DQ + "$X4_EXTENSIONSX/mymod" + DQ,
+                  "X4_EXTENSIONS=/tmp/x; echo " + DQ + "$X4_EXTENSIONS" + DQ):
+            with self.subTest(c=c):
+                self.assertFalse(F(c, roots=self.EXT_ROOTS)["rm_deployed_mod"], c)
+
+    def test_TWIN_a_command_that_assigns_the_variable_deletes_under_its_own_value(self):
+        for c in ("X4_EXTENSIONS=/tmp/x; " + D + " -rf " + DQ + "$X4_EXTENSIONS/mymod" + DQ,
+                  "X4_EXTENSIONS=/tmp/x bash -c " + Q + D + " -rf " + DQ + "$X4_EXTENSIONS/mymod" + DQ + Q):
+            with self.subTest(c=c):
+                self.assertFalse(F(c, roots=self.EXT_ROOTS)["rm_deployed_mod"], c)
+
+    def test_TWIN_an_extensions_root_that_is_the_filesystem_root_names_nothing(self):
+        roots = dict(ROOTS, extensions="/")
+        self.assertFalse(F(D + " -rf /tmp/x", roots=roots)["rm_deployed_mod"])
+
+    def test_TWIN_a_configured_root_that_is_the_game_layout_stays_the_hard_block(self):
+        roots = dict(ROOTS, extensions=GAME + "/extensions")
+        f = F(D + ' -rf "' + GAME + '/extensions"', roots=roots)
+        self.assertTrue(f["rm_hits_game"])
+        self.assertFalse(f["rm_deployed_mod"])
+
+    def test_TWIN_a_longer_variable_name_is_another_variable(self):
+        """With a trailing slash on the root, the name's tail would land inside it."""
+        roots = dict(ROOTS, extensions="D:/elsewhere/live-mods/")
+        self.assertFalse(F("cat x; ls " + DQ + "$X4_EXTENSIONSX/mymod" + DQ + "; mv " + DQ + "$X4_EXTENSIONSX/mymod" + DQ + " /tmp/y",
+                           roots=roots)["rm_deployed_mod"])
+
+    def test_TWIN_the_variable_as_a_program_stays_an_unknown_program(self):
+        """The reason this is a reading: as a ROOT_VARS entry it would have become a known program."""
+        c = DQ + "$X4_EXTENSIONS/x.sh" + DQ + " " + Q + REF + Q
+        self.assertTrue(F(c)["program_dynamic_protected"])
+
+    def test_TWIN_a_root_that_cannot_be_written_into_a_reading_is_skipped(self):
+        roots = dict(ROOTS, extensions="D:/a$b/mods")
+        self.assertFalse(F(D + " -rf " + DQ + "$X4_EXTENSIONS/mymod" + DQ, roots=roots)["rm_deployed_mod"])
+
     def test_TWIN_other_game_install_deletes_are_not_a_deployed_mod(self):
         """Clause: under extensions/ -- a game-root file, the game's .claude/ and New mods/
         keep the rm_in_x4_dir ADVISORY; extensions/ itself is the rm_hits_game deny."""
@@ -3996,6 +4079,54 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
 
     def test_an_env_root_variable_names_its_root(self):
         self.assertTrue(self.P("Remove-Item $env:X4_REFERENCE/x")["rm_targets_reference"])
+
+    # 4.1.0 P1: `$P=<path>` was read and `$env:P=<path>` was not. A second reading of each command
+    # and not a replacement: `$env:X4_REFERENCE` still names its root whatever it was assigned.
+    def test_an_assigned_env_variable_resolves_like_a_local_one(self):
+        for c in ("$env:P=" + Q + REF + Q + "; Remove-Item -Recurse $env:P",
+                  "$Env:p=" + Q + REF + Q + "; Remove-Item -Recurse $env:P",
+                  "$env:P=" + Q + REF + Q + "; Remove-Item -Recurse " + DQ + "$env:P/libraries" + DQ,
+                  "$env:P=" + Q + REF + Q + "; Remove-Item -Recurse (Join-Path $env:P libraries)",
+                  "$env:P=" + Q + REF + Q + "; Get-ChildItem $env:P | Remove-Item",
+                  "$env:P=" + Q + REF + Q + "; cd $env:P; Remove-Item -Recurse libraries",
+                  "$env:A=" + Q + REF + Q + "; $env:B=" + DQ + "$env:A/x" + DQ + "; Remove-Item $env:B",
+                  "$env:A=" + Q + REF + Q + "; $t=" + DQ + "$env:A/x" + DQ + "; Remove-Item $t",
+                  "$env:A=" + Q + REF + Q + "; $t=" + DQ + "$env:A/x" + DQ + "; Remove-Item " + DQ + "$t/y" + DQ,
+                  "$env:P=" + Q + "/tmp/x" + Q + "; $env:P=" + Q + REF + Q + "; Remove-Item -Recurse $env:P",
+                  "$env:C=" + Q + "Remove-Item -Recurse " + REF + Q + "; Invoke-Expression $env:C"):
+            with self.subTest(c=c):
+                self.assertTrue(self.P(c)["rm_targets_reference"], c)
+
+    def test_an_assigned_env_variable_in_a_string_reaches_the_deployed_mod_ask(self):
+        c = "$env:G=" + Q + GAME + Q + "; Remove-Item -Recurse " + DQ + "$env:G" + BS + "extensions" + BS + "mymod" + DQ
+        f = self.P(c)
+        self.assertTrue(f["rm_deployed_mod"], c)
+        self.assertEqual(f["rm_deployed_mod_names"], "mymod")
+
+    def test_a_write_through_an_assigned_env_variable_is_a_write(self):
+        for c in ("$env:P=" + Q + REF + Q + "; Set-Content " + DQ + "$env:P/x" + DQ + " y",
+                  "$env:P=" + Q + REF + Q + "; " + Q + "y" + Q + " > " + DQ + "$env:P/x" + DQ):
+            with self.subTest(c=c):
+                self.assertTrue(self.P(c)["writes_reference"], c)
+
+    def test_TWIN_a_reassigned_root_variable_still_names_its_root(self):
+        c = "$env:X4_REFERENCE=" + Q + "/tmp/x" + Q + "; Remove-Item $env:X4_REFERENCE/x"
+        self.assertTrue(self.P(c)["rm_targets_reference"], c)
+
+    def test_TWIN_another_env_variable_is_no_opaque_value(self):
+        """Only the variable this command assigned turns into a value. Another stays a name, with no ask."""
+        c = "$env:A=" + Q + "/tmp/x" + Q + "; Remove-Item -Recurse $env:OTHER/y"
+        self.assertFalse(self.P(c)["carrier_untranslated"], c)
+
+    def test_TWIN_an_assignment_nothing_deletes_through(self):
+        for c in ("$env:P=" + Q + "/tmp/x" + Q + "; Remove-Item -Recurse $env:P",
+                  "$env:PYTHONPATH=" + Q + REF + Q + "; python x.py",
+                  "$env:P=" + Q + REF + Q + "; Get-ChildItem $env:P",
+                  "$env:P=" + Q + REF + Q + "; Remove-Item /tmp/x",
+                  "$env:Q=" + Q + REF + Q + "; Remove-Item -Recurse $env:P"):
+            with self.subTest(c=c):
+                f = self.P(c)
+                self.assertFalse(f["rm_targets_reference"] or f["writes_reference"], c)
 
     def test_set_content_is_a_write(self):
         self.assertTrue(self.P("Set-Content -Path " + Q + REF + "/a.xml" + Q + " -Value x")

@@ -749,6 +749,51 @@ class TestRR3CmdCarrier(_RR):
         ], tool="Bash")
 
 
+class TestGM3ExtensionsRootE2E(_RR):
+    """4.1.0 G-M3 and P1, through the REAL hook: the packet has to carry the configured root, and the
+    ask has to name the mod. MEASURED at d0843965: every non-twin row allowed."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.ext = cls.tmp / "live-mods"
+        (cls.ext / "mymod").mkdir(parents=True)
+        cls.Ef = str(cls.ext).replace(BS, "/")
+        cls.env = dict(cls.env, X4_EXTENSIONS=str(cls.ext))
+
+    def test_a_configured_root(self):
+        for command, tool in (('rm -rf "$X4_EXTENSIONS/mymod"', "Bash"), ('cd "$X4_EXTENSIONS" && rm -rf mymod', "Bash"),
+                              ('rm -rf "' + self.Ef + '/mymod"', "Bash"), ('cd "' + self.Ef + '" && rm -rf mymod', "Bash"),
+                              ('Remove-Item -Recurse "$env:X4_EXTENSIONS/mymod"', "PowerShell"),
+                              ('Remove-Item -Recurse "' + self.Ef + '/mymod"', "PowerShell")):
+            with self.subTest(c=command):
+                verdict, reason = self.verdict_with(command, tool)
+                self.assertEqual(verdict, "ask", reason)
+                self.assertIn("CONFIRM REMOVING DEPLOYED MOD", reason)
+                self.assertIn("mymod", reason)
+
+    def test_the_game_layout_is_still_a_deployed_mod_root(self):
+        verdict, reason = self.verdict_with('rm -rf "' + self.Gf + '/extensions/deployed"', "Bash")
+        self.assertEqual(verdict, "ask", reason)
+        self.assertIn("deployed", reason)
+
+    def test_an_assigned_env_variable(self):
+        self.expect([("deny", "$env:P='" + self.R + "'; Remove-Item -Recurse $env:P"),
+                     ("ask", "$env:G='" + self.G + "'; Remove-Item -Recurse " + '"$env:G' + BS + "extensions" + BS + 'mymod"')])
+
+    def test_TWIN_reading_or_a_neighbour_of_the_root(self):
+        self.expect([("allow", 'ls "$X4_EXTENSIONS/mymod"'), ("allow", 'rm -rf "' + self.Ef + '-old/mymod"')], "Bash")
+
+
+class TestGM3ExtensionsVariableGameLayout(_RR):
+    """No X4_EXTENSIONS anywhere: the variable means what x4-paths.env.example documents."""
+
+    def test_the_variable_reaches_the_game_layout(self):
+        verdict, reason = self.verdict_with('rm -rf "$X4_EXTENSIONS/mymod"', "Bash")
+        self.assertEqual(verdict, "ask", reason)
+        self.assertIn("mymod", reason)
+
+
 class TestF10DynamicProgramWordE2E(_RR):
     """F10 (v4.0), through the REAL hook: an unidentifiable command name (variable,
     substitution, `%R%`/`!R!`, `& $R`) gets at least the plain command's verdict, or an ask

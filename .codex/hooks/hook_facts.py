@@ -5661,12 +5661,32 @@ def _plain_expansion(m) -> str:
     return "${X4_SHELL_FLAGS}" if s == "$-" else "${" if s.startswith("${") else "$"
 
 
+#: The extensions root this call judges by: the configured one, else the game's (x4-paths.env.example
+#: documents that default). Set by facts(), read by the reading below.
+_EXTENSIONS_ROOT = [""]
+_EXTENSIONS_VAR = re.compile(r"\$\{X4_(?:GAME_)?EXTENSIONS\}|\$X4_(?:GAME_)?EXTENSIONS(?![A-Za-z0-9_])")
+_EXTENSIONS_SET = re.compile(r"(?<![A-Za-z0-9_])X4_(?:GAME_)?EXTENSIONS=")
+
+
+def _extensions_spelled(text: str) -> str:
+    """`$X4_EXTENSIONS` written out as the folder, for a reading. It is not in ROOT_VARS because a root
+    variable is known wherever it is read: as a program name it would stop being an unknown program, and
+    `${X4_EXTENSIONS:-<x>}` would stop being read as <x>. A root this cannot quote gives no reading, and
+    neither does a command that assigns the variable itself, which is the value it then deletes under."""
+    root = _EXTENSIONS_ROOT[0]
+    if not root or "EXTENSIONS" not in text or any(c in root for c in "\"'$`") or _EXTENSIONS_SET.search(text):
+        return text
+    quote = {i: kind for i, _c, _inq, kind in _qwalk(text)}
+    return _EXTENSIONS_VAR.sub(lambda m: root if quote.get(m.start()) else _sh_quote(root), text)
+
+
 def _value_readings(cmd: str, segs: list) -> list:
     """The command again with `${P@X}` and zsh's flagged forms read as plain expansions and each
     `printf -v`/`read <<<` variable written out as its value. ADDITIVE, like every reading here: the command as written is still
     judged with those names unknown, so nothing it was flagged for can be lost."""
     text = _VALUE_TRANSFORM.sub(lambda m: "${" + m.group(1) + "}", cmd) if "@" in cmd else cmd
     text = _FLAGGED_EXPANSION.sub(_plain_expansion, text)
+    text = _extensions_spelled(text)
     if ("printf" in cmd and "-v" in cmd) or ("read" in cmd and "<<<" in cmd):
         for seg in segs:
             for name, value in _builtin_assignment(seg).items():
@@ -6481,6 +6501,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _WIN_DIALECT.clear()
     _BRACE_WORDS.clear()                # C1: per call, like the two above
     _READING_TEXTS.clear()
+    _EXTENSIONS_ROOT[0] = (roots.get("extensions")
+                           or (roots["game"].rstrip("/" + chr(92)) + "/extensions" if roots.get("game") else "")
+                           ).replace(chr(92), "/")
     _CD_LANES_TRUNCATED[0] = False      # C7: per call
     _OPERAND_EXPANSION_TRUNCATED[0] = False
     _ps_spent[0] = 0.0                  # the translation budget is per hook call
@@ -7107,25 +7130,33 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # Same operand channels as rm_in_x4_dir's game clause. Names are lower-cased by norm().
     _g = norm(roots.get("game") or "")
     _ext = _g + "/extensions/" if _g else ""
+    # A separately configured extensions root counts as well (4.1.0 G-M3). All of it is asked here, as
+    # the deny for all of the game's extensions/ cannot reach a folder outside the game.
+    _other_ext = norm(roots.get("extensions") or "").rstrip("/") + "/"
+    if _other_ext == "/" or _other_ext == _ext:
+        _other_ext = ""
 
     def _deployed_mods(ops, filtered=False):
         # prep() already substituted a root variable ($X4_GAME, F154) and, for an unresolved
         # operand, `path` IS its resolved text -- so an unknown mod name stays as written.
         names = []
         for path, _unres, _raw in ops:
-            if not _ext:
-                break
             n = norm(path)
-            if n.startswith(_ext):
-                seg = n[len(_ext):].split("/")[0]
-                if seg == "${xargs_item}":
-                    # `find <extensions> ... | xargs rm`: each found entry, any mod
+            for root in (_ext, _other_ext):
+                if not root:
+                    continue
+                if n.startswith(root):
+                    seg = n[len(root):].split("/")[0]
+                    if seg == "${xargs_item}":
+                        # `find <extensions> ... | xargs rm`: each found entry, any mod
+                        names.append("<any mod the find matches>")
+                    elif seg:
+                        names.append(seg)
+                elif filtered and n == root[:-1]:
+                    # a FILTERED find over extensions/ itself reaches into any mod it matches
                     names.append("<any mod the find matches>")
-                elif seg:
-                    names.append(seg)
-            elif filtered and n == _ext[:-1]:
-                # a FILTERED find over extensions/ itself reaches into any mod it matches
-                names.append("<any mod the find matches>")
+                elif root == _other_ext and n == root[:-1]:
+                    names.append("<every mod in the extensions folder>")
         return names
 
     _mods = list(dict.fromkeys(_deployed_mods(rm_t + mv_src + subst_rm_t)
