@@ -765,8 +765,9 @@ def _starts_with_brace_word(s: str) -> bool:
     if s[:1] != "{" or s[1:2].isspace():
         return False
     first = _raw_words(s, spans=False)[:1]
-    if not first or "$" in first[0] or chr(96) in first[0]:
-        return False                    # a substitution in the word: walked on its own
+    # A substitution in the word is walked on its own, and a range (`{1..3}`) names no program.
+    if not first or "$" in first[0] or chr(96) in first[0] or "," not in first[0]:
+        return False
     toks = tokens(first[0])
     return bool(toks) and toks[0][0] in _BRACE_WORDS
 
@@ -995,10 +996,20 @@ def _builtin_assignment(seg: str) -> dict:
         return {}
     if v == "read":
         hs = _here_string(seg)
-        names = [t for t, _q in tokens(seg)[at + 1:] if not t.startswith(("-", "<<<"))]
-        if not hs or not names or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", names[0]):
-            return {}
-        return {names[0]: hs}
+        args = [t for t, _q in tokens(seg)[at + 1:]]
+        name, i = "", 0
+        while hs and i < len(args) and not name:
+            t = args[i]
+            i += 1
+            if t.startswith("<"):
+                break
+            if len(t) < 2 or t[0] != "-":
+                name = t
+            elif t[1] == "a" and len(t) > 2:
+                name = t[2:]
+            elif t[-1] in "pdnNtui":
+                i += 1
+        return {name: hs} if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) else {}
     args = _drop_redirects([t for t, _q in tokens(seg)[at + 1:]])
     if args[:1] == ["-v"]:
         name, args = (args[1] if len(args) > 1 else ""), args[2:]
@@ -1110,10 +1121,7 @@ def resolve_all(tok: str, assigns: dict) -> list:
     return out
 
 
-#: zsh's `$=X` `$~X` `$^X` and `${=X}` `${~X}` `${^X}` read X with a splitting or globbing flag, so
-#: a value is still X's. Bash leaves them literal; reading them as X there only adds a stricter
-#: judgement for a path nobody spells with those characters.
-_VAR = re.compile(r"\$\{[=~^]*([A-Za-z_][A-Za-z0-9_]*)\}|\$[=~^]*([A-Za-z_][A-Za-z0-9_]*)")
+_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
 #: ANY parameter expansion, not just the two shapes `_VAR` can name. `_VAR` exists to
 #: EXTRACT an identifier and only matches `${NAME}` with the brace closing straight
@@ -1129,10 +1137,7 @@ _VAR = re.compile(r"\$\{[=~^]*([A-Za-z_][A-Za-z0-9_]*)\}|\$[=~^]*([A-Za-z_][A-Za
 #: Separate from `_VAR` on purpose: "is there an expansion here" and "what is it
 #: called" are different questions, and one regex answering both is what made the
 #: narrow one authoritative.
-#:
-#: `$-` is bash's flag string, and zsh's `$=X` `$~X` `$^X` `$+X` expand too: MEASURED, each left
-#: `rm -rf <reference>$-` reading as a literal sibling folder, with no guard flag at all.
-_EXPANSION = re.compile(r"\$\{|\$[A-Za-z_]|\$[0-9@*#?!$-]|\$[=~^+](?=[A-Za-z_{])")
+_EXPANSION = re.compile(r"\$\{|\$[A-Za-z_]|\$[0-9@*#?!$]")
 
 
 #: `~` and `$HOME` are values a hook genuinely CAN know, unlike `$(...)`. Without them a
@@ -2242,7 +2247,16 @@ def _spanning_view(cmd: str) -> str:
     return "".join(out)
 
 
-def _verb_word(seg: str) -> tuple[str, int | None]:
+#: Value options _verb_word learned after the first releases. Before that their value read as the
+#: command, and `_value_word_readings` keeps that reading judged.
+_LATER_VALUE_OPTS = {
+    "exec": frozenset({"-a"}),
+    "sudo": frozenset({"-D", "--chdir", "-R", "--chroot", "-T", "--command-timeout", "-a", "--auth-type",
+                       "-c", "--login-class"}),
+}
+
+
+def _verb_word(seg: str, learned: bool = True) -> tuple[str, int | None]:
     """The RAW token carrying the command name, exactly as written.
 
     Split out of verb() for resolve_verb(): splicing a variable's value back into a
@@ -2307,7 +2321,7 @@ def _verb_word(seg: str) -> tuple[str, int | None]:
             continue
         if t.startswith("-"):
             if t in _WRAPPER_VALUE_OPTS.get(wrapper, ()):
-                want_value = True
+                want_value = learned or t not in _LATER_VALUE_OPTS.get(wrapper, ())
             continue
         if seen_wrapper and _WRAPPER_ARG.match(t):
             continue                    # a duration or a placeholder, not a command
@@ -2453,14 +2467,22 @@ _GLOB_NAME_CHARS = re.compile(r"[A-Za-z0-9_.:/" + chr(92) + r"+*?\[\]!^-]+")
 
 
 def _glob_program(seg: str, t: str) -> bool:
-    """Is the command name an UNQUOTED glob? The filesystem picks the program, so the name is as
-    unidentifiable as a variable's. MEASURED: `ev?l 'rm -rf <reference>'` and `r? -rf <reference>`
-    carried no guard flag."""
+    """Is the command name an UNQUOTED glob whose BASENAME could spell a verb that changes files or
+    re-reads text? MEASURED: `ev?l 'rm -rf <reference>'` and `r? -rf <reference>` carried no guard
+    flag. A glob in the directory leaves a literal name, which verb() already reads
+    (`/c/Python3*/python`), and one that spells nothing dangerous (`./scripts/*.sh`) is left alone:
+    asking on those cost a prompt for a read-only command."""
     if not ("*" in t or "?" in t or "[" in t) or not _GLOB_NAME_CHARS.fullmatch(t):
         return False
     w = _verb_word_text(seg)[0]
     bare = "".join(" " if inq else c for _i, c, inq, _k in _qwalk(w))
-    return bool(_GLOB_NAME.search(bare))
+    if not _GLOB_NAME.search(bare):
+        return False
+    name = _verb_name(t)
+    if not _GLOB_NAME.search(name):
+        return False
+    import fnmatch                       # only a glob command name pays for this
+    return any(fnmatch.fnmatchcase(v, name) for v in _GLOB_SPELLABLE)
 
 
 def _dynamic_program(seg: str) -> bool:
@@ -5217,21 +5239,28 @@ def _windows_carrier(seg: str, cmd: str, prev=None) -> list:
 
 #: A shell option word after `-c`: bash reads every option before its program text, so
 #: `bash -c -- '<cmd>'` and `bash -c -x '<cmd>'` run <cmd>, and the word after `-c` was all that
-#: was walked (MEASURED: no guard flag). `-o`/`-O` take the next word as their value.
+#: was walked (MEASURED: no guard flag). Each `o`/`O` in a cluster takes the next word as its value,
+#: and `-` ends the options as `--` does.
 _SHELL_OPT_WORD = re.compile(r"[-+][A-Za-z]+|--[a-z][a-z-]*")
+_SHELL_LONG_VALUE_OPTS = ("--rcfile", "--init-file")
 
 
-def _shell_text_at(toks: list, j: int) -> int:
-    """The index of a shell's program text, given the index just after its `-c`."""
-    k = j
+def _shell_option_values(t: str) -> int:
+    return 0 if t[:2] == "--" else t.count("o") + t.count("O")
+
+
+def _shell_text_at(toks: list, j: int, flag: str = "") -> int:
+    """The index of a shell's program text, given the index just after its `-c` (`flag`, whose own
+    `o` takes a value too in `-co pipefail`)."""
+    k = j + _shell_option_values(flag)
     while k < len(toks):
         t = toks[k][0]
-        if t == "--":
+        if t in ("--", "-"):
             k += 1
             break
         if not _SHELL_OPT_WORD.fullmatch(t):
             break
-        k += 2 if len(t) == 2 and t[1] in "oO" else 1
+        k += 1 + (1 if t in _SHELL_LONG_VALUE_OPTS else _shell_option_values(t))
     return k if k < len(toks) else j
 
 
@@ -5338,9 +5367,9 @@ def _text_option(words: list) -> list:
         t, quoted = toks[0]
         text = None
         following = words[i + 1:]
-        if t.startswith("--command="):
-            text = t[len("--command="):]
-        elif (t == "--command" or (not quoted and _DASH_C.match(t))) and following:
+        if t.startswith(("--command=", "--session-command=")):
+            text = t.partition("=")[2]
+        elif (t in ("--command", "--session-command") or (not quoted and _DASH_C.match(t))) and following:
             k = _shell_text_at([(_head(x), False) for x in following], 0)
             text, following = _head(following[k]), following[k + 1:]
         elif t.startswith("-c") and len(t) > 2 and _EVAL_SPLITS.search(t):
@@ -5356,15 +5385,20 @@ def _env_split_readings(seg: str) -> list:
     it is a carrier _verb_word cannot read (it steps over -S's value). Also `env -iu VAR <cmd>` and
     `env -iC DIR <cmd>`: the value option in a cluster, which _verb_word reads as the command."""
     words = _raw_words(seg)
-    i = 0
+    i, wrapper = 0, ""
     while i < len(words):                # step over assignments and other wrappers to `env`
         t = _head(words[i])
         name = _verb_name(t)
         if name == "env":
             break
-        if not (_ASSIGNMENT.match(t) or name in WRAPPERS or (i and t.startswith("-"))):
-            return []
         i += 1
+        if name in WRAPPERS:
+            wrapper = name
+        elif t.startswith("-") and wrapper:
+            if t in _WRAPPER_VALUE_OPTS.get(wrapper, ()):
+                i += 1
+        elif not (_ASSIGNMENT.match(t) or (wrapper and _WRAPPER_ARG.match(t))):
+            return []
     else:
         return []
     j, clustered = i + 1, False
@@ -5410,28 +5444,55 @@ def _env_split_readings(seg: str) -> list:
 
 
 def _value_word_readings(seg: str) -> list:
-    """The words from a wrapper option's VALUE on, for the two value options _verb_word learned
-    last (`exec -a`, sudo's -D and friends): `exec -a rm -rf <x>` read as a delete before they
-    were learned, and it stays a judged reading rather than dropping out of every rule."""
+    """The words from where the command name sat before `_LATER_VALUE_OPTS` were learned, for
+    `exec -a rm -rf <x>` and `sudo -u root -a rm -rf <x>`: each read as a delete then, and stays a
+    judged reading rather than dropping out of every rule."""
+    at = _verb_word(seg, learned=False)[1]
+    if at is None or at == _verb_word(seg)[1]:
+        return []
+    index = 0
     words = _raw_words(seg)
-    table = None
-    for i, w in enumerate(words[:-1]):
-        t = _head(w)
-        name = _verb_name(t)
-        if name == "exec":
-            table = {"-a"}
-        elif name == "sudo":
-            table = {"-D", "--chdir", "-R", "--chroot", "-T", "--command-timeout", "-a", "--auth-type",
-                     "-c", "--login-class"}
-        elif table is not None and t in table:
-            return [" ".join(words[i + 1:])]
-        elif table is not None and not t.startswith("-"):
-            return []
+    for k, w in enumerate(words):
+        if index == at:
+            return [" ".join(words[k:])]
+        index += len(tokens(w))
     return []
 
 
+def _ipv4_number(h: str):
+    """The address inet_aton reads from `h` (`0`, `2130706433`, `0x7f.1`, `0177.0.0.1`), or None."""
+    parts = h.split(".")
+    if not 1 <= len(parts) <= 4:
+        return None
+    try:
+        vals = [int(p, 16) if p[:2] in ("0x", "0X") else int(p, 8) if p[:1] == "0" and len(p) > 1 else int(p, 10)
+                for p in parts]
+    except ValueError:
+        return None
+    n = 0
+    for v in vals[:-1]:
+        n = n * 256 + v
+    return n * 256 ** (5 - len(vals)) + vals[-1]
+
+
+def _is_loopback(h: str) -> bool:
+    if h in _LOOPBACK_NAMES:
+        return True
+    n = _ipv4_number(h)
+    if n is not None:
+        return n == 0 or n >> 24 == 127
+    if ":" in h:
+        import ipaddress
+        try:
+            a = ipaddress.ip_address(h)
+        except ValueError:
+            return False
+        return a.is_loopback or a.is_unspecified or bool(a.ipv4_mapped and _is_loopback(str(a.ipv4_mapped)))
+    return False
+
+
 def _is_this_machine(host: str) -> bool:
-    """Might this ssh destination be THIS machine? A loopback name or this computer's own name
+    """Might this ssh destination be THIS machine? A loopback spelling or this computer's own name
     is; so is a host in a variable, which this command cannot name. Anything else is another
     machine, whose paths are not this one's protected folders."""
     if has_unresolved(host):
@@ -5439,12 +5500,12 @@ def _is_this_machine(host: str) -> bool:
     h = host.lower()
     if h.startswith("ssh://"):
         h = h[6:]
-    h = h.rpartition("@")[2].strip("[]").rstrip(".").partition("/")[0]
-    if h in _LOOPBACK_NAMES or h.startswith("127."):
+    h = h.rpartition("@")[2].rstrip(".").partition("/")[0]
+    if h.startswith("["):
+        h = h[1:].partition("]")[0]
+    if _is_loopback(h) or (h.count(":") == 1 and _is_loopback(h.partition(":")[0])):
         return True
     h = h.partition(":")[0] or h
-    if h in _LOOPBACK_NAMES or h.startswith("127."):
-        return True
     import socket                        # only a command that actually runs ssh pays for this
     own = {os.environ.get("COMPUTERNAME", ""), os.environ.get("HOSTNAME", "")}
     try:
@@ -5455,17 +5516,29 @@ def _is_this_machine(host: str) -> bool:
         n.lower() for n in own if n}
 
 
+#: ssh options whose value runs on THIS machine, whatever the destination.
+_SSH_LOCAL_COMMAND = re.compile(r"(?:proxycommand|localcommand|knownhostscommand)\s*[= ]\s*(.*)", re.I | re.S)
+
+
 def _ssh_readings(words: list) -> list:
     """`ssh <this machine> <cmd>`. ssh's remote command starts in the login directory, never in
     this command's directory, so the reading anchors there: a relative path stays unknown."""
     at = _program_at(words, _SSH_VALUE_OPTS)
+    out = []
+    for i, w in enumerate(words if at is None else words[:at]):
+        t = _head(w)
+        value = t[2:] if t.startswith("-o") and len(t) > 2 else (
+            _head(words[i + 1]) if t == "-o" and i + 1 < len(words) else "")
+        m = _SSH_LOCAL_COMMAND.fullmatch(value)
+        if m:
+            out.append(m.group(1))
     if at is None or at >= len(words) or not _is_this_machine(_head(words[at])):
-        return []
+        return out
     tail = words[at + 1:]
     k = _program_at(tail, _SSH_VALUE_OPTS)
     if k is None or k >= len(tail):
-        return []
-    return ["cd " + _UNKNOWN_CWD + " && " + r for r in _as_program(tail[k:])]
+        return out
+    return out + ["cd " + _UNKNOWN_CWD + " && " + r for r in _as_program(tail[k:])]
 
 
 def _parallel_readings(words: list, prev) -> list:
@@ -5576,12 +5649,24 @@ def _mapfile_readings(words: list) -> list:
 #: change case or list it. MEASURED: `P=<reference>; rm -rf "${P@P}"` carried no guard flag.
 _VALUE_TRANSFORM = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)@[PEQUuLKk]\}")
 
+#: `$-` is bash's flag string; zsh's `$=X` `$~X` `$^X` `$+X` `${=X}` read X with a flag. Bash and the
+#: resolver take most of these literally: MEASURED, `rm -rf <reference>$-` read as a sibling folder
+#: with no guard flag. Read here as the expansions they may be, never in the resolver itself, which
+#: lost verdicts the literal reading has (`> $-` from the game root).
+_FLAGGED_EXPANSION = re.compile(r"\$\{[=~^]+(?=[A-Za-z_])|\$[=~^+](?=[A-Za-z_{])|\$-")
+
+
+def _plain_expansion(m) -> str:
+    s = m.group(0)
+    return "${X4_SHELL_FLAGS}" if s == "$-" else "${" if s.startswith("${") else "$"
+
 
 def _value_readings(cmd: str, segs: list) -> list:
-    """The command again with `${P@X}` read as `${P}` and each `printf -v`/`read <<<` variable
-    written out as its value. ADDITIVE, like every reading here: the command as written is still
+    """The command again with `${P@X}` and zsh's flagged forms read as plain expansions and each
+    `printf -v`/`read <<<` variable written out as its value. ADDITIVE, like every reading here: the command as written is still
     judged with those names unknown, so nothing it was flagged for can be lost."""
     text = _VALUE_TRANSFORM.sub(lambda m: "${" + m.group(1) + "}", cmd) if "@" in cmd else cmd
+    text = _FLAGGED_EXPANSION.sub(_plain_expansion, text)
     if ("printf" in cmd and "-v" in cmd) or ("read" in cmd and "<<<" in cmd):
         for seg in segs:
             for name, value in _builtin_assignment(seg).items():
@@ -5598,9 +5683,12 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
     An unreadable inner command is not a clean pass either: a variable there reaches
     `program_dynamic_protected` as any other unknown program does."""
     out = []
-    if vt and vt in _BRACE_WORDS:
-        # `{eval,} <cmd>`, `{rm,-rf,<x>}`: bash brace-expands the name into words.
+    if vt and "," in vt and vt in _BRACE_WORDS:
+        # `{eval,} <cmd>`, `{rm,-rf,<x>}`: bash brace-expands the name into words. A range inside
+        # one is not a truncated operand scope: no operand is being judged here.
+        was = _OPERAND_EXPANSION_TRUNCATED[0]
         parts = [_sh_quote(p) for p in _brace_expand(vt) if p]
+        _OPERAND_EXPANSION_TRUNCATED[0] = was
         rest = _verb_word_text(seg)[1].strip()
         if parts:
             out.append(" ".join(parts + ([rest] if rest else [])))
@@ -5637,6 +5725,10 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
 
 
 _ALL_CARRIER_VERBS = frozenset(_ARGV_CARRIERS) | _TEXT_C_CARRIERS | {"ssh", "parallel", "tmux", "mapfile", "readarray"}
+#: The command names a glob must be able to spell before its name counts as unknown.
+_GLOB_SPELLABLE = (DELETE_VERBS | COPY_VERBS | _TRASH_VERBS | WRAPPERS | _ALL_CARRIER_VERBS | set(_SHELLS)
+                   | {"eval", "source", ".", "trap", "ln", "mklink", "touch", "truncate", "dd", "sed", "find",
+                      "git", "cmd", "powershell", "pwsh", "mkdir", "chmod", "chown", "del", "erase", "rd", "icacls"})
 _ENV_FLAG = re.compile(r"\s-[A-Za-z0-9]*[SuC]|\s--s")
 
 
@@ -5661,6 +5753,8 @@ def _inner_commands(cmd: str) -> list[str]:
     assigns_ = None
     dynamic = {}                         # F10: segment index -> its readings
     carrying = {}                        # _program_carrier_readings: the same, kept apart
+    handled = {}                         # ...and the not-found handler's, read once
+    tmux_chain = False                   # the last segment was a tmux command ending in `\\;`
     not_found_handler = "command_not_found_handle" in cmd
     if "@P}" in cmd:
         # `${P@P}` runs prompt expansion, whose `$(...)` executes, over P's stored value.
@@ -5686,11 +5780,16 @@ def _inner_commands(cmd: str) -> list[str]:
                 carrying[n] = readings
         v = _verb_name(vt)              # one read per segment: this walk runs on every hook call
         carried_here = _program_carrier_readings(seg, v, vt, segs[n - 1] if n and pipes[n] else None)
+        if tmux_chain:
+            carried_here = carried_here + _tmux_readings(_raw_words(seg))
+        tmux_chain = (tmux_chain or v == "tmux") and seg.rstrip().endswith(chr(92))
         if not_found_handler:
             # A function bash calls with the words of any command it cannot find. It may run
             # them, whichever word it starts from.
             whole = _raw_words(seg)
-            carried_here = carried_here + [r for k in (0, 1) for r in _as_program(whole[k:]) if whole[k:]]
+            readings = [r for k in (0, 1) if whole[k:] for r in _as_program(whole[k:])]
+            if readings:
+                handled[n] = readings
         if carried_here:
             carrying[n] = carrying.get(n, []) + list(dict.fromkeys(carried_here))
         if v in ("cmd",) + _PS_EXES:
@@ -5737,7 +5836,7 @@ def _inner_commands(cmd: str) -> list[str]:
                     # it, so a two-statement command any script writes lost the block.
                     # EVERY value (FX-G6 / reviewer K C1, found by fuzz-guard): one resolve()
                     # judged `bash -c 'rm -rf "${NOPE:+zz}<ref>"'` as the alternate only.
-                    out.extend(resolve_variants(toks[_shell_text_at(toks, i + 1)][0], assignments(cmd)))
+                    out.extend(resolve_variants(toks[_shell_text_at(toks, i + 1, t)][0], assignments(cmd)))
                     break
         elif v == "eval":
             # `eval` concatenates its arguments and runs the result.
@@ -5768,6 +5867,13 @@ def _inner_commands(cmd: str) -> list[str]:
         out.extend(rewritten)
     if carrying:
         variants = _reading_variants(cmd, segs, carrying)
+        _READING_TEXTS.update(variants)
+        out.extend(variants)
+    if handled:
+        # Without the handler's name, or each reading would read itself one word shorter until the
+        # depth bound reported a harmless `a b c d e f` as too tangled to analyse.
+        variants = [t.replace("command_not_found_handle", "x4_read_handler")
+                    for t in _reading_variants(cmd, segs, handled)]
         _READING_TEXTS.update(variants)
         out.extend(variants)
     return out

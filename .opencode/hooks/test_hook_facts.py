@@ -6921,6 +6921,123 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
         self.assertEqual(base["rm_in_x4_dir"], with_reading["rm_in_x4_dir"])
 
 
+class TestProgramsThatRunProgramsReview(unittest.TestCase):
+    """The independent review of the carrier readings: verdicts they lost, prompts they added on
+    read-only commands, and misses inside the same class."""
+
+    DEL = D + " -rf "
+
+    def plain(self, t):
+        return self.DEL + Q + t + Q
+
+    def inner(self, t):
+        return Q + self.DEL + DQ + t + DQ + Q
+
+    def caught(self, *commands):
+        for c in commands:
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["rm_targets_reference"], c)
+
+    def test_a_later_flags_value_is_still_read_as_the_command(self):
+        self.caught("sudo -u root -a " + self.plain(REF), "sudo -u root -c " + self.plain(REF),
+                    "sudo -u root -D " + self.plain(REF), "time exec -a " + self.plain(REF))
+
+    def test_TWIN_a_later_commands_flag_is_not_a_wrapper_value(self):
+        self.assertFalse(F("sudo ls -a " + D + " " + Q + REF + Q)["rm_targets_reference"])
+
+    def test_a_flagged_expansion_keeps_its_literal_verdict(self):
+        for c in ("> $-", "> $=X", "> $~X"):
+            with self.subTest(c=c):
+                self.assertTrue(FC(c, GAME)["redirect_truncate_into_game_or_profile"], c)
+        self.assertTrue(FC("X=/tmp; " + self.DEL + DQ + "$=X" + DQ, GAME)["rm_in_x4_dir"])
+
+    def test_a_glob_in_the_directory_is_the_literal_name(self):
+        for c in ("/c/Python3*/python tools/x.py " + Q + REF + "/libraries/wares.xml" + Q,
+                  "/c/Py?/python x.py " + Q + PROF + "/content.xml" + Q):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["program_dynamic_protected"], c)
+        # a literal name a glob could also spell is still only that name
+        self.assertFalse(F("/c/Git*/bin/git log " + Q + REF + "/a.xml" + Q)["program_dynamic_protected"])
+        self.assertTrue(F("/b?n/" + self.plain(REF))["rm_targets_reference"])
+
+    def test_a_glob_that_cannot_spell_a_dangerous_verb_is_left_alone(self):
+        for c in ("./scripts/*.sh " + Q + REF + Q, "./run?.py " + Q + REF + "/a.xml" + Q, "my* " + Q + REF + Q):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["program_dynamic_protected"], c)
+
+    def test_TWIN_a_glob_that_can_spell_one_still_asks(self):
+        for c in ("m? " + Q + REF + Q, "*sh -c x " + Q + REF + Q, "gi? " + Q + REF + Q):
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["program_dynamic_protected"], c)
+
+    def test_a_brace_range_as_a_word_is_data(self):
+        for c in ("{1..3}", "$X {1..3}", "{a..c}", "{1..3}; ls", "{a,{1..3}} x"):
+            with self.subTest(c=c):
+                f = F(c)
+                self.assertFalse(f["operand_expansion_truncated"], c)
+                self.assertFalse(f["carriers_truncated"], c)
+        # a range opens no brace word, so a leading brace is stripped as it always was
+        self.assertEqual(H.segments("{1..3} x"), ["1..3} x"])
+
+    def test_a_not_found_handler_is_read_once(self):
+        c = "command_not_found_handle(){ :; }; a b c d e f g h i j"
+        self.assertFalse(F(c)["carriers_truncated"])
+        self.caught("command_not_found_handle(){ :; }; a " + self.plain(REF))
+
+    def test_shell_option_ends_and_value_clusters_after_c(self):
+        self.caught("bash -c - " + self.inner(REF), "bash -co pipefail " + self.inner(REF),
+                    "bash -c -eo pipefail " + self.inner(REF), "sh -c - " + self.inner(REF),
+                    "bash -c --rcfile f " + self.inner(REF), "bash -c -oo pipefail errexit " + self.inner(REF))
+
+    def test_TWIN_shell_with_nothing_after_its_option(self):
+        for c in ("sh -c -", "bash -c -o", "bash -co", "bash -co pipefail"):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["rm_targets_reference"], c)
+
+    def test_env_S_behind_a_wrapper_with_a_value(self):
+        self.caught("timeout 5 env -S " + self.inner(REF), "nice -n 5 env -S " + self.inner(REF),
+                    "sudo -u root env -S " + self.inner(REF), "timeout 5 env -iu X " + self.plain(REF))
+
+    def test_TWIN_a_program_named_before_a_word_env_is_not_env(self):
+        self.assertFalse(F("ls env -S " + self.inner(REF))["rm_targets_reference"])
+
+    def test_tmux_chained_with_an_escaped_semicolon(self):
+        self.caught("tmux ls " + BS + "; run " + self.inner(REF), "tmux ls" + BS + "; run " + self.inner(REF),
+                    "tmux ls " + BS + "; ls " + BS + "; run " + self.inner(REF))
+
+    def test_TWIN_a_backslash_ended_segment_of_another_program(self):
+        self.assertFalse(F("find . -name x -exec ls {} " + BS + "; run " + self.inner(REF))["rm_targets_reference"])
+
+    def test_read_options_before_the_name(self):
+        ref = DQ + "$P" + DQ
+        here = " <<< " + Q + REF + Q + "; " + self.DEL + ref
+        self.caught("read -p x P" + here, "read -d x P" + here, "read -a P" + here, "read -ra P" + here,
+                    "read -n 1 P" + here, "read -aP" + here)
+
+    def test_su_session_command(self):
+        self.caught("su --session-command " + self.inner(REF), "su --session-command=" + self.inner(REF))
+
+    def test_every_loopback_spelling_is_this_machine(self):
+        for host in ("0", "2130706433", "0x7f.1", "0177.0.0.1", "127.1", "::ffff:127.0.0.1", "[::1]", "::1", "0.0.0.0"):
+            with self.subTest(host=host):
+                self.caught("ssh " + host + " " + self.plain(REF))
+
+    def test_TWIN_addresses_that_are_not_this_machine(self):
+        for host in ("8.8.8.8", "134744072", "10.0.0.1", "::ffff:8.8.8.8", "2001:db8::1", "hub", "hub.local", "1x"):
+            with self.subTest(host=host):
+                self.assertFalse(F("ssh " + host + " " + self.plain(REF))["rm_targets_reference"], host)
+
+    def test_ssh_options_that_run_a_local_command(self):
+        self.caught("ssh -o ProxyCommand=" + self.inner(REF) + " host", "ssh -oProxyCommand=" + self.inner(REF) + " host",
+                    "ssh -o " + DQ + "ProxyCommand " + self.DEL + REF + DQ + " host",
+                    "ssh -o LocalCommand=" + self.inner(REF) + " host", "ssh -o proxycommand=" + self.inner(REF) + " host")
+
+    def test_TWIN_ordinary_ssh_options(self):
+        for c in ("ssh -o BatchMode=yes host ls", "ssh -o ProxyCommand=" + Q + "nc %h %p" + Q + " host ls"):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["rm_targets_reference"], c)
+
+
 def load_tests(loader, standard_tests, pattern):
     """unittest.main() collects TestCase SUBCLASSES ONLY, so every module-level
     `def test_*` in this file was invisible to it.
