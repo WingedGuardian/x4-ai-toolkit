@@ -127,3 +127,20 @@ def test_xref_index_edited_during_the_walk_reads_stale(world, tmp_path, monkeypa
     v = _xref.check_index(out)[3]
     assert not v.fresh, "the index predates the edit and claims the new world"
     assert "content changed" in " ".join(v.reasons)
+
+
+def test_an_xref_index_ignores_an_engine_move(world, tmp_path, monkeypatch):
+    """x4xref reads files as written and merges nothing, so its engine axis is not compared. Pinned because the
+    changelog said otherwise (review T11) and the release notes depend on it. The control is the effective
+    store's compare, which must go stale on the same move."""
+    ref, exts, _patch = world
+    out = tmp_path / "x.tsv"
+    assert _build_xref(ref, exts, out) == 0
+    real = _freshness.fingerprint
+
+    def moved_engine(*a, **k):
+        return dict(real(*a, **k), engine="moved")
+    monkeypatch.setattr(_freshness, "fingerprint", moved_engine)
+    assert _xref.check_index(out)[3].fresh
+    stored = _freshness.read_sidecar(out)
+    assert not _freshness.compare(stored, moved_engine(_merge.Config(reference=ref), [exts]), engine_dependent=True).fresh
