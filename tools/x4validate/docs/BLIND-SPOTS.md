@@ -443,6 +443,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F338 | `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree | **SCOPE LIMIT (read)** · IN-ARC | `_provenance.Recorder.elem_replaced` drops the old subtree's attribute records (by design); after a whole-file replace (`full_override`) no node has a record, so none is annotated and the header names the replacing origin instead. Real-data run 2026-11-01 on `aiscripts/order.fight.escort.xml` (base + 5 mods): 109 annotated nodes, all attributed to a mod and op line | documented in `--help`; not fixed |
 | F339 | `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them | **SCOPE LIMIT (measured)** · IN-ARC | a 9.0 save stores a table variable as a reference id resolved elsewhere in the save; on save_020 the KUDA config cue alone holds 3 such tables (`$byShipId`, `$defaultOrdersByShipId`, `$lxl_isStrictMaintainDistance`) | stated in output and `--help`; expansion is a follow-up |
 | F340 | The bulk-file guard runs out of its 40 s deadline on a 3,589-path batch at ordinary desk load and refuses it unchecked (fails closed) | **OPEN (measured)** · PRE-ARC | 12 of 12 timed runs on this machine, including the pre-arc tree; ~12.8 ms/path; 64% of a 2,000-path profile is `profiles._resolved`, ~20 calls per path | open; see entry |
+| F341 | A mod edited while `x4effective build` or `x4xref build` ran was stamped as already absorbed, so the store read FRESH with the old values | **DEFECT (measured)** · PRE-ARC (exposure IN-ARC) | release review probe `probe_race2`: an edit during the build left the new world's fingerprint over the old values, FRESH until the next change | FIXED 2026-11-03 - both fingerprint before their first mod read; x4fresh compares the world's digest around each builder |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11740,3 +11741,23 @@ to fail CI intermittently until the guard is faster.
 Not fixed. `_resolved` is reviewed save-protection code, and a plain cache could mask a link swapped between two checks
 in one pass, so any fix needs its own review of which calls may share an answer. The test only reaches a push's
 pre-push gate when the push changes a file it names (`agent-harness.py`, `modding-harness.lock.json`).
+
+## F341 - A mod edited during a build was stamped as absorbed, so the store read FRESH with stale values · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-03
+
+Found by the 4.1.0 release review (probe `probe_race2`, MEASURED). `x4effective build` and `x4xref build` took their
+freshness fingerprint AFTER reading the mods (`_effective.py`, `_xref.py`), so a mod edited while a build ran left the
+new world's fingerprint over values read from the old one, and the artifact read FRESH until something changed again.
+The root is PRE-ARC (`fe09e995`); the session-start auto-rebuild (`68a74d2b`) made it reachable without anyone running a
+build by hand, which is why it is fixed in this release.
+
+Fix (`81a9d484`): both builders fingerprint before the first mod read and refuse a mutated tree there, so the same edit
+reads STALE (the fix commit's statement; this register did not re-run the race). `x4fresh rebuild` also compares the
+world's digest around each builder, reports a world that moved, and treats a digest it cannot compute as "could not be
+compared". BaseX stamps at the END of its build, so a move there revokes the content axis of its coverage stamp, which is
+the file `ask.py` reads. `_effective.py` is an engine source, so the effective store and BaseX `x4eff` read STALE until
+rebuilt once.
+
+RESIDUAL (reported by the fix lane, not fixed): `build-corpus.sh` and `build-effective.sh` run directly, without
+`x4fresh`, keep the race; an edit that preserves both size and modification time is invisible to the fingerprint.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_freshcli.py`.
