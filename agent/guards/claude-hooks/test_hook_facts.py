@@ -6637,6 +6637,284 @@ class TestF331PowerShellLinkCreation(unittest.TestCase):
         self.assertFalse(f["link_into_protected"])
 
 
+class TestProgramsThatRunPrograms(unittest.TestCase):
+    """A delete handed to another program. MEASURED on the base commit, each row carried no guard
+    flag with a plain path, while `rm -rf <path>` alone is caught. Each shape runs against the
+    reference folder and the saves; every TWIN is a form ordinary work types."""
+
+    DEL = D + " -rf "
+
+    def caught(self, build):
+        for target, key in ((REF, "rm_targets_reference"), (PROF + "/save", "rm_saves")):
+            for c in build(target):
+                with self.subTest(c=c):
+                    self.assertTrue(F(c)[key], c)
+
+    def quiet(self, *commands):
+        for c in commands:
+            with self.subTest(c=c):
+                f = F(c)
+                for key in ("rm_targets_reference", "writes_reference", "rm_saves", "rm_in_x4_dir",
+                            "rm_hits_game", "program_dynamic_protected"):
+                    self.assertFalse(f[key], (key, c))
+
+    def plain(self, t):
+        return self.DEL + Q + t + Q
+
+    def inner(self, t):
+        return Q + self.DEL + DQ + t + DQ + Q
+
+    def test_watch_runs_its_words_and_its_text(self):
+        self.caught(lambda t: ["watch " + self.plain(t), "watch -n 1 " + self.plain(t), "watch -n1 " + self.plain(t),
+                               "watch --interval 2 " + self.plain(t), "watch " + self.inner(t),
+                               "sudo watch " + self.plain(t)])
+
+    def test_TWIN_watch_of_ordinary_commands(self):
+        self.quiet("watch git status", "watch -n 1 git status", "watch " + Q + "ls -la" + Q,
+                   "watch cat " + Q + REF + "/a.xml" + Q)
+
+    def test_ssh_to_this_machine_is_a_local_command(self):
+        self.caught(lambda t: ["ssh localhost " + self.plain(t), "ssh localhost " + self.inner(t),
+                               "ssh 127.0.0.1 " + self.plain(t), "ssh me@localhost " + self.plain(t),
+                               "ssh -p 22 localhost " + self.plain(t), "ssh -ti key localhost " + self.plain(t),
+                               "ssh " + DQ + "$H" + DQ + " " + self.plain(t)])
+
+    def test_TWIN_ssh_to_another_machine_is_not_this_machines_folder(self):
+        self.quiet("ssh host ls", "ssh host " + Q + "ls -la" + Q, "ssh -p 22 host uptime", "ssh host",
+                   "ssh localhost ls", "ssh host " + self.plain(REF), "ssh host " + self.inner(PROF + "/save"))
+
+    def test_TWIN_ssh_relative_paths_are_not_read_in_this_directory(self):
+        f = FC("ssh localhost " + D + " -rf extensions", GAME)
+        self.assertFalse(f["rm_hits_game"] or f["rm_in_x4_dir"])
+
+    def test_su_and_script_run_their_c_text(self):
+        self.caught(lambda t: ["su -c " + self.inner(t), "su root -c " + self.inner(t), "su - root -c " + self.inner(t),
+                               "su -lc " + self.inner(t), "su --command=" + self.inner(t),
+                               "su --command " + self.inner(t), "runuser -c " + self.inner(t),
+                               "script -c " + self.inner(t), "script -qc " + self.inner(t) + " /dev/null",
+                               "script --command=" + self.inner(t), "flock /tmp/l -c " + self.inner(t)])
+
+    def test_TWIN_su_and_script_ordinary_forms(self):
+        self.quiet("su", "su -", "su -c " + Q + "whoami" + Q, "su root -c id", "script out.txt", "script -q /tmp/o",
+                   "script -c ls /dev/null")
+
+    def test_env_S_runs_its_split_text(self):
+        self.caught(lambda t: ["env -S " + self.inner(t), "env -S " + Q + self.DEL + t + Q, "env -iS " + self.inner(t),
+                               "env -vS " + self.inner(t), "env -S" + self.inner(t),
+                               "env --split-string=" + self.inner(t), "env --split-string " + self.inner(t),
+                               "env -S " + Q + self.DEL.strip() + Q + " " + Q + t + Q, "sudo env -S " + self.inner(t),
+                               "env -i env -S " + self.inner(t), "env -u X -S " + self.inner(t)])
+
+    def test_a_value_option_at_the_end_of_an_env_cluster(self):
+        self.caught(lambda t: ["env -iu X " + self.plain(t), "env -iC /tmp " + self.plain(t)])
+
+    def test_TWIN_env_ordinary_forms(self):
+        self.quiet("env -S " + Q + "python x.py" + Q, "env -iS " + Q + "python x.py" + Q, "env FOO=1 python x.py",
+                   "env -u X python x.py", "env", "env -i ls")
+
+    def test_wsl_runs_its_words(self):
+        self.caught(lambda t: ["wsl " + self.plain(t), "wsl -e " + self.plain(t), "wsl --exec " + self.plain(t),
+                               "wsl -- " + self.plain(t), "wsl -d Ubuntu " + self.plain(t), "wsl.exe " + self.plain(t),
+                               "wsl -u root " + self.plain(t), "wsl bash -c " + self.inner(t)])
+
+    def test_wsl_spells_this_machines_drive_under_mnt(self):
+        self.caught(lambda t: ["wsl " + self.plain("/mnt/c" + t[2:]), "wsl bash -c " + self.inner("/mnt/c" + t[2:])])
+
+    def test_TWIN_wsl_ordinary_forms(self):
+        self.quiet("wsl", "wsl ls", "wsl -l -v", "wsl --list", "wsl --shutdown", "wsl -d Ubuntu",
+                   "wsl bash -c " + Q + "ls" + Q, "wsl cat " + Q + REF + "/a.xml" + Q, "wsl " + self.plain("/mnt/d/tmp"))
+
+    def test_tmux_commands_that_run_a_shell(self):
+        self.caught(lambda t: [
+            "tmux new-session " + self.inner(t), "tmux new-session -d " + self.inner(t), "tmux new -d " + self.inner(t),
+            "tmux new -d -s x " + self.inner(t), "tmux new-window " + self.inner(t), "tmux neww " + self.inner(t),
+            "tmux split-window " + self.inner(t), "tmux splitw -h " + self.inner(t), "tmux run-shell " + self.inner(t),
+            "tmux run " + self.inner(t), "tmux respawn-pane -k " + self.inner(t), "tmux display-popup " + self.inner(t),
+            "tmux if-shell " + self.inner(t) + " " + Q + Q, "tmux send-keys " + self.inner(t) + " Enter",
+            "tmux send -t x " + self.inner(t) + " Enter", "tmux -L s new -d " + self.inner(t), "tmux -c " + self.inner(t),
+            "tmux new-session -d " + self.plain(t), "tmux new -- " + self.plain(t),
+            "tmux ls " + Q + ";" + Q + " run " + self.inner(t)])
+
+    def test_TWIN_tmux_ordinary_forms(self):
+        self.quiet("tmux ls", "tmux attach -t x", "tmux new -s dev", "tmux kill-session -t x",
+                   "tmux new-session -d -s w " + Q + "python x.py" + Q, "tmux send-keys -t x " + Q + "ls" + Q + " Enter",
+                   "tmux display-message " + Q + D + " is a verb " + REF + Q,
+                   "tmux new -s w -c " + Q + REF + Q + " " + Q + "python x.py" + Q)
+
+    def test_parallel_runs_its_template_over_its_arguments(self):
+        self.caught(lambda t: [
+            "parallel " + self.DEL + "::: " + Q + t + Q, "parallel " + Q + self.DEL + "{}" + Q + " ::: " + Q + t + Q,
+            "parallel -j4 " + self.DEL + "::: " + Q + t + Q, "parallel -j 4 " + self.DEL + "::: " + Q + t + Q,
+            "parallel " + Q + self.DEL + "{1}" + Q + " ::: " + Q + t + Q, "parallel ::: " + self.inner(t),
+            "parallel " + self.DEL + Q + t + Q + " ::: a", "parallel -k " + self.DEL + "::: a " + Q + t + Q + " b",
+            "echo " + Q + t + Q + " | parallel " + self.DEL.strip(), "echo " + self.inner(t) + " | parallel"])
+
+    def test_TWIN_parallel_ordinary_forms(self):
+        self.quiet("parallel echo ::: a", "parallel echo ::: a b c", "parallel " + Q + "echo {}" + Q + " ::: a",
+                   "parallel -j4 gzip ::: a.txt", "cat l | parallel gzip", "parallel " + self.DEL + "::: /tmp/x",
+                   "parallel echo ::: " + Q + REF + Q, "parallel cat ::: " + Q + REF + "/a.xml" + Q)
+
+    def test_busybox_and_sibling_runners(self):
+        self.caught(lambda t: ["busybox " + self.plain(t), "busybox sh -c " + self.inner(t), "busybox ash -c " + self.inner(t),
+                               "toybox " + self.plain(t), "/bin/busybox " + self.plain(t), "winpty " + self.plain(t),
+                               "pkexec " + self.plain(t), "chroot /mnt " + self.plain(t), "flock /tmp/l " + self.plain(t),
+                               "nsenter -t 1 " + self.plain(t), "unshare -r " + self.plain(t), "runuser -u me -- " + self.plain(t),
+                               "taskset 0x3 " + self.plain(t), "taskset -c 0-3 " + self.plain(t), "chrt -f 10 " + self.plain(t),
+                               "screen -dm " + self.plain(t), "screen -dmS n " + self.plain(t),
+                               "screen -X stuff " + self.inner(t)])
+
+    def test_shells_outside_the_save_lift_list_run_their_c_text(self):
+        self.caught(lambda t: [s + " -c " + self.inner(t) for s in ("ash", "fish", "mksh", "csh", "tcsh", "yash")])
+
+    def test_TWIN_busybox_and_siblings_ordinary_forms(self):
+        self.quiet("busybox ls", "busybox --list", "busybox sh -c " + Q + "ls" + Q, "toybox ls", "screen", "screen -ls",
+                   "screen -r x", "screen -dmS x python x.py", "winpty python x.py", "flock /tmp/l ls",
+                   "taskset 0x3 ls", "chrt -f 10 ls", "ash -c ls", "busybox ls " + Q + REF + Q)
+
+    def test_a_shell_reads_options_after_c_before_its_text(self):
+        self.caught(lambda t: ["bash -c -- " + self.inner(t), "bash -c -x " + self.inner(t), "bash -c -e -x " + self.inner(t),
+                               "bash -c +x " + self.inner(t), "bash -c -o pipefail " + self.inner(t),
+                               "bash -c -O extglob " + self.inner(t), "bash -lc -- " + self.inner(t),
+                               "sh -c -- " + self.inner(t), "bash --norc -c -- " + self.inner(t)])
+
+    def test_TWIN_a_shell_with_options_after_c_running_something_ordinary(self):
+        self.quiet("bash -c -- ls", "bash -c -x " + Q + "ls" + Q, "bash -c -o pipefail " + Q + "ls | wc" + Q,
+                   "bash -c " + Q + "-x" + Q, "sh -c")
+
+    def test_exec_a_and_sudo_value_options_are_not_the_command(self):
+        self.caught(lambda t: ["exec -a x " + self.plain(t), "exec -c -a x " + self.plain(t), "sudo -D /tmp " + self.plain(t),
+                               "sudo --chdir /tmp " + self.plain(t), "sudo -R /x " + self.plain(t),
+                               "sudo -a t " + self.plain(t), "sudo -c c " + self.plain(t)])
+
+    def test_a_word_a_new_value_option_would_swallow_is_still_judged(self):
+        """`exec -a <delete verb> ...` read as a delete before -a was learned. It stays judged."""
+        self.caught(lambda t: ["exec -a " + self.plain(t), "sudo -D " + self.plain(t)])
+
+    def test_TWIN_exec_and_sudo_ordinary_forms(self):
+        self.quiet("exec -a x ls", "exec ls", "exec -a x python x.py", "sudo -D /tmp ls", "sudo -T 5 ls", "sudo ls")
+
+    def test_a_brace_expanded_command_name(self):
+        self.caught(lambda t: ["{eval,} " + self.plain(t), "{eval,} " + self.inner(t), "{" + D + ",} -rf " + Q + t + Q,
+                               "{" + D + ",-rf," + t + "}", "{bash,-c} " + self.inner(t), "{sudo,} " + self.plain(t),
+                               "/bin/{" + D + ",} -rf " + Q + t + Q])
+
+    def test_TWIN_a_group_or_a_harmless_brace_name(self):
+        self.quiet("{eval,} ls", "{ls,-la}", "{echo,hi}", "{ ls; }", "{ " + D + " -rf /tmp/x; }",
+                   "{ cat " + Q + REF + "/a.xml" + Q + "; }")
+        # a group still strips, whatever follows it
+        self.assertTrue(F("{ " + self.plain(REF) + "; }")["rm_targets_reference"])
+
+    def test_a_glob_as_the_command_name(self):
+        self.caught(lambda t: ["ev?l " + self.plain(t), "ev?l " + self.inner(t), "e*l " + self.inner(t), "ev[a]l " + self.inner(t),
+                               "b?sh -c " + self.inner(t), "s?do " + self.plain(t)])
+
+    def test_a_glob_that_may_be_the_delete_itself_is_an_unknown_program(self):
+        for c in ("r? -rf " + Q + REF + Q, "r[m] -rf " + Q + REF + Q, "/bin/r? -rf " + Q + REF + Q, "sudo r? -rf " + Q + REF + Q):
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["program_dynamic_protected"], c)
+
+    def test_TWIN_glob_like_names_that_are_not_globs(self):
+        self.quiet("[ -f x ]", "[[ -f x ]]", "[ -d " + Q + REF + Q + " ] && echo y", "l? -la", "/bin/l? -la", "./run*.sh a",
+                   Q + "ev?l" + Q + " ls", "ev?l ls")
+        self.assertFalse(F(Q + "r?" + Q + " -rf " + Q + REF + Q)["program_dynamic_protected"])
+        self.assertFalse(F(BS + "?x " + Q + REF + Q)["rm_targets_reference"])
+
+    def test_a_value_transform_keeps_the_value(self):
+        for op in "PQEUuLK":
+            self.caught(lambda t: ["P=" + Q + t + Q + "; " + self.DEL + DQ + "${P@" + op + "}" + DQ])
+
+    def test_prompt_expansion_runs_a_substitution_in_the_stored_value(self):
+        self.caught(lambda t: ["P=" + Q + "$(" + self.DEL + DQ + t + DQ + ")" + Q + "; : " + DQ + "${P@P}" + DQ])
+
+    def test_TWIN_a_value_transform_of_an_ordinary_path(self):
+        self.quiet("P=/tmp/x; " + self.DEL + DQ + "${P@P}" + DQ, "P=/tmp/x; echo " + DQ + "${P@Q}" + DQ,
+                   "P=" + Q + REF + Q + "; echo " + DQ + "${P@Q}" + DQ)
+
+    def test_printf_v_assigns(self):
+        ref = DQ + "$P" + DQ
+        self.caught(lambda t: ["printf -v P %s " + Q + t + Q + "; " + self.DEL + ref,
+                               "printf -vP %s " + Q + t + Q + "; " + self.DEL + ref,
+                               "printf -v P " + Q + t + Q + "; " + self.DEL + ref,
+                               "printf -v P -- %s " + Q + t + Q + "; " + self.DEL + ref,
+                               "printf -v P " + Q + "%s/%s" + Q + " " + Q + t + Q + " x; " + self.DEL + ref])
+
+    def test_read_from_a_here_string_assigns(self):
+        ref = DQ + "$P" + DQ
+        self.caught(lambda t: ["read -r P <<< " + Q + t + Q + "; " + self.DEL + ref, "read P <<< " + Q + t + Q + "; " + self.DEL + ref,
+                               "IFS= read -r P <<< " + Q + t + Q + "; " + self.DEL + ref])
+
+    def test_TWIN_builtin_assignments_of_ordinary_values(self):
+        ref = DQ + "$P" + DQ
+        self.quiet("printf -v P %s /tmp/x; " + self.DEL + ref, "printf -v P %s " + Q + REF + Q + "; echo " + ref,
+                   "printf -v P %d 3; echo $P", "printf " + Q + "%s" + Q + " -v", "read -r P <<< /tmp/x; " + self.DEL + ref,
+                   "read -r a b", "read P")
+
+    def test_mapfile_evals_its_callback(self):
+        self.caught(lambda t: ["mapfile -C " + Q + self.DEL.strip() + Q + " -c 1 <<< " + Q + t + Q,
+                               "readarray -C " + Q + self.DEL.strip() + Q + " -c 1 <<< " + Q + t + Q,
+                               "mapfile -c 1 -C " + Q + self.DEL.strip() + Q + " A <<< " + Q + t + Q,
+                               "mapfile -C" + Q + self.DEL.strip() + Q + " -c1 <<< " + Q + t + Q,
+                               "mapfile -C " + Q + self.DEL + DQ + t + DQ + " #" + Q + " -c 1 <<< x"])
+
+    def test_TWIN_mapfile_ordinary_forms(self):
+        self.quiet("mapfile -t A < f", "mapfile -t A <<< x", "readarray A < f", "mapfile -C echo -c 1 A <<< x",
+                   "mapfile -C echo -c 1 A <<< " + Q + REF + Q)
+
+    def test_a_not_found_handler_may_run_any_command(self):
+        self.caught(lambda t: ["command_not_found_handle(){ eval " + DQ + "$*" + DQ + "; }; nosuch " + self.plain(t),
+                               "command_not_found_handle(){ shift; eval " + DQ + "$*" + DQ + "; }; nosuch " + self.plain(t),
+                               "command_not_found_handle(){ eval " + DQ + "$1" + DQ + "; }; " + self.inner(t)])
+
+    def test_TWIN_a_not_found_handler_and_ordinary_commands(self):
+        self.quiet("command_not_found_handle(){ echo nope; }", "command_not_found_handle(){ eval " + DQ + "$*" + DQ + "; }; nosuch ls",
+                   "nosuch a b")
+
+    def test_zsh_flags_and_dollar_dash_are_expansions(self):
+        self.caught(lambda t: ["zsh -c " + Q + self.DEL + t + "$=X" + Q, "zsh -c " + Q + self.DEL + t + "$~X" + Q,
+                               "zsh -c " + Q + self.DEL + t + "$^X" + Q, "zsh -c " + Q + self.DEL + t + "$+X" + Q,
+                               "bash -c " + Q + self.DEL + t + "$-" + Q, self.DEL + DQ + t + "$-" + DQ])
+
+    def test_zsh_flags_read_the_variables_value(self):
+        self.caught(lambda t: ["zsh -c " + Q + "X=" + t + "; " + self.DEL + w + Q
+                               for w in ("$=X", "$~X", "$^X", "${=X}", "${~X}", "${^X}")])
+
+    def test_TWIN_zsh_flags_and_dollar_dash_in_ordinary_text(self):
+        self.quiet("echo $-", "[[ $- == *i* ]] && echo i", "sed -i " + Q + "s/$-/x/" + Q + " /tmp/f", "grep " + Q + "x$-y" + Q + " f",
+                   "echo " + Q + "a$=b" + Q, self.DEL + "/tmp/x$-", self.DEL + "/tmp/x$=y", "ls $+X",
+                   "zsh -c " + Q + "X=/tmp/x; " + self.DEL + "$=X" + Q, "cat " + Q + REF + "/x$=y" + Q)
+
+    def test_a_carrier_keeps_the_directory_changed_before_it(self):
+        for spelled in ("watch " + D + " -rf x", "env -S " + Q + D + " -rf x" + Q, "wsl " + D + " -rf x", "busybox " + D + " -rf x",
+                        "su -c " + Q + D + " -rf x" + Q, "exec -a n " + D + " -rf x", "parallel " + D + " -rf ::: x",
+                        "tmux run " + Q + D + " -rf x" + Q, "{" + D + ",} -rf x"):
+            with self.subTest(c=spelled):
+                self.assertTrue(F("cd " + Q + REF + Q + " && " + spelled)["rm_targets_reference"], spelled)
+
+    def test_an_unreadable_program_in_a_carrier_is_an_unknown_program(self):
+        for c in ("watch " + DQ + "$C" + DQ + " " + Q + REF + Q, "su -c " + DQ + "$C" + DQ + " " + Q + REF + Q,
+                  "env -S " + DQ + "$C" + DQ + " " + Q + REF + Q, "wsl " + DQ + "$C" + DQ + " " + Q + REF + Q,
+                  "mapfile -C " + DQ + "$C" + DQ + " <<< " + Q + REF + Q, "parallel " + DQ + "$C" + DQ + " ::: " + Q + REF + Q):
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["program_dynamic_protected"], c)
+
+    def test_a_write_through_a_carrier_is_a_write(self):
+        for c in ("watch cp x " + Q + REF + "/y" + Q, "env -S " + Q + "cp x " + REF + "/y" + Q, "wsl touch " + Q + REF + "/y" + Q,
+                  "busybox tee " + Q + REF + "/y" + Q, "su -c " + Q + "echo x > " + REF + "/y" + Q, "tmux run " + Q + "echo x > " + REF + "/y" + Q,
+                  "parallel cp x ::: " + Q + REF + "/y" + Q, "bash -c -- " + Q + "echo x > " + REF + "/y" + Q,
+                  "exec -a x touch " + Q + REF + "/y" + Q, "sudo -D /tmp touch " + Q + REF + "/y" + Q):
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["writes_reference"], c)
+
+    def test_a_cd_inside_a_reading_keeps_the_session_directory_of_other_carriers(self):
+        """`moves` asks whether the command's own text changes directory. A `cd` only a carrier
+        reading holds is not that: it must not drop the session directory from `bash -c`."""
+        base = FC("bash -c " + Q + D + " -rf extensions" + Q, GAME)
+        with_reading = FC("bash -c " + Q + D + " -rf extensions" + Q + "; tmux run " + Q + "cd /tmp && ls" + Q, GAME)
+        self.assertTrue(base["rm_hits_game"] or base["rm_in_x4_dir"])
+        self.assertEqual(base["rm_hits_game"], with_reading["rm_hits_game"])
+        self.assertEqual(base["rm_in_x4_dir"], with_reading["rm_in_x4_dir"])
+
+
 def load_tests(loader, standard_tests, pattern):
     """unittest.main() collects TestCase SUBCLASSES ONLY, so every module-level
     `def test_*` in this file was invisible to it.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The Bash/PowerShell guard now reads a delete or write handed to another program: `watch`, `su -c`, `env -S`, `wsl` (including `/mnt/<drive>` paths), `script -c`, `tmux`, `screen`, `parallel`, `busybox` and similar runners, `ssh` to this machine, `bash -c -- <cmd>`, `exec -a`, `sudo -D`, `mapfile -C`, a `command_not_found_handle`, and brace or glob command names. It also reads `printf -v`, `read <<<`, `${P@P}`, and zsh's `$=X`-style expansions and `$-`. `ssh` to any other machine is not judged, because its paths are not this machine's folders.
+
 - A 3,589-path file check no longer runs out of its 40 s deadline on Windows. The save-scope pass resolved
   the same paths about 18 times each, so a 3,589-path action was refused unchecked after 40 s
   (it failed safe). Each spelling now resolves once per read, and that action takes 13-21 s.
