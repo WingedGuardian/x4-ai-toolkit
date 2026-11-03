@@ -414,19 +414,47 @@ def post_tool_use(payload: dict, deadline: float) -> dict:
 SESSION_START_BUDGET_S = 18.0
 
 
-def session_start(deadline: float) -> dict:
+def _charter_pointer(session_id) -> str:
+    """Where the charter and ledger are, and the ledger command, for when the charter does not fit."""
+    project = HERE.parents[1]
+    sid = session_id or "<session id>"
+    tools = Path(os.environ.get("X4_TOOLKIT") or project) / "tools" / "modding_harness" / "ledger.py"
+    return (f"SESSION CHARTER: not shown (session-start output budget). Read {(project / '.agent-sessions' / (sid + '.md')).as_posix()}"
+            f" and list the open ledger with: {'& ' if os.name == 'nt' else ''}\"{Path(sys.executable).as_posix()}\" -B \"{tools.as_posix()}\""
+            f" --workspace \"{project.as_posix()}\" --session={sid} list")
+
+
+def session_start(deadline: float, payload: dict | None = None) -> dict:
+    """payload is the real Codex SessionStart event: only the charter reads it (its session_id names the
+    charter file, and source `compact` is when it matters); the other hooks keep their fixed payload."""
     parts = [BANNER]
     deadline = min(deadline, time.monotonic() + SESSION_START_BUDGET_S)
-    for script in ("check-reference-version.sh", "session-canary.sh"):
+    fixed = {"hook_event_name": "SessionStart", "source": "startup"}
+    real = payload or {}
+    charter = {"hook_event_name": "SessionStart", "source": real.get("source") or "startup",
+               "session_id": real.get("session_id")}
+    for script, event in (("check-reference-version.sh", fixed), ("session-canary.sh", fixed),
+                          ("charter.sh", charter)):
         left = deadline - time.monotonic()
         if left < 1:
             parts.append(f"[x4] {script} did not run: the session-start budget was spent")
             continue
-        out, err = _run_hook(script, {"hook_event_name": "SessionStart", "source": "startup"}, left)
+        out, err = _run_hook(script, event, left)
         if err:
             parts.append(f"[x4] {script} did not run: {err}")
         elif out and out.strip():
-            parts.append(out.strip())
+            text = out.strip()
+            if script == "charter.sh":
+                # The context is cut from its END to fit max_chars(), and the charter comes last:
+                # give it what the other parts leave. When it does not fit, a short pointer goes
+                # right after the banner instead (the head is what survives a cut), carrying the
+                # paths and the ledger command it needs -- never a mid-cut charter, which would
+                # lose its end marker and the file name, so the agent could not tell it is partial.
+                room = max_chars() - 120 - len("\n".join(parts)) - 1
+                if len(text) > room:
+                    parts.insert(1, _charter_pointer(charter.get("session_id")))
+                    continue
+            parts.append(text)
     return {"decision": "advise", "context": bounded("\n".join(parts), [])}
 
 
@@ -463,7 +491,7 @@ def handle(event: str, raw: bytes) -> str:
     except (OSError, TypeError) as e:
         return _fail(event, f"the payload cwd cannot be entered ({type(e).__name__}), so relative paths cannot be resolved")
     if event == "session_start":
-        return render(event, session_start(deadline))
+        return render(event, session_start(deadline, payload))
     if not payload.get("tool_name"):
         return _fail(event, "unreadable Codex payload (no tool_name)")
     if event == "post_tool_use":

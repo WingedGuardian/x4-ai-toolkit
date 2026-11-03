@@ -137,6 +137,14 @@ run_layout(){ # run_layout <name> <toolkit> <game>
   decide deny  protect-files.sh "$(fj "$GAME/libraries/CLAUDE.md")"         "a CLAUDE.md deeper in the game is a game file"
   decide deny  protect-files.sh "$(fj "$GAME/libraries/KNOWLEDGEBASE.md")"  "a KNOWLEDGEBASE.md deeper in the game is a game file"
   decide allow protect-files.sh "$(fj "$GAME/KNOWLEDGEBASE.md")"            "KNOWLEDGEBASE.md at the game root"
+  # Session charters (2026-10-27): only <project>/.agent-sessions/<file>.md, never the name deeper.
+  decide allow protect-files.sh "$(fj "$TK/.agent-sessions/s1.md")"         "the session charter at the toolkit root"
+  decide deny  protect-files.sh "$(fj "$GAME/libraries/.agent-sessions/s1.md")" "a charter name deeper in the game is a game file"
+  decide deny  protect-files.sh "$(fj "$GAME/.agent-sessions/../libraries/wares.xml")" \
+    "a .. out of .agent-sessions/ still reaches the game block"
+  if [ "$name" = "in-game" ]; then
+    decide deny protect-files.sh "$(fj "$GAME/.agent-sessions/sub/s1.md")"  "only files DIRECTLY in .agent-sessions/"
+  fi
   decide allow protect-files.sh "$(fj "$GAME/.claude/CLAUDE.md")"           "Claude's .claude/CLAUDE.md at the game root"
   decide deny  protect-files.sh "$(fj "$TK/reference/libraries/wares.xml")" "reference/ is read-only"
   # A BACKSLASH path, which the harness could not carry until 2026-08-30: fj
@@ -189,6 +197,14 @@ run_layout(){ # run_layout <name> <toolkit> <game>
 # inside it and must not be caught by the game-installation block.
 run_layout "in-game"  "$SBX_TMP/game/X4 Foundations" "$SBX_TMP/game/X4 Foundations"
 run_layout "separate" "$SBX_TMP/sep/toolkit"         "$SBX_TMP/sep/X4 Foundations"
+
+# Hook-only game-root deployment: the hook tree's OWN project root is where its charter lives,
+# even when that root is the game folder and the toolkit is elsewhere ($HOOK_DIR/../.. leg).
+_hk_game="${X4_GAME-}"; _hk_tk="${X4_TOOLKIT-}"
+export X4_GAME="$REPO" X4_TOOLKIT="$SBX_TMP/sep/toolkit"
+decide allow protect-files.sh "$(fj "$REPO/.agent-sessions/s1.md")" "hook-only game root: the hook tree's own .agent-sessions/"
+decide deny  protect-files.sh "$(fj "$REPO/libraries/.agent-sessions/s1.md")" "hook-only game root: deeper is still a game file"
+export X4_GAME="$_hk_game" X4_TOOLKIT="$_hk_tk"
 
 # The OTHER branch of the same rule, and it must be exercised or the deny above is the
 # only reachable outcome and the ask is dead code. Mods living INSIDE the game folder is
@@ -575,7 +591,7 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
   "a substituted argument in a cd is untouched"
 
 
-EXPECT=324
+EXPECT=333
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written

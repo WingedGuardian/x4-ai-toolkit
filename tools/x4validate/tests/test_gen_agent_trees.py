@@ -73,9 +73,10 @@ def test_agent_frontmatter_matches_the_claude_contract():
 def test_every_skill_and_settings_is_generated():
     out = load().generate(REPO)
     skills = sorted(p for p in out if p.startswith(".claude/skills/") and p.endswith("/SKILL.md"))
-    assert len(skills) == 12, skills
+    assert len(skills) == 13, skills
     assert ".claude/skills/x4-toolkit-dev/SKILL.md" in skills
     assert ".claude/skills/x4-mod-release-review/SKILL.md" in skills
+    assert ".claude/skills/find-session/SKILL.md" in skills
     assert ".claude/settings.json" in out
     assert sum(p.startswith(".claude/skills/x4-cli-reference/reference/") for p in out) == 11
 

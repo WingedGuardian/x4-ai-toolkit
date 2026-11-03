@@ -287,6 +287,21 @@ case "$_NP" in
       [ "$_nfc" = "${_X4_CANON_RESULT%/}/$_nrel" ] && return 0
     done ;;
 esac
+# Session charters (owner ruling 2026-10-27): the agent keeps notes in its session charter,
+# <project>/.agent-sessions/<session id>.md, which the charter hook reads back after context
+# compaction. Same shape as the notes whitelist above, and narrower: only a .md file DIRECTLY
+# in .agent-sessions/ under this hook tree's own project root (where the hook reads it) or the
+# toolkit root, compared after canonicalising, so the name anywhere deeper in the game tree
+# stays denied. Without it the in-game layout (X4_GAME == X4_TOOLKIT) denies every charter edit.
+case "$_NP" in
+  */.agent-sessions/*.md)
+    x4_canon_memo "$FILE_PATH"; _cfc="$_X4_CANON_RESULT"; _cfd="${_cfc%/*}"
+    for _cr in "$HOOK_DIR/../.." "${X4_TOOLKIT:-}"; do
+      [ -n "$_cr" ] || continue
+      x4_canon_memo "$_cr"
+      [ "$_cfd" = "${_X4_CANON_RESULT%/}/.agent-sessions" ] && return 0
+    done ;;
+esac
 # dev/ and dist/ are the documented mod workspace; they MUST be whitelisted before the
 # game-install block below, because in the "in-game" install method X4_TOOLKIT *is* the game
 # folder — without this, editing your own mod source is hard-denied in the default layout.
