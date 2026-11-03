@@ -211,7 +211,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("coverage", help="what this store DOES and does not index "
                                     "(so a negative can carry its denominator)")
 
-    fd = sub.add_parser("find", help="entities whose in-game NAME contains TEXT (resolves {page,id} to English)")
+    fd = sub.add_parser("find", help="entities whose in-game NAME contains TEXT (resolves {page,id} to English); "
+                                     "exit 0 a match, 1 none among the names searched, 3 nothing to search")
     fd.add_argument("text", help="part of the name the player sees, e.g. 'M0' or 'omega' (case-insensitive)")
     fd.add_argument("--kind", default="macro", help="entity kind to search (default: %(default)s)")
     fd.add_argument("--class", dest="klass", default=None,
@@ -328,7 +329,10 @@ NAME_PROPS = ("identification.name", "identification.basename", "identification.
 
 def _cmd_find(con, args) -> int:
     """Match TEXT against resolved display names. A zero carries its denominator; an unresolvable name
-    is counted and shown as written, never dropped (it is still searchable by its raw text)."""
+    is counted and shown as written, never dropped (it is still searchable by its raw text). Exit 0 a
+    match, 1 names were searched and none matched, 3 the filter left no name to search: a non-answer, which
+    says how many entities it covered and which kinds do carry names. Entities are not unique by id (the
+    live store has macros on several vpaths), so each is listed and counted, and the shared ones are marked."""
     from x4validate import _text
     needle = (args.text or "").strip().lower()
     if not needle:
@@ -342,39 +346,71 @@ def _cmd_find(con, args) -> int:
               "rebuild with `uv run x4effective build`", file=sys.stderr)
         return 2
     res = _text.Resolver(texts)
-    sql = ("SELECT e.name, e.klass, e.origin, a.prop, a.value FROM entities e JOIN attrs a "
+    sql = ("SELECT e.id, e.name, e.klass, e.origin, e.vpath, a.prop, a.value FROM entities e JOIN attrs a "
            "ON a.entity_id = e.id WHERE e.kind = ? AND a.prop IN ({})".format(",".join("?" * len(NAME_PROPS))))
     params: list = [args.kind, *NAME_PROPS]
     if args.klass:
         sql += " AND e.klass = ?"
         params.append(args.klass)
-    named: dict[str, dict] = {}
+    named: dict[int, dict] = {}
     statuses: dict[str, int] = {}
-    for name, klass, origin, prop, raw in con.execute(sql, params):
+    for eid, name, klass, origin, vpath, prop, raw in con.execute(sql, params):
         shown, status = res.value(raw or "")
-        entry = named.setdefault(name, {"klass": klass, "origin": origin, "names": {}, "status": "ok"})
+        entry = named.setdefault(eid, {"name": name, "klass": klass, "origin": origin, "vpath": vpath,
+                                       "names": {}, "status": "ok"})
         entry["names"][prop] = (shown, raw)
         if status not in ("ok", "literal"):
             entry["status"] = status
     for e in named.values():
         statuses[e["status"]] = statuses.get(e["status"], 0) + 1
+    scope = f"{args.kind}" + (f" class {args.klass}" if args.klass else "")
+    if not named:
+        return _find_nothing_named(con, args, scope)
+    copies: dict[str, int] = {}
+    for e in named.values():
+        copies[e["name"]] = copies.get(e["name"], 0) + 1
     hits = []
-    for name, e in sorted(named.items()):
+    for _eid, e in sorted(named.items(), key=lambda kv: (kv[1]["name"], kv[0])):
         # Match on ANY name-bearing property (the id included), but always DISPLAY the best player-facing
         # one: a hit on the macro id must still show "M0", which is the point of the command.
         if any(needle in shown.lower() or needle in raw.lower() for shown, raw in e["names"].values()):
             best = next(p for p in NAME_PROPS if p in e["names"])
-            hits.append((name, e, best, e["names"][best][0]))
-    for name, e, prop, shown in hits[:args.limit if args.limit > 0 else None]:
+            hits.append((e, e["names"][best][0]))
+    for e, shown in hits[:args.limit if args.limit > 0 else None]:
         flag = "" if e["status"] == "ok" else f"  [{e['status']} reference]"
-        print(f"{name}\t{e['klass'] or ''}\t{e['origin']}\t{shown}{flag}")
+        dup = f"\t[shares this id with {copies[e['name']] - 1} more: {e['vpath']}]" if copies[e["name"]] > 1 else ""
+        print(f"{e['name']}\t{e['klass'] or ''}\t{e['origin']}\t{shown}{flag}{dup}")
     unresolved = sum(n for s, n in statuses.items() if s != "ok")
-    scope = f"{args.kind}" + (f" class {args.klass}" if args.klass else "")
+    shared = sum(1 for n in copies.values() if n > 1)
     print(f"\n{len(hits)} match(es) for {args.text!r} among {len(named)} named {scope} entit(ies); "
           f"{len(named) - unresolved} fully resolved, {unresolved} with an unresolvable reference "
-          "(matched on their raw text)" + (f"; showing {args.limit}" if 0 < args.limit < len(hits) else ""),
+          "(matched on their raw text)"
+          + (f"; {shared} id(s) are on more than one entity" if shared else "")
+          + (f"; showing {args.limit}" if 0 < args.limit < len(hits) else ""),
           file=sys.stderr)
     return 0 if hits else 1
+
+
+def _find_nothing_named(con, args, scope: str) -> int:
+    """The filter left no name to search, so "0 matches" would be an absence nobody measured."""
+    sql = "SELECT count(*) FROM entities WHERE kind = ?"
+    params = [args.kind]
+    if args.klass:
+        sql += " AND klass = ?"
+        params.append(args.klass)
+    total = con.execute(sql, params).fetchone()[0]
+    marks = ",".join("?" * len(NAME_PROPS))
+    kinds = con.execute(
+        "SELECT e.kind, count(DISTINCT e.id) FROM entities e JOIN attrs a ON a.entity_id = e.id "
+        f"WHERE a.prop IN ({marks}) GROUP BY e.kind ORDER BY 2 DESC", NAME_PROPS).fetchall()
+    print(f"NOT SEARCHED: 0 of {total} {scope} entit(ies) carry a name ({', '.join(NAME_PROPS)}), so this says "
+          "nothing about whether that name exists.", file=sys.stderr)
+    if kinds:
+        print("  kinds with names in this store: " + ", ".join(f"{k} ({n})" for k, n in kinds)
+              + f"; try `x4effective find {args.text!r} --kind {kinds[0][0]}`", file=sys.stderr)
+    else:
+        print("  no kind in this store carries a name: rebuild with `uv run x4effective build`", file=sys.stderr)
+    return 3
 
 
 def _known_kinds(con) -> list[str]:
