@@ -312,6 +312,18 @@ def test_a_value_with_a_newline_stays_on_its_row(tmp_path, capsys):
     assert rows[1].endswith("one line"), "the twin: a value with no newline is printed as it is"
 
 
+def test_a_stored_backslash_n_does_not_read_as_a_stored_newline(tmp_path, capsys):
+    """T7: both printed as backslash-n, so the display could not be undone. Escaping the backslash too makes it reversible."""
+    doc = (b'<savegame><md><script name="s"><cue name="c"><vars>'
+           b'<value name="$real" type="string" value="a&#10;b"/>'
+           b'<value name="$lit" type="string" value="a\\nb"/>'
+           b'<value name="$path" type="string" value="C:\\x"/>'
+           b'</vars></cue></script></md></savegame>')
+    assert _savecli.main(["vars", "^(real|lit|path)$", str(_save(tmp_path, doc))]) == 0
+    rows = {ln.split()[1]: ln.split()[-1] for ln in capsys.readouterr().out.splitlines() if "$" in ln}
+    assert rows == {"$real": "a\\nb", "$lit": "a\\\\nb", "$path": "C:\\\\x"}
+
+
 def test_the_row_escape_is_display_only(tmp_path):
     doc = (b'<savegame><md><script name="s"><cue name="c"><vars>'
            b'<value name="$a" type="string" value="x&#10;y"/></vars></cue></script></md></savegame>')

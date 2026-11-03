@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json as _json
 import argparse
-import errno
 import json
 import sqlite3
 import sys
@@ -25,7 +24,7 @@ from pathlib import Path
 
 from lxml import etree
 
-from x4validate import __version__, _effective, _merge, _paths, _registry
+from x4validate import __version__, _closedpipe, _effective, _merge, _paths, _registry
 from x4validate._provenance import Recorder, annotate_tree, comment_safe
 from x4validate._effective import (
     BUILDABLE_KINDS,
@@ -131,6 +130,7 @@ def _fmt_chain(chain_json: str | None) -> str:
 # --- CLI ----------------------------------------------------------------------
 
 @_paths.refuses_unconfigured
+@_closedpipe.quiet_exit
 def main(argv: list[str] | None = None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -247,30 +247,22 @@ def main(argv: list[str] | None = None) -> int:
     # healthy store, and a command bug read as store damage.
     con = None
     try:
-        try:
-            con = _connect(db)
-            return _read_store(con, args)
-        except (sqlite3.Error, OSError, StoreMetadataError) as exc:
-            if isinstance(exc, BrokenPipeError):
-                raise
-            if con is not None and not isinstance(exc, (sqlite3.Error, StoreMetadataError)):
-                raise          # an OSError from a COMMAND, after the store opened fine
-            print(f'effective store unreadable or incompatible: {db}: {exc}\n'
-                  'Rebuild: uv run x4effective build', file=sys.stderr)
-            return 2
-        except ValueError as exc:
-            if con is not None:
-                raise          # a command's own ValueError is a bug, never store damage
-            print(f'effective store unreadable or incompatible: {db}: {exc}\n'
-                  'Rebuild: uv run x4effective build', file=sys.stderr)
-            return 2
-    except OSError as exc:
-        if not _reader_gone(exc):
+        con = _connect(db)
+        return _read_store(con, args)
+    except (sqlite3.Error, OSError, StoreMetadataError) as exc:
+        # An OSError after the store opened is the COMMAND's; a closed reader is OutputClosed (an OSError too),
+        # and _closedpipe.quiet_exit takes it from here.
+        if con is not None and not isinstance(exc, (sqlite3.Error, StoreMetadataError)):
             raise
-        # The reader went away (`| head`): what was printed was printed. Python's own
-        # recipe: point stdout at devnull so the interpreter's exit flush cannot raise again.
-        _quiet_stdout()
-        return 0
+        print(f'effective store unreadable or incompatible: {db}: {exc}\n'
+              'Rebuild: uv run x4effective build', file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        if con is not None:
+            raise          # a command's own ValueError is a bug, never store damage
+        print(f'effective store unreadable or incompatible: {db}: {exc}\n'
+              'Rebuild: uv run x4effective build', file=sys.stderr)
+        return 2
     finally:
         if con is not None:
             con.close()
@@ -279,23 +271,6 @@ def main(argv: list[str] | None = None) -> int:
 class StoreMetadataError(ValueError):
     """The store's freshness metadata is damaged: a STORE failure, unlike a command's own
     ValueError."""
-
-
-def _reader_gone(exc: OSError) -> bool:
-    """A closed pipe is BrokenPipeError on POSIX and EINVAL on Windows. A file operation can also raise EINVAL
-    (a bad name), and that one carries the filename; a write to stdout does not."""
-    if isinstance(exc, BrokenPipeError):
-        return True
-    return exc.errno == errno.EINVAL and exc.filename is None
-
-
-def _quiet_stdout() -> None:
-    import os
-    try:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-    except (OSError, ValueError, AttributeError):  # silent-ok: best effort after a closed pipe
-        pass
 
 
 def _read_store(con, args) -> int:

@@ -57,9 +57,7 @@ THREE THINGS THAT MADE THIS WRONG BEFORE IT WAS RIGHT, all enforced below:
 """
 from __future__ import annotations
 
-import errno
 import gzip
-import os
 import re
 import sys
 import zlib
@@ -68,7 +66,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import _check, _effective, _merge, _paths, _registry, _scan
+from . import _check, _closedpipe, _effective, _merge, _paths, _registry, _scan
 from . import __version__
 
 #: Elements whose ``macro=`` is a genuine macro reference. <connection> is excluded on
@@ -212,9 +210,10 @@ def extract_vars(path: Path, pattern: str, on_row=None) -> VarScan:
     parser = expat.ParserCreate()
     scanned = 0
     count = 0
+    sink_failure = None     # an on_row write that failed: the destination's fault, never the save's
 
     def start(name, attrs):
-        nonlocal count
+        nonlocal count, sink_failure
         vname = attrs.get("name") if name == "value" else None
         if vname and (rx.search(vname) or rx.search(vname.lstrip("$"))):
             typ, val = _var_display(attrs)
@@ -223,7 +222,11 @@ def extract_vars(path: Path, pattern: str, on_row=None) -> VarScan:
             if on_row is None:
                 rows.append(row)
             else:
-                on_row(row)
+                try:
+                    on_row(row)
+                except OSError as exc:
+                    sink_failure = exc
+                    raise
         keep = {k: attrs[k] for k in ("name", "id") if k in attrs}
         stack.append((name, keep))
 
@@ -245,76 +248,41 @@ def extract_vars(path: Path, pattern: str, on_row=None) -> VarScan:
                 scanned += len(chunk)
                 parser.Parse(chunk, False)
             parser.Parse(b"", True)
-    except BrokenPipeError:
-        raise                                   # the reader of on_row's output went away; the save is not at fault
     except (OSError, EOFError, gzip.BadGzipFile, zlib.error, expat.ExpatError) as exc:
+        if exc is sink_failure:
+            raise
         raise SaveUnreadable(f"{path}: decompression/XML parse failed ({exc})") from exc
     return VarScan(rows, scanned, count)
 
 
-def _quiet_stdout() -> None:
-    """After a BrokenPipeError, point fd 1 at the null device so the interpreter's exit-time flush stays silent."""
-    try:
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-    except (OSError, ValueError, AttributeError):
-        pass  # silent-ok: no real fd 1 to redirect (captured/replaced stdout); the exit is quiet regardless
-
-
 def cmd_vars(path: Path, pattern: str, out=None) -> int:
-    to_stdout = out is None
-    out = sys.stdout if to_stdout else out
+    out = sys.stdout if out is None else out
     printed = 0
-
-    def closed_pipe(exc: OSError) -> None:
-        # A closed pipe is EPIPE on POSIX and EINVAL on Windows; any other write error (disk full) stays as is.
-        if exc.errno in (errno.EPIPE, errno.EINVAL):
-            raise BrokenPipeError(errno.EPIPE, "output closed") from exc
-        raise exc
-
-    def say(text: str) -> None:
-        try:
-            print(text, file=out)
-        except OSError as exc:
-            closed_pipe(exc)
-
-    def say_flush() -> None:
-        try:
-            out.flush()
-        except OSError as exc:
-            closed_pipe(exc)
 
     def emit(r: VarRow) -> None:
         nonlocal printed
-        # One row, one line: a stored newline must not split a row a reader may be cutting or grepping.
+        # One row, one line: a stored newline must not split a row a reader may be cutting or grepping. The backslash is
+        # escaped too, so a stored backslash-n reads differently from a stored newline and the display can be undone.
         row = f"  {r.where}  {r.name}  {r.type or '-'}  {r.value}"
-        say(row.replace("\r", "\\r").replace("\n", "\\n"))
+        print(row.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n"), file=out)
         printed += 1
 
+    print(f"save: {path}", file=out)
     try:
-        say(f"save: {path}")
         scan = extract_vars(path, pattern, on_row=emit)
-        if scan.count:
-            rc = 0
-            say(f"{scan.count} match(es) over {scan.scanned_bytes:,} decompressed bytes. Tables, lists "
-                "and groups are shown as references (type#id), not expanded.")
-        else:
-            rc = 1
-            say(f"NO MATCH over {scan.scanned_bytes:,} decompressed bytes for /{pattern}/: no named "
-                "variable matched (table, list and group contents are not searched)")
-        # HERE, inside the handler: a reader that left while the last rows sat in the buffer fails no print.
-        # Left to the interpreter's exit flush, that failure is "Exception ignored" and rc 120.
-        say_flush()
-    except BrokenPipeError:
-        # `x4save vars ... | head`: the reader stopped, which is not a broken save. Quiet exit, rc 0.
-        if to_stdout:
-            _quiet_stdout()
-        return 0
     except SaveUnreadable:
         if printed:
             print(f"INCOMPLETE: {printed} row(s) were printed above before the save failed to read; "
                   "the list is partial, not an answer", file=sys.stderr)
         raise
-    return rc
+    if scan.count:
+        print(f"{scan.count} match(es) over {scan.scanned_bytes:,} decompressed bytes. Tables, lists "
+              "and groups are shown as references (type#id), not expanded.", file=out)
+        return 0
+    print(f"NO MATCH over {scan.scanned_bytes:,} decompressed bytes for /{pattern}/: no named "
+          "variable matched (table, list and group contents are not searched)", file=out)
+    return 1
+
 
 def _attr(block: str, tag: str, name: str) -> str:
     m = re.search(rf'<{tag}\b[^>]*?\b{name}="([^"]*)"', block)
@@ -474,6 +442,7 @@ def cmd_check(path: Path, limit: int = 40, out=None) -> int:
 
 
 @_paths.refuses_unconfigured
+@_closedpipe.quiet_exit
 def main(argv: list[str] | None = None) -> int:
     import argparse
 

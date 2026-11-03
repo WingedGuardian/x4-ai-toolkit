@@ -1,7 +1,7 @@
 """Store failures are actionable rc 2; user SQL mistakes remain rc 1."""
 import sqlite3
 import pytest
-from x4validate import _effective, _effectivecli, _freshness
+from x4validate import _closedpipe, _effective, _effectivecli, _freshness
 
 
 def store(path):
@@ -84,9 +84,8 @@ def test_a_BROKEN_PIPE_is_not_relabelled_store_unreadable(tmp_path, capsys, monk
     unreadable ... Rebuild' -- sending the user to rebuild a healthy store."""
     path = store(tmp_path/'ok.sqlite')
     def pipe(con, args):
-        raise BrokenPipeError(32, 'Broken pipe')
+        raise _closedpipe.OutputClosed(32, 'Broken pipe')
     monkeypatch.setattr(_effectivecli, '_cmd_ls', pipe)
-    monkeypatch.setattr(_effectivecli, '_quiet_stdout', lambda: None)
     rc = _effectivecli.main(['--db', str(path), 'ls', 'ware'])
     err = capsys.readouterr().err
     assert 'unreadable' not in err, err
