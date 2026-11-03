@@ -6819,6 +6819,12 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
         self.assertFalse(F(Q + "r?" + Q + " -rf " + Q + REF + Q)["program_dynamic_protected"])
         self.assertFalse(F(BS + "?x " + Q + REF + Q)["rm_targets_reference"])
 
+    def test_TWIN_a_glob_name_alone_beside_another_reading(self):
+        """It has no readings of its own. MEASURED: an empty list raised IndexError in the hook once
+        another segment had a reading, on a real command with a `**text**` line in it."""
+        self.quiet("./*.sh; watch ls", "watch ls; ./*.sh", "r?; tmux run " + Q + "ls -la" + Q)
+        self.assertTrue(F("./*.sh; watch " + self.plain(REF))["rm_targets_reference"])
+
     def test_a_value_transform_keeps_the_value(self):
         for op in "PQEUuLK":
             self.caught(lambda t: ["P=" + Q + t + Q + "; " + self.DEL + DQ + "${P@" + op + "}" + DQ])

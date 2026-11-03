@@ -5681,7 +5681,9 @@ def _inner_commands(cmd: str) -> list[str]:
                 dynamic[n] = readings
             vt = _verb_token(seg)
         elif _glob_program(seg, vt):
-            carrying[n] = dynamic_program_readings(seg)
+            readings = dynamic_program_readings(seg)
+            if readings:
+                carrying[n] = readings
         v = _verb_name(vt)              # one read per segment: this walk runs on every hook call
         carried_here = _program_carrier_readings(seg, v, vt, segs[n - 1] if n and pipes[n] else None)
         if not_found_handler:
