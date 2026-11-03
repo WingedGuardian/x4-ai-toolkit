@@ -13,6 +13,11 @@ reported: creating a save changes none.
 The host decides how loudly to report: the game may be the writer, and dated_within() tells it whether a change's own
 timestamp falls inside a window in which the game ran. Nothing here blocks: a post-call hook cannot undo a call, and
 the store's committed transactions remain the only recovery authority.
+
+The record is shared by every session and hooks run in parallel, so a read or a replace can meet another look's replace,
+or a scanner. Both are retried, under a second in all and only after a failure. A record still held after that is not
+lost: load_state says "busy", check() compares nothing, save_state keeps the baseline, and the next look reports what
+changed. Only a record held for STUCK_AFTER seconds, with no look recorded in between, counts as lost.
 """
 from __future__ import annotations
 
@@ -24,9 +29,11 @@ from pathlib import Path
 from typing import NamedTuple
 
 from .profiles import comparison_key
+from .save_lock import REPLACE_WAITS
 
 WALK_LIMIT = 20000          # entries per watched folder; a larger one is reported as truncated
 CLOCK_SLACK = 5.0           # seconds: a backup committed just before the previous look still counts
+STUCK_AFTER = 300.0         # seconds a record may stay held, across looks, before it reads as lost
 
 
 class Report(NamedTuple):
@@ -36,6 +43,8 @@ class Report(NamedTuple):
     truncated: tuple        # watched folders too large to list fully
     state_lost: bool = False    # the previous look's record existed and could not be read
     unread: tuple = ()      # folders (or a drive) that could not be listed: their previous rows are kept, not "removed"
+    record_held: bool = False   # the record is locked just now: nothing compared, the baseline kept for the next look
+    lost_why: str = ""      # with state_lost: what happened to the record
 
 
 def _member(name, extensions):
@@ -153,12 +162,15 @@ def backed_up_since(store_root, since):
 def check(profile, store, state, watch=(), now=None, covered=None):
     """Compare the profile's save roots and `watch` folders with the previous look recorded in `state` (a dict,
     updated in place). `covered` may add keys the caller's own (legacy) backup records cover."""
+    if state.get("busy"):
+        return Report(False, (), (), (), record_held=True)
     now = time.time() if now is None else now
     files, truncated, unread = _scan(profile.save_roots, profile.extensions, watch, WALK_LIMIT)
     previous = state.get("files")
     since = state.get("time", now)
     first = not isinstance(previous, dict)
     lost = bool(state.pop("unreadable", False))
+    why = state.pop("why", "")
     unbacked, backed = [], []
     if not first:
         _carry_unlisted(previous, files, truncated + unread)
@@ -176,7 +188,7 @@ def check(profile, store, state, watch=(), now=None, covered=None):
             for kind, path in found:
                 (backed if comparison_key(os.path.abspath(path)) in keys else unbacked).append((kind, path))
     state.update({"v": 1, "time": now, "files": files})
-    return Report(first, tuple(unbacked), tuple(backed), truncated, lost, unread)
+    return Report(first, tuple(unbacked), tuple(backed), truncated, lost, unread, lost_why=why)
 
 
 def _seen_path(path):
@@ -185,34 +197,81 @@ def _seen_path(path):
     return path.with_name(path.name + ".seen")
 
 
-def load_state(path):
-    """The previous look's record. Nothing there, ever, is {}, a first look. A record that cannot be read, or is gone
-    though one was written here, is {"unreadable": True}: still a new baseline, but check() reports it, because changes
-    since the last look are lost. Deleting the mark along with the record reads as a first look."""
+def _retrying(call):
+    """call(), tried again when another look or a scanner holds the file. Costs nothing unless a try fails."""
+    for wait in REPLACE_WAITS:
+        try:
+            return call()
+        except PermissionError:
+            if wait is None:
+                raise
+            time.sleep(wait)
+
+
+def _lost(why):
+    return {"unreadable": True, "why": why}
+
+
+def _still_held(path, now):
+    """The record stayed locked through the retries. Busy, unless the mark shows it has been locked since a look at
+    least STUCK_AFTER ago with none recorded since (save_state empties the mark); then it is lost, and the clock starts
+    again so that a record that stays held alarms once per window. An unwritable mark only keeps this look busy."""
+    now = time.time() if now is None else now
+    seen = _seen_path(path)
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {"unreadable": True} if _seen_path(path).exists() else {}
+        since = float(seen.read_text(encoding="ascii"))
     except (OSError, ValueError):
-        return {"unreadable": True}
-    return data if isinstance(data, dict) and data.get("v") == 1 else {"unreadable": True}
+        since = None
+    stuck = since is not None and abs(now - since) >= STUCK_AFTER
+    if since is None or stuck:
+        try:
+            seen.write_text(str(now), encoding="ascii")
+        except OSError:
+            pass                    # silent-ok: this look's note does not depend on the mark
+    return _lost("it stayed locked for {:.0f} seconds or more".format(STUCK_AFTER)) if stuck else {"busy": True}
+
+
+def load_state(path, now=None):
+    """The previous look's record. Nothing there, ever, is {}, a first look. A record gone though one was written here,
+    or corrupt, or failing to read for any other reason, is {"unreadable": True, "why": ...}: still a new baseline, but
+    check() reports it, because changes since the last look are lost. Deleting the mark along with the record reads as
+    a first look. A record locked through the retries is {"busy": True}: see the module docstring."""
+    path = Path(path)
+    try:
+        data = json.loads(_retrying(lambda: path.read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        return _lost("it was deleted") if _seen_path(path).exists() else {}
+    except PermissionError:
+        return _still_held(path, now)
+    except OSError as exc:
+        return _lost("reading it failed: {}".format(type(exc).__name__))
+    except ValueError:
+        return _lost("its contents are corrupt")
+    return data if isinstance(data, dict) and data.get("v") == 1 else _lost("its contents are corrupt")
 
 
 def save_state(path, state):
     """Replace the state atomically, then mark that a record exists. Unlike durable.atomic_json (no-clobber, for
-    immutable records) this is a cache that each look overwrites; losing it makes the next look a disclosed baseline."""
+    immutable records) this is a cache that each look overwrites; losing it makes the next look a disclosed baseline.
+    A look that read nothing writes nothing: the record it could not read is still the baseline."""
+    if state.get("busy"):
+        return
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_name(".part-" + str(os.getpid()) + "-" + path.name)
     try:
         part.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
-        os.replace(part, path)
+        _retrying(lambda: os.replace(part, path))
     finally:
         if part.exists():
             part.unlink()   # same-call scratch this function created
     seen = _seen_path(path)
-    if not seen.exists():
-        seen.write_bytes(b"")
+    try:
+        clean = seen.stat().st_size == 0
+    except OSError:
+        clean = False
+    if not clean:           # absent, or stamped by a look that found the record held
+        _retrying(lambda: seen.write_bytes(b""))
 
 
 def describe(report, limit=15):
@@ -230,7 +289,11 @@ def describe(report, limit=15):
     if report.unread:
         lines.append("SAVE SENTINEL: folder(s) that could not be listed, so changes there are not known: "
                      + ", ".join(report.unread))
+    if report.record_held:
+        lines.append("SAVE SENTINEL: the record of the previous look is held by another process just now, so this look "
+                     "compared nothing. The record is kept, and the next look reports anything changed since it.")
     if report.state_lost:
-        lines.append("SAVE SENTINEL: the record of the previous look is gone or could not be read, so this look is a new "
-                     "baseline and any change since the previous look is not reported.")
+        lines.append("SAVE SENTINEL: the record of the previous look is gone or could not be read{}, so this look is a "
+                     "new baseline and any change since the previous look is not reported."
+                     .format(" ({})".format(report.lost_why) if report.lost_why else ""))
     return "\n".join(lines)
