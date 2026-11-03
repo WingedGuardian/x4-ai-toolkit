@@ -35,7 +35,7 @@ def world(tmp_path_factory):
     (ref / "t" / "0001-l044.xml").write_bytes(b'<language id="44"><page id="1"><t id="1">Shipname</t></page></language>')
     macros = ref / "assets" / "units" / "size_xl" / "macros"
     macros.mkdir(parents=True)
-    for i in range(400):
+    for i in range(2400):
         (macros / f"ship_{i}_macro.xml").write_bytes(_macro(i))
     (ref / "libraries").mkdir()
     (ref / "libraries" / "wares.xml").write_bytes(
@@ -52,9 +52,9 @@ def world(tmp_path_factory):
     assert built.returncode == 0, built.stderr
     head = '<?xml version="1.0" encoding="UTF-8"?>\n<savegame>\n<info><save name="x" date="1"/>'
     head += '<game id="X4" version="900" build="1" time="3600" start="s"/><player name="p" money="1"/><patches>'
-    head += "".join(f'<patch extension="ext{i}" version="1"/>' for i in range(3000)) + "</patches></info><universe>"
+    head += "".join(f'<patch extension="ext{i}" version="1"/>' for i in range(6000)) + "</patches></info><universe>"
     # Names nothing defines, so `check` has a long list to print; one that is defined, so it has a denominator.
-    head += "".join(f'<component macro="gone_{i}_macro"/>' for i in range(1500))
+    head += "".join(f'<component macro="gone_{i}_macro"/>' for i in range(6000))
     head += '<component macro="ship_1_macro"/></universe></savegame>'
     big = base / "big.xml.gz"
     big.write_bytes(gzip.compress(head.encode()))
@@ -92,12 +92,13 @@ def _assert_quiet(err):
         assert bad not in err, err
 
 
+PIPE_HOLDS = 64 * 1024
 MID_WRITE = [
     ("x4effective", ["dump", "libraries/wares.xml"]),
     ("x4effective", ["dump", "libraries/wares.xml", "--chain"]),
     ("x4effective", ["ls", "macro", "--limit", "0"]),
     ("x4save", ["info", "@big"]),
-    ("x4save", ["check", "@big", "--limit", "1500"]),
+    ("x4save", ["check", "@big", "--limit", "6000"]),
 ]
 EXIT_FLUSH = [
     ("x4effective", ["dump", "libraries/small.xml"]),
@@ -116,6 +117,14 @@ def test_a_reader_that_leaves_while_it_prints_is_a_quiet_rc_0(world, tool, args)
     assert first, "the control: the reader saw output before it left"
     _assert_quiet(err)
     assert rc == 0, err
+
+
+@pytest.mark.parametrize("tool,args", MID_WRITE, ids=lambda v: v if isinstance(v, str) else " ".join(v))
+def test_a_mid_write_case_prints_more_than_a_pipe_holds(world, tool, args):
+    """A child that fits in the pipe can finish before the reader leaves, and then the case above tests only the exit.
+    Linux holds 64 KiB in a pipe by default. The twin of that test's name, so the fixture cannot shrink silently."""
+    _rc, _err, out = _with_a_reader_that_stays(world, tool, args)
+    assert len(out) > PIPE_HOLDS * 2, f"{len(out)} bytes fit too easily"
 
 
 @pytest.mark.parametrize("tool,args", EXIT_FLUSH, ids=lambda v: v if isinstance(v, str) else " ".join(v))
