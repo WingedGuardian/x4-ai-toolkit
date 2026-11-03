@@ -11862,7 +11862,7 @@ profile alone; a copy of a profile with fewer than 5 other files and few saves. 
 apart inside one window. The threat model is accidents and careless scripts, not a determined attacker.
 
 ALSO UNMEASURED OR OPEN (the saves lane's list): ReFS (see the identity entry below, which fails by refusing); a group deny
-rule is not read as binding, so locking fails loudly; if the record of the last look and its `.seen` copy are both deleted
+rule is not read as binding, so locking fails loudly; if the record of the last look and its `.seen` mark are both deleted
 the next look is a first look, and if `save-lock-folders.json` is deleted nothing is recorded for `off`;
 `sentinel.save_state` replaces its record once, with no retry.
 
@@ -12025,9 +12025,15 @@ at once 0 of 450 and 2 at once 0 of 300. Same machine, not a controlled identica
 
 A look that still finds the record held after its retries compares nothing and keeps the baseline, so the change
 surfaces one look later. In the 1,350 parallel looks above none found it held, so that path was exercised by a
-real-lock probe and by patched tests rather than by the load. Two parallel looks can both report one change; that
-this only duplicates and never loses a report is INFERRED. A record held across a session end is reported only once
-a later look also finds it held. The 5-minute stuck limit is a chosen value, not a measured one.
+real-lock probe and by patched tests rather than by the load. A longer hold delays the report until a look can read
+the record, or until the stuck alarm. Two parallel looks can both report one change. MEASURED by the next review with
+real hook processes: a change to a save present at the previous look was at worst duplicated (0 of 120 missing); a save
+first seen by a parallel look and modified within milliseconds can go unreported (2 of 320, forced timing; the cause was
+not traced). The 5-minute stuck limit is a chosen value, not a measured one, and its clock starts when a hold is first
+noted, so two separate holds with a gap between them can raise it. A record held across a session end is reported only
+once a later look also finds it held. If the mark beside the record can be neither read nor written either, such as a
+deny rule on the folder, every look stays busy and quiet: the agent still sees a note each call, the user is not raised
+(MEASURED), and the change is reported once access returns. Before this fix that case was loud on every look.
 
 **NO RE-DERIVATION: the parallel counts came from a review probe in private scratch, and the core's own tests live in the core's repository.**
 
@@ -12035,7 +12041,8 @@ a later look also finds it held. The 5-minute stuck limit is a chosen value, not
 
 `why_protected` runs its save sniff last, and save content still outranks the cheap reasons by default, because
 several callers overrule a cheap reason such as a backup folder and would otherwise retire a save copy. Only callers
-that never look at which reason they get pass `any_reason=True` and stop at the first cheap reason.
+that act on yes or no pass `any_reason=True` and stop at the first cheap reason; the reason text still reaches their
+count labels and the apply refusal message.
 MEASURED per item over 5,034 files: the default answer differs on 0, the `any_reason` verdict on 0, and the reason
 text on 6, all crafted save copies, which may read for example "backup folder" instead of "save" in a count label.
 The saving reaches only files a cheap reason already holds; unprotected files still pay for the sniff.

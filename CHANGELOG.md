@@ -154,9 +154,9 @@
 - **Rebuildable BaseX caches are deleted permanently now, with no backup and no Recycle Bin copy. This reverses v4.0.0's "Recycle Bin, always" for these caches, and only these.** The BaseX builders drop the `x4raw` and `x4eff` databases through BaseX's own `DROP DB`, and `scripts/x4basex_artifacts.py` permanently removes the generated staging and effective-corpus folders and stale cache licences, after checking now that their inputs are still there. Only known generated slots and workspaces carrying a producer's disposable receipt (`.x4-basex-disposable.json`) qualify. Custom workspaces without a receipt, links, unexpected files and hand-written findings or logs stay, a receipt identifies a folder rather than a spelling, and a moved folder is kept with the way forward named. A failure stops the build; it never falls back to the Recycle Bin or a backup copy. Everything else housekeeping removes still goes to the Recycle Bin or stays.
 - Save sentinel: a look that met the shared record locked by another session or a scanner could raise a false
   "record lost" alarm and drop a real change, or end in a quiet DID NOT RUN. Reads and replaces now retry briefly.
-  A record still held makes a quiet look that keeps the baseline, so the next look reports the change. Only a record
-  held for 5 minutes with no look recorded counts as stuck and raises the user; corrupt, deleted and stuck records
-  each say which they are.
+  A record still held makes a quiet look that keeps the baseline, so a later look reports the change. A record still
+  found held 5 minutes after a hold was first noted, with no look recorded, counts as stuck and raises the user;
+  corrupt, deleted and stuck records each say which they are.
 - Housekeeping: new or edited `*.md`, `*.json`, `*.jsonl`, `*.log` and `README*` files beside an archive stub now get a
   note; unchanged ones stay quiet, and nothing is deleted. The save sniff no longer opens FIFOs or other non-regular
   files and runs after the cheap protection checks, with no verdict changed. Cold-backup hashing no longer reloads
@@ -190,13 +190,16 @@ Command and file guards (the Bash and PowerShell channel judges paths by how the
 - The deployed-mod ask does not read `${X4_EXTENSIONS:-x}`, `${X4_EXTENSIONS%/}/mymod` or a path reached through another variable (`E="$X4_EXTENSIONS"`), and `Set-Item env:` and `[Environment]::SetEnvironmentVariable` are not read as assignments. In PowerShell, `$env:X4_EXTENSIONS='x'` still reads the real folder, where Bash lets the assignment win. A separately configured extensions folder feeds only the deployed-mod ask.
 - Creating a link through `tmux if-shell`, `.CreateAsSymbolicLink`, `cp -s`/`-l`/`-al`, `rsync --link-dest`, `subst`, `mount --bind`, or node, perl or ruby is not judged. A commit message containing an escaped backtick in link text can be refused wrongly.
 - `ps_translate.ps1` has no mutant table; one-off trials caught 10 of 10.
+- If the sentinel's record and the mark beside it can both be neither read nor written, such as a deny rule on
+  `.modding-agent-harness`, every look stays quiet and compares nothing. The agent still sees a note on each call and
+  the change is reported once access returns, but the user is not raised.
 
 Save locks and the sentinel (locks are off unless you turn them on):
 - What X4 shows when it tries to overwrite a locked numbered save slot has not been measured.
 - The elevated `unlock` and `off` paths were not run end to end for this release. Try them on a throwaway folder before relying on locks.
 - `save-lock.json` and `save-lock-folders.json` can be deleted by anything that can delete from their parent folder, and a program run through an inline `python -c` is opaque to the guard that asks before the locks change.
 - The sentinel decides "the game wrote this" from two signs, X4 running or an exit that shows, and cannot separate writers inside that window: a change made while X4 runs, a stamp set back into a real window, a script that rewrites `uidata.xml`, a second exit file and at most 10 saves, and a copy of a profile with fewer than 5 other files all read as the game's. The signs were measured from file stamps on four profiles' last exits and one whole-profile copy; no game session was run, and that every exit writes the second file is inferred. It guards against accidents and careless scripts, not a determined attacker (BLIND-SPOTS F344).
-- Save-lock identity compares a folder's path, file id and the low 32 bits of its volume; this was measured on one NTFS folder under two Python versions, and ReFS was not measured. A mismatch fails by refusing: `off` stays on and says the folder moved (`off --forget-missing`). A deny rule naming a group is not read as binding, so locking fails loudly instead. If the record of the last sentinel look and its `.seen` copy are both deleted, the next look is a first look (BLIND-SPOTS F350).
+- Save-lock identity compares a folder's path, file id and the low 32 bits of its volume; this was measured on one NTFS folder under two Python versions, and ReFS was not measured. A mismatch fails by refusing: `off` stays on and says the folder moved (`off --forget-missing`). A deny rule naming a group is not read as binding, so locking fails loudly instead. If the record of the last sentinel look and its `.seen` mark are both deleted, the next look is a first look (BLIND-SPOTS F350).
 
 Housekeeping and the reference lock:
 - `agent_output` on a network share is now held and expiry on a network share is refused (a behaviour change).
