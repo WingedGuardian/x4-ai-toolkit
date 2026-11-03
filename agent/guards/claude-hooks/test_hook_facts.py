@@ -877,6 +877,43 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
                     'sh /c/toolkit/setup.sh --yes --save-lock'):
             self.assertTrue(F(cmd)["save_lock_decision"], cmd)
 
+    def test_an_unknown_program_may_be_the_interpreter(self):
+        """On the segment itself: through facts() a program reading of the same text also finds it."""
+        self.assertTrue(H._save_lock_decision('"$RUNNER" -B tools/agent-harness.py save-lock on'))
+        self.assertFalse(H._save_lock_decision('"$RUNNER" -B tools/other.py save-lock on'))
+
+    def test_the_harness_run_as_a_program_changes_the_save_locks_too(self):
+        for cmd in ('./tools/agent-harness.py save-lock off',
+                    'tools/agent-harness.py save-lock on',
+                    r'"tools\agent-harness.py" save-lock unlock x',
+                    '"$X4_TOOLKIT/tools/agent-harness.py" save-lock off'):
+            self.assertTrue(F(cmd)["save_lock_decision"], cmd)
+
+    def test_the_harness_run_through_pipenv_changes_the_save_locks_too(self):
+        for cmd in ('pipenv run python tools/agent-harness.py save-lock on',
+                    'pipenv run python tools/agent-harness.py save-lock off'):
+            self.assertTrue(F(cmd)["save_lock_decision"], cmd)
+
+    def test_the_harness_as_a_program_from_powershell_changes_the_save_locks_too(self):
+        for cmd in ('tools/agent-harness.py save-lock off', './tools/agent-harness.py save-lock on',
+                    r'tools\agent-harness.py save-lock off', r'.\tools\agent-harness.py save-lock on',
+                    'pipenv run python tools/agent-harness.py save-lock on'):
+            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
+            self.assertTrue(f["save_lock_decision"], cmd)
+
+    def test_TWIN_the_harness_as_a_program_reading_the_save_locks_is_not_a_decision(self):
+        for cmd in ('./tools/agent-harness.py save-lock status',
+                    'tools/agent-harness.py save-list',
+                    'tools/agent-harness.py on',
+                    'tools/agent-harness.py save-list on',
+                    'python tools/agent-harness.py save-list on',
+                    'python tools/agent-harness.py on',
+                    './tools/other.py save-lock off',
+                    'pipenv run python tools/agent-harness.py save-lock status',
+                    'pipenv run python tools/other.py save-lock on',
+                    'pipenv install'):
+            self.assertFalse(F(cmd)["save_lock_decision"], cmd)
+
     def test_a_save_lock_action_the_guard_cannot_read_is_asked(self):
         for cmd in ('python tools/agent-harness.py save-lock "$ACTION"',
                     'echo on | xargs python tools/agent-harness.py save-lock'):
