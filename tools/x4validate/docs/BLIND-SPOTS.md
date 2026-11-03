@@ -448,6 +448,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F343 | `x4effective find` resolves names from the store's merged text table, which lacked 12 of 75,168 entries that plain t-files define | **OPEN (measured)** · IN-ARC | release review probe over its scratch store: 12 of 75,168 distinct (page, id) entries in plain t-files absent from the table; page 90105 among them | open; cause not established; a name that depends on one reads as an unresolved reference, never silently as absent |
 | F344 | The save sentinel decides whether the game wrote a change from the game's session window; it cannot separate writers inside a window, and a crashed session leaves no stamp | **SCOPE LIMIT (measured on fake timestamps only)** · IN-ARC | the fix lane's tests drive the window with fabricated timestamps; no in-game session was run | stated in the CHANGELOG; the window comes from `uidata.xml`'s modification time |
 | F345 | `bin_refusal` judged the drive letter of the absolute path, so a path under a junction or symlink to a network share looked recyclable and Windows' shell then destroys such files silently | **DEFECT (measured)** · IN-ARC | release review: an ancestor junction to a UNC path passed; fix lane: real junctions, 6 classes of path, 2 arms each | FIXED 2026-11-03 - every existing component is checked for a link and `realpath` has the last word |
+| F346 | Plain `x4refguard status` samples the tree, so after a killed `remove` it can read `protected` while about 2,000 of 40,006 objects have lost their deny | **OPEN LIMIT (measured)** · PRE-ARC | killed a real `icacls` on a 40,006-object tree: a killed `remove` left the root denied and a sample read `protected` | open by design: `--full` walks every object; `apply` and `remove` always verify the full walk and re-running finishes an interrupted one |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11828,3 +11829,19 @@ reports it MEASURED with real junctions: six classes of path, two arms each. An 
 the only difference allowed through. The policy text was changed to say this (RETENTION.md rule 2).
 
 **RE-DERIVED BY:** `tools/x4validate/tests/test_x4housekeep_safety.py`.
+
+## F346 - `x4refguard status` without `--full` can read protected over a half-removed tree · **OPEN LIMIT (measured)** · PRE-ARC · confidence 90%
+
+MEASURED by the housekeeping lane on 2026-11-03 by killing a real `icacls` on a 40,006-object tree: a killed `apply`
+leaves about 3,000 objects denied and the root without the deny (icacls writes the root last), which now reads `partial`;
+a killed `remove` leaves the root's deny in place and a couple of thousand objects without it (the source comment says
+"about 2,000", the lane's report "~2,200"), and a sample can still read `protected`. `icacls <missing> /C` exits 0 and
+reports the failure in its text, so the exit code alone is not the answer (`9d6f848d` reads the result).
+
+Plain `status` samples: the root, the sentinel and the first file found depth-first in each top-level directory. It says it
+is not a census on every run. This is a deliberate speed trade, not a defect to fix: `--full` walks every object (about
+80 s per 100,000 on Windows, from the tool's own message) and says how many it walked. `apply` and `remove` always verify
+the full walk, and running either again finishes an interrupted one (40,006 of 40,006, none left, MEASURED).
+
+NOT TIMED: a full pass over the whole reference tree. The lane extrapolated about 7 minutes for 510,000 objects from the
+per-100,000 figure; nothing ran at that size.
