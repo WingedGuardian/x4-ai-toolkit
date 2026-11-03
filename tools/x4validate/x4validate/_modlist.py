@@ -491,6 +491,9 @@ def cmd_refresh(args) -> int:
     if args.limit:
         mods = mods[: args.limit]
 
+    if getattr(args, "dry_run", False):
+        return _print_refresh_plan(mods, args, today)
+
     resolved = fetched = errors = skipped = 0
     fatal: _nexus.NexusFatal | None = None
     checked: set[str] = set()     # rows whose update verdict was produced THIS run
@@ -518,6 +521,36 @@ def cmd_refresh(args) -> int:
               "fetched before the stop is saved. Re-run once the cause is fixed "
               "(rows already checked today are skipped).", file=sys.stderr)
         return 2
+    return 0
+
+
+def _refresh_plan_row(m, args, today) -> str:
+    """What `_refresh_rows` would do with this row, by the same tests in the same order, touching nothing."""
+    if m["auto"].get("checked_at") == today.isoformat() and not args.force:
+        return "skip-today"
+    nid, _fid, state = _registry.identity(m)
+    if state in _registry.TERMINAL_ID_STATES and not nid:
+        return "off-nexus"
+    if not nid:
+        return "no-id" if args.no_resolve else "resolve"
+    return "fetch"
+
+
+def _print_refresh_plan(mods, args, today) -> int:
+    """`refresh --dry-run`: no network, no registry write, no dashboard, so it needs no key."""
+    plan: dict[str, list] = {}
+    for m in mods:
+        plan.setdefault(_refresh_plan_row(m, args, today), []).append(m["id"])
+    print(f"refresh --dry-run: {len(mods)} rows in scope. Nothing was fetched or written.")
+    for key, what in (("fetch", "have an id: would be fetched"),
+                      ("resolve", "have no id: would search for one, then fetch any it finds"),
+                      ("no-id", "have no id and --no-resolve is on: would be marked untriaged, no call"),
+                      ("off-nexus", "are marked off-nexus: no call"),
+                      ("skip-today", "were checked today: skipped, --force includes them")):
+        ids = plan.get(key, [])
+        print(f"  {len(ids):4} {what}")
+        if ids and key in ("fetch", "resolve"):
+            print(f"       {', '.join(sorted(ids))}")
     return 0
 
 
@@ -1195,6 +1228,8 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--limit", type=int, help="cap how many mods to process (API-call safety)")
     pr.add_argument("--force", action="store_true", help="ignore the once-per-day TTL")
     pr.add_argument("--no-resolve", action="store_true", help="skip A3 identity resolution")
+    pr.add_argument("--dry-run", action="store_true", help="say which rows a refresh would fetch, search for or "
+                    "skip, with no network, no key and no write")
     pr.set_defaults(func=cmd_refresh)
 
     pd = sub.add_parser("dashboard", help="regenerate WORKLIST.md from the registry")

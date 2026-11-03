@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `x4modlist downloads` warns about what would go wrong after an install, for mods you might still install: the
+  profile has an entry turning that id off; an installed mod has the same name under a different id; a profile
+  named with the new `--test-profile` has no entry, so the mod would load there; and the merged icon total passes
+  what one install was measured to load. An icon count it cannot read is reported as unknown, never zero, and a
+  check that could not run says so.
+
+- `x4modlist refresh --dry-run` says which rows a refresh would fetch, search for or skip, with no network, no
+  key and no write.
+
 - Shared preservation core pinned to e0851b8: each path resolves once per read-only pass, in the core itself. X4 uses it instead of its own wrapper, and a 3,589-path file check takes about 15-18 s.
 
 - `x4save vars <pattern> | head` exits quietly (rc 0) when the reader closes the pipe; it was reported as

@@ -78,6 +78,7 @@ options:
 
 ```text
 usage: x4modlist refresh [-h] [--ids IDS] [--seeded] [--limit LIMIT] [--force] [--no-resolve]
+                         [--dry-run]
 
 options:
   -h, --help     show this help message and exit
@@ -87,6 +88,8 @@ options:
   --limit LIMIT  cap how many mods to process (API-call safety)
   --force        ignore the once-per-day TTL
   --no-resolve   skip A3 identity resolution
+  --dry-run      say which rows a refresh would fetch, search for or skip, with no network, no key
+                 and no write
 ```
 
 ## `x4modlist dashboard`
@@ -213,15 +216,18 @@ options:
 ## `x4modlist downloads`
 
 ```text
-usage: x4modlist downloads [-h] [--recursive] [--all] [--json] DIR [DIR ...]
+usage: x4modlist downloads [-h] [--recursive] [--all] [--test-profile PATH] [--json] DIR [DIR ...]
 
 positional arguments:
-  DIR          a folder of downloaded mod archives
+  DIR                  a folder of downloaded mod archives
 
 options:
-  -h, --help   show this help message and exit
-  --recursive  also scan subfolders (default: top level only)
-  --all        also list mods that match what is installed, older copies, and archives with no
-               manifest
-  --json       print the whole report as JSON
+  -h, --help           show this help message and exit
+  --recursive          also scan subfolders (default: top level only)
+  --all                also list mods that match what is installed, older copies, and archives
+                       with no manifest
+  --test-profile PATH  a profile folder or content.xml to check for mods that would load there
+                       because it has no entry for them; repeat for several. An unreadable one
+                       refuses
+  --json               print the whole report as JSON
 ```

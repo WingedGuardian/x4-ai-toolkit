@@ -359,3 +359,80 @@ def test_dashboard_update_available_table_excludes_same_release():
     assert "Same Release" not in avail_block
     # but it is still counted in the tally, so it isn't invisible
     assert "same-release?" in out
+
+
+# --- refresh --dry-run ---------------------------------------------------------------------
+
+def _plan_registry(regp, today):
+    reg = _registry._new_registry()
+    rows = {"has_id": {"human": 7}, "needs_search": {}, "checked": {"human": 8, "checked_at": today},
+            "gone": {"human": "none"}}
+    for name, spec in rows.items():
+        e = _registry._new_entry(name, True)
+        e["auto"].update(installed=True, installed_date="2026-06-01", installed_name=name)
+        if "human" in spec:
+            e["human"]["nexus_id"] = spec["human"]
+        if "checked_at" in spec:
+            e["auto"]["checked_at"] = spec["checked_at"]
+        reg["mods"].append(e)
+    _registry.save_registry(reg, regp)
+
+
+def _dry(regp, **kw):
+    args = dict(registry=str(regp), ids=None, seeded=False, limit=None, force=False, no_resolve=False, dry_run=True)
+    args.update(kw)
+    return _modlist.cmd_refresh(types.SimpleNamespace(**args))
+
+
+def test_dry_run_makes_no_call_needs_no_key_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("X4_NEXUS_KEY", raising=False)
+
+    def no_network(*a, **k):
+        raise AssertionError("a dry run opened the network")
+    monkeypatch.setattr(_nexus.urllib.request, "urlopen", no_network)
+    regp = tmp_path / "r.yaml"
+    _plan_registry(regp, datetime.now(timezone.utc).date().isoformat())
+    before = regp.read_bytes()
+    files = sorted(p.name for p in tmp_path.iterdir())
+    assert _dry(regp) == 0
+    out = capsys.readouterr().out
+    assert regp.read_bytes() == before and sorted(p.name for p in tmp_path.iterdir()) == files
+    assert "4 rows in scope" in out and "Nothing was fetched or written" in out
+
+
+def test_dry_run_sorts_each_row_the_way_the_real_loop_would(tmp_path, monkeypatch, capsys):
+    """The plan repeats the loop's tests, so run both over one registry and compare per row."""
+    regp = tmp_path / "r.yaml"
+    today = datetime.now(timezone.utc).date()
+    _plan_registry(regp, today.isoformat())
+    reg = _registry.load_registry(regp)
+    args = types.SimpleNamespace(force=False, no_resolve=False)
+    plan = {m["id"]: _modlist._refresh_plan_row(m, args, today) for m in reg["mods"]}
+    assert plan == {"has_id": "fetch", "needs_search": "resolve", "checked": "skip-today", "gone": "off-nexus"}
+
+    fetched, searched = [], []
+    monkeypatch.setattr(_nexus, "fetch_mod", lambda nid: fetched.append(nid) or _nexus.ModMeta(
+        nexus_id=nid, name="n", author="a", version="1", updated="2026-07-01", status="published"))
+    monkeypatch.setattr(_modlist, "_record_update", lambda *a, **k: None)
+    monkeypatch.setattr(_modlist, "_resolve_identity", lambda mod_id, a: searched.append(mod_id) or (None, "unmatched"))
+    _modlist._refresh_rows(reg["mods"], args, today, set())
+    assert fetched == [7] and searched == ["needs_search"]   # 8 was checked today, off-nexus made no call
+
+
+def test_dry_run_honours_force_no_resolve_and_limit(tmp_path, capsys):
+    regp = tmp_path / "r.yaml"
+    today = datetime.now(timezone.utc).date()
+    _plan_registry(regp, today.isoformat())
+    reg = _registry.load_registry(regp)
+    by = {m["id"]: m for m in reg["mods"]}
+    forced = types.SimpleNamespace(force=True, no_resolve=False)
+    assert _modlist._refresh_plan_row(by["checked"], forced, today) == "fetch"
+    no_res = types.SimpleNamespace(force=False, no_resolve=True)
+    assert _modlist._refresh_plan_row(by["needs_search"], no_res, today) == "no-id"
+    assert _dry(regp, limit=1) == 0
+    assert "1 rows in scope" in capsys.readouterr().out
+
+
+def test_dry_run_still_refuses_a_registry_path_that_is_not_a_file(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        _dry(tmp_path / "typo.yaml")
