@@ -509,3 +509,58 @@ def test_world_digest_is_a_non_answer_when_the_roots_are_unknown(monkeypatch):
         raise OSError("gone")
     monkeypatch.setattr(fc._freshness, "fingerprint", boom)
     assert fc._world_digest() is None
+
+
+# --------------------------------------------------------------------------- accepted means EVERY warning is accepted
+
+def _accepted_rebuild(sd, monkeypatch, code):
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=_lossy(EIGHT)))
+    _fake_builder(monkeypatch, built, code)
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "accepted-losses.json").write_text(json.dumps({"effective": {"keys": sorted(EIGHT), "when": "d"}}))
+    assert fc.rebuild(auto=True) == 0
+    return (sd / "session-note.txt").read_text(encoding="utf-8")
+
+
+def test_a_new_warning_after_an_accept_reaches_the_note(sd, monkeypatch):
+    note = _accepted_rebuild(sd, monkeypatch, "print('  WARNING: a brand new kind of loss')")
+    assert "WARNING: a brand new kind of loss" in note
+    assert "BUILT WITH 8 DROPS" in note and "accepted d" not in note.splitlines()[1]
+
+
+@pytest.mark.parametrize("line", ["  WARNING: 8 overlay(s) could not be read and were left OUT of it",
+                                  "  skipped 8 unparseable file(s); e.g. t/0001-l044.xml",
+                                  "  WARNING: 8 property subtree(s) hit the depth-64 guard and were NOT indexed",
+                                  "  NOT INDEXED - 8 file(s) would not parse; any answer excludes them"])
+def test_a_warning_that_only_summarises_the_accepted_loss_stays_quiet(sd, monkeypatch, line):
+    """Each twin keeps one summary line in the allowed set: without it, an accept could never quiet a build."""
+    assert _accepted_rebuild(sd, monkeypatch, f"print({line!r})") == ""
+
+
+def test_a_summary_line_is_only_quiet_while_the_loss_set_still_matches(sd, monkeypatch):
+    """The line alone never quiets anything: a changed key set is news even with the same wording."""
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    built = _world(monkeypatch, before, dict(before, effective=_lossy(EIGHT + ["dropped new <- m"])))
+    _fake_builder(monkeypatch, built, "print('  WARNING: 9 overlay(s) could not be read')")
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "accepted-losses.json").write_text(json.dumps({"effective": {"keys": sorted(EIGHT), "when": "d"}}))
+    assert fc.rebuild(auto=True) == 0
+    assert "BUILT WITH 9 DROPS" in (sd / "session-note.txt").read_text(encoding="utf-8")
+
+
+def test_truncated_property_subtrees_count_as_a_loss_of_the_store(tmp_path, monkeypatch):
+    db = _store(tmp_path, truncated_props=12, truncated_prop_samples=json_list(["a.xml: x.y", "b.xml: z"]),
+                loss_keys=json_list(["truncated a.xml: x.y", "truncated b.xml: z"]))
+    monkeypatch.setattr(fc._effective, "effective_db", lambda: db)
+    s = fc._status_effective()
+    assert s.incomplete == 12
+    assert s.notes[0].startswith("12 property subtree(s)")
+    assert "  - a.xml" in s.notes
+    assert s.loss_keys == ["truncated a.xml: x.y", "truncated b.xml: z"]
+
+
+def test_a_store_with_no_truncation_key_has_no_truncation_loss(tmp_path, monkeypatch):
+    """An older store: this key absent reads 0, as the two older loss keys do (its engine axis is stale anyway)."""
+    monkeypatch.setattr(fc._effective, "effective_db", lambda: _store(tmp_path))
+    assert fc._status_effective().incomplete == 0

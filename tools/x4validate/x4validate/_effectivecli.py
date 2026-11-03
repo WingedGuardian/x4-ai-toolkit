@@ -634,6 +634,20 @@ def _cmd_coverage(con, args) -> int:
                 print(f"        - {str(item).split(': ', 1)[0]}")
             if len(items) > 10:
                 print(f"        ... and {len(items) - 10} more")
+    truncated = int(meta.get("truncated_props") or 0)
+    print(f"  truncated props : {truncated}"
+          + ("" if truncated else "   (none -- every property subtree was indexed)"))
+    if truncated:
+        print(f"      {truncated} property subtree(s) were deeper than the build's depth guard and are NOT "
+              "in this store: a query about them answers from absence.")
+        try:
+            names = _json.loads(meta.get("truncated_prop_samples") or "[]")
+        except ValueError:
+            names = []
+        for item in names[:10]:
+            print(f"        - {item}")
+        if truncated > len(names[:10]):
+            print(f"        ... and {truncated - len(names[:10])} more")
     print()
     print(f"  {scope_note()}")
     return 0

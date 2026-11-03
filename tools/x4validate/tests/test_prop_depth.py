@@ -570,3 +570,39 @@ def test_the_depth_fixture_is_DERIVED_from_the_constant():
         "the deep fixtures no longer derive their nesting from the constant (found "
         "%d `MAX_PROP_DEPTH + n` expressions, expected the four fixtures); a raise "
         "will make them pass vacuously or fail for an unrelated reason" % len(derived))
+
+
+def test_a_build_persists_its_truncations_in_the_store(tmp_path, monkeypatch):
+    """Printed at build time only until 4.1.0 (review T2): nothing read later could see this loss, and an
+    `x4fresh accept` could quiet a build that newly lost a subtree."""
+    import json
+    import os
+    import sqlite3
+    for k in list(os.environ):
+        if k.startswith("X4_"):
+            monkeypatch.delenv(k, raising=False)
+    cfg_file = tmp_path / "x4-paths.env"
+    cfg_file.write_text("", encoding="utf-8")
+    monkeypatch.setenv("X4_CONFIG", str(cfg_file))
+    ref = tmp_path / "reference"
+    macros = ref / "assets" / "units" / "size_s" / "macros"
+    macros.mkdir(parents=True)
+    deep = "<a>" * 12 + '<leaf v="1"/>' + "</a>" * 12
+    (macros / "ship_x_macro.xml").write_text(
+        f'<macros><macro name="ship_x_macro" class="ship_s"><properties>{deep}</properties></macro></macros>',
+        encoding="utf-8")
+    monkeypatch.setattr(_effective._registry, "ingest_content_xml", lambda *a, **k: [])
+    monkeypatch.setattr(_effective, "active_mods", lambda *a, **k: [])
+    _effective.base_vpaths.cache_clear()
+    db = tmp_path / "s.sqlite"
+    try:
+        _effective.build(_merge.Config(reference=ref), db, kinds=("macro",))
+    finally:
+        _effective.base_vpaths.cache_clear()
+    con = sqlite3.connect(db)
+    meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
+    con.close()
+    assert int(meta["truncated_props"]) >= 1
+    samples = json.loads(meta["truncated_prop_samples"])
+    assert "ship_x_macro.xml" in samples[0]
+    assert any(k.startswith("truncated ") and "ship_x_macro.xml" in k for k in json.loads(meta["loss_keys"]))

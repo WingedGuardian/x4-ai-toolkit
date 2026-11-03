@@ -58,6 +58,12 @@ STATES = ("FRESH", "STALE", "UNKNOWN", "MISSING", "REBUILDING")
 # other words (review 2026-11-01, finding 1): without it a build that lost files read "REBUILT, FRESH".
 WARN_RE = re.compile(r"\bWARNING\b|\bNOT INDEXED\b|\bINCOMPLETE\b|\bERROR\b|\bskipped \d+ unparseable\b")
 MAX_LISTED = 5   # per list in a report; the hook output that carries it is bounded
+# A line that only SUMMARISES the losses the store lists by identity. `accepted` compares those identities,
+# so these say nothing new once the sets match; any OTHER warning is outside what the user accepted.
+LOSS_SUMMARY_RE = re.compile(r"\bWARNING: \d+ overlay\(s\) could not be read\b"
+                             r"|\bskipped \d+ unparseable\b"
+                             r"|\bWARNING: \d+ property subtree\(s\) hit\b"
+                             r"|\bNOT INDEXED\b.*\d+ file\(s\) would not parse\b")
 MOVED_STAMP = "moved-during-build"   # never equals a digest, so a reader compares it and reads STALE
 
 
@@ -162,7 +168,9 @@ def _status_effective() -> Status:
             ("dropped_overlays", "dropped_overlay_samples",
              "overlay(s) could not be read and are NOT in the store; values they would set read as base"),
             ("skipped_files", "skipped_file_samples",
-             "file(s) could not be merged at all and contribute NO rows")):
+             "file(s) could not be merged at all and contribute NO rows"),
+            ("truncated_props", "truncated_prop_samples",
+             "property subtree(s) were deeper than the build's depth guard and are NOT indexed")):
         raw = meta.get(count_key)
         try:
             n = int(raw or 0)
@@ -606,7 +614,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
         except (OSError, ValueError) as exc:
             rc, warnings = -1, [f"could not start the builder: {exc}"]
         world_after = _world_digest()
-        moved = world_before != world_after
+        moved = world_before is not None and world_after is not None and world_before != world_after
         if moved and name not in AUTO_SET:
             why_not = _revoke_basex_stamp(name)
             if why_not:
@@ -620,7 +628,8 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path) -> int:
         else:
             memo.pop(name, None)
             # The count is the artifact's OWN (meta), never the number of sample lines (capped at 10).
-            if after.accepted:
+            outside = [w for w in warnings if not LOSS_SUMMARY_RE.search(w)]
+            if after.accepted and not outside:
                 # The SAME losses the user accepted: still said, never called clean, but not news.
                 verdict = f"REBUILT, FRESH ({after.incomplete} known loss(es), accepted {after.accepted})"
             else:
