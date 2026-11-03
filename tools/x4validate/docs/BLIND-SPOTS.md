@@ -450,7 +450,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F345 | `bin_refusal` judged the drive letter of the absolute path, so a path under a junction or symlink to a network share looked recyclable and Windows' shell then destroys such files silently | **DEFECT (measured)** · IN-ARC | release review: an ancestor junction to a UNC path passed; fix lane: real junctions, 6 classes of path, 2 arms each | FIXED 2026-11-03 - every existing component is checked for a link and `realpath` has the last word |
 | F346 | Plain `x4refguard status` samples the tree, so after a killed `remove` it can read `protected` while about 2,000 of 40,006 objects have lost their deny | **OPEN LIMIT (measured)** · PRE-ARC | killed a real `icacls` on a 40,006-object tree: a killed `remove` left the root denied and a sample read `protected` | open by design: `--full` walks every object; `apply` and `remove` always verify the full walk and re-running finishes an interrupted one |
 | F347 | The hook mutation gate refused on 5 stale anchors, so the mutants added with the carrier-reading commits never ran | **DEFECT (measured)** · IN-ARC | release review: 5 of 344 anchors stale across `85442321`, `f9435d4b`, `158f8a18`; first run of the new rows: 21 of 150 survived (the review's count); at this commit the table holds 445 anchors, all of which `--check-anchors` finds exactly once | FIXED 2026-11-03 - anchors re-cut; `--check-anchors` runs without trials in the unit suite and the pre-push gate |
-| F348 | The guards read `$X4_EXTENSIONS` and an assigned `$env:` as additive readings; several spellings of both are not read | **OPEN LIMIT (measured)** · IN-ARC | replay: 45 PowerShell commands that assign `$env:` changed 0; 620 others, 155 sampled, changed 0 | open; see entry |
+| F348 | The deployed-mod ask reads `$X4_EXTENSIONS` as an additive reading and several spellings are not read; a PowerShell `$env:` variable the command assigns stays a name (a second translation pass that read it was removed), `Pop-Location` is not modelled and a reassigned `$P` is judged against its first value | **OPEN LIMIT (measured)** · IN-ARC | the guards lane's replay old against new: 0 weaker verdicts over 2,893 test rows, 6,797 Bash commands, 200 PowerShell commands and 11,550 probes; the three PowerShell gaps probed at this commit | open; `test_KNOWN_GAP_an_env_variable_this_command_assigned_is_not_read_as_its_value` pins the first |
 | F349 | The installed toolkit's own test suite was never run in CI: on a fresh install it had 74 errors and 64 failures while SETUP_PROMPT.txt promised none | **DEFECT (measured)** · PRE-ARC | whole suite on a fresh install: 5,821 passed, 64 failed, 74 errors, 534 skipped of 6,493 | FIXED 2026-11-03 - tests read what an install ships or skip with a counted reason; CI gained an installed-copy job |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
@@ -11918,17 +11918,39 @@ RESIDUAL: `ps_translate.ps1` has no mutant table. The lane's one-off trials caug
 
 **RE-DERIVED BY:** `tools/x4validate/tests/test_verify_hook_tests.py`.
 
-## F348 - The deployed-mod ask and `$env:` assignments do not cover every spelling · **OPEN LIMIT (measured)** · IN-ARC · confidence 85%
+## F348 - The deployed-mod ask and PowerShell variables do not cover every spelling · **OPEN LIMIT (measured)** · IN-ARC · confidence 85%
 
-The 4.1.0 guard lane made the deployed-mod ask see `$X4_EXTENSIONS` and a separately configured extensions root (it
-asked only under the game folder before), and made PowerShell `$env:P='<path>'; Remove-Item $env:P` get the same verdict
-as `$P='<path>'` (`5975812d`). Both are additive readings. MEASURED replay over the PowerShell corpus: 45 commands assign
-`$env:` and 0 changed verdict; of the other 620, 155 were sampled and 0 changed.
+The 4.1.0 guard lane made the deployed-mod ask see `$X4_EXTENSIONS` and a separately configured extensions root (it asked
+only under the game folder before), and tried to make PowerShell `$env:P='<path>'; Remove-Item $env:P` get the same
+verdict as `$P='<path>'` (`5975812d`). The `$env:` half is gone: `3b4807df` removed the second translation pass that
+read it, and `ps_translate.ps1` is byte-identical to its state at `d0843965` in all five tracked copies (compared by
+`git diff` of the committed blobs, 5 of 5). The release review of the candidate had found a regression in that pass: a
+`cd` inside the second pass replaced the real one, so a command that had been denied was allowed. Any future fix must judge
+a whole script separately, not run a second pass over the translated text.
 
-NOT READ (the lane's list, not re-run here):
-* `${X4_EXTENSIONS:-x}` and `${X4_EXTENSIONS%/}/mymod` are not read as the extensions root.
+Pinned by `test_KNOWN_GAP_an_env_variable_this_command_assigned_is_not_read_as_its_value` in `test_hook_facts.py`: the
+two commands there, `$env:P='<reference>'; Remove-Item -Recurse $env:P` and the same with a `cd $env:P` first, are NOT
+flagged. If that row goes red the gap was closed: drop the row and this paragraph. A structural twin
+(`test_an_assigned_env_variable_translates_once_as_a_name`) fails if a second pass comes back in any shape.
+
+The guards lane measured the replay of the final guard code against the code at `d0843965` and found 0 verdicts weaker:
+2,893 test rows (48 stricter), 6,797 Bash commands, 200 PowerShell commands, 11,550 probes (330 stricter, 63 commands, all
+of them naming `X4_EXTENSIONS`). The save-lock ask also reads `agent-harness.py` run as a program and through `pipenv`
+(`adda0609`; 14 mutants).
+
+NOT READ (the lane's list; the first three re-probed at this commit with the guard's own `facts()`):
+* A PowerShell `$env:` variable the command itself assigns stays a name, as above.
+* `Pop-Location` is not modelled. `Set-Location <reference>; Push-Location C:/safe; Pop-Location; Remove-Item x` is not
+  flagged (`rm_targets_reference` false, probed): the relative path is judged in the pushed folder. PRE-ARC; the fix is a
+  translator change that needs its own review, so it is a decision for the next release, and no test pins it.
+* A PowerShell `$P` assigned twice is judged against its first value (the translation of `$P=<safe>; $P=<reference>;
+  Remove-Item -Recurse $P/x` is `rm -rf <safe>/x`, probed: not flagged).
+* The deployed-mod ask does not follow `$X4_EXTENSIONS` through another variable (`E="$X4_EXTENSIONS"`) or `:-` default
+  (`${X4_EXTENSIONS:-x}`), and not `${X4_EXTENSIONS%/}/mymod`.
+* `python -c` is not seen by the save-lock ask (the program is opaque to it).
 * `Set-Item env:P` and `[Environment]::SetEnvironmentVariable` are not read as assignments.
-* In PowerShell, `$env:X4_EXTENSIONS='x'` still reads the real root (Bash lets the assignment win).
+* In PowerShell, `$env:X4_EXTENSIONS='x'` still reads the real root (Bash lets the assignment win), which the lane
+  recorded as a false ask, not a missed one.
 * A separate extensions root feeds only the deployed-mod ask; other rules still use the game folder.
 * A symlinked `extensions` folder is judged by its spelling (the shell channel is lexical through existing links, the
   pre-arc limit recorded in F331).
@@ -11936,6 +11958,8 @@ NOT READ (the lane's list, not re-run here):
 Also untouched in this release: a false deny on an escaped backtick in a commit message's link text, and link creation
 by `tmux if-shell`, `.CreateAsSymbolicLink`, `cp -s`/`-l`/`-al`, `rsync --link-dest`, `subst`, `mount --bind`, and
 node, perl or ruby (all reported by the review, none re-run here).
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py`.
 
 ## F349 - The installed copy's test suite was never run, and was red · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-03
 
