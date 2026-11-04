@@ -132,17 +132,6 @@ def test_locking_off_locks_nothing(world, monkeypatch):
     assert files == []
 
 
-def test_locking_on_locks_settled_saves_once_and_leaves_rotating_slots(world, monkeypatch):
-    mod, roots, saves, tk = world
-    files = _fake_locks(mod, tk, monkeypatch)
-    for name in ("save_001.xml.gz", "autosave_01.xml.gz", "quicksave.xml.gz"):
-        _old(saves / name)
-    _switch(mod, tk, True)
-    text, loud = mod.report(roots, now=1000.0)
-    assert files == ["save_001.xml.gz"] and not loud, text
-    files.clear()
-    mod.report(roots, now=1010.0)
-    assert files == []
 
 
 def test_switching_locking_off_is_raised_once(world, monkeypatch):
@@ -156,13 +145,6 @@ def test_switching_locking_off_is_raised_once(world, monkeypatch):
     assert "switched OFF" not in mod.report(roots, now=1020.0)[0]
 
 
-def test_an_elevated_agent_is_warned_while_locking_is_on(world, monkeypatch):
-    mod, roots, saves, tk = world
-    _fake_locks(mod, tk, monkeypatch, elevated=True)
-    _switch(mod, tk, True)
-    text, loud = mod.report(roots, now=1000.0)
-    assert loud and "runs as administrator" in text
-    assert "runs as administrator" not in mod.report(roots, now=1010.0)[0]
 
 
 def test_the_switch_lives_in_the_protected_harness_state(world):
@@ -588,53 +570,10 @@ def test_a_tasklist_that_cannot_be_decoded_cannot_kill_the_look(tmp_path, monkey
 
 
 # --- F2/F7: a lock failure is loud, and never kills the look ---
-def test_a_lock_failure_is_raised_once_until_it_changes(world, monkeypatch):
-    mod, roots, saves, tk = world
-    lock = mod.save_policy.core(str(tk), "save_lock")
-    _fake_locks(mod, tk, monkeypatch)
-    monkeypatch.setattr(lock, "auto_lock", lambda *a, **k: ["F:/save (the rule failed)"])
-    _switch(mod, tk, True)
-    text, loud = mod.report(roots, now=1000.0)
-    assert loud and "could not lock" in text and "the rule failed" in text
-    assert mod.report(roots, now=1010.0) == ("", False)            # the same failure: not every tool call
-    monkeypatch.setattr(lock, "auto_lock", lambda *a, **k: ["F:/other (new)"])
-    text, loud = mod.report(roots, now=1020.0)
-    assert loud and "F:/other" in text
-    monkeypatch.setattr(lock, "auto_lock", lambda *a, **k: [])
-    assert mod.report(roots, now=1030.0) == ("", False)
-    monkeypatch.setattr(lock, "auto_lock", lambda *a, **k: ["F:/other (new)"])
-    assert mod.report(roots, now=1040.0)[1]                        # back after it cleared: raised again
 
 
-def test_TWIN_a_lock_failure_repeats_after_the_quiet_period(world, monkeypatch):
-    mod, roots, saves, tk = world
-    lock = mod.save_policy.core(str(tk), "save_lock")
-    _fake_locks(mod, tk, monkeypatch)
-    monkeypatch.setattr(lock, "auto_lock", lambda *a, **k: ["F:/save (the rule failed)"])
-    _switch(mod, tk, True)
-    assert mod.report(roots, now=1000.0)[1]
-    assert mod.report(roots, now=1000.0 + mod.ELEVATED_REPEAT + 1)[1]
 
 
-@pytest.mark.parametrize("boom", [UnicodeDecodeError("cp1252", b"\x81", 0, 1, "strict"), ValueError("x"),
-                                  subprocess.CalledProcessError(1, "whoami"), OSError("x")])
-def test_any_failure_inside_locking_is_loud_and_the_sentinel_still_reports(world, monkeypatch, boom):
-    mod, roots, saves, tk = world
-    lock = mod.save_policy.core(str(tk), "save_lock")
-    _fake_locks(mod, tk, monkeypatch)
-
-    def fail(*a, **k):
-        raise boom
-    monkeypatch.setattr(lock, "auto_lock", fail)
-    _switch(mod, tk, True)
-    s = saves / "save_001.xml.gz"
-    s.write_bytes(b"x")
-    text, loud = mod.report(roots, now=1000.0)
-    assert loud and "locking unavailable" in text
-    _bump(s, b"changed")
-    text, loud = mod.report(roots, now=1010.0)
-    assert loud and "modified: " + str(s) in text                  # the look itself still reached the agent
-    assert "DID NOT RUN" not in text
 
 
 def test_the_switched_off_note_tells_the_user_and_offers_no_command_that_refuses(world, monkeypatch):
@@ -647,15 +586,6 @@ def test_the_switched_off_note_tells_the_user_and_offers_no_command_that_refuses
     assert "tell them now" in note and "save-lock on" not in note
 
 
-def test_auto_lock_gets_the_switch_so_off_can_account_for_a_new_folder(world, monkeypatch):
-    mod, roots, saves, tk = world
-    lock = mod.save_policy.core(str(tk), "save_lock")
-    _fake_locks(mod, tk, monkeypatch)
-    seen = {}
-    monkeypatch.setattr(lock, "auto_lock", lambda *a, **k: seen.update(k) or [])
-    _switch(mod, tk, True)
-    mod.report(roots, now=1000.0)
-    assert seen["config"] == mod.lock_switch(str(tk))
 
 
 def _hook_copy(tmp_path, policy_source):
@@ -776,3 +706,29 @@ def test_setup_neither_asks_about_locks_nor_turns_them_on():
     assert "Lock your saves" not in text
     assert "agent-harness.py\" save-lock on" not in text
     assert "--save-lock: save locks cannot be turned on" in text
+
+
+def test_a_switch_that_says_on_locks_nothing_and_says_how_to_lift_it(world, monkeypatch):
+    """A player must be able to save over a save (owner ruling 2026-11-04), so a switch left by a pre-release build, or
+    written by a script, must not start or spread locks."""
+    mod, roots, saves, tk = world
+    files = _fake_locks(mod, tk, monkeypatch)
+    lock = mod.save_policy.core(str(tk), "save_lock")
+
+    def reached(*a, **k):
+        raise AssertionError("the sentinel called auto_lock")
+    monkeypatch.setattr(lock, "auto_lock", reached)
+    _old(saves / "save_001.xml.gz")
+    _switch(mod, tk, True)
+    text, loud = mod.report(roots, now=1000.0)
+    assert files == [] and "the sentinel called auto_lock" not in text
+    assert loud and "save-lock off" in text and "cannot be on in this version" in text
+
+
+def test_TWIN_that_warning_repeats_only_after_the_quiet_period(world, monkeypatch):
+    mod, roots, saves, tk = world
+    _fake_locks(mod, tk, monkeypatch)
+    _switch(mod, tk, True)
+    assert mod.report(roots, now=1000.0)[1]
+    assert "save-lock off" not in mod.report(roots, now=1010.0)[0]
+    assert "save-lock off" in mod.report(roots, now=1000.0 + mod.ELEVATED_REPEAT + 1)[0]

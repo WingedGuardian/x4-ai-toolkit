@@ -60,7 +60,7 @@ MARKED_REFRESH = 3600
 SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv"}
 GAMES = ("X4.exe",)
 EXTENSIONS = (".xml.gz", ".xml")
-ELEVATED_REPEAT = 12 * 3600   # seconds between "this agent runs elevated" warnings, and repeats of one lock failure
+ELEVATED_REPEAT = 12 * 3600   # seconds between repeats of the warning about a switch that says on
 SESSION_FILE = "uidata.xml"       # rewritten by X4 on every exit, in the profile folder above its save folder
 EXIT_COMPANIONS = ("pipelinecache.bin", "config.xml", "userdata.xml", "debug.txt")    # the rest of an exit: any one will do
 EXIT_NAMES = {SESSION_FILE, *EXIT_COMPANIONS}
@@ -223,7 +223,7 @@ def report(roots, now=None):
     before = dict(state.get("files") or {})
     since = state.get("time", now)
     result = sentinel.check(profile, store, state, watch=state["marked"], now=now)
-    notes, lock_loud = lock_notes(root, state, before, profile, now)
+    notes, lock_loud = lock_notes(root, state, now)
     try:
         sentinel.save_state(state_path, state)
     except OSError as exc:          # this look's findings still count; the old record stays the baseline, so at worst
@@ -250,14 +250,15 @@ def report(roots, now=None):
 
 
 def lock_switch(root):
-    """The optional save-lock switch (modding_harness/save_lock.py). It lives in the neutral harness state, which
+    """The save-lock switch (modding_harness/save_lock.py); locks cannot be on in 4.1.0. It lives in the neutral harness state, which
     save_policy already refuses to let an agent change: only the user switches locking off."""
     return Path(root) / ".modding-agent-harness" / "save-lock.json"
 
 
-def lock_notes(root, state, before, profile, now):
-    """(notes, raise to the user?): lock new or changed saves once settled while the switch is on, and say so
-    loudly when locking was switched off or the agent runs elevated (the locks do not hold it)."""
+def lock_notes(root, state, now):
+    """(notes, raise to the user?). Nothing here locks: a lock binds the game too, and a player must be able to save over
+    a save (owner ruling 2026-11-04). A switch that says on, from a pre-release build or a script, earns a warning.
+    A switch turned off is still raised once."""
     save_lock = save_policy.core(root, "save_lock")
     enabled = bool(save_lock.read_config(lock_switch(root)).get("enabled"))
     notes, loud = [], False
@@ -267,33 +268,14 @@ def lock_notes(root, state, before, profile, now):
         loud = True
     state["lock_enabled"] = enabled
     if not enabled or not save_lock.supported():
+        state.pop("lock_on_warned", None)
         return notes, loud
-    files = state.get("files") or {}
-    folders = list(dict.fromkeys([str(r) for r in profile.save_roots]
-                                 + [os.path.dirname(p) for _, _, p in files.values()]))
-    try:
-        failed = save_lock.auto_lock(state, before, files, folders, now=now, extensions=profile.extensions,
-                                     config=lock_switch(root))
-    except Exception as exc:        # noqa: BLE001 -- locks are optional; the look above must still reach the agent
-        failed = ["(locking unavailable: {}: {})".format(type(exc).__name__, exc)]
-    if failed:                      # the user's business, once per failure: this runs after every tool call
-        seen = sorted(failed)
-        if state.get("lock_failed") != seen or now - state.get("lock_failed_time", 0) > ELEVATED_REPEAT:
-            state["lock_failed"], state["lock_failed_time"] = seen, now
-            notes.append("SAVE LOCK: could not lock {} save(s) or folder(s), so they are NOT protected: {}".format(
-                len(failed), ", ".join(failed[:5])))
-            loud = True
-    else:
-        state.pop("lock_failed", None)
-        state.pop("lock_failed_time", None)
-    if save_lock.is_elevated():
-        if "elevated_warned" not in state or now - state["elevated_warned"] > ELEVATED_REPEAT:
-            state["elevated_warned"] = now
-            notes.append("SAVE LOCK: this agent session runs as administrator, so the save locks do NOT protect the "
-                         "saves from it. Restart the agent from a normal (non-admin) terminal.")
-            loud = True
-    else:
-        state.pop("elevated_warned", None)
+    if "lock_on_warned" not in state or now - state["lock_on_warned"] > ELEVATED_REPEAT:
+        state["lock_on_warned"] = now
+        notes.append("SAVE LOCK: the switch {} says on, but save locks cannot be on in this version, so nothing new is "
+                     "locked. Any save already locked still cannot be saved over in game. Tell the user: from an "
+                     "administrator prompt, python tools/agent-harness.py save-lock off".format(lock_switch(root)))
+        loud = True
     return notes, loud
 
 

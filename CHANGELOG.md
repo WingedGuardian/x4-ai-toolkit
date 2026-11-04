@@ -71,7 +71,8 @@
   the sentinel module itself fails to import, instead of staying silent (BLIND-SPOTS F344).
 
 - Save locks (Windows) cannot be turned on in this version: `save-lock on` and
-  `setup.sh --save-lock` refuse and change nothing. A lock binds X4 as well as agents, so a
+  `setup.sh --save-lock` refuse and change nothing, and the sentinel never locks: a switch
+  that says on earns a warning naming `off`. A lock binds X4 as well as agents, so a
   player could not save over a locked save, and Windows permissions cannot tell the two
   apart. `python tools/agent-harness.py save-lock status|off|unlock` remain, for anyone
   holding locks from a pre-release build; `off` and `unlock` need an elevated prompt. Saves
@@ -183,6 +184,8 @@ Command and file guards (the Bash and PowerShell channel judges paths by how the
   the change is reported once access returns, but the user is not raised.
 
 The save guard and the sentinel:
+- The elevated `save-lock unlock` was not run end to end for this release; `off` was run once.
+- If the sentinel's record of the last look and its `.seen` mark are both deleted, the next look is a first look.
 - The save-store guard resolves each path once per check. A link swapped by another process during that check can turn
   a deny into an allow. The same race already exists between any check and the command after it.
 - The sentinel decides "the game wrote this" from two signs, X4 running or an exit that shows, and cannot separate writers inside that window: a change made while X4 runs, a stamp set back into a real window, a script that rewrites `uidata.xml`, a second exit file and at most 10 saves, and a copy of a profile with fewer than 5 other files all read as the game's. The signs were measured from file stamps on four profiles' last exits and one whole-profile copy; no game session was run, and that every exit writes the second file is inferred. It guards against accidents and careless scripts, not a determined attacker (BLIND-SPOTS F344).

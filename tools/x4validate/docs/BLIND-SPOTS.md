@@ -455,7 +455,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F350 | A save-lock folder's identity compares its path, file id and the low 32 bits of its volume; ReFS was not measured | **SCOPE LIMIT (measured on one NTFS folder)** · IN-ARC | one NTFS folder read under Python 3.10.10 and 3.12.10: `st_dev` differs between them, its low 32 bits and `st_ino` do not | FIXED for NTFS 2026-11-03 in the pinned core; ReFS unmeasured, a mismatch fails by refusing |
 | F351 | A sentinel look that finds the shared record held compares nothing; the change surfaces one look later | **SCOPE LIMIT (measured)** · IN-ARC | 1,350 parallel looks at the pinned core: 0 found the record held, so that path ran only under a real-lock probe and patched tests | FIXED 2026-11-03: false alarm and lost baseline gone; the delayed report is by design |
 | F352 | Callers of the save sniff that only need a yes can label a save copy by its cheap reason in count rows | **SCOPE LIMIT (measured)** · IN-ARC | 5,034 files: verdict differs on 0, reason text on 6, all crafted save copies | OPEN, by design: labels only |
-| F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses; the core's locking code stays, tested but unused | OPEN by owner ruling 2026-11-04 |
+| F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12053,7 +12053,8 @@ The saving reaches only files a cheap reason already holds; unprotected files st
 
 Windows permissions apply to a user, not a program, so a lock that refuses an agent also refuses X4, and a player could
 not save over a locked save. What X4 shows on that refusal was never measured. The owner ruled on 2026-11-04 that a
-player must be able to save over a save, so `save-lock on` and `setup.sh --save-lock` refuse. `status`, `off` and `unlock`
+player must be able to save over a save, so `save-lock on` and `setup.sh --save-lock` refuse, and the sentinel never locks
+even if a switch says on: it warns and names `off`. `status`, `off` and `unlock`
 remain for locks from a pre-release build. MEASURED once, on one machine: an elevated `off` lifted 32 rules (30 saves, 2
 folders) and a re-read found every one plain; the elevated `unlock` was not run. The entries above that describe locks
 (F350 and the sentinel's) apply only to such a build.
