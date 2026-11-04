@@ -783,9 +783,8 @@ jobs:
           # 6504 passed, 378 skipped. The 381 above was COMPUTED (366 + 4 + 8 + 3), never read off a run; it is
           # 378 + 3, so it stood. Windows READ at the same head: 60 skipped, 60 + 3 = 63.
           # 2026-11-03 (4.1 review round 2, R2-I1): raised for the range d0843965..head, 381 -> 418 ubuntu, windows 63
-          # unchanged. DERIVED, NOT READ OFF A RUN: skip markers diffed per test id at both commits (a collection, on
-          # Windows), plus the bodies' own pytest.skip added in the range. When the first run prints it, read it, set
-          # the ceiling to that + 3, and replace this comment.
+          # unchanged. Derived per test id, then READ on run 41735880898 (fd0a95ff): ubuntu 415, as derived, and
+          # windows 62: 60 + the two test_x4housekeep_stub_and_sniff skips (named pipes, volume records no reads).
           #    378  ubuntu, read at d0843965
           #    +31  test_x4housekeep_safety: "Windows volumes, junctions and the shell's Recycle Bin"
           #     +2  test_x4refguard_repair: NTFS ACLs
@@ -794,8 +793,6 @@ jobs:
           #    415 + 3 = 418
           # Not in the sum, each looked at: test_x4fresh_session +4 (needs_bash: ubuntu has bash), test_codex_rules +1
           # (this job installs codex), test_bootstrap_scripts_are_portable (9 .ps1 files at both commits, no change).
-          # Could add one to EITHER leg: test_x4housekeep_stub_and_sniff's "this volume does not record reads" skip.
-          # Windows then reads 61 at most from this range, inside its 63.
           X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '418' || '63' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
@@ -930,12 +927,9 @@ jobs:
     #
     # THE THREE NUMBERS AT THE BOTTOM. min-tests 6000 and min-passed 5300 are floors under the MEASURED
     # counts of a fresh Windows install (6,493 cases before the D-C2 fixes; about 6,506 after, 5,927 passed, projected from a re-run of the changed modules), so a suite that silently collected a
-    # fraction of itself cannot pass. max-skips 934 is NOT MEASURED ON CI YET: it is DERIVED, an upper bound,
-    # 578 skipped on that Windows install + 1 (test_the_prepush_gate_runs_the_check, export-ignored script, R2-1)
-    # + the 352 more that the `tests` job's ubuntu leg is projected to skip than its windows leg (415 vs 63: see that
-    # job's X4_MAX_SKIPS comment) + 3. The first run of this job prints
-    # "INSTALLED-COPY SUITE: ... N skipped"; replace 934 with N + 3 and itemise the change here, as the
-    # `tests` job does. Until then a ceiling this loose catches a mass dormancy, not a slide.
+    # fraction of itself cannot pass. max-skips 886 = 883 READ on run 41735880898 (fd0a95ff) + 3. It replaces a
+    # derived upper bound of 934 from before this job had run. A later change itemises itself here, as the `tests`
+    # job does.
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -1013,7 +1007,7 @@ jobs:
           python3 .github/scripts/installed_suite_verdict.py \
             --junit "$RUNNER_TEMP/installed-suite.xml" \
             --root "$RUNNER_TEMP/installed-toolkit" \
-            --min-tests 6000 --min-passed 5300 --max-skips 934
+            --min-tests 6000 --min-passed 5300 --max-skips 886
 
   hook-mutation:
     name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/4)

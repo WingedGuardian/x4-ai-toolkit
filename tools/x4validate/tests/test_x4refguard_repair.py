@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from refguard_owner import own_or_skip
+
 REPO = Path(__file__).resolve().parents[3]
 _spec = importlib.util.spec_from_file_location("x4refguard_repair", REPO / "scripts" / "x4refguard.py")
 rg = importlib.util.module_from_spec(_spec)
@@ -259,6 +261,7 @@ def scratch(tmp_path, monkeypatch):
     (root / rg.SENTINEL).write_text("x")
     for name in ("a.xml", "b.xml", "c.xml"):
         (root / "libraries" / name).write_text("<x/>")
+    own_or_skip(root, rg)                  # an elevated runner creates it owned by Administrators
     yield root
     subprocess.run(["icacls", str(root), "/reset", "/T", "/C", "/Q"], capture_output=True)
 
