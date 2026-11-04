@@ -12087,3 +12087,8 @@ Fix is CLI-only (`dlc_owned_vpath`, `_cmd_dump`), so `_merge` and the engine fin
 `build_effective` callers were read, not measured: `_check`, `_similarity`, `_effective` and `_geometry_assets` pass fixed
 library names or vpaths from an index or logical key, so this wrong form is a typed-path problem. An unpatched DLC file
 stays at the literal path with no note, because both forms are then the same file. `tests/test_dump_dlc_owned_bare_path.py` proves it, with one falsification twin per clause.
+
+LIMITS found by review, not fixed. A DLC's complete file over a base file is skipped by the same check, so a bare path
+can still return the base document with no note: MEASURED on a synthetic case, 0 of 159 loose door documents here, packed
+mods not scanned. A bare `libraries/god.xml` ignores patches in a DLC's tree with no note: 6 of those 159, PRE-ARC, and
+whether the engine applies those patches is not measured.

@@ -207,7 +207,7 @@ fi
 echo
 _sl_switch="$ROOT/.modding-agent-harness/save-lock.json"
 if [ -f "$_sl_switch" ] && grep -q '"enabled": true' "$_sl_switch" 2>/dev/null; then
-  warn "save locks: ON, from an earlier build. They stop X4 saving over a locked save. From an administrator prompt: python tools/agent-harness.py save-lock off"
+  warn "save locks: ON, from an earlier build. They stop X4 saving over a locked save. From an administrator prompt: python \"$ROOT/tools/agent-harness.py\" save-lock off"
 elif [ "$_I_SAVE_LOCK" = yes ]; then
   warn "--save-lock: save locks cannot be turned on in this version, because a locked save could not be saved over in game. Nothing was changed."
 fi

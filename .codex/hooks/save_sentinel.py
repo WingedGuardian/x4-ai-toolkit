@@ -220,7 +220,6 @@ def report(roots, now=None):
         store = workspace.save_store(root, profile)
     except (OSError, ValueError):
         store = _NoStore()          # no readable store: every change is reported, none is "covered"
-    before = dict(state.get("files") or {})
     since = state.get("time", now)
     result = sentinel.check(profile, store, state, watch=state["marked"], now=now)
     notes, lock_loud = lock_notes(root, state, now)
@@ -274,7 +273,8 @@ def lock_notes(root, state, now):
         state["lock_on_warned"] = now
         notes.append("SAVE LOCK: the switch {} says on, but save locks cannot be on in this version, so nothing new is "
                      "locked. Any save already locked still cannot be saved over in game. Tell the user: from an "
-                     "administrator prompt, python tools/agent-harness.py save-lock off".format(lock_switch(root)))
+                     "administrator prompt, python \"{}\" save-lock off".format(
+                         lock_switch(root), Path(root) / "tools" / "agent-harness.py"))
         loud = True
     return notes, loud
 
