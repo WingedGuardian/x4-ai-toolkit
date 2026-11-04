@@ -469,3 +469,16 @@ def test_three_way_base_stack_says_only_its_first_layer_is_compared(tmp_path, ca
     lines = _manifest_lines(out)
     assert len(lines) == 2 and all(ln.startswith("manifest content.xml base -> ") for ln in lines)
     assert all(": identical" in ln and "base only" in ln and "not merged" in ln for ln in lines), out
+
+
+def test_an_absolute_path_maps_to_the_innermost_compared_folder(tmp_path):
+    """A folder compared inside another: the first root that contains the path used to win, so a file in the inner
+    folder read as `sub/...` of the outer one and printed REMOVED."""
+    from x4validate._diffcli import _vpath_under
+    outer = tmp_path / "old"
+    inner = outer / "extensions" / "sub"
+    inner.mkdir(parents=True)
+    target = inner / "md" / "a.xml"
+    assert _vpath_under(str(target), [outer, inner]) == "md/a.xml"
+    assert _vpath_under(str(target), [inner, outer]) == "md/a.xml"
+    assert _vpath_under(str(outer / "md" / "b.xml"), [outer, inner]) == "md/b.xml"

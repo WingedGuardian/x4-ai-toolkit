@@ -36,9 +36,10 @@ refused for:
         purpose: "Fixed: a crash on load" is an ordinary first line of a changelog, so "any
         Key: value" would refuse good files.
 
-THE ROLLBACK COPY is the previous page as it was, so none of the paste-file rules apply to its text:
-a line such as "Version: 1.1.0" or "# Install", or a literal "&lt;", may be what that page said, and
-changing it would make the rollback wrong. It must exist, carry the manifest's version in its name,
+THE ROLLBACK COPY is the previous page as it was, so its wording is not judged: a line such as
+"Version: 1.1.0" or "# Install", or a literal "&lt;", may be what that page said, and changing it would
+make the rollback wrong. It is pasted back, so its form is judged: UTF-8, LF line endings, no control
+bytes and no <br. It must exist, carry the manifest's version in its name,
 not be empty, and, if the manifest lists it ("files" with its plain name as the path, or "archives"),
 match that row's sha256 and size.
 
@@ -219,7 +220,15 @@ def _check_paste(name: str, data: bytes, is_changelog: bool, problems: list) -> 
 
 
 def _check_rollback(name: str, data: bytes, file_rows: list, problems: list) -> None:
-    """The rollback copy's text is never judged; only a manifest row for it can refuse it."""
+    """Its wording is never judged, but it is pasted over the page on a rollback, so its form is: UTF-8 with no control
+    bytes, no carriage return and no raw `<br`, the API's form that step 3 converts. Then any manifest row for it."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    if text is None or "\r" in text or "<br" in text.lower() or any(ord(c) < 32 and c not in "\n\t" for c in text):
+        problems.append(Problem("rollback-form", name, "not in the editor's form: it must be UTF-8 with LF line "
+                                "endings and no <br, converted as the skill's step 3 says, with the wording unchanged"))
     for row in file_rows:
         if row["path"] != name:
             continue

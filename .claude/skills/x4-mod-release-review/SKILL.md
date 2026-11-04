@@ -209,8 +209,9 @@ the final go. Then:
    It refuses, naming every problem, on: a required file missing or empty; `<br` or an HTML entity, a
    carriage return, or a header line in a paste file; a changelog line over 120 characters; an
    archive that differs from the manifest or is not listed in it; a manifest without `mod`; a folder
-   it cannot read. The rollback copy is checked only for being there, not being empty, and matching
-   the manifest if the manifest lists it. `--help`
+   it cannot read. The rollback copy's wording is not judged. It is checked for being there, not being
+   empty, being in the editor's form (UTF-8, LF, no `<br`), and matching the manifest if the manifest
+   lists it. If its form is refused, redo the conversion from the stored response; never reword it. `--help`
    defines each of these. A pass says the folder has the right shape and paste form. It does not say
    the text is right, or that the description came from the live page. On a refusal, fix the pack and
    re-run. These are pack files, not the mod, so rule 4 does not apply to them. A refusal that would

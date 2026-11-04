@@ -62,9 +62,10 @@ def _vpath_under(typed: str, roots: list[Path]) -> str:
     if not path.is_absolute():
         return typed
     resolved = path.resolve()
-    for root in roots:
+    # The innermost folder wins: a compared folder can sit inside another.
+    for root in sorted((r.resolve() for r in roots), key=lambda r: len(r.parts), reverse=True):
         try:
-            return resolved.relative_to(root.resolve()).as_posix()
+            return resolved.relative_to(root).as_posix()
         except ValueError:  # silent-ok: not under this root; a path under none stays as typed and is reported
             continue
     return typed

@@ -247,7 +247,8 @@ UNEDITED_PAGE = [
 UNEDITED_IDS = ["description", "version", "later-heading", "entity", "br", "crlf", "not-utf8"]
 
 
-@pytest.mark.parametrize("body,_code", UNEDITED_PAGE, ids=UNEDITED_IDS)
+# Wording only: the last three are about form, which test_a_rollback_copy_that_could_not_be_pasted_back_is_refused covers.
+@pytest.mark.parametrize("body,_code", UNEDITED_PAGE[:4], ids=UNEDITED_IDS[:4])
 def test_the_rollback_copy_is_not_refused_for_what_the_old_page_said(pack, body, _code):
     (pack / BEFORE).write_bytes(body)
     assert found(_mod(), pack) == []
@@ -623,3 +624,16 @@ def test_the_skills_fetch_sends_what_the_toolkits_own_lookups_send(monkeypatch):
     assert headers["apikey"] == "fake-key-for-the-test"
     assert headers["application-name"] == _nexus._APP["Application-Name"]
     assert headers["user-agent"] == _nexus._APP["User-Agent"]
+
+
+@pytest.mark.parametrize("body", [
+    b"An old line<br />\nAnother line\n",
+    b"An old line\r\nAnother line\r\n",
+    "An old page".encode("utf-16"),
+    b"\x00\x01\x02 binary",
+], ids=["raw-api-br", "crlf", "utf-16", "binary"])
+def test_a_rollback_copy_that_could_not_be_pasted_back_is_refused(pack, body):
+    """The copy is pasted over the page on a rollback. Raw API text or the wrong encoding would put literal tags or
+    garbage on the live page, which is the reason it gets the conversion."""
+    (pack / BEFORE).write_bytes(body)
+    assert found(_mod(), pack) == [("rollback-form", BEFORE)]
