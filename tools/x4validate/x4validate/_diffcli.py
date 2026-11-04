@@ -12,10 +12,48 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from x4validate import __version__, _diff, _input, _paths, _scan, _threeway
-from x4validate._diff import FileDiff, ModDiff, diff_mods
+from x4validate._diff import MANIFEST, FileDiff, ManifestDiff, ModDiff, diff_mods
+
+#: A manifest value longer than this is cut in the summary; `--file` shows it whole.
+_MANIFEST_VALUE_WIDTH = 40
+
+
+def _clip(value: str) -> str:
+    return value if len(value) <= _MANIFEST_VALUE_WIDTH else value[:_MANIFEST_VALUE_WIDTH] + "..."
+
+
+def _manifest_text(m: ManifestDiff) -> str:
+    """The manifest answer in one phrase. Every state reads differently."""
+    if m.state == "identical":
+        text = "identical"
+    elif m.state == "differs":
+        parts = [f"{a} {_clip(ov)}->{_clip(nv)}" for a, ov, nv in m.root_changes]
+        others = m.detail.weight - len(m.root_changes)
+        if others:
+            parts.append(f"{others} other change(s); --file {MANIFEST} lists them")
+        text = f"differs ({', '.join(parts)})"
+    elif m.state == "absent-old":
+        text = f"absent from {m.old_label}, present in {m.new_label}"
+    elif m.state == "absent-new":
+        text = f"present in {m.old_label}, absent from {m.new_label}"
+    elif m.state == "absent-both":
+        text = "absent from both"
+    else:
+        text = f"NOT COMPARED, and NOT counted as identical - {m.reason or 'no comparison ran'}"
+    return f"{text} [{m.note}]" if m.note else text
+
+
+def _norm_vpath(vpath: str) -> str:
+    """A typed path as a vpath: forward slashes, no `./`, no doubled separators."""
+    return PurePosixPath(vpath.replace("\\", "/")).as_posix()
+
+
+def _names_manifest(vpath: str) -> bool:
+    """True for the mod-root manifest however it is spelled, and for nothing nested."""
+    return _norm_vpath(vpath).lower() == MANIFEST
 
 
 def _fmt_summary(md: ModDiff) -> str:
@@ -29,7 +67,8 @@ def _fmt_summary(md: ModDiff) -> str:
              # plant attribute edits only, so their expected counts are unchanged.
              f"  total attr changes: {sum(len(f.attr_changes) for f in ch)}"
              f"   nodes added: {sum(len(f.nodes_added) for f in ch)}"
-             f"   nodes removed: {sum(len(f.nodes_removed) for f in ch)}"]
+             f"   nodes removed: {sum(len(f.nodes_removed) for f in ch)}",
+             f"  manifest {MANIFEST}: {_manifest_text(md.manifest)}"]
     if md.unreadable:
         lines.append(f"  NOT COMPARED: {len(md.unreadable)} file(s) — see the list below; "
                      "they are absent from every section, not 'unchanged'")
@@ -57,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
                         "is the core alone, the submod's ops show as REMOVED nodes")
     p.add_argument("--detail", action="store_true",
                    help="list every attr change (element text shows as @text())")
-    p.add_argument("--file", help="detail one vpath only")
+    p.add_argument("--file", help="detail one vpath only; content.xml shows the manifest comparison")
     p.add_argument("--top", type=int, default=30, help="show N heaviest changed files (default: %(default)s)")
     p.add_argument("--base", action="append", default=[],
                    help="COMMON ANCESTOR of OLD and NEW: makes this a THREE-WAY "
@@ -81,8 +120,11 @@ def main(argv: list[str] | None = None) -> int:
     md = diff_mods(baseline, Path(args.new))
     print(_fmt_summary(md))
 
+    if args.file and _names_manifest(args.file):
+        return _print_manifest_file(md.manifest)
+
     if args.file:
-        want = args.file.lower()
+        want = _norm_vpath(args.file).lower()
         fd = next((f for f in md.files if f.vpath.lower() == want), None)
         if fd is not None:
             _print_file(fd)
@@ -99,9 +141,17 @@ def main(argv: list[str] | None = None) -> int:
         if hit:
             print(f"  {args.file}: NOT COMPARED - {hit[0]}")
             return 1
-        readable = any(_diff.read_vpath(d, args.file) is not None
-                       for d in baseline + [Path(args.new)])
-        if not readable:
+        #
+        # "No differences" is earned only by a document `diff_mods` actually compared,
+        # so this asks its population. Asking "does any side parse?" answered yes for
+        # a type it skips: a changed .xsd read as "no differences".
+        suffix = PurePosixPath(want).suffix
+        if suffix and (suffix != ".xml" or want.endswith(_diff.IGNORED_SUFFIXES)):
+            print(f"  {args.file}: NOT IN THE COMPARISON - x4diff does not compare "
+                  f"{suffix} files, so this says nothing about whether it differs.")
+            return 1
+        compared = _diff.merged_vpaths(baseline).keys() | _diff.mod_xml_vpaths(Path(args.new)).keys()
+        if want not in compared:
             print(f"  {args.file}: NOT IN THE COMPARISON - neither side has that "
                   f"vpath. That is an absence of the FILE, not an absence of "
                   f"differences.")
@@ -127,10 +177,29 @@ def main(argv: list[str] | None = None) -> int:
              sorted(md.removed(), key=lambda x: x.vpath), "-")
     _section("changed files (heaviest first)",
              sorted(md.changed(), key=lambda x: -x.weight), "~", detail=True)
+    if args.detail and md.manifest.detail is not None:
+        print(f"\n## manifest {MANIFEST}:")
+        _print_file(md.manifest.detail)
     if md.unreadable:
         print(f"\n## NOT COMPARED ({len(md.unreadable)}):")
         for u in md.unreadable:
             print(f"  ? {u}")
+    return 0
+
+
+def _print_manifest_file(m: ManifestDiff) -> int:
+    """`--file content.xml`, answered from the comparison the summary line reports."""
+    if m.not_read:
+        print(f"  {MANIFEST}: NOT COMPARED - {m.reason or 'no comparison ran'}")
+        return 1
+    if m.state == "absent-both":
+        print(f"  {MANIFEST}: NOT IN THE COMPARISON - neither side has that vpath. That "
+              f"is an absence of the FILE, not an absence of differences.")
+        return 1
+    if m.detail is None:
+        print(f"  {MANIFEST}: no differences")
+    else:
+        _print_file(m.detail)
     return 0
 
 
@@ -171,6 +240,9 @@ def _three_way(args) -> int:
     print(f"    upstream drift ..... {len(r.upstream_drift)}")
     print(f"    converged .......... {len(r.converged)}   (both sides, same change)")
     print(f"    BOTH-MOVED ......... {len(r.both_moved)}   <-- the decisions")
+    print(f"  manifest {MANIFEST} base -> archived: {_manifest_text(r.manifest_archived)}")
+    print(f"  manifest {MANIFEST} base -> current: {_manifest_text(r.manifest_current)}")
+    print("    (the manifest is reported here and never classified above)")
 
     # A rewritten vpath is a transforming step and says so. Reported BEFORE the
     # exclusions, because it is what moves a document out of them.
@@ -219,7 +291,8 @@ def _three_way(args) -> int:
         for v in r.node_level[:args.top]:
             print(f"    {v}")
 
-    want = (args.file or "").lower()
+    want = _norm_vpath(args.file).lower() if args.file else ""
+    wants_manifest = bool(args.file) and _names_manifest(args.file)
 
     def _keep(rows):
         return [c for c in rows if not want or c.vpath.lower() == want
@@ -229,6 +302,13 @@ def _three_way(args) -> int:
         print()
         print(f"  --file {args.file}: the counts above are the WHOLE comparison; "
               f"only the listings below are filtered")
+
+    if wants_manifest:
+        for side, m in (("archived", r.manifest_archived), ("current", r.manifest_current)):
+            if m.detail is not None and m.detail.weight:
+                print()
+                print(f"  {MANIFEST} base -> {side}:")
+                _print_file(m.detail, indent="    ")
 
     _bm = _keep(r.both_moved)
     if _bm:
@@ -258,7 +338,7 @@ def _three_way(args) -> int:
             if len(rows) > args.top:
                 print(f"    ... {len(rows) - args.top} more (raise --top)")
 
-    if want and not any(_keep(rows) for rows in
+    if want and not wants_manifest and not any(_keep(rows) for rows in
                         (r.both_moved, r.author_edits, r.upstream_drift, r.converged)):
         print()
         print(f"  --file {args.file}: no classified attribute in that document. "
@@ -276,7 +356,8 @@ def _three_way(args) -> int:
     # while these four are plain strings -- and the note printed above already says
     # the counts are the WHOLE comparison while only the listings are filtered.
     excluded = (len(r.unreadable) + len(r.no_base) + len(r.dropped_by_author)
-                + len(r.key_collisions))
+                + len(r.key_collisions)
+                + r.manifest_archived.not_read + r.manifest_current.not_read)
     if excluded:
         print()
         print(f"  {excluded} document(s) were NOT compared (see the exclusion lists "

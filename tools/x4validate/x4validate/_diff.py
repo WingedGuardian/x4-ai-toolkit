@@ -22,6 +22,10 @@ element with no non-whitespace text has no `text()` at all.
 
 The top-level ops of a `<diff>` are keyed by what they install (their first
 payload child's id/name/macro/ref), else by `sel`; see `_op_key`.
+
+The mod's own `content.xml` is not one of those files: the shared enumerator drops
+it, rightly, for the store and x4compat. It is compared separately by
+`compare_manifests` and reported as `ModDiff.manifest`, outside every file count.
 """
 
 from __future__ import annotations
@@ -40,7 +44,8 @@ from x4validate import __version__
 
 
 def mod_xml_vpaths(mod_dir: Path) -> dict[str, str]:
-    """lower(vpath) -> real vpath for a mod's XML (packed + loose). content.xml dropped."""
+    """lower(vpath) -> real vpath for a mod's XML (packed + loose). content.xml dropped:
+    `compare_manifests` is what looks at that one."""
     return _compat._mod_xml_paths(mod_dir)
 
 
@@ -297,6 +302,81 @@ def diff_file(old: etree._Element, new: etree._Element, vpath: str) -> FileDiff:
     return fd
 
 
+#: Document types `diff_mods` skips by default.
+IGNORED_SUFFIXES = (".xsd",)
+
+#: The mod-root manifest, which `mod_xml_vpaths` leaves out.
+MANIFEST = "content.xml"
+
+#: Root attributes a reader looks for first; the rest follow alphabetically.
+_MANIFEST_ATTR_ORDER = ("id", "version", "date")
+
+
+@dataclass
+class ManifestDiff:
+    """The manifest comparison. Each state is a different answer, so none collapses
+    into another: identical | differs | absent-old | absent-new | absent-both |
+    unreadable. `not-compared` is the default until a comparison has run."""
+    state: str = "not-compared"
+    old_label: str = "OLD"
+    new_label: str = "NEW"
+    #: (attr, old, new) for the root element, `_MANIFEST_ATTR_ORDER` first.
+    root_changes: list[tuple[str, str, str]] = field(default_factory=list)
+    #: Every row, root attributes included. None unless there is something to list.
+    detail: FileDiff | None = None
+    #: Why it could not be read (state `unreadable`).
+    reason: str = ""
+    #: A limit on what was compared, stated next to the answer.
+    note: str = ""
+
+    @property
+    def not_read(self) -> bool:
+        return self.state in ("unreadable", "not-compared")
+
+
+def compare_manifests(old_dir: Path, new_dir: Path,
+                      old_label: str = "OLD", new_label: str = "NEW") -> ManifestDiff:
+    """Compare two mod folders' `content.xml`, semantically like any other document.
+
+    Root attributes are compared directly, with `diff_file` given attribute-less roots
+    for everything below them: `_node_key` keys a root on its `id`, so a changed id
+    would otherwise read as the whole document removed and added, with no id row.
+    """
+    m = ManifestDiff(old_label=old_label, new_label=new_label)
+    problems: list[str] = []
+
+    def _read(mod_dir: Path, label: str) -> etree._Element | None:
+        # Passing `skipped` is what separates "could not read" from "not there".
+        skipped: list[str] = []
+        root = _merge.overlay_root(mod_dir, MANIFEST, skipped)
+        problems.extend(f"{label}: {s}" for s in skipped)
+        return root
+
+    o, n = _read(old_dir, old_label), _read(new_dir, new_label)
+    if problems:
+        m.state, m.reason = "unreadable", "; ".join(problems)
+    elif o is None and n is None:
+        m.state = "absent-both"
+    elif o is None:
+        m.state, m.detail = "absent-old", FileDiff(MANIFEST, "added")
+    elif n is None:
+        m.state, m.detail = "absent-new", FileDiff(MANIFEST, "removed")
+    else:
+        attrs = sorted(set(o.attrib) | set(n.attrib), key=lambda a: (
+            _MANIFEST_ATTR_ORDER.index(a) if a in _MANIFEST_ATTR_ORDER
+            else len(_MANIFEST_ATTR_ORDER), a))
+        m.root_changes = [(a, o.get(a, "∅"), n.get(a, "∅")) for a in attrs
+                          if o.get(a) != n.get(a)]
+        bare_o, bare_n = copy.deepcopy(o), copy.deepcopy(n)
+        bare_o.attrib.clear()
+        bare_n.attrib.clear()
+        fd = diff_file(bare_o, bare_n, MANIFEST)
+        fd.attr_changes[:0] = [(f"/{n.tag}", a, ov, nv) for a, ov, nv in m.root_changes]
+        m.state = "differs" if fd.weight else "identical"
+        m.detail = fd if fd.weight else None
+    return m
+
+
 @dataclass
 class ModDiff:
     old: str
@@ -306,6 +386,9 @@ class ModDiff:
     #: would not parse. Without this they fell out of `files` entirely and read
     #: as UNCHANGED — the one verdict a diff must never invent.
     unreadable: list[str] = field(default_factory=list)
+    #: Reported on its own line and never counted in `files`: "changed files" is the
+    #: game documents, and gates/diff_truth.py pins it to the files it mutates.
+    manifest: ManifestDiff = field(default_factory=ManifestDiff)
 
     def changed(self):
         return [f for f in self.files if f.status == "changed" and f.weight]
@@ -318,10 +401,14 @@ class ModDiff:
 
 
 def diff_mods(old_dirs: Path | list[Path], new_dir: Path,
-              ignore_suffixes: tuple[str, ...] = (".xsd",)) -> ModDiff:
+              ignore_suffixes: tuple[str, ...] = IGNORED_SUFFIXES) -> ModDiff:
     """Diff *new_dir* against a baseline of one or more *old_dirs* (merged in order)."""
     old_list = [old_dirs] if isinstance(old_dirs, Path) else list(old_dirs)
     md = ModDiff(" + ".join(d.name for d in old_list), str(new_dir))
+    md.manifest = compare_manifests(old_list[0], new_dir)
+    if len(old_list) > 1:
+        md.manifest.note = (f"compared against {old_list[0].name} only; "
+                            "baseline layers' manifests are not merged")
     ov, nv = merged_vpaths(old_list), mod_xml_vpaths(new_dir)
     drop = lambda low: low.endswith(ignore_suffixes)
     for low in nv.keys() - ov.keys():
