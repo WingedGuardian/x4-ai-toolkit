@@ -457,6 +457,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F352 | Callers of the save sniff that only need a yes can label a save copy by its cheap reason in count rows | **SCOPE LIMIT (measured)** · IN-ARC | 5,034 files: verdict differs on 0, reason text on 6, all crafted save copies | OPEN, by design: labels only |
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
+| F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12092,3 +12093,11 @@ LIMITS found by review, not fixed. A DLC's complete file over a base file is ski
 can still return the base document with no note: MEASURED on a synthetic case, 0 of 159 loose door documents here, packed
 mods not scanned. A bare `libraries/god.xml` ignores patches in a DLC's tree with no note: 6 of those 159, PRE-ARC, and
 whether the engine applies those patches is not measured.
+
+## F355 - x4diff compares the manifest against the first stacked baseline only · **SCOPE LIMIT (measured)** · IN-ARC · confidence 90% · OPEN, disclosed
+
+`x4diff` now compares `content.xml`, which it used to leave out without saying so. With `--overlay` or a repeated `--base`, it
+compares against the first baseline folder only, because later layers' manifests are not merged. The output says so. The
+denominator is every stacked run; MEASURED on fixtures only, with no real mods.
+
+**NO RE-DERIVATION: a scope statement; the fixture behaviour is pinned by the x4diff tests, not this sentence.**
