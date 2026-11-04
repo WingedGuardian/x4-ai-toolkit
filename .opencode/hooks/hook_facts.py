@@ -6800,11 +6800,12 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
 
     modlist_writes = set()
     non_modlist_writes = set()
+    # A move is not on the list: it also removes its source, which may be a save.
     # One recognized data-write primitive only. Compound commands can change a
     # destination's kind or link state before a later write. Retain their prior
     # profile confirmation rather than infer future filesystem state from now.
     simple_modlist_write = (len(all_cmds) == 1 and len(seg_cwd) == 1
-        and _verb_name(verb(seg_cwd[0][0])) in {':', 'echo', 'printf', 'cat', 'tee', 'cp', 'mv', 'touch'}
+        and _verb_name(verb(seg_cwd[0][0])) in {':', 'echo', 'printf', 'cat', 'tee', 'cp', 'touch'}
         and not any(marker in body for marker in ('$(', '`', '<(', '>(')))
 
     def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file", copy_sources=None):

@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -90,11 +91,14 @@ def _known_documents():
 
 
 def _is_dir(path):
-    """A denied folder must not stop every look: Path.is_dir can raise PermissionError, depending on the Python."""
+    """Absent is False. A folder that cannot be examined is True: dropping it would read its saves as removed, while
+    keeping it lets the listing fail and report it as unread, with its saves carried as unknown."""
     try:
-        return Path(path).is_dir()
-    except OSError:
+        return stat.S_ISDIR(os.stat(path).st_mode)
+    except (FileNotFoundError, NotADirectoryError, ValueError):
         return False
+    except OSError:
+        return True
 
 
 def save_folders(roots):
@@ -106,7 +110,7 @@ def save_folders(roots):
             try:
                 found.extend(p / "save" for p in profile.iterdir() if _is_dir(p))
             except OSError:
-                pass                    # silent-ok: the configured folders are still watched
+                found.append(profile)   # its accounts cannot be named: a failed listing reports this folder as unread
     unique = {}
     for f in found:
         if _is_dir(f):

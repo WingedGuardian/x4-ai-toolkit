@@ -300,7 +300,7 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
   does not change that file's treatment. Shell writes must resolve to an actual
   mod-list file target; configuration links, directories, destructive operations
   and mixed protected writes keep their existing safeguards.
-  The shell exemption covers one recognized data-write operation at a time;
+  The shell exemption covers one recognized data write or copy at a time, not a move;
   compound or opaque programs keep their previous profile confirmation because
   an earlier action can change a later destination into a directory or link.
   An opaque program naming saves requires review; its named pairs are preserved first,

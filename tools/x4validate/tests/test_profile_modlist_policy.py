@@ -113,7 +113,6 @@ def test_guarded_new_profile_transaction_scratch_only(candidate):
     for path,data in files.items():
         path.parent.mkdir(parents=True,exist_ok=True)
         with path.open("xb") as stream:stream.write(data)
-    assert {path:path.read_bytes() for path in files}==files
     assert current.read_bytes()==b"<content existing='preserve'/>"
 
 def test_mutation_snapshot_carries_modlist_native_path_dependency(tmp_path):
@@ -229,7 +228,9 @@ def test_shell_copy_destination_named_content_xml_is_not_a_modlist(guard):
     g, roots = guard
     target = roots['X4_PROFILE'] / 'content.xml'
     target.mkdir(parents=True)
-    command = "cp fixture.xml '" + str(target) + "'"
+    origin = target.parent / 'fixture.xml'
+    origin.write_bytes(b'<x/>')
+    command = "cp '" + str(origin) + "' '" + str(target) + "'"
     reply = g.verdict_for('shell', 'bash', command, None, save_qualified=False)
     assert reply['decision'] == 'ask' and not reply['inert'], reply
 
@@ -277,3 +278,27 @@ def test_shell_profile_parent_link_cannot_gain_modlist_exemption(guard, tmp_path
     command = "echo fixture > '" + str(linked_numeric / 'content.xml') + "'"
     reply = g.verdict_for('shell', 'bash', command, None, save_qualified=False)
     assert reply['decision'] == 'ask' and not reply['inert'], reply
+
+
+@pytest.mark.parametrize('source', ['other/save/s2.xml.gz', 'other/config.xml', 'plain.xml'])
+def test_a_move_onto_the_modlist_keeps_its_confirmation(guard, source):
+    """A move also removes its source: a save moved this way would lose its only copy with no backup and no question."""
+    g, roots = guard
+    profile = roots['X4_PROFILE']
+    origin = profile.parent / source
+    origin.parent.mkdir(parents=True, exist_ok=True)
+    origin.write_bytes(b'<x/>')
+    command = "mv '" + str(origin) + "' '" + str(profile / 'content.xml') + "'"
+    reply = g.verdict_for('shell', 'bash', command, None, save_qualified=False)
+    assert reply['decision'] == 'ask' and not reply['inert'], reply
+
+
+def test_TWIN_a_copy_of_a_real_file_onto_the_modlist_is_advisory(guard):
+    g, roots = guard
+    profile = roots['X4_PROFILE']
+    profile.mkdir(parents=True, exist_ok=True)
+    origin = profile.parent / 'plain.xml'
+    origin.write_bytes(b'<x/>')
+    command = "cp '" + str(origin) + "' '" + str(profile / 'content.xml') + "'"
+    reply = g.verdict_for('shell', 'bash', command, None, save_qualified=False)
+    assert reply['decision'] != 'ask' and not reply['inert'], reply

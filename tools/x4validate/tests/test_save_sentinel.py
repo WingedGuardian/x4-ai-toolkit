@@ -833,23 +833,70 @@ def test_TWIN_a_change_is_still_said_while_a_standing_note_is_quiet(world, monke
 def test_a_denied_folder_does_not_stop_every_look(world, monkeypatch, tmp_path):
     mod, roots, saves, tk = world
     denied = tmp_path / "denied" / "save"
-    real = Path.is_dir
-    def is_dir(self, *a, **k):
-        if self == denied:
-            raise PermissionError("denied")
-        return real(self, *a, **k)
-    monkeypatch.setattr(Path, "is_dir", is_dir)
+    denied.mkdir(parents=True)
     monkeypatch.setattr(mod.save_policy, "folders", lambda _roots: (saves, denied))
-    assert mod.save_folders(roots) == (saves,)
+    _deny(monkeypatch, denied)
+    assert mod.report(roots, now=1000.0)[0].count(str(denied)) == 1
 
 
-def test_TWIN_a_documents_folder_that_cannot_be_listed_does_not_stop_every_look(world, monkeypatch, tmp_path):
+def _deny(monkeypatch, denied):
+    """A folder whose PARENT refuses access: stat raises PermissionError and so does listing, as on a real deny rule."""
+    top = os.path.join(os.path.abspath(denied), "")
+    real_stat, real_scandir = os.stat, os.scandir
+    def stat(path, *a, **k):
+        if os.path.join(os.path.abspath(os.fspath(path)), "").startswith(top):
+            raise PermissionError(13, "denied", str(path))
+        return real_stat(path, *a, **k)
+    def scandir(path="."):
+        if os.path.join(os.path.abspath(os.fspath(path)), "").startswith(top):
+            raise PermissionError(13, "denied", str(path))
+        return real_scandir(path)
+    monkeypatch.setattr(os, "stat", stat)
+    monkeypatch.setattr(os, "scandir", scandir)
+
+
+def test_a_folder_behind_a_denied_parent_is_unread_never_removed(world, monkeypatch, tmp_path):
+    """Dropping it from the watch list read every save in it as removed, then said nothing, and missed later changes."""
+    mod, roots, saves, tk = world
+    other = tmp_path / "other" / "save"
+    other.mkdir(parents=True)
+    s = other / "save_009.xml.gz"
+    s.write_bytes(b"x")
+    monkeypatch.setattr(mod.save_policy, "folders", lambda _roots: (saves, other))
+    assert mod.report(roots, now=1000.0) == ("", False)
+    with monkeypatch.context() as held:
+        _deny(held, other)
+        text, _loud = mod.report(roots, now=1010.0)
+    assert "removed" not in text and str(other) in text, text
+    with monkeypatch.context() as held:
+        _deny(held, other)
+        assert mod.report(roots, now=1020.0)[0] == ""
+    _bump(s, b"changed while denied")
+    text, loud = mod.report(roots, now=1030.0)
+    assert loud and "modified: " + str(s) in text
+
+
+def test_TWIN_a_folder_that_is_really_gone_still_reads_as_gone(world, monkeypatch, tmp_path):
+    mod, roots, saves, tk = world
+    other = tmp_path / "other" / "save"
+    other.mkdir(parents=True)
+    s = other / "save_009.xml.gz"
+    s.write_bytes(b"x")
+    monkeypatch.setattr(mod.save_policy, "folders", lambda _roots: (saves, other))
+    assert mod.report(roots, now=1000.0) == ("", False)
+    s.unlink()
+    other.rmdir()
+    assert "removed: " + str(s) in mod.report(roots, now=1010.0)[0]
+
+
+def test_TWIN_a_documents_folder_that_cannot_be_listed_is_still_named_as_unread(world, monkeypatch, tmp_path):
     mod, roots, saves, tk = world
     docs = tmp_path / "docs"
-    (docs / "Egosoft" / "X4").mkdir(parents=True)
+    profile = docs / "Egosoft" / "X4"
+    profile.mkdir(parents=True)
+    monkeypatch.setattr(mod, "_known_documents", lambda: [docs])
+    monkeypatch.setattr(mod.save_policy, "folders", lambda _roots: (saves,))
     def refuse(self):
         raise PermissionError("denied")
-    monkeypatch.setattr(mod, "_known_documents", lambda: [docs])
     monkeypatch.setattr(Path, "iterdir", refuse)
-    monkeypatch.setattr(mod.save_policy, "folders", lambda _roots: (saves,))
-    assert mod.save_folders(roots) == (saves,)
+    assert profile in mod.save_folders(roots)

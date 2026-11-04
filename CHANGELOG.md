@@ -2,7 +2,7 @@
 
 ## v4.1.0 — 2026-11-04
 
-- Save sentinel: a look that fails after its check keeps the finding for the next look, because the record is now written last. A failed look reaches the user once an hour, not only the agent. A folder that stays unreadable is mentioned once, and a denied folder no longer stops every look.
+- Save sentinel: a look that fails after its check keeps the finding for the next look, because the record is now written last. A look that fails once the toolkit folder is known reaches the user once an hour as well as the agent; a failure before that, or a module that will not import, reaches the agent only. A folder that stays unreadable is mentioned once, a denied folder no longer stops every look, and its saves are carried as unknown, not reported as removed.
 
 - Session charter and ledger: the folder ignores itself in git and its files are private to the user where the platform has modes. An edited charter cannot end its own record, and charter and ledger text is labelled as a record, not instructions. A first prompt with a malformed character is kept, so the second prompt is no longer recorded as the first.
 
@@ -27,7 +27,7 @@
 - `x4modlist refresh --dry-run` says which rows a refresh would fetch, search for or skip, with no network, no
   key and no write.
 
-- Creating or editing a profile's root `content.xml` no longer asks for a second approval, including new numeric test profiles and profiles other than `X4_PROFILE`. File edits, shell writes and batched Action v1 requests follow the same advisory policy. Configuration files, nested lookalikes, destructive operations, save preservation and game/reference hard blocks retain their protections.
+- Creating or editing a profile's root `content.xml` no longer asks for a second approval, including new numeric test profiles and profiles other than `X4_PROFILE`. File edits, single simple shell writes and copies, and batched Action v1 requests follow the same advisory policy. A move onto `content.xml` still asks, because it also removes its source. Configuration files, nested lookalikes, destructive operations, save preservation and game/reference hard blocks retain their protections.
 
 - `x4effective dump` with a bare path to a file only a DLC ships now returns the document mods actually patch, with a note saying so. It used to return the unpatched file with no warning (588 of 716 patched DLC documents here). A file a mod ships into a DLC's tree still reads as absent at the bare path, and the message now names where it is.
 
