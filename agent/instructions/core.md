@@ -126,7 +126,7 @@ For any bulk XML operation (mass stat changes, adding content to many files):
   own files
 
 ### Requires confirmation
-- Changes to non-save user-profile files (`Documents\Egosoft\X4\`); a `content.xml` edit is only ADVISED
+- Changes to non-save user-profile files (`Documents\Egosoft\X4\`); root `content.xml` creation/edits in any profile are only ADVISED
 - Deleting other files in the X4 profile, or removing a deployed mod (anything in a folder
   under the game's `extensions\`); other deletes in an X4 directory get an advisory
 - Removing several deployed mods: do it in ONE command, so the user answers one prompt

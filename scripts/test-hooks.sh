@@ -163,6 +163,8 @@ run_layout(){ # run_layout <name> <toolkit> <game>
   # User ruling 2026-10-28: routine mod-list updates are advisory. Later hard
   # blocks still run; other profile edits and destructive shell actions still ask.
   decide advise protect-files.sh "$(fj "$SBX_TMP/profile/content.xml")"       "profile mod-list edit is advisory"
+  decide advise protect-files.sh "$(fj "$SBX_TMP/docs/Egosoft/X4/12345678/content.xml")" "new secondary profile mod-list is advisory"
+  decide ask protect-files.sh "$(fj "$SBX_TMP/docs/Egosoft/X4/12345678/nested/content.xml")" "nested content.xml is not a profile mod-list"
   # ...and a DEPLOYED mod's manifest must still reach the extensions rule below the
   # advisory. MEASURED 2026-08-30 (F84): an advisory that exits makes every rule under
   # it unreachable, so this manifest was advised and never confirmed.
@@ -374,6 +376,8 @@ decide advise protect-bash.sh "$(cj "rm -rf '$X4_MODS/other'")" "rm inside mod s
 # Documents writes became ADVISORIES. The X4 PROFILE keeps asking (standing rule: a bad
 # content.xml or save="1" can damage saves); saves keep asking; game/reference stay hard.
 decide ask   protect-bash.sh "$(cj "echo x > '$SBX_TMP/profile/config.xml'")"   "writing into the X4 PROFILE still confirms"
+decide advise protect-bash.sh "$(cj "echo x > '$SBX_TMP/profile/content.xml'")" "writing the configured profile mod-list is advisory"
+decide ask protect-bash.sh "$(cj "echo x > '$SBX_TMP/profile/content.xml'; echo x > '$SBX_TMP/profile/config.xml'")" "mod-list write does not cover a config write"
 decide ask   protect-bash.sh "$(cj "rm -f '$SBX_TMP/profile/config.xml'")"   "deleting in the X4 PROFILE still confirms"
 decide ask   protect-bash.sh "$(cj "cp '$SBX_TMP/a.txt' '$SBX_TMP/profile/b.xml'")"   "copying INTO the X4 profile still confirms"
 # --- rule 2: the redirect advisory must test the TARGET, not the whole string ----
@@ -591,7 +595,8 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
   "a substituted argument in a cd is untouched"
 
 
-EXPECT=333
+# Two new file cases in each layout, plus two shell cases: 333 + 2*2 + 2.
+EXPECT=339
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
@@ -1264,7 +1269,7 @@ unset X4_PROFILE X4_SAVES
 export X4_DOCUMENTS="$SBX_TMP/pdocs"; mkdir -p "$X4_DOCUMENTS/Egosoft/X4/123/save" "$X4_DOCUMENTS/Other Game"
 printf 'save fixture' > "$X4_DOCUMENTS/Egosoft/X4/123/save/s1.xml.gz"
 decide advise protect-bash.sh "$(cj "rm -f '$X4_DOCUMENTS/Egosoft/X4/123/save/s1.xml.gz'")" "X4_PROFILE unset: a named save is preserved before allowance"
-decide ask    protect-bash.sh "$(cj "echo x > '$X4_DOCUMENTS/Egosoft/X4/123/content.xml'")" "X4_PROFILE unset: writing the profile content.xml still ASKS"
+decide advise protect-bash.sh "$(cj "echo x > '$X4_DOCUMENTS/Egosoft/X4/123/content.xml'")" "X4_PROFILE unset: root profile mod-list write is advisory"
 decide advise protect-bash.sh "$(cj "rm -f '$X4_DOCUMENTS/Other Game/a.txt'")"            "TWIN: another game's file in Documents is only advised"
 export X4_DOCUMENTS="$SBX_TMP/no-docs-here" HOME="$SBX_TMP/phome"; mkdir -p "$HOME/.config/EgoSoft/X4/123"
 decide ask    protect-bash.sh "$(cj "rm -f '$HOME/.config/EgoSoft/X4/123/content.xml'")"   "X4_PROFILE unset, Linux layout: ~/.config/EgoSoft/X4 still ASKS"
