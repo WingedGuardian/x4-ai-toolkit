@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `x4effective dump` with a bare path to a file only a DLC ships now returns the document mods actually patch, with a note saying so. It used to return the unpatched file with no warning (588 of 716 patched DLC documents here). A file a mod ships into a DLC's tree still reads as absent at the bare path, and the message now names where it is.
+
 - Shared preservation core pinned to e0851b8: each path resolves once per read-only pass, in the core itself. X4 uses it instead of its own wrapper, and a 3,589-path file check takes about 15-18 s.
 
 - `x4save vars <pattern> | head` exits quietly (rc 0) when the reader closes the pipe; it was reported as
