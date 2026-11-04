@@ -295,6 +295,14 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
 - **Command + file guards** (as Claude Code runs them; Codex and OpenCode reach the same guards
   through an adapter, see the agent table above) — block writes to `reference\` and direct `.cat`/`.dat` edits; confirm non-save profile changes. Recognized mutations of one or two saves first get permanent verified preservation; bulk save access needs bound human approval. A mod manifest is ADVISED rather than confirmed
   (a deliberate 2026-08-29 choice: the note is worth having, the interruption is not).
+  Root profile mod-enable lists (`content.xml`) also use advisory write policy,
+  including creation in a new numeric profile. Selecting another `X4_PROFILE`
+  does not change that file's treatment. Shell writes must resolve to an actual
+  mod-list file target; configuration links, directories, destructive operations
+  and mixed protected writes keep their existing safeguards.
+  The shell exemption covers one recognized data-write operation at a time;
+  compound or opaque programs keep their previous profile confirmation because
+  an earlier action can change a later destination into a directory or link.
   An opaque program naming saves requires review; its named pairs are preserved first,
   and unresolved save scope is refused. A separate profile confirmation never skips
   save preservation or bulk approval.

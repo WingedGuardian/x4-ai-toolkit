@@ -588,8 +588,9 @@ on rm_saves && [ "$_harness_save_qualified" != 1 ] && ask "DELETING A SAVE GAME,
 # MEASURED 2026-08-30: 193 of 196 hits were a command that merely NAMED a path there.
 # This was the only rule left spending the USER's attention on a false positive, so it
 # tests the write TARGET, not the whole string.
-# ADVISORY since 2026-10-02 (user; 13 prompts, 0 refused). The X4 PROFILE keeps asking.
-on writes_profile && [ "$_harness_save_qualified" != 1 ] && ask "WRITING OR DELETING IN YOUR X4 PROFILE (mod list, config, saves): a bad content.xml or save=\"1\" can damage saves. Confirm: $COMMAND"
+# Routine content.xml creation/updates follow ordinary mod-file write policy.
+# Other profile writes and destructive operations keep their confirmation.
+on writes_profile_other && [ "$_harness_save_qualified" != 1 ] && ask "WRITING OR DELETING IN YOUR X4 PROFILE (config, saves or other files): changes can damage saves. Confirm: $COMMAND"
 on writes_documents && advise "This writes or deletes under the Documents folder -- outside the toolkit and the game (game settings, other games, personal files). Keep it to what the task needs."
 
 # === CONFIRM — mv/cp into the game or profile dirs ===

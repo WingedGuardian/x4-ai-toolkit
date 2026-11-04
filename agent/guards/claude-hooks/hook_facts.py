@@ -18,7 +18,8 @@ Fixing those one predicate at a time meant writing the same parser eight more ti
 This is the "one implementation, asked for by everyone else" rule from CLAUDE.md's
 narrowing-step table, applied to the guards themselves.
 
-Most functions are pure. Two deliberate exceptions: Windows 8.3 aliases use
+Most functions are pure. Mod-list exemptions verify physical file targets;
+Windows 8.3 aliases use
 GetLongPathNameW to verify an existing prefix, and PowerShell text (the PowerShell TOOL's payload, or a
 `powershell -c` / `pwsh -Command` nested in a Bash command) is parsed by PowerShell's
 own parser: `powershell_to_sh` hands it to ps_translate.ps1, which answers "what does
@@ -35,6 +36,7 @@ import os
 import posixpath
 import fnmatch
 import itertools
+import importlib.util
 import re
 import shutil
 import subprocess
@@ -203,6 +205,62 @@ def under(path: str, root: str) -> bool:
         return False
     r, p = norm(root), norm(path)
     return p == r or p.startswith(r + "/")
+
+
+def is_profile_modlist(path: str, profile: str) -> bool:
+    """Exact configured mod-list or root content.xml of a numeric X4 profile.
+
+    Paths passed by the shell parser retain its ordinary link/hard-block checks.
+    This classifies only a write target; it never authorizes deletes or saves.
+    """
+    path = norm(path)
+    if (profile and not norm(profile).endswith('/egosoft/x4')
+            and path == norm(profile).rstrip('/') + '/content.xml'):
+        return True
+    marker = '/egosoft/x4/'
+    return marker in path and bool(re.fullmatch(r'[0-9]+/content[.]xml', path.split(marker, 1)[1]))
+
+
+def profile_modlist_write(path: str, physical: str, roots: dict, dialect: str,
+                          source_files: list[str] | None = None) -> bool:
+    """Grant the write exemption only after checking the actual filesystem target.
+
+    Preserve case for filesystem I/O. A directory operand is not a file; a link
+    to config/save/game data must not inherit the lexical content.xml exemption.
+    Failure to establish a physical target retains the ordinary confirmation.
+    """
+    if not physical or not is_profile_modlist(path, roots.get('profile', '')):
+        return False
+    try:
+        # Load the bridge beside THIS parser, not an ambient sys.path module
+        # from another checkout. facts() also supports standalone importlib users.
+        bridge_path = os.path.join(os.path.dirname(__file__), 'save_policy.py')
+        key = '_x4_modlist_bridge_' + os.path.normcase(os.path.abspath(bridge_path)).encode('utf-8').hex()
+        bridge = sys.modules.get(key)
+        if bridge is None:
+            spec = importlib.util.spec_from_file_location(key, bridge_path)
+            bridge = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(bridge)
+            sys.modules[key] = bridge
+        target = bridge.native(physical, dialect).resolve()
+        if target.exists() and (not target.is_file() or target.stat().st_nlink != 1):
+            return False
+        if source_files is not None:
+            if len(source_files) != 1:
+                return False
+            source = bridge.native(source_files[0], dialect)
+            if source.is_symlink() or not source.is_file():
+                return False
+        for key in ('reference', 'game', 'saves'):
+            if roots.get(key):
+                protected = bridge.native(roots[key]).resolve()
+                if target == protected or protected in target.parents:
+                    return False
+        profile = (str(bridge.native(roots['profile']).resolve())
+                   if roots.get('profile') else '')
+        return is_profile_modlist(str(target), profile)
+    except (OSError, ValueError, RuntimeError):
+        return False
 
 
 def is_root(path: str, root: str) -> bool:
@@ -6634,7 +6692,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # directory), so a segment is judged once per (seeded, unseeded) lane pair (FX-G7).
         bare = cwd_lanes(c, roots=roots)
         physical = cwd_lanes(c, base if (top or not moves) else "", seeded=True,
-                             roots=roots, physical=True) if evidence is not None else []
+                             roots=roots, physical=True)
         heads = _for_headers(c)
         for k, (s, ds) in enumerate(tracked):
             uds = bare[k][1] if k < len(bare) else [""]
@@ -6740,6 +6798,15 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     segs = [s for s, _ in seg_cwd]
     cwd = seg_cwd[-1][1] if seg_cwd else ""
 
+    modlist_writes = set()
+    non_modlist_writes = set()
+    # One recognized data-write primitive only. Compound commands can change a
+    # destination's kind or link state before a later write. Retain their prior
+    # profile confirmation rather than infer future filesystem state from now.
+    simple_modlist_write = (len(all_cmds) == 1 and len(seg_cwd) == 1
+        and _verb_name(verb(seg_cwd[0][0])) in {':', 'echo', 'printf', 'cat', 'tee', 'cp', 'mv', 'touch'}
+        and not any(marker in body for marker in ('$(', '`', '<(', '>(')))
+
     def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file", copy_sources=None):
         """(path resolved where it runs, unresolvable?, the token as written). A whole
         array reference -- a for-loop variable, `"${A[@]}"` -- yields one entry PER
@@ -6784,6 +6851,27 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                 d = c_old if (_DEBRIS.search(r) or _DEVICE.match(r)) else c_cwd
                 # An 8.3 short name is its long name (FX-G2 item 3; see long_name).
                 out.append((r if unres else long_name(join_cwd(d, r)), unres, r))
+                qualifies_as_modlist = False
+                if simple_modlist_write and operation == 'write' and scope != 'tree' and not unres:
+                    placed = physical_join('' if execution_context else physical_cwd, r,
+                                           posix_bash=POSIX_HOST and cur_dialect[0] != WINDOWS_DIALECT)
+                    source_files = None
+                    if scope == 'copy-destination':
+                        source_files = []
+                        for source in copy_sources or []:
+                            for resolved in resolve_all(source, assigns):
+                                resolved = subst_root_var(resolved, roots)
+                                if has_unresolved(resolved) or re.search(r'[*?\[\]{}]', resolved):
+                                    source_files.append('')
+                                else:
+                                    source_files.append(physical_join(physical_cwd, resolved,
+                                        posix_bash=POSIX_HOST and cur_dialect[0] != WINDOWS_DIALECT))
+                    if profile_modlist_write(out[-1][0], placed, roots, cur_dialect[0], source_files):
+                        qualifies_as_modlist = True
+                if operation == 'write':
+                    # Same spelling can occur as both a copy and a redirect.
+                    # A nonqualifying occurrence always dominates a qualifying one.
+                    (modlist_writes if qualifies_as_modlist else non_modlist_writes).add(out[-1])
                 if evidence is not None and operation:
                     # A cd prefix may fail and execution may continue. The existing parser
                     # does not prove control-flow dominance, so native context checks
@@ -7274,6 +7362,13 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             _AGENT_SETTINGS.search(norm(pp or rr))
             for pp, _u, rr in copy_t + redir_t_all + sed_t + out_t),
         "writes_profile": hit(writes_any, "profile"),
+        # Routine mod-list writes do not need another approval. Keep the full
+        # writes_profile fact above truthful; mixed config/save writes and every
+        # destructive target retain the existing confirmation policy.
+        "writes_profile_other": hit([
+            op for op in writes_any
+            if op not in modlist_writes or op in non_modlist_writes
+        ], "profile") or hit(rm_t + scoped_rm_t, "profile", conservative=True),
         # H1: any shell write/append/copy/move ONTO a host session transcript (see _HOST_TRANSCRIPT).
         # M1: also a directory destination that receives a .jsonl, and the host-relocated trees.
         "writes_host_transcript": transcript_copy or transcript_inline or any(

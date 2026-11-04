@@ -343,14 +343,46 @@ esac
 
 # === CONFIRMATION — user profile files (saves, config, active mod list) ===
 # Routine mod activation is part of an authorized install, not a second approval
-# ceremony (user ruling 2026-10-28). Only the canonical root mod-list qualifies;
-# other profile files and nested/symlinked lookalikes retain their policy. Do not
+# ceremony. A root mod-list in any numeric X4 profile qualifies, including a
+# not-yet-created profile, regardless of X4_PROFILE selection. Other profile
+# files and nested/symlinked lookalikes retain their policy. Do not
 # return here: save roots and game-install hard blocks below must still run.
 _profile_modlist=0
+x4_canon_memo "$FILE_PATH"; _profile_target="$_X4_CANON_RESULT"
 if [ -n "${X4_PROFILE:-}" ]; then
   x4_canon_memo "$X4_PROFILE"; _profile_root="${_X4_CANON_RESULT%/}"
   x4_canon_memo "$FILE_PATH"
   [ "$_X4_CANON_RESULT" = "$_profile_root/content.xml" ] && _profile_modlist=1
+fi
+# Match one profile ID and the exact filename after the FIRST canonical X4
+# profile-container marker. A nested save/content.xml cannot satisfy this.
+case "$_profile_target" in
+  */egosoft/x4/*)
+    _profile_tail="${_profile_target#*/egosoft/x4/}"
+    case "$_profile_tail" in
+      */content.xml)
+        _profile_id="${_profile_tail%/content.xml}"
+        case "$_profile_id" in ''|*[!0-9]*) ;; *) _profile_modlist=1 ;; esac ;;
+    esac ;;
+esac
+# An existing directory or multiply-linked inode is not an ordinary mod-list
+# file write. Preserve case for filesystem metadata, unlike comparison forms.
+if [ "$_profile_modlist" = 1 ]; then
+  if x4_winpath "$FILE_PATH"; then
+    _profile_physical="$_X4_WP"
+    if [ -e "$_profile_physical" ]; then
+      if [ ! -f "$_profile_physical" ]; then
+        _profile_modlist=0
+      else
+        _profile_links="$(stat -L -c '%h' -- "$_profile_physical" 2>/dev/null)" \
+          || _profile_links="$(stat -L -f '%l' "$_profile_physical" 2>/dev/null)" \
+          || _profile_links=""
+        [ "$_profile_links" = 1 ] || _profile_modlist=0
+      fi
+    fi
+  else
+    _profile_modlist=0
+  fi
 fi
 [ "$_profile_modlist" = 1 ] && advise "UPDATING THE MOD ENABLE/DISABLE LIST: $FILE_PATH -- carry out the authorized mod decision; preserve unrelated entries. No separate granular approval is required."
 x4_under "$FILE_PATH" "$X4_PROFILE" && [ "$_harness_save_qualified" != 1 ] && [ "$_profile_modlist" != 1 ] && { ask "EDITING USER PROFILE FILE: $FILE_PATH — changes affect live game config/saves. Confirm?"; return 0; }

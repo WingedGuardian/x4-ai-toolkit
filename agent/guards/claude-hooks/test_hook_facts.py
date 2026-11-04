@@ -7356,5 +7356,29 @@ def load_tests(loader, standard_tests, pattern):
     return standard_tests
 
 
+class TestProfileModlistWritePolicy(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.temp = tempfile.TemporaryDirectory(prefix='x4-modlist-')
+        self.addCleanup(self.temp.cleanup)
+        base = pathlib.Path(self.temp.name)
+        self.roots = {key: str(base / key) for key in ROOTS}
+        self.profile = pathlib.Path(self.roots['profile'])
+
+    def test_modlist_write_is_still_a_write_without_another_confirmation(self):
+        facts = F('echo fixture > ' + Q + str(self.profile / 'content.xml') + Q, roots=self.roots)
+        self.assertTrue(facts['writes_profile'])
+        self.assertFalse(facts['writes_profile_other'])
+
+    def test_configuration_write_still_requires_confirmation(self):
+        facts = F('echo fixture > ' + Q + str(self.profile / 'config.xml') + Q, roots=self.roots)
+        self.assertTrue(facts['writes_profile_other'])
+
+    def test_compound_modlist_write_retains_confirmation(self):
+        command = ('mkdir -p ' + Q + str(self.profile / 'content.xml') + Q
+                   + '; echo fixture > ' + Q + str(self.profile / 'content.xml') + Q)
+        self.assertTrue(F(command, roots=self.roots)['writes_profile_other'])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

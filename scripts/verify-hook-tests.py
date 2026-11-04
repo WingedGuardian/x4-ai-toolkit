@@ -59,7 +59,10 @@ HOOKS = REPO / ".claude" / "hooks"
 # ps_translate.ps1 travels with them: hook_facts.powershell_to_sh runs it from its OWN
 # directory, so a copy without it makes every PowerShell test a refusal and the baseline
 # red for a reason that has nothing to do with the code under test.
-FILES = ("hook_facts.py", "test_hook_facts.py", "ps_translate.ps1")
+# The mod-list exemption uses the native-path bridge beside its parser. Keep
+# the isolated baseline self-contained instead of mistaking a missing helper
+# for a production failure or a caught mutant.
+FILES = ("hook_facts.py", "test_hook_facts.py", "ps_translate.ps1", "save_policy.py")
 
 # (label, exact source text, replacement, the test that MUST go red)
 MUTANTS = [
