@@ -70,28 +70,12 @@
   not be listed or when the record of the last look is deleted or corrupt, and the hook says so when
   the sentinel module itself fails to import, instead of staying silent (BLIND-SPOTS F344).
 
-- Optional save locks (Windows):
-  `python tools/agent-harness.py save-lock status|on|off|unlock`. While on, NTFS
-  deny rules make Windows refuse any delete, overwrite, rename or recycle of a
-  locked save from any program running as the user; only an elevated `unlock` or
-  `off` lifts them. `unlock <save>` backs the save up first; `unlock <folder>` and
-  `off` change only permissions and back nothing up. `off` re-reads every save and
-  folder before reporting plain, and stays on while a lock cannot be lifted or read,
-  or a folder it locked has moved (`off --forget-missing` once that is dealt with).
-  A locked numbered save slot cannot be overwritten, by X4 either, until it is
-  unlocked; what X4 shows then has not been measured. An agent changing the locks is
-  asked first, in either direction. A failure while locking is reported loudly, once
-  per distinct failure, and never stops the sentinel's look. The locks outlast the
-  toolkit, so run `off` before removing it. Autosave and quicksave slots stay
-  unlocked; the sentinel locks each new save once it settles. `off` keeps working after a
-  Python version change: a folder's recorded identity no longer depends on how that Python
-  reports the volume (BLIND-SPOTS F350). A lock rule that names another account no longer counts
-  as locking the current user: locking adds the user's own rule, and `status` does not count that
-  save as protected. Off
-  unless chosen: `setup.sh` asks when run interactively (`--save-lock` /
-  `--no-save-lock`; the question now says plainly what a lock does to a numbered
-  slot), and `on` is refused from an elevated prompt. The switch lives
-  in `.modding-agent-harness/`, which the save guard already keeps from agents.
+- Save locks (Windows) cannot be turned on in this version: `save-lock on` and
+  `setup.sh --save-lock` refuse and change nothing. A lock binds X4 as well as agents, so a
+  player could not save over a locked save, and Windows permissions cannot tell the two
+  apart. `python tools/agent-harness.py save-lock status|off|unlock` remain, for anyone
+  holding locks from a pre-release build; `off` and `unlock` need an elevated prompt. Saves
+  stay protected by the guards, the backup before a save is changed and the sentinel.
 
 - Geometry comparison supports bounded recursive structural attachments, shared
   render-part references and an explicit `--geometry-pose bind` projection.
@@ -198,14 +182,10 @@ Command and file guards (the Bash and PowerShell channel judges paths by how the
   `.modding-agent-harness`, every look stays quiet and compares nothing. The agent still sees a note on each call and
   the change is reported once access returns, but the user is not raised.
 
-Save locks and the sentinel (locks are off unless you turn them on):
+The save guard and the sentinel:
 - The save-store guard resolves each path once per check. A link swapped by another process during that check can turn
   a deny into an allow. The same race already exists between any check and the command after it.
-- What X4 shows when it tries to overwrite a locked numbered save slot has not been measured.
-- The elevated `unlock` and `off` paths were not run end to end for this release. Try them on a throwaway folder before relying on locks.
-- `save-lock.json` and `save-lock-folders.json` can be deleted by anything that can delete from their parent folder, and a program run through an inline `python -c` is opaque to the guard that asks before the locks change.
 - The sentinel decides "the game wrote this" from two signs, X4 running or an exit that shows, and cannot separate writers inside that window: a change made while X4 runs, a stamp set back into a real window, a script that rewrites `uidata.xml`, a second exit file and at most 10 saves, and a copy of a profile with fewer than 5 other files all read as the game's. The signs were measured from file stamps on four profiles' last exits and one whole-profile copy; no game session was run, and that every exit writes the second file is inferred. It guards against accidents and careless scripts, not a determined attacker (BLIND-SPOTS F344).
-- Save-lock identity compares a folder's path, file id and the low 32 bits of its volume; this was measured on one NTFS folder under two Python versions, and ReFS was not measured. A mismatch fails by refusing: `off` stays on and says the folder moved (`off --forget-missing`). A deny rule naming a group is not read as binding, so locking fails loudly instead. If the record of the last sentinel look and its `.seen` mark are both deleted, the next look is a first look (BLIND-SPOTS F350).
 
 Housekeeping and the reference lock:
 - `agent_output` on a network share is now held and expiry on a network share is refused (a behaviour change).

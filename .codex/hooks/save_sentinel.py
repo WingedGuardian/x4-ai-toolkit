@@ -263,8 +263,7 @@ def lock_notes(root, state, before, profile, now):
     notes, loud = [], False
     if state.get("lock_enabled") and not enabled:
         notes.append("SAVE LOCK: save locking was switched OFF ({} changed or removed). If the user did not do this, "
-                     "an agent or script did: tell them now. Switching it back on is the user's decision: "
-                     "`python tools/agent-harness.py save-lock on`.".format(lock_switch(root)))
+                     "an agent or script did: tell them now.".format(lock_switch(root)))
         loud = True
     state["lock_enabled"] = enabled
     if not enabled or not save_lock.supported():

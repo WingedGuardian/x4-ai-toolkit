@@ -2,12 +2,14 @@
 
 Fake saves in tmp_path; the toolkit root is a temporary copy holding the vendored harness, so the sentinel's state
 and store never land in the repository; the OS Known Folder is switched off (X4_NO_KNOWN_FOLDERS)."""
+import argparse
 import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -635,13 +637,14 @@ def test_any_failure_inside_locking_is_loud_and_the_sentinel_still_reports(world
     assert "DID NOT RUN" not in text
 
 
-def test_the_switched_off_note_leaves_switching_back_on_to_the_user(world, monkeypatch):
+def test_the_switched_off_note_tells_the_user_and_offers_no_command_that_refuses(world, monkeypatch):
     mod, roots, saves, tk = world
     _fake_locks(mod, tk, monkeypatch)
     _switch(mod, tk, True)
     mod.report(roots, now=1000.0)
     _switch(mod, tk, False)
-    assert "user's decision" in mod.report(roots, now=1010.0)[0]
+    note = mod.report(roots, now=1010.0)[0]
+    assert "tell them now" in note and "save-lock on" not in note
 
 
 def test_auto_lock_gets_the_switch_so_off_can_account_for_a_new_folder(world, monkeypatch):
@@ -732,3 +735,44 @@ def test_TWIN_a_run_that_worked_discloses_nothing(tmp_path):
     r = _run_hook(tmp_path)
     assert r.returncode == 0
     assert "DID NOT RUN" not in r.stdout, r.stdout + r.stderr
+
+
+def _harness_that_cannot_lock(monkeypatch, core):
+    """tools/agent-harness.py with the lock core replaced. Never run these through the real command: while `on` still
+    worked, a first run of a test that did locked the real saves of the machine it ran on (2026-11-04). A regression
+    here must fail the test and touch nothing."""
+    harness = REPO / "tools" / "agent-harness.py"
+    monkeypatch.syspath_prepend(str(REPO / "tools" / "x4_harness"))
+    spec = importlib.util.spec_from_file_location("x4_agent_harness_t", harness)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod.save_policy, "core", core)
+    assert mod.save_policy.core is core
+    return mod
+
+
+def test_save_locks_cannot_be_turned_on_in_this_release(monkeypatch):
+    """A lock binds the game as well, and a player must be able to save over a save (owner ruling 2026-11-04)."""
+    def reached(root, name):
+        raise AssertionError("`save-lock on` reached the real " + name)
+    mod = _harness_that_cannot_lock(monkeypatch, reached)
+    out = mod.save_lock_command(argparse.Namespace(action="on", target=None, forget_missing=False))
+    assert out["decision"] == "refused" and "save over" in out["reason"], out
+
+
+def test_TWIN_the_way_back_out_of_locks_is_still_there(monkeypatch):
+    """Someone may hold locks from a pre-release build: `off` must still parse and reach its own checks. An empty core
+    has no turn_off, so reaching further raises and changes nothing."""
+    mod = _harness_that_cannot_lock(monkeypatch, lambda root, name: types.SimpleNamespace())
+    out = mod.save_lock_command(argparse.Namespace(action="off", target="somewhere", forget_missing=False))
+    assert out["decision"] == "refused" and "takes one save or folder" in out["reason"], out
+
+
+def test_setup_neither_asks_about_locks_nor_turns_them_on():
+    setup = REPO / "setup.sh"
+    if not setup.exists():
+        pytest.skip("setup.sh is not in this tree")
+    text = setup.read_text(encoding="utf-8")
+    assert "Lock your saves" not in text
+    assert "agent-harness.py\" save-lock on" not in text
+    assert "--save-lock: save locks cannot be turned on" in text

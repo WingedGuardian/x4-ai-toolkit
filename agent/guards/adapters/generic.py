@@ -58,9 +58,12 @@ def save_lock_folders(profile):
 
 
 def save_lock_command(args):
-    """status / on / off / unlock for the optional OS save locks. `unlock <save>` backs the save up into the permanent
+    """status / off / unlock for the OS save locks; `on` refuses. `unlock <save>` backs the save up into the permanent
     store first, and unlocks nothing when that backup fails. `unlock <folder>` and `off` only change permissions and
     back nothing up: they are the way back when a backup cannot be made."""
+    if args.action == "on":
+        return {"decision": "refused", "reason": "save locks cannot be turned on in this version: a lock binds X4 too, "
+                "and a player must be able to save over a save. Nothing was changed."}
     import save_sentinel
     lock = save_policy.core(ROOT, "save_lock")
     if (args.action == "unlock") != bool(args.target):
@@ -81,10 +84,6 @@ def save_lock_command(args):
                              "saves": len(state), "locked": sum(state.values())})
             return {"enabled": bool(lock.read_config(switch).get("enabled")), "elevated": lock.is_elevated(),
                     "folders": rows}
-        if args.action == "on":
-            done = lock.turn_on(switch, save_lock_folders(profile), profile.extensions)
-            return {"enabled": True, "folders": [{"folder": f, "locked_now": n, "left_unlocked": s}
-                                                 for f, n, s in done]}
         if args.action == "off":
             lifted = lock.turn_off(switch, save_lock_folders(profile), profile.extensions,
                                    forget_missing=args.forget_missing)
@@ -131,9 +130,9 @@ def main(argv=None):
     coverage = sub.add_parser("coverage")
     coverage.add_argument("--session-id", required=True)
     sub.add_parser("save-list")
-    # Optional OS save locks (user ruling 2026-10-31; modding_harness/save_lock.py): Windows refuses any delete or
-    # change of a locked save. `on` refused from an elevated prompt; `off` and `unlock` need one. `off` lifts every
-    # lock: the locks outlast the toolkit and ordinary Windows tools cannot lift them, so run it before removing it.
+    # OS save locks (modding_harness/save_lock.py): `on` refuses (user ruling 2026-11-04: a lock binds the game too, and
+    # a player must be able to save over a save). `off` and `unlock` stay, and need an elevated prompt: locks outlast
+    # the toolkit and ordinary Windows tools cannot lift them.
     locks = sub.add_parser("save-lock")
     locks.add_argument("action", choices=("status", "on", "off", "unlock"))
     locks.add_argument("target", nargs="?")
