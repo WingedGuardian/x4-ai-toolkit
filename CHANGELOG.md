@@ -2,6 +2,8 @@
 
 ## v4.1.0 — 2026-11-04
 
+- `x4-mod-release-review` now ends with the whole upload pack in one folder: archive, description, summary, changelog, upload notes, the previous page text, manifest and review record. The description is built from the live Nexus page through the API, with edits that refuse on a miss. If the API cannot provide the page, the skill stops and tells you instead of writing one fresh. The new `scripts/verify-mod-pack.py` refuses a pack with a missing or empty file, `<br`, an HTML entity, CRLF or a header line in a paste file, a changelog line over 120 characters, or an archive that differs from the manifest.
+
 - `x4modlist downloads` warns about what would go wrong after an install, for mods you might still install: the
   profile has an entry turning that id off; an installed mod has the same name under a different id; a profile
   named with the new `--test-profile` has no entry, so the mod would load there; and the merged icon total passes
