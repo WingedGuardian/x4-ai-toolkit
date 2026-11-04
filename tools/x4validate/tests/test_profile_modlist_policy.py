@@ -120,6 +120,8 @@ def test_mutation_snapshot_carries_modlist_native_path_dependency(tmp_path):
     import shutil
     import subprocess
     import sys
+    from _layout import require_repo
+    require_repo('scripts/verify-hook-tests.py', 'agent/guards/claude-hooks/test_hook_facts.py', why="the maintainers' mutation gate")
     spec = importlib.util.spec_from_file_location('modlist_mutation_gate', REPO / 'scripts/verify-hook-tests.py')
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
@@ -215,7 +217,8 @@ def test_modlist_parent_junction_cannot_hide_reference(guard, tmp_path, request)
 def test_modlist_source_fact_does_not_hide_the_write(guard):
     import importlib.util
     from codex_testlib import REPO
-    spec = importlib.util.spec_from_file_location('modlist_facts', REPO / 'agent/guards/claude-hooks/hook_facts.py')
+    from _layout import claude_hooks_source
+    spec = importlib.util.spec_from_file_location('modlist_facts', claude_hooks_source(why='the parser under test') / 'hook_facts.py')
     facts = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(facts)
     _, roots = guard

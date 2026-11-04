@@ -793,7 +793,8 @@ jobs:
           #    415 + 3 = 418
           # Not in the sum, each looked at: test_x4fresh_session +4 (needs_bash: ubuntu has bash), test_codex_rules +1
           # (this job installs codex), test_bootstrap_scripts_are_portable (9 .ps1 files at both commits, no change).
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '418' || '63' }}
+          # 2026-11-04 (rc3, ec8d30dc): windows 64 READ on 41870962364 (+2 test_verify_mod_pack, a whole number is the right type), +1 possible in test_profile_modlist_policy (file-symlink privilege), + 1 = 66.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '418' || '66' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar
