@@ -308,6 +308,65 @@ def test_file_flag_on_a_path_neither_side_has_says_so(tmp_path, capsys, name):
     assert "NOT IN THE COMPARISON" in out and "no differences" not in out, out
 
 
+@pytest.mark.parametrize("side", ["old", "new"])
+@pytest.mark.parametrize("sep", ["native", "forward"])
+def test_file_flag_with_an_absolute_path_under_either_mod_reaches_its_rows(tmp_path, capsys, side, sep):
+    old, new = _mod(tmp_path, "old", price="1"), _mod(tmp_path, "new", price="2")
+    path = (old if side == "old" else new).resolve() / "libraries" / "wares.xml"
+    rc, out = _run(capsys, old, new, "--file", path if sep == "native" else path.as_posix())
+    assert rc == 0, out
+    assert "@price: 1 -> 2" in out, out
+    assert "NOT IN THE COMPARISON" not in out
+
+
+def test_file_flag_with_an_absolute_path_to_a_file_one_side_has(tmp_path, capsys):
+    old, new = _mod(tmp_path, "old"), _mod(tmp_path, "new")
+    (old / "libraries" / "gone.xml").write_text("<gone/>", encoding="utf-8")
+    rc, out = _run(capsys, old, new, "--file", (old / "libraries" / "gone.xml").resolve())
+    assert rc == 0 and "REMOVED (present only in OLD)" in out, out
+
+
+def test_file_flag_with_an_absolute_path_to_an_overlay_file(tmp_path, capsys):
+    old, new, layer = _mod(tmp_path, "old"), _mod(tmp_path, "new"), _mod(tmp_path, "layer")
+    (layer / "libraries" / "extra.xml").write_text("<extra/>", encoding="utf-8")
+    rc, out = _run(capsys, old, new, "--overlay", layer, "--file", (layer / "libraries" / "extra.xml").resolve())
+    assert rc == 0 and "REMOVED (present only in OLD)" in out, out
+
+
+def test_file_flag_with_an_absolute_path_to_the_manifest(tmp_path, capsys):
+    old, new = _mod(tmp_path, "old", version="100"), _mod(tmp_path, "new", version="101")
+    rc, out = _run(capsys, old, new, "--file", (new / "content.xml").resolve())
+    assert rc == 0, out
+    assert "NOT IN THE COMPARISON" not in out and "no differences" not in out, out
+
+
+def test_file_flag_with_an_absolute_path_to_an_identical_file_is_no_differences(tmp_path, capsys):
+    """Twin: the mapping does not turn a true answer into a refusal, or print the folder."""
+    old, new = _mod(tmp_path, "old"), _mod(tmp_path, "new")
+    rc, out = _run(capsys, old, new, "--file", (new / "libraries" / "wares.xml").resolve())
+    assert rc == 0
+    assert "libraries/wares.xml: no differences" in out, out
+    assert str(tmp_path.resolve()) not in out
+
+
+@pytest.mark.parametrize("folder", ["other", "new2"], ids=["elsewhere", "sibling-sharing-a-prefix"])
+def test_file_flag_with_an_absolute_path_outside_both_says_so(tmp_path, capsys, folder):
+    old, new = _mod(tmp_path, "old", price="1"), _mod(tmp_path, "new", price="2")
+    outside = _mod(tmp_path, folder)
+    rc, out = _run(capsys, old, new, "--file", (outside / "libraries" / "wares.xml").resolve())
+    assert rc == 1
+    assert "NOT IN THE COMPARISON" in out and "no differences" not in out, out
+
+
+def test_three_way_file_flag_with_an_absolute_path_reaches_the_listing(tmp_path, capsys):
+    base = _mod(tmp_path, "base", price="1")
+    arch, curr = _mod(tmp_path, "arch", price="2"), _mod(tmp_path, "curr", price="3")
+    rc, relative = _run(capsys, arch, curr, "--base", base, "--file", "libraries/wares.xml")
+    rc2, absolute = _run(capsys, arch, curr, "--base", base, "--file", (curr / "libraries" / "wares.xml").resolve())
+    assert rc2 == rc and absolute == relative
+    assert "libraries/wares.xml" in relative
+
+
 def test_file_flag_on_a_one_sided_file_keeps_its_answer(tmp_path, capsys):
     old, new = _mod(tmp_path, "old"), _mod(tmp_path, "new")
     (new / "libraries" / "extra.xml").write_text("<extra/>", encoding="utf-8")

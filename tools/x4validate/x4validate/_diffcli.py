@@ -56,6 +56,20 @@ def _names_manifest(vpath: str) -> bool:
     return _norm_vpath(vpath).lower() == MANIFEST
 
 
+def _vpath_under(typed: str, roots: list[Path]) -> str:
+    """An absolute path under one of the compared folders as its vpath. Anything else is returned as typed."""
+    path = Path(typed)
+    if not path.is_absolute():
+        return typed
+    resolved = path.resolve()
+    for root in roots:
+        try:
+            return resolved.relative_to(root.resolve()).as_posix()
+        except ValueError:  # silent-ok: not under this root; a path under none stays as typed and is reported
+            continue
+    return typed
+
+
 def _fmt_summary(md: ModDiff) -> str:
     ch, ad, rm = md.changed(), md.added(), md.removed()
     lines = [f"# diff  {Path(md.old).name}  ->  {Path(md.new).name}",
@@ -96,7 +110,8 @@ def main(argv: list[str] | None = None) -> int:
                         "is the core alone, the submod's ops show as REMOVED nodes")
     p.add_argument("--detail", action="store_true",
                    help="list every attr change (element text shows as @text())")
-    p.add_argument("--file", help="detail one vpath only; content.xml shows the manifest comparison")
+    p.add_argument("--file", help="detail one vpath only, or an absolute path under a compared folder; "
+                                  "content.xml shows the manifest comparison")
     p.add_argument("--top", type=int, default=30, help="show N heaviest changed files (default: %(default)s)")
     p.add_argument("--base", action="append", default=[],
                    help="COMMON ANCESTOR of OLD and NEW: makes this a THREE-WAY "
@@ -110,6 +125,9 @@ def main(argv: list[str] | None = None) -> int:
     _input.require_mod_dir(Path(args.new), "NEW mod folder")
     for o in args.overlay:
         _input.require_mod_dir(Path(o), "--overlay dir")
+
+    if args.file:
+        args.file = _vpath_under(args.file, [Path(d) for d in (args.old, args.new, *args.overlay, *args.base)])
 
     if args.base:
         for b in args.base:
