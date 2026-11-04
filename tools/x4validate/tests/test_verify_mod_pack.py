@@ -34,8 +34,8 @@ BEFORE = f"description-BEFORE-v{VERSION}.txt"
 NOTES = "UPLOAD-NOTES.md"
 MANIFEST = "SHIPPED-MANIFEST.json"
 RECORD = "REVIEW-RECORD.md"
-PASTE_FILES = [DESCRIPTION, SUMMARY, CHANGELOG, BEFORE]
-TEXT_FILES = PASTE_FILES + [NOTES, RECORD]
+PASTE_FILES = [DESCRIPTION, SUMMARY, CHANGELOG]
+TEXT_FILES = PASTE_FILES + [BEFORE, NOTES, RECORD]
 
 
 def _mod():
@@ -90,7 +90,8 @@ def test_a_complete_pack_PASSES_and_states_what_it_checked(pack, capsys):
     assert mod.main([str(pack)]) == 0
     out = capsys.readouterr().out
     assert "PACK OK" in out, out
-    assert "4 paste file(s)" in out, out
+    assert "3 paste file(s)" in out, out
+    assert "rollback copy" in out, out
     assert "1 archive(s) matched" in out, out
     assert "2 changelog line(s)" in out, out
 
@@ -122,10 +123,21 @@ def test_a_missing_archive_is_named(pack):
 
 
 @pytest.mark.parametrize("name", TEXT_FILES)
-@pytest.mark.parametrize("body", [b"", b"  \r\n\n\t\n", b"\xef\xbb\xbf"], ids=["zero", "blank", "bom"])
+@pytest.mark.parametrize("body", [
+    b"", b"  \r\n\n\t\n", b"\xef\xbb\xbf",
+    "\u00a0\n".encode(), "\u200b\u200c\u200d\u2060\n".encode(), "\ufeff\u00a0 \u200b".encode(),
+], ids=["zero", "blank", "bom", "nbsp", "zero-width", "mixed"])
 def test_an_empty_required_file_is_named(pack, name, body):
     (pack / name).write_bytes(body)
     assert found(_mod(), pack) == [("empty", name)]
+
+
+@pytest.mark.parametrize("name", TEXT_FILES)
+@pytest.mark.parametrize("body", ["\u00a0Some text.\n", "\u200bSome text.\n"], ids=["nbsp", "zero-width"])
+def test_those_characters_beside_real_text_are_not_empty(pack, name, body):
+    """Twin: only a file with nothing else in it is empty."""
+    (pack / name).write_bytes(body.encode("utf-8"))
+    assert found(_mod(), pack) == []
 
 
 def test_an_empty_manifest_is_named(pack):
@@ -220,6 +232,69 @@ def test_a_paste_file_that_is_not_utf8_is_refused(pack):
     assert found(_mod(), pack) == [("not-utf8", DESCRIPTION)]
 
 
+# ---- the rollback copy keeps the previous page as it was -------------------------------------
+
+
+UNEDITED_PAGE = [
+    (b"Description: the old page opened like this\nThe text.\n", "header"),
+    (b"Version: 1.1.0\nThe text.\n", "header"),
+    (b"The text.\n# Install\nMore text.\n", "header"),
+    (b"Use &lt;add&gt; in a diff.\n", "entity"),
+    (b"line one<br />line two\n", "br"),
+    (b"line one\r\nline two\r\n", "crlf"),
+    (b"caf\xe9 in the wrong codepage\n", "not-utf8"),
+]
+UNEDITED_IDS = ["description", "version", "later-heading", "entity", "br", "crlf", "not-utf8"]
+
+
+@pytest.mark.parametrize("body,_code", UNEDITED_PAGE, ids=UNEDITED_IDS)
+def test_the_rollback_copy_is_not_refused_for_what_the_old_page_said(pack, body, _code):
+    (pack / BEFORE).write_bytes(body)
+    assert found(_mod(), pack) == []
+
+
+@pytest.mark.parametrize("name", PASTE_FILES)
+@pytest.mark.parametrize("body,code", UNEDITED_PAGE, ids=UNEDITED_IDS)
+def test_the_same_text_in_a_real_paste_file_is_still_refused(pack, name, body, code):
+    """Twin: the exemption belongs to the rollback copy alone."""
+    (pack / name).write_bytes(body)
+    assert found(_mod(), pack) == [(code, name)]
+
+
+def _before_row(body: bytes, **changes) -> dict:
+    return {"path": BEFORE, "size": len(body), "sha256": hashlib.sha256(body).hexdigest(), **changes}
+
+
+def test_a_rollback_copy_the_manifest_lists_must_match_it(pack):
+    body = (pack / BEFORE).read_bytes()
+    rows = _manifest()["files"]
+    _write_manifest(pack, _manifest(files=rows + [_before_row(body)]))
+    assert found(_mod(), pack) == []
+    (pack / BEFORE).write_bytes(b"X" * len(body))  # same size, so only the hash can see it
+    assert found(_mod(), pack) == [("rollback-hash", BEFORE)]
+
+
+def test_a_rollback_copy_the_manifest_lists_must_match_its_size(pack):
+    body = (pack / BEFORE).read_bytes()
+    rows = _manifest()["files"]
+    _write_manifest(pack, _manifest(files=rows + [_before_row(body, size=len(body) + 1)]))
+    assert found(_mod(), pack) == [("rollback-size", BEFORE)]
+
+
+def test_a_rollback_copy_listed_with_archives_is_checked_there(pack):
+    row = _manifest()["archives"][0]
+    _write_manifest(pack, _manifest(archives=[row, {"name": BEFORE, "size": (pack / BEFORE).stat().st_size,
+                                                    "sha256": "0" * 64}]))
+    assert found(_mod(), pack) == [("archive-hash", BEFORE)]
+
+
+def test_a_listed_row_for_another_file_does_not_bind_the_rollback_copy(pack):
+    """Twin: an unlisted rollback copy has no hash to match."""
+    rows = _manifest()["files"]
+    _write_manifest(pack, _manifest(files=rows + [{"path": "sub/" + BEFORE, "size": 1, "sha256": "0" * 64}]))
+    assert found(_mod(), pack) == []
+
+
 # ---- changelog line length -----------------------------------------------------------------
 
 
@@ -300,6 +375,59 @@ def test_a_malformed_manifest_field_is_named(pack, change, needle):
     problems = _mod().check_pack(pack).problems
     assert [(p.code, p.file) for p in problems] == [("manifest", MANIFEST)]
     assert needle in problems[0].detail
+
+
+@pytest.mark.parametrize("value", [None, "", "  ", 12, ["sample_mod"], {"id": "x"}],
+                         ids=["null", "empty", "blank", "number", "list", "object"])
+def test_a_manifest_whose_mod_is_not_a_name_is_refused(pack, value):
+    _write_manifest(pack, _manifest(mod=value))
+    problems = _mod().check_pack(pack).problems
+    assert [(p.code, p.file) for p in problems] == [("manifest", MANIFEST)]
+    assert '"mod"' in problems[0].detail
+
+
+def test_a_manifest_with_no_mod_key_is_refused(pack):
+    data = _manifest()
+    del data["mod"]
+    _write_manifest(pack, data)
+    problems = _mod().check_pack(pack).problems
+    assert [(p.code, p.file) for p in problems] == [("manifest", MANIFEST)]
+    assert '"mod"' in problems[0].detail
+
+
+WRONG_TYPES = [["a"], {"a": 1}, 12, 1.5, True, None]
+WRONG_TYPE_IDS = ["list", "object", "int", "float", "bool", "null"]
+
+
+@pytest.mark.parametrize("value", WRONG_TYPES, ids=WRONG_TYPE_IDS)
+@pytest.mark.parametrize("key", ["version", "status", "mod", "archives", "files"])
+def test_a_wrong_typed_top_level_field_is_a_named_problem(pack, key, value, capsys):
+    _write_manifest(pack, _manifest(**{key: value}))
+    mod = _mod()
+    assert mod.main([str(pack)]) == 1  # a traceback would never reach this line
+    out = capsys.readouterr().out
+    assert f'"{key}"' in out or f"{key}[0]" in out, out  # a list holding a non-object is named by its row
+
+
+@pytest.mark.parametrize("value", WRONG_TYPES, ids=WRONG_TYPE_IDS)
+@pytest.mark.parametrize("group,field", [("archives", "name"), ("archives", "sha256"), ("archives", "size"),
+                                         ("files", "path"), ("files", "sha256"), ("files", "size")])
+def test_a_wrong_typed_row_field_is_a_named_problem(pack, group, field, value, capsys):
+    if field == "size" and type(value) is int:
+        pytest.skip("a whole number is the right type for a size")
+    row = dict(_manifest()[group][0])
+    row[field] = value
+    _write_manifest(pack, _manifest(**{group: [row]}))
+    mod = _mod()
+    assert mod.main([str(pack)]) == 1
+    out = capsys.readouterr().out
+    assert f"{group}[0]" in out and f'"{field}"' in out, out
+
+
+def test_a_list_valued_archive_name_reports_the_row_and_the_archive_it_leaves_unlisted(pack):
+    row = _manifest()["archives"][0]
+    _write_manifest(pack, _manifest(archives=[{**row, "name": [ARCHIVE]}]))
+    assert found(_mod(), pack) == [("manifest", MANIFEST), ("archive-unlisted", ARCHIVE)]
 
 
 def test_a_manifest_with_no_archives_is_refused(pack):
@@ -449,3 +577,49 @@ def test_the_skill_requires_this_script_and_the_file_names_it_checks():
     for word in ("NEXUS-DESCRIPTION-v", "NEXUS-SUMMARY-v", "NEXUS-CHANGELOG-v", "description-BEFORE-v",
                  "UPLOAD-NOTES.md", "SHIPPED-MANIFEST.json", "REVIEW-RECORD.md", "archives"):
         assert word in text, word
+
+
+def _skill_text() -> str:
+    require_repo("agent/skills/x4-mod-release-review/SKILL.md")
+    data = (REPO / "agent/skills/x4-mod-release-review/SKILL.md").read_bytes()
+    return data.decode("utf-8").replace("\r\n", "\n")  # a checkout may carry either line ending
+
+
+def test_the_skill_cites_no_document_a_release_leaves_out():
+    text = _skill_text()
+    require_repo(".gitattributes")
+    ignored = [line.split()[0] for line in (REPO / ".gitattributes").read_text(encoding="utf-8").splitlines()
+               if line.strip().endswith("export-ignore") and not line.startswith("#")]
+    assert "docs/SUBAGENT-BRIEF.md" in ignored and "docs/REVIEW-SCOPE.md" in ignored  # the control
+    cited = [path for path in ignored if path.startswith("docs/") and path.rstrip("*/") in text]
+    assert cited == []
+
+
+def test_the_skill_keeps_the_rules_those_documents_carried():
+    text = " ".join(_skill_text().split())
+    assert "never run an installer" in text
+    assert "makes players REACH" in text
+
+
+def test_the_skills_fetch_sends_what_the_toolkits_own_lookups_send(monkeypatch):
+    """Runs the skill's own code block: the key comes from the helper and the app headers go with it."""
+    from x4validate import _nexus
+
+    block = _skill_text().split("```python\n", 1)[1].split("```", 1)[0]
+    block = "\n".join(line.strip() if not line.startswith("     ") else line[5:] for line in block.splitlines())
+    sent = []
+
+    def fake_open(req):
+        sent.append(req)
+        return {"description": "page text", "status": "published", "version": "1.1.0"}
+
+    monkeypatch.setattr(_nexus, "_open_json", fake_open)
+    monkeypatch.setattr(_nexus, "nexus_key", lambda: "fake-key-for-the-test")
+    scope: dict = {"__name__": "skill_block"}
+    exec(compile(block, "skill-block", "exec"), scope)  # noqa: S102 - the repo's own skill text
+    assert scope["page"]["description"] == "page text"
+    assert len(sent) == 1 and sent[0].full_url.startswith(_nexus.NEXUS_REST + "/")
+    headers = {k.lower(): v for k, v in sent[0].header_items()}
+    assert headers["apikey"] == "fake-key-for-the-test"
+    assert headers["application-name"] == _nexus._APP["Application-Name"]
+    assert headers["user-agent"] == _nexus._APP["User-Agent"]

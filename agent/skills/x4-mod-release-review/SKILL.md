@@ -16,8 +16,9 @@ Every rule below exists to prevent that.
 ## The rules
 
 1. **Read-only review.** While reviewing, change nothing in the mod, the game install, the user
-   profile or the package. Unpacked copies and reports go to the scratchpad. Reviewer subagents carry
-   the sandbox block from `{{TOOLKIT}}/docs/SUBAGENT-BRIEF.md` and are told not to edit.
+   profile or the package. Unpacked copies and reports go to the scratchpad. Reviewer subagents are told
+   not to edit, to never run an installer, a deploy script or anything else that writes against a real
+   target, to reproduce a defect only on a copy, and to write everything to the scratchpad.
 2. **Every finding goes to the author, including definite ones.** No silent fixes. No finding is
    dropped because the agent judged it minor.
 3. **What the author saw in game outranks the agent's reading of the files — for what they actually
@@ -82,8 +83,8 @@ Record the answer as the **author-tested set**. Tag each changed area tested or 
 Read every changed or added file **in full**, for context. **Findings are scoped to the changed
 nodes and what they affect.** Do not hunt through unchanged files. Something wrong in unchanged
 files that you notice anyway is reported as **PRE-EXISTING**, listed separately, and does not block
-the release: players already have it, so holding the release does not fix it. **Exception (from
-`{{TOOLKIT}}/docs/REVIEW-SCOPE.md`, the third bucket):** an old defect that this release makes players REACH —
+the release: players already have it, so holding the release does not fix it. **Exception:** an old
+defect that this release makes players REACH —
 through a new feature, a new default or a new instruction in the description — is treated as in-diff.
 
 ## Phase 3 — X4 checklist (check the rows the diff touches)
@@ -155,7 +156,7 @@ the final go. Then:
    - `NEXUS-DESCRIPTION-v{version}.txt`: the new page description (step 3)
    - `NEXUS-SUMMARY-v{version}.txt`: the short summary
    - `NEXUS-CHANGELOG-v{version}.txt`: one change per line, at most 120 characters each
-   - `description-BEFORE-v{version}.txt`: the previous page text, for rollback (step 3)
+   - `description-BEFORE-v{version}.txt`: the previous page text, unedited, for rollback (step 3)
    - `UPLOAD-NOTES.md`: the manual steps left for the author
    - `SHIPPED-MANIFEST.json`: `mod`, `version`, status `shipped`, `archives` (every download in this
      folder, by plain file name, with sha256 and size) and `files` (every packed file with path,
@@ -167,14 +168,25 @@ the final go. Then:
 3. **Build the description from the live page. Never write it fresh.** In order:
    - **Fetch it through the Nexus API, never by scraping the page.** No toolkit command returns the
      description: `fetch_mod` in `x4validate/_nexus.py` calls the right endpoint and drops the field.
-     Call `GET https://api.nexusmods.com/v1/games/x4foundations/mods/{id}.json` yourself, with the
-     author's key from `X4_NEXUS_KEY` in the `apikey` header (never print or log it), and read
-     `description` from the JSON. Also read `status` and `version`, and tell the author if the page
-     is not what you expected.
+     Make the same call with that module's helpers, in a script in the scratchpad, run from
+     `{{TOOLKIT}}/tools/x4validate` with `uv run --python 3.13 python <script>`:
+     ```python
+     from x4validate import _nexus
+
+     mod_id = 12345  # the mod's Nexus id
+     url = f"{_nexus.NEXUS_REST}/{mod_id}.json"
+     page = _nexus._mapped(f"page {mod_id}", _nexus._get_json, url, {"apikey": _nexus.nexus_key(), **_nexus._APP})
+     ```
+     `nexus_key()` finds the author's key in `X4_NEXUS_KEY` in the environment or in `x4-paths.env`, and
+     raises if neither has it. `_APP` is the application headers the API expects. Never print or log the
+     key. Read `description` from `page`. Also read `status` and `version`, and tell the author if the
+     page is not what you expected.
    - **Convert it to the editor's form.** The API hands back a display form that the editor does not
      accept. Drop each `<br />` that follows a newline, then unescape the HTML entities. Pasting the
      API's form fills the page with literal `<br />`. Save the converted text, unedited, as
-     `description-BEFORE-v{version}.txt`. Rollback pastes that file, so it gets the same conversion.
+     `description-BEFORE-v{version}.txt`. Rollback pastes that file, so it gets the same conversion
+     and no other change. The checker does not apply the paste-file rules to it: text like
+     `Version: 1.1.0`, `# Install` or a literal `&lt;` stays if the old page had it.
    - **Edit with anchored replacements.** Each edit names exact existing text and **refuses if that
      text is not found exactly once.** A miss means the page is not what you thought: stop and look,
      do not widen the anchor until it matches. Re-read the result and show the author the diff
@@ -194,7 +206,9 @@ the final go. Then:
    ```
    It refuses, naming every problem, on: a required file missing or empty; `<br` or an HTML entity, a
    carriage return, or a header line in a paste file; a changelog line over 120 characters; an
-   archive that differs from the manifest or is not listed in it; a folder it cannot read. `--help`
+   archive that differs from the manifest or is not listed in it; a manifest without `mod`; a folder
+   it cannot read. The rollback copy is checked only for being there, not being empty, and matching
+   the manifest if the manifest lists it. `--help`
    defines each of these. A pass says the folder has the right shape and paste form. It does not say
    the text is right, or that the description came from the live page. On a refusal, fix the pack and
    re-run. These are pack files, not the mod, so rule 4 does not apply to them. A refusal that would

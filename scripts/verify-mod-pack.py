@@ -12,12 +12,13 @@ REQUIRED FILES, all in the one folder. <version> is the manifest's "version".
   NEXUS-DESCRIPTION-v<version>.txt  paste file: the new page description
   NEXUS-SUMMARY-v<version>.txt      paste file: the short summary
   NEXUS-CHANGELOG-v<version>.txt    paste file: one change per line, at most 120 characters each
-  description-BEFORE-v<version>.txt paste file: the previous page text, for rollback
+  description-BEFORE-v<version>.txt the previous page text, for rollback (see THE ROLLBACK COPY)
   UPLOAD-NOTES.md                   the steps left for the author
   SHIPPED-MANIFEST.json             see below
   REVIEW-RECORD.md                  the baseline, the tested set, every finding and its answer
 Other files and subfolders are allowed and are not examined. An empty file, or one holding only
-whitespace, counts as empty.
+whitespace (a non-breaking space included) or invisible characters such as a zero-width space,
+counts as empty.
 
 A PASTE FILE is pasted whole into a web form, so it must be in the form the editor accepts. It is
 refused for:
@@ -35,6 +36,12 @@ refused for:
         purpose: "Fixed: a crash on load" is an ordinary first line of a changelog, so "any
         Key: value" would refuse good files.
 
+THE ROLLBACK COPY is the previous page as it was, so none of the paste-file rules apply to its text:
+a line such as "Version: 1.1.0" or "# Install", or a literal "&lt;", may be what that page said, and
+changing it would make the rollback wrong. It must exist, carry the manifest's version in its name,
+not be empty, and, if the manifest lists it ("files" with its plain name as the path, or "archives"),
+match that row's sha256 and size.
+
 SHIPPED-MANIFEST.json is a UTF-8 JSON object:
   {
     "mod": "my_mod",
@@ -43,9 +50,10 @@ SHIPPED-MANIFEST.json is a UTF-8 JSON object:
     "archives": [{"name": "my_mod-1.2.0.zip", "sha256": "<64 hex>", "size": 12345}],
     "files": [{"path": "ext_01.cat", "sha256": "<64 hex>", "size": 67890}]
   }
-"archives" lists every download in this folder, by plain file name, hashed as uploaded. "files"
-lists every file packed inside the release. "version" must match the versioned file names above,
-and "status" must be "shipped". Other keys are allowed.
+"mod" must be a non-empty string. "archives" lists every download in this folder, by plain file
+name, hashed as uploaded. "files" lists every file packed inside the release. "version" must match
+the versioned file names above, and "status" must be "shipped". Other keys are allowed. A field of
+the wrong type is reported like any other problem.
 
 WHAT THIS DOES NOT CHECK. It does not open an archive, compare "files" with anything, tell whether
 the description was really built from the live page, or read the prose. A clean run says the folder
@@ -59,6 +67,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from pathlib import Path
 from typing import NamedTuple
 
@@ -88,8 +97,9 @@ PASTE_FILES = (
     PasteFile("NEXUS-DESCRIPTION-v", ".txt"),
     PasteFile("NEXUS-SUMMARY-v", ".txt"),
     PasteFile("NEXUS-CHANGELOG-v", ".txt", True),
-    PasteFile("description-BEFORE-v", ".txt"),
 )
+ROLLBACK = PasteFile("description-BEFORE-v", ".txt")
+VERSIONED_FILES = (*PASTE_FILES, ROLLBACK)
 OTHER_REQUIRED = ("UPLOAD-NOTES.md", "REVIEW-RECORD.md")
 
 
@@ -112,7 +122,7 @@ class PackUnreadable(Exception):
 
 def required_label(name: str) -> str:
     """How a required file is named in a report: its version becomes `<version>`."""
-    for spec in PASTE_FILES:
+    for spec in VERSIONED_FILES:
         if name.startswith(spec.prefix) and name.endswith(spec.suffix):
             return spec.prefix + "<version>" + spec.suffix
     return name
@@ -134,7 +144,12 @@ def _sha256(path: Path) -> tuple[str, int]:
 
 
 def _blank(data: bytes) -> bool:
-    return not (data[len(BOM):] if data.startswith(BOM) else data).strip()
+    """Nothing a reader would see: whitespace, format characters (zero-width and the like) and controls."""
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:  # silent-ok: text that cannot decode is not blank; each caller reports the encoding
+        return False
+    return all(c.isspace() or unicodedata.category(c) in ("Cf", "Cc") for c in text)
 
 
 def _load(folder: Path, name: str, problems: list) -> bytes | None:
@@ -201,6 +216,18 @@ def _check_paste(name: str, data: bytes, is_changelog: bool, problems: list) -> 
             problems.append(Problem("line-too-long", name, f"line {number} has {len(line)} characters; "
                                                            f"the limit is {CHANGELOG_LINE_LIMIT}"))
     return sum(1 for line in lines if line.strip())
+
+
+def _check_rollback(name: str, data: bytes, file_rows: list, problems: list) -> None:
+    """The rollback copy's text is never judged; only a manifest row for it can refuse it."""
+    for row in file_rows:
+        if row["path"] != name:
+            continue
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != row["sha256"].lower():
+            problems.append(Problem("rollback-hash", name, f'sha256 is {digest}; the manifest says {row["sha256"]}'))
+        if len(data) != row["size"]:
+            problems.append(Problem("rollback-size", name, f'size is {len(data)}; the manifest says {row["size"]}'))
 
 
 def _plain_name(name: str) -> bool:
@@ -290,6 +317,7 @@ def check_pack(folder: Path) -> Result:
     version = None
     archive_rows = None
     listed_names: set = set()
+    file_rows: list = []
 
     # The manifest goes first: it supplies the version the file names are held to.
     if MANIFEST_NAME not in names:
@@ -305,6 +333,9 @@ def check_pack(folder: Path) -> Result:
             if data is not None and not isinstance(data, dict):
                 problems.append(Problem("manifest", MANIFEST_NAME, "the top level must be a JSON object"))
             elif isinstance(data, dict):
+                mod_name = data.get("mod")
+                if not isinstance(mod_name, str) or not mod_name.strip():
+                    problems.append(Problem("manifest", MANIFEST_NAME, '"mod" must be a non-empty string'))
                 candidate = data.get("version")
                 if isinstance(candidate, str) and candidate.strip():
                     version = candidate
@@ -317,14 +348,16 @@ def check_pack(folder: Path) -> Result:
                 if isinstance(raw_rows, list) and raw_rows:
                     # A row already refused as malformed still says the author meant that file,
                     # so its archive is not also reported as unlisted.
-                    listed_names = {r.get("name") for r in raw_rows if isinstance(r, dict)}
+                    # A name that is not a string is no file's name, and a list could not be held in a set.
+                    listed_names = {r.get("name") for r in raw_rows
+                                    if isinstance(r, dict) and isinstance(r.get("name"), str)}
                 else:
                     archive_rows = None
-                _rows(data, "files", "path", problems)
+                file_rows = _rows(data, "files", "path", problems)
 
     paste_count = 0
     changelog_lines = 0
-    for spec in PASTE_FILES:
+    for spec in VERSIONED_FILES:
         label = spec.prefix + "<version>" + spec.suffix
         matches = [n for n in names if n.startswith(spec.prefix) and n.endswith(spec.suffix)]
         if not matches:
@@ -338,6 +371,9 @@ def check_pack(folder: Path) -> Result:
             problems.append(Problem("wrong-version", name, f"the manifest's version is {version}"))
         data = _load(folder, name, problems)
         if data is None:
+            continue
+        if spec is ROLLBACK:
+            _check_rollback(name, data, file_rows, problems)
             continue
         paste_count += 1
         changelog_lines += _check_paste(name, data, spec.is_changelog, problems)
@@ -380,9 +416,10 @@ def main(argv: list | None = None) -> int:
             print(f"  [{problem.code}] {problem.file}: {problem.detail}")
         return 1
     print(f"PACK OK: {args.folder}")
-    print(f"  {result.paste_files} paste file(s) checked, {result.changelog_lines} changelog line(s), "
-          f"{result.archives_matched} archive(s) matched the manifest.")
-    print("  Not checked: the archive's contents, the prose, or where the description came from.")
+    print(f"  {result.paste_files} paste file(s) checked, rollback copy present, "
+          f"{result.changelog_lines} changelog line(s), {result.archives_matched} archive(s) matched the manifest.")
+    print("  Not checked: the archive's contents, the prose, the rollback copy's text, "
+          "or where the description came from.")
     return 0
 
 
