@@ -63,7 +63,11 @@ def test_no_predicate_is_silently_unfuzzed():
     for name in LABELS:
         assert "\n%s\t" % name in hook, (
             "%s is exempt as message text, but protect-bash.sh no longer reads it" % name)
-    METADATA = {"command", "cwd", "timeout", "background", "from_powershell"} | BRIDGE | LABELS
+    # `writes_profile` (4.1.0) stays the plain fact, "this writes in the profile". The rule reads
+    # `writes_profile_other`, which leaves out a verified mod-list write. Exempt only while that rule exists.
+    RAW = {"writes_profile"}
+    assert "on writes_profile_other" in hook, "writes_profile is exempt only while writes_profile_other carries the verdict"
+    METADATA = {"command", "cwd", "timeout", "background", "from_powershell"} | BRIDGE | LABELS | RAW
     unmapped = sorted(names - set(policy) - METADATA)
     assert not unmapped, (
         "these facts are computed but carry no verdict, so the fuzzer cannot test them "
