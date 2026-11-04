@@ -2,6 +2,7 @@
 
 ## v4.1.0 — 2026-11-04
 
+- `x4-mod-release-review` now ends with the whole upload pack in one folder: archive, description, summary, changelog, upload notes, the previous page text, manifest and review record. The description is built from the live Nexus page through the API, with edits that refuse on a miss. If the API cannot provide the page, the skill stops and tells you instead of writing one fresh. The new `scripts/verify-mod-pack.py` refuses a pack with a missing or empty file, `<br`, an HTML entity, CRLF or a header line in a paste file, a changelog line over 120 characters, or an archive that differs from the manifest.
 - `x4diff` now compares each mod's `content.xml` and prints what it found: identical, differs (with the version and date change), absent on a side, or not compared because it could not be read. It used to skip the manifest and `--file content.xml` said "no differences" even when the version had changed. Three-way mode reports it too, without classifying it. The manifest is not counted in `changed files`.
 
 - `x4diff --file` accepts `./path` and backslashes, and says a path is not in the comparison (exit 1) when x4diff does not compare that file type or neither side has it. These all used to print "no differences", even for a file that had changed.

@@ -149,17 +149,63 @@ Nothing is published until **every finding has the author's recorded answer** an
 the final go. Then:
 
 1. Pack with XRCatTool. Unpack the result to a scratch folder and confirm it matches the reviewed files.
-2. Write the release record in a folder **outside the mod's own folder**, so it is never packed. Use
-   the same place every release, e.g. `releases\{mod_name}\{version}\` beside `dev\`. Ask the author
-   once if they have no such place. It holds:
-   - `SHIPPED-MANIFEST.json`: every packed file with sha256 and size, status `shipped`. Once the
-     package is handed over, **treat it as published**: record it as the current version and the next
-     baseline without waiting for the author to confirm the upload. The next Phase 0 checks it
-   - a copy of the unpacked release (this is the next release's baseline)
+2. Build the **whole upload pack in one release folder**, **outside the mod's own folder**, so it is
+   never packed. Use the same place every release, e.g. `releases\{mod_name}\{version}\` beside
+   `dev\`. Ask the author once if they have no such place. A finished review with no pack is not a
+   finished release: the author should never have to ask where the description is. The folder holds:
+   - the archive to upload, and any optional file or separate source download
+   - `NEXUS-DESCRIPTION-v{version}.txt`: the new page description (step 3)
+   - `NEXUS-SUMMARY-v{version}.txt`: the short summary
+   - `NEXUS-CHANGELOG-v{version}.txt`: one change per line, at most 120 characters each
+   - `description-BEFORE-v{version}.txt`: the previous page text, for rollback (step 3)
+   - `UPLOAD-NOTES.md`: the manual steps left for the author
+   - `SHIPPED-MANIFEST.json`: `mod`, `version`, status `shipped`, `archives` (every download in this
+     folder, by plain file name, with sha256 and size) and `files` (every packed file with path,
+     sha256 and size). The script's `--help` has the exact format. Once the package is handed over,
+     **treat it as published**: record it as the current version and the next baseline without
+     waiting for the author to confirm the upload. The next Phase 0 checks it
    - `REVIEW-RECORD.md`: the baseline used, the author-tested set, every finding with its answer
-3. A clean review is necessary, not sufficient. The upload itself is the author's step.
+   - a copy of the unpacked release (this is the next release's baseline)
+3. **Build the description from the live page. Never write it fresh.** In order:
+   - **Fetch it through the Nexus API, never by scraping the page.** No toolkit command returns the
+     description: `fetch_mod` in `x4validate/_nexus.py` calls the right endpoint and drops the field.
+     Call `GET https://api.nexusmods.com/v1/games/x4foundations/mods/{id}.json` yourself, with the
+     author's key from `X4_NEXUS_KEY` in the `apikey` header (never print or log it), and read
+     `description` from the JSON. Also read `status` and `version`, and tell the author if the page
+     is not what you expected.
+   - **Convert it to the editor's form.** The API hands back a display form that the editor does not
+     accept. Drop each `<br />` that follows a newline, then unescape the HTML entities. Pasting the
+     API's form fills the page with literal `<br />`. Save the converted text, unedited, as
+     `description-BEFORE-v{version}.txt`. Rollback pastes that file, so it gets the same conversion.
+   - **Edit with anchored replacements.** Each edit names exact existing text and **refuses if that
+     text is not found exactly once.** A miss means the page is not what you thought: stop and look,
+     do not widen the anchor until it matches. Re-read the result and show the author the diff
+     against the BEFORE file.
+   - **If the API cannot provide the page, stop and tell the author.** A missing key, a refused or
+     failed request, or an empty `description` all mean this: **do not write a description fresh**
+     and do not reuse an old copy. Say what failed. The author can fix it, or paste in the current
+     text from their editor.
+   - **A first release has no page to fetch.** Only then is the description new. The author must
+     confirm the page does not exist (a failed lookup is not that), and
+     `description-BEFORE-v{version}.txt` then holds one line saying there was no previous page. A
+     mod with no Nexus page at all (Workshop only) is outside these steps: ask the author for the
+     current text, as above.
+4. **Run the checker on the folder, and do not hand it over until it passes:**
+   ```bash
+   python $CLAUDE_PROJECT_DIR/scripts/verify-mod-pack.py <release folder>
+   ```
+   It refuses, naming every problem, on: a required file missing or empty; `<br` or an HTML entity, a
+   carriage return, or a header line in a paste file; a changelog line over 120 characters; an
+   archive that differs from the manifest or is not listed in it; a folder it cannot read. `--help`
+   defines each of these. A pass says the folder has the right shape and paste form. It does not say
+   the text is right, or that the description came from the live page. On a refusal, fix the pack and
+   re-run. These are pack files, not the mod, so rule 4 does not apply to them. A refusal that would
+   need the mod itself changed goes to the author.
+5. Give the author **one path**, the release folder, and say what is left for them. A clean review is
+   necessary, not sufficient. The upload itself is the author's step.
 
-Skipping step 2 makes the next release's review start from a download or a full read.
+Skipping step 2 makes the next release's review start from a download or a full read, and leaves the
+author with nothing to upload.
 
 ### Packaging rules (mirrors the Skyrim `mod-release-review`)
 
