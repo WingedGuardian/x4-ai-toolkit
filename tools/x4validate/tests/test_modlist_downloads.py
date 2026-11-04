@@ -8,6 +8,9 @@ import pytest
 from x4validate import _downloads, _modlist, _registry
 
 
+_REAL_ENTRIES = _downloads.profile_entries  # the fixture stubs only the machine's own profile
+
+
 def _manifest(mod_id, version="100", date="2026-10-01", name="A Mod"):
     return (f'<?xml version="1.0"?><content id="{mod_id}" name="{name}" version="{version}" '
             f'date="{date}"/>').encode()
@@ -33,6 +36,8 @@ def world(monkeypatch):
     active = [m for m in installed if m["id"] != "mod_off"]
     monkeypatch.setattr(_registry, "mods", lambda scope, *a, **k: installed if scope == "installed" else active)
     monkeypatch.setattr(_downloads, "_registry_flags", lambda _p: ({"mod_custom": True}, None))
+    monkeypatch.setattr(_downloads, "profile_entries", lambda p=None: {} if p is None else _REAL_ENTRIES(p))
+    monkeypatch.setattr(_downloads, "icon_world", lambda active, config=None: {"base": {"b"}, "layers": [], "unread": []})
     return installed
 
 
@@ -400,3 +405,223 @@ def test_an_installed_row_with_no_id_does_not_abort(tmp_path, capsys, monkeypatc
     _zip(tmp_path, "mod.zip", {"a/content.xml": _manifest("mod_a", version="200")})
     rc, report = _report(capsys, tmp_path)
     assert rc == 0 and _bucket(report, "mod_a") == "NEWER"
+
+
+# --- warnings: what would go wrong after installing ----------------------------------------
+
+def _warn(report, mod_id):
+    return [w["kind"] for w in next(r for r in report["rows"] if r["id"] == mod_id)["warnings"]]
+
+
+def _texts(report, mod_id):
+    return " | ".join(w["text"] for w in next(r for r in report["rows"] if r["id"] == mod_id)["warnings"])
+
+
+def test_an_id_the_profile_turns_off_warns_and_one_it_turns_on_does_not(world, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(_downloads, "profile_entries", lambda p=None: {"new_off": False, "new_on": True})
+    _zip(tmp_path, "a.zip", {"x/content.xml": _manifest("New_Off", name="Off Mod")})
+    _zip(tmp_path, "b.zip", {"y/content.xml": _manifest("new_on", name="On Mod")})
+    _zip(tmp_path, "c.zip", {"z/content.xml": _manifest("new_absent", name="Absent Mod")})
+    _, report = _report(capsys, tmp_path)
+    assert _warn(report, "New_Off") == ["profile-disabled"]
+    assert _warn(report, "new_on") == [] and _warn(report, "new_absent") == []
+
+
+def test_a_profile_that_cannot_be_read_says_the_check_did_not_run(world, tmp_path, capsys, monkeypatch):
+    def boom(p=None):
+        raise FileNotFoundError("no profile")
+    monkeypatch.setattr(_downloads, "profile_entries", boom)
+    _zip(tmp_path, "a.zip", {"x/content.xml": _manifest("new_mod", name="Some Mod")})
+    rc, out, _ = _run(capsys, tmp_path)
+    assert rc == 0 and "profile-disabled not checked" in out
+
+
+def test_the_same_name_under_another_id_warns_and_names_it(world, tmp_path, capsys):
+    _zip(tmp_path, "a.zip", {"x/content.xml": _manifest("other_id", name="old name ")})
+    _, report = _report(capsys, tmp_path)
+    assert _warn(report, "other_id") == ["same-name"]
+    assert "folder_named [mod_named]" in _texts(report, "other_id")
+
+
+def test_the_same_name_and_the_same_id_is_not_a_twin(world, tmp_path, capsys):
+    _zip(tmp_path, "a.zip", {"folder_named/content.xml": _manifest("MOD_NAMED", "200", name="Old Name")})
+    _, report = _report(capsys, tmp_path)
+    assert _warn(report, "MOD_NAMED") == []
+
+
+def test_what_you_would_not_install_gets_no_warning(world, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(_downloads, "profile_entries", lambda p=None: {"mod_a": False})
+    _zip(tmp_path, "a.zip", {"folder_a/content.xml": _manifest("mod_a")})  # SAME
+    _, report = _report(capsys, tmp_path)
+    assert _bucket(report, "mod_a") == "SAME" and _warn(report, "mod_a") == []
+
+
+def _profile(folder, *entries):
+    folder.mkdir()
+    body = "".join(f'<extension id="{i}" enabled="{on}"/>' for i, on in entries)
+    (folder / "content.xml").write_text(f"<content>{body}</content>", encoding="utf-8")
+    return folder
+
+
+def test_a_test_profile_with_no_entry_leaks_and_one_with_any_entry_does_not(world, tmp_path, capsys):
+    downloads = tmp_path / "dl"
+    downloads.mkdir()
+    _zip(downloads, "a.zip", {"x/content.xml": _manifest("leaky", name="Leaky")})
+    _zip(downloads, "b.zip", {"y/content.xml": _manifest("listed", name="Listed")})
+    _zip(downloads, "c.zip", {"z/content.xml":
+                              b'<content id="off_itself" name="Off Itself" version="1" enabled="0"/>'})
+    prof = _profile(tmp_path / "900", ("listed", "false"))
+    rc, out, _ = _run(capsys, downloads, "--test-profile", prof, "--json")
+    report = json.loads(out)
+    assert rc == 0 and report["test_profiles"] == ["900"]
+    assert _warn(report, "leaky") == ["test-profile"] and "profile 900" in _texts(report, "leaky")
+    assert _warn(report, "listed") == []
+    assert _warn(report, "off_itself") == []   # its manifest defaults it off, so nothing leaks
+
+
+@pytest.mark.parametrize("make", ["missing", "broken"])
+def test_a_named_test_profile_that_cannot_be_read_refuses(world, tmp_path, capsys, make):
+    downloads = tmp_path / "dl"
+    downloads.mkdir()
+    _zip(downloads, "a.zip", {"x/content.xml": _manifest("leaky", name="Leaky")})
+    target = tmp_path / "content.xml"
+    if make == "broken":
+        target.write_text("<content", encoding="utf-8")
+    rc, out, err = _run(capsys, downloads, "--test-profile", target)
+    assert rc == 2 and "--test-profile" in err and "NEW" not in out
+
+
+def test_icon_ops_reads_a_whole_file_a_diff_and_refuses_anything_else():
+    assert _downloads.icon_ops(b'<icons><icon name="a"/><icon name="a"/><icon name="b"/></icons>') == ({"a", "b"}, set())
+    diff = (b'<diff><add sel="/icons"><icon name="c"/></add>'
+            b"""<remove sel="//icon[@name='d']"/><remove sel='/icons/icon[@name="e"]'/>"""
+            b'<replace sel="//icon[@name=\'f\']/@width">1</replace></diff>')
+    assert _downloads.icon_ops(diff) == ({"c"}, {"d", "e"})
+    assert _downloads.icon_ops(b"<wares/>") is None
+    assert _downloads.icon_ops(b"<icons") is None
+
+
+def _icon_xml(*names):
+    return ("<icons>" + "".join(f'<icon name="{n}"/>' for n in names) + "</icons>").encode()
+
+
+def _icon_world(base_size, *layers):
+    return {"base": {f"b{i}" for i in range(base_size)}, "layers": list(layers), "unread": []}
+
+
+def test_icon_total_follows_load_order_and_swaps_a_mod_for_its_archive():
+    world = _icon_world(10, ("m1", {"x", "y"}, set()), ("m2", set(), {"x", "b0"}))
+    assert _downloads.icon_total(world) == 10 + 2 - 2
+    assert _downloads.icon_total(world, "new", ({"z"}, set())) == 11              # appended
+    assert _downloads.icon_total(world, "m1", ({"y"}, set())) == 10               # m1 replaced, x never added
+    assert _downloads.icon_total(world, "m2", (set(), set())) == 12               # the removals go with m2
+
+
+def _with_world(monkeypatch, world):
+    monkeypatch.setattr(_downloads, "icon_world", lambda active, config=None: world)
+
+
+@pytest.mark.parametrize("base,expected", [
+    (_downloads.ICONS_LOADED - 1, []),                     # exactly the total that loaded: no warning
+    (_downloads.ICONS_LOADED, ["icons"]),                  # one past it
+    (_downloads.ICONS_FAILED - 1, ["icons"]),              # reaches the total that failed
+])
+def test_the_icon_warning_edges(world, tmp_path, capsys, monkeypatch, base, expected):
+    _with_world(monkeypatch, _icon_world(base))
+    _zip(tmp_path, "a.zip", {"x/content.xml": _manifest("new_mod", name="Icons"),
+                             "x/libraries/icons.xml": _icon_xml("z")})
+    _, report = _report(capsys, tmp_path)
+    assert _warn(report, "new_mod") == expected
+    assert next(r for r in report["rows"] if r["id"] == "new_mod")["icons"] == {"names": 1, "total_after": base + 1}
+
+
+def test_the_two_icon_warnings_say_different_things():
+    assert "unmeasured" in _downloads._icon_warning(_downloads.ICONS_LOADED + 1)["text"]
+    assert "failing to load" in _downloads._icon_warning(_downloads.ICONS_FAILED)["text"]
+    assert _downloads._icon_warning(_downloads.ICONS_LOADED) is None
+
+
+def test_a_mod_with_no_icons_is_not_blamed_for_a_total_already_over(world, tmp_path, capsys, monkeypatch):
+    _with_world(monkeypatch, _icon_world(_downloads.ICONS_FAILED + 5))
+    _zip(tmp_path, "a.zip", {"x/content.xml": _manifest("new_mod", name="No Icons")})
+    _, report = _report(capsys, tmp_path)
+    assert _warn(report, "new_mod") == []
+
+
+@pytest.mark.parametrize("members,why", [
+    ({"x/ext_01.cat": b"", "x/content.xml": _manifest("new_mod", name="P")}, "packed in a catalog"),
+    ({"x/libraries/icons.xml": b"<icons", "x/content.xml": _manifest("new_mod", name="P")}, "will not parse"),
+])
+def test_an_icon_count_that_cannot_be_read_is_unknown_not_zero(world, tmp_path, capsys, monkeypatch, members, why):
+    _with_world(monkeypatch, _icon_world(5))
+    _zip(tmp_path, "a.zip", members)
+    _, report = _report(capsys, tmp_path)
+    row = next(r for r in report["rows"] if r["id"] == "new_mod")
+    assert row["icons"] is None and why in _texts(report, "new_mod")
+
+
+def test_each_mod_in_an_archive_is_counted_from_its_own_folder(world, tmp_path, capsys, monkeypatch):
+    _with_world(monkeypatch, _icon_world(5))
+    _zip(tmp_path, "a.zip", {"one/content.xml": _manifest("m_one", name="One"),
+                             "one/libraries/icons.xml": _icon_xml("p", "q"),
+                             "two/content.xml": _manifest("m_two", name="Two"),
+                             "two/libraries/icons.xml": _icon_xml("r")})
+    _, report = _report(capsys, tmp_path)
+    got = {r["id"]: r["icons"]["names"] for r in report["rows"]}
+    assert got == {"m_one": 2, "m_two": 1}
+
+
+def test_a_failed_icon_count_says_so_and_prints_no_total(world, tmp_path, capsys, monkeypatch):
+    _with_world(monkeypatch, {"note": "icon budget not checked: no base-game icon list was found"})
+    _zip(tmp_path, "a.zip", {"x/content.xml": _manifest("new_mod", name="M")})
+    rc, out, _ = _run(capsys, tmp_path)
+    assert rc == 0 and "icon budget not checked" in out and "Merged icon names now" not in out
+
+
+def test_icon_world_refuses_an_empty_base(tmp_path):
+    class Cfg:
+        reference = tmp_path
+
+        @staticmethod
+        def dlc_dirs():
+            return []
+    assert "not checked" in _downloads.icon_world([], Cfg())["note"]
+
+
+def test_icon_world_reads_base_and_mods_and_names_an_unreadable_list(tmp_path):
+    base = tmp_path / "ref" / "libraries"
+    base.mkdir(parents=True)
+    (base / "icons.xml").write_bytes(_icon_xml("a", "b"))
+    good = tmp_path / "good" / "libraries"
+    good.mkdir(parents=True)
+    (good / "icons.xml").write_bytes(b'<diff><add sel="/icons"><icon name="c"/></add></diff>')
+    bad = tmp_path / "bad" / "libraries"
+    bad.mkdir(parents=True)
+    (bad / "icons.xml").write_bytes(b"<icons")
+
+    class Cfg:
+        reference = tmp_path / "ref"
+
+        @staticmethod
+        def dlc_dirs():
+            return []
+    active = [{"id": "good", "path": str(tmp_path / "good"), "folder": "good"},
+              {"id": "bad", "path": str(tmp_path / "bad"), "folder": "bad"}]
+    world = _downloads.icon_world(active, Cfg())
+    assert _downloads.icon_total(world) == 3 and world["unread"] == ["bad"]
+
+
+def test_icons_in_a_7z_are_read_with_names_that_cannot_be_switches(monkeypatch, tmp_path):
+    seen = []
+
+    def run7(exe, args):
+        seen.append(args)
+        if args[0] == "l":
+            return b"Path = m/libraries/icons.xml\nPath = n/ext_01.cat\nPath = m/other.xml\n"
+        return _icon_xml("a")
+    monkeypatch.setattr(_downloads, "_run_7z", run7)
+    path = tmp_path / "-x.7z"
+    path.write_bytes(b"not read")
+    lists, packed = _downloads.read_icon_lists(path, "7z")
+    assert lists == {"m": _icon_xml("a")} and packed == {"n"}
+    assert all("--" in a for a in seen)

@@ -15,6 +15,13 @@ A verdict here compares manifests only. NEWER is not a recommendation: this tool
 know about holds, local edits beyond the registry's flag, or what the new version does.
 When an id is installed in more than one folder, each copy is compared and named, and copies
 that disagree read UNDETERMINED: this tool does not know which copy the engine uses.
+
+WARNINGS cover only mods you might still install (NEWER, NOT-INSTALLED, the same-folder bucket and
+UNDETERMINED) and each states what it read. A check that could not run says so and is not a clean result:
+- profile-disabled: the profile has an entry turning this id off, so installing it will not load it.
+- same-name: an installed mod has this name under a different id.
+- test-profile: a profile given with --test-profile has no entry for this id, so it would load there.
+- icons: the merged icon total after this mod passes what one install was measured to load.
 """
 
 from __future__ import annotations
@@ -31,17 +38,32 @@ from pathlib import Path
 
 from lxml import etree
 
-from . import _registry
+from . import _merge, _registry, _scan
 
 ARCHIVE_SUFFIXES = (".zip", ".7z", ".rar")
 MAX_MANIFEST_BYTES = 1024 * 1024  # a content.xml is a few KB; anything huge is not one
 MAX_MANIFEST_DEPTH = 3  # content.xml, mod/content.xml, wrapper/mod/content.xml
 SEVENZIP_TIMEOUT_S = 120
 
+ICON_LIST = "libraries/icons.xml"
+MAX_ICON_LIST_BYTES = 32 * 1024 * 1024
+# MEASURED on ONE install (2026-11-02): with a HUD mod registering 911 icons the load died with
+# `Out of Handles! for 'class XGfx::Material'`; with 848 it loaded. These are those two runs in the units this
+# file counts, distinct merged names: 1,656 base + DLC + 75 from the other mods + the HUD's 848 or 911.
+# The 75 was counted on 2026-11-03, when those mods held 107 raw entries against about 110 at the test, so each
+# figure may be off by a few. How names map to handles, and whether the limit moves with other content or
+# hardware, is not measured, so these are reference points and never a proven limit.
+ICONS_LOADED = 2579
+ICONS_FAILED = 2642
+_REMOVED_ICON = re.compile(r"""@name\s*=\s*['"]([^'"]+)['"]""")
+_PACKED = re.compile(r"^(?:ext|subst)_\d+\.cat$", re.IGNORECASE)
+
 NEWER, SAME, OLDER, NOT_INSTALLED = "NEWER", "SAME", "OLDER", "NOT-INSTALLED"
 SAME_FOLDER = "DIFFERENT-ID-SAME-FOLDER"
 UNDETERMINED = "UNDETERMINED"
 BUCKET_ORDER = (NEWER, NOT_INSTALLED, SAME_FOLDER, UNDETERMINED, OLDER, SAME)
+#: A mod you might still install. SAME and OLDER are not, so warning about them would be noise.
+WOULD_INSTALL = (NEWER, NOT_INSTALLED, SAME_FOLDER, UNDETERMINED)
 
 # Nexus manual-download names, in the two shapes it has used:
 #   "Some Mod 2089 1.32 2026-10-30T18-12Z kslDldtFQ.zip"
@@ -153,8 +175,186 @@ def read_manifests(path: Path, sevenzip: str | None) -> list[tuple[str, bytes]]:
     return _read_with_7z(path, sevenzip)
 
 
+def _icon_prefix(member: str) -> tuple[str, str] | None:
+    """(mod folder inside the archive, "icons" or "packed") for a member that decides the icon count."""
+    parts = [p for p in member.replace("\\", "/").split("/") if p]
+    if not parts:
+        return None
+    if len(parts) >= 2 and "/".join(parts[-2:]).lower() == ICON_LIST and len(parts) <= MAX_MANIFEST_DEPTH + 1:
+        return "/".join(parts[:-2]).lower(), "icons"
+    if _PACKED.match(parts[-1]) and len(parts) <= MAX_MANIFEST_DEPTH:
+        return "/".join(parts[:-1]).lower(), "packed"
+    return None
+
+
+def read_icon_lists(path: Path, sevenzip: str | None) -> tuple[dict[str, bytes], set[str]]:
+    """({mod folder: its icon list bytes}, {mod folders with a catalog}). Raises ArchiveUnreadable.
+
+    A catalog is not opened, so a mod with one and no loose list has an UNKNOWN count, never zero.
+    """
+    lists: dict[str, bytes] = {}
+    packed: set[str] = set()
+    if path.suffix.lower() == ".zip":
+        try:
+            with zipfile.ZipFile(path) as z:
+                for info in z.infolist():
+                    hit = _icon_prefix(info.filename)
+                    if hit is None:
+                        continue
+                    if hit[1] == "packed":
+                        packed.add(hit[0])
+                    elif info.file_size > MAX_ICON_LIST_BYTES:
+                        raise ArchiveUnreadable(f"{info.filename} is larger than an icon list should be")
+                    else:
+                        lists[hit[0]] = z.read(info)
+        except ArchiveUnreadable:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a reason about this archive, as in _read_zip
+            raise ArchiveUnreadable(f"zip read failed: {exc.__class__.__name__}") from exc
+        return lists, packed
+    if sevenzip is None:
+        raise ArchiveUnreadable("needs 7-Zip, which was not found")
+    listing = _run_7z(sevenzip, ["l", "-ba", "-slt", "--", str(path)]).decode("utf-8", "replace")
+    for line in listing.splitlines():
+        if not line.startswith("Path = "):
+            continue
+        member = line[len("Path = "):].strip()
+        hit = _icon_prefix(member)
+        if hit is None:
+            continue
+        if hit[1] == "packed":
+            packed.add(hit[0])
+        else:
+            data = _run_7z(sevenzip, ["e", "-so", "-spd", "--", str(path), member])
+            if len(data) > MAX_ICON_LIST_BYTES:
+                raise ArchiveUnreadable(f"{member} is larger than an icon list should be")
+            lists[hit[0]] = data
+    return lists, packed
+
+
+def icon_ops(data: bytes) -> tuple[set[str], set[str]] | None:
+    """(names added, names removed) by one icons.xml, whole-file or diff. None if it is not one.
+
+    Names are what was measured to count: 176 duplicate names sharing one texture did not help.
+    A `<remove>` selecting anything other than a named icon removes nothing here, so a count errs high.
+    """
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
+    try:
+        root = etree.fromstring(data, parser)
+    except etree.XMLSyntaxError:  # silent-ok: the caller reports a None as an unread icon list, by mod
+        return None
+    if root.tag == "icons":
+        return {e.get("name") for e in root.iter("icon") if e.get("name")}, set()
+    if root.tag != "diff":
+        return None
+    added: set[str] = set()
+    removed: set[str] = set()
+    for op in root:
+        if op.tag == "add":
+            added.update(e.get("name") for e in op.iter("icon") if e.get("name"))
+        elif op.tag == "remove":
+            removed.update(_REMOVED_ICON.findall(op.get("sel") or ""))
+    return added, removed
+
+
+def _layer_ops(root: Path, unread: list[str], label: str) -> tuple[set[str], set[str]]:
+    """Every icon operation one mod or DLC root makes, loose then packed."""
+    pick = _scan.all_of(_scan.under("libraries/"), lambda v: v.lower() == ICON_LIST)
+    added: set[str] = set()
+    removed: set[str] = set()
+    failed: list = []
+    for _vpath, data in _scan.iter_mod_xml_bytes(root, pick, failed):
+        ops = icon_ops(data)
+        if ops is None:
+            unread.append(label)
+            continue
+        added |= ops[0]
+        removed |= ops[1]
+    if failed:
+        unread.append(label)
+    return added, removed
+
+
+def icon_world(active: list[dict], config=None) -> dict:
+    """The merged icon names of the running set, kept per layer so a mod can be swapped for its archive.
+
+    Returns {"base", "layers", "unread"} or {"note": why it could not be counted}. A count over a missing
+    base would read as a large margin, so an empty base is a refusal and not a small number.
+    """
+    try:
+        cfg = config or _merge.Config()
+        base: set[str] = set()
+        unread: list[str] = []
+        for root in [cfg.reference, *cfg.dlc_dirs()]:
+            base |= _layer_ops(Path(root), unread, Path(root).name)[0]
+        if not base:
+            return {"note": "icon budget not checked: no base-game icon list was found"}
+        layers = [(m["id"].lower(), *_layer_ops(Path(m["path"]), unread, m["folder"]))
+                  for m in active if m.get("id") and m.get("path")]
+    except Exception as exc:  # noqa: BLE001 - disclosed in the output as a check that did not run
+        return {"note": f"icon budget not checked ({exc.__class__.__name__}): {exc}"}
+    return {"base": base, "layers": layers, "unread": unread}
+
+
+def icon_total(world: dict, swap_id: str | None = None, ops: tuple[set[str], set[str]] | None = None) -> int:
+    """Merged names in load order. With *ops*, that mod's layer is replaced, or appended if not active."""
+    names = set(world["base"])
+    swapped = False
+    for mod_id, added, removed in world["layers"]:
+        if swap_id is not None and mod_id == swap_id:
+            added, removed = ops
+            swapped = True
+        names |= added
+        names -= removed
+    if ops is not None and not swapped:
+        names |= ops[0]
+        names -= ops[1]
+    return len(names)
+
+
+def profile_entries(path: Path | None = None) -> dict[str, bool]:
+    """{lower id: enabled} for one profile content.xml. The caller decides what a failure means."""
+    return {mod_id.lower(): on for mod_id, on in _registry.ingest_content_xml(path)}
+
+
+def _test_profile_file(given: str) -> Path:
+    p = Path(given)
+    return p / "content.xml" if p.is_dir() else p
+
+
+def _warnings_for(row: dict, manifest: dict, by_name: dict, profile: dict | None,
+                  test_profiles: dict[str, dict]) -> list[dict]:
+    if row["bucket"] not in WOULD_INSTALL:
+        return []
+    key = row["id"].lower()
+    out = []
+    if profile is not None and profile.get(key) is False:
+        out.append({"kind": "profile-disabled", "text": "the profile has an entry turning this id off, "
+                    "so it will not load after you install it"})
+    twins = [m for m in by_name.get(row["name"].strip().lower(), []) if (m.get("id") or "").lower() != key]
+    if row["name"].strip() and twins:
+        named = ", ".join(f"{m['folder']} [{m.get('id')}]" for m in twins)
+        out.append({"kind": "same-name", "text": f"already installed under a different id: {named}"})
+    if manifest.get("enabled", True):
+        for label, entries in test_profiles.items():
+            if key not in entries:
+                out.append({"kind": "test-profile", "text": f"profile {label} has no entry for this id, "
+                            "so it would load there"})
+    return out
+
+
+def _icon_warning(after: int) -> dict | None:
+    if after >= ICONS_FAILED:
+        return {"kind": "icons", "text": f"{after} merged icon names after this mod: one install measured "
+                f"{ICONS_FAILED} failing to load (Out of Handles) and {ICONS_LOADED} loading"}
+    if after > ICONS_LOADED:
+        return {"kind": "icons", "text": f"{after} merged icon names after this mod: past the {ICONS_LOADED} one "
+                f"install measured loading, short of the {ICONS_FAILED} it measured failing; between is unmeasured"}
+    return None
+
+
 def parse_manifest(data: bytes) -> dict | None:
-    """id/name/version/date from a manifest, or None if it is not a usable one."""
+    """id/name/version/date, and whether its own default is enabled, or None if it is not usable."""
     parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
     try:
         root = etree.fromstring(data, parser)
@@ -162,7 +362,9 @@ def parse_manifest(data: bytes) -> dict | None:
         return None
     if not isinstance(root.tag, str) or root.tag != "content" or not root.get("id"):
         return None
-    return {k: root.get(k) or "" for k in ("id", "name", "version", "date")}
+    manifest = {k: root.get(k) or "" for k in ("id", "name", "version", "date")}
+    manifest["enabled"] = _registry.profile_flag(root.get("enabled"))  # the same convention as a profile entry
+    return manifest
 
 
 def _version_int(value) -> int | None:
@@ -222,8 +424,15 @@ def _registry_flags(registry_path) -> tuple[dict[str, bool], str | None]:
 
 
 def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: dict,
-         recursive: bool, sevenzip: str | None) -> dict:
-    """The whole report as data. Reads only."""
+         recursive: bool, sevenzip: str | None, profile: dict | None = None,
+         test_profiles: dict[str, dict] | None = None, world: dict | None = None) -> dict:
+    """The whole report as data. Reads only. *profile* None means the profile was not read."""
+    test_profiles = test_profiles or {}
+    counting = world is not None and "base" in world
+    by_name: dict[str, list[dict]] = {}
+    for m in installed:
+        if (m.get("name") or "").strip():
+            by_name.setdefault(m["name"].strip().lower(), []).append(m)
     by_id: dict[str, list[dict]] = {}
     for m in sorted(installed, key=lambda r: str(r.get("folder")).lower()):
         if m.get("id"):
@@ -250,6 +459,14 @@ def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: 
             no_manifest.append(path.name)
             continue
         hint = parse_nexus_name(path.name) or {}
+        lists: dict[str, bytes] = {}
+        packed: set[str] = set()
+        list_error = None
+        if counting:
+            try:
+                lists, packed = read_icon_lists(path, sevenzip)
+            except ArchiveUnreadable as exc:
+                list_error = str(exc)
         for member, data in members:
             manifest = parse_manifest(data)
             if manifest is None:
@@ -276,17 +493,37 @@ def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: 
                     "version": inst.get("version"), "date": inst.get("date")},
                 "installed_copies": copies,
                 "flags": flags})
+            row = rows[-1]
+            row["warnings"] = _warnings_for(row, manifest, by_name, profile, test_profiles)
+            row["icons"] = None
+            if counting and bucket in WOULD_INSTALL:
+                parts = [p for p in member.replace("\\", "/").split("/") if p]
+                folder = "/".join(parts[:-1]).lower()
+                ops = icon_ops(lists[folder]) if folder in lists else None
+                if ops is not None or (folder not in lists and folder not in packed and list_error is None):
+                    ops = ops or (set(), set())
+                    after = icon_total(world, manifest["id"].lower(), ops)
+                    row["icons"] = {"names": len(ops[0]), "total_after": after}
+                    warning = _icon_warning(after) if ops[0] else None  # no icons: not this mod's doing
+                    if warning:
+                        row["warnings"].append(warning)
+                else:
+                    why = list_error or ("packed in a catalog" if folder in packed else "icon list will not parse")
+                    row["warnings"].append({"kind": "icons", "text": f"icon count unknown: {why}"})
     newest: dict[str, dict] = {}
     for row in rows:
         key = row["id"].lower()
         if key not in newest or _sort_key(row) > _sort_key(newest[key]):
             newest[key] = row
     superseded = [r for r in rows if newest[r["id"].lower()] is not r]
+    icons_now = icon_total(world) if counting else None
     return {"scanned": [str(d) for d in dirs], "recursive": recursive, "archives": len(archives),
             "other_files": other_files, "no_manifest": len(no_manifest), "no_manifest_files": no_manifest,
             "unreadable": unreadable,
             "bad_manifests": bad, "rows": sorted(newest.values(), key=lambda r: r["file"].lower()),
-            "superseded": superseded, "sevenzip": sevenzip}
+            "superseded": superseded, "sevenzip": sevenzip, "icons_now": icons_now,
+            "icons_unread": world.get("unread", []) if counting else [],
+            "test_profiles": sorted(test_profiles), "check_notes": []}
 
 
 def _describe(row: dict) -> str:
@@ -307,6 +544,12 @@ def _print_report(report: dict, show_all: bool, flag_note: str | None) -> None:
     rows = report["rows"]
     print("Manifests compared, nothing else: NEWER is not a recommendation, and holds or "
           "reasons for a difference are not known here.")
+    warned = [r for r in rows if r["warnings"]]
+    if warned:
+        print(f"\nWARNINGS: {sum(len(r['warnings']) for r in warned)} on {len(warned)} mods")
+        for row in warned:
+            for w in row["warnings"]:
+                print(f"  {row['name']} [{row['id']}] {w['kind']}: {w['text']}")
     for bucket in BUCKET_ORDER:
         group = [r for r in rows if r["bucket"] == bucket]
         if bucket == SAME and not show_all:
@@ -341,6 +584,13 @@ def _print_report(report: dict, show_all: bool, flag_note: str | None) -> None:
         print("7-Zip was not found: .7z and .rar archives could not be read.")
     if flag_note:
         print(flag_note)
+    for note in report["check_notes"]:
+        print(note)
+    if report["icons_now"] is not None:
+        print(f"Merged icon names now: {report['icons_now']}. One install measured {ICONS_LOADED} loading and "
+              f"{ICONS_FAILED} failing; that is a reference point, not a proven limit for this machine.")
+    if report["icons_unread"]:
+        print(f"Icon lists not read, so the count is short by theirs: {', '.join(report['icons_unread'])}")
 
 
 def cmd_downloads(args) -> int:
@@ -360,7 +610,27 @@ def cmd_downloads(args) -> int:
               "Run `x4validate --paths` to see where the tool is looking.", file=sys.stderr)
         return 2
     custom, flag_note = _registry_flags(getattr(args, "registry", None))
-    report = scan(dirs, installed, active_ids, custom, args.recursive, _find_7z())
+    test_profiles: dict[str, dict] = {}
+    for given in args.test_profile or []:
+        file = _test_profile_file(given)
+        try:
+            test_profiles[file.parent.name or str(file)] = profile_entries(file)
+        except (OSError, etree.XMLSyntaxError) as exc:
+            # Asked for by name, so a skip would read as "no leak" about a profile never opened.
+            print(f"error: --test-profile {given}: not readable ({exc.__class__.__name__})", file=sys.stderr)
+            return 2
+    notes = []
+    try:
+        profile = profile_entries()
+    except Exception as exc:  # noqa: BLE001 - disclosed below as a check that did not run
+        profile = None
+        notes.append(f"profile-disabled not checked: the profile was not read ({exc.__class__.__name__})")
+    world = icon_world(active)
+    if "note" in world:
+        notes.append(world["note"])
+    report = scan(dirs, installed, active_ids, custom, args.recursive, _find_7z(),
+                  profile=profile, test_profiles=test_profiles, world=world)
+    report["check_notes"] = notes
     if args.json:
         report["custom_flag_note"] = flag_note
         print(json.dumps(report, indent=1, ensure_ascii=False))
@@ -388,5 +658,8 @@ def register(sub) -> None:
     p.add_argument("--recursive", action="store_true", help="also scan subfolders (default: top level only)")
     p.add_argument("--all", action="store_true", help="also list mods that match what is installed, older copies, "
                    "and archives with no manifest")
+    p.add_argument("--test-profile", action="append", metavar="PATH",
+                   help="a profile folder or content.xml to check for mods that would load there because it has "
+                   "no entry for them; repeat for several. An unreadable one refuses")
     p.add_argument("--json", action="store_true", help="print the whole report as JSON")
     p.set_defaults(func=cmd_downloads)
