@@ -443,6 +443,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F338 | `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree | **SCOPE LIMIT (read)** · IN-ARC | `_provenance.Recorder.elem_replaced` drops the old subtree's attribute records (by design); after a whole-file replace (`full_override`) no node has a record, so none is annotated and the header names the replacing origin instead. Real-data run 2026-11-01 on `aiscripts/order.fight.escort.xml` (base + 5 mods): 109 annotated nodes, all attributed to a mod and op line | documented in `--help`; not fixed |
 | F339 | `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them | **SCOPE LIMIT (measured)** · IN-ARC | a 9.0 save stores a table variable as a reference id resolved elsewhere in the save; on save_020 the KUDA config cue alone holds 3 such tables (`$byShipId`, `$defaultOrdersByShipId`, `$lxl_isStrictMaintainDistance`) | stated in output and `--help`; expansion is a follow-up |
 | F340 | The bulk-file guard runs out of its 40 s deadline on a 3,589-path batch at ordinary desk load and refuses it unchecked (fails closed) | **OPEN (measured)** · PRE-ARC | 12 of 12 timed runs on this machine, including the pre-arc tree; ~12.8 ms/path; 64% of a 2,000-path profile is `profiles._resolved`, ~20 calls per path | open; see entry |
+| F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11740,3 +11741,29 @@ to fail CI intermittently until the guard is faster.
 Not fixed. `_resolved` is reviewed save-protection code, and a plain cache could mask a link swapped between two checks
 in one pass, so any fix needs its own review of which calls may share an answer. The test only reaches a push's
 pre-push gate when the push changes a file it names (`agent-harness.py`, `modding-harness.lock.json`).
+
+## F353 - `x4effective dump` answered a bare path to a DLC-only file with the unpatched file · **FIXED (measured)** · PRE-ARC · confidence 95%
+
+Found 2026-11-03 auditing a weapon mod. `dump --chain assets/props/weaponsystems/energy/macros/turret_ter_l_beam_01_mk1_macro.xml`
+returned rc 0, `sources: ego_dlc_terran:full`, and vanilla's bullet. The same document at
+`extensions/ego_dlc_terran/...` returned `sources: base, vro:diff` and a different weapon. Nothing in the first answer
+said a patch had been missed, and it produced two false conclusions in one audit. VRO's own diff text contradicting the
+output is what caught it.
+
+Root cause (READ `_merge.build_effective`): the engine builds a DLC's own file under `extensions/<dlc>/...` and mods patch
+it there. A DLC stays out of `owner_folders` on purpose, so the bare door never consults those patches. `logical_vpath`
+already handled the mirror case for a mod (F71).
+
+MEASURED over all 716 DLC-form vpaths an active mod touches (of 4,101 touched vpaths; buckets sum to 716):
+
+| what the bare path did | count |
+|---|---|
+| returned the unpatched DLC file; now serves the patched document and says so | 588 |
+| read as absent because a mod shipped the file into the DLC tree; still rc 1, now names the document | 113 |
+| base also supplies the path, or several owners: one ordinary document, unchanged | 14 |
+| a mod also ships the bare path: two documents, literal kept, the other named | 1 |
+
+Fix is CLI-only (`dlc_owned_vpath`, `_cmd_dump`), so `_merge` and the engine fingerprint are untouched. Other
+`build_effective` callers were read, not measured: `_check`, `_similarity`, `_effective` and `_geometry_assets` pass fixed
+library names or vpaths from an index or logical key, so this wrong form is a typed-path problem. An unpatched DLC file
+stays at the literal path with no note, because both forms are then the same file. `tests/test_dump_dlc_owned_bare_path.py` proves it, with one falsification twin per clause.
