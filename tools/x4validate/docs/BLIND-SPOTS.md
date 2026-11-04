@@ -11864,7 +11864,7 @@ apart inside one window. The threat model is accidents and careless scripts, not
 ALSO UNMEASURED OR OPEN (the saves lane's list): ReFS (see the identity entry below, which fails by refusing); a group deny
 rule is not read as binding, so locking fails loudly; if the record of the last look and its `.seen` mark are both deleted
 the next look is a first look, and if `save-lock-folders.json` is deleted nothing is recorded for `off`;
-`sentinel.save_state` replaces its record once, with no retry.
+`sentinel.save_state` retries a held record only briefly, so a longer hold still fails that write.
 
 **RE-DERIVED BY:** `tools/x4validate/tests/test_save_sentinel.py`.
 
@@ -11982,9 +11982,8 @@ suite and hands the junit file to the verdict script in `.github/scripts`, which
 skip. After the fix, the 16 changed modules ran 535 passed, 80 skipped and 1 failed; the one failure, conformance toy case
 66, also fails in a checkout, so it is not an install defect.
 
-RESIDUAL: the job's skip ceiling (`--max-skips 934` in `.github/workflows/ci.yml`; 896 when this entry was first written)
-is DERIVED from the local count, not measured on CI; replace it with the first CI run's count plus 3. The ceiling of the
-Linux checkout leg (418) is derived the same way. Removing the Windows-only skips from `test_save_sentinel` took 33 skips
+RESIDUAL: the job's skip ceiling is `--max-skips 886` in `.github/workflows/ci.yml`: 883 read on CI plus 3. The Linux
+checkout leg read 415 against its 418. Removing the Windows-only skips from `test_save_sentinel` took 33 skips
 off an installed run (59 passed, 0 skipped there, by the saves lane). The `test_codex_wrapper` and deploy-parity tests
 depend on a real `HOME` and a configured game root.
 

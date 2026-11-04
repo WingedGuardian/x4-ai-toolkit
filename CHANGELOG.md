@@ -2,7 +2,7 @@
 
 ## v4.1.0 — 2026-11-04
 
-- Shared preservation core: the revision recorded in `tools/modding-harness.lock.json` is the pin and is authoritative; it is `474a2b6` at this point in the 4.1.0 work, and a later re-pin supersedes that. The other revisions named below (`e0851b8`, `221292e`, `2d07fa4`, `bc2bafb`), and `1ac319f`, `7c4cc26`, `3274041` and every earlier pin, were interim pins of the same release: each entry says what that step added, and none is current. The pinned core reads save-lock permissions through the Windows API instead of parsing `icacls` text, and carries the sentinel and ledger fixes described below.
+- Shared preservation core: the revision recorded in `tools/modding-harness.lock.json` is the pin and is authoritative; it is `474a2b6` in 4.1.0. The other revisions named below (`e0851b8`, `221292e`, `2d07fa4`, `bc2bafb`), and `1ac319f`, `7c4cc26`, `3274041` and every earlier pin, were interim pins of the same release: each entry says what that step added, and none is current. The pinned core reads save-lock permissions through the Windows API instead of parsing `icacls` text, and carries the sentinel and ledger fixes described below.
 
 - `x4save vars <pattern> | head` exits quietly (rc 0) when the reader closes the pipe; it was reported as
   "decompression/XML parse failed (Broken pipe)", rc 2, as if the save were broken. The exit flush

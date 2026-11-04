@@ -166,7 +166,7 @@ class Gate:
                 raise OSError("no git directory")
             with open(path, "a" if self.kept else "w", encoding="utf-8", errors="replace") as f:
                 f.write("== {} at {}\n{}\n".format(name, time.strftime("%Y-%m-%d %H:%M:%S"), text))
-        except OSError as e:
+        except (OSError, UnicodeError) as e:
             print("   full output NOT kept: {}".format(e))
             return
         self.kept = True

@@ -556,8 +556,8 @@ jobs:
           # for -- 125 went dormant at once, once, and that is the shape it must catch.
           #
           # Headroom stays small on purpose. A ceiling far above the real floor cannot
-          # detect a dormant block, so windows keeps its measured floor + 3 and ubuntu
-          # + 2.
+          # detect a dormant block. Each leg's current reading and headroom are in the
+          # newest entry below: windows has + 1 at 4.1.0, because + 3 would hide two tests going dormant.
           #
           # RAISED 2026-09-05, 45 -> 49 / 55 -> 59, because the arc's own tests pushed
           # the floor past the ceiling and this leg would have gone RED on push.
