@@ -63,7 +63,14 @@ def test_no_predicate_is_silently_unfuzzed():
     for name in LABELS:
         assert "\n%s\t" % name in hook, (
             "%s is exempt as message text, but protect-bash.sh no longer reads it" % name)
-    METADATA = {"command", "cwd", "timeout", "background", "from_powershell"} | BRIDGE | LABELS
+    # The raw profile-write observation includes permitted root mod-list writes.
+    # Its refined counterpart carries the confirmation rule; do not exempt the
+    # observation unless that rule is still wired up. Parser mutation trials
+    # continue to pin both raw and refined facts in both directions.
+    DIAGNOSTIC = {"writes_profile"}
+    assert policy.get("writes_profile_other") == "ask", (
+        "raw profile-write metadata requires its refined confirmation rule")
+    METADATA = {"command", "cwd", "timeout", "background", "from_powershell"} | BRIDGE | LABELS | DIAGNOSTIC
     unmapped = sorted(names - set(policy) - METADATA)
     assert not unmapped, (
         "these facts are computed but carry no verdict, so the fuzzer cannot test them "
