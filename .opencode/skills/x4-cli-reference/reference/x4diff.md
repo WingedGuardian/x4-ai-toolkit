@@ -22,7 +22,8 @@ options:
                      merged core+submod patch. If NEW is the core alone, the submod's ops show as
                      REMOVED nodes
   --detail           list every attr change (element text shows as @text())
-  --file FILE        detail one vpath only; content.xml shows the manifest comparison
+  --file FILE        detail one vpath only, or an absolute path under a compared folder;
+                     content.xml shows the manifest comparison
   --top TOP          show N heaviest changed files (default: 30)
   --base BASE        COMMON ANCESTOR of OLD and NEW: makes this a THREE-WAY diff separating the
                      author's edits from upstream drift (repeatable, merged in order)
