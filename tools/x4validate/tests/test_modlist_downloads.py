@@ -739,6 +739,87 @@ def test_a_signature_or_unrelated_catalog_name_leaves_the_count_at_zero(world, t
     assert next(r for r in report["rows"] if r["id"] == "new_mod")["icons"] == {"names": 0, "total_after": 5}
 
 
+@pytest.mark.parametrize("cat", ["ext_v900.cat", "ext_01_diff_v900.cat", "subst_v900.cat", "ext_01.cat"])
+def test_a_loose_list_beside_an_unread_catalog_counts_and_warns_it_may_read_low(world, tmp_path, capsys, monkeypatch, cat):
+    _with_world(monkeypatch, _icon_world(5))
+    _zip(tmp_path, "a.zip", {f"x/{cat}": b"", "x/content.xml": _manifest("new_mod", name="P"),
+                             "x/libraries/icons.xml": _icon_xml("p")})
+    _, report = _report(capsys, tmp_path)
+    row = next(r for r in report["rows"] if r["id"] == "new_mod")
+    assert row["icons"]["names"] == 1 and row["icons"]["total_after"] == 6
+    assert row["icons"]["catalog_unread"] is True
+    assert _warn(report, "new_mod") == ["icons"]
+    assert "catalog" in _texts(report, "new_mod") and "low" in _texts(report, "new_mod")
+
+
+@pytest.mark.parametrize("extra", [{}, {"x/ext_01_sig.cat": b""}, {"x/notes.cat": b""}, {"y/ext_01.cat": b""}],
+                         ids=["none", "signature", "unrelated", "another-folder"])
+def test_a_loose_list_with_no_catalog_of_its_own_carries_no_such_warning(world, tmp_path, capsys, monkeypatch, extra):
+    """Twin: only a catalog the game could load, in this mod's own folder, leaves the count short."""
+    _with_world(monkeypatch, _icon_world(5))
+    _zip(tmp_path, "a.zip", {**extra, "x/content.xml": _manifest("new_mod", name="P"),
+                             "x/libraries/icons.xml": _icon_xml("p")})
+    _, report = _report(capsys, tmp_path)
+    row = next(r for r in report["rows"] if r["id"] == "new_mod")
+    assert row["icons"] == {"names": 1, "total_after": 6}
+    assert _warn(report, "new_mod") == []
+
+
+def test_the_combined_total_says_when_a_counted_mod_has_an_unread_catalog(world, tmp_path, capsys, monkeypatch):
+    _with_world(monkeypatch, _icon_world(5))
+    _two_icon_mods(tmp_path)
+    _zip(tmp_path, "c.zip", {"z/content.xml": _manifest("m_three", name="Three"), "z/ext_v900.cat": b"",
+                             "z/libraries/icons.xml": _icon_xml("r")})
+    _, report = _report(capsys, tmp_path)
+    assert report["icons_combined"]["catalog_unread"] == 1
+    _, out, _ = _run(capsys, tmp_path)
+    assert "1 with a catalog not opened" in out, out
+
+
+def test_the_combined_total_is_silent_about_catalogs_when_none_was_left_unread(world, tmp_path, capsys, monkeypatch):
+    """Twin."""
+    _with_world(monkeypatch, _icon_world(5))
+    _two_icon_mods(tmp_path)
+    _, report = _report(capsys, tmp_path)
+    assert report["icons_combined"]["catalog_unread"] == 0
+    _, out, _ = _run(capsys, tmp_path)
+    assert "catalog not opened" not in out, out
+
+
+class _RaisingCfg:
+    def __init__(self, exc, tmp_path):
+        self.exc = exc
+        self.reference = tmp_path
+
+    def dlc_dirs(self):
+        raise self.exc
+
+
+@pytest.mark.parametrize("make,shown", [
+    (lambda f: PermissionError(13, "Access is denied", f + "/private_parent/final_folder"), "final_folder"),
+    (lambda f: FileNotFoundError(2, "No such file", f + "/private_parent/content.xml"), "private_parent"),
+    (lambda f: ValueError(f"cannot read {f}/private_parent/x.xml"), ""),
+], ids=["permission", "manifest-file", "other-error"])
+def test_a_failed_icon_count_prints_no_full_path(tmp_path, make, shown):
+    (tmp_path / "libraries").mkdir()
+    (tmp_path / "libraries" / "icons.xml").write_text('<icons><icon name="b"/></icons>', encoding="utf-8")
+    exc = make(tmp_path.as_posix() + "/private_root")
+    note = _downloads.icon_world([], _RaisingCfg(exc, tmp_path))["note"]
+    assert "private_root" not in note and tmp_path.as_posix() not in note, note
+    assert exc.__class__.__name__ in note and "not checked" in note
+    assert shown in note
+    if shown != "private_parent":
+        assert "private_parent" not in note, note
+
+
+def test_a_failed_icon_count_with_no_path_still_gives_the_reason(tmp_path):
+    """Twin: the reason survives when there is no path to shorten."""
+    (tmp_path / "libraries").mkdir()
+    (tmp_path / "libraries" / "icons.xml").write_text('<icons><icon name="b"/></icons>', encoding="utf-8")
+    note = _downloads.icon_world([], _RaisingCfg(PermissionError(13, "Access is denied"), tmp_path))["note"]
+    assert "PermissionError" in note and "Access is denied" in note
+
+
 def _version_cat(root, name, *members):
     root.mkdir(parents=True)
     lines = "".join(f"{m} 1 0 {'0' * 32}\n" for m in members)

@@ -195,7 +195,8 @@ def _icon_prefix(member: str) -> tuple[str, str] | None:
 def read_icon_lists(path: Path, sevenzip: str | None) -> tuple[dict[str, bytes], set[str]]:
     """({mod folder: its icon list bytes}, {mod folders with a catalog}). Raises ArchiveUnreadable.
 
-    A catalog is not opened, so a mod with one and no loose list has an UNKNOWN count, never zero.
+    A catalog is not opened, so a mod with one and no loose list has an UNKNOWN count, never zero, and one with
+    a loose list as well is counted from that list and warned that the count may read low.
     """
     lists: dict[str, bytes] = {}
     packed: set[str] = set()
@@ -340,7 +341,7 @@ def icon_world(active: list[dict], config=None) -> dict:
         layers = [(m["id"].lower(), *_layer_ops(Path(m["path"]), unread, m["folder"]))
                   for m in active if m.get("id") and m.get("path")]
     except Exception as exc:  # noqa: BLE001 - disclosed in the output as a check that did not run
-        return {"note": f"icon budget not checked ({exc.__class__.__name__}): {exc}"}
+        return {"note": f"icon budget not checked ({exc.__class__.__name__}){_failure_detail(exc)}"}
     return {"base": base, "layers": layers, "unread": unread}
 
 
@@ -383,6 +384,16 @@ def _profile_labels(files: list[Path]) -> list[str]:
         if len(set(labels)) == len(labels):
             return labels
     return [str(f) for f in files]
+
+
+def _failure_detail(exc: Exception) -> str:
+    """Why a check failed, with no more of a private path than a profile label prints. Only an OSError keeps its
+    filename apart from its reason; any other message is free text that may hold a path, so it is not printed."""
+    if not isinstance(exc, OSError):
+        return ""
+    label = _profile_labels([Path(os.fsdecode(exc.filename))])[0] if exc.filename else ""
+    detail = ": ".join(part for part in (exc.strerror, label) if part)
+    return f": {detail}" if detail else ""
 
 
 def _warnings_for(row: dict, manifest: dict, by_name: dict, profile: dict | None,
@@ -570,6 +581,10 @@ def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: 
                         row_ops[id(row)] = ops
                     after = icon_total(world, manifest["id"].lower(), ops)
                     row["icons"] = {"names": len(ops[0]), "total_after": after}
+                    if folder in packed:  # the loose list is counted; what the catalog adds is not known
+                        row["icons"]["catalog_unread"] = True
+                        row["warnings"].append({"kind": "icons", "text": "icon count may read low: it comes from "
+                                                "the loose list, and a catalog here was not opened"})
                     warning = _icon_warning(after) if ops[0] else None  # no icons: not this mod's doing
                     if warning:
                         row["warnings"].append(warning)
@@ -590,6 +605,7 @@ def scan(dirs: list[Path], installed: list[dict], active_ids: set[str], custom: 
         icons_combined = {
             "mods": len(together), "total_after": after,
             "unknown": sum(r["bucket"] in WOULD_INSTALL and r["icons"] is None for r in newest.values()),
+            "catalog_unread": sum(bool(r["icons"] and r["icons"].get("catalog_unread")) for r in newest.values()),
             "warning": _icon_warning(after, f"all {len(together)} listed mods with icons")}
     return {"scanned": [str(d) for d in dirs], "recursive": recursive, "archives": len(archives),
             "other_files": other_files, "no_manifest": len(no_manifest), "no_manifest_files": no_manifest,
@@ -674,8 +690,9 @@ def _print_report(report: dict, show_all: bool, flag_note: str | None) -> None:
               "would add back what this one removes.")
     if combined:
         left_out = f", leaving out {combined['unknown']} whose count is unknown" if combined["unknown"] else ""
+        short = f", {combined['catalog_unread']} with a catalog not opened" if combined["catalog_unread"] else ""
         print(f"All {combined['mods']} listed mods with icons together: {combined['total_after']} merged icon "
-              f"names{left_out}. Each mod's own warning judges that mod alone.")
+              f"names{left_out}{short}. Each mod's own warning judges that mod alone.")
     if report["icons_unread"]:
         print(f"Icon lists not read, so the count may be short by theirs: {', '.join(report['icons_unread'])}")
 
