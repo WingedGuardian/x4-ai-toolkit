@@ -625,3 +625,235 @@ def test_icons_in_a_7z_are_read_with_names_that_cannot_be_switches(monkeypatch, 
     lists, packed = _downloads.read_icon_lists(path, "7z")
     assert lists == {"m": _icon_xml("a")} and packed == {"n"}
     assert all("--" in a for a in seen)
+
+
+# --- release review of the warnings: missing base, profile labels, catalog names, op semantics, the combined total
+
+def _cfg(ref, *dlcs):
+    class Cfg:
+        reference = ref
+
+        @staticmethod
+        def dlc_dirs():
+            return list(dlcs)
+    return Cfg()
+
+
+def _icon_root(root, data):
+    (root / "libraries").mkdir(parents=True)
+    (root / "libraries" / "icons.xml").write_bytes(data)
+    return root
+
+
+@pytest.mark.parametrize("base_list", [None, b"<icons", b"<wares/>", b"<icons/>"])
+def test_a_base_list_missing_or_unreadable_refuses_even_with_a_dlc_present(tmp_path, base_list):
+    """An un-unpacked reference plus packed DLC used to count the DLC alone: 1 name and a huge false margin."""
+    ref = tmp_path / "ref"
+    ref.mkdir()
+    if base_list is not None:
+        _icon_root(ref, base_list)
+    dlc = _icon_root(tmp_path / "ego_dlc_x", _icon_xml("d"))
+    world = _downloads.icon_world([], _cfg(ref, dlc))
+    assert "not checked" in world["note"] and "base" not in world
+
+
+def test_a_small_readable_base_is_counted_because_no_size_is_a_threshold(tmp_path):
+    """Twin: the refusal is about the base's own file, never about how many names it has."""
+    ref = _icon_root(tmp_path / "ref", _icon_xml("a"))
+    dlc = _icon_root(tmp_path / "ego_dlc_x", _icon_xml("d"))
+    world = _downloads.icon_world([], _cfg(ref, dlc))
+    assert _downloads.icon_total(world) == 2 and world["unread"] == []
+
+
+def test_a_dlc_with_no_icon_list_does_not_refuse(tmp_path):
+    """Twin: a DLC with no icon list is ordinary, so only the base's own file can refuse."""
+    ref = _icon_root(tmp_path / "ref", _icon_xml("a", "b"))
+    dlc = tmp_path / "ego_dlc_x"
+    dlc.mkdir()
+    world = _downloads.icon_world([], _cfg(ref, dlc))
+    assert _downloads.icon_total(world) == 2
+
+
+def test_a_dlc_removal_counts_in_the_base(tmp_path):
+    ref = _icon_root(tmp_path / "ref", _icon_xml("a", "b"))
+    dlc = _icon_root(tmp_path / "ego_dlc_x", b"""<diff><remove sel="//icon[@name='a']"/></diff>""")
+    assert _downloads.icon_total(_downloads.icon_world([], _cfg(ref, dlc))) == 1
+
+
+@pytest.mark.parametrize("leak_first", [True, False])
+def test_two_test_profiles_with_one_folder_name_stay_apart(world, tmp_path, capsys, leak_first):
+    """Keyed by folder name these collapsed, last wins, so in one order a real leak gave no warning."""
+    downloads = tmp_path / "dl"
+    downloads.mkdir()
+    _zip(downloads, "a.zip", {"x/content.xml": _manifest("leaky", name="Leaky")})
+    (tmp_path / "aa").mkdir()
+    (tmp_path / "bb").mkdir()
+    leaks = _profile(tmp_path / "aa" / "900")
+    covers = _profile(tmp_path / "bb" / "900", ("leaky", "true"))
+    first, second = (leaks, covers) if leak_first else (covers, leaks)
+    _, out, _ = _run(capsys, downloads, "--test-profile", first, "--test-profile", second, "--json")
+    report = json.loads(out)
+    assert report["test_profiles"] == ["aa/900", "bb/900"]
+    assert _warn(report, "leaky") == ["test-profile"]
+    assert "profile aa/900 " in _texts(report, "leaky")
+    assert tmp_path.name not in " ".join(report["test_profiles"]) + _texts(report, "leaky")
+
+
+def test_differently_named_test_profiles_print_only_the_folder_name(world, tmp_path, capsys):
+    """Twin: nothing more of a private path than it takes to tell them apart."""
+    downloads = tmp_path / "dl"
+    downloads.mkdir()
+    _zip(downloads, "a.zip", {"x/content.xml": _manifest("leaky", name="Leaky")})
+    one, two = _profile(tmp_path / "900"), _profile(tmp_path / "901", ("leaky", "true"))
+    _, out, _ = _run(capsys, downloads, "--test-profile", one, "--test-profile", two, "--json")
+    report = json.loads(out)
+    assert report["test_profiles"] == ["900", "901"] and "profile 900 " in _texts(report, "leaky")
+
+
+def test_one_test_profile_given_as_folder_and_as_file_is_one_profile(world, tmp_path, capsys):
+    downloads = tmp_path / "dl"
+    downloads.mkdir()
+    _zip(downloads, "a.zip", {"x/content.xml": _manifest("leaky", name="Leaky")})
+    prof = _profile(tmp_path / "900")
+    _, out, _ = _run(capsys, downloads, "--test-profile", prof, "--test-profile", prof / "content.xml", "--json")
+    report = json.loads(out)
+    assert report["test_profiles"] == ["900"] and _warn(report, "leaky") == ["test-profile"]
+
+
+@pytest.mark.parametrize("cat", ["ext_v900.cat", "ext_01_diff_v900.cat", "subst_v900.cat", "EXT_01.CAT"])
+def test_a_version_or_diff_catalog_makes_the_count_unknown_not_zero(world, tmp_path, capsys, monkeypatch, cat):
+    """One matching the game version is live, and nothing here opens it."""
+    _with_world(monkeypatch, _icon_world(5))
+    _zip(tmp_path, "a.zip", {f"x/{cat}": b"", "x/content.xml": _manifest("new_mod", name="P")})
+    _, report = _report(capsys, tmp_path)
+    row = next(r for r in report["rows"] if r["id"] == "new_mod")
+    assert row["icons"] is None and "packed in a catalog" in _texts(report, "new_mod")
+
+
+@pytest.mark.parametrize("cat", ["ext_01_sig.cat", "ext_v900_sig.cat", "notes.cat"])
+def test_a_signature_or_unrelated_catalog_name_leaves_the_count_at_zero(world, tmp_path, capsys, monkeypatch, cat):
+    """Twin: only a catalog the game could load makes the count unknown."""
+    _with_world(monkeypatch, _icon_world(5))
+    _zip(tmp_path, "a.zip", {f"x/{cat}": b"", "x/content.xml": _manifest("new_mod", name="P")})
+    _, report = _report(capsys, tmp_path)
+    assert next(r for r in report["rows"] if r["id"] == "new_mod")["icons"] == {"names": 0, "total_after": 5}
+
+
+def _version_cat(root, name, *members):
+    root.mkdir(parents=True)
+    lines = "".join(f"{m} 1 0 {'0' * 32}\n" for m in members)
+    (root / name).write_text(lines, encoding="utf-8")
+    return root
+
+
+def test_an_installed_version_catalog_holding_an_icon_list_is_named_as_not_read(tmp_path):
+    ref = _icon_root(tmp_path / "ref", _icon_xml("a"))
+    mod = _version_cat(tmp_path / "mod", "ext_v900.cat", "libraries/icons.xml")
+    world = _downloads.icon_world([{"id": "m", "path": str(mod), "folder": "mod"}], _cfg(ref))
+    assert world["unread"] == ["mod"]
+
+
+def test_an_installed_version_catalog_without_an_icon_list_is_not_named(tmp_path):
+    """Twin: most version catalogs have nothing to do with icons."""
+    ref = _icon_root(tmp_path / "ref", _icon_xml("a"))
+    mod = _version_cat(tmp_path / "mod", "ext_v900.cat", "libraries/wares.xml")
+    world = _downloads.icon_world([{"id": "m", "path": str(mod), "folder": "mod"}], _cfg(ref))
+    assert world["unread"] == []
+
+
+@pytest.mark.parametrize("ops,expected", [
+    # Document order decides, so a name removed and added back is present.
+    ("""<remove sel="//icon[@name='a']"/><add sel="/icons"><icon name="a"/></add>""", ({"a"}, set())),
+    ("""<add sel="/icons"><icon name="a"/></add><remove sel="//icon[@name='a']"/>""", (set(), {"a"})),
+    # Only a selector ending on the icon removes the icon.
+    ("""<remove sel="//icon[@name='a']/@width"/>""", (set(), set())),
+    ("""<remove sel="//icon[@name='a']/child"/>""", (set(), set())),
+    ("""<remove sel="//other[@name='a']"/>""", (set(), set())),
+    ("""<remove sel="/icons/icon[@name='a']"/>""", (set(), {"a"})),
+    # Replace: the whole icon, its name, or an attribute that changes no name.
+    ("""<replace sel="//icon[@name='a']"><icon name="b"/></replace>""", ({"b"}, {"a"})),
+    ("""<replace sel="//icon[@name='a']"><icon name="a"/></replace>""", ({"a"}, set())),
+    ("""<replace sel="//icon[@name='a']/@name">b</replace>""", ({"b"}, {"a"})),
+    ("""<replace sel="//icon[@name='a']/@width">1</replace>""", (set(), set())),
+    ("""<replace sel="/icons/group"><group><icon name="c"/></group></replace>""", ({"c"}, set())),
+    # A condition is not evaluated: its removal is not assumed, so the count errs high.
+    ("""<remove sel="//icon[@name='a']" if="x"/>""", (set(), set())),
+    ("""<replace sel="//icon[@name='a']" if="x"><icon name="b"/></replace>""", ({"b"}, set())),
+    ("""<replace sel="//icon[@name='a']/@name" if="x">b</replace>""", ({"b"}, set())),
+])
+def test_icon_ops_follows_what_each_op_does_to_names(ops, expected):
+    assert _downloads.icon_ops(f"<diff>{ops}</diff>".encode()) == expected
+
+
+def test_a_name_removed_and_added_back_stays_in_the_total():
+    readded = _downloads.icon_ops(b"""<diff><remove sel="//icon[@name='b0']"/>"""
+                                  b"""<add sel="/icons"><icon name="b0"/></add></diff>""")
+    assert _downloads.icon_total(_icon_world(3, ("m", *readded))) == 3
+    assert _downloads.icon_total(_icon_world(3), "new", readded) == 3
+
+
+def test_the_output_says_the_count_can_err_low(world, tmp_path, capsys):
+    _zip(tmp_path, "a.zip", {"x/content.xml": _manifest("new_mod", name="M")})
+    _, out, _ = _run(capsys, tmp_path)
+    assert "can err low" in out
+
+
+def _two_icon_mods(folder):
+    _zip(folder, "a.zip", {"x/content.xml": _manifest("m_one", name="One"), "x/libraries/icons.xml": _icon_xml("p")})
+    _zip(folder, "b.zip", {"y/content.xml": _manifest("m_two", name="Two"), "y/libraries/icons.xml": _icon_xml("q")})
+
+
+def test_two_mods_each_under_but_together_over_warn_on_the_combined_total(world, tmp_path, capsys, monkeypatch):
+    base = _downloads.ICONS_LOADED - 1
+    _with_world(monkeypatch, _icon_world(base))
+    _two_icon_mods(tmp_path)
+    _, report = _report(capsys, tmp_path)
+    assert _warn(report, "m_one") == [] and _warn(report, "m_two") == []
+    combined = report["icons_combined"]
+    assert combined["mods"] == 2 and combined["total_after"] == base + 2 and combined["unknown"] == 0
+    assert combined["warning"]["kind"] == "icons" and "unmeasured" in combined["warning"]["text"]
+    _, out, _ = _run(capsys, tmp_path)
+    assert "together" in out.split("WARNINGS:")[1].split("\n\n")[0]
+
+
+def test_two_mods_together_under_do_not_warn_and_still_print_the_total(world, tmp_path, capsys, monkeypatch):
+    """Twin: one short of the combined edge."""
+    base = _downloads.ICONS_LOADED - 2
+    _with_world(monkeypatch, _icon_world(base))
+    _two_icon_mods(tmp_path)
+    _, report = _report(capsys, tmp_path)
+    assert report["icons_combined"]["total_after"] == base + 2 and report["icons_combined"]["warning"] is None
+    _, out, _ = _run(capsys, tmp_path)
+    assert "WARNINGS" not in out and f"{base + 2} merged icon names" in out
+
+
+def test_the_combined_total_counts_only_the_newest_copy_and_only_what_would_install(world, tmp_path, capsys, monkeypatch):
+    _with_world(monkeypatch, _icon_world(5))
+    _zip(tmp_path, "old.zip", {"x/content.xml": _manifest("m_one", "100", name="One"),
+                               "x/libraries/icons.xml": _icon_xml("p", "old_only")})
+    _zip(tmp_path, "new.zip", {"x/content.xml": _manifest("m_one", "200", name="One"),
+                               "x/libraries/icons.xml": _icon_xml("p")})
+    _zip(tmp_path, "two.zip", {"y/content.xml": _manifest("m_two", name="Two"),
+                               "y/libraries/icons.xml": _icon_xml("q")})
+    _zip(tmp_path, "same.zip", {"folder_a/content.xml": _manifest("mod_a"),
+                                "folder_a/libraries/icons.xml": _icon_xml("same_only")})
+    _, report = _report(capsys, tmp_path)
+    assert report["icons_combined"]["mods"] == 2 and report["icons_combined"]["total_after"] == 5 + 2
+
+
+def test_one_mod_with_icons_has_no_combined_total(world, tmp_path, capsys, monkeypatch):
+    """Twin: its own row already says it."""
+    _with_world(monkeypatch, _icon_world(5))
+    _zip(tmp_path, "a.zip", {"x/content.xml": _manifest("m_one", name="One"), "x/libraries/icons.xml": _icon_xml("p")})
+    _, report = _report(capsys, tmp_path)
+    assert report["icons_combined"] is None
+
+
+def test_the_combined_total_says_what_it_left_out(world, tmp_path, capsys, monkeypatch):
+    _with_world(monkeypatch, _icon_world(5))
+    _two_icon_mods(tmp_path)
+    _zip(tmp_path, "c.zip", {"z/ext_01.cat": b"", "z/content.xml": _manifest("m_three", name="Three")})
+    _, report = _report(capsys, tmp_path)
+    assert report["icons_combined"]["unknown"] == 1
+    _, out, _ = _run(capsys, tmp_path)
+    assert "1 whose count is unknown" in out

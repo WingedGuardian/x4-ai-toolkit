@@ -5,8 +5,10 @@
 - `x4modlist downloads` warns about what would go wrong after an install, for mods you might still install: the
   profile has an entry turning that id off; an installed mod has the same name under a different id; a profile
   named with the new `--test-profile` has no entry, so the mod would load there; and the merged icon total passes
-  what one install was measured to load. An icon count it cannot read is reported as unknown, never zero, and a
-  check that could not run says so.
+  what one install was measured to load, for each mod and for all the listed mods with icons together. An icon
+  count it cannot read, including a mod with any catalog and no loose list, is reported as unknown, never zero; a
+  check that could not run says so, and a missing or unreadable base-game icon list is one. The count reads the
+  list operations without running them, so it can err high, and in the cases it prints, low.
 
 - `x4modlist refresh --dry-run` says which rows a refresh would fetch, search for or skip, with no network, no
   key and no write.
