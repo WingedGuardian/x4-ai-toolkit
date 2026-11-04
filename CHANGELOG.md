@@ -2,6 +2,8 @@
 
 ## v4.1.0 — 2026-11-04
 
+- `x4effective dump` with a bare path to a file only a DLC ships now returns the document mods actually patch, with a note saying so. It used to return the unpatched file with no warning (588 of 716 patched DLC documents here). A file a mod ships into a DLC's tree still reads as absent at the bare path, and the message now names where it is.
+
 - Shared preservation core: the revision recorded in `tools/modding-harness.lock.json` is the pin and is authoritative; it is `474a2b6` in 4.1.0. The other revisions named below (`e0851b8`, `221292e`, `2d07fa4`, `bc2bafb`), and `1ac319f`, `7c4cc26`, `3274041` and every earlier pin, were interim pins of the same release: each entry says what that step added, and none is current. The pinned core reads save-lock permissions through the Windows API instead of parsing `icacls` text, and carries the sentinel and ledger fixes described below.
 
 - `x4save vars <pattern> | head` exits quietly (rc 0) when the reader closes the pipe; it was reported as

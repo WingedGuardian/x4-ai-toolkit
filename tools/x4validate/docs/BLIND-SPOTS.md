@@ -456,6 +456,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F351 | A sentinel look that finds the shared record held compares nothing; the change surfaces one look later | **SCOPE LIMIT (measured)** · IN-ARC | 1,350 parallel looks at the pinned core: 0 found the record held, so that path ran only under a real-lock probe and patched tests | FIXED 2026-11-03: false alarm and lost baseline gone; the delayed report is by design |
 | F352 | Callers of the save sniff that only need a yes can label a save copy by its cheap reason in count rows | **SCOPE LIMIT (measured)** · IN-ARC | 5,034 files: verdict differs on 0, reason text on 6, all crafted save copies | OPEN, by design: labels only |
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
+| F340 | The bulk-file guard runs out of its 40 s deadline on a 3,589-path batch at ordinary desk load and refuses it unchecked (fails closed) | **OPEN (measured)** · PRE-ARC | 12 of 12 timed runs on this machine, including the pre-arc tree; ~12.8 ms/path; 64% of a 2,000-path profile is `profiles._resolved`, ~20 calls per path | open; see entry |
+| F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12060,3 +12062,29 @@ folders) and a re-read found every one plain; the elevated `unlock` was not run.
 (F350 and the sentinel's) apply only to such a build.
 
 **RE-DERIVED BY:** `tools/x4validate/tests/test_save_sentinel.py`.
+
+## F353 - `x4effective dump` answered a bare path to a DLC-only file with the unpatched file · **FIXED (measured)** · PRE-ARC · confidence 95%
+
+Found 2026-11-03 auditing a weapon mod. `dump --chain assets/props/weaponsystems/energy/macros/turret_ter_l_beam_01_mk1_macro.xml`
+returned rc 0, `sources: ego_dlc_terran:full`, and vanilla's bullet. The same document at
+`extensions/ego_dlc_terran/...` returned `sources: base, vro:diff` and a different weapon. Nothing in the first answer
+said a patch had been missed, and it produced two false conclusions in one audit. VRO's own diff text contradicting the
+output is what caught it.
+
+Root cause (READ `_merge.build_effective`): the engine builds a DLC's own file under `extensions/<dlc>/...` and mods patch
+it there. A DLC stays out of `owner_folders` on purpose, so the bare door never consults those patches. `logical_vpath`
+already handled the mirror case for a mod (F71).
+
+MEASURED over all 716 DLC-form vpaths an active mod touches (of 4,101 touched vpaths; buckets sum to 716):
+
+| what the bare path did | count |
+|---|---|
+| returned the unpatched DLC file; now serves the patched document and says so | 588 |
+| read as absent because a mod shipped the file into the DLC tree; still rc 1, now names the document | 113 |
+| base also supplies the path, or several owners: one ordinary document, unchanged | 14 |
+| a mod also ships the bare path: two documents, literal kept, the other named | 1 |
+
+Fix is CLI-only (`dlc_owned_vpath`, `_cmd_dump`), so `_merge` and the engine fingerprint are untouched. Other
+`build_effective` callers were read, not measured: `_check`, `_similarity`, `_effective` and `_geometry_assets` pass fixed
+library names or vpaths from an index or logical key, so this wrong form is a typed-path problem. An unpatched DLC file
+stays at the literal path with no note, because both forms are then the same file. `tests/test_dump_dlc_owned_bare_path.py` proves it, with one falsification twin per clause.

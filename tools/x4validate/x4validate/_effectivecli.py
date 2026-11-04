@@ -961,6 +961,33 @@ def logical_vpath(vpath: str, mod_folders: set[str],
     return "/".join(parts[2:])
 
 
+def dlc_owned_vpath(vpath: str, sources: list[str], dlc_folders: set[str]) -> str | None:
+    """The ``extensions/<dlc>/<vpath>`` document behind a bare path only one DLC supplied.
+
+    Returns None -- "leave it alone" -- when *vpath* is already under ``extensions/``,
+    when base supplies the file (a DLC diff over a base file is one document, addressed
+    bare), or when no single DLC shipped it whole. Two DLC shipping the same path is
+    refused rather than guessed.
+
+    **Why it exists.** The engine builds a DLC's own file under ``extensions/<dlc>/...``
+    and mods patch it there (see `logical_vpath` for the mirror case), but
+    `_merge.build_effective` keeps a DLC out of ``owner_folders``, so the bare door never
+    consults those patches and returns the UNPATCHED file as a complete answer. MEASURED
+    2026-11-03: the bare form of VRO's repurposed Terran L beam returned vanilla's weapon.
+
+    *dlc_folders* is asked of ``Config.dlc_dirs()``, never guessed from a name prefix.
+    """
+    parts = [p for p in vpath.replace("\\", "/").split("/") if p]
+    if not parts or parts[0].lower() == "extensions" or "base" in sources:
+        return None
+    known = {d.lower() for d in dlc_folders}
+    owners = [s.rsplit(":", 1)[0] for s in sources
+              if s.endswith(":full") and s.rsplit(":", 1)[0].lower() in known]
+    if len(owners) != 1:
+        return None
+    return f"extensions/{owners[0]}/" + "/".join(parts)
+
+
 def _cmd_dump(args) -> int:
     cfg = _merge.Config(reference=Path(args.reference))
     mods = active_mods()
@@ -999,13 +1026,50 @@ def _cmd_dump(args) -> int:
 
     if res.tree is None:
         print(f"no effective content for {args.vpath}", file=sys.stderr)
+        # An absence must not hide a document one path form away: a mod can ship a file
+        # into a DLC's tree, and it then exists ONLY at extensions/<dlc>/<vpath>.
+        rel = args.vpath.replace("\\", "/").lstrip("/").lower()
+        here = sorted(k for k in touch if k.lower().startswith("extensions/")
+                      and k.split("/", 2)[-1].lower() == rel
+                      and k.split("/")[1].lower() in {d.name.lower() for d in cfg.dlc_dirs()})
+        for k in here:
+            print(f"  a document does exist at: {k}", file=sys.stderr)
         return 1
+    # A HIT can be the wrong form too. Only when the DLC document really differs: with no
+    # patch there the two answers are the same file, and a note would be noise. When a mod
+    # ALSO ships the bare path there are two documents, and which one a macro uses is the
+    # index's call, not this tool's, so the literal answer stands and the other is named.
+    note_door, note_also = None, None
+    if note_alt is None:
+        dlc_folders = {d.name for d in cfg.dlc_dirs()}
+        door = dlc_owned_vpath(vpath, res.sources, dlc_folders)
+        if door is not None:
+            door_rec = Recorder()
+            door_res = _merge.build_effective(
+                door, cfg, extra_overlays=touchers_for(door, touch, folder_to_path),
+                recorder=door_rec)
+            if door_res.tree is not None and len(door_res.sources) > 1:
+                known = {d.lower() for d in dlc_folders}
+                if all(s.split(":", 1)[0].lower() in known for s in res.sources):
+                    note_door = door
+                    vpath, res, rec = door, door_res, door_rec
+                else:
+                    note_also = (door, door_res.sources)
     # Printed whether or not --chain: resolving a reinterpreted path SILENTLY would
     # trade one confident-wrong answer for another.
     if note_alt is not None:
         print(f"<!-- note: '{note_folder}' is an installed MOD, not a DLC, so that is "
               f"a disk path, not a game vpath;")
         print(f"     interpreted as logical vpath '{note_alt}' -->")
+    if note_door is not None:
+        print(f"<!-- note: a DLC owns this file and mods patch it at the DLC path, which the "
+              f"bare path does not reach;")
+        print(f"     interpreted as '{comment_safe(note_door)}' -->")
+    if note_also is not None:
+        print(f"<!-- note: a separate document ALSO exists at "
+              f"'{comment_safe(note_also[0])}' "
+              f"(sources: {comment_safe(', '.join(note_also[1]))}); "
+              f"index/macros.xml decides which one a macro uses -->")
     if args.chain or getattr(args, "annotate", False):
         print(f"<!-- {comment_safe('sources: ' + ', '.join(res.sources))} -->")
         if "base" not in res.sources and _effective.base_has(cfg, vpath):
