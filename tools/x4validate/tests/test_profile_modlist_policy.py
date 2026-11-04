@@ -116,6 +116,24 @@ def test_guarded_new_profile_transaction_scratch_only(candidate):
     assert {path:path.read_bytes() for path in files}==files
     assert current.read_bytes()==b"<content existing='preserve'/>"
 
+def test_mutation_snapshot_carries_modlist_native_path_dependency(tmp_path):
+    import importlib.util
+    import shutil
+    import subprocess
+    import sys
+    spec = importlib.util.spec_from_file_location('modlist_mutation_gate', REPO / 'scripts/verify-hook-tests.py')
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    work = tmp_path / 'mutation-snapshot'
+    work.mkdir()
+    for name in gate.FILES:
+        shutil.copy2(gate.HOOKS / name, work / name)
+    # Exercise the consumer, not an assertion about a filename in the manifest.
+    result = subprocess.run([sys.executable, '-B', 'test_hook_facts.py',
+        'TestProfileModlistWritePolicy.test_modlist_write_is_still_a_write_without_another_confirmation'],
+        cwd=work, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stdout.decode(errors='replace') + result.stderr.decode(errors='replace')
+
 def test_rejected_copy_options_cannot_borrow_redirect_exemption(guard, tmp_path):
     g, roots = guard
     source = tmp_path / 'source.xml'
