@@ -581,6 +581,10 @@ class _RR(_PSE2E):
                 if got != "deny" or "typed canonical human approval required" not in reason:
                     bad.append("%s (want bound save approval): %s" % (got, command))
                 continue
+            if want == "nothing-to-approve":
+                if got != "deny" or "matches no existing save" not in reason:
+                    bad.append("%s (want the empty-wildcard denial): %s" % (got, command))
+                continue
             if want == "scope-refusal":
                 if got != "deny" or "scope could not be completely evaluated" not in reason:
                     bad.append("%s (want unresolved-scope refusal): %s" % (got, command))
@@ -634,6 +638,9 @@ class TestRR1PipelineAndVariableTargets(_RR):
         S = self.S
         self.expect([
             ("deny", "$t = Resolve-Path '" + S + "'; Remove-Item $t -Recurse"),
+            ("nothing-to-approve", "$items = Get-ChildItem '" + S + "'; $items | Remove-Item"),
+        ])
+        self.expect_with_save([
             ("save-approval", "$items = Get-ChildItem '" + S + "'; $items | Remove-Item"),
         ])
 
@@ -1028,6 +1035,9 @@ class TestRRPreArcBash(_RR):
             ("ask", "robocopy ./mod '" + Gf + "/extensions/amod' /MIR"),    # 2026-10-27: rm_deployed_mod
         ], tool="Bash")
         self.expect([
+            ("nothing-to-approve", "foreach ($f in Get-ChildItem '" + self.S + "') { Remove-Item $f.FullName }"),
+        ])
+        self.expect_with_save([
             ("deny", "robocopy C:\\empty '" + G + "' /MIR"),
             ("save-approval", "foreach ($f in Get-ChildItem '" + self.S + "') { Remove-Item $f.FullName }"),
             ("deny", "foreach ($f in gci '" + self.R + "') { Remove-Item $f.FullName -Recurse }"),
