@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v4.1.0 — 2026-11-04
 
 - Shared preservation core: the revision recorded in `tools/modding-harness.lock.json` is the pin and is authoritative; it is `474a2b6` at this point in the 4.1.0 work, and a later re-pin supersedes that. The other revisions named below (`e0851b8`, `221292e`, `2d07fa4`, `bc2bafb`), and `1ac319f`, `7c4cc26`, `3274041` and every earlier pin, were interim pins of the same release: each entry says what that step added, and none is current. The pinned core reads save-lock permissions through the Windows API instead of parsing `icacls` text, and carries the sentinel and ledger fixes described below.
 
@@ -217,7 +217,7 @@ Derived stores and tests:
 - `x4fresh rebuild --auto` can write a `DEFERRED` note when everything is already FRESH, and a second launcher racing the lock can leave a `did not complete` note that is a false alarm. Neither hides a stale store.
 - `x4effective find` cannot resolve a name whose text the store's merged text table lacks (BLIND-SPOTS F343).
 - Closed-pipe handling covers `x4effective` and `x4save` only. Measured 2026-11-03 for `--help` alone: 10 of the other console tools still exit 120 when the output goes into a closed pipe (10 of 12 in all; no other case was measured for them). A command cut off mid-print exits 0 by design, so `x4save check` cut off before its verdict line exits 0 even if it would have reported a problem (BLIND-SPOTS F342).
-- The skip ceilings in CI (418 on the Linux checkout leg, 934 on the installed-copy job) are derived, not yet measured on CI; two test groups (the Codex wrapper and deploy parity) depend on a real home folder and a configured game root (BLIND-SPOTS F349).
+- Two test groups (the Codex wrapper and deploy parity) depend on a real home folder and a configured game root (BLIND-SPOTS F349).
 
 ## v4.0.0 — 2026-10-21
 
