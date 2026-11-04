@@ -38,6 +38,8 @@ The scratch E2E models the original three-file request, receives a fully evaluat
 
 ## Integration and deployment
 
+The mutation tester's isolated snapshot initially omitted the new sibling native-path helper. Its consumer regression failed before adding save_policy.py to the snapshot manifest, then passed. The updated focused module passed 32 tests with one Windows file-symlink privilege skip; the actual isolated mutation baseline ran all 912 parser tests successfully. Independent follow-up review found no issues in this verification-only addition. Full mutation trials were not run here: five stale exact-text anchors were measured unchanged from the starting master and remain outside this fix. Do not describe that baseline as a green mutation gate or exact-commit CI.
+
 Implemented source commit: `af36b24b14f1c0db6fcb2838ec4353cb5ed4748b`. The 26 tested source/generated/test/documentation paths were integrated to current master with exact-byte verification; four unrelated CLI-reference working files were preserved. A check-only replay of the original three-file request through that committed neutral harness returned evaluated allow, noninert, preservation not required; all three actual target files remained absent. This is policy-evaluation evidence, not execution of those writes or deployment acceptance.
 
 A detached checkout isolates tests without inventing a branch. Verified explicit paths land on current `master`; preserve unrelated working changes. Do not push, tag or release without user direction.
