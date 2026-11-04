@@ -301,8 +301,10 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
   mod-list file target; configuration links, directories, destructive operations
   and mixed protected writes keep their existing safeguards.
   The shell exemption covers one recognized data write or copy at a time, not a move;
-  compound or opaque programs keep their previous profile confirmation because
+  compound commands keep their previous profile confirmation because
   an earlier action can change a later destination into a directory or link.
+  A program whose writes the guard cannot read, such as `python -c`, is not
+  judged by this rule at all.
   An opaque program naming saves requires review; its named pairs are preserved first,
   and unresolved save scope is refused. A separate profile confirmation never skips
   save preservation or bulk approval.

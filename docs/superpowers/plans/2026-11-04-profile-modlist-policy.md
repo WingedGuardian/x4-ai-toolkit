@@ -6,7 +6,7 @@ The user requested ordinary mod-file treatment for creating and editing root pro
 
 - Root mod-list creation/editing is advisory through file guards and complete Action v1 batches.
 - Simple recognized shell data writes and a verified regular-file copy follow the same policy.
-- Compound/opaque shell commands keep their previous profile confirmation; preflight must not infer future destination kinds or borrow another operation's exemption.
+- Compound shell commands keep their previous profile confirmation (a program whose writes the guard cannot read, such as `python -c`, was not judged before and is not now); preflight must not infer future destination kinds or borrow another operation's exemption.
 - Configuration/nested-file confirmation, destructive actions, save transactions, and game/reference blocks are not relaxed.
 - Canonical targets, directories, symlinked copy sources and multiply-linked files cannot gain a mod-list exemption.
 - Regenerate all adapters from `agent/`; update instructions, README and changelog.
