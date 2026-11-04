@@ -4,6 +4,8 @@
 
 - `x4diff` now compares each mod's `content.xml` and prints what it found: identical, differs (with the version and date change), absent on a side, or not compared because it could not be read. It used to skip the manifest and `--file content.xml` said "no differences" even when the version had changed. Three-way mode reports it too, without classifying it. The manifest is not counted in `changed files`.
 
+- `x4diff --file` accepts `./path` and backslashes, and says a path is not in the comparison (exit 1) when x4diff does not compare that file type or neither side has it. These all used to print "no differences", even for a file that had changed.
+
 - `x4modlist downloads` warns about what would go wrong after an install, for mods you might still install: the
   profile has an entry turning that id off; an installed mod has the same name under a different id; a profile
   named with the new `--test-profile` has no entry, so the mod would load there; and the merged icon total passes

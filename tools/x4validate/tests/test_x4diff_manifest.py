@@ -254,6 +254,84 @@ def test_a_nested_content_xml_is_still_an_ordinary_document(tmp_path, capsys):
     assert rc == 0 and "@version: 1 -> 2" in out, out
 
 
+# --- --file: every spelling reaches the comparison; "no differences" is only ever earned ----
+
+@pytest.mark.parametrize("spelling", [
+    "libraries/wares.xml", "./libraries/wares.xml", "libraries\\wares.xml",
+    ".\\libraries\\wares.xml", "libraries//wares.xml", "LIBRARIES/WARES.XML"])
+def test_file_flag_spellings_of_a_changed_file_reach_its_rows(tmp_path, capsys, spelling):
+    old, new = _mod(tmp_path, "old", price="1"), _mod(tmp_path, "new", price="2")
+    rc, out = _run(capsys, old, new, "--file", spelling)
+    assert rc == 0
+    assert "@price: 1 -> 2" in out, out
+    assert "no differences" not in out
+
+
+@pytest.mark.parametrize("spelling", ["libraries/wares.xml", "./libraries/wares.xml",
+                                      "libraries\\wares.xml"])
+def test_file_flag_on_a_genuinely_identical_file_is_no_differences(tmp_path, capsys, spelling):
+    """The twin: refusing more must not cost the true answer."""
+    old, new = _mod(tmp_path, "old"), _mod(tmp_path, "new")
+    rc, out = _run(capsys, old, new, "--file", spelling)
+    assert rc == 0
+    assert f"{spelling}: no differences" in out, out
+
+
+def test_file_flag_on_an_unreadable_file_spelled_differently_refuses(tmp_path, capsys):
+    old, new = _mod(tmp_path, "old"), _mod(tmp_path, "new")
+    (new / "libraries" / "wares.xml").write_text("<wares", encoding="utf-8")
+    rc, out = _run(capsys, old, new, "--file", ".\\libraries\\wares.xml")
+    assert rc == 1
+    assert "NOT COMPARED" in out and "no differences" not in out, out
+
+
+@pytest.mark.parametrize("name,body", [("libraries/s.xsd", '<xs a="{}"/>'),
+                                       ("libraries/notes.txt", "note {}")])
+@pytest.mark.parametrize("same", [True, False])
+def test_file_flag_on_a_type_x4diff_does_not_compare_says_so(tmp_path, capsys, name, body, same):
+    """Differing OR identical: x4diff read neither, so it can claim neither."""
+    old, new = _mod(tmp_path, "old"), _mod(tmp_path, "new")
+    (old / name).write_text(body.format(1), encoding="utf-8")
+    (new / name).write_text(body.format(1 if same else 2), encoding="utf-8")
+    rc, out = _run(capsys, old, new, "--file", name)
+    assert rc == 1
+    assert "NOT IN THE COMPARISON" in out and "does not compare" in out, out
+    assert "no differences" not in out
+
+
+@pytest.mark.parametrize("name", ["libraries/nope.xml", "./libraries/nope.xml",
+                                  "libraries\\nope.xml", "libraries", "../old/libraries/wares.xml"])
+def test_file_flag_on_a_path_neither_side_has_says_so(tmp_path, capsys, name):
+    old, new = _mod(tmp_path, "old"), _mod(tmp_path, "new")
+    rc, out = _run(capsys, old, new, "--file", name)
+    assert rc == 1
+    assert "NOT IN THE COMPARISON" in out and "no differences" not in out, out
+
+
+def test_file_flag_on_a_one_sided_file_keeps_its_answer(tmp_path, capsys):
+    old, new = _mod(tmp_path, "old"), _mod(tmp_path, "new")
+    (new / "libraries" / "extra.xml").write_text("<extra/>", encoding="utf-8")
+    rc, out = _run(capsys, old, new, "--file", ".\\libraries\\extra.xml")
+    assert rc == 0 and "ADDED (present only in NEW)" in out, out
+
+
+def test_file_flag_counts_an_overlay_layer_as_part_of_the_baseline(tmp_path, capsys):
+    """A file only the --overlay layer ships is in the comparison, as REMOVED."""
+    old, new = _mod(tmp_path, "old"), _mod(tmp_path, "new")
+    layer = _mod(tmp_path, "layer")
+    (layer / "libraries" / "extra.xml").write_text("<extra/>", encoding="utf-8")
+    rc, out = _run(capsys, old, new, "--overlay", layer, "--file", "libraries/extra.xml")
+    assert rc == 0 and "REMOVED (present only in OLD)" in out, out
+
+
+def test_three_way_file_flag_spellings_reach_the_listing(tmp_path, capsys):
+    base = _mod(tmp_path, "base", price="1")
+    arch, curr = _mod(tmp_path, "arch", price="2"), _mod(tmp_path, "curr", price="3")
+    rc, out = _run(capsys, arch, curr, "--base", base, "--file", ".\\libraries\\wares.xml")
+    assert rc == 1, "a both-moved attribute is a decision"
+    assert "base 1  ->  archived 2  |  upstream 3" in out, out
+
+
 # --- the shared enumerator stays as it was --------------------------------------------------
 
 def test_the_shared_enumerator_still_drops_the_manifest(tmp_path):

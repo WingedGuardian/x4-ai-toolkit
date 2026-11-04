@@ -302,6 +302,9 @@ def diff_file(old: etree._Element, new: etree._Element, vpath: str) -> FileDiff:
     return fd
 
 
+#: Document types `diff_mods` skips by default.
+IGNORED_SUFFIXES = (".xsd",)
+
 #: The mod-root manifest, which `mod_xml_vpaths` leaves out.
 MANIFEST = "content.xml"
 
@@ -398,7 +401,7 @@ class ModDiff:
 
 
 def diff_mods(old_dirs: Path | list[Path], new_dir: Path,
-              ignore_suffixes: tuple[str, ...] = (".xsd",)) -> ModDiff:
+              ignore_suffixes: tuple[str, ...] = IGNORED_SUFFIXES) -> ModDiff:
     """Diff *new_dir* against a baseline of one or more *old_dirs* (merged in order)."""
     old_list = [old_dirs] if isinstance(old_dirs, Path) else list(old_dirs)
     md = ModDiff(" + ".join(d.name for d in old_list), str(new_dir))

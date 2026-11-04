@@ -46,9 +46,14 @@ def _manifest_text(m: ManifestDiff) -> str:
     return f"{text} [{m.note}]" if m.note else text
 
 
+def _norm_vpath(vpath: str) -> str:
+    """A typed path as a vpath: forward slashes, no `./`, no doubled separators."""
+    return PurePosixPath(vpath.replace("\\", "/")).as_posix()
+
+
 def _names_manifest(vpath: str) -> bool:
     """True for the mod-root manifest however it is spelled, and for nothing nested."""
-    return PurePosixPath(vpath.replace("\\", "/")).as_posix().lower() == MANIFEST
+    return _norm_vpath(vpath).lower() == MANIFEST
 
 
 def _fmt_summary(md: ModDiff) -> str:
@@ -119,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         return _print_manifest_file(md.manifest)
 
     if args.file:
-        want = args.file.lower()
+        want = _norm_vpath(args.file).lower()
         fd = next((f for f in md.files if f.vpath.lower() == want), None)
         if fd is not None:
             _print_file(fd)
@@ -136,9 +141,17 @@ def main(argv: list[str] | None = None) -> int:
         if hit:
             print(f"  {args.file}: NOT COMPARED - {hit[0]}")
             return 1
-        readable = any(_diff.read_vpath(d, args.file) is not None
-                       for d in baseline + [Path(args.new)])
-        if not readable:
+        #
+        # "No differences" is earned only by a document `diff_mods` actually compared,
+        # so this asks its population. Asking "does any side parse?" answered yes for
+        # a type it skips: a changed .xsd read as "no differences".
+        suffix = PurePosixPath(want).suffix
+        if suffix and (suffix != ".xml" or want.endswith(_diff.IGNORED_SUFFIXES)):
+            print(f"  {args.file}: NOT IN THE COMPARISON - x4diff does not compare "
+                  f"{suffix} files, so this says nothing about whether it differs.")
+            return 1
+        compared = _diff.merged_vpaths(baseline).keys() | _diff.mod_xml_vpaths(Path(args.new)).keys()
+        if want not in compared:
             print(f"  {args.file}: NOT IN THE COMPARISON - neither side has that "
                   f"vpath. That is an absence of the FILE, not an absence of "
                   f"differences.")
@@ -278,7 +291,7 @@ def _three_way(args) -> int:
         for v in r.node_level[:args.top]:
             print(f"    {v}")
 
-    want = (args.file or "").lower()
+    want = _norm_vpath(args.file).lower() if args.file else ""
     wants_manifest = bool(args.file) and _names_manifest(args.file)
 
     def _keep(rows):
