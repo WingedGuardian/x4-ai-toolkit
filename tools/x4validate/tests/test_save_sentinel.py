@@ -732,3 +732,124 @@ def test_TWIN_that_warning_repeats_only_after_the_quiet_period(world, monkeypatc
     assert mod.report(roots, now=1000.0)[1]
     assert "save-lock off" not in mod.report(roots, now=1010.0)[0]
     assert "save-lock off" in mod.report(roots, now=1000.0 + mod.ELEVATED_REPEAT + 1)[0]
+
+
+def test_a_look_that_dies_after_the_check_keeps_its_finding_for_the_next_look(world, monkeypatch):
+    """The record used to be written before the steps that can still fail, so the crash lost the finding for good."""
+    mod, roots, saves, tk = world
+    s = saves / "save_001.xml.gz"
+    s.write_bytes(b"x")
+    assert mod.report(roots, now=1000.0) == ("", False)
+    _bump(s, b"changed")
+    with monkeypatch.context() as broken:
+        broken.setattr(mod, "games_doing", lambda *_a: 1 / 0)
+        with pytest.raises(ZeroDivisionError):
+            mod.report(roots, now=1010.0)
+    text, loud = mod.report(roots, now=1020.0)
+    assert loud and "modified: " + str(s) in text
+
+
+def test_a_failed_look_reaches_the_user_once_an_hour_and_the_agent_every_time(world):
+    mod, roots, saves, tk = world
+    text, loud = mod.failed_look(ValueError("x"), roots, now=5000.0)
+    assert loud and text.startswith("SAVE SENTINEL DID NOT RUN (ValueError)")
+    text, loud = mod.failed_look(ValueError("x"), roots, now=5060.0)
+    assert not loud and text.startswith("SAVE SENTINEL DID NOT RUN (ValueError)")
+    assert mod.failed_look(ValueError("x"), roots, now=5000.0 + mod.FAILED_REPEAT + 1)[1]
+
+
+def test_main_raises_a_failed_look_to_the_user_once(world, monkeypatch, capsys):
+    mod, roots, saves, tk = world
+    monkeypatch.setattr(sys, "stdin", type("S", (), {"buffer": type("B", (), {"read": lambda self: b"{}"})()})())
+    monkeypatch.setattr(mod.save_policy, "packet", lambda _text: (roots, {}))
+    monkeypatch.setattr(mod, "report", lambda _roots: 1 / 0)
+    assert mod.main() == 0
+    assert "SAVE SENTINEL DID NOT RUN" in json.loads(capsys.readouterr().out)["systemMessage"]
+    assert mod.main() == 0
+    second = json.loads(capsys.readouterr().out)
+    assert "systemMessage" not in second
+    assert "SAVE SENTINEL DID NOT RUN" in second["hookSpecificOutput"]["additionalContext"]
+
+
+def test_TWIN_a_failure_before_the_roots_are_known_tells_the_agent_only(world):
+    mod, roots, saves, tk = world
+    text, loud = mod.failed_look(ValueError("x"), None, now=5000.0)
+    assert text.startswith("SAVE SENTINEL DID NOT RUN") and not loud
+
+
+def test_TWIN_a_mark_that_cannot_be_written_still_reports(world, monkeypatch):
+    mod, roots, saves, tk = world
+    def refuse(*_a, **_k):
+        raise PermissionError("held")
+    monkeypatch.setattr(Path, "write_bytes", refuse)
+    text, loud = mod.failed_look(ValueError("x"), roots, now=5000.0)
+    assert loud and text.startswith("SAVE SENTINEL DID NOT RUN")
+
+
+def _with_standing(monkeypatch, mod, roots, unread):
+    sentinel = mod.save_policy.core(mod.save_policy.native(roots["toolkit"]), "sentinel")
+    real = sentinel.check
+    monkeypatch.setattr(sentinel, "check", lambda *a, **k: real(*a, **k)._replace(unread=unread))
+
+
+def test_a_folder_that_stays_unreadable_is_said_once(world, monkeypatch):
+    mod, roots, saves, tk = world
+    mod.report(roots, now=1000.0)
+    with monkeypatch.context() as held:
+        _with_standing(held, mod, roots, ("D:/gone",))
+        assert "D:/gone" in mod.report(roots, now=1010.0)[0]
+        assert "D:/gone" not in mod.report(roots, now=1020.0)[0]
+
+
+def test_TWIN_a_new_unreadable_folder_and_a_return_are_said_again(world, monkeypatch):
+    mod, roots, saves, tk = world
+    mod.report(roots, now=1000.0)
+    with monkeypatch.context() as held:
+        _with_standing(held, mod, roots, ("D:/gone",))
+        mod.report(roots, now=1010.0)
+    with monkeypatch.context() as held:
+        _with_standing(held, mod, roots, ("D:/gone", "E:/also"))
+        text = mod.report(roots, now=1020.0)[0]
+        assert "D:/gone" in text and "E:/also" in text
+    assert mod.report(roots, now=1030.0)[0] == ""
+    with monkeypatch.context() as held:
+        _with_standing(held, mod, roots, ("D:/gone",))
+        assert "D:/gone" in mod.report(roots, now=1040.0)[0]
+
+
+def test_TWIN_a_change_is_still_said_while_a_standing_note_is_quiet(world, monkeypatch):
+    mod, roots, saves, tk = world
+    s = saves / "save_001.xml.gz"
+    s.write_bytes(b"x")
+    mod.report(roots, now=1000.0)
+    with monkeypatch.context() as held:
+        _with_standing(held, mod, roots, ("D:/gone",))
+        mod.report(roots, now=1010.0)
+        _bump(s, b"changed")
+        text, loud = mod.report(roots, now=1020.0)
+    assert loud and "modified: " + str(s) in text and "D:/gone" not in text
+
+
+def test_a_denied_folder_does_not_stop_every_look(world, monkeypatch, tmp_path):
+    mod, roots, saves, tk = world
+    denied = tmp_path / "denied" / "save"
+    real = Path.is_dir
+    def is_dir(self, *a, **k):
+        if self == denied:
+            raise PermissionError("denied")
+        return real(self, *a, **k)
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    monkeypatch.setattr(mod.save_policy, "folders", lambda _roots: (saves, denied))
+    assert mod.save_folders(roots) == (saves,)
+
+
+def test_TWIN_a_documents_folder_that_cannot_be_listed_does_not_stop_every_look(world, monkeypatch, tmp_path):
+    mod, roots, saves, tk = world
+    docs = tmp_path / "docs"
+    (docs / "Egosoft" / "X4").mkdir(parents=True)
+    def refuse(self):
+        raise PermissionError("denied")
+    monkeypatch.setattr(mod, "_known_documents", lambda: [docs])
+    monkeypatch.setattr(Path, "iterdir", refuse)
+    monkeypatch.setattr(mod.save_policy, "folders", lambda _roots: (saves,))
+    assert mod.save_folders(roots) == (saves,)

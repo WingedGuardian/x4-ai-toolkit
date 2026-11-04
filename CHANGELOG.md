@@ -2,6 +2,14 @@
 
 ## v4.1.0 — 2026-11-04
 
+- Save sentinel: a look that fails after its check keeps the finding for the next look, because the record is now written last. A failed look reaches the user once an hour, not only the agent. A folder that stays unreadable is mentioned once, and a denied folder no longer stops every look.
+
+- Session charter and ledger: the folder ignores itself in git and its files are private to the user where the platform has modes. An edited charter cannot end its own record, and charter and ledger text is labelled as a record, not instructions. A first prompt with a malformed character is kept, so the second prompt is no longer recorded as the first.
+
+- Sentinel core: a save that vanishes during a scan is the only one reported lost; every later save in that folder used to be reported as removed.
+
+- Upgrades: a failed preview or stage says why, and a default apply no longer creates a local config the install never had. `find-session` says its results can come from any project on the machine. OpenCode no longer says guards are live when the adapter is missing.
+
 - `x4-mod-release-review` now ends with the whole upload pack in one folder: archive, description, summary, changelog, upload notes, the previous page text, manifest and review record. The description is built from the live Nexus page through the API, with edits that refuse on a miss. If the API cannot provide the page, the skill stops and tells you instead of writing one fresh. The new `scripts/verify-mod-pack.py` refuses a pack with a missing or empty file, `<br`, an HTML entity, CRLF or a header line in a paste file, a changelog line over 120 characters, or an archive that differs from the manifest. The previous page text is kept as it was, so those paste-file rules do not apply to it.
 - `x4diff` now compares each mod's `content.xml` and prints what it found: identical, differs (with the version and date change), absent on a side, or not compared because it could not be read. It used to skip the manifest and `--file content.xml` said "no differences" even when the version had changed. Three-way mode reports it too, without classifying it. The manifest is not counted in `changed files`.
 
@@ -23,7 +31,7 @@
 
 - `x4effective dump` with a bare path to a file only a DLC ships now returns the document mods actually patch, with a note saying so. It used to return the unpatched file with no warning (588 of 716 patched DLC documents here). A file a mod ships into a DLC's tree still reads as absent at the bare path, and the message now names where it is.
 
-- Shared preservation core: the revision recorded in `tools/modding-harness.lock.json` is the pin and is authoritative; it is `474a2b6` in 4.1.0. The other revisions named below (`e0851b8`, `221292e`, `2d07fa4`, `bc2bafb`), and `1ac319f`, `7c4cc26`, `3274041` and every earlier pin, were interim pins of the same release: each entry says what that step added, and none is current. The pinned core reads save-lock permissions through the Windows API instead of parsing `icacls` text, and carries the sentinel and ledger fixes described below.
+- Shared preservation core: the revision recorded in `tools/modding-harness.lock.json` is the pin and is authoritative; it is `b86c709` in 4.1.0. The other revisions named below (`e0851b8`, `221292e`, `2d07fa4`, `bc2bafb`), and `474a2b6`, `1ac319f`, `7c4cc26`, `3274041` and every earlier pin, were interim pins of the same release: each entry says what that step added, and none is current. The pinned core reads save-lock permissions through the Windows API instead of parsing `icacls` text, and carries the sentinel and ledger fixes described below.
 
 - `x4save vars <pattern> | head` exits quietly (rc 0) when the reader closes the pipe; it was reported as
   "decompression/XML parse failed (Broken pipe)", rc 2, as if the save were broken. The exit flush

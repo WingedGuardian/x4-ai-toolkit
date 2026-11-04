@@ -68,6 +68,7 @@ EXIT_SPREAD = 30                  # seconds between uidata.xml and a companion; 
 REWRITTEN_FLOOR = 5               # other top-level files that must move, with at least half of them, to read as a copy
 MOST_A_SESSION_CHANGES = 10       # one folder, one look: three autosaves, a quicksave and a few overwritten saves
 SHOWN = 15
+FAILED_REPEAT = 3600              # seconds between telling the user the sentinel itself is failing
 
 
 def _known_documents():
@@ -88,16 +89,27 @@ def _known_documents():
         return []
 
 
+def _is_dir(path):
+    """A denied folder must not stop every look: Path.is_dir can raise PermissionError, depending on the Python."""
+    try:
+        return Path(path).is_dir()
+    except OSError:
+        return False
+
+
 def save_folders(roots):
     found = list(save_policy.folders(roots))
     for docs in _known_documents():
         profile = docs / "Egosoft" / "X4"
-        if profile.is_dir():
+        if _is_dir(profile):
             found.append(profile / "save")
-            found.extend(p / "save" for p in profile.iterdir() if p.is_dir())
+            try:
+                found.extend(p / "save" for p in profile.iterdir() if _is_dir(p))
+            except OSError:
+                pass                    # silent-ok: the configured folders are still watched
     unique = {}
     for f in found:
-        if Path(f).is_dir():
+        if _is_dir(f):
             unique.setdefault(os.path.normcase(os.path.abspath(f)), Path(f))
     return tuple(unique.values())
 
@@ -223,14 +235,14 @@ def report(roots, now=None):
     since = state.get("time", now)
     result = sentinel.check(profile, store, state, watch=state["marked"], now=now)
     notes, lock_loud = lock_notes(root, state, now)
-    try:
-        sentinel.save_state(state_path, state)
-    except OSError as exc:          # this look's findings still count; the old record stays the baseline, so at worst
-        notes.append("SAVE SENTINEL: this look could not be recorded ({}), so the next look may repeat it."    # a repeat
-                     .format(type(exc).__name__))
     game_folders = {os.path.normcase(os.path.abspath(f)) for f in profile.save_roots}
     quiet = games_doing(sentinel, result.unbacked, game_folders, since)
     raised = tuple(c for c in result.unbacked if c not in quiet)
+    # A folder that stays unreadable or too large is said once, not after every tool call.
+    standing = sorted(result.truncated + result.unread)
+    if state.get("noted") == standing:
+        result = result._replace(truncated=(), unread=())
+    state["noted"] = standing
     text = sentinel.describe(result._replace(unbacked=raised))
     if raised:
         text += ("\nThe save guard did not back these up. If a command or script you ran did this, tell the user "
@@ -245,6 +257,12 @@ def report(roots, now=None):
         if len(quiet) > SHOWN:
             lines.append("  ... and {} more".format(len(quiet) - SHOWN))
         text = "\n".join(t for t in [text] + lines if t)
+    # The record comes last: written before something that can still fail, it would lose the finding for good.
+    try:
+        sentinel.save_state(state_path, state)
+    except OSError as exc:          # this look's findings still count; the old record stays the baseline, so at worst
+        notes.append("SAVE SENTINEL: this look could not be recorded ({}), so the next look may repeat it."    # a repeat
+                     .format(type(exc).__name__))
     return "\n".join(t for t in [text] + notes if t), bool(raised) or lock_loud or result.state_lost
 
 
@@ -288,13 +306,38 @@ def render(text, loud):
     return json.dumps(out)
 
 
+def failed_look(exc, roots, now=None):
+    """(text, loud) for a look that failed. The agent hears every time and the user once per FAILED_REPEAT, because the
+    user was told any save change is reported. With no roots there is nowhere to remember it, so only the agent hears."""
+    now = time.time() if now is None else now
+    text = "SAVE SENTINEL DID NOT RUN ({}): saves were not checked after this call.".format(type(exc).__name__)
+    if not roots:
+        return text, False
+    try:
+        mark = Path(save_policy.native(roots["toolkit"])) / ".modding-agent-harness" / ".save-sentinel.failed"
+    except Exception:               # noqa: BLE001 -- an unusable packet: the agent still hears
+        return text, False
+    try:
+        if now - mark.stat().st_mtime < FAILED_REPEAT:
+            return text, False
+    except OSError:
+        pass                        # silent-ok: no mark yet means tell the user now
+    try:
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.write_bytes(b"")
+        os.utime(mark, (now, now))
+    except OSError:
+        pass                        # silent-ok: this report does not depend on the mark
+    return text, True
+
+
 def main():
+    roots = None
     try:
         roots, _payload = save_policy.packet(sys.stdin.buffer.read().decode("utf-8"))
         answer = render(*report(roots))
     except Exception as e:          # advisory: disclose that nothing was checked, never fail the call
-        answer = render("SAVE SENTINEL DID NOT RUN ({}): saves were not checked after this call."
-                        .format(type(e).__name__), False)
+        answer = render(*failed_look(e, roots))
     if answer:
         sys.stdout.write(answer)
     return 0
