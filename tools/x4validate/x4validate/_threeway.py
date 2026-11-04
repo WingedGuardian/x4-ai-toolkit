@@ -98,6 +98,11 @@ class ThreeWay:
     documents_compared: int = 0
     author_edited_docs: list[str] = field(default_factory=list)
 
+    #: content.xml, base -> each side. Reported and never classified: the version moves
+    #: on nearly every release, so as an attribute it would be BOTH-MOVED on every port.
+    manifest_archived: _diff.ManifestDiff = field(default_factory=_diff.ManifestDiff)
+    manifest_current: _diff.ManifestDiff = field(default_factory=_diff.ManifestDiff)
+
     @property
     def verbatim(self) -> int:
         """Documents the author did not touch at all. Usually the headline."""
@@ -231,6 +236,13 @@ def three_way(base: Path | list[Path], archived: Path, current: Path) -> ThreeWa
     r = ThreeWay(base=" + ".join(d.name for d in base_dirs),
                  archived=str(archived), current=str(current))
     ids = _identities(base_dirs)
+
+    r.manifest_archived = _diff.compare_manifests(base_dirs[0], archived, "BASE", "ARCHIVED")
+    r.manifest_current = _diff.compare_manifests(base_dirs[0], current, "BASE", "CURRENT")
+    if len(base_dirs) > 1:
+        r.manifest_archived.note = r.manifest_current.note = (
+            f"compared against {base_dirs[0].name} only; "
+            "baseline layers' manifests are not merged")
 
     b_map = _join_keys(_diff.merged_vpaths(base_dirs), ids, "base",
                        r.unwrapped, r.key_collisions)
