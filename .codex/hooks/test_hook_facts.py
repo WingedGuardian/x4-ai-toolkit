@@ -7457,10 +7457,11 @@ class TestGameArchiveShellWrites(unittest.TestCase):
         self.assertFalse(f["writes_game_archive"])
         self.assertTrue(f["rm_deployed_mod"])
 
-    def test_no_game_root_means_no_rule(self):
+    def test_TWIN_no_game_root_and_no_install_name_means_no_rule(self):
+        # The archive itself, with no root, is test_an_unknown_game_root_falls_back_to_the_install_folder_name.
         roots = dict(ROOTS, game="")
-        self.assertFalse(F("rm " + self.Q(self.ARC), roots=roots)["writes_game_archive"])
         self.assertFalse(F("rm /01.dat", roots=roots)["writes_game_archive"])
+        self.assertFalse(F("rm " + self.Q("C:/Games/X4/01.dat"), roots=roots)["writes_game_archive"])
 
     # --- which names are archives
     def test_TWIN_another_extension_does_not_fire(self):
@@ -7686,6 +7687,163 @@ class TestGameArchiveShellWrites(unittest.TestCase):
             if f.get("powershell_error") or f.get("carrier_untranslated"):
                 self.skipTest("no PowerShell parser on this machine")
             self.assertFalse(f["writes_game_archive"], cmd)
+
+    # --- 4.1.1 review: find expressions, a regex never run, an unknown game root, option words
+    def find_(self, expr, root=None, tail=" -delete"):
+        return F("find " + self.Q(root or GAME) + " " + expr + tail)["writes_game_archive"]
+
+    def test_a_backtracking_find_regex_is_never_run_and_returns_at_once(self):
+        # MEASURED by the 4.1.1 reviewer: `-regex '(.*)*zzz'` spun the hook for minutes. The
+        # facts run in a child that is killed at 60 s; the call itself must take under 1 s.
+        import json
+        import subprocess
+        code = ("import json, sys, time; sys.path.insert(0, sys.argv[1]); import hook_facts as H; "
+                "t = time.perf_counter(); H.facts(json.loads(sys.argv[2]), json.loads(sys.argv[3])); "
+                "print(time.perf_counter() - t)")
+        here = str(pathlib.Path(__file__).resolve().parent)
+        for expr in ("-regex " + Q + "(.*)*zzz" + Q, "-iregex " + Q + "(x+x+)+y" + Q,
+                     "! -regex " + Q + "(.*)*(.*)*(.*)*q" + Q,
+                     "-name " + Q + "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b" + Q,
+                     "-path " + Q + "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b" + Q):
+            payload = {"tool_input": {"command": "find " + self.Q(GAME) + " " + expr + " -delete"}}
+            try:
+                p = subprocess.run([sys.executable, "-I", "-c", code, here, json.dumps(payload),
+                                    json.dumps(ROOTS)], capture_output=True, text=True, timeout=60)
+            except subprocess.TimeoutExpired:
+                self.fail("facts() still running after 60 s, killed: " + expr)
+            self.assertEqual(p.returncode, 0, p.stderr[-400:])
+            self.assertLess(float(p.stdout.strip().splitlines()[-1]), 1.0, expr)
+
+    def test_a_find_regex_it_cannot_decide_may_reach_an_archive(self):
+        for rx in (".*" + BS + "." + BS + "(cat" + BS + "|dat" + BS + ")",      # GNU emacs spelling
+                   ".*" + BS + ".(cat|dat)", ".*", ".*dat", "(.*)*dat",
+                   ".*" + BS + ".dat|.*" + BS + ".xml"):                       # an alternation
+            self.assertTrue(self.find_("-regex " + Q + rx + Q), rx)
+        self.assertTrue(self.find_("-iregex " + Q + ".*" + BS + ".DAT" + Q))
+        # the root's own spelling is part of what -iregex folds
+        self.assertTrue(self.find_("-iregex " + Q + ".*x4 FOUNDATIONS/01" + BS + ".dat" + Q))
+
+    def test_TWIN_a_find_regex_whose_ending_no_archive_has_does_not_fire(self):
+        for rx in (".*" + BS + ".xml", ".*" + BS + ".xml$", "(.*)*zzz"):
+            self.assertFalse(self.find_("-regex " + Q + rx + Q), rx)
+
+    def test_a_negated_regex_may_always_reach_an_archive(self):
+        # `.*t` may match every sample and proves none: its negation may hold for each of them.
+        self.assertTrue(self.find_("! -regex " + Q + ".*t" + Q))
+
+    def test_a_negated_find_group_is_modelled(self):
+        self.assertTrue(self.find_("! ( -name " + Q + "*.xml" + Q + " )"))
+        self.assertTrue(self.find_("! " + BS + "( -name " + Q + "*.xml" + Q + " " + BS + ")"))
+        self.assertTrue(self.find_("-not ( -name a.xml -o -name b.txt )"))
+
+    def test_TWIN_a_group_or_negated_group_sparing_archives_does_not_fire(self):
+        self.assertFalse(self.find_(BS + "( -name " + Q + "*.xml" + Q + " -o -name " + Q + "*.txt" + Q + " " + BS + ")"))
+        self.assertFalse(self.find_("! " + BS + "( -name " + Q + "*.dat" + Q + " -o -name " + Q + "*.cat" + Q + " " + BS + ")"))
+
+    def test_an_OR_whose_other_side_has_no_test_fires(self):
+        self.assertTrue(self.find_("-name " + Q + "*.xml" + Q + " -prune -o"))
+        self.assertTrue(self.find_("-name " + Q + "*.xml" + Q + " -prune -o -print", tail=" | xargs rm"))
+
+    def test_TWIN_an_OR_that_prunes_the_archives_first_does_not_fire(self):
+        self.assertFalse(self.find_("-name " + Q + "*.?at" + Q + " -prune -o -name " + Q + "*.xml" + Q))
+        self.assertFalse(self.find_("-name " + Q + "*.?at" + Q + " -prune -o"))
+
+    def test_an_expression_it_cannot_parse_may_reach_an_archive(self):
+        for expr in ("-frobnicate", "( -name a.xml", "-name a.xml )", "-exec rm {}"):
+            self.assertTrue(self.find_(expr), expr)
+
+    def test_a_case_sensitive_name_in_capitals_may_still_match(self):
+        # -name is case-sensitive: `! -name '*.?AT'` spares no lower-case archive.
+        self.assertTrue(self.find_("! -name " + Q + "*.?AT" + Q))
+
+    def test_TWIN_a_case_folding_name_in_capitals_decides(self):
+        self.assertFalse(self.find_("! -iname " + Q + "*.?AT" + Q))
+
+    def test_only_the_deleting_action_is_judged(self):
+        self.assertTrue(self.find_("-name x.txt -print -o", tail=" -delete"))
+        self.assertFalse(self.find_("-name " + Q + "*.xml" + Q + " -delete -o -print", tail=""))
+
+    def test_a_path_filter_under_a_pattern_root_reads_only_its_ending(self):
+        root = 'find "' + GAME + '/extensions/ego_dlc_"* -path '
+        self.assertTrue(F(root + Q + "*/ext_01.cat" + Q + " -delete")["writes_game_archive"])
+        self.assertFalse(F(root + Q + "*/x.xml" + Q + " -delete")["writes_game_archive"])
+        self.assertTrue(F('find "$X4_GAME" -path ' + Q + "*/01.dat" + Q + " -delete")["writes_game_archive"])
+
+    def test_TWIN_a_find_printing_to_a_file_feeds_xargs_nothing(self):
+        self.assertFalse(self.find_("-fprint /c/o/list", tail=" | xargs rm"))
+
+    def test_a_find_expression_past_the_bounds_may_reach_an_archive(self):
+        wide = " -o ".join("-name a%d.xml" % i for i in range(220))
+        deep = (BS + "( ") * 40 + "-name a.xml" + (" " + BS + ")") * 40
+        self.assertTrue(self.find_(wide), "wide")
+        self.assertTrue(self.find_(deep), "deep")
+
+    def test_TWIN_a_find_expression_within_the_bounds_is_read(self):
+        wide = " -o ".join("-name a%d.xml" % i for i in range(20))
+        deep = (BS + "( ") * 10 + "-name a.xml" + (" " + BS + ")") * 10
+        self.assertFalse(self.find_(wide), "wide")
+        self.assertFalse(self.find_(deep), "deep")
+
+    def test_TWIN_a_find_name_filter_for_something_else_keeps_its_verdict(self):
+        for tail in (" -delete", " -exec rm {} +", " | xargs rm"):
+            self.assertFalse(self.find_("-name " + Q + "*.xml" + Q, tail=tail), tail)
+
+    # --- an unknown game root: the install's folder name, as the rm -rf <game> backstop reads it
+    NOGAME = dict(ROOTS, game="")
+
+    def test_an_unknown_game_root_falls_back_to_the_install_folder_name(self):
+        for cmd in ("rm " + self.Q(self.ARC), "echo x >> " + self.Q(self.CAT), "rm -rf " + self.Q(self.DLC),
+                    "rm " + self.Q("/d/games/x4 foundations/02.cat"),
+                    "find " + self.Q(GAME) + ' -name "*.dat" -delete', "cp /c/o/01.dat " + self.Q(GAME)):
+            self.assertTrue(F(cmd, roots=self.NOGAME)["writes_game_archive"], cmd)
+
+    def test_TWIN_an_unknown_game_root_leaves_other_dat_files_alone(self):
+        for path in ("C:/Program Files (x86)/Steam/steamapps/common/Skyrim/01.dat",
+                     "C:/Users/tester/Documents/Egosoft/X4/12345678/01.dat",
+                     "C:/Users/tester/Documents/Egosoft/X4/01.dat", GAME + "/extensions/01.dat",
+                     "C:/Users/tester/Documents/x.dat", "/01.dat",
+                     "C:/x/notX4 Foundations/01.dat", GAME + "/extensions/amod/ext_01.cat",
+                     GAME + "/sub/x.dat"):
+            self.assertFalse(F("rm " + self.Q(path), roots=self.NOGAME)["writes_game_archive"], path)
+
+    def test_TWIN_a_configured_root_is_not_second_guessed_by_a_folder_name(self):
+        self.assertFalse(F("rm " + self.Q("D:/Backup/X4 Foundations/01.dat"))["writes_game_archive"])
+
+    # --- option words are not targets
+    def test_TWIN_an_exclude_pattern_is_not_a_copied_name(self):
+        for cmd in ("rsync -a --exclude=" + Q + "*.dat" + Q + " src/ " + self.Q(GAME + "/"),
+                    "rsync -a --exclude " + Q + "*.dat" + Q + " src/ " + self.Q(GAME + "/"),
+                    "rsync -a --filter " + Q + "- *.cat" + Q + " src/ " + self.Q(GAME + "/"),
+                    "robocopy src " + self.Q(GAME) + " /E /XF *.dat",
+                    "robocopy src " + self.Q(GAME) + " /XF 01.dat 02.cat /E"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_robocopy_names_before_its_switches_still_count(self):
+        self.assertTrue(F("robocopy /c/o " + self.Q(GAME) + " 01.dat /E")["writes_game_archive"])
+
+    def test_rsync_moving_everything_out_of_a_home_folder_fires(self):
+        self.assertTrue(F("rsync -a --remove-source-files " + self.Q(GAME + "/") + " /c/o/")
+                        ["writes_game_archive"])
+
+    def test_TWIN_rsync_moving_a_subfolder_out_does_not_fire(self):
+        self.assertFalse(F("rsync -a --remove-source-files " + self.Q(GAME + "/sub/") + " /c/o/")
+                         ["writes_game_archive"])
+
+    # --- xargs -I: the item lands where the replacement string sits
+    def test_TWIN_xargs_replacing_into_another_folder_does_not_fire(self):
+        for prod in ("ls " + self.Q(GAME), "find " + self.Q(GAME), "find " + self.Q(GAME) + ' -name "*.dat"'):
+            for xa in ("xargs -I{} rm /d/o/backup/{}", "xargs -I {} rm /d/o/backup/{}",
+                       "xargs --replace=@ rm /d/o/backup/@"):
+                self.assertFalse(F(prod + " | " + xa)["writes_game_archive"], prod + " | " + xa)
+
+    def test_xargs_replacing_the_item_itself_still_fires(self):
+        for cmd in ('find "' + GAME + '" -name "*.dat" | xargs -I{} rm {}',
+                    'ls "' + GAME + '"/*.dat | xargs -I {} rm -f {}',
+                    'find "' + GAME + '" -name "*.dat" | xargs --replace=@ rm @'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_xargs_replacing_into_a_home_folder_fires(self):
+        self.assertTrue(F("ls /c/o | xargs -I{} rm " + self.Q(GAME) + "/{}")["writes_game_archive"])
 
 
 if __name__ == "__main__":

@@ -3488,20 +3488,11 @@ def _find_delete(seg: str) -> tuple:
             # `/bin/rm` and `rm.exe` onto `rm` -- so the rule caught the one form it was
             # written against and missed `-execdir` (which find's own documentation
             # recommends OVER -exec), `-ok`, `-okdir`, and any absolute spelling.
-            if t in _FIND_EXEC and i + 1 < len(toks):
-                nxt = _verb_name(toks[i + 1])
-                if nxt in DELETE_VERBS:
-                    deletes = True
-                    break
-                # `find <root> -exec bash -c '<cmd>' _ {} ;` -- the shell is a carrier
-                # here exactly as it is anywhere else, so it goes through the same walk
-                # rather than a second implementation.
-                if nxt in _SHELLS:
-                    rest = " ".join(toks[i + 1:])
-                    if any(_verb_name(verb(x)) in DELETE_VERBS
-                           for x in _inner_commands(rest)):
-                        deletes = True
-                        break
+            # The command, or a shell carrying one (`-exec bash -c '<cmd>' _ {} ;`): _exec_deletes,
+            # shared with the archive rule's expression reader.
+            if t in _FIND_EXEC and _exec_deletes(toks[i + 1:]):
+                deletes = True
+                break
     if not deletes:
         return [], filtered
     # find's PATHS are the operands before the first predicate (a `-flag`) -- counted
@@ -4591,14 +4582,69 @@ def _removes_game_archive(n: str, g: str) -> bool:
             or (n.endswith("/*") and _is_game_archive(n[:-2], g)))
 
 
+def named_game_roots(n: str) -> list:
+    """The game folders a normalised path names by the install's folder name, for a machine with
+    no configured game root. The same name test as the `rm -rf <game>` backstop (GAME_ROOTISH,
+    rm_named_game), at a whole path segment, and only its `x4 foundations` spelling: the other one
+    is the PROFILE, whose stray .dat files are not the game's."""
+    out, at = [], 0
+    while True:
+        at = n.find("/", at + 1)
+        p = n if at < 0 else n[:at]
+        m = GAME_ROOTISH.search(p)
+        if (m and m.group(1).lower() == "x4 foundations" and not m.group(2)
+                and (m.start() == 0 or p[m.start() - 1] == "/")):
+            out.append(p)
+        if at < 0:
+            return out
+
+
+#: rsync options whose value is the NEXT word when not joined by `=`: a filter rule, a list file,
+#: a folder, a program. `--exclude '*.dat'` names what is NOT copied, so it is never a source.
+_RSYNC_VALUE_OPTS = {"--exclude", "--include", "--filter", "-f", "--exclude-from", "--include-from",
+                     "--files-from", "-e", "--rsh", "--rsync-path", "--log-file", "--log-file-format",
+                     "-T", "--temp-dir", "--partial-dir", "--compare-dest", "--copy-dest", "--link-dest",
+                     "--backup-dir", "--suffix", "--chmod", "--chown", "--usermap", "--groupmap", "-B",
+                     "--block-size", "--max-size", "--min-size", "--bwlimit", "--timeout", "--contimeout",
+                     "--port", "--password-file", "--out-format", "--skip-compress", "--iconv", "--info",
+                     "--debug", "--sockopts", "--modify-window", "--max-delete", "--protocol",
+                     "--checksum-choice", "--compress-choice", "--compress-level", "-M", "--remote-option",
+                     "--write-batch", "--read-batch", "--only-write-batch", "--stop-after", "--stop-at"}
+
+
+def _copy_sources(seg: str) -> list:
+    """A copy's words other than its destination, an option, or an rsync option's value."""
+    toks = tokens_of(seg)
+    values = ({toks[i + 1] for i, t in enumerate(toks[:-1]) if t in _RSYNC_VALUE_OPTS}
+              if verb(seg) == "rsync" else set())
+    dests = copy_dests(seg)
+    return [o for o in _operands(seg) if o not in dests and not o.startswith("-") and o not in values]
+
+
+def _robocopy_names(seg: str) -> list:
+    """The file names a robocopy copies: the words after SRC and DST, up to its next switch. The
+    words after a switch, as in `/XF *.dat`, are that switch's own and name what is skipped."""
+    seen, out = 0, []
+    for t in tokens_of(seg)[_verb_at(seg, 0) + 1:]:     # P1: see _verb_at
+        if _ROBO_SWITCH.match(t):
+            if seen >= 2:
+                break
+            continue
+        if t.startswith(("<", ">")) or re.match(r"^\d+>", t):
+            continue
+        seen += 1
+        if seen > 2:
+            out.append(t)
+    return out
+
+
 def copy_names_archive(seg: str) -> bool:
     """A copy whose SOURCE is named as an archive: into a directory it lands under that name."""
     v = verb(seg)
     if v == "robocopy":
-        names = _robocopy_ops(seg)[2:]
+        names = _robocopy_names(seg)
     elif v in COPY_VERBS:
-        dests = copy_dests(seg)
-        names = [o for o in _operands(seg) if o not in dests]
+        names = _copy_sources(seg)
     else:
         return False
     return any(_ARCHIVE_EXT.search(norm(o)) for o in names)
@@ -4609,54 +4655,301 @@ def rsync_moved_sources(seg: str) -> list:
     a wider reach for the same flag is a separate change."""
     if verb(seg) != "rsync" or "--remove-source-files" not in tokens_of(seg):
         return []
-    dests = copy_dests(seg)
-    return [o for o in _operands(seg) if o not in dests]
+    return _copy_sources(seg)
+
+
+def _xargs_replace(seg: str) -> tuple:
+    """(replacement string or None, the delete verb's words that carry it) of `xargs -I R rm ...`.
+    Only the spellings that cannot eat the verb: `-I R`, `-IR`, `--replace=R`. A bare `-i` or
+    `--replace` makes the shared wrapper table read the verb as their value (BLIND-SPOTS F356)."""
+    toks = tokens_of(seg)
+    vt = _verb_token(seg)
+    if vt not in toks:
+        return None, []
+    vi = toks.index(vt)
+    repl = None
+    for i, t in enumerate(toks[:vi]):
+        if t == "-I" and i + 1 < vi:
+            repl = toks[i + 1]
+        elif t.startswith("-I") and len(t) > 2:
+            repl = t[2:]
+        elif t.startswith("--replace="):
+            repl = t[len("--replace="):]
+    if not repl:
+        return None, []
+    return repl, [w for w in toks[vi + 1:] if repl in w]
+
+
+def xargs_passes_item(seg: str) -> bool:
+    """The item an `xargs rm` reads is itself an operand: no -I, or a word that starts with it."""
+    repl, words = _xargs_replace(seg)
+    return repl is None or any(w.startswith(repl) for w in words)
+
+
+def xargs_replaced_folders(seg: str, prev) -> list:
+    """`xargs -I{} rm <dir>/{}` deletes inside <dir>, whatever the producer printed: `<dir>/*`."""
+    if not xargs_feed(seg, prev):
+        return []
+    repl, words = _xargs_replace(seg)
+    return [w[:w.index(repl)] + "*" for w in words if not w.startswith(repl)]
 
 
 def xargs_listed_operands(seg: str, prev) -> list:
     """What a producer other than find hands an `xargs rm`, read as named: `ls <game>/*.dat`.
     find's own operands include its tests, so it goes through find_can_reach_archive."""
-    if not xargs_feed(seg, prev) or verb(prev) == "find":
+    if not xargs_feed(seg, prev) or verb(prev) == "find" or not xargs_passes_item(seg):
         return []
     return _operands(prev)
 
 
-def _find_test_holds(kind: str, value: str, path: str, rel: str) -> bool:
-    if kind in ("-name", "-iname"):
-        return fnmatch.fnmatchcase(path.rpartition("/")[2], value.lower())
-    if kind in ("-path", "-ipath", "-wholename", "-iwholename"):
-        return any(fnmatch.fnmatchcase(p, _lexical_norm(value)) for p in (path, rel, "./" + rel))
-    try:
-        return any(re.fullmatch(value, p, re.I) for p in (path, rel, "./" + rel))
-    except re.error:
+# ---- find expressions. Parsed, never run: a regex the user wrote is not handed to `re`, because
+# `-regex '(.*)*zzz'` backtracked for minutes, past the hook's own timeout (4.1.1 review, MEASURED).
+#: Always true, no value: positional options, -true, -prune (which only stops descent).
+_FIND_TRUE0 = {"-depth", "-d", "-xdev", "-mount", "-follow", "-noleaf", "-daystart", "-warn",
+               "-nowarn", "-ignore_readdir_race", "-noignore_readdir_race", "-true", "-prune"}
+#: Always true, one value.
+_FIND_TRUE1 = {"-maxdepth", "-mindepth", "-regextype"}
+#: Tests the text cannot decide, no value and one value.
+_FIND_UNKNOWN0 = {"-empty", "-readable", "-writable", "-executable", "-nouser", "-nogroup", "-quit"}
+_FIND_UNKNOWN1 = {"-type", "-xtype", "-size", "-user", "-group", "-uid", "-gid", "-perm", "-links",
+                  "-inum", "-mtime", "-atime", "-ctime", "-mmin", "-amin", "-cmin", "-used", "-fstype",
+                  "-context", "-samefile", "-newer", "-anewer", "-cnewer", "-lname", "-ilname"}
+_FIND_NEWER_XY = re.compile(r"^-newer[aBcmt][aBcmt]$")
+#: Bounds: past them the expression is not read, and an unread expression may reach anything.
+_FIND_MAX_WORDS, _FIND_MAX_DEPTH = 400, 32
+#: Escaped, these stand for themselves in every regex dialect find accepts.
+_RX_SELF_ESCAPES = set("./-_")
+
+
+def _exec_deletes(words: list) -> bool:
+    """`-exec <words>` deletes: the command is a delete verb, or a shell carrying one."""
+    if not words:
+        return False
+    nxt = _verb_name(words[0])
+    if nxt in DELETE_VERBS:
         return True
+    # `find <root> -exec bash -c '<cmd>' _ {} ;` -- the shell is a carrier here exactly as it is
+    # anywhere else, so it goes through the same walk rather than a second implementation.
+    if nxt in _SHELLS:
+        return any(_verb_name(verb(x)) in DELETE_VERBS for x in _inner_commands(" ".join(words)))
+    return False
 
 
-def find_can_reach_archive(toks: list, root: str, g: str) -> bool:
-    """Can a `find` from `root` with these tests match a base-game or DLC archive?
+def _find_parse(words: list):
+    """(tree, has an action) for a find expression, or None when it cannot be read.
 
-    Each sample archive under `root` is tried against the tests. They AND unless an OR is
-    present, and any OR is read as the widest case. A negated test holds when it excludes the
-    sample; a test the text cannot decide holds, for either polarity. No filter at all reaches
-    every sample, so `find <dlc> | xargs rm` fires and `find <mod> | xargs rm` has no sample."""
+    Nodes: ("and"|"or"|",", [nodes]), ("not", node), ("const", True|False|None),
+    ("name", test, value), ("act", "delete"|"print"|"exec", value). None is "cannot tell"."""
+    if len(words) > _FIND_MAX_WORDS:
+        return None
+    pos, acted = 0, False
+
+    def take():
+        nonlocal pos
+        if pos >= len(words):
+            raise ValueError("a test with no value")
+        pos += 1
+        return words[pos - 1]
+
+    def primary():
+        nonlocal pos, acted
+        w = take()
+        if w in _FIND_NAME_TESTS:
+            return ("name", w, take())
+        if w in _FIND_TRUE0:
+            return ("const", True)
+        if w == "-false":
+            return ("const", False)
+        if w in _FIND_TRUE1:
+            take()
+            return ("const", True)
+        if w in _FIND_UNKNOWN0:
+            return ("const", None)
+        if w in _FIND_UNKNOWN1 or _FIND_NEWER_XY.match(w):
+            take()
+            return ("const", None)
+        acted = True
+        if w == "-delete":
+            return ("act", "delete", True)
+        if w in ("-print", "-print0", "-ls"):
+            return ("act", "print", True)
+        if w == "-printf":
+            take()
+            return ("act", "print", True)
+        if w in ("-fprint", "-fprint0", "-fls"):
+            take()
+            return ("const", True)
+        if w == "-fprintf":
+            take()
+            take()
+            return ("const", True)
+        if w in _FIND_EXEC:
+            start = pos
+            while pos < len(words) and words[pos] not in (";", "+"):
+                pos += 1
+            if pos >= len(words) or pos == start:
+                raise ValueError("an unterminated -exec")
+            pos += 1
+            return ("act", "delete" if _exec_deletes(words[start:pos - 1]) else "exec", None)
+        raise ValueError("an unknown primary")
+
+    def unary(depth):
+        nonlocal pos
+        negate = False
+        while pos < len(words) and words[pos] in ("!", "-not"):
+            negate, pos = not negate, pos + 1
+        if pos < len(words) and words[pos] == "(":
+            if depth >= _FIND_MAX_DEPTH:
+                raise ValueError("too deep")
+            pos += 1
+            node = chain(depth + 1, 0)
+            if take() != ")":
+                raise ValueError("an unclosed group")
+        else:
+            node = primary()
+        return ("not", node) if negate else node
+
+    _LEVELS = ((",",), ("-o", "-or"), ("-a", "-and"))
+
+    def chain(depth, level):
+        # comma, then OR, then AND (implicit between adjacent terms), lowest binding first
+        def sub():
+            return unary(depth) if level == 2 else chain(depth, level + 1)
+        nonlocal pos
+        items = [sub()]
+        while pos < len(words) and words[pos] != ")":
+            if words[pos] in _LEVELS[level]:
+                pos += 1
+            elif level < 2 or words[pos] in (",", "-o", "-or"):
+                break
+            items.append(sub())
+        return items[0] if len(items) == 1 else (_LEVELS[level][0], items)
+
+    try:
+        tree = chain(0, 0) if words else ("const", True)
+    except ValueError:
+        return None
+    return (tree, acted) if pos == len(words) else None
+
+
+def _literal_tail(pat: str, specials: str, self_escapes: set) -> str:
+    """The literal text every full match of `pat` must END with; '' when none can be read."""
+    out, i = [], len(pat) - 1
+    while i >= 0:
+        c, j = pat[i], i - 1
+        while j >= 0 and pat[j] == chr(92):
+            j -= 1
+        if (i - 1 - j) % 2:                         # escaped
+            if c not in self_escapes:
+                break
+            out.append(c)
+            i = j
+            continue
+        if c in specials or c == chr(92):
+            break
+        out.append(c)
+        i -= 1
+    return "".join(reversed(out))
+
+
+def _find_name_test(kind: str, value: str, printed, tail_of: str):
+    """True, False, or None (cannot tell) for one sample. `printed` is the path as find prints it,
+    None when the root is not spelled as plain text; `tail_of` is the part it surely ends with.
+    Archive names are lower-case on disk (READ), so a case-sensitive test compares exactly."""
+    fold = kind.startswith("-i")
+    v = value.lower() if fold else value
+    if kind in ("-name", "-iname"):
+        return fnmatch.fnmatchcase(tail_of.rpartition("/")[2], v)
+    if kind in ("-regex", "-iregex"):
+        # Never run. A regex whose every match must END in text that no sample ends in cannot
+        # match; anything else may. An alternation anywhere means no ending is required.
+        if "|" in v:
+            return None
+        escapes = len(v[:-1]) - len(v[:-1].rstrip(chr(92)))
+        body = v[:-1] if v.endswith("$") and escapes % 2 == 0 else v
+        tail = _literal_tail(body, ".^$*+?{}[]()|", _RX_SELF_ESCAPES)
+    else:
+        if printed is not None and chr(92) not in v:
+            return fnmatch.fnmatchcase(printed.lower() if fold else printed, v)
+        tail = _literal_tail(v, "*?[]", set())
+    if not tail:
+        return None
+    hay = printed if printed is not None else tail_of
+    if printed is None and len(tail) > len(tail_of):
+        return None
+    if fold:
+        hay, tail = hay.lower(), tail.lower()
+    return None if hay.endswith(tail) else False
+
+
+def _find_eval(node, test, reach: list, mode: str):
+    """Three-valued: True, False, None. An action of `mode` reached on any path, certain or not,
+    is recorded in `reach`; an AND stops at a False, an OR at a True, as find does."""
+    kind = node[0]
+    if kind == "const":
+        return node[1]
+    if kind == "name":
+        return test(node[1], node[2])
+    if kind == "act":
+        if node[1] == mode:
+            reach.append(node)
+        return node[2]
+    if kind == "not":
+        v = _find_eval(node[1], test, reach, mode)
+        return None if v is None else not v
+    val = None
+    if kind == "-a":
+        val = True
+        for sub in node[1]:
+            v = _find_eval(sub, test, reach, mode)
+            if v is False:
+                return False
+            val = val if v is True else None
+    elif kind == "-o":
+        val = False
+        for sub in node[1]:
+            v = _find_eval(sub, test, reach, mode)
+            if v is True:
+                return True
+            val = val if v is False else None
+    else:                               # `,`: every part runs, the last one's value is the value
+        for sub in node[1]:
+            val = _find_eval(sub, test, reach, mode)
+    return val
+
+
+def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str) -> bool:
+    """Can a `find` from `root` (as written: `raw`) delete, or print to an `xargs rm` (`mode`
+    "print"), a base-game or DLC archive? Each sample archive under `root` walks the expression
+    as find would, three-valued: a test the text cannot decide may go either way, and an action
+    reached on either branch counts. An expression it cannot read may reach every sample."""
     files = [g + "/" + s for s in _ARCHIVE_SAMPLES if not s.startswith("ext_")]
     files += [d + "/" + s for d in _dlc_samples(g) for s in _ARCHIVE_SAMPLES if s.startswith("ext_")]
     if _is_pattern(root):
         files = [f for f in files if fnmatch.fnmatchcase(f, root + "/*")]
     else:
-        files = [f for f in files if f.startswith(root + "/")]
-    tests = [(t, toks[i + 1], i > 0 and toks[i - 1] in ("!", "-not"))
-             for i, t in enumerate(toks[:-1]) if t in _FIND_FILTERS]
+        files = [f for f in files if f.startswith(root.rstrip("/") + "/")]
+    if not files:
+        return False
+    k = _verb_at(seg, 0) + 1            # P1: see _verb_at
+    parsed = _find_parse(tokens_of(seg)[k + len(_find_roots(seg)):])
+    if parsed is None:
+        return True
+    tree, acted = parsed
+    plain = raw.replace(chr(92), "/").rstrip("/")
+    if any(c in plain for c in "$~`") or _is_pattern(plain) or not plain:
+        plain = None
+    for f in files:
+        rel = f[len(root.rstrip("/")) + 1:] if not _is_pattern(root) else f.rpartition("/")[2]
+        printed = None if plain is None else plain + "/" + rel
 
-    def holds(test, path):
-        kind, value, negated = test
-        if kind not in _FIND_NAME_TESTS:
-            return True                 # -size, -newer and the like: not knowable from the text
-        return _find_test_holds(kind, value, path, path[len(root) + 1:]) != negated
-
-    if any(t in _FIND_OR for t in toks):
-        return any(not tests or any(holds(t, f) for t in tests) for f in files)
-    return any(all(holds(t, f) for t in tests) for f in files)
+        def test(kind, value, printed=printed, rel=rel):
+            return _find_name_test(kind, value, printed, "/" + rel)
+        reach = []
+        v = _find_eval(tree, test, reach, mode)
+        if reach or (mode == "print" and not acted and v is not False):
+            return True
+    return False
 
 
 
@@ -7071,7 +7364,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     gitwipe_t, gitdiscard_t, gitwipe_pairs = [], [], []
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
     # For writes_game_archive only: moved rsync sources, folders receiving an archive-named
-    # copy, what a listing feeds `xargs rm`, and (root operand, tests) of each find that deletes.
+    # copy, what a listing feeds `xargs rm`, and (root operand, segment, mode) of each find that
+    # deletes ("delete") or prints to an `xargs rm` ("print").
     archive_moved_t, archive_into_t, archive_listed_t, archive_finds = [], [], [], []
     search_seg, git_all = False, False
     transcript_copy = False             # M1, see _copy_lands_a_transcript
@@ -7147,9 +7441,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         scoped_rm_t += prep(find_scoped_deletes(s), c_cwd, c_old, operation="delete", scope="filtered-tree")
         archive_moved_t += prep(rsync_moved_sources(s), c_cwd, c_old)
         archive_listed_t += prep(xargs_listed_operands(s, prev), c_cwd, c_old)
-        archive_finds += [(op, tokens_of(s)) for op in prep(_find_delete(s)[0], c_cwd, c_old)]
-        if xargs_feed(s, prev) and verb(prev) == "find":
-            archive_finds += [(op, tokens_of(prev)) for op in prep(_find_roots(prev), c_cwd, c_old)]
+        archive_listed_t += prep(xargs_replaced_folders(s, prev), c_cwd, c_old)
+        archive_finds += [(op, s, "delete") for op in prep(_find_delete(s)[0], c_cwd, c_old)]
+        if xargs_feed(s, prev) and verb(prev) == "find" and xargs_passes_item(s):
+            archive_finds += [(op, prev, "print") for op in prep(_find_roots(prev), c_cwd, c_old)]
         # A command name that arrives by substitution MAY be rm: its operands feed the X4
         # directory delete ADVISORY (FX-G4 / BLIND-SPOTS F183, MEASURED: `$(echo rm) -rf
         # <game>/libraries` was a plain allow where `rm -rf` advises). Advisory only; an
@@ -7456,15 +7751,23 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             n = norm(path or raw)
             yield from (_brace_expand(n) if norm(raw) in brace_patterns else [n])
 
+    def _games(n):
+        # No configured game root: the install's folder name in the path, as rm_named_game reads it.
+        return [_g] if _g else named_game_roots(n)
+
+    def _hits(ops, test):
+        return any(test(n, g) for n in _spellings(ops) for g in _games(n))
+
     _archive_written = copy_t + redir_t_all + sed_t + out_t + mod_t
     _archive_removed = rm_t + mv_src + archive_moved_t
-    writes_game_archive = bool(_g) and (
-        any(_is_game_archive(n, _g) for n in _spellings(_archive_written))
-        or any(_removes_game_archive(n, _g) for n in _spellings(_archive_removed))
-        or any(_is_archive_home(n, _g) for n in _spellings(archive_into_t))
-        or any(_is_game_archive(n, _g) or _is_archive_home(n, _g) for n in _spellings(archive_listed_t))
-        or any(find_can_reach_archive(toks_, n, _g)
-               for op, toks_ in archive_finds for n in _spellings([op])))
+    writes_game_archive = (
+        _hits(_archive_written, _is_game_archive)
+        or _hits(_archive_removed, _removes_game_archive)
+        or _hits(archive_moved_t, _is_archive_home)
+        or _hits(archive_into_t, _is_archive_home)
+        or _hits(archive_listed_t, lambda n, g: _is_game_archive(n, g) or _is_archive_home(n, g))
+        or any(find_can_reach_archive(seg_, n, op[2], g, mode_)
+               for op, seg_, mode_ in archive_finds for n in _spellings([op]) for g in _games(n)))
     result = {
         "command": cmd,
         "timeout": timeout,
