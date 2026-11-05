@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A shell command that writes, moves or deletes a base-game or official DLC `.cat` or `.dat`, or deletes or moves a whole DLC folder, is now refused, as the file-edit tools already refused those writes. Before, most of these only got a note, and an append or `touch` got nothing. This covers redirects, `cp`, `mv`, `tee`, `truncate`, `dd of=`, `sed -i`, `install`, `rsync`, `robocopy`, `rm`, `find -delete`, `xargs rm`, and the PowerShell equivalents. Reading an archive, and deploying or removing a mod's own packed archive, are unchanged. Other programs that can write a file, such as `perl -i`, `wget -O` and `gzip`, are still not recognised.
+
 ## v4.1.0 — 2026-11-04
 
 - Typed file deletion of deployed mod folders or ordinary XML now requests confirmation, matching shell retirement policy, instead of being rejected as a direct edit of the deployed copy. Direct writes, write-only batches, explicit moves, archive protections, save preservation and whole-install/reference blocks retain their prior policy.

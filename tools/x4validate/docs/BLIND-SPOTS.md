@@ -458,6 +458,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
+| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled | FIXED 2026-11-05 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12101,3 +12102,35 @@ compares against the first baseline folder only, because later layers' manifests
 denominator is every stacked run; MEASURED on fixtures only, with no real mods.
 
 **NO RE-DERIVATION: a scope statement; the fixture behaviour is pinned by the x4diff tests, not this sentence.**
+
+## F356 - Shell writes, moves and deletes of game archives were only advised · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-05
+
+The file tools deny a write to `<game>/*.cat|dat` and `<game>/extensions/ego_dlc_*/*.cat|dat`. The shell route only advised, or
+for an append or `touch` said nothing, and a DLC delete asked. `writes_game_archive` now denies them, from the channels the fact
+pipeline already had, plus a whole DLC folder deleted or moved, as the typed-delete refusal treats it.
+
+MEASURED through `protect-bash.sh` at 7753cc2c and after, on fixture roots; nothing ran. 288 forms:
+
+| group | forms | before | after |
+|---|---:|---|---|
+| names or may reach an archive | 213 | 125 advise, 31 allow, 33 ask, 24 deny | 8 advise, 20 allow, 4 ask, 181 deny |
+| a mod's archive, reads, other files | 75 | 23 advise, 30 allow, 17 ask, 5 deny | the same, 0 moved |
+
+The 32 not denied, which sum to the difference:
+
+| why | forms |
+|---|---:|
+| correctly not an archive: another name, or a mod | 6 |
+| contents unknown from the text: a tree copy, or an extraction into the game (`cp -r`, `rsync`, `robocopy`, `unzip`, `tar`, `7z`, `Expand-Archive`) and `git clean`, which asks | 8 |
+| unresolved folder or name (`rm "<game>/$X"`, `rm "$X/01.dat"`) | 2 |
+| the probe's own wording: an unquoted path with a space, and `/o` read as a robocopy switch; each respelled form denies | 2 |
+| **unmodelled write shape, OPEN**: `wget -O`, `perl -i`, `awk -i inplace`, `patch`, `fsutil file` (3), `XRCatTool -out`, `python -c`, `gzip`, `zip -m`, `git rm`, `find -exec mv`, `cmd` with a leading redirect | 14 |
+
+The same 14 shapes were tried at `reference/` as the control: all 14 raise no write or delete fact there either, so they are a gap
+in the pipeline and not in this rule.
+
+LIMITS. Archive names in patterns are tried against samples READ from one install. `.cat` or `.dat` deeper than a DLC or root folder
+is not covered, and neither is a separately configured extensions folder. A filtered find over the game with a test the text cannot
+decide (`-size`, `-newer`) is denied. A plain shell write to any other game file stays advisory by design.
+
+**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 53 mutants in `scripts/verify-hook-tests.py`, and the archive probes in `scripts/test-hooks.sh`.
