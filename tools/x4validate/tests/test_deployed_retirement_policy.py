@@ -1,0 +1,153 @@
+"""Typed deployed-mod removal confirms; writes and protected targets remain blocked."""
+import json
+import subprocess
+import sys
+from pathlib import Path
+import pytest
+from test_x4guard_check import sandbox, check
+REPO = Path(__file__).resolve().parents[3]
+
+@pytest.mark.parametrize('leaf', ['probe', 'probe/libraries/jobs.xml'])
+@pytest.mark.parametrize('kind,expected', [('write', 'deny'), ('delete', 'ask')])
+def test_deployed_removal_preserves_operation(sandbox, leaf, kind, expected):
+    tmp, tk, env = sandbox
+    target = tmp / 'X4 Foundations/extensions' / leaf
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.suffix:
+        target.write_text('<diff/>', encoding='utf-8')
+    else:
+        target.mkdir(exist_ok=True)
+    rc, v, err = check(env, '--kind', kind, '--path', str(target))
+    assert rc == 0 and (not v['inert']), (v, err)
+    assert v['decision'] == expected, v
+
+@pytest.mark.parametrize('kind,expected', [('write', 'deny'), ('delete', 'ask')])
+def test_neutral_action_preserves_deployed_removal(sandbox, kind, expected):
+    tmp, tk, env = sandbox
+    target = tmp / 'X4 Foundations/extensions/probe'
+    target.mkdir()
+    action = dict(api_version=1, host='codex', tool='delete' if kind == 'delete' else 'edit', surface='files', cwd=str(tk), paths=[str(target)], operations=[kind])
+    r = subprocess.run([sys.executable, str(REPO / 'tools/agent-harness.py'), 'check'], input=json.dumps(action).encode(), capture_output=True, env=env, cwd=tk, timeout=120)
+    assert r.returncode == 0, r.stderr
+    v = json.loads(r.stdout)
+    assert not v.get('inert') and v['result']['evaluation'] == 'evaluated', v
+    assert v['result']['decision'] == expected, v
+
+@pytest.mark.parametrize('target', ['reference', 'game', 'extensions', 'basefile', 'packed'])
+def test_deletion_keeps_protected_blocks(sandbox, target):
+    tmp, tk, env = sandbox
+    paths = {'reference': tk / 'reference/libraries/wares.xml', 'game': tmp / 'X4 Foundations', 'extensions': tmp / 'X4 Foundations/extensions', 'basefile': tmp / 'X4 Foundations/libraries/wares.xml', 'packed': tmp / 'X4 Foundations/extensions/probe/ext_01.cat'}
+    rc, v, err = check(env, '--kind', 'delete', '--path', str(paths[target]))
+    assert rc == 0 and (not v['inert']) and (v['decision'] == 'deny'), (v, err)
+
+def test_native_write_cannot_forge_removal_metadata(sandbox):
+    tmp, tk, env = sandbox
+    payload = {'tool_name': 'Write', 'operation': 'delete', 'tool_input': {'file_path': str(tmp / 'X4 Foundations/extensions/probe/libraries/jobs.xml'), 'content': '<diff/>', 'operation': 'delete', 'tool_name': 'DeleteFile'}}
+    script = REPO / '.claude/hooks/protect-files.sh'
+    spec = __import__('importlib.util', fromlist=['util']).spec_from_file_location('retirement_guard', REPO / '.claude/hooks/x4guard.py')
+    guard = __import__('importlib.util', fromlist=['util']).module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    bash, reason = guard.resolve_bash()
+    assert bash, reason
+    r = subprocess.run([bash, str(script), '--harness-policy-backend'], input=json.dumps(payload).encode(), capture_output=True, env=env, cwd=tk, timeout=120)
+    assert r.returncode == 0, r.stderr
+    v = json.loads(r.stdout)['hookSpecificOutput']
+    assert v['permissionDecision'] == 'deny', v
+
+def test_mixed_batch_cannot_borrow_delete_semantics(sandbox):
+    tmp, tk, env = sandbox
+    target = tmp / 'X4 Foundations/extensions/probe'
+    target.mkdir()
+    write = target / 'libraries/jobs.xml'
+    action = dict(api_version=1, host='codex', tool='patch', surface='files', cwd=str(tk), paths=[str(target), str(write)], operations=['delete', 'write'])
+    r = subprocess.run([sys.executable, str(REPO / 'tools/agent-harness.py'), 'check'], input=json.dumps(action).encode(), capture_output=True, env=env, cwd=tk, timeout=120)
+    assert r.returncode == 0, r.stderr
+    v = json.loads(r.stdout)
+    assert v['result']['evaluation'] == 'evaluated' and v['result']['decision'] == 'deny', v
+
+@pytest.mark.parametrize('ops,expected', [(['move', 'write'], 'deny'), (['delete', 'write'], 'ask'), (['delete', 'delete'], 'ask')])
+def test_explicit_move_and_both_endpoints(sandbox, ops, expected):
+    tmp, tk, env = sandbox
+    source = tmp / 'X4 Foundations/extensions/probe'
+    source.mkdir()
+    destination = tmp / 'mods/retired'
+    action = dict(api_version=1, host='codex', tool='move', surface='files', cwd=str(tk), paths=[str(source), str(destination)], operations=ops)
+    r = subprocess.run([sys.executable, str(REPO / 'tools/agent-harness.py'), 'check'], input=json.dumps(action).encode(), capture_output=True, env=env, cwd=tk, timeout=120)
+    assert r.returncode == 0, r.stderr
+    v = json.loads(r.stdout)
+    assert v['result']['evaluation'] == 'evaluated' and v['result']['decision'] == expected, v
+    assert source.is_dir() and (not destination.exists())
+
+def test_move_destination_is_still_a_write(sandbox):
+    tmp, tk, env = sandbox
+    source = tmp / 'mods/source'
+    source.mkdir()
+    destination = tmp / 'X4 Foundations/extensions/probe'
+    action = dict(api_version=1, host='codex', tool='move', surface='files', cwd=str(tk), paths=[str(source), str(destination)], operations=['delete', 'write'])
+    r = subprocess.run([sys.executable, str(REPO / 'tools/agent-harness.py'), 'check'], input=json.dumps(action).encode(), capture_output=True, env=env, cwd=tk, timeout=120)
+    assert r.returncode == 0, r.stderr
+    v = json.loads(r.stdout)
+    assert v['result']['evaluation'] == 'evaluated' and v['result']['decision'] == 'deny', v
+
+@pytest.mark.parametrize('leaf,expected', [('config.xml', 'ask'), ('nested/content.xml', 'ask')])
+def test_profile_deletion_still_confirms(sandbox, leaf, expected):
+    tmp, tk, env = sandbox
+    rc, v, err = check(env, '--kind', 'delete', '--path', str(tmp / 'profile' / leaf))
+    assert rc == 0 and (not v['inert']) and (v['decision'] == expected), (v, err)
+
+def test_write_only_batch_cannot_inherit_delete_name(sandbox):
+    tmp, tk, env = sandbox
+    script = REPO / '.claude/hooks/protect-files.sh'
+    spec = __import__('importlib.util', fromlist=['util']).spec_from_file_location('retirement_guard_batch', REPO / '.claude/hooks/x4guard.py')
+    guard = __import__('importlib.util', fromlist=['util']).module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    bash, reason = guard.resolve_bash()
+    assert bash, reason
+    path = str(tmp / 'X4 Foundations/extensions/probe/libraries/jobs.xml')
+    payload = {'tool_name': 'DeleteFile', 'tool_input': {'file_path': path, 'content': ''}}
+    wire = ('1\x00' + path + '\x00' + json.dumps(payload) + '\x00').encode()
+    r = subprocess.run([bash, str(script), '--harness-policy-backend', '--batch'], input=wire, capture_output=True, env=env, cwd=tk, timeout=120)
+    assert r.returncode == 0, r.stderr
+    fields = r.stdout.decode().split('\x00')
+    assert fields[:3] == ['X4FILE1', '1', 'deny'], fields
+
+def test_deployed_delete_python_reader_fallback(sandbox):
+    tmp, tk, env = sandbox
+    env = dict(env, X4_JQ=str(tmp / 'missing-jq'))
+    rc, v, err = check(env, '--kind', 'delete', '--path', str(tmp / 'X4 Foundations/extensions/probe'))
+    assert rc == 0 and (not v['inert']) and (v['decision'] == 'ask'), (v, err)
+
+@pytest.mark.parametrize('leaf', ['reference/libraries/wares.xml', 'X4 Foundations'])
+def test_delete_alias_keeps_actual_target_policy(sandbox, leaf):
+    tmp, tk, env = sandbox
+    actual = tk / 'reference/libraries/wares.xml' if leaf.startswith('reference') else tmp / 'X4 Foundations'
+    alias = tmp / 'mods/alias'
+    try:
+        alias.symlink_to(actual, target_is_directory=actual.is_dir())
+    except OSError as exc:
+        pytest.skip('file/directory symlink privilege unavailable: ' + str(exc))
+    rc, v, err = check(env, '--kind', 'delete', '--path', str(alias))
+    assert rc == 0 and (not v['inert']) and (v['decision'] == 'deny'), (v, err)
+
+def test_single_location_source_whitelist_is_unchanged(sandbox):
+    tmp, tk, env = sandbox
+    env = dict(env, X4_MODS=str(tmp / 'X4 Foundations/extensions'))
+    rc, v, err = check(env, '--kind', 'write', '--path', str(tmp / 'X4 Foundations/extensions/probe/libraries/jobs.xml'))
+    assert rc == 0 and (not v['inert']) and (v['decision'] == 'allow'), (v, err)
+
+@pytest.mark.parametrize('field,value', [('content', '{}'), ('edit', {'old_string': 'a', 'new_string': 'b'}), ('command', 'patch-text')])
+def test_delete_payload_preserves_existing_content_fields(field, value):
+    spec = __import__('importlib.util', fromlist=['util']).spec_from_file_location('retirement_guard_content', REPO / '.claude/hooks/x4guard.py')
+    guard = __import__('importlib.util', fromlist=['util']).module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    payload = guard.guard_payload('delete', None, None, '/project/.claude/settings.json', **{field: value}) if field != 'command' else guard.guard_payload('delete', None, value, '/project/.claude/settings.json', patch=True)
+    assert payload['tool_name'] == 'DeleteFile'
+    expected = {'content': 'content', 'edit': 'x4_edit', 'command': 'x4_written'}[field]
+    assert payload['tool_input'][expected] == value
+    if field == 'command':
+        assert payload['tool_input']['x4_patch'] is True
+
+def test_settings_deletion_retains_earlier_protection(sandbox):
+    tmp, tk, env = sandbox
+    rc, v, err = check(env, '--kind', 'delete', '--path', str(tk / '.claude/settings.json'))
+    assert rc == 0 and (not v['inert']) and (v['decision'] == 'deny'), (v, err)

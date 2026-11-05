@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Typed file deletion of deployed mod folders or ordinary XML now requests confirmation, matching shell retirement policy, instead of being rejected as a direct edit of the deployed copy. Direct writes, write-only batches, explicit moves, archive protections, save preservation and whole-install/reference blocks retain their prior policy.
+
 - Creating or editing a profile's root `content.xml` no longer asks for a second approval, including new numeric test profiles and profiles other than `X4_PROFILE`. File edits, shell writes and batched Action v1 requests follow the same advisory policy. Configuration files, nested lookalikes, destructive operations, save preservation and game/reference hard blocks retain their protections.
 
 - `x4effective dump` with a bare path to a file only a DLC ships now returns the document mods actually patch, with a note saying so. It used to return the unpatched file with no warning (588 of 716 patched DLC documents here). A file a mod ships into a DLC's tree still reads as absent at the bare path, and the message now names where it is.

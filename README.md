@@ -365,7 +365,10 @@ copy. Do not edit `.claude/hooks/` directly.
 `python .claude/hooks/x4guard.py check` lets another agent request a verdict without taking
 backups or executing its command. Supply `--kind shell --shell bash|powershell --command ...`
 or `--kind write|delete --path ...`. A delete check applies both file protection and deletion
-confirmation; the stricter verdict wins. An evaluation failure is `deny` with `inert: true`.
+confirmation; the stricter verdict wins. A typed delete of a deployed mod folder or ordinary
+XML requests confirmation even when direct edits of that separate deployed copy are blocked.
+Earlier archive/reference/settings/save protections still apply; write-only batches and explicit
+Action-v1 moves keep their existing policy. An evaluation failure is `deny` with `inert: true`.
 An ordinary `ask` requires approval. Neither exit 0 nor a passing check installs enforcement
 in an agent host. On Windows the guards find Git Bash themselves: `X4_BASH` if set, then
 Git for Windows' standard install locations, then `PATH` walked past the WSL stub. Set
