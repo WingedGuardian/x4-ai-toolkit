@@ -12133,4 +12133,42 @@ LIMITS. Archive names in patterns are tried against samples READ from one instal
 is not covered, and neither is a separately configured extensions folder. A filtered find over the game with a test the text cannot
 decide (`-size`, `-newer`) is denied. A plain shell write to any other game file stays advisory by design.
 
-**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 53 mutants in `scripts/verify-hook-tests.py`, and the archive probes in `scripts/test-hooks.sh`.
+**REVIEW 2026-11-05 (4.1.1), each row MEASURED through `protect-bash.sh` at 7753cc2c, c3078f29 and the fix, fixture roots:**
+
+| row | 7753cc2c | c3078f29 | fix |
+|---|---|---|---|
+| `find <game> -regex '(.*)*zzz' -delete` | advise, 0.4 s | still running at 40 s, killed | advise, 0.4 s |
+| `find <game> ... -delete` with GNU's escaped-group `-regex` for cat or dat, a negated group `! ( -name '*.xml' )`, or `-name '*.xml' -prune -o` | advise | advise | deny |
+| TWIN `find <game> -name '*.xml' -delete` | advise | advise | advise |
+| `rm <...>/X4 Foundations/01.dat`, `X4_GAME` unset or empty | allow | allow | deny |
+| TWIN, no root: another game's `.dat`, `Documents/Egosoft/X4/01.dat`, `Documents/x.dat` | allow | allow | allow |
+| `rsync --exclude='*.dat'` and `robocopy /XF *.dat` into the game; `ls` or `find` of the game piped to `xargs -I{} rm <elsewhere>/{}` | advise | deny | advise |
+| `find <game> -name '*.dat'` or `ls <game>/*.dat` piped to `xargs -I{} rm {}` | advise | deny | deny |
+
+The cause of the hang: the rule handed the user's `-regex` to Python's `re`, which backtracks without bound. Now no user regex
+is run. A `find` expression is parsed (groups, `!`, `-a`, `-o`, `,`, the action that deletes or prints) and each sample archive
+walks it with three values; a test the text cannot decide may go either way. A `-regex` is decided only by the literal text every
+match must end with, and with an alternation anywhere it is undecided. Past 400 words or 32 nested groups, or on any word it cannot
+read, the expression may reach every sample. With no configured game root, a path through a segment named `X4 Foundations` (the
+`rm -rf <game>` name check, GAME_ROOTISH, without its profile spelling) is the game. Over the 324 forms the slowest hook call took
+1.7 s; the unit bound is 1 s per parse, killed at 60 s.
+
+The 288 earlier forms: 0 moved from c3078f29 to the fix, per item.
+
+DECIDED, kept: a folder directly under `extensions/` named `ego_dlc_*` is DLC, as the file tools' `is_dlc_folder` reads it, so
+`rm <game>/extensions/ego_dlc_mymod/ext_01.cat` denies (it asked at 7753cc2c). `chmod +w <archive>` denies and `chmod -w` is
+allowed: the modify-target reader takes `-w` as an option, so the archive reads as the mode; removing a permission changes no
+data, and `chmod -w` at `reference/` is read the same way.
+
+**Unmodelled shapes, OPEN. This list is what review has found, not a census.** Each allows at the game root (MEASURED), and each
+of the 14 above plus these is unread at `reference/` as well, except where noted:
+- path spellings `/cygdrive/c/...`, `/mnt/c/...`, `//localhost/C$/...`;
+- `find -L`, `find -H` (and `-P`): an option before the root ends the root list, so no root is read;
+- a filter between the producer and the delete: `find <game>`, then `grep dat`, then `xargs rm`, in one pipeline;
+- `ls <game> | while read f; do rm "<game>/$f"; done`: an unresolved name, advised at the game; `reference/` DENIES it, because
+  its delete rule reads an unresolved name under the root conservatively. Owner decision whether this rule should too;
+- `xcopy`;
+- `xargs -i` and `xargs --replace` with no attached value: the shared wrapper table reads the next word as their value, so the
+  delete verb is never seen. `-I R`, `-IR` and `--replace=R` are read.
+
+**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 83 mutants in `scripts/verify-hook-tests.py`, and the archive probes in `scripts/test-hooks.sh`.
