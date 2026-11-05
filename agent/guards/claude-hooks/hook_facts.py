@@ -4891,6 +4891,30 @@ def _pwsh_exe():
     return None
 
 
+#: What a refusal may say about WHY translation failed. A `why` can carry command text, a
+#: translator message or a configured path, so it stays out of the refusal; this names which kind
+#: of failure it was, in fixed words only. The first category with a match wins.
+PS_TIMED_OUT = "PowerShell translation timed out"
+PS_BUDGET_SPENT = "PowerShell translation time budget spent"
+_PS_CATEGORIES = (
+    (PS_TIMED_OUT, lambda w: w == "PowerShell could not be run (TimeoutExpired)"),
+    (PS_BUDGET_SPENT, lambda w: w.startswith("the PowerShell translation budget ")),
+    ("no PowerShell available", lambda w: w.startswith("no PowerShell was found ")),
+    ("PowerShell translator file missing", lambda w: w.startswith("ps_translate.ps1 is missing ")),
+    ("PowerShell could not be started", lambda w: re.fullmatch(r"PowerShell could not be run \(\w+\)", w)),
+    ("PowerShell translator returned no verdict", lambda w: w.startswith("the PowerShell translator returned no ")),
+)
+
+
+def untranslated_category(whys) -> str:
+    """The fixed category for these failure reasons, never any of their text."""
+    whys = [str(w) for w in whys]
+    for category, matches in _PS_CATEGORIES:
+        if any(matches(w) for w in whys):
+            return category
+    return "part of the command could not be translated"
+
+
 def powershell_to_sh(text: str) -> tuple:
     """(sh, unknown, "") or (None, [], why it could not be made).
 
@@ -6598,7 +6622,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     if from_powershell:
         sh, unknown, why = powershell_to_sh(cmd)
         if sh is None:
-            return {"command": cmd, "powershell_error": why or "not translated"}
+            return {"command": cmd, "powershell_error": why or "not translated",
+                    "untranslated_category": untranslated_category([why])}
         _UNTRANSLATED.extend(unknown)
         cmd = sh
 
@@ -7288,6 +7313,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # A cmd/PowerShell carrier whose text could not be translated (HK-2): some
         # command reached NO rule, so -- like the truncation above -- not a clean pass.
         "carrier_untranslated": bool(_UNTRANSLATED),
+        # WHY, in fixed words, for the save bridge's refusal. Bash rules read only the bool above.
+        "untranslated_category": untranslated_category(_UNTRANSLATED) if _UNTRANSLATED else "",
         "from_powershell": from_powershell,
         "verb_unresolved": verb_unresolved,
         # F10: a command name from a variable/substitution, given a protected path.
@@ -7613,6 +7640,7 @@ def ipc(payload: dict, roots: dict, *, evidence: list | None = None, protected_s
     cmd = g.pop("command", "")
     g.pop("cwd", None)
     g.pop("save_lift_blockers", None)   # the save bridge's, not a Bash rule's
+    g.pop("untranslated_category", None)   # likewise
     out = []
     for k, v in sorted(g.items()):
         out.append(k + "\t" + _ipc_value(k, v))

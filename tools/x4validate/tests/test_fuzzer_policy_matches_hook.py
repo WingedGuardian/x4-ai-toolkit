@@ -51,7 +51,8 @@ def test_no_predicate_is_silently_unfuzzed():
     # pops it before the protect-bash.sh IPC and save_policy.py turns it into an opaque
     # evidence row (pinned in test_shared_save_policy.py). The exemption holds only while
     # that consumer exists -- asserted below, so a dead consumer cannot hide behind it.
-    BRIDGE = {"save_lift_blockers"}
+    # `untranslated_category` is the same shape: the bridge's refusal wording, popped too.
+    BRIDGE = {"save_lift_blockers", "untranslated_category"}
     save_policy = (m.HOOKS / "save_policy.py").read_text(encoding="utf-8")
     for name in BRIDGE:
         assert 'facts.get("%s")' % name in save_policy, (

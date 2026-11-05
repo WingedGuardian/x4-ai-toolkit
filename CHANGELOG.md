@@ -13,6 +13,7 @@
 - Upgrades: a failed preview or stage says why, and a default apply no longer creates a local config the install never had. `find-session` says its results can come from any project on the machine. OpenCode no longer says guards are live when the adapter is missing.
 
 - `x4-mod-release-review` now ends with the whole upload pack in one folder: archive, description, summary, changelog, upload notes, the previous page text, manifest and review record. The description is built from the live Nexus page through the API, with edits that refuse on a miss. If the API cannot provide the page, the skill stops and tells you instead of writing one fresh. The new `scripts/verify-mod-pack.py` refuses a pack with a missing or empty file, `<br`, an HTML entity, CRLF or a header line in a paste file, a changelog line over 120 characters, or an archive that differs from the manifest. The previous page text is kept as it was, so those paste-file rules do not apply to it.
+
 - `x4diff` now compares each mod's `content.xml` and prints what it found: identical, differs (with the version and date change), absent on a side, or not compared because it could not be read. It used to skip the manifest and `--file content.xml` said "no differences" even when the version had changed. Three-way mode reports it too, without classifying it. The manifest is not counted in `changed files`.
 
 - `x4diff --file` accepts `./path`, backslashes and an absolute path under a compared mod folder, and says a path is not in the comparison when x4diff does not compare that file type or neither side has it (exit 1; with `--base`, a path outside the compared folders gets a hedged note and exit 0). `./x.xml`, `x\y.xml`, an `.xsd` and `content.xml` used to print "no differences", even for a file that had changed.
@@ -33,7 +34,7 @@
 
 - `x4effective dump` with a bare path to a file only a DLC ships now returns the document mods actually patch, with a note saying so. It used to return the unpatched file with no warning (588 of 716 patched DLC documents here). A file a mod ships into a DLC's tree still reads as absent at the bare path, and the message now names where it is.
 
-- Shared preservation core: the revision recorded in `tools/modding-harness.lock.json` is the pin and is authoritative; it is `b86c709` in 4.1.0. The other revisions named below (`e0851b8`, `221292e`, `2d07fa4`, `bc2bafb`), and `474a2b6`, `1ac319f`, `7c4cc26`, `3274041` and every earlier pin, were interim pins of the same release: each entry says what that step added, and none is current. The pinned core reads save-lock permissions through the Windows API instead of parsing `icacls` text, and carries the sentinel and ledger fixes described below.
+- Shared preservation core: the revision recorded in `tools/modding-harness.lock.json` is the pin and is authoritative; it is `b86c709` in 4.1.0. The pinned core reads save-lock permissions through the Windows API instead of parsing `icacls` text, and carries the sentinel and ledger fixes described below.
 
 - `x4save vars <pattern> | head` exits quietly (rc 0) when the reader closes the pipe; it was reported as
   "decompression/XML parse failed (Broken pipe)", rc 2, as if the save were broken. The exit flush
@@ -74,7 +75,7 @@
   (tried with and without the stored `$`), labelled with where it lives: an MD script/cue
   path, `(aiscript <script> on entity <id>)`, or another container. An integer the engine
   stored without a value reads `0 (absent)` (other numeric types `0 (absent, inferred)`), a
-  typeless value `null`, and tables, lists and groups `type#<id>` (not expanded or searched,
+  typeless value `null`, and tables, lists and groups `table#<id>`, `list#<id>` and `group#<id>` (not expanded or searched,
   F339). Rows stream; the footer gives the decompressed bytes scanned, and no match exits 1
   naming what was not searched. Pass a save NAME (e.g. `save_020`). (#16)
 
@@ -106,7 +107,7 @@
   that says on earns a warning naming `off`. A lock binds X4 as well as agents, so a
   player could not save over a locked save, and Windows permissions cannot tell the two
   apart. `python tools/agent-harness.py save-lock status|off|unlock` remain, for anyone
-  holding locks from a pre-release build; `off` and `unlock` need an elevated prompt. Saves
+  holding locks from an earlier build made during this development cycle (not a public release); `off` and `unlock` need an elevated prompt. Saves
   stay protected by the guards, the backup before a save is changed and the sentinel.
 
 - Geometry comparison supports bounded recursive structural attachments, shared

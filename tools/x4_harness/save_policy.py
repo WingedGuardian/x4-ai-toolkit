@@ -345,8 +345,15 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None):
         raise ShellSyntaxError("PowerShell command does not parse; correct its syntax before retrying. "
                          "This call was not allowed.")
     if error or facts.get("carrier_untranslated"):
-        raise ScopeError("Shell scope could not be completely evaluated; use literal targets and "
-                         "an available parser. This call was not allowed.")
+        category = facts.get("untranslated_category")
+        # A slow translation needs no other parser, so it gets its own remedy.
+        remedy = ("retry, or use literal targets in a simpler command"
+                  if category in ("PowerShell translation timed out",
+                                  "PowerShell translation time budget spent")
+                  else "use literal targets and an available parser")
+        raise ScopeError("Shell scope could not be completely evaluated"
+                         + (" (" + category + ")" if category else "") + "; " + remedy
+                         + ". This call was not allowed.")
     if facts.get("cd_lanes_truncated"):
         # C7: protect-bash.sh denies this too; same verdict and wording, one expansion.
         raise ScopeError("This command's cd targets have so many possible values (${VAR:+...} / "

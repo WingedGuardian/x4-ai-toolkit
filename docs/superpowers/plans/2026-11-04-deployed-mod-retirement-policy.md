@@ -6,6 +6,8 @@ A dedicated normalized file delete of a deployed mod folder or ordinary XML requ
 
 This repair does not permit deleting archives directly, change explicit Action-v1 move policy, authorize retirement without confirmation, or establish host enforcement. A move represented as source delete plus destination write must retain both endpoint checks. Explicit move operations remain conservative. No game launch is part of this task.
 
+Correction, 2026-11-04: as first implemented, the whole-extensions sentence above was false. The delete branch asked for everything under the extensions root, so the whole folder (outside the game, behind a junction, or through an alias) and any `ego_dlc_*` folder went from deny to ask. The controls here only covered the spelling inside the game. The canonical target now decides: the whole extensions folder and a DLC folder deny, and only a deployed mod asks.
+
 ## Root cause and occurrence inventory
 
 READ: `_verdict` sent every non-shell operation to `protect-files.sh` as a Write, then additionally checked delete/move through the shell policy. The deployed-copy write denial dominated the shell retirement confirmation. `scripts/test-hooks.sh` already expects deployed-folder and XML removal to confirm.

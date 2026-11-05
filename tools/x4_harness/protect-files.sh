@@ -424,6 +424,22 @@ if x4_under "$FILE_PATH" "$X4_EXTENSIONS"; then
     fi
   fi
   if [ "$_deployed_delete" = 1 ]; then
+    # Only a deployed MOD is a retirement. The whole extensions folder and a DLC stay blocked,
+    # judged by the CANONICAL target (x4_under above followed any junction or symlink), so no
+    # spelling or alias of either one reaches the ask. The first segment below the root is what
+    # decides: `probe/ego_dlc_x` is inside a mod. Same test as _merge.is_dlc_folder; x4_norm has
+    # already lowercased the canonical form, so any spelling of the name matches.
+    x4_canon_memo "$X4_EXTENSIONS"; _ext_root="${_X4_CANON_RESULT%/}"
+    if [ -z "$_ext_root" ]; then
+      deny "BLOCKED: the extensions folder could not be resolved through its links, so what deleting $FILE_PATH removes is unknown."; return 0
+    fi
+    x4_canon_memo "$FILE_PATH"; _ext_seg="${_X4_CANON_RESULT#"$_ext_root"}"; _ext_seg="${_ext_seg#/}"
+    case "${_ext_seg%%/*}" in
+      '')
+        deny "BLOCKED: $FILE_PATH is the whole extensions folder, every installed mod and DLC. Remove mods one folder at a time."; return 0 ;;
+      ego_dlc_*)
+        deny "BLOCKED: $FILE_PATH is DLC content, which belongs to the game install, not a deployed mod. Use Steam to manage a DLC."; return 0 ;;
+    esac
     ask "REMOVING DEPLOYED MOD CONTENT: $FILE_PATH -- confirm retirement of this installed copy?"; return 0
   fi
   x4_mods_are_separate     && { deny "BLOCKED: $FILE_PATH is a DEPLOYED copy; the live extensions/ folder is overwritten on every deploy. Edit the source under $X4_MODS and redeploy."; return 0; }

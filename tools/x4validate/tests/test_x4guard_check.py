@@ -294,8 +294,9 @@ def test_guard_signals_not_checked_with_exit_2_only_under_X4_GUARD_CHECK(sandbox
     assert plain.returncode == 0 and b'"deny"' in plain.stdout.replace(b" ", b"")
     expected = {"hookSpecificOutput": {
         "hookEventName": "PreToolUse", "permissionDecision": "deny",
-        "permissionDecisionReason": "Shell scope could not be completely evaluated; use literal "
-                                    "targets and an available parser. This call was not allowed."}}
+        "permissionDecisionReason": "Shell scope could not be completely evaluated (no PowerShell "
+                                    "available); use literal targets and an available parser. "
+                                    "This call was not allowed."}}
     assert json.loads(plain.stdout) == expected
     assert check.returncode == 2
     # K10: the shell transport passes the dispatcher's static, actionable refusal through
