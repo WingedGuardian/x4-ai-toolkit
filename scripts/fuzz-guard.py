@@ -994,6 +994,7 @@ def seeds(roots):
         # tried to walk past it. The seed list was assembled from the shapes that had
         # already bitten us -- which is precisely why the untested one was untested.
         ("write into reference", "echo x > " + QU + ref + "/f.xml" + QU),
+        ("write a game archive", "echo x > " + QU + g + "/01.dat" + QU),
         # The settings rule (user decision 2026-10-05): a shell write to a settings env file.
         ("write a settings file", "echo x > " + QU + tk + "/.claude/settings.json" + QU),
         ("recursive search at reference", "grep -rn foo " + QU + ref + QU),

@@ -3245,6 +3245,14 @@ def rsync_deletes(seg: str) -> list[str]:
 _ROBO_SWITCH = re.compile(r"^/{1,2}[A-Za-z]+(:[^/]*)?$")
 
 
+def _robocopy_ops(seg: str) -> list:
+    """A robocopy's non-switch words: SRC, DST, then any file names."""
+    toks = tokens_of(seg)
+    k = _verb_at(seg, 0)                # P1: see _verb_at
+    return [t for t in toks[k + 1:] if not _ROBO_SWITCH.match(t)
+            and not t.startswith(("<", ">")) and not re.match(r"^\d+>", t)]
+
+
 def robocopy_effects(seg: str) -> tuple:
     """(copy destinations, deleted-content targets, moved sources) of a robocopy.
     `robocopy SRC DST /MIR` (or /PURGE) deletes what DST has and SRC lacks -- with an
@@ -3254,8 +3262,7 @@ def robocopy_effects(seg: str) -> tuple:
     toks = tokens_of(seg)
     k = _verb_at(seg, 0)                # P1: see _verb_at
     sw = [t.lstrip("/").split(":", 1)[0].lower() for t in toks[k + 1:] if _ROBO_SWITCH.match(t)]
-    ops = [t for t in toks[k + 1:] if not _ROBO_SWITCH.match(t)
-           and not t.startswith(("<", ">")) and not re.match(r"^\d+>", t)]
+    ops = _robocopy_ops(seg)
     if len(ops) < 2:
         return [], [], []
     src, dst = ops[0], ops[1]
@@ -3400,6 +3407,9 @@ def _narrows(toks: list, i: int) -> bool:
 
 #: find operators that make the expression an OR, so one test no longer bounds the set.
 _FIND_OR = {"-o", "-or", ","}
+#: The filters whose value names an entry, so the text can decide what they match.
+_FIND_NAME_TESTS = {"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename",
+                    "-regex", "-iregex"}
 
 
 def _only_regenerable(toks: list) -> bool:
@@ -4517,6 +4527,136 @@ def glob_covers(operand, target, *, expand_braces=True):
 
 
 GAME_ROOTISH = re.compile(r"(x4 foundations|egosoft/x4)(/extensions)?$", re.I)
+
+
+# ------------------------------------------------- base-game and official DLC archives
+# The file tools refuse a write to <game>/*.cat|dat and <game>/extensions/ego_dlc_*/*.cat|dat;
+# a shell write, move or delete of the same file was only advised (some were plain allows), and
+# only a Steam verify restores one. MEASURED 2026-11-05 through the deployed hooks, same at v4.0.0.
+# A MOD's own ext_*.cat is not here: packing and retiring a mod stays with the deploy rules.
+# Only ever fed text; the disk is never read, and an unresolved folder proves nothing.
+_ARCHIVE_EXT = re.compile(r"[.](cat|dat)$")
+#: What a pattern is tried against. READ from one install: 01-09 plus `_sig` and two loose .dat in
+#: the root, and these stems in all 8 DLC. A pattern that ends in .cat or .dat needs no sample.
+_ARCHIVE_SAMPLES = (tuple("%02d%s.%s" % (n, sig, ext) for n in range(1, 10) for sig in ("", "_sig")
+                          for ext in ("cat", "dat"))
+                    + ("lang.dat", "version.dat")
+                    + tuple("ext_%s%s.%s" % (stem, sig, ext)
+                            for stem in ("01", "02", "03", "01_diff_v900", "v610") for sig in ("", "_sig")
+                            for ext in ("cat", "dat")))
+_DLC_SAMPLES = ("boron", "mini_01", "mini_02", "pirate", "split", "terran", "timelines", "ventures")
+
+
+def _is_pattern(text: str) -> bool:
+    return any(c in text for c in _OPERAND_PATTERN_CHARS)
+
+
+def _dlc_samples(g: str) -> list:
+    return ["%s/extensions/ego_dlc_%s" % (g, name) for name in _DLC_SAMPLES]
+
+
+def _is_dlc_folder(n: str, g: str) -> bool:
+    """`n`, normalised, is an official DLC folder, or a pattern reaching one. Same test as the
+    file tools' DLC refusal: the segment directly below the game's extensions/ is ego_dlc_*."""
+    prefix = g + "/extensions/ego_dlc_"
+    if n.startswith(prefix) and "/" not in n[len(prefix):]:
+        return True
+    return _is_pattern(n) and any(d.count("/") == n.count("/") and fnmatch.fnmatchcase(d, n)
+                                  for d in _dlc_samples(g))
+
+
+def _is_archive_home(n: str, g: str) -> bool:
+    """`n` is a folder whose direct .cat and .dat files belong to the game."""
+    if n == g or _is_dlc_folder(n, g):
+        return True
+    return _is_pattern(n) and n.count("/") == g.count("/") and fnmatch.fnmatchcase(g, n)
+
+
+def _is_game_archive(n: str, g: str) -> bool:
+    """`n` names a direct .cat or .dat in the game root or a DLC, or a pattern reaching one."""
+    home, sep, name = n.rpartition("/")
+    if not sep or not _is_archive_home(home, g):
+        return False
+    if _ARCHIVE_EXT.search(name):
+        return True
+    in_dlc = _is_dlc_folder(home, g)
+    return _is_pattern(name) and any(fnmatch.fnmatchcase(s, name) for s in _ARCHIVE_SAMPLES
+                                     if s.startswith("ext_") == in_dlc)
+
+
+def _removes_game_archive(n: str, g: str) -> bool:
+    """A delete or move of `n` takes an archive away, or the DLC folder holding them. `<x>/*` is
+    how the PowerShell front end spells `Get-ChildItem <x> | Remove-Item`, so <x> counts too."""
+    return (_is_game_archive(n, g) or _is_dlc_folder(n, g)
+            or (n.endswith("/*") and _is_game_archive(n[:-2], g)))
+
+
+def copy_names_archive(seg: str) -> bool:
+    """A copy whose SOURCE is named as an archive: into a directory it lands under that name."""
+    v = verb(seg)
+    if v == "robocopy":
+        names = _robocopy_ops(seg)[2:]
+    elif v in COPY_VERBS:
+        dests = copy_dests(seg)
+        names = [o for o in _operands(seg) if o not in dests]
+    else:
+        return False
+    return any(_ARCHIVE_EXT.search(norm(o)) for o in names)
+
+
+def rsync_moved_sources(seg: str) -> list:
+    """`rsync --remove-source-files` takes its sources away, as `mv` does. Fed to this rule only:
+    a wider reach for the same flag is a separate change."""
+    if verb(seg) != "rsync" or "--remove-source-files" not in tokens_of(seg):
+        return []
+    dests = copy_dests(seg)
+    return [o for o in _operands(seg) if o not in dests]
+
+
+def xargs_listed_operands(seg: str, prev) -> list:
+    """What a producer other than find hands an `xargs rm`, read as named: `ls <game>/*.dat`.
+    find's own operands include its tests, so it goes through find_can_reach_archive."""
+    if not xargs_feed(seg, prev) or verb(prev) == "find":
+        return []
+    return _operands(prev)
+
+
+def _find_test_holds(kind: str, value: str, path: str, rel: str) -> bool:
+    if kind in ("-name", "-iname"):
+        return fnmatch.fnmatchcase(path.rpartition("/")[2], value.lower())
+    if kind in ("-path", "-ipath", "-wholename", "-iwholename"):
+        return any(fnmatch.fnmatchcase(p, _lexical_norm(value)) for p in (path, rel, "./" + rel))
+    try:
+        return any(re.fullmatch(value, p, re.I) for p in (path, rel, "./" + rel))
+    except re.error:
+        return True
+
+
+def find_can_reach_archive(toks: list, root: str, g: str) -> bool:
+    """Can a `find` from `root` with these tests match a base-game or DLC archive?
+
+    Each sample archive under `root` is tried against the tests. They AND unless an OR is
+    present, and any OR is read as the widest case. A negated test holds when it excludes the
+    sample; a test the text cannot decide holds, for either polarity. No filter at all reaches
+    every sample, so `find <dlc> | xargs rm` fires and `find <mod> | xargs rm` has no sample."""
+    files = [g + "/" + s for s in _ARCHIVE_SAMPLES if not s.startswith("ext_")]
+    files += [d + "/" + s for d in _dlc_samples(g) for s in _ARCHIVE_SAMPLES if s.startswith("ext_")]
+    if _is_pattern(root):
+        files = [f for f in files if fnmatch.fnmatchcase(f, root + "/*")]
+    else:
+        files = [f for f in files if f.startswith(root + "/")]
+    tests = [(t, toks[i + 1], i > 0 and toks[i - 1] in ("!", "-not"))
+             for i, t in enumerate(toks[:-1]) if t in _FIND_FILTERS]
+
+    def holds(test, path):
+        kind, value, negated = test
+        if kind not in _FIND_NAME_TESTS:
+            return True                 # -size, -newer and the like: not knowable from the text
+        return _find_test_holds(kind, value, path, path[len(root) + 1:]) != negated
+
+    if any(t in _FIND_OR for t in toks):
+        return any(not tests or any(holds(t, f) for t in tests) for f in files)
+    return any(all(holds(t, f) for t in tests) for f in files)
 
 
 
@@ -6930,6 +7070,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     sed_t, out_t, search_files = [], [], []
     gitwipe_t, gitdiscard_t, gitwipe_pairs = [], [], []
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
+    # For writes_game_archive only: moved rsync sources, folders receiving an archive-named
+    # copy, what a listing feeds `xargs rm`, and (root operand, tests) of each find that deletes.
+    archive_moved_t, archive_into_t, archive_listed_t, archive_finds = [], [], [], []
     search_seg, git_all = False, False
     transcript_copy = False             # M1, see _copy_lands_a_transcript
     # H1 follow-up, see _inline_program_writes_transcript; a heredoc PROGRAM is judged once,
@@ -7002,6 +7145,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # A FILTERED find-delete removes entries INSIDE its tree: it feeds every in-tree
         # delete rule, and never the whole-install hard block (see find_scoped_deletes).
         scoped_rm_t += prep(find_scoped_deletes(s), c_cwd, c_old, operation="delete", scope="filtered-tree")
+        archive_moved_t += prep(rsync_moved_sources(s), c_cwd, c_old)
+        archive_listed_t += prep(xargs_listed_operands(s, prev), c_cwd, c_old)
+        archive_finds += [(op, tokens_of(s)) for op in prep(_find_delete(s)[0], c_cwd, c_old)]
+        if xargs_feed(s, prev) and verb(prev) == "find":
+            archive_finds += [(op, tokens_of(prev)) for op in prep(_find_roots(prev), c_cwd, c_old)]
         # A command name that arrives by substitution MAY be rm: its operands feed the X4
         # directory delete ADVISORY (FX-G4 / BLIND-SPOTS F183, MEASURED: `$(echo rm) -rf
         # <game>/libraries` was a plain allow where `rm -rf` advises). Advisory only; an
@@ -7017,6 +7165,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         dests_ = prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination",
                       copy_sources=exact_copy_sources(s))
         copy_t += dests_
+        if copy_names_archive(s):
+            archive_into_t += dests_ + prep(robo_copy, c_cwd, c_old)
         transcript_copy = transcript_copy or _copy_lands_a_transcript(s, dests_, assigns)
         transcript_inline = transcript_inline or _inline_program_writes_transcript(s, c_cwd, assigns)
         for tgt_, at_, kind_ in ([] if is_for_ else _segment_links(s, assigns)):     # F331
@@ -7298,6 +7448,23 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _mods = list(dict.fromkeys(_deployed_mods(rm_t + mv_src + subst_rm_t)
                                + _deployed_mods(scoped_rm_t, filtered=True)))
     _mod_list = ", ".join(_mods[:10]) + (f" and {len(_mods) - 10} more" if len(_mods) > 10 else "")
+
+    # A shell write, move or delete of a base-game or official DLC archive (see _is_game_archive).
+    def _spellings(ops):
+        # Unquoted braces expand as glob_covers reads them; `p or raw` as rm_named_game does.
+        for path, _u, raw in ops:
+            n = norm(path or raw)
+            yield from (_brace_expand(n) if norm(raw) in brace_patterns else [n])
+
+    _archive_written = copy_t + redir_t_all + sed_t + out_t + mod_t
+    _archive_removed = rm_t + mv_src + archive_moved_t
+    writes_game_archive = bool(_g) and (
+        any(_is_game_archive(n, _g) for n in _spellings(_archive_written))
+        or any(_removes_game_archive(n, _g) for n in _spellings(_archive_removed))
+        or any(_is_archive_home(n, _g) for n in _spellings(archive_into_t))
+        or any(_is_game_archive(n, _g) or _is_archive_home(n, _g) for n in _spellings(archive_listed_t))
+        or any(find_can_reach_archive(toks_, n, _g)
+               for op, toks_ in archive_finds for n in _spellings([op])))
     result = {
         "command": cmd,
         "timeout": timeout,
@@ -7355,6 +7522,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # tree had the wider channel and the hard-blocked one the narrower.
         "writes_reference": hit(copy_t + [(pp, uu, rr) for _m, pp, uu, rr in redir_t]
                                 + sed_t + out_t + mod_t, "reference"),
+        "writes_game_archive": writes_game_archive,
         "rm_in_x4_dir": any(hit(rm_t + mv_src + scoped_rm_t, k, conservative=True) for k in
                             ("game", "profile", "mods", "toolkit")) or rm_named_game
                         or hit(subst_rm_t, "game"),

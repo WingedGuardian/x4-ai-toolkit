@@ -461,6 +461,12 @@ on rm_targets_reference && deny "BLOCKED: reference/ is the read-only unpacked b
 # CLAUDE.md lists it under "Hard blocked". Two channels, one tree, opposite verdicts.
 on writes_reference && deny "BLOCKED: reference/ is the read-only unpacked base game data — never write into it (re-unpack only via bin/unpack-reference.sh). Work in a mod folder under extensions/ instead."
 
+# === HARD BLOCK — WRITE, MOVE or DELETE a base-game or official DLC archive ===
+# The file channel (protect-files.sh) denies these; the shell only advised, or said nothing for
+# an append. MEASURED 2026-11-05. The base archives run to about 10 GB each. A mod's own
+# archive is not this rule: deploy.py, cp and `rm -rf <mod>` keep their verdicts below.
+on writes_game_archive && deny "BLOCKED: this writes, moves or deletes a base-game or official DLC archive (.cat/.dat, or a whole DLC folder). Only a Steam verify restores one. Read it freely, pack with bin/xrcat (XRCatTool) into your own mod folder, and repair the game through Steam's Verify Integrity. Command: $COMMAND"
+
 # === HARD BLOCK — WRITE or DELETE the toolkit's PATH CONFIG (v4.0 release review R1-F1/R1-P1) ===
 # Every guard reads its roots from x4-paths.env; an agent that could rewrite it could move or
 # drop what they protect. The SAME parse pass judges it: hook_facts runs once more with the
@@ -616,8 +622,8 @@ on sed_i_in_game_or_profile && deny "BLOCKED: in-place sed edit (sed -i) of a fi
 
 # === CONFIRM — direct reference to .cat/.dat archives ===
 # DROPPED 2026-08-29: this fired on any command whose TEXT mentioned a .cat -- including
-# an `echo` that merely discussed one. Writing a .cat is already covered by
-# protect-files.sh, which checks the actual TARGET PATH rather than the command text.
+# an `echo` that merely discussed one. A shell write to a game or DLC archive is judged by
+# writes_game_archive above, on its TARGET PATH, and file tools by protect-files.sh.
 
 
 # =============================================================================

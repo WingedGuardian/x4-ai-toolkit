@@ -418,6 +418,49 @@ decide ask   protect-bash.sh "$(cj "rm -f '$X4_GAME/extensions/deployed/ext_01.c
 decide ask   protect-bash.sh "$(cj "DST='$X4_GAME/extensions/deployed'; rm -rf \"\$DST\"")"   "a variable deploy destination confirms, not blocks"
 decide advise protect-bash.sh "$(cj "rm -f '$X4_GAME/notes.txt'")"   "TWIN: a game-root file outside extensions/ keeps the advisory"
 decide advise protect-bash.sh "$(cj "rm -rf '$X4_GAME/.claude/backups/x'")"   "TWIN: the game's .claude/ keeps the advisory"
+
+# THE SHELL'S ARCHIVE BLOCK (4.1.1). protect-files.sh has always denied a write to these; every
+# shell form only advised, or said nothing for an append. A MOD's own archive keeps its verdict.
+_arc="$X4_GAME/01.dat"; _dlc="$X4_GAME/extensions/ego_dlc_boron"; _mod="$X4_GAME/extensions/deployed"
+decide deny   protect-bash.sh "$(cj "echo x > '$_arc'")"             "archive: truncating redirect"
+decide deny   protect-bash.sh "$(cj "echo x >> '$_arc'")"            "archive: append, which no rule saw"
+decide deny   protect-bash.sh "$(cj "echo x | tee '$_arc'")"         "archive: tee"
+decide deny   protect-bash.sh "$(cj "cp a '$_arc'")"                 "archive: cp destination"
+decide deny   protect-bash.sh "$(cj "cp /c/o/01.dat '$X4_GAME/'")"   "archive: cp into the folder under that name"
+decide deny   protect-bash.sh "$(cj "mv a '$_arc'")"                 "archive: mv destination"
+decide deny   protect-bash.sh "$(cj "mv '$_arc' /c/o/x")"            "archive: mv source"
+decide deny   protect-bash.sh "$(cj "rm '$_arc'")"                   "archive: rm"
+decide deny   protect-bash.sh "$(cj "truncate -s 0 '$_arc'")"        "archive: truncate"
+decide deny   protect-bash.sh "$(cj "dd if=a of='$_arc'")"           "archive: dd of="
+decide deny   protect-bash.sh "$(cj "install a '$_arc'")"            "archive: install"
+decide deny   protect-bash.sh "$(cj "rsync a '$_arc'")"              "archive: rsync destination"
+decide deny   protect-bash.sh "$(cj "robocopy /c/o '$X4_GAME' 01.dat")" "archive: robocopy by name"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' -delete")" "archive: filtered find -delete"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' | xargs rm")" "archive: find piped to xargs rm"
+decide deny   protect-bash.sh "$(cj "rm '$X4_GAME/01.DAT'")"         "archive: any case"
+decide deny   protect-bash.sh "$(cj "rm '$_dlc/ext_01.cat'")"        "DLC archive: rm, which only asked"
+decide deny   protect-bash.sh "$(cj "echo x > '$_dlc/ext_01.dat'")"  "DLC archive: redirect"
+decide deny   protect-bash.sh "$(cj "rm -rf '$_dlc'")"               "a whole DLC folder, as the file tools refuse it"
+decide allow  protect-bash.sh "$(cj "sha256sum '$_arc'")"            "TWIN: hashing an archive reads it"
+decide allow  protect-bash.sh "$(cj "cp '$_arc' /c/o/x")"            "TWIN: copying an archive OUT reads it"
+decide allow  protect-bash.sh "$(cj "XRCatTool -in '$_arc' -out /c/o/x")" "TWIN: XRCatTool reading an archive"
+decide advise protect-bash.sh "$(cj "cp a '$_mod/ext_01.cat'")"      "TWIN: packing into a mod keeps the deploy advisory"
+decide advise protect-bash.sh "$(cj "echo x > '$_mod/ext_01.dat'")"  "TWIN: a redirect into a mod's archive keeps its advisory"
+decide allow  protect-bash.sh "$(cj "echo x >> '$_mod/ext_01.dat'")" "TWIN: an append to a mod's archive stays as it was"
+decide allow  protect-bash.sh "$(cj "python dev/_tools/deploy.py deployed")" "TWIN: deploy.py itself"
+decide ask    protect-bash.sh "$(cj "rm -rf '$_dlc/libraries'")"     "TWIN: a DLC subfolder keeps its confirmation"
+decide advise protect-bash.sh "$(cj "cp a '$X4_GAME/notes.txt'")"    "TWIN: a plain game-root file keeps the deploy advisory"
+decide advise protect-bash.sh "$(cj "cp /c/o/notes.txt '$X4_GAME/'")" "TWIN: another name into the folder keeps it too"
+if command -v pwsh >/dev/null 2>&1 || command -v powershell >/dev/null 2>&1; then
+  _psq(){ printf '{"tool_name":"PowerShell","tool_input":{"command":%s}}' "$(printf '%s' "$1" | jq -Rs .)"; }
+  decide deny protect-bash.sh "$(_psq "Remove-Item '$_arc'")"        "archive: Remove-Item"
+  decide deny protect-bash.sh "$(_psq "Set-Content '$_arc' x")"      "archive: Set-Content"
+  decide deny protect-bash.sh "$(_psq "Copy-Item a '$_dlc/ext_01.cat'")" "DLC archive: Copy-Item"
+  decide ask  protect-bash.sh "$(_psq "Remove-Item '$_mod/ext_01.cat'")" "TWIN: Remove-Item in a mod keeps its confirmation"
+else
+  skip "archive: Remove-Item (no PowerShell)"; skip "archive: Set-Content (no PowerShell)"
+  skip "DLC archive: Copy-Item (no PowerShell)"; skip "TWIN: Remove-Item in a mod (no PowerShell)"
+fi
 decide ask   protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions/a' '$X4_GAME/extensions/b/x' '$X4_GAME/extensions/c'")"   "several deployed mods in one command confirm"
 # ...ONCE, naming every mod (user 2026-10-27): one prompt per command, never per file.
 _mm=$(cj "rm -rf '$X4_GAME/extensions/a' '$X4_GAME/extensions/b/x' '$X4_GAME/extensions/c' '$X4_GAME/extensions/a/y'" | bash "$HOOKS/protect-bash.sh" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
@@ -598,7 +641,8 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 
 
 # Two new file cases in each layout, plus two shell cases: 333 + 2*2 + 2.
-EXPECT=339
+# The archive block adds 19 denies + 10 twins + 4 PowerShell: 339 + 33.
+EXPECT=372
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written

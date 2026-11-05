@@ -7380,5 +7380,313 @@ class TestProfileModlistWritePolicy(unittest.TestCase):
         self.assertTrue(F(command, roots=self.roots)['writes_profile_other'])
 
 
+class TestGameArchiveShellWrites(unittest.TestCase):
+    """A shell command that changes a base-game or official DLC archive gets the deny the file
+    tools give it. Only a Steam verify restores those files. Parse-only: nothing here runs.
+    A MOD's own archive stays with the deploy and retirement rules."""
+    ARC = GAME + "/01.dat"
+    DLC = GAME + "/extensions/ego_dlc_boron"
+    CAT = DLC + "/ext_01.cat"
+    MOD = GAME + "/extensions/amod"
+
+    def Q(self, path):
+        return '"' + path + '"'
+
+    # --- one test per write channel: copy_t, redirects, truncate, sed_t, out_t, mod_t
+    def test_a_redirect_onto_an_archive_fires_truncating_or_appending(self):
+        for form in ("echo x > ", "echo x >> ", "echo x 2> ", "echo x &> "):
+            self.assertTrue(F(form + self.Q(self.ARC))["writes_game_archive"], form)
+
+    def test_a_copy_destination_on_an_archive_fires(self):
+        for form in ("cp a ", "mv a ", "install a ", "rsync a ", "echo x | tee "):
+            self.assertTrue(F(form + self.Q(self.ARC))["writes_game_archive"], form)
+
+    def test_truncate_and_dd_on_an_archive_fire(self):
+        self.assertTrue(F("truncate -s 0 " + self.Q(self.ARC))["writes_game_archive"])
+        self.assertTrue(F("dd if=a of=" + self.Q(self.ARC))["writes_game_archive"])
+
+    def test_sed_in_place_on_an_archive_fires(self):
+        self.assertTrue(F("sed -i s/a/b/ " + self.Q(self.ARC))["writes_game_archive"])
+
+    def test_an_output_flag_on_an_archive_fires(self):
+        self.assertTrue(F("curl -o " + self.Q(self.ARC) + " http://x/y")["writes_game_archive"])
+
+    def test_touch_on_an_archive_fires(self):
+        self.assertTrue(F("touch " + self.Q(self.ARC))["writes_game_archive"])
+
+    # --- the two delete channels
+    def test_a_delete_of_an_archive_fires(self):
+        for form in ("rm ", "rm -f ", "unlink ", "shred "):
+            self.assertTrue(F(form + self.Q(self.ARC))["writes_game_archive"], form)
+
+    def test_a_move_away_of_an_archive_fires(self):
+        self.assertTrue(F("mv " + self.Q(self.ARC) + " /c/o/x")["writes_game_archive"])
+
+    def test_rsync_removing_its_source_archive_fires(self):
+        self.assertTrue(F("rsync --remove-source-files " + self.Q(self.ARC) + " /c/o/")
+                        ["writes_game_archive"])
+
+    def test_TWIN_rsync_keeping_its_source_is_a_read(self):
+        self.assertFalse(F("rsync " + self.Q(self.ARC) + " /c/o/")["writes_game_archive"])
+
+    # --- which folders hold an archive
+    def test_an_official_dlc_archive_fires(self):
+        self.assertTrue(F("rm " + self.Q(self.CAT))["writes_game_archive"])
+        self.assertTrue(F("echo x > " + self.Q(self.CAT))["writes_game_archive"])
+        self.assertTrue(F("rm " + self.Q(GAME + "/extensions/ego_dlc_mini_01/ext_01_sig.dat"))
+                        ["writes_game_archive"])
+
+    def test_the_game_root_itself_holds_archives(self):
+        self.assertTrue(F("rm " + self.Q(GAME + "/version.dat"))["writes_game_archive"])
+
+    def test_TWIN_a_mods_own_archive_does_not_fire(self):
+        for form in ("rm ", "cp a ", "mv a ", "echo x > ", "echo x >> ", "truncate -s 0 "):
+            self.assertFalse(F(form + self.Q(self.MOD + "/ext_01.cat"))["writes_game_archive"], form)
+
+    def test_TWIN_a_dlc_shaped_folder_elsewhere_does_not_fire(self):
+        for path in (self.MOD + "/extensions/ego_dlc_boron/ext_01.cat",    # inside a mod
+                     GAME + "/extensions/ego_dlcx/ext_01.cat",             # not ego_dlc_
+                     GAME + "x/01.dat",                                    # a sibling folder
+                     GAME + "/sub/x.dat",                                  # deeper in the game
+                     self.DLC + "/libraries/x.dat",                        # deeper in a DLC
+                     "/c/o/01.dat"):
+            self.assertFalse(F("rm " + self.Q(path))["writes_game_archive"], path)
+
+    def test_TWIN_a_mod_folder_delete_keeps_its_one_confirmation(self):
+        f = F('rm -rf ' + self.Q(self.MOD) + ' ' + self.Q(GAME + "/extensions/bmod"))
+        self.assertFalse(f["writes_game_archive"])
+        self.assertTrue(f["rm_deployed_mod"])
+
+    def test_no_game_root_means_no_rule(self):
+        roots = dict(ROOTS, game="")
+        self.assertFalse(F("rm " + self.Q(self.ARC), roots=roots)["writes_game_archive"])
+        self.assertFalse(F("rm /01.dat", roots=roots)["writes_game_archive"])
+
+    # --- which names are archives
+    def test_TWIN_another_extension_does_not_fire(self):
+        for name in ("x.txt", "x.xml", "01.zip", "01.cat.bak", "01.dat.tmp", "01.dat.x", "01cat"):
+            self.assertFalse(F("rm " + self.Q(GAME + "/" + name))["writes_game_archive"], name)
+            self.assertFalse(F("echo x > " + self.Q(GAME + "/" + name))["writes_game_archive"], name)
+
+    def test_any_case_and_path_spelling_fires(self):
+        for path in (GAME + "/01.DAT", GAME.upper() + "/EXTENSIONS/EGO_DLC_BORON/EXT_01.CAT",
+                     "/c/" + GAME[3:] + "/01.dat", GAME + "/./01.dat", GAME + "//01.dat",
+                     GAME + "/sub/../01.dat", GAME + "/01.dat.", GAME + "/01.dat::$DATA"):
+            self.assertTrue(F("rm '" + path + "'")["writes_game_archive"], path)
+
+    def test_a_root_variable_and_a_directory_change_fire(self):
+        self.assertTrue(F('rm "$X4_GAME/01.dat"')["writes_game_archive"])
+        self.assertTrue(F("cd " + self.Q(self.DLC) + " && rm ext_01.cat")["writes_game_archive"])
+        self.assertTrue(FC("rm 01.dat", GAME)["writes_game_archive"])
+
+    def test_TWIN_a_relative_name_elsewhere_does_not_fire(self):
+        self.assertFalse(FC("rm 01.dat", "/c/o")["writes_game_archive"])
+        self.assertFalse(FC("rm ext_01.dat", self.MOD)["writes_game_archive"])
+
+    def test_an_unknown_stem_with_a_visible_archive_ending_fires(self):
+        self.assertTrue(F('rm "' + GAME + '/$X.dat"')["writes_game_archive"])
+
+    def test_TWIN_an_unresolved_name_or_folder_proves_nothing(self):
+        self.assertFalse(F('rm "' + GAME + '/$X"')["writes_game_archive"])
+        self.assertFalse(F('rm "$X/01.dat"')["writes_game_archive"])
+        self.assertFalse(F('rm "' + GAME + '/extensions/$X/ext_01.cat"')["writes_game_archive"])
+
+    # --- globs: a pattern is present in the text, so what it covers is decidable
+    def test_a_glob_naming_archives_fires(self):
+        for pat in ("/*.dat", "/*.cat", "/0?.cat", "/0[1-9].dat"):
+            self.assertTrue(F('echo x > "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_a_bare_glob_covering_an_archive_name_fires(self):
+        for pat in ("/*", "/0*", "/lang*"):
+            self.assertTrue(F('touch "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_TWIN_a_bare_glob_covering_no_archive_name_does_not_fire(self):
+        for pat in ("/*.xml", "/x*", "/ext*"):
+            self.assertFalse(F('touch "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_a_folder_glob_reaching_a_dlc_fires(self):
+        for pat in ("/extensions/ego_dlc_*/ext_01.cat", "/extensions/*/ext_01.cat"):
+            self.assertTrue(F('rm "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_TWIN_a_folder_glob_missing_every_dlc_does_not_fire(self):
+        for pat in ("/extensions/a*/ext_01.cat", "/*/x.dat", "/*/*/*/x.dat"):
+            self.assertFalse(F('rm "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_a_pattern_for_the_game_folder_itself_fires(self):
+        self.assertTrue(F('rm "' + GAME.replace("X4 F", "X4?F") + '/01.dat"')["writes_game_archive"])
+
+    def test_TWIN_a_pattern_above_the_game_folder_does_not_fire(self):
+        self.assertFalse(F('rm "C:/*/01.dat"')["writes_game_archive"])
+
+    def test_a_brace_list_of_archives_fires(self):
+        self.assertTrue(F('rm "' + GAME + '"/{01.dat,x.txt}')["writes_game_archive"])
+
+    def test_TWIN_a_brace_list_of_other_names_does_not_fire(self):
+        self.assertFalse(F('rm "' + GAME + '"/{a,b}.txt')["writes_game_archive"])
+
+    # --- a whole DLC folder holds the archives, like the file tools' DLC refusal
+    def test_deleting_or_moving_a_whole_dlc_folder_fires(self):
+        for cmd in ("rm -rf " + self.Q(self.DLC), "rm -rf " + self.Q(self.DLC + "/"),
+                    "mv " + self.Q(self.DLC) + " /c/o/x", "rm -rf " + self.Q(self.DLC) + "/*",
+                    'rm -rf "' + GAME + '/extensions/ego_dlc_b"*'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_dlc_subfolder_or_other_file_keeps_its_verdict(self):
+        for cmd in ("rm -rf " + self.Q(self.DLC + "/libraries"), "rm " + self.Q(self.DLC + "/content.xml")):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+            self.assertTrue(F(cmd)["rm_deployed_mod"], cmd)
+
+    def test_TWIN_a_write_at_a_dlc_folder_is_not_a_delete_of_it(self):
+        self.assertFalse(F("cp a " + self.Q(self.DLC))["writes_game_archive"])
+
+    # --- a directory destination: the source's name decides
+    def test_an_archive_named_source_into_a_home_folder_fires(self):
+        for cmd in ("cp /c/o/01.dat " + self.Q(GAME), "cp /c/o/01.dat " + self.Q(GAME + "/"),
+                    "cp -t " + self.Q(GAME) + " 01.dat", "mv /c/o/ext_01.cat " + self.Q(self.DLC + "/"),
+                    "rsync -a /c/o/01.dat " + self.Q(GAME + "/"), "cp /c/o/*.cat " + self.Q(GAME)):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_robocopy_of_a_named_archive_into_a_home_folder_fires(self):
+        self.assertTrue(F("robocopy /c/o " + self.Q(GAME) + " 01.dat")["writes_game_archive"])
+
+    def test_robocopy_moving_a_dlc_folder_away_fires(self):
+        self.assertTrue(F("robocopy " + self.Q(self.DLC) + " /c/o/x /MOVE")["writes_game_archive"])
+
+    def test_TWIN_robocopy_without_an_archive_name_does_not_fire(self):
+        self.assertFalse(F("robocopy /c/o " + self.Q(GAME))["writes_game_archive"])
+        self.assertFalse(F("robocopy /c/o " + self.Q(GAME) + " a.txt")["writes_game_archive"])
+
+    def test_TWIN_another_source_or_a_mod_destination_does_not_fire(self):
+        for cmd in ("cp /c/o/a.txt " + self.Q(GAME), "cp -r /c/o/pack/. " + self.Q(GAME + "/"),
+                    "cp /c/o/ext_01.cat " + self.Q(self.MOD + "/"), "cp /c/o/*.cat " + self.Q(self.MOD),
+                    "mv /c/o/amod " + self.Q(GAME + "/extensions/")):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- find: a filter decides what the walk reaches
+    def test_a_find_delete_named_for_an_archive_fires(self):
+        for filt in ("-name 01.dat", '-name "*.dat"', '-maxdepth 1 -name "*.cat"', '-iname "*.CAT"'):
+            self.assertTrue(F("find " + self.Q(GAME) + " " + filt + " -delete")["writes_game_archive"], filt)
+
+    def test_a_find_exec_rm_named_for_an_archive_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + " -name 01.dat -exec rm {} +")["writes_game_archive"])
+
+    def test_a_find_path_filter_for_an_archive_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -path "*/01.dat" -delete')["writes_game_archive"])
+
+    def test_a_find_regex_filter_for_an_archive_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -regex ".*dat" -delete')["writes_game_archive"])
+
+    def test_a_find_filter_it_cannot_read_may_reach_an_archive(self):
+        self.assertTrue(F("find " + self.Q(GAME) + " -size +1G -delete")["writes_game_archive"])
+
+    def test_a_find_regex_it_cannot_parse_may_reach_an_archive(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -regex "[" -delete')["writes_game_archive"])
+
+    def test_a_find_root_pattern_reaching_a_dlc_fires(self):
+        self.assertTrue(F('find "' + GAME + '/extensions/ego_dlc_"* -name "*.cat" -delete')
+                        ["writes_game_archive"])
+
+    def test_a_negated_find_filter_that_spares_archives_elsewhere_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -not -name "*.xml" -delete')["writes_game_archive"])
+        self.assertTrue(F("find " + self.Q(GAME) + ' ! -name "*.xml" -delete')["writes_game_archive"])
+
+    def test_TWIN_a_negated_find_filter_excluding_archives_does_not_fire(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -not -name "*.?at" -delete')["writes_game_archive"])
+
+    def test_a_find_OR_filter_reaching_an_archive_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -name "*.xml" -o -name "*.dat" -delete')
+                        ["writes_game_archive"])
+
+    def test_a_find_OR_of_tests_with_no_name_reaches_an_archive(self):
+        self.assertTrue(F("find " + self.Q(GAME) + " -type f -o -type d | xargs rm")["writes_game_archive"])
+
+    def test_TWIN_a_find_AND_filter_needs_one_name_to_pass_both(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -name "*.xml" -name "*.dat" -delete')
+                         ["writes_game_archive"])
+
+    def test_TWIN_a_find_filter_for_something_else_does_not_fire(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -name "*.xml" -delete')["writes_game_archive"])
+        self.assertFalse(F("find " + self.Q(GAME) + " -name __pycache__ -exec rm -rf {} +")["writes_game_archive"])
+
+    def test_a_find_over_extensions_reaches_a_dlc(self):
+        self.assertTrue(F("find " + self.Q(GAME + "/extensions") + " -name ext_01.cat -delete")
+                        ["writes_game_archive"])
+        self.assertTrue(F("find " + self.Q(self.DLC) + ' -name "*.cat" -delete')["writes_game_archive"])
+
+    def test_TWIN_a_find_in_one_mod_does_not_fire(self):
+        f = F("find " + self.Q(self.MOD) + ' -name "*.cat" -delete')
+        self.assertFalse(f["writes_game_archive"])
+        self.assertTrue(f["rm_deployed_mod"])
+
+    def test_TWIN_a_find_that_only_lists_is_a_read(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -name "*.dat"')["writes_game_archive"])
+
+    def test_an_unfiltered_find_delete_of_a_dlc_fires(self):
+        self.assertTrue(F("find " + self.Q(self.DLC) + " -delete")["writes_game_archive"])
+
+    # --- xargs: the producer's text names what is deleted
+    def test_find_piped_to_xargs_rm_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -name "*.dat" | xargs rm')["writes_game_archive"])
+
+    def test_TWIN_find_piped_to_xargs_rm_elsewhere_does_not_fire(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -name "*.xml" | xargs rm')["writes_game_archive"])
+        self.assertFalse(F("find " + self.Q(self.MOD) + " | xargs rm")["writes_game_archive"])
+
+    def test_TWIN_find_piped_to_a_reader_does_not_fire(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -name "*.dat" | xargs sha256sum')["writes_game_archive"])
+
+    def test_a_listing_of_archives_piped_to_xargs_rm_fires(self):
+        self.assertTrue(F('ls "' + GAME + '"/*.dat | xargs rm')["writes_game_archive"])
+
+    def test_a_listing_of_a_home_folder_piped_to_xargs_rm_fires(self):
+        self.assertTrue(F("ls " + self.Q(GAME) + " | xargs rm")["writes_game_archive"])
+        self.assertTrue(F("ls " + self.Q(self.DLC) + " | xargs rm -rf")["writes_game_archive"])
+
+    def test_TWIN_a_listing_of_a_mod_piped_to_xargs_rm_does_not_fire(self):
+        self.assertFalse(F("ls " + self.Q(self.MOD) + " | xargs rm")["writes_game_archive"])
+
+    def test_TWIN_a_listing_piped_to_a_reader_does_not_fire(self):
+        self.assertFalse(F('ls "' + GAME + '"/*.dat | xargs sha256sum')["writes_game_archive"])
+
+    # --- reading stays allowed
+    def test_TWIN_reading_an_archive_does_not_fire(self):
+        for cmd in ("ls ", "sha256sum ", "stat ", "cat ", "grep -c foo "):
+            self.assertFalse(F(cmd + self.Q(self.ARC))["writes_game_archive"], cmd)
+        for cmd in ("cp " + self.Q(self.ARC) + " /c/o/x", "cat " + self.Q(self.ARC) + " > /c/o/x",
+                    "dd if=" + self.Q(self.ARC) + " of=/c/o/x", 'echo "rm ' + self.ARC + '"',
+                    "XRCatTool -in " + self.Q(self.ARC) + " -out /c/o/x"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_carriers_and_wrappers_reach_the_rule(self):
+        for cmd in ("bash -c 'rm " + self.Q(self.ARC) + "'", "sudo rm " + self.Q(self.ARC),
+                    "eval 'rm " + self.Q(self.ARC) + "'", "cmd /c del " + self.Q(self.ARC),
+                    'F=' + self.Q(self.ARC) + '; echo x > "$F"',
+                    'for f in 01 02; do rm "' + GAME + '/$f.dat"; done'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_powershell_forms_reach_the_rule(self):
+        for cmd in ("Remove-Item '%s'", "Set-Content '%s' x", "Add-Content '%s' x", "Copy-Item a '%s'",
+                    "Move-Item '%s' /c/o/x", "'x' | Out-File '%s'", "[IO.File]::Delete('%s')"):
+            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd % self.ARC}}, ROOTS)
+            if f.get("powershell_error") or f.get("carrier_untranslated"):
+                self.skipTest("no PowerShell parser on this machine")
+            self.assertTrue(f["writes_game_archive"], cmd)
+
+    def test_contents_of_an_archive_named_operand_read_as_the_archive(self):
+        # the PowerShell front end's `Get-ChildItem <x> | Remove-Item`
+        self.assertTrue(F('rm -rf "' + GAME + '/*.dat/*"')["writes_game_archive"])
+
+    def test_TWIN_contents_of_another_operand_do_not(self):
+        self.assertFalse(F('rm -rf "' + GAME + '/*.xml/*"')["writes_game_archive"])
+
+    def test_TWIN_powershell_on_a_mod_or_reading_does_not_fire(self):
+        for cmd, path in (("Remove-Item '%s'", self.MOD + "/ext_01.cat"), ("Copy-Item a '%s'", self.MOD + "/ext_01.cat"),
+                          ("Get-FileHash '%s'", self.ARC), ("Copy-Item '%s' /c/o/x", self.ARC)):
+            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd % path}}, ROOTS)
+            if f.get("powershell_error") or f.get("carrier_untranslated"):
+                self.skipTest("no PowerShell parser on this machine")
+            self.assertFalse(f["writes_game_archive"], cmd)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
