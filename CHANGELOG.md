@@ -2,6 +2,8 @@
 
 ## v4.1.0 — 2026-11-04
 
+- Typed file deletion of deployed mod folders or ordinary XML now requests confirmation, matching shell retirement policy, instead of being rejected as a direct edit of the deployed copy. Direct writes, write-only batches, explicit moves, archive protections, save preservation and whole-install/reference blocks retain their prior policy.
+
 - Save sentinel: a look that fails after its check keeps the finding for the next look, because the record is now written last. A look that fails once the toolkit folder is known reaches the user once an hour as well as the agent; a failure before that, or a module that will not import, reaches the agent only. A folder that stays unreadable is mentioned once. A denied save folder no longer stops every look, and its saves are carried as unknown, not reported as removed. A denied `Egosoft/X4` folder with no `X4_PROFILE` set still stops the look, which then says it did not run.
 
 - Session charter and ledger: the folder ignores itself in git and its files are private to the user where the platform has modes. An edited charter cannot end its own record, and charter and ledger text is labelled as a record, not instructions. A first prompt with a malformed character is kept, so the second prompt is no longer recorded as the first.

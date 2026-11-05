@@ -7359,7 +7359,7 @@ def load_tests(loader, standard_tests, pattern):
 class TestProfileModlistWritePolicy(unittest.TestCase):
     def setUp(self):
         import tempfile
-        self.temp = tempfile.TemporaryDirectory(prefix='x4-modlist-')
+        self.temp = tempfile.TemporaryDirectory(prefix='x4-vht-case-')
         self.addCleanup(self.temp.cleanup)
         base = pathlib.Path(self.temp.name)
         self.roots = {key: str(base / key) for key in ROOTS}

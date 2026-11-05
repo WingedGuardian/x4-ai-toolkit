@@ -411,6 +411,21 @@ x4_mods_are_separate() {
   return 0
 }
 if x4_under "$FILE_PATH" "$X4_EXTENSIONS"; then
+  # A typed delete removes a deployed copy; it is not an edit that the next deploy
+  # would overwrite. Keep earlier file protections and the caller's shell-delete
+  # check. Never take removal semantics from free-form tool_input metadata, and
+  # never let the internal write-only batch borrow them.
+  local _deployed_delete=0
+  if [ "$_X4_FILE_BATCH" = 0 ]; then
+    if [ "${JQ_OK:-0}" = 1 ]; then
+      printf '%s' "$INPUT" | "$JQ" -e '.tool_name == "DeleteFile"' >/dev/null 2>&1 && _deployed_delete=1
+    elif [ -n "$PY" ]; then
+      X4_IN="$INPUT" "$PY" -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["X4_IN"]).get("tool_name") == "DeleteFile" else 1)' >/dev/null 2>&1 && _deployed_delete=1
+    fi
+  fi
+  if [ "$_deployed_delete" = 1 ]; then
+    ask "REMOVING DEPLOYED MOD CONTENT: $FILE_PATH -- confirm retirement of this installed copy?"; return 0
+  fi
   x4_mods_are_separate     && { deny "BLOCKED: $FILE_PATH is a DEPLOYED copy; the live extensions/ folder is overwritten on every deploy. Edit the source under $X4_MODS and redeploy."; return 0; }
   ask "EDITING DEPLOYED MOD: $FILE_PATH -- the live extensions/ folder is overwritten on each deploy; edit the source instead. Confirm?"; return 0
 fi

@@ -316,8 +316,10 @@ Exit 2 means a usage error (a wrong option). The rules for calling it:
   pass it only for settings files (READ: `agent/guards/adapters/codex.py`, `opencode.py`); a
   large file through the command line can exceed the OS argument limit.
 - **`--kind delete`** for anything that removes or moves a file away; x4guard judges it as the
-  stricter of a write and an `rm -rf` of that path. A move is a delete of the source plus a
-  write of the destination. A tool that touches several files is several checks; the worst
+  stricter of removal-aware file policy and an `rm -rf` of that path. A move is a delete of the source plus a
+  write of the destination. Explicit Action-v1 `move` operations retain the conservative
+  file-write policy; to describe both endpoints use a source `delete` and destination
+  `write`. A tool that touches several files is several checks; the worst
   verdict wins (deny > ask > advise > allow). `--kind delete` is for a DEDICATED delete or move
   tool. If your agent has none, and deletes only through its shell tool (`rm`, `mv`,
   `Remove-Item`), you need nothing extra: send the whole command as `--kind shell`, and the shell

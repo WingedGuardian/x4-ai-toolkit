@@ -192,3 +192,10 @@ def test_TWIN_the_shard_matrix_check_goes_red_on_a_mismatch(monkeypatch):
         monkeypatch.setattr(sys.modules[__name__], "_ci_shard_config", lambda s=shards, n=ns: (s, n))
         with pytest.raises(AssertionError):
             test_the_ci_shard_matrix_is_exactly_the_N_its_run_line_divides_by()
+
+
+def test_a_refused_baseline_names_the_test_and_keeps_its_traceback():
+    text = vht.baseline_refusal(1, {"TestA.test_b"}, 949, "x" * 9000 + "AssertionError: the reason")
+    assert "REFUSING: baseline is not green (rc=1, ran=949, 1 failed)" in text
+    assert "  TestA.test_b" in text and text.endswith("AssertionError: the reason")
+    assert len(text) < 6500, "a bound: this goes to a CI log"

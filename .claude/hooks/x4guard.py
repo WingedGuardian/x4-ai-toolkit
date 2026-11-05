@@ -275,14 +275,17 @@ def guard_payload(kind: str, shell: str | None, command: str | None, path: str |
         return {"tool_name": "PowerShell" if shell == "powershell" else "Bash",
                 "tool_input": {"command": command}, "cwd": os.getcwd(),
                 "x4_execution_host": execution_host}
+    # Only a normalized delete gets removal policy. Explicit move keeps the existing
+    # conservative file-write check; destinations must always be checked as writes.
+    file_tool = "DeleteFile" if kind == "delete" else "Write"
     if content is not None:
         # The file's WHOLE new content (a whole-file write tool, `--content`): exactly a Claude Code
         # Write, so every rule judges it as the reference hooks do (FX-G5 item 10).
-        return {"tool_name": "Write", "tool_input": {"file_path": path, "content": content}}
+        return {"tool_name": file_tool, "tool_input": {"file_path": path, "content": content}}
     if edit is not None:
         # ONE string replacement (an OpenCode edit: old, new, replace_all), which the settings rule
         # APPLIES to the file as it is now and judges the result (FX-G6 / reviewer K I5).
-        return {"tool_name": "Write", "tool_input": {"file_path": path, "x4_edit": edit}}
+        return {"tool_name": file_tool, "tool_input": {"file_path": path, "x4_edit": edit}}
     if command is not None or is_agent_settings(path):
         # The TEXT this write applies (an apply_patch, an OpenCode write/edit), for the
         # settings-file rule (settings_guard.py, user decision 2026-10-05). Not `content`: a
@@ -292,8 +295,8 @@ def guard_payload(kind: str, shell: str | None, command: str | None, path: str |
         ti = {"file_path": path, "x4_written": command}
         if patch:
             ti["x4_patch"] = True
-        return {"tool_name": "Write", "tool_input": ti}
-    return {"tool_name": "Write", "tool_input": {"file_path": path, "content": ""}}
+        return {"tool_name": file_tool, "tool_input": ti}
+    return {"tool_name": file_tool, "tool_input": {"file_path": path, "content": ""}}
 
 
 def parse_hook_output(out: str) -> tuple[str, str | None, str | None]:
@@ -512,7 +515,7 @@ def _verdict(kind: str, shell: str | None, command: str | None, path: str | None
              edit: dict | None = None, patch: bool = False, save_qualified=None,
              execution_host: str = "") -> dict:
     """A relative path is resolved from the CALLER's working directory (Codex apply_patch paths
-    are relative). A delete is judged as the stricter of a write and an `rm -rf --` of that path:
+    are relative). A delete is judged by removal-aware file policy and an `rm -rf --` of that path:
     recursive, because the path may be a directory. No protect-bash rule distinguishes it from
     `rm -f` today (MEASURED 9/9 paths identical); the probe says what a delete IS, for any
     future rule keyed on recursion."""
@@ -528,7 +531,7 @@ def _verdict(kind: str, shell: str | None, command: str | None, path: str | None
         return check("protect-bash.sh", guard_payload(kind, shell, command, None,
                      execution_host=execution_host), deadline, budget)
     path = os.path.abspath(path)
-    parts = [check("protect-files.sh", guard_payload("write", None, command, path, content, edit, patch),
+    parts = [check("protect-files.sh", guard_payload(kind, None, command, path, content, edit, patch),
                        deadline, budget)]
     if kind in ("delete", "move"):
         quoted = path.replace("\\", "/").replace("'", "'\"'\"'")    # close, "'", reopen

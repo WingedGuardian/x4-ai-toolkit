@@ -1883,6 +1883,17 @@ def credited(failed: set, srcs: dict, key: str) -> set:
     return {t for t in failed if names_predicate(srcs.get(t, ""), key)}
 
 
+LAST_OUTPUT = ""
+
+
+def baseline_refusal(rc, failed, ran, output, keep=6000):
+    """What a refused baseline prints: the tests that failed and the end of their output, where unittest puts the
+    tracebacks. An intermittent failure cannot be chased from a count."""
+    names = "\n".join("  " + str(f) for f in sorted(failed))
+    return (f"REFUSING: baseline is not green (rc={rc}, ran={ran}, {len(failed)} failed). "
+            f"No mutation result would mean anything.\n{names}\n--- end of the test output ---\n{output[-keep:]}")
+
+
 def run(work: Path, tests=()):
     # PYTHONDONTWRITEBYTECODE, and it is not hygiene -- without it this gate returns
     # WRONG VERDICTS. CPython invalidates a cached .pyc on (source mtime in SECONDS,
@@ -1905,6 +1916,8 @@ def run(work: Path, tests=()):
     p = subprocess.run([sys.executable, "test_hook_facts.py", *tests], cwd=work,
                        capture_output=True, text=True, errors="replace", env=env)
     out = p.stdout + p.stderr
+    global LAST_OUTPUT
+    LAST_OUTPUT = out
     failed = failed_tests(out)
     ran = re.search(r"Ran (\d+) tests?", out)
     return p.returncode, failed, int(ran.group(1)) if ran else -1
@@ -2085,9 +2098,7 @@ def main(argv=None) -> int:
             base_tests = sorted({t.split(".")[0] for t in targets if t})
         rc, failed, ran = run(work, base_tests)
         if rc != 0 or ran < floor:
-            print(f"REFUSING: baseline is not green (rc={rc}, ran={ran}, "
-                  f"{len(failed)} failed). No mutation result would mean anything.",
-                  file=sys.stderr)
+            print(baseline_refusal(rc, failed, ran, LAST_OUTPUT), file=sys.stderr)
             return 2
         print(f"baseline: {ran} tests green\n")
 
