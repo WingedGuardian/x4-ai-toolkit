@@ -451,6 +451,22 @@ decide allow  protect-bash.sh "$(cj "python dev/_tools/deploy.py deployed")" "TW
 decide ask    protect-bash.sh "$(cj "rm -rf '$_dlc/libraries'")"     "TWIN: a DLC subfolder keeps its confirmation"
 decide advise protect-bash.sh "$(cj "cp a '$X4_GAME/notes.txt'")"    "TWIN: a plain game-root file keeps the deploy advisory"
 decide advise protect-bash.sh "$(cj "cp /c/o/notes.txt '$X4_GAME/'")" "TWIN: another name into the folder keeps it too"
+# 4.1.1 review rows: a find expression is read whole and a -regex is never run; option words and
+# an xargs -I destination elsewhere are not targets; no configured game root uses the folder name.
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -regex '.*\.\(cat\|dat\)' -delete")" "archive: find -regex in GNU's escaped-group spelling"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' ! \( -name '*.xml' \) -delete")" "archive: find with a negated group"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.xml' -prune -o -delete")" "archive: find whose OR branch deletes with no test"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' | xargs -I{} rm {}")" "archive: find to xargs -I rm of the item itself"
+decide advise protect-bash.sh "$(cj "find '$X4_GAME' -name '*.xml' -delete")" "TWIN: find -name '*.xml' -delete keeps its advisory"
+decide advise protect-bash.sh "$(cj "find '$X4_GAME' -regex '(.*)*zzz' -delete")" "TWIN: a backtracking -regex is not run and keeps its advisory"
+decide advise protect-bash.sh "$(cj "rsync -a --exclude='*.dat' src/ '$X4_GAME/'")" "TWIN: an rsync exclude pattern is not a target"
+decide advise protect-bash.sh "$(cj "robocopy src '$X4_GAME' /E /XF *.dat")" "TWIN: a robocopy /XF pattern is not a target"
+decide advise protect-bash.sh "$(cj "ls '$X4_GAME' | xargs -I{} rm /c/o/backup/{}")" "TWIN: ls to xargs -I rm into another folder"
+decide advise protect-bash.sh "$(cj "find '$X4_GAME' | xargs -I{} rm /c/o/backup/{}")" "TWIN: find to xargs -I rm into another folder"
+_sg="$X4_GAME"; _se="$X4_EXTENSIONS"; export X4_GAME="" X4_EXTENSIONS=""
+decide deny   protect-bash.sh "$(cj "rm '/c/games/X4 Foundations/01.dat'")" "archive: no game root configured, the install's folder name"
+decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")"     "TWIN: no game root, another game's .dat"
+export X4_GAME="$_sg" X4_EXTENSIONS="$_se"
 if command -v pwsh >/dev/null 2>&1 || command -v powershell >/dev/null 2>&1; then
   _psq(){ printf '{"tool_name":"PowerShell","tool_input":{"command":%s}}' "$(printf '%s' "$1" | jq -Rs .)"; }
   decide deny protect-bash.sh "$(_psq "Remove-Item '$_arc'")"        "archive: Remove-Item"
@@ -642,7 +658,8 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 
 # Two new file cases in each layout, plus two shell cases: 333 + 2*2 + 2.
 # The archive block adds 19 denies + 10 twins + 4 PowerShell: 339 + 33.
-EXPECT=372
+# The 4.1.1 review rows add 5 denies + 7 twins: 372 + 12.
+EXPECT=384
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
