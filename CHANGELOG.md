@@ -10,6 +10,8 @@
 
 - Tests: a test that checks a PowerShell verdict is now skipped, with the reason named, when the real PowerShell translator ran out of time on the machine running it. The guard still refuses such a command; only the test stops reporting a failure it never measured (seen once on a CI runner). A test that stubs the timeout on purpose still checks it. A nested `powershell -c` that times out inside a shell command cannot be told apart from other untranslatable text in a hook's reply, so the end-to-end tests do not skip it.
 
+- Tests: the installer tests (`test_install_over_existing.py`) now delete each passing test's install folder, and what that install moved to the test recycle bin, as soon as the test ends; a failing test's folder is kept. Before, every folder stayed until the whole run ended, about 28 MiB a test over 372 tests, and a CI run ran out of disk right after this module. Over 40 of these tests the disk peak is now 86 MiB, where it used to grow with every test.
+
 ## v4.1.0 — 2026-11-04
 
 - Typed file deletion of deployed mod folders or ordinary XML now requests confirmation, matching shell retirement policy, instead of being rejected as a direct edit of the deployed copy. Direct writes, write-only batches, explicit moves, archive protections, save preservation and whole-install/reference blocks retain their prior policy.

@@ -417,3 +417,71 @@ def conformance_dump():
         yield rows, sbx
     finally:
         xc.remove_sandbox(sbx, repo / ".test-sandbox")
+
+
+# --------------------------------------------------------------- per-test install trees
+def _rmtree_writable(path):
+    """Remove *path*, clearing a read-only bit first where a test locked a file or folder."""
+    import shutil
+    import stat
+
+    def retry(func, p, _exc):
+        for q in (p, os.path.dirname(p)):
+            try:
+                os.chmod(q, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
+            except OSError:
+                pass
+        func(p)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=retry)
+    else:
+        shutil.rmtree(path, onerror=lambda f, p, e: retry(f, p, e))
+
+
+@pytest.fixture
+def drop_tmp_path_on_pass(request, tmp_path, tmp_path_factory):
+    """Delete this test's own `tmp_path` when it PASSES; keep it when it fails.
+
+    4.1.1: pytest keeps every `tmp_path` until the session ends, so a module of real installs
+    holds them all at once. CI run 41992260237 (cold-archive leg) hit `Disk quota exceeded`
+    right after test_install_over_existing.py: MEASURED 2026-11-06, 27.6 MiB per test over its
+    first 12 (331 MiB), against 372 tests in the module. Only pytest's own per-test folder,
+    under this session's base temp, is ever removed; a failed test's tree stays for diagnosis."""
+    base = tmp_path_factory.getbasetemp()
+    fake_bin = os.environ.get("X4_RECYCLE_TEST_BIN")
+    bin_before = _listing(fake_bin)
+    failed_before = request.session.testsfailed
+    yield
+    if drop_tmp_if_passed(failed_before, request.session.testsfailed, base, tmp_path):
+        # what the installer "recycled" during this test (an old .venv, a __pycache__) went to
+        # the session's FAKE bin, which otherwise grows for the whole session (MEASURED: 172.6
+        # MiB over 40 install tests). Only entries new since this test started are removed.
+        for name in sorted(_listing(fake_bin) - bin_before):
+            drop_tmp_if_passed(0, 0, base, Path(fake_bin) / name)
+
+
+def _listing(folder):
+    try:
+        return set(os.listdir(folder)) if folder else set()
+    except OSError:
+        return set()
+
+
+def drop_tmp_if_passed(failed_before, failed_after, base, tmp):
+    """The decision, separate so it is testable: True when *tmp* was removed."""
+    if failed_after != failed_before:
+        return False
+    # the LEAF is not resolved: a link is removed as a link, never followed to its target
+    base, here = Path(base).resolve(), Path(tmp).parent.resolve() / Path(tmp).name
+    if base not in here.parents:
+        return False
+    if here.is_symlink() or os.path.isjunction(here) if hasattr(os.path, "isjunction") else here.is_symlink():
+        try:
+            os.unlink(here)
+        except OSError:
+            os.rmdir(here)                  # a directory link on Windows: removes the link only
+    elif here.is_dir():
+        _rmtree_writable(here)
+    else:
+        here.unlink(missing_ok=True)
+    return True
