@@ -528,6 +528,10 @@ decide allow  protect-bash.sh "$(cj "find . -exec grep -l x {} +")" "TWIN: find 
 decide allow  protect-bash.sh "$(cj "sshpass -p x ssh otherhost ls")" "TWIN: sshpass to another host, a harmless command"
 decide allow  protect-bash.sh "$(cj "ssh otherhost ls")" "TWIN: ssh to another host, a harmless command"
 decide allow  protect-bash.sh "$(cj "valgrind ./a.out")" "TWIN: valgrind of a program"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' -exec mv {} /c/o \\;")" "find -exec mv of what it finds: an archive moved away"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' | xargs sed -i s/a/b/")" "find | xargs sed -i: an archive rewritten"
+decide allow  protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' -exec cp {} /c/backup/ \\;")" "TWIN: find -exec copying archives OUT"
+decide allow  protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' | xargs cp -t /c/backup")" "TWIN: find | xargs cp -t copying archives OUT"
 _sg="$X4_GAME"; _se="$X4_EXTENSIONS"; export X4_GAME="" X4_EXTENSIONS=""
 decide deny   protect-bash.sh "$(cj "rm '/c/games/X4 Foundations/01.dat'")" "archive: no game root configured, the install's folder name"
 decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")"     "TWIN: no game root, another game's .dat"
@@ -729,8 +733,8 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # Round 3 adds 5 denies + 4 twins: 399 + 9.
 # Round 4 adds 5 denies + 3 twins: 408 + 8.
 # Round 5 adds 5 denies + 4 twins: 416 + 9.
-# Round 6 adds 7 denies + 1 advisory + 5 twins: 425 + 13.
-EXPECT=438
+# Round 6 adds 7 denies + 1 advisory + 5 twins: 425 + 13; its find-write part 2 denies + 2 twins: 438 + 4.
+EXPECT=442
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
