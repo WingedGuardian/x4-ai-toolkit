@@ -262,6 +262,11 @@ class MergeResult:
     # Without this channel a malformed overlay is indistinguishable from an absent
     # one, and the resulting tree looks complete when it is not.
     skipped: list[str] = field(default_factory=list)
+    # Merge steps whose ENGINE behaviour is UNMEASURED (issue #17): a complete
+    # (non-diff) file that met an existing document and was modelled as a
+    # replacement (or, at a nested path, as a keyed union). The tree is the model's
+    # answer; these say which parts of it nobody has seen the engine confirm.
+    unmeasured: list[str] = field(default_factory=list)
 
 
 def parse_file(path: Path) -> etree._Element:
@@ -957,19 +962,81 @@ def _registry_rel(vpath: str) -> str:
     return vpath
 
 
+def merges_nested_copy(rel: str) -> bool:
+    """Is *rel* (an OWNER-relative path) in the one class whose NESTED full copy the
+    engine is MEASURED to merge rather than replace: a macro file,
+    `.../macros/<name>_macro.xml`?
+
+    Issue #17, MEASURED (debug.txt 2026-11-05 and 2026-11-06, two launches):
+    `cpsdo_vro` ships complete `<macros>` copies of two `cpsdo_zb_modpack` macro files
+    at `extensions/cpsdo_zb_modpack/assets/fx/weaponfx/macros/...`, and a later mod's
+    `/macros/macro[@name='X']/...` ops were skipped with "Multiple matching nodes" --
+    so the merged document holds BOTH macros. Census of the 213-mod active list the
+    same day: those 2 files are the only nested full copies over a mod-supplied file.
+
+    Deliberately this class ONLY. Every other class (libraries, index, md,
+    aiscripts, t, components, other assets) and a full copy at a plain path keep
+    their old model and are disclosed through `MergeResult.unmeasured` instead:
+    one measured instance does not say the engine does this everywhere."""
+    parts = rel.replace("\\", "/").lower().split("/")
+    # A rel still under `extensions/` is a doubly-nested path (F305): not the class.
+    return (len(parts) >= 2 and parts[0] != "extensions"
+            and parts[-2] == "macros" and parts[-1].endswith("_macro.xml"))
+
+
+def _nested_on_mod(vpath: str) -> bool:
+    """*vpath* is `extensions/<mod>/<rel>` with <mod> not a DLC: a patch path on a
+    MOD-owned file. (A packed-only DLC owner is `ego_dlc_*` and so is excluded.)"""
+    parts = vpath.replace("\\", "/").split("/")
+    return len(parts) >= 3 and parts[0].lower() == "extensions" and not is_dlc_folder(parts[1])
+
+
+def _append_children(tree: etree._Element, overlay: etree._Element,
+                     recorder: Recorder | None, source: str) -> None:
+    """Append every element child of *overlay* to *tree*: no dedupe, the engine keeps
+    both same-named macros (issue #17). Recorded as `union-add`."""
+    for child in overlay:
+        if not isinstance(child.tag, str):
+            continue
+        new = copy.deepcopy(child)
+        tree.append(new)
+        if recorder is not None:
+            recorder.elem_created(new, Origin(source, "union-add"))
+
+
+def unmeasured_note(source: str, vpath: str, mode: str, nested: bool) -> str:
+    """The `MergeResult.unmeasured` line for one complete file that met an existing
+    document. ONE wording, shared by every reader (x4effective, x4validate)."""
+    where = "a NESTED path (a patch path on another extension's file)" if nested \
+        else "a plain path"
+    model = "a keyed union (same id/name replaced)" if mode == "union" else "a replacement"
+    return (f"{source}: a complete (non-diff) file at {where} met an existing "
+            f"document at {vpath} and is modelled as {model}; the engine's behaviour "
+            f"for this case is UNMEASURED (issue #17 measured only a nested full copy "
+            f"of a mod-owned macro file, which MERGES)")
+
+
 def apply_overlay(
     tree: etree._Element | None,
     oroot: etree._Element,
     vpath: str,
     source: str,
     recorder: Recorder | None = None,
+    nested_on_mod: bool = False,
 ) -> tuple[etree._Element | None, str]:
     """Apply one overlay root onto *tree*; returns (new tree, mode).
 
-    Mode is one of "diff", "diff(no-base!)", "union", "script(inert)", "full" —
-    mirrors the source-tag suffixes recorded by build_effective. Extracted so callers other
-    than build_effective (e.g. x4effective's mod-owned-base path) reuse the exact
-    dispatch semantics."""
+    Mode is one of "diff", "diff(no-base!)", "merge", "union", "script(inert)",
+    "full" — mirrors the source-tag suffixes recorded by build_effective. Extracted so
+    callers other than build_effective (e.g. x4effective's mod-owned-base path) reuse
+    the exact dispatch semantics.
+
+    *nested_on_mod*: *oroot* was read at a patch path on a MOD-owned file,
+    `extensions/<mod>/<rel>` -- whichever spelling *vpath* has (the plain door passes
+    the owner's plain vpath, the nested door the nested one). EXPLICIT, never inferred
+    from *vpath*: x4diff stacks layers at one vpath that are not engine patches of
+    each other. "merge" is a complete copy of a macro file at such a path: its
+    children are APPENDED, not deduped (`merges_nested_copy`, issue #17)."""
     if oroot.tag == "diff":
         if tree is None:
             return None, "diff(no-base!)"  # diff with no base — cannot apply
@@ -977,6 +1044,10 @@ def apply_overlay(
         return tree, "diff"
     # The OWNER-RELATIVE path, never the requested one -- see _registry_rel.
     _kind = _registry_rel(vpath).lower()
+    if (tree is not None and oroot.tag == tree.tag
+            and nested_on_mod and merges_nested_copy(_kind)):
+        _append_children(tree, oroot, recorder, source)
+        return tree, "merge"
     if (tree is not None and oroot.tag == tree.tag
             and _kind.startswith(_ADDITIVE_DIRS)):
         _union_children(tree, oroot, recorder=recorder, source=source,
@@ -1053,13 +1124,18 @@ def _build_owned(owner_name: str, rel: str, vpath: str,
                 recorder.owner = owner_dir.name       # display only: annotate_tree names it
                 recorder.owner_is_dlc = owner_is_dlc
 
+    unmeasured: list[str] = []
     for odir in overlay_dirs:
         if odir is owner_dir:
             continue
         oroot = overlay_root(odir, vpath, skipped)
         if oroot is None:
             continue
-        tree, mode = apply_overlay(tree, oroot, vpath, odir.name, recorder=recorder)
+        had_tree = tree is not None
+        tree, mode = apply_overlay(tree, oroot, vpath, odir.name, recorder=recorder,
+                                   nested_on_mod=not owner_is_dlc)
+        if had_tree and mode in ("full", "union"):
+            unmeasured.append(unmeasured_note(odir.name, vpath, mode, nested=True))
         if recorder is not None and mode != "full":
             recorder.file_chain.append(Origin(odir.name, mode))
         sources.append(f"{odir.name}:{mode}")
@@ -1070,7 +1146,7 @@ def _build_owned(owner_name: str, rel: str, vpath: str,
     # for a DLC owner would be a lie waiting for the next caller.
     return MergeResult(tree=tree, sources=sources, base_found=tree is not None,
                        base_from_game=owner_is_dlc and tree is not None,
-                       skipped=skipped)
+                       skipped=skipped, unmeasured=unmeasured)
 
 
 def build_effective(
@@ -1151,6 +1227,7 @@ def build_effective(
     # every value. The engine has ONE document, and F19's debug.txt evidence shows
     # nested ops ARE evaluated — so this door was the wrong one.
     owner_folders: list[str] = []
+    unmeasured: list[str] = []
 
     def apply_nested(odir: Path, owner: str) -> None:
         """Apply *odir*'s patch of *owner*'s file at `extensions/<owner>/<vpath>`."""
@@ -1158,7 +1235,13 @@ def build_effective(
         nroot = overlay_root(odir, f"extensions/{owner}/{vpath}", skipped)
         if nroot is None:
             return
-        tree, nmode = apply_overlay(tree, nroot, vpath, odir.name, recorder=recorder)
+        had_tree = tree is not None
+        # Every owner here is a MOD (`owner_folders` never holds a game layer).
+        tree, nmode = apply_overlay(tree, nroot, vpath, odir.name, recorder=recorder,
+                                    nested_on_mod=True)
+        if had_tree and nmode in ("full", "union"):
+            unmeasured.append(unmeasured_note(
+                odir.name, f"extensions/{owner}/{vpath}", nmode, nested=True))
         if recorder is not None and nmode != "full":
             recorder.file_chain.append(Origin(odir.name, nmode))
         sources.append(f"{odir.name}:{nmode}(nested:{owner})")
@@ -1181,8 +1264,15 @@ def build_effective(
                     and odir.resolve() not in game_dirs):
                 sources.append(f"{odir.name}:diff(inert)")
             else:
+                had_tree = tree is not None
                 tree, mode = apply_overlay(tree, oroot, vpath, odir.name,
                                            recorder=recorder)
+                if (had_tree and mode == "full"
+                        and odir.resolve() not in game_dirs):
+                    # A MOD's complete file replacing an existing document at a plain
+                    # path. Kept as a replacement, but never silently (issue #17).
+                    unmeasured.append(unmeasured_note(odir.name, vpath, mode,
+                                                      nested=False))
                 if mode != "diff(no-base!)":
                     base_found = base_found or mode in {"union", "full"}
                     if mode in {"union", "full"} and odir.resolve() in game_dirs:
@@ -1237,4 +1327,5 @@ def build_effective(
 
     return MergeResult(tree=tree, sources=sources,
                        base_found=base_found or tree is not None,
-                       base_from_game=from_game, skipped=skipped)
+                       base_from_game=from_game, skipped=skipped,
+                       unmeasured=unmeasured)

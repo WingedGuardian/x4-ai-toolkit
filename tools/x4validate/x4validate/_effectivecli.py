@@ -1092,6 +1092,11 @@ def _cmd_dump(args) -> int:
             print("       " + comment_safe(str(item)))
         print("     The engine cannot read them either, so what it loads differs from"
               " what this shows. -->")
+    # Issue #17: a complete file that met an existing document is the MODEL's answer
+    # (replacement / keyed union) with no engine measurement behind it. Unconditional,
+    # like the skip channel above: the tree below looks exactly as certain either way.
+    for line in res.unmeasured:
+        print(f"<!-- UNMEASURED: {comment_safe(line)} -->")
     if getattr(args, "annotate", False):
         header, n_nodes = annotate_tree(res.tree, rec)
         print(f"<!-- node provenance: {n_nodes} node(s) changed by an overlay; removals: "

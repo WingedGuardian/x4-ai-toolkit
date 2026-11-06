@@ -143,6 +143,7 @@ def trace(vpath, base, roots, expected=None, nested=None):
     records = {}
     owners: list[str] = []
     seen: list[str] = []
+    on_mod = _merge._nested_on_mod(vpath)
 
     def apply_nested(source, owner):
         nonlocal tree
@@ -150,7 +151,8 @@ def trace(vpath, base, roots, expected=None, nested=None):
         if nroot is None:
             return True
         nodes.source, nodes.op_index, nodes.split = source, f"nested:{owner}", False
-        tree, _m = _merge.apply_overlay(tree, nroot, vpath, source, recorder=nodes)
+        tree, _m = _merge.apply_overlay(tree, nroot, vpath, source, recorder=nodes,
+                                          nested_on_mod=True)
         if tree is None:
             return False
         nodes.tree = tree
@@ -170,7 +172,9 @@ def trace(vpath, base, roots, expected=None, nested=None):
         nodes.source = source
         nodes.split = False
         if root.tag != "diff":
-            tree, mode = _merge.apply_overlay(tree, root, vpath, source, recorder=nodes)
+            # At a nested vpath every root is a patch on the owner's file (issue #17).
+            tree, mode = _merge.apply_overlay(tree, root, vpath, source, recorder=nodes,
+                                              nested_on_mod=on_mod)
             if tree is None:
                 return {}, {}, False
             nodes.tree = tree

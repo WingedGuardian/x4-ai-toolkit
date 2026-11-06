@@ -1376,6 +1376,88 @@ def check_nested_diff(vpath: str, root: etree._Element, report: Report) -> None:
                    vpath, el.sourceline or 0)
 
 
+#: How many vpaths one aggregated UNMEASURED disclosure names before "and N more".
+_MERGE_NOTE_SAMPLE = 5
+
+
+def _child_names(root: etree._Element) -> set[str]:
+    """@name (else @id) of *root*'s element children: the names a merge duplicates."""
+    return {c.get("name") or c.get("id") for c in root
+            if isinstance(c.tag, str)} - {None}
+
+
+def check_complete_file_merge(complete: list[tuple[str, etree._Element]],
+                              config: _merge.Config, report: Report) -> None:
+    """Say how the merge model treats each COMPLETE (non-diff) file of this mod that
+    meets an existing document, and whether the engine was measured doing that (#17).
+
+    * Nested full copy of a MOD-owned macro file (`_merge.merges_nested_copy`):
+      MERGED, MEASURED. One INFO per file naming the names that now exist twice, since
+      any un-indexed selector on them -- this mod's or a later one's -- is skipped.
+    * Any other nested full copy over a file its owner supplies, and a full copy at a
+      plain path over a base-game/DLC file outside the union/script dirs: modelled as a
+      replacement (or keyed union), engine behaviour UNMEASURED. ONE aggregated INFO per
+      kind, never one per file, so a big overhaul cannot flood the report.
+
+    The owner of a nested path is looked up among the merged roots only (Tier B); Tier A
+    merges no other mod, so it says nothing about nested copies there."""
+    owned = config.packed_dlc_names()
+    roots = {p.name.lower(): p for p in (*config.overlays, *config.final_overlays)}
+    nested_unmeasured: list[str] = []
+    plain_unmeasured: list[str] = []
+    dlc = config.dlc_dirs()
+    for vpath, root in complete:
+        nested = _merge._nested_target(vpath, owned)
+        if nested is not None:
+            owner_dir = roots.get(nested[0].lower())
+            if owner_dir is None or nested[0].lower() in owned:
+                continue
+            try:
+                oroot = _merge.overlay_root(owner_dir, nested[1], [])
+            except (etree.LxmlError, OSError, ValueError):
+                continue   # silent-ok: readability is check_readability's channel
+            if oroot is None or oroot.tag == "diff":
+                continue   # nothing to merge into: the copy IS the document
+            if _merge.merges_nested_copy(nested[1]) and oroot.tag == root.tag:
+                dup = sorted(_child_names(root) & _child_names(oroot))
+                report.add("info", "merge",
+                           f"complete copy of '{owner_dir.name}'s macro file at a nested "
+                           f"path: the engine MERGES it into '{owner_dir.name}'s document "
+                           f"(MEASURED, issue #17), so both copies exist"
+                           + (f" -- {len(dup)} name(s) now defined twice "
+                              f"({', '.join(dup[:_MERGE_NOTE_SAMPLE])}); any selector on "
+                              f"them without an index matches 2 nodes and the engine "
+                              f"skips it. Which copy the engine uses is UNMEASURED"
+                              if dup else ""), vpath)
+                continue
+            nested_unmeasured.append(vpath)
+            continue
+        low = vpath.lower()
+        if (low.startswith(_merge._ADDITIVE_DIRS) or low.startswith(_merge._SCRIPT_REGISTRY_DIRS)
+                or _merge._is_text_vpath(vpath)):
+            continue
+        if (config.reference / vpath).is_file() or any(
+                _merge.overlay_root(d, vpath, []) is not None for d in dlc):
+            plain_unmeasured.append(vpath)
+
+    def disclose(paths: list[str], what: str) -> None:
+        if not paths:
+            return
+        shown = ", ".join(paths[:_MERGE_NOTE_SAMPLE])
+        more = (f" and {len(paths) - _MERGE_NOTE_SAMPLE} more"
+                if len(paths) > _MERGE_NOTE_SAMPLE else "")
+        report.add("info", "merge",
+                   f"{len(paths)} complete (non-diff) file(s) {what}; the toolkit models "
+                   "each as a replacement (a keyed union or an inert script in the "
+                   "registry dirs), and the engine's behaviour for this "
+                   "case is UNMEASURED (issue #17 measured only a nested full copy of a "
+                   f"mod-owned macro file, which MERGES): {shown}{more}")
+
+    disclose(nested_unmeasured,
+             "at a nested path over a file the owning mod supplies")
+    disclose(plain_unmeasured, "at a base-game/DLC path the game already supplies")
+
+
 def check_sel_resolution(mod_dir: Path, config: _merge.Config, report: Report) -> None:
     """Flag any non-silent op whose sel= matches nothing in the merged base+DLC tree.
 
@@ -1385,10 +1467,14 @@ def check_sel_resolution(mod_dir: Path, config: _merge.Config, report: Report) -
     checked = found = 0
     seen_skips: set[str] = set()
     payload = []  # one parse pass serves both the nested-diff check and the denominator
+    complete: list[tuple[str, etree._Element]] = []
     for vpath, root in iter_mod_xml_roots(mod_dir):
         check_nested_diff(vpath, root, report)
         if vpath.lower() != MANIFEST:
             payload.append(vpath)
+            if root.tag != "diff":
+                complete.append((vpath, root))
+    check_complete_file_merge(complete, config, report)
     for vpath, diff_root in iter_diff_files(mod_dir):
         found += 1
         checked += _sel_check_file(vpath, diff_root, config, report, seen_skips)
