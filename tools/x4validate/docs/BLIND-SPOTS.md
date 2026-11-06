@@ -458,7 +458,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
-| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder) | FIXED 2026-11-06 |
+| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict) | FIXED 2026-11-06 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12308,4 +12308,42 @@ operands; 20.5 s through the hook at 69fb8a6e and at the fix) are denied by the 
 Timing, whole hook, final run: c5's many-operand `rm` 8.6 s (10.2 s at 69fb8a6e); the reviewer's four budget rows 3.5 to
 20.6 s, as at 69fb8a6e; no other row over 2.5 s.
 
-**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 103 `game archive` mutants in `scripts/verify-hook-tests.py` (120 with the `glob:`, `recursion:`, `xargs:` and `find -exec` ones), plus 23 round-3 mutants, one per clause (labels ending `(A)` to `(E)` and `(loop)`), 14 round-4 mutants (labels ending `(r4, N)`; the 4 PowerShell ones are run by hand, since the table mutates `hook_facts.py` only), `TestArchiveGlobWholeHookTime` in `test_audit0924_hooks.py`, and the archive probes in `scripts/test-hooks.sh`.
+**REVIEW ROUND 5 2026-11-06 (4.1.1).** MEASURED through `protect-bash.sh` at 7753cc2c (v4.1.0), at 24775c29 and at the fix,
+fixture roots (every set of round 4, the reviewer's three round-5 hook sets, and 237 rows of this round's own, one carrier per
+row family); nothing ran. 1526 rows paired per item, 0 unpaired. Against 24775c29 91 moved: 86 toward deny, 5 deny to advise,
+ask or allow (the depth-0 `-type f` rows below, each back to its v4.1.0 verdict).
+
+| row | form | 24775c29 | fix |
+|---|---|---|---|
+| 1 | `watch -n1 echo a\; rm -rf <ref>`, the same through `wsl`, `wsl --`, `ssh localhost`, a `$R` command name, `... \| parallel`, a not-found handler, with `\&\&`, `\|`, `\|\|` or escaped blanks; with `git add -A`; `watch echo a\; rm -rf "<game>"` | allow (ask for `$R rm`) | deny |
+| 2 | `eval git add -A`, `eval git add --all`, `eval -- git add -A`, `eval echo a\; git add -A` | allow (the first three also at v4.1.0) | deny |
+| 3 | `find <game> -maxdepth 0 -type f \| xargs rm -rf`, `-xtype f`, the `extensions/` and parent forms | deny | advise, ask, allow (as v4.1.0) |
+| TWIN | `watch -x`, `watch --exec`, `wsl -e`, `nohup`, `busybox`, `timeout`, `xargs`, `ssh otherhost` with `echo a\; ...`; `eval git add -p`; `-type d`, `-type l`, `! -type f`, `-type $T` at depth 0 | unchanged | unchanged |
+
+What changed. 1, root cause: round 4 made `segments()` read `\;` as literal, which is right for bash, but the readers of
+programs that hand their words to a shell had relied on the old split. `_as_program` only opened QUOTED words. It now also
+re-reads an escaped blank or operator for a carrier that joins its words for a shell: `watch` without `-x`/`--exec`, `wsl`
+without `-e`/`--exec`, `ssh` to this machine, a not-found handler, and a `parallel` template with no `:::`; a command name
+held in a variable (it may be eval) and eval itself do too. With an escape there is one more reading, with each quoted word
+kept whole: the re-reading shell splits a quoted `"<game>"` at its blank (so it would delete `<steam>/X4` and `Foundations`),
+and v4.1.0 judged the quoted path. 2, root cause pre-arc: the eval reader dropped every word starting with `-`, its command's
+flags included. 3: a `find`'s depth-0 root is a folder or a link to one, so a `-type`/`-xtype` list naming neither skips it;
+any other entry, and a type not written as letters, stays undecided.
+
+Every row weaker than v4.1.0 (90 of 1526), each the shell's own reading: the 4 the reviewer named (`echo '...' \| bash` with an
+escaped pipe prints; `tmux ls\;run` is one tmux word; `watch -x` and `nohup` echo); 85 of this round's rows, an escaped
+separator handed to a program that runs its words directly or takes one word as its text (`watch -x`, `wsl -e`, `busybox`,
+`toybox`, `winpty`, `pkexec`, `runuser`, `chroot`, `flock`, `nsenter`, `unshare`, `taskset`, `chrt`, `screen`, `nohup`, `sudo`,
+`timeout`, `nice`, `env`, `command`, `exec`, `xargs`, `setsid`, `stdbuf`, `doas`, `bash -c`, `su -c`, `script -c`, `flock -c`,
+`trap`, `ssh otherhost`, and `tmux new`/`run-shell`, where the `;` ends the tmux command and `rm` is no tmux command); and
+`printf '%s' a\; rm -rf <x> \| bash`, which prints `a;rm-rf<x>`. v4.1.0 denied these only because it split at the `\;`.
+INFERRED, not measured: `sudo -s` and `sudo -i` escape the words they hand the shell, so their `;` stays literal (sudo's
+documented behaviour, not run here).
+
+NOT FIXED, PRE-ARC (allow at v4.1.0 too, MEASURED): `find . -exec sh -c echo\ a\;\ rm\ -rf\ <ref> \;`: `_exec_deletes` joins
+find's decoded words, losing which ones were one word, so the `-c` text reads as `echo`.
+
+Timing, whole hook: c5's many-operand `rm` 8.7 s (8.3 s at 24775c29); the reviewer's four budget rows 3.7 to 20.5 s, as
+before; no other row over 2.5 s. A first lane run spanned a machine sleep and reported three rows at 18,965 s (#31); rerun.
+
+**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 103 `game archive` mutants in `scripts/verify-hook-tests.py` (120 with the `glob:`, `recursion:`, `xargs:` and `find -exec` ones), plus 23 round-3 mutants, one per clause (labels ending `(A)` to `(E)` and `(loop)`), 14 round-4 mutants (labels ending `(r4, N)`; the 4 PowerShell ones are run by hand, since the table mutates `hook_facts.py` only), 22 round-5 mutants (labels ending `(r5, N)`), `TestArchiveGlobWholeHookTime` in `test_audit0924_hooks.py`, and the archive probes in `scripts/test-hooks.sh`.
