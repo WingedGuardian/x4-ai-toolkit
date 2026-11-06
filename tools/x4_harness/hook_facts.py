@@ -4731,6 +4731,11 @@ def _may_name_archive(name: str) -> bool:
     # any archive's, as the same loop under reference/ is denied (user decision 2026-11-05). The
     # xargs item stands for what a producer prints, which the find and listing readers judge.
     # A backtick pair is the older spelling of $(...) (4.1.1 review round 4, 6).
+    if name.startswith(_XARGS_ITEM) and not re.search(r"[$`*?\[]", name[len(_XARGS_ITEM):]):
+        # A find's `{}` with a literal tail (`{}.bak`, round 6): an archive only if the tail can end one.
+        tail = name[len(_XARGS_ITEM):].lower()
+        return bool(tail) and any(tail.endswith(e) if len(tail) >= len(e) else e.endswith(tail)
+                                  for e in _ARCHIVE_ENDINGS)
     if ("$" in name or name.count(chr(96)) >= 2) and name != _XARGS_ITEM:
         return True
     return _is_pattern(name) and any(_glob_may_meet(name, [_GLOB_DISK_NAME] + _glob_lit(e))
@@ -4990,6 +4995,72 @@ def _exec_deletes(words: list) -> bool:
     return any(_verb_name(verb(s)) in DELETE_VERBS for x in _inner_commands(text) for s in segments(x))
 
 
+#: The entry a find or an xargs hands its command, as a path no other operand can spell (round 6, D).
+_FIND_ENTRY = "/x4-find-entry/" + "entry"
+_PERL_IN_PLACE = re.compile(r"^-[A-Za-z]*i")
+
+
+def _is_entry(p: str) -> bool:
+    return p == _FIND_ENTRY or p.startswith(_FIND_ENTRY + "/")
+
+
+def _entry_effect(text: str):
+    """"move" when a command (a carried text too) moves or renames _FIND_ENTRY, "write" when it
+    writes it or into it, else None. The same readers every other write uses: copy and move
+    destinations, redirects, truncate/dd, sed -i, output flags, touch/chmod/chown/ln, plus
+    `perl -i`. The entry as a SOURCE being copied elsewhere is no change (`cp {} <backup>/`)."""
+    effect = None
+    for x in [text] + _inner_commands(text):
+        for s in segments(x):
+            if any(_is_entry(h) for h in move_sources(s)):
+                return "move"
+            hits = (copy_dests(s) + [t for _m, t in redirects(s)] + clobber_targets(s) + sed_in_place_targets(s)
+                    + output_targets(s) + modify_targets(s))
+            toks = tokens(s)
+            if _verb_name(verb(s)) == "perl" and any(not q and _PERL_IN_PLACE.match(t) for t, q in toks):
+                hits += [t for t, _q in toks]
+            if any(_is_entry(h) for h in hits):
+                effect = "write"
+    return effect
+
+
+def _exec_entry_effect(words: list):
+    """_entry_effect of an -exec command, `{}` standing for the entry."""
+    if not words or not any("{}" in w for w in words):
+        return None
+    return _entry_effect(" ".join(_sh_quote(w.replace("{}", _FIND_ENTRY)) for w in words))
+
+
+def find_entry_write_roots(seg: str) -> list:
+    """The starting points of a find whose -exec moves or writes what it finds (round 6, D)."""
+    if verb(seg) != "find" or not ("-exec" in seg or "-ok" in seg):
+        return []
+    words = tokens_of(seg)
+    for i, t in enumerate(words):
+        if t in _FIND_EXEC:
+            j = i + 1
+            while j < len(words) and words[j] != ";" and (words[j] != "+" or words[j - 1] != "{}"):
+                j += 1
+            if j < len(words) and _exec_entry_effect(words[i + 1:j]):
+                return _find_roots(seg) or ["."]
+    return []
+
+
+def xargs_entry_effect(seg: str, prev):
+    """"move"/"write" when an `xargs <cmd>` fed by a find moves or writes each item: `{}`-style
+    replacement (-I R) or the item appended, as xargs does (round 6, D)."""
+    if prev is None or verb(prev) != "find":
+        return None
+    toks = tokens_of(seg)
+    vt = _verb_token(seg)
+    if vt not in toks or not any(_verb_name(t) == "xargs" for t in toks[:toks.index(vt)]):
+        return None
+    words = toks[toks.index(vt):]
+    repl, _w = _xargs_replace(seg)
+    words = [w.replace(repl, _FIND_ENTRY) for w in words] if repl else words + [_FIND_ENTRY]
+    return _entry_effect(" ".join(_sh_quote(w) for w in words))
+
+
 #: How many starting points a find's -exec readings are built for (_find_exec_readings).
 _FIND_EXEC_ROOTS = 4
 
@@ -5116,7 +5187,8 @@ def _find_parse(words: list):
             pos += 1
             ran = words[start:pos - 1]
             if not _exec_deletes(ran):
-                return ("act", "exec", None)
+                # A command that CHANGES the entry (round 6, D): moves it ("move") or writes it.
+                return ("act", _exec_entry_effect(ran) or "exec", None)
             # A recursive delete also removes a matched FOLDER whole (F2).
             return ("act", "rdelete" if deletes_recursively(ran) else "delete", None)
         raise ValueError("an unknown primary")
@@ -5286,7 +5358,8 @@ def _entry_depths(rel: list) -> tuple:
 def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec: bool = False) -> bool:
     """Can a `find` from `root` (as written: `raw`) delete, or print to an `xargs rm` (`mode`
     "print"; `rec` when that rm is recursive), a base-game or DLC archive, or remove a folder that
-    holds one? Each entry under `root` walks the expression as find would, three-valued: a test the
+    holds one? Mode "delete" also counts an -exec that moves or writes the entry (round 6, D), and
+    modes "move"/"write" are a find printing to an `xargs` that moves or writes each item. Each entry under `root` walks the expression as find would, three-valued: a test the
     text cannot decide may go either way, and an action reached on either branch counts. An
     expression it cannot read may reach every entry. A root in or at a DLC folder is denied
     whatever it matches (F8).
@@ -5298,17 +5371,27 @@ def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec
     r = root.rstrip("/")
     if _is_dlc_folder(r, g) or _in_dlc_folder(r, g):
         return True
-    file_modes = ("delete", "rdelete") if mode == "delete" else ("print",)
-    dir_modes = ("rdelete",) if mode == "delete" else (("print",) if rec else ())
+    file_modes = ("delete", "rdelete", "write", "move") if mode == "delete" else ("print",)
+    dir_modes = {"delete": ("rdelete", "move"), "print": ("print",) if rec else (), "move": ("print",),
+                 "write": ()}[mode]
+    # Writing INTO a folder harms only a DLC folder (anything in it is game content); moving one
+    # away removes it like a delete (round 6, D).
+    dlc_dir_modes = dir_modes + {"delete": ("write",), "write": ("print",)}.get(mode, ())
     plain = raw.replace(chr(92), "/").rstrip("/")
     if any(c in plain for c in "$~`") or _is_pattern(plain) or not plain:
         plain = None
     ext = g + "/extensions"
     at_ext = (r == ext) if not _is_pattern(r) else _glob_may_meet(r, _glob_lit(ext))
     entries = []
+    # A write or a move reaches every file in a DLC folder from any root that holds one: the routine
+    # cleanup the delete exemption below keeps is a delete, never a rewrite (round 6, D).
+    changes = ("write", "move") if mode == "delete" else ("print",) if mode in ("write", "move") else ()
+    wide = bool(changes) and _holds_a_dlc(r, g)
     for path, name, ending, folder, content in _archive_entries(g):
-        modes = dir_modes if folder else file_modes
-        if not modes or (content and not at_ext):
+        modes = (dlc_dir_modes if ending == "" else dir_modes) if folder else file_modes
+        if content and not at_ext:
+            modes = changes if wide else ()
+        if not modes:
             continue
         if _is_pattern(r):
             if not _glob_may_meet(r, path, tail=(("lit", "/"), _GLOB_ALL)):
@@ -8016,6 +8099,12 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             archive_listed_rec_t += listed_
         archive_finds += [(op, s, "delete", True)
                           for op in prep(_find_delete(s, default_root=True)[0], c_cwd, c_old)]
+        archive_finds += [(op, s, "delete", True)
+                          for op in prep(find_entry_write_roots(s), c_cwd, c_old)]
+        x_effect = xargs_entry_effect(s, prev)
+        if x_effect:
+            x_roots = _find_roots(prev) or ["."]
+            archive_finds += [(op, prev, x_effect, False) for op in prep(x_roots, c_cwd, c_old)]
         if xargs_feed(s, prev) and verb(prev) == "find" and xargs_passes_item(s):
             archive_finds += [(op, prev, "print", xargs_rec)
                               for op in prep(_find_roots(prev) or ["."], c_cwd, c_old)]

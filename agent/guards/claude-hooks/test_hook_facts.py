@@ -8493,6 +8493,58 @@ class TestRound6FindExecAndCarriers(unittest.TestCase):
                     "FZA=(" + DQ + REF + DQ + "); ssh otherhost " + D + " -rf " + DQ + "${FZA[0]}" + DQ):
             self.assertTrue(F(cmd)["ssh_host_unplaced"], cmd)
 
+    # --- D: a find that CHANGES what it finds reaches the archive rule
+    WRITES = ("mv {} /c/o", "mv /c/o/x {}", "cp /c/o/x {}", "dd if=/dev/zero of={} count=1", "truncate -s0 {}",
+              "tee {}", "sed -i s/a/b/ {}", "perl -pi -e s/a/b/ {}", "chmod 644 {}", "touch {}",
+              "install /c/o/x {}", "sh -c " + Q + "cp /c/o/x " + DQ + "{}" + DQ + Q)
+
+    def test_a_find_that_changes_what_it_finds_can_reach_an_archive(self):
+        g, x = Q + GAME + Q, Q + GAME + "/extensions" + Q
+        for w in self.WRITES:
+            for act in ("-exec", "-execdir", "-ok"):
+                cmd = "find " + g + " -name " + Q + "*.dat" + Q + " " + act + " " + w + self.END
+                self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+            if w.endswith("{}"):
+                cmd = "find " + g + " -name " + Q + "*.dat" + Q + " -exec " + w + " +"
+                self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+            # ...and anything in a DLC folder, from extensions/ or from the game folder
+            for root in (x, g):
+                cmd = "find " + root + " -name content.xml -exec " + w + self.END
+                self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        for xa in ("xargs mv -t /c/o", "xargs -I{} mv {} /c/o", "xargs -I{} cp /c/o/x {}", "xargs touch",
+                   "xargs sed -i s/a/b/", "xargs truncate -s0", "xargs chmod 644"):
+            cmd = "find " + g + " -name " + Q + "*.cat" + Q + " | " + xa
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        for cmd in ("find " + x + " -maxdepth 1 -type d -exec cp /c/o/f {}" + self.END,      # into a DLC folder
+                    "find " + x + " -maxdepth 1 -type d -exec cp /c/o/f {}/" + self.END,
+                    "find " + x + " -maxdepth 0 -exec mv {} /c/o" + self.END):               # extensions/ moved away
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_copying_what_a_find_finds_out_is_no_write(self):
+        g, m = Q + GAME + Q, Q + self.MOD + Q
+        for cmd in ("find " + g + " -name " + Q + "*.dat" + Q + " -exec cp {} /c/backup/" + self.END,
+                    "find " + g + " -name " + Q + "*.dat" + Q + " -exec cp -t /c/backup {} +",
+                    "find " + g + " -name " + Q + "*.dat" + Q + " -exec sha256sum {} +",
+                    "find " + g + " -name " + Q + "*.dat" + Q + " -execdir cp {} /c/backup/" + self.END,
+                    "find " + g + " -name " + Q + "*.dat" + Q + " -exec cp {} {}.bak" + self.END,
+                    "find " + g + " -name " + Q + "*.dat" + Q + " | xargs cp -t /c/backup",
+                    "find " + g + " -name " + Q + "*.dat" + Q + " | xargs -I{} cp {} /c/backup/",
+                    "find " + m + " -exec cp {} /c/backup/" + self.END,
+                    "find " + m + " -name " + Q + "*.cat" + Q + " -exec cp /c/o/x {}" + self.END,
+                    "find " + Q + GAME + "/extensions" + Q + " -maxdepth 1 -name " + Q + "zzz_*" + Q
+                    + " -exec cp -r /c/o/mod {}" + self.END,
+                    "find " + Q + GAME + "/.." + Q + " -maxdepth 1 -exec cp /c/o/x {}" + self.END,
+                    "find " + g + " -maxdepth 1 -type f -name " + Q + "*.txt" + Q + " -exec mv {} /c/o" + self.END,
+                    "find /tmp -name " + Q + "*.dat" + Q + " -exec mv {} /c/o" + self.END,
+                    # `+` not after `{}` ends nothing: find refuses the command and runs nothing
+                    "find " + g + " -name " + Q + "*.dat" + Q + " -exec touch {} x +"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+        for w in self.WRITES:
+            cmd = "find " + m + " -name " + Q + "*.xml" + Q + " -exec " + w + self.END
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+            cmd = "find " + m + " -name " + Q + "*.xml" + Q + " | xargs " + w.replace(" {}", "")
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
     def test_TWIN_this_commands_own_delete_is_not_the_remote_one(self):
         f = F(D + " -rf " + Q + GAME + "/x" + Q + "; ssh otherhost ls")
         self.assertTrue(f["rm_in_x4_dir"])
