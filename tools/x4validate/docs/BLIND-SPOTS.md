@@ -458,8 +458,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
-| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 229 of 2063 moved, all to deny or advise | FIXED 2026-11-06 |
-| F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
+| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 321 of 2177 moved, all to deny, ask or advise; `find -exec` writes to what it finds now reach this rule | FIXED 2026-11-06 |
+| F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own; a find that moves or writes what it finds never reached the archive rule | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12384,10 +12384,11 @@ ADVISORY only: never an ask or a deny.
 
 **Measured, through `protect-bash.sh`, fixture roots, nothing run:** every probe set of rounds 3 to 5, the reviewer's six
 round-6 sets, and 283 rows of this round's own, at 7753cc2c (v4.1.0), 28f260ee and the fix: 2063 rows paired per item, 0
-unpaired. Against 28f260ee 229 moved, all stronger: 192 allow to deny, 37 allow to advise (ssh to an unplaced host; four
-`find <game> -name '*.dat' -exec mv|truncate|cp|dd {}` rows, where `{}` is an unknown name, so the archive rule does not
-see a `.dat`). 0 weaker. The `scripts/test-hooks.sh` probes (261 protect-bash rows) replayed through the three trees: 8
-moved, all this round's new probes; 0 weaker than 28f260ee; 2 weaker than v4.1.0, round 5's `watch -x` and `nohup` twins.
+unpaired; with D's 114 rows, 2177. Against 28f260ee 321 moved, all stronger: 270 allow to deny, 50 allow to advise (31 ssh to
+an unplaced host; the rest writes in a mod folder or to non-archive files in the game folder, now seen by the copy and delete
+rules), 1 allow to ask (a mod folder's entries moved
+away). 0 weaker. The `scripts/test-hooks.sh` probes (265 protect-bash rows) replayed through the three trees: 10 moved, all
+this round's new probes; 0 weaker than 28f260ee; 2 weaker than v4.1.0, round 5's `watch -x` and `nohup` twins.
 
 Weaker than v4.1.0: 141 rows. 89 are round 5's justified list, all still weaker (two of them, `ssh otherhost echo a\; ...`,
 now advise rather than allow). The other 52 are rows new in this round's sets, every one of a class round 5 justified: an escaped separator
@@ -12396,14 +12397,35 @@ handed to a program that runs its words directly (`torsocks`, `valgrind`, `caffe
 escape the re-reading shell keeps literal (`watch 'echo a\; rm ...'`, `watch echo 'a\;' rm ...`), and `ssh` to an unplaced
 host (deny to advise). v4.1.0 denied them only because it split at the `\;`.
 
-**Not fixed.** `find <game> -name '*.dat' -exec mv {} <dir>` advises, not denies: the `{}` name is unknown to the archive
-rule (F356 lists `find -exec mv` as an unmodelled shape). A remote command over 8 per command, or nested past 4 ssh hops, is
+**(D), added the same day at the coordinator's request:** a `find` that CHANGES what it finds now reaches the archive rule.
+`find <game> -name '*.dat' -exec mv {} <dir> \;` (and `cp x {}`, `dd of={}`, `truncate`, `tee`, `sed -i`, `perl -i`, `touch`,
+`chmod`, `install`, a shell text writing `"{}"`; `-execdir`, `-ok`, `{} +`) and `find ... | xargs mv -t|-I{} cp x {}|sed -i|touch|
+truncate|chmod` advised or allowed (allow at v4.1.0, MEASURED). An -exec whose command moves `{}` ("move") or writes it or into
+it ("write") is now a find action, and an xargs fed by a find that does either is a print mode, both through
+`find_can_reach_archive` with its `-maxdepth`/`-type` handling. Whether `{}` is changed is read by the readers every other
+write uses (copy and move destinations, redirects, truncate/dd, sed -i, output flags, touch/chmod/chown/ln) plus `perl -i`,
+with `{}` as a sentinel path; so the entry as a SOURCE (`-exec cp {} <backup>/`, `xargs cp -t <backup>`) stays allowed. A
+folder counts when moved away, and when written into only if it is a DLC folder; a write or move reaches every file in a DLC
+folder from any root that holds one (a delete still only from `extensions/`, by the F356 decision). `{}` with a literal tail
+(`{}.bak`) names an archive only if the tail can end one. FRICTION, by design: from the game folder `find . -name '*.py'
+-exec sed -i ... {} +` is denied (a DLC folder could hold such a file as far as the text says); `-prune` is not modelled, so
+`-path '*/extensions' -prune -o ...` does not help. In a mod folder, `find <mod> -name '*.xml' -exec sed -i ... {} \;` is
+denied by the existing in-place sed rule (its direct `sed -i <mod>/x.xml` form is denied at v4.1.0 too), not by this one; the
+other mod-folder writes keep no archive verdict (advise or ask from the delete and copy rules).
+
+D measured: 114 rows of its own (`r6d`), RED at 28f260ee (67 expectation misses) and 1 at the fix (the sed -i row above);
+the per-item comparison below includes them.
+
+**Not fixed.** `perl -i` is read only for a find's or xargs's entry; a top-level `perl -i <game>/...` stays the unmodelled
+shape F356 lists. A remote command over 8 per command, or nested past 4 ssh hops, is
 not judged for the advisory. The test-hooks replay of `C1: a brace-expanded save delete` asks in all three trees where the
 live suite denies: a replay environment difference, not a change.
 
-Timing, whole hook: median per-row ratio to 28f260ee 1.00 (p90 1.22); c5's many-operand `rm` 9.6 s (8.6 s); the four budget
-rows 3.5 to 20.7 s, bounded by the backend deadline; no other row over 2.5 s.
+Timing, whole hook: median per-row ratio to 28f260ee 1.11 over the lanes (p90 1.42; the lanes ran an hour apart), 1.08 run
+back to back over c7; c5's many-operand `rm` 8.7 s (9.3 s); the four budget rows 3.6 to 20.6 s, bounded by the backend
+deadline. Four c7 PowerShell rows (5.8 to 7.7 s) and two test-hooks replay rows (18 s, one of them in every tree) were
+re-run: 0.5 to 0.9 s, a stall of the machine, not of the hook (#31). No other row over 2.5 s.
 
-**RE-DERIVED BY:** `TestRound6FindExecAndCarriers` in `test_hook_facts.py` (12 tests), 24 mutants labelled `(r6, A|B|C)` in
+**RE-DERIVED BY:** `TestRound6FindExecAndCarriers` in `test_hook_facts.py` (14 tests), 40 mutants labelled `(r6, A|B|C|D)` in
 `scripts/verify-hook-tests.py`, the round-6 probes in `scripts/test-hooks.sh`, and the `ssh to an unplaced host` seed in
 `scripts/fuzz-guard.py` (its 164 mutators weaken it 0 times).
