@@ -513,6 +513,21 @@ decide allow  protect-bash.sh "$(cj "nohup echo a\\; git add -A")" "TWIN: nohup 
 decide allow  protect-bash.sh "$(cj "eval git add -p")" "TWIN: eval of an ordinary git add"
 decide advise protect-bash.sh "$(cj "find '$X4_GAME' -maxdepth 0 -type f | xargs rm -rf")" "TWIN: a depth-0 root a -type f skips"
 decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -maxdepth 0 -type d | xargs rm -rf")" "a depth-0 root a -type d matches"
+# 4.1.1 review round 6 (GitHub issue #18): a find's -exec command is a command of its own; wrappers
+# that run their argv carry it; a destructive command to an ssh host the guard cannot place is advised.
+decide deny   protect-bash.sh "$(cj "find . -exec rm -rf '$X4_REFERENCE' \;")" "find -exec: the command itself is judged"
+decide deny   protect-bash.sh "$(cj "find . -execdir git add -A \;")" "find -execdir: git add -A is judged"
+decide deny   protect-bash.sh "$(cj "find . -exec sh -c 'rm -rf \"$X4_REFERENCE\"' {} +")" "find -exec: a shell's text is judged"
+decide deny   protect-bash.sh "$(cj "sshpass -p x ssh localhost rm -rf '$X4_REFERENCE'")" "sshpass runs the ssh it is given"
+decide deny   protect-bash.sh "$(cj "torsocks git add -A")" "torsocks runs its argv"
+decide deny   protect-bash.sh "$(cj "start wsl echo a\; git add -A")" "start runs wsl, which joins for a shell"
+decide deny   protect-bash.sh "$(cj "foo ssh localhost echo a\; git add -A")" "an unknown wrapper before ssh: the ssh is read"
+decide advise protect-bash.sh "$(cj "ssh otherhost rm -rf '$X4_REFERENCE'")" "ssh to a host the guard cannot place: advised"
+decide allow  protect-bash.sh "$(cj "find . -name '*.pyc' -exec rm {} +")" "TWIN: a cache cleanup through find -exec"
+decide allow  protect-bash.sh "$(cj "find . -exec grep -l x {} +")" "TWIN: find -exec of a reader"
+decide allow  protect-bash.sh "$(cj "sshpass -p x ssh otherhost ls")" "TWIN: sshpass to another host, a harmless command"
+decide allow  protect-bash.sh "$(cj "ssh otherhost ls")" "TWIN: ssh to another host, a harmless command"
+decide allow  protect-bash.sh "$(cj "valgrind ./a.out")" "TWIN: valgrind of a program"
 _sg="$X4_GAME"; _se="$X4_EXTENSIONS"; export X4_GAME="" X4_EXTENSIONS=""
 decide deny   protect-bash.sh "$(cj "rm '/c/games/X4 Foundations/01.dat'")" "archive: no game root configured, the install's folder name"
 decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")"     "TWIN: no game root, another game's .dat"
@@ -714,7 +729,8 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # Round 3 adds 5 denies + 4 twins: 399 + 9.
 # Round 4 adds 5 denies + 3 twins: 408 + 8.
 # Round 5 adds 5 denies + 4 twins: 416 + 9.
-EXPECT=425
+# Round 6 adds 7 denies + 1 advisory + 5 twins: 425 + 13.
+EXPECT=438
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
