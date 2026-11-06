@@ -1369,5 +1369,73 @@ class TestArchiveGlobWholeHookTime(unittest.TestCase):
         self.assertLess(secs - plain, 2.0, "crafted %.1f s, plain %.1f s" % (secs, plain))
 
 
+class TestSshChainWholeHookTime(unittest.TestCase):
+    """4.1.1 review round 7, 1, MEASURED at 9cd83006: the ssh advisory re-judged every spliced text with
+    the other ssh segments still in it, so `ssh a ls && ...` with 7 segments and an `rm -rf <ref>` took
+    33 s and 9 segments 128 s -- past the hook's 30 s timeout, where a hook does not block. The whole
+    hook must answer within 2 s of a plain command's time, with the payload's own verdict."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4psfe_"))
+        cls.ref = cls.tmp / "reference"
+        cls.ref.mkdir()
+        cls.env = _owned_env(cls.tmp, X4_REFERENCE=str(cls.ref), X4_CONFIG=str(cls.tmp / "none.env"))
+        cls.env.pop("CLAUDE_PROJECT_DIR", None)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def run_hook(self, command, args=(), raw=None):
+        import time
+        payload = raw if raw is not None else json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        t = time.perf_counter()
+        try:
+            # BYTES: text mode would turn the backend packet's newlines into CRLF on Windows.
+            p = subprocess.run([BASH, str(HOOKS / "protect-bash.sh"), *args], input=payload.encode("utf-8"),
+                               capture_output=True, env=self.env, timeout=120)
+        except subprocess.TimeoutExpired:
+            self.fail("protect-bash.sh still running after 120 s")
+        secs = time.perf_counter() - t
+        self.assertEqual(p.returncode, 0, p.stderr[-400:])
+        out = p.stdout.decode("utf-8", "replace")
+        hso = json.loads(out)["hookSpecificOutput"] if out.strip() else {}
+        self.last_reason = hso.get("permissionDecisionReason", "")
+        return hso.get("permissionDecision", "allow"), secs
+
+    def test_ssh_chains_answer_in_time(self):
+        ref = str(self.ref).replace(chr(92), "/")
+        _v, plain = self.run_hook("ls")
+        for n in (10, 20):
+            chain = " && ".join("ssh h%d ls" % i for i in range(n))
+            for tail, want in (("", "allow"), (" && rm -rf '" + ref + "'", "deny")):
+                verdict, secs = self.run_hook(chain + tail)
+                self.assertEqual(verdict, want, (n, tail))
+                self.assertLess(secs - plain, 2.0, "%d segments%s: %.1f s, plain %.1f s" % (n, tail, secs, plain))
+
+    def test_a_find_sed_in_the_game_folder_names_the_edit_tool(self):
+        # Round 7, 4: the remedy for an in-place sed of game files is the edit tool, not XRCatTool.
+        game = self.env["X4_GAME"].replace(chr(92), "/")
+        verdict, _s = self.run_hook("find '" + game + "' -name '*.xml' -exec sed -i s/a/b/ {} +")
+        self.assertEqual(verdict, "deny")
+        self.assertIn("file-edit tool", self.last_reason)
+        # Twin: a move of the archives keeps the archive message.
+        verdict, _s = self.run_hook("find '" + game + "' -name '*.cat' -exec mv {} /c/o ';'")
+        self.assertEqual(verdict, "deny")
+        self.assertNotIn("file-edit tool", self.last_reason)
+
+    def test_an_analysis_past_its_deadline_is_a_deny(self):
+        # The backend reading the analyser's rc 6 (round 7, 1): refused, never allowed.
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}})
+        verdict, _s = self.run_hook(None, ("--harness-policy-backend", "--facts-stdin"),
+                                    raw="6\n" + payload + "\nthe deadline passed")
+        self.assertEqual(verdict, "deny")
+        # Twin: rc 0 with an empty fact stream for the same payload is not refused.
+        verdict, _s = self.run_hook(None, ("--harness-policy-backend", "--facts-stdin"),
+                                    raw="0\n" + payload + "\n__X4_COMMAND__\nls")
+        self.assertNotEqual(verdict, "deny")
+
+
 if __name__ == "__main__":
     unittest.main()

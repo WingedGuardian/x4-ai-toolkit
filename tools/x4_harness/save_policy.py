@@ -325,7 +325,11 @@ class ShellSyntaxError(ScopeError):
     """The real shell parser rejected the request, rather than failing to run."""
 
 
-def shell_evidence(payload, roots, *, execution_context=False, ipc=None):
+#: The rule backend's share of HOOK_BUDGET_S: the analysis must end this much before the deadline.
+BACKEND_SHARE_S = 2.0
+
+
+def shell_evidence(payload, roots, *, execution_context=False, ipc=None, deadline=None):
     """Evidence rows for one shell payload. `ipc` (a list) also receives the (exit code,
     stdout bytes) hook_facts.py would print for the same payload and roots, so the Bash
     backend can take them with --facts-stdin instead of analysing the command again (K5)."""
@@ -333,13 +337,19 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None):
     evidence = []
     if ipc is None:
         facts = hook_facts.facts(payload, roots, evidence=evidence, execution_context=execution_context,
-                                protected_save_folders=folders(roots))
+                                protected_save_folders=folders(roots), deadline=deadline)
     else:
         # The root packet exactly as hook_facts.main() reads it (long names included).
         rc, raw, facts = hook_facts.ipc(payload, hook_facts.ipc_roots(
             "\n".join(str(k) + "\t" + str(v) for k, v in roots.items())), evidence=evidence,
-            protected_save_folders=folders(roots))
+            protected_save_folders=folders(roots), deadline=deadline)
         ipc[:] = [rc, raw]
+    if facts.get("analysis_timeout"):
+        # 4.1.1 review round 7, 1: the analysis outran its deadline. Refused, never allowed: a hook that
+        # outruns Claude Code's own timeout does not block at all.
+        raise ScopeError("This command took the guard too long to analyse, so it was NEVER fully checked. "
+                         "Split it into simpler commands (or a script file) and re-run. This call was not "
+                         "allowed.")
     error = facts.get("powershell_error")
     if error and str(error).startswith(hook_facts.PS_PARSE_ERROR):
         raise ShellSyntaxError("PowerShell command does not parse; correct its syntax before retrying. "
@@ -669,7 +679,7 @@ def main(argv=None):
             root = contracts = None
         cwd = str(payload.get("cwd", ""))
         if kind == "shell":
-            evidence = shell_evidence(payload, roots, ipc=ipc)
+            evidence = shell_evidence(payload, roots, ipc=ipc, deadline=deadline - BACKEND_SHARE_S)
         else:
             ti = payload.get("tool_input") or {}
             path = ti.get("file_path") or ti.get("notebook_path")

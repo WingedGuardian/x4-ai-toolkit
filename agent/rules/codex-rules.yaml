@@ -82,6 +82,8 @@
 - {id: link-target-unresolved, source: protect-bash.sh, anchor: "a link-creating command (junction, symlink or hardlink) whose TARGET the guard cannot resolve", verdict: deny, bucket: hook_only, reason: "depends on resolving the link target; deny with a remedy, inert under check (F331)"}
 - {id: copy-into-game, source: protect-bash.sh, anchor: "Copying into a game or profile directory", verdict: advise, bucket: hook_only, reason: "path-scoped; an advisory has no Codex rule form"}
 - {id: redirect-into-game, source: protect-bash.sh, anchor: "Redirecting output into a game or profile directory", verdict: advise, bucket: hook_only, reason: "path-scoped; an advisory has no Codex rule form"}
+- {id: sed-i-game-archive, source: protect-bash.sh, anchor: "these may include official DLC content", verdict: deny, bucket: hook_only, reason: "the in-place sed form of write-game-archive, with the edit-tool remedy (4.1.1 round 7)"}
+- {id: analysis-deadline, source: protect-bash.sh, anchor: "took the guard too long to analyse", verdict: deny, bucket: hook_only, reason: "depends on how long the analysis of the whole command takes (4.1.1 round 7)"}
 - {id: sed-i-game, source: protect-bash.sh, anchor: "on sed_i_in_game_or_profile", fact: sed_i_in_game_or_profile, verdict: deny, bucket: hook_only, reason: "path-scoped: game or profile files"}
 - {id: truncate-durable-record, source: protect-bash.sh, anchor: "BLOCKED: truncating redirect onto a durable record", verdict: deny, bucket: hook_only, reason: "depends on the redirect target's name"}
 - {id: python-open-durable-record, source: protect-bash.sh, anchor: "in a command that names a durable record", verdict: deny, bucket: hook_only, reason: "depends on the command's content"}

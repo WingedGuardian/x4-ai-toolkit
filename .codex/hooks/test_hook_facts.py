@@ -8545,6 +8545,100 @@ class TestRound6FindExecAndCarriers(unittest.TestCase):
             cmd = "find " + m + " -name " + Q + "*.xml" + Q + " | xargs " + w.replace(" {}", "")
             self.assertFalse(F(cmd)["writes_game_archive"], cmd)
 
+    # --- round 7, 1: the advisory has a budget, and the analysis a deadline
+    def _chain(self, n, tail=""):
+        return " && ".join("ssh h%d ls" % i for i in range(n)) + tail
+
+    def test_a_chain_of_harmless_ssh_commands_is_quick_and_quiet(self):
+        import time
+        for n in (10, 20):
+            t = time.perf_counter()
+            f = F(self._chain(n))
+            secs = time.perf_counter() - t
+            self.assertFalse(f["ssh_host_unplaced"], n)
+            self.assertLess(secs, 2.0, "%d ssh segments: %.1f s" % (n, secs))
+            t = time.perf_counter()
+            f = F(self._chain(n, " && " + D + " -rf " + Q + REF + Q))
+            self.assertTrue(f["rm_targets_reference"], n)
+            self.assertLess(time.perf_counter() - t, 2.0, n)
+            self.assertTrue(F(self._chain(n, " && ssh z git add -A"))["ssh_host_unplaced"], n)
+
+    def test_a_spent_advisory_budget_advises(self):
+        was = H._MAX_SSH_JUDGED
+        H._MAX_SSH_JUDGED = 0
+        try:
+            self.assertTrue(F("ssh otherhost ls")["ssh_host_unplaced"])
+        finally:
+            H._MAX_SSH_JUDGED = was
+        # More distinct remote commands than are judged: advised, not passed quietly.
+        self.assertTrue(F("; ".join("ssh h%d ls%d" % (i, i) for i in range(H._MAX_SSH_UNPLACED + 1)))["ssh_host_unplaced"])
+        self.assertFalse(F("; ".join("ssh h%d ls%d" % (i, i) for i in range(H._MAX_SSH_UNPLACED)))["ssh_host_unplaced"])
+
+    def test_an_analysis_past_its_deadline_is_refused(self):
+        payload = {"tool_input": {"command": "ls"}}
+        f = H.facts(payload, ROOTS, deadline=H._clock() - 1)
+        self.assertTrue(f.get("analysis_timeout"))
+        rc, out, _f = H.ipc(payload, ROOTS, deadline=H._clock() - 1)
+        self.assertEqual(rc, 6)
+        self.assertFalse(H.facts(payload, ROOTS).get("analysis_timeout"))
+
+    # --- round 7, 2: positional parameters, rsync, replacing compressors, rename, pass-on filters
+    def test_a_shell_texts_positional_parameters_are_its_operands(self):
+        g = Q + GAME + Q
+        for cmd, key in (("sh -c " + Q + D + " -rf " + DQ + "$1" + DQ + Q + " _ " + Q + REF + Q, "rm_targets_reference"),
+                         ("bash -c " + Q + D + " -rf " + DQ + "$@" + DQ + Q + " _ " + Q + REF + Q, "rm_targets_reference"),
+                         ("sh -c " + Q + D + " " + DQ + "${1}" + DQ + Q + " _ " + Q + self.ARC + Q, "writes_game_archive"),
+                         ("find " + g + " -name " + Q + "*.cat" + Q + " -exec sh -c " + Q + "echo > " + DQ + "$1" + DQ + Q
+                          + " _ {}" + self.END, "writes_game_archive"),
+                         ("find " + g + " -name " + Q + "*.cat" + Q + " | xargs -n1 sh -c " + Q + "mv " + DQ + "$0" + DQ
+                          + " " + DQ + "$0.old" + DQ + Q, "writes_game_archive")):
+            self.assertTrue(F(cmd)[key], cmd)
+        self.assertEqual(H._positional_text("a " + DQ + "$@" + DQ, ["_", "x y", "z"]), "a " + DQ + "x y" + DQ + " " + DQ + "z" + DQ)
+
+    def test_TWIN_a_positional_parameter_that_is_only_read(self):
+        for cmd in ("sh -c " + Q + "echo " + DQ + "$1" + DQ + Q + " _ " + Q + REF + Q,
+                    "sh -c " + Q + "echo " + Q + Q + "$1" + Q + Q + Q + " _ " + Q + REF + Q):
+            self.assertFalse(F(cmd)["rm_targets_reference"], cmd)
+        self.assertEqual(H._positional_text("echo " + BS + "$1", ["_", "x"]), "echo " + BS + "$1")
+        self.assertEqual(H._positional_text("echo " + Q + "$1" + Q, ["_", "x"]), "echo " + Q + "$1" + Q)
+
+    def test_a_replacing_compressor_rename_or_moving_rsync_moves_its_operand(self):
+        g = Q + GAME + Q
+        for z in ("gzip", "xz", "bzip2", "lzma", "pigz", "zstd --rm", "rename .cat .bak"):
+            for cmd in (z + " " + Q + self.ARC + Q,
+                        "find " + g + " -name " + Q + "*.dat" + Q + " -exec " + z + " {}" + self.END):
+                self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        cmd = "find " + g + " -name " + Q + "*.dat" + Q + " -exec rsync -a --remove-source-files {} /tmp/bk/" + self.END
+        self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_compressor_that_keeps_its_operand(self):
+        for z in ("gzip -k", "gzip -c", "xz --keep", "bzip2 -t", "zstd", "gzip -l", "gzip --stdout"):
+            cmd = z + " " + Q + self.ARC + Q
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+        cmd = "find " + Q + GAME + Q + " -name " + Q + "*.dat" + Q + " -exec rsync -a {} /tmp/bk/" + self.END
+        self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_pass_on_filter_between_find_and_xargs(self):
+        for f in ("sort", "uniq", "grep cat", "head -n 5", "tail -5", "tr a b", "cat", "tee /c/o/l", "sort | uniq"):
+            cmd = "find " + Q + GAME + Q + " -name " + Q + "*.cat" + Q + " | " + f + " | xargs mv -t /c/o"
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+            cmd = "find " + Q + GAME + Q + " -name " + Q + "*.cat" + Q + " | " + f + " | xargs cp -t /c/o"
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+        # Twin: a filter reading a FILE does not pass the find's output on.
+        cmd = "find " + Q + GAME + Q + " -name " + Q + "*.cat" + Q + " | sort /c/o/list | xargs mv -t /c/o"
+        self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- round 7, 3: gfind is find; fd -x/-X runs a command per result
+    def test_gfind_and_fd_exec(self):
+        self.assertTrue(F("gfind " + Q + GAME + Q + " -name " + Q + "*.cat" + Q + " -delete")["writes_game_archive"])
+        for cmd, key in (("fd . " + Q + REF + Q + " -x " + D, "rm_targets_reference"),
+                         ("fd -e xml . " + Q + REF + Q + " -x " + D + " -rf {}", "rm_targets_reference"),
+                         ("fdfind . " + Q + REF + Q + " --exec " + D + " {/}", "rm_targets_reference"),
+                         ("fd x -X git add -A", "git_add_all")):
+            self.assertTrue(F(cmd)[key], cmd)
+        for cmd in ("fd . /tmp -x cat", "fd -e py -x wc -l"):
+            self.assertFalse(F(cmd)["rm_targets_reference"] or F(cmd)["git_add_all"], cmd)
+
     def test_TWIN_this_commands_own_delete_is_not_the_remote_one(self):
         f = F(D + " -rf " + Q + GAME + "/x" + Q + "; ssh otherhost ls")
         self.assertTrue(f["rm_in_x4_dir"])

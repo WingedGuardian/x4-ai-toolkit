@@ -2120,6 +2120,8 @@ def _verb_name(t: str) -> str:
     n = posixpath.basename(norm(t))
     if n.endswith(".exe"):
         n = n[:-4]
+    if n == "gfind":
+        n = "find"                      # GNU find's name on macOS and the BSDs (4.1.1 review round 7, 3)
     return n or t
 
 
@@ -3573,6 +3575,31 @@ def clobber_targets(seg: str) -> list[str]:
     return []
 
 
+#: Compressors that REPLACE their operand by default (`gzip x` leaves only `x.gz`), unless told to keep
+#: it, write to stdout, test or list (4.1.1 review round 7, 2). zstd keeps it unless given --rm.
+_REPLACING = frozenset({"gzip", "bzip2", "xz", "lzma", "lzip", "compress", "pigz", "pbzip2", "zstd"})
+_KEEPING_LONG = frozenset({"--keep", "--stdout", "--to-stdout", "--test", "--list", "-"})
+
+
+def replaced_sources(seg: str) -> list[str]:
+    """What a replacing compressor or `rename` takes away: each a move of its operand, as `mv` is.
+    `rename FROM TO FILE...` (util-linux) and `rename EXPR FILE...` (perl) alike: every operand after
+    the first may be a file, read conservatively."""
+    v = verb(seg)
+    if v == "rename":
+        return _operands(seg)[1:]
+    if v not in _REPLACING:
+        return []
+    toks = tokens(seg)
+    flags = [t for t, q in toks[_verb_at(seg, 0) + 1:] if not q and t.startswith("-")]
+    if v == "zstd" and "--rm" not in flags:
+        return []
+    for f in flags:
+        if f in _KEEPING_LONG or (not f.startswith("--") and set(f[1:]) & set("kctl")):
+            return []
+    return _operands(seg)
+
+
 def move_sources(seg: str) -> list[str]:
     """What a `mv` takes AWAY. Every operand but the last is a source.
 
@@ -4667,12 +4694,15 @@ def _glob_meet(a: list, b: list) -> bool:
             for lo, hi in t[3]:
                 alpha |= {lo, hi, chr(ord(lo) + 1), chr(ord(hi) + 1), chr(max(ord(lo) - 1, 0)),
                           chr(max(ord(hi) - 1, 0))}
+    _check_deadline()                   # round 7, 1: many bounded walks still add up
     seen, todo, steps = set(), [(0, 0)], 0
     while todo:
         i, j = todo.pop()
         if (i, j) in seen:
             continue
         seen.add((i, j))
+        if not len(seen) & 4095:
+            _check_deadline()               # round 7, 1: the analysis deadline covers the glob walk
         if i == len(a) and j == len(b):
             return True
         if i < len(a) and a[i][0] == "star":
@@ -5012,7 +5042,7 @@ def _entry_effect(text: str):
     effect = None
     for x in [text] + _inner_commands(text):
         for s in segments(x):
-            if any(_is_entry(h) for h in move_sources(s)):
+            if any(_is_entry(h) for h in move_sources(s) + replaced_sources(s) + rsync_moved_sources(s)):
                 return "move"
             hits = (copy_dests(s) + [t for _m, t in redirects(s)] + clobber_targets(s) + sed_in_place_targets(s)
                     + output_targets(s) + modify_targets(s))
@@ -5029,6 +5059,34 @@ def _exec_entry_effect(words: list):
     if not words or not any("{}" in w for w in words):
         return None
     return _entry_effect(" ".join(_sh_quote(w.replace("{}", _FIND_ENTRY)) for w in words))
+
+
+#: Programs that pass their stdin on (filtered or not) when given no input file (round 7, 2), so
+#: `find ... | sort | xargs mv -t <dir>` is read as fed by the find. tee writes files and passes it on.
+_STDIN_FILTERS = frozenset({"sort", "uniq", "head", "tail", "tr", "cat", "tee", "grep", "egrep", "fgrep"})
+
+
+def _passes_stdin_through(seg: str) -> bool:
+    v = verb(seg)
+    if v not in _STDIN_FILTERS:
+        return False
+    if v in ("tee", "tr"):
+        return True
+    ops = [o for o in _operands(seg) if not re.fullmatch(r"[+-]?[0-9]+", o)]
+    return len(ops) <= (1 if v in ("grep", "egrep", "fgrep") else 0)
+
+
+def _stdin_producer(before: list):
+    """The segment whose output reaches the next one: the one just before it, or, through pass-on
+    filters (_STDIN_FILTERS), a find further back -- only a find, which the find readers judge."""
+    if not before:
+        return None
+    j = len(before) - 1
+    while j > 0 and _passes_stdin_through(before[j]):
+        j -= 1
+    if j < len(before) - 1 and verb(before[j]) == "find":
+        return before[j]
+    return before[-1]
 
 
 def find_entry_write_roots(seg: str) -> list:
@@ -5059,6 +5117,51 @@ def xargs_entry_effect(seg: str, prev):
     repl, _w = _xargs_replace(seg)
     words = [w.replace(repl, _FIND_ENTRY) for w in words] if repl else words + [_FIND_ENTRY]
     return _entry_effect(" ".join(_sh_quote(w) for w in words))
+
+
+#: fd's options that take a value, so its search paths can be told from them (_fd_exec_readings).
+_FD_VALUE_OPTS = frozenset({"-e", "--extension", "-t", "--type", "-E", "--exclude", "-d", "--max-depth",
+                            "--min-depth", "--exact-depth", "-j", "--threads", "-S", "--size", "--changed-within",
+                            "--changed-before", "-o", "--owner", "--base-directory", "--path-separator",
+                            "--max-results", "-c", "--color", "--ignore-file", "--format", "--batch-size"})
+_FD_PLACEHOLDER = re.compile(r"[{](?:/|//|[.]|/[.])?[}]")
+
+
+def _fd_exec_readings(seg: str) -> list:
+    """`fd [pattern] [path...] -x|-X <cmd>` runs <cmd> per result (or once for all), with `{}`, `{/}`,
+    `{//}`, `{.}`, `{/.}` standing for the result, or the result appended when none is given: a carrier
+    like find's -exec (4.1.1 review round 7, 3). A result is an entry under each search path."""
+    toks = tokens(seg)
+    words = [t for t, _q in toks[_verb_at(seg, 0) + 1:]]
+    pos, i, ran = [], 0, None
+    while i < len(words):
+        w = words[i]
+        if w in ("-x", "--exec", "-X", "--exec-batch"):
+            ran = words[i + 1:]
+            break
+        if w == "--search-path" and i + 1 < len(words):
+            pos.append(words[i + 1])
+            i += 2
+            continue
+        if w.startswith("-"):
+            i += 2 if w in _FD_VALUE_OPTS else 1
+            continue
+        pos.append(w)
+        i += 1
+    if ran and ran[-1] == ";":
+        ran = ran[:-1]
+    if not ran:
+        return []
+    out = []
+    for root in (pos[1:] or ["."])[:_FIND_EXEC_ROOTS]:
+        item = _sh_quote(root.rstrip("/") + "/") + _XARGS_ITEM
+        if any(_FD_PLACEHOLDER.search(w) for w in ran):
+            parts = [item.join(_sh_quote(p) if p else "" for p in _FD_PLACEHOLDER.split(w))
+                     if _FD_PLACEHOLDER.search(w) else _sh_quote(w) for w in ran]
+        else:
+            parts = [_sh_quote(w) for w in ran] + [item]
+        out.append(" ".join(parts))
+    return list(dict.fromkeys(out))
 
 
 #: How many starting points a find's -exec readings are built for (_find_exec_readings).
@@ -5428,6 +5531,7 @@ def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec
     entries = [e for e in entries
                if (maxd is None or e[4][0] <= maxd) and (mind is None or e[4][1] is None or e[4][1] >= mind)]
     for hay, name, ending, modes, _span, folder in entries:
+        _check_deadline()
         def test(kind, value, hay=hay, name=name, ending=ending, folder=folder):
             if kind in ("-type", "-xtype"):
                 # The root is a folder, or a link to one: a type naming neither skips it (4.1.1
@@ -5588,6 +5692,38 @@ def _reads_stdin_program(seg: str) -> bool:
 #: C2 was fixed -- the here-string is the program, so the single carrier whose payload is
 #: plainly visible in the command text was the one we declined to inspect.
 _REDIR_WORD = ("<<<", "<", ">", ">>", "<>", ">|", "<<", "<<-")
+
+
+_POSITIONAL = re.compile(r"[$](?:[{]([0-9]+|[@*])[}]|([0-9@*]))")
+
+
+def _positional_text(text: str, args: list) -> str:
+    """`text` with `$0`..`$9`, `${N}`, `$@`, `$*` (quoted or not) replaced by `args` (args[0] is `$0`),
+    as the shell running `sh -c TEXT ARGS...` fills them in. A parameter past the last argument is
+    empty. Inside double quotes the value is escaped for them; elsewhere it is quoted as one word
+    each, so a value with a blank stays one operand (4.1.1 review round 7, 2)."""
+    if "$" not in text or not args:
+        return text
+    kinds = {i: k for i, _c, _inq, k in _qwalk(text)}
+    out, last = [], 0
+    for m in _POSITIONAL.finditer(text):
+        k = kinds.get(m.start(), "")
+        if k in ("'", "$'") or (m.start() and text[m.start() - 1] == chr(92)):
+            continue
+        name = m.group(1) or m.group(2)
+        vals = args[1:] if name in "@*" else ([args[int(name)]] if int(name) < len(args) else [""])
+        if k == chr(34) and name == "@":
+            # "$@" is one word per argument: `"pre$@post"` is "pre<a1>" "<a2>post".
+            rep = (chr(34) + " " + chr(34)).join(
+                re.sub(r"([" + chr(92) + chr(92) + chr(34) + "$`])", chr(92) + chr(92) + r"\1", x) for x in vals)
+        elif k == chr(34):
+            rep = re.sub(r"([" + chr(92) + chr(92) + chr(34) + "$`])", chr(92) + chr(92) + r"\1", " ".join(vals))
+        else:
+            rep = " ".join(_sh_quote(x) for x in vals) if vals != [""] else "''"
+        out.append(text[last:m.start()])
+        out.append(rep)
+        last = m.end()
+    return "".join(out) + text[last:] if out else text
 
 
 def _drop_redirects(toks: list[str]) -> list[str]:
@@ -6610,6 +6746,13 @@ _SSH_UNPLACED: list = []
 #: ...and the same commands spliced into the command around them, which this machine expands first.
 _SSH_UNPLACED_SPLICED: list = []
 _SSH_NESTED = [0]
+#: Per hook call (round 7, 1): judgements already made, by text, and how many facts() runs the advisory
+#: spent. Past _MAX_SSH_JUDGED runs, or _SSH_ADVISORY_S seconds, the advisory stops and ADVISES (it could
+#: not judge the rest); it never costs the verdict, which is computed before it.
+_SSH_MEMO: dict = {}
+_SSH_JUDGED = [0]
+_MAX_SSH_JUDGED = 24                  # every remote and spliced text of _MAX_SSH_UNPLACED ssh segments, and more
+_SSH_ADVISORY_S = 2.0
 _MAX_SSH_DEPTH = 4                    # as deep as the carrier walk goes (_MAX_CARRIER_DEPTH)
 #: How many of them facts() judges; past it the rest are not judged, and the advisory says nothing
 #: about them (it is advice, never a verdict).
@@ -6840,6 +6983,8 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
         out.extend(_value_word_readings(seg))
     if v == "find" and ("-exec" in seg or "-ok" in seg):
         out.extend(_find_exec_readings(seg))
+    if v in ("fd", "fdfind") and ("-x" in seg or "-X" in seg or "--exec" in seg):
+        out.extend(_fd_exec_readings(seg))
     if v not in _ALL_CARRIER_VERBS:
         if v not in _NOT_RUNNERS and v not in WRAPPERS and _MAY_CARRY_JOINER.search(seg):
             out.extend(_joiner_behind_unknown(seg))
@@ -6951,6 +7096,7 @@ def _inner_commands(cmd: str) -> list[str]:
     carrying = {}                        # _program_carrier_readings: the same, kept apart
     handled = {}                         # ...and the not-found handler's, read once
     tmux_chain = False                   # the last segment was a tmux command ending in `\\;`
+    ssh_here = {}                        # round 6, C: segment index -> its unplaced remote commands
     not_found_handler = "command_not_found_handle" in cmd
     if "@P}" in cmd:
         # `${P@P}` runs prompt expansion, whose `$(...)` executes, over P's stored value.
@@ -6975,12 +7121,11 @@ def _inner_commands(cmd: str) -> list[str]:
             if readings:
                 carrying[n] = readings
         v = _verb_name(vt)              # one read per segment: this walk runs on every hook call
+        _check_deadline()
         unplaced = len(_SSH_UNPLACED)
         carried_here = _program_carrier_readings(seg, v, vt, segs[n - 1] if n and pipes[n] else None)
         if len(_SSH_UNPLACED) > unplaced:
-            # ...and each IN PLACE, as every carrier reading is: the remote command is expanded HERE
-            # first, so `FZ=<ref>; ssh <host> rm -rf "$FZ"` sends the path (round 6, C).
-            _SSH_UNPLACED_SPLICED.extend(_reading_variants(cmd, segs, {n: _SSH_UNPLACED[unplaced:]}))
+            ssh_here[n] = _SSH_UNPLACED[unplaced:]
         if tmux_chain:
             carried_here = carried_here + _tmux_readings(_raw_words(seg))
         tmux_chain = (tmux_chain or v == "tmux") and seg.rstrip().endswith(chr(92))
@@ -7037,7 +7182,13 @@ def _inner_commands(cmd: str) -> list[str]:
                     # it, so a two-statement command any script writes lost the block.
                     # EVERY value (FX-G6 / reviewer K C1, found by fuzz-guard): one resolve()
                     # judged `bash -c 'rm -rf "${NOPE:+zz}<ref>"'` as the alternate only.
-                    out.extend(resolve_variants(toks[_shell_text_at(toks, i + 1, t)][0], assignments(cmd)))
+                    at = _shell_text_at(toks, i + 1, t)
+                    out.extend(resolve_variants(toks[at][0], assignments(cmd)))
+                    # ...and with its positional parameters filled in from the words after it
+                    # (round 7, 2): `sh -c 'rm -rf "$1"' _ <ref>`, `-exec sh -c 'echo > "$1"' _ {} ;`.
+                    filled = _positional_text(toks[at][0], _drop_redirects([w for w, _q in toks[at + 1:]]))
+                    if filled != toks[at][0]:
+                        out.append(filled)
                     break
         elif v == "eval":
             # `eval` concatenates its arguments and runs the result.
@@ -7065,6 +7216,12 @@ def _inner_commands(cmd: str) -> list[str]:
             rest = [t for t, _ in toks[k + 1:] if not t.startswith("-")]
             if rest:
                 out.append(rest[0])
+    for n, remote in ssh_here.items():
+        # ...each IN PLACE, as every carrier reading is: the remote command is expanded HERE first, so
+        # `FZ=<ref>; ssh <host> rm -rf "$FZ"` sends the path (round 6, C). Every OTHER unplaced ssh is a
+        # no-op there, so one judgement never re-judges the rest (round 7, 1: n segments recursed n deep).
+        others = {m: [":"] for m in ssh_here if m != n}
+        _SSH_UNPLACED_SPLICED.extend(_reading_variants(cmd, segs, {n: remote, **others}))
     out.extend(_reading_variants(cmd, segs, dynamic))
     rewritten = _value_readings(cmd, segs)
     if rewritten:
@@ -7176,6 +7333,7 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
     for depth in range(_MAX_CARRIER_DEPTH + 1):
         nxt = []
         for c in frontier:
+            _check_deadline()
             inners = _inner_commands(c)
             subs = substitutions(c)
             for i_, kind in ([(x, WINDOWS_DIALECT if x in _WIN_DIALECT else "bash") for x in inners]
@@ -7671,8 +7829,49 @@ def _carries_program_text(seg: str) -> bool:
     return False
 
 
+#: THE ANALYSIS DEADLINE for one hook call, in seconds (4.1.1 review round 7, 1). Claude Code gives the
+#: hook 30 s and a hook that times out does NOT block, so an analysis that outran it failed OPEN (MEASURED
+#: at 9cd83006: nine `ssh <host> ls` segments took 128 s and were allowed). Every bounded walk below
+#: checks it; past it the command is refused (`analysis_timeout`), never allowed. The save bridge passes
+#: its own, earlier deadline (save_policy.HOOK_BUDGET_S, less the backend's share).
+_ANALYSIS_BUDGET_S = 18.0
+_DEADLINE = [None]
+
+
+class AnalysisTimeout(Exception):
+    """The analysis deadline passed: the command was not fully analysed."""
+
+
+def _check_deadline():
+    d = _DEADLINE[0]
+    if d is not None and _clock() > d:
+        raise AnalysisTimeout()
+
+
 def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution_context: bool = False,
-          protected_save_folders=()) -> dict:
+          protected_save_folders=(), deadline: float | None = None) -> dict:
+    """The facts of one command (_facts), within the analysis deadline. A judgement nested inside one
+    (the ssh advisory) shares its caller's deadline and lets a timeout reach it."""
+    if _SSH_NESTED[0]:
+        return _facts(payload, roots, evidence=evidence, execution_context=execution_context,
+                      protected_save_folders=protected_save_folders)
+    _DEADLINE[0] = deadline if deadline is not None else _clock() + _ANALYSIS_BUDGET_S
+    _SSH_MEMO.clear()
+    _SSH_JUDGED[0] = 0
+    _ps_spent[0] = 0.0                  # the translation budget is per hook call, never per judgement
+    try:
+        return _facts(payload, roots, evidence=evidence, execution_context=execution_context,
+                      protected_save_folders=protected_save_folders)
+    except AnalysisTimeout:
+        return {"command": (payload.get("tool_input") or {}).get("command") or "",
+                "analysis_timeout": "the guard's analysis deadline passed before this command was fully "
+                                    "analysed"}
+    finally:
+        _DEADLINE[0] = None
+
+
+def _facts(payload: dict, roots: dict, *, evidence: list | None = None, execution_context: bool = False,
+           protected_save_folders=()) -> dict:
     inp = payload.get("tool_input") or {}
     cmd = inp.get("command") or ""
     timeout = inp.get("timeout", 0)
@@ -7693,7 +7892,6 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                            ).replace(chr(92), "/")
     _CD_LANES_TRUNCATED[0] = False      # C7: per call
     _OPERAND_EXPANSION_TRUNCATED[0] = False
-    _ps_spent[0] = 0.0                  # the translation budget is per hook call
 
     # THE POWERSHELL TOOL (AUDIT-2026-09-24 HK-1). It had no PreToolUse guard at all, so
     # every rule below was one tool choice away from not existing. Its command is
@@ -7806,7 +8004,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             uds = bare[k][1] if k < len(bare) else [""]
             rs = resolve_verb(s, assigns)
             # The segment BEFORE each one in the same carried command: what feeds an xargs.
-            prev = tracked[k - 1][0] if k else None
+            prev = _stdin_producer([t[0] for t in tracked[:k]])
             pds = physical[k][1] if physical else [""] * len(ds)
             for d, ud, pd in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds)):
                 seg_dialect.append(dialects.get(c, "bash"))
@@ -8039,6 +8237,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                      for folder in save_spellings if folder]
     for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0], is_for_ in zip(
             seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect, seg_for):
+        _check_deadline()
         if (save_folders and evidence is not None and not execution_context
                 and verb(s) not in SAVE_MODELLED_VERBS and not _carries_program_text(s)
                 and not _save_read_only_program(s)):
@@ -8119,7 +8318,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             subst_rm_t += prep(_operands(s), c_old, c_old)
         # truncate / dd of=are truncating writes, judged as `>` is (see clobber_targets).
         redir_t += [("truncate",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False, operation="write")]
-        mv_src += prep(move_sources(s), c_cwd, c_old, operation="move")
+        mv_src += prep(move_sources(s) + replaced_sources(s), c_cwd, c_old, operation="move")
         dests_ = prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination",
                       copy_sources=exact_copy_sources(s))
         copy_t += dests_
@@ -8749,23 +8948,35 @@ def _ssh_unplaced_destructive(outer: dict, roots: dict, protected_save_folders=(
     host is most likely another machine, whose paths are not this one's protected folders. A remote
     command spliced into the command around it counts only for a fact `outer` (this command's own
     facts) does not already have: the rest of that text is this command, already judged."""
-    remote = list(dict.fromkeys(_SSH_UNPLACED))[:_MAX_SSH_UNPLACED]
+    distinct = list(dict.fromkeys(_SSH_UNPLACED))
+    if len(distinct) > _MAX_SSH_UNPLACED and not _SSH_NESTED[0]:
+        return True                      # more remote commands than are judged: advise (round 7, 1)
+    remote = distinct[:_MAX_SSH_UNPLACED]
     spliced = [t for t in dict.fromkeys(_SSH_UNPLACED_SPLICED) if t not in remote][:_MAX_SSH_UNPLACED]
     if not remote or _SSH_NESTED[0] >= _MAX_SSH_DEPTH:
         return False
     keys = _SSH_DESTRUCTIVE + ("ssh_host_unplaced",)
+    was = _DEADLINE[0]
+    soon = _clock() + _SSH_ADVISORY_S
+    _DEADLINE[0] = soon if was is None else min(was, soon)
     _SSH_NESTED[0] += 1
     try:
         for text, whole in [(t, True) for t in remote] + [(t, False) for t in spliced]:
-            sub = facts({"tool_name": "Bash", "tool_input": {"command": text}}, roots,
-                        protected_save_folders=protected_save_folders)
-            if any(sub.get(k) and (whole or not outer.get(k)) for k in keys):
+            if text not in _SSH_MEMO:
+                if _SSH_JUDGED[0] >= _MAX_SSH_JUDGED:
+                    return True              # the budget is spent with texts unjudged: advise (round 7, 1)
+                _SSH_JUDGED[0] += 1
+                sub = facts({"tool_name": "Bash", "tool_input": {"command": text}}, roots,
+                            protected_save_folders=protected_save_folders)
+                _SSH_MEMO[text] = {k for k in keys if sub.get(k)}
+            if any(whole or not outer.get(k) for k in _SSH_MEMO[text]):
                 return True
         return False
-    except Exception:                    # noqa: BLE001 -- unjudged is advised, never silently clean
+    except Exception:                    # noqa: BLE001 -- unjudged (a timeout too) is advised, never clean
         return True
     finally:
         _SSH_NESTED[0] -= 1
+        _DEADLINE[0] = was
 
 
 # ----------------------------------------------------------------------- CLI
@@ -8796,14 +9007,18 @@ def ipc_roots(head: str) -> dict:
     return roots
 
 
-def ipc(payload: dict, roots: dict, *, evidence: list | None = None, protected_save_folders=()):
+def ipc(payload: dict, roots: dict, *, evidence: list | None = None, protected_save_folders=(),
+        deadline: float | None = None):
     """(exit code, stdout bytes, facts) exactly as main() reports them to protect-bash.sh.
 
     K5 (v4.0 release review): the save bridge computes the facts ONCE with this and hands the
     same bytes to the Bash backend (`--facts-stdin`), instead of a second process re-parsing
     the command and re-running the PowerShell translation -- that doubled the hook's latency.
     """
-    f = facts(payload, roots, evidence=evidence, protected_save_folders=protected_save_folders)
+    f = facts(payload, roots, evidence=evidence, protected_save_folders=protected_save_folders, deadline=deadline)
+    if f.get("analysis_timeout"):
+        # rc 6: the analysis deadline passed (round 7, 1). Nothing was fully analysed: the caller DENIES.
+        return 6, str(f["analysis_timeout"]).encode("utf-8", "replace"), f
     if f.get("powershell_error"):
         # rc 4 + the reason on stdout: the caller ASKS with it. Nothing was analysed, so
         # no fact line may be emitted -- a partial stream would read as a clean pass.

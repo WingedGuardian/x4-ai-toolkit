@@ -250,6 +250,12 @@ if [ "$PARSE_RC" = 5 ]; then
   _X4_UNRELAXED=1     # an inability: X4_GUARD=off never relaxes it below ask (R1-F2)
   deny "This PowerShell command does not parse, so the guard could evaluate NO rule against it -- and PowerShell would reject it too: ${FACTS_RAW:-no reason given}. Fix the syntax and re-run."
 fi
+# rc 6: the analysis outran its deadline (4.1.1 review round 7, 1). A hook that outruns Claude Code's
+# timeout does not block at all, so a slow analysis failed OPEN; now it is a DENY with a remedy.
+if [ "$PARSE_RC" = 6 ]; then
+  _X4_UNRELAXED=1
+  deny "This command took the guard too long to analyse (${FACTS_RAW:-deadline passed}), so it was NEVER fully checked against the rules. Split it into simpler commands, or put it in a script file, and re-run."
+fi
 # rc 4: a PowerShell TOOL command could not be translated (no PowerShell was found to
 # parse it, it failed, or the budget ran out), and the reason is on stdout. ASK,
 # as an unparseable Bash command does below -- nothing was analysed, so this is neither
@@ -465,6 +471,10 @@ on writes_reference && deny "BLOCKED: reference/ is the read-only unpacked base 
 # The file channel (protect-files.sh) denies these; the shell only advised, or said nothing for
 # an append. MEASURED 2026-11-05. The base archives run to about 10 GB each. A mod's own
 # archive is not this rule: deploy.py, cp and `rm -rf <mod>` keep their verdicts below.
+# An in-place sed of game files that MAY reach DLC content: the remedy is the edit tool (round 7, 4).
+if on sed_i_in_game_or_profile && on writes_game_archive; then
+  deny "BLOCKED: in-place sed edit (sed -i) of files in the game folder, and these may include official DLC content or a .cat/.dat archive, which is never edited in place. Use your file-edit tool instead (Edit, apply_patch) on the files you mean: it is backed up, checked by protect-files.sh, and fails loudly on a non-unique match. A find that starts at your own mod's folder reaches no DLC file. Command: $COMMAND"
+fi
 on writes_game_archive && deny "BLOCKED: this writes, moves or deletes a base-game or official DLC archive (.cat/.dat), or deletes or moves something in an official DLC folder (extensions/ego_dlc_*, which is game content, not a deployed mod). Only a Steam verify restores them. Read it freely, pack with bin/xrcat (XRCatTool) into your own mod folder, and repair the game through Steam's Verify Integrity. Command: $COMMAND"
 
 # === HARD BLOCK — WRITE or DELETE the toolkit's PATH CONFIG (v4.0 release review R1-F1/R1-P1) ===
