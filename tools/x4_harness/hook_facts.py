@@ -68,6 +68,9 @@ _PROVIDER = re.compile(r"^(microsoft[.]powershell[.]core/)?filesystem::")
 _SLASHES = re.compile(r"/{2,}")
 
 
+_POSIX_CLASS = re.compile(r"\[:[A-Za-z]*:\]")
+
+
 def _win_alias(s: str) -> str:
     """Each `/`-separated component as WINDOWS opens it: an NTFS stream suffix dropped
     (`x::$DATA` IS x, `dir::$INDEX_ALLOCATION` IS dir, `x:alt` is a stream OF x) and trailing
@@ -84,7 +87,9 @@ def _win_alias(s: str) -> str:
     out = []
     for n, c in enumerate(s.split("/")):
         if c and c not in (".", ".."):
-            i = c.find(":")
+            # A glob's POSIX class (`X4[[:space:]]Foundations`) is not a stream: no Windows name
+            # holds a colon, so `[:name:]` can only be a pattern (4.1.1 review round 3, C).
+            i = _POSIX_CLASS.sub(lambda m: "#" * len(m.group()), c).find(":")
             # Not in the FIRST component of a relative token: there a colon is a drive-relative
             # `C:x` or a command NAME (verb() reads names through norm -- `C:toolsrm` must stay
             # that word, test_an_UNQUOTED_windows_path_is_not_that_command_at_all). A relative
@@ -4573,10 +4578,28 @@ def _glob_parse(pat: str, slash: bool, escapes: bool, caret: bool) -> list:
             j = i + 1
             neg = j < n and (pat[j] == "!" or (caret and pat[j] == "^"))
             j += neg
-            close = pat.find("]", j + 1 if j < n and pat[j] == "]" else j)
+            # A `]` first in the set is a member. A POSIX class (`[:alpha:]`, `[=a=]`, `[.a.]`)
+            # holds a `]` of its own, so the set closes after it, not at it (4.1.1 review round 3, B).
+            k, close, has_class = (j + 1 if j < n and pat[j] == "]" else j), -1, False
+            while k < n:
+                if pat[k] == "[" and k + 1 < n and pat[k + 1] in ":=.":
+                    end = pat.find(pat[k + 1] + "]", k + 2)
+                    if end >= 0:
+                        has_class, k = True, end + 2
+                        continue
+                if pat[k] == "]":
+                    close = k
+                    break
+                k += 1
             if close < 0:
                 out.append(("lit", c))
                 i += 1
+                continue
+            if has_class:
+                # Read as ANY one character, negated or not: wider than the set, so a meet it
+                # finds may be false but none is missed. Marked, so _glob_covers never relies on it.
+                out.append(("one", True, noslash, (), "class"))
+                i = close + 1
                 continue
             body, chars, ranges, m = pat[j:close], set(), [], 0
             while m < len(body):
@@ -4603,10 +4626,18 @@ def _glob_accepts(t: tuple, c: str) -> bool:
     return hit != t[1]
 
 
+#: The bound on one _glob_meet: characters tried. Its cost is positions x positions x stand-in
+#: characters, and a crafted pattern of 3,000 one-range sets ran the hook 37.6 s (4.1.1 review round
+#: 3, A, MEASURED), past its 30 s timeout -- and a hook that times out does not block. Past the bound
+#: the answer is "may meet", which every caller reads as the wider verdict.
+_GLOB_MAX_STEPS = 50000
+
+
 def _glob_meet(a: list, b: list) -> bool:
     """Some string matches both token lists. A walk over pairs of positions; a character is tried
     from a literal on either side, else from stand-ins that cover every class: each character the
-    patterns name, a range's ends and their neighbours, and one that nothing names."""
+    patterns name, a range's ends and their neighbours, and one that nothing names. True, unread,
+    past _GLOB_MAX_STEPS."""
     alpha = {"/", chr(0xE000)}
     for t in a + b:
         if t[0] == "lit":
@@ -4616,7 +4647,7 @@ def _glob_meet(a: list, b: list) -> bool:
             for lo, hi in t[3]:
                 alpha |= {lo, hi, chr(ord(lo) + 1), chr(ord(hi) + 1), chr(max(ord(lo) - 1, 0)),
                           chr(max(ord(hi) - 1, 0))}
-    seen, todo = set(), [(0, 0)]
+    seen, todo, steps = set(), [(0, 0)], 0
     while todo:
         i, j = todo.pop()
         if (i, j) in seen:
@@ -4632,6 +4663,9 @@ def _glob_meet(a: list, b: list) -> bool:
             continue
         ta, tb = a[i], b[j]
         cands = (ta[1],) if ta[0] == "lit" else (tb[1],) if tb[0] == "lit" else alpha
+        steps += len(cands)
+        if steps > _GLOB_MAX_STEPS:
+            return True
         for c in cands:
             if _glob_accepts(ta, c) and _glob_accepts(tb, c):
                 todo.append((i + (ta[0] != "star"), j + (tb[0] != "star")))
@@ -4656,6 +4690,8 @@ def _glob_covers(pat: str, ending: str, slash: bool) -> bool:
         return False
     # Read with `[^` as a negation, its widest reading: only the refusal above keeps it from counting.
     toks = _glob_parse(pat, slash, True, True)
+    if any(len(t) > 4 for t in toks):
+        return False                    # a POSIX class is read only as "any character"
     while toks and toks[0][0] == "star":
         toks = toks[1:]
     if len(toks) > len(ending) or any(t[0] == "star" for t in toks):
@@ -4663,9 +4699,18 @@ def _glob_covers(pat: str, ending: str, slash: bool) -> bool:
     return all(_glob_accepts(t, c) for t, c in zip(toks, ending[len(ending) - len(toks):]))
 
 
+#: The operand xargs_feed gives an `xargs rm` fed by another command, as norm() spells it.
+_XARGS_ITEM = "${xargs_item}"
+
+
 def _may_name_archive(name: str) -> bool:
     """A file name, or a pattern for one, that some .cat or .dat could have."""
     if _ARCHIVE_EXT.search(name):
+        return True
+    # A name the shell fills in at run time (`ls <game> | while read f; do rm "<game>/$f"`) may be
+    # any archive's, as the same loop under reference/ is denied (user decision 2026-11-05). The
+    # xargs item stands for what a producer prints, which the find and listing readers judge.
+    if "$" in name and name != _XARGS_ITEM:
         return True
     return _is_pattern(name) and any(_glob_may_meet(name, [_GLOB_DISK_NAME] + _glob_lit(e))
                                      for e in _ARCHIVE_ENDINGS)
@@ -4753,8 +4798,27 @@ def named_game_roots(n: str) -> list:
         if (m and m.group(1).lower() == "x4 foundations" and not m.group(2)
                 and (m.start() == 0 or p[m.start() - 1] == "/")):
             out.append(p)
+        elif at >= 0 and _globs_install_name(p):
+            out.append(p)
         if at < 0:
             return out
+
+
+#: The install's folder name as a path segment, for a pattern to meet: `X4*Foundations`, `X4?F...`.
+_INSTALL_NAME = _glob_lit("x4 foundations")
+
+
+def _globs_install_name(p: str) -> bool:
+    """The last segment of `p` is a pattern that may spell the install's folder name (4.1.1 review
+    round 3, C). One that spells it with fewer than two literal characters (`*`, `?*`) is read so
+    only directly under steamapps/common: elsewhere `C:/*/01.dat` names every folder, not a game."""
+    head, _sep, last = p.rpartition("/")
+    if not last or not _is_pattern(last):
+        return False
+    lits = sum(1 for t in _glob_parse(last, False, True, False) if t[0] == "lit")
+    if lits < 2 and not head.endswith("/steamapps/common"):
+        return False
+    return _glob_may_meet(last, _INSTALL_NAME)
 
 
 #: rsync options whose value is the NEXT word when not joined by `=`: a filter rule, a list file,
@@ -4894,13 +4958,15 @@ def _exec_deletes(words: list) -> bool:
 
 
 def _find_parse(words: list):
-    """(tree, has an action) for a find expression, or None when it cannot be read.
+    """(tree, has an action, (mindepth, maxdepth)) for a find expression, or None when it cannot be
+    read. The depths are find's global options, None when not given (the last one counts, as in
+    GNU find).
 
     Nodes: ("and"|"or"|",", [nodes]), ("not", node), ("const", True|False|None),
     ("name", test, value), ("act", "delete"|"print"|"exec", value). None is "cannot tell"."""
     if len(words) > _FIND_MAX_WORDS:
         return None
-    pos, acted = 0, False
+    pos, acted, depth = 0, False, {}
 
     def take():
         nonlocal pos
@@ -4919,7 +4985,10 @@ def _find_parse(words: list):
         if w == "-false":
             return ("const", False)
         if w in _FIND_TRUE1:
-            take()
+            v = take()
+            if w in ("-maxdepth", "-mindepth"):
+                # A depth not spelled as a number (`$N`) bounds nothing that can be read.
+                depth[w] = int(v) if v.isdigit() else None
             return ("const", True)
         if w in _FIND_UNKNOWN0:
             return ("const", None)
@@ -4991,7 +5060,9 @@ def _find_parse(words: list):
         tree = chain(0, 0) if words else ("const", True)
     except ValueError:
         return None
-    return (tree, acted) if pos == len(words) else None
+    if pos != len(words):
+        return None
+    return tree, acted, (depth.get("-mindepth"), depth.get("-maxdepth"))
 
 
 def _literal_tail(pat: str, specials: str, self_escapes: set) -> str:
@@ -5039,7 +5110,9 @@ def _find_name_test(kind: str, value: str, hay: list, name: list, ending: str):
             return None
         escapes = len(v[:-1]) - len(v[:-1].rstrip(chr(92)))
         body = v[:-1] if v.endswith("$") and escapes % 2 == 0 else v
-        tail = _literal_tail(body, ".^$*+?{}[]()|", _RX_SELF_ESCAPES)
+        # Only its last characters: a match ending in all of it ends in them, so a False stays
+        # sound, and a crafted tail of thousands cannot outrun the meet's bounds (round 3, A).
+        tail = _literal_tail(body, ".^$*+?{}[]()|", _RX_SELF_ESCAPES)[-64:]
         if not tail:
             return None
         return None if _glob_meet([_GLOB_ALL] + _glob_lit(tail), hay) else False
@@ -5085,22 +5158,32 @@ def _find_eval(node, test, reach: list, modes: tuple):
 
 
 def _archive_entries(g: str) -> list:
-    """(path, name, ending, is a folder) for what a find over the game may remove: an archive in
-    the game folder or in a DLC folder, and, for a recursive delete only, a DLC folder, extensions/
-    and the game folder themselves (F2). Paths and names are glob tokens."""
+    """(path, name, ending, is a folder, DLC content) for what a find over the game may remove: an
+    archive in the game folder or in a DLC folder; for a recursive delete only, a DLC folder,
+    extensions/ and the game folder themselves (F2); and anything else inside a DLC folder, at any
+    depth and under any name (F8, 4.1.1 review round 3, E). Paths and names are glob tokens."""
     dlc = _glob_lit(g + "/extensions/ego_dlc_") + [_GLOB_DISK_NAME]
     out = []
     for e in _ARCHIVE_ENDINGS:
         name = [_GLOB_DISK_NAME] + _glob_lit(e)
-        out.append((_glob_lit(g + "/") + name, name, e, False))
-        out.append((dlc + [("lit", "/")] + name, name, e, False))
-    out.append((dlc, _glob_lit("ego_dlc_") + [_GLOB_DISK_NAME], "", True))
-    out.append((_glob_lit(g + "/extensions"), _glob_lit("extensions"), "extensions", True))
+        out.append((_glob_lit(g + "/") + name, name, e, False, False))
+        out.append((dlc + [("lit", "/")] + name, name, e, False, False))
+    out.append((dlc, _glob_lit("ego_dlc_") + [_GLOB_DISK_NAME], "", True, False))
+    out.append((_glob_lit(g + "/extensions"), _glob_lit("extensions"), "extensions", True, False))
     # The install folder's own name, in any case: it is spelled `X4 Foundations` on disk.
     base = g.rpartition("/")[2]
     out.append((_glob_lit(g), [("one", False, frozenset((c.lower(), c.upper())), ()) for c in base],
-                base, True))
+                base, True, False))
+    out.append((dlc + [("lit", "/"), _GLOB_ALL], [_GLOB_SEGMENT], "", False, True))
     return out
+
+
+def _entry_depths(rel: list) -> tuple:
+    """(least, most) depth below a find's root of an entry whose path below it is `rel`; most is
+    None when a token may hold any number of `/`."""
+    least = 1 + sum(1 for t in rel if t == ("lit", "/"))
+    deep = any(t[0] != "lit" and _glob_accepts(t, "/") for t in rel)
+    return least, (None if deep else least)
 
 
 def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec: bool = False) -> bool:
@@ -5109,7 +5192,12 @@ def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec
     holds one? Each entry under `root` walks the expression as find would, three-valued: a test the
     text cannot decide may go either way, and an action reached on either branch counts. An
     expression it cannot read may reach every entry. A root in or at a DLC folder is denied
-    whatever it matches (F8)."""
+    whatever it matches (F8).
+
+    A root AT extensions/ also reaches every other file in a DLC folder (F8, round 3 E); a root at
+    the game folder or above does not, by decision: from there `find . -name __pycache__ -exec rm
+    -rf {} +` is routine repository cleanup (BLIND-SPOTS F356). A global -maxdepth or -mindepth
+    drops the entries it cannot reach (round 3, D)."""
     r = root.rstrip("/")
     if _is_dlc_folder(r, g) or _in_dlc_folder(r, g):
         return True
@@ -5118,15 +5206,18 @@ def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec
     plain = raw.replace(chr(92), "/").rstrip("/")
     if any(c in plain for c in "$~`") or _is_pattern(plain) or not plain:
         plain = None
+    ext = g + "/extensions"
+    at_ext = (r == ext) if not _is_pattern(r) else _glob_may_meet(r, _glob_lit(ext))
     entries = []
-    for path, name, ending, folder in _archive_entries(g):
+    for path, name, ending, folder, content in _archive_entries(g):
         modes = dir_modes if folder else file_modes
-        if not modes:
+        if not modes or (content and not at_ext):
             continue
         if _is_pattern(r):
             if not _glob_may_meet(r, path, tail=(("lit", "/"), _GLOB_ALL)):
                 continue
             hay = [_GLOB_ALL, ("lit", "/")] + name
+            span = (1, None)
         else:
             head = r + "/"
             if len(path) <= len(head) or "".join(t[1] for t in path[:len(head)] if t[0] == "lit") != head \
@@ -5134,15 +5225,18 @@ def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec
                 continue
             rel = path[len(head):]
             hay = (_glob_lit(plain + "/") if plain is not None else [_GLOB_ALL, ("lit", "/")]) + rel
-        entries.append((hay, name, ending, modes))
+            span = _entry_depths(rel)
+        entries.append((hay, name, ending, modes, span))
     if not entries:
         return False
     k = _verb_at(seg, 0) + 1            # P1: see _verb_at
     parsed = _find_parse(tokens_of(seg)[k + len(_find_roots(seg)):])
     if parsed is None:
         return True
-    tree, acted = parsed
-    for hay, name, ending, modes in entries:
+    tree, acted, (mind, maxd) = parsed
+    entries = [e for e in entries
+               if (maxd is None or e[4][0] <= maxd) and (mind is None or e[4][1] is None or e[4][1] >= mind)]
+    for hay, name, ending, modes, _span in entries:
         def test(kind, value, hay=hay, name=name, ending=ending):
             return _find_name_test(kind, value, hay, name, ending)
         reach = []
@@ -7970,6 +8064,14 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     def _hits(ops, test):
         return any(test(n, g) for n in _spellings(ops) for g in _games(n))
 
+    def _find_games(n):
+        # ...and, for a find, a Steam library's common/ folder: the install's usual parent, so it may
+        # hold one (4.1.1 review round 3, C). Its archives and DLC folders, as for any root above
+        # extensions/ (see find_can_reach_archive).
+        out = _games(n)
+        lib = n.rstrip("/")
+        return out + ([lib + "/x4 foundations"] if lib.endswith("/steamapps/common") else [])
+
     _archive_written = copy_t + redir_t_all + sed_t + out_t + mod_t
     _archive_removed = rm_t + mv_src + archive_moved_t
     writes_game_archive = (
@@ -7981,7 +8083,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         or _hits(archive_listed_rec_t, _holds_a_dlc)
         or bool(_dlc_named)
         or any(find_can_reach_archive(seg_, n, op[2], g, mode_, rec_)
-               for op, seg_, mode_, rec_ in archive_finds for n in _spellings([op]) for g in _games(n)))
+               for op, seg_, mode_, rec_ in archive_finds for n in _spellings([op])
+               for g in dict.fromkeys(_find_games(n))))
     result = {
         "command": cmd,
         "timeout": timeout,

@@ -585,6 +585,13 @@ function Targets([CommandAst]$c, $binding, [string[]]$names, [bool]$delete = $fa
     # variable. Read as a path it named the root its variable name spells (MEASURED in
     # this lane's replay: an ask on clearing X4_* variables before an installer test).
     $r = RT $r.known @($r.paths | Where-Object { [string]$_ -notmatch $NON_FS_PROVIDER }) $r.filter $false $r.recurse
+    # -Path is a WILDCARD, where a backtick quotes the next character: `Remove-Item '01.c`at'`
+    # removes 01.cat (4.1.1 review round 3, F). -LiteralPath keeps the backtick. The unquoted
+    # spelling is judged beside the written one, so this can only widen a verdict.
+    if ($null -ne (Bound $binding @('Path'))) {
+        $bare = @($r.paths | Where-Object { ([string]$_).Contains('`') } | ForEach-Object { ([string]$_) -replace '`(.)', '$1' })
+        if ($bare.Count) { $r = RT $r.known (@($r.paths) + $bare) $r.filter $false $r.recurse }
+    }
     if ($delete -and (-not $r.known -or (AnyOpaque $r.paths))) {
         Unknown "$($c.GetCommandName()): a delete target the guard cannot resolve: $($c.Extent.Text)"
     }

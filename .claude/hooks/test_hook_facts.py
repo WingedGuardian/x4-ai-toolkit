@@ -7486,8 +7486,8 @@ class TestGameArchiveShellWrites(unittest.TestCase):
     def test_an_unknown_stem_with_a_visible_archive_ending_fires(self):
         self.assertTrue(F('rm "' + GAME + '/$X.dat"')["writes_game_archive"])
 
-    def test_TWIN_an_unresolved_name_or_folder_proves_nothing(self):
-        self.assertFalse(F('rm "' + GAME + '/$X"')["writes_game_archive"])
+    def test_TWIN_an_unresolved_folder_proves_nothing(self):
+        # `rm "<game>/$X"` fires from round 3: see test_a_name_filled_in_at_run_time_may_be_an_archive.
         self.assertFalse(F('rm "$X/01.dat"')["writes_game_archive"])
         self.assertFalse(F('rm "' + GAME + '/extensions/$X/ext_01.cat"')["writes_game_archive"])
 
@@ -7930,7 +7930,7 @@ class TestGameArchiveShellWrites(unittest.TestCase):
     def test_TWIN_a_name_no_archive_could_have_does_not_fire(self):
         for cmd in ('rm "' + GAME + '"/x*.xml', "find " + self.Q(GAME) + " -name " + Q + "ext_v7*.txt" + Q + " -delete",
                     "find " + self.Q(GAME) + " -name " + Q + "*.[!cd]at" + Q + " -delete",
-                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*.xml" + Q + " | xargs rm",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.xml" + Q + " | xargs rm",
                     "find " + self.Q(GAME) + " -name EXT_V710.CAT -delete",      # -name keeps case
                     "find " + self.Q(GAME) + " -name EXT_v710.cat -delete"):     # ...in the stem too
             self.assertFalse(F(cmd)["writes_game_archive"], cmd)
@@ -7976,7 +7976,7 @@ class TestGameArchiveShellWrites(unittest.TestCase):
         # `-name 'ego_dlc_*'` without -r still fires: ego_dlc_x.cat is a name an archive could have.
         for cmd in ("find " + ext + " -maxdepth 1 -name ego_dlc_boron -exec rm {} +",
                     "find " + ext + " -maxdepth 1 -name amod -exec rm -rf {} +",
-                    "find " + ext + " -name __pycache__ -exec rm -rf {} +",
+                    "find " + self.Q(GAME) + " -name __pycache__ -exec rm -rf {} +",
                     "find " + ext + " -maxdepth 1 -name ego_dlc_boron | xargs rm",
                     "ls " + ext + " | xargs rm", "ls " + self.Q(self.MOD) + " | xargs rm -rf"):
             self.assertFalse(F(cmd)["writes_game_archive"], cmd)
@@ -8035,6 +8035,171 @@ class TestGameArchiveShellWrites(unittest.TestCase):
                                 json.dumps(ROOTS)], capture_output=True, text=True, timeout=60)
             self.assertEqual(p.returncode, 0, p.stderr[-400:])
             self.assertLess(float(p.stdout.strip().splitlines()[-1]), 1.0, cmd[:80])
+
+    # --- 4.1.1 review round 3. A: a crafted glob cannot outrun the hook's timeout
+    @staticmethod
+    def _ranges(k):
+        return "".join("[%s-%s]" % (chr(0x100 + 3 * i), chr(0x101 + 3 * i)) for i in range(k))
+
+    def _facts_time(self, cmd):
+        import json
+        import subprocess
+        code = ("import json, sys, time; sys.path.insert(0, sys.argv[1]); import hook_facts as H; "
+                "t = time.perf_counter(); f = H.facts(json.loads(sys.argv[2]), json.loads(sys.argv[3])); "
+                "print(time.perf_counter() - t, f['writes_game_archive'])")
+        here = str(pathlib.Path(__file__).resolve().parent)
+        payload = {"tool_input": {"command": cmd}}
+        try:
+            p = subprocess.run([sys.executable, "-I", "-c", code, here, json.dumps(payload), json.dumps(ROOTS)],
+                               capture_output=True, text=True, encoding="utf-8", timeout=60)
+        except subprocess.TimeoutExpired:
+            self.fail("facts() still running after 60 s, killed: " + cmd[:80])
+        self.assertEqual(p.returncode, 0, p.stderr[-400:])
+        secs, verdict = p.stdout.strip().splitlines()[-1].split()
+        return float(secs), verdict == "True"
+
+    def test_a_glob_past_the_meet_bound_is_read_as_may_match_at_once(self):
+        # MEASURED by the round-3 reviewer: 3,000 ranges ran the hook 37.6 s, past its 30 s timeout.
+        # 1,200 took 4.9 s unbounded here (MEASURED, 4.1.1 round 3) and 0.14 s bounded. Past the
+        # bound the -name may match, so the find deletes the DLC folder it also names.
+        for tail in (" -o -name ego_dlc_boron -exec rm -rf {} +", " -delete"):
+            cmd = "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*" + self._ranges(1200) + "q" + Q + tail
+            secs, verdict = self._facts_time(cmd)
+            self.assertTrue(verdict, tail)
+            self.assertLess(secs, 1.0, tail)
+
+    def test_TWIN_a_glob_within_the_meet_bound_is_still_decided(self):
+        # 30 ranges and a `q` no archive ends in: read in full, so it matches nothing.
+        cmd = "find " + self.Q(GAME) + " -name " + Q + "*" + self._ranges(30) + "q" + Q + " -delete"
+        self.assertEqual(self._facts_time(cmd)[1], False)
+
+    # --- B: a POSIX class closes after its own `]`
+    def test_a_posix_class_in_a_bracket_may_match_any_character(self):
+        for cmd in ("find " + self.Q(GAME) + " -name " + Q + "*.[[:alpha:]]at" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.c[[:alpha:]]t" + Q + " -exec rm {} +",
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*.[[:alpha:]]at" + Q + " -delete",
+                    "find " + Q + "D:/S/steamapps/common/X4 Foundations" + Q + " -name " + Q + "*.[[:digit:]]at" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.[![:digit:]]at" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.[=c=]at" + Q + " -delete",
+                    "rm " + self.Q(GAME) + "/01.c[[:alpha:]]t", "mv " + self.Q(GAME) + "/0[[:digit:]].cat /c/o/"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_posix_class_in_a_name_no_archive_has(self):
+        for cmd in ("find " + self.Q(GAME) + " -name " + Q + "*.[[:alpha:]]ml" + Q + " -delete",
+                    "rm " + self.Q(GAME) + "/x[[:alpha:]].xml"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_posix_class_never_covers_every_archive(self):
+        # Read as "any character", so it cannot say every archive matches: the negation spares none.
+        self.assertTrue(self.find_("! -name " + Q + "*.[[:alpha:]]at" + Q))
+        self.assertFalse(self.find_("! -name " + Q + "*.?at" + Q))
+
+    # --- C: a pattern for the install's folder name
+    def test_a_globbed_install_folder_name_is_an_install(self):
+        for cmd in ("rm D:/Backup/X4*Foundations/01.cat", "rm D:/Backup/X4?Foundations/01.cat",
+                    "rm D:/Backup/X4[[:space:]]Foundations/01.cat", "rm D:/Backup/X4*/01.cat",
+                    "rm D:/SteamLibrary/steamapps/common/X4*/01.cat",
+                    "rm D:/SteamLibrary/steamapps/common/*/01.cat",
+                    "rm D:/Backup/X4*/extensions/ego_dlc_boron/content.xml"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+            self.assertTrue(F(cmd, roots=self.NOGAME)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_folder_pattern_that_is_not_the_install_name(self):
+        for cmd in ("rm D:/Backup/*/01.cat", "rm D:/Backup/?*/01.cat", "rm D:/Backup/Y4*/01.cat",
+                    "rm D:/Backup/X4*/notes.txt", "rm D:/Backup/X4*/sub/01.cat"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_find_over_a_steam_library_may_reach_an_install(self):
+        lib = "/d/SteamLibrary/steamapps/common"
+        for expr in ("-name " + Q + "*.cat" + Q + " -delete", "-maxdepth 2 -name 01.dat -delete",
+                     "-name " + Q + "*" + Q + " -exec rm -rf {} +"):
+            self.assertTrue(F("find " + lib + " " + expr)["writes_game_archive"], expr)
+
+    def test_TWIN_a_find_over_a_steam_library_for_other_files(self):
+        lib = "/d/SteamLibrary/steamapps/common"
+        for cmd in ("find " + lib + " -name " + Q + "*.txt" + Q + " -delete",
+                    "find " + lib + " -name __pycache__ -exec rm -rf {} +",
+                    "find " + lib + " -maxdepth 1 -name " + Q + "*.cat" + Q + " -delete",
+                    "find /d/SteamLibrary/other/common -name " + Q + "*.cat" + Q + " -delete"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- D: -maxdepth and -mindepth
+    def test_a_depth_limited_find_over_extensions_keeps_the_mod_confirmation(self):
+        ext = self.Q(GAME + "/extensions")
+        for cmd in ("find " + ext + " -maxdepth 1 -name " + Q + "zzz_mine_*" + Q + " -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name deployed_old -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name content.xml -delete"):
+            f = F(cmd)
+            self.assertFalse(f["writes_game_archive"], cmd)
+            self.assertTrue(f["rm_deployed_mod"], cmd)
+
+    def test_TWIN_a_depth_that_reaches_a_dlc_still_fires(self):
+        ext = self.Q(GAME + "/extensions")
+        for cmd in ("find " + ext + " -maxdepth 2 -name " + Q + "zzz_mine_*" + Q + " -exec rm -rf {} +",
+                    "find " + ext + " -name " + Q + "zzz_mine_*" + Q + " -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name " + Q + "ego_dlc_*" + Q + " -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth $N -name " + Q + "zzz_mine_*" + Q + " -exec rm -rf {} +",
+                    "find " + self.Q(GAME) + " -maxdepth 1 -name " + Q + "*.cat" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -mindepth 3 -name " + Q + "*.cat" + Q + " -delete",
+                    "find " + ext + " -mindepth 5 -name content.xml -delete"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_depth_no_archive_sits_at(self):
+        for cmd in ("find " + self.Q(GAME) + " -maxdepth 0 -name " + Q + "*.cat" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -mindepth 4 -name " + Q + "*.cat" + Q + " -delete"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- E: from extensions/, a find deletes inside every DLC folder whatever the file
+    def test_a_find_at_extensions_deleting_any_file_a_dlc_may_hold_fires(self):
+        ext = GAME + "/extensions"
+        for cmd in ("find " + self.Q(ext) + " -name content.xml -delete",
+                    "find " + self.Q(ext) + " -name " + Q + "*.xml" + Q + " -delete",
+                    "find " + self.Q(ext) + " -name content.xml | xargs rm",
+                    "find " + self.Q(ext) + " -name videos -exec rm -rf {} +",
+                    # Two of these were twins in round 2: from extensions/ they reach every DLC folder.
+                    "find " + self.Q(ext) + " -name " + Q + "*.xml" + Q + " | xargs rm",
+                    "find " + self.Q(ext) + " -name __pycache__ -exec rm -rf {} +",
+                    "cd " + self.Q(ext) + " && find -name " + Q + "*.xml" + Q + " -delete",
+                    'find "' + GAME + '/ext"* -name content.xml -delete'):
+            f = F(cmd)
+            self.assertTrue(f["writes_game_archive"], cmd)
+            self.assertNotIn("ego_dlc", f["rm_deployed_mod_names"], cmd)
+        self.assertTrue(FC("find -name " + Q + "*.xml" + Q + " -delete", ext)["writes_game_archive"])
+
+    def test_TWIN_a_find_from_the_game_folder_or_one_mod_for_other_files(self):
+        # From the game folder only archives and DLC folders count: `find . -name __pycache__
+        # -exec rm -rf {} +` there is repository cleanup (decided, BLIND-SPOTS F356).
+        for cmd in ("find " + self.Q(GAME) + " -name content.xml -delete",
+                    "find " + self.Q(self.MOD) + " -name " + Q + "*.xml" + Q + " -delete",
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*.xml" + Q,
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*.xml" + Q + " | xargs grep x",
+                    'find "' + GAME + '/extensions/a"* -name content.xml -delete'):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- the user decision of 2026-11-05: a name filled in at run time, as under reference/
+    def test_a_name_filled_in_at_run_time_may_be_an_archive(self):
+        for cmd in ("ls " + self.Q(GAME) + ' | while read f; do rm "' + GAME + '/$f"; done',
+                    "ls " + self.Q(GAME) + ' | while read -r f; do rm -f "' + GAME + '/${f}"; done',
+                    'rm "' + GAME + '/$X"', 'rm "$X4_GAME/$X"'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_run_time_name_in_a_mod_or_a_find_item(self):
+        for cmd in ("ls " + self.Q(self.MOD) + ' | while read f; do rm "' + self.MOD + '/$f"; done',
+                    'rm -rf "' + GAME + '/extensions/$DST"',
+                    "find " + self.Q(GAME) + " -name " + Q + "*.xml" + Q + " | xargs rm"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- F: PowerShell's -Path reads a backtick as a quote
+    def test_a_backtick_in_a_powershell_path_is_read_both_ways(self):
+        for cmd, want in (("Remove-Item '%s'" % (GAME + "/01.d`at"), True),
+                          ("Remove-Item -Path '%s'" % (GAME + "/0`1.dat"), True),
+                          ("Move-Item '%s' /c/o/x" % (GAME + "/01.d`at"), True),
+                          ("Remove-Item -LiteralPath '%s'" % (GAME + "/01.d`at"), False),
+                          ("Remove-Item '%s'" % (GAME + "/notes`.txt"), False)):
+            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
+            if f.get("powershell_error") or f.get("carrier_untranslated"):
+                self.skipTest("no PowerShell parser on this machine")
+            self.assertEqual(f["writes_game_archive"], want, cmd)
 
 
 if __name__ == "__main__":

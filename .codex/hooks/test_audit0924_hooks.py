@@ -1016,7 +1016,10 @@ class TestRRPreArcBash(_RR):
         self.expect([
             ("deny", "echo '" + Rf + "' | xargs rm -rf"),
             ("deny", "printf '%s' '" + Gf + "' | xargs -0 rm -rf"),
-            ("ask", "find '" + Gf + "/extensions' -name '*.bak' | xargs rm -f"),    # 2026-10-27: rm_deployed_mod
+            # 2026-10-27: rm_deployed_mod asked; from extensions/ the find also reaches every DLC folder,
+            # which denies (user ruling 2026-11-05, 4.1.1 review round 3 E). One mod keeps the ask.
+            ("deny", "find '" + Gf + "/extensions' -name '*.bak' | xargs rm -f"),
+            ("ask", "find '" + Gf + "/extensions/amod' -name '*.bak' | xargs rm -f"),
             ("deny", "for f in '" + Rf + "'/*; do rm -rf \"$f\"; done"),
             ("deny", "for d in build '" + Gf + "'; do rm -rf \"$d\"; done"),
             ("deny", "t=$(realpath -m '" + Rf + "/libraries'); rm -rf \"$t\""),
@@ -1320,6 +1323,50 @@ class TestF11UncommittedKnowledgebase(unittest.TestCase):
         (self.root / self.KB).write_bytes(self.base + b"SECRET-CONTENT-LINE\n")
         _, out = self.run_hook()
         self.assertNotIn("SECRET-CONTENT-LINE", out)
+
+
+@unittest.skipUnless(BASH, "no Git Bash: protect-bash.sh cannot be run")
+class TestArchiveGlobWholeHookTime(unittest.TestCase):
+    """4.1.1 review round 3, A, MEASURED: a crafted -name of 3,000 one-range sets ran protect-bash.sh
+    37.6 s. The hook's timeout is 30 s, and a hook that times out does not block, so the delete it
+    names would have gone ahead unjudged. The whole hook, through bash, must answer within 2 s of a
+    plain command's time on the same machine -- and answer deny."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4psfe_"))
+        cls.game = cls.tmp / "X4 Foundations"
+        (cls.game / "extensions" / "ego_dlc_boron").mkdir(parents=True)
+        cls.env = _owned_env(cls.tmp, X4_GAME=str(cls.game), X4_REFERENCE=str(cls.tmp / "reference"),
+                             X4_CONFIG=str(cls.tmp / "none.env"))
+        cls.env.pop("CLAUDE_PROJECT_DIR", None)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def run_hook(self, command):
+        import time
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        t = time.perf_counter()
+        try:
+            p = subprocess.run([BASH, str(HOOKS / "protect-bash.sh")], input=payload, capture_output=True,
+                               text=True, encoding="utf-8", env=self.env, timeout=120)
+        except subprocess.TimeoutExpired:
+            self.fail("protect-bash.sh still running after 120 s")
+        secs = time.perf_counter() - t
+        self.assertEqual(p.returncode, 0, p.stderr[-400:])
+        verdict = json.loads(p.stdout)["hookSpecificOutput"].get("permissionDecision") if p.stdout.strip() else "allow"
+        return verdict, secs
+
+    def test_a_crafted_glob_is_denied_in_time(self):
+        ranges = "".join("[%s-%s]" % (chr(0x100 + 3 * i), chr(0x101 + 3 * i)) for i in range(3000))
+        ext = str(self.game / "extensions").replace(chr(92), "/")
+        crafted = ("find '" + ext + "' -name '*" + ranges + "q' -o -name ego_dlc_boron -exec rm -rf {} +")
+        _v, plain = self.run_hook("find '" + ext + "' -name '*.txt' -print")
+        verdict, secs = self.run_hook(crafted)
+        self.assertEqual(verdict, "deny")
+        self.assertLess(secs - plain, 2.0, "crafted %.1f s, plain %.1f s" % (secs, plain))
 
 
 if __name__ == "__main__":
