@@ -668,6 +668,22 @@ def segments(cmd: str, raw: bool = False) -> list[str]:
     return [_unwrap(p) for p in parts if p.strip()]
 
 
+#: 4.1.1: stages that write nothing themselves and may feed the final `tee` of a mod-list write.
+_MODLIST_PIPE_PRODUCERS = frozenset({":", "echo", "printf", "cat"})
+
+
+def _modlist_tee_pipeline(cmd: str, segs: list) -> bool:
+    """`echo x | tee <profile>/content.xml` (4.1.1): ONE pipeline whose every stage but the last
+    is a producer above and whose last stage is `tee` -- the same data write as `echo x > <file>`,
+    which the mod-list exemption already covers. Anything joined by `;`, `&&` or `||`, a stage
+    that is not one of those, or a segment walked in more than one directory, keeps the
+    ordinary confirmation. Each written path still qualifies on its own (profile_modlist_write)."""
+    if len(segs) < 2 or piped_in(cmd) != [False] + [True] * (len(segs) - 1):
+        return False
+    names = [_verb_name(verb(s)) for s in segs]
+    return names[-1] == "tee" and all(n in _MODLIST_PIPE_PRODUCERS for n in names[:-1])
+
+
 def piped_in(cmd: str) -> list:
     """For each segment segments(cmd) returns, in order: is it fed by a PIPE (`|`)?
 
@@ -7912,11 +7928,14 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # One recognized data-write primitive only. Compound commands can change a
     # destination's kind or link state before a later write. Retain their prior
     # profile confirmation rather than infer future filesystem state from now.
-    simple_modlist_write = (len(all_cmds) == 1 and len(seg_cwd) == 1
-        and _verb_name(verb(seg_cwd[0][0])) in {':', 'echo', 'printf', 'cat', 'tee', 'cp', 'touch'}
+    simple_modlist_write = (len(all_cmds) == 1
+        and (len(seg_cwd) == 1
+             and _verb_name(verb(seg_cwd[0][0])) in {':', 'echo', 'printf', 'cat', 'tee', 'cp', 'touch'}
+             or _modlist_tee_pipeline(all_cmds[0], [s for s, _d in seg_cwd]))
         and not any(marker in body for marker in ('$(', '`', '<(', '>(')))
 
-    def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file", copy_sources=None):
+    def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file", copy_sources=None,
+             reads_stdin=False):
         """(path resolved where it runs, unresolvable?, the token as written). A whole
         array reference -- a for-loop variable, `"${A[@]}"` -- yields one entry PER
         element (resolve_all).
@@ -7965,7 +7984,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                     placed = physical_join('' if execution_context else physical_cwd, r,
                                            posix_bash=POSIX_HOST and cur_dialect[0] != WINDOWS_DIALECT)
                     source_files = None
-                    if scope == 'copy-destination':
+                    # 4.1.1: `tee` copies its STDIN, as `echo x > <file>` does; it has no source
+                    # operand to check, and an empty source list disqualified every tee.
+                    if scope == 'copy-destination' and not reads_stdin:
                         source_files = []
                         for source in copy_sources or []:
                             for resolved in resolve_all(source, assigns):
@@ -8121,7 +8142,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         redir_t += [("truncate",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False, operation="write")]
         mv_src += prep(move_sources(s), c_cwd, c_old, operation="move")
         dests_ = prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination",
-                      copy_sources=exact_copy_sources(s))
+                      copy_sources=exact_copy_sources(s), reads_stdin=_verb_name(verb(s)) == "tee")
         copy_t += dests_
         if copy_names_archive(s):
             archive_into_t += dests_ + prep(robo_copy, c_cwd, c_old)

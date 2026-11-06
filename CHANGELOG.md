@@ -14,6 +14,8 @@
 
 - With `X4_MODS` set to the game's `extensions` folder, a file-tool delete of the whole `extensions` folder or of an official DLC folder (or a file inside one) is now refused, and deleting a mod folder asks for confirmation, as in every other layout. Before, the file guard on its own let all of these through, since everything under the mods folder was treated as your own source; the shell guard still refused or asked, so only the file-tool channel was open. Ordinary edits there are unchanged. A file edit inside a DLC folder is still not refused in this layout (BLIND-SPOTS F358).
 
+- `tee` onto the profile's mod list (`<profile>/content.xml`) no longer asks for confirmation: `tee <file>`, `tee <file> < input`, and a pipeline of `echo`, `printf`, `cat` or `:` into a final `tee` (`echo x | tee <profile>/content.xml`) now get the same note as `echo x > <profile>/content.xml` and `cp`. Before, `tee` always asked. Anything else in the command keeps its own verdict: a `tee` that also writes another profile file, a second `tee`, a stage that is not one of those four, a `;` or `&&` list, or a `$(...)` still asks.
+
 ## v4.1.0 — 2026-11-04
 
 - Typed file deletion of deployed mod folders or ordinary XML now requests confirmation, matching shell retirement policy, instead of being rejected as a direct edit of the deployed copy. Direct writes, write-only batches, explicit moves, archive protections, save preservation and whole-install/reference blocks retain their prior policy.

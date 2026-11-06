@@ -7462,6 +7462,27 @@ class TestProfileModlistWritePolicy(unittest.TestCase):
                    + '; echo fixture > ' + Q + str(self.profile / 'content.xml') + Q)
         self.assertTrue(F(command, roots=self.roots)['writes_profile_other'])
 
+    def test_tee_onto_the_modlist_is_the_same_write_as_a_redirect(self):
+        """4.1.1: `tee` was disqualified by its (absent) source operand, and a pipeline into it by
+        having two segments, so both asked where `echo x > <modlist>` did not."""
+        m = Q + str(self.profile / 'content.xml') + Q
+        for command in ('tee ' + m, 'echo x | tee ' + m, 'printf x | cat | tee -a ' + m + ' > /dev/null',
+                        ': | tee ' + m):
+            with self.subTest(command=command):
+                facts = F(command, roots=self.roots)
+                self.assertTrue(facts['writes_profile'], command)
+                self.assertFalse(facts['writes_profile_other'], command)
+
+    def test_TWIN_tee_onto_anything_else_or_from_a_writer_keeps_its_confirmation(self):
+        m = Q + str(self.profile / 'content.xml') + Q
+        c = Q + str(self.profile / 'config.xml') + Q
+        for command in ('echo x | tee ' + c, 'echo x | tee ' + m + ' ' + c,
+                        'echo x | tee ' + m + ' | tee ' + c, 'echo x; tee ' + m,
+                        'mkdir -p ' + m + ' | tee ' + m, 'echo x && echo y | tee ' + m,
+                        'echo $(date) | tee ' + m):
+            with self.subTest(command=command):
+                self.assertTrue(F(command, roots=self.roots)['writes_profile_other'], command)
+
 
 class TestGameArchiveShellWrites(unittest.TestCase):
     """A shell command that changes a base-game or official DLC archive gets the deny the file

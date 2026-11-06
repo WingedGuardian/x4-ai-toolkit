@@ -2632,6 +2632,23 @@ MUTANTS = [
      'input=text.encode("utf-8"), capture_output=True, timeout=timeout, env=env,',
      'input=text.encode("utf-8"), capture_output=True, timeout=timeout,',
      'TestPowerShellStartsWithoutNetworkCalls.test_telemetry_and_update_check_are_off_and_the_env_is_kept'),
+    # --- 4.1.1: a tee onto the profile mod list is the redirect's exempt write ----
+    ("4.1.1: tee copies stdin, so it has no source operand to check",
+     "                    if scope == 'copy-destination' and not reads_stdin:",
+     "                    if scope == 'copy-destination':",
+     "TestProfileModlistWritePolicy.test_tee_onto_the_modlist_is_the_same_write_as_a_redirect"),
+    ("4.1.1: a producer pipeline into tee is one mod-list write",
+     "             or _modlist_tee_pipeline(all_cmds[0], [s for s, _d in seg_cwd]))",
+     "             or False)",
+     "TestProfileModlistWritePolicy.test_tee_onto_the_modlist_is_the_same_write_as_a_redirect"),
+    ("4.1.1: only producers may feed the mod-list tee",
+     '    return names[-1] == "tee" and all(n in _MODLIST_PIPE_PRODUCERS for n in names[:-1])',
+     '    return names[-1] == "tee"',
+     "TestProfileModlistWritePolicy.test_TWIN_tee_onto_anything_else_or_from_a_writer_keeps_its_confirmation"),
+    ("4.1.1: only a pure pipeline (no ; && ||) is one mod-list write",
+     "    if len(segs) < 2 or piped_in(cmd) != [False] + [True] * (len(segs) - 1):",
+     "    if len(segs) < 2:",
+     "TestProfileModlistWritePolicy.test_TWIN_tee_onto_anything_else_or_from_a_writer_keeps_its_confirmation"),
 ]
 
 SHIM = '''
