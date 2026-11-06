@@ -16,6 +16,8 @@
 
 - `tee` onto the profile's mod list (`<profile>/content.xml`) no longer asks for confirmation: `tee <file>`, `tee <file> < input`, and a pipeline of `echo`, `printf`, `cat` or `:` into a final `tee` (`echo x | tee <profile>/content.xml`) now get the same note as `echo x > <profile>/content.xml` and `cp`. Before, `tee` always asked. Anything else in the command keeps its own verdict: a `tee` that also writes another profile file, a second `tee`, a stage that is not one of those four, a `;` or `&&` list, or a `$(...)` still asks.
 
+- `x4fresh rebuild`: when a builder fails, the `FAILED` line now ends with the job wrapper's own line that explains the exit (a kill, a refusal, a watchdog, a cap that was hit, or the exit code it reports, for example `rb: KILLED by rb: memory cap 3.0 GB hit (allocation refused) -> exit 86`), and that line is listed first. Before, such a line was not collected at all unless it said WARNING or ERROR, so the report showed an unrelated wrapper remark instead. A build that succeeds reports nothing new.
+
 ## v4.1.0 — 2026-11-04
 
 - Typed file deletion of deployed mod folders or ordinary XML now requests confirmation, matching shell retirement policy, instead of being rejected as a direct edit of the deployed copy. Direct writes, write-only batches, explicit moves, archive protections, save preservation and whole-install/reference blocks retain their prior policy.
