@@ -458,7 +458,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
-| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled | FIXED 2026-11-05 |
+| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny | FIXED 2026-11-05 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12171,4 +12171,56 @@ of the 14 above plus these is unread at `reference/` as well, except where noted
 - `xargs -i` and `xargs --replace` with no attached value: the shared wrapper table reads the next word as their value, so the
   delete verb is never seen. `-I R`, `-IR` and `--replace=R` are read.
 
-**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 83 mutants in `scripts/verify-hook-tests.py`, and the archive probes in `scripts/test-hooks.sh`.
+**REVIEW ROUND 2 2026-11-05 (4.1.1).** MEASURED through `protect-bash.sh` at e5eb547e and at the fix, fixture roots (the
+reviewer's c1 to c8, and c3 again with no game root and with the real install path as root); nothing ran. 705 rows paired
+per item: 78 moved, every one toward deny (61 allow, 12 ask and 5 advise became deny), 0 weakened, 0 unpaired.
+
+| row | form | e5eb547e | fix |
+|---|---|---|---|
+| R2 F1 | `rm <ventures>/ext_v7*`, `find <ventures> -name 'ext_v7*' -delete` | ask | deny |
+| R2 F1 | `find <game> -name ext_v710.cat`, `10.cat`, `ext_03_diff_v900.dat`, `'ext_v7*'` with `-delete` | advise | deny |
+| R2 F1 | `find <game>/extensions -name 'ext_v7*' \| xargs rm`, `ls <ventures>/ext_v7* \| xargs rm` | ask | deny |
+| R2 F2 | `find <game>/extensions -maxdepth 1 -name 'ego_dlc_*' -exec rm -rf {} +`, and `\| xargs rm -rf` | ask | deny |
+| R2 F3 | `cd <game> && find -name '*.dat' -delete`, `cd <game> && ls \| xargs rm` | allow | deny |
+| R2 F4 | `-exec env rm`, `-exec busybox rm`, `-exec cmd /c del` | allow | deny |
+| R2 F5 | `find <game> -name '*.[^x]at' -delete`, `-name '\0\1.dat'` | advise | deny |
+| R2 F7 | `rm D:/SteamLibrary/steamapps/common/X4 Foundations/01.dat`, root configured elsewhere | allow | deny |
+| R2 F8 | `rm <dlc>/content.xml`, `rm -rf <dlc>/libraries` | ask | deny |
+| TWIN (test-hooks.sh) | `find <extensions> -maxdepth 1 -name deployed -exec rm -rf {} +` | ask | ask |
+| TWIN | `ls`, `cat`, `sha256sum`, `git status` in the game; `cp <archive> /c/o/x`; a mod's `ext_01.cat`; `.claude/` cleanups; the profile | unchanged | unchanged |
+
+What changed. No list of archive names: a name or pattern is an archive when some lower-case name ending `.cat` or `.dat` could
+match it, decided by intersecting the two globs (`_glob_meet`), never by samples. A `find` walks symbolic entries (any archive in
+the game folder or a DLC folder; for a recursive delete also a DLC folder, `extensions/` and the game folder themselves); a
+`-name`/`-path` is True only when it holds for every name with that ending, False when it can hold for none, else unknown. A
+backslash or `[^` is read every way a tool might read it and never counts as holding for every name. A find, or the producer
+of an `xargs rm`, with no path is `.`. `-exec` reads its verb through the shared wrapper table and carrier walk. The folder-name
+fallback is ADDED to a configured root. User ruling 2026-11-05: a delete or move of anything inside an official DLC folder
+denies; an `ego_dlc_*` folder is never named in the deployed-mod confirmation. A mod folder delete keeps its ask.
+
+DECIDED, conservative (each a deny where no archive is touched): F6 `find <game> -regex '.*/deployed/.*\.dat' -delete`;
+`-name 'ego_dlc_*' -exec rm {} +` without `-r` (`ego_dlc_x.cat` is a name an archive could have); a glob that could name a DLC
+folder only in theory, `rm <game>/extensions/*a*a*...` (c4, ask before); `-name '*\*'`, which only the literal reading of the
+backslash lets reach an archive; any folder named `X4 Foundations`, a backup copy included. Found by the per-item diff and fixed:
+`touch --reference='<archive>' /c/o/x` (allow at e5eb547e) denied in a first run, because the fallback read the option word as a path; allow again at the fix.
+
+LIMITS, round 2. A filtered find from ABOVE a DLC folder (`find <game> -name '*.bak' -delete`) is judged on archives and DLC
+folders only, not on the DLC's other files, so a game-root cache cleanup keeps its verdict; a root at or inside a DLC folder
+denies whatever it matches. Shell WRITES to a DLC's other files keep the in-tree advisory. Only this rule and the `xargs` feed read
+a path-less find as `.`; the in-tree advisory still does not (`cd <game> && find -name '*.xml' -delete` allows). The paragraph
+above saying names are "tried against samples" is SUPERSEDED by this section.
+
+**Open after round 2, added to the list above (MEASURED allow or advise at the fix, reviewer rows):** a backtick substitution,
+`` rm `echo <archive>` `` (advise; the shared tokenizer splits it into words, so `identity_subst` never sees one token, while
+`$(echo <archive>)` denies); `xargs -I{} mv {} <x>`, `xargs -I{} sh -c 'rm {}'`, `xargs sh -c 'rm "$@"' _`, `xargs cp -t`;
+`-exec mv`, `-exec cp <x> {}`, `-exec dd of={}`, `-exec truncate -s0 {}`; `perl -pi`, `python -c`, `tar -C`, `unzip -d`,
+`7z -o`, `wget -O`, `gzip`, `git clean` (asks); a filter (`sort`, `grep`) or a `while read` loop between the producer and the
+delete, and `xargs rm < <list>`; `find -L`/`-H`/`-P`; `xargs -i`/`--replace` with no value; PowerShell
+`gci <game> -Recurse | ? Extension -eq '.dat' | ri` (advise) and, with no root, `Remove-Item "$env:X4_GAME\01.dat"` (allow).
+`/cygdrive/c/...`, `/mnt/c/...` and UNC spellings now deny when the path runs through a folder named `X4 Foundations` (the
+fallback); other spellings of a renamed install stay open.
+
+Timing: no new-path parse over 1 s in the unit bound, and the slowest c3 call alone took 0.96 s (0.71 s at e5eb547e); the slowest probe call, 8.2 s, is c5's many-operand `rm`, 8.2 s at
+e5eb547e too.
+
+**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 103 `game archive` mutants in `scripts/verify-hook-tests.py` (120 with the `glob:`, `recursion:`, `xargs:` and `find -exec` ones), and the archive probes in `scripts/test-hooks.sh`.
