@@ -458,7 +458,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
-| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`) | FIXED 2026-11-05 |
+| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder) | FIXED 2026-11-06 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12262,4 +12262,50 @@ A `while read` loop whose delete names no game folder (`find <game> ... | while 
 Timing: the slowest call is still c5's many-operand `rm`, 9.1 s (8.2 s at cac38adb); no other over 2.3 s. The crafted rows r4
 to r6 took 29, 4.7, 12.9 and 65 s at cac38adb and 0.9 to 1.5 s at the fix.
 
-**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 103 `game archive` mutants in `scripts/verify-hook-tests.py` (120 with the `glob:`, `recursion:`, `xargs:` and `find -exec` ones), plus 23 round-3 mutants, one per clause (labels ending `(A)` to `(E)` and `(loop)`), `TestArchiveGlobWholeHookTime` in `test_audit0924_hooks.py`, and the archive probes in `scripts/test-hooks.sh`.
+**REVIEW ROUND 4 2026-11-06 (4.1.1).** MEASURED through `protect-bash.sh` at 69fb8a6e, at cac38adb and at the fix, fixture
+roots (every set of round 3, the reviewer's three round-4 hook sets, and 37 rows of this round's own); nothing ran. 988 rows paired
+per item, 0 unpaired. Against 69fb8a6e 31 moved: 28 toward deny, 1 allow to advise, 2 deny to ask (row 4). Against
+cac38adb 67 moved; the 6 weaker rows are the 5 requested D asks (`-maxdepth 1 -name 'zzz_*' -exec rm -rf {} +`, and its
+`-mindepth 1` form) and `find <game> -maxdepth 0 | xargs rm` (deny to advise, already at 69fb8a6e: only the root is printed, and a
+plain `rm` cannot remove a folder).
+
+**Round 3 correction.** Round 3's accounting above missed one weakening. D's depth filter removed the deeper entries that had
+masked a skip of the root itself, so `find <game> -maxdepth 0 | xargs rm -rf` and its `-print0`, `-mindepth 0` and `cd <game> &&
+find .` forms went deny to advise or allow, and the `extensions/` form deny to ask, at 69fb8a6e. Fixed below (1).
+
+| row | form | 69fb8a6e | fix |
+|---|---|---|---|
+| 1 | `find <game> -maxdepth 0 \| xargs rm -rf` (also `-print0`, `-mindepth 0`, `xargs -r rm -rf --`), `cd <game> && find . -maxdepth 0 ...`, `find <ext> -maxdepth 0 ...`, a globbed install root | advise, allow or ask | deny |
+| 7 | `find <game> -name '*.cat' -exec echo hi \; -delete`, `-exec sha256sum {} \; -delete`, `find <ext> -name 'ego_dlc_*' -exec echo hi \; -exec rm -rf {} +`, `-execdir`, `-ok`/`-okdir` | allow | deny |
+| 3 | PowerShell `Get-ChildItem -Path '<game>/01.c`at' \| Remove-Item`, `Get-Item '<game>/0?.c`at' \| Remove-Item` | advise | deny |
+| 4 | PowerShell `Remove-Item -Path '<ext>/zzz_my`[1`]mod' -Recurse` | deny ("cannot delete the X4 game installation directory") | ask (mod confirmation) |
+| 5 | `find /d/Games/X4*Foundations -name '*.cat' -delete` | allow | deny |
+| 6 | `rm "<game>/`cat list`"`, `rm "<game>/$f/01.cat"` | advise | deny |
+| TWIN | `find <game> -maxdepth 0 \| xargs rm`; a mod folder at depth 0 with `-exec rm -rf`; `-exec sha256sum {} \;` alone; `-LiteralPath '...01.c`at'`; `rm "<game>/$f/notes.txt"`; `rm "<ext>/$x/ext_01.cat"` (a mod's own archive, its ask) | unchanged | unchanged |
+
+What changed. 1: a `find`'s start folder is a depth-0 entry; when it is the game folder, `extensions/`, a DLC folder or a folder
+above them, a recursive delete of what the find prints or runs on reaches it, whatever `-maxdepth` says. 7, root cause: `segments()`
+split a command at a backslash-escaped `;`, so `find ... -exec echo {} \; -delete` became two commands and find's reader never saw
+the `-delete`; the quoted `';'` spelling was denied. `segments()` and `piped_in()` now read an escaped character as literal, as
+the shell does, so every reader of the segment sees the whole command (MEASURED for `find_can_reach_archive`; by construction
+for the older `_find_delete` and anything else after a `\;`, `\|` or `\&`). The tmux reader, which relied on the old split for `tmux ls\; run '<cmd>'`, now splits
+a word ending in `\;` itself. A `\+` reaches find as `+`. 3: the backtick-unquoted spelling is now also read
+for the `-Path` of a `Get-Item`, `Get-ChildItem`, `Resolve-Path`, `Convert-Path` or `Get-ItemProperty` feeding the delete;
+`-LiteralPath` keeps it literal. 4: a backtick before a wildcard character keeps that character literal in PowerShell, so that
+spelling is no longer unquoted into a glob. 5: a globbed install name counts as the last segment, as the literal name does.
+6: a backtick pair counts as a name filled in at run time, as `$(...)` does, and so does a `$` or backtick folder directly in the
+game folder holding an archive name (it may be `.` or `extensions/ego_dlc_x`). Not under `extensions/`: `rm "<ext>/$MOD/ext_01.cat"`
+is how a packed mod is retired.
+
+NOT FIXED, open: a bare `rm "$f"` (or `ls | while read f; do rm "$f"; done`) run from inside the game or a DLC folder stays
+allow: an unresolved relative operand is never joined to the shell's folder, and the archive check has no cwd to join it to.
+NOT FIXED, PRE-ARC (present at v4.1.0, MEASURED): `rm -rf '<ext>/zzz_my[1]mod'` and `Remove-Item -LiteralPath
+'<ext>/zzz_my[1]mod' -Recurse` deny as "the game installation directory": `glob_covers` reads quoted brackets as a glob and a
+glob last segment as "the folder's contents". Holding the release does not fix it; recorded for 4.1.1's after-list.
+NOTE (2): the glob meet bound is per match, not per hook. Inputs that still take over 20 s (130 slow `-name` tests, 300 crafted
+operands; 20.5 s through the hook at 69fb8a6e and at the fix) are denied by the backend's deadline, so they fail closed.
+
+Timing, whole hook, final run: c5's many-operand `rm` 8.6 s (10.2 s at 69fb8a6e); the reviewer's four budget rows 3.5 to
+20.6 s, as at 69fb8a6e; no other row over 2.5 s.
+
+**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 103 `game archive` mutants in `scripts/verify-hook-tests.py` (120 with the `glob:`, `recursion:`, `xargs:` and `find -exec` ones), plus 23 round-3 mutants, one per clause (labels ending `(A)` to `(E)` and `(loop)`), 14 round-4 mutants (labels ending `(r4, N)`; the 4 PowerShell ones are run by hand, since the table mutates `hook_facts.py` only), `TestArchiveGlobWholeHookTime` in `test_audit0924_hooks.py`, and the archive probes in `scripts/test-hooks.sh`.
