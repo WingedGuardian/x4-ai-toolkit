@@ -12429,3 +12429,25 @@ re-run: 0.5 to 0.9 s, a stall of the machine, not of the hook (#31). No other ro
 **RE-DERIVED BY:** `TestRound6FindExecAndCarriers` in `test_hook_facts.py` (14 tests), 40 mutants labelled `(r6, A|B|C|D)` in
 `scripts/verify-hook-tests.py`, the round-6 probes in `scripts/test-hooks.sh`, and the `ssh to an unplaced host` seed in
 `scripts/fuzz-guard.py` (its 164 mutators weaken it 0 times).
+
+## F358 - With the mods root set to the extensions folder, the file guard allowed a typed delete of the whole folder or a DLC · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-06
+
+Found by the 4.1.0 release session; owner ruling: deleting the whole extensions folder or a DLC is denied, a mod folder keeps
+its confirmation. `protect-files.sh` whitelists everything under `X4_MODS` before the deployed-delete block, so with
+`X4_MODS=<game>/extensions` (the single-location layout written out) that block never ran. MEASURED with `protect-files.sh`
+ALONE on a `DeleteFile` payload (`test_mods_root_at_extensions_file_guard_alone`), before the fix: 5 of 5 targets ALLOWED
+(the folder, `ego_dlc_boron`, `ego_dlc_boron/content.xml`, a mod, a mod file), where the policy is deny, deny, deny, ask,
+ask. Through `x4guard check --kind delete` and the neutral `agent-harness` delete the same targets already came out deny /
+ask, because the shell guard's verdict was combined in (before the fix, as expected: 8 of 8 through `x4guard check`, 3 of 3
+through the neutral delete): the hole was the file channel by itself.
+
+Fix: the whitelist is skipped only for a typed delete under `X4_EXTENSIONS` (`x4_typed_delete`, the existing tool-name
+test, now one function used in both places). Ordinary edits under that mods root stay allowed
+(`test_TWIN_mods_root_at_extensions_keeps_ordinary_writes_allowed`).
+
+**OPEN, not in the ruling's scope.** An Edit or Write of a file INSIDE a DLC folder, MEASURED with the file guard alone (4
+payloads each: Edit/Write x `libraries/wares.xml`/`content.xml`): `X4_MODS=<extensions>` -> advise, 4 of 4;
+`X4_MODS` unset -> ask (the deployed-mod confirmation), 4 of 4; `X4_MODS` elsewhere -> deny, 4 of 4. A DLC edit is
+refused in one of the three layouts only; whether it should always deny is the owner's call.
+
+**RE-DERIVED BY:** the `mods_root_at_extensions` tests in `tests/test_deployed_retirement_policy.py`.
