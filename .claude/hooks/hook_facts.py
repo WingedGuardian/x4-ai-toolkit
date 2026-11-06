@@ -3346,9 +3346,11 @@ def xargs_feed(seg: str, prev) -> list[str]:
         names = [ft[i + 1] for i, t in enumerate(ft[:-1]) if t in ("-name", "-iname")]
         if names and all(n in _REGENERABLE for n in names):
             return []
-        # find's PATHS only -- its predicates' values are not places.
-        return [o.rstrip("/" + chr(92)) + "/${XARGS_ITEM}" for o in _find_roots(prev)]
-    return [o.rstrip("/" + chr(92)) + "/${XARGS_ITEM}" for o in _operands(prev)]
+        # find's PATHS only -- its predicates' values are not places. None is `.` (GNU find),
+        # and a bare `ls` lists `.` too (4.1.1 review round 2, F3).
+        return [o.rstrip("/" + chr(92)) + "/${XARGS_ITEM}" for o in _find_roots(prev) or ["."]]
+    return [o.rstrip("/" + chr(92)) + "/${XARGS_ITEM}"
+            for o in _operands(prev) or (["."] if pv in ("ls", "dir") else [])]
 
 
 def _find_roots(seg: str) -> list:
@@ -3464,8 +3466,9 @@ def find_scoped_deletes(seg: str) -> list:
     return [] if _only_regenerable(toks) else paths
 
 
-def _find_delete(seg: str) -> tuple:
-    """(paths a `find` deletes under, whether a NARROWING filter scopes it)."""
+def _find_delete(seg: str, default_root: bool = False) -> tuple:
+    """(paths a `find` deletes under, whether a NARROWING filter scopes it). `default_root`: a
+    find with no path searches `.`, as GNU find does (the archive rule only, 4.1.1 round 2 F3)."""
     if verb(seg) != "find":
         return [], False
     toks = [t for t, q in tokens(seg)]
@@ -3508,7 +3511,7 @@ def _find_delete(seg: str) -> tuple:
         if not quoted and t.startswith("-"):
             break
         out.append(t)
-    return out, filtered
+    return (out or (["."] if default_root else [])), filtered
 
 
 #: Verbs that DESTROY a file's content in place without deleting it. AUDIT-2026-09-24
@@ -4527,23 +4530,145 @@ GAME_ROOTISH = re.compile(r"(x4 foundations|egosoft/x4)(/extensions)?$", re.I)
 # A MOD's own ext_*.cat is not here: packing and retiring a mod stays with the deploy rules.
 # Only ever fed text; the disk is never read, and an unresolved folder proves nothing.
 _ARCHIVE_EXT = re.compile(r"[.](cat|dat)$")
-#: What a pattern is tried against. READ from one install: 01-09 plus `_sig` and two loose .dat in
-#: the root, and these stems in all 8 DLC. A pattern that ends in .cat or .dat needs no sample.
-_ARCHIVE_SAMPLES = (tuple("%02d%s.%s" % (n, sig, ext) for n in range(1, 10) for sig in ("", "_sig")
-                          for ext in ("cat", "dat"))
-                    + ("lang.dat", "version.dat")
-                    + tuple("ext_%s%s.%s" % (stem, sig, ext)
-                            for stem in ("01", "02", "03", "01_diff_v900", "v610") for sig in ("", "_sig")
-                            for ext in ("cat", "dat")))
-_DLC_SAMPLES = ("boron", "mini_01", "mini_02", "pirate", "split", "terran", "timelines", "ventures")
+#: No list of archive NAMES: a pattern is an archive when SOME name ending .cat or .dat could
+#: match it. The stems differ per DLC and grow with patches (READ 2026-11-05: ventures alone has
+#: ext_v610, ext_v620, ext_v700, ext_v710 and two _diff_v900 pairs), so a sample list went stale
+#: once already (4.1.1 review round 2, F1).
+_ARCHIVE_ENDINGS = (".cat", ".dat")
+#: The parts of a glob, as tokens: ("lit", c) one character; ("one", neg, chars, ranges) one
+#: character in (or, neg, outside) the set; ("star", neg, chars, ranges) any run of such characters.
+_GLOB_ALL = ("star", True, frozenset(), ())               # anything, `/` included
+_GLOB_SEGMENT = ("star", True, frozenset("/"), ())         # anything inside one path segment
+#: A name on disk: one segment, lower case. Every archive and DLC folder name READ is lower case.
+_GLOB_DISK_NAME = ("star", True, frozenset("/"), (("A", "Z"),))
 
 
 def _is_pattern(text: str) -> bool:
     return any(c in text for c in _OPERAND_PATTERN_CHARS)
 
 
-def _dlc_samples(g: str) -> list:
-    return ["%s/extensions/ego_dlc_%s" % (g, name) for name in _DLC_SAMPLES]
+def _glob_lit(text: str) -> list:
+    return [("lit", c) for c in text]
+
+
+def _glob_parse(pat: str, slash: bool, escapes: bool, caret: bool) -> list:
+    """A glob as tokens. `slash`: `*`, `?` and a bracket may match `/` (find -path), or not (a
+    shell path, find -name). `escapes`: a backslash quotes the next character. `caret`: `[^` is a
+    negation, as `[!` is."""
+    out, i, n = [], 0, len(pat)
+    noslash = frozenset() if slash else frozenset("/")
+    while i < n:
+        c = pat[i]
+        if c == chr(92) and escapes and i + 1 < n:
+            out.append(("lit", pat[i + 1]))
+            i += 2
+        elif c == "*":
+            if not (out and out[-1][0] == "star"):
+                out.append(("star", True, noslash, ()))
+            i += 1
+        elif c == "?":
+            out.append(("one", True, noslash, ()))
+            i += 1
+        elif c == "[":
+            j = i + 1
+            neg = j < n and (pat[j] == "!" or (caret and pat[j] == "^"))
+            j += neg
+            close = pat.find("]", j + 1 if j < n and pat[j] == "]" else j)
+            if close < 0:
+                out.append(("lit", c))
+                i += 1
+                continue
+            body, chars, ranges, m = pat[j:close], set(), [], 0
+            while m < len(body):
+                if m + 2 < len(body) and body[m + 1] == "-":
+                    ranges.append((body[m], body[m + 2]))
+                    m += 3
+                else:
+                    chars.add(body[m])
+                    m += 1
+            if neg:
+                chars |= noslash
+            out.append(("one", neg, frozenset(chars), tuple(ranges)))
+            i = close + 1
+        else:
+            out.append(("lit", c))
+            i += 1
+    return out
+
+
+def _glob_accepts(t: tuple, c: str) -> bool:
+    if t[0] == "lit":
+        return t[1] == c
+    hit = c in t[2] or any(lo <= c <= hi for lo, hi in t[3])
+    return hit != t[1]
+
+
+def _glob_meet(a: list, b: list) -> bool:
+    """Some string matches both token lists. A walk over pairs of positions; a character is tried
+    from a literal on either side, else from stand-ins that cover every class: each character the
+    patterns name, a range's ends and their neighbours, and one that nothing names."""
+    alpha = {"/", chr(0xE000)}
+    for t in a + b:
+        if t[0] == "lit":
+            alpha.add(t[1])
+        else:
+            alpha |= t[2]
+            for lo, hi in t[3]:
+                alpha |= {lo, hi, chr(ord(lo) + 1), chr(ord(hi) + 1), chr(max(ord(lo) - 1, 0)),
+                          chr(max(ord(hi) - 1, 0))}
+    seen, todo = set(), [(0, 0)]
+    while todo:
+        i, j = todo.pop()
+        if (i, j) in seen:
+            continue
+        seen.add((i, j))
+        if i == len(a) and j == len(b):
+            return True
+        if i < len(a) and a[i][0] == "star":
+            todo.append((i + 1, j))
+        if j < len(b) and b[j][0] == "star":
+            todo.append((i, j + 1))
+        if i == len(a) or j == len(b):
+            continue
+        ta, tb = a[i], b[j]
+        cands = (ta[1],) if ta[0] == "lit" else (tb[1],) if tb[0] == "lit" else alpha
+        for c in cands:
+            if _glob_accepts(ta, c) and _glob_accepts(tb, c):
+                todo.append((i + (ta[0] != "star"), j + (tb[0] != "star")))
+    return False
+
+
+def _glob_may_meet(pat: str, other: list, slash: bool = False, tail: tuple = ()) -> bool:
+    """`pat` (then the tokens `tail`) and the tokens `other` can match one string, under every
+    reading a tool might give `pat`: a backslash as an escape or as itself, `[^` as a negation or
+    as a member (F5)."""
+    for esc in ((True, False) if chr(92) in pat else (True,)):
+        for caret in ((True, False) if "[^" in pat else (False,)):
+            if _glob_meet(_glob_parse(pat, slash, esc, caret) + list(tail), other):
+                return True
+    return False
+
+
+def _glob_covers(pat: str, ending: str, slash: bool) -> bool:
+    """Every name ending in `ending` matches `pat`: leading `*`s, then characters that each accept
+    their place in the ending. A backslash or `[^` is never read this way (F5)."""
+    if chr(92) in pat or "[^" in pat or not pat.startswith("*"):
+        return False
+    # Read with `[^` as a negation, its widest reading: only the refusal above keeps it from counting.
+    toks = _glob_parse(pat, slash, True, True)
+    while toks and toks[0][0] == "star":
+        toks = toks[1:]
+    if len(toks) > len(ending) or any(t[0] == "star" for t in toks):
+        return False
+    return all(_glob_accepts(t, c) for t, c in zip(toks, ending[len(ending) - len(toks):]))
+
+
+def _may_name_archive(name: str) -> bool:
+    """A file name, or a pattern for one, that some .cat or .dat could have."""
+    if _ARCHIVE_EXT.search(name):
+        return True
+    return _is_pattern(name) and any(_glob_may_meet(name, [_GLOB_DISK_NAME] + _glob_lit(e))
+                                     for e in _ARCHIVE_ENDINGS)
 
 
 def _is_dlc_folder(n: str, g: str) -> bool:
@@ -4552,8 +4677,17 @@ def _is_dlc_folder(n: str, g: str) -> bool:
     prefix = g + "/extensions/ego_dlc_"
     if n.startswith(prefix) and "/" not in n[len(prefix):]:
         return True
-    return _is_pattern(n) and any(d.count("/") == n.count("/") and fnmatch.fnmatchcase(d, n)
-                                  for d in _dlc_samples(g))
+    return _is_pattern(n) and _glob_may_meet(n, _glob_lit(prefix) + [_GLOB_SEGMENT])
+
+
+def _in_dlc_folder(n: str, g: str) -> bool:
+    """`n` is INSIDE an official DLC folder, at any depth, or a pattern reaching inside one. User
+    ruling 2026-11-05: a delete or move there is denied as an archive's is, never asked as a mod's."""
+    prefix = g + "/extensions/ego_dlc_"
+    if n.startswith(prefix) and "/" in n[len(prefix):].rstrip("/"):
+        return True
+    return _is_pattern(n) and _glob_may_meet(n, _glob_lit(prefix) + [_GLOB_SEGMENT, ("lit", "/"),
+                                                                     _GLOB_ALL])
 
 
 def _is_archive_home(n: str, g: str) -> bool:
@@ -4568,25 +4702,49 @@ def _is_game_archive(n: str, g: str) -> bool:
     home, sep, name = n.rpartition("/")
     if not sep or not _is_archive_home(home, g):
         return False
-    if _ARCHIVE_EXT.search(name):
-        return True
-    in_dlc = _is_dlc_folder(home, g)
-    return _is_pattern(name) and any(fnmatch.fnmatchcase(s, name) for s in _ARCHIVE_SAMPLES
-                                     if s.startswith("ext_") == in_dlc)
+    return _may_name_archive(name)
 
 
 def _removes_game_archive(n: str, g: str) -> bool:
-    """A delete or move of `n` takes an archive away, or the DLC folder holding them. `<x>/*` is
-    how the PowerShell front end spells `Get-ChildItem <x> | Remove-Item`, so <x> counts too."""
-    return (_is_game_archive(n, g) or _is_dlc_folder(n, g)
+    """A delete or move of `n` takes an archive away, the DLC folder holding them, or anything
+    else inside a DLC folder (F8). `<x>/*` is how the PowerShell front end spells
+    `Get-ChildItem <x> | Remove-Item`, so <x> counts too."""
+    return (_is_game_archive(n, g) or _is_dlc_folder(n, g) or _in_dlc_folder(n, g)
             or (n.endswith("/*") and _is_game_archive(n[:-2], g)))
+
+
+def _holds_a_dlc(n: str, g: str) -> bool:
+    """`n` is the game's extensions/, the game folder, or a folder above it, or a pattern for one:
+    a RECURSIVE delete of it takes every official DLC with it (F2)."""
+    cands = [g + "/extensions", g] + [g[:i] for i in range(len(g)) if g[i] == "/" and i]
+    if not _is_pattern(n):
+        return n.rstrip("/") in cands
+    return any(_glob_may_meet(n, _glob_lit(c)) for c in cands)
+
+
+def deletes_recursively(words: list) -> bool:
+    """The delete verb among `words` (a command's words, wrappers and carriers included) removes
+    folders whole: `rm -r`/`-R`/`--recursive` in any cluster, as the translated `rd /s` is too."""
+    text = " ".join(words)
+    for c in [text] + _inner_commands(text):
+        toks = tokens_of(c)
+        vt = _verb_token(c)
+        if _verb_name(verb(c)) not in DELETE_VERBS or vt not in toks:
+            continue
+        for t in toks[toks.index(vt) + 1:]:
+            if t == "--recursive" or (re.match(r"^-[A-Za-z]+$", t) and set(t[1:]) & set("rR")):
+                return True
+    return False
 
 
 def named_game_roots(n: str) -> list:
     """The game folders a normalised path names by the install's folder name, for a machine with
     no configured game root. The same name test as the `rm -rf <game>` backstop (GAME_ROOTISH,
     rm_named_game), at a whole path segment, and only its `x4 foundations` spelling: the other one
-    is the PROFILE, whose stray .dat files are not the game's."""
+    is the PROFILE, whose stray .dat files are not the game's. An option word (`--reference=<path>`,
+    which a reader may keep as a target) is not a path, so it names no game folder."""
+    if n.startswith("-"):
+        return []
     out, at = [], 0
     while True:
         at = n.find("/", at + 1)
@@ -4699,7 +4857,8 @@ def xargs_listed_operands(seg: str, prev) -> list:
     find's own operands include its tests, so it goes through find_can_reach_archive."""
     if not xargs_feed(seg, prev) or verb(prev) == "find" or not xargs_passes_item(seg):
         return []
-    return _operands(prev)
+    # A bare `ls` lists the current directory (4.1.1 review round 2, F3).
+    return _operands(prev) or (["."] if verb(prev) in ("ls", "dir") else [])
 
 
 # ---- find expressions. Parsed, never run: a regex the user wrote is not handed to `re`, because
@@ -4725,14 +4884,13 @@ def _exec_deletes(words: list) -> bool:
     """`-exec <words>` deletes: the command is a delete verb, or a shell carrying one."""
     if not words:
         return False
-    nxt = _verb_name(words[0])
-    if nxt in DELETE_VERBS:
+    # Through the shared wrapper table (verb) and carrier walk (_inner_commands), as any other
+    # command: `-exec env rm`, `-exec busybox rm`, `-exec cmd /c del` (4.1.1 review round 2, F4).
+    # `find <root> -exec bash -c '<cmd>' _ {} ;` is the same carrier as anywhere else.
+    text = " ".join(words)
+    if _verb_name(verb(text)) in DELETE_VERBS:
         return True
-    # `find <root> -exec bash -c '<cmd>' _ {} ;` -- the shell is a carrier here exactly as it is
-    # anywhere else, so it goes through the same walk rather than a second implementation.
-    if nxt in _SHELLS:
-        return any(_verb_name(verb(x)) in DELETE_VERBS for x in _inner_commands(" ".join(words)))
-    return False
+    return any(_verb_name(verb(x)) in DELETE_VERBS for x in _inner_commands(text))
 
 
 def _find_parse(words: list):
@@ -4790,7 +4948,11 @@ def _find_parse(words: list):
             if pos >= len(words) or pos == start:
                 raise ValueError("an unterminated -exec")
             pos += 1
-            return ("act", "delete" if _exec_deletes(words[start:pos - 1]) else "exec", None)
+            ran = words[start:pos - 1]
+            if not _exec_deletes(ran):
+                return ("act", "exec", None)
+            # A recursive delete also removes a matched FOLDER whole (F2).
+            return ("act", "rdelete" if deletes_recursively(ran) else "delete", None)
         raise ValueError("an unknown primary")
 
     def unary(depth):
@@ -4852,38 +5014,42 @@ def _literal_tail(pat: str, specials: str, self_escapes: set) -> str:
     return "".join(reversed(out))
 
 
-def _find_name_test(kind: str, value: str, printed, tail_of: str):
-    """True, False, or None (cannot tell) for one sample. `printed` is the path as find prints it,
-    None when the root is not spelled as plain text; `tail_of` is the part it surely ends with.
-    Archive names are lower-case on disk (READ), so a case-sensitive test compares exactly."""
+def _glob_fold(toks: list) -> list:
+    """Tokens with every literal lower-cased, for a case-folding test."""
+    return [("lit", t[1].lower()) if t[0] == "lit" else t for t in toks]
+
+
+def _find_name_test(kind: str, value: str, hay: list, name: list, ending: str):
+    """True, False, or None (cannot tell) for one entry. `hay` is the path as find prints it, as
+    tokens (a `*` stands for a root not spelled as plain text); `name` is the entry's own name and
+    `ending` the text every such name ends with. Names are not listed: an entry is any lower-case
+    name with its ending (READ: every archive and DLC folder name is lower case on disk)."""
     fold = kind.startswith("-i")
     v = value.lower() if fold else value
+    if fold:
+        hay, name = _glob_fold(hay), _glob_fold(name)
     if kind in ("-name", "-iname"):
-        return fnmatch.fnmatchcase(tail_of.rpartition("/")[2], v)
+        if not _glob_may_meet(v, name):
+            return False
+        return True if _glob_covers(v, ending, False) else None
     if kind in ("-regex", "-iregex"):
-        # Never run. A regex whose every match must END in text that no sample ends in cannot
+        # Never run. A regex whose every match must END in text no entry can end in cannot
         # match; anything else may. An alternation anywhere means no ending is required.
         if "|" in v:
             return None
         escapes = len(v[:-1]) - len(v[:-1].rstrip(chr(92)))
         body = v[:-1] if v.endswith("$") and escapes % 2 == 0 else v
         tail = _literal_tail(body, ".^$*+?{}[]()|", _RX_SELF_ESCAPES)
-    else:
-        if printed is not None and chr(92) not in v:
-            return fnmatch.fnmatchcase(printed.lower() if fold else printed, v)
-        tail = _literal_tail(v, "*?[]", set())
-    if not tail:
-        return None
-    hay = printed if printed is not None else tail_of
-    if printed is None and len(tail) > len(tail_of):
-        return None
-    if fold:
-        hay, tail = hay.lower(), tail.lower()
-    return None if hay.endswith(tail) else False
+        if not tail:
+            return None
+        return None if _glob_meet([_GLOB_ALL] + _glob_lit(tail), hay) else False
+    if not _glob_may_meet(v, hay, slash=True):
+        return False
+    return True if _glob_covers(v, ending, True) else None
 
 
-def _find_eval(node, test, reach: list, mode: str):
-    """Three-valued: True, False, None. An action of `mode` reached on any path, certain or not,
+def _find_eval(node, test, reach: list, modes: tuple):
+    """Three-valued: True, False, None. An action in `modes` reached on any path, certain or not,
     is recorded in `reach`; an AND stops at a False, an OR at a True, as find does."""
     kind = node[0]
     if kind == "const":
@@ -4891,63 +5057,97 @@ def _find_eval(node, test, reach: list, mode: str):
     if kind == "name":
         return test(node[1], node[2])
     if kind == "act":
-        if node[1] == mode:
+        if node[1] in modes:
             reach.append(node)
         return node[2]
     if kind == "not":
-        v = _find_eval(node[1], test, reach, mode)
+        v = _find_eval(node[1], test, reach, modes)
         return None if v is None else not v
     val = None
     if kind == "-a":
         val = True
         for sub in node[1]:
-            v = _find_eval(sub, test, reach, mode)
+            v = _find_eval(sub, test, reach, modes)
             if v is False:
                 return False
             val = val if v is True else None
     elif kind == "-o":
         val = False
         for sub in node[1]:
-            v = _find_eval(sub, test, reach, mode)
+            v = _find_eval(sub, test, reach, modes)
             if v is True:
                 return True
             val = val if v is False else None
     else:                               # `,`: every part runs, the last one's value is the value
         for sub in node[1]:
-            val = _find_eval(sub, test, reach, mode)
+            val = _find_eval(sub, test, reach, modes)
     return val
 
 
-def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str) -> bool:
+def _archive_entries(g: str) -> list:
+    """(path, name, ending, is a folder) for what a find over the game may remove: an archive in
+    the game folder or in a DLC folder, and, for a recursive delete only, a DLC folder, extensions/
+    and the game folder themselves (F2). Paths and names are glob tokens."""
+    dlc = _glob_lit(g + "/extensions/ego_dlc_") + [_GLOB_DISK_NAME]
+    out = []
+    for e in _ARCHIVE_ENDINGS:
+        name = [_GLOB_DISK_NAME] + _glob_lit(e)
+        out.append((_glob_lit(g + "/") + name, name, e, False))
+        out.append((dlc + [("lit", "/")] + name, name, e, False))
+    out.append((dlc, _glob_lit("ego_dlc_") + [_GLOB_DISK_NAME], "", True))
+    out.append((_glob_lit(g + "/extensions"), _glob_lit("extensions"), "extensions", True))
+    # The install folder's own name, in any case: it is spelled `X4 Foundations` on disk.
+    base = g.rpartition("/")[2]
+    out.append((_glob_lit(g), [("one", False, frozenset((c.lower(), c.upper())), ()) for c in base],
+                base, True))
+    return out
+
+
+def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec: bool = False) -> bool:
     """Can a `find` from `root` (as written: `raw`) delete, or print to an `xargs rm` (`mode`
-    "print"), a base-game or DLC archive? Each sample archive under `root` walks the expression
-    as find would, three-valued: a test the text cannot decide may go either way, and an action
-    reached on either branch counts. An expression it cannot read may reach every sample."""
-    files = [g + "/" + s for s in _ARCHIVE_SAMPLES if not s.startswith("ext_")]
-    files += [d + "/" + s for d in _dlc_samples(g) for s in _ARCHIVE_SAMPLES if s.startswith("ext_")]
-    if _is_pattern(root):
-        files = [f for f in files if fnmatch.fnmatchcase(f, root + "/*")]
-    else:
-        files = [f for f in files if f.startswith(root.rstrip("/") + "/")]
-    if not files:
+    "print"; `rec` when that rm is recursive), a base-game or DLC archive, or remove a folder that
+    holds one? Each entry under `root` walks the expression as find would, three-valued: a test the
+    text cannot decide may go either way, and an action reached on either branch counts. An
+    expression it cannot read may reach every entry. A root in or at a DLC folder is denied
+    whatever it matches (F8)."""
+    r = root.rstrip("/")
+    if _is_dlc_folder(r, g) or _in_dlc_folder(r, g):
+        return True
+    file_modes = ("delete", "rdelete") if mode == "delete" else ("print",)
+    dir_modes = ("rdelete",) if mode == "delete" else (("print",) if rec else ())
+    plain = raw.replace(chr(92), "/").rstrip("/")
+    if any(c in plain for c in "$~`") or _is_pattern(plain) or not plain:
+        plain = None
+    entries = []
+    for path, name, ending, folder in _archive_entries(g):
+        modes = dir_modes if folder else file_modes
+        if not modes:
+            continue
+        if _is_pattern(r):
+            if not _glob_may_meet(r, path, tail=(("lit", "/"), _GLOB_ALL)):
+                continue
+            hay = [_GLOB_ALL, ("lit", "/")] + name
+        else:
+            head = r + "/"
+            if len(path) <= len(head) or "".join(t[1] for t in path[:len(head)] if t[0] == "lit") != head \
+                    or any(t[0] != "lit" for t in path[:len(head)]):
+                continue
+            rel = path[len(head):]
+            hay = (_glob_lit(plain + "/") if plain is not None else [_GLOB_ALL, ("lit", "/")]) + rel
+        entries.append((hay, name, ending, modes))
+    if not entries:
         return False
     k = _verb_at(seg, 0) + 1            # P1: see _verb_at
     parsed = _find_parse(tokens_of(seg)[k + len(_find_roots(seg)):])
     if parsed is None:
         return True
     tree, acted = parsed
-    plain = raw.replace(chr(92), "/").rstrip("/")
-    if any(c in plain for c in "$~`") or _is_pattern(plain) or not plain:
-        plain = None
-    for f in files:
-        rel = f[len(root.rstrip("/")) + 1:] if not _is_pattern(root) else f.rpartition("/")[2]
-        printed = None if plain is None else plain + "/" + rel
-
-        def test(kind, value, printed=printed, rel=rel):
-            return _find_name_test(kind, value, printed, "/" + rel)
+    for hay, name, ending, modes in entries:
+        def test(kind, value, hay=hay, name=name, ending=ending):
+            return _find_name_test(kind, value, hay, name, ending)
         reach = []
-        v = _find_eval(tree, test, reach, mode)
-        if reach or (mode == "print" and not acted and v is not False):
+        v = _find_eval(tree, test, reach, modes)
+        if reach or ("print" in modes and not acted and v is not False):
             return True
     return False
 
@@ -7367,6 +7567,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # copy, what a listing feeds `xargs rm`, and (root operand, segment, mode) of each find that
     # deletes ("delete") or prints to an `xargs rm` ("print").
     archive_moved_t, archive_into_t, archive_listed_t, archive_finds = [], [], [], []
+    archive_listed_rec_t = []           # ...and what a listing feeds a RECURSIVE `xargs rm` (F2)
     search_seg, git_all = False, False
     transcript_copy = False             # M1, see _copy_lands_a_transcript
     # H1 follow-up, see _inline_program_writes_transcript; a heredoc PROGRAM is judged once,
@@ -7440,11 +7641,17 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # delete rule, and never the whole-install hard block (see find_scoped_deletes).
         scoped_rm_t += prep(find_scoped_deletes(s), c_cwd, c_old, operation="delete", scope="filtered-tree")
         archive_moved_t += prep(rsync_moved_sources(s), c_cwd, c_old)
-        archive_listed_t += prep(xargs_listed_operands(s, prev), c_cwd, c_old)
+        listed_ = prep(xargs_listed_operands(s, prev), c_cwd, c_old)
+        archive_listed_t += listed_
         archive_listed_t += prep(xargs_replaced_folders(s, prev), c_cwd, c_old)
-        archive_finds += [(op, s, "delete") for op in prep(_find_delete(s)[0], c_cwd, c_old)]
+        xargs_rec = bool(listed_ or verb(prev or "") == "find") and deletes_recursively(tokens_of(s))
+        if xargs_rec:
+            archive_listed_rec_t += listed_
+        archive_finds += [(op, s, "delete", True)
+                          for op in prep(_find_delete(s, default_root=True)[0], c_cwd, c_old)]
         if xargs_feed(s, prev) and verb(prev) == "find" and xargs_passes_item(s):
-            archive_finds += [(op, prev, "print") for op in prep(_find_roots(prev), c_cwd, c_old)]
+            archive_finds += [(op, prev, "print", xargs_rec)
+                              for op in prep(_find_roots(prev) or ["."], c_cwd, c_old)]
         # A command name that arrives by substitution MAY be rm: its operands feed the X4
         # directory delete ADVISORY (FX-G4 / BLIND-SPOTS F183, MEASURED: `$(echo rm) -rf
         # <game>/libraries` was a plain allow where `rm -rf` advises). Advisory only; an
@@ -7742,6 +7949,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
 
     _mods = list(dict.fromkeys(_deployed_mods(rm_t + mv_src + subst_rm_t)
                                + _deployed_mods(scoped_rm_t, filtered=True)))
+    # An official DLC is not a deployed mod: removing one of its files is denied with the archives
+    # (user ruling 2026-11-05, 4.1.1 review round 2 F8), so it never reaches the mod confirmation.
+    _dlc_named = [m for m in _mods if m.startswith("ego_dlc_")]
+    _mods = [m for m in _mods if not m.startswith("ego_dlc_")]
     _mod_list = ", ".join(_mods[:10]) + (f" and {len(_mods) - 10} more" if len(_mods) > 10 else "")
 
     # A shell write, move or delete of a base-game or official DLC archive (see _is_game_archive).
@@ -7752,8 +7963,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             yield from (_brace_expand(n) if norm(raw) in brace_patterns else [n])
 
     def _games(n):
-        # No configured game root: the install's folder name in the path, as rm_named_game reads it.
-        return [_g] if _g else named_game_roots(n)
+        # The configured game root, AND the install's folder name in the path, as rm_named_game
+        # reads it: a second install is an install too (4.1.1 review round 2, F7).
+        return list(dict.fromkeys(([_g] if _g else []) + named_game_roots(n)))
 
     def _hits(ops, test):
         return any(test(n, g) for n in _spellings(ops) for g in _games(n))
@@ -7766,8 +7978,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         or _hits(archive_moved_t, _is_archive_home)
         or _hits(archive_into_t, _is_archive_home)
         or _hits(archive_listed_t, lambda n, g: _is_game_archive(n, g) or _is_archive_home(n, g))
-        or any(find_can_reach_archive(seg_, n, op[2], g, mode_)
-               for op, seg_, mode_ in archive_finds for n in _spellings([op]) for g in _games(n)))
+        or _hits(archive_listed_rec_t, _holds_a_dlc)
+        or bool(_dlc_named)
+        or any(find_can_reach_archive(seg_, n, op[2], g, mode_, rec_)
+               for op, seg_, mode_, rec_ in archive_finds for n in _spellings([op]) for g in _games(n)))
     result = {
         "command": cmd,
         "timeout": timeout,

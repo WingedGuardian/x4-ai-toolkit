@@ -465,7 +465,7 @@ on writes_reference && deny "BLOCKED: reference/ is the read-only unpacked base 
 # The file channel (protect-files.sh) denies these; the shell only advised, or said nothing for
 # an append. MEASURED 2026-11-05. The base archives run to about 10 GB each. A mod's own
 # archive is not this rule: deploy.py, cp and `rm -rf <mod>` keep their verdicts below.
-on writes_game_archive && deny "BLOCKED: this writes, moves or deletes a base-game or official DLC archive (.cat/.dat, or a whole DLC folder). Only a Steam verify restores one. Read it freely, pack with bin/xrcat (XRCatTool) into your own mod folder, and repair the game through Steam's Verify Integrity. Command: $COMMAND"
+on writes_game_archive && deny "BLOCKED: this writes, moves or deletes a base-game or official DLC archive (.cat/.dat), or deletes or moves something in an official DLC folder (extensions/ego_dlc_*, which is game content, not a deployed mod). Only a Steam verify restores them. Read it freely, pack with bin/xrcat (XRCatTool) into your own mod folder, and repair the game through Steam's Verify Integrity. Command: $COMMAND"
 
 # === HARD BLOCK — WRITE or DELETE the toolkit's PATH CONFIG (v4.0 release review R1-F1/R1-P1) ===
 # Every guard reads its roots from x4-paths.env; an agent that could rewrite it could move or
@@ -554,7 +554,9 @@ fi
 on rm_in_profile && [ "$_harness_save_qualified" != 1 ] && ask "DELETING IN YOUR X4 PROFILE (mod list, config, saves) -- not reproducible. Confirm: $COMMAND"
 # 2026-10-27 (user): removing a DEPLOYED MOD (a folder in the game's extensions/, or
 # anything inside one) ASKS -- ONE prompt per command, naming every mod it touches. Every
-# other X4-directory delete keeps the bd45eef advisory below.
+# other X4-directory delete keeps the bd45eef advisory below. An official DLC folder
+# (ego_dlc_*) is not a mod: its deletes are denied above (user ruling 2026-11-05), and
+# hook_facts never names one here.
 _t="${FACTS_NL#*
 rm_deployed_mod_names	}"
 RM_MODS="${_t%%

@@ -7448,7 +7448,6 @@ class TestGameArchiveShellWrites(unittest.TestCase):
                      GAME + "/extensions/ego_dlcx/ext_01.cat",             # not ego_dlc_
                      GAME + "x/01.dat",                                    # a sibling folder
                      GAME + "/sub/x.dat",                                  # deeper in the game
-                     self.DLC + "/libraries/x.dat",                        # deeper in a DLC
                      "/c/o/01.dat"):
             self.assertFalse(F("rm " + self.Q(path))["writes_game_archive"], path)
 
@@ -7502,7 +7501,8 @@ class TestGameArchiveShellWrites(unittest.TestCase):
             self.assertTrue(F('touch "' + GAME + '"' + pat)["writes_game_archive"], pat)
 
     def test_TWIN_a_bare_glob_covering_no_archive_name_does_not_fire(self):
-        for pat in ("/*.xml", "/x*", "/ext*"):
+        # "/x*" and "/ext*" fired from round 2 (F1): x.dat and ext.dat could be there.
+        for pat in ("/*.xml", "/x*.xml", "/*.txt", "/*.[!cd]at", "/*.d[!a]t"):
             self.assertFalse(F('touch "' + GAME + '"' + pat)["writes_game_archive"], pat)
 
     def test_a_folder_glob_reaching_a_dlc_fires(self):
@@ -7510,7 +7510,8 @@ class TestGameArchiveShellWrites(unittest.TestCase):
             self.assertTrue(F('rm "' + GAME + '"' + pat)["writes_game_archive"], pat)
 
     def test_TWIN_a_folder_glob_missing_every_dlc_does_not_fire(self):
-        for pat in ("/extensions/a*/ext_01.cat", "/*/x.dat", "/*/*/*/x.dat"):
+        # "/*/*/*/x.dat" reaches inside a DLC folder, which is denied from round 2 (F8).
+        for pat in ("/extensions/a*/ext_01.cat", "/*/x.dat", "/extensions/[a-d]*/ext_01.cat"):
             self.assertFalse(F('rm "' + GAME + '"' + pat)["writes_game_archive"], pat)
 
     def test_a_pattern_for_the_game_folder_itself_fires(self):
@@ -7532,10 +7533,53 @@ class TestGameArchiveShellWrites(unittest.TestCase):
                     'rm -rf "' + GAME + '/extensions/ego_dlc_b"*'):
             self.assertTrue(F(cmd)["writes_game_archive"], cmd)
 
-    def test_TWIN_a_dlc_subfolder_or_other_file_keeps_its_verdict(self):
-        for cmd in ("rm -rf " + self.Q(self.DLC + "/libraries"), "rm " + self.Q(self.DLC + "/content.xml")):
+    def test_a_delete_or_move_inside_a_dlc_folder_is_denied_not_asked(self):
+        # User ruling 2026-11-05 (4.1.1 review round 2, F8): an official DLC is game content, so a
+        # delete of ANY of its files denies as an archive's does. It asked, as a DEPLOYED MOD.
+        for cmd in ("rm -rf " + self.Q(self.DLC + "/libraries"), "rm " + self.Q(self.DLC + "/content.xml"),
+                    "rm " + self.Q(self.DLC + "/libraries/x.dat"), "mv " + self.Q(self.DLC + "/content.xml") + " /c/o/x",
+                    'rm "' + GAME + '"/extensions/*/libraries', 'rm "' + GAME + '"/*/*/*/x.dat',
+                    "find " + self.Q(self.DLC) + ' -name "*.xml" -delete',
+                    "ls " + self.Q(self.DLC + "/libraries") + " | xargs rm",
+                    "rsync -a --delete src/ " + self.Q(self.DLC + "/libraries/")):
+            f = F(cmd)
+            self.assertTrue(f["writes_game_archive"], cmd)
+            self.assertNotIn("ego_dlc", f["rm_deployed_mod_names"], cmd)
+
+    def test_inside_a_dlc_folder_by_the_install_name_alone(self):
+        # No configured root, so no mod list either: only the DLC-folder readers can see these.
+        dlc = "/d/games/X4 Foundations/extensions/ego_dlc_boron"
+        for cmd in ("rm -rf " + self.Q(dlc + "/libraries"), "find " + self.Q(dlc) + ' -name "*.xml" -delete'):
+            self.assertTrue(F(cmd, roots=self.NOGAME)["writes_game_archive"], cmd)
+
+    def test_a_substituted_delete_inside_a_dlc_is_denied(self):
+        self.assertTrue(F("$(echo rm) -rf " + self.Q(self.DLC + "/libraries"))["writes_game_archive"])
+
+    def test_a_write_through_a_dlc_folder_glob_fires(self):
+        # `ego_dlc_*` is read by the plain prefix test; a pattern before the prefix needs the glob reader.
+        for pat in ("/extensions/e*/ext_01.dat", "/extensions/*/ext_01.dat", "/*/ego_dlc_boron/ext_01.dat"):
+            self.assertTrue(F('echo x > "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_TWIN_a_write_deeper_in_a_dlc_is_not_an_archive(self):
+        for cmd in ('echo x > "' + self.DLC + '"/*/x.dat', "echo x > " + self.Q(self.DLC + "/libraries/x.dat")):
             self.assertFalse(F(cmd)["writes_game_archive"], cmd)
-            self.assertTrue(F(cmd)["rm_deployed_mod"], cmd)
+
+    def test_a_configured_root_with_another_name_is_read(self):
+        roots = dict(ROOTS, game="D:/Games/X4")
+        self.assertTrue(F("rm " + self.Q("D:/Games/X4/01.dat"), roots=roots)["writes_game_archive"])
+        self.assertFalse(F("rm " + self.Q("D:/Games/X4/x.txt"), roots=roots)["writes_game_archive"])
+
+    def test_TWIN_a_mod_subfolder_delete_keeps_its_one_confirmation(self):
+        for cmd in ("rm -rf " + self.Q(self.MOD + "/libraries"), "rm " + self.Q(self.MOD + "/content.xml"),
+                    'rm "' + GAME + '"/extensions/a*/libraries'):
+            f = F(cmd)
+            self.assertFalse(f["writes_game_archive"], cmd)
+            self.assertTrue(f["rm_deployed_mod"], cmd)
+
+    def test_a_dlc_is_never_named_as_a_deployed_mod(self):
+        f = F("rm -rf " + self.Q(self.MOD) + " " + self.Q(self.DLC + "/libraries"))
+        self.assertTrue(f["writes_game_archive"])
+        self.assertEqual(f["rm_deployed_mod_names"], "amod")
 
     def test_TWIN_a_write_at_a_dlc_folder_is_not_a_delete_of_it(self):
         self.assertFalse(F("cp a " + self.Q(self.DLC))["writes_game_archive"])
@@ -7722,6 +7766,8 @@ class TestGameArchiveShellWrites(unittest.TestCase):
         self.assertTrue(self.find_("-iregex " + Q + ".*" + BS + ".DAT" + Q))
         # the root's own spelling is part of what -iregex folds
         self.assertTrue(self.find_("-iregex " + Q + ".*x4 FOUNDATIONS/01" + BS + ".dat" + Q))
+        # ...with a leading `/`, which only the game folder's own (folded) name can satisfy
+        self.assertTrue(self.find_("-iregex " + Q + ".*/x4 FOUNDATIONS/01" + BS + ".dat" + Q))
 
     def test_TWIN_a_find_regex_whose_ending_no_archive_has_does_not_fire(self):
         for rx in (".*" + BS + ".xml", ".*" + BS + ".xml$", "(.*)*zzz"):
@@ -7766,7 +7812,11 @@ class TestGameArchiveShellWrites(unittest.TestCase):
     def test_a_path_filter_under_a_pattern_root_reads_only_its_ending(self):
         root = 'find "' + GAME + '/extensions/ego_dlc_"* -path '
         self.assertTrue(F(root + Q + "*/ext_01.cat" + Q + " -delete")["writes_game_archive"])
-        self.assertFalse(F(root + Q + "*/x.xml" + Q + " -delete")["writes_game_archive"])
+        # A DLC pattern root deletes inside a DLC whatever the filter (F8); a game-root pattern does not.
+        self.assertTrue(F(root + Q + "*/x.xml" + Q + " -delete")["writes_game_archive"])
+        groot = 'find "' + GAME[:-1] + '"* -path '
+        self.assertTrue(F(groot + Q + "*/01.dat" + Q + " -delete")["writes_game_archive"])
+        self.assertFalse(F(groot + Q + "*/x.xml" + Q + " -delete")["writes_game_archive"])
         self.assertTrue(F('find "$X4_GAME" -path ' + Q + "*/01.dat" + Q + " -delete")["writes_game_archive"])
 
     def test_TWIN_a_find_printing_to_a_file_feeds_xargs_nothing(self):
@@ -7806,8 +7856,24 @@ class TestGameArchiveShellWrites(unittest.TestCase):
                      GAME + "/sub/x.dat"):
             self.assertFalse(F("rm " + self.Q(path), roots=self.NOGAME)["writes_game_archive"], path)
 
-    def test_TWIN_a_configured_root_is_not_second_guessed_by_a_folder_name(self):
-        self.assertFalse(F("rm " + self.Q("D:/Backup/X4 Foundations/01.dat"))["writes_game_archive"])
+    def test_a_configured_root_keeps_the_folder_name_fallback_for_a_second_install(self):
+        # 4.1.1 review round 2 (F7): the configured root is ADDED to, not replaced.
+        for path in ("D:/SteamLibrary/steamapps/common/X4 Foundations/01.dat",
+                     "D:/SteamLibrary/steamapps/common/X4 Foundations/extensions/ego_dlc_boron/ext_01.cat"):
+            self.assertTrue(F("rm " + self.Q(path))["writes_game_archive"], path)
+
+    def test_TWIN_an_option_word_naming_an_archive_is_not_a_path(self):
+        # touch reads the archive's times and writes /c/o/x. modify_targets keeps the quoted option
+        # word, and the folder-name fallback must not read it as a path (4.1.1 round 2 probe c6).
+        cmd = "touch --reference=" + Q + GAME + "/01.dat" + Q + " /c/o/x"
+        self.assertFalse(F(cmd)["writes_game_archive"])
+        self.assertFalse(F(cmd, roots=self.NOGAME)["writes_game_archive"])
+
+    def test_TWIN_a_configured_root_and_another_games_dat_files(self):
+        for path in ("C:/Program Files (x86)/Steam/steamapps/common/Skyrim/01.dat",
+                     "D:/SteamLibrary/steamapps/common/X4 Foundations/sub/01.dat",
+                     PROF + "/01.dat", "C:/Users/tester/Documents/Egosoft/X4/01.dat"):
+            self.assertFalse(F("rm " + self.Q(path))["writes_game_archive"], path)
 
     # --- option words are not targets
     def test_TWIN_an_exclude_pattern_is_not_a_copied_name(self):
@@ -7844,6 +7910,131 @@ class TestGameArchiveShellWrites(unittest.TestCase):
 
     def test_xargs_replacing_into_a_home_folder_fires(self):
         self.assertTrue(F("ls /c/o | xargs -I{} rm " + self.Q(GAME) + "/{}")["writes_game_archive"])
+
+    # --- 4.1.1 review round 2. F1: no fixed list of archive names
+    VENT = GAME + "/extensions/ego_dlc_ventures"
+
+    def test_any_name_an_archive_could_have_fires_on_every_path(self):
+        # READ 2026-11-05: ventures has ext_v620/v700/v710 and ext_03_diff_v900, none of them sampled.
+        for cmd in ('rm "' + GAME + '"/1*', 'touch "' + GAME + '"/x*', 'rm "' + GAME + '"/[0-9][0-9].?at',
+                    "find " + self.Q(GAME) + " -name " + Q + "ext_v7*" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name ext_v710.cat -delete",
+                    "find " + self.Q(GAME) + " -name ext_03_diff_v900.dat -delete",
+                    "find " + self.Q(GAME) + " -name 10.cat -delete",
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "ext_v7*" + Q + " | xargs rm",
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*_v900*" + Q + " -exec rm {} +",
+                    'ls "' + self.VENT + '/"ext_v7* | xargs rm', 'rm "' + self.VENT + '/"ext_v7*',
+                    'echo x > "' + GAME + '"/?0.cat'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_name_no_archive_could_have_does_not_fire(self):
+        for cmd in ('rm "' + GAME + '"/x*.xml', "find " + self.Q(GAME) + " -name " + Q + "ext_v7*.txt" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.[!cd]at" + Q + " -delete",
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*.xml" + Q + " | xargs rm",
+                    "find " + self.Q(GAME) + " -name EXT_V710.CAT -delete",      # -name keeps case
+                    "find " + self.Q(GAME) + " -name EXT_v710.cat -delete"):     # ...in the stem too
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_name_test_true_for_every_archive_still_spares_them(self):
+        for expr in ("! -name " + Q + "*.?at" + Q, "-not -name " + Q + "*t" + Q, "! -name " + Q + "*" + Q,
+                     "! -path " + Q + "*.[cd]at" + Q):
+            self.assertFalse(self.find_(expr), expr)
+
+    # --- F5: a backslash or `[^` in a -name is read every way a tool might read it
+    def test_a_name_with_a_backslash_or_caret_may_match_and_never_spares(self):
+        for expr in ("-name " + Q + "*.[^x]at" + Q, "-name " + Q + BS + "0" + BS + "1.dat" + Q,
+                     "! -name " + Q + "*.[^x]at" + Q, "! -name " + Q + "*" + BS + ".dat" + Q,
+                     "-name " + Q + "*.[^d]at" + Q):
+            self.assertTrue(self.find_(expr), expr)
+
+    def test_every_reading_of_a_backslash_or_caret_is_tried(self):
+        # `[^cd]` read as a set holding ^, c and d matches .cat; `d\a` read literally matches no
+        # archive but read as an escape is `da`; `*\at` read as an escape covers every archive.
+        for expr in ("-name " + Q + "*.[^cd]at" + Q, "-name " + Q + "*.d" + BS + "at" + Q,
+                     "! -name " + Q + "*" + BS + "at" + Q,
+                     "-name " + Q + "*" + BS + "*" + Q):    # only the literal reading reaches an archive
+            self.assertTrue(self.find_(expr), expr)
+
+    def test_TWIN_a_caret_name_no_archive_could_have_does_not_fire(self):
+        self.assertFalse(self.find_("-name " + Q + "*.[^x]ml" + Q))
+
+    # --- F2: a recursive delete of a directory the find matches
+    def test_a_recursive_delete_of_a_found_dlc_folder_fires(self):
+        ext = self.Q(GAME + "/extensions")
+        for cmd in ("find " + ext + " -maxdepth 1 -name " + Q + "ego_dlc_*" + Q + " -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name " + Q + "ego_dlc_*" + Q + " | xargs rm -rf",
+                    "find " + ext + " -maxdepth 1 -type d -name " + Q + "ego*" + Q + " -exec rm -r {} ;",
+                    "find " + ext + " -name " + Q + "ego_dlc_*" + Q + " -exec bash -c " + DQ + "rm -rf $1" + DQ + " _ {} ;",
+                    "find " + self.Q(GAME) + " -maxdepth 1 -name extensions -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name ego_dlc_boron -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name ego_dlc_boron | xargs rm -r",
+                    "ls " + ext + " | xargs rm -rf"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_non_recursive_or_other_folder_delete_does_not_fire(self):
+        ext = self.Q(GAME + "/extensions")
+        # `-name 'ego_dlc_*'` without -r still fires: ego_dlc_x.cat is a name an archive could have.
+        for cmd in ("find " + ext + " -maxdepth 1 -name ego_dlc_boron -exec rm {} +",
+                    "find " + ext + " -maxdepth 1 -name amod -exec rm -rf {} +",
+                    "find " + ext + " -name __pycache__ -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name ego_dlc_boron | xargs rm",
+                    "ls " + ext + " | xargs rm", "ls " + self.Q(self.MOD) + " | xargs rm -rf"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- F3: no path operand is the current directory
+    def test_a_find_or_listing_with_no_path_reads_the_current_directory(self):
+        for cmd in ("cd " + self.Q(GAME) + " && find -name " + Q + "*.dat" + Q + " -delete",
+                    "cd " + self.Q(GAME) + " && find -name " + Q + "*.dat" + Q + " | xargs rm",
+                    "cd " + self.Q(GAME) + " && ls | xargs rm",
+                    "cd " + self.Q(self.DLC) + " && find -delete"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_no_path_elsewhere_or_a_read_does_not_fire(self):
+        for cmd in ("cd " + self.Q(GAME) + " && find -name " + Q + "*.xml" + Q + " -delete",
+                    "cd " + self.Q(GAME) + " && ls", "cd " + self.Q(GAME) + " && find -name " + Q + "*.dat" + Q,
+                    "cd /c/o && find -name " + Q + "*.dat" + Q + " -delete", "cd /c/o && ls | xargs rm",
+                    "cd " + self.Q(self.MOD) + " && ls | xargs rm",
+                    "cd " + self.Q(GAME) + " && ls | xargs sha256sum"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- F4: -exec through a wrapper
+    def test_a_find_exec_through_a_wrapper_fires(self):
+        for ex in ("-exec env rm {} +", "-exec busybox rm {} +", "-exec cmd /c del {} ;",
+                   "-exec nice -n 5 rm {} ;", "-exec sudo rm -f {} +", "-execdir env rm {} +"):
+            self.assertTrue(self.find_("-name 01.dat " + ex, tail=""), ex)
+
+    def test_TWIN_a_find_exec_of_a_wrapped_reader_does_not_fire(self):
+        for ex in ("-exec env cat {} +", "-exec busybox sha256sum {} +", "-exec cmd /c type {} ;",
+                   "-exec nice -n 5 sha256sum {} ;"):
+            self.assertFalse(self.find_("-name 01.dat " + ex, tail=""), ex)
+
+    # --- the glob reader itself
+    def test_glob_meet_is_exact_on_small_cases(self):
+        def may(p, q):
+            return H._glob_meet(H._glob_parse(p, False, True, True), H._glob_parse(q, False, True, True))
+        for p, q, want in (("*.dat", "01.dat", True), ("*.dat", "01.cat", False), ("[a-c]x", "[b-d]x", True),
+                           ("[a-c]x", "[d-f]x", False), ("[!a]", "a", False), ("[^a]", "b", True),
+                           ("?", "", False), ("*", "", True), ("a*b", "*c", False), ("a*c", "ab*", True),
+                           ("x/*", "x/a", True), ("*", "a/b", False), ("[a-z]", "[!a-y]", True),
+                           (BS + "*", "*", True), (BS + "*", "a", False)):
+            self.assertEqual(may(p, q), want, (p, q))
+
+    def test_no_new_reading_takes_over_a_second(self):
+        import json
+        import subprocess
+        code = ("import json, sys, time; sys.path.insert(0, sys.argv[1]); import hook_facts as H; "
+                "t = time.perf_counter(); H.facts(json.loads(sys.argv[2]), json.loads(sys.argv[3])); "
+                "print(time.perf_counter() - t)")
+        here = str(pathlib.Path(__file__).resolve().parent)
+        star = "[a-z]*" * 30
+        for cmd in ('rm "' + GAME + '"/' + star + ".?at", "find " + self.Q(GAME) + " -name " + Q + star + Q + " -delete",
+                    "find " + self.Q(GAME) + " -path " + Q + "*/" * 40 + "*" + Q + " -exec rm -rf {} +",
+                    'rm "' + GAME + '/extensions/' + "*" * 50 + '/x"'):
+            payload = {"tool_input": {"command": cmd}}
+            p = subprocess.run([sys.executable, "-I", "-c", code, here, json.dumps(payload),
+                                json.dumps(ROOTS)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr[-400:])
+            self.assertLess(float(p.stdout.strip().splitlines()[-1]), 1.0, cmd[:80])
 
 
 if __name__ == "__main__":
