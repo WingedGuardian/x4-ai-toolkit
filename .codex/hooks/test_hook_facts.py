@@ -8201,6 +8201,121 @@ class TestGameArchiveShellWrites(unittest.TestCase):
                 self.skipTest("no PowerShell parser on this machine")
             self.assertEqual(f["writes_game_archive"], want, cmd)
 
+    # --- round 4, 1: the find's root is itself a depth-0 entry
+    def _gone(self, f):
+        return f["writes_game_archive"] or f["rm_hits_game"]
+
+    def test_a_recursive_delete_of_a_root_holding_a_dlc_at_depth_0_fires(self):
+        ext = GAME + "/extensions"
+        for cmd in ("find " + self.Q(GAME) + " -maxdepth 0 -print0 | xargs -0 rm -rf",
+                    "find " + self.Q(GAME) + " -maxdepth 0 | xargs rm -rf",
+                    "find " + self.Q(GAME) + " -mindepth 0 -maxdepth 0 | xargs -r rm -rf --",
+                    "find " + self.Q(ext) + " -maxdepth 0 -print0 | xargs -0 rm -rf",
+                    "find " + self.Q(GAME) + " -maxdepth 0 -exec rm -rf {} +",
+                    "find " + self.Q(ext) + " -maxdepth 0 -exec rm -rf {} +",
+                    "find " + self.Q(ext + "/ego_dlc_boron") + " -maxdepth 0 -exec rm -rf {} +",
+                    "find " + self.Q(ext + "/ego_dlc_boron") + " -maxdepth 0 | xargs rm -rf",
+                    "find " + self.Q(GAME.rpartition("/")[0]) + " -maxdepth 0 -exec rm -rf {} +",
+                    "find " + self.Q(GAME.rpartition("/")[0]) + " -maxdepth 0 | xargs rm -rf"):
+            self.assertTrue(self._gone(F(cmd)), cmd)
+        for cmd in ("find . -maxdepth 0 -print0 | xargs -0 rm -rf", "find . -maxdepth 0 -exec rm -rf {} +"):
+            self.assertTrue(self._gone(FC(cmd, GAME)), cmd)
+        # A root the text cannot spell as one path: read as any root.
+        for roots in (ROOTS, self.NOGAME):
+            for cmd in ("find /d/Games/X4*Foundations -maxdepth 0 | xargs rm -rf",
+                        "find /d/Games/X4*Foundations -maxdepth 0 -name " + Q + "X4 Foundations" + Q + " | xargs rm -rf"):
+                self.assertTrue(self._gone(F(cmd, roots=roots)), cmd)
+
+    def test_TWIN_a_depth_0_root_that_is_not_removed_whole_or_holds_no_dlc(self):
+        ext = GAME + "/extensions"
+        for cmd in ("find " + self.Q(GAME) + " -maxdepth 0 | xargs rm",            # not recursive
+                    "find " + self.Q(GAME) + " -maxdepth 0 -name " + Q + "*.cat" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -maxdepth 0 -name zzz -exec rm -rf {} +",
+                    "find " + self.Q(GAME) + " -mindepth 1 -maxdepth 1 -name zzz -exec rm -rf {} +",
+                    "find " + self.Q(ext) + " -mindepth 1 -maxdepth 1 -name " + Q + "zzz_*" + Q + " -exec rm -rf {} +",
+                    "find " + self.Q(self.MOD) + " -maxdepth 0 -exec rm -rf {} +",    # a mod: its ask
+                    "find " + self.Q(self.MOD) + " -maxdepth 0 | xargs rm -rf"):
+            self.assertFalse(self._gone(F(cmd)), cmd)
+        self.assertFalse(self._gone(FC("find . -name __pycache__ -exec rm -rf {} +", GAME)))
+        self.assertTrue(F("find " + self.Q(self.MOD) + " -maxdepth 0 -exec rm -rf {} +")["rm_deployed_mod"])
+
+    # --- round 4, 7: a backslash-escaped `;` ends an -exec and the command goes on
+    def test_an_escaped_terminator_ends_the_exec_and_find_reads_on(self):
+        bs, ext = chr(92), GAME + "/extensions"
+        for term in (bs + ";", Q + ";" + Q, DQ + ";" + DQ):
+            for cmd in ("find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -exec echo hi " + term + " -delete",
+                        "find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -exec sha256sum {} " + term + " -delete",
+                        "find " + self.Q(ext) + " -name " + Q + "ego_dlc_*" + Q + " -exec echo hi " + term
+                        + " -exec rm -rf {} +",
+                        "find " + self.Q(ext) + " -name " + Q + "ego_dlc_*" + Q + " -execdir echo hi " + term
+                        + " -execdir rm -rf {} " + bs + "+",
+                        "find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -ok echo hi " + term
+                        + " -okdir rm {} " + term,
+                        "find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -exec echo {} " + term
+                        + " -exec echo {} " + term + " -delete"):
+                self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_an_escaped_terminator_with_nothing_deleting_after_it(self):
+        bs = chr(92)
+        for cmd in ("find " + self.Q(GAME) + " -name " + Q + "*.xml" + Q + " -exec echo hi " + bs + "; -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -exec sha256sum {} " + bs + ";",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -exec sha256sum {} " + bs + "; ; echo done"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_an_escaped_operator_does_not_split_a_command(self):
+        bs = chr(92)
+        for cmd, n in (("echo a " + bs + "; b", 1), ("echo a " + bs + "| b " + bs + "& c", 1),
+                       ("echo a " + bs + bs + "; b", 2), ("echo a; b", 2), ("echo " + Q + bs + Q + "; b", 2)):
+            self.assertEqual(len(H.segments(cmd)), n, cmd)
+            self.assertEqual(len(H.piped_in(cmd)), n, cmd)
+
+    # --- round 4, 5: a globbed install name as the root's last segment
+    def test_a_find_rooted_at_a_globbed_install_name(self):
+        for roots in (ROOTS, self.NOGAME):
+            self.assertTrue(F("find /d/Games/X4*Foundations -name " + Q + "*.cat" + Q + " -delete",
+                              roots=roots)["writes_game_archive"])
+        for cmd in ("find /d/Games/X4*Foundations -name " + Q + "*.txt" + Q + " -delete",
+                    "find /d/Games/Y4* -name " + Q + "*.cat" + Q + " -delete"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- round 4, 6: names filled in at run time
+    def test_a_backtick_name_or_a_run_time_folder_in_the_game_folder(self):
+        bt = chr(96)
+        for cmd in ('rm "' + GAME + "/" + bt + "cat list" + bt + '"', 'rm "' + GAME + '/$f/01.cat"',
+                    'rm "' + GAME + "/" + bt + "x" + bt + '/01.cat"'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_run_time_folder_holding_no_archive_or_not_in_the_game_folder(self):
+        for cmd in ('rm "' + GAME + '/$f/notes.txt"', 'rm "' + GAME + '/a/$f/01.cat"',
+                    'rm "' + GAME + '/' + chr(96) + 'x/01.cat"', 'rm "' + GAME + '/notes' + chr(96) + '.txt"'):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+        f = F('rm "' + GAME + '/extensions/$x/ext_01.cat"')     # a mod's own archive: its ask
+        self.assertFalse(f["writes_game_archive"])
+        self.assertTrue(f["rm_deployed_mod"])
+
+    # --- round 4, 3 and 4: PowerShell backticks through a pipeline, and before a wildcard
+    def _ps(self, cmd):
+        f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
+        if f.get("powershell_error") or f.get("carrier_untranslated"):
+            self.skipTest("no PowerShell parser on this machine")
+        return f
+
+    def test_a_backtick_in_an_upstream_path_is_read_both_ways(self):
+        for cmd, want in (("Get-ChildItem -Path '%s' | Remove-Item" % (GAME + "/01.c`at"), True),
+                          ("Get-Item '%s' | Remove-Item" % (GAME + "/0?.c`at"), True),
+                          ("Get-ChildItem -LiteralPath '%s' | Remove-Item" % (GAME + "/01.c`at"), False),
+                          ("Get-Item -LiteralPath '%s' | Remove-Item" % (GAME + "/01.c`at"), False),
+                          ("Get-Item '%s' | Remove-Item" % (GAME + "/notes`.txt"), False)):
+            self.assertEqual(self._ps(cmd)["writes_game_archive"], want, cmd)
+
+    def test_a_backtick_before_a_wildcard_keeps_a_mod_folder_its_ask(self):
+        f = self._ps("Remove-Item -Path '%s' -Recurse" % (GAME + "/extensions/zzz_my`[1`]mod"))
+        self.assertFalse(f["rm_hits_game"])
+        self.assertFalse(f["writes_game_archive"])
+        self.assertTrue(f["rm_deployed_mod"])
+        # Twin: a backtick before an ordinary character is still unquoted.
+        self.assertTrue(self._ps("Remove-Item -Path '%s'" % (GAME + "/0`1.dat"))["writes_game_archive"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

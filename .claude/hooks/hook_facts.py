@@ -457,6 +457,24 @@ def _scan(s: str):
         yield c, inq
 
 
+def _scan_ops(s: str):
+    """_scan for the walks that find where a command ENDS (segments, piped_in): a character a
+    backslash escapes outside quotes is literal there, as a quoted one is. `find ... -exec echo {}
+    \\; -delete` is ONE command: split at the `\\;`, find lost everything after it, so the
+    -delete reached no rule while the `';'` spelling was denied (4.1.1 review round 4, 7). Only
+    these two walks: blank_quoted must keep the `r` of `\\rm`."""
+    esc = False
+    for _i, c, inq, _k in _qwalk(s):
+        if esc:
+            esc = False
+            yield c, True
+            continue
+        # A quoted backslash needs no `not inq`: its closing quote always comes before the next
+        # unquoted character and clears the flag (the mutation gate cannot tell the two apart).
+        esc = c == chr(92)
+        yield c, inq
+
+
 def join_continuations(s: str) -> str:
     """Remove backslash-newline, which bash removes before it does anything else.
 
@@ -610,7 +628,7 @@ def segments(cmd: str, raw: bool = False) -> list[str]:
     """Split on shell separators that are OUTSIDE quotes. A `|` inside grep -E 'a|b'
     is not a pipeline. `raw`: the same pieces before _unwrap (reserved words kept), one per
     segment, in the same order."""
-    parts, buf, chars = [], [], list(_scan(cmd))
+    parts, buf, chars = [], [], list(_scan_ops(cmd))
     i = 0
     while i < len(chars):
         c, inq = chars[i]
@@ -658,7 +676,7 @@ def piped_in(cmd: str) -> list:
     reads the tool's own (empty) stdin, not ls's output (v3.3.0 release review, found by
     this lane's history replay -- pairing on ANY separator asked on `command -v pwsh`).
     """
-    out, buf, chars, sep = [], [], list(_scan(cmd)), ""
+    out, buf, chars, sep = [], [], list(_scan_ops(cmd)), ""
     i = 0
 
     def close(next_sep):
@@ -4710,7 +4728,8 @@ def _may_name_archive(name: str) -> bool:
     # A name the shell fills in at run time (`ls <game> | while read f; do rm "<game>/$f"`) may be
     # any archive's, as the same loop under reference/ is denied (user decision 2026-11-05). The
     # xargs item stands for what a producer prints, which the find and listing readers judge.
-    if "$" in name and name != _XARGS_ITEM:
+    # A backtick pair is the older spelling of $(...) (4.1.1 review round 4, 6).
+    if ("$" in name or name.count(chr(96)) >= 2) and name != _XARGS_ITEM:
         return True
     return _is_pattern(name) and any(_glob_may_meet(name, [_GLOB_DISK_NAME] + _glob_lit(e))
                                      for e in _ARCHIVE_ENDINGS)
@@ -4745,8 +4764,14 @@ def _is_archive_home(n: str, g: str) -> bool:
 def _is_game_archive(n: str, g: str) -> bool:
     """`n` names a direct .cat or .dat in the game root or a DLC, or a pattern reaching one."""
     home, sep, name = n.rpartition("/")
-    if not sep or not _is_archive_home(home, g):
+    if not sep:
         return False
+    if not _is_archive_home(home, g):
+        # A folder filled in at run time directly in the game folder may be `.` or
+        # `extensions/ego_dlc_x` (4.1.1 review round 4, 6: `rm "<game>/$f/01.cat"` was advised).
+        below = home[len(g) + 1:] if home.startswith(g + "/") else ""
+        if not below or "/" in below or ("$" not in below and below.count(chr(96)) < 2):
+            return False
     return _may_name_archive(name)
 
 
@@ -4798,7 +4823,9 @@ def named_game_roots(n: str) -> list:
         if (m and m.group(1).lower() == "x4 foundations" and not m.group(2)
                 and (m.start() == 0 or p[m.start() - 1] == "/")):
             out.append(p)
-        elif at >= 0 and _globs_install_name(p):
+        elif _globs_install_name(p):
+            # The last segment too, as the literal name counts there (4.1.1 review round 4, 5:
+            # `find /d/Games/X4*Foundations -name '*.cat' -delete` was allowed).
             out.append(p)
         if at < 0:
             return out
@@ -5227,6 +5254,17 @@ def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec
             hay = (_glob_lit(plain + "/") if plain is not None else [_GLOB_ALL, ("lit", "/")]) + rel
             span = _entry_depths(rel)
         entries.append((hay, name, ending, modes, span))
+    # The root itself is a depth-0 entry. A recursive delete of a root that is the game folder,
+    # extensions/ or a folder above them takes every DLC with it, whatever -maxdepth says. The walk
+    # above only sees entries BELOW the root, which deeper entries masked until -maxdepth 0 dropped
+    # them (4.1.1 review round 4, 1: `find <game> -maxdepth 0 | xargs rm -rf` advised).
+    if _holds_a_dlc(r, g):
+        base = (plain or r).rpartition("/")[2]
+        if plain is None or _is_pattern(r):
+            hay, name, ending = [_GLOB_ALL], [_GLOB_SEGMENT], ""
+        else:
+            hay, name, ending = _glob_lit(plain), _glob_lit(base), base
+        entries.append((hay, name, ending, dir_modes, (0, 0)))
     if not entries:
         return False
     k = _verb_at(seg, 0) + 1            # P1: see _verb_at
@@ -6419,7 +6457,13 @@ def _tmux_readings(words: list) -> list:
             break
     chunk = []
     for w in words[i:] + [";"]:
-        if _head(w) != ";":
+        h = _head(w)
+        if h != ";" and h.endswith(";") and w.endswith(chr(92) + ";"):
+            # `tmux ls\; run '<cmd>'`: a separator glued to the word before it. segments() split
+            # there until it learned that `\;` is literal (4.1.1 review round 4, 7).
+            chunk.append(w[:-2])
+            h = ";"
+        if h != ";":
             chunk.append(w)
             continue
         if chunk:
