@@ -502,6 +502,17 @@ decide deny   protect-bash.sh "$(cj "rm '$X4_GAME/'\"\$f\"'/01.cat'")" "archive:
 decide ask    protect-bash.sh "$(cj "find '$_mod' -maxdepth 0 -exec rm -rf {} +")" "TWIN: a depth-0 mod folder keeps its confirmation"
 decide advise protect-bash.sh "$(cj "find '$X4_GAME' -maxdepth 0 | xargs rm")" "TWIN: a depth-0 root a plain rm cannot remove"
 decide allow  protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' -exec sha256sum {} \\;")" "TWIN: an escaped terminator with nothing deleting after it"
+# 4.1.1 review round 5: a carrier that joins its words for a shell re-reads an escaped separator;
+# eval keeps its command's flags; the depth-0 root is a folder.
+decide deny   protect-bash.sh "$(cj "watch -n1 echo a\\; rm -rf '$X4_REFERENCE'")" "watch joins for a shell: an escaped ; separates"
+decide deny   protect-bash.sh "$(cj "wsl echo a\\; git add -A")" "wsl joins for a shell: an escaped ; separates"
+decide deny   protect-bash.sh "$(cj "ssh localhost echo a\\&\\& rm -rf '$X4_REFERENCE'")" "ssh to this machine: an escaped && separates"
+decide deny   protect-bash.sh "$(cj "eval git add -A")" "eval keeps the flags of the command it runs"
+decide allow  protect-bash.sh "$(cj "watch -x echo a\\; rm -rf '$X4_REFERENCE'")" "TWIN: watch -x runs its words directly"
+decide allow  protect-bash.sh "$(cj "nohup echo a\\; git add -A")" "TWIN: nohup runs its words directly"
+decide allow  protect-bash.sh "$(cj "eval git add -p")" "TWIN: eval of an ordinary git add"
+decide advise protect-bash.sh "$(cj "find '$X4_GAME' -maxdepth 0 -type f | xargs rm -rf")" "TWIN: a depth-0 root a -type f skips"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -maxdepth 0 -type d | xargs rm -rf")" "a depth-0 root a -type d matches"
 _sg="$X4_GAME"; _se="$X4_EXTENSIONS"; export X4_GAME="" X4_EXTENSIONS=""
 decide deny   protect-bash.sh "$(cj "rm '/c/games/X4 Foundations/01.dat'")" "archive: no game root configured, the install's folder name"
 decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")"     "TWIN: no game root, another game's .dat"
@@ -702,7 +713,8 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # ask); the DLC subfolder probe flipped from ask to deny is not new: 384 + 15.
 # Round 3 adds 5 denies + 4 twins: 399 + 9.
 # Round 4 adds 5 denies + 3 twins: 408 + 8.
-EXPECT=416
+# Round 5 adds 5 denies + 4 twins: 416 + 9.
+EXPECT=425
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
