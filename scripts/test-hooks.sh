@@ -532,6 +532,17 @@ decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' -exec mv {} /
 decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' | xargs sed -i s/a/b/")" "find | xargs sed -i: an archive rewritten"
 decide allow  protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' -exec cp {} /c/backup/ \\;")" "TWIN: find -exec copying archives OUT"
 decide allow  protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' | xargs cp -t /c/backup")" "TWIN: find | xargs cp -t copying archives OUT"
+# 4.1.1 review round 7: the ssh advisory is bounded; sh -c positional parameters; replacing compressors;
+# pass-on filters between find and xargs; gfind and fd -x.
+_ch="ssh h0 ls && ssh h1 ls && ssh h2 ls && ssh h3 ls && ssh h4 ls && ssh h5 ls && ssh h6 ls && ssh h7 ls && ssh h8 ls && ssh h9 ls"
+decide deny   protect-bash.sh "$(cj "$_ch && rm -rf '$X4_REFERENCE'")" "ten ssh segments, then a delete of reference/: denied in time"
+decide allow  protect-bash.sh "$(cj "$_ch")" "TWIN: ten harmless ssh segments"
+decide deny   protect-bash.sh "$(cj "sh -c 'rm -rf \"\$1\"' _ '$X4_REFERENCE'")" "sh -c reads its positional parameters"
+decide deny   protect-bash.sh "$(cj "gzip '$X4_GAME/01.cat'")" "gzip replaces an archive"
+decide allow  protect-bash.sh "$(cj "gzip -k '$X4_GAME/01.cat'")" "TWIN: gzip -k keeps it"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' | sort | xargs mv -t /c/o")" "find | sort | xargs mv: archives moved away"
+decide deny   protect-bash.sh "$(cj "gfind '$X4_GAME' -name '*.cat' -delete")" "gfind is find"
+decide deny   protect-bash.sh "$(cj "fd . '$X4_REFERENCE' -x rm")" "fd -x runs a command per result"
 _sg="$X4_GAME"; _se="$X4_EXTENSIONS"; export X4_GAME="" X4_EXTENSIONS=""
 decide deny   protect-bash.sh "$(cj "rm '/c/games/X4 Foundations/01.dat'")" "archive: no game root configured, the install's folder name"
 decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")"     "TWIN: no game root, another game's .dat"
@@ -734,7 +745,8 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # Round 4 adds 5 denies + 3 twins: 408 + 8.
 # Round 5 adds 5 denies + 4 twins: 416 + 9.
 # Round 6 adds 7 denies + 1 advisory + 5 twins: 425 + 13; its find-write part 2 denies + 2 twins: 438 + 4.
-EXPECT=442
+# Round 7 adds 6 denies + 2 twins: 442 + 8.
+EXPECT=450
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
