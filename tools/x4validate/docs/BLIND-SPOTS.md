@@ -458,7 +458,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
-| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict) | FIXED 2026-11-06 |
+| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 229 of 2063 moved, all to deny or advise | FIXED 2026-11-06 |
+| F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12330,20 +12331,79 @@ and v4.1.0 judged the quoted path. 2, root cause pre-arc: the eval reader droppe
 flags included. 3: a `find`'s depth-0 root is a folder or a link to one, so a `-type`/`-xtype` list naming neither skips it;
 any other entry, and a type not written as letters, stays undecided.
 
-Every row weaker than v4.1.0 (90 of 1526), each the shell's own reading: the 4 the reviewer named (`echo '...' \| bash` with an
-escaped pipe prints; `tmux ls\;run` is one tmux word; `watch -x` and `nohup` echo); 85 of this round's rows, an escaped
+Every row weaker than v4.1.0 (89 of 1526; first written as 90, which counted the `printf` row below twice, corrected in round 6), each the shell's own reading: the 4 the reviewer named (`echo '...' \| bash` with an
+escaped pipe prints; `tmux ls\;run` is one tmux word; `watch -x` and `nohup` echo); 84 of this round's rows, an escaped
 separator handed to a program that runs its words directly or takes one word as its text (`watch -x`, `wsl -e`, `busybox`,
 `toybox`, `winpty`, `pkexec`, `runuser`, `chroot`, `flock`, `nsenter`, `unshare`, `taskset`, `chrt`, `screen`, `nohup`, `sudo`,
 `timeout`, `nice`, `env`, `command`, `exec`, `xargs`, `setsid`, `stdbuf`, `doas`, `bash -c`, `su -c`, `script -c`, `flock -c`,
 `trap`, `ssh otherhost`, and `tmux new`/`run-shell`, where the `;` ends the tmux command and `rm` is no tmux command); and
 `printf '%s' a\; rm -rf <x> \| bash`, which prints `a;rm-rf<x>`. v4.1.0 denied these only because it split at the `\;`.
-INFERRED, not measured: `sudo -s` and `sudo -i` escape the words they hand the shell, so their `;` stays literal (sudo's
-documented behaviour, not run here).
+READ (round 6), not run here: `sudo -s` and `sudo -i` escape the words they hand the shell, so their `;` stays literal.
+sudo's `parse_args()`, as quoted in Qualys's CVE-2021-3156 ("Baron Samedit") advisory, concatenates the arguments in shell
+mode and puts a backslash before every character for which `!isalnum(c) && c != '_' && c != '-' && c != '$'` (its lines
+587-595 and 590-591). The advisory quotes the sudo source of that time; a later sudo was not read.
 
-NOT FIXED, PRE-ARC (allow at v4.1.0 too, MEASURED): `find . -exec sh -c echo\ a\;\ rm\ -rf\ <ref> \;`: `_exec_deletes` joins
-find's decoded words, losing which ones were one word, so the `-c` text reads as `echo`.
+FIXED in round 6 (F357), was PRE-ARC (allow at v4.1.0 too, MEASURED): `find . -exec sh -c echo\ a\;\ rm\ -rf\ <ref> \;`:
+`_exec_deletes` joined find's decoded words, losing which ones were one word, so the `-c` text read as `echo`. It now quotes
+each word back, and the -exec command is a reading of its own.
 
 Timing, whole hook: c5's many-operand `rm` 8.7 s (8.3 s at 24775c29); the reviewer's four budget rows 3.7 to 20.5 s, as
 before; no other row over 2.5 s. A first lane run spanned a machine sleep and reported three rows at 18,965 s (#31); rerun.
 
 **RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 103 `game archive` mutants in `scripts/verify-hook-tests.py` (120 with the `glob:`, `recursion:`, `xargs:` and `find -exec` ones), plus 23 round-3 mutants, one per clause (labels ending `(A)` to `(E)` and `(loop)`), 14 round-4 mutants (labels ending `(r4, N)`; the 4 PowerShell ones are run by hand, since the table mutates `hook_facts.py` only), 22 round-5 mutants (labels ending `(r5, N)`), `TestArchiveGlobWholeHookTime` in `test_audit0924_hooks.py`, and the archive probes in `scripts/test-hooks.sh`.
+
+## F357 - A `find -exec` command, and the command an argv wrapper runs, reached no rule of its own · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-06
+
+GitHub issue [#18](https://github.com/WingedGuardian/x4-ai-toolkit/issues/18). Found by the 4.1.1 review, round 6.
+
+**The defect.** The guard read a `find` only through `_find_delete`: does its `-exec` command delete, and if so, under the
+start folder. The command itself was never judged, so `find . -exec rm -rf <ref> \;` (also `-execdir`, `-ok`, `-okdir`, `{} +`),
+`find . -exec rm '<game>/01.cat' \;`, `find . -exec git add -A \;` and `find . -exec sh -c 'rm -rf <ref>' \;` were ALLOW at
+v4.1.0 and at 28f260ee (MEASURED through the hook). Separately, programs that run their argv but were in no table hid the
+command they carried: `sshpass`, `autossh`, `torsocks`, `valgrind`, `caffeinate`, `start`, `mintty -e`, `gsudo`, `gdb --args`,
+and an unknown wrapper in front of `ssh`, `watch` or `wsl`. v4.1.0 denied some of the escaped forms (`sshpass -p x ssh
+localhost echo a\; rm -rf <ref>`) only through the old `\;` split; the unescaped forms were allowed in v4.1.0 too.
+
+**The fix.** (A) `_find_exec_readings`: each -exec command is a carrier reading, spliced in place like every other one, so
+every rule judges it. find runs the words as argv, so each is quoted back; `{}` is `<start>/${xargs_item}` (one reading per
+start, up to 4); `-execdir`/`-okdir` read in the start, in an unknown folder below it, and in the start's parent with `{}` as
+`./<name>`; `+` ends an -exec only right after `{}` (else find refuses the command and runs nothing); a find that can only
+match a regenerable cache drops a bare `{}`. `_exec_deletes` quotes its words back and reads every segment of a carried text.
+(B) The six argv carriers joined `_ARGV_CARRIERS`; `gdb --args`, `start` (switches, `/D <dir>`, a double-quoted title) and
+`autossh` (`-M <port>`, then an ssh) are read by `_special_carrier_readings`; gsudo is read as joining for a shell (INFERRED
+from its documentation of running the caller's shell, not measured; it only adds readings). An unknown program whose first
+operand is `ssh`, `watch` or `wsl` gets the words from there as a reading (`echo`, `printf`, `man`, `which` and other
+printers excluded). (C) The remote command of an `ssh <host>` that is not recognised as this machine is judged by the whole
+rule set after the verdict, as written and spliced into the command around it (this machine expands `"$FZ"` first; the
+spliced form counts only for a fact the command does not already have). A destructive result sets `ssh_host_unplaced`, an
+ADVISORY only: never an ask or a deny.
+
+**Localhost recognition (C), MEASURED by the reviewer through the hook:** catches `127.0.0.x`, `0.0.0.0`, `::1`, `[::1]`,
+`user@`, `-p`, `-l`, `-o Port=`, `-J`, `-F`, `ssh://`, `$(hostname)`, `$HOSTNAME`, `$COMPUTERNAME`, this computer's name, and
+`.local`. Not recognised, and now advised instead: a LAN address, a Tailscale address or name, an `~/.ssh/config` alias.
+
+**Measured, through `protect-bash.sh`, fixture roots, nothing run:** every probe set of rounds 3 to 5, the reviewer's six
+round-6 sets, and 283 rows of this round's own, at 7753cc2c (v4.1.0), 28f260ee and the fix: 2063 rows paired per item, 0
+unpaired. Against 28f260ee 229 moved, all stronger: 192 allow to deny, 37 allow to advise (ssh to an unplaced host; four
+`find <game> -name '*.dat' -exec mv|truncate|cp|dd {}` rows, where `{}` is an unknown name, so the archive rule does not
+see a `.dat`). 0 weaker. The `scripts/test-hooks.sh` probes (261 protect-bash rows) replayed through the three trees: 8
+moved, all this round's new probes; 0 weaker than 28f260ee; 2 weaker than v4.1.0, round 5's `watch -x` and `nohup` twins.
+
+Weaker than v4.1.0: 141 rows. 89 are round 5's justified list, all still weaker (two of them, `ssh otherhost echo a\; ...`,
+now advise rather than allow). The other 52 are rows new in this round's sets, every one of a class round 5 justified: an escaped separator
+handed to a program that runs its words directly (`torsocks`, `valgrind`, `caffeinate`, `start`, `mintty -e`, `gdb --args`,
+`time`, `wsl -e`, `watch -tx`, `docker run ... echo`, `R=echo; $R`), `sudo -s`/`-i` (F356, now READ), `watch` given an
+escape the re-reading shell keeps literal (`watch 'echo a\; rm ...'`, `watch echo 'a\;' rm ...`), and `ssh` to an unplaced
+host (deny to advise). v4.1.0 denied them only because it split at the `\;`.
+
+**Not fixed.** `find <game> -name '*.dat' -exec mv {} <dir>` advises, not denies: the `{}` name is unknown to the archive
+rule (F356 lists `find -exec mv` as an unmodelled shape). A remote command over 8 per command, or nested past 4 ssh hops, is
+not judged for the advisory. The test-hooks replay of `C1: a brace-expanded save delete` asks in all three trees where the
+live suite denies: a replay environment difference, not a change.
+
+Timing, whole hook: median per-row ratio to 28f260ee 1.00 (p90 1.22); c5's many-operand `rm` 9.6 s (8.6 s); the four budget
+rows 3.5 to 20.7 s, bounded by the backend deadline; no other row over 2.5 s.
+
+**RE-DERIVED BY:** `TestRound6FindExecAndCarriers` in `test_hook_facts.py` (12 tests), 24 mutants labelled `(r6, A|B|C)` in
+`scripts/verify-hook-tests.py`, the round-6 probes in `scripts/test-hooks.sh`, and the `ssh to an unplaced host` seed in
+`scripts/fuzz-guard.py` (its 164 mutators weaken it 0 times).
