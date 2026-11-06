@@ -1000,6 +1000,8 @@ def seeds(roots):
         ("recursive search at reference", "grep -rn foo " + QU + ref + QU),
         ("rg at reference", "rg foo " + QU + ref + QU),
         ("git add -A", "git add -A"),
+        # 4.1.1 review round 6, C: a destructive command to an ssh host the guard cannot place
+        ("ssh to an unplaced host", "ssh otherhost " + d + " -rf " + QU + ref + QU),
         ("sed -i in the game", s + " -i " + AP + "s/a/b/" + AP + " " + QU + g + "/f.xml" + QU),
         ("cd then relative delete", "cd " + QU + g + QU + " && " + d + " -rf extensions"),
         ("profile search by name", "grep -n foo " + QU + prof + "/content.xml" + QU),

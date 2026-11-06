@@ -565,6 +565,13 @@ _rm_mod=0; on rm_deployed_mod && _rm_mod=1
 on rm_deployed_mod && ask "CONFIRM REMOVING DEPLOYED MOD(S) from the game's extensions/: $RM_MODS. One answer covers this whole command. Command: $COMMAND"
 on rm_in_x4_dir && [ "$_rm_mod" != 1 ] && advise "This deletes files in an X4 directory (game files, mod sources or the toolkit). Make sure it is what you meant -- check git status afterwards, and redeploy if you removed a deployed mod by mistake. Command: $COMMAND"
 
+# === ADVISORY — a destructive command sent to an ssh host the guard cannot place ===
+# 4.1.1 review round 6, C (GitHub issue #18): `ssh <host> rm -rf <reference>` is judged as running
+# here only when <host> is recognisably this machine (loopback, this computer's name, a variable).
+# A LAN address, a Tailscale name or an ~/.ssh/config alias may be this machine too, and the guard
+# cannot tell -- so an advisory, never an ask or a deny: the host is usually another machine.
+on ssh_host_unplaced && advise "This sends a command to an ssh host the guard cannot place, and that command would be refused or confirmed had it run on THIS machine (a delete, a write into a protected folder, git add -A). The guard recognises loopback addresses and this computer's own name only; a LAN address, a Tailscale name or an ~/.ssh/config alias may still be this machine. Make sure the host is the one you mean. Command: $COMMAND"
+
 # === CONFIRM — destructive git inside an X4 directory ===
 # git IGNORES the read-only attribute. MEASURED 2026-09-04: `git checkout HEAD~1 -- f`
 # overwrote a LOCKED file and left it unlocked afterwards, and `git clean -fdx` deleted

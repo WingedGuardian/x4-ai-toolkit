@@ -4980,10 +4980,76 @@ def _exec_deletes(words: list) -> bool:
     # Through the shared wrapper table (verb) and carrier walk (_inner_commands), as any other
     # command: `-exec env rm`, `-exec busybox rm`, `-exec cmd /c del` (4.1.1 review round 2, F4).
     # `find <root> -exec bash -c '<cmd>' _ {} ;` is the same carrier as anywhere else.
-    text = " ".join(words)
+    # Each word QUOTED back (4.1.1 review round 6, A): find hands its words over as argv, so
+    # `sh -c echo\ a\;\ rm\ -rf\ <x>` is ONE word holding a whole program; joined bare, it fell
+    # apart at its blanks and the shell's text read as `echo`. And every SEGMENT of a carried
+    # text, not only its first: `sh -c 'echo a; rm -rf <x>'`.
+    text = " ".join(_sh_quote(w) for w in words)
     if _verb_name(verb(text)) in DELETE_VERBS:
         return True
-    return any(_verb_name(verb(x)) in DELETE_VERBS for x in _inner_commands(text))
+    return any(_verb_name(verb(s)) in DELETE_VERBS for x in _inner_commands(text) for s in segments(x))
+
+
+#: How many starting points a find's -exec readings are built for (_find_exec_readings).
+_FIND_EXEC_ROOTS = 4
+
+
+def _find_exec_readings(seg: str) -> list:
+    """Each command a find's -exec/-execdir/-ok/-okdir runs, as a command in its own right (4.1.1
+    review round 6, A; GitHub issue #18). The delete rules read a find only as deleting under its
+    starting point, so `find . -exec rm -rf <reference> \\;`, `-exec git add -A \\;` and `-exec sh
+    -c '<cmd>' \\;` reached no rule. find runs the words as argv, so each is quoted back as written
+    and nothing is re-split; `{}` is an entry the guard cannot name, under the starting point
+    (`<root>/${xargs_item}`, as xargs_feed spells one). `-execdir`/`-okdir` run in the entry's own
+    folder: under the starting point, in it, or (for the starting point itself) its parent, with
+    `{}` as `./<name>` -- one reading each. A find that can only match a regenerable cache
+    (_only_regenerable) drops a bare `{}`, so its cleanup stays the hygiene it always was."""
+    toks = tokens(seg)
+    start = _verb_at(seg, 0) + 1        # P1: see _verb_at
+    words = [t for t, _q in toks[start:]]
+    roots = []
+    for t, quoted in toks[start:]:
+        if not quoted and t.startswith(("-", "(", "!")):
+            break
+        roots.append(t)
+    roots = roots[:_FIND_EXEC_ROOTS] or ["."]
+    regenerable = _only_regenerable([t for t, _q in toks])
+    out, i = [], len(roots)
+    while i < len(words):
+        if words[i] not in _FIND_EXEC:
+            i += 1
+            continue
+        act, j = words[i], i + 1
+        while j < len(words) and not (words[j] == ";" or (words[j] == "+" and words[j - 1] == "{}")):
+            j += 1
+        ran, i = words[i + 1:j], j + 1
+        if j >= len(words) or not ran:
+            continue                     # find refuses an unterminated -exec and runs nothing
+        for root in roots:
+            base = root.rstrip("/" + chr(92)) or root
+            if act in ("-exec", "-ok"):
+                places = [("", _sh_quote(base + "/") + _XARGS_ITEM)]
+            else:
+                parent, slash, name = base.replace(chr(92), "/").rpartition("/")
+                if name in ("", ".", ".."):
+                    parent, name = base + "/..", "."
+                elif slash and (not parent or parent.endswith(":")):
+                    parent += "/"
+                places = [("cd " + _sh_quote(base) + " && ", "./" + _XARGS_ITEM),
+                          ("cd " + _sh_quote(base + "/") + _XARGS_ITEM + " && ", "./" + _XARGS_ITEM),
+                          ("cd " + _sh_quote(parent or ".") + " && ", _sh_quote("./" + name))]
+            for cd, item in places:
+                parts = []
+                for w in ran:
+                    if w == "{}" and regenerable:
+                        continue
+                    pieces = w.split("{}")
+                    parts.append(item.join(_sh_quote(p) if p else "" for p in pieces) if len(pieces) > 1
+                                 else _sh_quote(w))
+                out.append(cd + " ".join(parts))
+            if act in ("-exec", "-ok") and "{}" not in "".join(ran):
+                break                    # the same command whatever the root: read it once
+    return list(dict.fromkeys(out))
 
 
 def _find_parse(words: list):
@@ -6163,7 +6229,23 @@ _ARGV_CARRIERS = {
     "taskset": ({"-c", "--cpu-list"}, 0, True),
     "chrt": ({"-T", "-P", "-D"}, 0, True),
     "screen": ({"-S", "-c", "-T", "-h", "-p", "-t", "-e", "-s"}, 0, False),
+    # 4.1.1 review round 6, B: each ran its argv unseen (MEASURED: `sshpass -p x ssh localhost
+    # rm -rf <reference>`, `torsocks git add -A`, `mintty -e bash -c '<cmd>'` were allowed).
+    "sshpass": ({"-p", "-f", "-d", "-P"}, 0, False),
+    "torsocks": ({"-u", "--user", "-p", "--pass", "-a", "--address", "-P", "--port"}, 0, False),
+    "valgrind": (frozenset(), 0, False),
+    "caffeinate": ({"-t", "-w"}, 0, False),
+    "mintty": ({"-c", "--config", "-C", "--loadconfig", "-h", "--hold", "-i", "--icon", "-l", "--log",
+                "-o", "--option", "-p", "--position", "-s", "--size", "-t", "--title", "-T", "--class",
+                "-w", "--window", "-B", "--Border", "-R", "--Report", "--dir"}, 0, False),
+    "gsudo": ({"-u", "--user", "-i", "--integrity"}, 0, False),
 }
+#: Carriers whose program sits behind a word of their own, read by _special_carrier_readings: `gdb
+#: --args <cmd>`, `start [/switch]... ["title"] <cmd>` (cmd.exe's, which Git Bash's `start` calls),
+#: and `autossh -M <port> <ssh arguments>`, which IS an ssh.
+_SPECIAL_CARRIERS = frozenset({"gdb", "start", "autossh"})
+#: start's switches that take the next word as their value (`/D <dir>`, `/NODE <n>`, `/AFFINITY <m>`).
+_START_VALUE_SWITCHES = frozenset({"/d", "/node", "/affinity"})
 _NUMERIC_WORD = re.compile(r"0[xX][0-9a-fA-F]+|[0-9][0-9,-]*")
 
 #: Programs that run TEXT given to a `-c` option, exactly as `bash -c` does. The extra shells are
@@ -6273,7 +6355,9 @@ def _joins_for_a_shell(v: str, options: list) -> bool:
         return not any(h == "--exec" or re.fullmatch(r"-[A-Za-z]*x[A-Za-z]*", h) for h in heads)
     if v == "wsl":
         return not any(h in ("-e", "--exec") for h in heads)
-    return False
+    # INFERRED, not measured here: gsudo hands its words to the shell it was called from (`bash -c`
+    # under Git Bash). Read as joining, which only ADDS readings (4.1.1 review round 6, B).
+    return v == "gsudo"
 
 
 def _text_option(words: list) -> list:
@@ -6436,6 +6520,25 @@ def _is_this_machine(host: str) -> bool:
         n.lower() for n in own if n}
 
 
+#: The remote commands of an `ssh <host>` the guard cannot place (not recognised as this machine),
+#: for this facts() call, and how deep facts() is in judging them (round 6, C): `ssh a ssh b <cmd>`
+#: is one level more, and _MAX_SSH_DEPTH bounds it.
+_SSH_UNPLACED: list = []
+#: ...and the same commands spliced into the command around them, which this machine expands first.
+_SSH_UNPLACED_SPLICED: list = []
+_SSH_NESTED = [0]
+_MAX_SSH_DEPTH = 4                    # as deep as the carrier walk goes (_MAX_CARRIER_DEPTH)
+#: How many of them facts() judges; past it the rest are not judged, and the advisory says nothing
+#: about them (it is advice, never a verdict).
+_MAX_SSH_UNPLACED = 8
+#: The facts that make a remote command DESTRUCTIVE had it run here: each is a deny or an ask in
+#: protect-bash.sh, or the in-X4-folder delete advisory.
+_SSH_DESTRUCTIVE = ("rm_hits_game", "rm_targets_reference", "writes_reference", "writes_game_archive",
+                    "writes_host_transcript", "writes_agent_settings", "link_into_protected", "rm_in_profile",
+                    "rm_deployed_mod", "rm_in_x4_dir", "rm_saves", "writes_profile_other", "git_wipes_x4_dir",
+                    "git_wipe_from_session_dir", "sed_i_in_game_or_profile", "git_add_all",
+                    "durable_truncating_redirect", "program_dynamic_protected", "verb_unresolved")
+
 #: ssh options whose value runs on THIS machine, whatever the destination.
 _SSH_LOCAL_COMMAND = re.compile(r"(?:proxycommand|localcommand|knownhostscommand)\s*[= ]\s*(.*)", re.I | re.S)
 
@@ -6452,13 +6555,21 @@ def _ssh_readings(words: list) -> list:
         m = _SSH_LOCAL_COMMAND.fullmatch(value)
         if m:
             out.append(m.group(1))
-    if at is None or at >= len(words) or not _is_this_machine(_head(words[at])):
+    if at is None or at >= len(words):
         return out
     tail = words[at + 1:]
     k = _program_at(tail, _SSH_VALUE_OPTS)
     if k is None or k >= len(tail):
         return out
-    return out + ["cd " + _UNKNOWN_CWD + " && " + r for r in _as_program(tail[k:], True)]
+    remote = ["cd " + _UNKNOWN_CWD + " && " + r for r in _as_program(tail[k:], True)]
+    if not _is_this_machine(_head(words[at])):
+        # Another machine's paths are not this one's protected folders, so these are no reading
+        # here. But the guard cannot tell a LAN address, a Tailscale name or an ~/.ssh/config
+        # alias for this machine from another one: facts() judges them apart and only ADVISES
+        # (4.1.1 review round 6, C).
+        _SSH_UNPLACED.extend(remote)
+        return out
+    return out + remote
 
 
 def _parallel_readings(words: list, prev) -> list:
@@ -6644,7 +6755,11 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
         out.extend(_env_split_readings(seg))
     if "exec" in seg or "sudo" in seg:
         out.extend(_value_word_readings(seg))
+    if v == "find" and ("-exec" in seg or "-ok" in seg):
+        out.extend(_find_exec_readings(seg))
     if v not in _ALL_CARRIER_VERBS:
+        if v not in _NOT_RUNNERS and v not in WRAPPERS and _MAY_CARRY_JOINER.search(seg):
+            out.extend(_joiner_behind_unknown(seg))
         return out
     words = _raw_words(_verb_word_text(seg)[1].strip())
     if v in _ARGV_CARRIERS:
@@ -6659,6 +6774,8 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
                 # WSL spells this machine's drives /mnt/<drive>/.
                 readings += [_WSL_MOUNT.sub(lambda m: m.group(1) + ":", r) for r in readings if "/mnt/" in r]
             out.extend(readings)
+    if v in _SPECIAL_CARRIERS:
+        out.extend(_special_carrier_readings(v, words))
     if v in _TEXT_C_CARRIERS:
         out.extend(_text_option(words))
     if v == "ssh":
@@ -6672,7 +6789,55 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
     return out
 
 
-_ALL_CARRIER_VERBS = frozenset(_ARGV_CARRIERS) | _TEXT_C_CARRIERS | {"ssh", "parallel", "tmux", "mapfile", "readarray"}
+def _special_carrier_readings(v: str, words: list) -> list:
+    """The program `gdb --args`, `start` and `autossh` run (_SPECIAL_CARRIERS)."""
+    heads = [_head(w) for w in words]
+    if v == "gdb":
+        # Without --args gdb's operand is a program FILE it loads, not one it runs.
+        at = heads.index("--args") + 1 if "--args" in heads else None
+        return _as_program(words[at:]) if at is not None and at < len(words) else []
+    if v == "autossh":
+        k = 0
+        while k < len(words):
+            if heads[k] == "-M":
+                k += 2
+            elif heads[k] in ("-f", "-V") or heads[k].startswith("-M"):
+                k += 1
+            else:
+                break
+        return ["ssh " + " ".join(words[k:])] if k < len(words) else []
+    # start: `/b`, `/wait`, `/min`, `/D <dir>`, then an optional DOUBLE-QUOTED title, then the program.
+    k = 0
+    while k < len(words) and heads[k][:1] == "/" and len(heads[k]) > 1 and "/" not in heads[k][1:]:
+        k += 2 if heads[k].lower() in _START_VALUE_SWITCHES else 1
+    if k < len(words) and words[k][:1] == chr(34):
+        k += 1
+    return _as_program(words[k:]) if k < len(words) else []
+
+
+#: Verbs that print or look up the words after them rather than running them, for
+#: _joiner_behind_unknown: `echo ssh localhost rm -rf <x>` runs nothing.
+_NOT_RUNNERS = frozenset({"echo", "printf", "man", "which", "type", "whereis", "whatis", "apropos", "info",
+                          "help", "tldr", "hash", "alias", "unalias", "complete", "compgen", "declare",
+                          "local", "export", "readonly", "set", "unset", "grep", "egrep", "fgrep", "rg"})
+_SHELL_JOINERS = ("ssh", "watch", "wsl")
+_MAY_CARRY_JOINER = re.compile(r"(?<![A-Za-z0-9_.-])(?:ssh|watch|wsl)(?:[.]exe)?(?![A-Za-z0-9_.-])")
+
+
+def _joiner_behind_unknown(seg: str) -> list:
+    """`<unknown wrapper> [-opts] ssh|watch|wsl ...`: a program this file does not know, whose first
+    operand is a carrier that joins its words for a shell, may be running it -- `sshpass`-like tools
+    nobody has listed yet. The words from that carrier on are a reading of their own, so its escaped
+    separator is re-read as it would be (4.1.1 review round 6, B). Additive, like every reading."""
+    words = _raw_words(_verb_word_text(seg)[1].strip())
+    k = next((i for i, w in enumerate(words) if not _head(w).startswith("-")), None)
+    if k is None or k + 1 >= len(words) or _verb_name(_head(words[k])) not in _SHELL_JOINERS:
+        return []
+    return [" ".join(words[k:])]
+
+
+_ALL_CARRIER_VERBS = (frozenset(_ARGV_CARRIERS) | _TEXT_C_CARRIERS | _SPECIAL_CARRIERS
+                      | {"ssh", "parallel", "tmux", "mapfile", "readarray"})
 #: The command names a glob must be able to spell before its name counts as unknown.
 _GLOB_SPELLABLE = (DELETE_VERBS | COPY_VERBS | _TRASH_VERBS | WRAPPERS | _ALL_CARRIER_VERBS | set(_SHELLS)
                    | {"eval", "source", ".", "trap", "ln", "mklink", "touch", "truncate", "dd", "sed", "find",
@@ -6727,7 +6892,12 @@ def _inner_commands(cmd: str) -> list[str]:
             if readings:
                 carrying[n] = readings
         v = _verb_name(vt)              # one read per segment: this walk runs on every hook call
+        unplaced = len(_SSH_UNPLACED)
         carried_here = _program_carrier_readings(seg, v, vt, segs[n - 1] if n and pipes[n] else None)
+        if len(_SSH_UNPLACED) > unplaced:
+            # ...and each IN PLACE, as every carrier reading is: the remote command is expanded HERE
+            # first, so `FZ=<ref>; ssh <host> rm -rf "$FZ"` sends the path (round 6, C).
+            _SSH_UNPLACED_SPLICED.extend(_reading_variants(cmd, segs, {n: _SSH_UNPLACED[unplaced:]}))
         if tmux_chain:
             carried_here = carried_here + _tmux_readings(_raw_words(seg))
         tmux_chain = (tmux_chain or v == "tmux") and seg.rstrip().endswith(chr(92))
@@ -7433,6 +7603,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _WIN_DIALECT.clear()
     _BRACE_WORDS.clear()                # C1: per call, like the two above
     _READING_TEXTS.clear()
+    del _SSH_UNPLACED[:]                # round 6, C: per call (a nested judgement clears its own)
+    del _SSH_UNPLACED_SPLICED[:]
     _EXTENSIONS_ROOT[0] = (roots.get("extensions")
                            or (roots["game"].rstrip("/" + chr(92)) + "/extensions" if roots.get("game") else "")
                            ).replace(chr(92), "/")
@@ -8477,7 +8649,34 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # Several fields above evaluate glob membership; capture scope AFTER every
     # field has run so a late overflow cannot disappear from the result.
     result["operand_expansion_truncated"] = _OPERAND_EXPANSION_TRUNCATED[0]
+    result["ssh_host_unplaced"] = _ssh_unplaced_destructive(result, roots, protected_save_folders)
     return result
+
+
+def _ssh_unplaced_destructive(outer: dict, roots: dict, protected_save_folders=()) -> bool:
+    """Would a remote command of an `ssh <host>` the guard cannot place be destructive, had it run on
+    THIS machine (4.1.1 review round 6, C)? Each is judged by the whole rule set on its own, last, so
+    nothing it sets can reach this command's verdict -- the answer is only an advisory, because the
+    host is most likely another machine, whose paths are not this one's protected folders. A remote
+    command spliced into the command around it counts only for a fact `outer` (this command's own
+    facts) does not already have: the rest of that text is this command, already judged."""
+    remote = list(dict.fromkeys(_SSH_UNPLACED))[:_MAX_SSH_UNPLACED]
+    spliced = [t for t in dict.fromkeys(_SSH_UNPLACED_SPLICED) if t not in remote][:_MAX_SSH_UNPLACED]
+    if not remote or _SSH_NESTED[0] >= _MAX_SSH_DEPTH:
+        return False
+    keys = _SSH_DESTRUCTIVE + ("ssh_host_unplaced",)
+    _SSH_NESTED[0] += 1
+    try:
+        for text, whole in [(t, True) for t in remote] + [(t, False) for t in spliced]:
+            sub = facts({"tool_name": "Bash", "tool_input": {"command": text}}, roots,
+                        protected_save_folders=protected_save_folders)
+            if any(sub.get(k) and (whole or not outer.get(k)) for k in keys):
+                return True
+        return False
+    except Exception:                    # noqa: BLE001 -- unjudged is advised, never silently clean
+        return True
+    finally:
+        _SSH_NESTED[0] -= 1
 
 
 # ----------------------------------------------------------------------- CLI

@@ -8379,5 +8379,133 @@ class TestGameArchiveShellWrites(unittest.TestCase):
             self.assertTrue(F(cmd)["writes_game_archive"], cmd)
 
 
+class TestRound6FindExecAndCarriers(unittest.TestCase):
+    """4.1.1 review round 6 (GitHub issue #18). A: a find's -exec command is a command in its own
+    right. B: wrappers that run their argv carry the command. C: a destructive command sent to an
+    ssh host the guard cannot place is advised."""
+    ARC = GAME + "/01.dat"
+    MOD = GAME + "/extensions/zzz_mymod"
+    END = " " + BS + ";"
+
+    def _payloads(self):
+        return ((D + " -rf " + Q + REF + Q, "rm_targets_reference"), ("git add -A", "git_add_all"),
+                (D + " " + Q + self.ARC + Q, "writes_game_archive"),
+                ("sh -c " + Q + D + " -rf " + REF + Q, "rm_targets_reference"),
+                ("bash -c " + Q + "echo a; git add -A" + Q, "git_add_all"),
+                ("env " + D + " -rf " + Q + REF + Q, "rm_targets_reference"))
+
+    # --- A: the -exec command
+    def test_a_find_exec_command_is_judged_as_a_command(self):
+        for act in ("-exec", "-execdir", "-ok", "-okdir"):
+            for term in (self.END, " {} +") if act in ("-exec", "-execdir") else (self.END,):
+                for pay, key in self._payloads():
+                    cmd = "find . " + act + " " + pay + term
+                    self.assertTrue(F(cmd)[key], cmd)
+        # among other actions, and with the terminator quoted
+        for cmd in ("find . -exec echo {} " + BS + "; -exec git add -A " + BS + ";",
+                    "find . -exec git add -A " + BS + "; -print", "find . -exec git add -A " + Q + ";" + Q):
+            self.assertTrue(F(cmd)["git_add_all"], cmd)
+
+    def test_a_shell_text_of_one_escaped_word_keeps_its_separator(self):
+        # F356: the words were decoded and joined bare, so the text fell apart at its blanks.
+        cmd = "find . -exec sh -c echo" + BS + " a" + BS + ";" + BS + " " + D + BS + " -rf" + BS + " " + REF + self.END
+        self.assertTrue(F(cmd)["rm_targets_reference"], cmd)
+        self.assertTrue(H._exec_deletes(["sh", "-c", "echo a; " + D + " x"]))
+        self.assertTrue(H._exec_deletes(["sh", "-c", "echo a " + D + " x"]) is False)
+
+    def test_TWIN_harmless_finds_keep_their_verdict(self):
+        keys = ("rm_targets_reference", "git_add_all", "writes_game_archive", "rm_in_x4_dir", "rm_hits_game",
+                "copy_into_game_or_profile")
+        for cmd in ("find . -name " + Q + "*.pyc" + Q + " -exec " + D + " {} +",
+                    "find . -name __pycache__ -type d -exec " + D + " -rf {} +",
+                    "find " + Q + GAME + Q + " -name __pycache__ -exec " + D + " -rf {} +",
+                    "find . -exec grep -l x {} +", "find . -exec git -C {} status" + self.END,
+                    "find . -type f -exec wc -l {} +", "find . -exec echo " + D + " -rf " + Q + REF + Q + self.END,
+                    "find /tmp -name x -exec cp /c/o/x {}" + self.END,
+                    # `+` ends an -exec only right after `{}`: find refuses this and runs nothing
+                    "find . -exec " + D + " -rf " + Q + REF + Q + " +"):
+            f = F(cmd)
+            self.assertEqual([k for k in keys if f[k]], [], cmd)
+
+    def test_the_entry_is_a_path_under_the_starting_point(self):
+        self.assertTrue(F("find " + Q + GAME + Q + " -name x -exec cp /c/o/x {}" + self.END)["copy_into_game_or_profile"])
+        self.assertTrue(F("find " + Q + self.MOD + Q + " -exec " + D + " -rf {} +")["rm_deployed_mod"])
+
+    def test_execdir_runs_in_the_entry_folder(self):
+        cp = "cp /c/o/x 01.cat"
+        self.assertTrue(F("find " + Q + GAME + Q + " -execdir " + cp + self.END)["writes_game_archive"])
+        # the starting point itself: from its parent
+        cmd = "find " + Q + GAME + Q + " -maxdepth 0 -execdir cp /c/o/x " + Q + "X4 Foundations/01.cat" + Q + self.END
+        self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        # Twin: -exec runs where the command runs, not in the entry's folder.
+        self.assertFalse(F("find " + Q + GAME + Q + " -exec " + cp + self.END)["writes_game_archive"])
+
+    # --- B: wrappers that run their argv
+    def test_a_wrapper_that_runs_its_argv_carries_the_command(self):
+        for pre in ("sshpass -p x ssh localhost ", "sshpass -f /tmp/pw ssh localhost ", "sshpass -e ssh localhost ",
+                    "autossh -M 0 localhost ", "autossh -M 0 -f localhost ", "torsocks ", "torsocks -u a ",
+                    "valgrind ", "valgrind --tool=memcheck ", "caffeinate -i ", "caffeinate -t 5 ", "start ",
+                    "start /b ", "start /b /wait " + DQ + "t" + DQ + " ", "start " + DQ + "title" + DQ + " ",
+                    "mintty -e ", "mintty -t x -e ", "gsudo ", "gsudo -n ", "gdb --args ", "gdb -q --args ",
+                    "start wsl ", "nohup sshpass -p x ssh localhost "):
+            for pay, key in self._payloads():
+                cmd = pre + pay
+                self.assertTrue(F(cmd)[key], cmd)
+        for pre in ("find . -exec watch ", "find . -exec ssh localhost ", "start wsl ", "sshpass -p x ssh localhost ",
+                    "autossh -M 0 localhost ", "gsudo "):
+            for pay, key in self._payloads()[:2]:
+                cmd = pre + "echo a" + BS + "; " + pay + (self.END if pre.startswith("find") else "")
+                self.assertTrue(F(cmd)[key], cmd)
+
+    def test_an_unknown_wrapper_before_a_shell_joining_carrier(self):
+        for pre in ("foo ", "foo -q "):
+            for joiner in ("ssh localhost ", "watch ", "wsl "):
+                for pay, key in self._payloads()[:2]:
+                    cmd = pre + joiner + "echo a" + BS + "; " + pay
+                    self.assertTrue(F(cmd)[key], cmd)
+
+    def test_TWIN_harmless_wrapper_use(self):
+        keys = ("rm_targets_reference", "git_add_all", "writes_game_archive", "rm_in_x4_dir")
+        for cmd in ("sshpass -p x ssh host ls", "valgrind ./a.out", "start notepad", "start " + DQ + DQ + " notepad",
+                    "torsocks curl https://x", "mintty -e bash", "gdb ./a.out " + D + " -rf " + Q + REF + Q,
+                    "echo ssh localhost " + D + " -rf " + Q + REF + Q, "torsocks echo a" + BS + "; git add -A",
+                    "valgrind echo a" + BS + "; " + D + " -rf " + Q + REF + Q, "autossh -M 0 -f -N host",
+                    # an unknown program's first operand counts only when it is ssh, watch or wsl
+                    "mycli git add -A --via ssh"):
+            f = F(cmd)
+            self.assertEqual([k for k in keys if f[k]], [], cmd)
+
+    # --- C: an ssh host the guard cannot place
+    def test_a_destructive_command_to_an_unplaced_host_is_advised(self):
+        for host in ("otherhost", "192.168.1.5", "me@100.64.0.7", "-p 2222 box.tailnet.ts.net"):
+            for pay in (D + " -rf " + Q + REF + Q, Q + D + " -rf " + REF + Q, "git add -A",
+                        "echo a" + BS + "; " + D + " -rf " + Q + REF + Q):
+                f = F("ssh " + host + " " + pay)
+                self.assertTrue(f["ssh_host_unplaced"], host + " " + pay)
+                self.assertFalse(f["rm_targets_reference"] or f["git_add_all"], host + " " + pay)
+        for cmd in ("sshpass -p x ssh otherhost git add -A", "ssh a ssh b git add -A",
+                    "find . -exec ssh otherhost git add -A" + self.END):
+            self.assertTrue(F(cmd)["ssh_host_unplaced"], cmd)
+
+    def test_the_remote_command_is_expanded_here_first(self):
+        # This machine expands the words before ssh sends them (found by fuzz-guard's mutators).
+        for cmd in ("FZ=" + DQ + REF + "QQ" + DQ + "; ssh otherhost " + D + " -rf " + DQ + "${FZ%QQ}" + DQ,
+                    "FZA=(" + DQ + REF + DQ + "); ssh otherhost " + D + " -rf " + DQ + "${FZA[0]}" + DQ):
+            self.assertTrue(F(cmd)["ssh_host_unplaced"], cmd)
+
+    def test_TWIN_this_commands_own_delete_is_not_the_remote_one(self):
+        f = F(D + " -rf " + Q + GAME + "/x" + Q + "; ssh otherhost ls")
+        self.assertTrue(f["rm_in_x4_dir"])
+        self.assertFalse(f["ssh_host_unplaced"])
+
+    def test_TWIN_a_harmless_command_or_this_machine_is_not_that_advisory(self):
+        for cmd in ("ssh otherhost ls", "ssh otherhost " + D + " -rf /tmp/x", "ssh otherhost", "git push origin master",
+                    "ssh otherhost " + Q + "cat /etc/hosts" + Q):
+            self.assertFalse(F(cmd)["ssh_host_unplaced"], cmd)
+        f = F("ssh localhost " + D + " -rf " + Q + REF + Q)
+        self.assertTrue(f["rm_targets_reference"])
+        self.assertFalse(f["ssh_host_unplaced"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
