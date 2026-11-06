@@ -12430,3 +12430,48 @@ re-run: 0.5 to 0.9 s, a stall of the machine, not of the hook (#31). No other ro
 **RE-DERIVED BY:** `TestRound6FindExecAndCarriers` in `test_hook_facts.py` (14 tests), 40 mutants labelled `(r6, A|B|C|D)` in
 `scripts/verify-hook-tests.py`, the round-6 probes in `scripts/test-hooks.sh`, and the `ssh to an unplaced host` seed in
 `scripts/fuzz-guard.py` (its 164 mutators weaken it 0 times).
+
+## F358 - A nested full copy of a mod-owned macro file was modelled as a replacement; the engine merges it · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-06 for macro files only
+
+GitHub issue #17. `cpsdo_vro` ships complete `<macros>` copies of two `cpsdo_zb_modpack` files at
+`extensions/cpsdo_zb_modpack/assets/fx/weaponfx/macros/` (`bullet_cpsdo_turret_m_ion_01_mk4_macro.xml`,
+`bullet_cpsdo_turret_xl_ion_01_mk6_macro.xml`). MEASURED, engine log on two launches (2026-11-05, 2026-11-06): a later
+mod's `/macros/macro[@name='X']/properties/...` ops were skipped with "Multiple matching nodes", 3 ops in all, so the
+merged document holds two macros of each name. `apply_overlay` sent a non-diff root outside the union and script dirs
+to "full" (`tree = oroot`), so `dump --chain` showed one macro, x4validate passed the selectors and `x4debug crosscheck`
+predicted 0 of the 3 skips.
+
+MEASURED census, 213 active mods, loose and packed: 1,556 XML files at `extensions/<x>/...`, 139 of them complete
+files. 2 sit over a file a MOD supplies as a complete document (the two above); 19 macro files sit over a mod that does
+not ship the file (the copy IS the document, unchanged); 118 sit at an unpacked DLC path (81 other assets, 31 macro,
+6 libraries), which the toolkit treats as a plain path. 2 files could not be read and are not in the census.
+
+Fixed: `_merge.merges_nested_copy` names the class (`.../macros/*_macro.xml`, owner a mod, root tag equal), and
+`apply_overlay(..., nested_on_mod=True)` appends its children with no dedupe (mode `merge`). The flag is passed
+explicitly by every door that applies a nested patch: `_build_owned`, `build_effective`'s plain door,
+`_compat._walk_positions` and `_compat_state.trace`. x4diff's layer stack does not pass it. x4compat now reports a HARD
+row per name defined twice, with no live-value owner, instead of FULL-OVERRIDE. x4validate gives the copying mod an
+INFO naming those names.
+
+Real modlist, before -> after (read-only): `dump --chain` for both files went 1 -> 2 macros,
+`cpsdo_vro:full(nested:...)` -> `cpsdo_vro:merge(nested:...)`. The patcher's current `[1]`/`[2]` ops: 4 `if=` guarded
+no-ops -> 0, 0 errors either way. A scratch copy of the patcher with the old un-indexed selectors: x4validate 0 -> 3
+"matched 2 nodes" errors; crosscheck against the issue's three log lines went from 3 OBSERVED ONLY to 3 agreed. x4compat
+on the live list, every item compared: collisions 414 -> 414, exactly 2 FULL-OVERRIDE rows replaced by 2 HARD rows on
+the same files, `guarded_off` 1,874 -> 1,870 (the patcher's 4 `[2]` ops), every other list identical.
+
+UNMEASURED, and disclosed instead of changed: which copy the engine uses; any other class at a nested path
+(libraries, index, md, aiscripts, t, components, other assets; see also F303); a nested copy over a DLC; a mod's complete
+file at a plain base-game or DLC path. These keep the old model. `MergeResult.unmeasured` carries one line per such step,
+`x4effective dump` prints it, and x4validate gives one aggregated INFO per kind for the mod's own files.
+
+Not changed, a LEAD: readers that take the first element of a name (`gates/consistency_audit.from_merge`, store lookups
+by macro name) now see two macros where these two files are concerned. The store keeps both rows. Not measured until the
+store is rebuilt.
+
+The same log's `Multiple matching nodes` lines for `cpsdo_faction` wares (issue's "possibly related") are a different
+case: `x4debug crosscheck cpsdo_faction` on the live log 2026-11-06, 192 distinct engine skips, 192 agreed, OBSERVED ONLY 0.
+The KB records the cause (two `<production>` children, 2026-08-13).
+
+**RE-DERIVED BY:** `tests/test_nested_full_copy_merges.py` (15 tests; 11 of the first 13 RED on the unfixed code, the 2 later clause twins call the new keyword), and
+`tests/test_compat_owner_full_override.py`, which now pins the clobber model on a non-macro path.
