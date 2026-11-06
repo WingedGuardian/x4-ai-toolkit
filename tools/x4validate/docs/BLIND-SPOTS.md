@@ -458,8 +458,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
-| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 321 of 2177 moved, all to deny, ask or advise; `find -exec` writes to what it finds now reach this rule | FIXED 2026-11-06 |
-| F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own; a find that moves or writes what it finds never reached the archive rule | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
+| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 321 of 2177 moved, all to deny, ask or advise; `find -exec` writes to what it finds now reach this rule. Round 7: 473 of 2469 moved vs 28f260ee, all stronger | FIXED 2026-11-06 |
+| F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own; a find that moves or writes what it finds never reached the archive rule; round 7: an analysis with no deadline failed open | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12429,3 +12429,53 @@ re-run: 0.5 to 0.9 s, a stall of the machine, not of the hook (#31). No other ro
 **RE-DERIVED BY:** `TestRound6FindExecAndCarriers` in `test_hook_facts.py` (14 tests), 40 mutants labelled `(r6, A|B|C|D)` in
 `scripts/verify-hook-tests.py`, the round-6 probes in `scripts/test-hooks.sh`, and the `ssh to an unplaced host` seed in
 `scripts/fuzz-guard.py` (its 164 mutators weaken it 0 times).
+
+**REVIEW ROUND 7 2026-11-06 (4.1.1), an independent review of 28f260ee..9cd83006: SHIP AFTER FIXES.**
+
+1, HIGH, in range (C). `_ssh_unplaced_destructive` ran facts() on every remote command and every spliced text, and each
+spliced text still held every other ssh segment, so the walk recursed to `_MAX_SSH_DEPTH` with 8 + 8 branches a level.
+MEASURED by the reviewer at 9cd83006: in-process `ssh a ls && ssh b ls && ...` 2 segments 0.02 s, 5 1.47 s, 6 8.4 s; through
+the hook 7 segments and `&& rm -rf <ref>` denied in 33.0 s, 9 segments timed out at 128 s. Claude Code's hook timeout is
+30 s and a hook that times out does not block, so both failed OPEN. MEASURED here at 9cd83006 (this round's `r7c` rows):
+the harmless 7-, 9- and 10-segment chains answered in 21 to 116 s. Fixed three ways: (a) a spliced text has every OTHER
+unplaced ssh segment replaced by `:`; (b) the advisory has a budget per hook call (24 facts() runs, 2 s, a memo by text) and
+ADVISES when it is spent or when more than 8 distinct remote commands exist, and it runs after the verdict, which it never
+changes; (c) the analysis itself has a DEADLINE (`_ANALYSIS_BUDGET_S`, 18 s; the save bridge passes its own 20 s budget less
+2 s for the rule backend), checked in the carrier walk, the segment loop, the find reach test and the glob walk. Past it
+facts() returns `analysis_timeout`, the analyser exits 6, and protect-bash.sh and the save bridge DENY with a remedy.
+Before, nothing bounded facts() as a whole: the save bridge's 20 s budget was checked only after the analysis returned. Now:
+10 and 20 harmless segments 0.05 and 0.09 s in-process; through the hook every chain row answered in under 1 s.
+NOTE: the four budget rows (`h` 45-48) still take 3.6 and 20.6 s and deny, as before: the analysis part is 6.3 s
+(MEASURED in-process), the rest is the save bridge and backend, which its 20 s budget refuses. They fail closed.
+
+2, MEDIUM. (a) A `sh -c`/`bash -c` text is now also read with `$0`..`$9`, `${N}`, `$@`, `$*` filled in from the words
+after it (quoted as the shell would; not inside single quotes, nor escaped), so `sh -c 'rm -rf "$1"' _ <ref>` (allow at
+v4.1.0, MEASURED), `-exec sh -c 'echo > "$1"' _ {} ;` and `xargs -n1 sh -c 'mv "$0" "$0.old"'` are judged by what they
+touch. (b) `-exec rsync --remove-source-files {} <dir>` moves the entry, as the plain form already did. (c) `gzip`, `xz`,
+`bzip2`, `lzma`, `lzip`, `compress`, `pigz`, `pbzip2`, `zstd --rm` (each unless `-k`/`--keep`/`-c`/`--stdout`/`-t`/`-l`) and
+`rename` move their operands, plain and inside a find (plain `gzip <game>/01.cat` was allow at v4.1.0, MEASURED). (d) `sort`,
+`uniq`, `grep` (pattern only), `head`, `tail`, `tr`, `cat` (no file) and `tee` between a find and its xargs pass the find on.
+
+3, backlog. FIXED: `gfind` is `find`; `fd`/`fdfind -x`/`--exec`/`-X`/`--exec-batch` are carriers (`{}`, `{/}`, `{//}`, `{.}`,
+`{/.}`, or the result appended). OPEN, recorded only (MEASURED allow at the fix, as at v4.1.0): `find -files0-from <list>`
+(the start points are in a file); `locate <name> | xargs rm` (absolute paths from a database); `cd <ref> && git ls-files |
+xargs rm` and `cd <ref> && ls | xargs rm` alike (an unresolved relative operand is never joined to the folder, the open row
+in F356); `-exec "$CMD" {}`; `-exec python -c "shutil.rmtree(...)"` (a Python write is not modelled anywhere); `bash -c
+'for f; do ... "$f"; done' _ {} +` (a loop over the positional parameters); a `sed` between find and xargs. `-execdir git clean
+-fdx` asks, as the plain `git -C <game> clean -fdx` does.
+
+4, nit. A find whose `sed -i` may reach DLC content now gets the edit-tool remedy (both facts set), not the XRCatTool one.
+
+Measured through `protect-bash.sh` at 7753cc2c (v4.1.0), 28f260ee, 9cd83006 and the fix, fixture roots, nothing run: every
+earlier set, the reviewer's round-7 sets (`rv6` a, c, d, w2, one, t, s, with `{TK}` and `{E}` substituted) and 102 rows of
+this round's own: 2469 rows paired per item, 0 unpaired. Against 9cd83006 66 moved: 53 allow to deny and 1 allow to ask (2a
+to 2d and 3; the ask is `rename` of a file in a mod folder, as `mv` there asks); 7 TIMEOUT (over 120 s) and 5 deny or advise
+on harmless ssh chains, which 9cd83006 reached only after 21 to 116 s; now allow, or advise where more than 8 distinct remote
+commands go unjudged. Against 28f260ee 473 moved, all stronger, 0 weaker. Weaker than v4.1.0: 152, the 141 of round 6 plus
+11 rows of the reviewer's new sets, every one of round 5's justified classes and equally weaker at 28f260ee. The
+`scripts/test-hooks.sh` probes (273 protect-bash rows) through the four trees: 0 weaker than 28f260ee; against 9cd83006 7
+moved, 1 to allow (the ten-segment harmless chain, which 9cd83006 denied after 120 s).
+
+**RE-DERIVED BY (round 7):** 9 more tests in `TestRound6FindExecAndCarriers`, `TestSshChainWholeHookTime` in
+`test_audit0924_hooks.py` (10 and 20 segments through the whole hook under 2 s; rc 6 denies; the sed remedy), 21 mutants
+labelled `(r7, N)`, and 8 more probes in `scripts/test-hooks.sh`.
