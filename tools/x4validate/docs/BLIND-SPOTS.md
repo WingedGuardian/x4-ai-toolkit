@@ -458,7 +458,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
-| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny | FIXED 2026-11-05 |
+| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`) | FIXED 2026-11-05 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12223,4 +12223,43 @@ fallback); other spellings of a renamed install stay open.
 Timing: no new-path parse over 1 s in the unit bound, and the slowest c3 call alone took 0.96 s (0.71 s at e5eb547e); the slowest probe call, 8.2 s, is c5's many-operand `rm`, 8.2 s at
 e5eb547e too.
 
-**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 103 `game archive` mutants in `scripts/verify-hook-tests.py` (120 with the `glob:`, `recursion:`, `xargs:` and `find -exec` ones), and the archive probes in `scripts/test-hooks.sh`.
+**REVIEW ROUND 3 2026-11-05 (4.1.1).** MEASURED through `protect-bash.sh` at cac38adb and at the fix, fixture roots (c1 to c8,
+c3 with no root and with the real install path, the reviewer's r1 to r7, and 31 rows of this round's own); nothing ran. 889 rows
+paired per item, 0 unpaired: 30 moved. 27 toward deny; 3 deny to ask, each the requested D fix below.
+
+| row | form | cac38adb | fix | moved rows |
+|---|---|---|---|---:|
+| A | `find <ext> -name '*[Ā-ā]...x3000 q' -o -name ego_dlc_boron -exec rm -rf {} +` | deny in 65 s (past the 30 s hook timeout, so unjudged) | deny in 1.5 s | 0 |
+| B | `find <game> -name '*.[[:alpha:]]at' -delete`, `-name '*.c[[:alpha:]]t' -exec rm`, the extensions and second-install forms | advise, ask or allow | deny | 5 |
+| C | `rm D:/Backup/X4*Foundations/01.cat`, `X4?F...`, `X4[[:space:]]F...`, `X4*/01.cat`; `.../steamapps/common/X4*` and `/*/01.cat`; `find .../steamapps/common -name '*.cat' -delete` | allow | deny | 9 |
+| D | `find <ext> -maxdepth 1 -name 'zzz_*' -exec rm -rf {} +` | deny | ask (mod confirmation) | 3 |
+| E | `find <ext> -name content.xml -delete`, `-name '*.xml' -delete`, `\| xargs rm`, the same with `cd <ext>` or cwd `<ext>` | ask or allow | deny | 8 |
+| F | PowerShell `Remove-Item '<game>\01.c`at'` | advise | deny | 3 |
+| loop | `ls <game> \| while read f; do rm "<game>/$f"; done` (user decision 2026-11-05) | advise | deny | 2 |
+| TWIN | `-LiteralPath '...01.c`at'`; `find <game> -name content.xml -delete`; `find .../steamapps/common -name '*.txt' -delete`; `rm "$TMP"` from the game | unchanged | unchanged | 0 |
+
+What changed. A: `_glob_meet` stops after 50,000 tried characters and answers "may meet", which every caller reads as the wider
+verdict; a `-regex` is decided by its last 64 literal characters only. B: a bracket holding `[:class:]`, `[=c=]` or `[.c.]` closes
+after the class and reads as any one character, never as covering every name; `_win_alias` no longer reads the class's colon as
+an NTFS stream. C: a folder segment that is a pattern meeting `x4 foundations` names an install, if it has two or more literal
+characters or sits directly under `steamapps/common`; a `find` rooted at a `steamapps/common` folder is judged as if the install
+were in it (archives and DLC folders only). D: a global `-maxdepth` or `-mindepth` drops the entries it cannot reach. E: a find
+rooted AT `extensions/` (or a pattern for it) reaches every file in every DLC folder, at any depth and name. Loop: a name holding
+`$` directly in the game folder may be an archive's; the `xargs` item is left to the producer's reader.
+
+DECIDED, conservative, kept: `cd <game> && find -type d -empty -delete` and `rm <game>/extensions/*/*.bak` deny;
+`find <ext> -maxdepth 1 -type d -name '*_old' -exec rm -rf {} +` denies, because `*_old` can name a DLC folder `ego_dlc_old` and
+there is no DLC name list by design (round 2, F1); `find <ext> -mindepth 2 -path '*/deployed/*' -name '*.cat' -delete` (c6,
+ask before) denies, because a DLC folder may hold a subfolder named `deployed` (READ: 2 of 8 DLC folders hold `videos/`). A
+pattern past the meet bound denies whatever it could have matched.
+
+DECIDED, not done: E from the game folder or above. `find <game> -name content.xml -delete` stays advise and
+`find . -name __pycache__ -exec rm -rf {} +` from the game folder stays as before: the game folder is a repository here, and that
+cleanup is routine. `rm D:/Backup/*/01.cat` stays allow: a bare `*` segment is read as the install name only under
+`steamapps/common`. A find rooted above `steamapps/common` (`find /d/SteamLibrary ...`) is not read as reaching an install.
+A `while read` loop whose delete names no game folder (`find <game> ... | while read f; do rm "$f"`) stays open.
+
+Timing: the slowest call is still c5's many-operand `rm`, 9.1 s (8.2 s at cac38adb); no other over 2.3 s. The crafted rows r4
+to r6 took 29, 4.7, 12.9 and 65 s at cac38adb and 0.9 to 1.5 s at the fix.
+
+**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 103 `game archive` mutants in `scripts/verify-hook-tests.py` (120 with the `glob:`, `recursion:`, `xargs:` and `find -exec` ones), plus 23 round-3 mutants, one per clause (labels ending `(A)` to `(E)` and `(loop)`), `TestArchiveGlobWholeHookTime` in `test_audit0924_hooks.py`, and the archive probes in `scripts/test-hooks.sh`.
