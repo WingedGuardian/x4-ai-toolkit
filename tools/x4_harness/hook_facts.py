@@ -2626,9 +2626,11 @@ def dynamic_program_readings(seg: str) -> list:
         # blank or an operator. Joining a quoted plain path changes nothing an eval would run,
         # but un-quotes it for the text rules -- MEASURED in the corpus replay, a quoted
         # script path then read as a foreground long job (4 historical commands).
+        # An escaped one too, which an eval re-reads as a separator: _requoted reads it with each
+        # quoted word kept whole (4.1.1 review round 5, 1).
         joined = " ".join(t for t, _q in toks) if any(
             q and _EVAL_SPLITS.search(t) for t, q in toks) else rest
-        for r in (rest, joined):
+        for r in [rest, joined] + _requoted(toks, _escapes_a_split(rest)):
             if r and r not in out:
                 out.append(r)
         first = toks[0][0].lower() if toks else ""
@@ -4961,7 +4963,7 @@ _FIND_TRUE0 = {"-depth", "-d", "-xdev", "-mount", "-follow", "-noleaf", "-daysta
 _FIND_TRUE1 = {"-maxdepth", "-mindepth", "-regextype"}
 #: Tests the text cannot decide, no value and one value.
 _FIND_UNKNOWN0 = {"-empty", "-readable", "-writable", "-executable", "-nouser", "-nogroup", "-quit"}
-_FIND_UNKNOWN1 = {"-type", "-xtype", "-size", "-user", "-group", "-uid", "-gid", "-perm", "-links",
+_FIND_UNKNOWN1 = {"-size", "-user", "-group", "-uid", "-gid", "-perm", "-links",
                   "-inum", "-mtime", "-atime", "-ctime", "-mmin", "-amin", "-cmin", "-used", "-fstype",
                   "-context", "-samefile", "-newer", "-anewer", "-cnewer", "-lname", "-ilname"}
 _FIND_NEWER_XY = re.compile(r"^-newer[aBcmt][aBcmt]$")
@@ -5019,6 +5021,8 @@ def _find_parse(words: list):
             return ("const", True)
         if w in _FIND_UNKNOWN0:
             return ("const", None)
+        if w in ("-type", "-xtype"):
+            return ("name", w, take())     # decided only for an entry known to be a folder
         if w in _FIND_UNKNOWN1 or _FIND_NEWER_XY.match(w):
             take()
             return ("const", None)
@@ -5253,7 +5257,7 @@ def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec
             rel = path[len(head):]
             hay = (_glob_lit(plain + "/") if plain is not None else [_GLOB_ALL, ("lit", "/")]) + rel
             span = _entry_depths(rel)
-        entries.append((hay, name, ending, modes, span))
+        entries.append((hay, name, ending, modes, span, False))
     # The root itself is a depth-0 entry. A recursive delete of a root that is the game folder,
     # extensions/ or a folder above them takes every DLC with it, whatever -maxdepth says. The walk
     # above only sees entries BELOW the root, which deeper entries masked until -maxdepth 0 dropped
@@ -5264,7 +5268,7 @@ def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec
             hay, name, ending = [_GLOB_ALL], [_GLOB_SEGMENT], ""
         else:
             hay, name, ending = _glob_lit(plain), _glob_lit(base), base
-        entries.append((hay, name, ending, dir_modes, (0, 0)))
+        entries.append((hay, name, ending, dir_modes, (0, 0), True))
     if not entries:
         return False
     k = _verb_at(seg, 0) + 1            # P1: see _verb_at
@@ -5274,8 +5278,13 @@ def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec
     tree, acted, (mind, maxd) = parsed
     entries = [e for e in entries
                if (maxd is None or e[4][0] <= maxd) and (mind is None or e[4][1] is None or e[4][1] >= mind)]
-    for hay, name, ending, modes, _span in entries:
-        def test(kind, value, hay=hay, name=name, ending=ending):
+    for hay, name, ending, modes, _span, folder in entries:
+        def test(kind, value, hay=hay, name=name, ending=ending, folder=folder):
+            if kind in ("-type", "-xtype"):
+                # The root is a folder, or a link to one: a type naming neither skips it (4.1.1
+                # review round 5, 3: `find <game> -maxdepth 0 -type f | xargs rm -rf` was denied).
+                # Any other entry, and a type not spelled as letters, cannot be told.
+                return False if folder and re.fullmatch(r"[bcpfsD](?:,[bcpfsD])*", value) else None
             return _find_name_test(kind, value, hay, name, ending)
         reach = []
         v = _find_eval(tree, test, reach, modes)
@@ -6215,14 +6224,56 @@ def _program_at(words: list, opts, positional: int = 0, numeric: bool = False):
     return None
 
 
-def _as_program(words: list) -> list:
+def _escapes_a_split(text: str) -> bool:
+    """`text` has a backslash before a blank or an operator: `a\\;`, `rm\\ -rf`. Unquoted, the word
+    holds the character literally, and a shell that is handed the words joined reads it as a
+    separator again."""
+    if chr(92) not in text:
+        return False
+    esc = False
+    for _i, c, _inq, _k in _qwalk(text):
+        if esc:
+            if _EVAL_SPLITS.match(c):
+                return True
+            esc = False
+            continue
+        # A quoted backslash needs no `not inq`: a quoted split character is the other clause of
+        # every caller (the mutation gate cannot tell the two apart).
+        esc = c == chr(92)
+    return False
+
+
+def _as_program(words: list, shell: bool = False) -> list:
     """Readings of `words` as a program: as written (run as argv), and with quoted words opened
-    (run through a shell, which re-reads a quoted `rm -rf x` as three words)."""
+    (run through a shell, which re-reads a quoted `rm -rf x` as three words). `shell`: the carrier
+    joins its words for a shell (`watch`, `wsl`, `ssh`), which re-reads an ESCAPED separator too
+    (`watch echo a\\; rm -rf x`); a carrier that runs its words as argv keeps it literal (4.1.1
+    review round 5, 1: segments() stopped splitting at `\\;` in round 4)."""
     rest = " ".join(words)
     toks = tokens(rest)
-    if not any(q and _EVAL_SPLITS.search(t) for t, q in toks):
+    escaped = shell and _escapes_a_split(rest)
+    if not (any(q and _EVAL_SPLITS.search(t) for t, q in toks) or escaped):
         return [rest]
-    return [rest, " ".join(t for t, _q in toks)]
+    return [rest, " ".join(t for t, _q in toks)] + _requoted(toks, escaped)
+
+
+def _requoted(toks: list, escaped: bool) -> list:
+    """With an escaped separator, the words again with each QUOTED one kept whole. The shell that
+    re-reads them splits a quoted `"<game>"` at its blank, so `watch echo a\\; rm -rf "<game>"`
+    deletes `<steam>/X4` and `Foundations`; 4.1.0 judged the quoted path, and so does this
+    reading (4.1.1 review round 5, 1)."""
+    return [" ".join(_sh_quote(t) if q else t for t, q in toks)] if escaped else []
+
+
+def _joins_for_a_shell(v: str, options: list) -> bool:
+    """An argv carrier that hands its words to a shell: `watch` without -x/--exec, `wsl` without
+    -e/--exec. `options`: the words before the program."""
+    heads = [_head(w) for w in options]
+    if v == "watch":
+        return not any(h == "--exec" or re.fullmatch(r"-[A-Za-z]*x[A-Za-z]*", h) for h in heads)
+    if v == "wsl":
+        return not any(h in ("-e", "--exec") for h in heads)
+    return False
 
 
 def _text_option(words: list) -> list:
@@ -6407,7 +6458,7 @@ def _ssh_readings(words: list) -> list:
     k = _program_at(tail, _SSH_VALUE_OPTS)
     if k is None or k >= len(tail):
         return out
-    return out + ["cd " + _UNKNOWN_CWD + " && " + r for r in _as_program(tail[k:])]
+    return out + ["cd " + _UNKNOWN_CWD + " && " + r for r in _as_program(tail[k:], True)]
 
 
 def _parallel_readings(words: list, prev) -> list:
@@ -6420,7 +6471,9 @@ def _parallel_readings(words: list, prev) -> list:
     tail = words[at:]
     sep = next((i for i, w in enumerate(tail) if _head(w) in _PARALLEL_SEPS), None)
     if sep is None:
-        return ["xargs " + " ".join(tail)]
+        # The template still runs through a shell, which re-reads an escaped separator (4.1.1
+        # review round 5, 1: `... | parallel echo a\\; rm -rf <x>`).
+        return ["xargs " + r for r in _as_program(tail, True)]
     template, args, in_file = tail[:sep], [], False
     for w in tail[sep:]:
         t = _head(w)
@@ -6601,7 +6654,7 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
             tail = words[at:]
             if v == "screen" and _head(tail[0]) in ("stuff", "exec"):
                 tail = tail[1:]
-            readings = _as_program(tail) if tail else []
+            readings = _as_program(tail, _joins_for_a_shell(v, words[:at])) if tail else []
             if v == "wsl":
                 # WSL spells this machine's drives /mnt/<drive>/.
                 readings += [_WSL_MOUNT.sub(lambda m: m.group(1) + ":", r) for r in readings if "/mnt/" in r]
@@ -6682,7 +6735,7 @@ def _inner_commands(cmd: str) -> list[str]:
             # A function bash calls with the words of any command it cannot find. It may run
             # them, whichever word it starts from.
             whole = _raw_words(seg)
-            readings = [r for k in (0, 1) if whole[k:] for r in _as_program(whole[k:])]
+            readings = [r for k in (0, 1) if whole[k:] for r in _as_program(whole[k:], True)]
             if readings:
                 handled[n] = readings
         if carried_here:
@@ -6743,9 +6796,13 @@ def _inner_commands(cmd: str) -> list[str]:
             # token also picks up an absolute spelling, which verb() now normalises.
             k = next((i for i, (t, _) in enumerate(toks)
                       if _verb_name(t) == "eval"), 0)
-            parts = [t for t, _ in toks[k + 1:] if not t.startswith("-")]
+            # Every word is the command's, its flags included (4.1.1 review round 5, 2: `eval git
+            # add -A` read as `git add`). eval's own `--` stays: a reading of `-- git add -A` is
+            # still judged as git (the mutation gate cannot tell a step over it apart).
+            parts = [t for t, _ in toks[k + 1:]]
             if parts:
                 out.extend(resolve_variants(" ".join(parts), assignments(cmd)))   # FX-G6 / K C1
+                out.extend(_requoted(toks[k + 1:], _escapes_a_split(seg)))
         elif v == "trap":
             # `trap <cmd> <SIGNAL...>` runs its first operand as a command when the
             # signal fires. That operand is normally single-quoted, which is exactly

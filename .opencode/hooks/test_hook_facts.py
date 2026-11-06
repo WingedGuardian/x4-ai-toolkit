@@ -8316,6 +8316,68 @@ class TestGameArchiveShellWrites(unittest.TestCase):
         # Twin: a backtick before an ordinary character is still unquoted.
         self.assertTrue(self._ps("Remove-Item -Path '%s'" % (GAME + "/0`1.dat"))["writes_game_archive"])
 
+    # --- round 5, 1: a carrier that joins its words for a shell re-reads an escaped separator
+    def _payloads(self):
+        return ((D + " -rf " + Q + REF + Q, "rm_targets_reference"), ("git add -A", "git_add_all"),
+                (D + " " + BS + DQ + self.ARC + BS + DQ, "writes_game_archive"))
+
+    def test_an_escaped_separator_reaches_the_shell_a_carrier_hands_its_words_to(self):
+        for pre in ("watch -n1 ", "watch ", "wsl ", "wsl -d Ubuntu ", "wsl -- ", "ssh localhost ",
+                    "$R ", "echo 1 | parallel ", "command_not_found_handle() { eval " + DQ + "$*" + DQ + "; }; zz "):
+            for sep in (BS + "; ", BS + "&" + BS + "& ", BS + "| ", BS + "|" + BS + "| "):
+                for pay, key in self._payloads():
+                    cmd = pre + "echo a " + sep + pay
+                    self.assertTrue(F(cmd)[key], cmd)
+            # escaped blanks too: one word to the carrier, three to its shell
+            cmd = pre + D + BS + " -rf" + BS + " " + Q + REF + Q
+            self.assertTrue(F(cmd)["rm_targets_reference"], cmd)
+
+    def test_an_escaped_separator_before_a_quoted_path_judges_the_path_whole(self):
+        # The re-reading shell splits a quoted path at its blank; 4.1.0 judged it whole, and still does.
+        for pre in ("watch -n1 ", "ssh localhost ", "$R ", "eval ", "time eval "):
+            for pay in (D + " -rf " + DQ + GAME + DQ, D + " " + Q + self.ARC + Q):
+                cmd = pre + "echo a " + BS + "; " + pay
+                self.assertTrue(self._gone(F(cmd)), cmd)
+
+    def test_TWIN_a_carrier_that_runs_its_words_directly_keeps_the_separator_literal(self):
+        for pre in ("watch -x ", "watch --exec ", "watch -n1 -x ", "wsl -e ", "wsl --exec ", "nohup ", "busybox ",
+                    "timeout 5 ", "echo 1 | xargs ", "ssh otherhost "):
+            for pay, key in self._payloads():
+                cmd = pre + "echo a " + BS + "; " + pay
+                self.assertFalse(F(cmd)[key], cmd)
+        # and an unescaped quoted word with no separator stays one reading
+        self.assertFalse(F("watch -n1 echo " + Q + "a b" + Q)["rm_targets_reference"])
+
+    # --- round 5, 2: eval's operands keep their own flags
+    def test_eval_keeps_the_flags_of_the_command_it_runs(self):
+        for cmd in ("eval git add -A", "eval git add --all", "eval -- git add -A", "time eval git add -A",
+                    "eval echo a " + BS + "; git add -A", "eval echo a " + BS + "; git add --all"):
+            self.assertTrue(F(cmd)["git_add_all"], cmd)
+
+    def test_TWIN_eval_of_an_ordinary_git_add(self):
+        for cmd in ("eval git add -p", "eval git add file.txt", "eval echo -A"):
+            self.assertFalse(F(cmd)["git_add_all"], cmd)
+
+    # --- round 5, 3: the depth-0 root is a folder, so a -type naming no folder skips it
+    def test_TWIN_a_depth_0_root_skipped_by_its_type(self):
+        for t in ("f", "p", "s", "f,p"):
+            for tool in ("-type", "-xtype"):
+                cmd = "find " + self.Q(GAME) + " -maxdepth 0 " + tool + " " + t + " | xargs rm -rf"
+                self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+        cmd = "find " + self.Q(GAME + "/..") + " -maxdepth 0 -type f -exec rm -rf {} +"
+        self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_depth_0_root_matched_by_its_type_still_fires(self):
+        for expr in ("-type d", "-type l", "-type f,d", "! -type f", "-not -type f", "-type $T", "-xtype d",
+                     "-type f -o -type d"):
+            for tail in (" | xargs rm -rf", " -exec rm -rf {} +"):
+                cmd = "find " + self.Q(GAME) + " -maxdepth 0 " + expr + tail
+                self.assertTrue(self._gone(F(cmd)), cmd)
+        # Below the root, a file test still reaches the archives.
+        for cmd in ("find " + self.Q(GAME) + " -maxdepth 1 -type f | xargs rm -rf",
+                    "find " + self.Q(GAME) + " -type f -name " + Q + "*.cat" + Q + " -delete"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
