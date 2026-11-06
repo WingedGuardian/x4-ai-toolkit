@@ -448,7 +448,9 @@ decide advise protect-bash.sh "$(cj "cp a '$_mod/ext_01.cat'")"      "TWIN: pack
 decide advise protect-bash.sh "$(cj "echo x > '$_mod/ext_01.dat'")"  "TWIN: a redirect into a mod's archive keeps its advisory"
 decide allow  protect-bash.sh "$(cj "echo x >> '$_mod/ext_01.dat'")" "TWIN: an append to a mod's archive stays as it was"
 decide allow  protect-bash.sh "$(cj "python dev/_tools/deploy.py deployed")" "TWIN: deploy.py itself"
-decide ask    protect-bash.sh "$(cj "rm -rf '$_dlc/libraries'")"     "TWIN: a DLC subfolder keeps its confirmation"
+decide deny   protect-bash.sh "$(cj "rm -rf '$_dlc/libraries'")"     "a DLC subfolder: game content, not a mod (user 2026-11-05)"
+decide deny   protect-bash.sh "$(cj "rm '$_dlc/content.xml'")"       "a DLC's content.xml: game content, not a mod (user 2026-11-05)"
+decide ask    protect-bash.sh "$(cj "rm -rf '$_mod/libraries'")"     "TWIN: a deployed mod's subfolder keeps its confirmation"
 decide advise protect-bash.sh "$(cj "cp a '$X4_GAME/notes.txt'")"    "TWIN: a plain game-root file keeps the deploy advisory"
 decide advise protect-bash.sh "$(cj "cp /c/o/notes.txt '$X4_GAME/'")" "TWIN: another name into the folder keeps it too"
 # 4.1.1 review rows: a find expression is read whole and a -regex is never run; option words and
@@ -463,6 +465,22 @@ decide advise protect-bash.sh "$(cj "rsync -a --exclude='*.dat' src/ '$X4_GAME/'
 decide advise protect-bash.sh "$(cj "robocopy src '$X4_GAME' /E /XF *.dat")" "TWIN: a robocopy /XF pattern is not a target"
 decide advise protect-bash.sh "$(cj "ls '$X4_GAME' | xargs -I{} rm /c/o/backup/{}")" "TWIN: ls to xargs -I rm into another folder"
 decide advise protect-bash.sh "$(cj "find '$X4_GAME' | xargs -I{} rm /c/o/backup/{}")" "TWIN: find to xargs -I rm into another folder"
+# 4.1.1 review round 2: no list of archive names, a recursive delete of a found DLC folder, no path
+# is `.`, -exec through a wrapper, a second install by its folder name.
+_ven="$X4_GAME/extensions/ego_dlc_ventures"
+decide deny   protect-bash.sh "$(cj "rm '$_ven/'ext_v7*")"            "archive: a DLC stem no list named (ext_v710)"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name ext_03_diff_v900.dat -delete")" "archive: find -name for an unlisted stem"
+decide deny   protect-bash.sh "$(cj "ls '$_ven/'ext_v7* | xargs rm")" "archive: a listing of unlisted stems to xargs rm"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME/extensions' -maxdepth 1 -name 'ego_dlc_*' -exec rm -rf {} +")" "a found DLC folder, deleted recursively"
+decide deny   protect-bash.sh "$(cj "cd '$X4_GAME' && find -name '*.dat' -delete")" "archive: find with no path searches the current folder"
+decide deny   protect-bash.sh "$(cj "cd '$X4_GAME' && ls | xargs rm")"  "archive: a bare ls lists the current folder"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name 01.dat -exec env rm {} +")" "archive: -exec env rm"
+decide deny   protect-bash.sh "$(cj "rm '/d/SteamLibrary/steamapps/common/X4 Foundations/01.dat'")" "archive: a second install, by its folder name"
+decide ask    protect-bash.sh "$(cj "find '$X4_GAME/extensions' -maxdepth 1 -name deployed -exec rm -rf {} +")" "TWIN: a found mod folder keeps its confirmation"
+decide allow  protect-bash.sh "$(cj "cd '$X4_GAME' && find -name '*.xml' -delete")" "TWIN: no path, another name is not an archive (the in-tree advisory never read a path-less find: F356)"
+decide allow  protect-bash.sh "$(cj "find '$X4_GAME' -name 01.dat -exec env sha256sum {} +")" "TWIN: -exec env of a reader"
+decide allow  protect-bash.sh "$(cj "cd '$X4_GAME' && git status")"  "TWIN: git status in the game folder"
+decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")" "TWIN: with a game root, another game's .dat"
 _sg="$X4_GAME"; _se="$X4_EXTENSIONS"; export X4_GAME="" X4_EXTENSIONS=""
 decide deny   protect-bash.sh "$(cj "rm '/c/games/X4 Foundations/01.dat'")" "archive: no game root configured, the install's folder name"
 decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")"     "TWIN: no game root, another game's .dat"
@@ -659,7 +677,9 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # Two new file cases in each layout, plus two shell cases: 333 + 2*2 + 2.
 # The archive block adds 19 denies + 10 twins + 4 PowerShell: 339 + 33.
 # The 4.1.1 review rows add 5 denies + 7 twins: 372 + 12.
-EXPECT=384
+# Round 2 adds 9 denies (8 rows and a DLC's content.xml) + 6 twins (5 rows and a mod subfolder's
+# ask); the DLC subfolder probe flipped from ask to deny is not new: 384 + 15.
+EXPECT=399
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
