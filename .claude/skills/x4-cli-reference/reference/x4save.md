@@ -3,23 +3,27 @@
 # `x4save`
 
 ```text
-usage: x4save [-h] [--version] {info,check,vars} ...
+usage: x4save [-h] [--version] {info,check,vars,census} ...
 
 Read an X4 savegame: what is baked into it, what it references that the live tree no longer
-defines, and its MD variables.
+defines, its MD variables, and a count of its components (ships, turrets, stations) by macro,
+owner or parent.
 
 positional arguments:
-  {info,check,vars}
-    info             header: build, playtime, and the SAVE-BAKED extensions
-    check            macro references the live tree no longer defines
-    vars             named variables whose name matches a pattern: MD cue variables, AI-script and
-                     blackboard values, each labelled with where it lives (pass a save NAME, not a
-                     path into the save folder; only gzipped *.xml.gz saves are read, a plain .xml
-                     save is not)
+  {info,check,vars,census}
+    info                header: build, playtime, and the SAVE-BAKED extensions
+    check               macro references the live tree no longer defines
+    vars                named variables whose name matches a pattern: MD cue variables, AI-script
+                        and blackboard values, each labelled with where it lives (pass a save
+                        NAME, not a path into the save folder; only gzipped *.xml.gz saves are
+                        read, a plain .xml save is not)
+    census              count <component> elements (ships, turrets, stations, modules...) grouped
+                        by macro, owner, class or parent, with the scanned denominator (pass a
+                        save NAME)
 
 options:
-  -h, --help         show this help message and exit
-  --version          show program's version number and exit
+  -h, --help            show this help message and exit
+  --version             show program's version number and exit
 ```
 
 ## `x4save info`
@@ -59,4 +63,51 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
+```
+
+## `x4save census`
+
+```text
+usage: x4save census [-h] [--class GLOB] [--owner GLOB] [--macro GLOB] [--by KEYS]
+                     [--parent-class GLOB] [--parent-anywhere] [--limit LIMIT] [--json]
+                     [save]
+
+Count every <component> in a save, filtered by class/owner/macro globs and grouped by
+the --by keys. Read-only and streamed. Pass a save NAME (save_016), not a path into
+the save folder: the save guard refuses a path given to a program it cannot see into.
+An owner is the component's owner=, else its nearest ancestor component's. 'Parent' is
+the nearest ancestor of --parent-class, searched up to the component's own station or
+ship_* (so a turret on a docked ship belongs to the ship) unless --parent-anywhere.
+
+positional arguments:
+  save                 save name, e.g. save_016, or a path (default: newest)
+
+options:
+  -h, --help           show this help message and exit
+  --class GLOB         component class glob(s), comma-separated or repeated, case-insensitive
+                       (e.g. 'ship_*', turret, station)
+  --owner GLOB         owner faction glob(s) (e.g. xenon); matched against the inherited owner
+  --macro GLOB         macro glob(s) (e.g. 'turret_xen_l_*')
+  --by KEYS            comma-separated group keys from: macro, owner, class, parent-class, parent-
+                       macro, station-macro (default: macro)
+  --parent-class GLOB  which ancestor counts as the parent for parent-class/parent-macro (default
+                       station,ship_*); @module = the station-module classes (buildmodule,connecti
+                       onmodule,defencemodule,dockarea,habitation,pier,processingmodule,production
+                       ,radar,storage,ventureplatform,welfaremodule)
+  --parent-anywhere    let the parent and station-macro search continue past the component's own
+                       station or ship_* (e.g. a docked ship's turret then finds the dock module)
+  --limit LIMIT        groups to print, largest first (default 0 = all)
+  --json               machine-readable output (schema x4save.census/1)
+
+examples:
+  # Xenon ships by macro
+  x4save census save_016 --class 'ship_*' --owner xenon --by macro
+  # Xenon turrets by macro, split station vs ship (parent defaults to station,ship_*)
+  x4save census save_016 --class turret --owner xenon --by parent-class,macro
+  # Xenon L turrets by station module macro, and the station they are on
+  x4save census save_016 --class turret --owner xenon --macro 'turret_xen_l_*' \
+      --parent-class @module --by macro,parent-macro,station-macro
+
+exit: 0 matches found, 1 no component matched (the scanned count is printed),
+2 the save could not be read or an argument was refused.
 ```

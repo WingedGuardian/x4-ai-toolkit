@@ -74,8 +74,9 @@ was built (Python / lxml). It checks:
 
 It also ships **`x4modlist`** (mod-registry triage via the Nexus API; `x4modlist downloads DIR...`
 reads the manifests inside downloaded `.zip`/`.7z`/`.rar` mods and says which are newer than what is
-installed, extracting nothing), **`x4save`** (`info`, `check`, and `vars <pattern> [save]`, which prints
-the MD variables a save stores and where they live) and an **XSD-based 7.x→9.0 migration checker**.
+installed, extracting nothing), **`x4save`** (`info`, `check`, `vars <pattern> [save]`, which prints
+the MD variables a save stores and where they live, and `census`, which counts its ships, turrets and
+stations by macro, owner or parent) and an **XSD-based 7.x→9.0 migration checker**.
 
 ```bash
 cd tools/x4validate
