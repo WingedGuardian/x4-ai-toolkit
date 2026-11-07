@@ -126,6 +126,53 @@ $script:Unknown = New-Object Collections.Generic.List[string]
 function Unknown([string]$why) { if (-not $script:Unknown.Contains($why)) { $script:Unknown.Add($why) } }
 $script:Depth = 0
 
+# THE LOCATION STACK (4.1.1 final round). Push-Location was read as a plain `cd` and Pop-Location not
+# at all, so after `Set-Location <reference>; Push-Location C:/safe; Pop-Location` a relative operand
+# was judged in C:/safe while PowerShell was back in <reference>. A push is now `pushd` and a pop of
+# a push this command made is `popd`, which the hook's reader already models. PowerShell has NAMED
+# stacks (-StackName; Set-Location -StackName changes the default); bash has one, so each emitted
+# pushd records its stack's name here, in order. A name the translator cannot read is '?<text>',
+# matched only by the same text; a pop of a readable name reaches its own last push even under a
+# '?' push, which may be the same stack (the residual BLIND-SPOTS records). A pop it cannot
+# match lands somewhere unknown (a stack pushed before this command, in a host that keeps its
+# runspace): the line below keeps the current directory AND adds an unknown one, so the reader
+# judges a later relative operand against both and the strictest verdict stands. Once a pop
+# popped past another stack's entries, the emitted stack no longer mirrors PowerShell's, and
+# every later pop is unknown.
+$script:LocPushes = New-Object Collections.Generic.List[string]
+$script:LocDefault = 'default'
+$script:LocLost = $false
+$LOC_UNKNOWN = 'cd "${X4_PS_LOCATION_STACK:-.}"'
+function LocStack($binding) {
+    $b = Bound $binding @('StackName')
+    if ($null -eq $b) { return $script:LocDefault }
+    $v = @(BVals $binding @('StackName')) | Select-Object -First 1
+    if ($null -ne $b.Value -and ($null -eq $v -or -not (IsResolved ([string]$v)))) {
+        return '?' + $b.Value.Extent.Text.ToLowerInvariant()
+    }
+    $v = ([string]$v).ToLowerInvariant()
+    if ($v -eq '') { return 'default' }
+    return $v
+}
+function LocPop([string]$s) {
+    if ($script:LocLost) { return @($LOC_UNKNOWN) }
+    for ($i = $script:LocPushes.Count - 1; $i -ge 0; $i--) {
+        if ($script:LocPushes[$i] -eq $s) {
+            # Its own push, possibly under later pushes of other stacks (or of an unreadable one,
+            # which may be this stack: then PowerShell may stop sooner, which the emitted stack cannot
+            # also say). PowerShell lands where that push left; bash gets there by popping all of
+            # them, and the emitted stack then no longer mirrors PowerShell's.
+            $k = $script:LocPushes.Count - $i
+            $script:LocPushes.RemoveRange($i, $k)
+            if ($k -gt 1) { $script:LocLost = $true }
+            return @(1..$k | ForEach-Object { 'popd' })
+        }
+    }
+    # No push of this stack in the command: PowerShell pops one pushed before it, or none. The
+    # pushes this command made are untouched either way.
+    return @($LOC_UNKNOWN)
+}
+
 function Flatten($ast) {
     # An expression we do not evaluate: keep what it NAMES. `Join-Path $env:X4_REFERENCE
     # 'libraries'` becomes "${X4_REFERENCE}/libraries", which is what it means.
@@ -202,7 +249,7 @@ $ALIASES = @{
     'ren' = 'rename-item'; 'rni' = 'rename-item'
     'sc' = 'set-content'; 'ac' = 'add-content'; 'clc' = 'clear-content'; 'ni' = 'new-item'
     'md' = 'new-item'; 'mkdir' = 'new-item'
-    'cd' = 'set-location'; 'sl' = 'set-location'; 'chdir' = 'set-location'; 'pushd' = 'push-location'
+    'cd' = 'set-location'; 'sl' = 'set-location'; 'chdir' = 'set-location'; 'pushd' = 'push-location'; 'popd' = 'pop-location'
     'gci' = 'get-childitem'; 'ls' = 'get-childitem'; 'dir' = 'get-childitem'; 'gi' = 'get-item'
     'iwr' = 'invoke-webrequest'; 'irm' = 'invoke-restmethod'; 'cli' = 'clear-item'
     'sp' = 'set-itemproperty'; 'rp' = 'remove-itemproperty'; 'cpp' = 'copy-itemproperty'; 'mp' = 'move-itemproperty'
@@ -824,9 +871,27 @@ function Translate-Command([CommandAst]$c) {
             }
             return $lines
         }
-        { $_ -in 'set-location', 'push-location' } {
+        'set-location' {
             $p = @(BVals $binding @('Path', 'LiteralPath')) | Select-Object -First 1
             if ($p) { $lines.Add("cd $(Q $p)") }
+            # `Set-Location -StackName s` makes s the default stack. MEASURED (pwsh 7): a stack that
+            # does not exist is refused ("Cannot find path") and the default stays, so a name this
+            # command never pushed leaves it; an unreadable name becomes its own '?' token.
+            if ($null -ne (Bound $binding @('StackName'))) {
+                $s = LocStack $binding
+                if ($s.StartsWith('?') -or $s -eq 'default' -or $script:LocPushes.Contains($s)) { $script:LocDefault = $s }
+            }
+            return $lines
+        }
+        'push-location' {
+            $p = @(BVals $binding @('Path', 'LiteralPath')) | Select-Object -First 1
+            # No path: the current location is pushed and stays in force.
+            $lines.Add($(if ($p) { "pushd $(Q $p)" } else { 'pushd .' }))
+            $script:LocPushes.Add((LocStack $binding))
+            return $lines
+        }
+        'pop-location' {
+            foreach ($l in (LocPop (LocStack $binding))) { $lines.Add($l) }
             return $lines
         }
         'select-string' {
@@ -1143,7 +1208,7 @@ function IsLiteralName($ast) {
 #: The command names a partly-readable name (`"$($R)-Item"`) is matched against: every name
 #: this translator models, so a reading reaches the rule its plain spelling reaches.
 $MODELLED_NAMES = @($WRITERS) + @($ALIASES.Keys) + @('invoke-expression', 'start-process', 'set-location',
-                    'push-location', 'tee-object', 'new-object', 'select-string')
+                    'push-location', 'pop-location', 'tee-object', 'new-object', 'select-string')
 
 # The SPECULATIVE readings of a command whose name cannot be read, each translated as
 # PowerShell -- ADDITIVE, none assumed to be the one that runs:

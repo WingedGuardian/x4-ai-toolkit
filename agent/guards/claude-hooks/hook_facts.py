@@ -134,6 +134,28 @@ def long_name(p: str) -> str:
     return p
 
 
+def link_resolved(p: str) -> str:
+    """The path a write or delete of `p` reaches through an EXISTING link on it (a symlink or a Windows
+    junction), when that differs from `p` as written; "" when nothing on it is a link, it is not an
+    absolute drive path, or the filesystem cannot answer (4.1.1 final round, F360). MEASURED at
+    7f4895a2: `>`, `touch` and `rm` through a junction into reference/ were allowed (3 of 3) while
+    the file tools, which canonicalise, denied. The caller judges this path IN ADDITION to the
+    lexical one, so the stricter verdict stands. os.path.realpath resolves the longest existing
+    prefix and keeps the rest as written (non-strict); a UNC or device path is left lexical."""
+    if not p or has_unresolved(p) or not is_abs(p):
+        return ""
+    s = p.replace(chr(92), "/")
+    if os.name == "nt":
+        s = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", s)
+        if not re.match(r"^[A-Za-z]:/", s):
+            return ""
+    try:
+        real = os.path.realpath(s).replace(chr(92), "/")
+    except (OSError, ValueError):
+        return ""
+    return real if _lexical_norm(real) != _lexical_norm(s) else ""
+
+
 def _lexical_norm(p: str) -> str:
     """Lowercase, backslashes to slashes, drive dialect unified, dot segments resolved.
 
@@ -4077,6 +4099,47 @@ def cwd_track(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
             for d in dict.fromkeys(ds)]
 
 
+_DIRSTACK_N = re.compile(r"^[+-][0-9]+$")
+
+
+def _dirstack_forms(v: str, words: list, cwd: str, from_seed: bool, stack: list, join=None):
+    """(cwd, from_seed, stack) after the pushd/popd forms that are not "push this directory" or "pop the top", or
+    None for those two (cwd_lanes reads them). 4.1.1 final round, MEASURED at 7f4895a2: from `cd <reference>; pushd
+    <mod>`, a bare `pushd` (swap the top two), `pushd +1` (rotate) and `pushd -n <dir>` (add <dir> below the top, no
+    cd) all leave bash in <reference>, and each was read as staying in <mod> (or moving to `<mod>/+1`), so a relative
+    delete there was advised instead of denied. bash's list is the directory in force, then `stack` from its end;
+    +N counts from the left of that list, -N from the right, and a number past its end changes nothing (bash refuses)."""
+    if v == "pushd" and not words:
+        if stack:                                     # swap the top two
+            top = stack.pop()
+            stack.append((cwd, from_seed))
+            return (top[0], top[1], stack)
+        return (cwd, from_seed, stack)
+    first = words[0] if words else ""
+    if v == "pushd" and first == "-n":
+        if len(words) > 1 and not _DIRSTACK_N.match(words[1]):
+            stack.append(((join or join_cwd)(cwd, words[1]), from_seed and not is_abs(words[1])))
+        return (cwd, from_seed, stack)
+    if v == "popd" and first == "-n":
+        if stack:
+            stack.pop()                               # the entry below the top goes, no cd
+        return (cwd, from_seed, stack)
+    if not _DIRSTACK_N.match(first):
+        return None
+    dirs = [(cwd, from_seed)] + stack[::-1]
+    n = int(first[1:])
+    idx = n if first[0] == "+" else len(dirs) - 1 - n
+    if not 0 <= idx < len(dirs):
+        return (cwd, from_seed, stack)
+    if v == "pushd":                                  # rotate: entry idx becomes the top
+        dirs = dirs[idx:] + dirs[:idx]
+    elif idx == 0:                                    # popd +0: the top goes, as a plain popd
+        dirs = dirs[1:] or dirs
+    else:                                             # popd +N: entry N goes, no cd
+        dirs = dirs[:idx] + dirs[idx + 1:]
+    return (dirs[0][0], dirs[0][1], dirs[1:][::-1])
+
+
 #: How many directories cwd_lanes() keeps in force at once (FX-G7). Each `cd` whose target
 #: has several values (an unassigned variable: resolve_variants) splits every lane; past
 #: this bound a lane takes the value that lands under a configured root instead (the
@@ -4125,6 +4188,11 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
     def step(seg, v, lane, tgt):
         """One lane through one segment; `tgt` is the value its cd/pushd takes in this lane."""
         cwd, from_seed, stack = lane[0], lane[1], list(lane[2])
+        if v in ("pushd", "popd"):
+            moved = _dirstack_forms(v, _operands(seg, include_flags=True), cwd, from_seed, stack,
+                                    physical_join if physical else join_cwd)
+            if moved is not None:
+                return moved
         if v in DIR_VERBS:
             ops = _operands(seg)
             if ops:
@@ -5066,7 +5134,9 @@ def _may_name_archive(name: str) -> bool:
         tail = name[len(_XARGS_ITEM):].lower()
         return bool(tail) and any(tail.endswith(e) if len(tail) >= len(e) else e.endswith(tail)
                                   for e in _ARCHIVE_ENDINGS)
-    if ("$" in name or name.count(chr(96)) >= 2) and name != _XARGS_ITEM:
+    # No `name != _XARGS_ITEM` clause: the bare item returned above (an empty tail is no archive), so it was
+    # dead -- the mutation gate could not kill it (4.1.1 final round).
+    if "$" in name or name.count(chr(96)) >= 2:
         return True
     return _is_pattern(name) and any(_glob_may_meet(name, [_GLOB_DISK_NAME] + _glob_lit(e))
                                      for e in _ARCHIVE_ENDINGS)
@@ -5431,6 +5501,34 @@ def xargs_entry_effect(seg: str, prev):
     repl, _w = _xargs_replace(seg)
     words = [w.replace(repl, _FIND_ENTRY) for w in words] if repl else words + [_FIND_ENTRY]
     return _entry_effect(" ".join(_sh_quote(w) for w in words))
+
+
+#: How many items of an echo/printf an `xargs -I` reading is built for (_xargs_item_readings).
+_XARGS_ITEMS = 8
+
+
+def _xargs_item_readings(seg: str, prev) -> list:
+    """`echo <x> | xargs <cmd> [args]` runs `<cmd> [args] <x>` (or `<cmd>` with -I's replacement string
+    replaced by <x>): that command, as a reading in its own right (4.1.1 final round, F360). Only the delete
+    verbs read xargs' stdin (xargs_feed), so `echo <x4-paths.env> | xargs touch` and `echo <reference file> |
+    xargs truncate -s 0` reached no write rule while the literal spellings were denied. Only an echo/printf
+    feeds a reading: its words ARE the items, judged like the literal operands, unsplit as xargs_feed reads
+    them (xargs splits a blank-holding word, so the reading is the stricter one). A find's or a listing's
+    items are entries the guard cannot name, which the find and listing readers already judge."""
+    if verb(prev) not in ("echo", "printf"):
+        return []
+    toks = tokens_of(seg)
+    vt = _verb_token(seg)
+    if vt not in toks or not any(_verb_name(t) == "xargs" for t in toks[:toks.index(vt)]):
+        return []
+    items = _producer_items(prev)
+    if not items:
+        return []
+    ran = _drop_redirects(toks[toks.index(vt):])
+    repl, _w = _xargs_replace(seg)
+    if repl:
+        return [" ".join(_sh_quote(w.replace(repl, item)) for w in ran) for item in items[:_XARGS_ITEMS]]
+    return [" ".join(_sh_quote(w) for w in ran + items)]
 
 
 #: fd's options that take a value, so its search paths can be told from them (_fd_exec_readings).
@@ -7395,6 +7493,8 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
         out.extend(_find_exec_readings(seg))
     if v in ("fd", "fdfind") and ("-x" in seg or "-X" in seg or "--exec" in seg):
         out.extend(_fd_exec_readings(seg))
+    if prev is not None and "xargs" in seg:
+        out.extend(_xargs_item_readings(seg, prev))
     if v not in _ALL_CARRIER_VERBS:
         if v not in _NOT_RUNNERS and v not in WRAPPERS and _MAY_CARRY_JOINER.search(seg):
             out.extend(_joiner_behind_unknown(seg))
@@ -8760,6 +8860,12 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                                                 or source in _BRACE_WORDS or resolved in _BRACE_WORDS})
                         row["copy_sources"] = sources
                     evidence.append(row)
+                # 4.1.1 final round (F360): a link on the path (a junction into reference/) is judged
+                # where it lands as well; every rule ORs over these entries, so the stricter stands.
+                if not unres:
+                    real = link_resolved(out[-1][0])
+                    if real:
+                        out.append((real, False, r))
         return out
 
     cur_dialect = ["bash"]                # the dialect of the segment prep() is reading

@@ -4072,6 +4072,97 @@ class TestRRPowerShellHostPayload(unittest.TestCase):
         self.assertFalse(H._ps_reads_stdin("bash <<EOF"))
 
 
+class TestWriteThroughAnExistingLink(unittest.TestCase):
+    """4.1.1 final round (F360): a shell write, touch or delete through an EXISTING junction or symlink into
+    reference/ was allowed (3 of 3) while the file tools, which canonicalise, denied. Each target is now also
+    judged where the link sends it. The links are made in a temporary folder, to a temporary 'reference'."""
+
+    def setUp(self):
+        import tempfile
+        self._td = tempfile.TemporaryDirectory()
+        base = pathlib.Path(self._td.name)
+        self.ref = base / "reference"
+        (self.ref / "libraries").mkdir(parents=True)
+        self.work = base / "work"
+        self.work.mkdir()
+        self.link = self.work / "refj"
+        try:
+            if os.name == "nt":
+                import _winapi
+                _winapi.CreateJunction(str(self.ref), str(self.link))
+            else:
+                os.symlink(str(self.ref), str(self.link))
+        except (OSError, ImportError, AttributeError) as exc:
+            self._td.cleanup()
+            self.skipTest("cannot make a link here: " + repr(exc))
+        self.roots = dict(ROOTS, reference=self.ref.as_posix())
+
+    def tearDown(self):
+        if os.name == "nt" and self.link.exists():
+            os.rmdir(self.link)              # the junction only, never its target
+        self._td.cleanup()
+
+    def f(self, cmd, cwd=None):
+        p = {"tool_input": {"command": cmd}}
+        if cwd:
+            p["cwd"] = cwd
+        return _facts(p, self.roots)
+
+    def test_a_write_or_delete_through_the_link_is_the_reference(self):
+        L = self.link.as_posix()
+        for cmd, flag in (("echo x > " + Q + L + "/x.xml" + Q, "writes_reference"),
+                          ("touch " + Q + L + "/libraries/wares.xml" + Q, "writes_reference"),
+                          ("cp /tmp/a " + Q + L + "/libraries/" + Q, "writes_reference"),
+                          ("rm -f " + Q + L + "/x.xml" + Q, "rm_targets_reference"),
+                          ("rm -rf " + Q + L + "/libraries" + Q, "rm_targets_reference"),
+                          ("cd " + Q + L + Q + " && rm -f x.xml", "rm_targets_reference")):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(self.f(cmd)[flag], cmd)
+        self.assertTrue(self.f("touch refj/x.xml", cwd=self.work.as_posix())["writes_reference"])
+
+    def test_TWIN_no_link_on_the_path_or_a_read_fires_nothing(self):
+        W = self.work.as_posix()
+        for cmd, flag in (("touch " + Q + W + "/x.xml" + Q, "writes_reference"),
+                          ("touch " + Q + W + "/nolink/refj/x.xml" + Q, "writes_reference"),
+                          ("rm -f " + Q + W + "/x.xml" + Q, "rm_targets_reference")):
+            with self.subTest(cmd=cmd):
+                self.assertFalse(self.f(cmd)[flag], cmd)
+
+    def test_link_resolved_names_the_target_only_through_a_link(self):
+        self.assertEqual(H._lexical_norm(H.link_resolved(self.link.as_posix() + "/libraries/x.xml")),
+                         H._lexical_norm(self.ref.as_posix() + "/libraries/x.xml"))
+        self.assertEqual(H.link_resolved(self.work.as_posix() + "/x.xml"), "")
+        self.assertEqual(H.link_resolved("refj/x.xml"), "")              # relative: nothing to resolve
+        self.assertEqual(H.link_resolved(self.link.as_posix() + "/${X}"), "")   # unresolved
+
+
+class TestBashDirectoryStackForms(unittest.TestCase):
+    """4.1.1 final round: bash's other pushd/popd forms. A bare `pushd` swaps the top two, `pushd +N`/`-N` rotate,
+    `pushd -n <dir>` adds <dir> below the top without a cd, `popd -n` and `popd +N` remove an entry without a cd.
+    Each was read as a plain push (or ignored), so a relative delete was judged in the wrong folder."""
+
+    def test_the_directory_in_force_after_each_form(self):
+        r, m = Q + REF + Q, Q + "C:/work/mod" + Q
+        for head, in_ref in (("cd " + r + "; pushd " + m + "; pushd; ", True),
+                             ("cd " + m + "; pushd " + r + "; pushd; ", False),
+                             ("cd " + r + "; pushd -n " + m + "; ", True),
+                             ("cd " + m + "; pushd -n " + r + "; popd; ", True),
+                             ("cd " + r + "; pushd " + m + "; pushd +1; ", True),
+                             ("cd " + r + "; pushd " + m + "; pushd -0; ", True),
+                             ("cd " + r + "; pushd " + m + "; pushd +0; ", False),
+                             ("cd " + r + "; pushd " + m + "; pushd +5; ", False),
+                             ("cd " + r + "; pushd " + m + "; popd -n; ", False),
+                             ("cd " + m + "; pushd " + r + "; popd +1; ", True),
+                             ("cd " + r + "; pushd " + m + "; popd +0; ", True),
+                             ("cd " + m + "; pushd; ", False),
+                             # a later popd sees what -n and +N removed
+                             ("cd " + m + "; pushd " + r + "; popd -n; popd; ", True),
+                             ("cd " + m + "; pushd " + r + "; popd +1; popd; ", True)):
+            c = head + "rm -f x.xml"
+            with self.subTest(c=c):
+                self.assertEqual(F(c)["rm_targets_reference"], in_ref, c)
+
+
 class TestRRPreArcBash(unittest.TestCase):
     """The reviewer's pre-arc notes, unit level (E2E in test_audit0924_hooks.py)."""
 
@@ -4097,6 +4188,44 @@ class TestRRPreArcBash(unittest.TestCase):
         self.assertTrue(f["rm_in_x4_dir"])
         self.assertFalse(f["rm_hits_game"])
         self.assertFalse(F("find . -name '*.pyc' | xargs rm -f")["rm_in_x4_dir"])
+
+    # 4.1.1 final round (F360): an xargs-fed WRITE. Only the delete verbs read xargs' stdin, so `echo <reference file>
+    # | xargs touch` reached no write rule while `touch <reference file>` was denied. The echo/printf's words are the
+    # operands: the command xargs runs is a reading of its own.
+    XARGS_WRITES = ("xargs touch", "xargs truncate -s 0", "xargs chmod 644", "xargs sed -i s/a/b/",
+                    "xargs tee < /dev/null", "xargs cp /tmp/a.xml", "xargs mv /tmp/a.xml", "xargs -n1 touch",
+                    "xargs -0 touch", "xargs -I{} touch {}", "xargs -I % cp /tmp/a.xml %", "xargs sudo touch")
+
+    def test_an_xargs_fed_write_is_judged_like_its_literal(self):
+        for producer in ("echo " + Q + REF + "/libraries/wares.xml" + Q,
+                         "printf '%s" + chr(92) + "n' " + Q + REF + "/libraries/wares.xml" + Q):
+            for x in self.XARGS_WRITES:
+                c = producer + " | " + x
+                with self.subTest(c=c):
+                    self.assertTrue(F(c)["writes_reference"], c)
+                    self.assertTrue(F(x.replace("xargs ", "").replace("-n1 ", "").replace("-0 ", "")
+                                      .replace("-I{} ", "").replace(" {}", "").replace("-I % ", "").replace(" %", "")
+                                      .replace("sudo ", "").replace(" < /dev/null", "")
+                                      + " " + Q + REF + "/libraries/wares.xml" + Q)["writes_reference"], x)
+
+    def test_an_xargs_fed_write_to_the_path_config_is_the_config_write(self):
+        cfg = TOOLKIT + "/x4-paths.env"
+        roots = dict(ROOTS, reference=cfg, config=cfg)
+        for c in ("echo " + Q + cfg + Q + " | xargs touch", "echo " + Q + cfg + Q + " | xargs -I{} cp /tmp/x {}"):
+            with self.subTest(c=c):
+                self.assertTrue(_facts({"tool_input": {"command": c}, "cwd": _ELSEWHERE}, roots)["writes_reference"], c)
+
+    def test_TWIN_an_xargs_fed_write_elsewhere_or_a_read_does_not_fire(self):
+        for c in ("echo /tmp/a.xml | xargs touch", "echo " + Q + REF + "/x.xml" + Q + " | xargs cat",
+                  "echo " + Q + REF + "/x.xml" + Q + " | xargs grep -n ware",
+                  "echo " + Q + REF + "/x.xml" + Q + " | xargs -I{} cp {} /tmp/out.xml",
+                  "echo " + Q + REF + "/x.xml" + Q + " ; xargs touch",
+                  "echo " + Q + REF + "/x.xml" + Q + " | touch /tmp/a",
+                  "echo " + Q + REF + "/x.xml" + Q + " | touch /tmp/xargs.log",
+                  "find " + Q + REF + Q + " -name x.xml | xargs touch",
+                  "cat " + Q + REF + "/list.txt" + Q + " | xargs touch"):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["writes_reference"], c)
 
     def test_for_loop_and_arrays_expand_every_element(self):
         self.assertEqual(H.assignments("for f in a 'b c' d; do echo; done")["f"], "(a 'b c' d)")
@@ -4267,12 +4396,92 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
     def test_an_assigned_env_variable_translates_once_as_a_name(self):
         """The structural form: a second pass reintroduced in any shape adds a line here."""
         for c, sh in (("$env:D=" + Q + "C:/safe" + Q + "; Set-Location $env:D", 'cd "${D}"'),
-                      ("$env:D=" + Q + "C:/safe" + Q + "; Push-Location $env:D", 'cd "${D}"'),
+                      ("$env:D=" + Q + "C:/safe" + Q + "; Push-Location $env:D", 'pushd "${D}"'),
                       ("$env:D=" + Q + "C:/safe" + Q + "; Remove-Item -Recurse $env:D/x", 'rm -rf "${D}"/x'),
                       ("$env:D=" + Q + "C:/safe" + Q + "; " + Q + "y" + Q + " > " + DQ + "$env:D/x" + DQ, ': > "${D}"/x'),
                       ("$env:D=" + Q + "C:/safe" + Q + "; Set-Content " + DQ + "$env:D/x" + DQ + " y", ': > "${D}"/x')):
             with self.subTest(c=c):
                 self.assertEqual(H.powershell_to_sh(c)[0], sh)
+
+    # 4.1.1 final round (BLIND-SPOTS location stack): Push-Location was read as a plain `cd` and Pop-Location not at
+    # all, so after `Set-Location <reference>; Push-Location C:/safe; Pop-Location` a relative operand was judged in
+    # C:/safe, where PowerShell is back in <reference>. The stack is modelled: a push is `pushd`, a pop whose push this
+    # command made is `popd`, and a pop the translation cannot match keeps the current directory AND adds an unknown one.
+    LOC_TAILS = (("Remove-Item x", "rm_targets_reference"), ("Set-Content out.txt y", "writes_reference"))
+
+    def _at_ref(self, middle):
+        return "Set-Location " + Q + REF + Q + "; " + middle
+
+    def test_a_pop_returns_to_the_location_its_push_left(self):
+        safe = Q + "C:/safe" + Q
+        for middle in ("Push-Location " + safe + "; Pop-Location; ",
+                       "pushd " + safe + "; popd; ",
+                       "Push-Location -Path " + safe + "; Pop-Location -PassThru; ",
+                       "Push-Location -LiteralPath " + safe + "; Pop-Location; ",
+                       "Push-Location " + safe + "; Push-Location C:/w2; Pop-Location; Pop-Location; ",
+                       "Push-Location -StackName s " + safe + "; Pop-Location -StackName s; ",
+                       "Push-Location -StackName s " + safe + "; Push-Location C:/w2; Pop-Location -StackName s; ",
+                       "Set-Location -StackName s; Push-Location " + safe + "; Pop-Location; ",
+                       "Set-Location -StackName $n; Push-Location " + safe + "; Pop-Location; ",
+                       "Push-Location; Set-Location " + safe + "; Pop-Location; ",
+                       # under a push to an unreadable stack, the pop still reaches its own push
+                       "Push-Location " + safe + "; Push-Location -StackName $n C:/w2; Pop-Location; ",
+                       # the default changed to a stack pushed before, so the pop takes ITS entry
+                       "Push-Location -StackName s " + safe + "; Set-Location -StackName s; Pop-Location; ",
+                       # a stack never pushed: PowerShell refuses it and keeps the default
+                       "Push-Location " + safe + "; Set-Location -StackName t; Pop-Location; ",
+                       "Push-Location -StackName $n C:/w1; Push-Location C:/w2; Pop-Location -StackName $n; "):
+            for tail, flag in self.LOC_TAILS:
+                c = self._at_ref(middle + tail)
+                with self.subTest(c=c):
+                    self.assertTrue(self.P(c)[flag], c)
+
+    def test_a_pop_the_command_cannot_match_keeps_the_current_location_too(self):
+        """A pop of a stack this command did not push (a host that keeps its runspace) lands somewhere unknown; the
+        current location stays one of the candidates, so a relative operand there is still judged."""
+        for middle in ("Pop-Location; ", "popd; ", "Pop-Location -StackName $n; ",
+                       "Push-Location -StackName $n C:/w2; Set-Location " + Q + REF + Q + "; Pop-Location; "):
+            for tail, flag in self.LOC_TAILS:
+                c = self._at_ref(middle + tail)
+                with self.subTest(c=c):
+                    self.assertTrue(self.P(c)[flag], c)
+
+    def test_TWIN_the_pop_restores_a_location_outside_the_root(self):
+        for middle in ("Set-Location C:/work; Push-Location " + Q + REF + Q + "; Pop-Location; ",
+                       "Set-Location C:/work; pushd " + Q + REF + Q + "; popd; "):
+            for tail, flag in self.LOC_TAILS:
+                c = middle + tail
+                with self.subTest(c=c):
+                    self.assertFalse(self.P(c)[flag], c)
+
+    def test_TWIN_with_no_pop_the_pushed_location_is_in_force(self):
+        # The second: PowerShell has no stack `other` to pop, so it stays in C:/safe.
+        for middle in ("Push-Location C:/safe; ", "Push-Location C:/safe; Pop-Location -StackName other; "):
+            for tail, flag in self.LOC_TAILS:
+                c = self._at_ref(middle + tail)
+                with self.subTest(c=c):
+                    self.assertFalse(self.P(c)[flag], c)
+
+    def test_TWIN_after_popping_past_another_stack_a_later_pop_is_not_guessed(self):
+        """Popping stack s past a later default push: PowerShell keeps that default entry, bash's one stack does
+        not. A later default pop must not be matched to the EARLIER default push (back in <reference>, where
+        PowerShell is in C:/w1): it is unknown, the current location kept."""
+        for tail, flag in self.LOC_TAILS:
+            c = self._at_ref("Push-Location C:/w0; Push-Location -StackName s C:/w1; Push-Location C:/w2; "
+                             "Pop-Location -StackName s; Pop-Location; " + tail)
+            with self.subTest(c=c):
+                self.assertFalse(self.P(c)[flag], c)
+
+    def test_an_unmatched_pop_translates_as_the_current_and_an_unknown_location(self):
+        self.assertEqual(H.powershell_to_sh("Pop-Location")[0], 'cd "${X4_PS_LOCATION_STACK:-.}"')
+        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Pop-Location -StackName s")[0],
+                         "pushd C:/a" + chr(10) + 'cd "${X4_PS_LOCATION_STACK:-.}"')
+
+    def test_the_stack_translates_as_pushd_and_popd(self):
+        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Pop-Location")[0], "pushd C:/a" + chr(10) + "popd")
+        self.assertEqual(H.powershell_to_sh("Push-Location -StackName s C:/a; Push-Location C:/b; "
+                                            "Pop-Location -StackName s")[0],
+                         "pushd C:/a" + chr(10) + "pushd C:/b" + chr(10) + "popd" + chr(10) + "popd")
 
     def test_TWIN_a_local_variable_is_still_read_as_its_value(self):
         self.assertEqual(H.powershell_to_sh("$D=" + Q + "C:/safe" + Q + "; Set-Location $D")[0], "cd C:/safe")
@@ -7693,6 +7902,19 @@ class TestGameArchiveShellWrites(unittest.TestCase):
 
     def test_a_pattern_for_the_game_folder_itself_fires(self):
         self.assertTrue(F('rm "' + GAME.replace("X4 F", "X4?F") + '/01.dat"')["writes_game_archive"])
+
+    def test_a_pattern_for_a_game_folder_not_on_disk_fires(self):
+        """The row above passes without _is_archive_home's pattern clause (the mutation gate MEASURED it uncaught
+        at 7f4895a2): `X4?Foundations` still names the install, so named_game_roots reads the pattern itself as a
+        game root. A pattern that names no install (`*`, `X[4]*`) reaches the game only through the clause; a
+        game root that does not exist keeps the operand a pattern on any machine."""
+        g = "C:/NoSuchSteam/common/X4 Foundations"
+        for pat in ("*", "X[4]*"):
+            with self.subTest(pat=pat):
+                self.assertTrue(F('rm "C:/NoSuchSteam/common/' + pat + '/01.dat"', roots=dict(ROOTS, game=g))
+                                ["writes_game_archive"])
+                self.assertFalse(F('rm "C:/NoSuchSteam/common/' + pat + '/01.txt"', roots=dict(ROOTS, game=g))
+                                 ["writes_game_archive"])
 
     def test_TWIN_a_pattern_above_the_game_folder_does_not_fire(self):
         self.assertFalse(F('rm "C:/*/01.dat"')["writes_game_archive"])
