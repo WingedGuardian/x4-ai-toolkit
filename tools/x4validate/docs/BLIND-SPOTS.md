@@ -12430,7 +12430,7 @@ re-run: 0.5 to 0.9 s, a stall of the machine, not of the hook (#31). No other ro
 `scripts/verify-hook-tests.py`, the round-6 probes in `scripts/test-hooks.sh`, and the `ssh to an unplaced host` seed in
 `scripts/fuzz-guard.py` (its 164 mutators weaken it 0 times).
 
-## F358 - With the mods root set to the extensions folder, the file guard allowed a typed delete of the whole folder or a DLC · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-06
+## F359 - With the mods root set to the extensions folder, the file guard allowed a typed delete of the whole folder or a DLC · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-06
 
 Found by the 4.1.0 release session; owner ruling: deleting the whole extensions folder or a DLC is denied, a mod folder keeps
 its confirmation. `protect-files.sh` whitelists everything under `X4_MODS` before the deployed-delete block, so with
