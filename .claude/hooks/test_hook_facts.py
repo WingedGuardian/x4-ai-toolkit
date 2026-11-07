@@ -59,9 +59,32 @@ def _measured(f):
     is measuring the refusal itself, and must keep failing if it changes."""
     if (H.subprocess is _subprocess
             and f.get("untranslated_category") in _TRANSLATOR_OUT_OF_TIME):
+        _TRANSLATOR_SKIPS.append(f["untranslated_category"])
         raise unittest.SkipTest("the real PowerShell translator ran out of time on this machine ("
                                 + f["untranslated_category"] + "): the verdict was NOT measured")
     return f
+
+
+#: 4.1.1 review: the timeout skip needs a ceiling, or a runner where translation ALWAYS times out turns every
+#: PowerShell verdict test into a skip and the leg stays green. Counted here, enforced by __main__ (the CI legs run this
+#: file with plain python). X4_MAX_TRANSLATOR_SKIPS sets it (CI: 0 on Windows, 3 on Ubuntu); unset means 3.
+_TRANSLATOR_SKIPS = []
+
+
+def translator_skip_ceiling(count, raw=None):
+    """0 when `count` named translator-timeout skips are within the ceiling, else 1 (and says why)."""
+    raw = os.environ.get("X4_MAX_TRANSLATOR_SKIPS", "3") if raw is None else raw
+    try:
+        cap = int(raw)
+    except ValueError:
+        print("X4_MAX_TRANSLATOR_SKIPS=%r is not a number: the ceiling cannot be applied, which is a FAILURE" % raw)
+        return 1
+    print("translator-timeout skips: %d (ceiling %d)" % (count, cap))
+    if count > cap:
+        print("FAILED: %d PowerShell verdict test(s) skipped because the translator ran out of time, over the ceiling "
+              "of %d: the PowerShell front-end was not measured on this run" % (count, cap))
+        return 1
+    return 0
 
 
 def _facts(payload, roots, **kw):
@@ -4438,9 +4461,12 @@ class TestARealTranslatorTimeoutIsASkipNotAVerdict(unittest.TestCase):
         for call in (lambda: _facts({"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}},
                                     ROOTS),
                      lambda: F('pwsh -c "Get-Date"')):
+            before = len(_TRANSLATOR_SKIPS)
             with self.assertRaises(unittest.SkipTest) as cm:
                 self._with_run(timed_out, call)
             self.assertIn(H.PS_TIMED_OUT, str(cm.exception))
+            self.assertEqual(len(_TRANSLATOR_SKIPS), before + 1)     # counted against the ceiling
+            _TRANSLATOR_SKIPS.pop()                                   # this one was the test's own
 
     def test_TWIN_any_other_translation_failure_is_still_a_verdict(self):
         import subprocess as sp
@@ -4472,6 +4498,19 @@ class TestARealTranslatorTimeoutIsASkipNotAVerdict(unittest.TestCase):
             H._PS_CACHE.clear()
         self.assertTrue(f["carrier_untranslated"])
 
+
+class TestTheTranslatorSkipHasACeiling(unittest.TestCase):
+    """4.1.1 review: past the ceiling the leg FAILS; an unusable ceiling fails too; within it, it passes."""
+
+    def test_over_the_ceiling_fails_and_within_it_passes(self):
+        self.assertEqual(translator_skip_ceiling(4, "3"), 1)
+        self.assertEqual(translator_skip_ceiling(3, "3"), 0)
+        self.assertEqual(translator_skip_ceiling(1, "0"), 1)
+        self.assertEqual(translator_skip_ceiling(0, "0"), 0)
+
+    def test_an_unusable_ceiling_is_a_failure_not_a_pass(self):
+        self.assertEqual(translator_skip_ceiling(0, ""), 1)
+        self.assertEqual(translator_skip_ceiling(0, "three"), 1)
 
 class TestPowerShellStartsWithoutNetworkCalls(unittest.TestCase):
     """4.0.1: the translator's PowerShell runs with telemetry and the update check OFF (each a
@@ -8685,4 +8724,5 @@ class TestRound6FindExecAndCarriers(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    _run = unittest.main(verbosity=2, exit=False)
+    sys.exit((0 if _run.result.wasSuccessful() else 1) or translator_skip_ceiling(len(_TRANSLATOR_SKIPS)))

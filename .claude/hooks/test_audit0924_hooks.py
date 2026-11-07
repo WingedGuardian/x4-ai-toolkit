@@ -223,12 +223,48 @@ TRANSLATOR_OUT_OF_TIME = ("PowerShell could not be run (TimeoutExpired)",
                           _H.PS_TIMED_OUT, _H.PS_BUDGET_SPENT)
 
 
+#: 4.1.1 review: the timeout skip needs a ceiling, or a runner where translation ALWAYS times out turns every
+#: PowerShell verdict test into a skip and the leg stays green. Counted here, enforced by __main__ (the CI legs run this
+#: file with plain python). X4_MAX_TRANSLATOR_SKIPS sets it (CI: 0 on Windows, 3 on Ubuntu); unset means 3.
+_TRANSLATOR_SKIPS = []
+
+
+def translator_skip_ceiling(count, raw=None):
+    """0 when `count` named translator-timeout skips are within the ceiling, else 1 (and says why)."""
+    raw = os.environ.get("X4_MAX_TRANSLATOR_SKIPS", "3") if raw is None else raw
+    try:
+        cap = int(raw)
+    except ValueError:
+        print("X4_MAX_TRANSLATOR_SKIPS=%r is not a number: the ceiling cannot be applied, which is a FAILURE" % raw)
+        return 1
+    print("translator-timeout skips: %d (ceiling %d)" % (count, cap))
+    if count > cap:
+        print("FAILED: %d PowerShell verdict test(s) skipped because the translator ran out of time, over the ceiling "
+              "of %d: the PowerShell front-end was not measured on this run" % (count, cap))
+        return 1
+    return 0
+
+
 def skip_if_translator_out_of_time(reason):
     for said in TRANSLATOR_OUT_OF_TIME:
         if said in (reason or ""):
+            _TRANSLATOR_SKIPS.append(said)
             raise unittest.SkipTest("the real PowerShell translator ran out of time on this machine ("
                                     + said + "): the verdict was NOT measured")
 
+
+class TestTheTranslatorSkipHasACeiling(unittest.TestCase):
+    """4.1.1 review: past the ceiling the leg FAILS; an unusable ceiling fails too; within it, it passes."""
+
+    def test_over_the_ceiling_fails_and_within_it_passes(self):
+        self.assertEqual(translator_skip_ceiling(4, "3"), 1)
+        self.assertEqual(translator_skip_ceiling(3, "3"), 0)
+        self.assertEqual(translator_skip_ceiling(1, "0"), 1)
+        self.assertEqual(translator_skip_ceiling(0, "0"), 0)
+
+    def test_an_unusable_ceiling_is_a_failure_not_a_pass(self):
+        self.assertEqual(translator_skip_ceiling(0, ""), 1)
+        self.assertEqual(translator_skip_ceiling(0, "three"), 1)
 
 class TestATranslatorTimeoutReasonIsRecognised(unittest.TestCase):
     """The words matched above are the words the guard EMITS: the rc-4 reason is produced here by
@@ -250,12 +286,18 @@ class TestATranslatorTimeoutReasonIsRecognised(unittest.TestCase):
         return raw.decode("utf-8")
 
     def test_the_real_timeout_reason_skips(self):
-        with self.assertRaises(unittest.SkipTest):
-            skip_if_translator_out_of_time("X4 GUARD: ... " + self._rc4_reason(subprocess.TimeoutExpired))
-        for category in (_H.PS_TIMED_OUT, _H.PS_BUDGET_SPENT):
+        before = len(_TRANSLATOR_SKIPS)
+        try:
             with self.assertRaises(unittest.SkipTest):
-                skip_if_translator_out_of_time("Shell scope could not be completely evaluated ("
-                                               + category + "); retry")
+                skip_if_translator_out_of_time("X4 GUARD: ... " + self._rc4_reason(subprocess.TimeoutExpired))
+            self.assertEqual(_TRANSLATOR_SKIPS[before:], ["PowerShell could not be run (TimeoutExpired)"])
+            for category in (_H.PS_TIMED_OUT, _H.PS_BUDGET_SPENT):
+                with self.assertRaises(unittest.SkipTest):
+                    skip_if_translator_out_of_time("Shell scope could not be completely evaluated ("
+                                                   + category + "); retry")
+            self.assertEqual(len(_TRANSLATOR_SKIPS), before + 3)        # every one counted against the ceiling
+        finally:
+            del _TRANSLATOR_SKIPS[before:]                             # this test's own, never the run's real ones
 
     def test_TWIN_other_refusals_are_verdicts(self):
         skip_if_translator_out_of_time("X4 GUARD: ... " + self._rc4_reason(FileNotFoundError))
@@ -1422,4 +1464,5 @@ class TestArchiveGlobWholeHookTime(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    _run = unittest.main(exit=False)
+    sys.exit((0 if _run.result.wasSuccessful() else 1) or translator_skip_ceiling(len(_TRANSLATOR_SKIPS)))
