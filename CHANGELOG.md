@@ -50,6 +50,8 @@
 
 - A wrapper's clustered short flags ending in one that takes a value (`sudo -su root rm ...`, `sudo -Eu root ...`) now take the next word as that value; the guard read `root` as the command, so `sudo -su root rm -rf <reference>` reached no delete rule (an older gap). `-uroot` (value attached) is unchanged, and the old reading is still judged as well.
 
+- Contributors: CI now follows a draft/ready pull-request workflow. A draft pull request runs the fast checks only (Python syntax, lock freshness, the workflow contract, the identifier scans), and its `CI required` check stays red on purpose: fast checks are not full qualification. Marking the pull request ready runs the full jobs (the Windows and Linux `tests` legs, the cold-clone and cold-archive verifications, the installed-copy suite and the eight hook mutation shards) from `.github/workflows/full-qualification.yml`, one full run at a time per repository, and `CI required` turns green only when every one of them passed on that head. Every later push to a ready pull request needs a fresh full run. Pushing a `ci/**` branch no longer starts CI: open a draft pull request, or run the workflow by hand (`workflow_dispatch`). Pushes to `master` still run everything. The shared policy comes from the modding-agent-harness repository, pinned to one commit. See `docs/ci-workflow.md`.
+
 ## v4.1.0 — 2026-11-04
 
 - Typed file deletion of deployed mod folders or ordinary XML now requests confirmation, matching shell retirement policy, instead of being rejected as a direct edit of the deployed copy. Direct writes, write-only batches, explicit moves, archive protections, save preservation and whole-install/reference blocks retain their prior policy.

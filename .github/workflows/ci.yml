@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: WingedGuardian/modding-agent-harness/.github/actions/ci-policy@38bf2cb8da9d4add2fa3c71341d641fafd265368 # v1 policy API
+      - uses: WingedGuardian/modding-agent-harness/.github/actions/ci-policy@43aa26ab84bd5eb0906ecfc6f097b29afa3a8575 # v1 policy API
         id: context
         with:
           profile: x4
@@ -51,7 +51,7 @@ jobs:
       - name: Dependency lock freshness
         working-directory: tools/x4validate
         run: uv lock --check
-      - uses: WingedGuardian/modding-agent-harness/.github/actions/ci-policy@38bf2cb8da9d4add2fa3c71341d641fafd265368 # v1 policy API
+      - uses: WingedGuardian/modding-agent-harness/.github/actions/ci-policy@43aa26ab84bd5eb0906ecfc6f097b29afa3a8575 # v1 policy API
         with:
           profile: x4
           mode: contract
@@ -193,13 +193,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: WingedGuardian/modding-agent-harness/.github/actions/ci-policy@38bf2cb8da9d4add2fa3c71341d641fafd265368 # v1 policy API
+      - uses: WingedGuardian/modding-agent-harness/.github/actions/ci-policy@43aa26ab84bd5eb0906ecfc6f097b29afa3a8575 # v1 policy API
         with:
           profile: x4
           mode: verify
           required-jobs: '["policy","quick","scrub","qualification"]'
           needs-json: ${{ toJSON(needs) }}
-      - uses: WingedGuardian/modding-agent-harness/.github/actions/ci-policy@38bf2cb8da9d4add2fa3c71341d641fafd265368 # v1 policy API
+      - uses: WingedGuardian/modding-agent-harness/.github/actions/ci-policy@43aa26ab84bd5eb0906ecfc6f097b29afa3a8575 # v1 policy API
         if: always()
         with:
           profile: x4
