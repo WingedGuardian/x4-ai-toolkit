@@ -12566,6 +12566,8 @@ interrupted swap and its remedy, and a leftover `<db>__next`.
 builders and in `smoke-basex.sh`, which drops only its own sandbox database. The gap between the two renames is
 one BaseX command; a query started in it gets "not found", as before, but for about a second instead of a build.
 
+**Review fix round (2026-11-07).** An independent review found nothing stopped two builders racing: a second `prepare` -> `recover` could undo a first build's swap at phase `begun`, a rollback could race a commit (both pass the target-absent check, then ALTER replaces one generation with the other), `prepare` could drop the first build's `__next` between CREATE and coverage, and the two shared `pending-fingerprint-<db>.json`. Fixed by `build-<db>.lock`, created with O_EXCL and naming its owner (the builder shell's OS pid) and time, held from before `prepare` to after the swap and checked by every `prepare`/`swap`/`recover`; a lock is stale only when its owner is not running, judged by the process AND its start time (a reused pid does not count). `recover` also refuses a journal whose writer is still running. Also: `_drop_old` re-checks the `__old` receipt, the `__next` receipt is retired once `__next` becomes `<db>`, the disk floor is read on the resolved DBPATH and says when the pagefile size is unknown, a first build is budgeted by a stated estimate, and preflight/ask.py names an in-progress or interrupted swap instead of "not built". The reviewer's 24 mutants plus 15 for the new code: all killed (see RE-DERIVED BY). Still a judgement, not a proof: a lock is only as good as the liveness check, and a builder that is suspended (not dead) keeps its lock.
+
 **Not covered.** The rename window is not atomic: BaseX offers no swap. A report with an unexplained deficit is
 still swapped in (as before; it then refuses negatives). `x4fresh rebuild --auto` still does not start BaseX
 builds unattended, and a swap refused by a reader is not retried automatically. No real-corpus rebuild was run
@@ -12574,5 +12576,5 @@ builds unattended, and a swap refused by a reader is not retried automatically. 
 **RE-DERIVED BY:** `tools/basex/test_dbswap.py` (a fake BaseX with the measured replace semantics: success, build
 failure, killed mid-build, 7 verification failures, a lock on the live and on the old generation, a kill before
 each BaseX step, a crash between the renames, an unaccounted `__old`, disk), its real-BaseX test (reader refusal,
-then the swap), 13 of 13 mutants killed; `test_bx3_a_build_never_drops_the_live_database_or_its_licence`
+then the swap), 13 of 13 mutants killed, then the review round's 24 plus 15 new ones (lock, receipts, disk), all killed; the lock tests (a second builder refused, a dead or reused-pid lock taken over and reported); `test_bx3_a_build_never_drops_the_live_database_or_its_licence`
 (builder step order); the `test_freshcli.py` swap-status tests; the `test_staleness.py` next-generation stamp.

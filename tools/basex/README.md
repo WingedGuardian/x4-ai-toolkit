@@ -75,6 +75,10 @@ answering from the previous database (STALE if the world moved), never "not foun
   the new database was already verified, otherwise back to the previous one), or run
   `dbswap.py recover --db <db>`. `dbswap.py status --db <db>` and `x4fresh status`
   describe any leftover generation.
+- **One build per database at a time.** A build holds `basex/build-<db>.lock` (with
+  its process id) from before `prepare` until after the swap; a second build of the
+  same database, or a `dbswap.py` call, exits `7` while it runs. A lock left by a
+  killed build (its process is no longer running) is taken over and reported.
 - BaseX `ALTER DB` onto an existing name **replaces** it (MEASURED, BaseX 12.4), so
   `dbswap.py` checks every rename target is absent and never renames by hand.
 
@@ -161,7 +165,7 @@ distinction the `x4validate` CLIs make.
 | **`preflight.py`** | 0 / 2 | ready / not ready |
 | **`dbswap.py`** | 0 | swapped / prepared / recovered / status printed |
 | | 2 | refused: verification failed, disk below the floor, or an unknown database under a reserved name; nothing was swapped |
-| | 7 | refused: a reader holds the database open; nothing was swapped, retry the same command |
+| | 7 | refused: a reader holds the database open, or another build of it is running; nothing was swapped, retry the same command |
 | **`build-effective.py`** | 0 / 3 | all vpaths merged / some failed (the manifest names them; the tree is still built) |
 
 ⚠ **The two `coverage.py` paths do not share a scale.** The `x4raw` path has three
