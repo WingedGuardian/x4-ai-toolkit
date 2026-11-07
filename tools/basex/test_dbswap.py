@@ -668,3 +668,39 @@ def test_real_alter_semantics(tmp_path):
     dbswap.swap(bx, home, "x4raw")
     assert bx.exists("x4raw") and not bx.exists("x4raw__next") and not bx.exists("x4raw__old")
     assert bx.count("x4raw") == 3
+
+
+# ================================================================ read-only checks for an unattended caller (4.1.1 auto BaseX)
+
+def test_disk_shortfall_answers_without_touching_anything(home):
+    """x4fresh asks before starting an automatic build: the answer must cost no recovery, drop or BaseX call."""
+    bx = FakeBaseX({"x4raw": 5_000_000, "x4raw__next": 2})
+    receipt(home, "x4raw__next")
+    (home / "swap-x4raw.json").write_text(json.dumps({"db": "x4raw", "phase": "begun"}), encoding="utf-8")
+    journal = (home / "swap-x4raw.json").read_bytes()
+    why = dbswap.disk_shortfall(bx, home, "x4raw", free_bytes=6 * 2**30, floor_bytes=2 * 2**30)
+    assert why and "not enough disk to build x4raw" in why
+    assert dbswap.disk_shortfall(bx, home, "x4raw", free_bytes=100 * 2**30, floor_bytes=2 * 2**30) is None  # twin
+    assert bx.calls == [] and bx.dbs == {"x4raw": 5_000_000, "x4raw__next": 2}
+    assert (home / "swap-x4raw.json").read_bytes() == journal, "no recovery ran"
+
+
+def test_prepare_refuses_on_exactly_the_shortfall_answer(home):
+    bx = FakeBaseX({"x4raw": 5_000_000})
+    why = dbswap.disk_shortfall(bx, home, "x4raw", free_bytes=6 * 2**30, floor_bytes=2 * 2**30)
+    with pytest.raises(dbswap.SwapRefused) as exc:
+        dbswap.prepare(bx, home, "x4raw", free_bytes=6 * 2**30, floor_bytes=2 * 2**30)
+    assert str(exc.value) == why
+
+
+def test_running_build_names_only_a_live_holder(home):
+    assert dbswap.running_build(home, "x4raw") is None
+    _hold(home, _dead_pid())
+    assert dbswap.running_build(home, "x4raw") is None, "a dead build's lock is not a running build"
+    live = _sleeper()
+    try:
+        _hold(home, live.pid)
+        assert dbswap.running_build(home, "x4raw") == live.pid
+    finally:
+        live.kill()
+        live.wait()
