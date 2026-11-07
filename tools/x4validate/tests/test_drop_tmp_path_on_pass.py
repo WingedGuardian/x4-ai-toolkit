@@ -136,3 +136,24 @@ def test_a_real_failing_test_gets_the_marker_and_a_passing_one_is_dropped(tmp_pa
     passed = [d for d in base.iterdir() if d.name.startswith("test_passes")]
     assert len(failed) == 1 and (failed[0] / ".x4-kept-failure").is_file() and (failed[0] / "evidence.txt").is_file()
     assert passed == []
+    # 4.1.1 review B1: the session's base folder is marked too, so evidence outside a tmp_path is kept with it
+    assert (base / ".x4-kept-failure").is_file()
+
+
+def test_a_failing_test_with_only_tmp_path_factory_marks_the_session(tmp_path):
+    """4.1.1 review B1: a failing test that wrote its evidence through tmp_path_factory had no tmp_path to mark."""
+    import subprocess
+    import sys
+    here = Path(__file__).resolve().parent
+    mod = tmp_path / "case_mod"
+    mod.mkdir()
+    (mod / "test_case.py").write_text(
+        "def test_fails(tmp_path_factory):\n    (tmp_path_factory.mktemp('made') / 'e.txt').write_text('e')\n"
+        "    assert False\n", encoding="utf-8")
+    base = tmp_path / "child-base"
+    env = dict(os.environ, PYTHONPATH=str(here) + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "conftest",
+                        "--basetemp", str(base), "--rootdir", str(mod), str(mod / "test_case.py")],
+                       capture_output=True, text=True, env=env, cwd=str(mod), timeout=300)
+    assert "1 failed" in r.stdout, r.stdout[-1500:] + r.stderr[-1500:]
+    assert (base / ".x4-kept-failure").is_file()

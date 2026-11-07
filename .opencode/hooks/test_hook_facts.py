@@ -4135,6 +4135,124 @@ class TestWriteThroughAnExistingLink(unittest.TestCase):
         self.assertEqual(H.link_resolved("refj/x.xml"), "")              # relative: nothing to resolve
         self.assertEqual(H.link_resolved(self.link.as_posix() + "/${X}"), "")   # unresolved
 
+    @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
+    def test_TWIN_skipped_remote_operands_leave_the_local_junction_judged(self):
+        # 4.1.1 review A1: a remote drive is not resolved and does not spend the per-call budget, so a
+        # junction on a local drive after 100 of them is still judged where it lands.
+        from unittest import mock
+        real = H._drive_type
+        decoys = " ".join("Y:/d/f%d.xml" % i for i in range(100))
+        with mock.patch.object(H, "_drive_type", lambda l: 4 if l.upper() == "Y" else real(l)):
+            got = self.f("touch " + decoys + " " + Q + self.link.as_posix() + "/libraries/wares.xml" + Q)
+        self.assertTrue(got["writes_reference"])
+
+
+class TestLinkResolutionIsBounded(unittest.TestCase):
+    """4.1.1 review A1: link_resolved ran an uninterruptible realpath on EVERY absolute write or delete
+    operand. MEASURED: one realpath of an unreachable network path took 21 s, so two operands on a drive
+    mapped to an offline server outran the hook's 30 s, and a hook that times out does not block. Now a
+    drive that is not local is never resolved (its type asked once per drive per call), the analysis
+    deadline is checked before each realpath, and a hook call makes at most _MAX_LINK_RESOLVED of them."""
+
+    def setUp(self):
+        from unittest import mock
+        self.mock = mock
+        self.calls = []
+        real_rp = os.path.realpath
+
+        def fake_realpath(p, *a, **k):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411/"):
+                self.calls.append(p)
+                return p
+            return real_rp(p, *a, **k)
+        self.fake_realpath = fake_realpath
+
+    def run_facts(self, cmd, types=None):
+        types = types or {}
+        with self.mock.patch.object(H.os.path, "realpath", self.fake_realpath), \
+                self.mock.patch.object(H, "_drive_type", lambda l: types.get(l.upper(), 3), create=True):
+            return H.facts({"tool_input": {"command": cmd}}, ROOTS)
+
+    @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
+    def test_a_remote_or_rootless_drive_is_never_resolved(self):
+        seen = []
+        real_rp = os.path.realpath
+
+        def rp(p, *a, **k):
+            seen.append(str(p))
+            return real_rp(p, *a, **k) if str(p)[:1].upper() not in "YZQ" else p
+        types = {"Y": 4, "Z": 1, "Q": 0}
+        with self.mock.patch.object(H.os.path, "realpath", rp), \
+                self.mock.patch.object(H, "_drive_type", lambda l: types.get(l.upper(), 3), create=True):
+            H.facts({"tool_input": {"command": "touch Y:/share/x.xml Z:/b/y.xml Q:/c/z.xml"}}, ROOTS)
+        self.assertEqual([p for p in seen if p[:1].upper() in "YZQ"], [])
+
+    @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
+    def test_TWIN_a_local_drive_is_still_resolved(self):
+        self.run_facts("touch C:/w411/a.xml", types={"C": 3})
+        self.assertEqual(len(self.calls), 1)
+
+    @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
+    def test_the_drive_type_is_asked_once_per_drive_per_call(self):
+        import ctypes
+        asked = []
+        k32 = ctypes.windll.kernel32
+        real = k32.GetDriveTypeW
+
+        def gdt(root):
+            asked.append(root)
+            return real(root)
+        with self.mock.patch.object(k32, "GetDriveTypeW", gdt), \
+                self.mock.patch.object(H.os.path, "realpath", self.fake_realpath):
+            cmd = "touch " + " ".join("C:/w411/f%d.xml" % i for i in range(10))
+            H.facts({"tool_input": {"command": cmd}}, ROOTS)
+            H.facts({"tool_input": {"command": cmd}}, ROOTS)
+        self.assertEqual([r[:1].upper() for r in asked], ["C", "C"])     # once per drive, per hook call
+
+    def test_realpath_calls_are_capped_per_hook_call(self):
+        cmd = "touch " + " ".join("C:/w411/f%d.xml" % i for i in range(200))
+        self.run_facts(cmd)
+        self.assertEqual(len(self.calls), H._MAX_LINK_RESOLVED)
+        self.calls.clear()
+        self.run_facts(cmd)                                             # per hook call, not per process
+        self.assertEqual(len(self.calls), H._MAX_LINK_RESOLVED)
+
+    def test_the_deadline_is_checked_before_each_realpath(self):
+        clock = [1000.0]
+
+        def slow(p, *a, **k):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411/"):
+                self.calls.append(p)
+                clock[0] += 10.0                                        # each one costs 10 s
+                return p
+            return os.path.realpath(p, *a, **k)
+        with self.mock.patch.object(H.os.path, "realpath", slow), \
+                self.mock.patch.object(H, "_clock", lambda: clock[0]), \
+                self.mock.patch.object(H, "_drive_type", lambda l: 3, create=True):
+            got = H.facts({"tool_input": {"command": "touch " + " ".join(
+                "C:/w411/f%d.xml" % i for i in range(5))}}, ROOTS)
+        self.assertIn("analysis_timeout", got)                          # refused, never allowed
+        self.assertLessEqual(len(self.calls), 2)
+
+    def test_whole_hook_time_with_many_slow_operands(self):
+        import time
+
+        def slow(p, *a, **k):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411/"):
+                self.calls.append(p)
+                time.sleep(0.02)
+                return p
+            return os.path.realpath(p, *a, **k)
+        cmd = "rm -f " + " ".join("C:/w411/f%d.xml" % i for i in range(400))
+        t0 = time.monotonic()
+        with self.mock.patch.object(H.os.path, "realpath", slow), \
+                self.mock.patch.object(H, "_drive_type", lambda l: 3, create=True):
+            got = H.facts({"tool_input": {"command": cmd}}, ROOTS)
+        took = time.monotonic() - t0
+        self.assertNotIn("analysis_timeout", got)
+        self.assertLessEqual(len(self.calls), 64)
+        self.assertLess(took, 6.0, took)            # uncapped: 400 x 20 ms = 8 s of realpath alone
+
 
 class TestBashDirectoryStackForms(unittest.TestCase):
     """4.1.1 final round: bash's other pushd/popd forms. A bare `pushd` swaps the top two, `pushd +N`/`-N` rotate,
@@ -4214,6 +4332,53 @@ class TestRRPreArcBash(unittest.TestCase):
         for c in ("echo " + Q + cfg + Q + " | xargs touch", "echo " + Q + cfg + Q + " | xargs -I{} cp /tmp/x {}"):
             with self.subTest(c=c):
                 self.assertTrue(_facts({"tool_input": {"command": c}, "cwd": _ELSEWHERE}, roots)["writes_reference"], c)
+
+    def test_an_xargs_item_past_the_reading_bound_is_never_dropped(self):
+        # 4.1.1 review A2: `xargs -I` readings were built for the first 8 items only, so a reference file as the
+        # 9th item was allowed. Past the bound the command is too tangled to analyse, and says so.
+        ref = Q + REF + "/libraries/wares.xml" + Q
+        for n in (8, H._XARGS_ITEMS):
+            c = "printf '%s" + chr(92) + "n' " + " ".join(str(i) for i in range(1, n + 1)) + " " + ref \
+                + " | xargs -I{} touch {}"
+            with self.subTest(n=n):
+                f = F(c)
+                self.assertTrue(f["writes_reference"] or f["carriers_truncated"], c)
+        c = "printf '%s" + chr(92) + "n' " + " ".join(str(i) for i in range(H._XARGS_ITEMS + 1)) + " " + ref \
+            + " | xargs -I{} touch {}"
+        self.assertTrue(F(c)["carriers_truncated"], c)
+
+    def test_TWIN_items_within_the_bound_are_not_truncated(self):
+        c = "printf '%s" + chr(92) + "n' " + " ".join("/tmp/f%d" % i for i in range(H._XARGS_ITEMS)) \
+            + " | xargs -I{} touch {}"
+        f = F(c)
+        self.assertFalse(f["carriers_truncated"], c)
+        self.assertFalse(f["writes_reference"], c)
+        # without -I every item is one reading, so no bound applies
+        c = "printf '%s" + chr(92) + "n' " + " ".join("/tmp/f%d" % i for i in range(100)) + " | xargs touch"
+        self.assertFalse(F(c)["carriers_truncated"], c)
+
+    def test_the_old_gnu_replace_spellings_are_read(self):
+        # 4.1.1 review A4: GNU `xargs -i` is `-I{}` (an optional replacement ATTACHED: `-iX`), and `--replace`
+        # with no `=` is `{}`. The wrapper table read the next word as their value, so the verb was never seen.
+        ref = Q + REF + "/libraries/wares.xml" + Q
+        for x in ("xargs -i cp /dev/null {}", "xargs -i touch {}", "xargs -iX cp /dev/null X",
+                  "xargs --replace cp /dev/null {}", "xargs -i -n1 touch {}", "xargs -l touch", "xargs -e touch",
+                  "xargs -l1 touch", "xargs -eEOF touch"):
+            c = "echo " + ref + " | " + x
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["writes_reference"], c)
+        self.assertTrue(F("echo " + Q + REF + Q + " | xargs -i rm -rf {}")["rm_targets_reference"])
+        self.assertEqual(H._xargs_replace("xargs -i cp a {}")[0], "{}")
+        self.assertEqual(H._xargs_replace("xargs -iX cp a X")[0], "X")
+        self.assertEqual(H._xargs_replace("xargs --replace cp a {}")[0], "{}")
+        self.assertEqual(H.verb("xargs -i cp /dev/null {}"), "cp")
+        self.assertIsNone(H._xargs_replace("sudo -i xargs touch a")[0])   # only xargs's own options count
+
+    def test_TWIN_old_replace_spelling_elsewhere_does_not_fire(self):
+        for c in ("echo /tmp/a.xml | xargs -i cp /dev/null {}", "echo " + Q + REF + "/x.xml" + Q
+                  + " | xargs -i cp {} /tmp/out.xml", "echo " + Q + REF + "/x.xml" + Q + " | xargs -i cat {}"):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["writes_reference"], c)
 
     def test_TWIN_an_xargs_fed_write_elsewhere_or_a_read_does_not_fire(self):
         for c in ("echo /tmp/a.xml | xargs touch", "echo " + Q + REF + "/x.xml" + Q + " | xargs cat",
@@ -4471,6 +4636,45 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
                              "Pop-Location -StackName s; Pop-Location; " + tail)
             with self.subTest(c=c):
                 self.assertFalse(self.P(c)[flag], c)
+
+    def test_an_unreadable_stack_name_may_be_the_default_stack(self):
+        """4.1.1 review A3: an unreadable -StackName ($n unset is the DEFAULT stack in real pwsh) was its own stack, so
+        a default pop after a push to it, and the mirror, were judged where the command already was (C:/safe) while
+        PowerShell may be back in <reference>. Both outcomes are now judged: the pop returns, or it does not."""
+        safe = Q + "C:/safe" + Q
+        for middle in ("Push-Location " + safe + " -StackName $n; Pop-Location; ",
+                       "Push-Location " + safe + "; Pop-Location -StackName $n; ",
+                       "Push-Location -StackName $n " + safe + "; Push-Location -StackName $m C:/w2; Pop-Location; "
+                       "Pop-Location; "):
+            for tail, flag in self.LOC_TAILS:
+                c = self._at_ref(middle + tail)
+                with self.subTest(c=c):
+                    self.assertTrue(self.P(c)[flag], c)
+        for tail, flag in (("Remove-Item libraries/wares.xml", "rm_targets_reference"),):
+            c = self._at_ref("Push-Location " + safe + " -StackName $n; Pop-Location; " + tail)
+            self.assertTrue(self.P(c)[flag], c)
+
+    def test_TWIN_an_unreadable_stack_name_judges_only_the_candidate_folders(self):
+        for c in ("Set-Location C:/work; Push-Location C:/safe -StackName $n; Pop-Location; ",
+                  "Set-Location C:/work; Push-Location C:/safe; Pop-Location -StackName $n; ",
+                  self._at_ref("Push-Location C:/w1; Push-Location C:/safe -StackName $n; Pop-Location -StackName t; ")):
+            for tail, flag in self.LOC_TAILS:
+                with self.subTest(c=c + tail):
+                    self.assertFalse(self.P(c + tail)[flag], c + tail)
+
+    def test_a_maybe_pop_translates_as_a_pop_that_may_not_happen(self):
+        maybe = "popd ${X4_PS_LOCATION_STACK:+-n}"
+        self.assertEqual(H.powershell_to_sh("Push-Location -StackName $n C:/a; Pop-Location")[0],
+                         "pushd C:/a" + chr(10) + maybe + chr(10) + 'cd "${X4_PS_LOCATION_STACK:-.}"')
+        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Pop-Location -StackName $n")[0],
+                         "pushd C:/a" + chr(10) + maybe + chr(10) + 'cd "${X4_PS_LOCATION_STACK:-.}"')
+        # a definite push under an unreadable one: PowerShell lands at one of them, so both pops may happen
+        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Push-Location -StackName $n C:/b; Pop-Location")[0],
+                         "pushd C:/a" + chr(10) + "pushd C:/b" + chr(10) + maybe + chr(10) + maybe)
+
+    def test_the_reader_splits_a_pop_that_may_not_happen(self):
+        lanes = H.cwd_lanes("cd C:/r; pushd C:/s; popd ${X4_PS_LOCATION_STACK:+-n}; rm x", "C:/b")
+        self.assertEqual(sorted(H.norm(d) for d in lanes[-1][1]), sorted([H.norm("C:/r"), H.norm("C:/s")]))
 
     def test_an_unmatched_pop_translates_as_the_current_and_an_unknown_location(self):
         self.assertEqual(H.powershell_to_sh("Pop-Location")[0], 'cd "${X4_PS_LOCATION_STACK:-.}"')

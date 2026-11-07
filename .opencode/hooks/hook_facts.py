@@ -149,11 +149,44 @@ def link_resolved(p: str) -> str:
         s = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", s)
         if not re.match(r"^[A-Za-z]:/", s):
             return ""
+        # 4.1.1 review A1: a realpath cannot be interrupted, and on a drive mapped to an offline server
+        # one took 21 s (MEASURED: realpath of an unreachable UNC path), so two such operands outran the
+        # hook's 30 s and the call failed OPEN. Only a local drive is resolved.
+        if _drive_type(s[0]) not in _LOCAL_DRIVE_TYPES:
+            return ""
+    # Bounded per hook call, and inside the analysis deadline (past it the command is refused). Skipping
+    # a resolution only gives up the ADDED strictness of this second reading: the lexical path is still
+    # judged as written, so no verdict is ever lower than it would be without link resolution.
+    _check_deadline()
+    if _LINK_RESOLVED[0] >= _MAX_LINK_RESOLVED:
+        return ""
+    _LINK_RESOLVED[0] += 1
     try:
         real = os.path.realpath(s).replace(chr(92), "/")
     except (OSError, ValueError):
         return ""
     return real if _lexical_norm(real) != _lexical_norm(s) else ""
+
+
+#: link_resolved's per-hook-call bounds (4.1.1 review A1); facts() resets both.
+_MAX_LINK_RESOLVED = 64
+_LINK_RESOLVED = [0]
+_DRIVE_TYPES: dict = {}
+#: GetDriveTypeW: 2 removable, 3 fixed, 5 CD-ROM, 6 RAM disk. Not resolved: 0 unknown, 1 no root
+#: directory, 4 remote (a mapped network drive, whose server may be offline).
+_LOCAL_DRIVE_TYPES = frozenset((2, 3, 5, 6))
+
+
+def _drive_type(letter: str) -> int:
+    """GetDriveTypeW of `letter:` (0 when it cannot be asked), cached per drive per hook call."""
+    key = letter.upper()
+    if key not in _DRIVE_TYPES:
+        try:
+            import ctypes
+            _DRIVE_TYPES[key] = int(ctypes.windll.kernel32.GetDriveTypeW(key + ":" + chr(92)))
+        except Exception:
+            _DRIVE_TYPES[key] = 0
+    return _DRIVE_TYPES[key]
 
 
 def _lexical_norm(p: str) -> str:
@@ -2365,7 +2398,9 @@ _WRAPPER_VALUE_OPTS = {
     "exec": {"-a"},
     "doas": {"-u", "-C"},
     "timeout": {"-s", "--signal", "-k", "--kill-after"},
-    "xargs": {"-I", "-i", "--replace", "-n", "--max-args", "-P", "--max-procs",
+    # `-i` and `--replace` take NO separate value (GNU: an optional one ATTACHED, `-iX`, `--replace=X`);
+    # listed here they ate the verb (4.1.1 review A4). `-e`/`-l` likewise attach theirs and are not listed.
+    "xargs": {"-I", "-n", "--max-args", "-P", "--max-procs",
               "-d", "--delimiter", "-E", "-L", "--max-lines", "-s", "--max-chars",
               "-a", "--arg-file"},
     "nice": {"-n", "--adjustment"},
@@ -4189,7 +4224,12 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
         """One lane through one segment; `tgt` is the value its cd/pushd takes in this lane."""
         cwd, from_seed, stack = lane[0], lane[1], list(lane[2])
         if v in ("pushd", "popd"):
-            moved = _dirstack_forms(v, _operands(seg, include_flags=True), cwd, from_seed, stack,
+            words = _operands(seg, include_flags=True)
+            if v == "popd" and words and has_unresolved(words[0]):
+                # A pop that may not happen (4.1.1 review A3: the PowerShell translator's `popd
+                # ${X4_PS_LOCATION_STACK:+-n}`): this lane takes one of the operand's values.
+                words = ([tgt] if tgt else []) + words[1:]
+            moved = _dirstack_forms(v, words, cwd, from_seed, stack,
                                     physical_join if physical else join_cwd)
             if moved is not None:
                 return moved
@@ -4223,6 +4263,9 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
         out.append((seg, [ln[0] for ln in lanes]))
         v = verb(seg)
         ops = _operands(seg) if v in DIR_VERBS else []
+        if v == "popd":
+            # Only an operand with several values splits the lanes; a plain popd form is read in step().
+            ops = [o for o in _operands(seg, include_flags=True)[:1] if has_unresolved(o)]
         if not ops:
             lanes = [step(seg, v, ln, "") for ln in lanes]
             continue
@@ -5315,22 +5358,30 @@ def rsync_moved_sources(seg: str) -> list:
 
 
 def _xargs_replace(seg: str) -> tuple:
-    """(replacement string or None, the delete verb's words that carry it) of `xargs -I R rm ...`.
-    Only the spellings that cannot eat the verb: `-I R`, `-IR`, `--replace=R`. A bare `-i` or
-    `--replace` makes the shared wrapper table read the verb as their value (BLIND-SPOTS F356)."""
+    """(replacement string or None, the delete verb's words that carry it) of `xargs -I R rm ...`:
+    `-I R`, `-IR`, `--replace=R`, and GNU's older spellings `-i` / `--replace` (`{}`) and `-iR` (4.1.1
+    review A4; before it the wrapper table read the word after a bare `-i` as its value, F356). Only the
+    xargs's own options count, the words between the last `xargs` and the verb."""
     toks = tokens_of(seg)
     vt = _verb_token(seg)
     if vt not in toks:
         return None, []
     vi = toks.index(vt)
+    xi = max((i for i, t in enumerate(toks[:vi]) if _verb_name(t) == "xargs"), default=-1)
     repl = None
     for i, t in enumerate(toks[:vi]):
+        if i <= xi:
+            continue
         if t == "-I" and i + 1 < vi:
             repl = toks[i + 1]
         elif t.startswith("-I") and len(t) > 2:
             repl = t[2:]
         elif t.startswith("--replace="):
             repl = t[len("--replace="):]
+        elif t in ("-i", "--replace"):
+            repl = "{}"
+        elif t.startswith("-i") and len(t) > 2:
+            repl = t[2:]
     if not repl:
         return None, []
     return repl, [w for w in toks[vi + 1:] if repl in w]
@@ -5503,8 +5554,10 @@ def xargs_entry_effect(seg: str, prev):
     return _entry_effect(" ".join(_sh_quote(w) for w in words))
 
 
-#: How many items of an echo/printf an `xargs -I` reading is built for (_xargs_item_readings).
-_XARGS_ITEMS = 8
+#: How many items of an echo/printf an `xargs -I` reading is built for (_xargs_item_readings). More is
+#: too tangled to analyse (carriers_truncated, a refusal), never a silent cut (4.1.1 review A2: the
+#: 9th item of 8 was dropped, so a reference file there was allowed). The segment bound is the same.
+_XARGS_ITEMS = 32                       # = _MAX_SEGMENT_READINGS, defined further down
 
 
 def _xargs_item_readings(seg: str, prev) -> list:
@@ -5527,6 +5580,8 @@ def _xargs_item_readings(seg: str, prev) -> list:
     ran = _drop_redirects(toks[toks.index(vt):])
     repl, _w = _xargs_replace(seg)
     if repl:
+        if len(items) > _XARGS_ITEMS:
+            _READINGS_TRUNCATED[0] = True
         return [" ".join(_sh_quote(w.replace(repl, item)) for w in ran) for item in items[:_XARGS_ITEMS]]
     return [" ".join(_sh_quote(w) for w in ran + items)]
 
@@ -8455,6 +8510,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _DEADLINE[0] = deadline if deadline is not None else _clock() + _ANALYSIS_BUDGET_S
     _SSH_MEMO.clear()
     _SSH_JUDGED[0] = 0
+    _LINK_RESOLVED[0] = 0               # link_resolved's realpath budget and drive cache: per hook call
+    _DRIVE_TYPES.clear()
     _ps_spent[0] = 0.0                  # the translation budget is per hook call, never per judgement
     try:
         return _facts(payload, roots, evidence=evidence, execution_context=execution_context,

@@ -492,23 +492,8 @@ def drop_tmp_if_passed(failed_before, failed_after, base, tmp):
     return True
 
 
-#: The marker a FAILED test's tmp_path gets, so a leftover session folder holding failure evidence is recycled by
-#: x4housekeep, never deleted (release-session policy, 4.1.1). Same name as scripts/x4housekeep.py KEPT_FAILURE.
-KEPT_FAILURE = ".x4-kept-failure"
-
-
-def mark_kept_failure(folder):
-    try:
-        (Path(folder) / KEPT_FAILURE).write_bytes(b"")
-    except OSError:
-        pass  # silent-ok: a missing marker leaves the folder to the ordinary rules; the failure itself is reported
-
-
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item, call):
-    outcome = yield
-    report = outcome.get_result()
-    if report.failed:
-        tmp = getattr(item, "funcargs", {}).get("tmp_path")
-        if tmp is not None and Path(tmp).is_dir():
-            mark_kept_failure(tmp)
+#: The marker a FAILED test leaves, so a leftover session folder holding failure evidence is recycled by x4housekeep,
+#: never deleted (release-session policy, 4.1.1). Written by scripts/x4pytest.py's plugin, which every toolkit
+#: conftest loads through x4pytest.configure (4.1.1 review B1); re-exported here for the tests that name it.
+KEPT_FAILURE = x4pytest.KEPT_FAILURE
+mark_kept_failure = x4pytest.mark_kept_failure
