@@ -461,6 +461,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 321 of 2177 moved, all to deny, ask or advise; `find -exec` writes to what it finds now reach this rule. Round 7: 473 of 2469 moved vs 28f260ee, all stronger. Round 8: 556 of 2623, all stronger | FIXED 2026-11-06 |
 | F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own; a find that moves or writes what it finds never reached the archive rule; round 7: an analysis with no deadline failed open; round 8: a positional fill grew as uses x arguments | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
 | F358 | A complete copy of a mod-owned macro file at a nested path was modelled as REPLACING the owner's document; the engine MERGES it (two same-named macros), so later un-indexed selectors passed x4validate and the engine skipped them | **DEFECT (measured)** · PRE-ARC | GitHub issue #17: engine skipped 3 ops (debug.txt 2026-11-05, 2026-11-06), x4validate predicted 0; live census 213 active mods: 2 nested full copies over a mod-supplied file, both this case | FIXED 2026-11-06 for `.../macros/*_macro.xml` only; copy order and the engine's choice of copy UNMEASURED and disclosed by every reader; every other class (118 live at a DLC's nested path, INFERRED the largest exposure) and a plain-path full copy still a replacement and DISCLOSED as unmeasured |
+| F359 | With `X4_MODS` set to the extensions folder, the file guard alone allowed a typed delete of the whole folder, a DLC and a mod | **DEFECT (measured)** · PRE-ARC | 5 of 5 targets allowed by protect-files.sh alone; x4guard and the neutral delete already denied/asked. A DLC file EDIT in that layout is still only advised (open) | FIXED 2026-11-06 (deletes) |
+| F360 | A shell write whose target comes from xargs's stdin, or passes through an existing junction, reaches no write rule | **DEFECT (measured)** · PRE-ARC | `echo <config> \| xargs touch` and `echo <reference file> \| xargs touch` allowed; 3 of 3 shell writes through a junction into reference/ allowed where the file tool denies | OPEN |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12600,3 +12602,53 @@ commit (3 of them only by a TypeError on the new keyword: the DLC-owner, lone-co
 green. Round 2 added one falsification twin per clause and per door; 19 hand mutants from the review plus 7 for the
 round-2 disclosures, 26 of 26 killed (scratch harness `mut.py` + `mut17r2_extra.py`, every file restored
 byte-identical).
+
+## F359 - With the mods root set to the extensions folder, the file guard allowed a typed delete of the whole folder or a DLC · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-06
+
+Found by the 4.1.0 release session; owner ruling: deleting the whole extensions folder or a DLC is denied, a mod folder keeps
+its confirmation. `protect-files.sh` whitelists everything under `X4_MODS` before the deployed-delete block, so with
+`X4_MODS=<game>/extensions` (the single-location layout written out) that block never ran. MEASURED with `protect-files.sh`
+ALONE on a `DeleteFile` payload (`test_mods_root_at_extensions_file_guard_alone`), before the fix: 5 of 5 targets ALLOWED
+(the folder, `ego_dlc_boron`, `ego_dlc_boron/content.xml`, a mod, a mod file), where the policy is deny, deny, deny, ask,
+ask. Through `x4guard check --kind delete` and the neutral `agent-harness` delete the same targets already came out deny /
+ask, because the shell guard's verdict was combined in (before the fix, as expected: 8 of 8 through `x4guard check`, 3 of 3
+through the neutral delete): the hole was the file channel by itself.
+
+Fix: the whitelist is skipped only for a typed delete under `X4_EXTENSIONS` (`x4_typed_delete`, the existing tool-name
+test, now one function used in both places). Ordinary edits under that mods root stay allowed
+(`test_TWIN_mods_root_at_extensions_keeps_ordinary_writes_allowed`).
+
+**OPEN, not in the ruling's scope.** An Edit or Write of a file INSIDE a DLC folder, MEASURED with the file guard alone (4
+payloads each: Edit/Write x `libraries/wares.xml`/`content.xml`): `X4_MODS=<extensions>` -> advise, 4 of 4;
+`X4_MODS` unset -> ask (the deployed-mod confirmation), 4 of 4; `X4_MODS` elsewhere -> deny, 4 of 4. A DLC edit is
+refused in one of the three layouts only; whether it should always deny is the owner's call.
+
+**RE-DERIVED BY:** the `mods_root_at_extensions` tests in `tests/test_deployed_retirement_policy.py`.
+
+## F360 - A shell write whose target arrives on xargs's stdin, or passes through an existing junction, reaches no write rule · **DEFECT (measured)** · PRE-ARC · confidence 90% · OPEN, recorded for the 4.1.1 release session
+
+MEASURED 2026-11-06 through `x4guard check --kind shell --shell bash`, fixture toolkit, decide-only (nothing ran):
+
+| command | verdict |
+|---|---|
+| `touch <toolkit>/x4-paths.env` | deny (the path-config rule) |
+| `echo x \| xargs tee <toolkit>/x4-paths.env` | deny (the path-config rule) |
+| `echo <toolkit>/x4-paths.env \| xargs touch` | **ALLOW** |
+| `printf '%s' <toolkit>/x4-paths.env \| xargs -I{} touch {}` | **ALLOW** |
+| `echo <reference>/libraries/wares.xml \| xargs touch` | **ALLOW** |
+| `xargs touch <toolkit>/x4-paths.env < /dev/null` | deny, but INERT: "save mutation has no absolute physical path", not the policy |
+| `xargs touch <reference file> < /dev/null` | deny, INERT, same reason |
+
+So a `touch` (a write: it creates the file, or bumps its time) fed its target by xargs from stdin reaches no write rule; the
+literal-operand form is refused only because the save bridge cannot place it. Not fixed here: the xargs reader lives in
+`hook_facts.py`'s find/xargs code, which another lane owned at the time.
+
+Junctions, MEASURED the same way with a real junction `<tmp>/work/lnk -> <toolkit>/reference` (created by the probe
+script, outside the guard): `echo x > lnk/libraries/wares.xml`, `touch lnk/libraries/wares.xml` and `rm
+lnk/libraries/wares.xml` were ALLOWED (3 of 3), while the file tool's write of the same path was DENIED (reference is
+read-only). Shell write targets are judged by their spelling; the file guard canonicalises through links. Creating such a
+link with the guard watching is denied (F331), so this needs a link that already exists. Not fixed: a canonicalising
+pass over every shell write target is a design change for the release session to weigh (cost per command, a missing
+path, a link created earlier in the same command).
+
+**RE-DERIVED BY:** the two probe scripts named in the 4.1.1 leftovers report (scratch, not shipped); no test pins it yet.

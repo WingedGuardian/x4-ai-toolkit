@@ -510,7 +510,35 @@ def invoke_hook(install, tool, ti, preview=False, omit_cwd=False, extra=None):
     result = subprocess.run([bash, str(hooks / ("protect-bash.sh" if tool in ("Bash", "PowerShell") else "protect-files.sh"))],
                             input=json.dumps(payload).encode(), capture_output=True, env=env, timeout=40)
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout) if result.stdout.strip() else {}
+    got = json.loads(result.stdout) if result.stdout.strip() else {}
+    if tool == "PowerShell":
+        _skip_if_translator_out_of_time(got.get("hookSpecificOutput", {}).get("permissionDecisionReason", ""))
+    return got
+
+
+#: 4.1.1 (CI run 41992260237): the REAL translator ran out of time. The guard refuses (right);
+#: the test measured nothing, so it is skipped and named. Same words as test_audit0924_hooks.
+_TRANSLATOR_OUT_OF_TIME = ("PowerShell could not be run (TimeoutExpired)",
+                           "the PowerShell translation budget for one command",
+                           "PowerShell translation timed out", "PowerShell translation time budget spent")
+
+
+def _skip_if_translator_out_of_time(reason):
+    for said in _TRANSLATOR_OUT_OF_TIME:
+        if said in (reason or ""):
+            pytest.skip("the real PowerShell translator ran out of time on this machine (" + said
+                        + "): the verdict was NOT measured")
+
+
+def test_a_translator_timeout_reason_skips_and_others_do_not():
+    emitter = (REPO / "agent/guards/claude-hooks/hook_facts.py").read_text(encoding="utf-8")
+    for said in _TRANSLATOR_OUT_OF_TIME:     # the words are the guard's own, not a paraphrase
+        assert said.replace("(TimeoutExpired)", "(%s)") in emitter, said
+    for said in _TRANSLATOR_OUT_OF_TIME:
+        with pytest.raises(pytest.skip.Exception):
+            _skip_if_translator_out_of_time("X4 GUARD: ... " + said + " ...")
+    _skip_if_translator_out_of_time("Shell scope could not be completely evaluated (no PowerShell available)")
+    _skip_if_translator_out_of_time("")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows filesystem-provider physical path preservation")

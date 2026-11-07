@@ -98,6 +98,19 @@ x4_file_name_match() {
   return "$rc"
 }
 
+# A typed delete (tool_name DeleteFile), never the internal write-only batch. Removal semantics
+# come from the tool name only, never from free-form tool_input metadata.
+x4_typed_delete() {
+  [ "$_X4_FILE_BATCH" = 0 ] || return 1
+  if [ "${JQ_OK:-0}" = 1 ]; then
+    printf '%s' "$INPUT" | "$JQ" -e '.tool_name == "DeleteFile"' >/dev/null 2>&1
+  elif [ -n "$PY" ]; then
+    X4_IN="$INPUT" "$PY" -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["X4_IN"]).get("tool_name") == "DeleteFile" else 1)' >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
 x4_file_policy() {
 # === HARD BLOCK — read-only reference data (unpacked base game, never edit) ===
 # X4_REFERENCE defaults to $X4_TOOLKIT/reference, so this covers the default layout too.
@@ -314,7 +327,11 @@ esac
 # Both workspace branches below only allow. Test the configured mod root first
 # so an ordinary mod file need not traverse unrelated toolkit subdirectories.
 # All hard blocks, transcript checks and advisories above still run first.
-x4_under "$FILE_PATH" "${X4_MODS:-}" && return 0
+# 4.1.1 (user ruling): a mods root AT or above the extensions folder must not whitelist a typed
+# delete there -- the extensions block below denies the whole folder and a DLC, and asks for a mod.
+if x4_under "$FILE_PATH" "${X4_MODS:-}"; then
+  x4_under "$FILE_PATH" "$X4_EXTENSIONS" && x4_typed_delete || return 0
+fi
 x4_canon_memo "$X4_TOOLKIT"; _tkc="${_X4_CANON_RESULT%/}"
 x4_canon_memo "$FILE_PATH";  _fpc="$_X4_CANON_RESULT"
 for sub in "${_X4_WORK_SUBS[@]}"; do
@@ -416,13 +433,7 @@ if x4_under "$FILE_PATH" "$X4_EXTENSIONS"; then
   # check. Never take removal semantics from free-form tool_input metadata, and
   # never let the internal write-only batch borrow them.
   local _deployed_delete=0
-  if [ "$_X4_FILE_BATCH" = 0 ]; then
-    if [ "${JQ_OK:-0}" = 1 ]; then
-      printf '%s' "$INPUT" | "$JQ" -e '.tool_name == "DeleteFile"' >/dev/null 2>&1 && _deployed_delete=1
-    elif [ -n "$PY" ]; then
-      X4_IN="$INPUT" "$PY" -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["X4_IN"]).get("tool_name") == "DeleteFile" else 1)' >/dev/null 2>&1 && _deployed_delete=1
-    fi
-  fi
+  x4_typed_delete && _deployed_delete=1
   if [ "$_deployed_delete" = 1 ]; then
     # Only a deployed MOD is a retirement. The whole extensions folder and a DLC stay blocked,
     # judged by the CANONICAL target (x4_under above followed any junction or symlink), so no

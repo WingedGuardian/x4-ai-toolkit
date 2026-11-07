@@ -74,6 +74,10 @@ NOTE_PENDING = ("x4fresh: NOT CHECKED: the session-start check started but has n
 # `skipped N unparseable file(s)` is the effective build's whole-file loss line and carries none of the
 # other words (review 2026-11-01, finding 1): without it a build that lost files read "REBUILT, FRESH".
 WARN_RE = re.compile(r"\bWARNING\b|\bNOT INDEXED\b|\bINCOMPLETE\b|\bERROR\b|\bskipped \d+ unparseable\b")
+#: A job wrapper's own line that explains a NON-ZERO exit: a kill, a refusal, a watchdog, a cap that was hit, or the
+#: exit code it reports. Generic words, no wrapper's codes; `exit 0` and a bare `(cap 25.0)` budget remark do not match.
+WRAPPER_EXIT_RE = re.compile(r"\bKILLED\b|\bkilled\b|\brefused\b|\bREFUSED\b|\bwatchdog\b|\btimed out\b"
+                             r"|\bcap\b[^\n]*\bhit\b|\bexit(?:ed)?(?: with)?(?: code)? [1-9]\d*\b", re.I)
 MAX_LISTED = 5   # per list in a report; the hook output that carries it is bounded
 # A line that only SUMMARISES the losses the store lists by identity. `accepted` compares those identities,
 # so these say nothing new once the sets match; any OTHER warning is outside what the user accepted.
@@ -557,10 +561,30 @@ def _run(name: str, log: Path) -> tuple[int, list[str], list[str]]:
                      "is killed, the build lock frees while the builder may still run\n")
         for line in proc.stdout:
             fh.write(line)
-            if WARN_RE.search(line):
-                (wrappers if line.startswith(own) else warnings).append(line.rstrip())
+            mine = bool(own) and line.startswith(own)
+            # A wrapper's KILL line carries no WARNING word (rb: "KILLED by rb: memory cap 3.0 GB hit (allocation
+            # refused) -> exit 86"), and it is the line that says why the builder stopped (4.1.1).
+            if WARN_RE.search(line) or (mine and WRAPPER_EXIT_RE.search(line)):
+                (wrappers if mine else warnings).append(line.rstrip())
         rc = proc.wait()
     return rc, warnings, wrappers
+
+
+WHY_MAX = 300   # characters of a wrapper line quoted on the FAILED line
+
+
+def _exit_reason(wrapper_lines: list[str], rc: int) -> str | None:
+    """The wrapper line that explains exit `rc`: the LAST one naming `exit <rc>`, else the last explaining line. An
+    earlier "refused" can be an admission the wrapper then waited out; the kill comes last (4.1.1 review)."""
+    explains = [w for w in wrapper_lines if WRAPPER_EXIT_RE.search(w)]
+    names_rc = [w for w in explains if re.search(r"\bexit(?:ed)?(?: with)?(?: code)? {}\b".format(rc), w, re.I)]
+    return (names_rc or explains or [None])[-1]
+
+
+def _explaining_first(wrapper_lines: list[str], rc: int = 0) -> list[str]:
+    """The job wrapper's lines: the one that explains exit `rc` first, then the others in printed order."""
+    why = _exit_reason(wrapper_lines, rc)
+    return ([why] if why else []) + [w for w in wrapper_lines if w is not why]
 
 
 def _deferred(auto: bool) -> str | None:
@@ -747,8 +771,13 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
         if rc not in (0, 3):
             failed = True
             memo[name] = {"reasons": key, "rc": rc, "when": time.strftime("%Y-%m-%d %H:%M")}
-            lines.append(f"{name}: FAILED rc {rc}, now {after.state} (log: {log})")
-            warnings = wrapper_lines + warnings          # a wrapper's refusal or kill may be WHY it failed
+            why = _exit_reason(wrapper_lines, rc)                  # a wrapper's refusal or kill may be WHY it failed
+            wrapper_lines = _explaining_first(wrapper_lines, rc)
+            if why and len(why) > WHY_MAX:
+                why = why[:WHY_MAX - 3] + "..."
+            lines.append(f"{name}: FAILED rc {rc}, now {after.state} (log: {log})"
+                         + (f" -- job wrapper: {why}" if why else ""))
+            warnings = wrapper_lines + warnings
         elif after.state != "FRESH":
             # The builder did its work and the artifact still is not current (typically: the world moved during it).
             # Not "a builder failed", exit 1's documented meaning: this is exit 5, and the note carries it.

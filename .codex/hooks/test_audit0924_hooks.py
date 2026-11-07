@@ -214,6 +214,98 @@ def engine_failure(reason):
     return any(failure in (reason or "") for failure in ENGINE_FAILURES)
 
 
+#: 4.1.1 (CI run 41992260237): what a refusal says when the REAL translator ran out of time --
+#: the raw rc-4 reason, or the save bridge's category. Fail-closed is right; the case then
+#: measured nothing, so it is SKIPPED (counted, named), never passed and never failed.
+#: A nested `powershell -c` that times out is NOT recognisable here: its ask names no cause.
+TRANSLATOR_OUT_OF_TIME = ("PowerShell could not be run (TimeoutExpired)",
+                          "the PowerShell translation budget for one command",
+                          _H.PS_TIMED_OUT, _H.PS_BUDGET_SPENT)
+
+
+#: 4.1.1 review: the timeout skip needs a ceiling, or a runner where translation ALWAYS times out turns every
+#: PowerShell verdict test into a skip and the leg stays green. Counted here, enforced by __main__ (the CI legs run this
+#: file with plain python). X4_MAX_TRANSLATOR_SKIPS sets it (CI: 0 on Windows, 3 on Ubuntu); unset means 3.
+_TRANSLATOR_SKIPS = []
+
+
+def translator_skip_ceiling(count, raw=None):
+    """0 when `count` named translator-timeout skips are within the ceiling, else 1 (and says why)."""
+    raw = os.environ.get("X4_MAX_TRANSLATOR_SKIPS", "3") if raw is None else raw
+    try:
+        cap = int(raw)
+    except ValueError:
+        print("X4_MAX_TRANSLATOR_SKIPS=%r is not a number: the ceiling cannot be applied, which is a FAILURE" % raw)
+        return 1
+    print("translator-timeout skips: %d (ceiling %d)" % (count, cap))
+    if count > cap:
+        print("FAILED: %d PowerShell verdict test(s) skipped because the translator ran out of time, over the ceiling "
+              "of %d: the PowerShell front-end was not measured on this run" % (count, cap))
+        return 1
+    return 0
+
+
+def skip_if_translator_out_of_time(reason):
+    for said in TRANSLATOR_OUT_OF_TIME:
+        if said in (reason or ""):
+            _TRANSLATOR_SKIPS.append(said)
+            raise unittest.SkipTest("the real PowerShell translator ran out of time on this machine ("
+                                    + said + "): the verdict was NOT measured")
+
+
+class TestTheTranslatorSkipHasACeiling(unittest.TestCase):
+    """4.1.1 review: past the ceiling the leg FAILS; an unusable ceiling fails too; within it, it passes."""
+
+    def test_over_the_ceiling_fails_and_within_it_passes(self):
+        self.assertEqual(translator_skip_ceiling(4, "3"), 1)
+        self.assertEqual(translator_skip_ceiling(3, "3"), 0)
+        self.assertEqual(translator_skip_ceiling(1, "0"), 1)
+        self.assertEqual(translator_skip_ceiling(0, "0"), 0)
+
+    def test_an_unusable_ceiling_is_a_failure_not_a_pass(self):
+        self.assertEqual(translator_skip_ceiling(0, ""), 1)
+        self.assertEqual(translator_skip_ceiling(0, "three"), 1)
+
+class TestATranslatorTimeoutReasonIsRecognised(unittest.TestCase):
+    """The words matched above are the words the guard EMITS: the rc-4 reason is produced here by
+    the real ipc() with `subprocess.run` stubbed to time out (nothing is executed)."""
+
+    def _rc4_reason(self, exc):
+        saved = (subprocess.run, _H._pwsh_exe)
+
+        def run(args, **kw):
+            raise exc(args, kw["timeout"]) if exc is subprocess.TimeoutExpired else exc("fixture")
+        subprocess.run, _H._pwsh_exe = run, (lambda: "pwsh")
+        _H._PS_CACHE.clear()
+        try:
+            rc, raw, _f = _H.ipc({"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}}, {})
+        finally:
+            subprocess.run, _H._pwsh_exe = saved
+            _H._PS_CACHE.clear()
+        self.assertEqual(rc, 4)
+        return raw.decode("utf-8")
+
+    def test_the_real_timeout_reason_skips(self):
+        before = len(_TRANSLATOR_SKIPS)
+        try:
+            with self.assertRaises(unittest.SkipTest):
+                skip_if_translator_out_of_time("X4 GUARD: ... " + self._rc4_reason(subprocess.TimeoutExpired))
+            self.assertEqual(_TRANSLATOR_SKIPS[before:], ["PowerShell could not be run (TimeoutExpired)"])
+            for category in (_H.PS_TIMED_OUT, _H.PS_BUDGET_SPENT):
+                with self.assertRaises(unittest.SkipTest):
+                    skip_if_translator_out_of_time("Shell scope could not be completely evaluated ("
+                                                   + category + "); retry")
+            self.assertEqual(len(_TRANSLATOR_SKIPS), before + 3)        # every one counted against the ceiling
+        finally:
+            del _TRANSLATOR_SKIPS[before:]                             # this test's own, never the run's real ones
+
+    def test_TWIN_other_refusals_are_verdicts(self):
+        skip_if_translator_out_of_time("X4 GUARD: ... " + self._rc4_reason(FileNotFoundError))
+        skip_if_translator_out_of_time("Shell scope could not be completely evaluated "
+                                       "(no PowerShell available); use literal targets")
+        skip_if_translator_out_of_time("")
+
+
 @unittest.skipUnless(_H._pwsh_exe(), "no PowerShell here: the front-end cannot be exercised "
                                      "(without one normal dispatch refuses PowerShell commands)")
 class _PSE2E(unittest.TestCase):
@@ -254,6 +346,7 @@ class _PSE2E(unittest.TestCase):
         if not p.stdout.strip():
             return "allow", ""
         h = json.loads(p.stdout)["hookSpecificOutput"]
+        skip_if_translator_out_of_time(h.get("permissionDecisionReason", ""))
         return h.get("permissionDecision", "advise"), h.get("permissionDecisionReason", "")
 
     def assert_scope_refusal(self, command, tool="PowerShell"):
@@ -505,6 +598,7 @@ class TestPSEmptyTranslation(_PSE2E):
         if not p.stdout.strip():
             return "allow", ""
         h = json.loads(p.stdout)["hookSpecificOutput"]
+        skip_if_translator_out_of_time(h.get("permissionDecisionReason", ""))
         return h.get("permissionDecision", "advise"), h.get("permissionDecisionReason", "")
 
     def test_empty_with_unresolved_parts_refuses_with_a_real_reason(self):
@@ -1450,4 +1544,5 @@ class TestSshChainWholeHookTime(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    _run = unittest.main(exit=False)
+    sys.exit((0 if _run.result.wasSuccessful() else 1) or translator_skip_ceiling(len(_TRANSLATOR_SKIPS)))

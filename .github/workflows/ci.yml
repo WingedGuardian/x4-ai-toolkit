@@ -180,6 +180,10 @@ jobs:
       - name: Hook parse-pass unit tests
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: bash
+        # 4.1.1: a PowerShell verdict test the real translator timed out on is SKIPPED (named); past this many the
+        # file exits 1, so a runner where translation always times out cannot pass the leg on skips.
+        env:
+          X4_MAX_TRANSLATOR_SKIPS: ${{ matrix.os == 'windows-latest' && '0' || '3' }}
         run: python .claude/hooks/test_hook_facts.py
 
       # The AUDIT-2026-09-24 hook tests: settings.json matcher coverage for every
@@ -189,6 +193,10 @@ jobs:
       - name: Hook audit tests (matcher coverage, PowerShell front-end E2E)
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: bash
+        # 4.1.1: a PowerShell verdict test the real translator timed out on is SKIPPED (named); past this many the
+        # file exits 1, so a runner where translation always times out cannot pass the leg on skips.
+        env:
+          X4_MAX_TRANSLATOR_SKIPS: ${{ matrix.os == 'windows-latest' && '0' || '3' }}
         run: python .claude/hooks/test_audit0924_hooks.py
 
       - name: Hook E2E probe suite

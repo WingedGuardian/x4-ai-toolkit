@@ -15,6 +15,7 @@ happened four times.
 """
 import os
 import pathlib
+import subprocess as _subprocess
 import sys
 import unittest
 
@@ -44,10 +45,56 @@ DEL_GAME = D + ' -rf "' + GAME + '"'
 DEL_REF = D + ' -rf "' + REF + '"'
 
 
+#: 4.1.1: what the REAL translator says when it ran out of time. The guard refuses (fail-closed,
+#: correct), but a test that asserts a translation VERDICT then measured nothing: CI run
+#: 41992260237 failed a twin on `PowerShell could not be run (TimeoutExpired)` (10 s cap, slow
+#: ubuntu runner). Such a run is SKIPPED, counted and named -- never passed, never failed.
+_TRANSLATOR_OUT_OF_TIME = (H.PS_TIMED_OUT, H.PS_BUDGET_SPENT)
+
+
+def _measured(f):
+    """*f*, unless the REAL PowerShell translator timed out producing it: then SkipTest.
+
+    Only the real one: a test that stubs `H.subprocess` to time out (TestHK1TranslationBudget)
+    is measuring the refusal itself, and must keep failing if it changes."""
+    if (H.subprocess is _subprocess
+            and f.get("untranslated_category") in _TRANSLATOR_OUT_OF_TIME):
+        _TRANSLATOR_SKIPS.append(f["untranslated_category"])
+        raise unittest.SkipTest("the real PowerShell translator ran out of time on this machine ("
+                                + f["untranslated_category"] + "): the verdict was NOT measured")
+    return f
+
+
+#: 4.1.1 review: the timeout skip needs a ceiling, or a runner where translation ALWAYS times out turns every
+#: PowerShell verdict test into a skip and the leg stays green. Counted here, enforced by __main__ (the CI legs run this
+#: file with plain python). X4_MAX_TRANSLATOR_SKIPS sets it (CI: 0 on Windows, 3 on Ubuntu); unset means 3.
+_TRANSLATOR_SKIPS = []
+
+
+def translator_skip_ceiling(count, raw=None):
+    """0 when `count` named translator-timeout skips are within the ceiling, else 1 (and says why)."""
+    raw = os.environ.get("X4_MAX_TRANSLATOR_SKIPS", "3") if raw is None else raw
+    try:
+        cap = int(raw)
+    except ValueError:
+        print("X4_MAX_TRANSLATOR_SKIPS=%r is not a number: the ceiling cannot be applied, which is a FAILURE" % raw)
+        return 1
+    print("translator-timeout skips: %d (ceiling %d)" % (count, cap))
+    if count > cap:
+        print("FAILED: %d PowerShell verdict test(s) skipped because the translator ran out of time, over the ceiling "
+              "of %d: the PowerShell front-end was not measured on this run" % (count, cap))
+        return 1
+    return 0
+
+
+def _facts(payload, roots, **kw):
+    return _measured(H.facts(payload, roots, **kw))
+
+
 def F(command, timeout=0, background=False, roots=None):
     payload = {"tool_input": {"command": command, "timeout": timeout,
                               "run_in_background": background}}
-    return H.facts(payload, ROOTS if roots is None else roots)
+    return _facts(payload, ROOTS if roots is None else roots)
 
 
 # ---------------------------------------------------------------- primitives
@@ -775,7 +822,7 @@ class TestMiscPredicates(unittest.TestCase):
             payload["x4_execution_host"] = host
         else:
             payload["tool_input"]["x4_execution_host"] = host
-        return H.facts(payload, ROOTS)
+        return _facts(payload, ROOTS)
 
     def test_a_codex_shell_long_job_is_not_a_foreground_long_job(self):
         self.assertFalse(self._host("uv run python gates/corpus_sweep.py", "codex")["longjob_foreground"])
@@ -821,7 +868,7 @@ class TestMiscPredicates(unittest.TestCase):
         """Clause: `background is not True` -- a job already in the background needs no note."""
         payload = {"tool_input": {"command": "uv run python gates/corpus_sweep.py",
                                   "run_in_background": True}, "x4_execution_host": "codex"}
-        self.assertFalse(H.facts(payload, ROOTS)["longjob_codex"])
+        self.assertFalse(_facts(payload, ROOTS)["longjob_codex"])
 
     def test_TWIN_the_codex_advisory_needs_the_TOP_LEVEL_host(self):
         self.assertFalse(self._host("uv run python gates/corpus_sweep.py", "codex",
@@ -898,7 +945,7 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
         for cmd in ('tools/agent-harness.py save-lock off', './tools/agent-harness.py save-lock on',
                     r'tools\agent-harness.py save-lock off', r'.\tools\agent-harness.py save-lock on',
                     'pipenv run python tools/agent-harness.py save-lock on'):
-            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
+            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
             self.assertTrue(f["save_lock_decision"], cmd)
 
     def test_TWIN_the_harness_as_a_program_reading_the_save_locks_is_not_a_decision(self):
@@ -1165,7 +1212,7 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
                 self.assertEqual(f["rm_deployed_mod_names"], "", c)
 
     def test_rm_deployed_mod_also_reads_a_powershell_delete(self):
-        f = H.facts({"tool_name": "PowerShell", "tool_input": {
+        f = _facts({"tool_name": "PowerShell", "tool_input": {
             "command": "Remove-Item -Recurse " + DQ + GAME + "/extensions/deployed" + DQ}}, ROOTS)
         self.assertTrue(f["rm_deployed_mod"], f)
 
@@ -1178,7 +1225,7 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
                         ("Bash", "find " + Q + E + "a" + Q + " " + Q + E + "b" + Q + " " + Q + E + "c" + Q
                          + " -name " + Q + "*.bak" + Q + " | xargs " + D + " -f")):
             with self.subTest(tool=tool, c=c):
-                f = H.facts({"tool_name": tool, "tool_input": {"command": c}}, ROOTS)
+                f = _facts({"tool_name": tool, "tool_input": {"command": c}}, ROOTS)
                 self.assertEqual(f["rm_deployed_mod_names"], "a, b, c", c)
 
     def test_a_filtered_find_over_extensions_names_any_matching_mod(self):
@@ -1254,7 +1301,7 @@ class TestBareSystemPythonOnToolkitCode(unittest.TestCase):
 
     def test_the_payload_cwd_is_where_the_shell_starts(self):
         def f(cwd):
-            return H.facts({"tool_input": {"command": "python -m pytest -q"}, "cwd": cwd},
+            return _facts({"tool_input": {"command": "python -m pytest -q"}, "cwd": cwd},
                            ROOTS)["bare_python_on_project_code"]
         self.assertTrue(f(TOOLKIT + "/tools/x4validate"))
         self.assertTrue(f("C:" + BS + "tk" + BS + "tools" + BS + "x4validate" + BS + "tests"))
@@ -4148,7 +4195,7 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
     same ones."""
 
     def P(self, command):
-        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
+        return _facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
 
     def test_remove_item_recurse_reference_is_the_reference_block(self):
         f = self.P("Remove-Item -Recurse " + Q + REF + Q)
@@ -4403,6 +4450,81 @@ class TestHK1TranslationBudget(unittest.TestCase):
         self.assertEqual(self.calls, [H._PS_CALL_CAP_S, H._PS_CALL_CAP_S])
 
 
+class TestARealTranslatorTimeoutIsASkipNotAVerdict(unittest.TestCase):
+    """4.1.1 (CI run 41992260237): a twin failed on `PowerShell could not be run (TimeoutExpired)`.
+    The guard's refusal is right; the TEST measured nothing. Patched at `subprocess.run` (the
+    REAL module stays in place), so this is the shape a slow runner produces. Nothing runs."""
+
+    def _with_run(self, run, fn):
+        import subprocess as sp
+        saved = (sp.run, H._pwsh_exe)
+        sp.run, H._pwsh_exe = run, (lambda: "pwsh")
+        H._PS_CACHE.clear()
+        try:
+            return fn()
+        finally:
+            sp.run, H._pwsh_exe = saved
+            H._PS_CACHE.clear()
+
+    def test_a_real_timeout_skips_with_its_reason(self):
+        import subprocess as sp
+
+        def timed_out(args, **kw):
+            raise sp.TimeoutExpired(args, kw["timeout"])
+        for call in (lambda: _facts({"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}},
+                                    ROOTS),
+                     lambda: F('pwsh -c "Get-Date"')):
+            before = len(_TRANSLATOR_SKIPS)
+            with self.assertRaises(unittest.SkipTest) as cm:
+                self._with_run(timed_out, call)
+            self.assertIn(H.PS_TIMED_OUT, str(cm.exception))
+            self.assertEqual(len(_TRANSLATOR_SKIPS), before + 1)     # counted against the ceiling
+            _TRANSLATOR_SKIPS.pop()                                   # this one was the test's own
+
+    def test_TWIN_any_other_translation_failure_is_still_a_verdict(self):
+        import subprocess as sp
+
+        def cannot_start(args, **kw):
+            raise FileNotFoundError("fixture: no such PowerShell")
+        f = self._with_run(cannot_start, lambda: _facts(
+            {"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}}, ROOTS))
+        self.assertTrue(f.get("powershell_error"))                 # refused, and NOT skipped
+        self.assertEqual(f["untranslated_category"], "PowerShell could not be started")
+        self.assertIsNot(H.subprocess.run, cannot_start)           # the stub was undone
+
+    def test_TWIN_a_stubbed_timeout_is_measured_not_skipped(self):
+        """TestHK1TranslationBudget replaces H.subprocess: its timeouts are the subject."""
+        import subprocess as sp
+        import types
+
+        def timed_out(args, **kw):
+            raise sp.TimeoutExpired(args, kw["timeout"])
+        saved = (H.subprocess, H._pwsh_exe)
+        H.subprocess = types.SimpleNamespace(run=timed_out, TimeoutExpired=sp.TimeoutExpired,
+                                             SubprocessError=sp.SubprocessError)
+        H._pwsh_exe = lambda: "pwsh"
+        H._PS_CACHE.clear()
+        try:
+            f = F('pwsh -c "Get-Date"')
+        finally:
+            H.subprocess, H._pwsh_exe = saved
+            H._PS_CACHE.clear()
+        self.assertTrue(f["carrier_untranslated"])
+
+
+class TestTheTranslatorSkipHasACeiling(unittest.TestCase):
+    """4.1.1 review: past the ceiling the leg FAILS; an unusable ceiling fails too; within it, it passes."""
+
+    def test_over_the_ceiling_fails_and_within_it_passes(self):
+        self.assertEqual(translator_skip_ceiling(4, "3"), 1)
+        self.assertEqual(translator_skip_ceiling(3, "3"), 0)
+        self.assertEqual(translator_skip_ceiling(1, "0"), 1)
+        self.assertEqual(translator_skip_ceiling(0, "0"), 0)
+
+    def test_an_unusable_ceiling_is_a_failure_not_a_pass(self):
+        self.assertEqual(translator_skip_ceiling(0, ""), 1)
+        self.assertEqual(translator_skip_ceiling(0, "three"), 1)
+
 class TestPowerShellStartsWithoutNetworkCalls(unittest.TestCase):
     """4.0.1: the translator's PowerShell runs with telemetry and the update check OFF (each a
     network call at startup, paid once per parsed command), and keeps the rest of the env."""
@@ -4462,7 +4584,7 @@ class TestHK1FailsClosedWithoutPowerShell(unittest.TestCase):
         os.environ["X4_PWSH"] = "x4-no-such-powershell-binary"
         H._PS_CACHE.clear()
         try:
-            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}},
+            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}},
                         ROOTS)
             self.assertIn("no PowerShell", f.get("powershell_error", ""))
             self.assertTrue(F("powershell -c Get-Date")["carrier_untranslated"])
@@ -4479,7 +4601,7 @@ def FC(command, cwd, **kw):
     payload = {"tool_input": {"command": command}}
     if cwd is not _NO_CWD:
         payload["cwd"] = cwd
-    return H.facts(payload, ROOTS)
+    return _facts(payload, ROOTS)
 
 
 _NO_CWD = object()
@@ -4519,7 +4641,7 @@ class TestARootVariableCdIsTheRoot(unittest.TestCase):
         roots = dict(ROOTS, reference="")
         payload = {"tool_input": {"command": 'cd "$X4_REFERENCE" && ' + D + " -rf libraries"},
                    "cwd": _ELSEWHERE}
-        self.assertFalse(H.facts(payload, roots)["rm_targets_reference"])
+        self.assertFalse(_facts(payload, roots)["rm_targets_reference"])
 
     def test_what_follows_the_variable_is_kept(self):
         self.assertTrue(FC('cd "$X4_REFERENCE/$SUB" && ' + D + ' -rf x', _ELSEWHERE)["rm_targets_reference"])
@@ -4530,9 +4652,9 @@ class TestARootVariableCdIsTheRoot(unittest.TestCase):
         read as staying in the session dir (cwd TOOLKIT holds reference/ here)."""
         payload = {"tool_input": {"command": 'cd "$X4_GAME" && ' + D + " -rf reference/libraries"},
                    "cwd": TOOLKIT}
-        self.assertFalse(H.facts(payload, dict(ROOTS, game=""))["rm_targets_reference"])
+        self.assertFalse(_facts(payload, dict(ROOTS, game=""))["rm_targets_reference"])
         payload["tool_input"]["command"] = D + " -rf reference/libraries"            # control
-        self.assertTrue(H.facts(payload, dict(ROOTS, game=""))["rm_targets_reference"])
+        self.assertTrue(_facts(payload, dict(ROOTS, game=""))["rm_targets_reference"])
 
     def test_TWIN_an_assignment_in_the_command_wins_over_the_root(self):
         cmd = 'X4_REFERENCE=/c/tmp/x; cd "$X4_REFERENCE" && ' + D + " -rf libraries"
@@ -4891,17 +5013,17 @@ class TestG2ARootVariableOperandIsItsRoot(unittest.TestCase):
                     'echo a > "$X4_CONFIG"',
                     D + ' "$X4_TOOLKIT/x4-paths.env"'):
             with self.subTest(cmd=cmd):
-                f = H.facts({"tool_input": {"command": cmd}, "cwd": _ELSEWHERE}, roots)
+                f = _facts({"tool_input": {"command": cmd}, "cwd": _ELSEWHERE}, roots)
                 self.assertTrue(f["writes_reference"] or f["rm_targets_reference"], cmd)
         # TWIN: the config ALONE (the old pass) cannot resolve the toolkit variable.
-        f = H.facts({"tool_input": {"command": 'echo a > "$X4_TOOLKIT/x4-paths.env"'}},
+        f = _facts({"tool_input": {"command": 'echo a > "$X4_TOOLKIT/x4-paths.env"'}},
                     {"reference": cfg})
         self.assertFalse(f["writes_reference"])
 
     # --- one falsification twin per clause ---
     def test_TWIN_an_unconfigured_root_is_not_substituted(self):
         """Clause: the root is configured. Unset, the token stays unresolved as before."""
-        f = H.facts({"tool_input": {"command": 'echo x > "$X4_REFERENCE/libraries/w.xml"'}},
+        f = _facts({"tool_input": {"command": 'echo x > "$X4_REFERENCE/libraries/w.xml"'}},
                     dict(ROOTS, reference=""))
         self.assertFalse(f["writes_reference"])
 
@@ -4987,7 +5109,7 @@ class TestG2WindowsPathAliases(unittest.TestCase):
             self.assertEqual(H.norm(got), H.norm(longdir + "/new/f.xml"))
             roots = dict(ROOTS, reference=longdir.replace(BS, "/"))
             payload = {"tool_input": {"command": 'echo x > "' + sdir.replace(BS, "/") + '/w.xml"'}}
-            self.assertTrue(H.facts(payload, roots)["writes_reference"])
+            self.assertTrue(_facts(payload, roots)["writes_reference"])
             # TWIN: a path with no `~<digit>` is returned untouched (no syscall)
             self.assertEqual(H.long_name(longdir + "/x"), longdir + "/x")
 
@@ -5617,7 +5739,7 @@ class TestInlineInterpreterWriteOntoATranscript(unittest.TestCase):
 
 def _evidence(command, cwd=TOOLKIT, roots=None):
     ev = []
-    H.facts({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd},
+    _facts({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd},
             ROOTS if roots is None else roots, evidence=ev)
     return ev
 
@@ -5723,7 +5845,7 @@ class TestP1AnAssignmentPrefixIsOneWordWhateverSpanItHolds(unittest.TestCase):
 
 
 def _blockers(command, tool="Bash"):
-    return H.facts({"tool_name": tool, "tool_input": {"command": command}, "cwd": TOOLKIT},
+    return _facts({"tool_name": tool, "tool_input": {"command": command}, "cwd": TOOLKIT},
                    ROOTS).get("save_lift_blockers") or []
 
 
@@ -6582,7 +6704,7 @@ class TestF10PowerShellUnreadableCommandName(unittest.TestCase):
     translated with the name as a literal, so no rule knew a delete was possible."""
 
     def P(self, command):
-        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
+        return _facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
 
     def test_each_unreadable_name_shape_reaches_the_plain_commands_rule(self):
         for c in ("& $R Remove-Item " + Q + REF + Q, ". $R Remove-Item " + Q + REF + Q,
@@ -6818,7 +6940,7 @@ class TestF331PowerShellLinkCreation(unittest.TestCase):
     CreateSymbolicLink as a truncation of it -- so no rule saw the target."""
 
     def P(self, command):
-        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command},
+        return _facts({"tool_name": "PowerShell", "tool_input": {"command": command},
                         "cwd": _ELSEWHERE}, ROOTS)
 
     def _shapes(self, t):
@@ -7392,6 +7514,48 @@ class TestProfileModlistWritePolicy(unittest.TestCase):
                    + '; echo fixture > ' + Q + str(self.profile / 'content.xml') + Q)
         self.assertTrue(F(command, roots=self.roots)['writes_profile_other'])
 
+    def test_tee_onto_the_modlist_is_the_same_write_as_a_redirect(self):
+        """4.1.1: `tee` was disqualified by its (absent) source operand, and a pipeline into it by
+        having two segments, so both asked where `echo x > <modlist>` did not."""
+        m = Q + str(self.profile / 'content.xml') + Q
+        for command in ('tee ' + m, 'echo x | tee ' + m, 'printf x | cat | tee -a ' + m + ' > /dev/null',
+                        ': | tee ' + m):
+            with self.subTest(command=command):
+                facts = F(command, roots=self.roots)
+                self.assertTrue(facts['writes_profile'], command)
+                self.assertFalse(facts['writes_profile_other'], command)
+
+    def test_TWIN_tee_onto_anything_else_or_from_a_writer_keeps_its_confirmation(self):
+        m = Q + str(self.profile / 'content.xml') + Q
+        c = Q + str(self.profile / 'config.xml') + Q
+        for command in ('echo x | tee ' + c, 'echo x | tee ' + m + ' ' + c,
+                        'echo x | tee ' + m + ' | tee ' + c, 'echo x; tee ' + m,
+                        'mkdir -p ' + m + ' | tee ' + m, 'echo x && echo y | tee ' + m,
+                        'echo $(date) | tee ' + m):
+            with self.subTest(command=command):
+                self.assertTrue(F(command, roots=self.roots)['writes_profile_other'], command)
+
+    def test_TWIN_a_wrapped_tee_is_not_the_exempt_write(self):
+        """4.1.1 review: verb() sees through wrappers, so `xargs tee <modlist>` counted as tee -- and xargs APPENDS
+        its stdin to tee's arguments: `echo <save> | xargs tee <modlist>` truncates the save. Only a stage whose
+        literal first word is `tee` is the mod-list write; any wrapper or prefix keeps the confirmation."""
+        m = Q + str(self.profile / 'content.xml') + Q
+        s = Q + str(self.profile / 'save' / 'a.xml.gz') + Q
+        for command in ('echo ' + s + ' | xargs tee ' + m, 'xargs tee ' + m + ' < ' + s,
+                        'echo x | sudo tee ' + m, 'echo x | env X=1 tee ' + m, 'echo x | timeout 5 tee ' + m,
+                        'echo x | nice tee ' + m, 'echo x | command tee ' + m, 'sudo tee ' + m,
+                        'X=1 tee ' + m, 'echo x | parallel tee ' + m, 'echo x | sudo echo y | tee ' + m):
+            with self.subTest(command=command):
+                self.assertTrue(F(command, roots=self.roots)['writes_profile_other'], command)
+
+    def test_a_tee_that_only_READS_a_save_is_still_the_exempt_write(self):
+        """`cat <save> | tee <modlist>` reads the save and writes only the mod list."""
+        m = Q + str(self.profile / 'content.xml') + Q
+        s = Q + str(self.profile / 'save' / 'a.xml.gz') + Q
+        facts = F('cat ' + s + ' | tee ' + m, roots=self.roots)
+        self.assertFalse(facts['writes_profile_other'])
+        self.assertFalse(facts.get('rm_saves'))
+
 
 class TestGameArchiveShellWrites(unittest.TestCase):
     """A shell command that changes a base-game or official DLC archive gets the deny the file
@@ -7725,7 +7889,7 @@ class TestGameArchiveShellWrites(unittest.TestCase):
     def test_powershell_forms_reach_the_rule(self):
         for cmd in ("Remove-Item '%s'", "Set-Content '%s' x", "Add-Content '%s' x", "Copy-Item a '%s'",
                     "Move-Item '%s' /c/o/x", "'x' | Out-File '%s'", "[IO.File]::Delete('%s')"):
-            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd % self.ARC}}, ROOTS)
+            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd % self.ARC}}, ROOTS)
             if f.get("powershell_error") or f.get("carrier_untranslated"):
                 self.skipTest("no PowerShell parser on this machine")
             self.assertTrue(f["writes_game_archive"], cmd)
@@ -7740,7 +7904,7 @@ class TestGameArchiveShellWrites(unittest.TestCase):
     def test_TWIN_powershell_on_a_mod_or_reading_does_not_fire(self):
         for cmd, path in (("Remove-Item '%s'", self.MOD + "/ext_01.cat"), ("Copy-Item a '%s'", self.MOD + "/ext_01.cat"),
                           ("Get-FileHash '%s'", self.ARC), ("Copy-Item '%s' /c/o/x", self.ARC)):
-            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd % path}}, ROOTS)
+            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd % path}}, ROOTS)
             if f.get("powershell_error") or f.get("carrier_untranslated"):
                 self.skipTest("no PowerShell parser on this machine")
             self.assertFalse(f["writes_game_archive"], cmd)
@@ -8209,7 +8373,7 @@ class TestGameArchiveShellWrites(unittest.TestCase):
                           ("Move-Item '%s' /c/o/x" % (GAME + "/01.d`at"), True),
                           ("Remove-Item -LiteralPath '%s'" % (GAME + "/01.d`at"), False),
                           ("Remove-Item '%s'" % (GAME + "/notes`.txt"), False)):
-            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
+            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
             if f.get("powershell_error") or f.get("carrier_untranslated"):
                 self.skipTest("no PowerShell parser on this machine")
             self.assertEqual(f["writes_game_archive"], want, cmd)
@@ -8308,7 +8472,7 @@ class TestGameArchiveShellWrites(unittest.TestCase):
 
     # --- round 4, 3 and 4: PowerShell backticks through a pipeline, and before a wildcard
     def _ps(self, cmd):
-        f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
+        f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
         if f.get("powershell_error") or f.get("carrier_untranslated"):
             self.skipTest("no PowerShell parser on this machine")
         return f
@@ -8752,4 +8916,5 @@ class TestRound6FindExecAndCarriers(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    _run = unittest.main(verbosity=2, exit=False)
+    sys.exit((0 if _run.result.wasSuccessful() else 1) or translator_skip_ceiling(len(_TRANSLATOR_SKIPS)))

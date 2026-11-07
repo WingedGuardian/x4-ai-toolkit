@@ -44,6 +44,10 @@ INSTALL_SH = ROOT / "install.sh"
 INSTALL_PS1 = ROOT / "install.ps1"
 SENTINEL = "SENTINEL_DO_NOT_CLOBBER=1"
 
+#: 4.1.1: each test is a real install (~28 MiB); keep a tree only when its test fails, so
+#: the module's disk peak is one test, not all of them (conftest.drop_tmp_path_on_pass).
+pytestmark = pytest.mark.usefixtures("drop_tmp_path_on_pass")
+
 
 def _bash() -> str | None:
     """Git Bash via the repo own resolver, never a bare `bash`.

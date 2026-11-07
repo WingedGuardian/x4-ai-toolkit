@@ -290,3 +290,62 @@ def test_delete_with_an_unresolvable_extensions_root_is_not_a_retirement_ask(san
     assert r.returncode == 0, r.stderr
     v = json.loads(r.stdout)['hookSpecificOutput']
     assert v['permissionDecision'] == 'deny', v
+
+# 4.1.1 (user ruling): with X4_MODS pointed AT the extensions folder (the single-location layout
+# spelled out), the mod-root whitelist returned before the deployed-delete block, so a typed
+# delete of the whole extensions folder or of a DLC was not denied. Both deny; a mod keeps its ask.
+@pytest.mark.parametrize('leaf', ['', 'ego_dlc_boron', 'EGO_DLC_Boron', 'ego_dlc_boron/libraries', 'ego_dlc_boron/content.xml'])
+def test_mods_root_at_extensions_still_denies_extensions_and_dlc_deletes(sandbox, leaf):
+    tmp, tk, env = sandbox
+    ext = _installed(tmp / 'X4 Foundations/extensions')
+    env = dict(env, X4_MODS=str(ext))
+    target = str(ext) + ('/' + leaf if leaf else '')
+    assert _delete(env, target)['decision'] == 'deny', target
+
+@pytest.mark.parametrize('leaf', ['probe', 'probe/libraries/jobs.xml', 'probe/ego_dlc_boron'])
+def test_TWIN_mods_root_at_extensions_keeps_the_mod_delete_ask(sandbox, leaf):
+    tmp, tk, env = sandbox
+    ext = _installed(tmp / 'X4 Foundations/extensions')
+    env = dict(env, X4_MODS=str(ext))
+    assert _delete(env, ext / leaf)['decision'] == 'ask', leaf
+
+def test_TWIN_mods_root_at_extensions_keeps_ordinary_writes_allowed(sandbox):
+    """The whitelist still holds for an edit: only a typed delete of the root or a DLC leaves it."""
+    tmp, tk, env = sandbox
+    ext = _installed(tmp / 'X4 Foundations/extensions')
+    env = dict(env, X4_MODS=str(ext))
+    rc, v, err = check(env, '--kind', 'write', '--path', str(ext / 'probe/libraries/jobs.xml'))
+    assert rc == 0 and (not v['inert']) and v['decision'] == 'allow', (v, err)
+
+def _file_guard_alone(env, tk, path):
+    """protect-files.sh by itself, as the file-tool channel runs it (no shell guard to mask it)."""
+    spec = __import__('importlib.util', fromlist=['util']).spec_from_file_location('retirement_guard_alone', REPO / '.claude/hooks/x4guard.py')
+    guard = __import__('importlib.util', fromlist=['util']).module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    bash, reason = guard.resolve_bash()
+    assert bash, reason
+    payload = {'tool_name': 'DeleteFile', 'tool_input': {'file_path': str(path)}}
+    r = subprocess.run([bash, str(REPO / '.claude/hooks/protect-files.sh'), '--harness-policy-backend'], input=json.dumps(payload).encode(), capture_output=True, env=env, cwd=tk, timeout=120)
+    assert r.returncode == 0, r.stderr
+    out = r.stdout.decode().strip()
+    return json.loads(out)['hookSpecificOutput'].get('permissionDecision', 'advise') if out else 'allow'
+
+@pytest.mark.parametrize('leaf,expected', [('', 'deny'), ('ego_dlc_boron', 'deny'), ('ego_dlc_boron/content.xml', 'deny'), ('probe', 'ask'), ('probe/libraries/jobs.xml', 'ask')])
+def test_mods_root_at_extensions_file_guard_alone(sandbox, leaf, expected):
+    tmp, tk, env = sandbox
+    ext = _installed(tmp / 'X4 Foundations/extensions')
+    env = dict(env, X4_MODS=str(ext))
+    target = str(ext) + ('/' + leaf if leaf else '')
+    assert _file_guard_alone(env, tk, target) == expected, target
+
+@pytest.mark.parametrize('leaf,expected', [('', 'deny'), ('ego_dlc_boron', 'deny'), ('probe', 'ask')])
+def test_mods_root_at_extensions_neutral_delete(sandbox, leaf, expected):
+    tmp, tk, env = sandbox
+    ext = _installed(tmp / 'X4 Foundations/extensions')
+    env = dict(env, X4_MODS=str(ext))
+    target = str(ext) + ('/' + leaf if leaf else '')
+    action = dict(api_version=1, host='codex', tool='delete', surface='files', cwd=str(tk), paths=[target], operations=['delete'])
+    r = subprocess.run([sys.executable, str(REPO / 'tools/agent-harness.py'), 'check'], input=json.dumps(action).encode(), capture_output=True, env=env, cwd=tk, timeout=120)
+    assert r.returncode == 0, r.stderr
+    v = json.loads(r.stdout)
+    assert v['result']['evaluation'] == 'evaluated' and v['result']['decision'] == expected, (target, v)

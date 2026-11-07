@@ -980,6 +980,64 @@ def test_a_failed_build_shows_the_wrappers_lines_because_they_may_be_why(sd, mon
     assert "rb: ERROR: stopped at the memory cap" in capsys.readouterr().out
 
 
+def _killing_wrapper(tmp_path, *said):
+    """A REAL wrapper that prints `said` (its own lines, in order) and exits 86, as rb does on a kill."""
+    wrapper = tmp_path / "throttle.py"
+    wrapper.write_text("import subprocess, sys\n"
+                       "subprocess.run(sys.argv[2:])\n"
+                       + "".join(f"print({line!r}, flush=True)\n" for line in said)
+                       + "sys.exit(86)\n", encoding="utf-8")
+    return wrapper
+
+
+KILL = "throttle: KILLED by throttle: memory cap 3.0 GB hit (allocation refused) -> exit 86"
+
+
+def test_a_failed_build_names_the_wrappers_kill_reason_first(sd, monkeypatch, capsys, tmp_path):
+    """4.1.1: the FAILED line showed an unrelated disk remark while the kill line, which carries no WARNING or ERROR
+    word, was not collected at all. The line that explains the exit comes first, whatever order it was printed in."""
+    wrapper = _killing_wrapper(tmp_path, "throttle: WARNING: disk:C whole-drive decline exceeds estimate", KILL,
+                               "throttle: measured: cpu peak 4% (cap 25.0)")
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    _fake_builder(monkeypatch, _world(monkeypatch, before, before), "pass")
+    monkeypatch.setenv("X4_JOB_WRAPPER", json.dumps([sys.executable, str(wrapper), "--"]))
+    assert fc.rebuild(("effective",)) == 1
+    out = capsys.readouterr().out
+    failed = next(ln for ln in out.splitlines() if "effective: FAILED rc 86" in ln)
+    assert KILL in failed, out
+    shown = [ln.strip() for ln in out.splitlines() if ln.startswith("    ")]
+    assert shown[0] == KILL, out
+    assert "throttle: WARNING: disk:C whole-drive decline exceeds estimate" in shown, out
+
+
+def test_TWIN_a_successful_build_does_not_report_the_wrappers_exit_remarks(sd, monkeypatch, capsys, tmp_path):
+    """A clean exit's `child exit 0` or `(cap 25.0)` explains nothing, and is not counted as a wrapper line."""
+    wrapper = tmp_path / "throttle.py"
+    wrapper.write_text("import subprocess, sys\n"
+                       "r = subprocess.run(sys.argv[2:]).returncode\n"
+                       "print('throttle: measured: cpu peak 4% (cap 25.0)', flush=True)\n"
+                       "print('throttle: child exit 0', flush=True)\n"
+                       "sys.exit(r)\n", encoding="utf-8")
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    _fake_builder(monkeypatch, _world(monkeypatch, before, dict(before, effective=FRESH("effective"))), "pass")
+    monkeypatch.setenv("X4_JOB_WRAPPER", json.dumps([sys.executable, str(wrapper), "--"]))
+    assert fc.rebuild(("effective",)) == 0
+    out = capsys.readouterr().out
+    assert "effective: REBUILT, FRESH" in out and "from the job wrapper" not in out, out
+
+
+def test_TWIN_a_failure_with_no_explaining_line_keeps_the_printed_order(sd, monkeypatch, capsys, tmp_path):
+    wrapper = _killing_wrapper(tmp_path, "throttle: WARNING: first", "throttle: ERROR: second")
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    _fake_builder(monkeypatch, _world(monkeypatch, before, before), "pass")
+    monkeypatch.setenv("X4_JOB_WRAPPER", json.dumps([sys.executable, str(wrapper), "--"]))
+    assert fc.rebuild(("effective",)) == 1
+    out = capsys.readouterr().out
+    shown = [ln.strip() for ln in out.splitlines() if ln.startswith("    ")]
+    assert shown[:2] == ["throttle: WARNING: first", "throttle: ERROR: second"], out
+    assert "job wrapper:" not in next(ln for ln in out.splitlines() if "FAILED rc 86" in ln), out
+
+
 def test_a_loss_list_accepted_before_truncated_keys_existed_explains_the_mismatch(sd, monkeypatch):
     """An old accept holds the 8 overlays and cannot hold the property subtrees, listed by name only since 4.1.0."""
     sd.mkdir(parents=True, exist_ok=True)
@@ -1043,3 +1101,39 @@ def test_another_databases_folder_does_not_count(tmp_path, monkeypatch):
     monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
     monkeypatch.setattr(fc, "_basex_unbuildable", lambda: "java is not on PATH.")
     assert fc._status_basex("x4raw").state == fc.NOT_BUILT
+
+
+def _failed_line(sd, monkeypatch, capsys, tmp_path, *said):
+    wrapper = _killing_wrapper(tmp_path, *said)
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    _fake_builder(monkeypatch, _world(monkeypatch, before, before), "pass")
+    monkeypatch.setenv("X4_JOB_WRAPPER", json.dumps([sys.executable, str(wrapper), "--"]))
+    assert fc.rebuild(("effective",)) == 1
+    out = capsys.readouterr().out
+    return next(ln for ln in out.splitlines() if "effective: FAILED rc 86" in ln), out
+
+
+def test_an_earlier_admission_refusal_that_was_waited_out_is_not_blamed(sd, monkeypatch, capsys, tmp_path):
+    """4.1.1 review: `refused` at admission, then a wait, then the real kill -> the kill (it names this rc) is the why."""
+    early = "throttle: admission refused: cpu busy, waiting 30s"
+    failed, _out = _failed_line(sd, monkeypatch, capsys, tmp_path, early, KILL)
+    assert failed.endswith("job wrapper: " + KILL), failed
+
+
+def test_the_last_explaining_line_wins_when_none_names_the_exit_code(sd, monkeypatch, capsys, tmp_path):
+    failed, _out = _failed_line(sd, monkeypatch, capsys, tmp_path,
+                                "throttle: admission refused once", "throttle: watchdog killed the child")
+    assert failed.endswith("job wrapper: throttle: watchdog killed the child"), failed
+
+
+def test_TWIN_a_line_naming_another_exit_code_loses_to_one_naming_this_one(sd, monkeypatch, capsys, tmp_path):
+    other = "throttle: KILLED an earlier child -> exit 3"
+    failed, _out = _failed_line(sd, monkeypatch, capsys, tmp_path, KILL, other)
+    assert failed.endswith("job wrapper: " + KILL), failed
+
+
+def test_the_quoted_wrapper_line_is_capped(sd, monkeypatch, capsys, tmp_path):
+    long = "throttle: KILLED " + "x" * 2000 + " -> exit 86"
+    failed, _out = _failed_line(sd, monkeypatch, capsys, tmp_path, long)
+    quoted = failed.split("job wrapper: ", 1)[1]
+    assert len(quoted) <= 300 and quoted.startswith("throttle: KILLED"), len(quoted)
