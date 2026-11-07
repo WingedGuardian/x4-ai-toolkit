@@ -145,6 +145,15 @@ def _db(basex_dir: Path, db: str) -> str | None:
     path = _dbpath(basex_dir) / db
     if path.is_dir():
         return None
+    # Build-then-swap (dbswap.py): between its two renames the live name is briefly absent, and a killed swap can
+    # leave it absent. Calling that "never built" sends the reader to a full rebuild; the journal or build lock
+    # says which it is.
+    busy = [n for n in (f"swap-{db}.json", f"build-{db}.lock") if (basex_dir / n).exists()]
+    if busy:
+        return (f"the '{db}' database is absent because a swap is in progress or was interrupted "
+                f"({', '.join(busy)} present).\n"
+                f"    Wait for a running build, or finish an interrupted swap:\n"
+                f"    cd tools/x4validate && uv run python ../basex/dbswap.py recover --db {db}")
     script = "build-corpus.sh" if db == "x4raw" else "build-effective.sh"
     return (f"the '{db}' database has not been built (nothing at {path}).\n"
             f"    Run:  bash {script}\n"

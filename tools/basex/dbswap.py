@@ -15,6 +15,7 @@ THE FILES (all beside the jar, in the BaseX home):
     coverage-<db>__next.json    the build's report on <db>__next, stamped with the pre-build fingerprint
     coverage-<db>__old.json     the previous report, parked while <db> is renamed to <db>__old
     swap-<db>.json              the journal: a swap is in progress (phase), so a crash is recovered, never guessed
+    build-<db>.lock             the build lock: ONE builder or dbswap call per database at a time (below)
 At every moment coverage-<db>.json either describes the database named <db> or is absent. It is parked BEFORE the
 live database is renamed and written AFTER the next one takes its name, so an absent report (UNKNOWN: ask.py
 certifies no negative) covers the gap and never a report about the other generation.
@@ -27,16 +28,27 @@ THE BASEX FACTS this rests on (MEASURED on BaseX 12.4, private DBPATH; see BLIND
   * ALTER/DROP of an absent database: ALTER rc 1 "not found"; DROP rc 0 (so DROP's rc proves nothing: existence
     is re-checked after it).
 
+THE LOCK. Two builders of one database would race: a second `prepare` -> `recover` could undo the first's swap
+mid-flight, a rollback could race a commit (both pass the target-absent check, and BaseX's ALTER then REPLACES one
+generation with the other), `prepare` could drop the first's `<db>__next` between CREATE and coverage, and both
+share `pending-fingerprint-<db>.json`. So `build-<db>.lock` is created with O_EXCL and names its owner's pid and
+creation time. A builder takes it before `prepare` (`dbswap.py lock --owner <its pid>`) and releases it after the
+swap; every `prepare`/`swap`/`recover` call checks it, and a bare CLI call takes it for itself. A lock whose owner
+is not running is STALE (a killed build): it is taken over, and the takeover is reported. "Not running" is decided
+by the process AND its start time, so a reused pid does not keep a dead build's lock alive.
+
 DISK. The swap holds two generations at once. `prepare()` refuses a build that would leave less than the floor
 free (system drive: min(pagefile, 50 GiB); other drives: min(5%, 50 GiB)), with the numbers in the message. There
 is deliberately NO drop-first fallback: that fallback is the defect this module exists to remove, and a silent one
 would bring it back exactly when the disk is short. Free space or move DBPATH, then rebuild.
 
 CLI (run from tools/x4validate with `uv run python ../basex/dbswap.py ...`):
-    prepare --db x4raw   recover, check disk, drop a leftover receipted <db>__next     (rc 0 ok, 2 refused)
+    lock    --db x4raw --owner PID   take the build lock for a builder process      (rc 0, 7 held by a live build)
+    unlock  --db x4raw --owner PID   release it, only if PID holds it
+    prepare --db x4raw   recover, check disk, drop a leftover receipted <db>__next     (rc 0 ok, 2 refused, 7 busy)
     swap    --db x4raw   verify <db>__next and swap it in                             (rc 0, 2 verify, 7 locked)
     recover --db x4raw   finish or roll back an interrupted swap                       (rc 0, 7 locked)
-    status  --db x4raw   read-only: describe leftovers and interruptions
+    status  --db x4raw   read-only: describe leftovers, interruptions and a running build
 """
 from __future__ import annotations
 
@@ -47,6 +59,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -56,6 +69,10 @@ NEXT, OLD = "__next", "__old"
 GIB = 2 ** 30
 #: Staging/serialized-tree working set beside the new generation; preflight's measured figure.
 STAGING_BYTES = 3 * GIB
+#: A FIRST build has no previous generation to measure, so its size is ESTIMATED: tools/basex/.gitignore records
+#: basex/data at 2.8 GB for a built corpus (both databases; README: 942 MB x4raw + 949 MB x4eff, 2026-08-24).
+#: One database is budgeted at that whole figure, rounded up, so the estimate errs towards refusing.
+FIRST_BUILD_BYTES = 3 * GIB
 #: rc for a refusal that is retryable as is (a reader holds a database): distinct from 2 (fix something first).
 RC_LOCKED = 7
 _LOCKED_RE = re.compile(r"opened by another process|is being updated|locked", re.I)
@@ -83,6 +100,7 @@ class Files:
         self.cov_next = self.home / f"coverage-{self.next}.json"
         self.cov_old = self.home / f"coverage-{self.old}.json"
         self.journal = self.home / f"swap-{db}.json"
+        self.lock = self.home / f"build-{db}.lock"
         self.pending = self.home / f"pending-fingerprint-{db}.json"
 
     def receipt(self, name: str) -> Path:
@@ -111,7 +129,7 @@ def _phase(f: Files) -> str | None:
 
 
 def _set_phase(f: Files, phase: str) -> None:
-    _write_json(f.journal, {"db": f.db, "phase": phase, "pid": os.getpid()})
+    _write_json(f.journal, {"db": f.db, "phase": phase, "pid": os.getpid(), "at": time.time()})
 
 
 def _receipt_value(path: Path) -> dict:
@@ -141,6 +159,123 @@ def _locked(name: str, msg: str, what: str, retry: str) -> SwapRefused:
         f"{what}: BaseX refused ({msg.strip() or 'no message'}). Another process holds '{name}' open -- an ask.py or "
         f"coverage query, a BaseX GUI or server. Nothing was swapped; the previous database and its coverage are in "
         f"place. Retry once that reader finishes: {retry}"))
+
+
+# ---------------------------------------------------------------- the build lock
+
+def _process_started(pid: int) -> float | None:
+    """The process's start time (epoch seconds) if it is running, `0.0` if it is running but its start time cannot
+    be read, None if it is not running. Never signals the process (os.kill on Windows TERMINATES it)."""
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        h = k32.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            # 5 = access denied: the process EXISTS (another user's); anything else (87) = no such process
+            return 0.0 if ctypes.get_last_error() == 5 else None
+        try:
+            code = wintypes.DWORD()
+            if not k32.GetExitCodeProcess(h, ctypes.byref(code)) or code.value != 259:   # STILL_ACTIVE
+                return None
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not k32.GetProcessTimes(h, *[ctypes.byref(t) for t in times]):
+                return 0.0
+            ticks = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            return ticks / 1e7 - 11644473600.0              # FILETIME (1601, 100 ns) -> Unix epoch
+        finally:
+            k32.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        return 0.0
+    try:   # Linux: start time in clock ticks since boot -> epoch
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        boot = next(float(ln.split()[1]) for ln in Path("/proc/stat").read_text().splitlines()
+                    if ln.startswith("btime "))
+        return boot + int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return 0.0
+
+
+def owner_running(pid, since) -> bool:
+    """Is the process that wrote a lock or journal at `since` still running? A pid whose current process started
+    AFTER `since` (2 s slack) is a reused pid: the writer is gone."""
+    try:
+        pid, since = int(pid), float(since)
+    except (TypeError, ValueError):
+        return False
+    started = _process_started(pid)
+    if started is None:
+        return False
+    return started == 0.0 or started <= since + 2.0
+
+
+def _lock_holder(f: Files) -> dict | None:
+    return _read_json(f.lock)
+
+
+def take_lock(home: Path, db: str, owner: int) -> list[str]:
+    """Hold `build-<db>.lock` for `owner`, or refuse. Returns notes (a stale takeover is one).
+
+    Already held by `owner`: fine (a builder's later steps). Held by a running process: SwapRefused("busy").
+    Held by a process that is not running, or unreadable for over a minute: taken over, and said."""
+    f = Files(home, db)
+    notes: list[str] = []
+    for _attempt in range(3):
+        try:
+            fd = os.open(f.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            held = _lock_holder(f)
+            if held is not None and held.get("pid") == owner:
+                return notes
+            if held is not None and owner_running(held.get("pid"), held.get("at")):
+                raise SwapRefused("busy", (
+                    f"another build of {db} is running (pid {held.get('pid')}, lock {f.lock.name}); nothing was "
+                    f"touched. Retry once it finishes"))
+            if held is None:
+                try:
+                    age = time.time() - f.lock.stat().st_mtime
+                except OSError:
+                    continue
+                if age < 60:   # being written right now by another taker
+                    raise SwapRefused("busy", f"{f.lock.name} is being written by another process; retry")
+            # STALE: move it aside under a name only we use, then confirm we moved the one we judged.
+            aside = f.lock.with_name(f"{f.lock.name}.stale-{os.getpid()}")
+            try:
+                os.replace(f.lock, aside)
+            except OSError:
+                continue
+            moved = _read_json(aside)
+            if moved != held:   # someone replaced it between our read and our move: put theirs back
+                try:
+                    os.rename(aside, f.lock)
+                except OSError:
+                    pass   # silent-ok: theirs is gone only if a third process already took a newer lock
+                raise SwapRefused("busy", f"{f.lock.name} changed hands while being taken over; retry")
+            aside.unlink(missing_ok=True)
+            notes.append(f"{db}: took over a stale build lock left by pid {(held or {}).get('pid', '?')} "
+                         f"(not running: a killed or crashed build)")
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump({"db": db, "pid": owner, "at": time.time()}, fh)
+        return notes
+    raise SwapRefused("busy", f"could not take {f.lock.name}; retry")
+
+
+def release_lock(home: Path, db: str, owner: int) -> bool:
+    """Remove the lock only if `owner` holds it. Returns whether it did."""
+    f = Files(home, db)
+    held = _lock_holder(f)
+    if held is not None and held.get("pid") == owner:
+        f.lock.unlink(missing_ok=True)
+        return True
+    return False
 
 
 # ---------------------------------------------------------------- verification
@@ -232,12 +367,18 @@ def _commit(bx, f: Files, report: dict | None = None) -> list[str]:
         _write_json(f.cov, report)
         f.cov_next.unlink(missing_ok=True)
     _write_receipt(f, bx, f.db)
+    # <db>__next no longer exists: its receipt must not outlive it, or a later database of that name that this
+    # tool did not create would pass _receipted() and be dropped.
+    f.receipt(f.next).unlink(missing_ok=True)
     _set_phase(f, "committed")
     return _drop_old(bx, f)
 
 
 def _drop_old(bx, f: Files) -> list[str]:
     lines = []
+    if bx.exists(f.old) and not _receipted(f, f.old):
+        return [f"{f.db}: swapped in; {f.old} was NOT dropped: {f.receipt(f.old).name} is missing or invalid, so "
+                f"this tool cannot show it made it. Drop it by hand once you know what it is"]
     if bx.exists(f.old):
         ok, msg = bx.drop(f.old)
         if not ok or bx.exists(f.old):
@@ -288,6 +429,10 @@ def recover(bx, home: Path, db: str) -> list[str]:
     if phase == "unreadable":
         raise SwapRefused("unknown", f"{f.journal} is unreadable; a swap was interrupted and its state cannot be "
                                      "decided. Inspect the databases and remove the journal by hand")
+    j = _read_json(f.journal) or {}
+    if j.get("pid") != os.getpid() and owner_running(j.get("pid"), j.get("at")):
+        raise SwapRefused("busy", f"a swap of {db} is in progress (pid {j.get('pid')}, journal {f.journal.name}); "
+                                  "nothing was touched. Retry once it finishes")
     if phase == "begun":
         if bx.exists(db):
             _move(f.cov_old, f.cov)
@@ -324,9 +469,12 @@ def disk_floor_bytes(*, total: int, pagefile: int | None, system_drive: bool) ->
     return min(total * 5 // 100, cap)
 
 
-def _floor_for(where: Path) -> int:
-    usage = shutil.disk_usage(where)
-    anchor = Path(os.path.abspath(where)).anchor
+def _floor_for(where: Path) -> tuple[int, str]:
+    """(floor bytes, how it was derived). `where` is resolved first: a junctioned DBPATH lives on its TARGET's drive,
+    which is the drive whose free space and floor rule apply."""
+    real = Path(os.path.realpath(where))
+    usage = shutil.disk_usage(real)
+    anchor = real.anchor
     sysdrive = os.environ.get("SystemDrive", "")  # env-ok: Windows' own system-drive name, not a configured location
     system = bool(sysdrive) and anchor.lower().startswith(sysdrive.lower())
     pagefile = None
@@ -334,8 +482,15 @@ def _floor_for(where: Path) -> int:
         try:
             pagefile = os.stat(Path(anchor) / "pagefile.sys").st_size
         except OSError:
-            pagefile = None   # silent-ok: unknown pagefile falls back to the 5% rule, said in the refusal
-    return disk_floor_bytes(total=usage.total, pagefile=pagefile, system_drive=system)
+            pagefile = None   # silent-ok: said in the returned rule, which the refusal prints
+    floor = disk_floor_bytes(total=usage.total, pagefile=pagefile, system_drive=system)
+    if system and pagefile:
+        rule = f"system drive {anchor}: min(pagefile, 50 GiB)"
+    elif system:
+        rule = f"system drive {anchor}, pagefile size UNKNOWN: min(5% of the drive, 50 GiB) used instead"
+    else:
+        rule = f"drive {anchor}: min(5% of the drive, 50 GiB)"
+    return floor, rule
 
 
 def prepare(bx, home: Path, db: str, *, free_bytes: int | None = None, floor_bytes: int | None = None) -> list[str]:
@@ -346,21 +501,28 @@ def prepare(bx, home: Path, db: str, *, free_bytes: int | None = None, floor_byt
         raise SwapRefused("unknown", f"a database named {f.next} exists without this tool's receipt "
                                      f"({f.receipt(f.next).name}); it is kept and nothing was built. Drop it by "
                                      "hand once you know what it is")
-    need = (bx.size_bytes(db) or 0) + STAGING_BYTES
+    if bx.exists(db):
+        size, basis = bx.size_bytes(db), f"the size of the current {db}"
+    else:
+        size, basis = FIRST_BUILD_BYTES, (f"an ESTIMATE of {FIRST_BUILD_BYTES / GIB:.0f} GiB: there is no previous "
+                                          f"{db} to measure")
+    need = size + STAGING_BYTES
     where = bx.data_dir() if hasattr(bx, "data_dir") else f.home
+    where = Path(os.path.realpath(where if Path(where).exists() else Path(where).parent))
+    rule = "floor given by the caller"
     if free_bytes is None:
         free_bytes = shutil.disk_usage(where).free
     if floor_bytes is None:
-        floor_bytes = _floor_for(where)
+        floor_bytes, rule = _floor_for(where)
     # the leftover next generation is about to be dropped, so its space counts as free
     reclaim = bx.size_bytes(f.next) if bx.exists(f.next) else 0
     if free_bytes + reclaim - need < floor_bytes:
         raise SwapRefused("disk", (
-            f"not enough disk to build {db} beside the previous one: {free_bytes / GIB:.1f} GiB free, the new "
-            f"generation needs about {need / GIB:.1f} GiB (the current {db} plus {STAGING_BYTES / GIB:.0f} GiB of "
-            f"staging), and {floor_bytes / GIB:.1f} GiB must stay free. Nothing was dropped or built; the previous "
-            f"{db} stays in place. Free space (or move BaseX's DBPATH) and rebuild. There is no drop-first fallback "
-            f"on purpose: it is what left the databases MISSING"))
+            f"not enough disk to build {db} beside the previous one: {free_bytes / GIB:.1f} GiB free on {where}, "
+            f"the new generation needs about {need / GIB:.1f} GiB ({basis}, plus {STAGING_BYTES / GIB:.0f} GiB of "
+            f"staging), and {floor_bytes / GIB:.1f} GiB must stay free ({rule}). Nothing was dropped or built; the "
+            f"previous {db} stays in place. Free space (or move BaseX's DBPATH) and rebuild. There is no drop-first "
+            f"fallback on purpose: it is what left the databases MISSING"))
     if bx.exists(f.next):
         ok, msg = bx.drop(f.next)
         if not ok or bx.exists(f.next):
@@ -378,6 +540,10 @@ def describe(bx, home: Path, db: str) -> list[str]:
     """What status should say about generations and interruptions. Reads only."""
     f = Files(home, db)
     out = []
+    held = _lock_holder(f)
+    if held is not None:
+        out.append(f"a build of {db} is running (pid {held.get('pid')})" if owner_running(held.get("pid"), held.get("at"))
+                   else f"{f.lock.name} is left by pid {held.get('pid')}, which is not running; the next build takes it over")
     phase = _phase(f)
     if phase:
         out.append(f"a swap of {db} was interrupted (journal phase {phase!r}); the next build recovers it, or run "
@@ -472,21 +638,43 @@ class BaseXRunner:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="dbswap", description="Build-then-swap for x4raw/x4eff.")
-    p.add_argument("action", choices=("prepare", "swap", "recover", "status"))
+    p.add_argument("action", choices=("lock", "unlock", "prepare", "swap", "recover", "status"))
     p.add_argument("--db", required=True, choices=DBS)
     p.add_argument("--home", default=str(BASEX_DIR), help="the BaseX home (default: tools/basex/basex)")
+    p.add_argument("--owner", type=int, default=None,
+                   help="the pid of the builder holding build-<db>.lock (the builders pass their own); without it "
+                        "a prepare/swap/recover call takes the lock for itself and releases it when done")
     args = p.parse_args(argv)
-    bx = BaseXRunner(Path(args.home))
+    home = Path(args.home)
+    bx = BaseXRunner(home)
+    if args.action in ("lock", "unlock") and args.owner is None:
+        p.error(f"{args.action} needs --owner")
+    owner = args.owner if args.owner is not None else os.getpid()
+    own_call = args.owner is None and args.action in ("prepare", "swap", "recover")
+    lines: list[str] = []
     try:
         if args.action == "status":
-            lines = describe(bx, Path(args.home), args.db) or [f"{args.db}: no swap leftovers"]
+            lines = describe(bx, home, args.db) or [f"{args.db}: no swap leftovers"]
+        elif args.action == "unlock":
+            lines = [f"{args.db}: build lock released" if release_lock(home, args.db, owner)
+                     else f"{args.db}: build lock not held by pid {owner}; left as it is"]
         else:
-            lines = {"prepare": prepare, "swap": swap, "recover": recover}[args.action](bx, Path(args.home), args.db)
-            if args.action == "swap":
-                lines.append(f"{args.db}: SWAPPED IN the new generation")
+            lines = take_lock(home, args.db, owner)
+            if args.action == "lock":
+                lines.append(f"{args.db}: build lock held by pid {owner}")
+            else:
+                try:
+                    lines += {"prepare": prepare, "swap": swap, "recover": recover}[args.action](bx, home, args.db)
+                finally:
+                    if own_call:
+                        release_lock(home, args.db, owner)
+                if args.action == "swap":
+                    lines.append(f"{args.db}: SWAPPED IN the new generation")
     except SwapRefused as exc:
+        for ln in lines:
+            print(f"  {ln}")
         print(f"REFUSED ({exc.kind}): {exc}", file=sys.stderr)
-        return RC_LOCKED if exc.kind == "locked" else 2
+        return RC_LOCKED if exc.kind in ("locked", "busy") else 2
     for ln in lines:
         print(f"  {ln}")
     return 0

@@ -57,7 +57,14 @@ echo "== preflight =="
 # the floor (there is no drop-first fallback), and drops a leftover receipted ${DB}__next. rc 2/7 = refused.
 NEXT="${DB}__next"
 echo "== preparing the next generation =="
-(cd "$X4VALIDATE" && uv run python "$HERE/dbswap.py" prepare --db "$DB")
+# THE BUILD LOCK (review 2026-11-07): one build of $DB at a time, from here through the swap. A second builder's
+# `prepare` could otherwise undo this one's swap, drop its $NEXT mid-build, or share its pending fingerprint. The
+# owner is THIS shell's OS pid (Git Bash: its Windows pid), so a killed build leaves a lock whose owner is not
+# running, which the next build takes over and reports. rc 7 = another live build holds it.
+OWNER="$(cat /proc/$$/winpid 2>/dev/null || echo $$)"
+(cd "$X4VALIDATE" && uv run python "$HERE/dbswap.py" lock --db "$DB" --owner "$OWNER")
+trap '(cd "$X4VALIDATE" && uv run python "$HERE/dbswap.py" unlock --db "$DB" --owner "$OWNER") >/dev/null 2>&1 || true' EXIT
+(cd "$X4VALIDATE" && uv run python "$HERE/dbswap.py" prepare --db "$DB" --owner "$OWNER")
 
 # Delete the previous run's artifacts BEFORE building, not after.
 #
@@ -182,7 +189,7 @@ echo "== swapping $NEXT in as $DB =="
 # write coverage-$DB.json, drop the previous generation. rc 7: a reader holds $DB open -- nothing was swapped,
 # retry the printed command when it finishes. rc 2: verification refused; the previous $DB is untouched.
 SWAP_RC=0
-(cd "$X4VALIDATE" && uv run python "$HERE/dbswap.py" swap --db "$DB") || SWAP_RC=$?
+(cd "$X4VALIDATE" && uv run python "$HERE/dbswap.py" swap --db "$DB" --owner "$OWNER") || SWAP_RC=$?
 if [ "$SWAP_RC" -ne 0 ]; then
   echo "ERROR: $NEXT was built and stamped but NOT swapped in (rc $SWAP_RC); see the reason above." >&2
   exit "$SWAP_RC"

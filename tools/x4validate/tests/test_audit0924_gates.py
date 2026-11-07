@@ -267,16 +267,22 @@ def test_bx3_a_build_never_drops_the_live_database_or_its_licence(script):
         assert len(hits) == 1, f"{script}: {pattern!r} matched {len(hits)} lines"
         return hits[0]
 
-    steps = [at(r'dbswap\.py" prepare --db "\$DB"'),
+    # The build lock (review 2026-11-07): taken before prepare, released on EXIT, and named by every later step.
+    assert [ln for ln in code if ln.startswith("trap ") and 'dbswap.py" unlock --db "$DB" --owner "$OWNER"' in ln], \
+        f"{script}: the build lock must be released by an EXIT trap"
+    steps = [at(r'dbswap\.py" lock --db "\$DB" --owner "\$OWNER"'),
+             at(r'dbswap\.py" prepare --db "\$DB" --owner "\$OWNER"'),
              at(r'--declare-db "\$NEXT"'),
              at(r'^CREATE DB \$NEXT$'),
              at(r'coverage\.py" --db "\$NEXT"'),
              at(r'staleness\.py" --write --db "\$DB"'),
-             at(r'dbswap\.py" swap --db "\$DB"')]
+             at(r'dbswap\.py" swap --db "\$DB" --owner "\$OWNER"')]
     for a, b in zip(steps, steps[1:]):
         assert a < b, f"{script}: build-then-swap steps out of order: {code[a]!r} must precede {code[b]!r}"
-    assert '--coverage "$BASEX_DIR/coverage-$NEXT.json"' in code[steps[4]], \
+    assert '--coverage "$BASEX_DIR/coverage-$NEXT.json"' in code[steps[5]], \
         f"{script}: the stamp must go on the next generation's report, never on the live one"
+    assert steps[0] < at(r'staleness\.py" --snapshot'), \
+        f"{script}: the shared pending fingerprint must be written under the build lock"
     assert "set -euo pipefail" in text[:text.index("dbswap.py")]
 
 

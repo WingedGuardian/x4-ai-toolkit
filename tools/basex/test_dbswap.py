@@ -373,6 +373,266 @@ def test_only_toolkit_databases_are_handled(home):
         dbswap.swap(FakeBaseX(), home, "userdb")
 
 
+# ================================================================ review fix round (2026-11-07)
+
+def _sleeper():
+    """A live process that is not this one: a concurrent build's stand-in."""
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+
+def _dead_pid():
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
+
+
+def _hold(home, pid, at=None):
+    import time
+    (home / "build-x4raw.lock").write_text(json.dumps({"db": "x4raw", "pid": pid, "at": at or time.time()}),
+                                           encoding="utf-8")
+
+
+@pytest.mark.parametrize("action", ["prepare", "recover", "swap"])
+def test_a_second_builder_is_refused_while_the_lock_is_held(home, action, capsys):
+    """Review finding 1: a second prepare -> recover could undo a first build's swap mid-flight."""
+    (home / "swap-x4raw.json").write_text(json.dumps({"db": "x4raw", "phase": "begun"}), encoding="utf-8")
+    journal = (home / "swap-x4raw.json").read_bytes()
+    live = _sleeper()
+    try:
+        _hold(home, live.pid)
+        rc = dbswap.main([action, "--db", "x4raw", "--home", str(home)])
+    finally:
+        live.kill()
+        live.wait()
+    err = capsys.readouterr().err
+    assert rc == dbswap.RC_LOCKED and "another build of x4raw is running" in err, err
+    assert (home / "swap-x4raw.json").read_bytes() == journal, "nothing touched"
+    assert json.loads((home / "build-x4raw.lock").read_text())["pid"] == live.pid
+
+
+def test_a_stale_lock_from_a_dead_build_is_taken_over_and_reported(home, capsys):
+    _hold(home, _dead_pid())
+    rc = dbswap.main(["recover", "--db", "x4raw", "--home", str(home)])
+    out = capsys.readouterr().out
+    assert rc == 0 and "took over a stale build lock" in out, out
+    assert not (home / "build-x4raw.lock").exists(), "a bare CLI call releases the lock it took"
+
+
+def test_a_reused_pid_does_not_keep_a_dead_builds_lock(home, capsys):
+    """The pid now belongs to a process that started AFTER the lock was written: the writer is gone."""
+    live = _sleeper()
+    try:
+        _hold(home, live.pid, at=1_000_000.0)
+        rc = dbswap.main(["recover", "--db", "x4raw", "--home", str(home)])
+    finally:
+        live.kill()
+        live.wait()
+    assert rc == 0 and "took over a stale build lock" in capsys.readouterr().out
+
+
+def test_a_builder_holding_the_lock_passes_its_own_checks(home):
+    live = _sleeper()
+    try:
+        assert dbswap.main(["lock", "--db", "x4raw", "--owner", str(live.pid), "--home", str(home)]) == 0
+        assert dbswap.main(["recover", "--db", "x4raw", "--owner", str(live.pid), "--home", str(home)]) == 0
+        assert (home / "build-x4raw.lock").exists(), "the builder's lock outlives its steps"
+        assert dbswap.main(["unlock", "--db", "x4raw", "--owner", "1", "--home", str(home)]) == 0
+        assert (home / "build-x4raw.lock").exists(), "only the owner releases"
+        assert dbswap.main(["unlock", "--db", "x4raw", "--owner", str(live.pid), "--home", str(home)]) == 0
+        assert not (home / "build-x4raw.lock").exists()
+    finally:
+        live.kill()
+        live.wait()
+
+
+def test_a_journal_whose_writer_is_still_running_is_not_recovered(home):
+    import time
+    bx = built(home)
+    live = _sleeper()
+    try:
+        (home / "swap-x4raw.json").write_text(json.dumps({"db": "x4raw", "phase": "begun", "pid": live.pid,
+                                                          "at": time.time()}), encoding="utf-8")
+        with pytest.raises(dbswap.SwapRefused) as exc:
+            dbswap.recover(bx, home, "x4raw")
+    finally:
+        live.kill()
+        live.wait()
+    assert exc.value.kind == "busy" and bx.calls == []
+
+
+def test_the_status_names_a_running_build(home):
+    live = _sleeper()
+    try:
+        _hold(home, live.pid)
+        assert any("build of x4raw is running" in ln for ln in dbswap.describe(FakeBaseX(), home, "x4raw"))
+    finally:
+        live.kill()
+        live.wait()
+
+
+class _ReplacingRunner(dbswap.BaseXRunner):
+    """BaseXRunner over a fake jar that does what BaseX 12.4 was MEASURED to do: ALTER onto an existing name
+    replaces it."""
+
+    def __init__(self, dbs):
+        super().__init__(Path("."))
+        self.dbs = dbs
+        runner = self
+
+        class Run:
+            @staticmethod
+            def run_command(cmd, _home):
+                _, _, src, dst = cmd.split()
+                runner.dbs[dst] = runner.dbs.pop(src)
+                return 0, ""
+        self._fake = Run
+
+    def exists(self, name):
+        return name in self.dbs
+
+    def _run(self):
+        return self._fake
+
+
+def test_the_runner_refuses_to_alter_onto_an_existing_name():
+    """Review finding 2: this check is the ONLY defence against BaseX replacing a generation."""
+    r = _ReplacingRunner({"a": "A", "b": "B"})
+    ok, msg = r.alter("a", "b")
+    assert not ok and "already exists" in msg
+    assert r.dbs == {"a": "A", "b": "B"}
+
+
+def test_the_runner_refuses_to_alter_onto_an_existing_name_on_real_basex(tmp_path):
+    jar = Path(dbswap.__file__).parent / "basex" / "BaseX.jar"
+    if not jar.is_file() or not shutil.which("java"):
+        pytest.skip("needs the vendored jar and Java")
+    h = tmp_path / "basex"
+    h.mkdir()
+    shutil.copyfile(jar, h / "BaseX.jar")
+    (h / ".basexhome").write_bytes(b"")
+    (h / ".basex").write_text(f"DBPATH = {(h / 'data').as_posix()}\n", encoding="utf-8")
+    bx = dbswap.BaseXRunner(h)
+    assert (h / "data").as_posix().lower() in bx.info().replace("\\", "/").lower()
+    bx.create_for_test("a", 1)
+    bx.create_for_test("b", 2)
+    ok, _msg = bx.alter("a", "b")
+    assert not ok and bx.count("a") == 1 and bx.count("b") == 2
+
+
+def test_a_rename_reported_ok_that_left_the_live_name_is_refused(home):
+    """Review: `or bx.exists(db)` after the first ALTER. A rename that 'succeeded' but left <db> in place must not
+    proceed to rename <db>__next onto it."""
+    bx = built(home)
+    bx.alter = lambda src, dst: (True, "")
+    before = live_cov(home)
+    with pytest.raises(dbswap.SwapRefused):
+        dbswap.swap(bx, home, "x4raw")
+    assert bx.dbs == {"x4raw": 5, "x4raw__next": 10}
+    assert live_cov(home) == before and not (home / "swap-x4raw.json").exists()
+
+
+@pytest.mark.parametrize("field,value", [("path", "data/x4raw"), ("producer", "someone-else"),
+                                         ("kind", "stage"), ("path", 7)])
+def test_a_receipt_that_does_not_name_this_database_is_not_authority(home, field, value):
+    bx = FakeBaseX({"x4raw": 5, "x4raw__next": 2})
+    r = receipt(home, "x4raw__next")
+    data = json.loads(r.read_text())
+    data[field] = str(home / value) if field == "path" and isinstance(value, str) else value
+    r.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(dbswap.SwapRefused) as exc:
+        dbswap.prepare(bx, home, "x4raw", free_bytes=10**12, floor_bytes=0)
+    assert exc.value.kind == "unknown" and bx.dbs == {"x4raw": 5, "x4raw__next": 2}
+
+
+def test_swap_alone_refuses_an_unreceipted_next(home):
+    bx = built(home)
+    (home / "disposition-x4raw__next.json").unlink()
+    with pytest.raises(dbswap.SwapRefused) as exc:
+        dbswap.swap(bx, home, "x4raw")
+    assert exc.value.kind == "verify" and "disposition-x4raw__next.json" in str(exc.value)
+    assert not any(c.startswith("ALTER") for c in bx.calls)
+
+
+def test_an_unreadable_journal_is_refused_not_guessed(home):
+    bx = built(home)
+    (home / "swap-x4raw.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(dbswap.SwapRefused) as exc:
+        dbswap.recover(bx, home, "x4raw")
+    # the named refusal, not the generic unknown-phase one it would otherwise fall through to
+    assert exc.value.kind == "unknown" and "cannot be decided" in str(exc.value)
+    assert bx.calls == []
+
+
+@pytest.mark.parametrize("fp", [{}, {"content": "c"}, {"engine": "e"}, {"content": "", "engine": "e"}])
+def test_a_partial_fingerprint_is_refused(home, fp):
+    bx = built(home)
+    cov(home, "x4raw__next", fingerprint=fp)
+    with pytest.raises(dbswap.SwapRefused) as exc:
+        dbswap.swap(bx, home, "x4raw")
+    assert exc.value.kind == "verify"
+
+
+def test_the_floor_alone_refuses_when_the_estimate_fits(home):
+    """Review: the old disk test failed on the estimate alone, so a floor of 0 survived mutation."""
+    bx = FakeBaseX({"x4raw": 1_000_000})            # ~1 GB in the fake: needs ~4 GiB with staging
+    with pytest.raises(dbswap.SwapRefused) as exc:
+        dbswap.prepare(bx, home, "x4raw", free_bytes=10 * 2**30, floor_bytes=8 * 2**30)
+    assert exc.value.kind == "disk"
+    dbswap.prepare(bx, home, "x4raw", free_bytes=10 * 2**30, floor_bytes=4 * 2**30)   # the twin fits
+
+
+def test_a_first_build_is_budgeted_by_an_estimate_and_says_so(home):
+    bx = FakeBaseX({})
+    with pytest.raises(dbswap.SwapRefused) as exc:
+        dbswap.prepare(bx, home, "x4raw", free_bytes=5 * 2**30, floor_bytes=0)
+    assert exc.value.kind == "disk" and "ESTIMATE" in str(exc.value)
+    dbswap.prepare(bx, home, "x4raw", free_bytes=7 * 2**30, floor_bytes=0)
+
+
+def test_the_floor_rule_says_when_the_pagefile_is_unknown(tmp_path, monkeypatch):
+    anchor = Path(os.path.realpath(tmp_path)).anchor
+    monkeypatch.setenv("SystemDrive", anchor.rstrip("\\/") or anchor)
+    real_stat = os.stat
+    def stat(p, *a, **k):
+        if str(p).lower().endswith("pagefile.sys"):
+            raise OSError("no pagefile here")
+        return real_stat(p, *a, **k)
+    monkeypatch.setattr(dbswap.os, "stat", stat)
+    floor, rule = dbswap._floor_for(tmp_path)
+    assert "UNKNOWN" in rule and floor > 0
+
+
+def test_the_floor_is_read_on_the_resolved_drive(tmp_path, monkeypatch):
+    """A junctioned DBPATH lives on its target's drive: free space and the rule come from the RESOLVED path."""
+    monkeypatch.setattr(dbswap.os.path, "realpath", lambda p: str(tmp_path))
+    floor, rule = dbswap._floor_for(Path("Q:/no/such/junction"))
+    assert floor > 0 and Path(os.path.abspath(tmp_path)).anchor.rstrip("\\/") in rule
+
+
+def test_an_old_generation_whose_receipt_is_gone_is_not_dropped(home):
+    bx = built(home)
+    real_alter = bx.alter
+    def alter(src, dst):
+        ok, msg = real_alter(src, dst)
+        if ok and dst == "x4raw__old":
+            (home / "disposition-x4raw__old.json").unlink()
+        return ok, msg
+    bx.alter = alter
+    lines = dbswap.swap(bx, home, "x4raw")
+    assert bx.dbs == {"x4raw": 10, "x4raw__old": 5}
+    assert any("NOT dropped" in ln for ln in lines), lines
+
+
+def test_the_next_receipt_is_retired_once_next_becomes_live(home):
+    bx = built(home)
+    dbswap.swap(bx, home, "x4raw")
+    assert not (home / "disposition-x4raw__next.json").exists()
+    bx.dbs["x4raw__next"] = 3             # a later database of that name that this tool did not make
+    with pytest.raises(dbswap.SwapRefused) as exc:
+        dbswap.prepare(bx, home, "x4raw", free_bytes=10**12, floor_bytes=0)
+    assert exc.value.kind == "unknown" and bx.dbs["x4raw__next"] == 3
+
+
 # ---------------------------------------------------------------- real BaseX (skips without Java)
 
 def test_real_alter_semantics(tmp_path):
