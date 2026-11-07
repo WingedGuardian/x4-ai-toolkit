@@ -416,7 +416,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F311 | Prior-run cleanup bypassed the Recycle Bin and pruned measured baselines | **DEFECT (measured/read)** | Two installers, two BaseX builders, two shell drivers, deploy and probe removal | FIXED 2026-10-20 - shared recoverable removal and baseline retention |
 | F312 | Restoring an older backup destroyed the current destination | **DEFECT (read/measured)** | Restore entry point and byte-preservation controls | FIXED 2026-10-20 - retain current bytes before publishing the restore |
 | F313 | Steam title lookup leaked incomplete HTTP reads out of refresh | **DEFECT (measured)** | Three transport failures and the real no-title twin | FIXED 2026-10-20 - HTTPException maps to SteamUnavailable |
-| F314 | Opaque programs naming saves bypassed review and preservation | **DEFECT (measured)** | Named/bulk/embedded scope, reader twins, 26,346-payload replay and 31 per-item verdicts | FIXED 2026-10-20 - possible-access review after preservation; unresolved scope refused |
+| F314 | Opaque programs naming saves bypassed review and preservation | **DEFECT (measured)** | Named/bulk/embedded scope, reader twins, 26,346-payload replay and 31 per-item verdicts | FIXED 2026-10-20 - possible-access review after preservation; unresolved scope refused. SUPERSEDED IN PART 2026-11-06 (#19): the review is now a deny naming the remedy (copy to scratch, or `x4save` by save name), returned before preservation |
 | F315 | Unknown tools in hook-only deployments raised ValueError before routing | **DEFECT (measured)** | Actual installed reproduction and Codex/OpenCode hook-only fixtures | FIXED 2026-10-20 - resolve the configured external runtime when local tools are absent |
 | F316 | Pytest itself pruned shared earlier-run temp outside ownership checks | **DEFECT (measured)** | Main/BaseX startup, seeded foreign run, explicit-path twins | FIXED 2026-10-20 - per-invocation owned scratch and refusal of existing basetemp |
 | F317 | Deduplication chmod reached outside live files through existing hard links | **DEFECT (measured)** | Canonical/duplicate external-link refusals, late-link refusal, three-copy twin | FIXED 2026-10-20 - retain unqualified links and count only links created by this apply |
@@ -11109,6 +11109,14 @@ files together pass 41 tests without network access.
 tests/test_audit0924_runtime.py.
 
 ## F314 - Opaque save access bypassed preservation · **DEFECT (measured)** · confidence 97% · FIXED 2026-10-20
+
+SUPERSEDED IN PART 2026-11-06 (4.1.1, issue #19): the possible-access REVIEW below is now a
+DENY. An ask made the user judge a call the agent can reshape: the deny names the saves, a copy
+command into the agent's scratch directory and `x4save vars|info|check <save name>`. It returns
+before preservation, so no backup is written for a call that does not run. MEASURED on fixture
+roots: `cp`/`Copy-Item` of a save to scratch, a script reading the scratch copy and `x4save`
+by save name all pass with no prompt and no backup (7 of 7); `x4save` given a save PATH is
+denied like any opaque program. Bulk, unresolved and known-tool save verdicts are unchanged.
 
 SUPERSEDED MEASUREMENT 2026-10-20: the 31-match price below is the earlier
 parser. F321 records the final 34-match replay and all per-item comparisons.

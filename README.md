@@ -305,8 +305,10 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
   an earlier action can change a later destination into a directory or link.
   A program whose writes the guard cannot read, such as `python -c`, is not
   judged by this rule at all.
-  An opaque program naming saves requires review; its named pairs are preserved first,
-  and unresolved save scope is refused. A separate profile confirmation never skips
+  An opaque program naming saves (a script, `python -c`, an unknown binary) is refused,
+  never asked about: the refusal tells the agent to run it on a copy in its scratch
+  directory or to read the save with `x4save` by save name. Unresolved save scope is
+  refused too. A separate profile confirmation never skips
   save preservation or bulk approval.
   They cover every tool that can change a file: Bash, **PowerShell** (parsed by PowerShell's
   own parser and judged by the same rules as Bash — it needs `pwsh` or Windows PowerShell,
