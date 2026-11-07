@@ -1386,3 +1386,9 @@ def test_a_v2_dir_holding_kept_failure_evidence_is_recycled_not_deleted(tmp_path
     res = hk.sweep_temp(sweep_cfg(tmp_path), temp=tmp_path / "temp", recycler=fake_bin, deleter=fake_del)
     assert [Path(p) for p in fake_bin.got] == [d] and [Path(p) for p in fake_del.got] == [clean]
     assert any(str(d) in k and "failed test" in k for k in res["kept"]), res["kept"]
+
+
+def test_the_kept_failure_marker_is_the_one_the_test_suite_writes():
+    """conftest.mark_kept_failure writes it; a drift on either side would delete failure evidence silently."""
+    import conftest
+    assert hk.KEPT_FAILURE == conftest.KEPT_FAILURE == ".x4-kept-failure"
