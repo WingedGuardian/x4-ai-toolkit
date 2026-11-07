@@ -247,3 +247,14 @@ def test_5_TWIN_refs_does_not_match_lookalikes(real_db, xml):
 
 def test_5_TWIN_player_class_is_not_a_reference(real_db):
     assert _refs_count('player', '<r><component class="player"/></r>') == 0
+
+
+# --- 4.1.1, BaseX 13.0: `attr` ordered values only by count, so equal counts came out in
+# distinct-values() order -- which is the ENGINE's choice. MEASURED on the reference corpus:
+# `attr roomtype` printed the same 26 lines on 12.4 and 13.0 in a different order (two pairs
+# of tied values swapped). The value is now the tie-break, so the output is the same on any engine.
+def test_attr_ties_are_ordered_by_value_not_by_engine(real_db):
+    q = ask.q_attr('x4eff', 'k').replace(
+        "collection('x4eff')", "parse-xml('<r><x k=\"b\"/><x k=\"c\"/><x k=\"a\"/><x k=\"z\"/><x k=\"z\"/></r>')")
+    assert "parse-xml" in q
+    assert ask.run_xq(q).split('\n') == ['z : 2', 'a : 1', 'b : 1', 'c : 1']

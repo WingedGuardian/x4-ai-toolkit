@@ -590,7 +590,7 @@ def q_attr(db: str, attr: str) -> str:
     return f"""
 for $v in distinct-values(collection('{db}')//@{attr})
 let $n := count(collection('{db}')//*[@{attr} = $v])
-order by $n descending
+order by $n descending, string($v)
 return $v || ' : ' || $n
 """
 
