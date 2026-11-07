@@ -543,6 +543,14 @@ decide allow  protect-bash.sh "$(cj "gzip -k '$X4_GAME/01.cat'")" "TWIN: gzip -k
 decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' | sort | xargs mv -t /c/o")" "find | sort | xargs mv: archives moved away"
 decide deny   protect-bash.sh "$(cj "gfind '$X4_GAME' -name '*.cat' -delete")" "gfind is find"
 decide deny   protect-bash.sh "$(cj "fd . '$X4_REFERENCE' -x rm")" "fd -x runs a command per result"
+# 4.1.1 literal-dollar port (6cbeb825, 51129cde, ed667b4a): a `$` literal in every layer is part of
+# the name (the sibling of reference/); any layer that may expand it, or re-run the word, keeps it unknown.
+decide deny   protect-bash.sh "$(cj "sh -c 'rm -rf \"$X4_REFERENCE\$x\"'")" "literal \$: an inner shell that expands it keeps it unknown"
+decide deny   protect-bash.sh "$(cj "rm(){ eval command rm \"\$@\"; }; rm -rf '$X4_REFERENCE\$x'")" "literal \$: a function that may re-run the word keeps it unknown"
+decide deny   protect-bash.sh "$(cj "rm -rf \$'$X4_REFERENCE\\x00junk'")" "an ANSI-C word ends at its NUL"
+decide deny   protect-bash.sh "$(cj "sudo -su root rm -rf '$X4_REFERENCE'")" "a sudo flag cluster takes its value"
+decide advise protect-bash.sh "$(cj "rm -rf '$X4_REFERENCE\$x'")" "TWIN: a single-quoted \$ names the sibling of reference/ (a toolkit delete: advised)"
+decide advise protect-bash.sh "$(cj "bash -c \"rm -rf '$X4_REFERENCE\\\$x'\"")" "TWIN: a \$ literal in both layers names the sibling"
 _sg="$X4_GAME"; _se="$X4_EXTENSIONS"; export X4_GAME="" X4_EXTENSIONS=""
 decide deny   protect-bash.sh "$(cj "rm '/c/games/X4 Foundations/01.dat'")" "archive: no game root configured, the install's folder name"
 decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")"     "TWIN: no game root, another game's .dat"
@@ -746,7 +754,8 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # Round 5 adds 5 denies + 4 twins: 416 + 9.
 # Round 6 adds 7 denies + 1 advisory + 5 twins: 425 + 13; its find-write part 2 denies + 2 twins: 438 + 4.
 # Round 7 adds 6 denies + 2 twins: 442 + 8.
-EXPECT=450
+# The literal-dollar port adds 4 denies + 2 twins (advised, not denied): 450 + 6.
+EXPECT=456
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written

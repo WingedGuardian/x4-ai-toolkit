@@ -891,11 +891,19 @@ _ANSI_C_SIMPLE = {'a': chr(7), 'b': chr(8), 'e': chr(27), 'E': chr(27),
 
 
 def _ansi_c_decode(body: str) -> str:
-    """Decode one ANSI-C quoted body.
+    r"""Decode one ANSI-C quoted body.
 
     The hex and octal forms are the ones that matter: two different spellings of
     `rm` that reached `_verb_name` as literal escape text and came out as `x6d`
     and `155`. B2, MEASURED as a total bypass of all three hard blocks.
+
+    The result STOPS at the first NUL, however it is spelled (`\x00`, `\0`, `\000`,
+    `\400`, `\u0000`, `\U00000000`, `\c@`, or a raw NUL): bash builds a C string, so
+    `$'<reference>\x00junk'` IS `<reference>` -- and was read as the sibling
+    `<reference>junk` (MEASURED in review of 6cbeb825; the gap is older than that).
+    `\c` and `\u`/`\U` up to 0x7F are decoded as bash does (MEASURED with Git Bash
+    `printf`), so `$'<ref>\u002flibraries'` is a path inside reference/; a `\u`/`\U`
+    above 0x7F is locale-dependent in bash and is kept as written.
     """
     out = []
     i = 0
@@ -906,16 +914,29 @@ def _ansi_c_decode(body: str) -> str:
             i += 1
             continue
         n = body[i + 1]
-        if n == 'x':
+        if n in 'xuU':
             h = ''
             j = i + 2
-            while j < len(body) and len(h) < 2 and body[j] in '0123456789abcdefABCDEF':
+            width = {'x': 2, 'u': 4, 'U': 8}[n]
+            while j < len(body) and len(h) < width and body[j] in '0123456789abcdefABCDEF':
                 h += body[j]
                 j += 1
-            if h:
+            if h and (n == 'x' or int(h, 16) <= 0x7F):
+                # \x is a BYTE. \u/\U above 0x7F depend on the locale: MEASURED in Git
+                # Bash (no LANG), `\u00e9` became one byte, `\uD800`, `\U0010FFFF` and
+                # `\u041B` stayed as their escape TEXT -- whose backslash is a separator
+                # there. Such an escape is left exactly as written (the pre-change reading).
                 out.append(chr(int(h, 16)))
                 i = j
                 continue
+        elif n == 'c' and i + 2 < len(body):
+            x = body[i + 2]
+            j = i + 3
+            if x == chr(92) and j < len(body) and body[j] == chr(92):
+                j += 1                          # bash: `\c\\` is control-backslash
+            out.append(chr(127) if x == '?' else chr(ord(x.upper()) & 0x1F))
+            i = j
+            continue
         elif n in '01234567':
             o = ''
             j = i + 1
@@ -932,7 +953,7 @@ def _ansi_c_decode(body: str) -> str:
         # An unknown escape keeps its backslash, as bash does.
         out.append(c)
         i += 1
-    return ''.join(out)
+    return ''.join(out).split(chr(0), 1)[0]
 
 
 #: C1 (v4.0 release review): the dequoted text of every word whose UNQUOTED part holds a
@@ -974,21 +995,34 @@ def _has_brace_expansion(m: str) -> bool:
     return False
 
 
-def tokens(seg: str) -> list[tuple[str, bool]]:
+def tokens(seg: str, *, literal_expansions: dict | None = None) -> list[tuple[str, bool]]:
     """(text, was_quoted) per token. Quotes are stripped from the text; a
     backslash-escaped space JOINS, which is why `X4\\ Foundations` must stay one token
     -- the bash tokeniser split it and the game-delete block stopped firing.
 
-    A word whose unquoted part holds a brace expansion is recorded in _BRACE_WORDS (C1)."""
+    A word whose unquoted part holds a brace expansion is recorded in _BRACE_WORDS (C1).
+
+    `literal_expansions`, when given, receives text -> "no `$` in this word is
+    expansion-active" (every `$` single-quoted, escaped, or ANSI-C decoded; no unquoted
+    glob or brace character). A text spelled both ways in one segment is False: one
+    occurrence never qualifies another (see facts' literal_dollar_path)."""
     out, buf, quoted, started = [], [], False, False
     mbuf = []                               # buf with every quoted/escaped char as NUL
+    xbuf = []                               # only expansion-active characters survive
     q = ""
+    unterminated = False                    # a `$'...` run that never closed
     i = 0
 
     def emit():
         text = "".join(buf)
         if "{" in mbuf and _has_brace_expansion("".join(mbuf)):
             _BRACE_WORDS.add(text)
+        if literal_expansions is not None:
+            # An UNQUOTED glob or brace character also disqualifies the word: the shell
+            # may replace it with other text, so its spelling here proves nothing.
+            literal_expansions[text] = (literal_expansions.get(text, True)
+                                        and not has_unresolved("".join(xbuf))
+                                        and not any(ch in mbuf for ch in "*?[{"))
         out.append((text, quoted))
 
     while i < len(seg):
@@ -1001,18 +1035,23 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
                 i += 1
                 buf.append(seg[i])
                 mbuf.append(chr(0))
+                xbuf.append(chr(0))
             else:
                 buf.append(c)
                 mbuf.append(chr(0))
+                xbuf.append(chr(0) if q == "'" else c)
         elif c in "\"'":
             # ANSI-C / locale quoting: `$'rm'` and `$"rm"` are the word `rm`. The `$`
             # is a quoting SIGIL, not part of the name. Without this the token was
             # `$rm` AND flagged quoted, so verb()'s `if quoted: return t` handed every
             # verb-keyed rule a name no rule has ever heard of -- a total bypass.
-            dollar = bool(buf) and buf[-1] == "$"
+            # Only an UNQUOTED, unescaped `$` is a sigil: in `'dir$'"/x"` and `\$'x'` the
+            # `$` is a character of the name (literal-dollar port, 6cbeb825).
+            dollar = bool(buf) and buf[-1] == "$" and mbuf[-1] == "$"
             if dollar:
                 buf.pop()
                 mbuf.pop()
+                xbuf.pop()
             if dollar and c == chr(39):
                 # $'...' -- take the WHOLE run and decode it. Popping the sigil was
                 # only half the job: inside a single-quoted run this loop appends
@@ -1031,7 +1070,9 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
                 dec = _ansi_c_decode(''.join(body))
                 buf.append(dec)
                 mbuf.extend(chr(0) * len(dec))
+                xbuf.extend(chr(0) * len(dec))
                 quoted = started = True
+                unterminated = unterminated or j >= len(seg)
                 i = j + 1
                 continue
             q = c
@@ -1040,19 +1081,26 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
             i += 1
             buf.append(seg[i])          # \<space> joins; \x keeps x
             mbuf.append(chr(0))         # an escaped `{` / `,` is literal (C1)
+            xbuf.append(chr(0))
             started = True
         elif c.isspace():
             if started:
                 emit()
             buf, quoted, started = [], False, False
             mbuf = []
+            xbuf = []
         else:
             buf.append(c)
             mbuf.append(c)
+            xbuf.append(c)
             started = True
         i += 1
     if started:
         emit()
+        if (q or unterminated) and literal_expansions is not None:
+            # An UNTERMINATED quote: what a shell does with this word is not this parse's
+            # to say, so it proves nothing literal.
+            literal_expansions[out[-1][0]] = False
     return out
 
 
@@ -1954,6 +2002,115 @@ def _opener_feeds(opener: str, sink) -> bool:
     return any(sink(sg) for c in cands for sg in segments(c))
 
 
+# ------------------------------------------------- literal `$` in a path (4.1.1)
+# Ported by hand from session/literal-dollar-v2 (6cbeb825, 51129cde, ed667b4a): a `$` that
+# EVERY shell layer keeps literal -- single-quoted, escaped, ANSI-C decoded -- is part of the
+# name, so `rm -rf '<root>$R1234'` names the sibling `<root>$R1234` (a Recycle Bin item)
+# rather than an unknown scope. Only texts a shell parses exactly as written qualify (see
+# facts: exact_texts), and nothing qualifies in a command that can re-run a word as shell
+# text. Every rule below only ever takes the qualification AWAY: the old, unresolved reading.
+
+#: A command that DEFINES something able to re-run a later word as shell text: a function
+#: (`rm(){ eval command rm "$@"; }`), an alias (`alias rm='eval rm'`), a sourced file, a
+#: trap, a builtin switched off, or their PowerShell counterparts. Once any is present
+#: `rm -rf '<ref>$X'` may expand `$X` after all (MEASURED in Git Bash: the function form
+#: removed `<ref>`), so NO text in such a command is exact (see facts). Matched over the
+#: raw command, quotes and all: a match inside a string only costs strictness.
+_REDEFINES = re.compile(
+    r"(?:^|[\s;&|({`!])(?:function|alias|source|trap|enable|shopt|declare|typeset|export|"
+    r"readonly|local|unalias|unset|hash|filter|set-alias|new-alias|sal|nal|"
+    r"import-module|ipmo|set-item|new-item|ni|si|"
+    # PowerShell's eval: a definition built at run time evades every pattern here, as
+    # `eval $'rm\x28\x29 ...'` does in bash (4.1.1 port: no literal anywhere beside one).
+    r"iex|invoke-expression|icm|invoke-command|new-module|nmo|add-type)(?=[\s;&|)}(\"']|$)"
+    r"|(?:^|[\s;&|({`!])\.(?=\s)"
+    r"|[^\s;&|()<>'\"]\s*\(\s*\)"
+    r"|(?:function|alias|variable):|scriptblock|invokecommand|newscriptblock"
+    r"|BASH_ENV|ENV=|PROMPT_COMMAND|BASH_FUNC_|BASH_ALIASES|BASH_CMDS",
+    re.IGNORECASE)
+
+
+def _redefines_commands(text: str) -> bool:
+    """Might `text` define a function or alias -- anything a LATER word can run through?"""
+    return bool(_REDEFINES.search(text or ""))
+
+
+#: A command name that is a plain word: nothing a quote, escape or expansion built.
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9_./:+@%,~-]+")
+#: A shell flag that loads startup files or enables aliases (`-i`, `-l`, `-O`/`+O`).
+_SHELL_RC_FLAG = re.compile(r"^(?:[-+][A-Za-z]*[ilO][A-Za-z]*|--login|--rcfile|--init-file"
+                            r"|--rcfile=.*|--init-file=.*)$")
+
+
+def _no_literal_anywhere(texts) -> bool:
+    """BROAD rule: may anything in this command re-run a word as shell text, so that NO
+    `$` in it can be called literal? True when any text (the command, every carried or
+    decoded inner command) holds: a definition `_REDEFINES` sees; an `eval`, `source` or
+    `.` anywhere; a command name that is not a plain word (a variable, a substitution, a
+    quoted or escaped spelling such as `"rm"'()'` -- a definition can be BUILT at run time,
+    `eval $'rm\\x28\\x29 {...}'`); or a shell started with startup files or aliases
+    (`-i`, `-l`, `-O`, `+O`, `--rcfile`, `--init-file`, `--login`). Over-matching only
+    restores the old, stricter reading."""
+    for text in texts:
+        if not text:
+            continue
+        if _redefines_commands(text):
+            return True
+        for seg in segments(text):
+            words_ = [t for t, _q in tokens(seg)]
+            if any(_verb_name(t) in ("eval", "source") for t in words_):
+                return True
+            name = _verb_token(seg) or ""
+            if name and (name == "." or has_unresolved(name) or not _PLAIN_NAME.fullmatch(name)):
+                return True
+            if any(_verb_name(t) in _SHELLS for t in words_) and any(
+                    _SHELL_RC_FLAG.match(t) for t in words_):
+                return True
+    return False
+
+
+#: sudo options that make it hand the command to a SHELL's `-c` (`-s`, `-i` and long
+#: forms, in any cluster such as `-is`, `-su root`, `-Es`). sudo backslash-escapes every
+#: character there EXCEPT `$`, so `sudo -s rm -rf '<ref>$X'` expands `$X` in that shell.
+_SUDO_SHELL = re.compile(r"^(?:-[A-Za-z]*[si][A-Za-z]*|--shell|--login)$")
+
+
+def _reparsing_wrapper(seg: str) -> bool:
+    """Does a wrapper in this segment run the command through a shell that re-parses it
+    (sudo -s / -i)? Any option token after a `sudo` word counts -- an over-match is only
+    stricter. Such a segment is never exact, nor is a `-c` string it carries."""
+    words_ = [t for t, _q in tokens(seg)]
+    for k, w in enumerate(words_):
+        if _verb_name(w) == "sudo":
+            return any(_SUDO_SHELL.match(t) for t in words_[k + 1:] if t.startswith("-"))
+    return False
+
+
+def exact_heredoc_bodies(cmd: str) -> set:
+    """Top-level heredoc bodies that a shell parses EXACTLY as written: a QUOTED delimiter
+    (`<<'EOF'`, so nothing in the body was expanded) on an opening line that is ONE plain
+    shell command reading its program from stdin, with no other redirection that could
+    replace that stdin. Anything else -- an unquoted delimiter, a body reaching the shell
+    through a pipe (`cat <<'EOF' | sed ... | bash` may rewrite it), a substitution, a
+    second heredoc on the line -- is not proven exact, so its `$` stays unresolved.
+    Bodies are returned as facts() keeps them (comments stripped)."""
+    docs, _kept = _heredoc_walk(cmd)
+    exact, loose = set(), set()
+    for opener, _term, expands, body in docs:
+        text = strip_comments(chr(10).join(body))
+        segs_ = segments(opener)
+        plain = blank_quoted(opener)
+        ok = (not expands and len(segs_) == 1 and len(_heredoc_opens(opener)) == 1
+              and plain.count("<") == 2 and ">(" not in plain and "$(" not in plain
+              and chr(96) not in plain)
+        if ok:
+            sg = _unwrap(segs_[0])
+            ok = (sg == segs_[0].strip() and _verb_name(verb(sg)) in _EXACT_SHELLS
+                  and _reads_stdin_program(sg) and not has_unresolved(_verb_token(sg) or ""))
+        (exact if ok else loose).add(text)
+    return exact - loose
+
+
 def heredoc_substitutions(cmd: str) -> list[str]:
     """The commands an EXPANDING heredoc body runs: every `$(...)` and backtick in it.
 
@@ -2403,8 +2560,21 @@ def _verb_word(seg: str, learned: bool = True) -> tuple[str, int | None]:
             wrapper = name
             continue
         if t.startswith("-"):
-            if t in _WRAPPER_VALUE_OPTS.get(wrapper, ()):
+            opts_ = _WRAPPER_VALUE_OPTS.get(wrapper, ())
+            if t in opts_:
                 want_value = learned or t not in _LATER_VALUE_OPTS.get(wrapper, ())
+            elif learned and len(t) > 2 and t[1] != "-":
+                # ...or a CLUSTER of short flags ending in one that takes a value: `sudo -su
+                # root rm ...` -- `root` is -u's value, not the command (MEASURED on
+                # session/literal-dollar-v2, 51129cde: verb() read `root`, so even `sudo -su root
+                # rm -rf <reference>` reached no delete rule). getopt order: the FIRST
+                # value-taking letter ends the cluster and the rest of the word is its value
+                # (`-uroot`); only when it is the LAST letter does the value come next. sudo's
+                # `-h` takes no separate value in a cluster (`-Eh` is help). learned=False keeps
+                # the old reading, which _value_word_readings still judges.
+                k_ = next((k for k, ch in enumerate(t[1:], 1) if "-" + ch in opts_
+                           and not (wrapper == "sudo" and ch == "h")), None)
+                want_value = k_ == len(t) - 1
             continue
         if seen_wrapper and _WRAPPER_ARG.match(t):
             continue                    # a duration or a placeholder, not a command
@@ -7066,6 +7236,9 @@ def _joiner_behind_unknown(seg: str) -> list:
 
 _ALL_CARRIER_VERBS = (frozenset(_ARGV_CARRIERS) | _TEXT_C_CARRIERS | _SPECIAL_CARRIERS
                       | {"ssh", "parallel", "tmux", "mapfile", "readarray"})
+#: The shells whose `-c` text (or quoted-delimiter heredoc) may be EXACT: zsh is left out because
+#: it reads .zshenv on every run (see _carries_program_text), so its text is not all it runs.
+_EXACT_SHELLS = frozenset({"bash", "sh", "dash", "ksh"})
 #: The command names a glob must be able to spell before its name counts as unknown.
 _GLOB_SPELLABLE = (DELETE_VERBS | COPY_VERBS | _TRASH_VERBS | WRAPPERS | _ALL_CARRIER_VERBS | set(_SHELLS)
                    | {"eval", "source", ".", "trap", "ln", "mklink", "touch", "truncate", "dd", "sed", "find",
@@ -7078,15 +7251,27 @@ def _env_candidate(seg: str) -> bool:
     return "nv" in seg and bool(_ENV_FLAG.search(seg))
 
 
-def _inner_commands(cmd: str) -> list[str]:
+def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
     """Command strings hidden inside a wrapper, so the rules see them too.
 
     Carriers: a shell's `-c` argument, `eval`, `trap`, a shell reading stdin, and (HK-2)
     `cmd /c` and a PowerShell host's -Command/-EncodedCommand. Each takes TEXT and runs
     it as a command, so anything it carries is invisible to every rule that inspects
     segments.
+
+    `exact`, when given, receives the carried texts that are BYTE-FOR-BYTE what the inner
+    shell is handed: a `-c` argument (bash/sh/dash/ksh, the segment as written) in which the
+    OUTER shell expanded nothing (every `$` and backtick quoted or escaped, no unquoted glob
+    or brace). Only such a text keeps its own quoting as evidence that a `$` in it is
+    literal (see facts' literal_dollar_path). Every other carrier -- eval, a heredoc or
+    here-string, echo | sh, a translated cmd/PowerShell command, a substitution, a reading,
+    positional parameters filled in, ssh/watch/wsl and the other joiners -- may have been
+    expanded or re-quoted on the way in, so its `'REF$X'` may really be `reference/` itself.
+    A text produced by any non-exact route is never exact, even if an exact route produced
+    it too (4.1.1 port of 6cbeb825).
     """
     out = []
+    exact_idx = set()
     segs = segments(cmd)
     pipes = piped_in(cmd)
     if len(pipes) != len(segs):          # never guess the pairing short: assume piped
@@ -7104,6 +7289,7 @@ def _inner_commands(cmd: str) -> list[str]:
         for name in set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)@P\}", cmd)):
             out.extend(substitutions(table.get(name, "")))
     for n, seg in enumerate(segs):
+        written = seg
         # F10: a command NAME from a variable. One this command assigns a bare name to is
         # spliced in first, so `R=eval; $R '<cmd>'` reaches the eval arm below (MEASURED:
         # allowed); one it cannot name contributes its speculative readings.
@@ -7183,7 +7369,15 @@ def _inner_commands(cmd: str) -> list[str]:
                     # EVERY value (FX-G6 / reviewer K C1, found by fuzz-guard): one resolve()
                     # judged `bash -c 'rm -rf "${NOPE:+zz}<ref>"'` as the alternate only.
                     at = _shell_text_at(toks, i + 1, t)
-                    out.extend(resolve_variants(toks[at][0], assignments(cmd)))
+                    arg = toks[at][0]
+                    values = resolve_variants(arg, assignments(cmd))
+                    if (exact is not None and seg == written and v in _EXACT_SHELLS
+                            and arg in values and not _reparsing_wrapper(seg)):
+                        lx = {}
+                        tokens(seg, literal_expansions=lx)
+                        if lx.get(arg, False) and arg not in _BRACE_WORDS:
+                            exact_idx.add(len(out) + values.index(arg))
+                    out.extend(values)
                     # ...and with its positional parameters filled in from the words after it
                     # (round 7, 2): `sh -c 'rm -rf "$1"' _ <ref>`, `-exec sh -c 'echo > "$1"' _ {} ;`.
                     filled = _positional_text(toks[at][0], _drop_redirects([w for w, _q in toks[at + 1:]]))
@@ -7238,6 +7432,9 @@ def _inner_commands(cmd: str) -> list[str]:
                     for t in _reading_variants(cmd, segs, handled)]
         _READING_TEXTS.update(variants)
         out.extend(variants)
+    if exact is not None:
+        loose = {t for k, t in enumerate(out) if k not in exact_idx}
+        exact.update(out[k] for k in exact_idx if out[k] not in loose)
     return out
 
 
@@ -7299,7 +7496,8 @@ _MAX_CARRIER_DEPTH = 4
 _MAX_CARRIED = 250
 
 
-def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tuple:
+def carried_commands(body: str, extra: list, dialects: dict | None = None, *,
+                     exact: dict | None = None) -> tuple:
     """Every command string reachable from `body`, following carriers.
 
     _inner_commands was applied EXACTLY ONCE, to the top level, so a command one
@@ -7313,7 +7511,34 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
     `dialects` (text -> "bash"/"windows", seeded with `body`) is filled for every text:
     a PowerShell/cmd translation is Windows-spelled, a shell carrier's text is Bash, and
     a substitution keeps its parent's dialect (LINUX GAP).
+
+    `exact` (text -> bool), when given, is SEEDED by the caller for `body` and each
+    `extra` (True only where that text is exactly what a shell parses) and is filled for
+    every text returned: exact only when EVERY route that reaches it is exact -- an exact
+    Bash parent handing on a `-c` argument the outer shell expanded nothing in (see
+    _inner_commands). Anything not known exact is False, which keeps a `$` in it an
+    unresolved expansion: the stricter reading.
     """
+    edges = []                          # (parent, child, exact hand-off?) -- every route
+
+    def finish(result, trunc):
+        if exact is not None:
+            # A root (`body`, an `extra`) starts from its seed; a carried text starts
+            # True and is lowered by any route into it that is not an exact hand-off.
+            roots_ = {body, *extra}
+            ex = {t: (exact.get(t, False) if t in roots_ else True) for t in result}
+            ex[body] = exact.get(body, False)
+            changed = True
+            while changed:              # only ever LOWERS a value, so it terminates
+                changed = False
+                for parent, child, handed in edges:
+                    if ex.get(child, False) and not (handed and ex.get(parent, False)):
+                        ex[child] = False
+                        changed = True
+            exact.clear()
+            exact.update(ex)
+        return result, trunc
+
     d = {} if dialects is None else dialects
     d.setdefault(body, "bash")
     seen = {body}
@@ -7324,7 +7549,7 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
         d.setdefault(e, WINDOWS_DIALECT if e in _WIN_DIALECT else "bash")
         if e not in seen:
             if len(out) >= _MAX_CARRIED:
-                return out, True
+                return finish(out, True)
             seen.add(e)
             out.append(e)
             frontier.append(e)
@@ -7334,19 +7559,26 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
         nxt = []
         for c in frontier:
             _check_deadline()
-            inners = _inner_commands(c)
+            exact_inners = set()
+            inners = _inner_commands(c, exact_inners)
             subs = substitutions(c)
-            for i_, kind in ([(x, WINDOWS_DIALECT if x in _WIN_DIALECT else "bash") for x in inners]
-                             + [(x, d.get(c, "bash")) for x in subs]):
-                for inner in _carrier_parts(i_):
+            for i_, kind, handed in ([(x, WINDOWS_DIALECT if x in _WIN_DIALECT else "bash",
+                                       x in exact_inners and x not in _WIN_DIALECT
+                                       and d.get(c, "bash") == "bash")
+                                      for x in inners]
+                                     + [(x, d.get(c, "bash"), False) for x in subs]):
+                for n_, inner in enumerate(_carrier_parts(i_)):
                     if inner:
                         d.setdefault(inner, kind)
+                        # Recorded BEFORE the dedup below: a text reached again by a
+                        # non-exact route must lose exactness it was granted earlier.
+                        edges.append((c, inner, handed and n_ == 0))
                     if not inner or inner in seen:
                         continue
                     if c in _READING_TEXTS or i_ in _READING_TEXTS:
                         _READING_TEXTS.add(inner)
                     if depth == _MAX_CARRIER_DEPTH:
-                        return out, True
+                        return finish(out, True)
                     seen.add(inner)
                     nxt.append(inner)
                     if len(out) + len(nxt) >= _MAX_CARRIED:
@@ -7354,12 +7586,12 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
                         # would be a step that narrows its data and reports success --
                         # the shape behind every tool defect found in this workspace.
                         out.extend(nxt)
-                        return out[:_MAX_CARRIED], True
+                        return finish(out[:_MAX_CARRIED], True)
         if not nxt:
             break
         out.extend(nxt)
         frontier = nxt
-    return out, truncated
+    return finish(out, truncated)
 
 
 def _ipc_value(key: str, v) -> str:
@@ -7941,7 +8173,29 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
             extra.append(sh_)
     # Which dialect spelled each command's paths (LINUX GAP): see carried_commands.
     dialects = {body: WINDOWS_DIALECT if from_powershell else "bash"}
-    all_cmds, carriers_truncated = carried_commands(body, extra, dialects)
+    # LITERAL `$` (4.1.1 port of 6cbeb825/51129cde/ed667b4a): which texts a shell parses
+    # exactly as they are spelled here -- the top level itself, and quoted-delimiter heredoc
+    # bodies fed straight to a shell. Everything else is seeded False, and carried_commands
+    # lowers, never raises. NOTHING is exact when the command can redefine what a later word
+    # runs through (function, alias, source, trap ...), names a startup-steering variable,
+    # holds a raw NUL (the text bash receives ends there), is a remote command judged for an
+    # unplaced ssh (the remote shell re-parses it), or holds no `$` at all (nothing to qualify).
+    raw_cmd = inp.get("command") or ""
+    no_exact = ("$" not in cmd or _SSH_NESTED[0] > 0 or _SHELL_STARTUP_ENV[0]
+                or _redefines_commands(raw_cmd) or _redefines_commands(cmd)
+                or chr(0) in raw_cmd or chr(0) in cmd)
+    exact_texts = {} if no_exact else {e: False for e in extra}
+    if not no_exact:
+        exact_bodies = exact_heredoc_bodies(spliced)
+        exact_texts = {e: e in exact_bodies and extra.count(e) == 1 for e in extra}
+        exact_texts[body] = body not in exact_texts
+    all_cmds, carriers_truncated = carried_commands(body, extra, dialects,
+                                                    exact=None if no_exact else exact_texts)
+    if not no_exact and (carriers_truncated or _no_literal_anywhere(
+            [cmd, body] + list(extra) + list(all_cmds))):
+        # (A PowerShell tool command is read here as its TRANSLATION; its raw text went
+        # through _redefines_commands above. Bash rules over PowerShell syntax misread it.)
+        exact_texts = {}
     # ...and each one with its separator-holding substitutions collapsed (FX-G6 / reviewer
     # K I4): `A=$(echo a; echo b) rm -rf <game>` -- see _spanning_view. Inserted after the
     # top level, so the last command (and the `cwd` fact read from it) is unchanged; the
@@ -7982,6 +8236,7 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # otherwise reaches no verb-keyed rule at all, hard blocks included.
     seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect = [], [], [], [], []
     seg_for = []                        # F331: is THIS segment a `for` header (_for_headers)?
+    seg_exact = []                      # is the segment's text exactly what a shell parses?
     base = session_cwd(payload)
     # A carried command (bash -c, a heredoc fed to a shell, $(...)) is walked on its own,
     # so it cannot see a `cd` made around it. When nothing anywhere changes directory it
@@ -8008,6 +8263,7 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
             pds = physical[k][1] if physical else [""] * len(ds)
             for d, ud, pd in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds)):
                 seg_dialect.append(dialects.get(c, "bash"))
+                seg_exact.append(exact_texts.get(c, False))
                 seg_for.append(k < len(heads) and heads[k])
                 seg_cwd.append((rs, d))
                 seg_prev.append(prev)
@@ -8114,6 +8370,29 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
         and _verb_name(verb(seg_cwd[0][0])) in {':', 'echo', 'printf', 'cat', 'tee', 'cp', 'touch'}
         and not any(marker in body for marker in ('$(', '`', '<(', '>(')))
 
+    literal_expansions = {}
+
+    def literal_words(seg, exact_text):
+        # Which of this segment's words have NO expansion-active `$` -- but only when the
+        # segment's text is exactly what a shell parses (seg_exact) and no wrapper in it runs the
+        # command through a re-parsing shell (sudo -s). In a command handed on by eval, an
+        # unquoted heredoc, `echo | sh`, ssh/watch/wsl and the other carriers, a translated
+        # cmd/PowerShell line, or a `-c` string the outer shell expanded, `'REF$X'` may already
+        # be `REF<value of X>`, i.e. reference/ itself: those texts are never exact. (The
+        # carrier's OWN segment -- `ssh host rm '<x>$X'` -- reaches no operand rule as `rm`; a
+        # per-word carrier test here was MEASURED unobservable through every rule and dropped.)
+        found = {}
+        if exact_text and not _reparsing_wrapper(seg):
+            tokens(seg, literal_expansions=found)
+        return found
+
+    def literal_dollar_path(path):
+        # Only a plain absolute path whose dollars were all quoted/escaped, in a segment a
+        # shell parses exactly as written (literal_words). Pattern membership and relative
+        # execution scope remain unqualified.
+        return ("$" in path and literal_expansions.get(path, False) and is_abs(path)
+                and not any(char in path for char in "*?[]{}"))
+
     def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file", copy_sources=None):
         """(path resolved where it runs, unresolvable?, the token as written). A whole
         array reference -- a for-loop variable, `"${A[@]}"` -- yields one entry PER
@@ -8129,13 +8408,14 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
         `c_old` is the segment's directory WITHOUT the session seed (lane F); see below."""
         out = []
         for p in paths:
+            literal = literal_dollar_path(p)
             # expand=False: resolved exactly as before this lane -- loop words and
             # `$(...)` values are not substituted, so such an operand stays unresolved.
             # C6 (v4.0 release review): EVERY value here too. One resolve() judged
             # `> "${NOPE:+x}<reference>/libraries/wares.xml"` as the alternate only -- ADVISED
             # where the plain path denies (broken since FX-G5 47d06cd; 0801a1a fixed the
             # other rules only). resolve_variants' first value is the plain resolve().
-            rs = resolve_all(p, assigns) if expand else resolve_variants(p, plain_assigns)
+            rs = [p] if literal else (resolve_all(p, assigns) if expand else resolve_variants(p, plain_assigns))
             for r in rs:
                 # A LEADING ROOT VARIABLE IS ITS ROOT, for every operand (FX-G2 items 1-2,
                 # v4.0.0 delta review). Only `cd` (R2-P1) and the icacls rule substituted it,
@@ -8146,8 +8426,8 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                 # "$X4_TOOLKIT/x4-paths.env" were ALLOWED (34 of 40 probes) while the literal
                 # path was refused. The variable NAME identifies the root (ROOT_VARS); a root
                 # that is not configured is left unsubstituted, exactly as before.
-                r = subst_root_var(r, roots)
-                unres = has_unresolved(r)
+                r = r if literal else subst_root_var(r, roots)
+                unres = not literal and has_unresolved(r)
                 # PARSE DEBRIS IS NOT JOINED ONTO THE SESSION SEED (lane F). `c_old` is the
                 # directory this segment had before the seed existed; a token carrying a
                 # quote, a paren, a redirect or a pipe character, or naming a Windows
@@ -8187,7 +8467,8 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                     physical = physical_join("" if execution_context else physical_cwd, r,
                                              posix_bash=posix_bash)
                     row = {"operation": operation, "path": physical, "dialect": cur_dialect[0],
-                                     "raw": r, "unresolved": unres or not physical or has_unresolved(physical)
+                                     "raw": r, "unresolved": unres or not physical
+                                     or (not literal and has_unresolved(physical))
                                      or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical))
                                      # C1: an unquoted brace-expanded word names SEVERAL paths
                                      # (or none), never the one literal path written here.
@@ -8196,11 +8477,14 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                     if copy_sources is not None:
                         sources = []
                         for source in copy_sources:
-                            for resolved in resolve_all(source, assigns):
-                                resolved = subst_root_var(resolved, roots)
+                            source_literal = literal_dollar_path(source)
+                            for resolved in ([source] if source_literal else resolve_all(source, assigns)):
+                                resolved = resolved if source_literal else subst_root_var(resolved, roots)
                                 placed = physical_join(physical_cwd, resolved, posix_bash=posix_bash)
-                                sources.append({"path": placed, "unresolved": not placed or has_unresolved(resolved)
-                                                or has_unresolved(placed) or bool(_DEBRIS.search(resolved))
+                                sources.append({"path": placed, "unresolved": not placed
+                                                or (not source_literal and (has_unresolved(resolved)
+                                                                            or has_unresolved(placed)))
+                                                or bool(_DEBRIS.search(resolved))
                                                 or source in _BRACE_WORDS or resolved in _BRACE_WORDS})
                         row["copy_sources"] = sources
                     evidence.append(row)
@@ -8235,9 +8519,10 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                                          for folder in protected_save_folders}
     save_mentions = [re.compile(re.escape(folder) + r"(?=$|[/\s\"'`<>);,*?\[\]{}$])")
                      for folder in save_spellings if folder]
-    for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0], is_for_ in zip(
-            seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect, seg_for):
+    for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0], is_for_, exact_ in zip(
+            seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect, seg_for, seg_exact):
         _check_deadline()
+        literal_expansions = literal_words(s, exact_)
         if (save_folders and evidence is not None and not execution_context
                 and verb(s) not in SAVE_MODELLED_VERBS and not _carries_program_text(s)
                 and not _save_read_only_program(s)):
@@ -8411,6 +8696,9 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # unknown cmdlet's RELATIVE arguments are not known to be paths at all. MEASURED in the
     # replay: 2 historical rows, both a user-defined PowerShell function called with
     # relative names from the game root -- each would have become a new prompt.
+    # A cmdlet the guard does not model may re-parse its argument (Invoke-Expression inside a
+    # module function), so no `$` in its operands is literal: the old reading.
+    literal_expansions = {}
     for (s, _c), c_old in zip(seg_cwd, unseeded):
         if verb(s) == "x4-unknown-cmdlet":
             ops = prep(_operands(s), c_old, c_old)
@@ -8430,6 +8718,7 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # name that is a ROOT variable (`"$X4_GAME/X4.exe"`) is a known program, not this case.
     program_dynamic = False
     for (s, _c), c_old in zip(seg_cwd, unseeded):
+        # (literal_expansions stays empty: a program the guard cannot name may re-parse anything.)
         if not _dynamic_program(s):
             continue
         if (not has_unresolved(subst_root_var(resolve(_verb_token(s), assigns), roots))

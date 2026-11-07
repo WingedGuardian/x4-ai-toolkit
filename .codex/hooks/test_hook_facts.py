@@ -8653,5 +8653,153 @@ class TestRound6FindExecAndCarriers(unittest.TestCase):
         self.assertFalse(f["ssh_host_unplaced"])
 
 
+class TestLiteralDollarPaths(unittest.TestCase):
+    """4.1.1 port of session/literal-dollar-v2 (6cbeb825, 51129cde, ed667b4a), re-applied by hand.
+    A `$` every shell layer keeps literal is part of the name: `<reference>$x` is the SIBLING of
+    reference/, not reference/ with an unknown tail. Any layer that may expand it -- or anything that
+    may re-run the word as shell text -- keeps the old, unresolved reading (the TWIN tests).
+    The sibling path the literal reading names is `REF + "$x"`; the reference rule must not fire."""
+    K = "rm_targets_reference"
+    LIT = Q + REF + "$x" + Q                       # 'REF$x'
+
+    def ref(self, cmd):
+        return F(cmd)[self.K]
+
+    # --- the top level
+    def test_a_quoted_or_escaped_dollar_names_the_sibling(self):
+        for cmd in (D + " -rf " + self.LIT, D + " -rf " + REF + BS + "$x", D + " -rf $" + Q + REF + BS + "x24x" + Q,
+                    "env " + D + " -rf " + self.LIT, "timeout 5 " + D + " -rf " + self.LIT):
+            self.assertFalse(self.ref(cmd), cmd)
+
+    def test_TWIN_a_dollar_the_shell_expands_stays_unresolved(self):
+        for cmd in (D + " -rf " + DQ + REF + "$x" + DQ, D + " -rf " + Q + REF + Q + "$x",
+                    D + " -rf " + self.LIT + "*", D + " -rf " + Q + REF + "$x" + Q + "{a,b}",
+                    D + " -rf " + Q + REF + "$x*" + Q,                  # a pattern spelling
+                    D + " -rf " + Q + REF + "$x"):           # an unterminated quote proves nothing
+            self.assertTrue(self.ref(cmd), cmd)
+
+    def test_a_quoted_dollar_is_no_ansi_c_sigil(self):
+        # `'dir$'"/x"` is the name `dir$/x`; `\$'x'` is `$x`. Before, the `$` was popped as a sigil.
+        self.assertEqual(H.words(Q + "a$" + Q + DQ + "/x" + DQ), ["a$/x"])
+        self.assertEqual(H.words(BS + "$" + Q + "x" + Q), ["$x"])
+        self.assertEqual(H.words("$" + Q + BS + "x72" + BS + "x6d" + Q), [D])
+
+    # --- the ANSI-C decoder
+    def test_an_ansi_c_word_ends_at_its_first_nul(self):
+        for body in ("ab" + BS + "x00cd", "ab" + BS + "0cd", "ab" + BS + "400cd", "ab" + BS + "u0000cd",
+                     "ab" + BS + "c@cd", "ab" + chr(0) + "cd"):
+            self.assertEqual(H._ansi_c_decode(body), "ab", body)
+        self.assertTrue(self.ref(D + " -rf $" + Q + REF + BS + "x00junk" + Q))
+
+    def test_ansi_c_u_and_c_escapes_decode_as_git_bash_does(self):
+        self.assertEqual(H._ansi_c_decode("a" + BS + "u002fb"), "a/b")
+        self.assertEqual(H._ansi_c_decode("a" + BS + "U00000041b"), "aAb")
+        self.assertEqual(H._ansi_c_decode("a" + BS + "uD800b"), "a" + BS + "uD800b")
+        self.assertEqual(H._ansi_c_decode("a" + BS + "x4142b"), "aA42b")
+        self.assertEqual(H._ansi_c_decode(BS + "cA"), chr(1))
+
+    # --- a shell's -c text and a heredoc
+    def test_a_shell_c_text_literal_in_every_layer_names_the_sibling(self):
+        for cmd in ("bash -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ,
+                    "sh -c " + Q + D + " -rf " + Q + DQ + Q + DQ + Q + REF + "$x" + Q + DQ + Q + DQ + Q + Q,
+                    "bash <<" + Q + "EOF" + Q + chr(10) + D + " -rf " + self.LIT + chr(10) + "EOF"):
+            self.assertFalse(self.ref(cmd), cmd)
+
+    def test_TWIN_an_inner_layer_that_may_expand_keeps_it_unresolved(self):
+        for cmd in ("bash -c " + DQ + D + " -rf " + self.LIT + DQ,                    # outer expands
+                    "sh -c " + Q + D + " -rf " + DQ + REF + "$x" + DQ + Q,           # inner expands
+                    "sh -c " + Q + D + " -rf " + DQ + "$1" + DQ + Q + " _ " + self.LIT,
+                    "zsh -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ,      # .zshenv
+                    "sudo -s bash -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ,
+                    "bash <<EOF" + chr(10) + D + " -rf " + self.LIT + chr(10) + "EOF",
+                    "cat <<" + Q + "EOF" + Q + " | bash" + chr(10) + D + " -rf " + self.LIT + chr(10) + "EOF",
+                    "bash <<" + Q + "EOF" + Q + " < /dev/null" + chr(10) + D + " -rf " + self.LIT + chr(10) + "EOF",
+                    "echo " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ + " | bash",
+                    "bash -c " + Q + D + " -rf " + Q + DQ + Q + DQ + Q + REF + "$x" + Q + DQ + Q + DQ + Q
+                    + " #" + Q + "*",                                     # outer glob may rewrite it
+                    "BASHOPTS=expand_aliases bash -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ):
+            self.assertTrue(self.ref(cmd), cmd)
+
+    def test_TWIN_a_carrier_that_joins_words_for_a_shell_keeps_it_unresolved(self):
+        for pre in ("ssh localhost ", "watch ", "wsl ", "parallel ", "sshpass -p x ssh localhost "):
+            cmd = pre + D + " -rf " + self.LIT + (" ::: x" if pre == "parallel " else "")
+            self.assertTrue(self.ref(cmd), cmd)
+        for cmd in ("su -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ,
+                    "script -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ + " /dev/null"):
+            self.assertTrue(self.ref(cmd), cmd)
+
+    def test_an_unplaced_ssh_host_is_judged_with_the_dollar_unresolved(self):
+        # The remote shell re-parses what ssh joins, so its nested judgement has no literal at all.
+        # (The toolkit root is moved away from reference/'s parent, so the sibling is in no root.)
+        roots = dict(ROOTS, toolkit="C:/Users/tester/tk", mods="C:/Users/tester/tk/dev")
+        cmd = "ssh example.com " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ
+        self.assertTrue(F(cmd, roots=roots)["ssh_host_unplaced"], cmd)
+
+    # --- anything that can re-run a word as shell text
+    def test_TWIN_a_definition_or_eval_anywhere_keeps_every_dollar_unresolved(self):
+        for pre in (D + "(){ eval command " + D + " " + DQ + "$@" + DQ + "; }; ",
+                    "alias " + D + "=" + Q + "eval " + D + Q + "; ",
+                    "eval true; ", "source /tmp/x; ", ". /tmp/x; ", "R=eval; $R true; ",
+                    DQ + "eval" + DQ + " true; ", "BASH_ENV=/tmp/x true; ", "bash -i -c true; ",
+                    DQ + "$NOPE" + DQ + " true; ",
+                    "bash --rcfile /tmp/rc -c true; "):
+            cmd = pre + D + " -rf " + self.LIT
+            self.assertTrue(self.ref(cmd), cmd)
+        # ...a definition DECODED from a carried `$'...'` text, which the raw command does not show
+        inner = D + " -rf " + BS + Q + REF + "$x" + BS + Q
+        for pre in ("function" + BS + "x20" + D + " { sh -c " + DQ + "/bin/" + D + " $*" + DQ + "; }; ",
+                    "alias" + BS + "x20" + D + "=x; ", "trap" + BS + "x20x EXIT; "):
+            cmd = "bash -c $" + Q + pre + inner + Q
+            self.assertTrue(self.ref(cmd), cmd)
+
+    def test_TWIN_sudo_through_a_shell_keeps_it_unresolved(self):
+        for flag in ("-s", "-i", "--shell", "--login", "-is", "-E -s"):
+            cmd = "sudo " + flag + " " + D + " -rf " + self.LIT
+            self.assertTrue(self.ref(cmd), cmd)
+        self.assertFalse(self.ref("sudo -u root " + D + " -rf " + self.LIT))
+
+    def test_a_clustered_wrapper_flag_takes_its_value(self):
+        for cmd in ("sudo -su root " + D + " -rf " + Q + REF + Q, "sudo -Eu root " + D + " -rf " + Q + REF + Q,
+                    "sudo -Eh " + D + " -rf " + Q + REF + Q):
+            self.assertTrue(self.ref(cmd), cmd)
+        self.assertEqual(H.verb("sudo -su root " + D + " x"), D)
+        self.assertEqual(H.verb("sudo -Eh " + D + " x"), D)        # -h takes no value in a cluster
+        self.assertEqual(H.verb("sudo -uroot " + D + " x"), D)
+
+    def test_only_an_absolute_literal_path_qualifies(self):
+        # A relative literal path is read exactly as the expanding spelling is: where it runs is
+        # not this parse's to prove, so it gains no qualification either way.
+        for pre in ("cd " + Q + REF + Q + " && ", ""):
+            lit = F(pre + D + " -rf " + Q + "$x" + Q)
+            dyn = F(pre + D + " -rf " + DQ + "$x" + DQ)
+            self.assertEqual(lit[self.K], dyn[self.K], pre)
+            self.assertEqual(lit["rm_in_x4_dir"], dyn["rm_in_x4_dir"], pre)
+
+
+@unittest.skipUnless(_PWSH, "no PowerShell on this machine: the PowerShell front-end cannot be "
+                     "exercised here")
+class TestLiteralDollarPathsPowerShell(unittest.TestCase):
+    """The same port through the PowerShell front end: `'..$x'` and a backtick-escaped `$` are
+    literal; a double-quoted `$x`, a function, alias or Invoke-Expression anywhere is not."""
+    K = "rm_targets_reference"
+
+    def P(self, command):
+        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
+
+    def test_a_single_quoted_or_backtick_escaped_dollar_names_the_sibling(self):
+        for cmd in ("Remove-Item -LiteralPath " + Q + REF + "$x" + Q + " -Recurse",
+                    "Remove-Item -LiteralPath " + DQ + REF + "`$x" + DQ + " -Recurse"):
+            self.assertFalse(self.P(cmd)[self.K], cmd)
+
+    def test_TWIN_an_expanding_or_redefining_command_keeps_it_unresolved(self):
+        lit = "Remove-Item -LiteralPath " + Q + REF + "$x" + Q + " -Recurse"
+        for cmd in ("Remove-Item -LiteralPath " + DQ + REF + "$x" + DQ + " -Recurse",
+                    "function f { 1 }; " + lit, "Set-Alias f g; " + lit,
+                    "iex " + Q + "1" + Q + "; " + lit,
+                    "Invoke-Expression " + DQ + "Remove-Item " + Q + REF + "`$x" + Q + DQ):
+            f = self.P(cmd)
+            self.assertTrue(f[self.K] or f.get("carrier_untranslated"), cmd)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
