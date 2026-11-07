@@ -1101,3 +1101,39 @@ def test_another_databases_folder_does_not_count(tmp_path, monkeypatch):
     monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
     monkeypatch.setattr(fc, "_basex_unbuildable", lambda: "java is not on PATH.")
     assert fc._status_basex("x4raw").state == fc.NOT_BUILT
+
+
+def _failed_line(sd, monkeypatch, capsys, tmp_path, *said):
+    wrapper = _killing_wrapper(tmp_path, *said)
+    before = {n: (STALE(n) if n == "effective" else FRESH(n)) for n in fc.ORDER}
+    _fake_builder(monkeypatch, _world(monkeypatch, before, before), "pass")
+    monkeypatch.setenv("X4_JOB_WRAPPER", json.dumps([sys.executable, str(wrapper), "--"]))
+    assert fc.rebuild(("effective",)) == 1
+    out = capsys.readouterr().out
+    return next(ln for ln in out.splitlines() if "effective: FAILED rc 86" in ln), out
+
+
+def test_an_earlier_admission_refusal_that_was_waited_out_is_not_blamed(sd, monkeypatch, capsys, tmp_path):
+    """4.1.1 review: `refused` at admission, then a wait, then the real kill -> the kill (it names this rc) is the why."""
+    early = "throttle: admission refused: cpu busy, waiting 30s"
+    failed, _out = _failed_line(sd, monkeypatch, capsys, tmp_path, early, KILL)
+    assert failed.endswith("job wrapper: " + KILL), failed
+
+
+def test_the_last_explaining_line_wins_when_none_names_the_exit_code(sd, monkeypatch, capsys, tmp_path):
+    failed, _out = _failed_line(sd, monkeypatch, capsys, tmp_path,
+                                "throttle: admission refused once", "throttle: watchdog killed the child")
+    assert failed.endswith("job wrapper: throttle: watchdog killed the child"), failed
+
+
+def test_TWIN_a_line_naming_another_exit_code_loses_to_one_naming_this_one(sd, monkeypatch, capsys, tmp_path):
+    other = "throttle: KILLED an earlier child -> exit 3"
+    failed, _out = _failed_line(sd, monkeypatch, capsys, tmp_path, KILL, other)
+    assert failed.endswith("job wrapper: " + KILL), failed
+
+
+def test_the_quoted_wrapper_line_is_capped(sd, monkeypatch, capsys, tmp_path):
+    long = "throttle: KILLED " + "x" * 2000 + " -> exit 86"
+    failed, _out = _failed_line(sd, monkeypatch, capsys, tmp_path, long)
+    quoted = failed.split("job wrapper: ", 1)[1]
+    assert len(quoted) <= 300 and quoted.startswith("throttle: KILLED"), len(quoted)

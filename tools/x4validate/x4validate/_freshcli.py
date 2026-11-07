@@ -570,10 +570,21 @@ def _run(name: str, log: Path) -> tuple[int, list[str], list[str]]:
     return rc, warnings, wrappers
 
 
-def _explaining_first(wrapper_lines: list[str]) -> list[str]:
-    """The job wrapper's lines with those that explain a non-zero exit first, each group in printed order."""
+WHY_MAX = 300   # characters of a wrapper line quoted on the FAILED line
+
+
+def _exit_reason(wrapper_lines: list[str], rc: int) -> str | None:
+    """The wrapper line that explains exit `rc`: the LAST one naming `exit <rc>`, else the last explaining line. An
+    earlier "refused" can be an admission the wrapper then waited out; the kill comes last (4.1.1 review)."""
     explains = [w for w in wrapper_lines if WRAPPER_EXIT_RE.search(w)]
-    return explains + [w for w in wrapper_lines if w not in explains]
+    names_rc = [w for w in explains if re.search(r"\bexit(?:ed)?(?: with)?(?: code)? {}\b".format(rc), w, re.I)]
+    return (names_rc or explains or [None])[-1]
+
+
+def _explaining_first(wrapper_lines: list[str], rc: int = 0) -> list[str]:
+    """The job wrapper's lines: the one that explains exit `rc` first, then the others in printed order."""
+    why = _exit_reason(wrapper_lines, rc)
+    return ([why] if why else []) + [w for w in wrapper_lines if w is not why]
 
 
 def _deferred(auto: bool) -> str | None:
@@ -760,8 +771,10 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
         if rc not in (0, 3):
             failed = True
             memo[name] = {"reasons": key, "rc": rc, "when": time.strftime("%Y-%m-%d %H:%M")}
-            wrapper_lines = _explaining_first(wrapper_lines)  # a wrapper's refusal or kill may be WHY it failed
-            why = next((w for w in wrapper_lines if WRAPPER_EXIT_RE.search(w)), None)
+            why = _exit_reason(wrapper_lines, rc)                  # a wrapper's refusal or kill may be WHY it failed
+            wrapper_lines = _explaining_first(wrapper_lines, rc)
+            if why and len(why) > WHY_MAX:
+                why = why[:WHY_MAX - 3] + "..."
             lines.append(f"{name}: FAILED rc {rc}, now {after.state} (log: {log})"
                          + (f" -- job wrapper: {why}" if why else ""))
             warnings = wrapper_lines + warnings
