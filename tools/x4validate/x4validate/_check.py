@@ -1386,7 +1386,7 @@ def _child_names(root: etree._Element) -> set[str]:
             if isinstance(c.tag, str)} - {None}
 
 
-def check_complete_file_merge(complete: list[tuple[str, etree._Element]],
+def check_complete_file_merge(complete: list[tuple[str, etree._Element | None]],
                               config: _merge.Config, report: Report) -> None:
     """Say how the merge model treats each COMPLETE (non-diff) file of this mod that
     meets an existing document, and whether the engine was measured doing that (#17).
@@ -1400,7 +1400,8 @@ def check_complete_file_merge(complete: list[tuple[str, etree._Element]],
       kind, never one per file, so a big overhaul cannot flood the report.
 
     The owner of a nested path is looked up among the merged roots only (Tier B); Tier A
-    merges no other mod, so it says nothing about nested copies there."""
+    merges no other mod, so it says nothing about nested copies there. A root is read only
+    for a nested path, so a caller may pass None for any other (check_sel_resolution does)."""
     owned = config.packed_dlc_names()
     roots = {p.name.lower(): p for p in (*config.overlays, *config.final_overlays)}
     nested_unmeasured: list[str] = []
@@ -1476,13 +1477,17 @@ def check_sel_resolution(mod_dir: Path, config: _merge.Config, report: Report) -
     checked = found = 0
     seen_skips: set[str] = set()
     payload = []  # one parse pass serves both the nested-diff check and the denominator
-    complete: list[tuple[str, etree._Element]] = []
+    # 4.1.1 review B4: a parsed root is kept only where check_complete_file_merge reads one (a nested path); a
+    # plain path needs its vpath alone. MEASURED on the largest installed mod by complete XML (309 files, 7.0 MB):
+    # keeping every root raised this pass's peak working set from 149 MB to 227 MB.
+    owned = config.packed_dlc_names()
+    complete: list[tuple[str, etree._Element | None]] = []
     for vpath, root in iter_mod_xml_roots(mod_dir):
         check_nested_diff(vpath, root, report)
         if vpath.lower() != MANIFEST:
             payload.append(vpath)
             if root.tag != "diff":
-                complete.append((vpath, root))
+                complete.append((vpath, root if _merge._nested_target(vpath, owned) is not None else None))
     check_complete_file_merge(complete, config, report)
     for vpath, diff_root in iter_diff_files(mod_dir):
         found += 1

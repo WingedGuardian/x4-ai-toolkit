@@ -407,3 +407,18 @@ def test_a_full_copy_at_a_DLC_nested_path_is_named_as_that_shape(tmp_path):
     rep = _check.validate(mod, cfg)
     merge = [f.message for f in rep.findings if f.category == "merge"]
     assert len(merge) == 1 and "DLC's nested path" in merge[0], merge
+
+
+def test_check_sel_resolution_keeps_a_parsed_root_only_where_the_merge_check_reads_one(tmp_path, monkeypatch):
+    """4.1.1 review B4: the pass kept EVERY complete parsed root of the mod until it ended. MEASURED on the largest
+    installed mod by complete XML (309 files, 7.0 MB): peak working set 149 MB without the list, 227 MB with it.
+    check_complete_file_merge reads a root only for a nested path; a plain path needs its vpath alone."""
+    _ext, ref, dirs = _world(tmp_path, copy_text=_macro(2))
+    _w(dirs["b_copy"] / "libraries" / "plain_full.xml", "<wares/>")
+    seen = {}
+    real = _check.check_complete_file_merge
+    monkeypatch.setattr(_check, "check_complete_file_merge",
+                        lambda complete, config, report: (seen.update(complete), real(complete, config, report)))
+    _check.check_sel_resolution(dirs["b_copy"], _cfg(ref, dirs, ["a_owner", "b_copy"]), _check.Report())
+    assert seen["libraries/plain_full.xml"] is None, seen
+    assert seen[NESTED] is not None and seen[NESTED].tag == "macros", seen
