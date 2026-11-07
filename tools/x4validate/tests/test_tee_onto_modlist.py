@@ -59,3 +59,31 @@ def test_TWIN_a_pipeline_that_touches_anything_else_keeps_its_verdict(sandbox, s
                        s=(prof / "save" / "a.xml.gz").as_posix())
     v = _decide(env, cmd)
     assert v["decision"] in ("ask", "deny"), (cmd, v)
+
+
+@pytest.mark.parametrize("shape", [
+    "echo '{s}' | xargs tee '{m}'",          # 4.1.1 review: xargs appends the save to tee's files -> truncated
+    "xargs tee '{m}' < '{s}'",               # the single-segment form
+    "echo x | sudo tee '{m}'",
+    "echo x | env X=1 tee '{m}'",
+    "echo x | timeout 5 tee '{m}'",
+])
+def test_TWIN_a_wrapped_tee_onto_the_mod_list_keeps_its_confirmation(sandbox, shape):
+    tmp, _tk, env = sandbox
+    prof, _src = _files(tmp)
+    save = prof / "save" / "a.xml.gz"
+    save.parent.mkdir(exist_ok=True)
+    save.write_bytes(b"opaque save fixture")
+    v = _decide(env, shape.format(m=(prof / "content.xml").as_posix(), s=save.as_posix()))
+    assert v["decision"] in ("ask", "deny"), (shape, v)
+
+
+def test_a_tee_that_reads_a_save_and_writes_only_the_mod_list_is_advised(sandbox):
+    tmp, _tk, env = sandbox
+    prof, _src = _files(tmp)
+    save = prof / "save" / "a.xml.gz"
+    save.parent.mkdir(exist_ok=True)
+    save.write_bytes(b"opaque save fixture")
+    v = _decide(env, "cat '{}' | tee '{}'".format(save.as_posix(), (prof / "content.xml").as_posix()))
+    assert v["decision"] in ("allow", "advise"), v
+    assert save.read_bytes() == b"opaque save fixture"      # decided only; nothing ran

@@ -7483,6 +7483,27 @@ class TestProfileModlistWritePolicy(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertTrue(F(command, roots=self.roots)['writes_profile_other'], command)
 
+    def test_TWIN_a_wrapped_tee_is_not_the_exempt_write(self):
+        """4.1.1 review: verb() sees through wrappers, so `xargs tee <modlist>` counted as tee -- and xargs APPENDS
+        its stdin to tee's arguments: `echo <save> | xargs tee <modlist>` truncates the save. Only a stage whose
+        literal first word is `tee` is the mod-list write; any wrapper or prefix keeps the confirmation."""
+        m = Q + str(self.profile / 'content.xml') + Q
+        s = Q + str(self.profile / 'save' / 'a.xml.gz') + Q
+        for command in ('echo ' + s + ' | xargs tee ' + m, 'xargs tee ' + m + ' < ' + s,
+                        'echo x | sudo tee ' + m, 'echo x | env X=1 tee ' + m, 'echo x | timeout 5 tee ' + m,
+                        'echo x | nice tee ' + m, 'echo x | command tee ' + m, 'sudo tee ' + m,
+                        'X=1 tee ' + m, 'echo x | parallel tee ' + m, 'echo x | sudo echo y | tee ' + m):
+            with self.subTest(command=command):
+                self.assertTrue(F(command, roots=self.roots)['writes_profile_other'], command)
+
+    def test_a_tee_that_only_READS_a_save_is_still_the_exempt_write(self):
+        """`cat <save> | tee <modlist>` reads the save and writes only the mod list."""
+        m = Q + str(self.profile / 'content.xml') + Q
+        s = Q + str(self.profile / 'save' / 'a.xml.gz') + Q
+        facts = F('cat ' + s + ' | tee ' + m, roots=self.roots)
+        self.assertFalse(facts['writes_profile_other'])
+        self.assertFalse(facts.get('rm_saves'))
+
 
 class TestGameArchiveShellWrites(unittest.TestCase):
     """A shell command that changes a base-game or official DLC archive gets the deny the file

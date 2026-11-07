@@ -680,8 +680,19 @@ def _modlist_tee_pipeline(cmd: str, segs: list) -> bool:
     ordinary confirmation. Each written path still qualifies on its own (profile_modlist_write)."""
     if len(segs) < 2 or piped_in(cmd) != [False] + [True] * (len(segs) - 1):
         return False
-    names = [_verb_name(verb(s)) for s in segs]
-    return names[-1] == "tee" and all(n in _MODLIST_PIPE_PRODUCERS for n in names[:-1])
+    return (_bare_command(segs[-1], {"tee"})
+            and all(_bare_command(s, _MODLIST_PIPE_PRODUCERS) for s in segs[:-1]))
+
+
+def _bare_command(seg: str, names) -> bool:
+    """The stage's LITERAL first word is one of `names`, and it is the command run: no wrapper (xargs, sudo, env,
+    timeout, nice, command...) and no assignment prefix. verb() sees through those, and `xargs tee <modlist>` APPENDS
+    its stdin to tee's files (4.1.1 review: `echo <save> | xargs tee <modlist>` truncates the save)."""
+    toks = tokens(seg)
+    if not toks:                # an assignment prefix (`X=1 tee`) is a first word that is not `tee`
+        return False
+    first = _verb_name(toks[0][0])
+    return first in names and _verb_name(verb(seg)) == first
 
 
 def piped_in(cmd: str) -> list:
@@ -8142,7 +8153,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         redir_t += [("truncate",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False, operation="write")]
         mv_src += prep(move_sources(s), c_cwd, c_old, operation="move")
         dests_ = prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination",
-                      copy_sources=exact_copy_sources(s), reads_stdin=_verb_name(verb(s)) == "tee")
+                      copy_sources=exact_copy_sources(s), reads_stdin=_bare_command(s, {"tee"}))
         copy_t += dests_
         if copy_names_archive(s):
             archive_into_t += dests_ + prep(robo_copy, c_cwd, c_old)
