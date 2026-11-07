@@ -20,6 +20,10 @@ def sd(tmp_path, monkeypatch):
     monkeypatch.setattr(fc, "state_dir", lambda: d)
     monkeypatch.delenv("X4_JOB_WRAPPER", raising=False)
     monkeypatch.delenv("X4_FRESH_AUTO", raising=False)
+    monkeypatch.delenv("X4_FRESH_BASEX_QUIET_MIN", raising=False)
+    # Off unless a test turns it on: no test may start a real background BaseX build.
+    monkeypatch.setenv("X4_FRESH_BASEX_AUTO", "off")
+    monkeypatch.setattr(fc, "_spawn_basex", lambda note: pytest.fail("a real background BaseX build was started"))
     monkeypatch.setattr(fc, "_world_digest", lambda: "world")
     return d
 
@@ -221,7 +225,7 @@ def test_auto_rebuilds_only_effective_and_xref_and_says_what_it_left(sd, monkeyp
     assert fc.rebuild(auto=True) == 0
     assert built == {"effective", "xref"}
     out = capsys.readouterr().out
-    assert "not rebuilt unattended" in out
+    assert "x4raw, x4eff: not rebuilt automatically: X4_FRESH_BASEX_AUTO=off" in out
     # The final status runs while THIS process holds the lock; that must not read as another rebuild.
     # (MEASURED 2026-11-01 end to end: the report said "rebuild in progress: x4raw, x4eff".)
     assert "REBUILDING" not in out and "rebuild in progress" not in out
@@ -1201,3 +1205,341 @@ def test_the_quoted_wrapper_line_is_capped(sd, monkeypatch, capsys, tmp_path):
     failed, _out = _failed_line(sd, monkeypatch, capsys, tmp_path, long)
     quoted = failed.split("job wrapper: ", 1)[1]
     assert len(quoted) <= 300 and quoted.startswith("throttle: KILLED"), len(quoted)
+
+
+
+# --------------------------------------------------------------------------- automatic BaseX rebuild (4.1.1)
+# `rebuild --auto` hands x4raw/x4eff to ONE detached background process, only when the game is closed, the world has
+# been quiet for X4_FRESH_BASEX_QUIET_MIN (default 30) minutes, the disk fits a second copy, no build holds a lock,
+# BaseX can build here, the database was built once before, and the same inputs did not already fail.
+
+T0 = 1_800_000_000.0
+
+
+@pytest.fixture
+def bxa(sd, monkeypatch):
+    """BaseX auto ON, every machine fact faked to 'fine'; tests flip one at a time."""
+    monkeypatch.delenv("X4_FRESH_BASEX_AUTO", raising=False)
+    clock = {"t": T0}
+    monkeypatch.setattr(fc, "_now", lambda: clock["t"])
+
+    def sleep(s):
+        clock["t"] += s
+    monkeypatch.setattr(fc, "_sleep", sleep)
+    monkeypatch.setattr(fc, "_basex_previously_built", lambda db: True)
+    monkeypatch.setattr(fc, "_basex_unbuildable", lambda: None)
+    monkeypatch.setattr(fc, "_basex_disk_shortfall", lambda db: None)
+    monkeypatch.setattr(fc, "_basex_running_build", lambda db: None)
+    spawned = []
+    monkeypatch.setattr(fc, "_spawn_basex", lambda note: spawned.append(note) or 4242)
+    return {"clock": clock, "spawned": spawned}
+
+
+def _seen(sd, minutes_ago, digest="world"):
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "world-seen.json").write_text(json.dumps({"digest": digest, "first_seen": T0 - minutes_ago * 60}),
+                                        encoding="utf-8")
+
+
+def _basex_stale(monkeypatch, effective="FRESH"):
+    before = {n: (STALE(n) if n in fc.BASEX else FRESH(n)) for n in fc.ORDER}
+    if effective != "FRESH":
+        before["effective"] = STALE("effective")
+    return _world(monkeypatch, before, before)
+
+
+def _note(sd):
+    return (sd / "session-note.txt").read_text(encoding="utf-8")
+
+
+def test_auto_starts_basex_in_the_background_once_the_world_is_quiet(sd, bxa, monkeypatch):
+    built = _basex_stale(monkeypatch)
+    _fake_builder(monkeypatch, built, "pass")
+    _seen(sd, 31)
+    assert fc.rebuild(auto=True) == 0
+    assert not built, "the session-start run must never build BaseX itself (it is detached)"
+    assert len(bxa["spawned"]) == 1
+    assert "x4raw, x4eff: automatic rebuild started in the background (pid 4242)" in _note(sd)
+
+
+def test_the_quiet_period_not_yet_over_starts_a_waiting_builder_and_says_until_when(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    _seen(sd, 10)
+    assert fc.rebuild(auto=True) == 0
+    assert len(bxa["spawned"]) == 1
+    assert "waits until the mods have been unchanged for 30 min" in _note(sd)
+
+
+def test_the_quiet_period_is_configurable(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    _seen(sd, 10)
+    monkeypatch.setenv("X4_FRESH_BASEX_QUIET_MIN", "5")
+    fc.rebuild(auto=True)
+    assert "waits" not in _note(sd) and bxa["spawned"]
+
+
+def test_an_unreadable_quiet_setting_skips_never_guesses(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    monkeypatch.setenv("X4_FRESH_BASEX_QUIET_MIN", "half an hour")
+    fc.rebuild(auto=True)
+    assert not bxa["spawned"]
+    assert "not rebuilt automatically: X4_FRESH_BASEX_QUIET_MIN" in _note(sd)
+
+
+def test_an_unmeasurable_world_skips(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    monkeypatch.setattr(fc, "_world_digest", lambda: None)
+    fc.rebuild(auto=True)
+    assert not bxa["spawned"]
+    assert "quiet period cannot be measured" in _note(sd)
+
+
+def test_first_seen_is_kept_for_the_same_world_and_reset_by_a_new_one(sd):
+    assert fc._first_seen(sd, "a", 100.0) == 100.0
+    assert fc._first_seen(sd, "a", 500.0) == 100.0
+    assert fc._first_seen(sd, "b", 900.0) == 900.0, "a changed world starts the quiet period again"
+
+
+@pytest.mark.parametrize("flip, expect", [
+    ("_basex_disk_shortfall", "not enough disk"),
+    ("_basex_running_build", "a build of"),
+    ("_basex_unbuildable", "BaseX cannot build here"),
+    ("_basex_previously_built", "never built here"),
+])
+def test_each_machine_condition_alone_skips_with_one_line(sd, bxa, monkeypatch, flip, expect):
+    _basex_stale(monkeypatch)
+    _seen(sd, 60)
+    value = {"_basex_disk_shortfall": lambda db: "not enough disk to build " + db,
+             "_basex_running_build": lambda db: 777,
+             "_basex_unbuildable": lambda: "java is not on PATH.",
+             "_basex_previously_built": lambda db: False}[flip]
+    monkeypatch.setattr(fc, flip, value)
+    assert fc.rebuild(auto=True) == 0
+    assert not bxa["spawned"]
+    note = _note(sd)
+    assert expect in note and "not rebuilt automatically" in note
+    assert "Traceback" not in note
+
+
+def test_a_game_running_defers_basex_too(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    _seen(sd, 60)
+    monkeypatch.setattr(fc, "_deferred", lambda auto: "deferring while running: x4.exe")
+    fc.rebuild(auto=True)
+    assert not bxa["spawned"]
+    assert "DEFERRED" in _note(sd)
+
+
+def test_one_background_builder_at_a_time(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    _seen(sd, 60)
+    held = fc.BuildLock(sd / fc.BASEX_AUTO_LOCK)
+    assert held.acquire()
+    try:
+        fc.rebuild(auto=True)
+    finally:
+        held.release()
+    assert not bxa["spawned"]
+    assert "already scheduled or running" in _note(sd)
+
+
+def test_never_built_or_not_built_is_never_started(sd, bxa, monkeypatch):
+    checks = _public_machine(monkeypatch)
+    _world(monkeypatch, checks, checks)
+    fc.rebuild(auto=True)
+    assert not bxa["spawned"]
+    assert "not rebuilt automatically" not in _note(sd), "a NOT-BUILT database is named once, not every session"
+
+
+def test_a_stale_effective_store_holds_back_x4eff_only(sd, bxa, monkeypatch):
+    built = _basex_stale(monkeypatch, effective="STALE")
+    _fake_builder(monkeypatch, built, "import sys; sys.exit(1)")    # the effective build fails: still STALE
+    _seen(sd, 60)
+    fc.rebuild(auto=True)
+    assert bxa["spawned"]
+    note = _note(sd)
+    assert "x4eff: not rebuilt automatically: the effective store is STALE" in note
+    assert "x4raw: automatic rebuild started" in note
+
+
+def test_a_remembered_failure_is_not_started_again(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    _seen(sd, 60)
+    sd.mkdir(parents=True, exist_ok=True)
+    key = "x4raw moved [a -> b] @ world"
+    (sd / "last-failures.json").write_text(json.dumps({"x4raw": {"reasons": key, "rc": 1, "when": "then"}}),
+                                           encoding="utf-8")
+    fc.rebuild(auto=True)
+    note = _note(sd)
+    assert "x4raw: not rebuilt automatically: not retried" in note
+    assert "x4eff: automatic rebuild started" in note
+
+
+def test_the_off_switch(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    _seen(sd, 60)
+    monkeypatch.setenv("X4_FRESH_BASEX_AUTO", "off")
+    fc.rebuild(auto=True)
+    assert not bxa["spawned"]
+    assert "not rebuilt automatically: X4_FRESH_BASEX_AUTO=off" in _note(sd)
+
+
+# ---- the background builder itself
+
+def _child_world(monkeypatch, effective_after_x4raw="FRESH"):
+    order: list[str] = []
+    state = {n: (STALE(n) if n in fc.BASEX else FRESH(n)) for n in fc.ORDER}
+
+    def check(name):
+        def f():
+            if name == "effective" and "x4raw" in order and effective_after_x4raw != "FRESH":
+                return STALE("effective")()
+            return (FRESH(name) if name in order else state[name])()
+        return f
+    monkeypatch.setattr(fc, "CHECKS", {n: check(n) for n in fc.ORDER})
+    monkeypatch.setattr(fc, "_deferred", lambda auto: None)
+
+    def builder(name):
+        order.append(name)
+        return [sys.executable, "-c", "pass"]
+    monkeypatch.setattr(fc, "builder", builder)
+    return order
+
+
+def test_the_background_builder_waits_out_the_quiet_period_then_builds_x4raw_then_x4eff(sd, bxa, monkeypatch):
+    order = _child_world(monkeypatch)
+    _seen(sd, 10)
+    assert fc._basex_child(sd / "session-note.txt") == 0
+    assert order == ["x4raw", "x4eff"]
+    assert bxa["clock"]["t"] >= T0 + 20 * 60, "it started before the quiet period was over"
+    rec = json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
+    assert rec["state"] == "finished"
+    assert _note(sd) == "", "a clean outcome leaves the note empty, as every --auto run does"
+    assert "x4raw: REBUILT, FRESH" in rec["detail"] and "x4eff: REBUILT, FRESH" in rec["detail"]
+    assert fc._basex_auto_line(sd).startswith("last automatic BaseX rebuild: finished")
+
+
+def test_a_world_that_moves_during_the_wait_restarts_it(sd, bxa, monkeypatch):
+    order = _child_world(monkeypatch)
+    _seen(sd, 25)
+    digests = iter(["world", "moved"])
+    monkeypatch.setattr(fc, "_world_digest", lambda: next(digests, "moved"))
+    fc._basex_child(sd / "session-note.txt")
+    assert order == ["x4raw", "x4eff"]
+    assert bxa["clock"]["t"] >= T0 + 30 * 60, "a change during the wait must restart the 30 minutes"
+
+
+def test_the_effective_store_going_stale_during_x4raw_holds_back_x4eff(sd, bxa, monkeypatch):
+    order = _child_world(monkeypatch, effective_after_x4raw="STALE")
+    _seen(sd, 60)
+    fc._basex_child(sd / "session-note.txt")
+    assert order == ["x4raw"]
+    assert "x4eff: not rebuilt automatically: the effective store is STALE" in _note(sd)
+
+
+def test_the_background_builder_rechecks_the_game_before_building(sd, bxa, monkeypatch):
+    order = _child_world(monkeypatch)
+    monkeypatch.setattr(fc, "_deferred", lambda auto: "deferring while running: x4.exe" if auto else None)
+    _seen(sd, 60)
+    fc._basex_child(sd / "session-note.txt")
+    assert order == []
+    assert json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))["state"] == "skipped"
+
+
+def test_a_second_background_builder_does_nothing(sd, bxa, monkeypatch):
+    order = _child_world(monkeypatch)
+    _seen(sd, 60)
+    held = fc.BuildLock(sd / fc.BASEX_AUTO_LOCK)
+    assert held.acquire()
+    try:
+        assert fc._basex_child(sd / "session-note.txt") == 0
+    finally:
+        held.release()
+    assert order == []
+
+
+def test_a_failed_background_build_is_recorded_and_remembered(sd, bxa, monkeypatch):
+    order = _child_world(monkeypatch)
+    monkeypatch.setattr(fc, "builder",
+                        lambda name: order.append(name) or [sys.executable, "-c", "import sys; sys.exit(2)"])
+    _seen(sd, 60)
+    fc._basex_child(sd / "session-note.txt")
+    rec = json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
+    assert rec["state"] == "failed"
+    assert "x4raw" in json.loads((sd / "last-failures.json").read_text(encoding="utf-8"))
+    assert "FAILED rc 2" in _note(sd)
+
+
+def test_a_background_builder_that_crashes_records_it(sd, bxa, monkeypatch):
+    _child_world(monkeypatch)
+    _seen(sd, 60)
+
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+    monkeypatch.setattr(fc, "_rebuild_locked", boom)
+    assert fc._basex_child(sd / "session-note.txt") == 1
+    rec = json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
+    assert rec["state"] == "failed" and "kaboom" in rec["detail"]
+
+
+def test_a_record_left_running_by_a_dead_builder_is_said_so(sd):
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "basex-auto.json").write_text(json.dumps({"state": "running", "pid": 1, "when": "2026-11-07 10:00"}),
+                                        encoding="utf-8")
+    assert "ended without reporting" in fc._basex_auto_line(sd)
+
+
+def test_a_record_running_with_its_lock_held_is_running(sd):
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "basex-auto.json").write_text(json.dumps({"state": "running", "pid": 1, "when": "2026-11-07 10:00",
+                                                    "building": "x4raw"}), encoding="utf-8")
+    holder = subprocess.Popen([sys.executable, "-c", HOLD, str(sd / fc.BASEX_AUTO_LOCK), str(fc.PKG_ROOT)],
+                              stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        line = fc._basex_auto_line(sd)
+    finally:
+        holder.kill()
+        holder.wait()
+    assert line.startswith("automatic BaseX rebuild: running since 2026-11-07 10:00") and "x4raw" in line
+
+
+def test_status_prints_the_automatic_build_line(sd, monkeypatch, capsys):
+    monkeypatch.setattr(fc, "CHECKS", {n: FRESH(n) for n in fc.ORDER})
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "basex-auto.json").write_text(json.dumps({"state": "skipped", "when": "2026-11-07 10:00",
+                                                    "detail": "x4raw: not enough disk"}), encoding="utf-8")
+    assert fc.main(["status"]) == 0
+    assert "last automatic BaseX rebuild: skipped 2026-11-07 10:00: x4raw: not enough disk" in capsys.readouterr().out
+
+
+def test_a_session_start_while_a_build_runs_says_so_not_that_it_died(sd, monkeypatch):
+    held = fc.BuildLock(sd / "x4fresh.lock")
+    assert held.acquire()
+    try:
+        assert fc.rebuild(auto=True) == 0
+    finally:
+        held.release()
+    note = _note(sd)
+    assert note.startswith("x4fresh: a rebuild is running") and not note.startswith(fc.NOTE_PENDING)
+
+
+def test_the_detached_launch_returns_at_once_and_outlives_the_call(tmp_path, monkeypatch):
+    """The real spawn, with a stand-in child: Popen must return while the child is still running."""
+    flag = tmp_path / "alive"
+    code = f"import time,pathlib; pathlib.Path({str(flag)!r}).write_text('up'); time.sleep(30)"
+    monkeypatch.setattr(fc, "_basex_child_argv", lambda note: [sys.executable, "-c", code])
+    t = time.time()
+    pid = fc._spawn_basex(tmp_path / "note.txt")
+    assert time.time() - t < 5, "the launch waited for the build"
+    deadline = time.time() + 15
+    while not flag.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    try:
+        assert flag.exists(), "the detached child never ran"
+        assert _alive(pid)
+    finally:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+        else:
+            os.kill(pid, 9)
