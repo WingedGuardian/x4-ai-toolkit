@@ -1702,6 +1702,19 @@ def deletable_temp(p: Path, toolkit) -> bool:
                                 "purpose": "disposable temporary workspace"}
 
 
+#: Dropped by the test suite's conftest in a FAILED test's tmp_path: the folder is kept as failure evidence.
+KEPT_FAILURE = ".x4-kept-failure"
+
+
+def _size_and_kept_failure(p: Path) -> tuple:
+    """(bytes, holds a kept failed-test folder?) in one walk; walk_files raises on a link inside."""
+    size, failure = 0, False
+    for f in walk_files(p):
+        failure = failure or f.name == KEPT_FAILURE
+        size += f.stat().st_size
+    return size, failure
+
+
 def delete_tree(paths, toolkit) -> dict:
     """{path: None when gone, else why it is not}. Re-reads each receipt immediately before; a link anywhere in the
     tree refuses it (walk_files), so nothing outside the dir is reached. Never falls back to anything else."""
@@ -1776,10 +1789,14 @@ def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler
             if _in_use(p):
                 rows["kept: in use"] += 1
             elif deletable_temp(p, cfg["root"]):
-                try:
-                    doomed.append((p, dir_size(p)))
-                except OSError:
-                    ready.append(p)      # a link or odd name inside: the bin moves a link, a delete must not walk it
+                # A link inside never gets here: the gates above walk the tree and refuse it (reported, kept), and
+                # delete_tree walks it again. Failure evidence goes to the bin (release-session policy, 4.1.1).
+                size, failure = _size_and_kept_failure(p)
+                if failure:
+                    ready.append(p)
+                    kept_named.append("{} (holds a failed test's folder: recycled, not deleted)".format(p))
+                else:
+                    doomed.append((p, size))
             else:
                 ready.append(p)
         except (OSError, ValueError) as exc:

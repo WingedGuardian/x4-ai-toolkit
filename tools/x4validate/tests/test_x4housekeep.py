@@ -1315,3 +1315,74 @@ def test_TWIN_delete_tree_removes_a_plain_receipted_tree(tmp_path, monkeypatch):
 
 
 _REAL_DELETE_TREE = hk.delete_tree  # captured at import, before the autouse fixture replaces it
+
+
+# --------------------------------------------------------------------------- 4.1.1 review: each receipt clause, links, kept failures
+def _v2(tmp_path, name, **change):
+    d = tdir(tmp_path / "temp", name, receipt="v2")
+    if change:
+        r = d / ".x4-temp-owner.json"
+        data = json.loads(r.read_text(encoding="utf-8"))
+        data.update(change)
+        r.write_text(json.dumps(data), encoding="utf-8")
+    return d
+
+
+def test_deletable_temp_accepts_the_exact_v2_receipt(tmp_path):
+    assert hk.deletable_temp(_v2(tmp_path, "x4qa_exact1"), tmp_path) is True
+
+
+@pytest.mark.parametrize("clause,change", [
+    ("a copied or moved dir: the receipt names another directory", {"directory": "C:/elsewhere/x4qa_moved"}),
+    ("another toolkit's dir", {"toolkit": "C:/another/toolkit"}),
+    ("another purpose", {"purpose": "kept workspace"}),
+    ("an older version", {"v": 1}),
+])
+def test_TWIN_each_receipt_clause_refuses_a_permanent_delete(tmp_path, monkeypatch, clause, change):
+    d = _v2(tmp_path, "x4qa_clause1", **change)
+    assert hk.deletable_temp(d, tmp_path) is False, clause
+    calls = _recording_rmtree(monkeypatch)
+    assert "receipt" in _REAL_DELETE_TREE([d], tmp_path)[str(d)] and calls == [], clause
+
+
+def test_TWIN_a_linked_receipt_file_is_no_receipt(tmp_path, monkeypatch):
+    """A receipt reached through a link may be any folder's. Patched at is_symlink (a file link needs a privilege
+    this machine may not grant); a real link is tried too."""
+    d = _v2(tmp_path, "x4qa_lnkrc1")
+    real = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda self: self.name == ".x4-temp-owner.json" or real(self))
+    assert hk.deletable_temp(d, tmp_path) is False
+
+
+def test_a_v2_dir_with_a_link_inside_is_neither_deleted_nor_recycled_and_is_reported(tmp_path):
+    """Review asked for "to the bin": MEASURED, the gates walk the tree and refuse a link inside before either route,
+    so it is kept and reported as a failure, its link target untouched (the pre-existing cleanup rule)."""
+    d = _v2(tmp_path, "x4qa_lnkin1")
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    try:
+        os.symlink(target, d / "sub" / "lnk", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        try:
+            import _winapi
+            _winapi.CreateJunction(str(target), str(d / "sub" / "lnk"))
+        except (ImportError, OSError) as exc:
+            pytest.skip("cannot create a link here: %s" % exc)
+    stale(d)
+    fake_bin, fake_del = FakeBin(tmp_path), FakeDelete(tmp_path)
+    res = hk.sweep_temp(sweep_cfg(tmp_path), temp=tmp_path / "temp", recycler=fake_bin, deleter=fake_del)
+    assert fake_del.got == [] and fake_bin.got == [], res
+    assert d.is_dir() and target.is_dir() and res["rows"]["failed"] == 1
+    assert "link" in res["failed"][0], res["failed"]
+
+
+def test_a_v2_dir_holding_kept_failure_evidence_is_recycled_not_deleted(tmp_path):
+    """Release-session policy: a session folder that still holds a failed test's folder holds evidence -> the bin."""
+    d = _v2(tmp_path, "x4qa_failed1")
+    write(d / "tests" / "test_x0" / hk.KEPT_FAILURE, b"")
+    stale(d)
+    clean = _v2(tmp_path, "x4qa_passed1")                      # twin: no marker -> deleted
+    fake_bin, fake_del = FakeBin(tmp_path), FakeDelete(tmp_path)
+    res = hk.sweep_temp(sweep_cfg(tmp_path), temp=tmp_path / "temp", recycler=fake_bin, deleter=fake_del)
+    assert [Path(p) for p in fake_bin.got] == [d] and [Path(p) for p in fake_del.got] == [clean]
+    assert any(str(d) in k and "failed test" in k for k in res["kept"]), res["kept"]

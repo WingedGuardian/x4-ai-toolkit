@@ -99,7 +99,8 @@ again. So:
    toolkit's own producer declared disposable when it created them, after the protection, inactivity and in-use
    checks. One that carries the toolkit's version-2 receipt (`.x4-temp-owner.json`, purpose "disposable temporary
    workspace") is deleted permanently, since the Recycle Bin frees nothing on the same drive; any other one goes to
-   the Recycle Bin. A dir with a file dated in the future, or with only a version-1 ownership receipt, is kept and
+   the Recycle Bin. So does a receipted one that still holds a failed test's folder (the test suite marks it with
+   `.x4-kept-failure`): that is failure evidence, and evidence is recycled, never deleted. A dir with a file dated in the future, or with only a version-1 ownership receipt, is kept and
    named. Each toolkit's checklist names how to turn it off.
 
 ### Where agent output goes
