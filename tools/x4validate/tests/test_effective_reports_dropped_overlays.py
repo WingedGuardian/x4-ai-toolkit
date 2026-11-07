@@ -288,11 +288,12 @@ def test_the_COVERAGE_command_says_so_when_NOTHING_was_dropped(tmp_path, monkeyp
 
 
 class _Res:
-    """The two fields _cmd_dump reads, and nothing else."""
+    """The fields _cmd_dump reads, and nothing else."""
     def __init__(self, skipped):
         self.tree = etree.fromstring("<wares/>")
         self.sources = ["base"]
         self.skipped = skipped
+        self.unmeasured = []        # issue #17's disclosure channel: none here
 
 
 def _run_dump(monkeypatch, capsys, skipped):

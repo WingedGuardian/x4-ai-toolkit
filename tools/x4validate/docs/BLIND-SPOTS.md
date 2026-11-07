@@ -460,6 +460,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
 | F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 321 of 2177 moved, all to deny, ask or advise; `find -exec` writes to what it finds now reach this rule. Round 7: 473 of 2469 moved vs 28f260ee, all stronger. Round 8: 556 of 2623, all stronger | FIXED 2026-11-06 |
 | F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own; a find that moves or writes what it finds never reached the archive rule; round 7: an analysis with no deadline failed open; round 8: a positional fill grew as uses x arguments | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
+| F358 | A complete copy of a mod-owned macro file at a nested path was modelled as REPLACING the owner's document; the engine MERGES it (two same-named macros), so later un-indexed selectors passed x4validate and the engine skipped them | **DEFECT (measured)** · PRE-ARC | GitHub issue #17: engine skipped 3 ops (debug.txt 2026-11-05, 2026-11-06), x4validate predicted 0; live census 213 active mods: 2 nested full copies over a mod-supplied file, both this case | FIXED 2026-11-06 for `.../macros/*_macro.xml` only; copy order and the engine's choice of copy UNMEASURED and disclosed by every reader; every other class (118 live at a DLC's nested path, INFERRED the largest exposure) and a plain-path full copy still a replacement and DISCLOSED as unmeasured |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12522,3 +12523,72 @@ four budget rows (3.6, 20.5 to 20.6 s, as before).
 `test_a_TANGLED_command_says_so_instead_of_passing_quietly` (the deep one takes ~14 s, near the deadline, so a slow runner
 may refuse it by the deadline instead -- either is a refusal), a whole-hook timing test at n=400 and 600 in
 `TestSshChainWholeHookTime`, 19 mutants labelled `(r8 ...)`, and 6 more probes in `scripts/test-hooks.sh`.
+
+## F358 - A nested full copy of a mod-owned macro file was modelled as a replacement; the engine merges it · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-06 for macro files only
+
+GitHub issue #17. `cpsdo_vro` ships complete `<macros>` copies of two `cpsdo_zb_modpack` files at
+`extensions/cpsdo_zb_modpack/assets/fx/weaponfx/macros/` (`bullet_cpsdo_turret_m_ion_01_mk4_macro.xml`,
+`bullet_cpsdo_turret_xl_ion_01_mk6_macro.xml`). MEASURED, engine log on two launches (2026-11-05, 2026-11-06): a later
+mod's `/macros/macro[@name='X']/properties/...` ops were skipped with "Multiple matching nodes", 3 ops in all, so the
+merged document holds two macros of each name. `apply_overlay` sent a non-diff root outside the union and script dirs
+to "full" (`tree = oroot`), so `dump --chain` showed one macro, x4validate passed the selectors and `x4debug crosscheck`
+predicted 0 of the 3 skips.
+
+MEASURED census, 213 active mods, loose and packed: 1,556 XML files at `extensions/<x>/...`, 139 of them complete
+files. 2 sit over a file a MOD supplies as a complete document (the two above); 19 macro files sit over a mod that does
+not ship the file (the copy IS the document, unchanged); 118 sit at an unpacked DLC's nested path
+`extensions/ego_dlc_*/...` (81 other assets, 31 macro files, 6 libraries). Those 118 are the SAME nested shape as the
+measured merge, with a DLC as the owner; the engine's behaviour for them is UNMEASURED and they keep the replacement
+model. INFERRED: they are the largest unmodelled exposure of this kind, since 31 of them are macro copies that would
+duplicate a DLC macro if a DLC owner merges the same way. 2 files could not be read and are not in the census.
+
+Fixed: `_merge.merges_nested_copy` names the class (`.../macros/*_macro.xml`, owner a mod, root tag equal), and
+`apply_overlay(..., nested_on_mod=True)` appends its children with no dedupe (mode `merge`). The flag is passed
+explicitly by every door that applies a nested patch: `_build_owned`, `build_effective`'s plain door,
+`_compat._walk_positions` and `_compat_state.trace`. x4diff's layer stack does not pass it. x4compat now reports a HARD
+row per name defined twice, with no live-value owner, instead of FULL-OVERRIDE. x4validate gives the copying mod an
+INFO naming those names.
+
+Real modlist, before -> after (read-only): `dump --chain` for both files went 1 -> 2 macros,
+`cpsdo_vro:full(nested:...)` -> `cpsdo_vro:merge(nested:...)`. The patcher's current `[1]`/`[2]` ops: 4 `if=` guarded
+no-ops -> 0, 0 errors either way. A scratch copy of the patcher with the old un-indexed selectors: x4validate 0 -> 3
+"matched 2 nodes" errors; crosscheck against the issue's three log lines went from 3 OBSERVED ONLY to 3 agreed. x4compat
+on the live list, every item compared: collisions 414 -> 414, exactly 2 FULL-OVERRIDE rows replaced by 2 HARD rows on
+the same files, `guarded_off` 1,874 -> 1,870 (the patcher's 4 `[2]` ops), every other list identical.
+
+The copies differ (READ in the merged dump, copy [1] vs [2]: m_ion_mk4 bullet speed 2500 vs 1500, damage 250 vs
+500; xl_ion_mk6 speed 5000 vs 8100, damage 1500 vs 1200), so WHICH copy a reader returns matters. UNMEASURED: the copy order in the merged tree
+(the model puts the owner's first, then the copies in load order) and which copy the engine uses for values. Review
+round 2 makes every reader say so instead of choosing silently:
+
+- a merge adds a `MergeResult.unmeasured` line naming the copy order and the engine's choice as unmeasured, so
+  `x4effective dump` prints it; x4validate's merge INFO and x4compat's HARD row carry the same words;
+- `x4effective show` (`_one_entity`) already took the lowest id with a NOTE; for same-named macros in one document the
+  NOTE now says they are copies in one merged document, names copy [1] and says the engine's choice is unmeasured.
+  The lowest id is copy [1] because the store numbers entities as it walks the merged tree (READ, `_effective.py`);
+- `x4live`'s `_store_props` took `fetchone()` with no ORDER BY; it now takes the lowest id and announces the
+  duplicate once per name per run, with the same unmeasured status;
+- `gates/consistency_audit.from_merge` / `from_dump` returned the first macro of the name, which could compare a
+  store row from one copy against the other copy and flake. A name defined more than once in its file is now NOT
+  compared: it returns a `_DUPLICATE` sentinel and the gate prints a named, counted "not compared" line.
+
+Other UNMEASURED cases, disclosed instead of changed: any other class at a nested path (libraries, index, md,
+aiscripts, t, components, other assets; see also F303); a nested copy over a DLC (above); a mod's complete file at a
+plain base-game path. These keep the old model. `MergeResult.unmeasured` carries one line per such step,
+`x4effective dump` prints it, and x4validate gives one aggregated INFO per kind for the mod's own files (the DLC's
+nested path is its own kind, not "a plain path").
+
+Not changed, a LATENT lead: `_similarity.extract_ship_vector` reads the first `<macro>` of a file. The census found
+0 ship macro files among the merged copies (both are bullets), so nothing it reads today is duplicated; a ship macro
+merged this way would be compared on copy [1] with no note.
+
+The same log's `Multiple matching nodes` lines for `cpsdo_faction` wares (issue's "possibly related") are a different
+case: `x4debug crosscheck cpsdo_faction` on the live log 2026-11-06, 192 distinct engine skips, 192 agreed, OBSERVED ONLY 0.
+The KB records the cause (two `<production>` children, 2026-08-13).
+
+**RE-DERIVED BY:** `tests/test_nested_full_copy_merges.py` and `tests/test_compat_owner_full_override.py` (which now
+pins the clobber model on a non-macro path). Round 1: the release review measured 13 of its 15 tests RED on the base
+commit (3 of them only by a TypeError on the new keyword: the DLC-owner, lone-copy and root-tag twins) and 2 twins
+green. Round 2 added one falsification twin per clause and per door; 19 hand mutants from the review plus 7 for the
+round-2 disclosures, 26 of 26 killed (scratch harness `mut.py` + `mut17r2_extra.py`, every file restored
+byte-identical).

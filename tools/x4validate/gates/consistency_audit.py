@@ -123,15 +123,27 @@ def from_merge(vpath: str, name: str, prop: str) -> str | None:
                                  extra_overlays=_overlays_for(vpath))
     if res.tree is None:
         return None
-    for macro in res.tree.iter("macro"):
-        if macro.get("name") == name:
-            return _lookup(macro, prop)
-    return None
+    return _one_macro(res.tree, name, prop)
 
 
 #: A dump that RAN and produced an incomplete tree. Distinct from None, which
 #: means the dump could not be used at all.
 _DEGRADED = object()
+
+#: The file holds the macro name MORE THAN ONCE (issue #17: a nested full copy
+#: merges, so both copies live in one document). Which copy the store row came from
+#: and which one the engine uses cannot be told apart here, so the value is NOT
+#: compared -- counted and named instead, never a coin toss that can flake the gate.
+_DUPLICATE = object()
+
+
+def _one_macro(tree, name: str, prop: str):
+    """*prop* of the ONE macro named *name* in *tree*; `_DUPLICATE` when there are
+    several, None when there is none."""
+    hits = [m for m in tree.iter("macro") if m.get("name") == name]
+    if len(hits) > 1:
+        return _DUPLICATE
+    return _lookup(hits[0], prop) if hits else None
 
 
 def from_dump(vpath: str, name: str, prop: str) -> str | None:
@@ -151,10 +163,7 @@ def from_dump(vpath: str, name: str, prop: str) -> str | None:
         root = etree.fromstring(p.stdout.encode())
     except Exception:
         return None  # silent-ok: dump unparseable; the cross-checked count drops visibly
-    for macro in root.iter("macro"):
-        if macro.get("name") == name:
-            return _lookup(macro, prop)
-    return None
+    return _one_macro(root, name, prop)
 
 
 def eq(a, b) -> bool:
@@ -180,6 +189,7 @@ def main() -> int:
     bad = []
     checked = 0
     no_vpath = no_merged = 0
+    duplicated: list[str] = []     # issue #17: name defined more than once in its file
     dump_checked = dump_degraded = dump_unusable = 0
     dump_cache: dict[tuple[str, str, str], str | None] = {}
     for name, vpath, prop, value, origin in rows:
@@ -187,6 +197,9 @@ def main() -> int:
             no_vpath += 1
             continue
         merged = from_merge(vpath, name, prop)
+        if merged is _DUPLICATE:
+            duplicated.append(f"{name} in {vpath}")
+            continue
         if merged is None:
             no_merged += 1
             continue
@@ -198,7 +211,9 @@ def main() -> int:
         if key not in dump_cache:
             dump_cache[key] = from_dump(vpath, name, prop)
         dumped = dump_cache[key]
-        if dumped is _DEGRADED:
+        if dumped is _DUPLICATE:
+            duplicated.append(f"{name} in {vpath} (dump)")
+        elif dumped is _DEGRADED:
             dump_degraded += 1
         elif dumped is None:
             dump_unusable += 1
@@ -215,6 +230,11 @@ def main() -> int:
     print(f"  values cross-checked : {checked}"
           + (f"   (not checkable: {no_vpath} without a vpath, {no_merged} with no merged "
              f"counterpart -- of {len(rows)} sampled)" if (no_vpath or no_merged) else ""))
+    if duplicated:
+        # NAMED, not just counted: these were sampled and deliberately not compared.
+        print(f"  not compared, name defined more than once in its file "
+              f"(issue #17, which copy is used is UNMEASURED): {len(duplicated)} -- "
+              + "; ".join(sorted(set(duplicated))[:10]))
     if not checked:
         print("REFUSING: 0 values were cross-checked, so there is nothing to "
               "agree about. A NON-ANSWER, not a clean run.", file=sys.stderr)

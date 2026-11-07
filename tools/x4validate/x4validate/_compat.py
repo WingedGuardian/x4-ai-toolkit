@@ -541,6 +541,10 @@ def _analyze_vpath(
     union_roots: dict[str, etree._Element] = {}   # folder -> its full union file (F276)
     diff_add_doc_keys: dict[str, set[str]] = {}  # folder -> doc-wide added keys (F12)
     overriders: list[str] = []
+    # Issue #17: nested full copies of a mod-owned macro file, which MERGE.
+    merge_copy = (_merge._nested_on_mod(vpath)
+                  and _merge.merges_nested_copy(_merge._registry_rel(vpath)))
+    merged_copies: list[tuple[str, etree._Element]] = []
     no_base_reported: set[str] = set()  # one skip per mod, not one per op
     unmatched: dict[str, list[etree._Element]] = defaultdict(list)  # AN-10 candidates
     ops_at: dict[str, dict[str, list[etree._Element]]] = defaultdict(
@@ -750,6 +754,10 @@ def _analyze_vpath(
         elif is_union and base_tree is not None and root.tag == base_tree.tag:
             union_keys[folder] = _child_keys(root)
             union_roots[folder] = root
+        elif merge_copy and base_tree is not None and root.tag == base_tree.tag:
+            # Issue #17: the engine MERGES a nested full copy of a mod-owned macro
+            # file -- both same-named macros exist -- so this is no clobber.
+            merged_copies.append((folder, root))
         elif vpath.lower() not in _PER_EXTENSION_FILES:
             overriders.append(folder)
 
@@ -969,6 +977,40 @@ def _analyze_vpath(
             vpath, "UNION-KEY", k, fs, winner(fs),
             f"same registry entry {k} defined by {len(fs)} mods — '{winner(fs)}' wins"
             + gnote((f, k) for f in fs)))
+
+    # 3a. nested full copies that MERGE (issue #17): every child key a copy shares with
+    # the owner's document (or an earlier copy) now exists twice, so an un-indexed
+    # selector on it matches 2 nodes and the engine skips that op. MEASURED: the
+    # merge and the skips (debug.txt 2026-11-05/06). UNMEASURED: which copy the
+    # engine uses, so `winner` is the last-loading provider by the usual convention
+    # and the detail says the survivor is not engine-measured.
+    if merged_copies:
+        owner = next((f for f in ordered if folder_to_path[f] in base_owners), None)
+        have: dict[str, list[str]] = defaultdict(list)
+        for k in (_child_keys(base_tree) if owner is not None else ()):
+            have[k].append(owner)
+        for folder, root in merged_copies:
+            for k in sorted(_child_keys(root)):
+                have[k].append(folder)
+        for k, providers in have.items():
+            if len(providers) < 2:
+                continue
+            tag, _, ident = k.partition("#")
+            hit = next((c for c in base_tree if isinstance(c.tag, str) and c.tag == tag
+                        and (c.get("id") or c.get("name")) == ident), None)
+            cid = _canonical(hit) if hit is not None else vpath
+            last = winner(providers)
+            collisions.append(Collision(
+                vpath, "HARD", cid, providers, last,
+                f"{len(providers)} copies of {k} in one merged document: a complete copy "
+                f"of a mod-owned macro file at a nested path is MERGED by the engine, not "
+                f"replaced (issue #17) -- an un-indexed selector on {k} matches "
+                f"{len(providers)} nodes and the engine skips it; '{last}' loads last -- "
+                f"which copy the engine uses is not engine-measured; "
+                f"{_merge.COPY_ORDER_UNMEASURED}",
+                # No live-value owner: both copies are live, and which one the engine
+                # reads is UNMEASURED -- so cross_tool must not compare a winner.
+                winner_qualified=False))
 
     # 3. full-file override collisions
     if len(overriders) >= 2:
@@ -1377,13 +1419,15 @@ def _walk_positions(vpath: str, ordered: list[str], folder_to_path: dict[str, Pa
                         nroot = _merge.overlay_root(folder_to_path[prior],
                                                     f"extensions/{odir.name}/{vpath}", [])
                         if nroot is not None:
-                            tree, _mode = _merge.apply_overlay(tree, nroot, vpath, prior)
+                            tree, _mode = _merge.apply_overlay(tree, nroot, vpath, prior,
+                                                               nested_on_mod=True)
         for owner in owners:
             if odir.name.lower() == owner.lower():
                 continue
             nroot = _merge.overlay_root(odir, f"extensions/{owner}/{vpath}", [])
             if nroot is not None:
-                tree, _mode = _merge.apply_overlay(tree, nroot, vpath, odir.name)
+                tree, _mode = _merge.apply_overlay(tree, nroot, vpath, odir.name,
+                                                   nested_on_mod=True)
         visit(pos, tree, True)
     if want is None:
         try:

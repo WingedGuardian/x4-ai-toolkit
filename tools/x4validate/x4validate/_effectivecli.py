@@ -712,6 +712,13 @@ def _one_entity(con, kind: str, name: str):
             klass = f"  class={r['klass']}" if "klass" in keys and r["klass"] else ""
             origin = f"  origin={r['origin']}" if "origin" in keys else ""
             print(f"      id={r['id']}  {vp}{klass}{origin}", file=sys.stderr)
+        if "vpath" in keys and kind == "macro" and len({r["vpath"] for r in rows}) == 1:
+            # Issue #17: same-named macros in ONE document are the copies a nested full
+            # copy MERGES in. Ids follow document order (the store numbers entities as
+            # it walks the merged tree), so the lowest id is copy [1].
+            print(f"      these are {len(rows)} copies in ONE merged document; showing "
+                  f"copy [1] (id={rows[0]['id']}). {_merge.COPY_ORDER_UNMEASURED[0].upper()}"
+                  f"{_merge.COPY_ORDER_UNMEASURED[1:]}", file=sys.stderr)
     return rows[0]
 
 
@@ -1092,6 +1099,11 @@ def _cmd_dump(args) -> int:
             print("       " + comment_safe(str(item)))
         print("     The engine cannot read them either, so what it loads differs from"
               " what this shows. -->")
+    # Issue #17: a complete file that met an existing document is the MODEL's answer
+    # (replacement / keyed union) with no engine measurement behind it. Unconditional,
+    # like the skip channel above: the tree below looks exactly as certain either way.
+    for line in res.unmeasured:
+        print(f"<!-- UNMEASURED: {comment_safe(line)} -->")
     if getattr(args, "annotate", False):
         header, n_nodes = annotate_tree(res.tree, rec)
         print(f"<!-- node provenance: {n_nodes} node(s) changed by an overlay; removals: "
