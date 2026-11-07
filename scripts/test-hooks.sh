@@ -231,10 +231,21 @@ decide ask protect-files.sh "$(fj "$GAME/extensions/deployed/x.xml")" "deployed 
 #      ...and a MANIFEST must reach it too: the manifest advisory sits above this rule
 #      and used to exit, so it never did (F84).
 decide ask protect-files.sh "$(fj "$GAME/extensions/deployed/content.xml")" "a deployed manifest still confirms"
+#      4.1.1 (user ruling): DLC content is GAME content in every layout -- an edit denies, never asks.
+decide deny protect-files.sh "$(fj "$GAME/extensions/ego_dlc_boron/libraries/wares.xml")" "a DLC file edit, no mods root: game content"
+decide deny protect-files.sh "$(fj "$GAME/extensions/EGO_DLC_Boron/content.xml")" "a DLC manifest edit, any spelling, no mods root"
 #  (b) mods root IS the extensions folder: the deployed copy IS the source, so this is
 #      ordinary work and must not prompt at all.
 export X4_MODS="$GAME/extensions"
 decide allow protect-files.sh "$(fj "$GAME/extensions/deployed/x.xml")" "deployed edit IS the source"
+#      ...but a DLC folder in that root is still the game's (4.1.1 user ruling): before, the
+#      mods-root whitelist allowed it (a manifest only advised).
+decide deny protect-files.sh "$(fj "$GAME/extensions/ego_dlc_boron/libraries/wares.xml")" "mods root = extensions: a DLC file edit denies"
+decide deny protect-files.sh "$(fj "$GAME/extensions/ego_dlc_boron/content.xml")" "mods root = extensions: a DLC manifest edit denies"
+decide deny protect-files.sh "$(fj "$GAME/extensions/ego_dlc_boron/../ego_dlc_split/t/0001-l044.xml")" "mods root = extensions: a dotted spelling into a DLC denies"
+#      Twins: a mod whose NAME merely contains ego_dlc below its first segment, and a mod beside it.
+decide allow protect-files.sh "$(fj "$GAME/extensions/probe/ego_dlc_x/x.xml")" "mods root = extensions: ego_dlc below a mod's own folder is the mod's"
+decide allow protect-files.sh "$(fj "$GAME/extensions/my_ego_dlc_fix/x.xml")" "mods root = extensions: a mod named *ego_dlc* is a mod"
 export X4_MODS="$_sm" X4_EXTENSIONS="$_se" X4_GAME="$_sg"
 
 
@@ -765,7 +776,7 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # Round 7 adds 6 denies + 2 twins: 442 + 8.
 # Round 8 adds 5 denies + 1 twin: 450 + 6.
 # The literal-dollar port adds 4 denies + 2 twins (advised, not denied): 456 + 6.
-EXPECT=462
+EXPECT=469
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
