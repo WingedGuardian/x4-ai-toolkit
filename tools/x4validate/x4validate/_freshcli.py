@@ -308,8 +308,11 @@ def _swap_notes(name: str) -> list[str]:
 
 def _status_basex(name: str) -> Status:
     s = _status_basex_alone(name)
-    if s.state not in ("FRESH", NOT_BUILT):
-        s.reasons.extend(_swap_notes(name))
+    # Every state (4.1.1 review B3): a FRESH database beside an unjournaled <db>__old or a finished but unswapped
+    # <db>__next (~1 GB) was never mentioned. Beside a verdict that is not about them they are notes, so the
+    # FRESH or NOT BUILT verdict and its reasons (the rebuild memo's key) stay as they are.
+    notes = _swap_notes(name)
+    (s.notes if s.state in ("FRESH", NOT_BUILT) else s.reasons).extend(notes)
     return s
 
 

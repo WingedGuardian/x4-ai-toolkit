@@ -1120,6 +1120,35 @@ def test_a_failed_build_leaves_the_previous_database_judged_not_missing(tmp_path
     assert "x4raw__next is left from an unfinished build" in " ".join(s.reasons), s
 
 
+_FRESH_STALENESS = chr(10).join(("from types import SimpleNamespace",
+                                  "def _defaults():",
+                                  "    return None, None, None",
+                                  "def check(*a, **k):",
+                                  "    return SimpleNamespace(fresh=True, determinable=True, reasons=[])", ""))
+
+
+@pytest.mark.parametrize("left, said", [("x4raw__old", "x4raw__old exists with no swap journal"),
+                                        ("x4raw__next", "x4raw__next is left from an unfinished build")])
+def test_a_fresh_database_still_names_a_generation_beside_it(tmp_path, monkeypatch, left, said):
+    """4.1.1 review B3: the swap notes were added only when the database was not FRESH, so a FRESH x4raw beside an
+    unjournaled x4raw__old, or a ~1 GB x4raw__next, was never mentioned. The verdict stays FRESH; the note is said."""
+    home = _swap_world(tmp_path, monkeypatch, "x4raw", left)
+    (tmp_path / "staleness.py").write_text(_FRESH_STALENESS, encoding="utf-8")
+    (home / "coverage-x4raw.json").write_text("{}", encoding="utf-8")
+    s = fc._status_basex("x4raw")
+    assert s.state == "FRESH", s
+    assert said in " ".join(s.reasons + s.notes), s
+    assert said in fc.render([s]), fc.render([s])
+
+
+def test_TWIN_a_fresh_database_alone_says_nothing_more(tmp_path, monkeypatch):
+    home = _swap_world(tmp_path, monkeypatch, "x4raw")
+    (tmp_path / "staleness.py").write_text(_FRESH_STALENESS, encoding="utf-8")
+    (home / "coverage-x4raw.json").write_text("{}", encoding="utf-8")
+    s = fc._status_basex("x4raw")
+    assert s.state == "FRESH" and s.reasons == [] and s.notes == [], s
+
+
 def test_an_empty_database_folder_is_still_never_built(tmp_path, monkeypatch):
     (tmp_path / "staleness.py").write_text("", encoding="utf-8")
     (tmp_path / "basex" / "data" / "x4raw").mkdir(parents=True)

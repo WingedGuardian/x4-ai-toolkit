@@ -54,8 +54,8 @@ EXTENSIONS="$(resolve_path X4_EXTENSIONS game_extensions)"
 DB=x4raw
 
 # THE REFERENCE MUST HOLD THE GAME, checked BEFORE preflight (which runs java) and
-# before the DROP DB below (issue #10). A missing reference used to be refused only by
-# BaseX's "not found" AFTER x4raw had been dropped; an EMPTY one beside installed mods
+# before the next generation is prepared below (issue #10). A missing reference used to be refused only by
+# BaseX's "not found" AFTER x4raw had been dropped (the drop-first build, before 4.1.1); an EMPTY one beside installed mods
 # would index the mods with no base game (READ from coverage.py, not run). rc 2 =
 # configuration.
 echo "== reference =="
