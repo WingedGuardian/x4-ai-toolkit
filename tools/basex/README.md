@@ -27,7 +27,7 @@ It is not the authority on correctness. `x4validate` is. See
 
 | | why |
 |---|---|
-| **Java 17 or newer** | BaseX 12.4's classes are bytecode **major 61**. An older JVM does not run slowly — it refuses to load them (`UnsupportedClassVersionError`). Read out of the shipped jar: `Build-Jdk-Spec: 17`. |
+| **Java 21 or newer** | BaseX 13.0's classes are bytecode **major 65**. An older JVM does not run slowly — it refuses to load them (`UnsupportedClassVersionError`). Read out of the shipped jar: `Build-Jdk-Spec: 21`. (Toolkits up to 4.1.0 shipped BaseX 12.4, which needed Java 17.) |
 | **`uv`** (with Python 3.13) | the build scripts drive `x4validate` through `uv run python` |
 | **~3 GB free disk, plus room for a second copy** | the index is the durable artifact — measured **942 MB** (`x4raw`) + **949 MB** (`x4eff`) — plus a transient staging tree during the build. A rebuild holds the old and the new database at once until the swap; `dbswap.py prepare` refuses up front (nothing dropped) if that would leave less than min(pagefile, 50 GiB) free on the system drive, or min(5%, 50 GiB) on another drive |
 | **a configured toolkit** | `$X4_REFERENCE` and `$X4_EXTENSIONS`, or `x4-paths.env` (toolkit root). The scripts **refuse** rather than guess: a corpus built over a path that does not exist indexes zero documents and would otherwise still exit 0. |
@@ -40,8 +40,18 @@ class`; if you do, that is a bug worth reporting.
 
 Put `BaseX.jar` in `basex/`. That is the whole installation — **`lib/` is not
 needed** (verified: a real `collection()` query runs from a directory holding
-only the jar). If it is missing, download BaseX 12.4 from
-<https://basex.org/download/>.
+only the jar). The toolkit ships BaseX **13.0**'s jar there. If it is missing,
+download <https://files.basex.org/releases/13.0/BaseX130.jar> (listed at
+<https://basex.org/download/>) and save it as `basex/BaseX.jar`. The jar the
+toolkit ships has SHA-256
+`022bc5a4ec057591d6c577b3e0c1ef6f0c71373f68ddb5cad3d3b2afb2c83a8d`; basex.org
+publishes no checksum, so that is the only one to compare against.
+
+`preflight.py` reads the jar's manifest and accepts **exactly** 13.0. Any other
+version — including the 12.4 jar of toolkits up to 4.1.0 — is refused with exit 2
+and the download link, because every BaseX behaviour the scripts rely on was
+measured on 13.0. Databases built by 12.4 open in 13.0 unchanged (measured), so
+replacing the jar needs no rebuild.
 
 Every caller invokes it as:
 
@@ -79,7 +89,7 @@ answering from the previous database (STALE if the world moved), never "not foun
   its process id) from before `prepare` until after the swap; a second build of the
   same database, or a `dbswap.py` call, exits `7` while it runs. A lock left by a
   killed build (its process is no longer running) is taken over and reported.
-- BaseX `ALTER DB` onto an existing name **replaces** it (MEASURED, BaseX 12.4), so
+- BaseX `ALTER DB` onto an existing name **replaces** it (MEASURED, BaseX 12.4 and 13.0), so
   `dbswap.py` checks every rename target is absent and never renames by hand.
 
 ## Ask
