@@ -26,8 +26,8 @@ requested artifact is FRESH; 1 a builder failed; 5 nothing failed but one is sti
 held, a gate started meanwhile, the world moved during its build, or NOT-BUILT and named with --only).
 
 `rebuild --auto` is what a session start launches in the background. It only rebuilds the effective store
-and the xref index: the BaseX builders drop their database for the length of the build, so they are never
-started unattended (reported instead). It also defers while a listed process runs (X4_FRESH_DEFER_WHILE,
+and the xref index: the BaseX builders are long and hold a second copy of their database until the swap
+(build-then-swap, tools/basex/dbswap.py), so they are never started unattended (reported instead). It also defers while a listed process runs (X4_FRESH_DEFER_WHILE,
 default X4.exe;X4), and it does not retry a build that already failed against the same inputs (reasons and
 the world's digest). It exits 0 unless a builder failed: the note carries the rest, not the exit code. The
 note reads "did not complete" from the start of the run until its outcome replaces it, and it is empty only
@@ -284,7 +284,32 @@ def _not_built(name: str, why: str) -> Status:
                                     "Optional: only the BaseX queries need it (setup: tools/basex/README.md)."])
 
 
+def _swap_notes(name: str) -> list[str]:
+    """What tools/basex/dbswap.py says about generations beside `name` (build-then-swap, 4.1.1): an interrupted
+    swap, an unfinished or unswapped <db>__next, a stray <db>__old. Read-only; never runs BaseX. A check that
+    cannot run says so in one line rather than hiding the rest of the verdict."""
+    path = BASEX_ROOT / "dbswap.py"
+    if not path.is_file():
+        return []
+    try:
+        spec = importlib.util.spec_from_file_location("x4fresh_dbswap", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        home = BASEX_ROOT / "basex"
+        return mod.describe(mod.BaseXRunner(home), home, name)
+    except Exception as exc:  # noqa: BLE001 -- said, not swallowed: the verdict above it still stands
+        return [f"the build-then-swap state could not be read ({type(exc).__name__}: {exc})"]
+
+
 def _status_basex(name: str) -> Status:
+    s = _status_basex_alone(name)
+    if s.state not in ("FRESH", NOT_BUILT):
+        s.reasons.extend(_swap_notes(name))
+    return s
+
+
+def _status_basex_alone(name: str) -> Status:
     cov = BASEX_ROOT / "basex" / f"coverage-{name}.json"
     if not (BASEX_ROOT / "staleness.py").is_file():
         return (Status(name, "UNKNOWN", [f"no BaseX freshness check at {BASEX_ROOT}, but a coverage report exists"])
@@ -791,7 +816,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
     if auto:
         skipped = [s.name for s in left if s.name not in AUTO_SET]
         if skipped:
-            lines.append(f"not rebuilt unattended (their build drops the database while it runs): "
+            lines.append(f"not rebuilt unattended (long builds that hold a second copy of the database): "
                          f"{', '.join(skipped)} -- run `x4fresh rebuild --only {' '.join(skipped)}`")
     head = render(final).splitlines()[0]
     report = "\n".join([head] + lines + render(final).splitlines()[1:])
