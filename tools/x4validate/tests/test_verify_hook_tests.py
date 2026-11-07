@@ -158,8 +158,8 @@ def _ci_shard_config():
     """(matrix shard list, [N of every `--shard K/N` in the hook-mutation job's run lines])"""
     import re
 
-    from ruamel.yaml import YAML
-    ci = YAML(typ="safe").load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    from ci_workflow import load_ci
+    ci = load_ci(ROOT)    # ci.yml + full-qualification.yml: the full jobs moved to the second file
     job = ci["jobs"]["hook-mutation"]
     runs = [str(s.get("run", "")) for s in job["steps"]]
     ns = [int(n) for r in runs for n in re.findall(r"--shard\s+\$\{\{\s*matrix\.shard\s*\}\}/(\d+)", r)]
