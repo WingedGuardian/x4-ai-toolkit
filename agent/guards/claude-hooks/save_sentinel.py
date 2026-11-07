@@ -102,7 +102,14 @@ def _is_dir(path):
 
 
 def save_folders(roots):
-    found = list(save_policy.folders(roots))
+    return save_folders_and_gaps(roots)[0]
+
+
+def save_folders_and_gaps(roots):
+    """(save folders, gaps): `gaps` are the X4 profile folders whose accounts could not be LISTED here. Their saves are
+    UNKNOWN for this look, never removed -- whatever the core's own listing of that folder says (4.1.1: a failed
+    `iterdir` while the core's `scandir` of the same folder worked read every save below it as removed)."""
+    found, gaps = list(save_policy.folders(roots)), []
     for docs in _known_documents():
         profile = docs / "Egosoft" / "X4"
         if _is_dir(profile):
@@ -111,11 +118,32 @@ def save_folders(roots):
                 found.extend(p / "save" for p in profile.iterdir() if _is_dir(p))
             except OSError:
                 found.append(profile)   # its accounts cannot be named: a failed listing reports this folder as unread
+                gaps.append(profile)
     unique = {}
     for f in found:
         if _is_dir(f):
             unique.setdefault(os.path.normcase(os.path.abspath(f)), Path(f))
-    return tuple(unique.values())
+    return tuple(unique.values()), tuple(gaps)
+
+
+def keep_unlisted(result, state, previous, gaps):
+    """The look's report with every change under a folder in `gaps` withdrawn: such a save keeps its previous row in
+    the record (unknown, not removed) and the folder is named as unread, as the core does for a folder it could not
+    list itself."""
+    if not gaps or not isinstance(previous, dict):
+        return result
+    tops = [os.path.join(os.path.abspath(g), "") for g in gaps]
+
+    def under(path):
+        return any(os.path.abspath(path).startswith(top) for top in tops)
+    files = state.get("files")
+    if isinstance(files, dict):
+        for key, row in previous.items():
+            if key not in files and isinstance(row, list) and len(row) > 2 and under(row[2]):
+                files[key] = row
+    unread = tuple(result.unread) + tuple(str(g) for g in gaps if str(g) not in result.unread)
+    return result._replace(unbacked=tuple(c for c in result.unbacked if not under(c[1])),
+                           backed_up=tuple(c for c in result.backed_up if not under(c[1])), unread=unread)
 
 
 def marked_folders(root, depth=MARKED_DEPTH):
@@ -231,13 +259,16 @@ def report(roots, now=None):
     if state.get("marked") is None or now - state.get("marked_time", 0) > MARKED_REFRESH:
         state["marked"] = marked_folders(root)
         state["marked_time"] = now
-    profile = profiles.GameProfile("x4", save_folders(roots), EXTENSIONS)
+    folders, gaps = save_folders_and_gaps(roots)
+    profile = profiles.GameProfile("x4", folders, EXTENSIONS)
     try:
         store = workspace.save_store(root, profile)
     except (OSError, ValueError):
         store = _NoStore()          # no readable store: every change is reported, none is "covered"
     since = state.get("time", now)
+    previous = dict(state["files"]) if isinstance(state.get("files"), dict) else None
     result = sentinel.check(profile, store, state, watch=state["marked"], now=now)
+    result = keep_unlisted(result, state, previous, gaps)
     notes, lock_loud = lock_notes(root, state, now)
     game_folders = {os.path.normcase(os.path.abspath(f)) for f in profile.save_roots}
     quiet = games_doing(sentinel, result.unbacked, game_folders, since)
