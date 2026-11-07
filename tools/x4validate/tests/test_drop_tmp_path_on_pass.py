@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import stat
+from pathlib import Path
 
 import pytest
 from conftest import drop_tmp_if_passed
@@ -81,3 +82,57 @@ def test_the_fixture_drops_what_a_passing_test_put_in_the_fake_bin():
     if not fake_bin or "bin_entry" not in _SEEN:
         pytest.skip("no session fake bin, or the writer did not run first")
     assert not os.path.lexists(os.path.join(fake_bin, _SEEN["bin_entry"]))
+
+
+def test_a_locked_file_during_the_delete_warns_and_leaves_the_folder(tmp_path_factory, monkeypatch):
+    """4.1.1 review: a Windows file lock during rmtree raised in teardown and turned a PASS into an ERROR."""
+    import conftest
+    base = tmp_path_factory.getbasetemp()
+    tmp = tmp_path_factory.mktemp("locked-case")
+    (tmp / "held.bin").write_bytes(b"x")
+
+    def locked(_path):
+        raise PermissionError(32, "being used by another process", str(tmp / "held.bin"))
+    monkeypatch.setattr(conftest, "_rmtree_writable", locked)
+    with pytest.warns(UserWarning, match="left in place"):
+        assert drop_tmp_if_passed(0, 0, base, tmp) is False
+    assert (tmp / "held.bin").is_file()
+
+
+def test_a_failed_tests_folder_carries_the_kept_failure_marker(tmp_path_factory):
+    """x4housekeep recycles (never deletes) a session folder holding one; the names must agree."""
+    import importlib.util
+    import conftest
+    spec = importlib.util.spec_from_file_location("hk_for_marker", Path(conftest.__file__).resolve().parents[3]
+                                                  / "scripts" / "x4housekeep.py")
+    assert conftest.KEPT_FAILURE == ".x4-kept-failure"
+    src = spec.origin and Path(spec.origin).read_text(encoding="utf-8")
+    assert 'KEPT_FAILURE = ".x4-kept-failure"' in src
+    tmp = tmp_path_factory.mktemp("failed-case-marker")
+    conftest.mark_kept_failure(tmp)
+    assert (tmp / conftest.KEPT_FAILURE).is_file()
+
+
+def test_a_real_failing_test_gets_the_marker_and_a_passing_one_is_dropped(tmp_path):
+    """End to end: a child pytest with THIS conftest as a plugin; one test fails, one passes. Only tmp_path is written."""
+    import subprocess
+    import sys
+    here = Path(__file__).resolve().parent
+    mod = tmp_path / "case_mod"
+    mod.mkdir()
+    (mod / "test_case.py").write_text(
+        "import pytest\n"
+        "@pytest.mark.usefixtures('drop_tmp_path_on_pass')\n"
+        "def test_fails(tmp_path):\n    (tmp_path / 'evidence.txt').write_text('e')\n    assert False\n"
+        "@pytest.mark.usefixtures('drop_tmp_path_on_pass')\n"
+        "def test_passes(tmp_path):\n    (tmp_path / 'scratch.txt').write_text('s')\n", encoding="utf-8")
+    base = tmp_path / "child-base"
+    env = dict(os.environ, PYTHONPATH=str(here) + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "conftest",
+                        "--basetemp", str(base), "--rootdir", str(mod), str(mod / "test_case.py")],
+                       capture_output=True, text=True, env=env, cwd=str(mod), timeout=300)
+    assert "1 failed, 1 passed" in r.stdout, r.stdout[-1500:] + r.stderr[-1500:]
+    failed = [d for d in base.iterdir() if d.name.startswith("test_fails")]
+    passed = [d for d in base.iterdir() if d.name.startswith("test_passes")]
+    assert len(failed) == 1 and (failed[0] / ".x4-kept-failure").is_file() and (failed[0] / "evidence.txt").is_file()
+    assert passed == []
