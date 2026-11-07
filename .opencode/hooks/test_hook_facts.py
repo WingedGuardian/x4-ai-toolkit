@@ -2100,8 +2100,14 @@ class TestCarriersNest(unittest.TestCase):
                 return "echo " + tag
             return " ".join("$(" + build(depth - 1, n, tag + chr(97 + i)) + ")"
                             for i in range(n))
+        # A WIDE command reaches the count bound fast, so a slow machine cannot hide it behind the
+        # analysis deadline (round 8: the deep one below takes ~14 s, near that deadline).
+        f = F("echo " + " ".join("$(echo a%d)" % i for i in range(300)))
+        self.assertTrue(f["carriers_truncated"], "the walk was cut short and said nothing")
         f = F("echo " + build(8, 3))
-        self.assertTrue(f["carriers_truncated"],
+        # ~14 s on a quick machine (MEASURED, round 8); a slower one may reach the analysis deadline
+        # first (round 7), which is the other refusal: either way it says so.
+        self.assertTrue(f.get("carriers_truncated") or f.get("analysis_timeout"),
                         "the walk was cut short and said nothing")
 
     def test_the_cap_is_reported_by_carried_commands_itself(self):
@@ -2480,6 +2486,13 @@ class TestFindRunsACommandFourWays(unittest.TestCase):
 
     def test_execdir_is_a_delete(self):
         self.assertTrue(F('find "' + GAME + '" -execdir ' + D + ' -rf {} +')["rm_hits_game"])
+
+    def test_execdir_rm_of_an_archive_fires(self):
+        # Round 8: the -execdir readings also catch the depth-0 root, so the archive reach of a
+        # filtered -execdir/-okdir delete is what pins that both are read as deleting.
+        for act, term in (("-execdir", " {} +"), ("-okdir", " {} ;"), ("-ok", " {} ;")):
+            cmd = 'find "' + GAME + '" -name "*.cat" ' + act + " " + D + term
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
 
     def test_okdir_is_a_delete(self):
         self.assertTrue(F('find "' + GAME + '" -okdir ' + D + ' -rf {} ;')["rm_hits_game"])
@@ -8638,6 +8651,91 @@ class TestRound6FindExecAndCarriers(unittest.TestCase):
             self.assertTrue(F(cmd)[key], cmd)
         for cmd in ("fd . /tmp -x cat", "fd -e py -x wc -l"):
             self.assertFalse(F(cmd)["rm_targets_reference"] or F(cmd)["git_add_all"], cmd)
+
+    # --- round 8, F1: no fill or reading may multiply the text
+    def test_a_repeated_positional_fill_is_bounded(self):
+        import time
+        for n in (400, 600):
+            cmd = ("sh -c " + Q + "echo " + " ".join([DQ + "$@" + DQ] * n) + Q + " _ "
+                   + " ".join("a%d" % i for i in range(n)) + " && " + D + " -rf " + Q + REF + Q)
+            t = time.perf_counter()
+            f = F(cmd)
+            self.assertTrue(f["rm_targets_reference"], n)
+            self.assertLess(time.perf_counter() - t, 2.5, n)
+        args = ["x"] + ["a%d" % i for i in range(400)]
+        text = " ".join([DQ + "$@" + DQ] * 400)
+        self.assertLess(len(H._positional_text(text, args)), 8 * len(text) + 8 * 4096)
+        # Every parameter is filled at its FIRST use, past the budget too: nothing is hidden.
+        filled = H._positional_text(text + " " + D + " " + DQ + "$0" + DQ, [REF] + args[1:])
+        self.assertIn(REF, filled)
+
+    def test_an_empty_quoted_at_is_no_word(self):
+        self.assertEqual(H._positional_text(D + " -rf " + DQ + "$@" + DQ, ["_"]), D + " -rf ")
+        # ...and behind xargs it is what xargs reads
+        self.assertTrue(F("find " + Q + REF + Q + " | xargs sh -c " + Q + D + " -rf " + DQ + "$@" + DQ + Q
+                          + " _")["rm_targets_reference"])
+        f = F("find /tmp | xargs sh -c " + Q + D + " -rf " + DQ + "$@" + DQ + Q + " _")
+        self.assertFalse(f["rm_targets_reference"] or f["rm_in_x4_dir"])
+
+    def test_a_positional_through_a_variable(self):
+        for cmd in ("sh -c " + Q + "d=$1; " + D + " -rf " + DQ + "$d" + DQ + Q + " _ " + Q + REF + Q,
+                    "sh -c " + Q + "d=" + DQ + "$1" + DQ + "; " + D + " -rf $d" + Q + " _ " + Q + REF + Q):
+            self.assertTrue(F(cmd)["rm_targets_reference"], cmd)
+        cmd = "sh -c " + Q + "d=$1; echo " + DQ + "$d" + DQ + Q + " _ " + Q + REF + Q
+        self.assertFalse(F(cmd)["rm_targets_reference"], cmd)
+
+    def test_many_find_actions_are_bounded(self):
+        import time
+        t = time.perf_counter()
+        f = F("find . " + " ".join("-exec echo %d {} %s;" % (i, BS) for i in range(200)))
+        self.assertLess(time.perf_counter() - t, 2.5)
+        self.assertTrue(f["carriers_truncated"])
+        self.assertTrue(F("find . " + " ".join("-exec echo %d {} %s;" % (i, BS) for i in range(40)))["carriers_truncated"])
+        self.assertFalse(F("find . -exec echo {} " + BS + "; -exec wc -l {} +")["carriers_truncated"])
+        big = " ".join("$(echo %s)" % (chr(97 + i) * 200000) for i in range(3))
+        self.assertTrue(H.carried_commands("echo " + big, [])[1])
+
+    def test_a_powershell_translation_is_bounded_by_the_deadline(self):
+        seen, real, was = [], H._translate_ps, H._DEADLINE[0]
+        H._translate_ps = lambda text, timeout=0: seen.append(timeout) or (None, [], "stub")
+        try:
+            H._ps_spent[0] = 0.0
+            H._DEADLINE[0] = H._clock() + 1.0
+            H.powershell_to_sh("Get-ChildItem round8-a-" + str(id(self)))
+            self.assertLessEqual(seen[-1], 1.0)
+            H._DEADLINE[0] = H._clock() - 1.0
+            with self.assertRaises(H.AnalysisTimeout):
+                H.powershell_to_sh("Get-ChildItem round8-b-" + str(id(self)))
+        finally:
+            H._translate_ps, H._DEADLINE[0] = real, was
+
+    # --- round 8, F3: replacing programs parsed properly, and more of them
+    def test_replacing_programs_and_their_option_values(self):
+        for cmd in ("gzip -S.lck ", "xz -Ccrc32 ", "xz -T 4 ", "zip -m /c/o/a.zip ", "tar -czf /c/o/a.tgz --remove-files ",
+                    "tar czf /c/o/a.tgz --remove-files ", "brotli --rm ", "unxz "):
+            self.assertTrue(F(cmd + Q + self.ARC + Q)["writes_game_archive"], cmd)
+        self.assertTrue(F("gunzip " + Q + self.ARC + ".gz" + Q)["writes_game_archive"])
+
+    def test_TWIN_replacing_programs_that_keep_the_file(self):
+        for cmd in ("gzip -k ", "xz -kT4 ", "zip /c/o/a.zip ", "tar czf /c/o/a.tgz ", "brotli ", "gunzip -c "):
+            self.assertFalse(F(cmd + Q + self.ARC + Q)["writes_game_archive"], cmd)
+        self.assertFalse(F("gunzip -c " + Q + self.ARC + ".gz" + Q)["writes_game_archive"])
+
+    def test_sed_awk_and_cut_pass_the_find_on(self):
+        g = Q + GAME + Q
+        for f in ("sed s/x/y/", "sed -e s/x/y/", "awk " + Q + "{print}" + Q, "cut -c1-", "cut -d , -f 1"):
+            cmd = "find " + g + " -name " + Q + "*.cat" + Q + " | " + f + " | xargs mv -t /c/o"
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        cmd = "find " + g + " -name " + Q + "*.cat" + Q + " | sed -i s/x/y/ | xargs mv -t /c/o"
+        self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_fd_reaches_like_find(self):
+        g = Q + GAME + Q
+        for cmd in ("fd . " + g + " -x " + D, "fd -e cat . " + g + " -x gzip", "fd . " + g + " -X " + D):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        self.assertTrue(F("fd --search-path " + Q + REF + Q + " -x " + D)["rm_targets_reference"])
+        for cmd in ("fd . " + g + " -x cat", "fd -e xml . " + Q + self.MOD + Q + " -x gzip", "fd . /tmp -x " + D):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
 
     def test_TWIN_this_commands_own_delete_is_not_the_remote_one(self):
         f = F(D + " -rf " + Q + GAME + "/x" + Q + "; ssh otherhost ls")

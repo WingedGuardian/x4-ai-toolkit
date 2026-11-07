@@ -628,6 +628,7 @@ def segments(cmd: str, raw: bool = False) -> list[str]:
     """Split on shell separators that are OUTSIDE quotes. A `|` inside grep -E 'a|b'
     is not a pipeline. `raw`: the same pieces before _unwrap (reserved words kept), one per
     segment, in the same order."""
+    _check_deadline()                   # round 8, F1
     parts, buf, chars = [], [], list(_scan_ops(cmd))
     i = 0
     while i < len(chars):
@@ -2224,6 +2225,7 @@ def _span_open(word: str) -> bool:
 def _scan_words(seg: str, spans: bool) -> tuple:
     """_raw_words' walk: (words, None) -- or, when a span is still open at the end,
     (words so far, (index of the word that opened it, its start offset in `seg`))."""
+    _check_deadline()                   # round 8, F1: the word walk is the hot path of every reader
     out, buf, stack = [], [], []
     esc, last, opened = False, "", None      # opened: (len(out), buf-start) of the outer span
     inner = []                               # the word being read INSIDE a span (case/esac)
@@ -3355,6 +3357,14 @@ def xargs_feed(seg: str, prev) -> list[str]:
         return []
     if not any(_verb_name(t) == "xargs" for t in toks[:toks.index(vt)]):
         return []
+    return _producer_items(prev)
+
+
+def _producer_items(prev) -> list[str]:
+    """What a producer hands an `xargs` (xargs_feed): an echo/printf's words, a find's or a listing's
+    folders as `<folder>/${XARGS_ITEM}`."""
+    if prev is None:
+        return []
     pv = verb(prev)
     if pv in ("echo", "printf"):
         pt = tokens(prev)
@@ -3520,7 +3530,9 @@ def _find_delete(seg: str, default_root: bool = False) -> tuple:
             # recommends OVER -exec), `-ok`, `-okdir`, and any absolute spelling.
             # The command, or a shell carrying one (`-exec bash -c '<cmd>' _ {} ;`): _exec_deletes,
             # shared with the archive rule's expression reader.
-            if t in _FIND_EXEC and _exec_deletes(toks[i + 1:]):
+            # Only this action's words, up to its terminator (round 8, F1): the rest of the expression
+            # read as one command made 200 -exec actions quadratic (6 s).
+            if t in _FIND_EXEC and _exec_deletes(toks[i + 1:_exec_end(toks, i)]):
                 deletes = True
                 break
     if not deletes:
@@ -3575,29 +3587,120 @@ def clobber_targets(seg: str) -> list[str]:
     return []
 
 
-#: Compressors that REPLACE their operand by default (`gzip x` leaves only `x.gz`), unless told to keep
-#: it, write to stdout, test or list (4.1.1 review round 7, 2). zstd keeps it unless given --rm.
-_REPLACING = frozenset({"gzip", "bzip2", "xz", "lzma", "lzip", "compress", "pigz", "pbzip2", "zstd"})
-_KEEPING_LONG = frozenset({"--keep", "--stdout", "--to-stdout", "--test", "--list", "-"})
+#: Compressors and decompressors that REPLACE their operand by default (`gzip x` leaves only `x.gz`,
+#: `gunzip x.gz` only `x`), unless told to keep it, write to stdout, test or list (4.1.1 review round
+#: 7, 2; round 8 added the decompressors). zstd, unzstd and brotli keep it unless given --rm.
+_REPLACING = frozenset({"gzip", "gunzip", "bzip2", "bunzip2", "xz", "unxz", "lzma", "unlzma", "lzip", "compress",
+                        "uncompress", "pigz", "unpigz", "pbzip2", "zstd", "unzstd", "brotli"})
+_RM_TO_REPLACE = frozenset({"zstd", "unzstd", "brotli"})
+_KEEPING_LONG = frozenset({"--keep", "--stdout", "--to-stdout", "--test", "--list"})
+#: Their short options that take a VALUE, attached (`-S.lck`) or as the next word (round 8, F3: the
+#: letters of `-S.lck` and `-Ccrc32` were read as flags, so `c` and `k` in them hid the replacement).
+_REPLACING_VALUE_SHORT = {"gzip": "S", "gunzip": "S", "pigz": "Sbp", "unpigz": "Sbp", "xz": "CFMST",
+                          "unxz": "CFMST", "lzma": "CFMST", "unlzma": "CFMST", "zstd": "oDT", "unzstd": "oDT",
+                          "brotli": "oqwS", "lzip": "bmoS", "pbzip2": "pbm", "compress": "b"}
+_REPLACING_VALUE_LONG = frozenset({"--suffix", "--format", "--check", "--threads", "--memlimit", "--memory",
+                                   "--output", "--dict", "--quality", "--lgwin", "--block-size"})
+_DECOMPRESSING = {"gunzip", "bunzip2", "unxz", "unlzma", "uncompress", "unpigz", "unzstd"}
+_PACKED_SUFFIX = re.compile(r"[.](?:gz|z|xz|lzma|bz2|lz|Z|zst|br|tgz)$", re.IGNORECASE)
+
+
+def _replacing_parse(seg: str):
+    """(name, short flags, long flags, operands) of a replacing (de)compressor, or None."""
+    v = verb(seg)
+    if v not in _REPLACING:
+        return None
+    toks = tokens(seg)
+    shorts, longs, ops, i, k = set(), set(), [], _verb_at(seg, 0) + 1, len(toks)
+    values = _REPLACING_VALUE_SHORT.get(v, "")
+    while i < k:
+        t, q = toks[i]
+        i += 1
+        if q or not t.startswith("-") or t == "-":
+            ops.append(t)
+            continue
+        if t == "--":
+            ops += [x for x, _q in toks[i:]]
+            break
+        if t.startswith("--"):
+            name = t.partition("=")[0]
+            longs.add(name)
+            if name in _REPLACING_VALUE_LONG and "=" not in t:
+                i += 1
+            continue
+        for j, c in enumerate(t[1:]):
+            if c in values:
+                if not t[j + 2:]:
+                    i += 1                  # the value is the next word
+                break
+            shorts.add(c)
+    return v, shorts, longs, _drop_redirects(ops)
 
 
 def replaced_sources(seg: str) -> list[str]:
-    """What a replacing compressor or `rename` takes away: each a move of its operand, as `mv` is.
-    `rename FROM TO FILE...` (util-linux) and `rename EXPR FILE...` (perl) alike: every operand after
-    the first may be a file, read conservatively."""
+    """What a replacing (de)compressor, `rename`, `zip -m` or `tar --remove-files` takes away: each a
+    move of its operand, as `mv` is. `rename FROM TO FILE...` (util-linux) and `rename EXPR FILE...`
+    (perl) alike: every operand after the first may be a file, read conservatively."""
     v = verb(seg)
     if v == "rename":
         return _operands(seg)[1:]
-    if v not in _REPLACING:
+    if v == "zip":
+        toks = tokens(seg)
+        flags = [t for t, q in toks if not q and t.startswith("-") and not t.startswith("--")]
+        moves = any("m" in f[1:] for f in flags) or "--move" in tokens_of(seg)
+        return _operands(seg)[1:] if moves else []
+    if v == "tar":
+        return _tar_removed(seg)
+    got = _replacing_parse(seg)
+    if got is None:
         return []
+    v, shorts, longs, ops = got
+    if v in _RM_TO_REPLACE and "--rm" not in longs:
+        return []
+    if longs & _KEEPING_LONG or shorts & set("kctl"):
+        return []
+    return ops
+
+
+def decompress_outputs(seg: str) -> list[str]:
+    """The files a replacing decompressor WRITES: each operand without its packed suffix
+    (`gunzip <game>/01.cat.gz` writes `<game>/01.cat`; round 8, F3)."""
+    got = _replacing_parse(seg)
+    if got is None:
+        return []
+    v, shorts, longs, ops = got
+    if not (v in _DECOMPRESSING or "d" in shorts or longs & {"--decompress", "--uncompress"}):
+        return []
+    if longs & _KEEPING_LONG - {"--keep"} or shorts & set("ctl"):
+        return []
+    return [_PACKED_SUFFIX.sub("", o) for o in ops if _PACKED_SUFFIX.search(o)]
+
+
+def _tar_removed(seg: str) -> list[str]:
+    """The files `tar --remove-files` takes away: its operands, without the archive (`-f X`, `fX`
+    in an old-style cluster) or a `-C <dir>` value."""
     toks = tokens(seg)
-    flags = [t for t, q in toks[_verb_at(seg, 0) + 1:] if not q and t.startswith("-")]
-    if v == "zstd" and "--rm" not in flags:
+    words = [t for t, _q in toks[_verb_at(seg, 0) + 1:]]
+    if "--remove-files" not in words:
         return []
-    for f in flags:
-        if f in _KEEPING_LONG or (not f.startswith("--") and set(f[1:]) & set("kctl")):
-            return []
-    return _operands(seg)
+    out, i = [], 0
+    while i < len(words):
+        w = words[i]
+        i += 1
+        if w.startswith("--"):
+            if w in ("--file", "--directory", "--exclude", "--files-from") and "=" not in w:
+                i += 1
+            continue
+        if w.startswith("-") or (i == 1 and re.fullmatch(r"[A-Za-z]+", w) and "f" in w):
+            body = w.lstrip("-")
+            for j, c in enumerate(body):
+                if c in "fCbHKLNTVX":
+                    if not body[j + 1:]:
+                        i += 1
+                    break
+            continue
+        out.append(w)
+    return out
 
 
 def move_sources(seg: str) -> list[str]:
@@ -5025,6 +5128,14 @@ def _exec_deletes(words: list) -> bool:
     return any(_verb_name(verb(s)) in DELETE_VERBS for x in _inner_commands(text) for s in segments(x))
 
 
+def _exec_end(words: list, i: int) -> int:
+    """The index of the terminator of the -exec at `i` (`;`, or `+` right after `{}`), or len(words)."""
+    j = i + 1
+    while j < len(words) and words[j] != ";" and (words[j] != "+" or words[j - 1] != "{}"):
+        j += 1
+    return j
+
+
 #: The entry a find or an xargs hands its command, as a path no other operand can spell (round 6, D).
 _FIND_ENTRY = "/x4-find-entry/" + "entry"
 _PERL_IN_PLACE = re.compile(r"^-[A-Za-z]*i")
@@ -5045,7 +5156,7 @@ def _entry_effect(text: str):
             if any(_is_entry(h) for h in move_sources(s) + replaced_sources(s) + rsync_moved_sources(s)):
                 return "move"
             hits = (copy_dests(s) + [t for _m, t in redirects(s)] + clobber_targets(s) + sed_in_place_targets(s)
-                    + output_targets(s) + modify_targets(s))
+                    + output_targets(s) + modify_targets(s) + decompress_outputs(s))
             toks = tokens(s)
             if _verb_name(verb(s)) == "perl" and any(not q and _PERL_IN_PLACE.match(t) for t, q in toks):
                 hits += [t for t, _q in toks]
@@ -5063,7 +5174,8 @@ def _exec_entry_effect(words: list):
 
 #: Programs that pass their stdin on (filtered or not) when given no input file (round 7, 2), so
 #: `find ... | sort | xargs mv -t <dir>` is read as fed by the find. tee writes files and passes it on.
-_STDIN_FILTERS = frozenset({"sort", "uniq", "head", "tail", "tr", "cat", "tee", "grep", "egrep", "fgrep"})
+_STDIN_FILTERS = frozenset({"sort", "uniq", "head", "tail", "tr", "cat", "tee", "grep", "egrep", "fgrep",
+                            "sed", "awk", "gawk", "mawk", "cut"})       # round 8 (e): sed, awk, cut
 
 
 def _passes_stdin_through(seg: str) -> bool:
@@ -5073,7 +5185,14 @@ def _passes_stdin_through(seg: str) -> bool:
     if v in ("tee", "tr"):
         return True
     ops = [o for o in _operands(seg) if not re.fullmatch(r"[+-]?[0-9]+", o)]
-    return len(ops) <= (1 if v in ("grep", "egrep", "fgrep") else 0)
+    if v == "sed":
+        flags = [t for t in tokens_of(seg) if t.startswith("-")]
+        if any(f.startswith("--in-place") or (not f.startswith("--") and "i" in f[1:]) for f in flags):
+            return False                     # sed -i edits files; it passes nothing on
+        return len(ops) <= 1 + sum(1 for f in flags if f in ("-e", "-f", "--expression", "--file"))
+    if v == "cut":
+        ops = [o for o in ops if len(o) > 1]  # `-d ,`: a one-character delimiter is no file
+    return len(ops) <= (1 if v in ("grep", "egrep", "fgrep", "awk", "gawk", "mawk") else 0)
 
 
 def _stdin_producer(before: list):
@@ -5096,9 +5215,7 @@ def find_entry_write_roots(seg: str) -> list:
     words = tokens_of(seg)
     for i, t in enumerate(words):
         if t in _FIND_EXEC:
-            j = i + 1
-            while j < len(words) and words[j] != ";" and (words[j] != "+" or words[j - 1] != "{}"):
-                j += 1
+            j = _exec_end(words, i)
             if j < len(words) and _exec_entry_effect(words[i + 1:j]):
                 return _find_roots(seg) or ["."]
     return []
@@ -5131,29 +5248,11 @@ def _fd_exec_readings(seg: str) -> list:
     """`fd [pattern] [path...] -x|-X <cmd>` runs <cmd> per result (or once for all), with `{}`, `{/}`,
     `{//}`, `{.}`, `{/.}` standing for the result, or the result appended when none is given: a carrier
     like find's -exec (4.1.1 review round 7, 3). A result is an entry under each search path."""
-    toks = tokens(seg)
-    words = [t for t, _q in toks[_verb_at(seg, 0) + 1:]]
-    pos, i, ran = [], 0, None
-    while i < len(words):
-        w = words[i]
-        if w in ("-x", "--exec", "-X", "--exec-batch"):
-            ran = words[i + 1:]
-            break
-        if w == "--search-path" and i + 1 < len(words):
-            pos.append(words[i + 1])
-            i += 2
-            continue
-        if w.startswith("-"):
-            i += 2 if w in _FD_VALUE_OPTS else 1
-            continue
-        pos.append(w)
-        i += 1
-    if ran and ran[-1] == ";":
-        ran = ran[:-1]
+    paths, ran, _opts = _fd_parse(seg)
     if not ran:
         return []
     out = []
-    for root in (pos[1:] or ["."])[:_FIND_EXEC_ROOTS]:
+    for root in paths[:_FIND_EXEC_ROOTS]:
         item = _sh_quote(root.rstrip("/") + "/") + _XARGS_ITEM
         if any(_FD_PLACEHOLDER.search(w) for w in ran):
             parts = [item.join(_sh_quote(p) if p else "" for p in _FD_PLACEHOLDER.split(w))
@@ -5162,6 +5261,72 @@ def _fd_exec_readings(seg: str) -> list:
             parts = [_sh_quote(w) for w in ran] + [item]
         out.append(" ".join(parts))
     return list(dict.fromkeys(out))
+
+
+def _fd_parse(seg: str) -> tuple:
+    """(search paths, the -x/-X command, {option: value}) of an `fd` (round 8, F3). The pattern is
+    the first operand and the paths the rest; `--search-path` adds a path and stops the first
+    operand being one, `--base-directory` is where relative paths start."""
+    toks = tokens(seg)
+    words = [t for t, _q in toks[_verb_at(seg, 0) + 1:]]
+    pos, search, opts, i, ran = [], [], {}, 0, None
+    while i < len(words):
+        w = words[i]
+        if w in ("-x", "--exec", "-X", "--exec-batch"):
+            ran = words[i + 1:]
+            break
+        name, eq, val = w.partition("=")
+        if name == "--search-path" and (eq or i + 1 < len(words)):
+            search.append(val if eq else words[i + 1])
+            i += 1 if eq else 2
+            continue
+        if w.startswith("-") and w != "-":
+            if name in _FD_VALUE_OPTS and not eq and i + 1 < len(words):
+                opts.setdefault(name, []).append(words[i + 1])
+                i += 2
+            else:
+                opts.setdefault(name, []).append(val if eq else "")
+                i += 1
+            continue
+        pos.append(w)
+        i += 1
+    if ran and ran[-1] == ";":
+        ran = ran[:-1]
+    paths = search + pos[1:] if search else pos[1:]
+    base = (opts.get("--base-directory") or [""])[-1]
+    paths = [p if (not base or is_abs(p)) else base.rstrip("/") + "/" + p for p in paths] or [base or "."]
+    return paths, ran, opts
+
+
+def _fd_as_find(seg: str):
+    """The `find` an `fd ... -x|-X <cmd>` amounts to, for the find readers' reach test (round 8, F3: `fd .
+    <game> -x rm` only advised where `find <game> -exec rm {} ;` denies). The pattern becomes a
+    `-regex` (fd matches it anywhere in the name; read conservatively), `-e EXT` a `-name '*.EXT'`,
+    `-g GLOB` a `-name`, `-d N` a `-maxdepth`; the command runs once per result with `{}`."""
+    paths, ran, opts = _fd_parse(seg)
+    if not ran:
+        return None
+    toks = tokens(seg)
+    words = [t for t, _q in toks[_verb_at(seg, 0) + 1:]]
+    first = next((w for w in words if not w.startswith("-")), None)
+    pattern = None if opts.get("--search-path") or first in (None, "-x", "-X", "--exec", "--exec-batch") \
+        else first
+    expr = []
+    for d in (opts.get("-d") or opts.get("--max-depth") or [])[-1:]:
+        expr += ["-maxdepth", d]
+    exts = (opts.get("-e") or []) + (opts.get("--extension") or [])
+    if exts:
+        expr += ["("] + sum((["-o", "-name", "*." + e.lstrip(".")] for e in exts), [])[1:] + [")"]
+    if "-g" in opts or "--glob" in opts:
+        if pattern:
+            expr += ["-name", pattern]
+    elif pattern and pattern not in (".", "", "^", ".*"):
+        expr += ["-regex", ".*" + pattern + ".*"]
+    cmd = [_FD_PLACEHOLDER.sub("{}", w) for w in ran]
+    if not any("{}" in w for w in cmd):
+        cmd.append("{}")
+    return " ".join(["find"] + [_sh_quote(p) for p in paths[:_FIND_EXEC_ROOTS]] + [_sh_quote(w) for w in expr]
+                    + ["-exec"] + [_sh_quote(w) for w in cmd] + ["';'"])
 
 
 #: How many starting points a find's -exec readings are built for (_find_exec_readings).
@@ -5697,33 +5862,76 @@ _REDIR_WORD = ("<<<", "<", ">", ">>", "<>", ">|", "<<", "<<-")
 _POSITIONAL = re.compile(r"[$](?:[{]([0-9]+|[@*])[}]|([0-9@*]))")
 
 
+#: What a positional fill may add beyond its own input (4.1.1 review round 8, F1). Each parameter is
+#: filled IN FULL at its first use, so no argument is ever hidden; a later use past the budget is an
+#: unknown value instead. MEASURED at a933b5c0: `sh -c 'echo "$@" x400' _ a0..a399` filled 160,000
+#: words and the hook ran 38 s, past its 30 s timeout.
+_POSITIONAL_EXTRA = 4096
+_POSITIONAL_UNKNOWN = "${x4_positional}"
+
+
 def _positional_text(text: str, args: list) -> str:
     """`text` with `$0`..`$9`, `${N}`, `$@`, `$*` (quoted or not) replaced by `args` (args[0] is `$0`),
     as the shell running `sh -c TEXT ARGS...` fills them in. A parameter past the last argument is
-    empty. Inside double quotes the value is escaped for them; elsewhere it is quoted as one word
-    each, so a value with a blank stays one operand (4.1.1 review round 7, 2)."""
+    empty, and an empty `"$@"` is no word at all. Inside double quotes the value is escaped for them;
+    elsewhere it is quoted as one word each, so a value with a blank stays one operand (4.1.1 review
+    round 7, 2). Bounded: see _POSITIONAL_EXTRA."""
     if "$" not in text or not args:
         return text
     kinds = {i: k for i, _c, _inq, k in _qwalk(text)}
-    out, last = [], 0
+    out, last, seen = [], 0, set()
+    budget = 4 * (len(text) + sum(len(a) + 1 for a in args)) + _POSITIONAL_EXTRA
     for m in _POSITIONAL.finditer(text):
         k = kinds.get(m.start(), "")
         if k in ("'", "$'") or (m.start() and text[m.start() - 1] == chr(92)):
             continue
         name = m.group(1) or m.group(2)
         vals = args[1:] if name in "@*" else ([args[int(name)]] if int(name) < len(args) else [""])
-        if k == chr(34) and name == "@":
+        start, end = m.start(), m.end()
+        if name in seen and budget <= 0:
+            rep = _POSITIONAL_UNKNOWN           # past the budget: unknown, never dropped
+        elif name == "@" and not vals and k == chr(34) and text[start - 1:start] == chr(34) \
+                and text[end:end + 1] == chr(34):
+            start, end, rep = start - 1, end + 1, ""   # an empty "$@" is no word
+        elif k == chr(34) and name == "@":
             # "$@" is one word per argument: `"pre$@post"` is "pre<a1>" "<a2>post".
             rep = (chr(34) + " " + chr(34)).join(
                 re.sub(r"([" + chr(92) + chr(92) + chr(34) + "$`])", chr(92) + chr(92) + r"\1", x) for x in vals)
         elif k == chr(34):
             rep = re.sub(r"([" + chr(92) + chr(92) + chr(34) + "$`])", chr(92) + chr(92) + r"\1", " ".join(vals))
         else:
-            rep = " ".join(_sh_quote(x) for x in vals) if vals != [""] else "''"
-        out.append(text[last:m.start()])
+            rep = " ".join(_sh_quote(x) for x in vals if x)
+        seen.add(name)
+        budget -= len(rep)
+        out.append(text[last:start])
         out.append(rep)
-        last = m.end()
+        last = end
     return "".join(out) + text[last:] if out else text
+
+
+def _inline_assigned(filled: str, text: str) -> str:
+    """`filled` with each variable it ASSIGNS a filled value to (`d=$1` became `d='<x>'`) written out
+    where it is read, as the shell would (round 8, F3: `sh -c 'd=$1; rm -rf "$d"' _ <ref>`). The
+    unfilled text assigns the same names an unknown value, and assignments() keeps the FIRST one it
+    meets, so without this the fill never reached the delete."""
+    was, now = assignments(text), assignments(filled)
+    names = [k for k, v in now.items() if was.get(k) != v and not has_unresolved(v)]
+    if not names:
+        return filled
+    kinds = {i: k for i, _c, _inq, k in _qwalk(filled)}
+    pat = re.compile(r"[$](?:[{](" + "|".join(map(re.escape, names)) + r")[}]|(" + "|".join(map(re.escape, names))
+                     + r")(?![A-Za-z0-9_]))")
+    out, last = [], 0
+    for m in pat.finditer(filled):
+        k = kinds.get(m.start(), "")
+        if k in ("'", "$'"):
+            continue
+        v = now[m.group(1) or m.group(2)]
+        out.append(filled[last:m.start()])
+        out.append(re.sub(r"([" + chr(92) + chr(92) + chr(34) + "$`])", chr(92) + chr(92) + r"\1", v)
+                   if k == chr(34) else _sh_quote(v))
+        last = m.end()
+    return "".join(out) + filled[last:]
 
 
 def _drop_redirects(toks: list[str]) -> list[str]:
@@ -5993,12 +6201,17 @@ def powershell_to_sh(text: str) -> tuple:
     if remaining < 0.5:
         return None, [], ("the PowerShell translation budget for one command (%.0f s) is "
                           "spent, so this part was not analysed" % _PS_BUDGET_S)
+    left = (_DEADLINE[0] - _clock()) if _DEADLINE[0] is not None else _PS_CALL_CAP_S
+    if left <= 0:
+        raise AnalysisTimeout()         # round 8, F2: no time left before the analysis deadline
+    cap = min(_PS_CALL_CAP_S, remaining, left)
     t0 = _clock()
     try:
-        got = _translate_ps(text, min(_PS_CALL_CAP_S, remaining))
+        got = _translate_ps(text, cap)
     finally:
         _ps_spent[0] += max(0.0, _clock() - t0)
-    _PS_CACHE[text] = got
+    if got[0] is not None or cap >= min(_PS_CALL_CAP_S, remaining):
+        _PS_CACHE[text] = got           # a call cut short by the deadline is not a verdict on the text
     return got
 
 
@@ -7137,7 +7350,14 @@ def _inner_commands(cmd: str) -> list[str]:
             if readings:
                 handled[n] = readings
         if carried_here:
-            carrying[n] = carrying.get(n, []) + list(dict.fromkeys(carried_here))
+            carried_here = list(dict.fromkeys(carried_here))
+            if len(carried_here) > _MAX_SEGMENT_READINGS:
+                # Each reading is the WHOLE command again (_reading_variants): unbounded, the text
+                # grows as readings x length (round 8: 200 -exec actions ran 6.8 s). Past the bound
+                # the command is too tangled to analyse, and says so (carriers_truncated).
+                _READINGS_TRUNCATED[0] = True
+                carried_here = carried_here[:_MAX_SEGMENT_READINGS]
+            carrying[n] = carrying.get(n, []) + carried_here
         if v in ("cmd",) + _PS_EXES:
             translated = _windows_carrier(seg, cmd, segs[n - 1] if n and pipes[n] else None)
             _WIN_DIALECT.update(translated)
@@ -7186,9 +7406,15 @@ def _inner_commands(cmd: str) -> list[str]:
                     out.extend(resolve_variants(toks[at][0], assignments(cmd)))
                     # ...and with its positional parameters filled in from the words after it
                     # (round 7, 2): `sh -c 'rm -rf "$1"' _ <ref>`, `-exec sh -c 'echo > "$1"' _ {} ;`.
-                    filled = _positional_text(toks[at][0], _drop_redirects([w for w, _q in toks[at + 1:]]))
+                    args = _drop_redirects([w for w, _q in toks[at + 1:]])
+                    prev_ = segs[n - 1] if n and pipes[n] else None
+                    if prev_ is not None and any(_verb_name(w) == "xargs" for w, _q in toks[:i]):
+                        # `... | xargs sh -c '<cmd> "$@"' _`: xargs appends what it reads, so "$@" is
+                        # the producer's items, not empty (round 8: an empty fill read as `.`).
+                        args = args + _producer_items(_stdin_producer(segs[:n]))
+                    filled = _positional_text(toks[at][0], args)
                     if filled != toks[at][0]:
-                        out.append(filled)
+                        out.append(_inline_assigned(filled, toks[at][0]))
                     break
         elif v == "eval":
             # `eval` concatenates its arguments and runs the result.
@@ -7298,6 +7524,13 @@ _MAX_CARRIER_DEPTH = 4
 #: only reason the number in it is now true.)
 _MAX_CARRIED = 250
 
+#: Round 8 (F1): the readings of one segment, and the characters of every carried text together. A
+#: reading or a fill repeats the command around it, so a count bound alone still let the TEXT grow
+#: quadratically. Past either, the walk stops and reports carriers_truncated (a refusal).
+_MAX_SEGMENT_READINGS = 32
+_MAX_CARRIED_CHARS = 400000
+_READINGS_TRUNCATED = [False]
+
 
 def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tuple:
     """Every command string reachable from `body`, following carriers.
@@ -7320,6 +7553,7 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
     out = [body]
     frontier = [body]
     truncated = False
+    size = len(body) + sum(len(e) for e in extra)
     for e in extra:
         d.setdefault(e, WINDOWS_DIALECT if e in _WIN_DIALECT else "bash")
         if e not in seen:
@@ -7349,6 +7583,10 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
                         return out, True
                     seen.add(inner)
                     nxt.append(inner)
+                    size += len(inner)
+                    if size > _MAX_CARRIED_CHARS:
+                        out.extend(nxt)
+                        return out, True
                     if len(out) + len(nxt) >= _MAX_CARRIED:
                         # STOP, and SAY SO. Dropping the rest and returning a verdict
                         # would be a step that narrows its data and reports success --
@@ -7887,6 +8125,7 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     _READING_TEXTS.clear()
     del _SSH_UNPLACED[:]                # round 6, C: per call (a nested judgement clears its own)
     del _SSH_UNPLACED_SPLICED[:]
+    _READINGS_TRUNCATED[0] = False
     _EXTENSIONS_ROOT[0] = (roots.get("extensions")
                            or (roots["game"].rstrip("/" + chr(92)) + "/extensions" if roots.get("game") else "")
                            ).replace(chr(92), "/")
@@ -7942,6 +8181,7 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # Which dialect spelled each command's paths (LINUX GAP): see carried_commands.
     dialects = {body: WINDOWS_DIALECT if from_powershell else "bash"}
     all_cmds, carriers_truncated = carried_commands(body, extra, dialects)
+    carriers_truncated = carriers_truncated or _READINGS_TRUNCATED[0]
     # ...and each one with its separator-holding substitutions collapsed (FX-G6 / reviewer
     # K I4): `A=$(echo a; echo b) rm -rf <game>` -- see _spanning_view. Inserted after the
     # top level, so the last command (and the `cwd` fact read from it) is unchanged; the
@@ -8285,7 +8525,7 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
         copy_t += prep(robo_copy, c_cwd, c_old, operation="write", scope="tree")
         rm_t += prep(robo_del, c_cwd, c_old, operation="delete", scope="tree")
         mv_src += prep(robo_mv, c_cwd, c_old, operation="move", scope="tree")
-        mod_t += prep(modify_targets(s), c_cwd, c_old, operation="write")
+        mod_t += prep(modify_targets(s) + decompress_outputs(s), c_cwd, c_old, operation="write")
         # A FILTERED find-delete removes entries INSIDE its tree: it feeds every in-tree
         # delete rule, and never the whole-install hard block (see find_scoped_deletes).
         scoped_rm_t += prep(find_scoped_deletes(s), c_cwd, c_old, operation="delete", scope="filtered-tree")
@@ -8300,6 +8540,10 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                           for op in prep(_find_delete(s, default_root=True)[0], c_cwd, c_old)]
         archive_finds += [(op, s, "delete", True)
                           for op in prep(find_entry_write_roots(s), c_cwd, c_old)]
+        fd_find = _fd_as_find(s) if verb(s) in ("fd", "fdfind") else None
+        if fd_find:
+            archive_finds += [(op, fd_find, "delete", True)
+                              for op in prep(_find_delete(fd_find)[0] + find_entry_write_roots(fd_find), c_cwd, c_old)]
         x_effect = xargs_entry_effect(s, prev)
         if x_effect:
             x_roots = _find_roots(prev) or ["."]

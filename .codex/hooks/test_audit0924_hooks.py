@@ -1414,6 +1414,18 @@ class TestSshChainWholeHookTime(unittest.TestCase):
                 self.assertEqual(verdict, want, (n, tail))
                 self.assertLess(secs - plain, 2.0, "%d segments%s: %.1f s, plain %.1f s" % (n, tail, secs, plain))
 
+    def test_a_repeated_positional_fill_answers_in_time(self):
+        # 4.1.1 review round 8, F1, MEASURED at a933b5c0: n=400 denied after 38.3 s (past the 30 s
+        # timeout, where a hook does not block). Each must still deny, within 2.5 s of a plain command.
+        ref = str(self.ref).replace(chr(92), "/")
+        _v, plain = self.run_hook("ls")
+        for n in (400, 600):
+            cmd = ("sh -c 'echo " + " ".join(['"$@"'] * n) + "' _ " + " ".join("a%d" % i for i in range(n))
+                   + " && rm -rf '" + ref + "'")
+            verdict, secs = self.run_hook(cmd)
+            self.assertEqual(verdict, "deny", n)
+            self.assertLess(secs - plain, 2.5, "n=%d: %.1f s, plain %.1f s" % (n, secs, plain))
+
     def test_a_find_sed_in_the_game_folder_names_the_edit_tool(self):
         # Round 7, 4: the remedy for an in-place sed of game files is the edit tool, not XRCatTool.
         game = self.env["X4_GAME"].replace(chr(92), "/")
