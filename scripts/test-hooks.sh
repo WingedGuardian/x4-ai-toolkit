@@ -543,6 +543,15 @@ decide allow  protect-bash.sh "$(cj "gzip -k '$X4_GAME/01.cat'")" "TWIN: gzip -k
 decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' | sort | xargs mv -t /c/o")" "find | sort | xargs mv: archives moved away"
 decide deny   protect-bash.sh "$(cj "gfind '$X4_GAME' -name '*.cat' -delete")" "gfind is find"
 decide deny   protect-bash.sh "$(cj "fd . '$X4_REFERENCE' -x rm")" "fd -x runs a command per result"
+# 4.1.1 review round 8: a bounded positional fill; positionals through a variable; option values of
+# replacing programs; sed between find and xargs; fd's reach test.
+_at=""; for _i in $(seq 400); do _at="$_at \"\$@\""; done
+decide deny   protect-bash.sh "$(cj "sh -c 'echo$_at' _ $(seq -s ' ' 400) && rm -rf '$X4_REFERENCE'")" "400 repeated \"\$@\" fills, then a delete of reference/: denied in time"
+decide deny   protect-bash.sh "$(cj "sh -c 'd=\$1; rm -rf \"\$d\"' _ '$X4_REFERENCE'")" "a positional through a variable"
+decide deny   protect-bash.sh "$(cj "gzip -S.lck '$X4_GAME/01.cat'")" "gzip with an attached suffix value replaces an archive"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' | sed s/x/y/ | xargs mv -t /c/o")" "find | sed | xargs mv: archives moved away"
+decide deny   protect-bash.sh "$(cj "fd . '$X4_GAME' -x rm")" "fd -x rm in the game folder: the find reach test"
+decide allow  protect-bash.sh "$(cj "zip /c/o/a.zip '$X4_GAME/01.cat'")" "TWIN: zip without -m copies an archive out"
 _sg="$X4_GAME"; _se="$X4_EXTENSIONS"; export X4_GAME="" X4_EXTENSIONS=""
 decide deny   protect-bash.sh "$(cj "rm '/c/games/X4 Foundations/01.dat'")" "archive: no game root configured, the install's folder name"
 decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")"     "TWIN: no game root, another game's .dat"
@@ -746,7 +755,8 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # Round 5 adds 5 denies + 4 twins: 416 + 9.
 # Round 6 adds 7 denies + 1 advisory + 5 twins: 425 + 13; its find-write part 2 denies + 2 twins: 438 + 4.
 # Round 7 adds 6 denies + 2 twins: 442 + 8.
-EXPECT=450
+# Round 8 adds 5 denies + 1 twin: 450 + 6.
+EXPECT=456
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
