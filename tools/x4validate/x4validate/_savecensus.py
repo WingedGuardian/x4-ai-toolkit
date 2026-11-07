@@ -268,8 +268,14 @@ def cmd_census(path: Path, *, classes, owners, macros, parent_classes, parent_an
     print("  " + _scan.count_line(len(shown), len(rows), "groups"), file=out)
     print(f"\n  {res.matched:,} of {res.seen:,} components matched, over {res.scanned_bytes:,} decompressed bytes",
           file=out)
-    print(f"  {res.no_class:,} component(s) had no class= (never matched by --class; grouped as "
-          f"'{NO_CLASS}')", file=out)
+    # 4.1.1 review B5: say what actually happened to them. Under --class none can match, so none is grouped.
+    if classes:
+        fate = "never matched by --class, so none is in the groups above"
+    elif "class" in by:
+        fate = f"in the groups above as '{NO_CLASS}' wherever they matched"
+    else:
+        fate = "counted in the groups above wherever they matched"
+    print(f"  {res.no_class:,} component(s) had no class= ({fate})", file=out)
     print(f"  {res.no_macro:,} matched component(s) had no macro= (grouped as '{NO_MACRO}')", file=out)
     print(f"  {res.owner_inherited:,} matched component(s) had no owner= and took their nearest ancestor "
           "component's", file=out)

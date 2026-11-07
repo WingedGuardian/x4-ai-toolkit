@@ -175,6 +175,18 @@ def test_cli_text_prints_groups_and_denominator_rc0(tmp_path, capsys):
     assert "1 component(s) had no class=" in out
 
 
+def test_cli_no_class_footer_says_what_happened_to_them(tmp_path, capsys):
+    """4.1.1 review B5: the footer said "grouped as '(no class)'" even when --class had filtered every one of them
+    out. With --class they are never in the groups; without it they are grouped like any other component."""
+    _savecli.main(["census", str(_save(tmp_path)), "--class", "ship_*", "--by", "class"])
+    out = capsys.readouterr().out
+    assert "'(no class)'" not in out, out
+    assert "1 component(s) had no class= (never matched by --class, so none is in the groups above)" in out, out
+    _savecli.main(["census", str(_save(tmp_path)), "--by", "class"])
+    out = capsys.readouterr().out
+    assert "1 component(s) had no class= (in the groups above as '(no class)' wherever they matched)" in out, out
+
+
 def test_cli_zero_match_states_how_many_were_scanned_rc1(tmp_path, capsys):
     """Fails if a zero reads like success, or hides the denominator."""
     rc = _savecli.main(["census", str(_save(tmp_path)), "--owner", "nobody"])
