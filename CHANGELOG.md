@@ -20,6 +20,8 @@
 
 - Save sentinel: when the `Egosoft/X4` folder's accounts cannot be listed, the saves in them are now reported as unknown for that look, with the folder named as unread, and no longer as removed. A listing that failed one way while another way still worked could report every save in the profile as removed. A later change to one of those saves is still reported, and a save folder that is really gone still reads as removed.
 
+- `x4housekeep` temp sweep: a leftover toolkit temp folder that carries the toolkit's own version-2 receipt (written when the toolkit created it empty, purpose "disposable temporary workspace") and passes the protection, inactivity and in-use checks is now deleted permanently, and the report and session note name what was deleted and how much it freed. Before, these went to the Recycle Bin, which frees nothing on the same drive; 15.45 GiB of finished test folders piled up there. Folders with any other receipt, or an explicit obsolete decision, still go to the Recycle Bin, and folders with no receipt are still left alone. A folder with only an older version-1 ownership receipt, or with a file dated in the future, is kept and now named in the report so you can decide. A failed delete leaves the folder and is reported; it never falls back to anything else. The sweep deletes on every OS, where before it did nothing off Windows.
+
 ## v4.1.0 — 2026-11-04
 
 - Typed file deletion of deployed mod folders or ordinary XML now requests confirmation, matching shell retirement policy, instead of being rejected as a direct edit of the deployed copy. Direct writes, write-only batches, explicit moves, archive protections, save preservation and whole-install/reference blocks retain their prior policy.

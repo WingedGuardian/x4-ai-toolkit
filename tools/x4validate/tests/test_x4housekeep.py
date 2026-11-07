@@ -401,8 +401,26 @@ def _never_the_real_bin(monkeypatch):
     A test that needs a bin injects FakeBin explicitly. The harness opt-out is cleared so session() runs."""
     def refuse(*_a, **_k):
         raise AssertionError("the REAL recycle() was reached from a test")
+
+    def refuse_delete(*_a, **_k):
+        raise AssertionError("the REAL delete_tree() was reached from a test")
     monkeypatch.setattr(hk, "recycle", refuse)
+    monkeypatch.setattr(hk, "delete_tree", refuse_delete)     # 4.1.1: a test that deletes injects FakeDelete
     monkeypatch.delenv("X4_HOUSEKEEP_SWEEP", raising=False)
+
+
+class FakeDelete:
+    """Stands in for the permanent delete: records the paths and moves each out of the fixture temp, nothing more."""
+    def __init__(self, root):
+        self.gone = root / "deleted"
+        self.gone.mkdir(exist_ok=True)
+        self.got = []
+
+    def __call__(self, paths, _toolkit):
+        for p in paths:
+            self.got.append(p)
+            os.replace(p, self.gone / "{}-{}".format(len(self.got), os.path.basename(p)))
+        return {str(p): None for p in paths}
 
 
 @pytest.fixture
@@ -688,14 +706,21 @@ def stale(d, days=3):
     return d
 
 
-def tdir(temp, name, days=3):
+def tdir(temp, name, days=3, receipt="recycle"):
+    """A toolkit temp dir. receipt="recycle" (the default): an ownership receipt plus the OTHER disposition receipt,
+    which still goes to the (fake) bin. receipt="v2": the producer's own v2 receipt, which is deleted (4.1.1).
+    receipt="v1": an ownership-only receipt, which is kept."""
     d = temp / name
     (d / "sub").mkdir(parents=True)
     (d / "sub" / "f.txt").write_text("x", encoding="utf-8")
     owner = next(parent.parent for parent in d.parents if parent.name == "temp")
-    (d / ".x4-temp-owner.json").write_text(json.dumps({
-        "v": 2, "toolkit": os.path.normcase(os.path.realpath(owner)),
-        "directory": os.path.normcase(os.path.realpath(d)), "purpose":"disposable temporary workspace"}), encoding="utf-8")
+    ident = {"toolkit": os.path.normcase(os.path.realpath(owner)), "directory": os.path.normcase(os.path.realpath(d))}
+    owner_receipt = dict(v=2, **ident, purpose="disposable temporary workspace") if receipt == "v2" else dict(v=1, **ident)
+    (d / ".x4-temp-owner.json").write_text(json.dumps(owner_receipt), encoding="utf-8")
+    if receipt == "recycle":
+        (d / ".housekeep-disposable.json").write_text(json.dumps(dict(
+            v=1, directory=ident["directory"], toolkit=ident["toolkit"],
+            purpose="producer-declared disposable temporary workspace")), encoding="utf-8")
     return stale(d, days)
 
 
@@ -989,13 +1014,23 @@ def test_session_never_sweeps_when_the_harness_says_off(tmp_path, monkeypatch):
     assert not left.exists()
 
 
-def test_the_tool_never_deletes_permanently():
-    """User ruling 2026-10-18: the Recycle Bin, always -- the tool's own files included."""
+def test_the_tool_deletes_permanently_in_one_place_only():
+    """User ruling 2026-10-18 (Recycle Bin always), narrowed by the 2026-10-30 deletion policy: a temp workspace the
+    toolkit's producer declared disposable when it created it is DELETED (4.1.1). That is the one permanent delete:
+    `delete_tree`, and `sweep_temp` is the one caller, only for what `deletable_temp` accepts. Everything else recycles."""
+    import ast
     import re
     src = (REPO / "scripts" / "x4housekeep.py").read_text(encoding="utf-8")
-    for call in ("os.unlink(", "os.remove(", "shutil.rmtree(", ".unlink(", "os.rmdir(", ".rmdir(",
-                 "FileSystem]::Delete"):
-        assert call not in src, call
+    tree = ast.parse(src)
+    deleting = {"unlink", "remove", "rmtree", "rmdir", "removedirs"}
+    where = sorted({fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
+                    for node in ast.walk(fn) if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute) and node.func.attr in deleting})
+    assert where == ["delete_tree"], where
+    callers = sorted({fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef) and fn.name != "delete_tree"
+                      for node in ast.walk(fn) if isinstance(node, ast.Name) and node.id == "delete_tree"})
+    assert callers == ["sweep_temp"], callers
+    assert "FileSystem]::Delete" not in src
     flags = re.findall(r"fFlags = ([^}]+?) \}", src)
     assert len(flags) == 1 and {"0x4000", "0x40"} <= set(re.findall(r"0x[0-9A-Fa-f]+", flags[0])), flags
 
@@ -1141,3 +1176,142 @@ def test_an_unreadable_instruction_file_blocks_but_a_missing_one_names_no_live_w
     (tree / "AGENTS.md").write_bytes(b"\xff\xfe\x00bad")                   # exists, not UTF-8
     with pytest.raises(hk.LiveStateUnknown):
         hk.live_state_tokens(cfg)
+
+
+# --------------------------------------------------------------------------- 4.1.1: receipted test workspaces are DELETED
+# The bin frees nothing on the same drive: 15.45 GiB of dead receipted x4-pytest-session dirs piled up there. User deletion
+# policy: a tool's own temp workspace with the producer's disposition receipt, proven dead, is deleted permanently. Every
+# test here uses tmp_path fixtures and FakeDelete / FakeBin; the real delete_tree and recycle raise (autouse fixture).
+
+def test_a_stale_dir_with_the_producers_v2_receipt_is_deleted_not_recycled(tmp_path):
+    temp = tmp_path / "temp"
+    doomed = tdir(temp, "x4-pytest-batch-dead01", receipt="v2")
+    binned = tdir(temp, "x4qa_other01")                        # twin: the OTHER disposition receipt still recycles
+    fake_bin, fake_del = FakeBin(tmp_path), FakeDelete(tmp_path)
+    res = hk.sweep_temp(sweep_cfg(tmp_path), temp=temp, recycler=fake_bin, deleter=fake_del)
+    assert [Path(p) for p in fake_del.got] == [doomed] and [Path(p) for p in fake_bin.got] == [binned]
+    assert res["rows"]["deleted"] == 1 and res["rows"]["recycled"] == 1
+    assert [Path(p) for p, _n in res["deleted"]] == [doomed] and res["deleted"][0][1] > 0
+
+
+@pytest.mark.parametrize("why", ["recent", "in use", "protected"])
+def test_TWIN_a_v2_dir_that_is_not_proven_dead_is_kept(tmp_path, monkeypatch, why):
+    temp = tmp_path / "temp"
+    d = tdir(temp, "x4qa_alive01", receipt="v2")
+    if why == "recent":
+        (d / "sub" / "f.txt").write_bytes(b"still working")
+    elif why == "in use":
+        monkeypatch.setattr(hk, "_in_use", lambda p: True)
+    else:
+        write(d / "backups" / "evidence.bin", b"keep")
+        stale(d)
+    fake_del = FakeDelete(tmp_path)
+    hk.sweep_temp(sweep_cfg(tmp_path), temp=temp, recycler=FakeBin(tmp_path), deleter=fake_del)
+    assert d.exists() and fake_del.got == []
+
+
+def test_a_v1_ownership_only_receipt_is_kept_and_named(tmp_path):
+    temp = tmp_path / "temp"
+    old = tdir(temp, "x4qa_legacy1", receipt="v1")
+    fake_bin, fake_del = FakeBin(tmp_path), FakeDelete(tmp_path)
+    res = hk.sweep_temp(sweep_cfg(tmp_path), temp=temp, recycler=fake_bin, deleter=fake_del)
+    assert old.exists() and fake_bin.got == [] and fake_del.got == []
+    assert res["rows"]["kept: ownership-only receipt (v1)"] == 1
+    assert any(str(old) in k and "v1" in k for k in res["kept"]), res["kept"]
+
+
+def test_a_dir_with_a_file_dated_in_the_future_is_kept_and_named(tmp_path):
+    temp = tmp_path / "temp"
+    odd = tdir(temp, "x4qa_future1", receipt="v2")
+    ahead = time.time() + 30 * DAY
+    os.utime(odd / "sub" / "f.txt", (ahead, ahead))
+    fake_del = FakeDelete(tmp_path)
+    res = hk.sweep_temp(sweep_cfg(tmp_path), temp=temp, recycler=FakeBin(tmp_path), deleter=fake_del)
+    assert odd.exists() and fake_del.got == []
+    assert res["rows"]["kept: dated in the future (clock oddity)"] == 1
+    assert any(str(odd) in k for k in res["kept"]), res["kept"]
+    assert res["rows"]["kept: changed recently"] == 0
+
+
+def test_a_failed_delete_is_reported_and_never_falls_back_to_the_bin(tmp_path):
+    temp = tmp_path / "temp"
+    d = tdir(temp, "x4qa_stuck01", receipt="v2")
+    fake_bin = FakeBin(tmp_path)
+    res = hk.sweep_temp(sweep_cfg(tmp_path), temp=temp, recycler=fake_bin,
+                        deleter=lambda paths, _tk: {str(p): "delete failed (fixture)" for p in paths})
+    assert d.exists() and fake_bin.got == [] and res["rows"]["failed"] == 1 and res["rows"]["deleted"] == 0
+    assert "x4qa_stuck01" in res["failed"][0]
+
+
+def test_off_windows_a_receipted_dir_is_still_deleted(tmp_path, monkeypatch):
+    """No bin is needed to delete; the recycle-only dirs are still kept there."""
+    temp = tmp_path / "temp"
+    monkeypatch.setattr(hk, "_has_bin", lambda: False)
+    doomed, kept = tdir(temp, "x4qa_posix01", receipt="v2"), tdir(temp, "x4qa_posix02")
+    fake_del = FakeDelete(tmp_path)
+    res = hk.sweep_temp(sweep_cfg(tmp_path), temp=temp, deleter=fake_del)
+    assert [Path(p) for p in fake_del.got] == [doomed] and kept.exists()
+    assert res["rows"]["kept: no Recycle Bin on this OS"] == 1
+
+
+def test_the_session_note_says_what_was_deleted(tmp_path, monkeypatch):
+    cfg = sweep_cfg(tmp_path)
+    cfg.update(codex_sessions_warn_gib=10 ** 6, worktrees_warn=10 ** 6, free_floor_gib=0)
+    monkeypatch.setattr(hk.tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setattr(hk, "recycle", FakeBin(tmp_path))
+    monkeypatch.setattr(hk, "delete_tree", FakeDelete(tmp_path))
+    monkeypatch.setattr(hk, "_has_bin", lambda: True)
+    tdir(tmp_path / "temp", "x4qa_note01", receipt="v2")
+    tdir(tmp_path / "temp", "x4qa_note02", receipt="v1")
+    state = tmp_path / "note.txt"
+    hk.session(cfg, state)
+    note = state.read_text(encoding="utf-8")
+    assert "permanently deleted 1 receipted disposable temp dir(s)" in note, note
+    assert "ownership-only v1 receipt" in note, note
+
+
+# delete_tree itself, with shutil.rmtree replaced by a recorder: nothing is removed even inside tmp_path.
+def _recording_rmtree(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hk.shutil, "rmtree", lambda p, **_k: calls.append(Path(p)))
+    return calls
+
+
+def test_delete_tree_rereads_the_receipt_and_refuses_a_changed_one(tmp_path, monkeypatch):
+    temp = tmp_path / "temp"
+    d = tdir(temp, "x4qa_swap01", receipt="v2")
+    calls = _recording_rmtree(monkeypatch)
+    (d / ".x4-temp-owner.json").write_text(json.dumps({"v": 1}), encoding="utf-8")   # changed after the check
+    out = _REAL_DELETE_TREE([d], tmp_path)
+    assert calls == [] and "receipt changed" in out[str(d)]
+
+
+def test_delete_tree_refuses_a_tree_with_a_link_inside(tmp_path, monkeypatch):
+    temp = tmp_path / "temp"
+    d = tdir(temp, "x4qa_link01", receipt="v2")
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    try:
+        os.symlink(target, d / "sub" / "lnk", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        try:
+            import _winapi
+            _winapi.CreateJunction(str(target), str(d / "sub" / "lnk"))
+        except (ImportError, OSError) as exc:
+            pytest.skip("cannot create a link here: %s" % exc)
+    calls = _recording_rmtree(monkeypatch)
+    out = _REAL_DELETE_TREE([d], tmp_path)
+    assert calls == [] and "delete failed" in out[str(d)] and "link" in out[str(d)]
+
+
+def test_TWIN_delete_tree_removes_a_plain_receipted_tree(tmp_path, monkeypatch):
+    temp = tmp_path / "temp"
+    d = tdir(temp, "x4qa_plain1", receipt="v2")
+    calls = _recording_rmtree(monkeypatch)
+    out = _REAL_DELETE_TREE([d], tmp_path)
+    assert calls == [d]
+    assert out[str(d)] == "still present after the delete"     # the recorder removed nothing, and it says so
+
+
+_REAL_DELETE_TREE = hk.delete_tree  # captured at import, before the autouse fixture replaces it
