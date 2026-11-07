@@ -1006,7 +1006,8 @@ def _analyze_vpath(
                 f"of a mod-owned macro file at a nested path is MERGED by the engine, not "
                 f"replaced (issue #17) -- an un-indexed selector on {k} matches "
                 f"{len(providers)} nodes and the engine skips it; '{last}' loads last -- "
-                "which copy the engine uses is not engine-measured",
+                f"which copy the engine uses is not engine-measured; "
+                f"{_merge.COPY_ORDER_UNMEASURED}",
                 # No live-value owner: both copies are live, and which one the engine
                 # reads is UNMEASURED -- so cross_tool must not compare a winner.
                 winner_qualified=False))

@@ -69,7 +69,9 @@ def test_a_nested_full_copy_of_a_mod_macro_file_MERGES_through_both_doors(tmp_pa
     for res in (plain, nested):
         values = [d.get("value") for d in res.tree.iter("damage")]
         assert values == ["1", "2"], (values, res.sources)
-        assert res.unmeasured == [], res.unmeasured
+        # The merge is MEASURED; the copy ORDER and which copy the engine reads are not.
+        assert len(res.unmeasured) == 1, res.unmeasured
+        assert "copy order" in res.unmeasured[0] and "UNMEASURED" in res.unmeasured[0]
     assert plain.sources == ["a_owner:full", "b_copy:merge(nested:a_owner)"], plain.sources
     assert nested.sources == ["a_owner:owner", "b_copy:merge"], nested.sources
 
@@ -198,7 +200,21 @@ def test_dump_chain_says_merge_and_shows_both_macros(tmp_path, monkeypatch, caps
     assert rc == 0, out
     assert "b_copy:merge(nested:a_owner)" in out, out
     assert out.count('name="bullet_x_macro"') == 2, out
-    assert "UNMEASURED" not in out, out
+    assert "<!-- UNMEASURED:" in out and "copy order" in out, out
+
+
+def test_dump_prints_UNMEASURED_for_a_plain_path_replacement(tmp_path, monkeypatch, capsys):
+    ref = tmp_path / "reference"
+    _w(ref / REL, _macro(1))
+    mod = tmp_path / "extensions" / "m_full"
+    _w(mod / REL, _macro(2))
+    monkeypatch.setattr(_effectivecli, "active_mods", lambda: [])
+    monkeypatch.setattr(_effectivecli, "touchers_for", lambda *a, **k: [mod])
+    rc = _effectivecli.main(["--db", str(tmp_path / "x.sqlite"), "dump", REL,
+                             "--reference", str(ref)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "<!-- UNMEASURED: m_full: a complete (non-diff) file at a plain path" in out, out
 
 
 # --- x4compat -----------------------------------------------------------------------
@@ -212,3 +228,182 @@ def test_x4compat_reports_the_duplicate_not_a_full_override(tmp_path):
         rep.collisions
     assert "not engine-measured" in hard[0].detail
     assert hard[0].live_value_owner() is None, "which copy the engine uses is UNMEASURED"
+
+
+# --- review round 2: one falsification twin per clause, per door ---------------------
+
+import sqlite3  # noqa: E402
+import types  # noqa: E402
+
+import pytest  # noqa: E402
+
+from x4validate import _compat_state, _livecli  # noqa: E402
+
+
+@pytest.mark.parametrize("rel, merges", [
+    ("assets/fx/weaponfx/macros/bullet_x_macro.xml", True),
+    ("assets/fx/weaponfx/bullet_x_macro.xml", False),             # parent is not macros/
+    ("assets/fx/weaponfx/macros/bullet_x.xml", False),            # name is not *_macro.xml
+    ("extensions/ego_dlc_x/assets/fx/macros/bullet_x_macro.xml", False),  # doubly nested
+])
+def test_merges_nested_copy_one_twin_per_clause(rel, merges):
+    assert _merge.merges_nested_copy(rel) is merges
+
+
+@pytest.mark.parametrize("rel", ["assets/fx/weaponfx/bullet_x_macro.xml",
+                                 "assets/fx/weaponfx/macros/bullet_x.xml"])
+def test_TWIN_each_class_clause_alone_keeps_the_replacement(tmp_path, rel):
+    """Each file fails exactly ONE clause of the class, so each clause has a twin."""
+    _ext, ref, dirs = _world(tmp_path, copy_text=_macro(2), rel=rel)
+    for vp in (rel, f"extensions/a_owner/{rel}"):
+        res = _merge.build_effective(vp, _cfg(ref, dirs, ["a_owner", "b_copy"]))
+        assert [d.get("value") for d in res.tree.iter("damage")] == ["2"], res.sources
+
+
+def test_TWIN_a_doubly_nested_copy_keeps_the_replacement(tmp_path):
+    """Clause `parts[0] != "extensions"`: b owns its own doubly-nested patch file
+    (F305), c ships a complete copy of THAT at c/extensions/b/extensions/<dlc>/..."""
+    inner = "extensions/ego_dlc_x/assets/fx/macros/bullet_x_macro.xml"
+    ext = tmp_path / "extensions"
+    _w(ext / "b_mod" / inner, _macro(1))
+    _w(ext / "c_copy" / "extensions" / "b_mod" / inner, _macro(2))
+    cfg = _merge.Config(reference=tmp_path / "reference", include_packed_dlc=False,
+                        overlays=(ext / "b_mod", ext / "c_copy"))
+    res = _merge.build_effective(f"extensions/b_mod/{inner}", cfg)
+    assert [d.get("value") for d in res.tree.iter("damage")] == ["2"], res.sources
+
+
+def test_TWIN_build_owned_with_a_DLC_owner_keeps_the_replacement(tmp_path):
+    """`_build_owned(owner_is_dlc=True)`: a packed-only DLC owner, never merged."""
+    dlc, copier = tmp_path / "ego_dlc_x", tmp_path / "m_copy"
+    _w(dlc / REL, _macro(1))
+    _w(copier / "extensions" / "ego_dlc_x" / REL, _macro(2))
+    res = _merge._build_owned("ego_dlc_x", REL, f"extensions/ego_dlc_x/{REL}",
+                              [dlc, copier], None, owner_is_dlc=True)
+    assert [d.get("value") for d in res.tree.iter("damage")] == ["2"], res.sources
+    assert res.sources == ["ego_dlc_x:owner", "m_copy:full"], res.sources
+
+
+def test_the_trace_nested_door_merges_like_the_plain_door(tmp_path):
+    """`_compat_state.trace`'s nested callback (x4compat's sequential instrument) must
+    pass the flag, or its byte check against the normal merge fails."""
+    _ext, ref, dirs = _world(tmp_path, copy_text=_macro(2))
+    want = _merge.build_effective(REL, _cfg(ref, dirs, ["a_owner", "b_copy"])).tree
+    copy_root = _merge.parse_bytes(_macro(2).encode())
+    nested = (lambda src, owner: copy_root if (src, owner) == ("b_copy", "a_owner") else None)
+    _rec, _paths, qualified = _compat_state.trace(
+        REL, _merge.parse_bytes(b"<macros/>"),
+        [("a_owner", _merge.parse_bytes(_macro(1).encode())),
+         ("b_copy", _merge.parse_bytes(b"<diff/>"))], want, nested=nested)
+    assert qualified
+
+
+@pytest.mark.parametrize("order", [["a_owner", "b_copy"], ["b_copy", "a_owner"]])
+def test_walk_positions_agrees_with_the_merge_at_both_nested_sites(tmp_path, order):
+    """The later-patcher site (owner first) and the earlier-patcher site (copier first)."""
+    _ext, ref, dirs = _world(tmp_path, copy_text=_macro(2))
+    cfg = _merge.Config(reference=ref, include_packed_dlc=False)
+    assert _compat._walk_positions(REL, order, dirs, cfg, lambda *a: None)
+
+
+def test_TWIN_x4validate_a_copy_with_another_root_tag_is_no_merge(tmp_path):
+    """`_check`'s `oroot.tag == root.tag` clause: a <components> file at the owner's
+    macro path does not merge, so it is disclosed as UNMEASURED, never as MERGES."""
+    _ext, ref, dirs = _world(tmp_path, copy_text='<components><component name="x"/></components>')
+    rep = _check.validate(dirs["b_copy"], _cfg(ref, dirs, ["a_owner"]))
+    merge = [f.message for f in rep.findings if f.category == "merge"]
+    assert len(merge) == 1 and "UNMEASURED" in merge[0] and "MERGES it" not in merge[0], merge
+
+
+def test_every_merge_reader_names_the_unmeasured_copy_order(tmp_path):
+    _ext, ref, dirs = _world(tmp_path, copy_text=_macro(2))
+    rep = _check.validate(dirs["b_copy"], _cfg(ref, dirs, ["a_owner"]))
+    merge = [f.message for f in rep.findings if f.category == "merge"]
+    assert len(merge) == 1 and "copy order" in merge[0], merge
+    ext, _ref, _dirs = _world(tmp_path / "c", copy_text=_macro(2))
+    crep = _compat.analyze(ext, config=_merge.Config(reference=_ref, include_packed_dlc=False))
+    hard = [c for c in crep.by_kind("HARD") if "merged document" in c.detail]
+    assert hard and "copy order" in hard[0].detail, crep.collisions
+
+
+# --- readers that return ONE value for a duplicated name ---------------------------
+
+def _store(rows):
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    con.executescript(
+        "CREATE TABLE entities(id INTEGER PRIMARY KEY, kind TEXT, name TEXT, klass TEXT,"
+        " vpath TEXT, origin TEXT, chain TEXT);"
+        "CREATE TABLE attrs(entity_id INTEGER, prop TEXT, value TEXT, num REAL,"
+        " origin TEXT, chain TEXT);")
+    for eid, speed in rows:
+        con.execute("INSERT INTO entities VALUES(?,?,?,?,?,?,?)",
+                    (eid, "macro", "bullet_x_macro", "bullet", REL, "a_owner", None))
+        con.execute("INSERT INTO attrs VALUES(?,?,?,?,?,?)",
+                    (eid, "bullet.speed", speed, float(speed), "a_owner", None))
+    return con
+
+
+def test_live_store_props_is_deterministic_and_announces_copies(capsys, monkeypatch):
+    monkeypatch.setattr(_livecli, "_ANNOUNCED_DUPLICATES", set())
+    con = _store([(7, "1500"), (3, "2500")])       # inserted out of id order
+    assert _livecli._store_props(con, "bullet_x_macro") == {"bullet.speed": "2500"}
+    err = capsys.readouterr().err
+    assert "2 entities" in err and "id=3" in err and "UNMEASURED" in err, err
+
+
+def test_TWIN_live_store_props_is_silent_for_one_entity(capsys):
+    assert _livecli._store_props(_store([(3, "2500")]), "bullet_x_macro") == {
+        "bullet.speed": "2500"}
+    assert capsys.readouterr().err == ""
+
+
+def test_show_names_the_copy_and_the_unmeasured_choice(capsys):
+    con = _store([(3, "2500"), (7, "1500")])
+    assert _effectivecli._one_entity(con, "macro", "bullet_x_macro")["id"] == 3
+    err = capsys.readouterr().err
+    assert "copy [1]" in err and "UNMEASURED" in err, err
+
+
+GATES = Path(__file__).resolve().parents[1] / "gates"
+
+
+@pytest.fixture()
+def ca(gate_install):
+    return gate_install.load("consistency_audit")
+
+
+_TWO = ('<macros><macro name="bullet_x_macro"><properties><bullet speed="2500"/>'
+        '</properties></macro><macro name="bullet_x_macro"><properties>'
+        '<bullet speed="1500"/></properties></macro></macros>')
+
+
+def test_consistency_audit_refuses_a_duplicated_name_in_the_merge(ca, monkeypatch):
+    monkeypatch.setattr(ca, "_overlays_for", lambda vp: [])
+    monkeypatch.setattr(ca._merge, "build_effective", lambda *a, **k: types.SimpleNamespace(
+        tree=_merge.parse_bytes(_TWO.encode()), sources=[], skipped=[], unmeasured=[]))
+    assert ca.from_merge(REL, "bullet_x_macro", "bullet.speed") is ca._DUPLICATE
+
+
+def test_consistency_audit_refuses_a_duplicated_name_in_the_dump(ca, monkeypatch):
+    monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: types.SimpleNamespace(
+        returncode=0, stdout=_TWO))
+    assert ca.from_dump(REL, "bullet_x_macro", "bullet.speed") is ca._DUPLICATE
+
+
+def test_a_full_copy_at_a_DLC_nested_path_is_named_as_that_shape(tmp_path):
+    """Review round 2: `extensions/ego_dlc_*/...` is #17's nested shape over a DLC,
+    the largest unmodelled exposure (118 live files), never "a plain path"."""
+    ref = tmp_path / "reference"
+    _w(ref / "libraries" / "wares.xml", "<wares/>")
+    dvp = f"extensions/ego_dlc_x/{REL}"
+    _w(ref / dvp, _macro(1))
+    mod = tmp_path / "extensions" / "m_full"
+    _w(mod / "content.xml", '<content id="m_full" name="m" version="1"/>')
+    _w(mod / dvp, _macro(2))
+    cfg = _merge.Config(reference=ref, include_packed_dlc=False)
+    res = _merge.build_effective(dvp, _merge.replace(cfg, overlays=(mod,)))
+    assert len(res.unmeasured) == 1 and "DLC's nested path" in res.unmeasured[0], res
+    rep = _check.validate(mod, cfg)
+    merge = [f.message for f in rep.findings if f.category == "merge"]
+    assert len(merge) == 1 and "DLC's nested path" in merge[0], merge

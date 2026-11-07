@@ -1405,6 +1405,7 @@ def check_complete_file_merge(complete: list[tuple[str, etree._Element]],
     roots = {p.name.lower(): p for p in (*config.overlays, *config.final_overlays)}
     nested_unmeasured: list[str] = []
     plain_unmeasured: list[str] = []
+    dlc_unmeasured: list[str] = []      # extensions/ego_dlc_*/...: #17's shape, DLC owner
     dlc = config.dlc_dirs()
     for vpath, root in complete:
         nested = _merge._nested_target(vpath, owned)
@@ -1427,8 +1428,8 @@ def check_complete_file_merge(complete: list[tuple[str, etree._Element]],
                            + (f" -- {len(dup)} name(s) now defined twice "
                               f"({', '.join(dup[:_MERGE_NOTE_SAMPLE])}); any selector on "
                               f"them without an index matches 2 nodes and the engine "
-                              f"skips it. Which copy the engine uses is UNMEASURED"
-                              if dup else ""), vpath)
+                              f"skips it" if dup else "")
+                           + f"; {_merge.COPY_ORDER_UNMEASURED}", vpath)
                 continue
             nested_unmeasured.append(vpath)
             continue
@@ -1438,7 +1439,12 @@ def check_complete_file_merge(complete: list[tuple[str, etree._Element]],
             continue
         if (config.reference / vpath).is_file() or any(
                 _merge.overlay_root(d, vpath, []) is not None for d in dlc):
-            plain_unmeasured.append(vpath)
+            parts = vpath.split("/")
+            if (len(parts) >= 3 and parts[0].lower() == "extensions"
+                    and _merge.is_dlc_folder(parts[1])):
+                dlc_unmeasured.append(vpath)
+            else:
+                plain_unmeasured.append(vpath)
 
     def disclose(paths: list[str], what: str) -> None:
         if not paths:
@@ -1455,7 +1461,10 @@ def check_complete_file_merge(complete: list[tuple[str, etree._Element]],
 
     disclose(nested_unmeasured,
              "at a nested path over a file the owning mod supplies")
-    disclose(plain_unmeasured, "at a base-game/DLC path the game already supplies")
+    disclose(dlc_unmeasured,
+             "at a DLC's nested path (extensions/ego_dlc_*/...: the shape issue #17 "
+             "measured for a MOD owner, here over a file the DLC supplies)")
+    disclose(plain_unmeasured, "at a base-game path the game already supplies")
 
 
 def check_sel_resolution(mod_dir: Path, config: _merge.Config, report: Report) -> None:

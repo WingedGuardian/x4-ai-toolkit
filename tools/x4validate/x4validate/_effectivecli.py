@@ -712,6 +712,13 @@ def _one_entity(con, kind: str, name: str):
             klass = f"  class={r['klass']}" if "klass" in keys and r["klass"] else ""
             origin = f"  origin={r['origin']}" if "origin" in keys else ""
             print(f"      id={r['id']}  {vp}{klass}{origin}", file=sys.stderr)
+        if "vpath" in keys and kind == "macro" and len({r["vpath"] for r in rows}) == 1:
+            # Issue #17: same-named macros in ONE document are the copies a nested full
+            # copy MERGES in. Ids follow document order (the store numbers entities as
+            # it walks the merged tree), so the lowest id is copy [1].
+            print(f"      these are {len(rows)} copies in ONE merged document; showing "
+                  f"copy [1] (id={rows[0]['id']}). {_merge.COPY_ORDER_UNMEASURED[0].upper()}"
+                  f"{_merge.COPY_ORDER_UNMEASURED[1:]}", file=sys.stderr)
     return rows[0]
 
 

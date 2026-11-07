@@ -1007,13 +1007,34 @@ def _append_children(tree: etree._Element, overlay: etree._Element,
 def unmeasured_note(source: str, vpath: str, mode: str, nested: bool) -> str:
     """The `MergeResult.unmeasured` line for one complete file that met an existing
     document. ONE wording, shared by every reader (x4effective, x4validate)."""
-    where = "a NESTED path (a patch path on another extension's file)" if nested \
-        else "a plain path"
+    parts = vpath.split("/")
+    if nested:
+        where = "a NESTED path (a patch path on another extension's file)"
+    elif len(parts) >= 3 and parts[0].lower() == "extensions" and is_dlc_folder(parts[1]):
+        # Same `extensions/<owner>/<rel>` shape as the measured merge, over a DLC.
+        where = (f"a DLC's nested path (extensions/{parts[1]}/..., the shape issue #17 "
+                 f"measured for a MOD owner, here over a DLC's file)")
+    else:
+        where = "a plain path"
     model = "a keyed union (same id/name replaced)" if mode == "union" else "a replacement"
     return (f"{source}: a complete (non-diff) file at {where} met an existing "
             f"document at {vpath} and is modelled as {model}; the engine's behaviour "
             f"for this case is UNMEASURED (issue #17 measured only a nested full copy "
             f"of a mod-owned macro file, which MERGES)")
+
+
+#: What a "merge" leaves unmeasured. ONE wording, shared by every reader (issue #17).
+COPY_ORDER_UNMEASURED = (
+    "the copy order in this tree ([1] the owner's, [2..] the copies in load order) and "
+    "which copy the engine uses for values are UNMEASURED")
+
+
+def merge_note(source: str, vpath: str) -> str:
+    """The `MergeResult.unmeasured` line for a "merge" (issue #17): the merge itself is
+    MEASURED, the order of the copies and the engine's choice between them are not."""
+    return (f"{source}: a complete copy of a mod-owned macro file at a nested path was "
+            f"MERGED into {vpath} (MEASURED, issue #17), so a name in it may now exist "
+            f"twice; {COPY_ORDER_UNMEASURED}")
 
 
 def apply_overlay(
@@ -1136,6 +1157,8 @@ def _build_owned(owner_name: str, rel: str, vpath: str,
                                    nested_on_mod=not owner_is_dlc)
         if had_tree and mode in ("full", "union"):
             unmeasured.append(unmeasured_note(odir.name, vpath, mode, nested=True))
+        elif mode == "merge":
+            unmeasured.append(merge_note(odir.name, vpath))
         if recorder is not None and mode != "full":
             recorder.file_chain.append(Origin(odir.name, mode))
         sources.append(f"{odir.name}:{mode}")
@@ -1242,6 +1265,8 @@ def build_effective(
         if had_tree and nmode in ("full", "union"):
             unmeasured.append(unmeasured_note(
                 odir.name, f"extensions/{owner}/{vpath}", nmode, nested=True))
+        elif nmode == "merge":
+            unmeasured.append(merge_note(odir.name, vpath))
         if recorder is not None and nmode != "full":
             recorder.file_chain.append(Origin(odir.name, nmode))
         sources.append(f"{odir.name}:{nmode}(nested:{owner})")
