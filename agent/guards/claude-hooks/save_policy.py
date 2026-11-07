@@ -307,7 +307,9 @@ def opaque_save_remedy(rows, extensions):
             "Copy-Item -LiteralPath '" + source + "' -Destination <scratch>), never /tmp; or (2) read it with "
             "x4save, which takes the save NAME, not its path: x4save vars <pattern> " + name +
             " (MD and AI-script variables), x4save info " + name + " (header, save-baked "
-            "extensions), x4save check " + name + " (references the live tree no longer defines). "
+            "extensions), x4save check " + name + " (references the live tree no longer defines), "
+            "x4save census " + name + " --class <class> --by macro (counts a save's components: ships, "
+            "turrets, stations, modules, grouped). "
             "Copying a file INTO the save folder, or a known tool's save change, keeps its own verdict.")
 
 

@@ -232,6 +232,7 @@ def test_opaque_program_naming_a_save_denies_with_actionable_remedy(install, pro
     assert files[0].as_posix() in reason.replace(chr(92), "/"), reason
     assert "cp " in reason and "x4save vars" in reason and "save_name" not in reason, reason
     assert "x4save vars <pattern> 0" in reason, reason        # the save NAME, derived from the file
+    assert "x4save census 0 " in reason and "components" in reason, reason   # 4.1.1: the census route too
     assert "cp '" + str(files[0]) + "' <scratch>/" in reason, reason
     assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
     assert files[0].read_bytes() == files[0].name.encode()
