@@ -159,6 +159,7 @@ path and reason. This is a non-answer; no save is modified.
 uv run x4save info                         # header + the SAVE-BAKED extensions
 uv run x4save check <save>                 # macro refs the live tree no longer defines
 uv run x4save vars <pattern> [save]        # named MD variables whose name matches a regex
+uv run x4save census [save] --class 'ship_*' --owner xenon --by macro   # count components, grouped
 ```
 
 `vars` prints every variable whose name matches the regex (tried with and without the stored `$`),
@@ -168,6 +169,16 @@ tables, lists and groups `type#<id>` (not expanded or searched, F339). Rows stre
 decompressed bytes scanned, and no match exits 1 naming what was not searched. Pass a save NAME such as
 `save_020`. Only gzipped `*.xml.gz` saves are read. `x4save vars ... | head` ends quietly when the reader
 closes the pipe.
+
+`census` counts every `<component>` (ships, turrets, stations, modules), filtered by `--class`,
+`--owner` and `--macro` globs (case-insensitive, comma-separated) and grouped by `--by` keys: `macro`,
+`owner`, `class`, `parent-class`, `parent-macro`, `station-macro`. A component without `owner=` takes
+its nearest ancestor component's. The parent is the nearest ancestor of `--parent-class` (default
+`station,ship_*`; `@module` = the station-module classes), searched up to the component's own station
+or ship, so a docked ship's turret belongs to the ship (`--parent-anywhere` lifts that). Every run
+prints components seen and matched, those with no `class=` or `macro=`, and the decompressed bytes
+read; no match exits 1 with that count. `--json` gives schema `x4save.census/1`. `x4save census
+--help` has worked examples.
 
 A save is the only artifact the ENGINE wrote, and it is cheap to read: the largest here
 is 1.28 GB expanded and streams in **2.5s**. Two measured facts drive the output.
@@ -571,7 +582,7 @@ handled here — it is a secret, not a path, and must never be written to a file
   or labelled `unclassified` and counted — never dropped.
 - `x4validate/_debugcli.py` — `x4debug`: triage / crosscheck / baseline.
 - `x4validate/_savecli.py` — `x4save`: savegame header + save-vs-live-tree
-  reference check, and `vars`. Streams gzip; never builds a tree.
+  reference check, `vars`, and `census` (`_savecensus.py`). Streams gzip; never builds a tree.
 - `x4validate/_freshcli.py` — `x4fresh`: status / rebuild / accept over the four derived artifacts.
 - `x4validate/_downloads.py` — `x4modlist downloads`: manifests inside archives vs what is installed.
 - `x4validate/_livedump.py` — decodes the in-game probe's payload out of
