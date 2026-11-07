@@ -12451,3 +12451,31 @@ payloads each: Edit/Write x `libraries/wares.xml`/`content.xml`): `X4_MODS=<exte
 refused in one of the three layouts only; whether it should always deny is the owner's call.
 
 **RE-DERIVED BY:** the `mods_root_at_extensions` tests in `tests/test_deployed_retirement_policy.py`.
+
+## F360 - A shell write whose target arrives on xargs's stdin, or passes through an existing junction, reaches no write rule · **DEFECT (measured)** · PRE-ARC · confidence 90% · OPEN, recorded for the 4.1.1 release session
+
+MEASURED 2026-11-06 through `x4guard check --kind shell --shell bash`, fixture toolkit, decide-only (nothing ran):
+
+| command | verdict |
+|---|---|
+| `touch <toolkit>/x4-paths.env` | deny (the path-config rule) |
+| `echo x \| xargs tee <toolkit>/x4-paths.env` | deny (the path-config rule) |
+| `echo <toolkit>/x4-paths.env \| xargs touch` | **ALLOW** |
+| `printf '%s' <toolkit>/x4-paths.env \| xargs -I{} touch {}` | **ALLOW** |
+| `echo <reference>/libraries/wares.xml \| xargs touch` | **ALLOW** |
+| `xargs touch <toolkit>/x4-paths.env < /dev/null` | deny, but INERT: "save mutation has no absolute physical path", not the policy |
+| `xargs touch <reference file> < /dev/null` | deny, INERT, same reason |
+
+So a `touch` (a write: it creates the file, or bumps its time) fed its target by xargs from stdin reaches no write rule; the
+literal-operand form is refused only because the save bridge cannot place it. Not fixed here: the xargs reader lives in
+`hook_facts.py`'s find/xargs code, which another lane owned at the time.
+
+Junctions, MEASURED the same way with a real junction `<tmp>/work/lnk -> <toolkit>/reference` (created by the probe
+script, outside the guard): `echo x > lnk/libraries/wares.xml`, `touch lnk/libraries/wares.xml` and `rm
+lnk/libraries/wares.xml` were ALLOWED (3 of 3), while the file tool's write of the same path was DENIED (reference is
+read-only). Shell write targets are judged by their spelling; the file guard canonicalises through links. Creating such a
+link with the guard watching is denied (F331), so this needs a link that already exists. Not fixed: a canonicalising
+pass over every shell write target is a design change for the release session to weigh (cost per command, a missing
+path, a link created earlier in the same command).
+
+**RE-DERIVED BY:** the two probe scripts named in the 4.1.1 leftovers report (scratch, not shipped); no test pins it yet.
