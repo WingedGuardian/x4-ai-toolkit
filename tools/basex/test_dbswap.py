@@ -226,6 +226,29 @@ def test_a_reader_on_the_live_database_blocks_the_swap_cleanly(home):
     assert bx.dbs == {"x4raw": 10} and live_cov(home)["fingerprint"] == FP
 
 
+def test_a_reader_on_the_next_generation_puts_the_old_one_back(home):
+    """MEASURED shape A8: the live database is already renamed aside when the second rename is refused. The swap
+    must restore it, under its own report, and say the refusal is retryable."""
+    bx = built(home)
+    bx.locked.add("x4raw__next")
+    before = live_cov(home)
+    with pytest.raises(dbswap.SwapRefused) as exc:
+        dbswap.swap(bx, home, "x4raw")
+    assert exc.value.kind == "locked" and "restored" in str(exc.value)
+    assert bx.dbs == {"x4raw": 5, "x4raw__next": 10}
+    assert live_cov(home) == before and not (home / "swap-x4raw.json").exists()
+
+
+def test_recovery_refuses_when_both_live_and_next_exist_mid_swap(home):
+    """Nothing in the swap makes this state; writing the next report over the live database would mislabel it."""
+    bx = built(home)
+    (home / "swap-x4raw.json").write_text(json.dumps({"db": "x4raw", "phase": "next-moved"}), encoding="utf-8")
+    with pytest.raises(dbswap.SwapRefused) as exc:
+        dbswap.recover(bx, home, "x4raw")
+    assert exc.value.kind == "unknown"
+    assert live_cov(home)["indexed"]["total"] == 5
+
+
 def test_a_reader_on_the_old_generation_leaves_it_for_recovery(home):
     bx = built(home)
     real_alter = bx.alter

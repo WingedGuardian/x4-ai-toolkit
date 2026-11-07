@@ -136,11 +136,11 @@ def _move(src: Path, dst: Path) -> None:
         os.replace(src, dst)
 
 
-def _locked(name: str, msg: str, what: str) -> SwapRefused:
+def _locked(name: str, msg: str, what: str, retry: str) -> SwapRefused:
     return SwapRefused("locked", (
         f"{what}: BaseX refused ({msg.strip() or 'no message'}). Another process holds '{name}' open -- an ask.py or "
         f"coverage query, a BaseX GUI or server. Nothing was swapped; the previous database and its coverage are in "
-        f"place. Retry once that reader finishes: uv run python ../basex/dbswap.py swap --db <db>"))
+        f"place. Retry once that reader finishes: {retry}"))
 
 
 # ---------------------------------------------------------------- verification
@@ -204,7 +204,8 @@ def swap(bx, home: Path, db: str) -> list[str]:
             f.receipt(f.old).unlink(missing_ok=True)
             f.journal.unlink(missing_ok=True)
             if _LOCKED_RE.search(msg):
-                raise _locked(db, msg, f"cannot move {db} aside")
+                raise _locked(db, msg, f"cannot move {db} aside",
+                              f"(cd tools/x4validate && uv run python ../basex/dbswap.py swap --db {db})")
             raise SwapRefused("verify", f"cannot move {db} aside: BaseX said {msg.strip()!r}; nothing was swapped")
     _set_phase(f, "live-moved")
     lines += _commit(bx, f, report)
@@ -216,7 +217,14 @@ def _commit(bx, f: Files, report: dict | None = None) -> list[str]:
     if not bx.exists(f.db):
         ok, msg = bx.alter(f.next, f.db)
         if not ok or not bx.exists(f.db):
-            return _rollback(bx, f, f"cannot rename {f.next} to {f.db}: BaseX said {msg.strip()!r}")
+            return _rollback(bx, f, f"cannot rename {f.next} to {f.db}: BaseX said {msg.strip()!r}",
+                             "locked" if _LOCKED_RE.search(msg) else "verify")
+    elif bx.exists(f.next) and f.cov_next.exists():
+        # The live name is taken while the next generation is still here: its report would be written over a
+        # database it does not describe. Nothing in the swap produces this, so it is not decided here.
+        raise SwapRefused("unknown", f"{f.db} and {f.next} both exist during an interrupted swap; refusing to "
+                                     f"guess which one {f.cov_next.name} describes. Inspect them, then remove "
+                                     f"{f.journal.name} by hand")
     _set_phase(f, "next-moved")
     report = report if report is not None else _read_json(f.cov_next)
     if report is not None:
@@ -242,15 +250,18 @@ def _drop_old(bx, f: Files) -> list[str]:
     return lines
 
 
-def _rollback(bx, f: Files, why: str) -> list[str]:
-    """The next generation could not take the name: put the previous one back, or say plainly it could not."""
+def _rollback(bx, f: Files, why: str, kind: str = "verify") -> list[str]:
+    """The next generation could not take the name: put the previous one back, or say plainly it could not.
+    `kind` is what the caller is told once the previous generation is back: `locked` (a reader held the next
+    generation; the same swap can simply be retried) or `verify`."""
     if bx.exists(f.old) and not bx.exists(f.db):
         ok, msg = bx.alter(f.old, f.db)
         if ok and bx.exists(f.db):
             _move(f.cov_old, f.cov)
             f.receipt(f.old).unlink(missing_ok=True)
             f.journal.unlink(missing_ok=True)
-            raise SwapRefused("verify", f"{why}; the previous {f.db} was restored")
+            raise SwapRefused(kind, f"{why}; the previous {f.db} was restored, nothing is swapped"
+                              + ("; retry the swap once that reader finishes" if kind == "locked" else ""))
         raise SwapRefused("locked" if _LOCKED_RE.search(msg) else "unknown",
                           f"{why}; restoring the previous {f.db} from {f.old} ALSO failed ({msg.strip()!r}). "
                           f"{f.db} is MISSING until `dbswap.py recover --db {f.db}` succeeds")
@@ -354,7 +365,7 @@ def prepare(bx, home: Path, db: str, *, free_bytes: int | None = None, floor_byt
         ok, msg = bx.drop(f.next)
         if not ok or bx.exists(f.next):
             if _LOCKED_RE.search(msg):
-                raise _locked(f.next, msg, f"cannot clear the leftover {f.next}")
+                raise _locked(f.next, msg, f"cannot clear the leftover {f.next}", "the same build")
             raise SwapRefused("unknown", f"cannot drop the leftover {f.next}: BaseX said {msg.strip()!r}")
         lines.append(f"{db}: dropped the leftover {f.next} from an unfinished build")
     f.cov_next.unlink(missing_ok=True)
