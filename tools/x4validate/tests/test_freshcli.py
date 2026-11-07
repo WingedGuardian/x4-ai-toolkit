@@ -1085,6 +1085,41 @@ def test_a_database_on_disk_with_no_coverage_is_not_never_built(tmp_path, monkey
     assert "java is not on PATH" in " ".join(s.reasons)
 
 
+def _swap_world(tmp_path, monkeypatch, *dbs):
+    """A BaseX home holding the named database folders, with the real dbswap/preflight beside it."""
+    import shutil
+    real = Path(fc.__file__).resolve().parents[2] / "basex"
+    for name in ("dbswap.py", "preflight.py"):
+        shutil.copyfile(real / name, tmp_path / name)
+    (tmp_path / "staleness.py").write_text("raise RuntimeError('judged')", encoding="utf-8")
+    for d in dbs:
+        (tmp_path / "basex" / "data" / d).mkdir(parents=True)
+        (tmp_path / "basex" / "data" / d / "tbl.basex").write_bytes(b"db")
+    monkeypatch.setattr(fc, "BASEX_ROOT", tmp_path)
+    monkeypatch.setattr(fc, "_basex_unbuildable", lambda: None)
+    return tmp_path / "basex"
+
+
+def test_an_interrupted_swap_is_reported_with_its_remedy(tmp_path, monkeypatch):
+    """4.1.1 build-then-swap: a crash between the renames leaves x4raw absent and x4raw__old/__next on disk.
+    MISSING is true, but on its own it sends the reader to a full rebuild; the swap journal says recovery."""
+    home = _swap_world(tmp_path, monkeypatch, "x4raw__old", "x4raw__next")
+    (home / "swap-x4raw.json").write_text('{"db": "x4raw", "phase": "live-moved"}', encoding="utf-8")
+    s = fc._status_basex("x4raw")
+    text = " ".join(s.reasons)
+    assert s.state == "MISSING" and "interrupted" in text and "dbswap.py recover --db x4raw" in text, s
+
+
+def test_a_failed_build_leaves_the_previous_database_judged_not_missing(tmp_path, monkeypatch):
+    """Twin: the live database and its report are in place, an unfinished x4raw__next beside them. The
+    verdict is the live one's (here UNKNOWN from the stub), never MISSING, and the leftover is named."""
+    home = _swap_world(tmp_path, monkeypatch, "x4raw", "x4raw__next")
+    (home / "coverage-x4raw.json").write_text("{}", encoding="utf-8")
+    s = fc._status_basex("x4raw")
+    assert s.state == "UNKNOWN", s
+    assert "x4raw__next is left from an unfinished build" in " ".join(s.reasons), s
+
+
 def test_an_empty_database_folder_is_still_never_built(tmp_path, monkeypatch):
     (tmp_path / "staleness.py").write_text("", encoding="utf-8")
     (tmp_path / "basex" / "data" / "x4raw").mkdir(parents=True)

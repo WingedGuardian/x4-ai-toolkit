@@ -93,6 +93,21 @@ def test_database_declaration_does_not_create_receipts_for_unknown_names(tmp_pat
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("db", ["x4raw__next", "x4eff__next"])
+def test_a_next_generation_gets_its_creation_receipt_before_create(tmp_path, db):
+    """Build-then-swap (dbswap.py) builds into <db>__next; its receipt is what later lets dbswap drop a leftover."""
+    marker = a.declare_database(db, proof=ready, artifact_root=tmp_path)
+    assert marker.name == f"disposition-{db}.json"
+    assert Path(json.loads(marker.read_text())["path"]).name == db
+
+
+@pytest.mark.parametrize("db", ["x4raw__old", "x4raw__nextx", "x4raw_next"])
+def test_only_the_next_generation_name_is_declarable(tmp_path, db):
+    """<db>__old is created by dbswap's own rename, which writes its receipt; nothing else is ours."""
+    with pytest.raises(ValueError, match="not a toolkit-owned"):
+        a.declare_database(db, proof=ready, artifact_root=tmp_path)
+
+
 def test_database_receipts_cannot_be_created_inside_reference(tmp_path):
     with pytest.raises(OSError, match="overlaps an input"):
         a.declare_database("x4eff", proof=ready, artifact_root=tmp_path, sources=(tmp_path,))

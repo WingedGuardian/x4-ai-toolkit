@@ -438,7 +438,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F333 | Three deployed-mod delete shapes the shell guard does not read: a python `shutil.rmtree` literal, a path through a junction to `extensions/`, and a root held in an unknown variable | **OPEN LIMIT (measured)** · PRE-ARC | release review of the 4.0.1 deployed-mod rule (2026-10-27): each allowed at a1d876a, ba370f9 and the merged head alike, in sandbox roots | open; see entry |
 | F334 | `x4housekeep report` crashed on a name Windows lists but cannot reach (trailing `.`/space), and its scratchpad size row could never pass a junction | **DEFECT (measured)** · PRE-ARC | real report: FileNotFoundError on 2 such names; after the fix the row reads `>= 3.16 GiB` with 2 names and 6 links named; delete/move paths already failed closed (4 sites read) | FIXED 2026-10-31 - report rows give a lower bound naming what was not counted; delete paths unchanged |
 | F335 | A diff op whose `sel` ends in `/text()` is not applied by `_merge`, and nothing reports it | **OPEN LIMIT (measured)** · PRE-ARC | toy t-file: `replace .../t[@id='4']/text()` leaves the old text, node replace applies; corpus x4raw 2026-11-01: 0 of 22,457 `@sel` contain `text()` (two query shapes) | open; no installed mod uses it; see entry |
-| F336 | The BaseX builders swallow a refused `DROP DB` (`>/dev/null 2>&1 \|\| true`), so a reader holding the DB turns into a confusing receipt refusal | **OPEN LIMIT (measured)** · PRE-ARC | M2 2026-11-01, private DBPATH: with a reader attached `DROP DB` rc 1 "opened by another process", reader unaffected (3\|3); control without reader: DROP + ALTER rc 0 | open; fails CLOSED (declare_database refuses); see entry |
+| F336 | The BaseX builders swallow a refused `DROP DB` (`>/dev/null 2>&1 \|\| true`), so a reader holding the DB turns into a confusing receipt refusal | **OPEN LIMIT (measured)** · PRE-ARC | M2 2026-11-01, private DBPATH: with a reader attached `DROP DB` rc 1 "opened by another process", reader unaffected (3\|3); control without reader: DROP + ALTER rc 0 | SUPERSEDED 2026-11-07 by F361: the builders no longer DROP; its ALTER claim is corrected there |
 | F337 | OpenCode runs no session-start canary, so the KB note, housekeep sweep and x4fresh auto-rebuild never start there | **OPEN LIMIT (read)** · PRE-ARC | `opencode_plugin.mjs:427-439` session path renders preferences only (`opencode.py:234`); Claude and Codex both run session-canary.sh | open; see entry |
 | F338 | `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree | **SCOPE LIMIT (read)** · IN-ARC | `_provenance.Recorder.elem_replaced` drops the old subtree's attribute records (by design); after a whole-file replace (`full_override`) no node has a record, so none is annotated and the header names the replacing origin instead. Real-data run 2026-11-01 on `aiscripts/order.fight.escort.xml` (base + 5 mods): 109 annotated nodes, all attributed to a mod and op line | documented in `--help`; not fixed |
 | F339 | `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them | **SCOPE LIMIT (measured)** · IN-ARC | a 9.0 save stores a table variable as a reference id resolved elsewhere in the save; on save_020 the KUDA config cue alone holds 3 such tables (`$byShipId`, `$defaultOrdersByShipId`, `$lxl_isStrictMaintainDistance`) | stated in output and `--help`; expansion is a follow-up |
@@ -463,6 +463,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F358 | A complete copy of a mod-owned macro file at a nested path was modelled as REPLACING the owner's document; the engine MERGES it (two same-named macros), so later un-indexed selectors passed x4validate and the engine skipped them | **DEFECT (measured)** · PRE-ARC | GitHub issue #17: engine skipped 3 ops (debug.txt 2026-11-05, 2026-11-06), x4validate predicted 0; live census 213 active mods: 2 nested full copies over a mod-supplied file, both this case | FIXED 2026-11-06 for `.../macros/*_macro.xml` only; copy order and the engine's choice of copy UNMEASURED and disclosed by every reader; every other class (118 live at a DLC's nested path, INFERRED the largest exposure) and a plain-path full copy still a replacement and DISCLOSED as unmeasured |
 | F359 | With `X4_MODS` set to the extensions folder, the file guard alone allowed a typed delete of the whole folder, a DLC and a mod | **DEFECT (measured)** · PRE-ARC | 5 of 5 targets allowed by protect-files.sh alone; x4guard and the neutral delete already denied/asked. A DLC file EDIT in that layout was only advised; owner ruling 2026-11-07: denied in every layout | FIXED 2026-11-06 (deletes), 2026-11-07 (edits) |
 | F360 | A shell write whose target comes from xargs's stdin, or passes through an existing junction, reaches no write rule | **DEFECT (measured)** · PRE-ARC | `echo <config> \| xargs touch` and `echo <reference file> \| xargs touch` allowed; 3 of 3 shell writes through a junction into reference/ allowed where the file tool denies | FIXED 2026-11-07 |
+| F361 | A failed, killed or refused BaseX build left x4raw/x4eff MISSING (the builders dropped first); and BaseX `ALTER DB` onto an existing name REPLACES it, or with a reader on it fails and DAMAGES it | **DEFECT (measured)** · PRE-ARC | 2026-11-05: 8 killed builds in a row left both databases missing for hours. BaseX 12.4, private DBPATH, n=2: ALTER onto an unopened existing name rc 0 and the target holds the source's data; onto a reader-held name rc 1 "could not be renamed" and the target lost `inf.basex` (unreadable), source kept | FIXED 2026-11-07 (4.1.1): build-then-swap, `tools/basex/dbswap.py`; see entry |
 | F362 | The location stack was not modelled: PowerShell `Push-Location` read as a `cd`, `Pop-Location` ignored; bash's bare `pushd`, `pushd +N`/`-N`/`-n`, `popd -n`/`+N` read as a plain push or ignored | **DEFECT (measured)** · PRE-ARC | at 7f4895a2, 9 of 11 PowerShell probes and 10 of 14 bash rows judged the relative operand in the wrong folder (1 a false deny) | FIXED 2026-11-07 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
@@ -7452,7 +7453,8 @@ printed as a hit (BX-5).
 `test_bx1_every_partial_or_unreadable_address_is_refused`,
 `test_bx1_TWIN_a_whole_database_zero_is_still_confirmed`,
 `test_bx1_a_zero_from_a_query_naming_NO_database_is_not_a_negative`,
-`test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped`,
+`test_bx3_a_build_never_drops_the_live_database_or_its_licence` (2026-11-07, F361: it replaced
+the drop-order test test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped; the builders no longer drop),
 `test_bx4_offsetting_per_root_errors_do_not_license_a_negative`,
 `test_bx5_a_database_argparse_rejects_is_never_advised`.
 
@@ -11705,6 +11707,8 @@ drops nothing, then `x4basex_artifacts.py --declare-db` refuses ("database still
 and the build stops: it fails CLOSED, but the message names the receipt, not the reader. This is also the
 basis for a build-then-swap design: a swap blocked by a reader is refused atomically and can retry.
 
+**SUPERSEDED 2026-11-07 (F361).** The builders no longer run `DROP DB`. The ALTER sentence above is too broad: MEASURED 2026-11-07 (n=2), `ALTER DB a b` with `b` existing and NOT open succeeds and REPLACES `b`; it is refused only when a reader holds `b`, and that refusal leaves `b` damaged. See F361.
+
 ## F337 - OpenCode has no session-start canary · **OPEN LIMIT (read)** · PRE-ARC · confidence 85%
 
 READ 2026-11-01: OpenCode's only session-start path is `experimental.chat.system.transform`
@@ -12683,6 +12687,58 @@ from `xargs -a <file>` / `-d`, are not modelled.
 `test_an_xargs_fed_write_to_the_path_config_is_the_config_write`, `test_TWIN_an_xargs_fed_write_elsewhere_or_a_read_does_not_fire`,
 `TestWriteThroughAnExistingLink` (all three tests) in `test_hook_facts.py`; mutants `xargs write: ... (final)` and
 `link: ... (final)` in `scripts/verify-hook-tests.py`.
+
+## F361 - A failed BaseX build left the database MISSING, and `ALTER DB` onto an existing name is not safe · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-07
+
+MEASURED 2026-11-05: eight `x4fresh` BaseX builds in a row were killed by a job-wrapper memory cap. Each builder
+ran `DROP DB` before building (`build-corpus.sh`, `build-effective.sh`), so every kill left x4raw and x4eff missing
+for hours, and every `ask.py` corpus query refused in that time. A failed build should leave an answer about the
+previous world, labelled STALE, not no answer at all.
+
+**The BaseX behaviour the fix rests on**, MEASURED 2026-11-07 on BaseX 12.4 / Java 24.0.1, in a private DBPATH
+confirmed through `INFO` before any CREATE (two scratch probes; the damage row reproduced in both, n=2):
+
+| case | rc | outcome |
+|---|---|---|
+| ALTER `a` `b`, `b` exists, nobody holds it | 0 | `b` now holds `a`'s data: **replaced, no refusal** |
+| ALTER `a` `b`, a reader holds `b` | 1 "Database 'a' could not be renamed." | `a` kept; **`b` lost `inf.basex` and is unreadable** |
+| ALTER `a` `c`, a reader holds `a` | 1 "Database 'a' is opened by another process." | nothing changed; reader result correct |
+| DROP `a`, a reader holds `a` | 1, same message | nothing changed |
+| ALTER / DROP of an absent database | ALTER 1 "not found"; DROP **0** | DROP's rc proves nothing |
+| two ALTERs in one `-c` script, first refused | 1 | script stops; second not run |
+| two ALTERs in one `-c` script, second refused | 1 | first done: the live name is ABSENT |
+
+So F336's "ALTER onto an existing name is refused" held only because a reader was attached, and that refusal
+damages the target.
+
+**Fix (4.1.1).** `tools/basex/dbswap.py`. The builders write `<db>__next` (receipted before CREATE), reconcile and
+stamp `coverage-<db>__next.json` with `<db>`'s pre-build snapshot (`staleness.py --write --db <db> --coverage
+...`), then `swap` verifies it (stamped, names `<db>__next`, document count equal to its report, no pending
+snapshot left), parks `coverage-<db>.json`, renames `<db>` to `<db>__old`, renames `<db>__next` into place, writes
+`coverage-<db>.json` (its `db` field rewritten: ask.py ignores a report naming another database) and drops
+`<db>__old`. Every rename first checks that its target is absent. A journal (`swap-<db>.json`) records the phase;
+the next build, or `dbswap.py recover`, goes forward when the next generation was already verified, else restores
+the old one. A reader on the live database refuses the swap with everything put back (rc 7, retryable as is).
+`prepare` refuses a build that cannot hold two generations above the disk floor (system drive min(pagefile,
+50 GiB), else min(5%, 50 GiB)); there is deliberately no drop-first fallback. `x4fresh status` names an
+interrupted swap and its remedy, and a leftover `<db>__next`.
+
+**Population.** READ 2026-11-07: `DROP DB` in non-comment lines of `tools/basex/*.sh` and `*.py` was in the two
+builders and in `smoke-basex.sh`, which drops only its own sandbox database. The gap between the two renames is
+one BaseX command; a query started in it gets "not found", as before, but for about a second instead of a build.
+
+**Review fix round (2026-11-07).** An independent review found nothing stopped two builders racing: a second `prepare` -> `recover` could undo a first build's swap at phase `begun`, a rollback could race a commit (both pass the target-absent check, then ALTER replaces one generation with the other), `prepare` could drop the first build's `__next` between CREATE and coverage, and the two shared `pending-fingerprint-<db>.json`. Fixed by `build-<db>.lock`, created with O_EXCL and naming its owner (the builder shell's OS pid) and time, held from before `prepare` to after the swap and checked by every `prepare`/`swap`/`recover`; a lock is stale only when its owner is not running, judged by the process AND its start time (a reused pid does not count). `recover` also refuses a journal whose writer is still running. Also: `_drop_old` re-checks the `__old` receipt, the `__next` receipt is retired once `__next` becomes `<db>`, the disk floor is read on the resolved DBPATH and says when the pagefile size is unknown, a first build is budgeted by a stated estimate, and preflight/ask.py names an in-progress or interrupted swap instead of "not built". The reviewer's 24 mutants plus 15 for the new code: all killed (see RE-DERIVED BY). Still a judgement, not a proof: a lock is only as good as the liveness check, and a builder that is suspended (not dead) keeps its lock.
+
+**Not covered.** The rename window is not atomic: BaseX offers no swap. A report with an unexplained deficit is
+still swapped in (as before; it then refuses negatives). `x4fresh rebuild --auto` still does not start BaseX
+builds unattended, and a swap refused by a reader is not retried automatically. No real-corpus rebuild was run
+(the shared databases serve other sessions); the end-to-end run used small databases in a private home.
+
+**RE-DERIVED BY:** `tools/basex/test_dbswap.py` (a fake BaseX with the measured replace semantics: success, build
+failure, killed mid-build, 7 verification failures, a lock on the live and on the old generation, a kill before
+each BaseX step, a crash between the renames, an unaccounted `__old`, disk), its real-BaseX test (reader refusal,
+then the swap), 13 of 13 mutants killed, then the review round's 24 plus 15 new ones (lock, receipts, disk), all killed; the lock tests (a second builder refused, a dead or reused-pid lock taken over and reported); `test_bx3_a_build_never_drops_the_live_database_or_its_licence`
+(builder step order); the `test_freshcli.py` swap-status tests; the `test_staleness.py` next-generation stamp.
 
 ## F362 - The location stack was not modelled: Push-Location read as a cd, Pop-Location ignored, bash's other pushd/popd forms misread · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-07
 

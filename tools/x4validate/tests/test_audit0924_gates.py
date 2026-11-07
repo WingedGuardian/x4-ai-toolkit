@@ -246,70 +246,44 @@ def test_bx2_a_config_FAILURE_refuses_instead_of_guessing(monkeypatch, tmp_path,
 # ============================================================================ BX-3 (build scripts)
 
 @pytest.mark.parametrize("script", ["build-corpus.sh", "build-effective.sh"])
-@pytest.mark.parametrize("disposal_fails", [False, True])
-def test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped(script, disposal_fails, tmp_path):
-    import os
-    import shlex
-    import shutil
-    import subprocess
+def test_bx3_a_build_never_drops_the_live_database_or_its_licence(script):
+    """BX-3's successor (4.1.1, build-then-swap). BX-3 revoked coverage-<db>.json before `DROP DB <db>`, because
+    a build that died after the drop left that licence beside a partial database. Drop-first is gone: MEASURED
+    2026-11-05, eight killed builds left x4raw and x4eff MISSING for hours. A build now writes <db>__next, and the
+    live database and its report change only inside dbswap.py's verified swap (its tests: tools/basex/test_dbswap.py).
+
+    Structural, over non-comment lines: no DROP DB and no coverage disposal in the builder at all, and the steps in
+    this order: prepare -> declare <db>__next -> CREATE DB <db>__next -> coverage over <db>__next -> stamp that
+    report -> swap. Each order clause is its own assertion, so moving any one step goes red on its own."""
     text = (BASEX / script).read_text(encoding="utf-8")
-    # The first DROP DB on a line that is not a COMMENT: issue #10 added a comment naming
-    # "the DROP DB below" above the revoke, and a bare text.find() anchored there.
-    drop, pos = -1, 0
-    for line in text.splitlines(keepends=True):
-        if "DROP DB" in line and not line.lstrip().startswith("#"):
-            drop = pos + line.index("DROP DB")
-            break
-        pos += len(line)
-    assert drop > 0, f"{script}: no DROP DB found -- the fixture premise moved"
-    revoke = re.search(r'^\(cd .*x4basex_artifacts\.py.*coverage-.*$', text[:drop], re.M)
-    assert revoke, f"{script}: no checked coverage revocation before DROP DB"
-    assert "set -euo pipefail" in text[:drop]
-    spec = importlib.util.spec_from_file_location("gitbash_for_bx3", PKG.parents[1] / "scripts/gitbash.py")
-    resolver = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(resolver)
-    bash = resolver.find_bash()
-    assert bash, "this shell-driver control requires Bash"
-    here = tmp_path / "tools/basex"
-    base = here / "basex"
-    base.mkdir(parents=True)
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    # Copies, not hard links: CI keeps the repo and temp on different drives (WinError 17), and a
-    # hard link would let a write in scratch reach the repo file.
-    shutil.copyfile(PKG.parents[1] / "scripts/x4basex_artifacts.py", scripts / "x4basex_artifacts.py")
-    shutil.copyfile(BASEX / "preflight.py", here / "preflight.py")
-    db = "x4raw" if script == "build-corpus.sh" else "x4eff"
-    coverage = base / f"coverage-{db}.json"
-    content = "invalid metadata" if disposal_fails else '{"old": "licence"}'
-    coverage.write_text(content)
-    reference = tmp_path / "reference/libraries"
-    reference.mkdir(parents=True)
-    (reference / "wares.xml").write_text("<wares/>")
-    witness = tmp_path / "drop-witness"
-    env = dict(os.environ, X4_REFERENCE=str(reference.parent), PYTEST_CURRENT_TEST="bx3-seam")
-    quote = lambda value: shlex.quote(Path(value).as_posix())
-    setup = "\n".join([
-        "set -euo pipefail",
-        "HERE=" + quote(here),
-        "BASEX_DIR=" + quote(base),
-        "REFERENCE=" + quote(reference.parent),
-        "X4VALIDATE=" + quote(PKG),
-        "DB=" + db,
-        'uv() { shift; shift; ' + quote(sys.executable) + ' "$@"; }',
-        "java() { printf dropped > " + quote(witness) + "; }",
-    ])
-    drop_line = next(line for line in text.splitlines()
-                     if "DROP DB" in line and not line.lstrip().startswith("#"))
-    run = subprocess.run([bash, "-c", setup + "\n" + revoke.group() + "\n" + drop_line],
-                         env=env, capture_output=True, text=True, timeout=30)
-    if disposal_fails:
-        assert run.returncode != 0 and coverage.read_text() == content, run.stderr
-        assert not witness.exists(), "DROP DB ran after failed coverage revocation"
-    else:
-        assert run.returncode == 0 and witness.read_text() == "dropped", run.stderr
-        assert not coverage.exists()
-        assert not (tmp_path / "fake-bin").exists()
+    code = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+    assert not [ln for ln in code if "DROP DB" in ln], f"{script}: a build must never DROP a database itself"
+    assert not [ln for ln in code if "x4basex_artifacts.py" in ln and "coverage-" in ln], \
+        f"{script}: the live coverage report is replaced only by the swap"
+    assert 'NEXT="${DB}__next"' in code
+
+    def at(pattern):
+        hits = [i for i, ln in enumerate(code) if re.search(pattern, ln)]
+        assert len(hits) == 1, f"{script}: {pattern!r} matched {len(hits)} lines"
+        return hits[0]
+
+    # The build lock (review 2026-11-07): taken before prepare, released on EXIT, and named by every later step.
+    assert [ln for ln in code if ln.startswith("trap ") and 'dbswap.py" unlock --db "$DB" --owner "$OWNER"' in ln], \
+        f"{script}: the build lock must be released by an EXIT trap"
+    steps = [at(r'dbswap\.py" lock --db "\$DB" --owner "\$OWNER"'),
+             at(r'dbswap\.py" prepare --db "\$DB" --owner "\$OWNER"'),
+             at(r'--declare-db "\$NEXT"'),
+             at(r'^CREATE DB \$NEXT$'),
+             at(r'coverage\.py" --db "\$NEXT"'),
+             at(r'staleness\.py" --write --db "\$DB"'),
+             at(r'dbswap\.py" swap --db "\$DB" --owner "\$OWNER"')]
+    for a, b in zip(steps, steps[1:]):
+        assert a < b, f"{script}: build-then-swap steps out of order: {code[a]!r} must precede {code[b]!r}"
+    assert '--coverage "$BASEX_DIR/coverage-$NEXT.json"' in code[steps[5]], \
+        f"{script}: the stamp must go on the next generation's report, never on the live one"
+    assert steps[0] < at(r'staleness\.py" --snapshot'), \
+        f"{script}: the shared pending fingerprint must be written under the build lock"
+    assert "set -euo pipefail" in text[:text.index("dbswap.py")]
 
 
 # ============================================================================ BX-4 (coverage.py)

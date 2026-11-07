@@ -230,3 +230,15 @@ def test_every_check_name_is_reachable_from_the_cli():
     p.add_argument("--need", nargs="+", choices=list(preflight.CHECKS))
     for name in preflight.CHECKS:
         assert p.parse_args(["--need", name]).need == [name]
+
+
+# --- build-then-swap (4.1.1 review): the gap between the two renames is not "never built" -------------------------
+@pytest.mark.parametrize("marker", ["swap-x4raw.json", "build-x4raw.lock"])
+def test_a_missing_database_during_a_swap_or_build_is_not_called_unbuilt(tmp_path, marker):
+    (tmp_path / marker).write_text("{}", encoding="utf-8")
+    msg = preflight._db(tmp_path, "x4raw")
+    assert msg and "has not been built" not in msg and "dbswap.py recover --db x4raw" in msg, msg
+
+
+def test_TWIN_a_missing_database_with_no_swap_is_still_unbuilt(tmp_path):
+    assert "has not been built" in preflight._db(tmp_path, "x4raw")
