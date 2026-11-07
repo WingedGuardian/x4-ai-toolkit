@@ -131,18 +131,27 @@ $script:Depth = 0
 # was judged in C:/safe while PowerShell was back in <reference>. A push is now `pushd` and a pop of
 # a push this command made is `popd`, which the hook's reader already models. PowerShell has NAMED
 # stacks (-StackName; Set-Location -StackName changes the default); bash has one, so each emitted
-# pushd records its stack's name here, in order. A name the translator cannot read is '?<text>',
-# matched only by the same text; a pop of a readable name reaches its own last push even under a
-# '?' push, which may be the same stack (the residual BLIND-SPOTS records). A pop it cannot
-# match lands somewhere unknown (a stack pushed before this command, in a host that keeps its
-# runspace): the line below keeps the current directory AND adds an unknown one, so the reader
-# judges a later relative operand against both and the strictest verdict stands. Once a pop
-# popped past another stack's entries, the emitted stack no longer mirrors PowerShell's, and
-# every later pop is unknown.
+# pushd records its stack's name here, in order. A name the translator cannot read is '?<text>':
+# the same text is the same stack, and it MAY be any other stack, the default included (an unset
+# `$n` is the default stack in pwsh). 4.1.1 review A3: it was read as a stack of its own, so
+# `Set-Location <reference>; Push-Location C:/safe -StackName $n; Pop-Location` (and the mirror)
+# was judged in C:/safe while PowerShell may be back in <reference>. A pop that may or may not
+# reach a push is now `popd ${X4_PS_LOCATION_STACK:+-n}`, which the reader splits into two
+# lanes (popped, not popped), so every candidate folder is judged and the strictest verdict
+# stands. A pop it cannot match lands somewhere unknown (a stack pushed before this command, in
+# a host that keeps its runspace): $LOC_UNKNOWN keeps the current directory AND adds an unknown
+# one. Once a pop popped past another stack's entries, or may have, the emitted stack no longer
+# mirrors PowerShell's, and every later pop is unknown.
 $script:LocPushes = New-Object Collections.Generic.List[string]
 $script:LocDefault = 'default'
 $script:LocLost = $false
 $LOC_UNKNOWN = 'cd "${X4_PS_LOCATION_STACK:-.}"'
+$LOC_MAYBE_POP = 'popd ${X4_PS_LOCATION_STACK:+-n}'
+function LocMatch([string]$e, [string]$s) {
+    if ($e -eq $s) { return 'yes' }
+    if ($e.StartsWith('?') -or $s.StartsWith('?')) { return 'maybe' }
+    return 'no'
+}
 function LocStack($binding) {
     $b = Bound $binding @('StackName')
     if ($null -eq $b) { return $script:LocDefault }
@@ -156,17 +165,30 @@ function LocStack($binding) {
 }
 function LocPop([string]$s) {
     if ($script:LocLost) { return @($LOC_UNKNOWN) }
+    $maybe = -1                         # the deepest push this pop MAY reach (an unreadable name)
     for ($i = $script:LocPushes.Count - 1; $i -ge 0; $i--) {
-        if ($script:LocPushes[$i] -eq $s) {
-            # Its own push, possibly under later pushes of other stacks (or of an unreadable one,
-            # which may be this stack: then PowerShell may stop sooner, which the emitted stack cannot
-            # also say). PowerShell lands where that push left; bash gets there by popping all of
-            # them, and the emitted stack then no longer mirrors PowerShell's.
-            $k = $script:LocPushes.Count - $i
-            $script:LocPushes.RemoveRange($i, $k)
-            if ($k -gt 1) { $script:LocLost = $true }
-            return @(1..$k | ForEach-Object { 'popd' })
+        $m = LocMatch $script:LocPushes[$i] $s
+        if ($m -eq 'no') { continue }
+        if ($m -eq 'maybe') { $maybe = $i; continue }
+        # Its own push, possibly under later pushes of other stacks. PowerShell lands where that push
+        # left; bash gets there by popping all of them, and the emitted stack then no longer mirrors
+        # PowerShell's. Under a push that MAY be this stack, PowerShell may stop there instead: each
+        # pop may or may not happen, so every folder in between is judged.
+        $k = $script:LocPushes.Count - $i
+        $script:LocPushes.RemoveRange($i, $k)
+        if ($maybe -ge 0) {
+            $script:LocLost = $true
+            return @(1..$k | ForEach-Object { $LOC_MAYBE_POP })
         }
+        if ($k -gt 1) { $script:LocLost = $true }
+        return @(1..$k | ForEach-Object { 'popd' })
+    }
+    if ($maybe -ge 0) {
+        # Only pushes that MAY be this stack: PowerShell pops one of them, or one pushed before this
+        # command (unknown), or none.
+        $k = $script:LocPushes.Count - $maybe
+        $script:LocLost = $true
+        return @(@(1..$k | ForEach-Object { $LOC_MAYBE_POP }) + @($LOC_UNKNOWN))
     }
     # No push of this stack in the command: PowerShell pops one pushed before it, or none. The
     # pushes this command made are untouched either way.
