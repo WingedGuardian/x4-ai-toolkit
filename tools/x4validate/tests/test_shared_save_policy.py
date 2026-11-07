@@ -945,3 +945,37 @@ def test_resolve_keeps_a_same_named_file_elsewhere_out_of_the_save_folder(instal
             {"path": str(files[0]), "operation": "write"}]
     plan = policy.resolve(root, roots, rows)[1]
     assert [m.path for m in plan.mutations] == [str(files[0])]
+
+
+# --------------------------------------------------------------------------- x4save census (4.1.1)
+
+_CENSUS_SHAPES = [
+    "x4save census 0 --class 'ship_*' --owner xenon --by macro",
+    "x4save census 0 --class turret --owner xenon --by parent-class,macro",
+    "x4save census 0 --class turret --owner xenon --macro 'turret_xen_l_*' --parent-class @module"
+    " --by macro,parent-macro,station-macro --json",
+    "uv run x4save census 0 --class ship_s,ship_m",
+]
+
+
+@pytest.mark.parametrize("command", _CENSUS_SHAPES)
+def test_x4save_census_by_save_name_passes_with_no_prompt_and_no_backup(install, command):
+    """The three --help examples (quoted globs included) and the `uv run` form, given a save NAME:
+    no decision at all (no ask, no deny) and no backup transaction. Nothing executes: the hook
+    only judges the command text against fixture roots. Fails if a quoted glob such as
+    'ship_*' or the save name is read as a save operand."""
+    root, roots, files = install
+    hso = invoke_hook(install, "Bash", {"command": command}).get("hookSpecificOutput", {})
+    assert not hso.get("permissionDecision"), hso
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+    assert all(p.read_bytes() == p.name.encode() for p in files)
+
+
+def test_x4save_census_given_a_save_PATH_is_never_silently_allowed(install):
+    """The twin: the same command naming the save by PATH is judged as a program touching a save
+    (ask before #19, deny after it) -- so the name test above can go red."""
+    root, roots, files = install
+    command = "x4save census '" + files[0].as_posix() + "' --class turret"
+    hso = invoke_hook(install, "Bash", {"command": command}).get("hookSpecificOutput", {})
+    assert hso.get("permissionDecision") in ("ask", "deny"), hso
+    assert files[0].read_bytes() == files[0].name.encode()
