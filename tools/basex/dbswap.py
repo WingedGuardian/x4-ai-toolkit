@@ -46,7 +46,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -423,41 +422,41 @@ class BaseXRunner:
                     pass   # silent-ok: an estimate for the disk check, which also keeps a margin
         return total
 
-    def _cmd(self, *args: str) -> tuple[int, str]:
-        p = subprocess.run(["java", "-cp", "BaseX.jar", "org.basex.BaseX", *args], cwd=self.home,
-                           capture_output=True, timeout=600,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        text = (p.stdout + p.stderr).decode("utf-8", errors="replace").replace("\r\n", "\n")
-        return p.returncode, text
+    @staticmethod
+    def _run():
+        """basex_run, by FILE: the ONE way this toolkit starts the jar (test_7 bans a hand-rolled one)."""
+        spec = importlib.util.spec_from_file_location("dbswap_basex_run", HERE / "basex_run.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
 
     def info(self) -> str:
-        return self._cmd("-c", "INFO")[1]
+        return self._run().run_command("INFO", self.home)[1]
 
     def alter(self, src: str, dst: str) -> tuple[bool, str]:
         if self.exists(dst):   # MEASURED: BaseX REPLACES an existing unopened target instead of refusing
             return False, f"Database '{dst}' already exists (refused here: BaseX would replace it)."
-        rc, out = self._cmd("-c", f"ALTER DB {src} {dst}")
+        rc, out = self._run().run_command(f"ALTER DB {src} {dst}", self.home)
         return rc == 0, out
 
     def drop(self, name: str) -> tuple[bool, str]:
-        rc, out = self._cmd("-c", f"DROP DB {name}")
+        rc, out = self._run().run_command(f"DROP DB {name}", self.home)
         return rc == 0, out
 
-    def count(self, name: str) -> int:
-        spec = importlib.util.spec_from_file_location("dbswap_basex_run", HERE / "basex_run.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        rc, out, err = mod.run_query(f"count(collection('{name}'))", self.home)
+    def _query(self, xquery: str) -> str:
+        rc, out, err = self._run().run_query(xquery, self.home)
         if rc != 0:
-            raise RuntimeError((err or out).strip().splitlines()[-1] if (err or out).strip() else f"rc {rc}")
-        return int(out.strip())
+            text = (err or out).strip()
+            raise RuntimeError(text.splitlines()[-1] if text else f"BaseX rc {rc}")
+        return out
+
+    def count(self, name: str) -> int:
+        return int(self._query(f"count(collection('{name}'))").strip())
 
     def create_for_test(self, name: str, docs: int) -> None:
         body = ", ".join(f"<d n='{i}'/>" for i in range(docs))
         paths = ", ".join(f"'d{i}.xml'" for i in range(docs))
-        rc, out = self._cmd(f"db:create('{name}', ({body}), ({paths}))")
-        if rc != 0:
-            raise RuntimeError(out)
+        self._query(f"db:create('{name}', ({body}), ({paths}))")
 
 
 def main(argv=None) -> int:
