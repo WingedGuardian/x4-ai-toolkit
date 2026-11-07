@@ -461,8 +461,9 @@ memory or from another session -- a remembered id was stale within a day here.
 | F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 321 of 2177 moved, all to deny, ask or advise; `find -exec` writes to what it finds now reach this rule. Round 7: 473 of 2469 moved vs 28f260ee, all stronger. Round 8: 556 of 2623, all stronger | FIXED 2026-11-06 |
 | F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own; a find that moves or writes what it finds never reached the archive rule; round 7: an analysis with no deadline failed open; round 8: a positional fill grew as uses x arguments | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
 | F358 | A complete copy of a mod-owned macro file at a nested path was modelled as REPLACING the owner's document; the engine MERGES it (two same-named macros), so later un-indexed selectors passed x4validate and the engine skipped them | **DEFECT (measured)** · PRE-ARC | GitHub issue #17: engine skipped 3 ops (debug.txt 2026-11-05, 2026-11-06), x4validate predicted 0; live census 213 active mods: 2 nested full copies over a mod-supplied file, both this case | FIXED 2026-11-06 for `.../macros/*_macro.xml` only; copy order and the engine's choice of copy UNMEASURED and disclosed by every reader; every other class (118 live at a DLC's nested path, INFERRED the largest exposure) and a plain-path full copy still a replacement and DISCLOSED as unmeasured |
-| F359 | With `X4_MODS` set to the extensions folder, the file guard alone allowed a typed delete of the whole folder, a DLC and a mod | **DEFECT (measured)** · PRE-ARC | 5 of 5 targets allowed by protect-files.sh alone; x4guard and the neutral delete already denied/asked. A DLC file EDIT in that layout is still only advised (open) | FIXED 2026-11-06 (deletes) |
-| F360 | A shell write whose target comes from xargs's stdin, or passes through an existing junction, reaches no write rule | **DEFECT (measured)** · PRE-ARC | `echo <config> \| xargs touch` and `echo <reference file> \| xargs touch` allowed; 3 of 3 shell writes through a junction into reference/ allowed where the file tool denies | OPEN |
+| F359 | With `X4_MODS` set to the extensions folder, the file guard alone allowed a typed delete of the whole folder, a DLC and a mod | **DEFECT (measured)** · PRE-ARC | 5 of 5 targets allowed by protect-files.sh alone; x4guard and the neutral delete already denied/asked. A DLC file EDIT in that layout was only advised; owner ruling 2026-11-07: denied in every layout | FIXED 2026-11-06 (deletes), 2026-11-07 (edits) |
+| F360 | A shell write whose target comes from xargs's stdin, or passes through an existing junction, reaches no write rule | **DEFECT (measured)** · PRE-ARC | `echo <config> \| xargs touch` and `echo <reference file> \| xargs touch` allowed; 3 of 3 shell writes through a junction into reference/ allowed where the file tool denies | FIXED 2026-11-07 |
+| F362 | The location stack was not modelled: PowerShell `Push-Location` read as a `cd`, `Pop-Location` ignored; bash's bare `pushd`, `pushd +N`/`-N`/`-n`, `popd -n`/`+N` read as a plain push or ignored | **DEFECT (measured)** · PRE-ARC | at 7f4895a2, 9 of 11 PowerShell probes and 10 of 14 bash rows judged the relative operand in the wrong folder (1 a false deny) | FIXED 2026-11-07 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -11962,6 +11963,7 @@ NOT READ (the lane's list; the first three re-probed at this commit with the gua
 * `Pop-Location` is not modelled. `Set-Location <reference>; Push-Location C:/safe; Pop-Location; Remove-Item x` is not
   flagged (`rm_targets_reference` false, probed): the relative path is judged in the pushed folder. PRE-ARC; the fix is a
   translator change that needs its own review, so it is a decision for the next release, and no test pins it.
+  **FIXED 2026-11-07 (4.1.1 final round): see F362.**
 * A PowerShell `$P` assigned twice is judged against its first value (the translation of `$P=<safe>; $P=<reference>;
   Remove-Item -Recurse $P/x` is `rm -rf <safe>/x`, probed: not flagged).
 * The deployed-mod ask does not follow `$X4_EXTENSIONS` through another variable (`E="$X4_EXTENSIONS"`) or `:-` default
@@ -12623,9 +12625,18 @@ payloads each: Edit/Write x `libraries/wares.xml`/`content.xml`): `X4_MODS=<exte
 `X4_MODS` unset -> ask (the deployed-mod confirmation), 4 of 4; `X4_MODS` elsewhere -> deny, 4 of 4. A DLC edit is
 refused in one of the three layouts only; whether it should always deny is the owner's call.
 
-**RE-DERIVED BY:** the `mods_root_at_extensions` tests in `tests/test_deployed_retirement_policy.py`.
+**CLOSED 2026-11-07 (4.1.1 final round), owner ruling: DLC content is game content, denied for writes, edits and deletes in
+every layout.** `protect-files.sh` now tests the canonical path's first segment below the extensions root (`X4_EXTENSIONS`,
+else the game's `extensions/`) for `ego_dlc_*` BEFORE the mods-root whitelist and the deployed-mod ask; a pure-shell case on
+the already-memoised canonical path gates it, so only a path naming `ego_dlc_` pays for the roots. RED before the fix: 5 of 7
+new `scripts/test-hooks.sh` probes (no mods root: 2 asked; mods root = extensions: 2 allowed, 1 advised); the two twins (a
+folder `ego_dlc_x` inside a mod, a mod named `my_ego_dlc_fix`) stay allowed. Not changed: a SHELL write into a DLC or the
+game folder (`touch`, `>`) is advised or allowed by design, as before (deletes and archives are denied, F356).
 
-## F360 - A shell write whose target arrives on xargs's stdin, or passes through an existing junction, reaches no write rule · **DEFECT (measured)** · PRE-ARC · confidence 90% · OPEN, recorded for the 4.1.1 release session
+**RE-DERIVED BY:** the `mods_root_at_extensions` tests in `tests/test_deployed_retirement_policy.py`; the `a DLC file edit`,
+`mods root = extensions: a DLC ...` and `...ego_dlc below a mod's own folder` probes in `scripts/test-hooks.sh`.
+
+## F360 - A shell write whose target arrives on xargs's stdin, or passes through an existing junction, reaches no write rule · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-07
 
 MEASURED 2026-11-06 through `x4guard check --kind shell --shell bash`, fixture toolkit, decide-only (nothing ran):
 
@@ -12651,4 +12662,58 @@ link with the guard watching is denied (F331), so this needs a link that already
 pass over every shell write target is a design change for the release session to weigh (cost per command, a missing
 path, a link created earlier in the same command).
 
-**RE-DERIVED BY:** the two probe scripts named in the 4.1.1 leftovers report (scratch, not shipped); no test pins it yet.
+**FIXED 2026-11-07 (4.1.1 final round).** xargs: `_xargs_item_readings` reads `echo|printf <x> | xargs <cmd> [args]` as
+`<cmd> [args] <x>` (or `<cmd>` with `-I`'s replacement string replaced by each of up to 8 items), a command of its own, so
+every write rule judges it as the literal spelling. Only an echo/printf feeds a reading (its words ARE the items, unsplit as
+`xargs_feed` reads them: xargs would split a blank-holding word, so the reading is the stricter one); a find's or a listing's
+items stay with the find and listing readers. Links: `prep()` also judges each resolved absolute target at
+`link_resolved()` (`os.path.realpath`, non-strict: the longest existing prefix resolved, the rest kept) when that differs;
+every rule ORs over the entries, so the stricter verdict stands; a UNC or device path stays lexical. Cost MEASURED on the
+probe set: about +0.05 s per command (0.30 -> 0.36 s). RED at 7f4895a2: 26 xargs subtests (24 reference writes over 12
+xargs forms x 2 producers, 2 config writes); 6 link subtests + 2 tests. Probes (decide-only, junctions made in the hook
+sandbox to sandbox targets): 13 of 13 junction writes/deletes and 13 of 14 xargs writes moved allow -> deny; `echo <dlc
+file> | xargs touch` stays allowed, as `touch <dlc file>` is (shell writes into the game folder are advised or allowed by
+design).
+
+RESIDUAL (not fixed): a link created EARLIER IN THE SAME COMMAND does not exist when the hook runs, so it is still judged by
+spelling (creating one into a protected tree is denied, F331); xargs's own splitting of a blank-holding item, and items
+from `xargs -a <file>` / `-d`, are not modelled.
+
+**RE-DERIVED BY:** `TestRRPreArcBash.test_an_xargs_fed_write_is_judged_like_its_literal`,
+`test_an_xargs_fed_write_to_the_path_config_is_the_config_write`, `test_TWIN_an_xargs_fed_write_elsewhere_or_a_read_does_not_fire`,
+`TestWriteThroughAnExistingLink` (all three tests) in `test_hook_facts.py`; mutants `xargs write: ... (final)` and
+`link: ... (final)` in `scripts/verify-hook-tests.py`.
+
+## F362 - The location stack was not modelled: Push-Location read as a cd, Pop-Location ignored, bash's other pushd/popd forms misread · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-07
+
+Recorded open under F348 (`Pop-Location` is not modelled). MEASURED at 7f4895a2 with the sandbox hook, decide-only: from
+`Set-Location <reference>`, `Push-Location <mod>; Pop-Location; Remove-Item x.xml` (and the `pushd`/`popd`, `-Path`,
+`-LiteralPath`, `-PassThru`, nested, `-StackName` and `Set-Location -StackName` spellings, and a payload cwd of
+`<reference>`) was advised or allowed: 9 of 11 probes; the reverse (`Set-Location <mod>; Push-Location <reference>;
+Pop-Location; Remove-Item x.xml`) was a false DENY. Bash's plain `pushd`/`popd` were modelled, but a bare `pushd` (swap),
+`pushd +N`/`-N` (rotate), `pushd -n <dir>` (add below the top, no cd), `popd -n` and `popd +N` were read as a plain push
+(`pushd +1` as a cd into `<dir>/+1`) or ignored: 10 of 14 rows wrong.
+
+Fix: `ps_translate.ps1` emits `pushd` for a push and `popd` for a pop of a push this command made, tracking each push's
+stack name (PowerShell has named stacks, bash one). A pop of its own push under later pushes of other stacks pops through
+them and marks the emitted stack lost (every later pop is then unknown). A pop the translation cannot match (a stack pushed
+before the command, a name never pushed, an unreadable name) emits `cd "${X4_PS_LOCATION_STACK:-.}"`: two lanes, the
+current folder and an unknown one, so the current folder's verdict is never lost. MEASURED (pwsh 7): `Set-Location
+-StackName <none>` is refused and the default stays, `Pop-Location` on an empty default stack is a silent no-op, and a pop
+of a missing named stack errors without moving, so a name this command never pushed leaves the default unchanged. In
+`hook_facts.cwd_lanes`, `_dirstack_forms` models the bash forms on bash's list (the folder in force, then the stack).
+
+RESIDUAL (not fixed, judged rare): an unreadable `-StackName` (`$n`) may be the default stack; a pop of a readable name
+reaches its own push even under a `?` push that may have been the same stack; and an unmatched pop in a host that keeps
+its runspace may land on an earlier location, which only the unknown lane stands for. One hand-run translator mutant is
+equivalent: dropping the `popd` alias changes no verdict, because an unmodelled command passes through as the same `popd`.
+
+Moved rows (per item over every probe set): the reverse case above moved deny -> advise (`f9:11`), the one new row weaker
+than 4.1.0, and correct (PowerShell is back in the mod folder).
+
+**RE-DERIVED BY:** `TestHK1PowerShellFrontEnd.test_a_pop_returns_to_the_location_its_push_left`,
+`test_a_pop_the_command_cannot_match_keeps_the_current_location_too`, `test_TWIN_the_pop_restores_a_location_outside_the_root`,
+`test_TWIN_with_no_pop_the_pushed_location_is_in_force`, `test_TWIN_after_popping_past_another_stack_a_later_pop_is_not_guessed`,
+`test_an_unmatched_pop_translates_as_the_current_and_an_unknown_location`, `test_the_stack_translates_as_pushd_and_popd`,
+`TestBashDirectoryStackForms.test_the_directory_in_force_after_each_form` in `test_hook_facts.py`; mutants `dir stack: ...
+(final)` in `scripts/verify-hook-tests.py` (the translator's ten were run by hand: 9 caught, 1 equivalent).
