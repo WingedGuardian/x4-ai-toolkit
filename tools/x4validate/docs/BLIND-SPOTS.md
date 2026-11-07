@@ -458,8 +458,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
-| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 321 of 2177 moved, all to deny, ask or advise; `find -exec` writes to what it finds now reach this rule. Round 7: 473 of 2469 moved vs 28f260ee, all stronger | FIXED 2026-11-06 |
-| F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own; a find that moves or writes what it finds never reached the archive rule; round 7: an analysis with no deadline failed open | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
+| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 321 of 2177 moved, all to deny, ask or advise; `find -exec` writes to what it finds now reach this rule. Round 7: 473 of 2469 moved vs 28f260ee, all stronger. Round 8: 556 of 2623, all stronger | FIXED 2026-11-06 |
+| F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own; a find that moves or writes what it finds never reached the archive rule; round 7: an analysis with no deadline failed open; round 8: a positional fill grew as uses x arguments | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12479,3 +12479,46 @@ moved, 1 to allow (the ten-segment harmless chain, which 9cd83006 denied after 1
 **RE-DERIVED BY (round 7):** 9 more tests in `TestRound6FindExecAndCarriers`, `TestSshChainWholeHookTime` in
 `test_audit0924_hooks.py` (10 and 20 segments through the whole hook under 2 s; rc 6 denies; the sed remedy), 21 mutants
 labelled `(r7, N)`, and 8 more probes in `scripts/test-hooks.sh`.
+
+**REVIEW ROUND 8 2026-11-06 (4.1.1), an independent review of 9cd83006..a933b5c0: DO NOT SHIP until F1.**
+
+F1, HIGH, a regression of round 7's `"$@"` fill. `sh -c 'echo "$@" x n' _ a0..a(n-1)` filled n x n words: MEASURED by
+the reviewer at a933b5c0, in-process n=200 6.5 s, 300 18.8 s, 400 33.4 s with no deadline firing (the result fields after the
+segment loop had no checkpoint); through the hook n=400 with `&& rm -rf <ref>` denied after 38.3 s (0.7 s at 9cd83006), past
+the 30 s timeout. MEASURED here at a933b5c0: the harmless n=200..600 rows 22 to 42 s. Fixed: a fill has a budget (4 x its
+input + 4096 characters); each parameter is filled IN FULL at its first use, so no argument is ever hidden, and a later use
+past the budget is an unknown value. Looking for the same shape elsewhere: a segment keeps at most 32 carrier readings and the
+carried texts at most 400,000 characters together, else `carriers_truncated` (a refusal) -- 200 `-exec` actions were 6.8 s;
+and `_find_delete` read each -exec as everything after it, quadratic (6 s at 200 actions), now only up to its terminator. The
+ssh splice (bounded in round 7) and the find/xargs `{}` fill (one sentinel) do not multiply. Deadline checkpoints now also in
+`segments()` and the word walk. In-process now: n=400 0.6 s, 600 0.8 s, 1000 2.4 s; 200 -exec actions 0.6 s.
+
+F2: a PowerShell translation was bounded by its own cap and the PowerShell budget, not by the analysis deadline; it now is,
+and with no time left it is an analysis timeout (a refusal). A call cut short by the deadline is not cached.
+
+F3: fixed -- a variable assigned a positional (`sh -c 'd=$1; rm -rf "$d"' _ <ref>`, `d="$1"`; allow at v4.1.0, MEASURED);
+fd's `--search-path` and `--base-directory`; fd's reach test, through the find an `fd ... -x|-X` amounts to (`fd . <game> -x
+rm` advised where `find <game> -exec rm {} ;` denies; pattern as `-regex`, `-e` as `-name '*.ext'`, `-g` as `-name`, `-d` as
+`-maxdepth`); short options with an attached value (`gzip -S.lck`, `xz -Ccrc32`: the value's letters were read as the keep and
+stdout flags; allow at v4.1.0 too); more replacing programs: `gunzip`, `unxz`, `bunzip2`, `unlzma`, `uncompress`, `unpigz`,
+`unzstd`/`brotli` with `--rm`, `zip -m`, `tar --remove-files`, and a decompressor's output (`gunzip <game>/01.cat.gz`) as a
+write. (e): `sed` (without `-i`), `awk` and `cut` between a find and its xargs pass the find on. Quirk: an empty `"$@"` is now
+no word (it was `''`, read as the working folder), and behind xargs it is the producer's items, so `find <ref> | xargs sh -c
+'rm -rf "$@"' _` denies naming reference/. OPEN, listed (MEASURED allow at the fix, as at v4.1.0): `shift` (the filled `$1`
+is then the old one, so the filled reading is wrong but adds nothing; the unfilled one stays unresolved), `set -- <x>` inside
+the text, `"${@:2}"` and other parameter slicing; perl `rename` expressions are read as files.
+
+Measured through `protect-bash.sh` at 7753cc2c (v4.1.0), 28f260ee, 9cd83006, a933b5c0 and the fix, fixture roots, nothing
+run: every earlier set, the reviewer's round-8 sets (`rv7r` a to d) and 61 rows of this round's own: 2623 rows paired, 0
+unpaired. Against a933b5c0 41 moved: 32 allow to deny and 4 advise to deny (F1 truncation of 50/200-action finds, F3, (e),
+the quirk), 1 allow to ask (`gunzip` of a file in a mod folder, as `gzip` there asks), 1 allow to advise (`find <game> -name
+'*.dat' | xargs sh -c 'rm "$@"' _`, now reading the items), and 3 deny to allow: harmless `echo "$@" x n` rows that a933b5c0
+denied only after 22 to 42 s (now 1.0 to 1.3 s). Against 28f260ee 556 moved, all stronger, 0 weaker. Weaker than v4.1.0: the
+same 152 rows as round 7, 0 new. `scripts/test-hooks.sh` (279 protect-bash rows) through the five trees: 0 weaker than
+28f260ee or a933b5c0; against a933b5c0 4 moved, this round's new probes. Timing: no row over 2.5 s but c5 (8.6 s) and the
+four budget rows (3.6, 20.5 to 20.6 s, as before).
+
+**RE-DERIVED BY (round 8):** 9 more tests in `TestRound6FindExecAndCarriers`, `test_execdir_rm_of_an_archive_fires`, a wide twin in
+`test_a_TANGLED_command_says_so_instead_of_passing_quietly` (the deep one takes ~14 s, near the deadline, so a slow runner
+may refuse it by the deadline instead -- either is a refusal), a whole-hook timing test at n=400 and 600 in
+`TestSshChainWholeHookTime`, 19 mutants labelled `(r8 ...)`, and 6 more probes in `scripts/test-hooks.sh`.
