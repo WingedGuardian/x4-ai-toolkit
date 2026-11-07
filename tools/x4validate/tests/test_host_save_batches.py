@@ -171,11 +171,11 @@ def test_rendered_hosts_preserve_opaque_named_saves_or_refuse_bulk(tmp_path, hos
         result = open_run(env, open_call(root, "bash", {"command": command, "workdir": str(root)}, shell="bash"))
         decision, reason = result["decision"], result["reason"]
         assert not result["inert"], result
-    # The Codex fixture decoder recovers the ask marker from its wire-level deny.
-    # OpenCode exposes that same refusal directly as deny.
-    assert decision == ("ask" if host == "codex" and count == 1 else "deny"), (decision, reason)
-    assert len(transactions(root)) == (1 if count == 1 else 0)
-    assert ("backup verified" if count == 1 else "SAVE_ACCESS_APPROVAL") in reason
+    # #19 (4.1.1): an opaque program naming saves is denied with a remedy, never asked, and the
+    # deny returns before preservation -- on every host, one save or many.
+    assert decision == "deny", (decision, reason)
+    assert not transactions(root)
+    assert "opaque program" in reason and "x4save vars" in reason, reason
     assert all(p.read_bytes() == p.name.encode() for p in files)
 
 

@@ -279,6 +279,38 @@ def _resolve(root, roots, evidence, deadline=None):
             transparent and profile_targets > 0 and profile_targets == save_targets)
 
 
+def opaque_save_remedy(rows, extensions):
+    """The deny reason for an opaque program naming saves (#19): what to run instead.
+
+    Both routes were MEASURED to pass the guard with no prompt and no backup (fixture roots,
+    tests/test_shared_save_policy.py::test_remedies_named_by_the_opaque_deny_pass_*): a copy
+    OUT of the save folder (`cp`, `Copy-Item`) and `x4save` given a save NAME."""
+    paths, names = [], []
+    for row in rows:
+        placed = _row_native(row) if row.get("path") and not row.get("unresolved") else None
+        text = str(placed) if placed is not None else str(row.get("raw") or row.get("path") or "")
+        if text and text not in paths:
+            paths.append(text)
+        stem = placed.name if placed is not None else ""
+        for ext in sorted(extensions, key=len, reverse=True):
+            if stem.lower().endswith(ext):
+                if stem[:-len(ext)] not in names:
+                    names.append(stem[:-len(ext)])
+                break
+    name = names[0] if len(names) == 1 else "<save name>"
+    # One save is shown in the command itself; a quote in its name would need dialect-specific escaping.
+    source = paths[0] if len(paths) == 1 and "'" not in paths[0] else "<save>"
+    shown = ", ".join("'" + path + "'" for path in paths[:4]) + (" ..." if len(paths) > 4 else "")
+    return ("Save access by an opaque program is refused: the guard cannot see whether it reads or "
+            "writes " + (shown or "the named save") + ". Instead, either (1) copy the save to your scratch "
+            "directory and run the program on the copy: cp '" + source + "' <scratch>/ (PowerShell: "
+            "Copy-Item -LiteralPath '" + source + "' -Destination <scratch>), never /tmp; or (2) read it with "
+            "x4save, which takes the save NAME, not its path: x4save vars <pattern> " + name +
+            " (MD and AI-script variables), x4save info " + name + " (header, save-baked "
+            "extensions), x4save check " + name + " (references the live tree no longer defines). "
+            "Copying a file INTO the save folder, or a known tool's save change, keeps its own verdict.")
+
+
 def enforce(root, roots, evidence, action, backend, *, transcript="", preview=False, deadline=None,
             local_restrictions=(), helper=False):
     """backend(save_only) returns a v1 Result after all Bash/local rules ran."""
@@ -293,10 +325,16 @@ def enforce(root, roots, evidence, action, backend, *, transcript="", preview=Fa
                          operations=tuple(op for _path, op in affected))
         def evaluate(request):
             result = backend(save_only and not plan.unresolved)
-            if result.decision != "deny" and any(row.get("possible_opaque_save_access") for row in evidence):
-                result = replace(result, decision="ask", reason=(result.reason + "\n" if result.reason else "") +
-                    "Possible save access by an opaque program. Only the named save pairs can be "
-                    "preserved; the program's other effects are unverified. Review or split this call.")
+            opaque = [row for row in evidence if row.get("possible_opaque_save_access")]
+            if opaque and result.decision != "deny":
+                # #19 (4.1.1): DENY, never ask. The guard cannot tell an opaque program's read from
+                # its write, and an ask makes the user judge a call the agent can reshape itself.
+                # A deny returns before preservation, so no backup is written for a call that never runs.
+                unresolved = "save scope refused: " + plan.unresolved + "\n" if plan.unresolved else ""
+                result = replace(result, decision="deny",
+                                 evaluation="partial" if plan.unresolved else result.evaluation,
+                                 preservation="failed" if plan.unresolved else result.preservation,
+                                 reason=unresolved + opaque_save_remedy(opaque, profile.extensions))
             if plan.unresolved and result.decision != "deny":
                 result = replace(result, decision="deny", evaluation="partial", preservation="failed",
                                  reason="save scope refused: " + plan.unresolved)
