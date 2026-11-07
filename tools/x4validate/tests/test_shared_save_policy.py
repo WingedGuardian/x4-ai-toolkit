@@ -84,15 +84,11 @@ def test_opaque_program_naming_saves_cannot_silently_bypass_preservation(install
     command = "./unknown-tool --wipe " + " ".join("'" + p.as_posix() + "'" for p in files[:count])
     result = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
     transactions = list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
-    if count == 1:
-        assert result["permissionDecision"] == "ask", result
-        assert "opaque program" in result["permissionDecisionReason"]
-        assert "backup verified" in result["permissionDecisionReason"]
-        assert len(transactions) == 1
-    else:
-        assert result["permissionDecision"] == "deny", result
-        assert "SAVE_ACCESS_APPROVAL" in result["permissionDecisionReason"]
-        assert not transactions
+    # #19 (4.1.1): one save or many, the opaque program is DENIED before preservation runs.
+    assert result["permissionDecision"] == "deny", result
+    assert "opaque program" in result["permissionDecisionReason"]
+    assert "SAVE_ACCESS_APPROVAL" not in result["permissionDecisionReason"]
+    assert not transactions
     assert all(p.read_bytes() == p.name.encode() for p in files)
 
 
@@ -184,9 +180,9 @@ def test_opaque_relative_save_operand_uses_the_command_directory(install):
     root, roots, files = install
     command = "cd '" + Path(roots['saves']).as_posix() + "'; ./unknown-tool '" + files[0].name + "'"
     result = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
-    assert result["permissionDecision"] == "ask", result
-    assert "backup verified" in result["permissionDecisionReason"]
-    assert len(list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))) == 1
+    assert result["permissionDecision"] == "deny", result
+    assert "x4save vars <pattern> 0" in result["permissionDecisionReason"], result
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
 @pytest.mark.parametrize("prefix", ["head -c 3", "tail -n 1", "du -h", "gzip -dc", "zcat"])
@@ -209,8 +205,108 @@ def test_opaque_save_rule_exempts_proven_literal_python_prose(install):
 def test_opaque_gzip_without_stdout_is_still_possible_save_mutation(install, options):
     root, roots, files = install
     result = invoke_hook(install, "Bash", {"command": "gzip " + options + " '" + files[0].as_posix() + "'"})
-    assert result["hookSpecificOutput"]["permissionDecision"] == "ask", result
-    assert "backup verified" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny", result
+    assert "opaque program" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+def _no_prompt_no_backup(install, result):
+    hso = result.get("hookSpecificOutput", {})
+    assert not hso.get("permissionDecision"), result
+    assert not list((install[0] / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+@pytest.mark.parametrize("program", ["py -3.12 -I ./read_save.py", "python -c 'import gzip, sys'",
+                                     "./unknown-tool"])
+def test_opaque_program_naming_a_save_denies_with_actionable_remedy(install, program):
+    """#19 (4.1.1): an opaque program naming a save is DENIED with a remedy, never asked.
+
+    Catches: the F314 ask restored (decision "ask"), the remedy text dropped, or preservation
+    still running before the deny (a backup written for a call that never runs)."""
+    root, roots, files = install
+    out = (root / "scratch" / "out.tsv").as_posix()
+    command = program + " '" + files[0].as_posix() + "' '" + out + "'"
+    hso = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny", hso
+    reason = hso["permissionDecisionReason"]
+    assert files[0].as_posix() in reason.replace(chr(92), "/"), reason
+    assert "cp " in reason and "x4save vars" in reason and "save_name" not in reason, reason
+    assert "x4save vars <pattern> 0" in reason, reason        # the save NAME, derived from the file
+    assert "cp '" + str(files[0]) + "' <scratch>/" in reason, reason
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+    assert files[0].read_bytes() == files[0].name.encode()
+
+
+def test_opaque_program_naming_two_saves_names_both_in_one_deny(install):
+    root, roots, files = install
+    command = "./unknown-tool " + " ".join("'" + p.as_posix() + "'" for p in files[:2])
+    hso = invoke_hook(install, "Bash", {"command": command})["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny", hso
+    reason = hso["permissionDecisionReason"].replace(chr(92), "/")
+    assert files[0].as_posix() in reason and files[1].as_posix() in reason, reason
+    assert "SAVE_ACCESS_APPROVAL" not in reason, reason
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+@pytest.mark.parametrize("tool,shape", [
+    ("Bash", "cp -- '{save}' '{scratch}/'"),
+    ("Bash", "cp '{save}' '{scratch}/copy.xml.gz'"),
+    ("PowerShell", "Copy-Item -LiteralPath '{save}' -Destination '{scratch}'"),
+    ("Bash", "py -3.12 -I ./read_save.py '{scratch}/0.xml.gz' '{scratch}/out.tsv'"),
+    ("Bash", "x4save vars allFactions 0"),
+    ("Bash", "x4save info 0"),
+    ("Bash", "x4save check 0"),
+])
+def test_remedies_named_by_the_opaque_deny_pass_without_prompt_or_backup(install, tool, shape):
+    """#19 measurement: each route the deny reason recommends passes with no ask and no deny.
+    Nothing here executes: the hook only judges the command text against fixture roots."""
+    root, roots, files = install
+    scratch = root / "scratch"
+    scratch.mkdir(exist_ok=True)
+    command = shape.format(save=files[0].as_posix() if tool == "Bash" else str(files[0]),
+                           scratch=scratch.as_posix() if tool == "Bash" else str(scratch))
+    _no_prompt_no_backup(install, invoke_hook(install, tool, {"command": command}))
+
+
+def test_powershell_opaque_program_naming_a_save_is_denied_not_asked(install):
+    root, roots, files = install
+    result = invoke_hook(install, "PowerShell", {"command": "python .\\read_save.py '" + str(files[0]) + "'"})
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny", result
+    assert "x4save vars <pattern> 0" in hso["permissionDecisionReason"], result
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
+
+
+def test_x4save_given_a_save_path_is_treated_like_any_opaque_program(install):
+    """Twin of the remedy row: the remedy is the save NAME. A save PATH still reaches the opaque
+    rule (x4save is not exempted by verb name), and the deny says to pass the name."""
+    root, roots, files = install
+    hso = invoke_hook(install, "Bash", {"command": "x4save vars x '" + files[0].as_posix() + "'"})[
+        "hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny", hso
+    assert "x4save vars <pattern> 0" in hso["permissionDecisionReason"]
+
+
+def test_copy_from_scratch_into_the_save_folder_keeps_preserved_allow(install, tmp_path):
+    """#19 twin: the reverse copy direction is a real save mutation and keeps its verdict."""
+    root, roots, files = install
+    source = tmp_path / files[0].name
+    source.write_bytes(b"incoming")
+    result = invoke_hook(install, "Bash", {"command": "cp '" + source.as_posix() + "' '" + files[0].as_posix() + "'"})
+    assert result["hookSpecificOutput"].get("permissionDecision") is None, result
+    assert "backup verified" in result["hookSpecificOutput"]["additionalContext"]
+    assert len(list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))) == 1
+
+
+def test_opaque_program_naming_a_non_save_profile_file_keeps_its_verdict(install):
+    """#19 twin: the deny is scoped to SAVE operands; a non-save profile file is untouched."""
+    root, roots, files = install
+    config = Path(roots["profile"]) / "config.xml"
+    config.write_bytes(b"keep")
+    result = invoke_hook(install, "Bash", {"command": "./unknown-tool '" + config.as_posix() + "'"})
+    reason = result.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+    assert "x4save" not in reason and "opaque program" not in reason, result
+    assert not list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
 @pytest.fixture
