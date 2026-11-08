@@ -9255,7 +9255,9 @@ class TestRound6FindExecAndCarriers(unittest.TestCase):
             t = time.perf_counter()
             f = F(cmd)
             self.assertTrue(f["rm_targets_reference"], n)
-            self.assertLess(time.perf_counter() - t, 2.5, n)
+            # The regression this guards took 38 s (round 8 F1); fixed, n=600 is ~1-1.6 s idle and was 3.5 s on a
+            # loaded machine (pre-push gate, 2026-11-08), so 2.5 s flaked. 10 s still fails the 38 s shape.
+            self.assertLess(time.perf_counter() - t, 10.0, n)
         args = ["x"] + ["a%d" % i for i in range(400)]
         text = " ".join([DQ + "$@" + DQ] * 400)
         self.assertLess(len(H._positional_text(text, args)), 8 * len(text) + 8 * 4096)
