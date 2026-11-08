@@ -136,7 +136,7 @@ def test_no_git_on_path_is_a_refusal_not_a_traceback(repo, tmp_path, monkeypatch
     _no_git(monkeypatch)
     assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
     err = capsys.readouterr().err
-    assert "git" in err and "--unverified-guards" in err and "ci/ branch" not in err
+    assert "git" in err and "--unverified-guards" in err and "pull request" not in err
     assert not (dest / "hooks" / "h.sh").exists()
 
 
@@ -163,7 +163,7 @@ def test_a_real_checkout_git_cannot_read_is_not_a_release_zip(repo, tmp_path, ca
     dest = _deployable(tmp_path, repo)
     assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
     err = capsys.readouterr().err
-    assert "Fix what git says" in err and "ci/ branch" not in err and "naming the release" not in err
+    assert "Fix what git says" in err and "pull request" not in err and "naming the release" not in err
 
 
 def test_dubious_ownership_is_said_as_itself(repo, monkeypatch):
@@ -186,7 +186,7 @@ def test_a_zip_install_is_told_what_to_do_not_to_push(tmp_path, capsys):
     assert dep.main(["--repo", str(unzipped), "--dest", str(dest), "--apply"]) == 2
     err = capsys.readouterr().err
     assert "not a git checkout" in err and "--unverified-guards" in err
-    assert "ci/ branch" not in err
+    assert "pull request" not in err
     assert not (dest / "hooks" / "h.sh").exists()
 
 
@@ -207,12 +207,12 @@ def test_a_zip_unpacked_inside_another_repo_does_not_borrow_its_head(tmp_path, m
     assert not asked
 
 
-def test_a_git_checkout_is_still_told_to_push_a_ci_branch(repo, tmp_path, monkeypatch, capsys):
+def test_a_git_checkout_is_still_told_to_open_a_pull_request(repo, tmp_path, monkeypatch, capsys):
     # The twin of the zip message: a real checkout keeps the instruction that works for it.
     dest = _deployable(tmp_path, repo)
     _gh(monkeypatch, stdout="[]")
     assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
-    assert "ci/ branch" in capsys.readouterr().err
+    assert "pull request" in capsys.readouterr().err
 
 
 def test_the_override_still_works_for_a_zip_install(tmp_path, capsys):
