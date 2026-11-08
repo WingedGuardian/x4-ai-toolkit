@@ -1543,3 +1543,46 @@ def test_the_detached_launch_returns_at_once_and_outlives_the_call(tmp_path, mon
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
         else:
             os.kill(pid, 9)
+
+
+# ---- 4.1.1 review of the automatic BaseX rebuild
+
+NO_WINDOW, DETACHED, NEW_GROUP, BELOW_NORMAL, BREAKAWAY = 0x08000000, 0x00000008, 0x00000200, 0x00004000, 0x01000000
+
+
+class _PopenSpy:
+    """Records each Popen call's kwargs; the first `fail` calls raise OSError (a job that forbids breakaway)."""
+
+    def __init__(self, fail=0):
+        self.calls, self.fail = [], fail
+
+    def __call__(self, argv, **kw):
+        self.calls.append(kw)
+        if len(self.calls) <= self.fail:
+            raise OSError("breakaway refused")
+        from types import SimpleNamespace
+        return SimpleNamespace(pid=999, returncode=None)
+
+
+@pytest.mark.parametrize("fail", [0, 1])
+def test_the_background_builder_gets_a_hidden_console_never_a_detached_one(monkeypatch, tmp_path, fail):
+    """DETACHED_PROCESS gives the builder NO console, so every console child it starts (bash for the whole build,
+    git, tasklist, java) gets a NEW, VISIBLE one; closing that window killed the build. CREATE_NO_WINDOW gives it a
+    hidden console its children inherit. Both attempts (with and without breakaway) carry it."""
+    spy = _PopenSpy(fail)
+    monkeypatch.setattr(fc.subprocess, "Popen", spy)
+    monkeypatch.setattr(fc, "_on_windows", lambda: True, raising=False)
+    assert fc._spawn_basex(tmp_path / "note.txt") == 999
+    flags = spy.calls[-1]["creationflags"]
+    assert flags & NO_WINDOW and not flags & DETACHED, hex(flags)
+    assert flags & NEW_GROUP and flags & BELOW_NORMAL, hex(flags)
+    assert bool(flags & BREAKAWAY) is (fail == 0), hex(flags)
+    assert "start_new_session" not in spy.calls[-1]
+
+
+def test_TWIN_posix_starts_a_new_session_and_no_windows_flags(monkeypatch, tmp_path):
+    spy = _PopenSpy()
+    monkeypatch.setattr(fc.subprocess, "Popen", spy)
+    monkeypatch.setattr(fc, "_on_windows", lambda: False, raising=False)
+    fc._spawn_basex(tmp_path / "note.txt")
+    assert spy.calls[-1]["start_new_session"] is True and "creationflags" not in spy.calls[-1]

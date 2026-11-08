@@ -1130,15 +1130,24 @@ def _basex_child_argv(note: Path) -> list[str]:
     return [sys.executable, "-m", "x4validate._freshcli", "rebuild", "--auto-basex", "--note", str(note)]
 
 
+def _on_windows() -> bool:
+    return os.name == "nt"
+
+
 def _spawn_basex(note: Path) -> int:
-    """Start the background BaseX builder DETACHED and return its pid at once: its own process group, no console, below-
-    normal priority (inherited by the builders it starts), no handle on our pipes, so it outlives the session-start
-    run. MEASURED 2026-11-07 (n=1 each): such a child, with and without breakaway, outlived `uv run`'s exit."""
+    """Start the background BaseX builder and return its pid at once: its own process group, a HIDDEN console,
+    below-normal priority (inherited by the builders it starts), no handle on our pipes, so it outlives the
+    session-start run. MEASURED 2026-11-07 (n=1 each): such a child, with and without breakaway, outlived `uv run`'s
+    exit (that measurement used DETACHED_PROCESS; process lifetime does not depend on the console flag).
+
+    CREATE_NO_WINDOW, never DETACHED_PROCESS (4.1.1 review): a DETACHED process has no console at all, so every
+    console program it starts -- bash for the whole build, git, tasklist, java -- is given a NEW, VISIBLE console
+    window, and closing that window killed the build. A hidden console is inherited by all of them."""
     argv = _basex_child_argv(note)
     common = {"cwd": str(PKG_ROOT), "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
               "stderr": subprocess.DEVNULL, "close_fds": True}
-    if os.name == "nt":
-        base = 0x00000008 | 0x00000200 | 0x00004000   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL
+    if _on_windows():
+        base = 0x08000000 | 0x00000200 | 0x00004000   # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL
         try:
             proc = subprocess.Popen(argv, creationflags=base | 0x01000000, **common)   # CREATE_BREAKAWAY_FROM_JOB
         except OSError:
