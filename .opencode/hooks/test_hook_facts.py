@@ -4129,9 +4129,13 @@ class TestWriteThroughAnExistingLink(unittest.TestCase):
                 self.assertFalse(self.f(cmd)[flag], cmd)
 
     def test_link_resolved_names_the_target_only_through_a_link(self):
-        self.assertEqual(H._lexical_norm(H.link_resolved(self.link.as_posix() + "/libraries/x.xml")),
-                         H._lexical_norm(self.ref.as_posix() + "/libraries/x.xml"))
-        self.assertEqual(H.link_resolved(self.work.as_posix() + "/x.xml"), "")
+        # The temp folder may be spelled with an 8.3 short name (a GitHub Windows runner's is RUNNER~1), and the
+        # resolver returns the long one, so this compares from the expanded folder names: the link's own folder
+        # through realpath (which does not follow the link at its end), the target as realpath gives it.
+        work = pathlib.Path(os.path.realpath(self.work)).as_posix()
+        self.assertEqual(H._lexical_norm(H.link_resolved(work + "/refj/libraries/x.xml")),
+                         H._lexical_norm(pathlib.Path(os.path.realpath(self.ref)).as_posix() + "/libraries/x.xml"))
+        self.assertEqual(H.link_resolved(work + "/x.xml"), "")
         self.assertEqual(H.link_resolved("refj/x.xml"), "")              # relative: nothing to resolve
         self.assertEqual(H.link_resolved(self.link.as_posix() + "/${X}"), "")   # unresolved
 
