@@ -6,8 +6,27 @@ is two segments, and the exemption required exactly one, so it asked. The guard 
 here; nothing runs the commands. Fixture roots only (test_x4guard_check.sandbox)."""
 from __future__ import annotations
 
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
+from codex_testlib import REPO
 from test_x4guard_check import check, sandbox  # noqa: F401  (pytest fixture)
+
+
+@pytest.fixture
+def tmp_path():
+    """The sandbox's root, inside the repo's .test-sandbox instead of the system temp folder. On Linux that is
+    /tmp, and the shell guard refuses any write under /tmp before the mod-list rule this module is about."""
+    base = REPO / ".test-sandbox"
+    base.mkdir(exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="tee-modlist-", dir=base))
+    try:
+        yield root
+    finally:
+        assert root.resolve().is_relative_to(base.resolve())
+        shutil.rmtree(root)
 
 
 def _decide(env, command):

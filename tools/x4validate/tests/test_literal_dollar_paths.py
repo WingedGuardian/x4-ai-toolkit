@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[3]
 @pytest.fixture
 def parser():
     spec = importlib.util.spec_from_file_location('literal_dollar_facts',
-        REPO/'agent/guards/claude-hooks/hook_facts.py')
+        REPO/'.claude/hooks/hook_facts.py')   # the generated copy: an installed toolkit has no agent/
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

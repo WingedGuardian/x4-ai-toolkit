@@ -42,7 +42,7 @@ def test_a_failing_test_in_this_suite_marks_its_folder_and_the_session(tmp_path)
     r, base = _child(tmp_path, "def test_fails(tmp_path):\n    (tmp_path / 'evidence.txt').write_text('e')\n"
                                "    assert False\n")
     assert "1 failed" in r.stdout, r.stdout[-1500:] + r.stderr[-1500:]
-    failed = [d for d in base.iterdir() if d.name.startswith("test_fails")]
+    failed = [d for d in base.iterdir() if d.name.startswith("test_fails") and not d.is_symlink()]
     assert len(failed) == 1 and (failed[0] / ".x4-kept-failure").is_file()
     assert (base / ".x4-kept-failure").is_file()
 

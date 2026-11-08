@@ -132,8 +132,8 @@ def test_a_real_failing_test_gets_the_marker_and_a_passing_one_is_dropped(tmp_pa
                         "--basetemp", str(base), "--rootdir", str(mod), str(mod / "test_case.py")],
                        capture_output=True, text=True, env=env, cwd=str(mod), timeout=300)
     assert "1 failed, 1 passed" in r.stdout, r.stdout[-1500:] + r.stderr[-1500:]
-    failed = [d for d in base.iterdir() if d.name.startswith("test_fails")]
-    passed = [d for d in base.iterdir() if d.name.startswith("test_passes")]
+    failed = [d for d in base.iterdir() if d.name.startswith("test_fails") and not d.is_symlink()]
+    passed = [d for d in base.iterdir() if d.name.startswith("test_passes") and not d.is_symlink()]
     assert len(failed) == 1 and (failed[0] / ".x4-kept-failure").is_file() and (failed[0] / "evidence.txt").is_file()
     assert passed == []
     # 4.1.1 review B1: the session's base folder is marked too, so evidence outside a tmp_path is kept with it
