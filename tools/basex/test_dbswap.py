@@ -605,7 +605,9 @@ def test_the_floor_rule_says_when_the_pagefile_is_unknown(tmp_path, monkeypatch)
 def test_the_floor_is_read_on_the_resolved_drive(tmp_path, monkeypatch):
     """A junctioned DBPATH lives on its target's drive: free space and the rule come from the RESOLVED path."""
     monkeypatch.setattr(dbswap.os.path, "realpath", lambda p: str(tmp_path))
-    floor, rule = dbswap._floor_for(Path("Q:/no/such/junction"))
+    # A drive other than the resolved one, built at run time: the path is only a stand-in for a junction.
+    other = "Q" if not str(tmp_path).upper().startswith("Q") else "R"
+    floor, rule = dbswap._floor_for(Path(other + ":", "no", "such", "junction"))
     assert floor > 0 and Path(os.path.abspath(tmp_path)).anchor.rstrip("\\/") in rule
 
 

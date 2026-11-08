@@ -1731,7 +1731,7 @@ def _temp_receipt(p: Path) -> dict | None:
         if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > 4096:
             return None
         data = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError):  # silent-ok: an unreadable receipt is no receipt, so the folder is kept
         return None
     return data if isinstance(data, dict) else None
 

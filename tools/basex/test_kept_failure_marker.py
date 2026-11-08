@@ -22,6 +22,7 @@ def _child(tmp_path, body: str):
     mod.mkdir()
     (mod / "test_case.py").write_text(body, encoding="utf-8")
     base = tmp_path / "child-base"
+    # env-ok: the child pytest inherits this process's environment; no configuration is read here
     env = dict(os.environ, PYTHONPATH=str(HERE) + os.pathsep + os.environ.get("PYTHONPATH", ""))
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "conftest",
                         "--basetemp", str(base), "--rootdir", str(mod), str(mod / "test_case.py")],
