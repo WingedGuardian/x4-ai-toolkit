@@ -962,8 +962,15 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
             self.assertFalse(F(cmd)["save_lock_decision"], cmd)
 
     def test_a_save_lock_action_the_guard_cannot_read_is_asked(self):
+        # The xargs rows whose items come from a FILE: since the 4.1.1 xargs item readings
+        # (e1ab153b) an `echo on |` producer is read as `... save-lock on` by itself, so only
+        # an action xargs supplies from text the guard cannot see needs the `"xargs" in toks`
+        # clause. MEASURED 2026-11-08: with that clause removed the echo row stays True and
+        # the two file rows go False (CI run 42517544460 reported the mutant uncaught).
         for cmd in ('python tools/agent-harness.py save-lock "$ACTION"',
-                    'echo on | xargs python tools/agent-harness.py save-lock'):
+                    'echo on | xargs python tools/agent-harness.py save-lock',
+                    'cat action.txt | xargs python tools/agent-harness.py save-lock',
+                    'xargs python tools/agent-harness.py save-lock < action.txt'):
             self.assertTrue(F(cmd)["save_lock_decision"], cmd)
 
     def test_TWIN_reading_or_naming_the_save_locks_is_not_a_decision(self):
@@ -2257,7 +2264,18 @@ class TestALineContinuationIsNotASeparator(unittest.TestCase):
     the other 6 have no whitespace to break at. This is how anyone writes a long command.
     """
     def test_the_game_root(self):
-        self.assertTrue(F(D + " -rf " + CONT + '  "' + GAME + '"')["rm_hits_game"])
+        """The first spelling breaks at a space, which segments() no longer splits on
+        (its scan treats the escaped newline as escaped), so it stays a delete even
+        with the splice removed. The other two break INSIDE a word -- after the verb
+        with no space, and in the middle of it -- where only the splice rejoins the
+        verb: unspliced, the verb is `rm<NL>` or `r<NL>m`. MEASURED 2026-11-08: with
+        `spliced = cmd` the first stays True and the other two go False, which is why
+        they are here (CI run 42517544460 reported the mutant uncaught)."""
+        for cmd in (D + " -rf " + CONT + '  "' + GAME + '"',
+                    D + CONT + ' -rf "' + GAME + '"',
+                    D[0] + CONT + D[1:] + ' -rf "' + GAME + '"'):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(F(cmd)["rm_hits_game"], cmd)
 
     def test_the_reference_tree(self):
         self.assertTrue(F(D + " -rf " + CONT + '  "' + REF + '"')["rm_targets_reference"])
@@ -4550,7 +4568,14 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
         for head in (at + d + "Push-Location $env:D; Pop-Location; ",
                      at + d + "Set-Location $env:D; Set-Location " + Q + REF + Q + "; ",
                      at + d,
-                     at + "foreach ($i in 1,2) {" + d + "Push-Location $env:D; Pop-Location}; "):
+                     at + "foreach ($i in 1,2) {" + d + "Push-Location $env:D; Pop-Location}; ",
+                     # A cd to the name that is NOT undone: `$env:` stays a name, so the target is unresolved
+                     # and the 2026-09-02 sticky join keeps the root it left. Since the 4.1.1 location stack
+                     # (e1ab153b) a Pop-Location restores the root by itself, so the rows above no longer
+                     # reach that join; these two are what the "cd to an unknown name" mutant needs.
+                     # MEASURED 2026-11-08: both go False with the join blanked (CI run 42517544460).
+                     at + d + "Set-Location $env:D; ",
+                     at + d + "Push-Location $env:D; "):
             for tail, flag in (("Remove-Item x", "rm_targets_reference"), ("Set-Content out.txt y", "writes_reference"),
                                (Q + "y" + Q + " > out.txt", "writes_reference")):
                 with self.subTest(c=head + tail):

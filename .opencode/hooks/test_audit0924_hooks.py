@@ -1425,7 +1425,7 @@ class TestF11UncommittedKnowledgebase(unittest.TestCase):
 class TestArchiveGlobWholeHookTime(unittest.TestCase):
     """4.1.1 review round 3, A, MEASURED: a crafted -name of 3,000 one-range sets ran protect-bash.sh
     37.6 s. The hook's timeout is 30 s, and a hook that times out does not block, so the delete it
-    names would have gone ahead unjudged. The whole hook, through bash, must answer within 2 s of a
+    names would have gone ahead unjudged. The whole hook, through bash, must answer within 10 s of a
     plain command's time on the same machine -- and answer deny."""
 
     @classmethod
@@ -1462,7 +1462,10 @@ class TestArchiveGlobWholeHookTime(unittest.TestCase):
         _v, plain = self.run_hook("find '" + ext + "' -name '*.txt' -print")
         verdict, secs = self.run_hook(crafted)
         self.assertEqual(verdict, "deny")
-        self.assertLess(secs - plain, 2.0, "crafted %.1f s, plain %.1f s" % (secs, plain))
+        # The regression this guards took 37.6 s (reviewer) / 65 s (ad1125dd) through the hook, past its 30 s
+        # timeout. Fixed, crafted - plain is 1.03-1.09 s idle (MEASURED 3 runs, 2026-11-08) and was 2.0 s on the
+        # Windows CI runner (crafted 2.4 s, plain 0.4 s; run 42517544460), so 2.0 s flaked. 10 s still fails it.
+        self.assertLess(secs - plain, 10.0, "crafted %.1f s, plain %.1f s" % (secs, plain))
 
 
 class TestSshChainWholeHookTime(unittest.TestCase):
@@ -1512,7 +1515,9 @@ class TestSshChainWholeHookTime(unittest.TestCase):
 
     def test_a_repeated_positional_fill_answers_in_time(self):
         # 4.1.1 review round 8, F1, MEASURED at a933b5c0: n=400 denied after 38.3 s (past the 30 s
-        # timeout, where a hook does not block). Each must still deny, within 2.5 s of a plain command.
+        # timeout, where a hook does not block). Each must still deny, within 10 s of a plain command: fixed,
+        # n=600 - plain is 0.95-1.0 s idle (MEASURED 3 runs, 2026-11-08) and was 2.9 s on the Windows CI runner
+        # (3.2 s, plain 0.3 s; run 42517544460), so the earlier 2.5 s flaked. 10 s still fails the 38 s shape.
         ref = str(self.ref).replace(chr(92), "/")
         _v, plain = self.run_hook("ls")
         for n in (400, 600):
@@ -1520,7 +1525,7 @@ class TestSshChainWholeHookTime(unittest.TestCase):
                    + " && rm -rf '" + ref + "'")
             verdict, secs = self.run_hook(cmd)
             self.assertEqual(verdict, "deny", n)
-            self.assertLess(secs - plain, 2.5, "n=%d: %.1f s, plain %.1f s" % (n, secs, plain))
+            self.assertLess(secs - plain, 10.0, "n=%d: %.1f s, plain %.1f s" % (n, secs, plain))
 
     def test_a_find_sed_in_the_game_folder_names_the_edit_tool(self):
         # Round 7, 4: the remedy for an in-place sed of game files is the edit tool, not XRCatTool.

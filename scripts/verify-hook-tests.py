@@ -2060,9 +2060,20 @@ MUTANTS = [
     ('carrier: env -S is read',
      '        out.extend(_env_split_readings(seg))', '        pass',
      'TestProgramsThatRunPrograms.test_env_S_runs_its_split_text'),
-    ('carrier: a value option at the end of an env cluster',
-     '    if clustered and j < len(words):', '    if False:',
-     'TestProgramsThatRunPrograms.test_a_value_option_at_the_end_of_an_env_cluster'),
+    # NOT MUTATED since 4.1.1: `if clustered and j < len(words):` in _env_split_readings
+    # ('carrier: a value option at the end of an env cluster') is EQUIVALENT today. 08873dcf
+    # taught _verb_word (learned=True, which verb() uses) that a short-flag cluster whose LAST
+    # letter takes a value consumes the next word, for every wrapper in _WRAPPER_VALUE_OPTS, so
+    # verb() reads `env -iu X rm ...` as `rm` itself and the env reading repeats the segment's
+    # own command. Both walks split words the same way (_raw_words + tokens' head), env's value
+    # letters are the same (u, C, with S returning earlier), and the learned=False reading runs
+    # only for exec/sudo. MEASURED 2026-11-08 (CI run 42517544460 reported it uncaught): the
+    # mutant survived the whole test_hook_facts.py (1189 tests, OK), and over 195 variants (15
+    # env prefixes -- behind sudo/nice/command, `\env`, `$E`, `--`, an assignment, an attached
+    # or unresolved value -- x 13 payloads: delete, sh -c, eval, xargs, find -delete, tee, cp,
+    # sed -i, git clean, python, relative delete after a cd) the set of true facts differed in
+    # 0. Kept in the guard as a second reading; not mutated, because a mutant that can never
+    # be caught sits here permanently red.
     ('carrier: a word a new wrapper value option swallows stays judged',
      '        out.extend(_value_word_readings(seg))', '        pass',
      'TestProgramsThatRunPrograms.test_a_word_a_new_value_option_would_swallow_is_still_judged'),
@@ -2167,9 +2178,18 @@ MUTANTS = [
     ('carrier: the walk to env steps over a wrapper number',
      ' or (wrapper and _WRAPPER_ARG.match(t))):', '):',
      'TestProgramsThatRunProgramsReview.test_env_S_behind_a_wrapper_with_a_value'),
-    ('carrier: a tmux chain continues past an escaped semicolon',
-     '        if tmux_chain:', '        if False:',
-     'TestProgramsThatRunProgramsReview.test_tmux_chained_with_an_escaped_semicolon'),
+    # NOT MUTATED since 4.1.1: `if tmux_chain:` in _inner_commands ('carrier: a tmux chain
+    # continues past an escaped semicolon') no longer decides any CORRECT verdict. It joined a
+    # tmux segment that ended in `\` to the next segment, for the days when segments() split at
+    # `\;`. Round 4/7 (_scan_ops) made an escaped `;` literal, so `tmux ls \; run '<cmd>'` is ONE
+    # segment that _tmux_readings reads by itself (its own mutant: 'tmux: a separator glued to a
+    # word (r4, 7)', same target test). A segment can now end in `\` only before an UNESCAPED
+    # separator (`tmux ls \\; run x`, `tmux ls \ ; run x`), where bash really ends the tmux
+    # command and runs the next segment as an ordinary command -- so the chain reading there is
+    # a misreading, and pinning it in a test would pin a false positive. MEASURED 2026-11-08 (CI
+    # run 42517544460 reported it uncaught): the mutant survived the whole test_hook_facts.py
+    # (1189 tests, OK); over 9 spellings it changed only `tmux ls \\; run '<del ref>'` (True ->
+    # False), the misreading. Not mutated; the vestigial arm is reported, not removed here.
     ('carrier: only tmux starts a chain',
      '(tmux_chain or v == "tmux") and seg', '(True) and seg',
      'TestProgramsThatRunProgramsReview.test_TWIN_a_backslash_ended_segment_of_another_program'),
