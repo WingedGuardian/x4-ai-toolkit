@@ -162,6 +162,29 @@ def build_index(config: _merge.Config, extra_overlays, index_rel: str,
                             "entries it defines were not registered", degraded=True)
             continue
         if root is None:
+            # A missing index is NOT "nothing registered here" (BLIND-SPOTS F364). The reference
+            # tree always ships index/macros.xml and index/components.xml, so None there means
+            # the reference is wrong or unpacked incompletely -- and every vanilla macro then
+            # reads as unregistered while the run looks clean. MEASURED 2026-11-08: a worktree
+            # without x4-paths.env resolved `reference` to a folder that did not exist, the base
+            # index registered 0 of 4,545 vanilla macros, no skip was recorded, and a fitting
+            # check reported 39 hits where the same code with a real reference reports 63.
+            if report is not None:
+                if src == config.reference and not (src / "index").is_dir():
+                    # Degraded only when the reference has no index folder at all (missing or wrong
+                    # folder). A reference that has index/ but lacks one file is a partial or minimal
+                    # tree (test fixtures build these); it is reported, but it does not degrade the run.
+                    report.skip(f"{index_rel} resolution",
+                                f"base index {src / index_rel} is missing and {src} has no index folder -- no vanilla "
+                                "entry was registered; every base-game macro/component now reads as unregistered. "
+                                "Check the reference tree (x4-paths.env / --reference)", degraded=True)
+                elif src == config.reference:
+                    report.skip(f"{index_rel} resolution",
+                                f"base index {src / index_rel} is missing (the index folder exists) -- its entries "
+                                "were not registered")
+                else:
+                    report.skip(f"{index_rel} resolution",
+                                f"DLC {src.name} has no {index_rel} (loose or packed) -- its entries were not registered")
             continue
         for name, value in _index_entries(root):
             index[name] = roots.target(value, src, config.reference)
@@ -289,6 +312,25 @@ def connections_of(data: bytes) -> set[str] | None:
         # component_connections. The caller reports it via Report.skip.
         return None
     return set(root.xpath("//connection/@name"))
+
+
+def connection_tags_of(data: bytes) -> dict[str, tuple[frozenset[str], str]] | None:
+    """connection name -> (tag set, group) for a component document, or None if it will not parse.
+
+    The group is stripped: the corpus writes `group="group_back_engines "` with a trailing space in
+    107 of 168 base and 82 of 149 DLC unit components (MEASURED 2026-11-08), so an unstripped compare
+    would call most of vanilla mismatched. Case is NOT folded here -- whether the engine folds it is
+    unmeasured, and `check_fitting_compatibility` reports a case-only match as its own finding.
+    """
+    try:
+        root = _merge.parse_bytes(data)
+    except etree.XMLSyntaxError:
+        # silent-ok: the same un-evaluable sentinel as connections_of; the caller skips.
+        return None
+    out: dict[str, tuple[frozenset[str], str]] = {}
+    for c in root.xpath("//connection[@name]"):
+        out[c.get("name")] = (frozenset((c.get("tags") or "").split()), (c.get("group") or "").strip())
+    return out
 
 
 def component_connections(component_file: Path) -> set[str] | None:

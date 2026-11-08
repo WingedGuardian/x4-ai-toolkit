@@ -2022,6 +2022,167 @@ def check_connections(mod_dir: Path, config: _merge.Config, report: Report) -> N
             check_loadout(lo, component_of_macro(lo.get("macro")), vpath, f"for {lo.get('macro')}")
 
 
+#: Loadout leaves whose `macro=` is equipment with an attachment connection (BLIND-SPOTS F363).
+_FIT_LEAF_KINDS = ("engine", "shield", "turret", "weapon")
+_FIT_GROUP_KINDS = {"engines": "engine", "shields": "shield", "turrets": "turret"}
+
+
+def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Report) -> None:
+    """The three fitting questions `check_connections` never asked (BLIND-SPOTS F363). ALL INFO.
+
+    `check_connections` proves a loadout `path` names a connection that EXISTS. It says nothing about
+    whether the equipment FITS that connection, whether a `<groups>` entry names a group the component
+    spells the same way, or whether a ship macro's own `<connection ref=X>` exists on its component.
+    A 7.x-era mod ported to 9.0 can be clean on existence and still spawn hulls with no engines.
+
+    1. **Tag fit** (documented rule, Egosoft "Tags and flags" rev 368.5: every tag on the equipment
+       component's `component`-tagged attachment connection, except `component` itself, must be on
+       the slot). Control: the rule rejects 0 of 1421 resolvable vanilla direct leaves and 0 of 386
+       vanilla `exact=` groups (MEASURED 2026-11-08, base + 8 DLC). It does not reject vanilla, so it
+       is safe as a screen. Whether the ENGINE rejects a mismatch is UNMEASURED; a hit is a suspect
+       for an in-game fitting readback, which is why every finding here is INFO, never an error.
+    2. **Group name case**: a `<groups>` entry whose `group=` matches no component connection group
+       exactly but matches one case-insensitively. Vanilla has 0 such entries in 882 (same run), so
+       case folding has no vanilla precedent either way.
+    3. **Macro connection refs**: `<macro><connections><connection ref=X>` where X is not a connection
+       of the macro's component. Vanilla: 0 of 1776 across 362 ship macros (same run). The first
+       ported mod this ran on had 197.
+
+    Skips, never silent: an unreadable component or an unresolvable equipment macro is recorded once
+    with `report.skip` and its leaves are not judged. An unregistered equipment macro is the refs
+    check's finding, not this one's.
+    """
+    mod_overlay = [mod_dir]
+    macro_index = _resolve.build_index(config, mod_overlay, _resolve.MACRO_INDEX, report)
+    component_index = _resolve.build_index(config, mod_overlay, _resolve.COMPONENT_INDEX, report)
+    comp_cache: dict[str, dict | None] = {}
+    attach_cache: dict[str, frozenset[str] | None] = {}
+    skipped_macros: set[str] = set()
+
+    def ports_of(comp_ref: str | None) -> dict | None:
+        if not comp_ref:
+            return None
+        if comp_ref not in comp_cache:
+            cf = _resolve.read_indexed(component_index, comp_ref)
+            ports = _resolve.connection_tags_of(cf.data) if cf else None
+            if cf and ports is None:
+                report.skip("fitting checks",
+                            f"component '{comp_ref}' ({cf.display.name}): unreadable, its fittings were not judged")
+            comp_cache[comp_ref] = ports
+        return comp_cache[comp_ref]
+
+    def component_of_macro(macro_name: str):
+        mf = _resolve.read_indexed(macro_index, macro_name)
+        if mf is None:
+            return None, None
+        try:
+            mr = _merge.parse_bytes(mf.data)
+        except etree.XMLSyntaxError:
+            return None, None
+        refs = mr.xpath(f"//macro[@name={_resolve._xq(macro_name)}]/component/@ref")
+        return (refs[0] if refs else None), mr
+
+    def required_tags(equip_macro: str) -> frozenset[str] | None:
+        """Attachment tags of an equipment macro, or None (unresolvable: skipped once, never judged)."""
+        if equip_macro in attach_cache:
+            return attach_cache[equip_macro]
+        res = None
+        comp_ref, _ = component_of_macro(equip_macro)
+        ports = ports_of(comp_ref)
+        if ports:
+            att = [tags for tags, _g in ports.values() if "component" in tags]
+            if len(att) == 1:
+                res = att[0] - {"component"}
+        if res is None and equip_macro not in skipped_macros:
+            skipped_macros.add(equip_macro)
+            report.skip("fitting checks",
+                        f"equipment macro '{equip_macro}': no single component-tagged attachment could be "
+                        "resolved, leaves naming it were not judged")
+        attach_cache[equip_macro] = res
+        return res
+
+    # ONE finding per ship macro, not one per leaf: the first ported mod this ran on produced 550 per-item
+    # lines beside its 31 real errors, which is the flood that trains a reader to ignore the output.
+    # Per-item detail is in the counts' examples here and, in full, in a caller's own walk of the same
+    # tree (the ROR lane's build_inventory_59.py is one).
+    per_macro: dict[str, dict] = {}
+
+    def bucket(macro_name: str, vpath: str, line: int) -> dict:
+        b = per_macro.get(macro_name)
+        if b is None:
+            b = per_macro[macro_name] = dict(vpath=vpath, line=line, tag=[], case=[], ref=[], leaves=0, groups=0, refs=0)
+        return b
+
+    def judge_loadout(lo, comp_ref: str | None, vpath: str, macro_name: str) -> None:
+        ports = ports_of(comp_ref)
+        if ports is None:
+            return
+        b = bucket(macro_name, vpath, lo.sourceline or 0)
+        groups_exact = {g for _t, g in ports.values() if g}
+        groups_fold = {g.lower(): g for g in groups_exact}
+        for leaf in lo.xpath("./macros/*[@macro][@path]"):
+            if leaf.tag not in _FIT_LEAF_KINDS:
+                continue
+            port = (leaf.get("path") or "").rsplit("/", 1)[-1]
+            if port not in ports:
+                continue  # existence is check_connections' finding
+            need = required_tags(leaf.get("macro"))
+            if need is None:
+                continue
+            b["leaves"] += 1
+            missing = sorted(need - ports[port][0])
+            if missing:
+                b["tag"].append(f"{leaf.tag} '{leaf.get('macro')}' on '{port}' needs {missing}, slot has "
+                                f"[{' '.join(sorted(ports[port][0]))}]")
+        for g in lo.xpath("./groups/*[@group]"):
+            if g.tag not in _FIT_GROUP_KINDS:
+                continue
+            b["groups"] += 1
+            name = (g.get("group") or "").strip()
+            if name and name not in groups_exact and name.lower() in groups_fold:
+                b["case"].append(f"'{name}' vs component '{groups_fold[name.lower()]}'")
+
+    for vpath, root in iter_mod_xml_roots(mod_dir):
+        for macro in root.xpath("//macro[@name]"):
+            crefs = macro.xpath("./component/@ref")
+            comp_ref = crefs[0] if crefs else None
+            if not (macro.get("class") or "").startswith("ship_"):
+                continue
+            for lo in macro.xpath(".//loadout"):
+                judge_loadout(lo, comp_ref, vpath, macro.get("name"))
+            ports = ports_of(comp_ref)
+            if ports is None:
+                continue
+            b = bucket(macro.get("name"), vpath, macro.sourceline or 0)
+            for conn in macro.xpath("./connections/connection[@ref]"):
+                ref = conn.get("ref") or ""
+                if not ref:
+                    continue
+                b["refs"] += 1
+                if ref not in ports:
+                    b["ref"].append(f"'{ref}' (component '{comp_ref}')")
+        for lo in root.xpath("//loadout[@macro]"):
+            comp_ref, _ = component_of_macro(lo.get("macro"))
+            judge_loadout(lo, comp_ref, vpath, lo.get("macro"))
+
+    for macro_name, b in per_macro.items():
+        if not (b["tag"] or b["case"] or b["ref"]):
+            continue
+        parts = []
+        if b["tag"]:
+            parts.append(f"{len(b['tag'])} of {b['leaves']} preset leaves fail the documented tag rule "
+                         f"(e.g. {'; '.join(b['tag'][:2])})")
+        if b["case"]:
+            parts.append(f"{len(b['case'])} of {b['groups']} group names match the component only by case "
+                         f"(e.g. {b['case'][0]})")
+        if b["ref"]:
+            parts.append(f"{len(b['ref'])} of {b['refs']} macro connection refs name no component connection "
+                         f"(e.g. {b['ref'][0]})")
+        report.add("info", "fit", f"ship macro '{macro_name}': " + "; ".join(parts)
+                   + ". Engine enforcement unmeasured for engines/shields, measured for weapons (not installed); "
+                   "a hit is a suspect for an in-game fitting readback", b["vpath"], b["line"])
+
+
 def check_module_groups(mod_dir: Path, config: _merge.Config, report: Report) -> None:
     """Verify every `<module group="X">` names a group defined in libraries/modulegroups.xml.
 
@@ -2939,6 +3100,7 @@ def validate(
     check_references(mod_dir, runtime, report)
     check_file_existence(mod_dir, runtime, report)
     check_connections(mod_dir, runtime, report)
+    check_fitting_compatibility(mod_dir, runtime, report)  # INFO only: tag fit, group case, macro refs (F363)
     check_module_groups(mod_dir, runtime, report)  # runtime: a later mod's group is still real
     check_page_collisions(mod_dir, config, report)
     check_text_sanity(mod_dir, config, report)

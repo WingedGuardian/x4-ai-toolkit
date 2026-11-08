@@ -465,6 +465,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F360 | A shell write whose target comes from xargs's stdin, or passes through an existing junction, reaches no write rule | **DEFECT (measured)** · PRE-ARC | `echo <config> \| xargs touch` and `echo <reference file> \| xargs touch` allowed; 3 of 3 shell writes through a junction into reference/ allowed where the file tool denies | FIXED 2026-11-07 |
 | F361 | A failed, killed or refused BaseX build left x4raw/x4eff MISSING (the builders dropped first); and BaseX `ALTER DB` onto an existing name REPLACES it, or with a reader on it fails and DAMAGES it | **DEFECT (measured)** · PRE-ARC | 2026-11-05: 8 killed builds in a row left both databases missing for hours. BaseX 12.4, private DBPATH, n=2: ALTER onto an unopened existing name rc 0 and the target holds the source's data; onto a reader-held name rc 1 "could not be renamed" and the target lost `inf.basex` (unreadable), source kept | FIXED 2026-11-07 (4.1.1): build-then-swap, `tools/basex/dbswap.py`; see entry |
 | F362 | The location stack was not modelled: PowerShell `Push-Location` read as a `cd`, `Pop-Location` ignored; bash's bare `pushd`, `pushd +N`/`-N`/`-n`, `popd -n`/`+N` read as a plain push or ignored | **DEFECT (measured)** · PRE-ARC | at 7f4895a2, 9 of 11 PowerShell probes and 10 of 14 bash rows judged the relative operand in the wrong folder (1 a false deny) | FIXED 2026-11-07 |
+| F363 | `check_connections` proved a loadout port EXISTS, never that the equipment FITS it, that a `<groups>` name matches the component's spelling, or that a ship macro's own `<connection ref>` exists | **SCOPE LIMIT (measured)** · PRE-ARC | 218 active+DEV mods: ROR 63 tag / 278 case / 209 ref hits; 12 other mods carry dangling refs (VRO included), XUP 10 tag mismatches; rule rejects 0 of 1421 vanilla leaves; a real save shows 0 of 10 mismatched preset weapons installed | FIXED 2026-11-08 as INFO `fit` findings; promotion to warn awaits a second ship class |
+| F364 | A missing base `index/*.xml` registered nothing and recorded no skip, so every vanilla macro read as unregistered while the run looked clean | **DEFECT (measured)** · PRE-ARC | a worktree without `x4-paths.env`: 150 macros indexed instead of 4,695, 39 fit hits instead of 63, `skipped` empty | FIXED 2026-11-08: degraded skip when the reference has no index folder, plain skip for a partial reference or a DLC |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12817,3 +12819,59 @@ translation/reader tests).
 **RE-DERIVED BY (A3):** `TestHK1PowerShellFrontEnd.test_an_unreadable_stack_name_may_be_the_default_stack`,
 `test_TWIN_an_unreadable_stack_name_judges_only_the_candidate_folders`, `test_a_maybe_pop_translates_as_a_pop_that_may_not_happen`,
 `test_the_reader_splits_a_pop_that_may_not_happen` in `test_hook_facts.py`; mutants labelled `(A3)`.
+
+## F363 - `check_connections` verified that a loadout port EXISTS, never that the equipment FITS it · **SCOPE LIMIT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-08 as INFO
+
+The connection check answered one question: does the `path` of a loadout leaf name a connection the hull component
+defines. It never asked whether the equipment macro's attachment tags are accepted by that slot, whether a `<groups>`
+entry names a group the component spells the same way, or whether a ship macro's own `<connection ref=X>` exists on
+its component. A 7.x-era mod can pass every existing check and still define hulls whose preset engines fit none of
+their engine ports.
+
+MEASURED 2026-11-08, `check_fitting_compatibility` over 216 active installed mods plus two DEV mods (218 scanned, 0
+dropped, 0 errors), reference + 8 DLC: the ported ROR base mod alone carries 63 tag mismatches, 278 case-only group
+names and 209 macro connection refs to connections its components do not define. Among the other 216 mods: 12 tag
+mismatches (XUP 10, xenon_backup 2; verified in source, e.g. an engine slot tagged `standardplatformcollision` with the
+space missing), 52 dangling macro connection refs across 12 mods including VRO (`ship_lint_frigate_akita` macro names
+`con_shipstorage_xs_01`, its component has `con_shipstorage_s_01`), and 0 case-only group names. Vanilla controls for
+the rule: 0 of 1421 direct leaves and 0 of 386 `exact=` groups rejected; 0 of 882 group entries case-only; 0 of 1776
+macro connection refs dangling; but 84 of 1505 vanilla direct leaves point at a port that does not exist.
+
+Every finding is INFO on purpose: the tag rule is Egosoft's documented one and it never rejects vanilla, but whether
+the ENGINE rejects a mismatched preset leaf is unmeasured, and mods that ship dangling refs demonstrably run. A hit is
+a suspect for an in-game fitting readback, not a verdict. Promotion to warn needs that runtime evidence.
+
+Tier A caveat, same as `check_connections`: 24 of the 52 cross-mod refs are one mod's macro judged against the vanilla
+component because the component it means is redefined by a dependency the Tier A tree does not load.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_fit_compat.py` (one falsification twin per clause; the quiet shapes,
+unreadable component and unresolvable equipment, are skips, never findings).
+
+RUNTIME EVIDENCE for the tag clause (2026-11-08, read-only save census, KNOWLEDGEBASE.md § Engine-does-not-install-preset-weapons):
+in a real 9.0 save, XUP lc4 destroyers whose preset weapons fail the rule carry 0 weapons on 10 of 10 ships, while the
+same mod's compatible destroyers carry 2 on 11 of 11. MEASURED for weapons; engines and shields INFERRED by the same
+slot-tag mechanism. This is the evidence promotion to `warn` would rest on; it stays INFO until a second ship class confirms.
+
+## F364 - A missing base `index/*.xml` registered nothing and said nothing · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
+
+`_resolve.build_index` read the reference and DLC indexes, and when `_read_source` returned None for a file that was
+not there it `continue`d. The index then held only the mod's own entries, every vanilla macro and component read as
+unregistered, and no skip was recorded. The run looked clean.
+
+MEASURED 2026-11-08: a fresh git worktree without the untracked `x4-paths.env` resolved `Config().reference` to a
+folder that did not exist (`Config` does not refuse a nonexistent path by design; it refuses only an UNRESOLVED one).
+`build_index` registered 150 macros (the mod's own) instead of 4,695; the fitting check above reported 39 tag hits
+where the same code with the real reference reports 63; `report.skipped` was empty. The instrument, not the subject.
+
+Now: a reference with NO `index/` folder (including a reference folder that does not exist) is a degraded skip naming
+the path and pointing at `x4-paths.env` / `--reference`. A reference that has `index/` but lacks one file is a plain
+skip: that shape is a minimal tree, not a wrong one. A missing DLC index is a plain skip naming the DLC. `report=None`
+callers are unchanged.
+
+CORRECTION 2026-11-08 (own regression, caught by CI run 42458249635 on 67e64d18): the first fix degraded on ANY missing
+reference index file. `test_audit0924_validate.py::test_va6_nested_patch_for_a_disabled_target_is_not_a_path_mismatch`
+builds a reference with `index/macros.xml` only, and its control `assert not rep.degraded` went red on all five CI jobs.
+The local targeted run had not included that file. The rule was broader than the measured failure (a missing folder);
+narrowed to the folder test, with a twin for each side.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_index_missing_is_degraded.py`.
