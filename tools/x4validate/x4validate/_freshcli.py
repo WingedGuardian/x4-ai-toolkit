@@ -593,9 +593,10 @@ class _ChildTree:
                                                       self.wintypes.HANDLE(int(proc._handle))))
 
 
-def _run(name: str, log: Path) -> tuple[int, list[str], list[str]]:
-    """(exit code, the builder's warning lines, the job wrapper's own warning lines). Every line is in the log."""
-    argv = _wrapper(name) + builder(name)
+def _run(name: str, log: Path, argv: list[str] | None = None) -> tuple[int, list[str], list[str]]:
+    """(exit code, the builder's warning lines, the job wrapper's own warning lines). Every line is in the log.
+    `argv`: run this instead of the artifact's builder (the swap-only retry), under the same wrapper."""
+    argv = _wrapper(name) + (argv if argv is not None else builder(name))
     warnings: list[str] = []
     wrappers: list[str] = []
     own = _wrapper_prefixes()
@@ -815,9 +816,12 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
                 continue
             _basex_record(sd, "running", building=name)
             ran.append(name)
+        # A finished build an earlier run could not swap in (rc 7: a reader held the database) is swapped in alone,
+        # never dropped and rebuilt; the memo of that rc 7 does not stop it, since nothing about it needs fixing.
+        swap_first = name in BASEX and _basex_swap_pending(name)
         world_before = _world_digest()
         key = _memo_key(s, world_before)
-        if auto and memo.get(name, {}).get("reasons") == key:
+        if auto and not swap_first and memo.get(name, {}).get("reasons") == key:
             what = ("against these same inputs" if world_before is not None
                     else "and its inputs could not be compared since")
             lines.append(f"{name}: NOT RETRIED: it did not end FRESH {what} at "
@@ -827,9 +831,28 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
         if _mutation.active() is not None:
             lines.append(f"{name}: SKIPPED: a mutation gate started meanwhile")
             continue
-        log = sd / "logs" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        log = sd / "logs" / f"{name}-{stamp}.log"
         try:
-            rc, warnings, wrapper_lines = _run(name, log)
+            if swap_first:
+                swap_log = sd / "logs" / f"{name}-{stamp}-swap.log"
+                rc, warnings, wrapper_lines = _run(name, swap_log, _swap_argv(name))
+                now = check(name).state if rc == 0 else None
+                if now == "FRESH":
+                    lines.append(f"{name}: swapped in the finished build an earlier run could not swap; no rebuild "
+                                 f"needed (log: {swap_log})")
+                    log = swap_log
+                elif rc == SWAP_LOCKED_RC:
+                    lines.append(f"{name}: the finished build an earlier run left still cannot be swapped in: a "
+                                 "reader holds the database; the next run retries the swap alone")
+                    log = swap_log
+                else:
+                    lines.append(f"{name}: the finished build an earlier run left was "
+                                 + (f"swapped in, but it is {now}" if rc == 0 else f"not swapped in (rc {rc})")
+                                 + f"; rebuilding (log: {swap_log})")
+                    swap_first = False
+            if not swap_first:
+                rc, warnings, wrapper_lines = _run(name, log)
         except (OSError, ValueError) as exc:
             rc, warnings, wrapper_lines = -1, [f"could not start the builder: {exc}"], []
         world_after = _world_digest()
@@ -994,6 +1017,23 @@ def _basex_running_build(db: str) -> int | None:
     return _load_dbswap().running_build(BASEX_ROOT / "basex", db)
 
 
+SWAP_LOCKED_RC = 7    # dbswap.RC_LOCKED: refused because a reader (or another build) holds the database
+
+
+def _basex_swap_pending(db: str) -> bool:
+    """A finished, stamped <db>__next waits to be swapped in, and no build of `db` is running (dbswap's own reading)."""
+    try:
+        mod = _load_dbswap()
+        home = BASEX_ROOT / "basex"
+        return bool(mod.unswapped_next(mod.BaseXRunner(home), home, db)) and mod.running_build(home, db) is None
+    except Exception:  # noqa: BLE001  # silent-ok: False = the full build runs, whose `prepare` reports what it finds
+        return False
+
+
+def _swap_argv(db: str) -> list[str]:
+    return [sys.executable, str(BASEX_ROOT / "dbswap.py"), "swap", "--db", db]
+
+
 def _basex_disk_shortfall(db: str) -> str | None:
     mod = _load_dbswap()
     home = BASEX_ROOT / "basex"
@@ -1009,8 +1049,10 @@ def _basex_blocker(db: str, statuses: dict, memo: dict, world: str | None) -> st
         if db == "x4eff" and statuses["effective"].state != "FRESH":
             return (f"the effective store is {statuses['effective'].state}, and x4eff is built from the same merge, "
                     "so it waits for a FRESH store")
+        # Only the swap of a finished build is waiting: it needs no new disk, and the memo of its rc 7 does not stop it.
+        swap_only = _basex_swap_pending(db)
         m = memo.get(db, {})
-        if m.get("reasons") == _memo_key(statuses[db], world):
+        if not swap_only and m.get("reasons") == _memo_key(statuses[db], world):
             return (f"not retried: it did not end FRESH against these same inputs at {m.get('when')} (rc {m.get('rc')}); "
                     f"run `x4fresh rebuild --only {db}` by hand after fixing the cause")
         pid = _basex_running_build(db)
@@ -1019,7 +1061,7 @@ def _basex_blocker(db: str, statuses: dict, memo: dict, world: str | None) -> st
         why = _basex_unbuildable()
         if why:
             return f"BaseX cannot build here now: {why}"
-        return _basex_disk_shortfall(db)
+        return None if swap_only else _basex_disk_shortfall(db)
     except Exception as exc:  # noqa: BLE001 -- said in the note; an unchecked condition never starts a build
         return f"its conditions could not be checked ({type(exc).__name__}: {exc})"
 

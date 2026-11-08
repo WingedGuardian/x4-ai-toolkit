@@ -574,11 +574,20 @@ def describe(bx, home: Path, db: str) -> list[str]:
     elif bx.exists(f.old):
         out.append(f"the previous generation {f.old} is still on disk and is dropped by recovery")
     if bx.exists(f.next) and phase is None:
-        stamped = (_read_json(f.cov_next) or {}).get("fingerprint")
         out.append(f"{f.next} is a finished build that was not swapped in (retry: dbswap.py swap --db {db})"
-                   if stamped else
+                   if unswapped_next(bx, home, db) else
                    f"{f.next} is left from an unfinished build; the next build drops it")
     return out
+
+
+def unswapped_next(bx, home: Path, db: str) -> bool:
+    """A finished, stamped <db>__next that no swap is working on: what a build refused at the swap leaves (rc 7, a
+    reader held <db>). `swap` alone takes it in (and verifies it first); a new build's `prepare` would drop it. Reads
+    only."""
+    f = Files(home, db)
+    if _phase(f) is not None or not bx.exists(f.next):
+        return False
+    return bool((_read_json(f.cov_next) or {}).get("fingerprint"))
 
 
 # ---------------------------------------------------------------- real BaseX
