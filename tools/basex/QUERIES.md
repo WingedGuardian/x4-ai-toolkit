@@ -1,7 +1,7 @@
 # BaseX / XQuery over the X4 corpus
 
 Discovery tool over the X4 corpus. Ships with the toolkit as of v2.6.0; it needs a
-JVM (Java 17+) and a one-off index build. See [README.md](README.md) for install,
+JVM (Java 21+) and a one-off index build. See [README.md](README.md) for install,
 the freshness contract, and the exit codes.
 
 ```bash

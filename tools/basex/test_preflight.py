@@ -24,6 +24,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import preflight  # noqa: E402
 
 
+def _jar(path: Path, version: str = preflight.BASEX_VERSION) -> Path:
+    """A minimal jar: a zip whose manifest names *version* -- all `_jar()` reads."""
+    import zipfile
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("META-INF/MANIFEST.MF",
+                   f"Manifest-Version: 1.0\r\nImplementation-Title: BaseX Core\r\n"
+                   f"Implementation-Version: {version}\r\n\r\n")
+    return path
+
+
 # --- jar -------------------------------------------------------------------
 
 def test_jar_missing_is_reported(tmp_path):
@@ -36,7 +46,7 @@ def test_jar_missing_is_reported(tmp_path):
 
 
 def test_a_complete_basex_install_is_silent(tmp_path):
-    (tmp_path / "BaseX.jar").write_bytes(b"not really a jar, but it is a file")
+    _jar(tmp_path / "BaseX.jar")
     (tmp_path / ".basexhome").write_bytes(b"")
     assert preflight.check(["jar"], basex_dir=tmp_path) == []
 
@@ -126,14 +136,15 @@ def test_java_absent_is_reported(monkeypatch):
 
 
 @pytest.mark.parametrize("banner,expected_ok", [
-    ('openjdk version "17.0.2" 2022-01-18', True),
+    ('openjdk version "17.0.2" 2022-01-18', False),  # BaseX 12.4's floor; 13.0 needs 21
+    ('openjdk version "20.0.2"', False),
     ('java version "24.0.1" 2025-04-15', True),
     ('openjdk version "21.0.1"', True),
     ('java version "11.0.20"', False),      # below the floor
     ('java version "1.8.0_402"', False),    # the pre-9 spelling: major is the 2nd field
 ])
 def test_java_version_floor(monkeypatch, banner, expected_ok):
-    """Bytecode major 61 means Java 17 REFUSES to be undercut -- an older JVM
+    """Bytecode major 65 means Java 21 REFUSES to be undercut -- an older JVM
     raises UnsupportedClassVersionError rather than running slowly."""
     monkeypatch.setattr(preflight.shutil, "which", lambda name: "/usr/bin/java")
 
@@ -214,7 +225,7 @@ def test_cli_refuses_with_2_not_1(tmp_path, capsys):
 
 
 def test_cli_reports_ok_when_satisfied(tmp_path, capsys):
-    (tmp_path / "BaseX.jar").write_bytes(b"file")
+    _jar(tmp_path / "BaseX.jar")
     (tmp_path / ".basexhome").write_bytes(b"")
     rc = preflight.main(["--need", "jar", "--basex-dir", str(tmp_path)])
     assert rc == 0
@@ -242,3 +253,63 @@ def test_a_missing_database_during_a_swap_or_build_is_not_called_unbuilt(tmp_pat
 
 def test_TWIN_a_missing_database_with_no_swap_is_still_unbuilt(tmp_path):
     assert "has not been built" in preflight._db(tmp_path, "x4raw")
+
+
+# --- BaseX 13.0 (4.1.1): the shipped jar, its Java floor, and a jar of the wrong version ----------------------------
+def test_the_pins_are_read_from_the_jar_that_ships():
+    """The version and the Java floor are facts about the vendored jar, not choices. A jar swapped without the
+    constants (or the reverse) must go red here, not at a user's UnsupportedClassVersionError."""
+    import struct
+    import zipfile
+    jar = preflight.HERE / "basex" / "BaseX.jar"
+    if not jar.is_file():
+        pytest.skip(f"no vendored jar at {jar}")
+    with zipfile.ZipFile(jar) as z:
+        manifest = z.read("META-INF/MANIFEST.MF").decode("utf-8")
+        major = struct.unpack(">H", z.read("org/basex/BaseX.class")[6:8])[0]
+    assert f"Implementation-Version: {preflight.BASEX_VERSION}\r\n" in manifest
+    assert f"Build-Jdk-Spec: {preflight.MIN_JAVA}\r\n" in manifest
+    assert major == preflight.CLASS_MAJOR == preflight.MIN_JAVA + 44, (major, preflight.MIN_JAVA)
+    assert (preflight.BASEX_VERSION, preflight.MIN_JAVA) == ("13.0", 21)
+
+
+def test_a_basex_12_4_jar_is_refused_with_the_cure(tmp_path):
+    _jar(tmp_path / "BaseX.jar", "12.4")
+    (tmp_path / ".basexhome").write_bytes(b"")
+    problems = preflight.check(["jar"], basex_dir=tmp_path)
+    assert len(problems) == 1, problems
+    msg = problems[0]
+    assert "BaseX 12.4 found" in msg and "needs BaseX 13.0" in msg, msg
+    assert preflight.BASEX_JAR_URL in msg, msg
+    assert "Java 21" in msg, msg
+
+
+@pytest.mark.parametrize("version", ["13.0.1", "13", "14.0", "12.4"])
+def test_only_the_exact_version_passes(tmp_path, version):
+    _jar(tmp_path / "BaseX.jar", version)
+    (tmp_path / ".basexhome").write_bytes(b"")
+    assert preflight.check(["jar"], basex_dir=tmp_path), version
+
+
+def test_TWIN_the_exact_version_passes(tmp_path):
+    _jar(tmp_path / "BaseX.jar", "13.0")
+    (tmp_path / ".basexhome").write_bytes(b"")
+    assert preflight.check(["jar"], basex_dir=tmp_path) == []
+
+
+@pytest.mark.parametrize("content", [b"not a jar", b""])
+def test_an_unreadable_jar_refuses_rather_than_passes(tmp_path, content):
+    """A file that is not a jar is a non-answer about the version: refuse, never read it as 13.0."""
+    (tmp_path / "BaseX.jar").write_bytes(content)
+    (tmp_path / ".basexhome").write_bytes(b"")
+    problems = preflight.check(["jar"], basex_dir=tmp_path)
+    assert len(problems) == 1 and "could not read" in problems[0], problems
+
+
+def test_a_jar_whose_manifest_names_no_version_refuses(tmp_path):
+    import zipfile
+    with zipfile.ZipFile(tmp_path / "BaseX.jar", "w") as z:
+        z.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\n\r\n")
+    (tmp_path / ".basexhome").write_bytes(b"")
+    problems = preflight.check(["jar"], basex_dir=tmp_path)
+    assert len(problems) == 1 and "names no Implementation-Version" in problems[0], problems

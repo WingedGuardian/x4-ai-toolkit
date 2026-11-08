@@ -238,7 +238,12 @@ def test_native_database_rebuild_keeps_only_the_current_generation(tmp_path, red
         cfg = home / ".basex"
         content, replaced = re.subn(r"^DBPATH = .*$", lambda match: "DBPATH = " + str(data),
                                     cfg.read_text(encoding="utf-8"), flags=re.M)
-        assert replaced == 1
+        # BaseX 12.4 wrote every option into a new .basex; 13.0 (the jar since 4.1.1) writes only
+        # comments, so there is no DBPATH line to replace: add one. The INFO check below proves
+        # the redirection took effect either way.
+        assert replaced in (0, 1), replaced
+        if not replaced:
+            content = content.rstrip("\n") + "\nDBPATH = " + str(data) + "\n"
         cfg.write_text(content, encoding="utf-8")
         info = run("-c", "INFO")
         assert str(data).replace(chr(92), "/").lower() in info.replace(chr(92), "/").lower(), info

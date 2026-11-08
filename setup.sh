@@ -86,20 +86,20 @@ if [ -n "$_py" ]; then ok "python found ($_py) — the Bash guard can analyse co
   fail "no python/python3/py on PATH — protect-bash.sh cannot analyse commands and will ASK on every one. Install Python 3, or set X4_PYTHON to an interpreter."; fi
 
 # Java is OPTIONAL and scoped to the BaseX corpus search (tools/basex). The floor is
-# MEASURED, not chosen: BaseX 12.4's classes are bytecode major 61, so an older JVM
+# MEASURED, not chosen: BaseX 13.0's classes are bytecode major 65 (Java 21), so an older JVM
 # refuses to load them outright (UnsupportedClassVersionError) rather than running
 # slowly. Nothing else in this toolkit needs a JVM.
 if command -v java >/dev/null 2>&1; then
   JV=$(java -version 2>&1 | head -1 | sed -n 's/.*version "\([0-9][0-9]*\).*/\1/p')
   # the pre-9 form is `java version "1.8.0_402"`, where the major is the SECOND field
   if [ "$JV" = "1" ]; then JV=$(java -version 2>&1 | head -1 | sed -n 's/.*version "1\.\([0-9][0-9]*\).*/\1/p'); fi
-  if [ -n "$JV" ] && [ "$JV" -ge 17 ] 2>/dev/null; then
+  if [ -n "$JV" ] && [ "$JV" -ge 21 ] 2>/dev/null; then
     ok "java $JV found (optional — powers the BaseX corpus search)"
   else
-    warn "java found but reports version '${JV:-unparsed}' — BaseX 12.4 needs 17+. Optional: only tools/basex uses it."
+    warn "java found but reports version '${JV:-unparsed}' — BaseX 13.0 needs 21+. Optional: only tools/basex uses it."
   fi
 else
-  warn "java not found — OPTIONAL, needed only for the BaseX corpus search (tools/basex, Java 17+). Everything else works without a JVM."
+  warn "java not found — OPTIONAL, needed only for the BaseX corpus search (tools/basex, Java 21+). Everything else works without a JVM."
 fi
 
 if [ "$OS" != "windows" ]; then

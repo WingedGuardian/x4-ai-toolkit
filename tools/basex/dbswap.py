@@ -20,7 +20,8 @@ At every moment coverage-<db>.json either describes the database named <db> or i
 live database is renamed and written AFTER the next one takes its name, so an absent report (UNKNOWN: ask.py
 certifies no negative) covers the gap and never a report about the other generation.
 
-THE BASEX FACTS this rests on (MEASURED on BaseX 12.4, private DBPATH; see BLIND-SPOTS F336 and the 4.1.1 row):
+THE BASEX FACTS this rests on (MEASURED on BaseX 12.4, private DBPATH; see BLIND-SPOTS F336 and the 4.1.1 row;
+RE-MEASURED on 13.0, the jar 4.1.1 ships, 2026-11-07: every rc and message below identical):
   * ALTER DB and DROP DB of a database another process has open are refused, rc 1, "Database 'x' is opened by
     another process.", and change nothing; the reader finishes with its own result.
   * ALTER DB onto a name that already exists is NOT refused when nobody holds the target: the target is replaced.

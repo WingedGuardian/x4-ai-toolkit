@@ -87,13 +87,13 @@ jobs:
       # unit tests pass without a JVM because they mock -- test_preflight.py monkeypatches
       # shutil.which and writes a jar that is literally b"not really a jar, but it is a
       # file". So a bad jar, a classpath change or an untracked .basexhome would ship
-      # silently: a green that could not have gone red. Java 17 is the MEASURED floor,
-      # read out of the jar itself (Build-Jdk-Spec: 17, bytecode major 61).
-      - name: Install Java 17 (for the BaseX smoke test)
+      # silently: a green that could not have gone red. Java 21 is the MEASURED floor,
+      # read out of the jar itself (BaseX 13.0: Build-Jdk-Spec: 21, bytecode major 65).
+      - name: Install Java 21 (for the BaseX smoke test)
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       # SETUP ENDS HERE. Every step above is setup: if one fails, every check below
       # is meaningless and they all skip (the default). Every step below is an
@@ -800,7 +800,7 @@ jobs:
     # checkout and runs there. No private config travels; the cold precondition
     # still refuses any resolved X4 path. The Windows `tests` leg covers the same
     # suite. If it should gate on Windows too, that is a deliberate widening, not
-    # an oversight. The setup mirrors the `tests` job's (uv, Python 3.13, Java 17
+    # an oversight. The setup mirrors the `tests` job's (uv, Python 3.13, Java 21
     # for the BaseX tests, the pinned Codex CLI for the .rules checks) so the suite
     # it runs in the cold tree sees the environment it saw as a step there.
   cold-clone:
@@ -821,11 +821,11 @@ jobs:
       - name: Install Python 3.13
         run: uv python install 3.13
 
-      - name: Install Java 17 (for the BaseX tests)
+      - name: Install Java 21 (for the BaseX tests)
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - name: Install the Codex CLI (pinned) for the .rules checks
         run: npm i -g @openai/codex@0.160.0
@@ -863,11 +863,11 @@ jobs:
       - name: Install Python 3.13
         run: uv python install 3.13
 
-      - name: Install Java 17 (for the BaseX tests)
+      - name: Install Java 21 (for the BaseX tests)
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - name: Install the Codex CLI (pinned) for the .rules checks
         run: npm i -g @openai/codex@0.160.0
@@ -920,11 +920,11 @@ jobs:
       - name: Install Python 3.13
         run: uv python install 3.13
 
-      - name: Install Java 17 (for the BaseX tests)
+      - name: Install Java 21 (for the BaseX tests)
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - name: Install the Codex CLI (pinned) for the .rules checks
         run: npm i -g @openai/codex@0.160.0

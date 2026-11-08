@@ -199,7 +199,7 @@ finding unless it can state its denominator, and then says *"NEGATIVE CONFIRMED 
 documents"* with every exclusion named. It also refuses to answer at all from a stale index rather
 than serving you a confidently wrong number.
 
-**Be honest with yourself about the cost before you start:** Java 17+, roughly 3 GB of disk, and a
+**Be honest with yourself about the cost before you start:** Java 21+, roughly 3 GB of disk, and a
 build measured in minutes, not seconds. BaseX itself is bundled (BSD-3-Clause, 5.2 MB) so there is
 nothing extra to download. See [`tools/basex/README.md`](tools/basex/README.md) for the install, the
 freshness contract and the exit codes, and `tools/basex/QUERIES.md` for worked queries.
@@ -545,7 +545,7 @@ one; until it has one, the toolkit's guards do not protect it.
 - **uv** (+ Python 3.13) — for x4validate (https://docs.astral.sh/uv/)
 - **XRCatTool** (from Egosoft) — to unpack your own game to `reference/` (run via `bin/xrcat`)
 - **Wine** — only on **Linux/macOS**, to run XRCatTool (a Windows `.exe`)
-- **Java 17+** — *optional*, only for the BaseX corpus search described above. Nothing else needs a
+- **Java 21+** — *optional*, only for the BaseX corpus search described above. Nothing else needs a
   JVM, and the rest of the toolkit works without it.
 
 ### Platform support
