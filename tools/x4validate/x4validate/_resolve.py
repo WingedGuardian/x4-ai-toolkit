@@ -133,6 +133,19 @@ def _read_source(root: Path, rel: str) -> etree._Element | None:
     return _merge.parse_bytes(data) if data is not None else None
 
 
+def _skip_once(report, what: str, why: str, degraded: bool = False) -> None:
+    """Record a skip unless the same (what, why) is already on the report.
+
+    `build_index` runs once per index per check, and three checks (file existence, connections,
+    fitting) each build both indexes, so an unguarded record turned ONE missing reference index
+    into three identical lines (six degraded skips for two causes). One cause reads as one line.
+    """
+    if report is None:
+        return
+    if not any(s.what == what and s.why == why for s in report.skipped):
+        report.skip(what, why, degraded=degraded)
+
+
 def build_index(config: _merge.Config, extra_overlays, index_rel: str,
                 report=None) -> dict[str, tuple[Path, str]]:
     """name -> (resolution_root, value). Later sources win (mod over base).
@@ -157,7 +170,7 @@ def build_index(config: _merge.Config, extra_overlays, index_rel: str,
             root = _read_source(src, index_rel)
         except (etree.XMLSyntaxError, OSError) as exc:
             if report is not None:
-                report.skip(f"{index_rel} resolution",
+                _skip_once(report, f"{index_rel} resolution",
                             f"base/DLC index {src / index_rel} is unreadable ({exc}) — the "
                             "entries it defines were not registered", degraded=True)
             continue
@@ -174,16 +187,16 @@ def build_index(config: _merge.Config, extra_overlays, index_rel: str,
                     # Degraded only when the reference has no index folder at all (missing or wrong
                     # folder). A reference that has index/ but lacks one file is a partial or minimal
                     # tree (test fixtures build these); it is reported, but it does not degrade the run.
-                    report.skip(f"{index_rel} resolution",
+                    _skip_once(report, f"{index_rel} resolution",
                                 f"base index {src / index_rel} is missing and {src} has no index folder -- no vanilla "
                                 "entry was registered; every base-game macro/component now reads as unregistered. "
                                 "Check the reference tree (x4-paths.env / --reference)", degraded=True)
                 elif src == config.reference:
-                    report.skip(f"{index_rel} resolution",
+                    _skip_once(report, f"{index_rel} resolution",
                                 f"base index {src / index_rel} is missing (the index folder exists) -- its entries "
                                 "were not registered")
                 else:
-                    report.skip(f"{index_rel} resolution",
+                    _skip_once(report, f"{index_rel} resolution",
                                 f"DLC {src.name} has no {index_rel} (loose or packed) -- its entries were not registered")
             continue
         for name, value in _index_entries(root):

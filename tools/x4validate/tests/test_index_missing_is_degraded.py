@@ -65,6 +65,59 @@ def test_missing_dlc_index_is_a_plain_skip(tmp_path, monkeypatch):
     assert len(hits) == 1 and not hits[0].degraded
 
 
+def _resolution_skips(rep):
+    return [s for s in rep.skipped if s.what.endswith("resolution")]
+
+
+def test_three_checks_record_one_skip_per_missing_index(tmp_path):
+    """One cause, one line: check_file_existence, check_connections and check_fitting_compatibility each
+    build both indexes, so an undeduplicated record gave 6 degraded skips for 2 missing files."""
+    rep = _check.Report()
+    cfg = _merge.Config(reference=tmp_path / "nowhere", include_packed_dlc=False)
+    mod = tmp_path / "mod"
+    mod.mkdir()
+    for check in (_check.check_file_existence, _check.check_connections, _check.check_fitting_compatibility):
+        check(mod, cfg, rep)
+    skips = _resolution_skips(rep)
+    assert len(skips) == 2 and all(s.degraded for s in skips), skips
+    assert {("macros.xml" in s.why, "components.xml" in s.why) for s in skips} == {(True, False), (False, True)}
+
+
+def test_partial_reference_skip_is_deduplicated_too(tmp_path):
+    """Twin for the plain (index folder exists) branch: two builds, one record."""
+    ref = tmp_path / "reference"
+    _w(ref / "index/macros.xml", "<index/>")
+    cfg = _merge.Config(reference=ref, include_packed_dlc=False)
+    rep = _check.Report()
+    for _ in range(2):
+        _resolve.build_index(cfg, [], _resolve.COMPONENT_INDEX, rep)
+    hits = _resolution_skips(rep)
+    assert len(hits) == 1 and not hits[0].degraded
+
+
+def test_missing_dlc_skip_is_deduplicated_too(tmp_path, monkeypatch):
+    """Twin for the DLC branch: two builds, one record."""
+    ref = tmp_path / "reference"
+    _w(ref / "index/macros.xml", "<index/>")
+    dlc = ref / "extensions" / "ego_dlc_fake"
+    dlc.mkdir(parents=True)
+    cfg = _merge.Config(reference=ref, include_packed_dlc=False)
+    monkeypatch.setattr(type(cfg), "dlc_dirs", lambda self: [dlc])
+    rep = _check.Report()
+    for _ in range(2):
+        _resolve.build_index(cfg, [], _resolve.MACRO_INDEX, rep)
+    assert len([s for s in rep.skipped if "ego_dlc_fake" in s.why]) == 1
+
+
+def test_distinct_causes_are_not_merged(tmp_path):
+    """Twin against over-deduplication: the macro and component index are two causes, two lines."""
+    rep = _check.Report()
+    cfg = _merge.Config(reference=tmp_path / "nowhere", include_packed_dlc=False)
+    _resolve.build_index(cfg, [], _resolve.MACRO_INDEX, rep)
+    _resolve.build_index(cfg, [], _resolve.COMPONENT_INDEX, rep)
+    assert len(_resolution_skips(rep)) == 2
+
+
 def test_none_report_does_not_crash(tmp_path):
     ref = tmp_path / "reference"
     ref.mkdir()
