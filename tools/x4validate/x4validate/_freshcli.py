@@ -1129,11 +1129,13 @@ def _basex_session_plan(sd: Path, final: dict, memo: dict, note: Path) -> list[s
         return []
     skips: dict[str, str] = {}
     left, err, quiet = None, None, 0.0
-    if _switch_off("X4_FRESH_BASEX_AUTO"):
-        err = "X4_FRESH_BASEX_AUTO=off"
-    elif BuildLock(sd / BASEX_AUTO_LOCK).held_elsewhere():
+    # The live builder first, the off switch second: a builder started before the switch was set owns its record,
+    # and "skipped" written over it read as if nothing was running (4.1.1 review).
+    if BuildLock(sd / BASEX_AUTO_LOCK).held_elsewhere():
         return [f"{', '.join(cands)}: not rebuilt automatically: an automatic BaseX rebuild is already scheduled or "
                 "running (`x4fresh status`)"]
+    if _switch_off("X4_FRESH_BASEX_AUTO"):
+        err = "X4_FRESH_BASEX_AUTO=off"
     else:
         left, err, quiet = _quiet_left(sd)
     if err:

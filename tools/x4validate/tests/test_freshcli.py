@@ -1734,6 +1734,37 @@ def test_a_pending_swap_is_read_from_the_real_dbswap_state(tmp_path, monkeypatch
     assert fc._basex_swap_pending("x4raw") is pending
 
 
+def _record(sd):
+    return json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
+
+
+def test_the_off_switch_never_overwrites_a_running_builders_record(sd, bxa, monkeypatch):
+    """4.1.1 review: with X4_FRESH_BASEX_AUTO=off the plan wrote "skipped" before looking at basex-auto.lock, so
+    `status` said skipped while a builder (started before the switch) was still running."""
+    _basex_stale(monkeypatch)
+    _seen(sd, 60)
+    monkeypatch.setenv("X4_FRESH_BASEX_AUTO", "off")
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "basex-auto.json").write_text(json.dumps({"state": "running", "pid": 1, "when": "2026-11-07 10:00"}),
+                                        encoding="utf-8")
+    held = fc.BuildLock(sd / fc.BASEX_AUTO_LOCK)
+    assert held.acquire()
+    try:
+        fc.rebuild(auto=True)
+    finally:
+        held.release()
+    assert _record(sd)["state"] == "running"
+    assert "already scheduled or running" in _note(sd) and not bxa["spawned"]
+
+
+def test_TWIN_the_off_switch_with_no_builder_running_records_skipped(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    _seen(sd, 60)
+    monkeypatch.setenv("X4_FRESH_BASEX_AUTO", "off")
+    fc.rebuild(auto=True)
+    assert _record(sd)["state"] == "skipped" and "X4_FRESH_BASEX_AUTO=off" in _record(sd)["detail"]
+
+
 def test_TWIN_posix_starts_a_new_session_and_no_windows_flags(monkeypatch, tmp_path):
     spy = _PopenSpy()
     monkeypatch.setattr(fc.subprocess, "Popen", spy)
