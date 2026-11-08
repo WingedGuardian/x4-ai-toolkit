@@ -2143,8 +2143,7 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
 
     # ONE finding per ship macro, not one per leaf: the first ported mod this ran on produced 550 per-item
     # lines beside its 31 real errors, which is the flood that trains a reader to ignore the output.
-    # Per-item detail is in the counts' examples here and, in full, in a caller's own walk of the same
-    # tree (the ROR lane's build_inventory_59.py is one).
+    # Per-item detail is in the counts' examples here; a caller that needs every item walks the same tree itself.
     per_macro: dict[str, dict] = {}
 
     def bucket(macro_name: str, vpath: str, line: int, cls: str) -> dict:
