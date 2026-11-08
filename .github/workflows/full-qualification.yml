@@ -984,20 +984,22 @@ jobs:
             --min-tests 6000 --min-passed 5300 --max-skips 892
 
   hook-mutation:
-    name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/4)
+    name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/8)
     # THE MUTATION GATE, SHARDED (4.0.1). It ran as a step of `tests` until ci/v4.0.1-rc6, where
     # it was still running 5 h 20 m into that job's 360-minute limit: 288 mutants plus two trials
     # per predicate, each trial a full run of a hook test file that had gone 41 s -> 75 s. Every
     # mutant, and each predicate's False/True pair, lands in exactly ONE shard
-    # (verify-hook-tests.py shard_groups), so the gate passes only when all four shards pass on
-    # both OSes. Changing the shard count: edit `shard` AND the `/4` in the run line together.
+    # (verify-hook-tests.py shard_groups), so the gate passes only when all eight shards pass on
+    # both OSes. Changing the shard count: edit `shard` AND the `/8` in the run line (and the name) together.
+    # 4.1.1: 4 -> 8 shards and 240 -> 360 minutes. At 4.1.0 an ubuntu shard already took 3 h 44 m of 240; on
+    # the first 4.1.1 run every ubuntu shard was cancelled at 240 min with 116 of 213 trials done (~2 min each).
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 240
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         id: checkout
@@ -1008,7 +1010,7 @@ jobs:
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         shell: bash
         # 4 workers = the runner's 4 vCPUs; each trial has its own temp copy.
-        run: python scripts/verify-hook-tests.py --workers 4 --shard ${{ matrix.shard }}/4
+        run: python scripts/verify-hook-tests.py --workers 4 --shard ${{ matrix.shard }}/8
 
   full-required:
     name: Full qualification required
