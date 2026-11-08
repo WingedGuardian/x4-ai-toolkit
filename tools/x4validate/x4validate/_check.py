@@ -2046,11 +2046,19 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
        case folding has no vanilla precedent either way.
     3. **Macro connection refs**: `<macro><connections><connection ref=X>` where X is not a connection
        of the macro's component. Vanilla: 0 of 1776 across 362 ship macros (same run). The first
-       ported mod this ran on had 197.
+       ported mod this ran on had 209 (MEASURED 2026-11-08 over 216 active + 2 DEV mods, BLIND-SPOTS F363).
 
-    Skips, never silent: an unreadable component or an unresolvable equipment macro is recorded once
-    with `report.skip` and its leaves are not judged. An unregistered equipment macro is the refs
-    check's finding, not this one's.
+    Skips, never silent: an unreadable component, an equipment macro with no single resolvable
+    attachment (unregistered, missing, or ambiguous), and a hull whose component cannot be resolved
+    (unregistered, file missing, or no `<component ref>`) are each recorded once with `report.skip`, and
+    what hangs off them is not judged. Leaves or group entries inside diff ops that patch an EXISTING
+    macro or loadout are recorded as "diff fragment not judged", once per file. `report.notes` carries
+    the denominator: macros judged, macros skipped, diff files with unjudged fragments.
+
+    SCOPE LIMIT: component and macro files are read AS STORED (the file the index names), not as
+    merged. A slot, tag or connection that a diff adds to a component is invisible here, so a hit can
+    be a false "fails the tag rule" or a false "names no component connection". Treat a hit on a
+    component another mod patches as unconfirmed until checked against the merged tree.
     """
     mod_overlay = [mod_dir]
     macro_index = _resolve.build_index(config, mod_overlay, _resolve.MACRO_INDEX, report)
@@ -2072,22 +2080,54 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
         return comp_cache[comp_ref]
 
     def component_of_macro(macro_name: str):
+        """(component ref or None, macro class, why-not) for a REGISTERED macro; why-not is '' on success."""
         mf = _resolve.read_indexed(macro_index, macro_name)
         if mf is None:
-            return None, None
+            why = ("is not registered in index/macros.xml" if macro_name not in macro_index
+                   else "is registered but its file is missing")
+            return None, "", why
         try:
             mr = _merge.parse_bytes(mf.data)
         except etree.XMLSyntaxError:
-            return None, None
-        refs = mr.xpath(f"//macro[@name={_resolve._xq(macro_name)}]/component/@ref")
-        return (refs[0] if refs else None), mr
+            return None, "", f"file ({mf.display.name}) will not parse"
+        node = mr.xpath(f"//macro[@name={_resolve._xq(macro_name)}]")
+        if not node:
+            return None, "", f"file ({mf.display.name}) does not define it"
+        refs = node[0].xpath("./component/@ref")
+        return (refs[0] if refs else None), node[0].get("class") or "", "" if refs else "has no <component ref>"
+
+    # Hull-level coverage (v4.1.1 review): a hull whose component cannot be resolved used to drop out with
+    # no record, so its leaves, groups and refs were never judged and a clean run said nothing about it.
+    judged_hulls: set[str] = set()
+    skipped_hulls: set[str] = set()
+
+    def hull_ports(macro_name: str, comp_ref: str | None, why_not: str = "") -> dict | None:
+        """Ports of a hull's component, or None after recording ONE skip for this macro."""
+        if comp_ref:
+            ports = ports_of(comp_ref)
+            if ports is not None:
+                return ports
+            if comp_ref not in component_index:
+                why_not = f"component '{comp_ref}' is not registered in index/components.xml"
+            elif _resolve.read_indexed(component_index, comp_ref) is None:
+                why_not = f"component '{comp_ref}' is registered but its file is missing"
+            else:
+                why_not = ""  # unreadable component: ports_of already recorded it, once per component
+        else:
+            why_not = why_not or "has no <component ref>"
+        if macro_name not in skipped_hulls:
+            skipped_hulls.add(macro_name)
+            if why_not:
+                report.skip("fitting checks", f"macro '{macro_name}': {why_not}; its loadouts and connection "
+                            "refs were not judged")
+        return None
 
     def required_tags(equip_macro: str) -> frozenset[str] | None:
         """Attachment tags of an equipment macro, or None (unresolvable: skipped once, never judged)."""
         if equip_macro in attach_cache:
             return attach_cache[equip_macro]
         res = None
-        comp_ref, _ = component_of_macro(equip_macro)
+        comp_ref, _cls, _why = component_of_macro(equip_macro)
         ports = ports_of(comp_ref)
         if ports:
             att = [tags for tags, _g in ports.values() if "component" in tags]
@@ -2107,17 +2147,22 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
     # tree (the ROR lane's build_inventory_59.py is one).
     per_macro: dict[str, dict] = {}
 
-    def bucket(macro_name: str, vpath: str, line: int) -> dict:
+    def bucket(macro_name: str, vpath: str, line: int, cls: str) -> dict:
         b = per_macro.get(macro_name)
         if b is None:
-            b = per_macro[macro_name] = dict(vpath=vpath, line=line, tag=[], case=[], ref=[], leaves=0, groups=0, refs=0)
+            # Label by what the macro IS: the loadout-library branch reaches any macro class, not only ships.
+            label = (f"ship macro '{macro_name}'" if cls.startswith("ship_")
+                     else f"macro '{macro_name}' (class '{cls or '?'}')")
+            b = per_macro[macro_name] = dict(vpath=vpath, line=line, label=label, tag=[], case=[], ref=[],
+                                             leaves=0, groups=0, refs=0)
+            judged_hulls.add(macro_name)
         return b
 
-    def judge_loadout(lo, comp_ref: str | None, vpath: str, macro_name: str) -> None:
-        ports = ports_of(comp_ref)
+    def judge_loadout(lo, comp_ref: str | None, vpath: str, macro_name: str, cls: str, why_not: str = "") -> None:
+        ports = hull_ports(macro_name, comp_ref, why_not)
         if ports is None:
             return
-        b = bucket(macro_name, vpath, lo.sourceline or 0)
+        b = bucket(macro_name, vpath, lo.sourceline or 0, cls)
         groups_exact = {g for _t, g in ports.values() if g}
         groups_fold = {g.lower(): g for g in groups_exact}
         for leaf in lo.xpath("./macros/*[@macro][@path]"):
@@ -2142,18 +2187,20 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
             if name and name not in groups_exact and name.lower() in groups_fold:
                 b["case"].append(f"'{name}' vs component '{groups_fold[name.lower()]}'")
 
+    fragment_files = 0
     for vpath, root in iter_mod_xml_roots(mod_dir):
         for macro in root.xpath("//macro[@name]"):
             crefs = macro.xpath("./component/@ref")
             comp_ref = crefs[0] if crefs else None
-            if not (macro.get("class") or "").startswith("ship_"):
+            cls = macro.get("class") or ""
+            if not cls.startswith("ship_"):
                 continue
             for lo in macro.xpath(".//loadout"):
-                judge_loadout(lo, comp_ref, vpath, macro.get("name"))
-            ports = ports_of(comp_ref)
+                judge_loadout(lo, comp_ref, vpath, macro.get("name"), cls)
+            ports = hull_ports(macro.get("name"), comp_ref)
             if ports is None:
                 continue
-            b = bucket(macro.get("name"), vpath, macro.sourceline or 0)
+            b = bucket(macro.get("name"), vpath, macro.sourceline or 0, cls)
             for conn in macro.xpath("./connections/connection[@ref]"):
                 ref = conn.get("ref") or ""
                 if not ref:
@@ -2162,8 +2209,22 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
                 if ref not in ports:
                     b["ref"].append(f"'{ref}' (component '{comp_ref}')")
         for lo in root.xpath("//loadout[@macro]"):
-            comp_ref, _ = component_of_macro(lo.get("macro"))
-            judge_loadout(lo, comp_ref, vpath, lo.get("macro"))
+            comp_ref, cls, why_not = component_of_macro(lo.get("macro"))
+            judge_loadout(lo, comp_ref, vpath, lo.get("macro"), cls, why_not)
+        if root.tag == "diff":
+            # A diff op that adds leaves or group entries INTO an existing macro or loadout has neither a <macro>
+            # nor a <loadout macro=> ancestor here, so it cannot be judged without the merged tree. Say so, once
+            # per file, rather than let it read as judged-and-clean.
+            frag = [e for e in root.xpath("//*[@macro][@path] | //*[@group]")
+                    if (e.tag in _FIT_LEAF_KINDS or e.tag in _FIT_GROUP_KINDS)
+                    and not e.xpath("ancestor::macro | ancestor::loadout[@macro]")]
+            if frag:
+                fragment_files += 1
+                report.skip("fitting checks", f"{vpath}: {len(frag)} loadout leaf/group element(s) inside diff ops "
+                            "that patch an existing macro or loadout -- diff fragment not judged")
+
+    report.notes.append(f"fitting checks: {len(judged_hulls)} macro(s) judged, {len(skipped_hulls)} skipped "
+                        f"(see NOT CHECKED); {fragment_files} diff file(s) with loadout fragments not judged")
 
     for macro_name, b in per_macro.items():
         if not (b["tag"] or b["case"] or b["ref"]):
@@ -2178,7 +2239,7 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
         if b["ref"]:
             parts.append(f"{len(b['ref'])} of {b['refs']} macro connection refs name no component connection "
                          f"(e.g. {b['ref'][0]})")
-        report.add("info", "fit", f"ship macro '{macro_name}': " + "; ".join(parts)
+        report.add("info", "fit", f"{b['label']}: " + "; ".join(parts)
                    + ". Engine enforcement unmeasured for engines/shields, measured for weapons (not installed); "
                    "a hit is a suspect for an in-game fitting readback", b["vpath"], b["line"])
 

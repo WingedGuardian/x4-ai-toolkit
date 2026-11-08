@@ -12844,8 +12844,22 @@ a suspect for an in-game fitting readback, not a verdict. Promotion to warn need
 Tier A caveat, same as `check_connections`: 24 of the 52 cross-mod refs are one mod's macro judged against the vanilla
 component because the component it means is redefined by a dependency the Tier A tree does not load.
 
-**RE-DERIVED BY:** `tools/x4validate/tests/test_fit_compat.py` (one falsification twin per clause; the quiet shapes,
-unreadable component and unresolvable equipment, are skips, never findings).
+The corpus numbers above (218 mods, 63 / 278 / 209, the vanilla controls) are MEASURED 2026-11-08 by one run over the
+installed set at that date (recorded in commit 449ba680); no test or gate re-derives them, and they will drift with
+the modlist.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_fit_compat.py` re-derives the BEHAVIOUR on synthetic fixtures, not the
+corpus numbers: each clause fires on a one-input change and stays silent on its twin; the quiet shapes (unreadable
+component, unresolvable or ambiguous equipment, unresolvable hull component, diff fragments) are skips, never
+findings; one finding per macro; nothing is ever an error.
+
+**LIMIT (open, 2026-11-08 v4.1.1 review): files are read AS STORED, not merged.** The check reads the component and
+macro file the index names, never the effective tree, so a connection, slot tag or group that a diff (from the mod
+itself or another) adds to a component is invisible. Consequence: a false "fails the documented tag rule" or a false
+"names no component connection" on any hull whose component is patched. The rate is UNMEASURED. Likewise, leaves and
+group entries inside diff ops that patch an existing macro or loadout cannot be judged from stored files; since
+v4.1.1 they are recorded as a "diff fragment not judged" skip, once per file, instead of passing silently. A hull
+whose component cannot be resolved is a skip naming the macro, and `report.notes` states macros judged / skipped.
 
 RUNTIME EVIDENCE for the tag clause (2026-11-08, read-only save census, KNOWLEDGEBASE.md § Engine-does-not-install-preset-weapons):
 in a real 9.0 save, XUP lc4 destroyers whose preset weapons fail the rule carry 0 weapons on 10 of 10 ships, while the
