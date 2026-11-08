@@ -115,6 +115,10 @@ class Status:
     incomplete: int = 0                                 # items the artifact is known to be missing
     loss_keys: list[str] | None = None                  # WHICH items, by identity (None: cannot say)
     accepted: str | None = None                         # when the user accepted exactly this loss set
+    # Reasons that describe a passing moment, not the artifact's inputs (dbswap leftovers with their pids, a running
+    # rebuild). Shown like any reason, but never part of the failure memo's key: a failed build LEAVES some of them,
+    # and they made the next key differ, so the same failure ran once more (4.1.1 review).
+    volatile: list[str] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- where things live
@@ -330,6 +334,7 @@ def _status_basex(name: str) -> Status:
     # FRESH or NOT BUILT verdict and its reasons (the rebuild memo's key) stay as they are.
     notes = _swap_notes(name)
     (s.notes if s.state in ("FRESH", NOT_BUILT) else s.reasons).extend(notes)
+    s.volatile.extend(notes)
     return s
 
 
@@ -443,6 +448,7 @@ def status(only=ORDER, holding_lock: bool = False) -> list[Status]:
         s = _mark_accepted(check(name), accepted)
         if locked and s.state != "FRESH" and (in_play is None or name in in_play):
             s.reasons.insert(0, f"a rebuild is running (lock held: {sd / 'x4fresh.lock'})")
+            s.volatile.append(s.reasons[0])
             s.state = "REBUILDING"
         out.append(s)
     return out
@@ -776,8 +782,9 @@ def _note_not_built_once(sd: Path, final: list[Status]) -> list[str]:
 
 def _memo_key(s: Status, world: str | None) -> str:
     # The reasons alone are not "the same inputs": MISSING and UNKNOWN carry no digest, so a mod could
-    # change and the same words would suppress the retry forever (review T10).
-    return " | ".join(s.reasons) + f" @ {world}"
+    # change and the same words would suppress the retry forever (review T10). Volatile reasons are left out: they
+    # describe what a build left behind, not its inputs (4.1.1 review).
+    return " | ".join(r for r in s.reasons if r not in s.volatile) + f" @ {world}"
 
 
 def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = False,

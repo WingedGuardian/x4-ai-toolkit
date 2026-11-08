@@ -1580,6 +1580,52 @@ def test_the_background_builder_gets_a_hidden_console_never_a_detached_one(monke
     assert "start_new_session" not in spy.calls[-1]
 
 
+def _stale_staleness(reason):
+    return chr(10).join(("from types import SimpleNamespace",
+                         "def _defaults():",
+                         "    return None, None, None",
+                         "def check(*a, **k):",
+                         f"    return SimpleNamespace(fresh=False, determinable=True, reasons=[{reason!r}])", ""))
+
+
+def _what_a_failed_build_leaves(home, dead_pid=2_000_000_000):
+    """The leftovers a failed or killed build really leaves beside a live x4raw: an unfinished x4raw__next and a
+    build lock whose owner is not running. dbswap's describe() turns each into a line with a pid in it."""
+    nxt = home / "data" / "x4raw__next"
+    nxt.mkdir(parents=True)
+    (nxt / "tbl.basex").write_bytes(b"db")
+    (home / "build-x4raw.lock").write_text(json.dumps({"db": "x4raw", "pid": dead_pid, "at": 1.0}), encoding="utf-8")
+
+
+def test_the_failure_memo_key_ignores_what_the_failed_build_left_behind(tmp_path, monkeypatch):
+    """4.1.1 review: the key was built from reasons that included dbswap's describe() lines. A failure was recorded
+    with the key from BEFORE the build; the leftovers it then left changed the next key, so the same failed build ran
+    once more at the next session start. Driven through the real _status_basex and the real dbswap.describe()."""
+    home = _swap_world(tmp_path, monkeypatch, "x4raw")
+    (tmp_path / "staleness.py").write_text(_stale_staleness("x4raw: a mod changed"), encoding="utf-8")
+    (home / "coverage-x4raw.json").write_text("{}", encoding="utf-8")
+    recorded = fc._memo_key(fc._status_basex("x4raw"), "world")
+    _what_a_failed_build_leaves(home)
+    after = fc._status_basex("x4raw")
+    said = " ".join(after.reasons)
+    assert "x4raw__next is left from an unfinished build" in said and "2000000000" in said, after
+    assert fc._memo_key(after, "world") == recorded
+    memo = {"x4raw": {"reasons": recorded, "rc": 1, "when": "then"}}
+    monkeypatch.setattr(fc, "_basex_previously_built", lambda db: True)
+    assert fc._basex_blocker("x4raw", {"x4raw": after}, memo, "world").startswith("not retried")
+
+
+def test_TWIN_a_changed_freshness_reason_still_changes_the_key(tmp_path, monkeypatch):
+    home = _swap_world(tmp_path, monkeypatch, "x4raw")
+    (tmp_path / "staleness.py").write_text(_stale_staleness("x4raw: a mod changed"), encoding="utf-8")
+    (home / "coverage-x4raw.json").write_text("{}", encoding="utf-8")
+    recorded = fc._memo_key(fc._status_basex("x4raw"), "world")
+    (tmp_path / "staleness.py").write_text(_stale_staleness("x4raw: another mod changed"), encoding="utf-8")
+    sys.modules.pop("staleness", None)
+    assert fc._memo_key(fc._status_basex("x4raw"), "world") != recorded
+    assert fc._memo_key(fc._status_basex("x4raw"), "moved") != fc._memo_key(fc._status_basex("x4raw"), "world")
+
+
 def test_TWIN_posix_starts_a_new_session_and_no_windows_flags(monkeypatch, tmp_path):
     spy = _PopenSpy()
     monkeypatch.setattr(fc.subprocess, "Popen", spy)
