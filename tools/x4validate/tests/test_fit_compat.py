@@ -58,22 +58,34 @@ def test_clean_world_has_no_fit_findings(tmp_path):
 
 def test_leaf_missing_slot_tag_is_info(tmp_path):
     rep = _run(*_world(tmp_path, slot_tags="engine ror_xl_b"))
-    hits = [f for f in rep.findings if f.category == "fit" and "ror_xl_a" in f.message]
+    hits = [f for f in rep.findings if f.category == "fit"]
     assert len(hits) == 1 and hits[0].severity == "info"
-    assert "con_engine_01" in hits[0].message and "eng_macro" in hits[0].message
+    m = hits[0].message
+    assert "1 of 1 preset leaves fail" in m and "con_engine_01" in m and "eng_macro" in m and "ror_xl_a" in m
+    assert "group names" not in m and "connection refs" not in m
 
 
 def test_group_case_only_match_is_info_and_exact_match_is_silent(tmp_path):
     rep = _run(*_world(tmp_path, group_name="Group_Back"))
-    hits = [f for f in rep.findings if f.category == "fit" and "case" in f.message]
-    assert len(hits) == 1 and hits[0].severity == "info" and "Group_Back" in hits[0].message
-    assert not [f for f in _run(*_world(tmp_path)).findings if "case" in f.message]
+    hits = [f for f in rep.findings if f.category == "fit"]
+    assert len(hits) == 1 and hits[0].severity == "info"
+    assert "1 of 1 group names match the component only by case" in hits[0].message and "Group_Back" in hits[0].message
+    assert not [f for f in _run(*_world(tmp_path)).findings if f.category == "fit"]
 
 
 def test_macro_connection_ref_absent_is_info(tmp_path):
     rep = _run(*_world(tmp_path, macro_conn="con_nowhere"))
-    hits = [f for f in rep.findings if f.category == "fit" and "con_nowhere" in f.message]
+    hits = [f for f in rep.findings if f.category == "fit"]
     assert len(hits) == 1 and hits[0].severity == "info"
+    assert "1 of 1 macro connection refs name no component connection" in hits[0].message and "con_nowhere" in hits[0].message
+
+
+def test_one_finding_per_ship_macro_not_per_item(tmp_path):
+    """The flood guard: three distinct problems on one hull are ONE line, and a second clean hull adds none."""
+    rep = _run(*_world(tmp_path, slot_tags="engine ror_xl_b", group_name="Group_Back", macro_conn="con_nowhere"))
+    fit = [f for f in rep.findings if f.category == "fit"]
+    assert len(fit) == 1 and fit[0].message.startswith("ship macro 'ship_new_macro': ")
+    assert all(s in fit[0].message for s in ("preset leaves fail", "only by case", "connection refs name no"))
 
 
 def test_unresolvable_equipment_macro_is_a_skip_not_a_finding(tmp_path):
@@ -93,4 +105,4 @@ def test_unreadable_component_is_a_skip_not_a_finding(tmp_path):
 def test_nothing_here_is_ever_an_error(tmp_path):
     rep = _run(*_world(tmp_path, slot_tags="engine ror_xl_b", group_name="Group_Back", macro_conn="con_nowhere"))
     fit = [f for f in rep.findings if f.category == "fit"]
-    assert len(fit) == 3 and {f.severity for f in fit} == {"info"}
+    assert fit and {f.severity for f in fit} == {"info"}
