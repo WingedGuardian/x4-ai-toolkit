@@ -2046,11 +2046,19 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
        case folding has no vanilla precedent either way.
     3. **Macro connection refs**: `<macro><connections><connection ref=X>` where X is not a connection
        of the macro's component. Vanilla: 0 of 1776 across 362 ship macros (same run). The first
-       ported mod this ran on had 197.
+       ported mod this ran on had 209 (MEASURED 2026-11-08 over 216 active + 2 DEV mods, BLIND-SPOTS F363).
 
-    Skips, never silent: an unreadable component or an unresolvable equipment macro is recorded once
-    with `report.skip` and its leaves are not judged. An unregistered equipment macro is the refs
-    check's finding, not this one's.
+    Skips, never silent: an unreadable component, an equipment macro with no single resolvable
+    attachment (unregistered, missing, or ambiguous), and a hull whose component cannot be resolved
+    (unregistered, file missing, or no `<component ref>`) are each recorded once with `report.skip`, and
+    what hangs off them is not judged. Leaves or group entries inside diff ops that patch an EXISTING
+    macro or loadout are recorded as "diff fragment not judged", once per file. `report.notes` carries
+    the denominator: macros judged, macros skipped, diff files with unjudged fragments.
+
+    SCOPE LIMIT: component and macro files are read AS STORED (the file the index names), not as
+    merged. A slot, tag or connection that a diff adds to a component is invisible here, so a hit can
+    be a false "fails the tag rule" or a false "names no component connection". Treat a hit on a
+    component another mod patches as unconfirmed until checked against the merged tree.
     """
     mod_overlay = [mod_dir]
     macro_index = _resolve.build_index(config, mod_overlay, _resolve.MACRO_INDEX, report)
