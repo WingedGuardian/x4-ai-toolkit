@@ -97,11 +97,10 @@ again. So:
    **The one exception to rules 6 and 7 is the toolkit temp sweep** (above). Session start launches it detached, with no
    announcement and no approved version, and the next session start reports what it did. It touches only workspaces the
    toolkit's own producer declared disposable when it created them, after the protection, inactivity and in-use
-   checks. One that carries the toolkit's version-2 receipt (`.x4-temp-owner.json`, purpose "disposable temporary
-   workspace") is deleted permanently, since the Recycle Bin frees nothing on the same drive; any other one goes to
-   the Recycle Bin. So does a receipted one that still holds a failed test's folder (the test suite marks it with
-   `.x4-kept-failure`): that is failure evidence, and evidence is recycled, never deleted. A dir with a file dated in the future, or with only a version-1 ownership receipt, is kept and
-   named. Each toolkit's checklist names how to turn it off.
+   checks. It moves them to the Recycle Bin, except a workspace whose creation receipt the toolkit's checklist names as
+   proof of disposability: that one is deleted permanently, since the Recycle Bin frees nothing on the same drive.
+   Failure evidence inside a workspace is recycled, never deleted. Each toolkit's checklist names its receipts and
+   how to turn the sweep off.
 
 ### Where agent output goes
 
@@ -177,6 +176,10 @@ and both shared archive helpers. The local pin tests alone do not prove that the
   QA and pytest producers write receipts; other unmarked scratch remains manual.
   Receipts are checked against both the canonical toolkit and directory paths.
   Set `X4_HOUSEKEEP_SWEEP=off` to disable the session sweep.
+  A workspace carrying the version-2 receipt (`.x4-temp-owner.json`, purpose "disposable temporary workspace") is
+  deleted permanently. One that still holds a failed test's folder (the test suite marks it with
+  `.x4-kept-failure`) is failure evidence and goes to the Recycle Bin instead. A directory with a file dated in the
+  future, or with only a version-1 ownership receipt, is kept and named in the report.
   A protected file, unreadable tree, active descendant or failed probe keeps the
   candidate in place and is accounted for. A failed probe restore names its retained
   location. Tests use a fake recycler and cannot invoke the real Recycle Bin.
