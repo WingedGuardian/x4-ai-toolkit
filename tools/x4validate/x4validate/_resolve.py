@@ -170,11 +170,18 @@ def build_index(config: _merge.Config, extra_overlays, index_rel: str,
             # index registered 0 of 4,545 vanilla macros, no skip was recorded, and a fitting
             # check reported 39 hits where the same code with a real reference reports 63.
             if report is not None:
-                if src == config.reference:
+                if src == config.reference and not (src / "index").is_dir():
+                    # Degraded only when the reference has no index folder at all (missing or wrong
+                    # folder). A reference that has index/ but lacks one file is a partial or minimal
+                    # tree (test fixtures build these); it is reported, but it does not degrade the run.
                     report.skip(f"{index_rel} resolution",
-                                f"base index {src / index_rel} is missing -- no vanilla entry was registered; "
-                                "every base-game macro/component now reads as unregistered. Check the "
-                                "reference tree (x4-paths.env / --reference)", degraded=True)
+                                f"base index {src / index_rel} is missing and {src} has no index folder -- no vanilla "
+                                "entry was registered; every base-game macro/component now reads as unregistered. "
+                                "Check the reference tree (x4-paths.env / --reference)", degraded=True)
+                elif src == config.reference:
+                    report.skip(f"{index_rel} resolution",
+                                f"base index {src / index_rel} is missing (the index folder exists) -- its entries "
+                                "were not registered")
                 else:
                     report.skip(f"{index_rel} resolution",
                                 f"DLC {src.name} has no {index_rel} (loose or packed) -- its entries were not registered")

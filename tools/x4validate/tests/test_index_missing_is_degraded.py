@@ -3,8 +3,9 @@
 The quiet shape is the dangerous one: `_read_source` returns None for a file that is not there, and until
 2026-11-08 `build_index` just `continue`d. A run against a wrong reference then reported every vanilla
 macro as unregistered (or, for a check that skips unresolvable items, reported fewer findings) and looked
-clean. Twin per clause: missing reference index -> degraded skip; missing DLC index -> plain skip; both
-present -> no skip; report=None -> no crash."""
+clean. Twin per clause: reference with no index folder (or no folder at all) -> degraded skip; reference
+with index/ but one file missing -> plain skip (a minimal tree, as test fixtures build); missing DLC index ->
+plain skip; present -> no skip; report=None -> no crash."""
 
 from pathlib import Path
 
@@ -23,6 +24,23 @@ def test_missing_reference_index_is_a_degraded_skip(tmp_path):
     idx = _resolve.build_index(_merge.Config(reference=ref, include_packed_dlc=False), [], _resolve.MACRO_INDEX, rep)
     assert idx == {}
     assert any(s.degraded and "base index" in s.why and "macros.xml" in s.why for s in rep.skipped)
+
+
+def test_nonexistent_reference_is_a_degraded_skip(tmp_path):
+    """The MEASURED F364 case: a worktree without x4-paths.env resolved `reference` to a missing folder."""
+    rep = _check.Report()
+    _resolve.build_index(_merge.Config(reference=tmp_path / "nowhere", include_packed_dlc=False), [], _resolve.MACRO_INDEX, rep)
+    assert any(s.degraded and "no index folder" in s.why for s in rep.skipped)
+
+
+def test_partial_reference_index_is_a_plain_skip(tmp_path):
+    """Twin: index/ exists with macros.xml only; building the COMPONENT index reports, but does not degrade."""
+    ref = tmp_path / "reference"
+    _w(ref / "index/macros.xml", "<index/>")
+    rep = _check.Report()
+    _resolve.build_index(_merge.Config(reference=ref, include_packed_dlc=False), [], _resolve.COMPONENT_INDEX, rep)
+    hits = [s for s in rep.skipped if "components.xml" in s.why]
+    assert len(hits) == 1 and not hits[0].degraded
 
 
 def test_present_reference_index_records_no_skip(tmp_path):

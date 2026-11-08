@@ -459,7 +459,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
 | F363 | `check_connections` proved a loadout port EXISTS, never that the equipment FITS it, that a `<groups>` name matches the component's spelling, or that a ship macro's own `<connection ref>` exists | **SCOPE LIMIT (measured)** · PRE-ARC | 218 active+DEV mods: ROR 63 tag / 278 case / 209 ref hits; 12 other mods carry dangling refs (VRO included), XUP 10 tag mismatches; rule rejects 0 of 1421 vanilla leaves; a real save shows 0 of 10 mismatched preset weapons installed | FIXED 2026-11-08 as INFO `fit` findings; promotion to warn awaits a second ship class |
-| F364 | A missing base `index/*.xml` registered nothing and recorded no skip, so every vanilla macro read as unregistered while the run looked clean | **DEFECT (measured)** · PRE-ARC | a worktree without `x4-paths.env`: 150 macros indexed instead of 4,695, 39 fit hits instead of 63, `skipped` empty | FIXED 2026-11-08: degraded skip for the reference, plain skip for a DLC |
+| F364 | A missing base `index/*.xml` registered nothing and recorded no skip, so every vanilla macro read as unregistered while the run looked clean | **DEFECT (measured)** · PRE-ARC | a worktree without `x4-paths.env`: 150 macros indexed instead of 4,695, 39 fit hits instead of 63, `skipped` empty | FIXED 2026-11-08: degraded skip when the reference has no index folder, plain skip for a partial reference or a DLC |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12147,7 +12147,15 @@ folder that did not exist (`Config` does not refuse a nonexistent path by design
 `build_index` registered 150 macros (the mod's own) instead of 4,695; the fitting check above reported 39 tag hits
 where the same code with the real reference reports 63; `report.skipped` was empty. The instrument, not the subject.
 
-Now: a missing REFERENCE index is a degraded skip naming the path and pointing at `x4-paths.env` / `--reference`; a
-missing DLC index is a plain skip naming the DLC. `report=None` callers are unchanged.
+Now: a reference with NO `index/` folder (including a reference folder that does not exist) is a degraded skip naming
+the path and pointing at `x4-paths.env` / `--reference`. A reference that has `index/` but lacks one file is a plain
+skip: that shape is a minimal tree, not a wrong one. A missing DLC index is a plain skip naming the DLC. `report=None`
+callers are unchanged.
+
+CORRECTION 2026-11-08 (own regression, caught by CI run 42458249635 on 67e64d18): the first fix degraded on ANY missing
+reference index file. `test_audit0924_validate.py::test_va6_nested_patch_for_a_disabled_target_is_not_a_path_mismatch`
+builds a reference with `index/macros.xml` only, and its control `assert not rep.degraded` went red on all five CI jobs.
+The local targeted run had not included that file. The rule was broader than the measured failure (a missing folder);
+narrowed to the folder test, with a twin for each side.
 
 **RE-DERIVED BY:** `tools/x4validate/tests/test_index_missing_is_degraded.py`.
