@@ -901,7 +901,7 @@ jobs:
     #
     # THE THREE NUMBERS AT THE BOTTOM. min-tests 6000 and min-passed 5300 are floors under the MEASURED
     # counts of a fresh Windows install (6,493 cases before the D-C2 fixes; about 6,506 after, 5,927 passed, projected from a re-run of the changed modules), so a suite that silently collected a
-    # fraction of itself cannot pass. max-skips 892 = 889 READ on run 41870962364 (ec8d30dc) + 3. It replaces a
+    # fraction of itself cannot pass. max-skips 899 = 896 READ on run 42517544460 (28c5b2f5) + 3; the 5 over 4.1.0 are REPO-ONLY skips (3 need the hook source, 2 the CI workflows). It replaces a
     # derived upper bound of 934 from before this job had run. A later change itemises itself here, as the `tests`
     # job does.
     runs-on: ubuntu-latest
@@ -981,7 +981,7 @@ jobs:
           python3 .github/scripts/installed_suite_verdict.py \
             --junit "$RUNNER_TEMP/installed-suite.xml" \
             --root "$RUNNER_TEMP/installed-toolkit" \
-            --min-tests 6000 --min-passed 5300 --max-skips 892
+            --min-tests 6000 --min-passed 5300 --max-skips 899
 
   hook-mutation:
     name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/8)
