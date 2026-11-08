@@ -268,6 +268,15 @@ def take_lock(home: Path, db: str, owner: int) -> list[str]:
     raise SwapRefused("busy", f"could not take {f.lock.name}; retry")
 
 
+def running_build(home: Path, db: str) -> int | None:
+    """The pid of a RUNNING process holding `build-<db>.lock`, or None (no lock, or a stale one the next build takes
+    over). Read-only."""
+    held = _lock_holder(Files(home, db))
+    if held is not None and owner_running(held.get("pid"), held.get("at")):
+        return held.get("pid")
+    return None
+
+
 def release_lock(home: Path, db: str, owner: int) -> bool:
     """Remove the lock only if `owner` holds it. Returns whether it did."""
     f = Files(home, db)
@@ -493,14 +502,12 @@ def _floor_for(where: Path) -> tuple[int, str]:
     return floor, rule
 
 
-def prepare(bx, home: Path, db: str, *, free_bytes: int | None = None, floor_bytes: int | None = None) -> list[str]:
-    """Run before a build reads anything: recover, check disk, clear a leftover receipted <db>__next."""
+def disk_shortfall(bx, home: Path, db: str, *, free_bytes: int | None = None,
+                   floor_bytes: int | None = None) -> str | None:
+    """Why a build of `db` would not fit beside the previous generation, or None. READ-ONLY: no recovery, no drop, no
+    BaseX command (sizes are read from the files), so an unattended caller can ask before starting a build. `prepare`
+    refuses on exactly this answer."""
     f = Files(home, db)
-    lines = recover(bx, home, db)
-    if bx.exists(f.next) and not _receipted(f, f.next):
-        raise SwapRefused("unknown", f"a database named {f.next} exists without this tool's receipt "
-                                     f"({f.receipt(f.next).name}); it is kept and nothing was built. Drop it by "
-                                     "hand once you know what it is")
     if bx.exists(db):
         size, basis = bx.size_bytes(db), f"the size of the current {db}"
     else:
@@ -517,12 +524,25 @@ def prepare(bx, home: Path, db: str, *, free_bytes: int | None = None, floor_byt
     # the leftover next generation is about to be dropped, so its space counts as free
     reclaim = bx.size_bytes(f.next) if bx.exists(f.next) else 0
     if free_bytes + reclaim - need < floor_bytes:
-        raise SwapRefused("disk", (
-            f"not enough disk to build {db} beside the previous one: {free_bytes / GIB:.1f} GiB free on {where}, "
-            f"the new generation needs about {need / GIB:.1f} GiB ({basis}, plus {STAGING_BYTES / GIB:.0f} GiB of "
-            f"staging), and {floor_bytes / GIB:.1f} GiB must stay free ({rule}). Nothing was dropped or built; the "
-            f"previous {db} stays in place. Free space (or move BaseX's DBPATH) and rebuild. There is no drop-first "
-            f"fallback on purpose: it is what left the databases MISSING"))
+        return (f"not enough disk to build {db} beside the previous one: {free_bytes / GIB:.1f} GiB free on {where}, "
+                f"the new generation needs about {need / GIB:.1f} GiB ({basis}, plus {STAGING_BYTES / GIB:.0f} GiB of "
+                f"staging), and {floor_bytes / GIB:.1f} GiB must stay free ({rule}). Nothing was dropped or built; the "
+                f"previous {db} stays in place. Free space (or move BaseX's DBPATH) and rebuild. There is no drop-first "
+                f"fallback on purpose: it is what left the databases MISSING")
+    return None
+
+
+def prepare(bx, home: Path, db: str, *, free_bytes: int | None = None, floor_bytes: int | None = None) -> list[str]:
+    """Run before a build reads anything: recover, check disk, clear a leftover receipted <db>__next."""
+    f = Files(home, db)
+    lines = recover(bx, home, db)
+    if bx.exists(f.next) and not _receipted(f, f.next):
+        raise SwapRefused("unknown", f"a database named {f.next} exists without this tool's receipt "
+                                     f"({f.receipt(f.next).name}); it is kept and nothing was built. Drop it by "
+                                     "hand once you know what it is")
+    short = disk_shortfall(bx, home, db, free_bytes=free_bytes, floor_bytes=floor_bytes)
+    if short:
+        raise SwapRefused("disk", short)
     if bx.exists(f.next):
         ok, msg = bx.drop(f.next)
         if not ok or bx.exists(f.next):

@@ -25,13 +25,23 @@ rebuild defers while a mutation gate is editing the engine or engine sources are
 requested artifact is FRESH; 1 a builder failed; 5 nothing failed but one is still not FRESH (deferred, lock
 held, a gate started meanwhile, the world moved during its build, or NOT-BUILT and named with --only).
 
-`rebuild --auto` is what a session start launches in the background. It only rebuilds the effective store
-and the xref index: the BaseX builders are long and hold a second copy of their database until the swap
-(build-then-swap, tools/basex/dbswap.py), so they are never started unattended (reported instead). It also defers while a listed process runs (X4_FRESH_DEFER_WHILE,
-default X4.exe;X4), and it does not retry a build that already failed against the same inputs (reasons and
-the world's digest). It exits 0 unless a builder failed: the note carries the rest, not the exit code. The
-note reads "did not complete" from the start of the run until its outcome replaces it, and it is empty only
-when everything this machine can build is FRESH and complete (a NOT-BUILT artifact is named in one note).
+`rebuild --auto` is what a session start launches in the background. It rebuilds the effective store and the
+xref index itself. It defers while a listed process runs (X4_FRESH_DEFER_WHILE, default X4.exe;X4), and it does
+not retry a build that already failed against the same inputs (reasons and the world's digest). It exits 0
+unless a builder failed: the note carries the rest, not the exit code. The note reads "did not complete" from
+the start of the run until its outcome replaces it, and it is empty only when everything this machine can build
+is FRESH and complete (a NOT-BUILT artifact is named in one note).
+
+The BaseX databases (x4raw, then x4eff) take about half an hour and hold a second copy until the swap
+(tools/basex/dbswap.py), so --auto never builds them itself: it starts ONE detached background builder at
+below-normal priority and returns. It does so only when all of these hold, else the note says which did not:
+the game is not running; the installed world (the freshness digest) has been unchanged for
+X4_FRESH_BASEX_QUIET_MIN minutes (default 30; measured from the first time an --auto run saw this digest, and a
+builder started earlier waits out the rest); the disk fits the second copy (dbswap's own check, read-only); no
+build of that database is running; BaseX and Java are here; the database was built here before (a database
+never built is never started automatically: build it once by hand); the same inputs did not already fail; and,
+for x4eff, the effective store is FRESH. The builder takes the build lock, so `status` reads REBUILDING, and its
+outcome replaces the session note; `status` also prints the last automatic BaseX rebuild's state.
 
 Optional environment:
     X4_JOB_WRAPPER        JSON list prefixed to every builder command; "{name}" becomes x4fresh-<artifact>
@@ -39,7 +49,9 @@ Optional environment:
                           by "<program>: " at the start of a line, for its first word and any script it names.
     X4_FRESH_DEFER_WHILE  ';'-separated process names that defer --auto (default: X4.exe)
     X4_FRESH_AUTO=off     --auto does nothing
-    X4_BASH               bash used for the BaseX builders (default: bash on PATH)
+    X4_FRESH_BASEX_AUTO=off   --auto never starts the background BaseX builder
+    X4_FRESH_BASEX_QUIET_MIN  minutes the mods must be unchanged before it does (default 30)
+    X4_BASH              bash used for the BaseX builders (default: bash on PATH)
 """
 from __future__ import annotations
 
@@ -64,6 +76,11 @@ TOOLKIT_ROOT = PKG_ROOT.parent.parent                       # repo root
 BASEX_ROOT = PKG_ROOT.parent / "basex"                      # tools/basex
 ORDER = ("effective", "xref", "x4raw", "x4eff")
 AUTO_SET = ("effective", "xref")
+BASEX = ("x4raw", "x4eff")                 # order matters: x4eff is built after x4raw, and after the effective store
+BASEX_AUTO_LOCK = "basex-auto.lock"        # held for the whole life of the ONE background BaseX builder
+BASEX_QUIET_MIN = 30
+BASEX_MAX_WAIT = 6 * 3600                  # a builder whose world never goes quiet gives up after this
+BASEX_LOCK_WAIT = 15 * 60                  # how long the builder waits for x4fresh.lock (another session's build)
 NOT_BUILT = "NOT-BUILT"
 STATES = ("FRESH", "STALE", "UNKNOWN", "MISSING", "REBUILDING", NOT_BUILT)
 # Holds the session note from the start of an --auto run until its outcome replaces it, so a run that dies
@@ -719,15 +736,19 @@ def rebuild(only=ORDER, auto: bool = False, note: Path | None = None, named: boo
     # env-ok: the session-start opt-out switch, not a configured location
     if auto and os.environ.get("X4_FRESH_AUTO", "").lower() == "off":
         return 0
+    note = (note or sd / "session-note.txt").resolve()
     lock = BuildLock(sd / "x4fresh.lock")
     if not lock.acquire():
         print("x4fresh: a rebuild is already running (lock held); nothing started")
+        if auto:
+            # The background BaseX builder holds the lock for half an hour: without this the launcher's "did not
+            # complete ... or it died" stood in the note for every session start meanwhile.
+            _write_note(note, _running_note(sd))
         return 0 if auto else 5
     try:
         targets = [n for n in only if not auto or n in AUTO_SET]
         # Tells a concurrent `status` which artifacts are actually in play (review finding 7).
         _write_note(sd / "rebuilding.json", json.dumps({"targets": targets, "auto": auto, "pid": os.getpid()}))
-        note = (note or sd / "session-note.txt").resolve()
         if auto:
             _write_note(note, NOTE_PENDING)
         return _rebuild_locked(sd, targets, auto, note, named=named)
@@ -753,9 +774,20 @@ def _note_not_built_once(sd: Path, final: list[Status]) -> list[str]:
     return [n for n in now if isinstance(told, list) and n in told]
 
 
-def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = False) -> int:
+def _memo_key(s: Status, world: str | None) -> str:
+    # The reasons alone are not "the same inputs": MISSING and UNKNOWN carry no digest, so a mod could
+    # change and the same words would suppress the retry forever (review T10).
+    return " | ".join(s.reasons) + f" @ {world}"
+
+
+def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = False,
+                    basex_child: bool = False) -> int:
+    """`basex_child`: this is the detached background BaseX builder; every database is checked again just before
+    its build (the game, the quiet period, the disk, locks, the effective store), and its outcome is recorded."""
     before = {s.name: s for s in status(ORDER, holding_lock=True)}
     lines, failed, unclean = [], False, False
+    skips: dict[str, str] = {}
+    ran: list[str] = []
     why = _deferred(auto)
     if why:
         lines.append(f"DEFERRED, nothing rebuilt: {why}")
@@ -769,10 +801,15 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
             if named:
                 lines.append(f"{name}: NOT BUILT: nothing started; {s.reasons[0] if s.reasons else ''}")
             continue
+        if basex_child:
+            not_now = _basex_ready(sd, name, memo)
+            if not_now:
+                skips[name] = not_now
+                continue
+            _basex_record(sd, "running", building=name)
+            ran.append(name)
         world_before = _world_digest()
-        # The reasons alone are not "the same inputs": MISSING and UNKNOWN carry no digest, so a mod could
-        # change and the same words would suppress the retry forever (review T10).
-        key = " | ".join(s.reasons) + f" @ {world_before}"
+        key = _memo_key(s, world_before)
         if auto and memo.get(name, {}).get("reasons") == key:
             what = ("against these same inputs" if world_before is not None
                     else "and its inputs could not be compared since")
@@ -845,11 +882,13 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
     os.replace(memo_tmp, _memo_path(sd))
     final = status(ORDER, holding_lock=True)
     left = [s for s in final if s.state not in ("FRESH", NOT_BUILT)]
-    if auto:
-        skipped = [s.name for s in left if s.name not in AUTO_SET]
-        if skipped:
-            lines.append(f"not rebuilt unattended (long builds that hold a second copy of the database): "
-                         f"{', '.join(skipped)} -- run `x4fresh rebuild --only {' '.join(skipped)}`")
+    if basex_child:
+        lines.extend(_skip_lines(skips))
+        outcome = "failed" if failed else ("finished" if ran else "skipped")
+        detail = [ln for ln in lines if ln.startswith(BASEX) or ln.startswith("DEFERRED")]
+        _basex_record(sd, outcome, detail="; ".join(detail)[:600] or "nothing to rebuild")
+    elif auto and not why:
+        lines.extend(_basex_session_plan(sd, {s.name: s for s in final}, memo, note))
     head = render(final).splitlines()[0]
     report = "\n".join([head] + lines + render(final).splitlines()[1:])
     print(report)
@@ -868,6 +907,299 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
         return 1
     still = [s for s in final if s.name in targets and s.state != "FRESH" and (named or s.state != NOT_BUILT)]
     return 5 if still else 0
+
+
+# --------------------------------------------------------------------------- the automatic BaseX rebuild (4.1.1)
+
+def _now() -> float:
+    return time.time()
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _stamp(t: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(t))
+
+
+def _switch_off(var: str) -> bool:
+    # env-ok: a per-machine runtime switch, not a configured location
+    return os.environ.get(var, "").strip().lower() == "off"
+
+
+def _basex_quiet_seconds() -> tuple[float | None, str | None]:
+    """(seconds, None), or (None, why): an unreadable setting is a non-answer, never a guessed default."""
+    # env-ok: a per-machine runtime switch (minutes), not a configured location
+    raw = os.environ.get("X4_FRESH_BASEX_QUIET_MIN", "").strip()
+    if not raw:
+        return BASEX_QUIET_MIN * 60.0, None
+    try:
+        minutes = float(raw)
+        if not minutes >= 0 or minutes == float("inf"):
+            raise ValueError(raw)
+    except ValueError:
+        return None, f"X4_FRESH_BASEX_QUIET_MIN={raw!r} is not a number of minutes, so the quiet period is unknown"
+    return minutes * 60.0, None
+
+
+def _first_seen(sd: Path, digest: str, now: float) -> float:
+    """When an x4fresh run first saw the installed world with this digest. Measured on the digest itself (both freshness
+    axes), not on file times: a removed mod or an engine change moves it too, and nothing outside what freshness
+    covers can. It errs late, never early: a change is first seen at the next session start, not when it was made."""
+    p = sd / "world-seen.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = None  # silent-ok: nothing remembered starts the quiet period now, the waiting direction
+    if isinstance(data, dict) and data.get("digest") == digest and isinstance(data.get("first_seen"), (int, float)) \
+            and data["first_seen"] <= now:
+        return float(data["first_seen"])
+    _write_note(p, json.dumps({"digest": digest, "first_seen": now}))
+    return now
+
+
+_DBSWAP = None
+
+
+def _load_dbswap():
+    """tools/basex/dbswap.py, loaded by file (it is not in this package)."""
+    global _DBSWAP
+    if _DBSWAP is None or Path(_DBSWAP.__file__).resolve() != (BASEX_ROOT / "dbswap.py").resolve():
+        spec = importlib.util.spec_from_file_location("x4fresh_dbswap", BASEX_ROOT / "dbswap.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        _DBSWAP = mod
+    return _DBSWAP
+
+
+def _basex_previously_built(db: str) -> bool:
+    """Built here before: a coverage report, or the database (or the previous generation of an interrupted swap)."""
+    home = BASEX_ROOT / "basex"
+    if (home / f"coverage-{db}.json").is_file():
+        return True
+    bx = _load_dbswap().BaseXRunner(home)
+    return bx.exists(db) or bx.exists(db + "__old")
+
+
+def _basex_running_build(db: str) -> int | None:
+    return _load_dbswap().running_build(BASEX_ROOT / "basex", db)
+
+
+def _basex_disk_shortfall(db: str) -> str | None:
+    mod = _load_dbswap()
+    home = BASEX_ROOT / "basex"
+    return mod.disk_shortfall(mod.BaseXRunner(home), home, db)
+
+
+def _basex_blocker(db: str, statuses: dict, memo: dict, world: str | None) -> str | None:
+    """Why `db` must not be rebuilt automatically now, or None. Cheap checks first; a check that cannot run blocks."""
+    try:
+        if not _basex_previously_built(db):
+            return (f"never built here; an automatic rebuild only refreshes a database built once before "
+                    f"(`x4fresh rebuild --only {db}`)")
+        if db == "x4eff" and statuses["effective"].state != "FRESH":
+            return (f"the effective store is {statuses['effective'].state}, and x4eff is built from the same merge, "
+                    "so it waits for a FRESH store")
+        m = memo.get(db, {})
+        if m.get("reasons") == _memo_key(statuses[db], world):
+            return (f"not retried: it did not end FRESH against these same inputs at {m.get('when')} (rc {m.get('rc')}); "
+                    f"run `x4fresh rebuild --only {db}` by hand after fixing the cause")
+        pid = _basex_running_build(db)
+        if pid:
+            return f"a build of {db} is already running (pid {pid})"
+        why = _basex_unbuildable()
+        if why:
+            return f"BaseX cannot build here now: {why}"
+        return _basex_disk_shortfall(db)
+    except Exception as exc:  # noqa: BLE001 -- said in the note; an unchecked condition never starts a build
+        return f"its conditions could not be checked ({type(exc).__name__}: {exc})"
+
+
+def _quiet_left(sd: Path) -> tuple[float | None, str | None, float]:
+    """(seconds still to wait, why not measurable, quiet seconds)."""
+    quiet, err = _basex_quiet_seconds()
+    if err:
+        return None, err, 0.0
+    world = _world_digest()
+    if world is None:
+        return None, "the installed world's digest cannot be established, so the quiet period cannot be measured", quiet
+    now = _now()
+    return max(0.0, quiet - (now - _first_seen(sd, world, now))), None, quiet
+
+
+def _skip_lines(skips: dict[str, str]) -> list[str]:
+    by_reason: dict[str, list[str]] = {}
+    for db, why in skips.items():
+        by_reason.setdefault(why, []).append(db)
+    return [f"{', '.join(dbs)}: not rebuilt automatically: {why}" for why, dbs in by_reason.items()]
+
+
+def _basex_record(sd: Path, state: str, **fields) -> None:
+    """basex-auto.json: what the automatic BaseX rebuild is doing or last did. `status` and the note read it."""
+    _write_note(sd / "basex-auto.json", json.dumps(dict({"state": state, "pid": os.getpid(), "when": _stamp(_now())},
+                                                        **fields)))
+
+
+def _basex_auto_line(sd: Path | None) -> str | None:
+    if sd is None:
+        return None
+    try:
+        rec = json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None  # silent-ok: no automatic BaseX rebuild has been recorded here
+    if not isinstance(rec, dict):
+        return None
+    state, when, pid = rec.get("state"), rec.get("when", "?"), rec.get("pid", "?")
+    if state in ("waiting", "running"):
+        if BuildLock(sd / BASEX_AUTO_LOCK).held_elsewhere():
+            if state == "waiting":
+                return (f"automatic BaseX rebuild: waiting since {when} for the mods to stay unchanged "
+                        f"(until about {rec.get('until', '?')}; pid {pid})")
+            return (f"automatic BaseX rebuild: running since {when} (pid {pid}"
+                    + (f", building {rec['building']}" if rec.get("building") else "") + ")")
+        return (f"automatic BaseX rebuild: started {when} (pid {pid}) and ended without reporting (killed, or the "
+                "machine stopped); the next session start schedules it again")
+    return f"last automatic BaseX rebuild: {state} {when}: {rec.get('detail', '')}"
+
+
+def _running_note(sd: Path) -> str:
+    targets = _rebuilding_targets(sd)
+    what = f" ({', '.join(n for n in ORDER if n in targets)})" if targets else ""
+    line = _basex_auto_line(sd)
+    return (f"x4fresh: a rebuild is running{what}, so this session start rebuilt nothing; its outcome replaces this "
+            "note. `x4fresh status` says where it is.\n" + (line + "\n" if line else ""))
+
+
+def _basex_session_plan(sd: Path, final: dict, memo: dict, note: Path) -> list[str]:
+    """At the end of a session-start --auto run: start the background BaseX builder, or say in one line per reason why
+    not. Never builds here (the session-start run must stay short)."""
+    cands = [db for db in BASEX if final[db].state not in ("FRESH", NOT_BUILT)]
+    if not cands:
+        return []
+    skips: dict[str, str] = {}
+    left, err, quiet = None, None, 0.0
+    if _switch_off("X4_FRESH_BASEX_AUTO"):
+        err = "X4_FRESH_BASEX_AUTO=off"
+    elif BuildLock(sd / BASEX_AUTO_LOCK).held_elsewhere():
+        return [f"{', '.join(cands)}: not rebuilt automatically: an automatic BaseX rebuild is already scheduled or "
+                "running (`x4fresh status`)"]
+    else:
+        left, err, quiet = _quiet_left(sd)
+    if err:
+        skips = {db: err for db in cands}
+    else:
+        world = _world_digest()
+        for db in cands:
+            why = _basex_blocker(db, final, memo, world)
+            if why:
+                skips[db] = why
+    lines = _skip_lines(skips)
+    build = [db for db in cands if db not in skips]
+    if not build:
+        _basex_record(sd, "skipped", detail="; ".join(lines))
+        return lines
+    try:
+        pid = _spawn_basex(note)
+    except (OSError, ValueError) as exc:
+        msg = f"{', '.join(build)}: the automatic rebuild could not start ({type(exc).__name__}: {exc})"
+        _basex_record(sd, "failed", detail=msg)
+        return lines + [msg]
+    wait = (f"; it waits until the mods have been unchanged for {quiet / 60:g} min (about "
+            f"{time.strftime('%H:%M', time.localtime(_now() + left))})" if left else "")
+    return lines + [f"{', '.join(build)}: automatic rebuild started in the background (pid {pid}){wait}; "
+                    "its outcome replaces this note"]
+
+
+def _basex_ready(sd: Path, db: str, memo: dict) -> str | None:
+    """In the background builder, just before `db`: everything again, since half an hour may have passed."""
+    why = _deferred(True)
+    if why:
+        return why
+    left, err, _quiet = _quiet_left(sd)
+    if err:
+        return err
+    if left:
+        return "the mods changed again after the quiet period started; the next session start schedules it again"
+    statuses = {"effective": check("effective"), db: check(db)}
+    return _basex_blocker(db, statuses, memo, _world_digest())
+
+
+def _basex_child_argv(note: Path) -> list[str]:
+    return [sys.executable, "-m", "x4validate._freshcli", "rebuild", "--auto-basex", "--note", str(note)]
+
+
+def _spawn_basex(note: Path) -> int:
+    """Start the background BaseX builder DETACHED and return its pid at once: its own process group, no console, below-
+    normal priority (inherited by the builders it starts), no handle on our pipes, so it outlives the session-start
+    run. MEASURED 2026-11-07 (n=1 each): such a child, with and without breakaway, outlived `uv run`'s exit."""
+    argv = _basex_child_argv(note)
+    common = {"cwd": str(PKG_ROOT), "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+              "stderr": subprocess.DEVNULL, "close_fds": True}
+    if os.name == "nt":
+        base = 0x00000008 | 0x00000200 | 0x00004000   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL
+        try:
+            proc = subprocess.Popen(argv, creationflags=base | 0x01000000, **common)   # CREATE_BREAKAWAY_FROM_JOB
+        except OSError:
+            proc = subprocess.Popen(argv, creationflags=base, **common)    # the job forbids breakaway
+    else:
+        proc = subprocess.Popen(argv, start_new_session=True, preexec_fn=lambda: os.nice(10), **common)
+    proc.returncode = 0   # never waited for, on purpose: keeps Popen.__del__ from warning about a running child
+    return proc.pid
+
+
+def _basex_child(note: Path) -> int:
+    """The background builder: one at a time (basex-auto.lock, held for its whole life), waits out the quiet period,
+    takes the build lock, then x4raw and x4eff with every condition checked again; the outcome goes to the note and
+    to basex-auto.json."""
+    sd = state_dir()
+    if sd is None:
+        return 2
+    if _switch_off("X4_FRESH_AUTO") or _switch_off("X4_FRESH_BASEX_AUTO"):
+        return 0
+    note = Path(note).resolve()
+    alock = BuildLock(sd / BASEX_AUTO_LOCK)
+    if not alock.acquire():
+        return 0      # another background builder: it owns the outcome
+    try:
+        try:
+            return _basex_child_locked(sd, note)
+        except Exception as exc:  # noqa: BLE001 -- nobody reads this process's output: the record is the report
+            _basex_record(sd, "failed", detail=f"the background builder crashed ({type(exc).__name__}: {exc})")
+            return 1
+    finally:
+        alock.release()
+
+
+def _basex_child_locked(sd: Path, note: Path) -> int:
+    start = _now()
+    while True:
+        left, err, _quiet = _quiet_left(sd)
+        if err or not left:
+            break     # an unmeasurable quiet period is said per database by _basex_ready
+        if _now() - start > BASEX_MAX_WAIT:
+            _basex_record(sd, "skipped", detail=f"the mods kept changing for {BASEX_MAX_WAIT // 3600} hours; the "
+                                                "next session start schedules it again")
+            return 0
+        _basex_record(sd, "waiting", until=time.strftime("%H:%M", time.localtime(_now() + left)))
+        _sleep(min(60.0, left))
+    lock = BuildLock(sd / "x4fresh.lock")
+    asked = _now()
+    while not lock.acquire():
+        if _now() - asked > BASEX_LOCK_WAIT:
+            _basex_record(sd, "skipped", detail=f"another rebuild held the x4fresh lock for {BASEX_LOCK_WAIT // 60} "
+                                                "min; the next session start schedules it again")
+            return 0
+        _sleep(5.0)
+    try:
+        _write_note(sd / "rebuilding.json", json.dumps({"targets": list(BASEX), "auto": True, "pid": os.getpid()}))
+        _basex_record(sd, "running")
+        return _rebuild_locked(sd, list(BASEX), True, note, basex_child=True)
+    finally:
+        with contextlib.suppress(OSError):
+            (sd / "rebuilding.json").unlink()
+        lock.release()
 
 
 def _prune_logs(logs: Path, keep: int = 5) -> None:
@@ -901,8 +1233,11 @@ def main(argv: list[str] | None = None) -> int:
                                         "builder failed")
     pr.add_argument("--only", nargs="+", choices=ORDER, default=None, help=ONLY_HELP)
     pr.add_argument("--auto", action="store_true",
-                    help="unattended mode (session start): effective + xref only, defers while a "
-                         "listed process runs, never retries the same failure")
+                    help="unattended mode (session start): rebuilds effective + xref, then starts ONE background "
+                         "BaseX builder once the game is closed and the mods have been unchanged for "
+                         "X4_FRESH_BASEX_QUIET_MIN minutes (default 30; X4_FRESH_BASEX_AUTO=off stops it); defers "
+                         "while a listed process runs, never retries the same failure")
+    pr.add_argument("--auto-basex", action="store_true", help=argparse.SUPPRESS)   # the background builder itself
     pr.add_argument("--note", type=Path,
                     help="with --auto: write the outcome here for the next session start to print "
                          "(reads 'did not complete' until the run reports; empty only when everything this "
@@ -921,11 +1256,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         results = status(only)
         print(render(results))
+        line = _basex_auto_line(state_dir())
+        if line and any(n in BASEX for n in only):
+            print(line)
         if not all(s.state == "FRESH" or (s.state == NOT_BUILT and not named) for s in results):
             return 5
         return 3 if _unaccepted(results) else 0
     if args.cmd == "accept":
         return accept(only)
+    if args.auto_basex:
+        return _basex_child(args.note or state_dir() / "session-note.txt")
     return rebuild(only, auto=args.auto, note=args.note, named=named)
 
 

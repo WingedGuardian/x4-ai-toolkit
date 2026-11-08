@@ -136,8 +136,15 @@ artifact FRESH, 1 a builder failed, 5 something still not FRESH (deferred, lock 
 A rebuild defers while a mutation gate is editing the engine or its sources have uncommitted changes, and a build
 that dropped input ends `BUILT WITH N DROPS`, never `fresh`.
 
-`rebuild --auto` is what a session start launches in the background (Claude Code and Codex hooks). It rebuilds only
-`effective` and `xref`, defers while a listed process runs, does not retry a build that failed against the same
+`rebuild --auto` is what a session start launches in the background (Claude Code and Codex hooks). It rebuilds
+`effective` and `xref` itself, then hands `x4raw` and `x4eff` (about half an hour) to one background builder at
+below-normal priority. That builder starts only when the game is closed, the installed mods have been unchanged for
+30 minutes (`X4_FRESH_BASEX_QUIET_MIN`; counted from the first session start that saw them), the disk has room for
+the second copy a build-then-swap holds, no build of that database is running, BaseX and Java are present, and the
+database was built here once before (a database you never built is never started automatically); `x4eff` also
+waits for a FRESH effective store. Each condition that stops it is named in one line of the note, and
+`x4fresh status` says whether the background build is waiting, running, finished, skipped or failed. It defers
+while a listed process runs, does not retry a build that failed against the same
 inputs, and always writes its outcome to a note the next session start prints; the note reads `did not complete`
 until the run reports and is empty only when everything this machine can build is FRESH and complete. Environment
 switches (set in the environment you launch the agent from; `x4-paths.env.example` lists them):
@@ -146,6 +153,8 @@ switches (set in the environment you launch the agent from; `x4-paths.env.exampl
 |---|---|
 | `X4_FRESH_AUTO=off` | the session-start launch does nothing |
 | `X4_HOUSEKEEP_SWEEP=off` | stops the temp sweep and this launch |
+| `X4_FRESH_BASEX_AUTO=off` | never start the background BaseX rebuild |
+| `X4_FRESH_BASEX_QUIET_MIN` | minutes the mods must be unchanged before it starts (default 30) |
 | `X4_FRESH_DEFER_WHILE` | `;`-separated process names that defer `--auto` (default `X4.exe;X4`) |
 | `X4_JOB_WRAPPER` | JSON list put in front of every builder command; `{name}` becomes `x4fresh-<artifact>` |
 | `X4_BASH` | the bash used for the BaseX builders (default: bash on `PATH`) |

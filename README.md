@@ -129,8 +129,10 @@ build could not include; `x4fresh rebuild` rebuilds what is not FRESH, one build
 records the losses you understand so the note stops repeating them (a changed set speaks again).
 
 At every session start (Claude Code and Codex; OpenCode has no session-start hook) the hook prints the
-previous run's note and starts `x4fresh rebuild --auto` in the background. That run rebuilds only the effective
-store and the xref index (BaseX is never rebuilt unattended), waits while the game runs, and writes a note that
+previous run's note and starts `x4fresh rebuild --auto` in the background. That run rebuilds the effective
+store and the xref index, and refreshes the BaseX databases in the background once the game is closed and your mods
+have been unchanged for 30 minutes (only a database you built once before; `X4_FRESH_BASEX_AUTO=off` stops it,
+`X4_FRESH_BASEX_QUIET_MIN` changes the wait). It waits while the game runs, and writes a note that
 is empty only when everything this machine can build is fresh and complete. To stop it, set `X4_FRESH_AUTO=off`
 in the environment you start the agent from (`X4_HOUSEKEEP_SWEEP=off` stops it as well, with the temp sweep).
 `X4_FRESH_DEFER_WHILE` (default `X4.exe;X4`) names the processes it waits for and `X4_JOB_WRAPPER` puts a
