@@ -12129,6 +12129,11 @@ component because the component it means is redefined by a dependency the Tier A
 **RE-DERIVED BY:** `tools/x4validate/tests/test_fit_compat.py` (one falsification twin per clause; the quiet shapes,
 unreadable component and unresolvable equipment, are skips, never findings).
 
+RUNTIME EVIDENCE for the tag clause (2026-11-08, read-only save census, KNOWLEDGEBASE.md § Engine-does-not-install-preset-weapons):
+in a real 9.0 save, XUP lc4 destroyers whose preset weapons fail the rule carry 0 weapons on 10 of 10 ships, while the
+same mod's compatible destroyers carry 2 on 11 of 11. MEASURED for weapons; engines and shields INFERRED by the same
+slot-tag mechanism. This is the evidence promotion to `warn` would rest on; it stays INFO until a second ship class confirms.
+
 ## F364 - A missing base `index/*.xml` registered nothing and said nothing · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
 
 `_resolve.build_index` read the reference and DLC indexes, and when `_read_source` returned None for a file that was
