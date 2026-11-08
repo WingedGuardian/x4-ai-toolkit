@@ -81,6 +81,7 @@ BASEX_AUTO_LOCK = "basex-auto.lock"        # held for the whole life of the ONE 
 BASEX_QUIET_MIN = 30
 BASEX_MAX_WAIT = 6 * 3600                  # a builder whose world never goes quiet gives up after this
 BASEX_LOCK_WAIT = 15 * 60                  # how long the builder waits for x4fresh.lock (another session's build)
+BASEX_ALOCK_TRIES = 10                     # x 0.5 s: outlasts a probe of basex-auto.lock, never a real holder
 NOT_BUILT = "NOT-BUILT"
 STATES = ("FRESH", "STALE", "UNKNOWN", "MISSING", "REBUILDING", NOT_BUILT)
 # Holds the session note from the start of an --auto run until its outcome replaces it, so a run that dies
@@ -1216,13 +1217,22 @@ def _basex_child(note: Path) -> int:
     sd = state_dir()
     if sd is None:
         return 2
-    if _switch_off("X4_FRESH_AUTO") or _switch_off("X4_FRESH_BASEX_AUTO"):
-        return 0
     note = Path(note).resolve()
     alock = BuildLock(sd / BASEX_AUTO_LOCK)
-    if not alock.acquire():
-        return 0      # another background builder: it owns the outcome
+    # `status` and a session start PROBE this lock by taking it for an instant (held_elsewhere): a builder starting in
+    # that instant gave up having built and recorded nothing (4.1.1 review). A probe lets go at once; retry briefly.
+    for _attempt in range(BASEX_ALOCK_TRIES):
+        if alock.acquire():
+            break
+        _sleep(0.5)
+    else:
+        return 0      # another background builder really holds it: it owns the outcome and the record
     try:
+        # After the lock, so a record is only ever written by its holder.
+        off = [v for v in ("X4_FRESH_AUTO", "X4_FRESH_BASEX_AUTO") if _switch_off(v)]
+        if off:
+            _basex_record(sd, "skipped", detail=f"{off[0]}=off: the background builder started and built nothing")
+            return 0
         try:
             return _basex_child_locked(sd, note)
         except Exception as exc:  # noqa: BLE001 -- nobody reads this process's output: the record is the report

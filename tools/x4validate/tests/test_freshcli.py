@@ -1765,6 +1765,51 @@ def test_TWIN_the_off_switch_with_no_builder_running_records_skipped(sd, bxa, mo
     assert _record(sd)["state"] == "skipped" and "X4_FRESH_BASEX_AUTO=off" in _record(sd)["detail"]
 
 
+@pytest.mark.parametrize("var", ["X4_FRESH_AUTO", "X4_FRESH_BASEX_AUTO"])
+def test_each_off_switch_inside_the_background_builder_builds_nothing_and_says_so(sd, bxa, monkeypatch, var):
+    """4.1.1 review: the builder returned 0 with no record at all, so `status` kept whatever an earlier run said."""
+    order = _child_world(monkeypatch)
+    _seen(sd, 60)
+    monkeypatch.setenv(var, "off")
+    assert fc._basex_child(sd / "session-note.txt") == 0
+    assert order == []
+    rec = _record(sd)
+    assert rec["state"] == "skipped" and f"{var}=off" in rec["detail"], rec
+
+
+def test_a_lock_probe_racing_the_builders_start_does_not_stop_it(sd, bxa, monkeypatch):
+    """`status` and a session start PROBE basex-auto.lock by taking it for an instant. A builder starting in that
+    instant returned 0 having built nothing and recorded nothing; it retries briefly instead."""
+    order = _child_world(monkeypatch)
+    _seen(sd, 60)
+    refusals = {"left": 2}
+    real = fc.BuildLock
+
+    class Probed(real):
+        def acquire(self):
+            if self.path.name == fc.BASEX_AUTO_LOCK and refusals["left"]:
+                refusals["left"] -= 1
+                return False
+            return super().acquire()
+    monkeypatch.setattr(fc, "BuildLock", Probed)
+    assert fc._basex_child(sd / "session-note.txt") == 0
+    assert order == ["x4raw", "x4eff"] and _record(sd)["state"] == "finished"
+
+
+def test_TWIN_a_builder_that_really_holds_the_lock_keeps_its_record(sd, bxa, monkeypatch):
+    order = _child_world(monkeypatch)
+    _seen(sd, 60)
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "basex-auto.json").write_text(json.dumps({"state": "running", "pid": 1, "when": "then"}), encoding="utf-8")
+    held = fc.BuildLock(sd / fc.BASEX_AUTO_LOCK)
+    assert held.acquire()
+    try:
+        assert fc._basex_child(sd / "session-note.txt") == 0
+    finally:
+        held.release()
+    assert order == [] and _record(sd)["state"] == "running"
+
+
 def test_TWIN_posix_starts_a_new_session_and_no_windows_flags(monkeypatch, tmp_path):
     spy = _PopenSpy()
     monkeypatch.setattr(fc.subprocess, "Popen", spy)
