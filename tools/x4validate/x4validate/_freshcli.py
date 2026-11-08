@@ -41,7 +41,10 @@ builder started earlier waits out the rest); the disk fits the second copy (dbsw
 build of that database is running; BaseX and Java are here; the database was built here before (a database
 never built is never started automatically: build it once by hand); the same inputs did not already fail; and,
 for x4eff, the effective store is FRESH. The builder takes the build lock, so `status` reads REBUILDING, and its
-outcome replaces the session note; `status` also prints the last automatic BaseX rebuild's state.
+outcome replaces the session note of the workspace that started it; `status` also prints the last automatic BaseX
+rebuild's state. It holds the build lock for BOTH databases (about half an hour): builders never run two at a time,
+and x4eff must read an effective store nobody is replacing. Meanwhile a session start rebuilds nothing (its note
+says a rebuild is running) and `rebuild` by hand exits 5, "already running".
 
 Optional environment:
     X4_JOB_WRAPPER        JSON list prefixed to every builder command; "{name}" becomes x4fresh-<artifact>
@@ -926,7 +929,9 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
     if auto:
         # ANY outcome other than a clean rebuild reaches the next session start -- a drop or a warning
         # included (review finding 2: those went only to stdout, which the launcher discards).
-        told = _note_not_built_once(sd, final)
+        # The background builder overwrites a note a session start wrote earlier, maybe naming a NOT-BUILT database for
+        # the first time and before anyone printed it: it names every NOT-BUILT row and leaves the record alone.
+        told = [] if basex_child else _note_not_built_once(sd, final)
         shown = [s for s in final if s.name not in told]
         noteworthy = left or failed or unclean or _unaccepted(final) or \
             any("DEFERRED" in ln or "NOT RETRIED" in ln for ln in lines) or \
@@ -1305,7 +1310,8 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--auto", action="store_true",
                     help="unattended mode (session start): rebuilds effective + xref, then starts ONE background "
                          "BaseX builder once the game is closed and the mods have been unchanged for "
-                         "X4_FRESH_BASEX_QUIET_MIN minutes (default 30; X4_FRESH_BASEX_AUTO=off stops it); defers "
+                         "X4_FRESH_BASEX_QUIET_MIN minutes (default 30; X4_FRESH_BASEX_AUTO=off stops it); that "
+                         "builder holds the build lock while it builds, so other rebuilds exit 5 meanwhile; defers "
                          "while a listed process runs, never retries the same failure")
     pr.add_argument("--auto-basex", action="store_true", help=argparse.SUPPRESS)   # the background builder itself
     pr.add_argument("--note", type=Path,

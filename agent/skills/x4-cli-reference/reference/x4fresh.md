@@ -46,8 +46,12 @@ options:
   -h, --help            show this help message and exit
   --only {effective,xref,x4raw,x4eff} [{effective,xref,x4raw,x4eff} ...]
                         limit to these artifacts (default: all of effective, xref, x4raw, x4eff)
-  --auto                unattended mode (session start): effective + xref only, defers while a
-                        listed process runs, never retries the same failure
+  --auto                unattended mode (session start): rebuilds effective + xref, then starts
+                        ONE background BaseX builder once the game is closed and the mods have
+                        been unchanged for X4_FRESH_BASEX_QUIET_MIN minutes (default 30;
+                        X4_FRESH_BASEX_AUTO=off stops it); that builder holds the build lock while
+                        it builds, so other rebuilds exit 5 meanwhile; defers while a listed
+                        process runs, never retries the same failure
   --note NOTE           with --auto: write the outcome here for the next session start to print
                         (reads 'did not complete' until the run reports; empty only when
                         everything this machine can build is fresh); default

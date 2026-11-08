@@ -1810,6 +1810,23 @@ def test_TWIN_a_builder_that_really_holds_the_lock_keeps_its_record(sd, bxa, mon
     assert order == [] and _record(sd)["state"] == "running"
 
 
+def test_the_background_builder_never_hides_a_not_built_notice_it_overwrites(sd, bxa, monkeypatch):
+    """The background builder writes the same note a session start wrote, half an hour later. That session start may
+    have named a NOT-BUILT database for the first time (and recorded it as told); the builder's note replaced it, read
+    "told", and left it out, so no session start ever printed it. The builder names NOT-BUILT rows and records
+    nothing about them: that record belongs to the session-start runs."""
+    order = _child_world(monkeypatch)
+    monkeypatch.setitem(fc.CHECKS, "x4eff", lambda: fc._not_built("x4eff", "java is not on PATH."))
+    _seen(sd, 60)
+    sd.mkdir(parents=True, exist_ok=True)
+    fc._write_note(fc._not_built_path(sd), json.dumps(["x4eff"]))
+    fc._basex_child(sd / "session-note.txt")
+    assert order == ["x4raw"]
+    assert "x4eff" in _note(sd) and fc.NOT_BUILT in _note(sd), _note(sd)
+    assert json.loads(fc._not_built_path(sd).read_text(encoding="utf-8")) == ["x4eff"]
+    # Twin: a session-start run still names it only once -- test_the_session_note_names_not_built_once.
+
+
 def test_TWIN_posix_starts_a_new_session_and_no_windows_flags(monkeypatch, tmp_path):
     spy = _PopenSpy()
     monkeypatch.setattr(fc.subprocess, "Popen", spy)
