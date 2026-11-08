@@ -90,30 +90,65 @@ def _java() -> str | None:
                 "you get 'BaseX query failed: [WinError 2]', which blames BaseX for a "
                 "missing JVM.")
     try:
-        out = subprocess.run([exe, "-version"], capture_output=True, text=True,
-                             check=False, timeout=30)
+        blob = _java_banner(exe)
     except (OSError, subprocess.SubprocessError) as exc:
         return f"java was found at {exe} but could not be run ({exc})."
-    # Both spellings occur: `java version "24.0.1"` and `openjdk version "17.0.2"`,
-    # plus the pre-9 form `java version "1.8.0_402"` whose major is the SECOND field.
-    blob = (out.stderr or "") + (out.stdout or "")
-    m = re.search(r'version\s+"(\d+)(?:\.(\d+))?', blob)
-    if not m:
+    major = _java_major(blob)
+    if major is None:
         # Do NOT guess a pass. An unparseable banner is a non-answer, and this
         # module exists so a non-answer cannot read as an answer.
-        first = blob.strip().splitlines()[0] if blob.strip() else "(no output)"
         return (f"java at {exe} printed a version banner this check could not parse:\n"
-                f"    {first}\n"
+                f"    {_first_line(blob)}\n"
                 f"    Refusing to assume it is >= {MIN_JAVA}. Check by hand with "
                 f"`java -version`.")
-    major = int(m.group(1))
-    if major == 1:  # the 1.8 spelling -> 8
-        major = int(m.group(2) or 0)
     if major < MIN_JAVA:
         return (f"java at {exe} is version {major}; BaseX {BASEX_VERSION} needs Java "
                 f"{MIN_JAVA} or newer.\n    Its classes are bytecode major {CLASS_MAJOR}, so an "
                 f"older JVM refuses to load them outright -- you would get "
                 f"UnsupportedClassVersionError, not a slow run.")
+    return None
+
+
+def _java_banner(exe: str) -> str:
+    out = subprocess.run([exe, "-version"], capture_output=True, text=True, check=False, timeout=30)
+    return (out.stderr or "") + (out.stdout or "")
+
+
+def _java_major(blob: str) -> int | None:
+    """The major version a `java -version` banner names, or None when it cannot be parsed.
+    Both spellings occur: `java version "24.0.1"` and `openjdk version "17.0.2"`, plus the
+    pre-9 form `java version "1.8.0_402"` whose major is the SECOND field."""
+    m = re.search(r'version\s+"(\d+)(?:\.(\d+))?', blob)
+    if not m:
+        return None
+    major = int(m.group(1))
+    return int(m.group(2) or 0) if major == 1 else major
+
+
+def _first_line(blob: str) -> str:
+    return blob.strip().splitlines()[0] if blob.strip() else "(no output)"
+
+
+def real_basex_unavailable(jar: Path) -> str | None:
+    """Why the vendored jar cannot be RUN here, as a one-line test skip reason, or None when it can.
+
+    For the tests that start the real jar in a private home: "java is on PATH" is not enough, since
+    BaseX 13.0 refuses to load on Java below MIN_JAVA (4.1.1 review: those tests failed on Java 17-20
+    instead of skipping). The version comes from the same parser the preflight refuses on."""
+    if not Path(jar).is_file():
+        return f"needs the vendored BaseX jar (none at {jar})"
+    exe = shutil.which("java")
+    if exe is None:
+        return f"needs Java {MIN_JAVA}+ (none on PATH)"
+    try:
+        blob = _java_banner(exe)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"needs Java {MIN_JAVA}+ (java could not be run: {type(exc).__name__})"
+    major = _java_major(blob)
+    if major is None:
+        return f"needs Java {MIN_JAVA}+ (version unreadable: {_first_line(blob)})"
+    if major < MIN_JAVA:
+        return f"needs Java {MIN_JAVA}+ (found {major})"
     return None
 
 

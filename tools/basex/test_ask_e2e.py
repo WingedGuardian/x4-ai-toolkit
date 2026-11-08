@@ -3,14 +3,16 @@ from pathlib import Path
 import shutil
 import pytest
 import ask
+import preflight
 import staleness
 
 
 @pytest.fixture(scope='module')
 def basex_home(tmp_path_factory):
     jar = Path(ask.__file__).parent/'basex'/'BaseX.jar'
-    if not jar.is_file() or not shutil.which('java'):
-        pytest.skip('real BaseX query tests require the vendored jar and Java')
+    why = preflight.real_basex_unavailable(jar)
+    if why:
+        pytest.skip(f'real BaseX query tests: {why}')
     home = tmp_path_factory.mktemp('ask-basex')
     shutil.copyfile(jar, home/'BaseX.jar')
     (home/'.basexhome').touch()

@@ -209,10 +209,16 @@ def test_failure_is_reported_and_never_falls_back(tmp_path, monkeypatch, capsys)
 def test_native_database_rebuild_keeps_only_the_current_generation(tmp_path, redirected):
     import shutil
     import subprocess
+    import importlib.util
     java = shutil.which("java")
     jar = a.ARTIFACT_ROOT / "basex/BaseX.jar"
-    if not java or not jar.is_file():
-        pytest.skip("native lifecycle requires the installed Java/BaseX runtime")
+    # The preflight's own version parser: "java is on PATH" also passed Java 17-20, on which BaseX 13.0 cannot load.
+    spec = importlib.util.spec_from_file_location("artifacts_test_preflight", a.ARTIFACT_ROOT / "preflight.py")
+    preflight = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(preflight)
+    why = preflight.real_basex_unavailable(jar)
+    if why:
+        pytest.skip(f"native lifecycle: {why}")
     root = tmp_path / "fixture"
     home = root / "basex"
     home.mkdir(parents=True)

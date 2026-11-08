@@ -286,9 +286,13 @@ def test_a_basex_12_4_jar_is_refused_with_the_cure(tmp_path):
 
 @pytest.mark.parametrize("version", ["13.0.1", "13", "14.0", "12.4"])
 def test_only_the_exact_version_passes(tmp_path, version):
+    """Refused for the RIGHT reason: the version refusal naming what was found, not any other problem."""
     _jar(tmp_path / "BaseX.jar", version)
     (tmp_path / ".basexhome").write_bytes(b"")
-    assert preflight.check(["jar"], basex_dir=tmp_path), version
+    problems = preflight.check(["jar"], basex_dir=tmp_path)
+    assert len(problems) == 1, (version, problems)
+    assert problems[0].startswith(f"BaseX {version} found at "), (version, problems)
+    assert f"needs BaseX {preflight.BASEX_VERSION}" in problems[0], (version, problems)
 
 
 def test_TWIN_the_exact_version_passes(tmp_path):
@@ -313,3 +317,44 @@ def test_a_jar_whose_manifest_names_no_version_refuses(tmp_path):
     (tmp_path / ".basexhome").write_bytes(b"")
     problems = preflight.check(["jar"], basex_dir=tmp_path)
     assert len(problems) == 1 and "names no Implementation-Version" in problems[0], problems
+
+
+# --- the real-jar tests' skip reason (4.1.1 review: they skipped only when java was ABSENT, and failed on Java 17-20)
+
+def _java_banner(monkeypatch, banner):
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: "/usr/bin/java")
+
+    class _Out:
+        stderr = banner
+        stdout = ""
+
+    monkeypatch.setattr(preflight.subprocess, "run", lambda *a, **k: _Out())
+
+
+@pytest.mark.parametrize("banner, found", [('openjdk version "17.0.2" 2022-01-18', "17"),
+                                           ('openjdk version "20.0.2"', "20"),
+                                           ('java version "1.8.0_402"', "8")])
+def test_a_java_below_the_floor_is_a_skip_reason_naming_both_versions(tmp_path, monkeypatch, banner, found):
+    _java_banner(monkeypatch, banner)
+    jar = _jar(tmp_path / "BaseX.jar")
+    assert preflight.real_basex_unavailable(jar) == f"needs Java {preflight.MIN_JAVA}+ (found {found})"
+
+
+@pytest.mark.parametrize("banner", ['openjdk version "21.0.1"', 'java version "24.0.1" 2025-04-15'])
+def test_TWIN_java_at_or_above_the_floor_with_the_jar_is_no_skip(tmp_path, monkeypatch, banner):
+    _java_banner(monkeypatch, banner)
+    assert preflight.real_basex_unavailable(_jar(tmp_path / "BaseX.jar")) is None
+
+
+def test_TWIN_no_jar_and_no_java_are_each_a_skip_reason(tmp_path, monkeypatch):
+    _java_banner(monkeypatch, 'openjdk version "21.0.1"')
+    assert "jar" in preflight.real_basex_unavailable(tmp_path / "BaseX.jar")
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: None)
+    assert preflight.real_basex_unavailable(_jar(tmp_path / "BaseX.jar")) == \
+        f"needs Java {preflight.MIN_JAVA}+ (none on PATH)"
+
+
+def test_TWIN_an_unparseable_banner_is_a_skip_reason_never_a_pass(tmp_path, monkeypatch):
+    _java_banner(monkeypatch, "some vendor JVM")
+    why = preflight.real_basex_unavailable(_jar(tmp_path / "BaseX.jar"))
+    assert why and why.startswith(f"needs Java {preflight.MIN_JAVA}+ (version unreadable"), why
