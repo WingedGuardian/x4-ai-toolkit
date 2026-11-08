@@ -1075,7 +1075,9 @@ class TestHygieneDeniesInBash(_RR):
             if depth == 0:
                 return "echo " + tag
             return " ".join("$(" + build(depth - 1, n, tag + chr(97 + i)) + ")" for i in range(n))
-        return "echo " + build(8, 3)
+        # Depth 6 = 1,093 substitutions, over 4x the walk's _MAX_CARRIED (250), so the bound trips. Depth 8 (9,841)
+        # took 13-16 s idle against the save step's 20 s deadline, and under load that deadline's refusal won instead.
+        return "echo " + build(6, 3)
 
     def test_an_unparseable_bash_command_denies_with_a_reason(self):
         v, r = self.verdict_with("echo 'unterminated", tool="Bash")
