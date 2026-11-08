@@ -34,7 +34,7 @@ This toolkit BUNDLES the following third-party software. Each keeps its own lice
 and those licences are reproduced with the component:
 
   BaseX (tools/basex/basex/BaseX.jar)
-      Copyright (c) 2005-2024 BaseX Team and contributors.
+      Copyright (c) BaseX Team.
       Licensed under the BSD 3-Clause License.
       Full text: tools/basex/basex/LICENSE
 

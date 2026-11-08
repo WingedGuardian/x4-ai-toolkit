@@ -238,7 +238,7 @@ paths, so it is gitignored — expect to generate your own.
 ## Licence
 
 The BaseX engine bundled here (`basex/BaseX.jar`) is **third-party software**:
-Copyright (c) 2005-2024 BaseX Team and contributors, licensed under the
+Copyright (c) BaseX Team, licensed under the
 **BSD 3-Clause License**. Its full licence text ships beside it at
 [`basex/LICENSE`](basex/LICENSE) and must be retained in any redistribution.
 
