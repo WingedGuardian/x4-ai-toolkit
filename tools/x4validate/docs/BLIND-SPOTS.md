@@ -12101,3 +12101,46 @@ compares against the first baseline folder only, because later layers' manifests
 denominator is every stacked run; MEASURED on fixtures only, with no real mods.
 
 **NO RE-DERIVATION: a scope statement; the fixture behaviour is pinned by the x4diff tests, not this sentence.**
+
+## F363 - `check_connections` verified that a loadout port EXISTS, never that the equipment FITS it · **SCOPE LIMIT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-08 as INFO
+
+The connection check answered one question: does the `path` of a loadout leaf name a connection the hull component
+defines. It never asked whether the equipment macro's attachment tags are accepted by that slot, whether a `<groups>`
+entry names a group the component spells the same way, or whether a ship macro's own `<connection ref=X>` exists on
+its component. A 7.x-era mod can pass every existing check and still define hulls whose preset engines fit none of
+their engine ports.
+
+MEASURED 2026-11-08, `check_fitting_compatibility` over 216 active installed mods plus two DEV mods (218 scanned, 0
+dropped, 0 errors), reference + 8 DLC: the ported ROR base mod alone carries 63 tag mismatches, 278 case-only group
+names and 209 macro connection refs to connections its components do not define. Among the other 216 mods: 12 tag
+mismatches (XUP 10, xenon_backup 2; verified in source, e.g. an engine slot tagged `standardplatformcollision` with the
+space missing), 52 dangling macro connection refs across 12 mods including VRO (`ship_lint_frigate_akita` macro names
+`con_shipstorage_xs_01`, its component has `con_shipstorage_s_01`), and 0 case-only group names. Vanilla controls for
+the rule: 0 of 1421 direct leaves and 0 of 386 `exact=` groups rejected; 0 of 882 group entries case-only; 0 of 1776
+macro connection refs dangling; but 84 of 1505 vanilla direct leaves point at a port that does not exist.
+
+Every finding is INFO on purpose: the tag rule is Egosoft's documented one and it never rejects vanilla, but whether
+the ENGINE rejects a mismatched preset leaf is unmeasured, and mods that ship dangling refs demonstrably run. A hit is
+a suspect for an in-game fitting readback, not a verdict. Promotion to warn needs that runtime evidence.
+
+Tier A caveat, same as `check_connections`: 24 of the 52 cross-mod refs are one mod's macro judged against the vanilla
+component because the component it means is redefined by a dependency the Tier A tree does not load.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_fit_compat.py` (one falsification twin per clause; the quiet shapes,
+unreadable component and unresolvable equipment, are skips, never findings).
+
+## F364 - A missing base `index/*.xml` registered nothing and said nothing · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
+
+`_resolve.build_index` read the reference and DLC indexes, and when `_read_source` returned None for a file that was
+not there it `continue`d. The index then held only the mod's own entries, every vanilla macro and component read as
+unregistered, and no skip was recorded. The run looked clean.
+
+MEASURED 2026-11-08: a fresh git worktree without the untracked `x4-paths.env` resolved `Config().reference` to a
+folder that did not exist (`Config` does not refuse a nonexistent path by design; it refuses only an UNRESOLVED one).
+`build_index` registered 150 macros (the mod's own) instead of 4,695; the fitting check above reported 39 tag hits
+where the same code with the real reference reports 63; `report.skipped` was empty. The instrument, not the subject.
+
+Now: a missing REFERENCE index is a degraded skip naming the path and pointing at `x4-paths.env` / `--reference`; a
+missing DLC index is a plain skip naming the DLC. `report=None` callers are unchanged.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_index_missing_is_degraded.py`.

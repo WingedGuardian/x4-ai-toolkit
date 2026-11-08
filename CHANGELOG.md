@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- x4validate: new INFO-only `fit` findings (BLIND-SPOTS F363). The connection check proved a loadout port exists; it never asked whether the equipment fits it. Now every direct engine/shield/turret/weapon leaf is judged by Egosoft's documented tag rule (attachment tags minus `component` must be on the slot), a `<groups>` entry whose name matches the component only by case is named, and a ship macro's own `<connection ref=X>` that its component lacks is named. INFO because the rule rejects 0 of 1421 vanilla leaves but engine enforcement is unmeasured; the first ported mod it ran on carried 63 / 278 / 209 such hits, and 12 other installed mods carry dangling connection refs.
+- x4validate: a missing reference `index/macros.xml` or `index/components.xml` is now a degraded skip instead of registering nothing in silence (F364). A worktree without `x4-paths.env` had resolved the reference to a folder that did not exist and reported fewer findings with an empty `skipped`.
+
 ## v4.1.0 — 2026-11-04
 
 - Typed file deletion of deployed mod folders or ordinary XML now requests confirmation, matching shell retirement policy, instead of being rejected as a direct edit of the deployed copy. Direct writes, write-only batches, explicit moves, archive protections, save preservation and whole-install/reference blocks retain their prior policy.
