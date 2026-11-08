@@ -41,7 +41,10 @@ builder started earlier waits out the rest); the disk fits the second copy (dbsw
 build of that database is running; BaseX and Java are here; the database was built here before (a database
 never built is never started automatically: build it once by hand); the same inputs did not already fail; and,
 for x4eff, the effective store is FRESH. The builder takes the build lock, so `status` reads REBUILDING, and its
-outcome replaces the session note; `status` also prints the last automatic BaseX rebuild's state.
+outcome replaces the session note of the workspace that started it; `status` also prints the last automatic BaseX
+rebuild's state. It holds the build lock for BOTH databases (about half an hour): builders never run two at a time,
+and x4eff must read an effective store nobody is replacing. Meanwhile a session start rebuilds nothing (its note
+says a rebuild is running) and `rebuild` by hand exits 5, "already running".
 
 Optional environment:
     X4_JOB_WRAPPER        JSON list prefixed to every builder command; "{name}" becomes x4fresh-<artifact>
@@ -81,6 +84,7 @@ BASEX_AUTO_LOCK = "basex-auto.lock"        # held for the whole life of the ONE 
 BASEX_QUIET_MIN = 30
 BASEX_MAX_WAIT = 6 * 3600                  # a builder whose world never goes quiet gives up after this
 BASEX_LOCK_WAIT = 15 * 60                  # how long the builder waits for x4fresh.lock (another session's build)
+BASEX_ALOCK_TRIES = 10                     # x 0.5 s: outlasts a probe of basex-auto.lock, never a real holder
 NOT_BUILT = "NOT-BUILT"
 STATES = ("FRESH", "STALE", "UNKNOWN", "MISSING", "REBUILDING", NOT_BUILT)
 # Holds the session note from the start of an --auto run until its outcome replaces it, so a run that dies
@@ -115,6 +119,10 @@ class Status:
     incomplete: int = 0                                 # items the artifact is known to be missing
     loss_keys: list[str] | None = None                  # WHICH items, by identity (None: cannot say)
     accepted: str | None = None                         # when the user accepted exactly this loss set
+    # Reasons that describe a passing moment, not the artifact's inputs (dbswap leftovers with their pids, a running
+    # rebuild). Shown like any reason, but never part of the failure memo's key: a failed build LEAVES some of them,
+    # and they made the next key differ, so the same failure ran once more (4.1.1 review).
+    volatile: list[str] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- where things live
@@ -330,6 +338,7 @@ def _status_basex(name: str) -> Status:
     # FRESH or NOT BUILT verdict and its reasons (the rebuild memo's key) stay as they are.
     notes = _swap_notes(name)
     (s.notes if s.state in ("FRESH", NOT_BUILT) else s.reasons).extend(notes)
+    s.volatile.extend(notes)
     return s
 
 
@@ -443,6 +452,7 @@ def status(only=ORDER, holding_lock: bool = False) -> list[Status]:
         s = _mark_accepted(check(name), accepted)
         if locked and s.state != "FRESH" and (in_play is None or name in in_play):
             s.reasons.insert(0, f"a rebuild is running (lock held: {sd / 'x4fresh.lock'})")
+            s.volatile.append(s.reasons[0])
             s.state = "REBUILDING"
         out.append(s)
     return out
@@ -587,9 +597,10 @@ class _ChildTree:
                                                       self.wintypes.HANDLE(int(proc._handle))))
 
 
-def _run(name: str, log: Path) -> tuple[int, list[str], list[str]]:
-    """(exit code, the builder's warning lines, the job wrapper's own warning lines). Every line is in the log."""
-    argv = _wrapper(name) + builder(name)
+def _run(name: str, log: Path, argv: list[str] | None = None) -> tuple[int, list[str], list[str]]:
+    """(exit code, the builder's warning lines, the job wrapper's own warning lines). Every line is in the log.
+    `argv`: run this instead of the artifact's builder (the swap-only retry), under the same wrapper."""
+    argv = _wrapper(name) + (argv if argv is not None else builder(name))
     warnings: list[str] = []
     wrappers: list[str] = []
     own = _wrapper_prefixes()
@@ -776,8 +787,9 @@ def _note_not_built_once(sd: Path, final: list[Status]) -> list[str]:
 
 def _memo_key(s: Status, world: str | None) -> str:
     # The reasons alone are not "the same inputs": MISSING and UNKNOWN carry no digest, so a mod could
-    # change and the same words would suppress the retry forever (review T10).
-    return " | ".join(s.reasons) + f" @ {world}"
+    # change and the same words would suppress the retry forever (review T10). Volatile reasons are left out: they
+    # describe what a build left behind, not its inputs (4.1.1 review).
+    return " | ".join(r for r in s.reasons if r not in s.volatile) + f" @ {world}"
 
 
 def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = False,
@@ -808,9 +820,12 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
                 continue
             _basex_record(sd, "running", building=name)
             ran.append(name)
+        # A finished build an earlier run could not swap in (rc 7: a reader held the database) is swapped in alone,
+        # never dropped and rebuilt; the memo of that rc 7 does not stop it, since nothing about it needs fixing.
+        swap_first = name in BASEX and _basex_swap_pending(name)
         world_before = _world_digest()
         key = _memo_key(s, world_before)
-        if auto and memo.get(name, {}).get("reasons") == key:
+        if auto and not swap_first and memo.get(name, {}).get("reasons") == key:
             what = ("against these same inputs" if world_before is not None
                     else "and its inputs could not be compared since")
             lines.append(f"{name}: NOT RETRIED: it did not end FRESH {what} at "
@@ -820,9 +835,28 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
         if _mutation.active() is not None:
             lines.append(f"{name}: SKIPPED: a mutation gate started meanwhile")
             continue
-        log = sd / "logs" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        log = sd / "logs" / f"{name}-{stamp}.log"
         try:
-            rc, warnings, wrapper_lines = _run(name, log)
+            if swap_first:
+                swap_log = sd / "logs" / f"{name}-{stamp}-swap.log"
+                rc, warnings, wrapper_lines = _run(name, swap_log, _swap_argv(name))
+                now = check(name).state if rc == 0 else None
+                if now == "FRESH":
+                    lines.append(f"{name}: swapped in the finished build an earlier run could not swap; no rebuild "
+                                 f"needed (log: {swap_log})")
+                    log = swap_log
+                elif rc == SWAP_LOCKED_RC:
+                    lines.append(f"{name}: the finished build an earlier run left still cannot be swapped in: a "
+                                 "reader holds the database; the next run retries the swap alone")
+                    log = swap_log
+                else:
+                    lines.append(f"{name}: the finished build an earlier run left was "
+                                 + (f"swapped in, but it is {now}" if rc == 0 else f"not swapped in (rc {rc})")
+                                 + f"; rebuilding (log: {swap_log})")
+                    swap_first = False
+            if not swap_first:
+                rc, warnings, wrapper_lines = _run(name, log)
         except (OSError, ValueError) as exc:
             rc, warnings, wrapper_lines = -1, [f"could not start the builder: {exc}"], []
         world_after = _world_digest()
@@ -895,7 +929,9 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
     if auto:
         # ANY outcome other than a clean rebuild reaches the next session start -- a drop or a warning
         # included (review finding 2: those went only to stdout, which the launcher discards).
-        told = _note_not_built_once(sd, final)
+        # The background builder overwrites a note a session start wrote earlier, maybe naming a NOT-BUILT database for
+        # the first time and before anyone printed it: it names every NOT-BUILT row and leaves the record alone.
+        told = [] if basex_child else _note_not_built_once(sd, final)
         shown = [s for s in final if s.name not in told]
         noteworthy = left or failed or unclean or _unaccepted(final) or \
             any("DEFERRED" in ln or "NOT RETRIED" in ln for ln in lines) or \
@@ -987,6 +1023,23 @@ def _basex_running_build(db: str) -> int | None:
     return _load_dbswap().running_build(BASEX_ROOT / "basex", db)
 
 
+SWAP_LOCKED_RC = 7    # dbswap.RC_LOCKED: refused because a reader (or another build) holds the database
+
+
+def _basex_swap_pending(db: str) -> bool:
+    """A finished, stamped <db>__next waits to be swapped in, and no build of `db` is running (dbswap's own reading)."""
+    try:
+        mod = _load_dbswap()
+        home = BASEX_ROOT / "basex"
+        return bool(mod.unswapped_next(mod.BaseXRunner(home), home, db)) and mod.running_build(home, db) is None
+    except Exception:  # noqa: BLE001  # silent-ok: False = the full build runs, whose `prepare` reports what it finds
+        return False
+
+
+def _swap_argv(db: str) -> list[str]:
+    return [sys.executable, str(BASEX_ROOT / "dbswap.py"), "swap", "--db", db]
+
+
 def _basex_disk_shortfall(db: str) -> str | None:
     mod = _load_dbswap()
     home = BASEX_ROOT / "basex"
@@ -1002,8 +1055,10 @@ def _basex_blocker(db: str, statuses: dict, memo: dict, world: str | None) -> st
         if db == "x4eff" and statuses["effective"].state != "FRESH":
             return (f"the effective store is {statuses['effective'].state}, and x4eff is built from the same merge, "
                     "so it waits for a FRESH store")
+        # Only the swap of a finished build is waiting: it needs no new disk, and the memo of its rc 7 does not stop it.
+        swap_only = _basex_swap_pending(db)
         m = memo.get(db, {})
-        if m.get("reasons") == _memo_key(statuses[db], world):
+        if not swap_only and m.get("reasons") == _memo_key(statuses[db], world):
             return (f"not retried: it did not end FRESH against these same inputs at {m.get('when')} (rc {m.get('rc')}); "
                     f"run `x4fresh rebuild --only {db}` by hand after fixing the cause")
         pid = _basex_running_build(db)
@@ -1012,7 +1067,7 @@ def _basex_blocker(db: str, statuses: dict, memo: dict, world: str | None) -> st
         why = _basex_unbuildable()
         if why:
             return f"BaseX cannot build here now: {why}"
-        return _basex_disk_shortfall(db)
+        return None if swap_only else _basex_disk_shortfall(db)
     except Exception as exc:  # noqa: BLE001 -- said in the note; an unchecked condition never starts a build
         return f"its conditions could not be checked ({type(exc).__name__}: {exc})"
 
@@ -1080,11 +1135,13 @@ def _basex_session_plan(sd: Path, final: dict, memo: dict, note: Path) -> list[s
         return []
     skips: dict[str, str] = {}
     left, err, quiet = None, None, 0.0
-    if _switch_off("X4_FRESH_BASEX_AUTO"):
-        err = "X4_FRESH_BASEX_AUTO=off"
-    elif BuildLock(sd / BASEX_AUTO_LOCK).held_elsewhere():
+    # The live builder first, the off switch second: a builder started before the switch was set owns its record,
+    # and "skipped" written over it read as if nothing was running (4.1.1 review).
+    if BuildLock(sd / BASEX_AUTO_LOCK).held_elsewhere():
         return [f"{', '.join(cands)}: not rebuilt automatically: an automatic BaseX rebuild is already scheduled or "
                 "running (`x4fresh status`)"]
+    if _switch_off("X4_FRESH_BASEX_AUTO"):
+        err = "X4_FRESH_BASEX_AUTO=off"
     else:
         left, err, quiet = _quiet_left(sd)
     if err:
@@ -1130,15 +1187,24 @@ def _basex_child_argv(note: Path) -> list[str]:
     return [sys.executable, "-m", "x4validate._freshcli", "rebuild", "--auto-basex", "--note", str(note)]
 
 
+def _on_windows() -> bool:
+    return os.name == "nt"
+
+
 def _spawn_basex(note: Path) -> int:
-    """Start the background BaseX builder DETACHED and return its pid at once: its own process group, no console, below-
-    normal priority (inherited by the builders it starts), no handle on our pipes, so it outlives the session-start
-    run. MEASURED 2026-11-07 (n=1 each): such a child, with and without breakaway, outlived `uv run`'s exit."""
+    """Start the background BaseX builder and return its pid at once: its own process group, a HIDDEN console,
+    below-normal priority (inherited by the builders it starts), no handle on our pipes, so it outlives the
+    session-start run. MEASURED 2026-11-07 (n=1 each): such a child, with and without breakaway, outlived `uv run`'s
+    exit (that measurement used DETACHED_PROCESS; process lifetime does not depend on the console flag).
+
+    CREATE_NO_WINDOW, never DETACHED_PROCESS (4.1.1 review): a DETACHED process has no console at all, so every
+    console program it starts -- bash for the whole build, git, tasklist, java -- is given a NEW, VISIBLE console
+    window, and closing that window killed the build. A hidden console is inherited by all of them."""
     argv = _basex_child_argv(note)
     common = {"cwd": str(PKG_ROOT), "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
               "stderr": subprocess.DEVNULL, "close_fds": True}
-    if os.name == "nt":
-        base = 0x00000008 | 0x00000200 | 0x00004000   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL
+    if _on_windows():
+        base = 0x08000000 | 0x00000200 | 0x00004000   # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | BELOW_NORMAL
         try:
             proc = subprocess.Popen(argv, creationflags=base | 0x01000000, **common)   # CREATE_BREAKAWAY_FROM_JOB
         except OSError:
@@ -1156,13 +1222,22 @@ def _basex_child(note: Path) -> int:
     sd = state_dir()
     if sd is None:
         return 2
-    if _switch_off("X4_FRESH_AUTO") or _switch_off("X4_FRESH_BASEX_AUTO"):
-        return 0
     note = Path(note).resolve()
     alock = BuildLock(sd / BASEX_AUTO_LOCK)
-    if not alock.acquire():
-        return 0      # another background builder: it owns the outcome
+    # `status` and a session start PROBE this lock by taking it for an instant (held_elsewhere): a builder starting in
+    # that instant gave up having built and recorded nothing (4.1.1 review). A probe lets go at once; retry briefly.
+    for _attempt in range(BASEX_ALOCK_TRIES):
+        if alock.acquire():
+            break
+        _sleep(0.5)
+    else:
+        return 0      # another background builder really holds it: it owns the outcome and the record
     try:
+        # After the lock, so a record is only ever written by its holder.
+        off = [v for v in ("X4_FRESH_AUTO", "X4_FRESH_BASEX_AUTO") if _switch_off(v)]
+        if off:
+            _basex_record(sd, "skipped", detail=f"{off[0]}=off: the background builder started and built nothing")
+            return 0
         try:
             return _basex_child_locked(sd, note)
         except Exception as exc:  # noqa: BLE001 -- nobody reads this process's output: the record is the report
@@ -1235,7 +1310,8 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--auto", action="store_true",
                     help="unattended mode (session start): rebuilds effective + xref, then starts ONE background "
                          "BaseX builder once the game is closed and the mods have been unchanged for "
-                         "X4_FRESH_BASEX_QUIET_MIN minutes (default 30; X4_FRESH_BASEX_AUTO=off stops it); defers "
+                         "X4_FRESH_BASEX_QUIET_MIN minutes (default 30; X4_FRESH_BASEX_AUTO=off stops it); that "
+                         "builder holds the build lock while it builds, so other rebuilds exit 5 meanwhile; defers "
                          "while a listed process runs, never retries the same failure")
     pr.add_argument("--auto-basex", action="store_true", help=argparse.SUPPRESS)   # the background builder itself
     pr.add_argument("--note", type=Path,

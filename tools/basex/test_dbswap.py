@@ -19,6 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dbswap  # noqa: E402
+import preflight  # noqa: E402
 
 FP = {"content": "c0ffee", "engine": "e1"}
 
@@ -504,8 +505,9 @@ def test_the_runner_refuses_to_alter_onto_an_existing_name():
 
 def test_the_runner_refuses_to_alter_onto_an_existing_name_on_real_basex(tmp_path):
     jar = Path(dbswap.__file__).parent / "basex" / "BaseX.jar"
-    if not jar.is_file() or not shutil.which("java"):
-        pytest.skip("needs the vendored jar and Java")
+    why = preflight.real_basex_unavailable(jar)
+    if why:
+        pytest.skip(why)
     h = tmp_path / "basex"
     h.mkdir()
     shutil.copyfile(jar, h / "BaseX.jar")
@@ -640,8 +642,9 @@ def test_the_next_receipt_is_retired_once_next_becomes_live(home):
 def test_real_alter_semantics(tmp_path):
     """The two BaseX behaviours the swap rests on, on the vendored jar in a private DBPATH."""
     jar = Path(dbswap.__file__).parent / "basex" / "BaseX.jar"
-    if not jar.is_file() or not shutil.which("java"):
-        pytest.skip("needs the vendored jar and Java")
+    why = preflight.real_basex_unavailable(jar)
+    if why:
+        pytest.skip(why)
     home = tmp_path / "basex"
     home.mkdir()
     shutil.copyfile(jar, home / "BaseX.jar")

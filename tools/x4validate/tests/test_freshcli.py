@@ -25,6 +25,8 @@ def sd(tmp_path, monkeypatch):
     monkeypatch.setenv("X4_FRESH_BASEX_AUTO", "off")
     monkeypatch.setattr(fc, "_spawn_basex", lambda note: pytest.fail("a real background BaseX build was started"))
     monkeypatch.setattr(fc, "_world_digest", lambda: "world")
+    # No test reads the real BaseX home for a waiting swap; the tests of that read point it at a private one.
+    monkeypatch.setattr(fc, "_basex_swap_pending", lambda db: False)
     return d
 
 
@@ -1543,3 +1545,291 @@ def test_the_detached_launch_returns_at_once_and_outlives_the_call(tmp_path, mon
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
         else:
             os.kill(pid, 9)
+
+
+# ---- 4.1.1 review of the automatic BaseX rebuild
+
+NO_WINDOW, DETACHED, NEW_GROUP, BELOW_NORMAL, BREAKAWAY = 0x08000000, 0x00000008, 0x00000200, 0x00004000, 0x01000000
+
+
+class _PopenSpy:
+    """Records each Popen call's kwargs; the first `fail` calls raise OSError (a job that forbids breakaway)."""
+
+    def __init__(self, fail=0):
+        self.calls, self.fail = [], fail
+
+    def __call__(self, argv, **kw):
+        self.calls.append(kw)
+        if len(self.calls) <= self.fail:
+            raise OSError("breakaway refused")
+        from types import SimpleNamespace
+        return SimpleNamespace(pid=999, returncode=None)
+
+
+@pytest.mark.parametrize("fail", [0, 1])
+def test_the_background_builder_gets_a_hidden_console_never_a_detached_one(monkeypatch, tmp_path, fail):
+    """DETACHED_PROCESS gives the builder NO console, so every console child it starts (bash for the whole build,
+    git, tasklist, java) gets a NEW, VISIBLE one; closing that window killed the build. CREATE_NO_WINDOW gives it a
+    hidden console its children inherit. Both attempts (with and without breakaway) carry it."""
+    spy = _PopenSpy(fail)
+    monkeypatch.setattr(fc.subprocess, "Popen", spy)
+    monkeypatch.setattr(fc, "_on_windows", lambda: True, raising=False)
+    assert fc._spawn_basex(tmp_path / "note.txt") == 999
+    flags = spy.calls[-1]["creationflags"]
+    assert flags & NO_WINDOW and not flags & DETACHED, hex(flags)
+    assert flags & NEW_GROUP and flags & BELOW_NORMAL, hex(flags)
+    assert bool(flags & BREAKAWAY) is (fail == 0), hex(flags)
+    assert "start_new_session" not in spy.calls[-1]
+
+
+def _stale_staleness(reason):
+    return chr(10).join(("from types import SimpleNamespace",
+                         "def _defaults():",
+                         "    return None, None, None",
+                         "def check(*a, **k):",
+                         f"    return SimpleNamespace(fresh=False, determinable=True, reasons=[{reason!r}])", ""))
+
+
+def _what_a_failed_build_leaves(home, dead_pid=2_000_000_000):
+    """The leftovers a failed or killed build really leaves beside a live x4raw: an unfinished x4raw__next and a
+    build lock whose owner is not running. dbswap's describe() turns each into a line with a pid in it."""
+    nxt = home / "data" / "x4raw__next"
+    nxt.mkdir(parents=True)
+    (nxt / "tbl.basex").write_bytes(b"db")
+    (home / "build-x4raw.lock").write_text(json.dumps({"db": "x4raw", "pid": dead_pid, "at": 1.0}), encoding="utf-8")
+
+
+def test_the_failure_memo_key_ignores_what_the_failed_build_left_behind(tmp_path, monkeypatch):
+    """4.1.1 review: the key was built from reasons that included dbswap's describe() lines. A failure was recorded
+    with the key from BEFORE the build; the leftovers it then left changed the next key, so the same failed build ran
+    once more at the next session start. Driven through the real _status_basex and the real dbswap.describe()."""
+    home = _swap_world(tmp_path, monkeypatch, "x4raw")
+    (tmp_path / "staleness.py").write_text(_stale_staleness("x4raw: a mod changed"), encoding="utf-8")
+    (home / "coverage-x4raw.json").write_text("{}", encoding="utf-8")
+    recorded = fc._memo_key(fc._status_basex("x4raw"), "world")
+    _what_a_failed_build_leaves(home)
+    after = fc._status_basex("x4raw")
+    said = " ".join(after.reasons)
+    assert "x4raw__next is left from an unfinished build" in said and "2000000000" in said, after
+    assert fc._memo_key(after, "world") == recorded
+    memo = {"x4raw": {"reasons": recorded, "rc": 1, "when": "then"}}
+    monkeypatch.setattr(fc, "_basex_previously_built", lambda db: True)
+    assert fc._basex_blocker("x4raw", {"x4raw": after}, memo, "world").startswith("not retried")
+
+
+def test_TWIN_a_changed_freshness_reason_still_changes_the_key(tmp_path, monkeypatch):
+    home = _swap_world(tmp_path, monkeypatch, "x4raw")
+    (tmp_path / "staleness.py").write_text(_stale_staleness("x4raw: a mod changed"), encoding="utf-8")
+    (home / "coverage-x4raw.json").write_text("{}", encoding="utf-8")
+    recorded = fc._memo_key(fc._status_basex("x4raw"), "world")
+    (tmp_path / "staleness.py").write_text(_stale_staleness("x4raw: another mod changed"), encoding="utf-8")
+    sys.modules.pop("staleness", None)
+    assert fc._memo_key(fc._status_basex("x4raw"), "world") != recorded
+    assert fc._memo_key(fc._status_basex("x4raw"), "moved") != fc._memo_key(fc._status_basex("x4raw"), "world")
+
+
+def _swap_retry_world(monkeypatch, swap_code="pass", after_swap="FRESH", pending_once=True):
+    """The background builder over x4raw and x4eff STALE, where x4raw has a finished, stamped x4raw__next that an
+    earlier run could not swap in (a reader held x4raw: rc 7). `ran` records each swap and each full build."""
+    ran: list[str] = []
+    moved = lambda n: (lambda: fc.Status(n, "STALE", [f"{n}: the swapped-in build is older than the mods"]))  # noqa: E731
+
+    def check(name):
+        def f():
+            if name in ran:
+                return FRESH(name)()
+            if "swap:" + name in ran and after_swap != "UNCHANGED":    # UNCHANGED: the swap was refused
+                return (FRESH(name) if after_swap == "FRESH" else moved(name))()
+            return (STALE(name) if name in fc.BASEX else FRESH(name))()
+        return f
+    monkeypatch.setattr(fc, "CHECKS", {n: check(n) for n in fc.ORDER})
+    monkeypatch.setattr(fc, "_deferred", lambda auto: None)
+    monkeypatch.setattr(fc, "builder", lambda name: ran.append(name) or [sys.executable, "-c", "pass"])
+    monkeypatch.setattr(fc, "_swap_argv", lambda name: ran.append("swap:" + name) or [sys.executable, "-c", swap_code],
+                        raising=False)
+    monkeypatch.setattr(fc, "_basex_swap_pending",
+                        lambda db: db == "x4raw" and not (pending_once and "swap:x4raw" in ran), raising=False)
+    return ran
+
+
+def _remember_failed(sd, db="x4raw"):
+    """The memo a real failure writes: the key the real key function gives the status before that build."""
+    sd.mkdir(parents=True, exist_ok=True)
+    key = fc._memo_key(STALE(db)(), "world")
+    (sd / "last-failures.json").write_text(json.dumps({db: {"reasons": key, "rc": 7, "when": "then"}}),
+                                           encoding="utf-8")
+
+
+def test_a_build_refused_only_at_the_swap_is_retried_as_the_swap_alone(sd, bxa, monkeypatch):
+    """4.1.1 review: a build that ended rc 7 (a reader held x4raw at swap time) left a verified, stamped x4raw__next.
+    The next attempt must swap that in, not drop it and rebuild for half an hour -- and the failure memo, whose key
+    no longer moves (previous fix), must not stop the swap either."""
+    ran = _swap_retry_world(monkeypatch)
+    _remember_failed(sd)
+    _seen(sd, 60)
+    assert fc._basex_child(sd / "session-note.txt") == 0
+    assert ran == ["swap:x4raw", "x4eff"], ran
+    rec = json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
+    assert rec["state"] == "finished" and "x4raw: swapped in the finished build" in rec["detail"], rec
+    assert "x4raw" not in json.loads((sd / "last-failures.json").read_text(encoding="utf-8"))
+
+
+def test_a_swap_refused_again_is_a_failure_and_is_retried_as_the_swap_next_time(sd, bxa, monkeypatch):
+    ran = _swap_retry_world(monkeypatch, swap_code="import sys; sys.exit(7)", after_swap="UNCHANGED",
+                            pending_once=False)
+    _seen(sd, 60)
+    fc._basex_child(sd / "session-note.txt")
+    assert "FAILED rc 7" in _note(sd)
+    fc._basex_child(sd / "session-note.txt")
+    assert ran == ["swap:x4raw", "x4eff", "swap:x4raw"], "never a full build while a finished one waits to be swapped"
+
+
+def test_TWIN_a_swapped_in_build_that_is_still_not_current_is_rebuilt_in_the_same_run(sd, bxa, monkeypatch):
+    ran = _swap_retry_world(monkeypatch, after_swap="STALE")
+    _seen(sd, 60)
+    fc._basex_child(sd / "session-note.txt")
+    assert ran == ["swap:x4raw", "x4raw", "x4eff"], ran
+
+
+def test_TWIN_a_swap_whose_verification_refuses_falls_back_to_the_full_build(sd, bxa, monkeypatch):
+    ran = _swap_retry_world(monkeypatch, swap_code="import sys; sys.exit(2)", after_swap="UNCHANGED")
+    _seen(sd, 60)
+    fc._basex_child(sd / "session-note.txt")
+    assert ran == ["swap:x4raw", "x4raw", "x4eff"], ran
+
+
+def test_TWIN_no_finished_build_waiting_and_a_remembered_failure_is_not_retried(sd, bxa, monkeypatch):
+    ran = _swap_retry_world(monkeypatch)
+    monkeypatch.setattr(fc, "_basex_swap_pending", lambda db: False)
+    _remember_failed(sd)
+    _seen(sd, 60)
+    fc._basex_child(sd / "session-note.txt")
+    assert ran == ["x4eff"], ran
+
+
+def test_the_session_start_schedules_a_pending_swap_despite_the_memo(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    monkeypatch.setattr(fc, "_basex_swap_pending", lambda db: db == "x4raw", raising=False)
+    monkeypatch.setattr(fc, "_basex_disk_shortfall", lambda db: "not enough disk to build " + db)
+    _remember_failed(sd)
+    _seen(sd, 60)
+    fc.rebuild(auto=True)
+    note = _note(sd)
+    assert "x4raw: automatic rebuild started" in note, "a swap needs neither the memo's leave nor new disk"
+    assert "x4eff: not rebuilt automatically: not enough disk" in note
+
+
+@pytest.mark.parametrize("change, pending", [(None, True), ("unstamped", False), ("journal", False),
+                                             ("live-lock", False), ("no-next", False)])
+def test_a_pending_swap_is_read_from_the_real_dbswap_state(tmp_path, monkeypatch, change, pending):
+    home = _swap_world(tmp_path, monkeypatch, "x4raw", *(() if change == "no-next" else ("x4raw__next",)))
+    stamped = {"db": "x4raw__next", "fingerprint": {"content": "c", "engine": "e"}}
+    (home / "coverage-x4raw__next.json").write_text(json.dumps({} if change == "unstamped" else stamped),
+                                                    encoding="utf-8")
+    if change == "journal":
+        (home / "swap-x4raw.json").write_text('{"db": "x4raw", "phase": "begun"}', encoding="utf-8")
+    if change == "live-lock":
+        (home / "build-x4raw.lock").write_text(json.dumps({"db": "x4raw", "pid": os.getpid(), "at": time.time()}),
+                                               encoding="utf-8")
+    assert fc._basex_swap_pending("x4raw") is pending
+
+
+def _record(sd):
+    return json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
+
+
+def test_the_off_switch_never_overwrites_a_running_builders_record(sd, bxa, monkeypatch):
+    """4.1.1 review: with X4_FRESH_BASEX_AUTO=off the plan wrote "skipped" before looking at basex-auto.lock, so
+    `status` said skipped while a builder (started before the switch) was still running."""
+    _basex_stale(monkeypatch)
+    _seen(sd, 60)
+    monkeypatch.setenv("X4_FRESH_BASEX_AUTO", "off")
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "basex-auto.json").write_text(json.dumps({"state": "running", "pid": 1, "when": "2026-11-07 10:00"}),
+                                        encoding="utf-8")
+    held = fc.BuildLock(sd / fc.BASEX_AUTO_LOCK)
+    assert held.acquire()
+    try:
+        fc.rebuild(auto=True)
+    finally:
+        held.release()
+    assert _record(sd)["state"] == "running"
+    assert "already scheduled or running" in _note(sd) and not bxa["spawned"]
+
+
+def test_TWIN_the_off_switch_with_no_builder_running_records_skipped(sd, bxa, monkeypatch):
+    _basex_stale(monkeypatch)
+    _seen(sd, 60)
+    monkeypatch.setenv("X4_FRESH_BASEX_AUTO", "off")
+    fc.rebuild(auto=True)
+    assert _record(sd)["state"] == "skipped" and "X4_FRESH_BASEX_AUTO=off" in _record(sd)["detail"]
+
+
+@pytest.mark.parametrize("var", ["X4_FRESH_AUTO", "X4_FRESH_BASEX_AUTO"])
+def test_each_off_switch_inside_the_background_builder_builds_nothing_and_says_so(sd, bxa, monkeypatch, var):
+    """4.1.1 review: the builder returned 0 with no record at all, so `status` kept whatever an earlier run said."""
+    order = _child_world(monkeypatch)
+    _seen(sd, 60)
+    monkeypatch.setenv(var, "off")
+    assert fc._basex_child(sd / "session-note.txt") == 0
+    assert order == []
+    rec = _record(sd)
+    assert rec["state"] == "skipped" and f"{var}=off" in rec["detail"], rec
+
+
+def test_a_lock_probe_racing_the_builders_start_does_not_stop_it(sd, bxa, monkeypatch):
+    """`status` and a session start PROBE basex-auto.lock by taking it for an instant. A builder starting in that
+    instant returned 0 having built nothing and recorded nothing; it retries briefly instead."""
+    order = _child_world(monkeypatch)
+    _seen(sd, 60)
+    refusals = {"left": 2}
+    real = fc.BuildLock
+
+    class Probed(real):
+        def acquire(self):
+            if self.path.name == fc.BASEX_AUTO_LOCK and refusals["left"]:
+                refusals["left"] -= 1
+                return False
+            return super().acquire()
+    monkeypatch.setattr(fc, "BuildLock", Probed)
+    assert fc._basex_child(sd / "session-note.txt") == 0
+    assert order == ["x4raw", "x4eff"] and _record(sd)["state"] == "finished"
+
+
+def test_TWIN_a_builder_that_really_holds_the_lock_keeps_its_record(sd, bxa, monkeypatch):
+    order = _child_world(monkeypatch)
+    _seen(sd, 60)
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "basex-auto.json").write_text(json.dumps({"state": "running", "pid": 1, "when": "then"}), encoding="utf-8")
+    held = fc.BuildLock(sd / fc.BASEX_AUTO_LOCK)
+    assert held.acquire()
+    try:
+        assert fc._basex_child(sd / "session-note.txt") == 0
+    finally:
+        held.release()
+    assert order == [] and _record(sd)["state"] == "running"
+
+
+def test_the_background_builder_never_hides_a_not_built_notice_it_overwrites(sd, bxa, monkeypatch):
+    """The background builder writes the same note a session start wrote, half an hour later. That session start may
+    have named a NOT-BUILT database for the first time (and recorded it as told); the builder's note replaced it, read
+    "told", and left it out, so no session start ever printed it. The builder names NOT-BUILT rows and records
+    nothing about them: that record belongs to the session-start runs."""
+    order = _child_world(monkeypatch)
+    monkeypatch.setitem(fc.CHECKS, "x4eff", lambda: fc._not_built("x4eff", "java is not on PATH."))
+    _seen(sd, 60)
+    sd.mkdir(parents=True, exist_ok=True)
+    fc._write_note(fc._not_built_path(sd), json.dumps(["x4eff"]))
+    fc._basex_child(sd / "session-note.txt")
+    assert order == ["x4raw"]
+    assert "x4eff" in _note(sd) and fc.NOT_BUILT in _note(sd), _note(sd)
+    assert json.loads(fc._not_built_path(sd).read_text(encoding="utf-8")) == ["x4eff"]
+    # Twin: a session-start run still names it only once -- test_the_session_note_names_not_built_once.
+
+
+def test_TWIN_posix_starts_a_new_session_and_no_windows_flags(monkeypatch, tmp_path):
+    spy = _PopenSpy()
+    monkeypatch.setattr(fc.subprocess, "Popen", spy)
+    monkeypatch.setattr(fc, "_on_windows", lambda: False, raising=False)
+    fc._spawn_basex(tmp_path / "note.txt")
+    assert spy.calls[-1]["start_new_session"] is True and "creationflags" not in spy.calls[-1]

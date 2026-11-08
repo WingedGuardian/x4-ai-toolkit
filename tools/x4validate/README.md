@@ -143,7 +143,12 @@ below-normal priority. That builder starts only when the game is closed, the ins
 the second copy a build-then-swap holds, no build of that database is running, BaseX and Java are present, and the
 database was built here once before (a database you never built is never started automatically); `x4eff` also
 waits for a FRESH effective store. Each condition that stops it is named in one line of the note, and
-`x4fresh status` says whether the background build is waiting, running, finished, skipped or failed. It defers
+`x4fresh status` says whether the background build is waiting, running, finished, skipped or failed. Its outcome is
+in `x4fresh status` and in the session-start note of the workspace whose session start launched it (another
+workspace's note does not carry it). While it builds, it holds the same build lock as every other rebuild, for both
+databases: builders never run two at a time, and `x4eff` must read an effective store nobody is replacing. So a
+session start during that half hour rebuilds nothing (its note says a rebuild is running), and `x4fresh rebuild` by
+hand exits 5 with "already running" until it ends. It defers
 while a listed process runs, does not retry a build that failed against the same
 inputs, and always writes its outcome to a note the next session start prints; the note reads `did not complete`
 until the run reports and is empty only when everything this machine can build is FRESH and complete. Environment
