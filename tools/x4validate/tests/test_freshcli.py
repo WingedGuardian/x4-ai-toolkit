@@ -1887,3 +1887,197 @@ def test_TWIN_write_note_gives_up_after_a_bounded_number_of_tries(tmp_path, monk
         fc._write_note(tmp_path / "note.json", "hello")
     assert 2 <= len(calls) <= 10
     assert not list(tmp_path.glob("*.tmp")), "a failed write must not leave its temp file behind"
+
+
+# ---- a game that starts while the background BaseX builder builds: the build drops to IDLE priority (4.1.1)
+
+@pytest.fixture
+def watch(monkeypatch):
+    """A _GameWatch whose game check, process listing and priority calls are all faked: nothing real is touched."""
+    world = {"game": ["x4.exe"], "tree": [100, 101, 102], "fail": {}}
+    calls: list[tuple[int, str]] = []
+    monkeypatch.setattr(fc, "_running_deferring_processes", lambda: world["game"])
+    monkeypatch.setattr(fc, "_descendants", lambda root: None if world["tree"] is None else [root] + [
+        p for p in world["tree"] if p != root])
+
+    def set_priority(pid, level):
+        calls.append((pid, level))
+        return world["fail"].get(pid)
+    monkeypatch.setattr(fc, "_set_priority", set_priority)
+    monkeypatch.setattr(fc, "_now", lambda: T0)
+    return {"w": fc._GameWatch(), "world": world, "calls": calls}
+
+
+def test_a_game_seen_mid_build_drops_every_process_of_the_build_to_idle(watch):
+    w = watch["w"]
+    w.poll(100)
+    assert watch["calls"] == [(100, fc.IDLE), (101, fc.IDLE), (102, fc.IDLE)]
+    text = " ".join(w.lines("x4raw"))
+    assert "x4raw: lowered to idle priority at" in text and "x4.exe" in text
+    assert w.level == fc.IDLE
+
+
+def test_TWIN_no_game_mid_build_changes_no_priority_and_says_nothing(watch):
+    watch["world"]["game"] = []
+    w = watch["w"]
+    w.poll(100)
+    w.poll(100)
+    assert watch["calls"] == []
+    assert w.lines("x4raw") == [] and w.level is None
+
+
+def test_a_process_the_build_starts_after_the_drop_is_dropped_on_the_next_poll(watch):
+    w = watch["w"]
+    w.poll(100)
+    watch["calls"].clear()
+    watch["world"]["tree"] = [100, 101, 103]       # 102 ended, java (103) started after the drop
+    w.poll(100)
+    assert (103, fc.IDLE) in watch["calls"] and (102, fc.IDLE) not in watch["calls"]
+
+
+def test_a_game_that_closes_restores_below_normal_once(watch):
+    w = watch["w"]
+    w.poll(100)
+    watch["world"]["game"] = []
+    watch["calls"].clear()
+    w.poll(100)
+    assert watch["calls"] == [(100, fc.BELOW_NORMAL), (101, fc.BELOW_NORMAL), (102, fc.BELOW_NORMAL)]
+    watch["calls"].clear()
+    w.poll(100)
+    assert watch["calls"] == [], "after the restore, a poll with no game touches nothing"
+    assert "restored to below-normal priority at" in " ".join(w.lines("x4raw"))
+
+
+def test_a_game_check_that_cannot_answer_drops_to_idle_as_if_a_game_ran(watch):
+    watch["world"]["game"] = None
+    w = watch["w"]
+    w.poll(100)
+    assert watch["calls"] and all(level == fc.IDLE for _pid, level in watch["calls"])
+    assert "could not list running processes" in " ".join(w.lines("x4raw"))
+
+
+def test_TWIN_a_game_check_that_cannot_answer_after_the_drop_never_restores(watch):
+    w = watch["w"]
+    w.poll(100)
+    watch["world"]["game"] = None
+    watch["calls"].clear()
+    w.poll(100)
+    assert watch["calls"] and all(level == fc.IDLE for _pid, level in watch["calls"])
+
+
+def test_a_process_that_already_exited_is_no_crash_and_no_problem(watch):
+    watch["world"]["fail"] = {101: "gone"}
+    w = watch["w"]
+    w.poll(100)
+    assert (102, fc.IDLE) in watch["calls"], "a vanished process must not stop the rest of the tree"
+    assert not any("could not" in ln for ln in w.lines("x4raw"))
+
+
+def test_TWIN_access_denied_is_said_in_the_note_and_the_rest_still_drops(watch):
+    watch["world"]["fail"] = {101: "access denied"}
+    w = watch["w"]
+    w.poll(100)
+    w.poll(100)
+    assert (102, fc.IDLE) in watch["calls"]
+    said = [ln for ln in w.lines("x4raw") if "could not" in ln]
+    assert len(said) == 1 and "access denied" in said[0] and "pid 101" in said[0], said
+
+
+def test_a_tree_that_cannot_be_listed_is_said_never_a_crash(watch):
+    watch["world"]["tree"] = None
+    w = watch["w"]
+    w.poll(100)
+    assert watch["calls"] == []
+    assert any("could not list the build's processes" in ln for ln in w.lines("x4raw"))
+
+
+def test_a_poll_that_raises_never_stops_the_build(watch, monkeypatch):
+    def boom():
+        raise RuntimeError("tasklist exploded")
+    monkeypatch.setattr(fc, "_running_deferring_processes", boom)
+    w = watch["w"]
+    w.safe_poll(100)
+    assert any("RuntimeError" in ln for ln in w.lines("x4raw"))
+
+
+def test_the_status_line_says_the_running_build_was_lowered_to_idle(sd, monkeypatch):
+    sd.mkdir(parents=True, exist_ok=True)
+    fc._basex_record(sd, "running", building="x4raw", priority="idle since 14:03: a game started (x4.exe)")
+    monkeypatch.setattr(fc.BuildLock, "held_elsewhere", lambda self: True)
+    line = fc._basex_auto_line(sd)
+    assert "building x4raw" in line and "idle since 14:03: a game started (x4.exe)" in line
+
+
+def test_TWIN_the_status_line_says_nothing_of_priority_when_nothing_was_lowered(sd, monkeypatch):
+    sd.mkdir(parents=True, exist_ok=True)
+    fc._basex_record(sd, "running", building="x4raw")
+    monkeypatch.setattr(fc.BuildLock, "held_elsewhere", lambda self: True)
+    assert "priority" not in fc._basex_auto_line(sd) and "idle" not in fc._basex_auto_line(sd)
+
+
+def _sleeping_builder(order, seconds):
+    def builder(name):
+        order.append(name)
+        return [sys.executable, "-c", f"import time; time.sleep({seconds})"]
+    return builder
+
+
+def test_the_background_builder_drops_its_build_to_idle_when_a_game_starts_and_records_it(sd, bxa, monkeypatch):
+    order = _child_world(monkeypatch)
+    monkeypatch.setattr(fc, "builder", _sleeping_builder(order, 1.5))
+    monkeypatch.setattr(fc, "GAME_POLL_SECONDS", 0.1)
+    monkeypatch.setattr(fc, "_running_deferring_processes", lambda: ["x4.exe"])
+    calls: list[tuple[int, str]] = []
+    monkeypatch.setattr(fc, "_descendants", lambda root: [root])
+    monkeypatch.setattr(fc, "_set_priority", lambda pid, level: calls.append((pid, level)))
+    records: list[dict] = []
+    real = fc._basex_record
+    monkeypatch.setattr(fc, "_basex_record", lambda sd_, state, **f: records.append(dict(f, state=state)) or
+                        real(sd_, state, **f))
+    _seen(sd, 60)
+    fc._basex_child(sd / "session-note.txt")
+    assert order == ["x4raw", "x4eff"], "a game seen mid-build must not stop or skip the build (_deferred is faked)"
+    assert calls and {lvl for _p, lvl in calls} == {fc.IDLE}
+    assert any(r["state"] == "running" and "idle since" in r.get("priority", "") for r in records), records
+    rec = json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
+    assert "x4raw: lowered to idle priority at" in rec["detail"], rec["detail"]
+
+
+def test_TWIN_the_background_builder_with_no_game_changes_no_priority(sd, bxa, monkeypatch):
+    order = _child_world(monkeypatch)
+    monkeypatch.setattr(fc, "builder", _sleeping_builder(order, 0.5))
+    monkeypatch.setattr(fc, "GAME_POLL_SECONDS", 0.1)
+    monkeypatch.setattr(fc, "_running_deferring_processes", lambda: [])
+    calls: list = []
+    monkeypatch.setattr(fc, "_descendants", lambda root: [root])
+    monkeypatch.setattr(fc, "_set_priority", lambda pid, level: calls.append((pid, level)))
+    _seen(sd, 60)
+    fc._basex_child(sd / "session-note.txt")
+    assert order == ["x4raw", "x4eff"] and calls == []
+    assert "priority" not in json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))["detail"]
+
+
+def test_TWIN_a_rebuild_by_hand_never_watches_for_the_game(sd, monkeypatch):
+    monkeypatch.setattr(fc, "GAME_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(fc, "_running_deferring_processes", lambda: pytest.fail("a rebuild by hand polled the game"))
+    monkeypatch.setattr(fc, "builder", _sleeping_builder([], 0.3))
+    rc, _w, _x = fc._run("effective", sd / "logs" / "e.log")
+    assert rc == 0
+
+
+def test_the_real_tree_listing_and_priority_calls_on_a_harmless_child_of_this_test():
+    """The only real priority change in this file: a sleeping child this test started itself. Under a job object that
+    limits priority (a resource governor running the suite) the change is not taken; then _set_priority must SAY so,
+    never report success: done <=> the class read back is idle."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        tree = fc._descendants(os.getpid())
+        assert tree is not None and child.pid in tree and tree[0] == os.getpid()
+        assert os.getppid() not in tree, "the listing must follow children only, never the parent"
+        err = fc._set_priority(child.pid, fc.IDLE)
+        assert (err is None) == (fc._get_priority(child.pid) == fc.IDLE), err
+        assert err is None or err.startswith("not taken"), err
+    finally:
+        child.kill()
+        child.wait()
+    assert fc._set_priority(child.pid, fc.IDLE) == "gone"
