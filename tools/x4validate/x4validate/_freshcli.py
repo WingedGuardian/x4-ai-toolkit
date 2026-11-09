@@ -621,12 +621,14 @@ def _run(name: str, log: Path, argv: list[str] | None = None,
         proc = subprocess.Popen(argv, cwd=str(PKG_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
                                 **tree.popen_kwargs())
-        if not tree.adopt(proc):
+        adopted = tree.adopt(proc)
+        if not adopted:
             fh.write("x4fresh: NOTE: the builder is not tied to x4fresh's life on this platform; if x4fresh "
                      "is killed, the build lock frees while the builder may still run\n")
-        if watch is not None:
-            watch.start(proc)
         try:
+            if watch is not None:
+                # In the try: whatever happens, the build is still read to its end, waited for, and the watch stopped.
+                watch.start(proc, job=tree.job if adopted else None)
             for line in proc.stdout:
                 fh.write(line)
                 mine = bool(own) and line.startswith(own)
@@ -713,14 +715,37 @@ def _running_deferring_processes() -> list[str] | None:
 # The background BaseX builder checks the game before each database, but x4raw alone takes about a quarter of an
 # hour. While it builds, _GameWatch asks the same question every GAME_POLL_SECONDS (one process listing: cheap) and,
 # from the first time a game is seen, keeps the build's whole process tree (the job wrapper, bash, java, and anything
-# they start later) at IDLE priority. It never stops the build. When the game is seen closed, the tree goes back to
-# below-normal. A listing that cannot answer counts as a game (it fails toward idle, never toward faster).
+# they start later) at IDLE priority. It never stops the build. When the game is seen closed, every process it
+# lowered goes back to what it had before, never above below-normal. A listing that cannot answer counts as a game
+# (it fails toward idle, never toward faster). What `status` shows is what the processes took, read back, never
+# what was asked: a priority-limited job object makes the call succeed and change nothing.
+#
+# A pid can be reused between the listing and the call, so every call confirms it holds the process it listed:
+# Windows, on the opened handle, by membership of the build's own job object or else by the start time recorded at
+# listing; POSIX, by the start time in /proc (checked just before the call: best-effort, there is no handle). A
+# process it cannot confirm is never touched.
 
 IDLE, BELOW_NORMAL = "idle", "below-normal"
 GAME_POLL_SECONDS = 30.0
+EVENTS_MAX = 10    # priority changes kept for the note; the rest are counted
 _WIN_CLASS = {IDLE: 0x00000040, BELOW_NORMAL: 0x00004000}      # IDLE_PRIORITY_CLASS, BELOW_NORMAL_PRIORITY_CLASS
+# Windows priority classes from lowest to highest: idle, below-normal, normal, above-normal, high, realtime.
+_WIN_RANK = {0x40: 0, 0x4000: 1, 0x20: 2, 0x8000: 3, 0x80: 4, 0x100: 5}
 _NICE = {IDLE: 19, BELOW_NORMAL: 10}
-_GONE = "gone"     # _set_priority: the process exited meanwhile, which is no problem
+_GONE = "gone"            # _set_priority: the process exited meanwhile, which is no problem
+_NOT_OURS = "not ours"    # _set_priority: the pid now names another process (reused), which is never touched
+
+
+def _raw(level) -> int:
+    """A level's raw value on this platform (a Windows priority class, a POSIX nice); a raw int passes through."""
+    if isinstance(level, int):
+        return level
+    return _WIN_CLASS[level] if os.name == "nt" else _NICE[level]
+
+
+def _rank(raw: int) -> int:
+    """Lower means lower priority. Windows: the class order (an unknown class ranks as normal); POSIX: -nice."""
+    return _WIN_RANK.get(raw, 2) if os.name == "nt" else -raw
 
 
 def _kernel32():
@@ -771,27 +796,52 @@ def _process_table() -> dict[int, int] | None:
     return table if out.returncode == 0 and table else None
 
 
-def _created(pid: int) -> int | None:
-    """Windows: the process's creation time (FILETIME ticks), None when it cannot be read. A Windows parent pid is
-    never updated when the parent exits, so a pid reused by our build could look like the parent of an older,
-    unrelated process; a child is never older than its parent, and _descendants drops one that is."""
-    if os.name != "nt":
+def _handle_birth(k32, wintypes, ctypes, h) -> int | None:
+    """Windows: the creation time (FILETIME ticks) of the process an open handle holds, None when unreadable."""
+    times = [ctypes.c_uint64() for _ in range(4)]
+    if not k32.GetProcessTimes(wintypes.HANDLE(h), *[ctypes.byref(t) for t in times]):
         return None
+    return times[0].value
+
+
+def _handle_in_job(k32, wintypes, ctypes, h, job) -> bool | None:
+    """Windows: whether the process an open handle holds is in `job`; None when that cannot be asked."""
+    inside = wintypes.BOOL()
+    if not k32.IsProcessInJob(wintypes.HANDLE(h), wintypes.HANDLE(job), ctypes.byref(inside)):
+        return None
+    return bool(inside.value)
+
+
+def _posix_birth(pid: int) -> int | None:
+    """Linux: the process's start time (field 22 of /proc/<pid>/stat, clock ticks after boot); None elsewhere or
+    when it cannot be read (the process exited, or there is no /proc)."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None  # silent-ok: None = unknown; a caller never touches a process it cannot confirm
+    fields = stat.rpartition(")")[2].split()     # the command name in parentheses may hold spaces
+    return int(fields[19]) if len(fields) > 19 and fields[19].isdigit() else None
+
+
+def _created(pid: int) -> int | None:
+    """The process's start time (Windows FILETIME ticks; Linux /proc ticks), None when it cannot be read. A Windows
+    parent pid is never updated when the parent exits, so a pid reused by our build could look like the parent of an
+    older, unrelated process; a child is never older than its parent, and _descendants drops one that is. The same
+    value, recorded at listing, is how a later call confirms the pid still names that process."""
+    if os.name != "nt":
+        return _posix_birth(pid)
     ctypes, wintypes, k32 = _kernel32()
     h = k32.OpenProcess(0x1000, False, pid)             # PROCESS_QUERY_LIMITED_INFORMATION
     if not h:
         return None
     try:
-        times = [ctypes.c_uint64() for _ in range(4)]
-        if not k32.GetProcessTimes(wintypes.HANDLE(h), *[ctypes.byref(t) for t in times]):
-            return None
-        return times[0].value
+        return _handle_birth(k32, wintypes, ctypes, h)
     finally:
         k32.CloseHandle(h)
 
 
-def _descendants(root: int) -> list[int] | None:
-    """`root` and every process below it, root first; None when the processes cannot be listed."""
+def _descendants(root: int) -> list[tuple[int, int | None]] | None:
+    """(pid, start time) for `root` and every process below it, root first; None when they cannot be listed."""
     table = _process_table()
     if table is None:
         return None
@@ -799,61 +849,118 @@ def _descendants(root: int) -> list[int] | None:
     for pid, ppid in table.items():
         if pid != ppid:
             children.setdefault(ppid, []).append(pid)
-    tree, todo, seen = [root], [root], {root}
+    born: dict[int, int | None] = {root: _created(root)}
+    tree, todo, seen = [(root, born[root])], [root], {root}
     while todo:
         parent = todo.pop()
-        born = _created(parent)
         for child in children.get(parent, []):
             if child in seen:
                 continue
-            child_born = _created(child)
-            if born is not None and child_born is not None and child_born < born:
+            born[child] = _created(child)
+            if born[parent] is not None and born[child] is not None and born[child] < born[parent]:
                 continue        # an older process naming a reused pid as its parent: not ours
             seen.add(child)
-            tree.append(child)
+            tree.append((child, born[child]))
             todo.append(child)
     return tree
 
 
-def _set_priority(pid: int, level: str) -> str | None:
-    """Set one process's priority. None: done; "gone": it exited meanwhile; else what went wrong, for the note."""
+def _win_open_error(err: int) -> str:
+    return _GONE if err == 87 else ("access denied" if err == 5 else f"Windows error {err}")
+
+
+def _win_open_ours(pid: int, born: int | None, job, access: int):
+    """Windows: (k32 bits, handle, None) for the process `pid` names IF it is the one listed, else (.., None, why)."""
+    ctypes, wintypes, k32 = _kernel32()
+    h = k32.OpenProcess(access, False, pid)
+    if not h:
+        return (ctypes, wintypes, k32), None, _win_open_error(ctypes.get_last_error())
+    code = wintypes.DWORD()
+    why = None
+    if k32.GetExitCodeProcess(wintypes.HANDLE(h), ctypes.byref(code)) and code.value != 259:
+        why = _GONE                                  # exited; our handle only keeps its record alive
+    elif not (job and _handle_in_job(k32, wintypes, ctypes, h, job)):
+        # Not provably in the build's job (no job, or a process started before the job took the tree): the start
+        # time recorded at listing must match the process this handle holds.
+        now = _handle_birth(k32, wintypes, ctypes, h)
+        if born is None or now is None:
+            why = "identity unconfirmed (its start time could not be read), so it was not touched"
+        elif now != born:
+            why = _NOT_OURS
+    if why:
+        k32.CloseHandle(h)
+        return (ctypes, wintypes, k32), None, why
+    return (ctypes, wintypes, k32), h, None
+
+
+def _posix_ours(pid: int, born: int | None) -> str | None:
+    if born is None:
+        return "identity unconfirmed (no process start time on this platform), so it was not touched"
+    now = _posix_birth(pid)
+    if now is None:
+        return _GONE
+    return None if now == born else _NOT_OURS
+
+
+def _set_priority(pid: int, level, born: int | None = None, job=None) -> str | None:
+    """Set one process's priority (IDLE, BELOW_NORMAL, or a raw value) if `pid` still names the process listed with
+    start time `born` (or, on Windows, one in the build's `job`). None: done, read back; _GONE: it exited meanwhile;
+    _NOT_OURS: the pid was reused, nothing touched; else what went wrong, for the note."""
+    want = _raw(level)
     if os.name == "nt":
-        ctypes, wintypes, k32 = _kernel32()
-        h = k32.OpenProcess(0x0200 | 0x1000, False, pid)  # PROCESS_SET_INFORMATION | QUERY_LIMITED_INFORMATION
-        if not h:
-            err = ctypes.get_last_error()
-            return _GONE if err == 87 else ("access denied" if err == 5 else f"Windows error {err}")
+        (ctypes, wintypes, k32), h, why = _win_open_ours(pid, born, job, 0x0200 | 0x1000)
+        if h is None:                                 # PROCESS_SET_INFORMATION | QUERY_LIMITED_INFORMATION
+            return why
         try:
-            code = wintypes.DWORD()
-            if k32.GetExitCodeProcess(wintypes.HANDLE(h), ctypes.byref(code)) and code.value != 259:
-                return _GONE                                # exited; our handle only keeps its record alive
-            if not k32.SetPriorityClass(wintypes.HANDLE(h), wintypes.DWORD(_WIN_CLASS[level])):
+            if not k32.SetPriorityClass(wintypes.HANDLE(h), wintypes.DWORD(want)):
                 err = ctypes.get_last_error()
                 return "access denied" if err == 5 else f"Windows error {err}"
             # A job object with a priority-class limit (a job wrapper's, for one) makes SetPriorityClass succeed
             # and change nothing (MEASURED 2026-11-09 under rb: the call returned success, the class stayed
             # below-normal). Read it back: "done" is the process's state, not the call's return.
             got = k32.GetPriorityClass(wintypes.HANDLE(h))
-            if got != _WIN_CLASS[level]:
+            if got != want:
                 now = next((lvl for lvl, cls in _WIN_CLASS.items() if cls == got), hex(got))
                 return f"not taken, still {now} (a job object, such as a job wrapper's, limits its priority)"
             return None
         finally:
             k32.CloseHandle(h)
+    why = _posix_ours(pid, born)
+    if why:
+        return why
     try:
-        os.setpriority(os.PRIO_PROCESS, pid, _NICE[level])
+        os.setpriority(os.PRIO_PROCESS, pid, want)
     except ProcessLookupError:
         return _GONE
     except PermissionError:
-        # Raising a nice value back down (the restore to below-normal) needs privilege on Linux.
-        return "permission denied"
+        # Raising a nice value back down (the restore after a game) needs privilege on Linux.
+        return "permission denied (raising a priority back needs privilege here)"
     except OSError as exc:
         return f"{type(exc).__name__}: {exc}"
     return None
 
 
+def _priority_raw(pid: int, born: int | None = None, job=None) -> int | None:
+    """The raw priority (Windows class, POSIX nice) of the process listed with start time `born`; None when it cannot
+    be read or the pid no longer names that process."""
+    if os.name == "nt":
+        (_c, wintypes, k32), h, _why = _win_open_ours(pid, born, job, 0x1000)
+        if h is None:
+            return None
+        try:
+            return k32.GetPriorityClass(wintypes.HANDLE(h)) or None
+        finally:
+            k32.CloseHandle(h)
+    if _posix_ours(pid, born):
+        return None
+    try:
+        return os.getpriority(os.PRIO_PROCESS, pid)
+    except OSError:
+        return None  # silent-ok: None = cannot be read, this function's documented non-answer
+
+
 def _get_priority(pid: int) -> str | None:
-    """IDLE, BELOW_NORMAL, another value as text, or None when it cannot be read."""
+    """IDLE, BELOW_NORMAL, another value as text, or None when it cannot be read (no identity check: a test aid)."""
     if os.name == "nt":
         ctypes, wintypes, k32 = _kernel32()
         h = k32.OpenProcess(0x1000, False, pid)
@@ -871,54 +978,142 @@ def _get_priority(pid: int) -> str | None:
     return next((lvl for lvl, n in _NICE.items() if n == got), str(got))
 
 
+def _short(errs: dict[str, list[int]]) -> str:
+    return "; ".join(errs)[:200]
+
+
 class _GameWatch:
-    """Watches for a game while one database builds; see the section comment above. `on_change(watch)` runs when the
-    priority changes (the background builder records it, so `x4fresh status` says it); `lines(db)` is for the note."""
+    """Watches for a game while one database builds; see the section comment above. `on_change(watch)` runs when what
+    `x4fresh status` should show changes (the background builder records it); `lines(db)` is for the note."""
 
     def __init__(self, on_change=None):
         self.level: str | None = None       # None: never touched; IDLE; BELOW_NORMAL: restored after a game
-        self.priority = ""                  # what `x4fresh status` shows while the build runs
+        self.priority = ""                  # what `x4fresh status` shows while the build runs: the MEASURED state
+        self.priority_at = ""               # when that last changed
         self.events: list[str] = []
+        self._more = 0                      # priority changes past EVENTS_MAX, counted
+        self._last_event = ""
         self.problems: dict[tuple, str] = {}
-        self._refused: dict[tuple[str, str], list[int]] = {}
+        self._refused: dict[tuple, list[int]] = {}
+        self._original: dict[tuple[int, int | None], int | None] = {}   # (pid, start) -> priority at first touch
+        self._lowered: set[tuple[int, int | None]] = set()               # what this watch dropped to idle
+        self._since = ""
+        self.job = None
         self.on_change = on_change
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
+    def _event(self, text: str) -> None:
+        if text == self._last_event:      # the same state again, back to back: said once
+            return
+        self._last_event = text
+        if len(self.events) >= EVENTS_MAX:
+            self._more += 1
+        else:
+            self.events.append(text)
+
+    def _refuse(self, kind: str, pid: int, err: str) -> None:
+        pids = self._refused.setdefault((kind, err), [])
+        if pid not in pids:
+            pids.append(pid)
+        shown = ", ".join(str(p) for p in pids[:MAX_LISTED]) + (", ..." if len(pids) > MAX_LISTED else "")
+        self.problems[("refused", kind, err)] = f"could not {kind} {len(pids)} process(es) (pid {shown}): {err}"
+
     def poll(self, root: int) -> None:
         busy = _running_deferring_processes()
         when = time.strftime("%H:%M", time.localtime(_now()))
-        changed = False
+        before = self.priority
         if busy is None or busy:
+            why = ("could not list running processes, so a game may be running" if busy is None
+                   else f"a game started ({', '.join(busy)})")
             if self.level != IDLE:
-                why = ("could not list running processes, so a game may be running" if busy is None
-                       else f"a game started ({', '.join(busy)})")
-                self.level, changed = IDLE, True
-                self.priority = f"idle since {when}: {why}"
-                self.events.append(f"lowered to idle priority at {when}: {why}")
-            self._apply(root, IDLE)          # every poll: a process the build started since is dropped too
+                self.level, self._since = IDLE, when
+            # every poll: a process the build started since is dropped too, and the state shown is re-measured
+            self.priority, event = self._lower(root, why)
+            if self.priority != before:
+                self._event(event)
         elif self.level == IDLE:
-            self.level, changed = BELOW_NORMAL, True
-            self.priority = f"below-normal again since {when}, after a game ran"
-            self.events.append(f"restored to below-normal priority at {when}: the game closed")
-            self._apply(root, BELOW_NORMAL)
-        if changed and self.on_change is not None:
-            self.on_change(self)
+            self.level = BELOW_NORMAL
+            self.priority, event = self._restore(root, when)
+            self._event(event)
+        if self.priority != before:
+            self.priority_at = _stamp(_now())
+            if self.on_change is not None:
+                self.on_change(self)
 
-    def _apply(self, root: int, level: str) -> None:
+    def _lower(self, root: int, why: str) -> tuple[str, str]:
+        """(what status shows, the note's event) for one drop to idle, from what the processes took."""
+        tree = _descendants(root)
+        since = self._since
+        if tree is None:
+            self.problems[("tree",)] = "could not list the build's processes to set idle priority"
+            return (f"idle requested {since}, not taken: could not list the build's processes: {why}",
+                    f"idle priority requested at {since}, not taken: could not list the build's processes: {why}")
+        took, refused, errs = 0, 0, {}
+        for pid, born in tree:
+            key = (pid, born)
+            if key not in self._original:
+                self._original[key] = _priority_raw(pid, born, self.job)
+            orig = self._original[key]
+            if orig is not None and _rank(orig) <= _rank(_raw(IDLE)):
+                took += 1                              # idle already, before any game: never touched
+                continue
+            err = _set_priority(pid, IDLE, born, self.job)
+            if err in (_GONE, _NOT_OURS):
+                continue
+            if err:
+                refused += 1
+                errs.setdefault(err, []).append(pid)
+                self._refuse("set idle priority on", pid, err)
+            else:
+                took += 1
+                self._lowered.add(key)
+        total = took + refused
+        if not refused:
+            return (f"idle since {since}: {why}", f"lowered to idle priority at {since}: {why}")
+        if not took:
+            return (f"idle requested {since}, not taken: {refused} of {total} processes ({_short(errs)}): {why}",
+                    f"idle priority requested at {since}, not taken on {refused} of {total} processes: {why}")
+        return (f"idle since {since} for {took} of {total} processes; not taken: {refused} ({_short(errs)}): {why}",
+                f"lowered to idle priority at {since} on {took} of {total} processes, not taken on {refused}: {why}")
+
+    def _restore(self, root: int, when: str) -> tuple[str, str]:
+        """(what status shows, the note's event) for the restore after a game: only what this watch lowered, back to
+        what it had, never above below-normal."""
         tree = _descendants(root)
         if tree is None:
-            self.problems[("tree",)] = f"could not list the build's processes to set {level} priority"
-            return
-        for pid in tree:
-            err = _set_priority(pid, level)
-            if err and err != _GONE:
-                pids = self._refused.setdefault((level, err), [])
-                if pid not in pids:
-                    pids.append(pid)
-                shown = ", ".join(str(p) for p in pids[:MAX_LISTED]) + (", ..." if len(pids) > MAX_LISTED else "")
-                self.problems[("refused", level, err)] = (f"could not set {level} priority on {len(pids)} "
-                                                          f"process(es) (pid {shown}): {err}")
+            self.problems[("tree", "restore")] = "could not list the build's processes to restore their priority"
+            return (f"restore at {when} not done: could not list the build's processes, so they stay at idle",
+                    f"restore to below-normal at {when} not done: could not list the build's processes")
+        done, left, errs = 0, 0, {}
+        for pid, born in tree:
+            key = (pid, born)
+            if key not in self._lowered:
+                continue
+            self._lowered.discard(key)
+            orig = self._original.get(key)
+            if orig is None:
+                left += 1
+                errs.setdefault("original priority unknown", []).append(pid)
+                self._refuse("restore the priority of", pid,
+                             "its priority before the game could not be read; left at idle")
+                continue
+            target = BELOW_NORMAL if _rank(orig) >= _rank(_raw(BELOW_NORMAL)) else orig
+            err = _set_priority(pid, target, born, self.job)
+            if err in (_GONE, _NOT_OURS):
+                continue
+            if err:
+                left += 1
+                errs.setdefault(err, []).append(pid)
+                self._refuse("restore the priority of", pid, f"{err}; left at idle")
+            else:
+                done += 1
+        if not left:
+            return (f"below-normal again since {when}, after a game ran",
+                    f"restored to below-normal priority at {when}: the game closed")
+        total = done + left
+        return (f"restore at {when} incomplete: {left} of {total} processes left at idle ({_short(errs)})",
+                f"restore to below-normal at {when} incomplete: {left} of {total} processes left at idle")
 
     def safe_poll(self, root: int) -> None:
         try:
@@ -928,10 +1123,14 @@ class _GameWatch:
                                                              f"{exc}); the build kept its priority")
 
     def lines(self, name: str) -> list[str]:
-        return [f"{name}: {e}" for e in self.events] + [f"{name}: {p}" for p in self.problems.values()]
+        more = [f"{name}: ... {self._more} more priority change(s)"] if self._more else []
+        return [f"{name}: {e}" for e in self.events] + more + [f"{name}: {p}" for p in self.problems.values()]
 
-    def start(self, proc) -> None:
+    def start(self, proc, job=None) -> None:
+        """Never raises: a watch that cannot start is said in the note, and the build runs on unwatched.
+        `job`: the job object the build's tree is in, which confirms a process is ours (Windows)."""
         root = proc.pid
+        self.job = job
         if self.level == IDLE:
             self.safe_poll(root)             # a second process for the same database (the swap, then the build)
         self._stop.clear()
@@ -939,8 +1138,13 @@ class _GameWatch:
         def loop():
             while not self._stop.wait(GAME_POLL_SECONDS):
                 self.safe_poll(root)
-        self._thread = threading.Thread(target=loop, name="x4fresh-game-watch", daemon=True)
-        self._thread.start()
+        try:
+            self._thread = threading.Thread(target=loop, name="x4fresh-game-watch", daemon=True)
+            self._thread.start()
+        except Exception as exc:  # noqa: BLE001 -- the watch must never stop the build it watches
+            self._thread = None
+            self.problems[("raised", "start", type(exc).__name__)] = (
+                f"could not watch for a game ({type(exc).__name__}: {exc}); the build ran unwatched")
 
     def stop(self) -> None:
         self._stop.set()
@@ -1070,6 +1274,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
     its build (the game, the quiet period, the disk, locks, the effective store), and its outcome is recorded."""
     before = {s.name: s for s in status(ORDER, holding_lock=True)}
     lines, failed, unclean = [], False, False
+    running_since = ""
     swap_waiting = False      # a finished build's swap is still refused by a reader: pending, not a failure
     skips: dict[str, str] = {}
     ran: list[str] = []
@@ -1091,7 +1296,8 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
             if not_now:
                 skips[name] = not_now
                 continue
-            _basex_record(sd, "running", building=name)
+            running_since = _stamp(_now())
+            _basex_record(sd, "running", building=name, when=running_since)
             ran.append(name)
         # A finished build an earlier run could not swap in (rc 7: a reader held the database) is swapped in alone,
         # never dropped and rebuilt; the memo of that rc 7 does not stop it, since nothing about it needs fixing.
@@ -1110,8 +1316,9 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
             continue
         swap_held = False
         # Only the background builder: it is the one that builds unattended, maybe while the user starts a game.
-        watch = (_GameWatch(on_change=lambda w, db=name: _basex_record(sd, "running", building=db,
-                                                                      priority=w.priority))
+        # A priority change keeps `when` (the build's start, "running since") and says its own time apart.
+        watch = (_GameWatch(on_change=lambda w, db=name, since=running_since: _basex_record(
+            sd, "running", building=db, when=since, priority=w.priority, priority_at=w.priority_at))
                  if basex_child else None)
         stamp = time.strftime('%Y%m%d-%H%M%S')
         log = sd / "logs" / f"{name}-{stamp}.log"

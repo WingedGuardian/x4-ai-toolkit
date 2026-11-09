@@ -1891,21 +1891,32 @@ def test_TWIN_write_note_gives_up_after_a_bounded_number_of_tries(tmp_path, monk
 
 # ---- a game that starts while the background BaseX builder builds: the build drops to IDLE priority (4.1.1)
 
+NORMAL_RAW = 0x20 if os.name == "nt" else 0          # NORMAL_PRIORITY_CLASS / nice 0
+REFUSED = "not taken, still below-normal (a job object, such as a job wrapper's, limits its priority)"
+
+
 @pytest.fixture
 def watch(monkeypatch):
-    """A _GameWatch whose game check, process listing and priority calls are all faked: nothing real is touched."""
-    world = {"game": ["x4.exe"], "tree": [100, 101, 102], "fail": {}}
-    calls: list[tuple[int, str]] = []
+    """A _GameWatch whose game check, process listing and priority calls are all faked: nothing real is touched.
+    world["fail"]: pid -> error for every call, or (pid, level) -> error for one level; world["orig"]: pid -> the
+    priority the process had before the watch touched it (default below-normal)."""
+    world = {"game": ["x4.exe"], "tree": [100, 101, 102], "fail": {}, "orig": {}}
+    calls: list[tuple[int, object]] = []
     monkeypatch.setattr(fc, "_running_deferring_processes", lambda: world["game"])
-    monkeypatch.setattr(fc, "_descendants", lambda root: None if world["tree"] is None else [root] + [
-        p for p in world["tree"] if p != root])
+    monkeypatch.setattr(fc, "_descendants", lambda root: None if world["tree"] is None else [
+        (p, p * 10) for p in [root] + [p for p in world["tree"] if p != root]])
 
-    def set_priority(pid, level):
+    def set_priority(pid, level, born=None, job=None):
+        assert born == pid * 10, "the start time recorded at listing must reach the priority call"
         calls.append((pid, level))
-        return world["fail"].get(pid)
+        return world["fail"].get((pid, level), world["fail"].get(pid))
     monkeypatch.setattr(fc, "_set_priority", set_priority)
+    monkeypatch.setattr(fc, "_priority_raw",
+                        lambda pid, born=None, job=None: world["orig"].get(pid, fc._raw(fc.BELOW_NORMAL)))
     monkeypatch.setattr(fc, "_now", lambda: T0)
-    return {"w": fc._GameWatch(), "world": world, "calls": calls}
+    changes: list[str] = []
+    return {"w": fc._GameWatch(on_change=lambda w: changes.append(w.priority)), "world": world, "calls": calls,
+            "changes": changes}
 
 
 def test_a_game_seen_mid_build_drops_every_process_of_the_build_to_idle(watch):
@@ -1915,6 +1926,7 @@ def test_a_game_seen_mid_build_drops_every_process_of_the_build_to_idle(watch):
     text = " ".join(w.lines("x4raw"))
     assert "x4raw: lowered to idle priority at" in text and "x4.exe" in text
     assert w.level == fc.IDLE
+    assert w.priority.startswith("idle since ") and watch["changes"] == [w.priority]
 
 
 def test_TWIN_no_game_mid_build_changes_no_priority_and_says_nothing(watch):
@@ -1923,7 +1935,45 @@ def test_TWIN_no_game_mid_build_changes_no_priority_and_says_nothing(watch):
     w.poll(100)
     w.poll(100)
     assert watch["calls"] == []
-    assert w.lines("x4raw") == [] and w.level is None
+    assert w.lines("x4raw") == [] and w.level is None and watch["changes"] == []
+
+
+def test_TWIN_a_drop_no_process_took_is_never_shown_as_idle(watch):
+    watch["world"]["fail"] = {100: REFUSED, 101: REFUSED, 102: REFUSED}
+    w = watch["w"]
+    w.poll(100)
+    assert "idle since" not in w.priority and w.priority.startswith("idle requested "), w.priority
+    assert "not taken: 3 of 3 processes" in w.priority and "job object" in w.priority, w.priority
+    assert watch["changes"] == [w.priority]
+    assert not any("lowered to idle priority" in ln for ln in w.lines("x4raw")), w.lines("x4raw")
+
+
+def test_TWIN_a_drop_some_processes_took_says_how_many(watch):
+    watch["world"]["fail"] = {101: REFUSED}
+    w = watch["w"]
+    w.poll(100)
+    assert w.priority.startswith("idle since ") and "for 2 of 3 processes" in w.priority, w.priority
+    assert "not taken: 1" in w.priority, w.priority
+
+
+def test_TWIN_a_drop_whose_tree_cannot_be_listed_is_never_shown_as_idle(watch):
+    watch["world"]["tree"] = None
+    w = watch["w"]
+    w.poll(100)
+    assert watch["calls"] == []
+    assert w.priority.startswith("idle requested ") and "could not list" in w.priority, w.priority
+    assert any("could not list the build's processes" in ln for ln in w.lines("x4raw"))
+
+
+def test_a_status_that_changes_on_a_later_poll_is_recorded_again(watch):
+    watch["world"]["fail"] = {100: REFUSED, 101: REFUSED, 102: REFUSED}
+    w = watch["w"]
+    w.poll(100)
+    watch["world"]["fail"] = {}
+    w.poll(100)
+    assert len(watch["changes"]) == 2 and watch["changes"][-1].startswith("idle since "), watch["changes"]
+    w.poll(100)
+    assert len(watch["changes"]) == 2, "an unchanged state must not be written again"
 
 
 def test_a_process_the_build_starts_after_the_drop_is_dropped_on_the_next_poll(watch):
@@ -1946,9 +1996,99 @@ def test_a_game_that_closes_restores_below_normal_once(watch):
     w.poll(100)
     assert watch["calls"] == [], "after the restore, a poll with no game touches nothing"
     assert "restored to below-normal priority at" in " ".join(w.lines("x4raw"))
+    assert w.priority.startswith("below-normal again since "), w.priority
 
 
-def test_a_game_check_that_cannot_answer_drops_to_idle_as_if_a_game_ran(watch):
+def test_restore_never_raises_a_process_that_was_idle_before_the_game(watch):
+    watch["world"]["orig"] = {101: fc._raw(fc.IDLE)}
+    w = watch["w"]
+    w.poll(100)
+    assert (101, fc.IDLE) not in watch["calls"], "a process already idle is not touched"
+    assert w.priority.startswith("idle since "), w.priority
+    watch["world"]["game"] = []
+    watch["calls"].clear()
+    w.poll(100)
+    assert watch["calls"] == [(100, fc.BELOW_NORMAL), (102, fc.BELOW_NORMAL)], watch["calls"]
+
+
+def test_TWIN_restore_never_raises_above_below_normal(watch):
+    watch["world"]["orig"] = {100: NORMAL_RAW}
+    w = watch["w"]
+    w.poll(100)
+    watch["world"]["game"] = []
+    watch["calls"].clear()
+    w.poll(100)
+    assert (100, fc.BELOW_NORMAL) in watch["calls"], watch["calls"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a nice value between below-normal and idle exists only on POSIX")
+def test_TWIN_restore_returns_a_lower_original_nice_not_below_normal(watch):
+    watch["world"]["orig"] = {101: 15}
+    w = watch["w"]
+    w.poll(100)
+    watch["world"]["game"] = []
+    watch["calls"].clear()
+    w.poll(100)
+    assert (101, 15) in watch["calls"] and (101, fc.BELOW_NORMAL) not in watch["calls"], watch["calls"]
+
+
+def test_a_restore_that_fails_is_said_never_shown_as_below_normal(watch):
+    watch["world"]["fail"] = {(101, fc.BELOW_NORMAL): "permission denied"}
+    w = watch["w"]
+    w.poll(100)
+    watch["world"]["game"] = []
+    w.poll(100)
+    assert "below-normal again" not in w.priority and "1 of 3" in w.priority, w.priority
+    assert any("permission denied" in ln and "pid 101" in ln for ln in w.lines("x4raw")), w.lines("x4raw")
+
+
+def test_TWIN_a_process_whose_original_could_not_be_read_is_left_idle_and_said(watch):
+    watch["world"]["orig"] = {101: None}
+    w = watch["w"]
+    w.poll(100)
+    watch["world"]["game"] = []
+    watch["calls"].clear()
+    w.poll(100)
+    assert (101, fc.BELOW_NORMAL) not in watch["calls"] and (100, fc.BELOW_NORMAL) in watch["calls"]
+    assert any("left at idle" in ln and "pid 101" in ln for ln in w.lines("x4raw")), w.lines("x4raw")
+
+
+def test_a_game_that_starts_again_keeps_the_first_original(watch):
+    watch["world"]["orig"] = {100: 0x8000 if os.name == "nt" else -5}   # above normal at first touch
+    w = watch["w"]
+    w.poll(100)
+    watch["world"]["game"] = []
+    w.poll(100)
+    watch["world"]["orig"] = {100: fc._raw(fc.BELOW_NORMAL)}          # what a re-read would see now
+    watch["world"]["game"] = ["x4.exe"]
+    w.poll(100)
+    assert w._original[(100, 1000)] == (0x8000 if os.name == "nt" else -5)
+
+
+def test_a_reused_pid_is_skipped_and_never_counted(watch):
+    watch["world"]["fail"] = {101: fc._NOT_OURS}
+    w = watch["w"]
+    w.poll(100)
+    assert w.priority.startswith("idle since ") and " of " not in w.priority, w.priority
+    assert not any("could not" in ln for ln in w.lines("x4raw"))
+
+
+def test_events_are_bounded_and_deduplicated(watch):
+    w = watch["w"]
+    for _ in range(30):
+        watch["world"]["game"] = ["x4.exe"]
+        w.poll(100)
+        watch["world"]["game"] = []
+        w.poll(100)
+    events = [ln for ln in w.lines("x4raw") if "could not" not in ln]
+    assert len(events) == fc.EVENTS_MAX + 1 and "50 more priority change" in events[-1], events
+    w2 = fc._GameWatch()
+    w2._event("same")
+    w2._event("same")
+    assert w2.lines("x") == ["x: same"]
+
+
+def test_TWIN_a_game_check_that_cannot_answer_drops_to_idle_as_if_a_game_ran(watch):
     watch["world"]["game"] = None
     w = watch["w"]
     w.poll(100)
@@ -1983,14 +2123,6 @@ def test_TWIN_access_denied_is_said_in_the_note_and_the_rest_still_drops(watch):
     assert len(said) == 1 and "access denied" in said[0] and "pid 101" in said[0], said
 
 
-def test_a_tree_that_cannot_be_listed_is_said_never_a_crash(watch):
-    watch["world"]["tree"] = None
-    w = watch["w"]
-    w.poll(100)
-    assert watch["calls"] == []
-    assert any("could not list the build's processes" in ln for ln in w.lines("x4raw"))
-
-
 def test_a_poll_that_raises_never_stops_the_build(watch, monkeypatch):
     def boom():
         raise RuntimeError("tasklist exploded")
@@ -1998,6 +2130,47 @@ def test_a_poll_that_raises_never_stops_the_build(watch, monkeypatch):
     w = watch["w"]
     w.safe_poll(100)
     assert any("RuntimeError" in ln for ln in w.lines("x4raw"))
+
+
+class _Proc:
+    pid = 200
+
+
+def test_a_second_process_for_the_same_database_is_dropped_at_once_when_already_idle(watch, monkeypatch):
+    monkeypatch.setattr(fc, "GAME_POLL_SECONDS", 3600.0)      # the loop never polls in this test
+    w = watch["w"]
+    w.poll(100)
+    watch["calls"].clear()
+    watch["world"]["tree"] = [200]
+    w.start(_Proc())
+    w.stop()
+    assert (200, fc.IDLE) in watch["calls"], watch["calls"]
+
+
+def test_TWIN_a_first_process_is_not_polled_before_the_interval(watch, monkeypatch):
+    monkeypatch.setattr(fc, "GAME_POLL_SECONDS", 3600.0)
+    w = watch["w"]
+    w.start(_Proc())
+    w.stop()
+    assert watch["calls"] == []
+
+
+def test_a_watch_thread_that_cannot_start_is_said_and_the_build_still_runs(sd, monkeypatch):
+    import threading
+    import types
+
+    class _NoThread:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+    monkeypatch.setattr(fc, "threading", types.SimpleNamespace(Thread=_NoThread, Event=threading.Event))
+    monkeypatch.setattr(fc, "builder", lambda name: [sys.executable, "-c", "pass"])
+    w = fc._GameWatch()
+    rc, _w, _x = fc._run("effective", sd / "logs" / "e.log", watch=w)
+    assert rc == 0
+    assert any("could not watch for a game" in ln and "RuntimeError" in ln for ln in w.lines("x4raw")), w.lines("x")
 
 
 def test_the_status_line_says_the_running_build_was_lowered_to_idle(sd, monkeypatch):
@@ -2022,14 +2195,26 @@ def _sleeping_builder(order, seconds):
     return builder
 
 
+def _fake_priority_calls(monkeypatch):
+    calls: list[tuple[int, object]] = []
+    monkeypatch.setattr(fc, "_descendants", lambda root: [(root, None)])
+    monkeypatch.setattr(fc, "_priority_raw", lambda pid, born=None, job=None: fc._raw(fc.BELOW_NORMAL))
+    monkeypatch.setattr(fc, "_set_priority", lambda pid, level, born=None, job=None: calls.append((pid, level)))
+    return calls
+
+
 def test_the_background_builder_drops_its_build_to_idle_when_a_game_starts_and_records_it(sd, bxa, monkeypatch):
     order = _child_world(monkeypatch)
     monkeypatch.setattr(fc, "builder", _sleeping_builder(order, 1.5))
     monkeypatch.setattr(fc, "GAME_POLL_SECONDS", 0.1)
     monkeypatch.setattr(fc, "_running_deferring_processes", lambda: ["x4.exe"])
-    calls: list[tuple[int, str]] = []
-    monkeypatch.setattr(fc, "_descendants", lambda root: [root])
-    monkeypatch.setattr(fc, "_set_priority", lambda pid, level: calls.append((pid, level)))
+    clock = {"t": T0}
+
+    def ticking():               # every reading of the clock is two minutes later than the one before
+        clock["t"] += 120
+        return clock["t"]
+    monkeypatch.setattr(fc, "_now", ticking)
+    calls = _fake_priority_calls(monkeypatch)
     records: list[dict] = []
     real = fc._basex_record
     monkeypatch.setattr(fc, "_basex_record", lambda sd_, state, **f: records.append(dict(f, state=state)) or
@@ -2038,7 +2223,13 @@ def test_the_background_builder_drops_its_build_to_idle_when_a_game_starts_and_r
     fc._basex_child(sd / "session-note.txt")
     assert order == ["x4raw", "x4eff"], "a game seen mid-build must not stop or skip the build (_deferred is faked)"
     assert calls and {lvl for _p, lvl in calls} == {fc.IDLE}
-    assert any(r["state"] == "running" and "idle since" in r.get("priority", "") for r in records), records
+    lowered = [r for r in records if r["state"] == "running" and "idle since" in r.get("priority", "")]
+    assert lowered, records
+    for r in lowered:
+        started = next(s for s in records if s["state"] == "running" and s.get("building") == r["building"]
+                       and "priority" not in s)
+        assert r["when"] == started["when"], "a priority change must not rewrite when the build started"
+        assert r.get("priority_at") and r["priority_at"] != r["when"], r
     rec = json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
     assert "x4raw: lowered to idle priority at" in rec["detail"], rec["detail"]
 
@@ -2048,9 +2239,7 @@ def test_TWIN_the_background_builder_with_no_game_changes_no_priority(sd, bxa, m
     monkeypatch.setattr(fc, "builder", _sleeping_builder(order, 0.5))
     monkeypatch.setattr(fc, "GAME_POLL_SECONDS", 0.1)
     monkeypatch.setattr(fc, "_running_deferring_processes", lambda: [])
-    calls: list = []
-    monkeypatch.setattr(fc, "_descendants", lambda root: [root])
-    monkeypatch.setattr(fc, "_set_priority", lambda pid, level: calls.append((pid, level)))
+    calls = _fake_priority_calls(monkeypatch)
     _seen(sd, 60)
     fc._basex_child(sd / "session-note.txt")
     assert order == ["x4raw", "x4eff"] and calls == []
@@ -2058,11 +2247,95 @@ def test_TWIN_the_background_builder_with_no_game_changes_no_priority(sd, bxa, m
 
 
 def test_TWIN_a_rebuild_by_hand_never_watches_for_the_game(sd, monkeypatch):
+    """The same BaseX databases, stale, rebuilt by hand (not the background builder): a game running meanwhile must
+    not be looked for, and nothing's priority changed."""
+    order = _child_world(monkeypatch)
+    monkeypatch.setattr(fc, "builder", _sleeping_builder(order, 0.4))
     monkeypatch.setattr(fc, "GAME_POLL_SECONDS", 0.05)
-    monkeypatch.setattr(fc, "_running_deferring_processes", lambda: pytest.fail("a rebuild by hand polled the game"))
-    monkeypatch.setattr(fc, "builder", _sleeping_builder([], 0.3))
-    rc, _w, _x = fc._run("effective", sd / "logs" / "e.log")
-    assert rc == 0
+    polled: list[int] = []
+    monkeypatch.setattr(fc, "_running_deferring_processes", lambda: polled.append(1) or ["x4.exe"])
+    calls = _fake_priority_calls(monkeypatch)
+    sd.mkdir(parents=True, exist_ok=True)
+    fc._rebuild_locked(sd, list(fc.BASEX), False, sd / "session-note.txt")
+    assert order == list(fc.BASEX), order
+    assert polled == [] and calls == [], (polled, calls)
+
+
+def test_descendants_drops_a_child_older_than_its_parent(monkeypatch):
+    """A Windows parent pid is never updated, so a pid reused by our build can look like the parent of an older,
+    unrelated process; a child is never older than its parent."""
+    monkeypatch.setattr(fc, "_process_table", lambda: {100: 1, 101: 100, 102: 100, 103: 101})
+    born = {100: 50, 101: 60, 102: 40, 103: 70}
+    monkeypatch.setattr(fc, "_created", lambda pid: born.get(pid))
+    assert fc._descendants(100) == [(100, 50), (101, 60), (103, 70)]
+
+
+def test_TWIN_descendants_keeps_a_child_whose_age_cannot_be_read(monkeypatch):
+    monkeypatch.setattr(fc, "_process_table", lambda: {100: 1, 101: 100})
+    monkeypatch.setattr(fc, "_created", lambda pid: 50 if pid == 100 else None)
+    assert fc._descendants(100) == [(100, 50), (101, None)]
+
+
+@pytest.mark.skipif(not (os.name == "nt" or sys.platform.startswith("linux")), reason="no start time here")
+def test_created_reads_a_real_start_time_and_a_child_is_never_older():
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        mine, its = fc._created(os.getpid()), fc._created(child.pid)
+        assert mine is not None and its is not None and its >= mine, (mine, its)
+        assert fc._created(child.pid) == its, "the same process must read the same start time"
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the Windows error codes of OpenProcess")
+@pytest.mark.parametrize("err, said", [(87, "gone"), (5, "access denied"), (31, "Windows error 31")])
+def test_windows_open_errors_map_to_gone_access_denied_or_the_code(monkeypatch, err, said):
+    import ctypes
+    import types
+    from ctypes import wintypes
+    k32 = types.SimpleNamespace(OpenProcess=lambda *a: 0,
+                                SetPriorityClass=lambda *a: pytest.fail("a process that never opened was set"))
+    fake = types.SimpleNamespace(get_last_error=lambda: err, byref=ctypes.byref)
+    monkeypatch.setattr(fc, "_kernel32", lambda: (fake, wintypes, k32))
+    assert fc._set_priority(4242, fc.IDLE, born=1) == said
+
+
+@pytest.mark.skipif(not (os.name == "nt" or sys.platform.startswith("linux")), reason="no start time here")
+def test_a_process_whose_start_time_differs_from_the_listing_is_never_touched():
+    """Real: a sleeping child of this test. A pid whose start time is not the one listed is someone else's (reused)."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        before = fc._get_priority(child.pid)
+        born = fc._created(child.pid)
+        assert fc._set_priority(child.pid, fc.IDLE, born=born + 1) == fc._NOT_OURS
+        assert fc._priority_raw(child.pid, born=born + 1) is None
+        assert fc._get_priority(child.pid) == before, "a mismatched process must keep its priority"
+        unconfirmed = fc._set_priority(child.pid, fc.IDLE, born=None)
+        assert unconfirmed.startswith("identity unconfirmed"), unconfirmed
+        assert fc._get_priority(child.pid) == before
+        if os.name == "nt":
+            tree = fc._ChildTree()            # a job the child is NOT in: membership proves nothing either way
+            assert fc._set_priority(child.pid, fc.IDLE, born=born + 1, job=tree.job) == fc._NOT_OURS
+            assert fc._get_priority(child.pid) == before
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="job membership is Windows")
+def test_TWIN_a_process_in_the_builds_job_is_ours_whatever_its_start_time(monkeypatch):
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        born = fc._created(child.pid)
+        monkeypatch.setattr(fc, "_handle_in_job", lambda k32, wintypes, ctypes, h, job: True)
+        err = fc._set_priority(child.pid, fc.IDLE, born=born + 1, job=1)
+        assert err is None or err.startswith("not taken"), err
+        monkeypatch.setattr(fc, "_handle_in_job", lambda k32, wintypes, ctypes, h, job: False)
+        assert fc._set_priority(child.pid, fc.BELOW_NORMAL, born=born + 1, job=1) == fc._NOT_OURS
+    finally:
+        child.kill()
+        child.wait()
 
 
 def test_the_real_tree_listing_and_priority_calls_on_a_harmless_child_of_this_test():
@@ -2072,12 +2345,17 @@ def test_the_real_tree_listing_and_priority_calls_on_a_harmless_child_of_this_te
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         tree = fc._descendants(os.getpid())
-        assert tree is not None and child.pid in tree and tree[0] == os.getpid()
-        assert os.getppid() not in tree, "the listing must follow children only, never the parent"
-        err = fc._set_priority(child.pid, fc.IDLE)
-        assert (err is None) == (fc._get_priority(child.pid) == fc.IDLE), err
-        assert err is None or err.startswith("not taken"), err
+        assert tree is not None and tree[0][0] == os.getpid()
+        listed = dict(tree)
+        assert child.pid in listed, tree
+        assert os.getppid() not in listed, "the listing must follow children only, never the parent"
+        err = fc._set_priority(child.pid, fc.IDLE, born=listed[child.pid])
+        if listed[child.pid] is None:
+            assert err.startswith("identity unconfirmed"), err
+        else:
+            assert (err is None) == (fc._get_priority(child.pid) == fc.IDLE), err
+            assert err is None or err.startswith("not taken"), err
     finally:
         child.kill()
         child.wait()
-    assert fc._set_priority(child.pid, fc.IDLE) == "gone"
+    assert fc._set_priority(child.pid, fc.IDLE, born=listed[child.pid]) in ("gone", fc._NOT_OURS)
