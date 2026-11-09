@@ -42,7 +42,11 @@ build of that database is running; BaseX and Java are here; the database was bui
 never built is never started automatically: build it once by hand); the same inputs did not already fail; and,
 for x4eff, the effective store is FRESH. The builder takes the build lock, so `status` reads REBUILDING, and its
 outcome replaces the session note of the workspace that started it; `status` also prints the last automatic BaseX
-rebuild's state. It holds the build lock for BOTH databases (about half an hour): builders never run two at a time,
+rebuild's state. A game that starts DURING a database's build does not stop it: the builder repeats the game check
+every 30 s and, from the first sighting, keeps that build's whole process tree (bash, java, anything started later)
+at IDLE priority, back to below-normal once the game is seen closed; `status` and the note say when, and say any
+process whose priority could not be changed (a job wrapper's job object can refuse it). x4eff still waits for a
+closed game. It holds the build lock for BOTH databases (about half an hour): builders never run two at a time,
 and x4eff must read an effective store nobody is replacing. Meanwhile a session start rebuilds nothing (its note
 says a rebuild is running) and `rebuild` by hand exits 5, "already running".
 
