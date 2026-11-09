@@ -4537,6 +4537,56 @@ class TestLinkResolutionOfLiteralSpellings(unittest.TestCase):
         got = self.f("touch " + Q + self.W + "/plain.xml::$DATA" + Q)
         self.assertFalse(got["writes_reference"] or got["links_unresolved"])
 
+    def test_RED_a_variable_inside_the_component_that_names_the_junction(self):
+        # Re-review of 180263b8: link_head_resolved followed only WHOLE components before the variable, so a
+        # variable inside the junction's own name read as no link, where the reference-root spelling is caught.
+        lib = "/libraries/wares.xml"
+        cases = [("touch " + DQ + self.W + "/refj$X" + lib + DQ, "writes_reference"),
+                 ("touch " + DQ + self.W + "/ref${X}j" + lib + DQ, "writes_reference"),
+                 ("rm -rf " + DQ + self.W + "/refj$X" + DQ, "rm_targets_reference"),
+                 ("rm -rf " + self.W + "/refj$(echo)", "rm_targets_reference")]
+        if os.name == "nt":
+            cases.append(("echo x > " + DQ + self.L + "::$INDEX_ALLOCATION" + lib + DQ, "writes_reference"))
+        for cmd, key in cases:
+            with self.subTest(cmd=cmd):
+                got = self.f(cmd)
+                self.assertTrue(got[key], cmd)
+                self.assertFalse(got["links_unresolved"], cmd)
+
+    def test_TWIN_a_variable_component_with_no_link_to_match(self):
+        # No link in the folder, or only a NON-link entry matching the prefix: nothing is added.
+        (self.work / "refdir").mkdir()
+        for cmd in ("touch " + DQ + self.W + "/refd$X/x.xml" + DQ, "rm -rf " + DQ + self.W + "/zz$X" + DQ,
+                    "rm -rf " + DQ + self.W + "/refdir/$X" + DQ):
+            with self.subTest(cmd=cmd):
+                got = self.f(cmd)
+                self.assertFalse(got["writes_reference"] or got["rm_targets_reference"] or got["links_unresolved"], cmd)
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+        H._LINK_DIRS.clear()
+        self.assertEqual(H.link_entries_matched(self.W + "/refd$X/x.xml"), [])
+        self.assertEqual(H.link_entries_matched(self.W + "/x.xml"), [])          # nothing unresolved
+        self.assertEqual(H.link_entries_matched(self.W + "/no-such-dir/r$X"), [])  # cannot be listed: as before
+        got = H.link_entries_matched(self.W + "/r$X/f")
+        self.assertEqual([g.lower() for g in got], [(self.ref.resolve().as_posix() + "/f").lower()])
+
+    def test_a_variable_component_spends_the_link_budget(self):
+        from unittest import mock
+        with mock.patch.object(H, "_MAX_LINK_PROBED", 0):
+            self.assertTrue(self.f("touch " + DQ + self.W + "/refj$X/x.xml" + DQ)["links_unresolved"])
+            self.assertFalse(self.f("grep foo " + DQ + self.W + "/refj$X/x.xml" + DQ)["links_unresolved"])
+        for refuse in (True, False):
+            H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+            H._LINK_DIRS.clear()
+            H._LINKS_UNRESOLVED[0] = False
+            with mock.patch.object(H, "_MAX_LINK_PROBED", 0):
+                self.assertEqual(H.link_entries_matched(self.W + "/refj$X/x.xml", refuse=refuse), [])
+            self.assertEqual(H._LINKS_UNRESOLVED[0], refuse)
+            H._LINK_PROBED[0] = 0
+            with mock.patch.object(H, "_MAX_LINK_RESOLVED", 0):
+                self.assertEqual(H.link_entries_matched(self.W + "/refj$X/x.xml", refuse=refuse), [])
+            self.assertEqual(H._LINKS_UNRESOLVED[0], refuse)
+        H._LINKS_UNRESOLVED[0] = False
+
     def test_RED_a_read_only_search_over_many_folders_is_not_refused(self):
         many = self.many_folders(H._MAX_LINK_RESOLVED + 1)
         for cmd in ("grep -rn foo " + many, "grep -n foo " + many, "rg foo " + many):

@@ -218,6 +218,59 @@ def link_head_resolved(p: str, refuse: bool = True) -> str:
     return real.rstrip("/") + "/" + "/".join(parts[i:]) if real else ""
 
 
+def link_entries_matched(p: str, refuse: bool = True) -> list:
+    """For an operand that cannot be resolved: where it lands through each LINK its first unresolved
+    component may name, plus the rest as written. The component is read as a pattern -- its literal text
+    before the first expansion or substitution, then anything (`refj$X`, `ref${X}j`, `refj$(echo)` all
+    start `ref`) -- and every entry of the literal head's folder that starts so and is a symlink or a
+    reparse point is resolved. Re-review of 180263b8, MEASURED: `touch "<work>/refj$X/libraries/wares.xml"`
+    and `rm -rf <work>/refj$(echo)` read no link, where `<reference>$X/...` is caught by the root in its text.
+    On Windows the literal prefix is read through _win_alias, so `refj::$INDEX_ALLOCATION` matches refj.
+    One listing is one probe and each link found one realpath of link_resolved's budget; past it
+    links_unresolved (when `refuse`), never "no link". A folder that cannot be listed (absent, denied, not a
+    local drive) adds nothing: the operand is judged as written, unresolved, as before this reading."""
+    parts = p.replace(chr(92), "/").split("/")
+    i = next((n for n, c in enumerate(parts) if has_unresolved(c)), len(parts))
+    head = "/".join(parts[:i])
+    if i == len(parts) or not head or not is_abs(head):
+        return []
+    if os.name == "nt":
+        head = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", head)
+        if not re.match(r"^[A-Za-z]:", head) or _drive_type(head[0]) not in _LOCAL_DRIVE_TYPES:
+            return []
+        head = head if "/" in head else head + "/"
+    comp = parts[i]
+    cut = min(m.start() for m in (_EXPANSION.search(comp), _SUBST.search(comp)) if m)
+    prefix = comp[:cut]
+    if os.name == "nt":
+        prefix = _win_alias("x/" + prefix).split("/", 1)[1].casefold()
+    if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
+        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+        return []
+    _LINK_PROBED[0] += 1
+    _check_deadline()
+    rest = "/".join(parts[i + 1:])
+    out = []
+    try:
+        with os.scandir(head) as it:
+            for n, e in enumerate(it):
+                if n % 256 == 0:
+                    _check_deadline()
+                name = e.name.casefold() if os.name == "nt" else e.name
+                if not name.startswith(prefix):
+                    continue
+                st = e.stat(follow_symlinks=False)
+                if not (stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400):
+                    continue
+                real = _realpath_budgeted(e.path.replace(chr(92), "/"), refuse)
+                if real is None:
+                    return out
+                out.append(real.rstrip("/") + ("/" + rest if rest else ""))
+    except OSError:
+        return out
+    return out
+
+
 def _realpath_budgeted(s: str, refuse: bool = True):
     """os.path.realpath of `s` with slashes, inside link_resolved's per-call budget: None when the budget is
     spent (and, when `refuse`, links_unresolved is set -- a refusal, never "no link") or the filesystem
@@ -9011,6 +9064,9 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                     # head's landing place plus the rest as written is judged the same way (unresolved).
                     real = link_head_resolved(r, refuse=not reads_only)
                     if real:
+                        out.append((real, True, real))
+                    # ...and through a link the unresolved component itself may name (`<work>/refj$X/f`).
+                    for real in link_entries_matched(r, refuse=not reads_only):
                         out.append((real, True, real))
         return out
 

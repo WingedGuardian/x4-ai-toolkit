@@ -468,7 +468,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F363 | `check_connections` proved a loadout port EXISTS, never that the equipment FITS it, that a `<groups>` name matches the component's spelling, or that a ship macro's own `<connection ref>` exists | **SCOPE LIMIT (measured)** · PRE-ARC | 218 active+DEV mods: ROR 63 tag / 278 case / 209 ref hits; 12 other mods carry dangling refs (VRO included), XUP 10 tag mismatches; rule rejects 0 of 1421 vanilla leaves; a real save shows 0 of 10 mismatched preset weapons installed | FIXED 2026-11-08 as INFO `fit` findings; promotion to warn awaits a second ship class |
 | F364 | A missing base `index/*.xml` registered nothing and recorded no skip, so every vanilla macro read as unregistered while the run looked clean | **DEFECT (measured)** · PRE-ARC | a worktree without `x4-paths.env`: 150 macros indexed instead of 4,695, 39 fit hits instead of 63, `skipped` empty | FIXED 2026-11-08: degraded skip when the reference has no index folder, plain skip for a partial reference or a DLC |
 | F368 | Past link_resolved's per-call budget of 64 realpaths a write/delete operand read as "no link", silently, so a junction into reference/ after 64 local decoys was allowed | **DEFECT (measured)** · IN-ARC (9a73c0a9) | at 5404046c: `touch <N decoys> <junction>/libraries/wares.xml` writes_reference True for N=63, False for N=64 and 200; 64 `touch` segments then `rm -f <junction>/x.xml` rm_targets_reference False | FIXED 2026-11-09: realpath cached per folder; past the budget `links_unresolved`, which protect-bash.sh and save_policy refuse |
-| F369 | link_resolved (F360) skipped any path has_unresolved() flagged, so a SINGLE-QUOTED `$` (`::$DATA`, a folder `a$b`) or a stream suffix on a junction left a write through the junction lexical only | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at a70dcedd, in-process facts(): `touch`/`echo x >` `'<junction>/libraries/wares.xml::$DATA'` writes_reference False (True with no junction); `touch '<junction>:s'` False | FIXED 2026-11-09: the caller passes `literal`; on Windows the path is resolved through _win_alias; an unresolved operand's literal head is followed too |
+| F369 | link_resolved (F360) skipped any path has_unresolved() flagged, so a SINGLE-QUOTED `$` (`::$DATA`, a folder `a$b`) or a stream suffix on a junction left a write through the junction lexical only | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at a70dcedd, in-process facts(): `touch`/`echo x >` `'<junction>/libraries/wares.xml::$DATA'` writes_reference False (True with no junction); `touch '<junction>:s'` False | FIXED 2026-11-09: the caller passes `literal`; on Windows the path is resolved through _win_alias; an unresolved operand's literal head, and any link its first unresolved component may name, are followed too |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12945,6 +12945,17 @@ rule) no longer set `links_unresolved` past the budget (a `grep -rn` over 65 fol
 budget are still resolved for it), and the ssh advisory judges a remote text's own `links_unresolved` (it was absent
 from `_SSH_DESTRUCTIVE`, and the nested facts() inherited the outer flag).
 
-UNMEASURED: how often a real command names an expansion behind a link; each such operand now spends link budget.
+Re-review of 180263b8, MEASURED: a variable INSIDE the component that names the junction was still missed (the head
+is followed only up to the whole components before it): `touch "<work>/refj$X/libraries/wares.xml"`, `"<work>/ref${X}j/..."`,
+`echo x > "<junction>::$INDEX_ALLOCATION/libraries/wares.xml"` (double-quoted), `rm -rf "<work>/refj$X"` and
+`rm -rf <work>/refj$(echo)` read False. Now (link_entries_matched) the head's folder is listed once and every entry
+that starts with the component's literal prefix (through _win_alias on Windows) and is a symlink or reparse point is
+resolved, its target plus the rest judged as an unresolved operand. One listing is one probe, each link one realpath
+of the budget; past it links_unresolved (search operands excepted). A folder that cannot be listed adds nothing.
+Over the reviewer's corpus plus 13 such commands (1,710) vs 180263b8: 45 stricter, 0 weaker; `rm -rf "<work>/$X"` (an empty prefix:
+every link in the folder) is among the stricter, by design.
+
+UNMEASURED: how often a real command names an expansion behind a link; each such operand now spends link budget, and
+one listing of its folder.
 
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkResolutionOfLiteralSpellings`.
