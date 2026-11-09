@@ -467,6 +467,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F362 | The location stack was not modelled: PowerShell `Push-Location` read as a `cd`, `Pop-Location` ignored; bash's bare `pushd`, `pushd +N`/`-N`/`-n`, `popd -n`/`+N` read as a plain push or ignored | **DEFECT (measured)** · PRE-ARC | at 7f4895a2, 9 of 11 PowerShell probes and 10 of 14 bash rows judged the relative operand in the wrong folder (1 a false deny) | FIXED 2026-11-07 |
 | F363 | `check_connections` proved a loadout port EXISTS, never that the equipment FITS it, that a `<groups>` name matches the component's spelling, or that a ship macro's own `<connection ref>` exists | **SCOPE LIMIT (measured)** · PRE-ARC | 218 active+DEV mods: ROR 63 tag / 278 case / 209 ref hits; 12 other mods carry dangling refs (VRO included), XUP 10 tag mismatches; rule rejects 0 of 1421 vanilla leaves; a real save shows 0 of 10 mismatched preset weapons installed | FIXED 2026-11-08 as INFO `fit` findings; promotion to warn awaits a second ship class |
 | F364 | A missing base `index/*.xml` registered nothing and recorded no skip, so every vanilla macro read as unregistered while the run looked clean | **DEFECT (measured)** · PRE-ARC | a worktree without `x4-paths.env`: 150 macros indexed instead of 4,695, 39 fit hits instead of 63, `skipped` empty | FIXED 2026-11-08: degraded skip when the reference has no index folder, plain skip for a partial reference or a DLC |
+| F368 | Past link_resolved's per-call budget of 64 realpaths a write/delete operand read as "no link", silently, so a junction into reference/ after 64 local decoys was allowed | **DEFECT (measured)** · IN-ARC (9a73c0a9) | at 5404046c: `touch <N decoys> <junction>/libraries/wares.xml` writes_reference True for N=63, False for N=64 and 200; 64 `touch` segments then `rm -f <junction>/x.xml` rm_targets_reference False | FIXED 2026-11-09: realpath cached per folder; past the budget `links_unresolved`, which protect-bash.sh and save_policy refuse |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12889,3 +12890,35 @@ The local targeted run had not included that file. The rule was broader than the
 narrowed to the folder test, with a twin for each side.
 
 **RE-DERIVED BY:** `tools/x4validate/tests/test_index_missing_is_degraded.py`.
+
+## F368 - Past the link budget an operand read as "no link" · **DEFECT (measured)** · IN-ARC · confidence 95% · FIXED 2026-11-09
+
+`hook_facts.link_resolved` (F360) judges a write or delete operand also where an existing junction or symlink sends
+it. 9a73c0a9 (4.1.1 review A1) bounded it to `_MAX_LINK_RESOLVED = 64` realpaths per hook call, for latency, and past
+the bound it returned "" -- the same value as "nothing on this path is a link". The docstring argued that skipping
+only gives up added strictness; that is true of one operand and false of the class, because the operand the budget
+skips is the one an adversary places last. A step that narrows its data and reports success.
+
+MEASURED at 5404046c (in-process facts, junction under the worktree's `.test-sandbox`): `touch <N local decoy files>
+<work>/refj/libraries/wares.xml` with `refj` a junction to the configured reference read writes_reference True for
+N=63 and False for N=64 and N=200; `N` `touch` segments then `; rm -f <work>/refj/x.xml` read rm_targets_reference
+False at N=64. Through the whole hook (protect-bash.sh, JSON payload) both shapes were ALLOWED. Before 9a73c0a9 there
+was no bound and both were caught. The test `test_realpath_calls_are_capped_per_hook_call` and its mutant pinned the
+fail-open as the intended behaviour.
+
+Now: the folder of an operand is resolved once per hook call (cached), and its last component is followed only when
+`lstat` says it is a link (S_ISLNK, or FILE_ATTRIBUTE_REPARSE_POINT for a junction; an lstat that cannot answer
+resolves the whole path), so files in one folder spend one realpath. An operand past either bound (64 realpaths,
+4096 last-component probes) sets the fact `links_unresolved`; protect-bash.sh DENIES it and save_policy raises
+ScopeError, each with "split it into commands that each touch fewer folders". Remote and rootless drives are still
+not resolved and do not spend the budget (by design, A1). Measured after: 64 and 200 one-folder decoys -> writes_reference
+True; 64 decoys in distinct folders -> links_unresolved True (deny); 200 one-folder files with no junction -> allow;
+65 distinct folders with no junction -> deny (fail closed: the guard cannot know there is no link). Latency, median of
+7 in-process facts() calls: 200 files in one folder 369 -> 346 ms, 200 files in 200 folders 685 -> 674 ms (no change
+beyond noise).
+
+UNMEASURED: how often real commands name more than 64 distinct local folders (no command corpus in this tree);
+such a command is now refused where it was allowed.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkBudgetFailsClosed`,
+`TestLinkResolutionIsBounded`, and `test_audit0924_hooks.py::TestLinkBudgetWholeHook`.

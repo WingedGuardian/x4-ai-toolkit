@@ -413,6 +413,12 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None, deadlin
     if facts.get("operand_expansion_truncated"):
         raise ScopeError("Brace or array operands could not be expanded completely; some targets were "
                          "NEVER checked. Use literal targets or split this command before retrying.")
+    if facts.get("links_unresolved"):
+        # 4.1.1 review (link budget): protect-bash.sh denies this too; same verdict and wording.
+        raise ScopeError("This command names files in so many different folders that the guard stopped "
+                         "checking them for links (a junction or symlink into a protected folder), so some "
+                         "targets were NEVER checked. Split it into commands that each touch fewer folders "
+                         "and re-run.")
     if facts.get("carriers_truncated"):
         # protect-bash.sh denies this unconditionally; running that backend would expand
         # the whole command a second time inside the same 20 s deadline (MEASURED
