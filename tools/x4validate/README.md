@@ -142,7 +142,12 @@ below-normal priority. That builder starts only when the game is closed, the ins
 30 minutes (`X4_FRESH_BASEX_QUIET_MIN`; counted from the first session start that saw them), the disk has room for
 the second copy a build-then-swap holds, no build of that database is running, BaseX and Java are present, and the
 database was built here once before (a database you never built is never started automatically); `x4eff` also
-waits for a FRESH effective store. Each condition that stops it is named in one line of the note, and
+waits for a FRESH effective store. A game started while a database builds does not stop that build: the builder
+checks for the game every 30 seconds and, from the first sighting, drops the build's whole process tree (bash, java,
+anything they start later) to idle priority, and back to below-normal once the game is closed; `x4fresh status` and
+the note say when it was lowered, and name any process whose priority could not be changed (a job wrapper that runs
+the build in a priority-limited job object refuses it; the wrapper's own rules then apply). `x4eff` still starts only
+with the game closed. Each condition that stops it is named in one line of the note, and
 `x4fresh status` says whether the background build is waiting, running, finished, skipped or failed. Its outcome is
 in `x4fresh status` and in the session-start note of the workspace whose session start launched it (another
 workspace's note does not carry it). While it builds, it holds the same build lock as every other rebuild, for both
