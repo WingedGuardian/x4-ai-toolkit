@@ -49,8 +49,9 @@ options:
   --auto                unattended mode (session start): rebuilds effective + xref, then starts
                         ONE background BaseX builder once the game is closed and the mods have
                         been unchanged for X4_FRESH_BASEX_QUIET_MIN minutes (default 30;
-                        X4_FRESH_BASEX_AUTO=off stops it); that builder holds the build lock while
-                        it builds, so other rebuilds exit 5 meanwhile; defers while a listed
+                        X4_FRESH_BASEX_AUTO=off starts no new one, and one already waiting is
+                        stopped by its pid in `x4fresh status`); that builder holds the build lock
+                        while it builds, so other rebuilds exit 5 meanwhile; defers while a listed
                         process runs, never retries the same failure
   --note NOTE           with --auto: write the outcome here for the next session start to print
                         (reads 'did not complete' until the run reports; empty only when

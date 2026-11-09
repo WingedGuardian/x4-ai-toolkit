@@ -131,7 +131,7 @@ records the losses you understand so the note stops repeating them (a changed se
 At every session start (Claude Code and Codex; OpenCode has no session-start hook) the hook prints the
 previous run's note and starts `x4fresh rebuild --auto` in the background. That run rebuilds the effective
 store and the xref index, and refreshes the BaseX databases in the background once the game is closed and your mods
-have been unchanged for 30 minutes (only a database you built once before; `X4_FRESH_BASEX_AUTO=off` stops it,
+have been unchanged for 30 minutes (only a database you built once before; `X4_FRESH_BASEX_AUTO=off` starts no new one, and a builder checks it once when it takes its own lock, so one already waiting out the quiet period must be stopped by the pid `x4fresh status` shows;
 `X4_FRESH_BASEX_QUIET_MIN` changes the wait). It waits while the game runs, and writes a note that
 is empty only when everything this machine can build is fresh and complete. To stop it, set `X4_FRESH_AUTO=off`
 in the environment you start the agent from (`X4_HOUSEKEEP_SWEEP=off` stops it as well, with the temp sweep).
@@ -200,7 +200,7 @@ documents"* with every exclusion named. It also refuses to answer at all from a 
 than serving you a confidently wrong number.
 
 **Be honest with yourself about the cost before you start:** Java 21+, roughly 3 GB of disk, and a
-build measured in minutes, not seconds. BaseX itself is bundled (BSD-3-Clause, 5.2 MB) so there is
+build measured in minutes, not seconds. BaseX itself is bundled (BSD-3-Clause, 5.8 MiB) so there is
 nothing extra to download. See [`tools/basex/README.md`](tools/basex/README.md) for the install, the
 freshness contract and the exit codes, and `tools/basex/QUERIES.md` for worked queries.
 

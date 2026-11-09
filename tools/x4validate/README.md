@@ -158,7 +158,7 @@ switches (set in the environment you launch the agent from; `x4-paths.env.exampl
 |---|---|
 | `X4_FRESH_AUTO=off` | the session-start launch does nothing |
 | `X4_HOUSEKEEP_SWEEP=off` | stops the temp sweep and this launch |
-| `X4_FRESH_BASEX_AUTO=off` | never start the background BaseX rebuild |
+| `X4_FRESH_BASEX_AUTO=off` | start no new background BaseX rebuild; a builder checks it once when it takes its own lock, so one already waiting out the quiet period is stopped by the pid `x4fresh status` shows |
 | `X4_FRESH_BASEX_QUIET_MIN` | minutes the mods must be unchanged before it starts (default 30) |
 | `X4_FRESH_DEFER_WHILE` | `;`-separated process names that defer `--auto` (default `X4.exe;X4`) |
 | `X4_JOB_WRAPPER` | JSON list put in front of every builder command; `{name}` becomes `x4fresh-<artifact>` |
