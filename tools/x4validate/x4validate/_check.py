@@ -2025,6 +2025,8 @@ def check_connections(mod_dir: Path, config: _merge.Config, report: Report) -> N
 #: Loadout leaves whose `macro=` is equipment with an attachment connection (BLIND-SPOTS F363).
 _FIT_LEAF_KINDS = ("engine", "shield", "turret", "weapon")
 _FIT_GROUP_KINDS = {"engines": "engine", "shields": "shield", "turrets": "turret"}
+#: A diff `sel` that targets a connection's `ref` attribute (`.../connection[@ref='x']/@ref`).
+_DIFF_REF_ATTR = re.compile(r"connection(\[[^\]]*\])*/@ref\s*$")
 
 
 def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Report) -> None:
@@ -2037,10 +2039,16 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
 
     1. **Tag fit** (documented rule, Egosoft "Tags and flags" rev 368.5: every tag on the equipment
        component's `component`-tagged attachment connection, except `component` itself, must be on
-       the slot). Control: the rule rejects 0 of 1421 resolvable vanilla direct leaves and 0 of 386
-       vanilla `exact=` groups (MEASURED 2026-11-08, base + 8 DLC). It does not reject vanilla, so it
-       is safe as a screen. Whether the ENGINE rejects a mismatch is UNMEASURED; a hit is a suspect
-       for an in-game fitting readback, which is why every finding here is INFO, never an error.
+       the slot). Control: the rule rejects 0 of 1421 resolvable vanilla direct leaves (MEASURED
+       2026-11-08, base + 8 DLC). A `<groups>` entry is judged against the slots of its group: it is a
+       hit when NO slot of the group accepts the macro. Vanilla groups mix kinds (engines and shields in
+       one group), so "every slot accepts it" would reject 945 of 946 resolvable vanilla entries; the
+       any-slot reading rejects 1 of 946, a `libraries/loadouts.xml` turret placed in a carrier group
+       that holds only engines and shields (MEASURED 2026-11-09, base + 8 DLC). An entry whose group
+       the component lacks by exact name is not tag-judged and is counted in the note. Engine
+       enforcement: MEASURED for weapons in one save (mismatched preset weapons not installed,
+       BLIND-SPOTS F363 RUNTIME EVIDENCE), UNMEASURED for other kinds; a hit is a suspect for an
+       in-game fitting readback, which is why every finding here is INFO, never an error.
     2. **Group name case**: a `<groups>` entry whose `group=` matches no component connection group
        exactly but matches one case-insensitively. Vanilla has 0 such entries in 882 (same run), so
        case folding has no vanilla precedent either way.
@@ -2051,9 +2059,11 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
     Skips, never silent: an unreadable component, an equipment macro with no single resolvable
     attachment (unregistered, missing, or ambiguous), and a hull whose component cannot be resolved
     (unregistered, file missing, or no `<component ref>`) are each recorded once with `report.skip`, and
-    what hangs off them is not judged. Leaves or group entries inside diff ops that patch an EXISTING
-    macro or loadout are recorded as "diff fragment not judged", once per file. `report.notes` carries
-    the denominator: macros judged, macros skipped, diff files with unjudged fragments.
+    what hangs off them is not judged. Leaves, group entries and macro `<connection ref>`s (elements, or
+    a `ref` attribute added/replaced by `sel=.../connection.../@ref` or `type="@ref"`) inside diff ops
+    that patch an EXISTING macro or loadout are recorded as "diff fragment not judged", once per file. `report.notes` carries
+    the denominator: macros judged (or "0 examined"), macros skipped, group entries not tag-judged, diff
+    files with unjudged fragments.
 
     SCOPE LIMIT: component and macro files are read AS STORED (the file the index names), not as
     merged. A slot, tag or connection that a diff adds to a component is invisible here, so a hit can
@@ -2145,6 +2155,8 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
     # lines beside its 31 real errors, which is the flood that trains a reader to ignore the output.
     # Per-item detail is in the counts' examples here; a caller that needs every item walks the same tree itself.
     per_macro: dict[str, dict] = {}
+    groups_unjudged = 0
+    skips_before = sum(1 for s in report.skipped if s.what == "fitting checks")
 
     def bucket(macro_name: str, vpath: str, line: int, cls: str) -> dict:
         b = per_macro.get(macro_name)
@@ -2152,12 +2164,13 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
             # Label by what the macro IS: the loadout-library branch reaches any macro class, not only ships.
             label = (f"ship macro '{macro_name}'" if cls.startswith("ship_")
                      else f"macro '{macro_name}' (class '{cls or '?'}')")
-            b = per_macro[macro_name] = dict(vpath=vpath, line=line, label=label, tag=[], case=[], ref=[],
-                                             leaves=0, groups=0, refs=0)
+            b = per_macro[macro_name] = dict(vpath=vpath, line=line, label=label, tag=[], gtag=[], case=[], ref=[],
+                                             leaves=0, gfit=0, groups=0, refs=0)
             judged_hulls.add(macro_name)
         return b
 
     def judge_loadout(lo, comp_ref: str | None, vpath: str, macro_name: str, cls: str, why_not: str = "") -> None:
+        nonlocal groups_unjudged
         ports = hull_ports(macro_name, comp_ref, why_not)
         if ports is None:
             return
@@ -2185,6 +2198,20 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
             name = (g.get("group") or "").strip()
             if name and name not in groups_exact and name.lower() in groups_fold:
                 b["case"].append(f"'{name}' vs component '{groups_fold[name.lower()]}'")
+            # Tag rule on a group entry: the macro goes into slots of ONE connection group, and vanilla groups mix
+            # kinds (engines and shields share a carrier's group), so the judged reading is "NO slot of the group
+            # accepts it". "Every slot accepts it" rejects 945 of 946 resolvable vanilla entries; this rejects 1.
+            if name not in groups_exact or not g.get("macro"):
+                groups_unjudged += 1  # no exact-name group to judge against (case-only is its own finding above)
+                continue
+            need = required_tags(g.get("macro"))
+            if need is None:
+                continue
+            b["gfit"] += 1
+            slots = [tags for tags, grp in ports.values() if grp == name]
+            if not any(need <= tags for tags in slots):
+                b["gtag"].append(f"{g.tag} '{g.get('macro')}' in '{name}' needs {sorted(need)}, "
+                                 f"none of its {len(slots)} slot(s) has them all")
 
     fragment_files = 0
     for vpath, root in iter_mod_xml_roots(mod_dir):
@@ -2217,21 +2244,43 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
             frag = [e for e in root.xpath("//*[@macro][@path] | //*[@group]")
                     if (e.tag in _FIT_LEAF_KINDS or e.tag in _FIT_GROUP_KINDS)
                     and not e.xpath("ancestor::macro | ancestor::loadout[@macro]")]
-            if frag:
+            # The same blind spot for clause 3: a <connection ref> added into an existing macro, or a ref attribute
+            # added/replaced on one. A component's own <connection name=> carries no ref, so it is not counted.
+            refs = [e for e in root.xpath("//connection[@ref]") if not e.xpath("ancestor::macro")]
+            refs += [op for op in root.xpath("./add | ./replace")
+                     if _DIFF_REF_ATTR.search(op.get("sel") or "")
+                     or (op.get("type") == "@ref" and "connection" in (op.get("sel") or ""))]
+            if frag or refs:
                 fragment_files += 1
-                report.skip("fitting checks", f"{vpath}: {len(frag)} loadout leaf/group element(s) inside diff ops "
-                            "that patch an existing macro or loadout -- diff fragment not judged")
+                what = []
+                if frag:
+                    what.append(f"{len(frag)} loadout leaf/group element(s)")
+                if refs:
+                    what.append(f"{len(refs)} macro connection ref(s)")
+                report.skip("fitting checks", f"{vpath}: {' and '.join(what)} inside diff ops that patch an "
+                            "existing macro or loadout -- diff fragment not judged")
 
-    report.notes.append(f"fitting checks: {len(judged_hulls)} macro(s) judged, {len(skipped_hulls)} skipped "
-                        f"(see NOT CHECKED); {fragment_files} diff file(s) with loadout fragments not judged")
+    # The denominator. Nothing examined must never read as judged-and-clean, and "(see NOT CHECKED)" appears only
+    # when this check actually recorded a skip there.
+    new_skips = sum(1 for s in report.skipped if s.what == "fitting checks") - skips_before
+    if judged_hulls or skipped_hulls:
+        head = f"{len(judged_hulls)} macro(s) judged, {len(skipped_hulls)} skipped"
+    else:
+        head = "0 macro(s) examined (no ship macro or library loadout in this mod)"
+    report.notes.append(f"fitting checks: {head}; {groups_unjudged} group entries not tag-judged (no component "
+                        f"group of that exact name); {fragment_files} diff file(s) with loadout fragments not judged"
+                        + (f" ({new_skips} skip(s), see NOT CHECKED)" if new_skips else ""))
 
     for macro_name, b in per_macro.items():
-        if not (b["tag"] or b["case"] or b["ref"]):
+        if not (b["tag"] or b["gtag"] or b["case"] or b["ref"]):
             continue
         parts = []
         if b["tag"]:
             parts.append(f"{len(b['tag'])} of {b['leaves']} preset leaves fail the documented tag rule "
                          f"(e.g. {'; '.join(b['tag'][:2])})")
+        if b["gtag"]:
+            parts.append(f"{len(b['gtag'])} of {b['gfit']} group entries fit no slot of their group under the "
+                         f"documented tag rule (e.g. {'; '.join(b['gtag'][:2])})")
         if b["case"]:
             parts.append(f"{len(b['case'])} of {b['groups']} group names match the component only by case "
                          f"(e.g. {b['case'][0]})")
@@ -2239,8 +2288,9 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
             parts.append(f"{len(b['ref'])} of {b['refs']} macro connection refs name no component connection "
                          f"(e.g. {b['ref'][0]})")
         report.add("info", "fit", f"{b['label']}: " + "; ".join(parts)
-                   + ". Engine enforcement unmeasured for engines/shields, measured for weapons (not installed); "
-                   "a hit is a suspect for an in-game fitting readback", b["vpath"], b["line"])
+                   + ". Engine enforcement: MEASURED for weapons in one save (mismatched presets not installed), "
+                   "UNMEASURED for other kinds; a hit is a suspect for an in-game fitting readback",
+                   b["vpath"], b["line"])
 
 
 def check_module_groups(mod_dir: Path, config: _merge.Config, report: Report) -> None:

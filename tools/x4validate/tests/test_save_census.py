@@ -185,6 +185,11 @@ def test_cli_no_class_footer_says_what_happened_to_them(tmp_path, capsys):
     _savecli.main(["census", str(_save(tmp_path)), "--by", "class"])
     out = capsys.readouterr().out
     assert "1 component(s) had no class= (in the groups above as '(no class)' wherever they matched)" in out, out
+    # Third branch: no --class and no class key in --by -- they are grouped, but under some other key.
+    _savecli.main(["census", str(_save(tmp_path)), "--by", "macro"])
+    out = capsys.readouterr().out
+    assert "1 component(s) had no class= (counted in the groups above wherever they matched)" in out, out
+    assert "never matched by --class" not in out and "as '(no class)'" not in out, out
 
 
 def test_cli_zero_match_states_how_many_were_scanned_rc1(tmp_path, capsys):
