@@ -720,10 +720,24 @@ def _do_replace(targets, op, recorder: Recorder | None = None,
     return None
 
 
+#: The values libraries/diff.xsd admits for <add pos=> (READ reference/libraries/diff.xsd
+#: :48-53). An absent pos means append; "append" itself is NOT one of them.
+_ADD_POS = frozenset({"before", "after", "prepend"})
+
+
 def _do_add(targets, op, recorder: Recorder | None = None,
             origin: Origin | None = None) -> str | None:
     pos = op.get("pos", "")
     typ = op.get("type", "")
+    # Any other pos is refused, not defaulted. This branch used to fall through to the
+    # append arm, so pos="append" was modelled as applied while the engine logs
+    # "Invalid pos attribute 'append' ... Skipping node" once per child and adds
+    # NOTHING (MEASURED 2026-11-08, X4 9.0 debug.txt: 12 lines from 11 ops in one mod).
+    # A static run then validated a tree the game never built.
+    if "pos" in op.attrib and pos not in _ADD_POS:
+        return (f"pos={pos!r} is not a valid position -- diff.xsd allows "
+                f"{'/'.join(sorted(_ADD_POS))}, and an absent pos appends; the engine "
+                "skips this node")
     new_children = [c for c in op if isinstance(c.tag, str)]
 
     def _record(new):

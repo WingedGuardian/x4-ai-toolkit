@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `x4validate` now reports an `<add>` whose `pos` is not `before`, `after` or `prepend` (for example `pos="append"`) as an error, and leaves the tree unchanged. The game skips such an operation, but the validator used to apply it as an append, so a mod could validate clean while the game silently dropped the change. Leave `pos` out to append.
+
+- `_cat.read_path` reads non-XML files inside a mod's catalogs (`.lua`, `.xmf`, `.dds` and so on). It used to return "absent" for every one of them.
+
 ## v4.1.0 — 2026-11-04
 
 - Typed file deletion of deployed mod folders or ordinary XML now requests confirmation, matching shell retirement policy, instead of being rejected as a direct edit of the deployed copy. Direct writes, write-only batches, explicit moves, archive protections, save preservation and whole-install/reference blocks retain their prior policy.

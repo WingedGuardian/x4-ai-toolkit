@@ -127,3 +127,20 @@ def test_loose_overrides_packed_in_same_mod(tmp_path):
     loose.write_text("<loose/>")
     root = _merge.overlay_root(mod, "md/x.xml")
     assert root.tag == "loose"
+
+
+def test_read_path_reads_non_xml_members(tmp_path):
+    """A packed non-XML member used to read as None (absent): the lookup went through
+    the XML-only index. MEASURED 2026-11-08 on a packed .lua in sn_mod_support_apis."""
+    mod = tmp_path / "mymod"
+    _write_cat(mod, "ext_01.cat", [
+        ("assets/geo.xmf", b"BINARYGEOMETRYBLOB"),
+        ("ui/Menu.LUA", b"return {}"),
+        ("md/after.xml", b"<ok/>"),
+    ])
+    assert _cat.read_path(mod, "assets/geo.xmf") == b"BINARYGEOMETRYBLOB"
+    assert _cat.read_path(mod, "ui/menu.lua") == b"return {}"   # case-insensitive too
+    assert _cat.read_path(mod, "md/after.xml") == b"<ok/>"
+    assert _cat.read_path(mod, "ui/missing.lua") is None
+    # The XML index every XML reader shares is unchanged: still XML-only.
+    assert set(_cat.mod_vfs(mod, packed_only=True)) == {"md/after.xml"}

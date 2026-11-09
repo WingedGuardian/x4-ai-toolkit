@@ -458,6 +458,9 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
+| F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
+| F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
+| F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12101,3 +12104,60 @@ compares against the first baseline folder only, because later layers' manifests
 denominator is every stacked run; MEASURED on fixtures only, with no real mods.
 
 **NO RE-DERIVATION: a scope statement; the fixture behaviour is pinned by the x4diff tests, not this sentence.**
+
+## F365 - `_merge` modelled `<add pos="append">` as an append; the engine skips the node · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
+
+Found 2026-11-08 reading a 9.0 debug.txt after an in-game run of a diagnostic mod: 12 lines of
+`Invalid pos attribute 'append' ... Skipping node`, from 11 `<add>` ops (one carries two children; the engine logs
+one line per child). The ops added nothing in game. x4validate, the installed-context validation built on it and an
+independent review had all been clean, because they examined the tree `_merge` built, and `_merge` had added them.
+
+Root cause (READ `_merge._do_add`): any `pos` other than `prepend`/`before`/`after` fell through to the default
+append arm. READ `reference/libraries/diff.xsd:48-53`: `pos` is `before | after | prepend`; an ABSENT pos appends,
+and `append` is not a value.
+
+Fix: an `<add>` whose `pos` attribute is present and outside that set is refused (`ok=False`, the value named), so
+the op becomes a finding and the tree is unchanged. MEASURED on the three real diffs: 21 ops, 11 refused (1/1/9),
+exactly the 11 the engine skipped; the other 10 apply as before.
+
+Corpus scope (MEASURED, `_scan.iter_corpus_xml`, 233 installed mods; 7,149 XML parsed, 11 unreadable and NOT
+scanned; 3,590 diff documents, 5,772 `<add>` ops): pos absent 4,723, after 463, before 459, prepend 116,
+append 11. All 11 are the diagnostic mod's, so no other installed mod's findings change. INFERRED, not measured:
+that the engine also skips an empty `pos=""`, a case variant such as `Prepend`, or an invalid pos on a
+`type="@attr"` add; the fix refuses those too because diff.xsd rejects them, and 0 corpus ops use them.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_merge_add_pos.py` (17 of its 21 cases fail on the old code).
+
+## F366 - `_cat.read_path` read every packed non-XML member as absent · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
+
+Found 2026-11-08: `read_path(sn_mod_support_apis, "ui/simple_menu/options_menu.lua")` returned `None`, while the
+member is in the catalog (read by hand from the cat/dat offsets, MD5 matching). The docstring promised "one virtual
+path's bytes". Root cause (READ `_cat.read_path`): both lookups used the XML-only index (`mod_vfs` and
+`_folded_vfs` with `xml_only=True`), which leaves out every non-`.xml`/`.xsd` member, so the miss looked like an
+absence.
+
+Fix: an `.xml`/`.xsd` vpath still uses the shared XML-only index; any other vpath uses the full index. READ every
+in-tree caller (`_merge`, `_resolve` x2, `_check`, `_effective`, `gates/noop_audit`, `gates/tool_properties` x3): all
+pass XML vpaths and parse the result, so none of their answers change. MEASURED after the fix: the `.lua` reads
+33,344 bytes with MD5 verified.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_cat.py::test_read_path_reads_non_xml_members` (fails on the old code).
+
+## F367 - a nested cross-mod patch is judged only against the active profile · **SCOPE LIMIT (measured)** · PRE-ARC · confidence 90% · OPEN
+
+Raised 2026-11-08 by a side review of the F365 fix. Tier B models the ACTIVE extension set, read from `$X4_PROFILE`. A
+nested patch (`extensions/<target>/...`) whose target is installed but disabled in that profile is reported as
+`[INFO] inactive ... designed no-op`, and none of its ops are evaluated. That is right for the profile modelled. It is
+wrong for a mod meant for a different profile, such as a test profile that enables the target.
+
+MEASURED: the diagnostic mod behind F365, with the default profile (ROR disabled): 6 of 6 nested ROR script patches
+read `inactive`, and the run ended with 2 errors unrelated to them. With `X4_PROFILE` set to its test profile (ROR
+enabled): all 14 diffs evaluated. On its pre-fix bytes the fixed toolkit then reports the 11 F365 errors, and the
+unfixed toolkit reports "no issues found". So a clean run on such a mod says nothing about these patches unless the
+profile the mod is for is the one modelled.
+
+Separate from F70, which is about the SCHEMA pass over nested script patches. F367 is about whether their ops are
+evaluated at all. Workaround: `X4_PROFILE=<profile dir> x4validate <mod> --tier b`. Proposed, not done: name the
+modelled profile in the `inactive` line and in the Tier B header.
+
+**NO RE-DERIVATION: a scope statement; the measurement is the two runs above.**
