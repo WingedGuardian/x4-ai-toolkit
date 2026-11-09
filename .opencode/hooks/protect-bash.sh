@@ -449,6 +449,15 @@ if on operand_expansion_truncated; then
   deny "Brace or array operands could not be expanded completely; some targets were NEVER checked. Use literal targets or split this command before retrying."
 fi
 
+# 4.1.1 review (link budget): link resolution is bounded per hook call (realpath once per folder, at most
+# _MAX_LINK_RESOLVED folders). An operand past the bound may sit behind a junction into a protected root,
+# so it is refused, never read as "no link". Same verdict as the truncations above.
+if on links_unresolved; then
+  x4_guard_check_inert
+  _X4_UNRELAXED=1
+  deny "This command names files in so many different folders that the guard stopped checking them for links (a junction or symlink into a protected folder), so some targets were NEVER checked. Split it into commands that each touch fewer folders and re-run."
+fi
+
 # === HARD BLOCK — delete the game installation ===
 # The target must be a real path in the tree, OR bear the game's name while not being
 # an archive. MEASURED 2026-08-30: 7 of 8 refusals here were a .zip merely NAMED after

@@ -4186,7 +4186,7 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
         real_rp = os.path.realpath
 
         def fake_realpath(p, *a, **k):
-            if str(p).replace(BS, "/").lower().startswith("c:/w411/"):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411"):      # a folder too: it is cached
                 self.calls.append(p)
                 return p
             return real_rp(p, *a, **k)
@@ -4235,12 +4235,63 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
         self.assertEqual([r[:1].upper() for r in asked], ["C", "C"])     # once per drive, per hook call
 
     def test_realpath_calls_are_capped_per_hook_call(self):
-        cmd = "touch " + " ".join("C:/w411/f%d.xml" % i for i in range(200))
-        self.run_facts(cmd)
+        # 200 distinct folders: at most _MAX_LINK_RESOLVED realpaths, and the rest FAIL CLOSED (4.1.1 review,
+        # link budget: past the cap an operand was read as "no link", silently, and a junction got through).
+        cmd = "touch " + " ".join("C:/w411/d%d/f.xml" % i for i in range(200))
+        got = self.run_facts(cmd)
         self.assertEqual(len(self.calls), H._MAX_LINK_RESOLVED)
+        self.assertTrue(got["links_unresolved"])
         self.calls.clear()
-        self.run_facts(cmd)                                             # per hook call, not per process
+        got = self.run_facts(cmd)                                       # per hook call, not per process
         self.assertEqual(len(self.calls), H._MAX_LINK_RESOLVED)
+        self.assertTrue(got["links_unresolved"])
+        self.calls.clear()
+        got = self.run_facts("touch C:/w411/d0/f.xml")                  # ...and the flag is per hook call too
+        self.assertFalse(got["links_unresolved"])
+
+    def test_a_folder_is_resolved_once_per_hook_call(self):
+        got = self.run_facts("touch " + " ".join("C:/w411/f%d.xml" % i for i in range(200)))
+        self.assertEqual(self.calls, ["C:/w411"])
+        self.assertFalse(got["links_unresolved"])
+        self.calls.clear()
+        self.run_facts("touch C:/w411/f0.xml")                          # the folder cache is per hook call
+        self.assertEqual(self.calls, ["C:/w411"])
+
+    def _timed(self, realpath_cost, lstat_cost, leaf_is_link, pattern="C:/w411/d%d/f.xml"):
+        import stat as st_
+        clock, lstats = [1000.0], []
+        real_lstat = os.lstat
+
+        def rp(p, *a, **k):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411"):
+                self.calls.append(p)
+                clock[0] += realpath_cost
+                return p
+            return os.path.realpath(p, *a, **k)
+
+        def ls(p, *a, **k):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411"):
+                lstats.append(p)
+                clock[0] += lstat_cost
+                if leaf_is_link:
+                    return os.stat_result((st_.S_IFLNK | 0o777, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+                raise FileNotFoundError(2, "no", str(p))
+            return real_lstat(p, *a, **k)
+        with self.mock.patch.object(H.os.path, "realpath", rp), self.mock.patch.object(H.os, "lstat", ls),                 self.mock.patch.object(H, "_clock", lambda: clock[0]),                 self.mock.patch.object(H, "_drive_type", lambda l: 3, create=True):
+            got = H.facts({"tool_input": {"command": "touch " + " ".join(
+                pattern % i for i in range(5))}}, ROOTS)
+        return got, lstats
+
+    def test_the_deadline_is_checked_before_a_link_leafs_realpath(self):
+        # Folder realpath, lstat, then the leaf's own realpath: the leaf's must be preceded by a check too.
+        got, _ = self._timed(10.0, 0.0, True)
+        self.assertIn("analysis_timeout", got)
+        self.assertLessEqual(len(self.calls), 2)
+
+    def test_the_deadline_is_checked_before_each_lstat(self):
+        got, lstats = self._timed(0.0, 10.0, False, "C:/w411/f%d.xml")     # one folder: lstats back to back
+        self.assertIn("analysis_timeout", got)
+        self.assertLessEqual(len(lstats), 2)
 
     def test_the_deadline_is_checked_before_each_realpath(self):
         clock = [1000.0]
@@ -4255,7 +4306,7 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
                 self.mock.patch.object(H, "_clock", lambda: clock[0]), \
                 self.mock.patch.object(H, "_drive_type", lambda l: 3, create=True):
             got = H.facts({"tool_input": {"command": "touch " + " ".join(
-                "C:/w411/f%d.xml" % i for i in range(5))}}, ROOTS)
+                "C:/w411/d%d/f.xml" % i for i in range(5))}}, ROOTS)
         self.assertIn("analysis_timeout", got)                          # refused, never allowed
         self.assertLessEqual(len(self.calls), 2)
 
@@ -4268,7 +4319,7 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
                 time.sleep(0.02)
                 return p
             return os.path.realpath(p, *a, **k)
-        cmd = "rm -f " + " ".join("C:/w411/f%d.xml" % i for i in range(400))
+        cmd = "rm -f " + " ".join("C:/w411/d%d/f.xml" % i for i in range(400))   # 400 folders: none cached
         t0 = time.monotonic()
         with self.mock.patch.object(H.os.path, "realpath", slow), \
                 self.mock.patch.object(H, "_drive_type", lambda l: 3, create=True):
@@ -4276,7 +4327,145 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
         took = time.monotonic() - t0
         self.assertNotIn("analysis_timeout", got)
         self.assertLessEqual(len(self.calls), 64)
+        self.assertTrue(got["links_unresolved"])    # ...and the rest are refused, never "no link"
         self.assertLess(took, 6.0, took)            # uncapped: 400 x 20 ms = 8 s of realpath alone
+
+
+def _sandbox_base():
+    """<repo>/.test-sandbox when this file sits in a checkout (the harness's own gitignored scratch base), so
+    a junction a test makes never lands in the system temp folder; the default temp folder otherwise."""
+    here = pathlib.Path(__file__).resolve().parent
+    for d in (here,) + tuple(here.parents):
+        if (d / ".git").exists():
+            sbx = d / ".test-sandbox"
+            sbx.mkdir(exist_ok=True)
+            return str(sbx)
+    return None
+
+
+class TestLinkBudgetFailsClosed(unittest.TestCase):
+    """4.1.1 review (link budget): link_resolved returned "" -- "no link" -- once _MAX_LINK_RESOLVED realpaths
+    had been spent in one hook call, silently. MEASURED at 5404046c: `touch <64 local decoys> <junction into
+    reference>/libraries/wares.xml` read writes_reference False (True with 63 decoys), and 64 touch segments
+    then `rm -f <junction>/x.xml` read rm_targets_reference False. Now realpath is cached per folder, so decoys
+    in one folder spend one, and an operand past the budget is links_unresolved, which the hook refuses."""
+
+    def setUp(self):
+        import tempfile
+        self._td = tempfile.TemporaryDirectory(prefix="x4linkbudget_", dir=_sandbox_base())
+        base = pathlib.Path(self._td.name)
+        self.ref = base / "reference"
+        (self.ref / "libraries").mkdir(parents=True)
+        self.work = base / "work"
+        self.work.mkdir()
+        self.link = self.work / "refj"
+        try:
+            if os.name == "nt":
+                import _winapi
+                _winapi.CreateJunction(str(self.ref), str(self.link))
+            else:
+                os.symlink(str(self.ref), str(self.link))
+        except (OSError, ImportError, AttributeError) as exc:
+            self._td.cleanup()
+            self.skipTest("cannot make a link here: " + repr(exc))
+        self.roots = dict(ROOTS, reference=self.ref.as_posix())
+        self.W = self.work.as_posix()
+        self.L = self.link.as_posix()
+
+    def tearDown(self):
+        if os.name == "nt" and self.link.exists():
+            os.rmdir(self.link)              # the junction only, never its target
+        self._td.cleanup()
+
+    def f(self, cmd):
+        return H.facts({"tool_input": {"command": cmd}}, self.roots)
+
+    def one_folder(self, n):
+        return " ".join(Q + self.W + "/f%d.xml" % i + Q for i in range(n))
+
+    def many_folders(self, n):
+        return " ".join(Q + self.W + "/d%d/f.xml" % i + Q for i in range(n))
+
+    def test_RED_decoys_then_a_junction_is_never_read_as_no_link(self):
+        target = Q + self.L + "/libraries/wares.xml" + Q
+        for decoys in (self.one_folder(H._MAX_LINK_RESOLVED), self.many_folders(H._MAX_LINK_RESOLVED),
+                       self.many_folders(3 * H._MAX_LINK_RESOLVED)):
+            with self.subTest(n=decoys.count(" ") + 1, folders=decoys.count("/d")):
+                got = self.f("touch " + decoys + " " + target)
+                self.assertTrue(got["writes_reference"] or got.get("links_unresolved"), "failed open")
+
+    def test_RED_many_segments_then_rm_through_the_junction(self):
+        rm = "; rm -f " + Q + self.L + "/x.xml" + Q
+        for segs in ("; ".join("touch " + Q + self.W + "/f%d.xml" % i + Q for i in range(H._MAX_LINK_RESOLVED)),
+                     "; ".join("touch " + Q + self.W + "/d%d/f.xml" % i + Q for i in range(H._MAX_LINK_RESOLVED))):
+            with self.subTest(folders=segs.count("/d")):
+                got = self.f(segs + rm)
+                self.assertTrue(got["rm_targets_reference"] or got.get("links_unresolved"), "failed open")
+
+    def test_decoys_in_one_folder_spend_one_resolution_and_the_junction_is_judged(self):
+        got = self.f("touch " + self.one_folder(4 * H._MAX_LINK_RESOLVED) + " " + Q + self.L + "/libraries/wares.xml" + Q)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+        got = self.f("; ".join("touch " + Q + self.W + "/f%d.xml" % i + Q for i in range(4 * H._MAX_LINK_RESOLVED))
+                     + "; rm -f " + Q + self.L + "/x.xml" + Q)
+        self.assertTrue(got["rm_targets_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_past_the_budget_the_operand_is_links_unresolved(self):
+        got = self.f("touch " + self.many_folders(H._MAX_LINK_RESOLVED) + " " + Q + self.L + "/libraries/wares.xml" + Q)
+        self.assertTrue(got["links_unresolved"])
+
+    def test_CONTROL_long_lists_with_no_junction(self):
+        # One folder: nothing to refuse, the budget is not spent (an ALLOW). Past the budget in distinct folders:
+        # links_unresolved even with no link anywhere, because the guard cannot know that (a DENY, split it).
+        got = self.f("touch " + self.one_folder(4 * H._MAX_LINK_RESOLVED))
+        self.assertFalse(got["writes_reference"] or got["links_unresolved"])
+        got = self.f("touch " + self.many_folders(H._MAX_LINK_RESOLVED - 1))
+        self.assertFalse(got["writes_reference"] or got["links_unresolved"])
+        got = self.f("touch " + self.many_folders(H._MAX_LINK_RESOLVED + 1))
+        self.assertFalse(got["writes_reference"])
+        self.assertTrue(got["links_unresolved"])
+
+    def test_a_link_leaf_in_a_cached_folder_is_still_followed(self):
+        # The folder cache must not hide a link that IS the last component: the folder resolves to itself.
+        got = self.f("touch " + Q + self.W + "/a.xml" + Q + " " + Q + self.L + Q)
+        self.assertTrue(got["writes_reference"])
+        got = self.f("rm -rf " + Q + self.W + "/a.xml" + Q + " " + Q + self.L + Q)
+        self.assertTrue(got["rm_targets_reference"])
+
+    def test_the_last_component_probe_is_bounded_too(self):
+        from unittest import mock
+        with mock.patch.object(H, "_MAX_LINK_PROBED", 3):
+            self.assertFalse(self.f("touch " + self.one_folder(3))["links_unresolved"])
+            self.assertTrue(self.f("touch " + self.one_folder(4))["links_unresolved"])
+
+    def test_a_last_component_lstat_cannot_read_is_resolved_whole(self):
+        from unittest import mock
+        real_lstat = os.lstat
+
+        def lstat(p, *a, **k):
+            if str(p).replace(BS, "/").lower().rstrip("/").endswith("/refj"):
+                raise PermissionError(13, "denied", str(p))
+            return real_lstat(p, *a, **k)
+        with mock.patch.object(H.os, "lstat", lstat):
+            self.assertTrue(self.f("touch " + Q + self.L + Q)["writes_reference"])
+
+    @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
+    def test_a_file_at_a_drive_root_resolves_from_the_root_not_the_current_folder(self):
+        # posixpath.split("C:/x") gives "C:", which realpath reads as the drive's CURRENT folder.
+        drive = os.path.splitdrive(os.getcwd())[0]
+        self.assertNotEqual(os.path.normcase(os.getcwd()), os.path.normcase(drive + BS))
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0                  # outside facts(): a fresh budget by hand
+        H._LINK_DIRS.clear()
+        self.assertEqual(H.link_resolved(drive + "/x4-no-such-file-here.xml"), "")
+        self.assertEqual(H._LINK_DIRS.get(drive + "/"), drive + "/")
+
+    def test_save_policy_refuses_links_unresolved(self):
+        import save_policy
+        cmd = "touch " + self.many_folders(H._MAX_LINK_RESOLVED + 1)
+        with self.assertRaises(save_policy.ScopeError) as ctx:
+            save_policy.shell_evidence({"tool_name": "Bash", "tool_input": {"command": cmd}}, self.roots)
+        self.assertIn("link", str(ctx.exception))
 
 
 class TestBashDirectoryStackForms(unittest.TestCase):

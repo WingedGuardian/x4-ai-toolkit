@@ -39,6 +39,7 @@ import itertools
 import importlib.util
 import re
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -154,23 +155,68 @@ def link_resolved(p: str) -> str:
         # hook's 30 s and the call failed OPEN. Only a local drive is resolved.
         if _drive_type(s[0]) not in _LOCAL_DRIVE_TYPES:
             return ""
-    # Bounded per hook call, and inside the analysis deadline (past it the command is refused). Skipping
-    # a resolution only gives up the ADDED strictness of this second reading: the lexical path is still
-    # judged as written, so no verdict is ever lower than it would be without link resolution.
-    _check_deadline()
-    if _LINK_RESOLVED[0] >= _MAX_LINK_RESOLVED:
-        return ""
-    _LINK_RESOLVED[0] += 1
-    try:
-        real = os.path.realpath(s).replace(chr(92), "/")
-    except (OSError, ValueError):
+    # Bounded per hook call, and inside the analysis deadline (past it the command is refused). The folder
+    # is resolved once per hook call (cached), and the last component is followed only when lstat says it
+    # is a link, so a long list of files in a few folders spends a few resolutions. 4.1.1 review (link
+    # budget), MEASURED at 5404046c: past the bound this returned "" -- "no link" -- silently, so 64 local
+    # decoys before a junction operand made a write into reference/ read as allowed. An operand past the
+    # bound now sets links_unresolved, which the hook REFUSES: it is never read as "no link". The analysis
+    # deadline is checked before EACH uninterruptible call (every realpath, every lstat).
+    head, leaf = posixpath.split(s)
+    if (not leaf or leaf in (".", "..") or _SHORT_NAME.search(leaf)
+            or any(c in (".", "..") for c in head.split("/"))):
+        real = _realpath_budgeted(s)        # dot segments / a short leaf: the whole path, as before
+    else:
+        if head.endswith(":"):
+            head += "/"                     # `C:` alone is the drive's CURRENT folder, never its root
+        rhead = _LINK_DIRS.get(head)
+        if rhead is None:
+            rhead = _realpath_budgeted(head)
+            if rhead is None:
+                return ""
+            _LINK_DIRS[head] = rhead
+        if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
+            _LINKS_UNRESOLVED[0] = True
+            return ""
+        _LINK_PROBED[0] += 1
+        _check_deadline()
+        try:
+            st = os.lstat(s)
+            is_link = stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & 0x400)
+        except FileNotFoundError:
+            is_link = False                 # nothing there: it lands where its folder resolves
+        except (OSError, ValueError):
+            is_link = True                  # cannot tell: resolve the whole path
+        real = _realpath_budgeted(s) if is_link else rhead.rstrip("/") + "/" + leaf
+    if real is None:
         return ""
     return real if _lexical_norm(real) != _lexical_norm(s) else ""
 
 
-#: link_resolved's per-hook-call bounds (4.1.1 review A1); facts() resets both.
+def _realpath_budgeted(s: str):
+    """os.path.realpath of `s` with slashes, inside link_resolved's per-call budget: None when the budget is
+    spent (and links_unresolved is set -- a refusal, never "no link") or the filesystem cannot answer."""
+    _check_deadline()
+    if _LINK_RESOLVED[0] >= _MAX_LINK_RESOLVED:
+        _LINKS_UNRESOLVED[0] = True
+        return None
+    _LINK_RESOLVED[0] += 1
+    try:
+        return os.path.realpath(s).replace(chr(92), "/")
+    except (OSError, ValueError):
+        return None
+
+
+#: link_resolved's per-hook-call bounds (4.1.1 review A1); facts() resets them. Past either bound an
+#: operand is links_unresolved (refused), never "no link" (4.1.1 review, link budget).
 _MAX_LINK_RESOLVED = 64
 _LINK_RESOLVED = [0]
+#: ...the lstat of each operand's last component (cheap on a local drive; bounded all the same).
+_MAX_LINK_PROBED = 4096
+_LINK_PROBED = [0]
+#: ...each folder's realpath, once per hook call.
+_LINK_DIRS: dict = {}
+_LINKS_UNRESOLVED = [False]
 _DRIVE_TYPES: dict = {}
 #: GetDriveTypeW: 2 removable, 3 fixed, 5 CD-ROM, 6 RAM disk. Not resolved: 0 unknown, 1 no root
 #: directory, 4 remote (a mapped network drive, whose server may be offline).
@@ -8511,6 +8557,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _SSH_MEMO.clear()
     _SSH_JUDGED[0] = 0
     _LINK_RESOLVED[0] = 0               # link_resolved's realpath budget and drive cache: per hook call
+    _LINK_PROBED[0] = 0
+    _LINK_DIRS.clear()
+    _LINKS_UNRESOLVED[0] = False
     _DRIVE_TYPES.clear()
     _ps_spent[0] = 0.0                  # the translation budget is per hook call, never per judgement
     try:
@@ -9665,6 +9714,9 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # Several fields above evaluate glob membership; capture scope AFTER every
     # field has run so a late overflow cannot disappear from the result.
     result["operand_expansion_truncated"] = _OPERAND_EXPANSION_TRUNCATED[0]
+    # 4.1.1 review (link budget): an operand whose links the per-call budget left unresolved is not "no
+    # link" -- the hook refuses it (see link_resolved). Captured after every field, like the flag above.
+    result["links_unresolved"] = _LINKS_UNRESOLVED[0]
     result["ssh_host_unplaced"] = _ssh_unplaced_destructive(result, roots, protected_save_folders)
     return result
 

@@ -1468,6 +1468,72 @@ class TestArchiveGlobWholeHookTime(unittest.TestCase):
         self.assertLess(secs - plain, 10.0, "crafted %.1f s, plain %.1f s" % (secs, plain))
 
 
+@unittest.skipUnless(BASH, "no Git Bash: protect-bash.sh cannot be run")
+class TestLinkBudgetWholeHook(unittest.TestCase):
+    """4.1.1 review (link budget), MEASURED at 5404046c: 64 local decoy files ahead of an operand through a
+    junction into reference/ spent link_resolved's per-call budget, and the junction operand read as "no link"
+    -- the write was allowed. Through the whole hook: decoys in one folder are now resolved once and the write
+    is denied as a reference write; past the budget (distinct folders) the hook denies with a reason to act on;
+    a long one-folder list with no junction stays allowed. The fixture lives under <repo>/.test-sandbox."""
+
+    @classmethod
+    def setUpClass(cls):
+        sbx = REPO / ".test-sandbox"
+        sbx.mkdir(exist_ok=True)
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4linkhook_", dir=str(sbx)))
+        cls.ref = cls.tmp / "reference"
+        (cls.ref / "libraries").mkdir(parents=True)
+        cls.work = cls.tmp / "work"
+        cls.work.mkdir()
+        cls.link = cls.work / "refj"
+        try:
+            if os.name == "nt":
+                import _winapi
+                _winapi.CreateJunction(str(cls.ref), str(cls.link))
+            else:
+                os.symlink(str(cls.ref), str(cls.link))
+        except (OSError, ImportError, AttributeError) as exc:
+            shutil.rmtree(cls.tmp, ignore_errors=True)
+            raise unittest.SkipTest("cannot make a link here: " + repr(exc))
+        cls.env = _owned_env(cls.tmp, X4_REFERENCE=str(cls.ref), X4_CONFIG=str(cls.tmp / "none.env"))
+        cls.env.pop("CLAUDE_PROJECT_DIR", None)
+        cls.W, cls.L = cls.work.as_posix(), cls.link.as_posix()
+
+    @classmethod
+    def tearDownClass(cls):
+        if os.name == "nt" and cls.link.exists():
+            os.rmdir(cls.link)               # the junction only, never its target
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def verdict(self, command):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        p = subprocess.run([BASH, str(HOOKS / "protect-bash.sh")], input=payload, capture_output=True,
+                           text=True, encoding="utf-8", env=self.env, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr[-400:])
+        if not p.stdout.strip():
+            return "allow", ""
+        h = json.loads(p.stdout)["hookSpecificOutput"]
+        return h.get("permissionDecision", "advise"), h.get("permissionDecisionReason", "")
+
+    def test_decoys_then_a_junction_into_reference_is_denied(self):
+        q = chr(39)
+        one = " ".join(q + self.W + "/f%d.xml" % i + q for i in range(64))
+        many = " ".join(q + self.W + "/d%d/f.xml" % i + q for i in range(64))
+        for decoys, why in ((one, "reference"), (many, "different folders")):
+            with self.subTest(why=why):
+                v, reason = self.verdict("touch " + decoys + " " + q + self.L + "/libraries/wares.xml" + q)
+                self.assertEqual(v, "deny", reason)
+                self.assertIn(why, reason)
+
+    def test_CONTROL_long_lists_with_no_junction(self):
+        q = chr(39)
+        v, reason = self.verdict("touch " + " ".join(q + self.W + "/f%d.xml" % i + q for i in range(200)))
+        self.assertEqual(v, "allow", reason)
+        v, reason = self.verdict("touch " + " ".join(q + self.W + "/d%d/f.xml" % i + q for i in range(65)))
+        self.assertEqual(v, "deny", reason)                 # fail closed: the guard cannot know there is no link
+        self.assertIn("different folders", reason)
+
+
 class TestSshChainWholeHookTime(unittest.TestCase):
     """4.1.1 review round 7, 1, MEASURED at 9cd83006: the ssh advisory re-judged every spliced text with
     the other ssh segments still in it, so `ssh a ls && ...` with 7 segments and an `rm -rf <ref>` took
