@@ -1674,14 +1674,36 @@ def test_a_build_refused_only_at_the_swap_is_retried_as_the_swap_alone(sd, bxa, 
     assert "x4raw" not in json.loads((sd / "last-failures.json").read_text(encoding="utf-8"))
 
 
-def test_a_swap_refused_again_is_a_failure_and_is_retried_as_the_swap_next_time(sd, bxa, monkeypatch):
+def test_a_swap_refused_again_is_swap_pending_not_a_failure_and_is_retried_as_the_swap_next_time(sd, bxa, monkeypatch):
+    """Release review: a reader still holding the database (rc 7) is the documented exit-5 situation, not a builder
+    failure: the note says the swap is pending, the record is not "failed", and no failure memo is written."""
     ran = _swap_retry_world(monkeypatch, swap_code="import sys; sys.exit(7)", after_swap="UNCHANGED",
                             pending_once=False)
     _seen(sd, 60)
-    fc._basex_child(sd / "session-note.txt")
-    assert "FAILED rc 7" in _note(sd)
+    assert fc._basex_child(sd / "session-note.txt") == 0
+    assert "FAILED" not in _note(sd), _note(sd)
+    assert "reader holds the database" in _note(sd)
+    rec = json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
+    assert rec["state"] == "swap pending", rec
+    assert "x4raw" not in json.loads((sd / "last-failures.json").read_text(encoding="utf-8"))
     fc._basex_child(sd / "session-note.txt")
     assert ran == ["swap:x4raw", "x4eff", "swap:x4raw"], "never a full build while a finished one waits to be swapped"
+
+
+def test_a_swap_refused_by_a_reader_exits_5_by_hand_not_1(sd, bxa, monkeypatch, capsys):
+    _swap_retry_world(monkeypatch, swap_code="import sys; sys.exit(7)", after_swap="UNCHANGED", pending_once=False)
+    assert fc.rebuild(("x4raw",)) == 5
+    assert "FAILED" not in capsys.readouterr().out
+
+
+def test_TWIN_a_swap_and_a_full_build_that_both_really_fail_still_record_failed(sd, bxa, monkeypatch):
+    ran = _swap_retry_world(monkeypatch, swap_code="import sys; sys.exit(2)", after_swap="UNCHANGED")
+    monkeypatch.setattr(fc, "builder", lambda name: ran.append(name) or [sys.executable, "-c", "import sys; sys.exit(1)"])
+    _seen(sd, 60)
+    assert fc._basex_child(sd / "session-note.txt") == 1
+    assert "FAILED rc 1" in _note(sd)
+    rec = json.loads((sd / "basex-auto.json").read_text(encoding="utf-8"))
+    assert rec["state"] == "failed", rec
 
 
 def test_TWIN_a_swapped_in_build_that_is_still_not_current_is_rebuilt_in_the_same_run(sd, bxa, monkeypatch):
@@ -1833,3 +1855,35 @@ def test_TWIN_posix_starts_a_new_session_and_no_windows_flags(monkeypatch, tmp_p
     monkeypatch.setattr(fc, "_on_windows", lambda: False, raising=False)
     fc._spawn_basex(tmp_path / "note.txt")
     assert spy.calls[-1]["start_new_session"] is True and "creationflags" not in spy.calls[-1]
+
+
+def test_write_note_retries_a_replace_that_a_reader_holds_open(tmp_path, monkeypatch):
+    """Windows: os.replace raises PermissionError while another process (x4fresh status) has the target open; the
+    waiting builder rewrites basex-auto.json every minute, so one collision must not crash it."""
+    real, calls = os.replace, []
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError("held open")
+        return real(src, dst)
+    monkeypatch.setattr(fc.os, "replace", flaky)
+    monkeypatch.setattr(fc.time, "sleep", lambda s: None)
+    target = tmp_path / "note.json"
+    fc._write_note(target, "hello")
+    assert target.read_text(encoding="utf-8") == "hello" and len(calls) == 3
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_TWIN_write_note_gives_up_after_a_bounded_number_of_tries(tmp_path, monkeypatch):
+    calls = []
+
+    def always(src, dst):
+        calls.append(1)
+        raise PermissionError("held open")
+    monkeypatch.setattr(fc.os, "replace", always)
+    monkeypatch.setattr(fc.time, "sleep", lambda s: None)
+    with pytest.raises(PermissionError):
+        fc._write_note(tmp_path / "note.json", "hello")
+    assert 2 <= len(calls) <= 10
+    assert not list(tmp_path.glob("*.tmp")), "a failed write must not leave its temp file behind"

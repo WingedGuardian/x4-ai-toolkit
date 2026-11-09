@@ -52,7 +52,9 @@ Optional environment:
                           by "<program>: " at the start of a line, for its first word and any script it names.
     X4_FRESH_DEFER_WHILE  ';'-separated process names that defer --auto (default: X4.exe)
     X4_FRESH_AUTO=off     --auto does nothing
-    X4_FRESH_BASEX_AUTO=off   --auto never starts the background BaseX builder
+    X4_FRESH_BASEX_AUTO=off   --auto starts no new background BaseX builder, and a builder re-reads it once, when it
+                          takes its own lock; one already waiting out its quiet period keeps waiting and is stopped
+                          by the pid `x4fresh status` shows
     X4_FRESH_BASEX_QUIET_MIN  minutes the mods must be unchanged before it does (default 30)
     X4_BASH              bash used for the BaseX builders (default: bash on PATH)
 """
@@ -731,11 +733,28 @@ def _revoke_basex_stamp(name: str) -> str | None:
     return None
 
 
+NOTE_REPLACE_TRIES = 5      # os.replace attempts; Windows refuses (PermissionError) while a reader has the target open
+NOTE_REPLACE_PAUSE = 0.25   # seconds between them: about a second in all, then the failure is the caller's as before
+
+
 def _write_note(p: Path, text: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
     tmp.write_bytes(text.encode("utf-8"))
-    os.replace(tmp, p)
+    try:
+        for attempt in range(NOTE_REPLACE_TRIES):
+            try:
+                os.replace(tmp, p)
+                return
+            except PermissionError:
+                # A concurrent `x4fresh status` reading the file; the waiting builder rewrites its record every minute.
+                if attempt == NOTE_REPLACE_TRIES - 1:
+                    raise
+                _sleep(NOTE_REPLACE_PAUSE)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
 
 
 def rebuild(only=ORDER, auto: bool = False, note: Path | None = None, named: bool = False) -> int:
@@ -798,6 +817,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
     its build (the game, the quiet period, the disk, locks, the effective store), and its outcome is recorded."""
     before = {s.name: s for s in status(ORDER, holding_lock=True)}
     lines, failed, unclean = [], False, False
+    swap_waiting = False      # a finished build's swap is still refused by a reader: pending, not a failure
     skips: dict[str, str] = {}
     ran: list[str] = []
     why = _deferred(auto)
@@ -835,6 +855,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
         if _mutation.active() is not None:
             lines.append(f"{name}: SKIPPED: a mutation gate started meanwhile")
             continue
+        swap_held = False
         stamp = time.strftime('%Y%m%d-%H%M%S')
         log = sd / "logs" / f"{name}-{stamp}.log"
         try:
@@ -850,6 +871,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
                     lines.append(f"{name}: the finished build an earlier run left still cannot be swapped in: a "
                                  "reader holds the database; the next run retries the swap alone")
                     log = swap_log
+                    swap_held = swap_waiting = True
                 else:
                     lines.append(f"{name}: the finished build an earlier run left was "
                                  + (f"swapped in, but it is {now}" if rc == 0 else f"not swapped in (rc {rc})")
@@ -867,7 +889,11 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
                 lines.append(f"{name}: its stamp could not be revoked ({why_not}): it may read FRESH over a moved world")
                 unclean = True
         after = _mark_accepted(check(name), _load_accepted(sd))
-        if rc not in (0, 3):
+        if swap_held:
+            # Exit 5's meaning (nothing failed, the artifact is not current), not a builder failure; no failure memo,
+            # which would only get in the way of the swap-alone retry the next run makes anyway.
+            unclean = True
+        elif rc not in (0, 3):
             failed = True
             memo[name] = {"reasons": key, "rc": rc, "when": time.strftime("%Y-%m-%d %H:%M")}
             why = _exit_reason(wrapper_lines, rc)                  # a wrapper's refusal or kill may be WHY it failed
@@ -918,7 +944,7 @@ def _rebuild_locked(sd: Path, targets, auto: bool, note: Path, named: bool = Fal
     left = [s for s in final if s.state not in ("FRESH", NOT_BUILT)]
     if basex_child:
         lines.extend(_skip_lines(skips))
-        outcome = "failed" if failed else ("finished" if ran else "skipped")
+        outcome = "failed" if failed else ("swap pending" if swap_waiting else ("finished" if ran else "skipped"))
         detail = [ln for ln in lines if ln.startswith(BASEX) or ln.startswith("DEFERRED")]
         _basex_record(sd, outcome, detail="; ".join(detail)[:600] or "nothing to rebuild")
     elif auto and not why:
@@ -1047,7 +1073,9 @@ def _basex_disk_shortfall(db: str) -> str | None:
 
 
 def _basex_blocker(db: str, statuses: dict, memo: dict, world: str | None) -> str | None:
-    """Why `db` must not be rebuilt automatically now, or None. Cheap checks first; a check that cannot run blocks."""
+    """Why `db` must not be rebuilt automatically now, or None. Cheap checks first. An exception from any check blocks
+    (said in the note); but `_basex_unbuildable` itself returns None when its BaseX/Java preflight cannot run, so that
+    one never blocks here: the build's own preflight refuses if BaseX or Java is really absent."""
     try:
         if not _basex_previously_built(db):
             return (f"never built here; an automatic rebuild only refreshes a database built once before "
@@ -1310,7 +1338,8 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--auto", action="store_true",
                     help="unattended mode (session start): rebuilds effective + xref, then starts ONE background "
                          "BaseX builder once the game is closed and the mods have been unchanged for "
-                         "X4_FRESH_BASEX_QUIET_MIN minutes (default 30; X4_FRESH_BASEX_AUTO=off stops it); that "
+                         "X4_FRESH_BASEX_QUIET_MIN minutes (default 30; X4_FRESH_BASEX_AUTO=off starts no new one, and one "
+                         "already waiting is stopped by its pid in `x4fresh status`); that "
                          "builder holds the build lock while it builds, so other rebuilds exit 5 meanwhile; defers "
                          "while a listed process runs, never retries the same failure")
     pr.add_argument("--auto-basex", action="store_true", help=argparse.SUPPRESS)   # the background builder itself
