@@ -283,8 +283,10 @@ def read_path(mod_dir: Path, vpath: str, verify: bool = True) -> bytes | None:
     # this acknowledgement the warning fired ~15 times on an ordinary `x4validate` run,
     # once per loose mod, at a call site where it can never be right. A check that floods
     # is worse than no check — it trains you to skim past the run it IS right about.
-    member = _get_ci(mod_vfs(mod_dir, xml_only=xml_only, packed_only=True), vpath,
-                     _folded_vfs(str(mod_dir), xml_only))
+    # The XML call is kept exactly as it was (positional dir + packed_only): callers and tests that
+    # substitute mod_vfs rely on that signature. Only a non-XML vpath asks for the full index.
+    vfs = mod_vfs(mod_dir, packed_only=True) if xml_only else mod_vfs(mod_dir, xml_only=False, packed_only=True)
+    member = _get_ci(vfs, vpath, _folded_vfs(str(mod_dir), xml_only))
     return None if member is None else read_member(member, verify=verify)
 
 
