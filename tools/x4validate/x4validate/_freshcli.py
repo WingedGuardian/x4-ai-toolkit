@@ -813,11 +813,64 @@ def _handle_in_job(k32, wintypes, ctypes, h, job) -> bool | None:
     return bool(inside.value)
 
 
+_PROC = Path("/proc")
+
+
+def _linux() -> bool:
+    return sys.platform.startswith("linux")
+
+
+def _tids(pid: int) -> list[int]:
+    """Linux: every thread of the process, since a nice value there belongs to ONE thread (setpriority on a pid sets
+    only the thread whose id it is, so java's running threads would keep theirs). [pid] elsewhere, or when the
+    threads cannot be listed."""
+    if not _linux():
+        return [pid]
+    try:
+        tids = sorted(int(e.name) for e in (_PROC / str(pid) / "task").iterdir() if e.name.isdigit())
+    except OSError:
+        return [pid]  # silent-ok: unlistable threads: the per-pid call is the fallback, as off Linux
+    return tids or [pid]
+
+
+def _posix_set(pid: int, want: int, threads: dict[int, int | None]) -> str | None:
+    """Set nice `want` on every thread of `pid` (the pid itself off Linux). `threads`: tid -> its nice before the
+    first touch, kept by the caller across calls; a thread first seen after that was started meanwhile (inheriting a
+    lowered nice) and has no original of its own (None). Each thread gets the LOWER priority of `want` and its own
+    original, so a restore never raises a thread above what it had. A thread that vanished is ignored."""
+    prio = getattr(os, "PRIO_PROCESS", 0)
+    first = not threads
+    done, err = 0, None
+    for tid in _tids(pid):
+        if tid not in threads:
+            try:
+                threads[tid] = os.getpriority(prio, tid) if first else None
+            except OSError:
+                threads[tid] = None  # silent-ok: unknown original: it gets `want`, the documented fallback
+        orig = threads[tid]
+        target = want if orig is None or orig <= want else orig      # a higher nice is a lower priority
+        try:
+            os.setpriority(prio, tid, target)
+        except ProcessLookupError:
+            continue  # silent-ok: the thread (or the process) ended meanwhile; none left = _GONE below
+        except PermissionError:
+            # Raising a nice value back down (the restore after a game) needs privilege on Linux.
+            err = err or "permission denied (raising a priority back needs privilege here)"
+            continue
+        except OSError as exc:
+            err = err or f"{type(exc).__name__}: {exc}"
+            continue
+        done += 1
+    if err:
+        return err
+    return None if done else _GONE
+
+
 def _posix_birth(pid: int) -> int | None:
     """Linux: the process's start time (field 22 of /proc/<pid>/stat, clock ticks after boot); None elsewhere or
     when it cannot be read (the process exited, or there is no /proc)."""
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        stat = (_PROC / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None  # silent-ok: None = unknown; a caller never touches a process it cannot confirm
     fields = stat.rpartition(")")[2].split()     # the command name in parentheses may hold spaces
@@ -903,10 +956,12 @@ def _posix_ours(pid: int, born: int | None) -> str | None:
     return None if now == born else _NOT_OURS
 
 
-def _set_priority(pid: int, level, born: int | None = None, job=None) -> str | None:
+def _set_priority(pid: int, level, born: int | None = None, job=None,
+                  threads: dict[int, int | None] | None = None) -> str | None:
     """Set one process's priority (IDLE, BELOW_NORMAL, or a raw value) if `pid` still names the process listed with
     start time `born` (or, on Windows, one in the build's `job`). None: done, read back; _GONE: it exited meanwhile;
-    _NOT_OURS: the pid was reused, nothing touched; else what went wrong, for the note."""
+    _NOT_OURS: the pid was reused, nothing touched; else what went wrong, for the note. `threads`: POSIX, the
+    per-thread originals _posix_set keeps for this process (Linux sets every thread)."""
     want = _raw(level)
     if os.name == "nt":
         (ctypes, wintypes, k32), h, why = _win_open_ours(pid, born, job, 0x0200 | 0x1000)
@@ -926,19 +981,10 @@ def _set_priority(pid: int, level, born: int | None = None, job=None) -> str | N
             return None
         finally:
             k32.CloseHandle(h)
-    why = _posix_ours(pid, born)
+    why = _posix_ours(pid, born)        # identity per PROCESS (its start time); the threads follow it
     if why:
         return why
-    try:
-        os.setpriority(os.PRIO_PROCESS, pid, want)
-    except ProcessLookupError:
-        return _GONE
-    except PermissionError:
-        # Raising a nice value back down (the restore after a game) needs privilege on Linux.
-        return "permission denied (raising a priority back needs privilege here)"
-    except OSError as exc:
-        return f"{type(exc).__name__}: {exc}"
-    return None
+    return _posix_set(pid, want, threads if threads is not None else {})
 
 
 def _priority_raw(pid: int, born: int | None = None, job=None) -> int | None:
@@ -998,6 +1044,7 @@ class _GameWatch:
         self._refused: dict[tuple, list[int]] = {}
         self._original: dict[tuple[int, int | None], int | None] = {}   # (pid, start) -> priority at first touch
         self._lowered: set[tuple[int, int | None]] = set()               # what this watch dropped to idle
+        self._threads: dict[tuple[int, int | None], dict] = {}           # POSIX: per-thread originals per process
         self._since = ""
         self.job = None
         self.on_change = on_change
@@ -1059,7 +1106,7 @@ class _GameWatch:
             if orig is not None and _rank(orig) <= _rank(_raw(IDLE)):
                 took += 1                              # idle already, before any game: never touched
                 continue
-            err = _set_priority(pid, IDLE, born, self.job)
+            err = _set_priority(pid, IDLE, born, self.job, threads=self._threads.setdefault(key, {}))
             if err in (_GONE, _NOT_OURS):
                 continue
             if err:
@@ -1100,7 +1147,7 @@ class _GameWatch:
                              "its priority before the game could not be read; left at idle")
                 continue
             target = BELOW_NORMAL if _rank(orig) >= _rank(_raw(BELOW_NORMAL)) else orig
-            err = _set_priority(pid, target, born, self.job)
+            err = _set_priority(pid, target, born, self.job, threads=self._threads.setdefault(key, {}))
             if err in (_GONE, _NOT_OURS):
                 continue
             if err:

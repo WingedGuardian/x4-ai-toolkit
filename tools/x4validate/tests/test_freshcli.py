@@ -1906,9 +1906,12 @@ def watch(monkeypatch):
     monkeypatch.setattr(fc, "_descendants", lambda root: None if world["tree"] is None else [
         (p, p * 10) for p in [root] + [p for p in world["tree"] if p != root]])
 
-    def set_priority(pid, level, born=None, job=None):
+    threads_seen: list[tuple[int, object]] = []
+
+    def set_priority(pid, level, born=None, job=None, threads=None):
         assert born == pid * 10, "the start time recorded at listing must reach the priority call"
         calls.append((pid, level))
+        threads_seen.append((pid, threads))
         return world["fail"].get((pid, level), world["fail"].get(pid))
     monkeypatch.setattr(fc, "_set_priority", set_priority)
     monkeypatch.setattr(fc, "_priority_raw",
@@ -1916,7 +1919,7 @@ def watch(monkeypatch):
     monkeypatch.setattr(fc, "_now", lambda: T0)
     changes: list[str] = []
     return {"w": fc._GameWatch(on_change=lambda w: changes.append(w.priority)), "world": world, "calls": calls,
-            "changes": changes}
+            "changes": changes, "threads": threads_seen}
 
 
 def test_a_game_seen_mid_build_drops_every_process_of_the_build_to_idle(watch):
@@ -2199,7 +2202,7 @@ def _fake_priority_calls(monkeypatch):
     calls: list[tuple[int, object]] = []
     monkeypatch.setattr(fc, "_descendants", lambda root: [(root, None)])
     monkeypatch.setattr(fc, "_priority_raw", lambda pid, born=None, job=None: fc._raw(fc.BELOW_NORMAL))
-    monkeypatch.setattr(fc, "_set_priority", lambda pid, level, born=None, job=None: calls.append((pid, level)))
+    monkeypatch.setattr(fc, "_set_priority", lambda pid, level, born=None, job=None, threads=None: calls.append((pid, level)))
     return calls
 
 
@@ -2359,3 +2362,119 @@ def test_the_real_tree_listing_and_priority_calls_on_a_harmless_child_of_this_te
         child.kill()
         child.wait()
     assert fc._set_priority(child.pid, fc.IDLE, born=listed[child.pid]) in ("gone", fc._NOT_OURS)
+
+
+# ---- Linux: nice is per THREAD, so a process's priority is set on every thread in /proc/<pid>/task (4.1.1)
+
+@pytest.fixture
+def fakeproc(tmp_path, monkeypatch):
+    """A stubbed /proc with process 100 and its threads; os.setpriority/getpriority faked (nothing real touched)."""
+    root = tmp_path / "proc"
+    world = {"nice": {100: 10, 101: 10, 102: 19}, "vanished": set(), "denied": set()}
+    calls: list[tuple[int, int]] = []
+
+    def add(tid):
+        (root / "100" / "task" / str(tid)).mkdir(parents=True, exist_ok=True)
+    for tid in (100, 101, 102):
+        add(tid)
+
+    def setp(which, tid, value):
+        if tid in world["vanished"]:
+            raise ProcessLookupError(tid)
+        if tid in world["denied"]:
+            raise PermissionError(tid)
+        calls.append((tid, value))
+        world["nice"][tid] = value
+
+    def getp(which, tid):
+        if tid in world["vanished"]:
+            raise ProcessLookupError(tid)
+        return world["nice"][tid]
+    monkeypatch.setattr(fc, "_PROC", root)
+    monkeypatch.setattr(fc, "_linux", lambda: True)
+    monkeypatch.setattr(fc.os, "setpriority", setp, raising=False)
+    monkeypatch.setattr(fc.os, "getpriority", getp, raising=False)
+    return {"world": world, "calls": calls, "add": add}
+
+
+def test_linux_sets_every_thread_and_records_each_threads_original(fakeproc):
+    threads: dict = {}
+    assert fc._posix_set(100, 19, threads) is None
+    assert fakeproc["calls"] == [(100, 19), (101, 19), (102, 19)]
+    assert threads == {100: 10, 101: 10, 102: 19}
+
+
+def test_TWIN_non_linux_posix_sets_the_pid_only(fakeproc, monkeypatch):
+    monkeypatch.setattr(fc, "_linux", lambda: False)
+    threads: dict = {}
+    assert fc._posix_set(100, 19, threads) is None
+    assert fakeproc["calls"] == [(100, 19)]
+
+
+def test_linux_a_thread_started_after_the_drop_is_dropped_on_the_next_call(fakeproc):
+    threads: dict = {}
+    fc._posix_set(100, 19, threads)
+    fakeproc["add"](103)
+    fakeproc["world"]["nice"][103] = 19        # inherited idle from a lowered thread
+    fakeproc["calls"].clear()
+    fc._posix_set(100, 19, threads)
+    assert (103, 19) in fakeproc["calls"]
+    assert threads[103] is None, "a thread born after the first touch has no original of its own"
+
+
+def test_linux_restore_returns_each_thread_to_its_own_original_never_above_the_target(fakeproc):
+    threads: dict = {}
+    fc._posix_set(100, 19, threads)
+    fakeproc["add"](103)
+    fakeproc["world"]["nice"][103] = 19
+    fc._posix_set(100, 19, threads)
+    fakeproc["calls"].clear()
+    assert fc._posix_set(100, 10, threads) is None
+    assert sorted(fakeproc["calls"]) == [(100, 10), (101, 10), (102, 19), (103, 10)], fakeproc["calls"]
+
+
+def test_linux_a_thread_that_vanishes_is_ignored(fakeproc):
+    fakeproc["world"]["vanished"] = {101}
+    assert fc._posix_set(100, 19, {}) is None
+    assert fakeproc["calls"] == [(100, 19), (102, 19)]
+
+
+def test_TWIN_linux_every_thread_vanished_is_gone(fakeproc):
+    fakeproc["world"]["vanished"] = {100, 101, 102}
+    assert fc._posix_set(100, 19, {}) == fc._GONE
+
+
+def test_TWIN_linux_a_thread_refused_is_said_and_the_rest_still_set(fakeproc):
+    fakeproc["world"]["denied"] = {101}
+    err = fc._posix_set(100, 10, {})
+    assert err and err.startswith("permission denied"), err
+    assert (100, 10) in fakeproc["calls"] and (102, 19) in fakeproc["calls"], "the other threads are still set"
+
+
+def test_the_watch_keeps_one_thread_record_per_process_across_polls(watch):
+    w = watch["w"]
+    w.poll(100)
+    w.poll(100)
+    kept = [t for p, t in watch["threads"] if p == 101]
+    assert len(kept) == 2 and kept[0] is not None and kept[0] is kept[1], watch["threads"]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="per-thread nice is Linux")
+def test_linux_real_every_thread_of_a_child_of_this_test_goes_idle():
+    code = ("import threading, time, sys\n"
+            "for _ in range(3): threading.Thread(target=time.sleep, args=(30,), daemon=True).start()\n"
+            "print('ready', flush=True); time.sleep(30)\n")
+    child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline().strip() == "ready"
+        tids = fc._tids(child.pid)
+        assert len(tids) >= 4 and child.pid in tids, tids
+        threads: dict = {}
+        assert fc._set_priority(child.pid, fc.IDLE, born=fc._created(child.pid), threads=threads) is None
+        assert set(threads) >= set(tids)
+        assert all(os.getpriority(os.PRIO_PROCESS, t) == 19 for t in tids), tids
+        back = fc._set_priority(child.pid, fc.BELOW_NORMAL, born=fc._created(child.pid), threads=threads)
+        assert back is None or back.startswith("permission denied"), back
+    finally:
+        child.kill()
+        child.wait()
