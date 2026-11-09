@@ -1183,12 +1183,16 @@ def resolve_roots():
 #:     top-level `x4_execution_host` is "codex", which only the Codex adapter or a neutral
 #:     Action v1 host sets; `verdict()` builds a host-less payload, and a host named in the
 #:     command text or tool_input exempts nothing by design.
+#:   * links_unresolved (4.1.1, F368) -- needs write/delete operands in more distinct
+#:     folders than the per-call link budget, a pathological INPUT SIZE (and real folders
+#:     on disk) like carriers_truncated; covered by TestLinkBudgetFailsClosed and
+#:     test_audit0924_hooks.py::TestLinkBudgetWholeHook.
 #: All of these are covered by unit tests (test_hook_facts.py, test_codex_long_jobs.py)
 #: instead. If a mutator ever gains the ability to reach one, drop it from here and the
 #: floor rises by itself.
 #: Module level, 2026-09-09, so the suite can assert the seed floor against the SAME
 #: exemption set the run uses -- a second copy in a test is a second thing to drift.
-STRUCTURAL = {"carriers_truncated", "timeout_over_cap", "git_wipe_from_session_dir",
+STRUCTURAL = {"carriers_truncated", "links_unresolved", "timeout_over_cap", "git_wipe_from_session_dir",
               "longjob_codex", "timeout_over_cap_codex"}
 
 #: (label, scope, old, new) -- each MUST apply exactly ONCE, and within `scope`
