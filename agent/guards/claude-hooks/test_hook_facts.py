@@ -551,6 +551,9 @@ class TestDeletePredicates(unittest.TestCase):
         # under test shadows it (CLAUDE.md #26).
         p = REF.replace("/reference", "/./reference")
         self.assertTrue(F(D + ' -rf "' + p + '"')["rm_targets_reference"])
+        # 4.1.1: link resolution (realpath) judges the same delete a second time and also removes the `.`, so on a
+        # drive it can resolve, the verdict above holds without this normaliser. Pin the lexical reading itself.
+        self.assertEqual(H._lexical_norm(p), H._lexical_norm(REF))
 
     def test_dotdot_segment_is_canonicalised(self):
         p = REF.replace("/reference", "/other/../reference")
