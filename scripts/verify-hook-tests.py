@@ -2960,13 +2960,13 @@ MUTANTS = [
     ('link bound: at most _MAX_LINK_RESOLVED realpaths (A1)',
      '    if _LINK_RESOLVED[0] >= _MAX_LINK_RESOLVED:', '    if False:',
      'test_realpath_calls_are_capped_per_hook_call'),
-    ('link bound: ...per hook call (A1)',
+    ('link bound: ...the realpath count per hook call (A1)',
      "    _LINK_RESOLVED[0] = 0               # link_resolved's", "    pass  # link_resolved's",
      'test_realpath_calls_are_capped_per_hook_call'),
     ('link bound: the drive type is cached (A1)',
      '    if key not in _DRIVE_TYPES:', '    if True:',
      'test_the_drive_type_is_asked_once_per_drive_per_call'),
-    ('link bound: ...per hook call (A1)',
+    ('link bound: ...the drive types per hook call (A1)',
      '    _DRIVE_TYPES.clear()', '    pass',
      'test_the_drive_type_is_asked_once_per_drive_per_call'),
     # --- 4.1.1 review A2/A4: xargs items past the bound, and GNU's old -i spellings
@@ -3012,6 +3012,28 @@ def facts(payload, roots):          # noqa: F811
 # `background` is a passthrough of the caller's own flag -- an INPUT the long-job rule
 # consumes, not a rule predicate. Excluded by name and printed, never quietly dropped.
 NOT_A_RULE = {"background"}
+
+# Mutants of code that runs on ONE operating system, by label -> (the os.name it runs under, why).
+# Elsewhere no test can reach the code, so the trial would read "NOT CAUGHT" for a reason that is
+# not a coverage hole. They are left out of the trials on other systems -- named in the output,
+# never quietly -- and still run, and must be caught, where the code runs. The same rule as the
+# codex adapter mutants' Windows-only skip (8bdaa55). Every label must name exactly one mutant
+# (anchor_problems), so a renamed mutant cannot leave a stale entry that excuses nothing.
+_DRIVE_TYPE_ONLY = ("nt", "link_resolved asks GetDriveTypeW only when os.name == 'nt'; its target "
+                    "tests skip elsewhere (drive letters are a Windows notion). MEASURED: uncaught on "
+                    "ubuntu shards 1, 2 and 4 of CI run 42517544460")
+OS_ONLY = {
+    "link bound: a drive that is not local is not resolved (A1)": _DRIVE_TYPE_ONLY,
+    "link bound: a remote drive is not local (A1)": _DRIVE_TYPE_ONLY,
+    "link bound: the drive type is cached (A1)": _DRIVE_TYPE_ONLY,
+    "link bound: ...the drive types per hook call (A1)": _DRIVE_TYPE_ONLY,
+}
+
+
+def runs_here(label: str, os_name: str | None = None) -> bool:
+    """Can a test reach this mutant's code on this operating system?"""
+    need = OS_ONLY.get(label)
+    return need is None or need[0] == (os.name if os_name is None else os_name)
 
 
 def test_sources(text: str) -> dict:
@@ -3199,6 +3221,13 @@ def anchor_problems(pristine: str, test_source: str, mutants=None) -> list:
             out.append("%s: the replacement is the anchor, so nothing is mutated" % label)
         if qualify(tgt, idx)[0] is None:
             out.append("%s: %s" % (label, qualify(tgt, idx)[1]))
+    labels = [m[0] for m in mutants]
+    for label in sorted({x for x in labels if labels.count(x) > 1}):
+        out.append("%s: the label names %d mutants, so a report line cannot say which"
+                   % (label, labels.count(label)))
+    if mutants is MUTANTS:
+        for label in sorted(set(OS_ONLY) - set(labels)):
+            out.append("%s: an OS_ONLY entry that names no mutant" % label)
     return out
 
 
@@ -3337,6 +3366,20 @@ def main(argv=None) -> int:
                       "having examined nothing" % args.shard, file=sys.stderr)
                 return 2
             print(f"shard {args.shard[0]}/{args.shard[1]}: {len(cases)} of {population} trials\n")
+        # Code another operating system runs: named and left out here, run where it runs (OS_ONLY).
+        elsewhere = [c for c in cases if c[0].startswith("mutation:")
+                     and not runs_here(MUTANTS[int(c[0].split(":")[1])][0])]
+        if elsewhere:
+            cases = [c for c in cases if c not in elsewhere]
+            print("not run on os.name %r, whose code runs only on another system: %d" % (os.name, len(elsewhere)))
+            for key, _s in elsewhere:
+                label = MUTANTS[int(key.split(":")[1])][0]
+                print("  %s (needs os.name %r)" % (label, OS_ONLY[label][0]))
+            print()
+            if not cases:
+                print("REFUSING: every selected trial runs only on another system -- nothing was examined",
+                      file=sys.stderr)
+                return 2
         if args.sample is not None:
             if not 1 <= args.sample <= population:
                 parser.error("--sample must be between 1 and the trial population")

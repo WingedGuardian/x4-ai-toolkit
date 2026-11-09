@@ -123,6 +123,34 @@ def test_each_kind_of_stale_row_is_reported():
     assert "nothing is mutated" in problems("noop", "once", "once", "test_a")[0]
     assert "no such test" in problems("target", "once", "x", "test_missing")[0]
     assert "EMPTY" in vht.anchor_problems("x", SOURCE, [])[0]
+    two = vht.anchor_problems("once twice", SOURCE, [("same", "once", "x", "test_a"),
+                                                    ("same", "twice", "x", "test_b")])
+    assert two == ["same: the label names 2 mutants, so a report line cannot say which"]
+
+
+def test_an_os_only_mutant_runs_only_where_its_code_runs():
+    labels = {m[0] for m in vht.MUTANTS}
+    assert vht.OS_ONLY and set(vht.OS_ONLY) <= labels
+    for label, (os_name, why) in vht.OS_ONLY.items():
+        assert os_name in ("nt", "posix") and why, label
+        assert vht.runs_here(label, os_name)
+        assert not vht.runs_here(label, "posix" if os_name == "nt" else "nt")
+    ordinary = next(iter(labels - set(vht.OS_ONLY)))
+    assert vht.runs_here(ordinary, "nt") and vht.runs_here(ordinary, "posix")
+
+
+def test_every_drive_type_mutant_is_windows_only():
+    """The drive-type branch of link_resolved runs under os.name == 'nt' alone, so a Linux trial of
+    any mutant in it reads NOT CAUGHT for a reason that is no coverage hole (CI run 42517544460)."""
+    drive = {m[0] for m in vht.MUTANTS if "_drive_type(" in m[1] or "_DRIVE_TYPES" in m[1]
+             or "_LOCAL_DRIVE_TYPES" in m[1]}
+    assert drive and all(vht.OS_ONLY.get(label, ("",))[0] == "nt" for label in drive), drive
+
+
+def test_an_os_only_entry_naming_no_mutant_is_a_problem(monkeypatch):
+    pristine, source = _anchor_table()
+    monkeypatch.setattr(vht, "OS_ONLY", dict(vht.OS_ONLY, **{"renamed away": ("nt", "x")}))
+    assert vht.anchor_problems(pristine, source) == ["renamed away: an OS_ONLY entry that names no mutant"]
 
 
 def test_the_check_refuses_on_a_real_stale_table_and_runs_nothing(monkeypatch, capsys):
