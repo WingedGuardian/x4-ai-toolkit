@@ -144,9 +144,11 @@ the second copy a build-then-swap holds, no build of that database is running, B
 database was built here once before (a database you never built is never started automatically); `x4eff` also
 waits for a FRESH effective store. A game started while a database builds does not stop that build: the builder
 checks for the game every 30 seconds and, from the first sighting, drops the build's whole process tree (bash, java,
-anything they start later) to idle priority, and back to below-normal once the game is closed; `x4fresh status` and
-the note say when it was lowered, and name any process whose priority could not be changed (a job wrapper that runs
-the build in a priority-limited job object refuses it; the wrapper's own rules then apply). `x4eff` still starts only
+anything they start later) to idle priority, and once the game is closed returns each process it lowered to the
+priority it had before (never above below-normal). `x4fresh status` and the note say what the processes actually took:
+"idle since" only when every one of them is idle, otherwise "not taken" with how many and why, and they name any
+process whose priority could not be changed (a job wrapper that runs the build in a priority-limited job object
+refuses it; the wrapper's own rules then apply). `x4eff` still starts only
 with the game closed. Each condition that stops it is named in one line of the note, and
 `x4fresh status` says whether the background build is waiting, running, finished, skipped or failed. Its outcome is
 in `x4fresh status` and in the session-start note of the workspace whose session start launched it (another
