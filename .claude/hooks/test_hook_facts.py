@@ -4437,6 +4437,7 @@ class TestLinkBudgetFailsClosed(unittest.TestCase):
         from unittest import mock
         with mock.patch.object(H, "_MAX_LINK_PROBED", 3):
             self.assertFalse(self.f("touch " + self.one_folder(3))["links_unresolved"])
+            self.assertFalse(self.f("touch " + self.one_folder(3))["links_unresolved"])    # reset per hook call
             self.assertTrue(self.f("touch " + self.one_folder(4))["links_unresolved"])
 
     def test_a_last_component_lstat_cannot_read_is_resolved_whole(self):
@@ -4466,6 +4467,121 @@ class TestLinkBudgetFailsClosed(unittest.TestCase):
         with self.assertRaises(save_policy.ScopeError) as ctx:
             save_policy.shell_evidence({"tool_name": "Bash", "tool_input": {"command": cmd}}, self.roots)
         self.assertIn("link", str(ctx.exception))
+
+
+class TestLinkResolutionOfLiteralSpellings(unittest.TestCase):
+    """4.1.1 review (link budget round 2). link_resolved skipped any path has_unresolved() flagged, so a
+    SINGLE-QUOTED `$` -- a literal character, never an expansion -- left the path lexical only. MEASURED at
+    a70dcedd: `touch '<junction into reference>/libraries/wares.xml::$DATA'` and `echo x > '<same>'` read
+    writes_reference False (True with no junction), and `touch '<junction>:s'` (MEASURED: a write to it
+    lands in a stream of the TARGET folder) False. Read-only search operands past the link budget set
+    links_unresolved, refusing a `grep -rn` over many folders, which no write/delete verdict reads."""
+
+    setUp = TestLinkBudgetFailsClosed.setUp
+    tearDown = TestLinkBudgetFailsClosed.tearDown
+    f = TestLinkBudgetFailsClosed.f
+    many_folders = TestLinkBudgetFailsClosed.many_folders
+
+    def test_RED_an_ntfs_stream_suffix_behind_a_junction_is_judged_where_it_lands(self):
+        tails = ["/libraries/wares.xml::$DATA", "/libraries/wares.xml:s:$DATA", "/libraries/wares.xml:s"]
+        if os.name == "nt":
+            tails += [":s", "::$DATA", "::$INDEX_ALLOCATION/libraries/x.xml"]
+        for tail in tails:
+            p = Q + self.L + tail + Q
+            for cmd in ("touch " + p, "echo x > " + p, "cp " + Q + self.W + "/a.xml" + Q + " " + p):
+                with self.subTest(cmd=cmd):
+                    self.assertTrue(self.f(cmd)["writes_reference"], cmd)
+            with self.subTest(rm=tail):
+                self.assertTrue(self.f("rm -f " + p)["rm_targets_reference"], tail)
+
+    def test_RED_a_literal_dollar_in_a_folder_name_behind_a_junction(self):
+        (self.ref / "a$b").mkdir()
+        for p in (Q + self.L + "/a$b/x.xml" + Q, Q + self.L + "/a$b" + Q, Q + self.L + "/a${b}/x.xml" + Q,
+                  DQ + self.L + "/a" + BS + "$b/x.xml" + DQ):
+            with self.subTest(p=p):
+                self.assertTrue(self.f("touch " + p)["writes_reference"], p)
+                self.assertTrue(self.f("echo x > " + p)["writes_reference"], p)
+
+    def test_TWIN_an_expansion_is_still_not_resolved_as_a_link(self):
+        # `$X` unquoted or double-quoted is a variable: the path is unknown, not literal (the existing rule).
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+        H._LINK_DIRS.clear()
+        self.assertEqual(H.link_resolved(self.L + "/$X/x.xml"), "")
+        self.assertEqual(H.link_resolved(self.L + "/$(echo x)/x.xml"), "")
+        self.assertNotEqual(H.link_resolved(self.L + "/$X/x.xml", literal=True), "")
+        # ...its literal head is followed, the rest kept as written: still an unresolved operand.
+        self.assertEqual(H.link_head_resolved(self.L + "/$X/x.xml").lower(),
+                         (self.ref.resolve().as_posix() + "/$X/x.xml").lower())
+        self.assertEqual(H.link_head_resolved(self.W + "/$X/x.xml"), "")       # no link on the head
+        self.assertEqual(H.link_head_resolved("$X/x.xml"), "")                 # no literal head
+        self.assertEqual(H.link_head_resolved(self.L + "/x.xml"), "")          # nothing unresolved
+
+    def test_an_expansion_behind_a_junction_reads_as_it_does_on_the_root(self):
+        # The lexical rule catches `<reference>/$X/x.xml` by the root in its text; the junction spelling agrees.
+        for tail in ("/$X/x.xml", "/libraries/*.xml", "/$(echo x)", "/lib*/$X/x.xml", "/l{a,b}/$X"):
+            for verb in ("touch ", "rm -rf "):
+                key = "rm_targets_reference" if verb == "rm -rf " else "writes_reference"
+                for quote in (DQ, ""):
+                    with self.subTest(cmd=verb + tail, q=quote):
+                        direct = self.f(verb + quote + self.ref.as_posix() + tail + quote)[key]
+                        via = self.f(verb + quote + self.L + tail + quote)
+                        self.assertTrue(direct, "control: the root spelling is caught")
+                        self.assertEqual(via[key], direct)
+                        self.assertFalse(via["links_unresolved"])
+
+    def test_TWIN_a_stream_suffix_with_no_link_still_reads_as_its_file(self):
+        p = self.ref.as_posix() + "/libraries/wares.xml"
+        for tail in ("::$DATA", ":s", ""):
+            with self.subTest(tail=tail):
+                self.assertTrue(self.f("touch " + Q + p + tail + Q)["writes_reference"])
+        got = self.f("touch " + Q + self.W + "/plain.xml::$DATA" + Q)
+        self.assertFalse(got["writes_reference"] or got["links_unresolved"])
+
+    def test_RED_a_read_only_search_over_many_folders_is_not_refused(self):
+        many = self.many_folders(H._MAX_LINK_RESOLVED + 1)
+        for cmd in ("grep -rn foo " + many, "grep -n foo " + many, "rg foo " + many):
+            with self.subTest(cmd=cmd[:12]):
+                self.assertFalse(self.f(cmd)["links_unresolved"], cmd[:40])
+
+    def test_TWIN_writes_over_many_folders_are_still_refused(self):
+        many = self.many_folders(H._MAX_LINK_RESOLVED + 1)
+        for cmd in ("touch " + many, "rm -f " + many, "grep foo " + many + "; touch " + Q + self.L + "/x.xml" + Q,
+                    "grep -rn foo " + many + " > " + Q + self.L + "/out.txt" + Q):
+            with self.subTest(cmd=cmd[:12]):
+                got = self.f(cmd)
+                self.assertTrue(got["links_unresolved"] or got["writes_reference"], cmd[:40])
+
+    def test_a_search_still_resolves_links_within_the_budget(self):
+        # The profile-by-name rule reads the search operand where it lands (a junction into the profile).
+        prof = pathlib.Path(self._td.name) / "profile"
+        prof.mkdir()
+        pj = self.work / "profj"
+        if os.name == "nt":
+            import _winapi
+            _winapi.CreateJunction(str(prof), str(pj))
+        else:
+            os.symlink(str(prof), str(pj))
+        try:
+            roots = dict(self.roots, profile=prof.as_posix())
+            got = H.facts({"tool_input": {"command": "grep -rn foo " + Q + pj.as_posix() + "/content.xml" + Q}}, roots)
+            self.assertTrue(got["profile_search_by_name"])
+        finally:
+            if os.name == "nt":
+                os.rmdir(pj)
+            else:
+                os.unlink(pj)
+
+    def test_RED_an_unplaced_ssh_command_past_the_link_budget_is_advised(self):
+        many = " ".join(self.W + "/d%d/f.xml" % i for i in range(H._MAX_LINK_RESOLVED + 1))
+        got = self.f("ssh otherhost touch " + many + " " + self.L + "/libraries/wares.xml")
+        self.assertFalse(got["links_unresolved"])          # the outer command is not refused for it
+        self.assertTrue(got["ssh_host_unplaced"])
+        got = self.f("ssh otherhost touch " + self.W + "/d0/f.xml")
+        self.assertFalse(got["ssh_host_unplaced"] or got["links_unresolved"])
+        # The remote text is judged on its own links: the outer command's own overflow is not the remote's.
+        got = self.f("touch " + self.many_folders(H._MAX_LINK_RESOLVED + 1) + "; ssh otherhost ls")
+        self.assertTrue(got["links_unresolved"])
+        self.assertFalse(got["ssh_host_unplaced"])
 
 
 class TestBashDirectoryStackForms(unittest.TestCase):

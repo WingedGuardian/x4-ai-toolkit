@@ -135,21 +135,31 @@ def long_name(p: str) -> str:
     return p
 
 
-def link_resolved(p: str) -> str:
+def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
     """The path a write or delete of `p` reaches through an EXISTING link on it (a symlink or a Windows
     junction), when that differs from `p` as written; "" when nothing on it is a link, it is not an
     absolute drive path, or the filesystem cannot answer (4.1.1 final round, F360). MEASURED at
     7f4895a2: `>`, `touch` and `rm` through a junction into reference/ were allowed (3 of 3) while
     the file tools, which canonicalise, denied. The caller judges this path IN ADDITION to the
     lexical one, so the stricter verdict stands. os.path.realpath resolves the longest existing
-    prefix and keeps the rest as written (non-strict); a UNC or device path is left lexical."""
-    if not p or has_unresolved(p) or not is_abs(p):
+    prefix and keeps the rest as written (non-strict); a UNC or device path is left lexical.
+
+    `literal`: the caller knows every `$` in `p` is a literal character (single-quoted or escaped), so
+    has_unresolved() does not apply. On Windows each component is resolved as Windows opens it
+    (_win_alias: an NTFS stream suffix and trailing dots/spaces dropped). 4.1.1 review (link budget round
+    2), MEASURED at a70dcedd: `touch '<junction>/libraries/wares.xml::$DATA'` read writes_reference False,
+    because has_unresolved() read the literal `$DATA` as a variable, and `touch '<junction>:s'` (a write
+    to it lands in a stream of the TARGET folder, MEASURED) False, because the leaf lstat'd as no link.
+    `refuse=False` (operands only read checks use): past the budget the path is left lexical WITHOUT
+    setting links_unresolved -- no write or delete verdict reads such an operand."""
+    if not p or (not literal and has_unresolved(p)) or not is_abs(p):
         return ""
     s = p.replace(chr(92), "/")
     if os.name == "nt":
         s = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", s)
         if not re.match(r"^[A-Za-z]:/", s):
             return ""
+        s = _win_alias(s)
         # 4.1.1 review A1: a realpath cannot be interrupted, and on a drive mapped to an offline server
         # one took 21 s (MEASURED: realpath of an unreachable UNC path), so two such operands outran the
         # hook's 30 s and the call failed OPEN. Only a local drive is resolved.
@@ -165,18 +175,18 @@ def link_resolved(p: str) -> str:
     head, leaf = posixpath.split(s)
     if (not leaf or leaf in (".", "..") or _SHORT_NAME.search(leaf)
             or any(c in (".", "..") for c in head.split("/"))):
-        real = _realpath_budgeted(s)        # dot segments / a short leaf: the whole path, as before
+        real = _realpath_budgeted(s, refuse)    # dot segments / a short leaf: the whole path, as before
     else:
         if head.endswith(":"):
             head += "/"                     # `C:` alone is the drive's CURRENT folder, never its root
         rhead = _LINK_DIRS.get(head)
         if rhead is None:
-            rhead = _realpath_budgeted(head)
+            rhead = _realpath_budgeted(head, refuse)
             if rhead is None:
                 return ""
             _LINK_DIRS[head] = rhead
         if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
-            _LINKS_UNRESOLVED[0] = True
+            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
             return ""
         _LINK_PROBED[0] += 1
         _check_deadline()
@@ -187,18 +197,34 @@ def link_resolved(p: str) -> str:
             is_link = False                 # nothing there: it lands where its folder resolves
         except (OSError, ValueError):
             is_link = True                  # cannot tell: resolve the whole path
-        real = _realpath_budgeted(s) if is_link else rhead.rstrip("/") + "/" + leaf
+        real = _realpath_budgeted(s, refuse) if is_link else rhead.rstrip("/") + "/" + leaf
     if real is None:
         return ""
     return real if _lexical_norm(real) != _lexical_norm(s) else ""
 
 
-def _realpath_budgeted(s: str):
+def link_head_resolved(p: str, refuse: bool = True) -> str:
+    """For an operand that cannot be resolved (an expansion or a substitution in it): where its literal
+    head -- the absolute components before the first one carrying either -- lands through a link, plus
+    the rest as written; "" when the head is not absolute or holds no link (link_resolved). A glob or
+    brace component in the head is resolved as written: realpath is non-strict (MEASURED on Windows:
+    `<junction>/lib*/$X` resolves its head)."""
+    parts = p.replace(chr(92), "/").split("/")
+    i = next((n for n, c in enumerate(parts) if has_unresolved(c)), len(parts))
+    head = "/".join(parts[:i])
+    if i == len(parts) or not head or not is_abs(head):
+        return ""
+    real = link_resolved(head, refuse=refuse)
+    return real.rstrip("/") + "/" + "/".join(parts[i:]) if real else ""
+
+
+def _realpath_budgeted(s: str, refuse: bool = True):
     """os.path.realpath of `s` with slashes, inside link_resolved's per-call budget: None when the budget is
-    spent (and links_unresolved is set -- a refusal, never "no link") or the filesystem cannot answer."""
+    spent (and, when `refuse`, links_unresolved is set -- a refusal, never "no link") or the filesystem
+    cannot answer."""
     _check_deadline()
     if _LINK_RESOLVED[0] >= _MAX_LINK_RESOLVED:
-        _LINKS_UNRESOLVED[0] = True
+        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
         return None
     _LINK_RESOLVED[0] += 1
     try:
@@ -7372,7 +7398,8 @@ _SSH_DESTRUCTIVE = ("rm_hits_game", "rm_targets_reference", "writes_reference", 
                     "writes_host_transcript", "writes_agent_settings", "link_into_protected", "rm_in_profile",
                     "rm_deployed_mod", "rm_in_x4_dir", "rm_saves", "writes_profile_other", "git_wipes_x4_dir",
                     "git_wipe_from_session_dir", "sed_i_in_game_or_profile", "git_add_all",
-                    "durable_truncating_redirect", "program_dynamic_protected", "verb_unresolved")
+                    "durable_truncating_redirect", "program_dynamic_protected", "verb_unresolved",
+                    "links_unresolved")
 
 #: ssh options whose value runs on THIS machine, whatever the destination.
 _SSH_LOCAL_COMMAND = re.compile(r"(?:proxycommand|localcommand|knownhostscommand)\s*[= ]\s*(.*)", re.I | re.S)
@@ -8869,7 +8896,7 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                 and not any(char in path for char in "*?[]{}"))
 
     def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file", copy_sources=None,
-             reads_stdin=False):
+             reads_stdin=False, reads_only=False):
         """(path resolved where it runs, unresolvable?, the token as written). A whole
         array reference -- a for-loop variable, `"${A[@]}"` -- yields one entry PER
         element (resolve_all).
@@ -8881,7 +8908,12 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
         (`for g in ...; do ... > /tmp/g_$g.txt`), which is friction on rules the
         pre-arc note never concerned -- so it was scoped out, not shipped.
 
-        `c_old` is the segment's directory WITHOUT the session seed (lane F); see below."""
+        `c_old` is the segment's directory WITHOUT the session seed (lane F); see below.
+
+        `reads_only=True` for operands that feed READ checks only (search_files): their links are still
+        resolved within the budget, but past it they never set links_unresolved (link_resolved `refuse`).
+        4.1.1 review (link budget round 2), MEASURED at a70dcedd: `grep -rn foo` over files in 65 folders
+        was refused."""
         out = []
         for p in paths:
             literal = literal_dollar_path(p)
@@ -8969,9 +9001,17 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                 # 4.1.1 final round (F360): a link on the path (a junction into reference/) is judged
                 # where it lands as well; every rule ORs over these entries, so the stricter stands.
                 if not unres:
-                    real = link_resolved(out[-1][0])
+                    real = link_resolved(out[-1][0], literal=literal, refuse=not reads_only)
                     if real:
                         out.append((real, False, r))
+                else:
+                    # ...and an UNRESOLVED operand's literal head (link budget round 2): `<junction>/$X/f`
+                    # and `'<junction>/a${b}/f'` (a quoted brace is not literal_dollar_path) read their
+                    # lexical text only, where `<reference>/$X/f` is caught by the root in its text. The
+                    # head's landing place plus the rest as written is judged the same way (unresolved).
+                    real = link_head_resolved(r, refuse=not reads_only)
+                    if real:
+                        out.append((real, True, real))
         return out
 
     cur_dialect = ["bash"]                # the dialect of the segment prep() is reading
@@ -9105,7 +9145,7 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
             link_unresolved = link_unresolved or j_ == "unresolved"
         sed_t +=prep(sed_in_place_targets(s), c_cwd, c_old, operation="write")
         out_t += prep(output_targets(s), c_cwd, c_old, False, operation="write")
-        search_files += prep(search_paths(s, require_recursive=False), c_cwd, c_old)
+        search_files += prep(search_paths(s, require_recursive=False), c_cwd, c_old, reads_only=True)
         # UNSEEDED, deliberately (lane F). `git clean -f` / `reset --hard` name no path, so
         # with the session seed EVERY one run from the game or toolkit root becomes an ASK
         # -- a new prompt outside the profile, which the user has ruled out (2026-10-02:
@@ -9746,6 +9786,9 @@ def _ssh_unplaced_destructive(outer: dict, roots: dict, protected_save_folders=(
                 if _SSH_JUDGED[0] >= _MAX_SSH_JUDGED:
                     return True              # the budget is spent with texts unjudged: advise (round 7, 1)
                 _SSH_JUDGED[0] += 1
+                # The remote text's OWN link verdict (the outer one is captured already): a remote text
+                # over the link budget is advised (links_unresolved is in _SSH_DESTRUCTIVE).
+                _LINKS_UNRESOLVED[0] = False
                 sub = facts({"tool_name": "Bash", "tool_input": {"command": text}}, roots,
                             protected_save_folders=protected_save_folders)
                 _SSH_MEMO[text] = {k for k in keys if sub.get(k)}
