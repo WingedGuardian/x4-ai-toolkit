@@ -12966,4 +12966,7 @@ every link in the folder) is among the stricter, by design.
 UNMEASURED: how often a real command names an expansion behind a link; each such operand now spends link budget, and
 one listing of its folder.
 
-**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkResolutionOfLiteralSpellings`.
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkResolutionOfLiteralSpellings`
+(generated copy `.claude/hooks/test_hook_facts.py`), e.g.
+`test_RED_an_ntfs_stream_suffix_behind_a_junction_is_judged_where_it_lands` and
+`test_RED_a_literal_dollar_in_a_folder_name_behind_a_junction`.
