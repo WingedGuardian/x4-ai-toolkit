@@ -7844,7 +7844,18 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
                     "tmux ls " + BS + "; ls " + BS + "; run " + self.inner(REF))
 
     def test_TWIN_a_backslash_ended_segment_of_another_program(self):
-        self.assertFalse(F("find . -name x -exec ls {} " + BS + "; run " + self.inner(REF))["rm_targets_reference"])
+        # Since 4.1.1 round 4/7 an escaped `;` does not split a segment, so the find row is ONE segment and
+        # never reaches the chain. The other rows end a segment in `\` before a REAL separator (an escaped
+        # backslash, an escaped blank): bash runs `run`/`new`/`send-keys` as commands of their own, and
+        # reading them as tmux commands would fire on nothing. MEASURED 2026-11-08: with `v == "tmux"`
+        # dropped from the chain start, these go True (CI run 42517544460 reported the mutant uncaught).
+        for c in ("find . -name x -exec ls {} " + BS + "; run " + self.inner(REF),
+                  "ls " + BS + BS + "; run " + self.inner(REF),
+                  "ls " + BS + " ; run " + self.inner(REF),
+                  "echo " + BS + BS + " && new " + self.inner(REF),
+                  "printf x" + BS + BS + "; send-keys " + self.inner(REF)):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["rm_targets_reference"], c)
 
     def test_read_options_before_the_name(self):
         ref = DQ + "$P" + DQ
