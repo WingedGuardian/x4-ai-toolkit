@@ -12830,16 +12830,23 @@ their engine ports.
 
 MEASURED 2026-11-08, `check_fitting_compatibility` over 216 active installed mods plus two DEV mods (218 scanned, 0
 dropped, 0 errors), reference + 8 DLC: the ported ROR base mod alone carries 63 tag mismatches, 278 case-only group
-names and 209 macro connection refs to connections its components do not define. Among the other 216 mods: 12 tag
+names and 209 macro connection refs to connections its components do not define. Among the other mods scanned (216 or
+217: the run's record, commit 449ba680, does not say whether the second DEV mod is in this population): 12 tag
 mismatches (XUP 10, xenon_backup 2; verified in source, e.g. an engine slot tagged `standardplatformcollision` with the
 space missing), 52 dangling macro connection refs across 12 mods including VRO (`ship_lint_frigate_akita` macro names
 `con_shipstorage_xs_01`, its component has `con_shipstorage_s_01`), and 0 case-only group names. Vanilla controls for
 the rule: 0 of 1421 direct leaves and 0 of 386 `exact=` groups rejected; 0 of 882 group entries case-only; 0 of 1776
 macro connection refs dangling; but 84 of 1505 vanilla direct leaves point at a port that does not exist.
+Group entries (added 2026-11-09, v4.1.1 review): judged as a hit when NO slot of the entry's group accepts the
+macro, because vanilla groups mix kinds; that reading rejects 1 of 946 resolvable vanilla entries (a
+`libraries/loadouts.xml` turret in a carrier group holding only engines and shields), while "every slot accepts it"
+would reject 945 of 946 (MEASURED 2026-11-09, base + 8 DLC, read-only scratch control mirroring the code). 36
+vanilla entries name a group their component lacks by exact name; those are not tag-judged and are counted in the note.
 
-Every finding is INFO on purpose: the tag rule is Egosoft's documented one and it never rejects vanilla, but whether
-the ENGINE rejects a mismatched preset leaf is unmeasured, and mods that ship dangling refs demonstrably run. A hit is
-a suspect for an in-game fitting readback, not a verdict. Promotion to warn needs that runtime evidence.
+Every finding is INFO on purpose: the tag rule is Egosoft's documented one and it never rejects a vanilla direct leaf,
+but ENGINE enforcement of a mismatched preset is MEASURED only for weapons, in one save (RUNTIME EVIDENCE below), and
+UNMEASURED for other kinds; mods that ship dangling refs demonstrably run. A hit is a suspect for an in-game fitting
+readback, not a verdict. Promotion to warn needs more of that runtime evidence (see RUNTIME EVIDENCE).
 
 Tier A caveat, same as `check_connections`: 24 of the 52 cross-mod refs are one mod's macro judged against the vanilla
 component because the component it means is redefined by a dependency the Tier A tree does not load.
@@ -12857,8 +12864,9 @@ findings; one finding per macro; nothing is ever an error.
 macro file the index names, never the effective tree, so a connection, slot tag or group that a diff (from the mod
 itself or another) adds to a component is invisible. Consequence: a false "fails the documented tag rule" or a false
 "names no component connection" on any hull whose component is patched. The rate is UNMEASURED. Likewise, leaves and
-group entries inside diff ops that patch an existing macro or loadout cannot be judged from stored files; since
-v4.1.1 they are recorded as a "diff fragment not judged" skip, once per file, instead of passing silently. A hull
+group entries inside diff ops that patch an existing macro or loadout, and macro `<connection ref>`s such ops add
+(elements, or a `ref` attribute set via `sel=.../connection.../@ref` or `type="@ref"`), cannot be judged from stored
+files; since v4.1.1 they are recorded as a "diff fragment not judged" skip, once per file, instead of passing silently. A hull
 whose component cannot be resolved is a skip naming the macro, and `report.notes` states macros judged / skipped.
 
 RUNTIME EVIDENCE for the tag clause (2026-11-08, read-only save census, KNOWLEDGEBASE.md § Engine-does-not-install-preset-weapons):
