@@ -39,9 +39,10 @@ jobs:
             # NOT FLIPPED HERE ON PURPOSE. CI is observable only on a push, and these
             # checks have never once been enforced, so flipping blind trades a masked
             # failure for a red release. The release plan's sequence is: push the
-            # reviewed code to a throwaway `ci/pre-3.1` branch (which the `ci/**`
-            # trigger at the top of this file exists to make fire — it did not,
-            # until 2026-09-07), read the PER-JOB
+            # reviewed code to a throwaway `ci/pre-3.1` branch (a `ci/**` push trigger
+            # existed then -- it did not fire until 2026-09-07; it has since been
+            # REMOVED: ci.yml's on.push is master/main only and a draft/ready pull
+            # request replaces it, see docs/ci-workflow.md), read the PER-JOB
             # conclusions (`gh api .../runs/<id>/jobs` -- the run conclusion said
             # success while ubuntu FAILED in 33994180317), and promote to
             # `experimental: false` only once ubuntu is observed green on this code.
@@ -901,7 +902,9 @@ jobs:
     #
     # THE THREE NUMBERS AT THE BOTTOM. min-tests 6000 and min-passed 5300 are floors under the MEASURED
     # counts of a fresh Windows install (6,493 cases before the D-C2 fixes; about 6,506 after, 5,927 passed, projected from a re-run of the changed modules), so a suite that silently collected a
-    # fraction of itself cannot pass. max-skips 899 = 896 READ on run 42517544460 (28c5b2f5) + 3; the 5 over 4.1.0 are REPO-ONLY skips (3 need the hook source, 2 the CI workflows). It replaces a
+    # fraction of itself cannot pass. max-skips 899 = 896 READ on run 42517544460 (28c5b2f5) + 3. That is 7 over the previous basis, 889
+    # READ on run 41870962364; commit b9ac580f attributes 5 new skips per test and reason as REPO-ONLY (3 need the hook source, 2 the CI
+    # workflows) against 4.1.0's run, and no record attributes the other 2. It replaces a
     # derived upper bound of 934 from before this job had run. A later change itemises itself here, as the `tests`
     # job does.
     runs-on: ubuntu-latest
