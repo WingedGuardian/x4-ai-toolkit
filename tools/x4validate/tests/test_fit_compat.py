@@ -335,3 +335,61 @@ def test_equipment_with_no_component_tagged_attachment_is_a_skip(tmp_path):
     rep = _run(*_world(tmp_path, slot_tags=_MISFIT, eng_tags="engine ror_xl_a"))
     assert _fit(rep) == [] and any("eng_macro" in s.why for s in rep.skipped)
     assert _fit(_run(*_world(tmp_path / "twin", slot_tags=_MISFIT, eng_tags="engine component ror_xl_a")))
+
+
+def _frag_skips(rep):
+    return [s for s in rep.skipped if s.what == "fitting checks" and "diff fragment not judged" in s.why]
+
+
+def test_diff_adding_a_connection_ref_to_an_existing_macro_is_a_skip(tmp_path):
+    """v4.1.1 review: a diff op adding <connection ref> into an existing ship macro was silently not judged."""
+    mod, cfg = _world(tmp_path)
+    _w(mod / "assets/u/ship_new_patch.xml",
+       "<diff><add sel=\"//macro[@name='ship_new_macro']/connections\">"
+       '<connection ref="con_nowhere"><macro ref="bridge_x_macro" connection="con_cockpit"/></connection></add></diff>')
+    rep = _run(mod, cfg)
+    hits = _frag_skips(rep)
+    assert len(hits) == 1 and "1 macro connection ref(s)" in hits[0].why and "loadout leaf" not in hits[0].why
+    assert "1 diff file(s)" in _note(rep)
+
+
+def test_diff_replacing_a_connection_ref_attribute_is_a_skip(tmp_path):
+    mod, cfg = _world(tmp_path)
+    _w(mod / "assets/u/ship_new_patch.xml",
+       "<diff><replace sel=\"//macro[@name='ship_new_macro']/connections/connection[@ref='con_cockpit']/@ref\">"
+       "con_nowhere</replace></diff>")
+    hits = _frag_skips(_run(mod, cfg))
+    assert len(hits) == 1 and "1 macro connection ref(s)" in hits[0].why
+
+
+def test_connection_ref_inside_a_whole_macro_added_by_a_diff_is_judged_not_skipped(tmp_path):
+    """Twin: the <connection ref> has its <macro> ancestor, so it is judged like a plain file."""
+    mod, cfg = _world(tmp_path)
+    (mod / "assets/u/ship_new_macro.xml").unlink()
+    _w(mod / "assets/u/ship_new_patch.xml",
+       '<diff><add sel="/macros"><macro name="ship_diff_macro" class="ship_s"><component ref="ship_x"/>'
+       '<connections><connection ref="con_nowhere"/></connections></macro></add></diff>')
+    rep = _run(mod, cfg)
+    assert [f for f in _fit(rep) if "ship_diff_macro" in f.message and "connection refs" in f.message]
+    assert _frag_skips(rep) == []
+
+
+def test_component_connection_added_by_a_diff_is_not_a_macro_ref_fragment(tmp_path):
+    """Twin: a component's <connection name=> carries no ref, so a component diff is not miscounted."""
+    mod, cfg = _world(tmp_path)
+    _w(mod / "assets/u/ship_x_patch.xml",
+       "<diff><add sel=\"//component[@name='ship_x']/connections\">"
+       '<connection name="con_new_01" tags="engine"/></add></diff>')
+    assert _frag_skips(_run(mod, cfg)) == []
+
+
+def test_diff_adding_a_ref_attribute_to_a_connection_is_a_skip_and_elsewhere_is_not(tmp_path):
+    """One twin per clause of the type="@ref" branch: on a connection it counts; on another element it does not."""
+    mod, cfg = _world(tmp_path)
+    _w(mod / "assets/u/ship_new_patch.xml",
+       "<diff><add sel=\"//macro[@name='ship_new_macro']/connections/connection[1]\" type=\"@ref\">con_nowhere</add></diff>")
+    assert len(_frag_skips(_run(mod, cfg))) == 1
+    mod, cfg = _world(tmp_path / "twin")
+    _w(mod / "assets/u/ship_new_patch.xml",
+       "<diff><add sel=\"//macro[@name='ship_new_macro']/component\" type=\"@ref\">ship_x</add></diff>")
+    assert _frag_skips(_run(mod, cfg)) == []

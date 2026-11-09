@@ -2025,6 +2025,8 @@ def check_connections(mod_dir: Path, config: _merge.Config, report: Report) -> N
 #: Loadout leaves whose `macro=` is equipment with an attachment connection (BLIND-SPOTS F363).
 _FIT_LEAF_KINDS = ("engine", "shield", "turret", "weapon")
 _FIT_GROUP_KINDS = {"engines": "engine", "shields": "shield", "turrets": "turret"}
+#: A diff `sel` that targets a connection's `ref` attribute (`.../connection[@ref='x']/@ref`).
+_DIFF_REF_ATTR = re.compile(r"connection(\[[^\]]*\])*/@ref\s*$")
 
 
 def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Report) -> None:
@@ -2057,8 +2059,9 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
     Skips, never silent: an unreadable component, an equipment macro with no single resolvable
     attachment (unregistered, missing, or ambiguous), and a hull whose component cannot be resolved
     (unregistered, file missing, or no `<component ref>`) are each recorded once with `report.skip`, and
-    what hangs off them is not judged. Leaves or group entries inside diff ops that patch an EXISTING
-    macro or loadout are recorded as "diff fragment not judged", once per file. `report.notes` carries
+    what hangs off them is not judged. Leaves, group entries and macro `<connection ref>`s (elements, or
+    a `ref` attribute added/replaced by `sel=.../connection.../@ref` or `type="@ref"`) inside diff ops
+    that patch an EXISTING macro or loadout are recorded as "diff fragment not judged", once per file. `report.notes` carries
     the denominator: macros judged (or "0 examined"), macros skipped, group entries not tag-judged, diff
     files with unjudged fragments.
 
@@ -2241,10 +2244,21 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
             frag = [e for e in root.xpath("//*[@macro][@path] | //*[@group]")
                     if (e.tag in _FIT_LEAF_KINDS or e.tag in _FIT_GROUP_KINDS)
                     and not e.xpath("ancestor::macro | ancestor::loadout[@macro]")]
-            if frag:
+            # The same blind spot for clause 3: a <connection ref> added into an existing macro, or a ref attribute
+            # added/replaced on one. A component's own <connection name=> carries no ref, so it is not counted.
+            refs = [e for e in root.xpath("//connection[@ref]") if not e.xpath("ancestor::macro")]
+            refs += [op for op in root.xpath("./add | ./replace")
+                     if _DIFF_REF_ATTR.search(op.get("sel") or "")
+                     or (op.get("type") == "@ref" and "connection" in (op.get("sel") or ""))]
+            if frag or refs:
                 fragment_files += 1
-                report.skip("fitting checks", f"{vpath}: {len(frag)} loadout leaf/group element(s) inside diff ops "
-                            "that patch an existing macro or loadout -- diff fragment not judged")
+                what = []
+                if frag:
+                    what.append(f"{len(frag)} loadout leaf/group element(s)")
+                if refs:
+                    what.append(f"{len(refs)} macro connection ref(s)")
+                report.skip("fitting checks", f"{vpath}: {' and '.join(what)} inside diff ops that patch an "
+                            "existing macro or loadout -- diff fragment not judged")
 
     # The denominator. Nothing examined must never read as judged-and-clean, and "(see NOT CHECKED)" appears only
     # when this check actually recorded a skip there.
