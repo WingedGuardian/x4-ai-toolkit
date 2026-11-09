@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v4.1.1 — 2026-11-10
+
+- After updating, expect `x4fresh status` to report your derived stores as STALE: this release changes the merge engine and catalog reader, which every store's engine fingerprint covers. Run `x4fresh rebuild` once.
 
 - If you start a game while the automatic background BaseX rebuild is building, that build now drops to idle priority (from below-normal) within about 30 seconds, and each process it lowered goes back to the priority it had (never above below-normal) when you close the game. Before, the game was only checked before each database, so `x4raw` (about 15 minutes) kept building at below-normal while you played. The build is never stopped and `x4eff` still waits for the game to close. `x4fresh status` shows what the build's processes actually took, not what was asked: "idle since" with the time and why only when every one is idle, otherwise "idle requested ..., not taken" (or "for K of M processes") with how many and why, for example when a job wrapper such as a resource governor runs the build in a job object that limits its priority; the note names any process whose priority could not be changed or restored. A process the build starts during the game (it inherits idle) is restored with its parent, and on Linux every thread of the build is lowered, not only each process's main thread. On Linux an ordinary user cannot raise a priority back, so there the build stays at idle until it ends and `x4fresh status` says the restore is incomplete ("permission denied"). On macOS the builder cannot read a process's start time to confirm it is the build's, so it lowers nothing and `x4fresh status` says idle was requested and not taken.
 
