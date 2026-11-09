@@ -45,9 +45,13 @@ outcome replaces the session note of the workspace that started it; `status` als
 rebuild's state. A game that starts DURING a database's build does not stop it: the builder repeats the game check
 every 30 s and, from the first sighting, keeps that build's whole process tree (bash, java, anything started later)
 at IDLE priority, and once the game is seen closed returns each process it lowered to its earlier priority (never
-above below-normal). `status` and the note show what the processes took, read back: "idle since" only when every
-one did, otherwise how many did not and why (a job wrapper's job object can refuse it). x4eff still waits for a
-closed game. It holds the build lock for BOTH databases (about half an hour): builders never run two at a time,
+above below-normal; a process started during the game inherits idle and is restored with its parent; on Linux every
+thread). `status` and the note show what the processes took, read back: "idle since" only when every one did,
+otherwise how many did not and why (a job wrapper's job object can refuse it), and "restore ... incomplete" when one
+stays at idle. On Linux an ordinary user cannot raise a nice value back (RLIMIT_NICE 0), so there the build stays at
+idle until it ends and the restore reads "incomplete ... permission denied". Without a process start time (macOS and
+other non-Linux POSIX) no process can be confirmed as the build's, so nothing is lowered: "idle requested ..., not
+taken ... identity unconfirmed". x4eff still waits for a closed game. It holds the build lock for BOTH databases (about half an hour): builders never run two at a time,
 and x4eff must read an effective store nobody is replacing. Meanwhile a session start rebuilds nothing (its note
 says a rebuild is running) and `rebuild` by hand exits 5, "already running".
 
@@ -833,13 +837,15 @@ def _tids(pid: int) -> list[int]:
     return tids or [pid]
 
 
-def _posix_set(pid: int, want: int, threads: dict[int, int | None]) -> str | None:
+def _posix_set(pid: int, want: int, threads: dict[int, int | None], own_originals: bool = True) -> str | None:
     """Set nice `want` on every thread of `pid` (the pid itself off Linux). `threads`: tid -> its nice before the
     first touch, kept by the caller across calls; a thread first seen after that was started meanwhile (inheriting a
-    lowered nice) and has no original of its own (None). Each thread gets the LOWER priority of `want` and its own
-    original, so a restore never raises a thread above what it had. A thread that vanished is ignored."""
+    lowered nice) and has no original of its own (None: it takes the process's, `want` on a restore). With
+    `own_originals` False (a process that itself inherited idle from a lowered parent) no thread has one. Each thread
+    gets the LOWER priority of `want` and its own original, so a restore never raises a thread above what it had. A
+    thread that vanished is ignored."""
     prio = getattr(os, "PRIO_PROCESS", 0)
-    first = not threads
+    first = not threads and own_originals
     done, err = 0, None
     for tid in _tids(pid):
         if tid not in threads:
@@ -854,8 +860,10 @@ def _posix_set(pid: int, want: int, threads: dict[int, int | None]) -> str | Non
         except ProcessLookupError:
             continue  # silent-ok: the thread (or the process) ended meanwhile; none left = _GONE below
         except PermissionError:
-            # Raising a nice value back down (the restore after a game) needs privilege on Linux.
-            err = err or "permission denied (raising a priority back needs privilege here)"
+            # Raising a nice value back down (the restore after a game) needs privilege on Linux: an ordinary user's
+            # RLIMIT_NICE is 0. Lowering never does, so a refusal there is something else.
+            err = err or ("permission denied" if want >= _NICE[IDLE]
+                          else "permission denied (raising a priority back needs privilege here)")
             continue
         except OSError as exc:
             err = err or f"{type(exc).__name__}: {exc}"
@@ -894,8 +902,9 @@ def _created(pid: int) -> int | None:
         k32.CloseHandle(h)
 
 
-def _descendants(root: int) -> list[tuple[int, int | None]] | None:
-    """(pid, start time) for `root` and every process below it, root first; None when they cannot be listed."""
+def _descendants(root: int) -> list[tuple[int, int | None, int | None]] | None:
+    """(pid, start time, parent pid) for `root` and every process below it, root first (its parent None); None when
+    they cannot be listed."""
     table = _process_table()
     if table is None:
         return None
@@ -904,7 +913,7 @@ def _descendants(root: int) -> list[tuple[int, int | None]] | None:
         if pid != ppid:
             children.setdefault(ppid, []).append(pid)
     born: dict[int, int | None] = {root: _created(root)}
-    tree, todo, seen = [(root, born[root])], [root], {root}
+    tree, todo, seen = [(root, born[root], None)], [root], {root}
     while todo:
         parent = todo.pop()
         for child in children.get(parent, []):
@@ -914,7 +923,7 @@ def _descendants(root: int) -> list[tuple[int, int | None]] | None:
             if born[parent] is not None and born[child] is not None and born[child] < born[parent]:
                 continue        # an older process naming a reused pid as its parent: not ours
             seen.add(child)
-            tree.append((child, born[child]))
+            tree.append((child, born[child], parent))
             todo.append(child)
     return tree
 
@@ -957,11 +966,11 @@ def _posix_ours(pid: int, born: int | None) -> str | None:
 
 
 def _set_priority(pid: int, level, born: int | None = None, job=None,
-                  threads: dict[int, int | None] | None = None) -> str | None:
+                  threads: dict[int, int | None] | None = None, own_originals: bool = True) -> str | None:
     """Set one process's priority (IDLE, BELOW_NORMAL, or a raw value) if `pid` still names the process listed with
     start time `born` (or, on Windows, one in the build's `job`). None: done, read back; _GONE: it exited meanwhile;
     _NOT_OURS: the pid was reused, nothing touched; else what went wrong, for the note. `threads`: POSIX, the
-    per-thread originals _posix_set keeps for this process (Linux sets every thread)."""
+    per-thread originals _posix_set keeps for this process (Linux sets every thread); `own_originals`: see there."""
     want = _raw(level)
     if os.name == "nt":
         (ctypes, wintypes, k32), h, why = _win_open_ours(pid, born, job, 0x0200 | 0x1000)
@@ -984,7 +993,7 @@ def _set_priority(pid: int, level, born: int | None = None, job=None,
     why = _posix_ours(pid, born)        # identity per PROCESS (its start time); the threads follow it
     if why:
         return why
-    return _posix_set(pid, want, threads if threads is not None else {})
+    return _posix_set(pid, want, threads if threads is not None else {}, own_originals)
 
 
 def _priority_raw(pid: int, born: int | None = None, job=None) -> int | None:
@@ -1046,6 +1055,8 @@ class _GameWatch:
         self._lowered: set[tuple[int, int | None]] = set()               # what this watch dropped to idle
         self._threads: dict[tuple[int, int | None], dict] = {}           # POSIX: per-thread originals per process
         self._since = ""
+        self._touched = 0                   # successful priority changes, so a failure can say some happened
+        self._unwritten = False             # on_change failed: write the state again on the next poll
         self.job = None
         self.on_change = on_change
         self._stop = threading.Event()
@@ -1086,8 +1097,10 @@ class _GameWatch:
             self._event(event)
         if self.priority != before:
             self.priority_at = _stamp(_now())
-            if self.on_change is not None:
-                self.on_change(self)
+        if (self.priority != before or self._unwritten) and self.on_change is not None:
+            self._unwritten = True
+            self.on_change(self)
+            self._unwritten = False
 
     def _lower(self, root: int, why: str) -> tuple[str, str]:
         """(what status shows, the note's event) for one drop to idle, from what the processes took."""
@@ -1098,15 +1111,28 @@ class _GameWatch:
             return (f"idle requested {since}, not taken: could not list the build's processes: {why}",
                     f"idle priority requested at {since}, not taken: could not list the build's processes: {why}")
         took, refused, errs = 0, 0, {}
-        for pid, born in tree:
+        keys = {pid: (pid, born) for pid, born, _parent in tree}
+        parents = {pid: parent for pid, _born, parent in tree}
+        earlier = set(self._lowered)     # lowered by an EARLIER poll: a process seen in this pass existed before
+        for pid, born, _parent in tree:
             key = (pid, born)
+            inherited = False
             if key not in self._original:
-                self._original[key] = _priority_raw(pid, born, self.job)
+                # A process the build started after the drop (a new java) inherited idle from its lowered parent:
+                # its own reading is not what it had before the game. It takes its nearest lowered ancestor's.
+                ancestor = self._lowered_ancestor(pid, keys, parents, earlier)
+                if ancestor is not None:
+                    self._original[key], inherited = self._original[ancestor], True
+                    self._lowered.add(key)
+                    earlier.add(key)         # its own children, below it in this same pass, inherited from it
+                else:
+                    self._original[key] = _priority_raw(pid, born, self.job)
             orig = self._original[key]
-            if orig is not None and _rank(orig) <= _rank(_raw(IDLE)):
+            if key not in self._lowered and orig is not None and _rank(orig) <= _rank(_raw(IDLE)):
                 took += 1                              # idle already, before any game: never touched
                 continue
-            err = _set_priority(pid, IDLE, born, self.job, threads=self._threads.setdefault(key, {}))
+            err = _set_priority(pid, IDLE, born, self.job, threads=self._threads.setdefault(key, {}),
+                                own_originals=not inherited)
             if err in (_GONE, _NOT_OURS):
                 continue
             if err:
@@ -1115,6 +1141,7 @@ class _GameWatch:
                 self._refuse("set idle priority on", pid, err)
             else:
                 took += 1
+                self._touched += 1
                 self._lowered.add(key)
         total = took + refused
         if not refused:
@@ -1125,6 +1152,17 @@ class _GameWatch:
         return (f"idle since {since} for {took} of {total} processes; not taken: {refused} ({_short(errs)}): {why}",
                 f"lowered to idle priority at {since} on {took} of {total} processes, not taken on {refused}: {why}")
 
+    def _lowered_ancestor(self, pid: int, keys: dict, parents: dict, lowered: set) -> tuple | None:
+        """The key of `pid`'s nearest RECORDED ancestor in this tree if that one is in `lowered`, else None: a parent
+        that was idle before the game passed on a real idle, not one this watch caused."""
+        seen, up = {pid}, parents.get(pid)
+        while up is not None and up not in seen:
+            if keys.get(up) in self._original:
+                return keys[up] if keys[up] in lowered else None
+            seen.add(up)
+            up = parents.get(up)
+        return None
+
     def _restore(self, root: int, when: str) -> tuple[str, str]:
         """(what status shows, the note's event) for the restore after a game: only what this watch lowered, back to
         what it had, never above below-normal."""
@@ -1133,8 +1171,8 @@ class _GameWatch:
             self.problems[("tree", "restore")] = "could not list the build's processes to restore their priority"
             return (f"restore at {when} not done: could not list the build's processes, so they stay at idle",
                     f"restore to below-normal at {when} not done: could not list the build's processes")
-        done, left, errs = 0, 0, {}
-        for pid, born in tree:
+        done, lower, left, errs = 0, 0, 0, {}
+        for pid, born, _parent in tree:
             key = (pid, born)
             if key not in self._lowered:
                 continue
@@ -1150,25 +1188,45 @@ class _GameWatch:
             err = _set_priority(pid, target, born, self.job, threads=self._threads.setdefault(key, {}))
             if err in (_GONE, _NOT_OURS):
                 continue
+            if not err:
+                self._touched += 1
+                # The state, not the call's return: read it back (POSIX setpriority, or a thread left behind).
+                got = _priority_raw(pid, born, self.job)
+                if got is not None and got != _raw(target):
+                    err = f"the call succeeded but its priority read back is {got}"
             if err:
                 left += 1
                 errs.setdefault(err, []).append(pid)
                 self._refuse("restore the priority of", pid, f"{err}; left at idle")
-            else:
+            elif target == BELOW_NORMAL:
                 done += 1
+            else:
+                lower += 1                             # back to an original lower than below-normal
+        total = done + lower + left
         if not left:
-            return (f"below-normal again since {when}, after a game ran",
-                    f"restored to below-normal priority at {when}: the game closed")
-        total = done + left
+            if not lower:
+                return (f"below-normal again since {when}, after a game ran",
+                        f"restored to below-normal priority at {when}: the game closed")
+            return (f"priority restored since {when} after a game ran ({done} to below-normal, {lower} to their "
+                    "lower earlier priority)",
+                    f"restored to the earlier priority at {when}: the game closed")
         return (f"restore at {when} incomplete: {left} of {total} processes left at idle ({_short(errs)})",
-                f"restore to below-normal at {when} incomplete: {left} of {total} processes left at idle")
+                f"priority restore at {when} incomplete: {left} of {total} processes left at idle")
 
     def safe_poll(self, root: int) -> None:
+        shown, touched = self.priority, self._touched
         try:
             self.poll(root)
         except Exception as exc:  # noqa: BLE001 -- the watch must never stop the build it watches
-            self.problems[("raised", type(exc).__name__)] = (f"could not watch for a game ({type(exc).__name__}: "
-                                                             f"{exc}); the build kept its priority")
+            what = f"{type(exc).__name__}: {exc}"
+            if self.priority != shown or self._unwritten:
+                said = f"priority changed (now: {self.priority}); status write failed: {what}"
+            elif self._touched != touched:
+                said = (f"could not finish watching for a game ({what}); {self._touched - touched} process(es) had "
+                        "their priority changed before it stopped")
+            else:
+                said = f"could not watch for a game ({what}); the build kept its priority"
+            self.problems[("raised", type(exc).__name__)] = said
 
     def lines(self, name: str) -> list[str]:
         more = [f"{name}: ... {self._more} more priority change(s)"] if self._more else []

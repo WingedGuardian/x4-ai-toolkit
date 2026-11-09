@@ -148,7 +148,11 @@ anything they start later) to idle priority, and once the game is closed returns
 priority it had before (never above below-normal). `x4fresh status` and the note say what the processes actually took:
 "idle since" only when every one of them is idle, otherwise "not taken" with how many and why, and they name any
 process whose priority could not be changed (a job wrapper that runs the build in a priority-limited job object
-refuses it; the wrapper's own rules then apply). `x4eff` still starts only
+refuses it; the wrapper's own rules then apply). A process the build starts during the game inherits idle and is
+restored with its parent; on Linux every thread is set. On Linux an ordinary user cannot raise a priority back
+(RLIMIT_NICE is 0), so there the build stays at idle until it ends and `x4fresh status` says the restore is incomplete
+("permission denied"). On macOS and other systems without a readable process start time the builder cannot confirm a
+process is the build's, so it lowers nothing and `x4fresh status` says idle was requested and not taken. `x4eff` still starts only
 with the game closed. Each condition that stops it is named in one line of the note, and
 `x4fresh status` says whether the background build is waiting, running, finished, skipped or failed. Its outcome is
 in `x4fresh status` and in the session-start note of the workspace whose session start launched it (another

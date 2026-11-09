@@ -1899,23 +1899,30 @@ REFUSED = "not taken, still below-normal (a job object, such as a job wrapper's,
 def watch(monkeypatch):
     """A _GameWatch whose game check, process listing and priority calls are all faked: nothing real is touched.
     world["fail"]: pid -> error for every call, or (pid, level) -> error for one level; world["orig"]: pid -> the
-    priority the process had before the watch touched it (default below-normal)."""
-    world = {"game": ["x4.exe"], "tree": [100, 101, 102], "fail": {}, "orig": {}}
+    priority the process had before the watch touched it (default below-normal); world["parent"]: pid -> its parent
+    (default the root); a successful set changes what a later read returns, except for a pid in world["sticky"]."""
+    world = {"game": ["x4.exe"], "tree": [100, 101, 102], "fail": {}, "orig": {}, "parent": {}, "now": {},
+             "sticky": set(), "own": {}}
     calls: list[tuple[int, object]] = []
     monkeypatch.setattr(fc, "_running_deferring_processes", lambda: world["game"])
     monkeypatch.setattr(fc, "_descendants", lambda root: None if world["tree"] is None else [
-        (p, p * 10) for p in [root] + [p for p in world["tree"] if p != root]])
+        (p, p * 10, None if p == root else world["parent"].get(p, root))
+        for p in [root] + [p for p in world["tree"] if p != root]])
 
     threads_seen: list[tuple[int, object]] = []
 
-    def set_priority(pid, level, born=None, job=None, threads=None):
+    def set_priority(pid, level, born=None, job=None, threads=None, own_originals=True):
         assert born == pid * 10, "the start time recorded at listing must reach the priority call"
         calls.append((pid, level))
         threads_seen.append((pid, threads))
-        return world["fail"].get((pid, level), world["fail"].get(pid))
+        world["own"][pid] = own_originals
+        err = world["fail"].get((pid, level), world["fail"].get(pid))
+        if err is None and pid not in world["sticky"]:
+            world["now"][pid] = fc._raw(level)
+        return err
     monkeypatch.setattr(fc, "_set_priority", set_priority)
-    monkeypatch.setattr(fc, "_priority_raw",
-                        lambda pid, born=None, job=None: world["orig"].get(pid, fc._raw(fc.BELOW_NORMAL)))
+    monkeypatch.setattr(fc, "_priority_raw", lambda pid, born=None, job=None: world["now"].get(
+        pid, world["orig"].get(pid, fc._raw(fc.BELOW_NORMAL))))
     monkeypatch.setattr(fc, "_now", lambda: T0)
     changes: list[str] = []
     return {"w": fc._GameWatch(on_change=lambda w: changes.append(w.priority)), "world": world, "calls": calls,
@@ -2200,9 +2207,10 @@ def _sleeping_builder(order, seconds):
 
 def _fake_priority_calls(monkeypatch):
     calls: list[tuple[int, object]] = []
-    monkeypatch.setattr(fc, "_descendants", lambda root: [(root, None)])
+    monkeypatch.setattr(fc, "_descendants", lambda root: [(root, None, None)])
     monkeypatch.setattr(fc, "_priority_raw", lambda pid, born=None, job=None: fc._raw(fc.BELOW_NORMAL))
-    monkeypatch.setattr(fc, "_set_priority", lambda pid, level, born=None, job=None, threads=None: calls.append((pid, level)))
+    monkeypatch.setattr(fc, "_set_priority", lambda pid, level, born=None, job=None, threads=None,
+                        own_originals=True: calls.append((pid, level)))
     return calls
 
 
@@ -2270,13 +2278,13 @@ def test_descendants_drops_a_child_older_than_its_parent(monkeypatch):
     monkeypatch.setattr(fc, "_process_table", lambda: {100: 1, 101: 100, 102: 100, 103: 101})
     born = {100: 50, 101: 60, 102: 40, 103: 70}
     monkeypatch.setattr(fc, "_created", lambda pid: born.get(pid))
-    assert fc._descendants(100) == [(100, 50), (101, 60), (103, 70)]
+    assert fc._descendants(100) == [(100, 50, None), (101, 60, 100), (103, 70, 101)]
 
 
 def test_TWIN_descendants_keeps_a_child_whose_age_cannot_be_read(monkeypatch):
     monkeypatch.setattr(fc, "_process_table", lambda: {100: 1, 101: 100})
     monkeypatch.setattr(fc, "_created", lambda pid: 50 if pid == 100 else None)
-    assert fc._descendants(100) == [(100, 50), (101, None)]
+    assert fc._descendants(100) == [(100, 50, None), (101, None, 100)]
 
 
 @pytest.mark.skipif(not (os.name == "nt" or sys.platform.startswith("linux")), reason="no start time here")
@@ -2349,7 +2357,7 @@ def test_the_real_tree_listing_and_priority_calls_on_a_harmless_child_of_this_te
     try:
         tree = fc._descendants(os.getpid())
         assert tree is not None and tree[0][0] == os.getpid()
-        listed = dict(tree)
+        listed = {pid: born for pid, born, _parent in tree}
         assert child.pid in listed, tree
         assert os.getppid() not in listed, "the listing must follow children only, never the parent"
         err = fc._set_priority(child.pid, fc.IDLE, born=listed[child.pid])
@@ -2478,3 +2486,132 @@ def test_linux_real_every_thread_of_a_child_of_this_test_goes_idle():
     finally:
         child.kill()
         child.wait()
+
+
+# ---- a process or thread started DURING the game inherits idle from its lowered parent (re-review 2026-11-09)
+
+def test_a_process_started_during_the_game_inherits_idle_and_is_restored_with_its_parent(watch):
+    w, world = watch["w"], watch["world"]
+    world["tree"] = [100, 101]
+    w.poll(100)
+    world["tree"] = [100, 101, 102]          # java, started by the (now idle) bash 101: it inherited idle
+    world["parent"] = {102: 101}
+    world["orig"][102] = fc._raw(fc.IDLE)
+    w.poll(100)
+    assert world["own"].get(102) is False, "an inherited process's threads take its ancestor's original"
+    world["game"] = []
+    watch["calls"].clear()
+    w.poll(100)
+    assert (102, fc.BELOW_NORMAL) in watch["calls"], watch["calls"]
+    assert w.priority.startswith("below-normal again since "), w.priority
+    assert all(world["now"][p] == fc._raw(fc.BELOW_NORMAL) for p in (100, 101, 102)), world["now"]
+
+
+def test_TWIN_a_grandchild_takes_the_nearest_lowered_ancestors_original(watch):
+    w, world = watch["w"], watch["world"]
+    world["tree"] = [100, 101]
+    w.poll(100)
+    world["tree"] = [100, 101, 102, 103]
+    world["parent"] = {102: 101, 103: 102}
+    world["orig"].update({102: fc._raw(fc.IDLE), 103: fc._raw(fc.IDLE)})
+    w.poll(100)
+    world["game"] = []
+    watch["calls"].clear()
+    w.poll(100)
+    assert (103, fc.BELOW_NORMAL) in watch["calls"], watch["calls"]
+
+
+def test_TWIN_a_child_of_a_process_idle_before_the_game_stays_idle(watch):
+    w, world = watch["w"], watch["world"]
+    world["tree"] = [100, 101]
+    world["orig"][101] = fc._raw(fc.IDLE)    # idle before any game: never lowered by the watch
+    w.poll(100)
+    world["tree"] = [100, 101, 102]
+    world["parent"] = {102: 101}
+    world["orig"][102] = fc._raw(fc.IDLE)
+    w.poll(100)
+    world["game"] = []
+    watch["calls"].clear()
+    w.poll(100)
+    assert watch["calls"] == [(100, fc.BELOW_NORMAL)], watch["calls"]
+
+
+def test_a_restore_the_process_did_not_take_is_never_shown_as_below_normal(watch):
+    w, world = watch["w"], watch["world"]
+    w.poll(100)
+    world["sticky"] = {101}                  # the call returns success and the read-back still says idle
+    world["game"] = []
+    w.poll(100)
+    assert "below-normal again" not in w.priority and "1 of 3" in w.priority, w.priority
+    assert any("pid 101" in ln and "read back" in ln for ln in w.lines("x4raw")), w.lines("x4raw")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a nice value between below-normal and idle exists only on POSIX")
+def test_TWIN_a_restore_to_a_lower_original_is_not_called_below_normal(watch):
+    w, world = watch["w"], watch["world"]
+    world["orig"] = {100: 15, 101: 15, 102: 15}
+    w.poll(100)
+    world["game"] = []
+    w.poll(100)
+    assert "below-normal" not in w.priority and "restored" in w.priority, w.priority
+    assert not any("below-normal" in e for e in w.events[1:]), w.events
+
+
+def test_a_status_write_that_fails_after_the_change_says_the_priority_changed(watch):
+    w = watch["w"]
+    fails = {"n": 1}
+
+    def write(_w):
+        if fails["n"]:
+            fails["n"] -= 1
+            raise OSError("disk full")
+    w.on_change = write
+    w.safe_poll(100)
+    said = " ".join(w.lines("x4raw"))
+    assert "kept its priority" not in said, said
+    assert "priority changed" in said and "status write failed" in said and "disk full" in said, said
+    written: list[str] = []
+    w.on_change = lambda w_: written.append(w_.priority)
+    w.safe_poll(100)
+    assert written and written[-1].startswith("idle since "), "an unwritten state is written on the next poll"
+
+
+def test_TWIN_a_poll_that_fails_before_any_change_says_the_build_kept_its_priority(watch, monkeypatch):
+    def boom():
+        raise RuntimeError("tasklist exploded")
+    monkeypatch.setattr(fc, "_running_deferring_processes", boom)
+    w = watch["w"]
+    w.safe_poll(100)
+    assert any("kept its priority" in ln for ln in w.lines("x4raw")), w.lines("x4raw")
+
+
+def test_TWIN_a_poll_that_fails_midway_says_some_processes_changed(watch, monkeypatch):
+    w = watch["w"]
+    real = fc._set_priority
+    n = {"i": 0}
+
+    def flaky(pid, level, born=None, job=None, threads=None, own_originals=True):
+        n["i"] += 1
+        if n["i"] == 2:
+            raise ValueError("boom")
+        return real(pid, level, born, job, threads, own_originals)
+    monkeypatch.setattr(fc, "_set_priority", flaky)
+    w.safe_poll(100)
+    said = " ".join(w.lines("x4raw"))
+    assert "kept its priority" not in said and "1 process(es) had their priority changed" in said, said
+
+
+def test_linux_a_lowering_refused_does_not_talk_of_raising_back(fakeproc):
+    fakeproc["world"]["denied"] = {101}
+    err = fc._posix_set(100, 19, {})
+    assert err == "permission denied", err
+
+
+def test_linux_threads_of_an_inherited_process_take_the_process_original(fakeproc):
+    fakeproc["world"]["nice"] = {100: 19, 101: 19, 102: 19}      # all inherited idle
+    threads: dict = {}
+    fc._posix_set(100, 19, threads, own_originals=False)
+    assert threads == {100: None, 101: None, 102: None}
+    fakeproc["calls"].clear()
+    fc._posix_set(100, 10, threads)
+    assert sorted(fakeproc["calls"]) == [(100, 10), (101, 10), (102, 10)], fakeproc["calls"]
