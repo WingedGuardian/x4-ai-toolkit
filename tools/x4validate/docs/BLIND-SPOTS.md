@@ -468,6 +468,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F363 | `check_connections` proved a loadout port EXISTS, never that the equipment FITS it, that a `<groups>` name matches the component's spelling, or that a ship macro's own `<connection ref>` exists | **SCOPE LIMIT (measured)** · PRE-ARC | 218 active+DEV mods: ROR 63 tag / 278 case / 209 ref hits; 12 other mods carry dangling refs (VRO included), XUP 10 tag mismatches; rule rejects 0 of 1421 vanilla leaves; a real save shows 0 of 10 mismatched preset weapons installed | FIXED 2026-11-08 as INFO `fit` findings; promotion to warn awaits a second ship class |
 | F364 | A missing base `index/*.xml` registered nothing and recorded no skip, so every vanilla macro read as unregistered while the run looked clean | **DEFECT (measured)** · PRE-ARC | a worktree without `x4-paths.env`: 150 macros indexed instead of 4,695, 39 fit hits instead of 63, `skipped` empty | FIXED 2026-11-08: degraded skip when the reference has no index folder, plain skip for a partial reference or a DLC |
 | F368 | Past link_resolved's per-call budget of 64 realpaths a write/delete operand read as "no link", silently, so a junction into reference/ after 64 local decoys was allowed | **DEFECT (measured)** · IN-ARC (9a73c0a9) | at 5404046c: `touch <N decoys> <junction>/libraries/wares.xml` writes_reference True for N=63, False for N=64 and 200; 64 `touch` segments then `rm -f <junction>/x.xml` rm_targets_reference False | FIXED 2026-11-09: realpath cached per folder; past the budget `links_unresolved`, which protect-bash.sh and save_policy refuse |
+| F369 | link_resolved (F360) skipped any path has_unresolved() flagged, so a SINGLE-QUOTED `$` (`::$DATA`, a folder `a$b`) or a stream suffix on a junction left a write through the junction lexical only | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at a70dcedd, in-process facts(): `touch`/`echo x >` `'<junction>/libraries/wares.xml::$DATA'` writes_reference False (True with no junction); `touch '<junction>:s'` False | FIXED 2026-11-09: the caller passes `literal`; on Windows the path is resolved through _win_alias; an unresolved operand's literal head is followed too |
 | — | 3 suspected findings that were **NOT** defects | correct | see "Cleared" | — |
 
 > F-numbers in this file are **local to this register** and unrelated to the F-series in the
@@ -12922,3 +12923,28 @@ such a command is now refused where it was allowed.
 
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkBudgetFailsClosed`,
 `TestLinkResolutionIsBounded`, and `test_audit0924_hooks.py::TestLinkBudgetWholeHook`.
+
+## F369 - A literal `$` or a stream suffix kept a write through a junction lexical · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-09
+
+`hook_facts.link_resolved` (F360) returned "" for any path `has_unresolved()` flags, before looking at the filesystem.
+`has_unresolved` reads the text: a `$` followed by a name is an expansion to it, also when the shell never expands
+it (single quotes, an escaped `\$`). prep() already knew (`literal_dollar_path`), and did not pass it on. The NTFS
+spelling `x::$DATA` IS x (_win_alias, FX-G2 item 3), so the class is every literal `$` in a path behind a link.
+
+MEASURED at a70dcedd (in-process facts(), junction `refj` -> the configured reference under the worktree's
+`.test-sandbox`): `touch '<work>/refj/libraries/wares.xml::$DATA'` and `echo x > '<same>'` read writes_reference
+False, True for the same spelling without the junction; `:s:$DATA` the same; `touch '<work>/refj:s'` False (MEASURED
+on NTFS: a write to `<junction>:s` creates the stream on the TARGET folder), because the leaf lstat'd as no link;
+`'<work>/refj/a$b/x.xml'` False. And an UNRESOLVED operand was never resolved at all: `touch "<junction>/$X/x.xml"`
+and `rm -rf "<junction>/$(echo x)"` (8 of 12 junction spellings, both quotings) read False where `<reference>/$X/x.xml` is caught by the root in its text.
+
+Now: prep() passes `literal`; on Windows link_resolved resolves `_win_alias(path)`; an unresolved operand's literal
+head (the components before the first one has_unresolved flags) is resolved and judged, with the rest as written, as
+an unresolved operand. Also in this round: operands that feed only read checks (search_files: the profile-by-name
+rule) no longer set `links_unresolved` past the budget (a `grep -rn` over 65 folders was refused; links within the
+budget are still resolved for it), and the ssh advisory judges a remote text's own `links_unresolved` (it was absent
+from `_SSH_DESTRUCTIVE`, and the nested facts() inherited the outer flag).
+
+UNMEASURED: how often a real command names an expansion behind a link; each such operand now spends link budget.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkResolutionOfLiteralSpellings`.
