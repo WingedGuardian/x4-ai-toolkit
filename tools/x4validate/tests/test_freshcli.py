@@ -2557,6 +2557,17 @@ def test_TWIN_a_restore_to_a_lower_original_is_not_called_below_normal(watch):
     assert not any("below-normal" in e for e in w.events[1:]), w.events
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a nice value between below-normal and idle exists only on POSIX")
+def test_TWIN_a_mixed_restore_names_both_counts(watch):
+    # CI round (cba3a1ce): a zero count is left out of the parenthetical; both stay when both are non-zero.
+    w, world = watch["w"], watch["world"]
+    world["orig"] = {101: 15}
+    w.poll(100)
+    world["game"] = []
+    w.poll(100)
+    assert "(2 to below-normal, 1 to their lower earlier priority)" in w.priority, w.priority
+
+
 def test_a_status_write_that_fails_after_the_change_says_the_priority_changed(watch):
     w = watch["w"]
     fails = {"n": 1}

@@ -1207,8 +1207,10 @@ class _GameWatch:
             if not lower:
                 return (f"below-normal again since {when}, after a game ran",
                         f"restored to below-normal priority at {when}: the game closed")
-            return (f"priority restored since {when} after a game ran ({done} to below-normal, {lower} to their "
-                    "lower earlier priority)",
+            # A zero count is left out: "(0 to below-normal, ...)" named a priority no process was given (CI,
+            # MEASURED at cba3a1ce on ubuntu, where a nice value lower than below-normal exists).
+            parts = ([f"{done} to below-normal"] if done else []) + [f"{lower} to their lower earlier priority"]
+            return (f"priority restored since {when} after a game ran ({', '.join(parts)})",
                     f"restored to the earlier priority at {when}: the game closed")
         return (f"restore at {when} incomplete: {left} of {total} processes left at idle ({_short(errs)})",
                 f"priority restore at {when} incomplete: {left} of {total} processes left at idle")
