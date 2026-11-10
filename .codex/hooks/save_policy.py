@@ -418,7 +418,8 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None, deadlin
         raise ScopeError("This command names files in so many different folders that the guard stopped "
                          "checking them for links (a junction or symlink into a protected folder), so some "
                          "targets were NEVER checked. Split it into commands that each touch fewer folders "
-                         "and re-run.")
+                         "and re-run. (Or the filesystem could not say whether one of its paths is a link: "
+                         "check that each path can be read.)")
     if facts.get("carriers_truncated"):
         # protect-bash.sh denies this unconditionally; running that backend would expand
         # the whole command a second time inside the same 20 s deadline (MEASURED
