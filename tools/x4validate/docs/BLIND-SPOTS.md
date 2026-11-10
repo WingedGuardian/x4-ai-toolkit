@@ -12161,3 +12161,22 @@ evaluated at all. Workaround: `X4_PROFILE=<profile dir> x4validate <mod> --tier 
 modelled profile in the `inactive` line and in the Tier B header.
 
 **NO RE-DERIVATION: a scope statement; the measurement is the two runs above.**
+
+## F370 - two engine-rejected MD constructs pass every static check · **BLIND SPOT (measured)** · PRE-ARC · confidence 90% · OPEN
+
+Raised 2026-11-10 by an in-game qualification run (ROR 9.0 port, a test profile). The engine rejected two
+constructs in the helper's own MD that x4validate (`--tier b --update`, 20-target run: 0 errors) and the X4CodeSense
+`check` (0 findings on both files) both passed:
+
+1. **A unit literal that does not exist.** `$Target.speed le 1mps`: the engine logged `Error while parsing expression:
+   Operator expected` with the position right after `1mps`, 7 of 7 occurrences. MEASURED: 0 of 399 vanilla md and
+   aiscripts files use `mps`; vanilla writes speeds as `m` (`speed lt 5m`). The whole condition fails to parse, so the
+   cue's gate is never true.
+2. **A value-only condition on a sub-cue of an instantiated cue.** `<conditions><check_value .../></conditions>` on a
+   child cue (no event) logged `Found non-event condition 'check_value', event condition required!`.
+
+Neither instrument models the expression grammar's unit-suffix set, nor which cue positions require an event
+condition. Run-time evidence is the only check for both today. Proposed, not done: an exprlint rule for unit suffixes
+against the set vanilla uses, with a corpus census first (INFO before it gates).
+
+**NO RE-DERIVATION: the measurement is the engine log of that run and the two 0-finding static runs.**
