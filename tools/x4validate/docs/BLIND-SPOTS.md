@@ -12937,8 +12937,10 @@ error (`ignored_error = OSError`, READ in CPython 3.13 `posixpath.py`) and retur
 lstat that cannot answer read as "no link" -- the same narrowing again, one layer down. And `_realpath_budgeted`
 returned None on an exception, which the callers also read as "no link". Now: a realpath that raises sets
 `links_unresolved` (when `refuse`); a leaf whose lstat failed (anything but FileNotFoundError) with realpath showing
-no link sets it; a matching entry in link_entries_matched whose lstat fails sets it. A missing path (FileNotFoundError)
-is an answer and sets nothing. Each has a RED test that fails on cba3a1ce's code (MEASURED on Windows; the leaf one
+no link sets it; a matching entry in link_entries_matched whose lstat fails sets it. A missing path (FileNotFoundError,
+NotADirectoryError) is an answer and sets nothing, and so is Windows' ERROR_INVALID_NAME (123) for a leaf such as `*`:
+NEAR-MISS, MEASURED in the local hook suites: the first cut read it as "cannot tell" and two PowerShell save-folder
+tests (`Get-ChildItem <save> | Remove-Item`) lost their verdict to links_unresolved. Each has a RED test that fails on cba3a1ce's code (MEASURED on Windows; the leaf one
 simulates posixpath's realpath) and a mutant that its test catches. The POSIX branch of the original test (real posixpath, `links_unresolved` True) is
 verified by REASONING only (no Linux here); CI re-derives it. UNMEASURED: posixpath also ignores an lstat error on a
 HEAD component (EACCES on a folder the caller cannot search; INFERRED: a non-root write there fails anyway); that
