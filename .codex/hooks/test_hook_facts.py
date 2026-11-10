@@ -4640,6 +4640,18 @@ class TestLinkResolutionOfLiteralSpellings(unittest.TestCase):
                     self.assertTrue(self.f(cmd)["writes_reference"], cmd)
             with self.subTest(rm=tail):
                 self.assertTrue(self.f("rm -f " + p)["rm_targets_reference"], tail)
+        if os.name == "nt":
+            # The same rule at the resolver, on a LONG spelling of the junction. Run 42770446123: a CI runner's
+            # sandbox sits under an 8.3 short name (C:/Users/RUNNER~1), whose expansion also reduced the stream
+            # suffix, so removing `_win_alias` went uncaught there. No short name is on this spelling.
+            long_l = os.path.realpath(self.work).replace("\\", "/") + "/refj"
+            want = os.path.realpath(self.ref).replace("\\", "/").lower()
+            for tail in (":s", "::$DATA"):
+                with self.subTest(resolver=tail):
+                    H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+                    H._LINK_DIRS.clear()
+                    got = H.link_resolved(long_l + tail, literal=True).replace("\\", "/").lower()
+                    self.assertTrue(got.startswith(want), (tail, got))
 
     def test_RED_a_literal_dollar_in_a_folder_name_behind_a_junction(self):
         (self.ref / "a$b").mkdir()
