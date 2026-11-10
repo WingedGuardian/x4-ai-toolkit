@@ -138,8 +138,9 @@ def long_name(p: str) -> str:
 def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
     """The path a write or delete of `p` reaches through an EXISTING link on it (a symlink or a Windows
     junction), when that differs from `p` as written; "" when nothing on it is a link, it is not an
-    absolute drive path, or the filesystem cannot answer (4.1.1 final round, F360). MEASURED at
-    7f4895a2: `>`, `touch` and `rm` through a junction into reference/ were allowed (3 of 3) while
+    absolute drive path, or the filesystem cannot answer -- which, when `refuse`, also sets links_unresolved
+    (a realpath that raised, a leaf lstat that failed with realpath showing no link); a realpath that only
+    respells `p` (an 8.3 short name expanded) is no link (4.1.1 final round, F360). MEASURED at 7f4895a2: `>`, `touch` and `rm` through a junction into reference/ were allowed (3 of 3) while
     the file tools, which canonicalise, denied. The caller judges this path IN ADDITION to the
     lexical one, so the stricter verdict stands. os.path.realpath resolves the longest existing
     prefix and keeps the rest as written (non-strict); a UNC or device path is left lexical.
@@ -173,6 +174,7 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
     # bound now sets links_unresolved, which the hook REFUSES: it is never read as "no link". The analysis
     # deadline is checked before EACH uninterruptible call (every realpath, every lstat).
     head, leaf = posixpath.split(s)
+    unknown = False
     if (not leaf or leaf in (".", "..") or _SHORT_NAME.search(leaf)
             or any(c in (".", "..") for c in head.split("/"))):
         real = _realpath_budgeted(s, refuse)    # dot segments / a short leaf: the whole path, as before
@@ -193,14 +195,28 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
         try:
             st = os.lstat(s)
             is_link = stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & 0x400)
-        except FileNotFoundError:
+        except (FileNotFoundError, NotADirectoryError):
             is_link = False                 # nothing there: it lands where its folder resolves
-        except (OSError, ValueError):
-            is_link = True                  # cannot tell: resolve the whole path
+        except OSError as exc:
+            # A name Windows rejects (ERROR_INVALID_NAME 123: a glob's `*`/`?`, `<`, `|`) names no file, so no
+            # link either; MEASURED: `<save>/*` from a PowerShell Get-ChildItem raised it. Anything else: cannot tell.
+            is_link = unknown = getattr(exc, "winerror", None) != 123
+        except ValueError:
+            is_link = unknown = True        # cannot tell: resolve the whole path
         real = _realpath_budgeted(s, refuse) if is_link else rhead.rstrip("/") + "/" + leaf
     if real is None:
         return ""
-    return real if _lexical_norm(real) != _lexical_norm(s) else ""
+    # A link is reported only when realpath's answer is not merely a respelling of `p`. On Windows realpath
+    # also expands an 8.3 short name (CI, MEASURED at cba3a1ce: the runner's TEMP is C:/Users/RUNNER~1/...,
+    # so a plain folder there read as a link); GetLongPathNameW expands short names and follows no link.
+    same = _lexical_norm(real) == _lexical_norm(s) or (
+        os.name == "nt" and _lexical_norm(real) == _lexical_norm(long_name(s)))
+    if same and unknown:
+        # The leaf's lstat could not answer, and realpath showed no link either. On POSIX realpath(strict=False)
+        # IGNORES every lstat error (posixpath: `ignored_error = OSError`), so a link it could not read comes
+        # back as written. CI, MEASURED at cba3a1ce on ubuntu: this read as "no link". Cannot tell = refused.
+        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+    return "" if same else real
 
 
 def link_head_resolved(p: str, refuse: bool = True) -> str:
@@ -259,7 +275,14 @@ def link_entries_matched(p: str, refuse: bool = True) -> list:
                 name = e.name.casefold() if os.name == "nt" else e.name
                 if not name.startswith(prefix):
                     continue
-                st = e.stat(follow_symlinks=False)
+                try:
+                    st = e.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue                # gone since the listing: nothing lands through it
+                except OSError:
+                    # A matching entry whose lstat cannot answer may be a link: refused, never "no link".
+                    _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+                    continue
                 if not (stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400):
                     continue
                 real = _realpath_budgeted(e.path.replace(chr(92), "/"), refuse)
@@ -274,7 +297,7 @@ def link_entries_matched(p: str, refuse: bool = True) -> list:
 def _realpath_budgeted(s: str, refuse: bool = True):
     """os.path.realpath of `s` with slashes, inside link_resolved's per-call budget: None when the budget is
     spent (and, when `refuse`, links_unresolved is set -- a refusal, never "no link") or the filesystem
-    cannot answer."""
+    cannot answer (a realpath that raised also sets links_unresolved, when `refuse`)."""
     _check_deadline()
     if _LINK_RESOLVED[0] >= _MAX_LINK_RESOLVED:
         _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
@@ -282,7 +305,9 @@ def _realpath_budgeted(s: str, refuse: bool = True):
     _LINK_RESOLVED[0] += 1
     try:
         return os.path.realpath(s).replace(chr(92), "/")
-    except (OSError, ValueError):
+    except Exception:
+        # A realpath that raised is a non-answer, never "no link" (CI round for 4.1.1): refused when `refuse`.
+        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
         return None
 
 

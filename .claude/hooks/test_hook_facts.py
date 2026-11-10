@@ -4449,7 +4449,147 @@ class TestLinkBudgetFailsClosed(unittest.TestCase):
                 raise PermissionError(13, "denied", str(p))
             return real_lstat(p, *a, **k)
         with mock.patch.object(H.os, "lstat", lstat):
-            self.assertTrue(self.f("touch " + Q + self.L + Q)["writes_reference"])
+            got = self.f("touch " + Q + self.L + Q)
+        # The stub is the process's os.lstat, so on POSIX realpath's own lstat fails too, and posixpath's
+        # non-strict realpath IGNORES that (CI, MEASURED at cba3a1ce on ubuntu: read as "no link"). The property
+        # on every OS: never silently no link. Windows' realpath does not lstat, so there it resolves whole.
+        self.assertTrue(got["writes_reference"] or got["links_unresolved"], "failed open")
+        if os.name == "nt":
+            self.assertTrue(got["writes_reference"])
+        else:
+            self.assertTrue(got["links_unresolved"])
+
+    def test_RED_a_leaf_lstat_error_with_a_realpath_showing_no_link_is_links_unresolved(self):
+        # Both OSes: the leaf lstat cannot answer and realpath gives the path back as written (what posixpath does
+        # when ITS lstat fails). Cannot tell is refused for a write or delete, and never set for a read-only use.
+        from unittest import mock
+        real_lstat = os.lstat
+
+        def lstat(p, *a, **k):
+            if str(p).replace(BS, "/").lower().endswith("/denied.xml"):
+                raise PermissionError(13, "denied", str(p))
+            return real_lstat(p, *a, **k)
+        target = self.W + "/denied.xml"
+        with mock.patch.object(H.os, "lstat", lstat), \
+                mock.patch.object(H.os.path, "realpath", lambda s, *a, **k: s):
+            for cmd in ("touch " + Q + target + Q, "rm -f " + Q + target + Q):
+                with self.subTest(cmd=cmd):
+                    self.assertTrue(self.f(cmd)["links_unresolved"], "failed open")
+            H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+            H._LINK_DIRS.clear()
+            H._LINKS_UNRESOLVED[0] = False
+            self.assertEqual(H.link_resolved(target, refuse=False), "")
+            self.assertFalse(H._LINKS_UNRESOLVED[0])
+
+    def test_RED_a_realpath_that_raises_is_links_unresolved(self):
+        from unittest import mock
+
+        def realpath(s, *a, **k):
+            raise OSError(5, "I/O error", s)
+        with mock.patch.object(H.os.path, "realpath", realpath):
+            got = self.f("touch " + Q + self.W + "/d0/f.xml" + Q)
+        self.assertTrue(got["links_unresolved"], "a realpath that raised read as no link")
+
+    def test_RED_a_matching_entry_whose_lstat_fails_is_links_unresolved(self):
+        # link_entries_matched: an entry that matches the unresolved component's prefix but cannot be lstat'd
+        # may be the link. Before this round the OSError ended the listing as "no link". A vanished entry
+        # (FileNotFoundError) is an answer, and skipped (TWIN).
+        from unittest import mock
+        real_scandir = os.scandir
+
+        class Entry:
+            def __init__(self, e, exc):
+                self.name, self.path, self._exc = e.name, e.path, exc
+
+            def stat(self, follow_symlinks=True):
+                raise self._exc
+
+        class Listing:
+            def __init__(self, path, exc):
+                self._it, self._exc = real_scandir(path), exc
+
+            def __enter__(self):
+                return (Entry(e, self._exc) if e.name == "refj" else e for e in self._it)
+
+            def __exit__(self, *a):
+                self._it.close()
+        cmd = "touch " + DQ + self.W + "/refj$X/libraries/wares.xml" + DQ
+        for exc, want in ((PermissionError(13, "denied"), True), (FileNotFoundError(2, "gone"), False)):
+            with self.subTest(exc=type(exc).__name__):
+                with mock.patch.object(H.os, "scandir", lambda p, exc=exc: Listing(p, exc)):
+                    got = self.f(cmd)
+                self.assertEqual(got["links_unresolved"], want)
+
+    def test_TWIN_a_name_windows_rejects_is_not_links_unresolved(self):
+        # A literal glob or `<`/`?` leaf: Windows' lstat raises ERROR_INVALID_NAME (123), which is an answer (no
+        # such file can exist), not "cannot tell". MEASURED: before this twin, `Get-ChildItem <save> | Remove-Item`
+        # read links_unresolved and lost its save-folder verdict. POSIX: lstat says FileNotFoundError.
+        for leaf in ("*.xml", "a?b.xml", "a<b.xml"):
+            for cmd in ("touch " + Q + self.W + "/" + leaf + Q, "rm -f " + Q + self.W + "/" + leaf + Q):
+                with self.subTest(cmd=cmd):
+                    self.assertFalse(self.f(cmd)["links_unresolved"])
+
+    def test_TWIN_a_missing_path_is_not_links_unresolved(self):
+        # FileNotFoundError is an answer (nothing there), not a failure: a missing leaf, a missing folder.
+        for p in (self.W + "/no-such-file.xml", self.W + "/no/such/folder/f.xml"):
+            for cmd in ("touch " + Q + p + Q, "rm -f " + Q + p + Q):
+                with self.subTest(cmd=cmd):
+                    got = self.f(cmd)
+                    self.assertFalse(got["links_unresolved"])
+                    self.assertFalse(got["writes_reference"] or got["rm_targets_reference"])
+
+    @unittest.skipUnless(os.name == "nt", "8.3 short names are a Windows notion")
+    def test_RED_a_short_name_spelling_of_a_plain_folder_is_not_a_link(self):
+        # CI, MEASURED at cba3a1ce: the windows runner's TEMP is C:/Users/RUNNER~1/..., realpath expands it, and
+        # link_head_resolved reported a plain folder as a link. Independent of TEMP: a short name made here.
+        import ctypes
+        long_dir = self.work / "a plain folder with a long name"
+        long_dir.mkdir()
+        buf = ctypes.create_unicode_buffer(32768)
+        n = ctypes.windll.kernel32.GetShortPathNameW(str(long_dir), buf, 32768)
+        short = buf.value.replace(BS, "/")
+        if not 0 < n < 32768 or short.lower() == long_dir.as_posix().lower():
+            self.skipTest("this volume gives no 8.3 short names")
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+        H._LINK_DIRS.clear()
+        H._LINKS_UNRESOLVED[0] = False
+        self.assertEqual(H.link_head_resolved(short + "/$X/x.xml"), "")
+        self.assertEqual(H.link_resolved(short + "/x.xml"), "")
+        self.assertEqual(H.link_resolved(short), "")
+        self.assertFalse(H._LINKS_UNRESOLVED[0])
+        # TWIN: a junction reached through the short spelling is still a link.
+        j = long_dir / "refj2"
+        import _winapi
+        _winapi.CreateJunction(str(self.ref), str(j))
+        try:
+            self.assertEqual(H.link_head_resolved(short + "/refj2/$X/x.xml").lower(),
+                             (self.ref.resolve().as_posix() + "/$X/x.xml").lower())
+            self.assertTrue(self.f("touch " + Q + short + "/refj2/libraries/wares.xml" + Q)["writes_reference"])
+        finally:
+            os.rmdir(j)                      # the junction only, never its target
+
+    @unittest.skipUnless(os.name == "nt", "8.3 short names are a Windows notion")
+    def test_RED_a_respelled_realpath_of_a_plain_folder_is_not_a_link_simulated(self):
+        # The same rule with the respelling simulated, so it is measured on a volume with short names disabled.
+        from unittest import mock
+        fake_short = self.W + "/PLAIN~1"
+        fake_long = self.W + "/plain folder long"
+        pathlib.Path(fake_long).mkdir()
+        real_realpath = os.path.realpath
+
+        def realpath(s, *a, **k):
+            return real_realpath(s.replace(fake_short, fake_long), *a, **k)
+
+        def long_name(p):
+            return p.replace(fake_short, fake_long)
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+        H._LINK_DIRS.clear()
+        with mock.patch.object(H.os.path, "realpath", realpath), mock.patch.object(H, "long_name", long_name):
+            self.assertEqual(H.link_head_resolved(fake_short + "/$X/x.xml"), "")
+        # CONTROL: without the long-name reading the same respelling IS reported, so the test can go red.
+        H._LINK_DIRS.clear()
+        with mock.patch.object(H.os.path, "realpath", realpath), mock.patch.object(H, "long_name", lambda p: p):
+            self.assertNotEqual(H.link_head_resolved(fake_short + "/$X/x.xml"), "")
 
     @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
     def test_a_file_at_a_drive_root_resolves_from_the_root_not_the_current_folder(self):
@@ -4464,8 +4604,12 @@ class TestLinkBudgetFailsClosed(unittest.TestCase):
     def test_save_policy_refuses_links_unresolved(self):
         import save_policy
         cmd = "touch " + self.many_folders(H._MAX_LINK_RESOLVED + 1)
+        # save_policy reads the save roots as PHYSICAL absolute paths; the generic `C:/...` fixture is not one on
+        # POSIX (CI, MEASURED at cba3a1ce on ubuntu: "save mutation has no absolute physical path"). Real ones here.
+        prof = pathlib.Path(self._td.name) / "profile"
+        roots = dict(self.roots, profile=prof.as_posix(), saves=(prof / "save").as_posix())
         with self.assertRaises(save_policy.ScopeError) as ctx:
-            save_policy.shell_evidence({"tool_name": "Bash", "tool_input": {"command": cmd}}, self.roots)
+            save_policy.shell_evidence({"tool_name": "Bash", "tool_input": {"command": cmd}}, roots)
         self.assertIn("link", str(ctx.exception))
 
 
