@@ -4576,12 +4576,15 @@ class TestLinkBudgetFailsClosed(unittest.TestCase):
         fake_long = self.W + "/plain folder long"
         pathlib.Path(fake_long).mkdir()
         real_realpath = os.path.realpath
+        real_long_name = H.long_name
 
         def realpath(s, *a, **k):
             return real_realpath(s.replace(fake_short, fake_long), *a, **k)
 
         def long_name(p):
-            return p.replace(fake_short, fake_long)
+            # Wraps the REAL long_name: on a CI runner the sandbox itself sits under a real short name
+            # (C:/Users/RUNNER~1/...), which realpath expands too (run 42758872772 failed on exactly that).
+            return real_long_name(p.replace(fake_short, fake_long))
         H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
         H._LINK_DIRS.clear()
         with mock.patch.object(H.os.path, "realpath", realpath), mock.patch.object(H, "long_name", long_name):
