@@ -12932,6 +12932,18 @@ beyond noise).
 UNMEASURED: how often real commands name more than 64 distinct local folders (no command corpus in this tree);
 such a command is now refused where it was allowed.
 
+CI round (cba3a1ce, 2026-11-09), MEASURED on ubuntu CI: `test_a_last_component_lstat_cannot_read_is_resolved_whole` failed. It stubs `os.lstat`, which is the process's: on POSIX `posixpath.realpath(strict=False)` IGNORES every lstat
+error (`ignored_error = OSError`, READ in CPython 3.13 `posixpath.py`) and returns the component as written, so an
+lstat that cannot answer read as "no link" -- the same narrowing again, one layer down. And `_realpath_budgeted`
+returned None on an exception, which the callers also read as "no link". Now: a realpath that raises sets
+`links_unresolved` (when `refuse`); a leaf whose lstat failed (anything but FileNotFoundError) with realpath showing
+no link sets it; a matching entry in link_entries_matched whose lstat fails sets it. A missing path (FileNotFoundError)
+is an answer and sets nothing. Each has a RED test that fails on cba3a1ce's code (MEASURED on Windows; the leaf one
+simulates posixpath's realpath) and a mutant that its test catches. The POSIX branch of the original test (real posixpath, `links_unresolved` True) is
+verified by REASONING only (no Linux here); CI re-derives it. UNMEASURED: posixpath also ignores an lstat error on a
+HEAD component (EACCES on a folder the caller cannot search; INFERRED: a non-root write there fails anyway); that
+path is not made strict.
+
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkBudgetFailsClosed`,
 `TestLinkResolutionIsBounded`, and `test_audit0924_hooks.py::TestLinkBudgetWholeHook`.
 
@@ -12968,6 +12980,15 @@ every link in the folder) is among the stricter, by design.
 
 UNMEASURED: how often a real command names an expansion behind a link; each such operand now spends link budget, and
 one listing of its folder.
+
+CI round (cba3a1ce, 2026-11-09), MEASURED on the windows CI runner: `link_head_resolved(<work>/$X/x.xml)` with no link
+returned the path, because the runner's TEMP is `C:/Users/RUNNER~1/...` and realpath expands the 8.3 short name, so
+any respelling read as a link. Reproduced locally with a short name made under `.test-sandbox` (GetShortPathNameW):
+link_head_resolved and link_resolved of the short spelling of a plain folder returned its long form. Now link_resolved
+reports no link when realpath's answer equals `long_name(p)` (GetLongPathNameW: expands short names, follows no link);
+a junction reached through the short spelling is still followed (twin). Tests: `TestLinkBudgetFailsClosed::
+test_RED_a_short_name_spelling_of_a_plain_folder_is_not_a_link` and its `_simulated` twin (volume-independent). INFERRED, not measured: harmless for verdicts
+before (an extra entry naming the same place), but wrong as a fact.
 
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkResolutionOfLiteralSpellings`
 (generated copy `.claude/hooks/test_hook_facts.py`), e.g.
