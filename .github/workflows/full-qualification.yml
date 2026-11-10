@@ -768,7 +768,11 @@ jobs:
           # Not in the sum, each looked at: test_x4fresh_session +4 (needs_bash: ubuntu has bash), test_codex_rules +1
           # (this job installs codex), test_bootstrap_scripts_are_portable (9 .ps1 files at both commits, no change).
           # 2026-11-04 (rc3, ec8d30dc): windows 64 READ on 41870962364 (+2 test_verify_mod_pack, a whole number is the right type), +1 possible in test_profile_modlist_policy (file-symlink privilege), + 1 = 66.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '418' || '66' }}
+          # 2026-11-09 (4.1.1): READ per file against v4.1.0's run 41992260237 on 42732234349 (cba3a1ce): the ONLY delta
+          # is tests/test_freshcli.py, the game-time idle priority's other-OS cases: windows 64 -> 67 (+3 POSIX-only nice
+          # cases), ubuntu 418 -> 422 (+4 Windows job/error-code cases); 90f6ca41 adds one more POSIX-only case
+          # (windows 68 expected). Each ceiling rises by exactly those: 66 + 4 = 70, 418 + 4 = 422.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '422' || '70' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar
@@ -902,7 +906,9 @@ jobs:
     #
     # THE THREE NUMBERS AT THE BOTTOM. min-tests 6000 and min-passed 5300 are floors under the MEASURED
     # counts of a fresh Windows install (6,493 cases before the D-C2 fixes; about 6,506 after, 5,927 passed, projected from a re-run of the changed modules), so a suite that silently collected a
-    # fraction of itself cannot pass. max-skips 899 = 896 READ on run 42517544460 (28c5b2f5) + 3. That is 7 over the previous basis, 889
+    # fraction of itself cannot pass. 2026-11-09: 900 READ on run 42732234349 (cba3a1ce), +4 = the four Windows-only
+    # tests/test_freshcli.py game-time idle priority cases (the same +4 the `tests` ubuntu leg itemises), so 899 + 4 = 903.
+    # Before that: max-skips 899 = 896 READ on run 42517544460 (28c5b2f5) + 3. That is 7 over the previous basis, 889
     # READ on run 41870962364; commit b9ac580f attributes 5 new skips per test and reason as REPO-ONLY (3 need the hook source, 2 the CI
     # workflows) against 4.1.0's run, and no record attributes the other 2. It replaces a
     # derived upper bound of 934 from before this job had run. A later change itemises itself here, as the `tests`
@@ -984,7 +990,7 @@ jobs:
           python3 .github/scripts/installed_suite_verdict.py \
             --junit "$RUNNER_TEMP/installed-suite.xml" \
             --root "$RUNNER_TEMP/installed-toolkit" \
-            --min-tests 6000 --min-passed 5300 --max-skips 899
+            --min-tests 6000 --min-passed 5300 --max-skips 903
 
   hook-mutation:
     name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/8)
