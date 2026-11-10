@@ -4781,6 +4781,15 @@ class TestLinkResolutionOfLiteralSpellings(unittest.TestCase):
                 os.unlink(pj)
 
     def test_RED_an_unplaced_ssh_command_past_the_link_budget_is_advised(self):
+        # The remote text is judged under min(outer deadline, now + _SSH_ADVISORY_S), and a timeout there is
+        # advised BY DESIGN ("unjudged is advised, never clean"). The asserts below are about which facts reach
+        # the remote's verdict, not about speed: give the nested judgement room, so a loaded machine (MEASURED:
+        # 1 of 3 whole-file runs under an 8% CPU cap read ssh_host_unplaced True at the last assert) cannot
+        # turn a logic test into a timing one. The timeout branch itself is pinned elsewhere.
+        from unittest import mock
+        patcher = mock.patch.object(H, "_SSH_ADVISORY_S", 60.0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         many = " ".join(self.W + "/d%d/f.xml" % i for i in range(H._MAX_LINK_RESOLVED + 1))
         got = self.f("ssh otherhost touch " + many + " " + self.L + "/libraries/wares.xml")
         self.assertFalse(got["links_unresolved"])          # the outer command is not refused for it
@@ -4791,6 +4800,14 @@ class TestLinkResolutionOfLiteralSpellings(unittest.TestCase):
         got = self.f("touch " + self.many_folders(H._MAX_LINK_RESOLVED + 1) + "; ssh otherhost ls")
         self.assertTrue(got["links_unresolved"])
         self.assertFalse(got["ssh_host_unplaced"])
+
+    def test_TWIN_a_remote_text_left_unjudged_by_its_deadline_is_advised(self):
+        # The branch the test above takes time out of: a remote text the nested judgement runs out of time on
+        # is advised, never read as clean. No time at all makes it deterministic; normal time is the control.
+        from unittest import mock
+        self.assertFalse(self.f("ssh otherhost ls")["ssh_host_unplaced"])
+        with mock.patch.object(H, "_SSH_ADVISORY_S", -1.0):
+            self.assertTrue(self.f("ssh otherhost ls")["ssh_host_unplaced"])
 
 
 class TestBashDirectoryStackForms(unittest.TestCase):
