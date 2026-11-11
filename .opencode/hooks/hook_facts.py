@@ -146,8 +146,9 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
     prefix and keeps the rest as written (non-strict); a UNC or device path is left lexical.
 
     `literal`: the caller knows every `$` in `p` is a literal character (single-quoted or escaped), so
-    has_unresolved() does not apply. On Windows each component is resolved as Windows opens it
-    (_win_alias: an NTFS stream suffix and trailing dots/spaces dropped). 4.1.1 review (link budget round
+    has_unresolved() does not apply. On Windows each component is resolved as Win32 opens it
+    (_win_alias: an NTFS stream suffix and trailing dots/spaces dropped) and as Git Bash does (_msys_spelling;
+    4.1.2: a junction named `j` U+F07C or `j.` was written through by Git Bash and read as no link). 4.1.1 review (link budget round
     2), MEASURED at a70dcedd: `touch '<junction>/libraries/wares.xml::$DATA'` read writes_reference False,
     because has_unresolved() read the literal `$DATA` as a variable, and `touch '<junction>:s'` (a write
     to it lands in a stream of the TARGET folder, MEASURED) False, because the leaf lstat'd as no link.
@@ -160,12 +161,58 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
         s = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", s)
         if not re.match(r"^[A-Za-z]:/", s):
             return ""
-        s = _win_alias(s)
         # 4.1.1 review A1: a realpath cannot be interrupted, and on a drive mapped to an offline server
         # one took 21 s (MEASURED: realpath of an unreachable UNC path), so two such operands outran the
         # hook's 30 s and the call failed OPEN. Only a local drive is resolved.
         if _drive_type(s[0]) not in _LOCAL_DRIVE_TYPES:
             return ""
+        # Two programs, two spellings of one text: Win32 (PowerShell, the file tools) opens `j.` as `j` and
+        # rejects `j|`; Git Bash opens `j.` as written and `j|` as j U+F07C (_msys_spelling). Both are resolved,
+        # the second only when it differs; when both land through links in different places, refused.
+        alt = _msys_spelling(s)
+        s = _win_alias(s)
+        real = _resolve_spelling(s, refuse)
+        if alt == s:
+            return real
+        other = _resolve_spelling("//?/" + alt, refuse)
+        other = other[4:] if other.startswith("//?/") else other
+        if real and other and _lexical_norm(real) != _lexical_norm(_unmsys(other)):
+            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+        return real or other
+    return _resolve_spelling(s, refuse)
+
+
+#: Characters Git Bash (the MSYS runtime) writes as U+F000 plus their code, because Win32 forbids them in
+#: a name. MEASURED 2026-11-11 with Git Bash's own `touch`: `|*?<>:` and 0x01-0x1f each became U+F0xx; `"`
+#: (in the runtime's documented set, not measured here: the probe could not pass it in argv) is included.
+_MSYS_MAPPED = frozenset('|*?<>:"' + "".join(chr(i) for i in range(1, 32)))
+
+
+def _msys_spelling(s: str) -> str:
+    """`s` (an absolute `C:/...` path with slashes) as Git Bash names it on disk: each component after the
+    drive with its _MSYS_MAPPED characters as U+F000 plus their code, and trailing dots and spaces KEPT
+    (MEASURED: `pq.` and `pq ` are written as named, where Win32 opens `pq`). For a file-system call, this
+    spelling needs the `\\\\?\\` prefix, which keeps Win32 from stripping those trailing characters."""
+    parts = s.split("/")
+    return "/".join(parts[:1] + ["".join(chr(0xF000 + ord(c)) if c in _MSYS_MAPPED else c for c in part)
+                                 for part in parts[1:]])
+
+
+def _unmsys(s: str) -> str:
+    """_msys_spelling's mapping undone, to compare where two spellings land (`<dir>/*.xml` and `<dir>/` U+F02A
+    `.xml` name one place, spelled by two programs)."""
+    return "".join(chr(ord(c) - 0xF000) if 0xF000 < ord(c) < 0xF080 and chr(ord(c) - 0xF000) in _MSYS_MAPPED
+                   else c for c in s)
+
+
+def _native(s: str) -> str:
+    """`s` for a file-system call: a `//?/` (verbatim) spelling takes backslashes, which that prefix requires."""
+    return s.replace("/", chr(92)) if s.startswith("//?/") else s
+
+
+def _resolve_spelling(s: str, refuse: bool) -> str:
+    """link_resolved for ONE spelling of an absolute local path: a `C:/...` path as Win32 opens it, or a
+    `//?/C:/...` one, opened verbatim. "" when nothing on it is a link or the filesystem cannot answer."""
     # Bounded per hook call, and inside the analysis deadline (past it the command is refused). The folder
     # is resolved once per hook call (cached), and the last component is followed only when lstat says it
     # is a link, so a long list of files in a few folders spends a few resolutions. 4.1.1 review (link
@@ -193,13 +240,15 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
         _LINK_PROBED[0] += 1
         _check_deadline()
         try:
-            st = os.lstat(s)
+            st = os.lstat(_native(s))
             is_link = stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & 0x400)
         except (FileNotFoundError, NotADirectoryError):
             is_link = False                 # nothing there: it lands where its folder resolves
         except OSError as exc:
-            # A name Windows rejects (ERROR_INVALID_NAME 123: a glob's `*`/`?`, `<`, `|`) names no file, so no
-            # link either; MEASURED: `<save>/*` from a PowerShell Get-ChildItem raised it. Anything else: cannot tell.
+            # A name Win32 rejects (ERROR_INVALID_NAME 123: a glob's `*`/`?`, `<`, `|`) names no file ON THIS
+            # SPELLING, so no link either; MEASURED: `<save>/*` from a PowerShell Get-ChildItem raised it. Git Bash
+            # opens such a name under its own spelling, which link_resolved resolves too (_msys_spelling).
+            # Anything else: cannot tell.
             is_link = unknown = getattr(exc, "winerror", None) != 123
         except ValueError:
             is_link = unknown = True        # cannot tell: resolve the whole path
@@ -259,7 +308,8 @@ def link_entries_matched(p: str, refuse: bool = True) -> list:
     cut = min(m.start() for m in (_EXPANSION.search(comp), _SUBST.search(comp)) if m)
     prefix = comp[:cut]
     if os.name == "nt":
-        prefix = _win_alias("x/" + prefix).split("/", 1)[1].casefold()
+        # Win32's and Git Bash's spelling of the prefix (link_resolved): an entry starting with either.
+        prefix = tuple({f("x/" + prefix).split("/", 1)[1].casefold() for f in (_win_alias, _msys_spelling)})
     if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
         _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
         return []
@@ -304,7 +354,7 @@ def _realpath_budgeted(s: str, refuse: bool = True):
         return None
     _LINK_RESOLVED[0] += 1
     try:
-        return os.path.realpath(s).replace(chr(92), "/")
+        return os.path.realpath(_native(s)).replace(chr(92), "/")
     except Exception:
         # A realpath that raised is a non-answer, never "no link" (CI round for 4.1.1): refused when `refuse`.
         _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse

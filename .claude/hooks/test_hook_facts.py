@@ -4810,6 +4810,86 @@ class TestLinkResolutionOfLiteralSpellings(unittest.TestCase):
             self.assertTrue(self.f("ssh otherhost ls")["ssh_host_unplaced"])
 
 
+@unittest.skipUnless(os.name == "nt", "Git Bash's on-disk spelling of a name exists only on Windows")
+class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
+    """4.1.2. Git Bash does not open a name the way Win32 does. MEASURED 2026-11-11 with Git Bash's own `touch`:
+    each of `|*?<>:` and a control character is written as U+F000 plus its code (`p|q` lands as p, U+F07C, q),
+    and a trailing dot or space is KEPT (`j.` is its own name, where Win32 opens `j`). So `touch '<w>/j|/x'`
+    writes through a junction named `j` U+F07C, and `touch '<w>/j./x'` through one named `j.`: both landed in
+    the junction's target, MEASURED. link_resolved read only the Win32 spelling (`j|` is ERROR_INVALID_NAME,
+    `j.` is `j`), so both read writes_reference False with links_unresolved False (the first found by the 4.1.1
+    reviewer at cba3a1ce). Each spelling is now resolved; when they land in different places, it is refused."""
+
+    setUp = TestLinkBudgetFailsClosed.setUp
+    f = TestLinkBudgetFailsClosed.f
+
+    def tearDown(self):
+        for p in getattr(self, "_made", []):
+            os.rmdir(p)                      # the junction only, never its target
+        TestLinkBudgetFailsClosed.tearDown(self)
+
+    def verbatim(self, name):
+        return "\\\\?\\" + str(self.work) + "\\" + name
+
+    def junction(self, name, target=None):
+        import _winapi
+        p = self.verbatim(name)
+        _winapi.CreateJunction(str(target or self.ref), p)
+        self._made = getattr(self, "_made", []) + [p]
+        return p
+
+    def test_RED_a_junction_named_with_a_character_git_bash_maps(self):
+        for ch in "|*?<>:" + chr(1):
+            self.junction("j" + chr(0xF000 + ord(ch)) + "k")
+            p = Q + self.W + "/j" + ch + "k/libraries/wares.xml" + Q
+            for cmd, key in (("touch " + p, "writes_reference"), ("echo x > " + p, "writes_reference"),
+                             ("rm -f " + p, "rm_targets_reference")):
+                with self.subTest(ch=hex(ord(ch)), cmd=cmd[:8]):
+                    got = self.f(cmd)
+                    self.assertTrue(got[key], cmd)
+                    self.assertFalse(got["links_unresolved"], cmd)
+
+    def test_RED_a_junction_named_with_a_trailing_dot_or_space(self):
+        for name in ("j.", "k ", "m.."):
+            self.junction(name)
+            p = Q + self.W + "/" + name + "/libraries/wares.xml" + Q
+            for cmd, key in (("touch " + p, "writes_reference"), ("rm -f " + p, "rm_targets_reference")):
+                with self.subTest(name=name, cmd=cmd[:8]):
+                    got = self.f(cmd)
+                    self.assertTrue(got[key], cmd)
+                    self.assertFalse(got["links_unresolved"], cmd)
+
+    def test_RED_a_variable_in_a_mapped_junction_name(self):
+        self.junction("j" + chr(0xF07C) + "k")
+        got = self.f("touch " + DQ + self.W + "/j|k$X/libraries/wares.xml" + DQ)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_TWIN_the_same_names_with_no_link_add_nothing(self):
+        (self.work / ("d" + chr(0xF07C))).mkdir()
+        os.mkdir(self.verbatim("e."))
+        self._made = [self.verbatim("e.")]
+        for cmd in ("touch " + Q + self.W + "/d|/x.xml" + Q, "touch " + Q + self.W + "/e./x.xml" + Q,
+                    "touch " + Q + self.W + "/q|r.xml" + Q, "rm -f " + Q + self.W + "/s:t/u." + Q):
+            with self.subTest(cmd=cmd):
+                got = self.f(cmd)
+                self.assertFalse(got["writes_reference"] or got["rm_targets_reference"] or got["links_unresolved"], cmd)
+
+    def test_TWIN_the_win32_spelling_is_still_followed(self):
+        # PowerShell and the file tools open `refj.` as refj: that reading is kept (the existing rule).
+        got = self.f("touch " + Q + self.L + "./libraries/wares.xml" + Q)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_two_spellings_landing_in_different_places_are_refused(self):
+        other = pathlib.Path(self._td.name) / "other"
+        other.mkdir()
+        self.junction("j", other)            # Win32's `j.`
+        self.junction("j.")                  # Git Bash's `j.`, into reference
+        got = self.f("touch " + Q + self.W + "/j./libraries/wares.xml" + Q)
+        self.assertTrue(got["writes_reference"] or got["links_unresolved"])
+
+
 class TestBashDirectoryStackForms(unittest.TestCase):
     """4.1.1 final round: bash's other pushd/popd forms. A bare `pushd` swaps the top two, `pushd +N`/`-N` rotate,
     `pushd -n <dir>` adds <dir> below the top without a cd, `popd -n` and `popd +N` remove an entry without a cd.

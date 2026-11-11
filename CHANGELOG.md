@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A shell write or delete through a junction or symbolic link whose name Git Bash spells differently from Windows is now judged where the link leads. Git Bash writes each of `| * ? < > :` and control characters in a name as a private-use character, and keeps a trailing dot or space, where Windows drops it. So `touch '<folder>/j|/x.xml'` writes through a junction named `j` plus that character, and `touch '<folder>/j./x.xml'` through one named `j.`. Both were allowed into `reference/` (they lead there; measured with Git Bash's own `touch`), because the guard looked the path up only as Windows spells it. Both spellings are now looked up, and a path whose two spellings lead through links to different places is refused.
+
 ## v4.1.1 — 2026-11-10
 
 - After updating, expect `x4fresh status` to report your derived stores as STALE: this release changes the merge engine and catalog reader, which every store's engine fingerprint covers. Run `x4fresh rebuild` once.
