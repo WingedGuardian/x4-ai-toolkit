@@ -7876,7 +7876,6 @@ def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
     dynamic = {}                         # F10: segment index -> its readings
     carrying = {}                        # _program_carrier_readings: the same, kept apart
     handled = {}                         # ...and the not-found handler's, read once
-    tmux_chain = False                   # the last segment was a tmux command ending in `\\;`
     ssh_here = {}                        # round 6, C: segment index -> its unplaced remote commands
     not_found_handler = "command_not_found_handle" in cmd
     if "@P}" in cmd:
@@ -7908,9 +7907,6 @@ def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
         carried_here = _program_carrier_readings(seg, v, vt, segs[n - 1] if n and pipes[n] else None)
         if len(_SSH_UNPLACED) > unplaced:
             ssh_here[n] = _SSH_UNPLACED[unplaced:]
-        if tmux_chain:
-            carried_here = carried_here + _tmux_readings(_raw_words(seg))
-        tmux_chain = (tmux_chain or v == "tmux") and seg.rstrip().endswith(chr(92))
         if not_found_handler:
             # A function bash calls with the words of any command it cannot find. It may run
             # them, whichever word it starts from.

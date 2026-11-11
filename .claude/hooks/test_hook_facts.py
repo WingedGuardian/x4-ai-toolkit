@@ -8524,11 +8524,16 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
         # backslash, an escaped blank): bash runs `run`/`new`/`send-keys` as commands of their own, and
         # reading them as tmux commands would fire on nothing. MEASURED 2026-11-08: with `v == "tmux"`
         # dropped from the chain start, these go True (CI run 42517544460 reported the mutant uncaught).
+        # 4.1.2: the chain itself is removed, so the same holds after a tmux command (the last three rows;
+        # 4.1.1 read them True). MEASURED old vs new over 343 spellings: 60 changed, all of this shape.
         for c in ("find . -name x -exec ls {} " + BS + "; run " + self.inner(REF),
                   "ls " + BS + BS + "; run " + self.inner(REF),
                   "ls " + BS + " ; run " + self.inner(REF),
                   "echo " + BS + BS + " && new " + self.inner(REF),
-                  "printf x" + BS + BS + "; send-keys " + self.inner(REF)):
+                  "printf x" + BS + BS + "; send-keys " + self.inner(REF),
+                  "tmux ls " + BS + BS + "; run " + self.inner(REF),
+                  "tmux ls " + BS + " ; run-shell " + self.inner(REF),
+                  "tmux new -d " + BS + BS + " && send-keys " + self.inner(REF) + " Enter"):
             with self.subTest(c=c):
                 self.assertFalse(F(c)["rm_targets_reference"], c)
 

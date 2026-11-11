@@ -2177,7 +2177,7 @@ MUTANTS = [
     ('carrier: the walk to env steps over a wrapper number',
      ' or (wrapper and _WRAPPER_ARG.match(t))):', '):',
      'TestProgramsThatRunProgramsReview.test_env_S_behind_a_wrapper_with_a_value'),
-    # NOT MUTATED since 4.1.1: `if tmux_chain:` in _inner_commands ('carrier: a tmux chain
+    # HISTORY (not mutated in 4.1.1): `if tmux_chain:` in _inner_commands ('carrier: a tmux chain
     # continues past an escaped semicolon') no longer decides any CORRECT verdict. It joined a
     # tmux segment that ended in `\` to the next segment, for the days when segments() split at
     # `\;`. Round 4/7 (_scan_ops) made an escaped `;` literal, so `tmux ls \; run '<cmd>'` is ONE
@@ -2188,10 +2188,8 @@ MUTANTS = [
     # a misreading, and pinning it in a test would pin a false positive. MEASURED 2026-11-08 (CI
     # run 42517544460 reported it uncaught): the mutant survived the whole test_hook_facts.py
     # (1189 tests, OK); over 9 spellings it changed only `tmux ls \\; run '<del ref>'` (True ->
-    # False), the misreading. Not mutated; the vestigial arm is reported, not removed here.
-    ('carrier: only tmux starts a chain',
-     '(tmux_chain or v == "tmux") and seg', '(True) and seg',
-     'TestProgramsThatRunProgramsReview.test_TWIN_a_backslash_ended_segment_of_another_program'),
+    # False), the misreading. REMOVED in 4.1.2, with its mutant 'carrier: only tmux starts a chain':
+    # test_TWIN_a_backslash_ended_segment_of_another_program now pins the tmux rows False too.
     ('carrier: a read option takes its value',
      '            elif t[-1] in "pdnNtui":', '            elif False:',
      'TestProgramsThatRunProgramsReview.test_read_options_before_the_name'),
