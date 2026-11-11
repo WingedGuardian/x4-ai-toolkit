@@ -469,7 +469,10 @@ memory or from another session -- a remembered id was stale within a day here.
 | F364 | A missing base `index/*.xml` registered nothing and recorded no skip, so every vanilla macro read as unregistered while the run looked clean | **DEFECT (measured)** · PRE-ARC | a worktree without `x4-paths.env`: 150 macros indexed instead of 4,695, 39 fit hits instead of 63, `skipped` empty | FIXED 2026-11-08: degraded skip when the reference has no index folder, plain skip for a partial reference or a DLC |
 | F368 | Past link_resolved's per-call budget of 64 realpaths a write/delete operand read as "no link", silently, so a junction into reference/ after 64 local decoys was allowed | **DEFECT (measured)** · IN-ARC (9a73c0a9) | at 5404046c: `touch <N decoys> <junction>/libraries/wares.xml` writes_reference True for N=63, False for N=64 and 200; 64 `touch` segments then `rm -f <junction>/x.xml` rm_targets_reference False | FIXED 2026-11-09: realpath cached per folder; past the budget `links_unresolved`, which protect-bash.sh and save_policy refuse |
 | F369 | link_resolved (F360) skipped any path has_unresolved() flagged, so a SINGLE-QUOTED `$` (`::$DATA`, a folder `a$b`) or a stream suffix on a junction left a write through the junction lexical only | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at a70dcedd, in-process facts(): `touch`/`echo x >` `'<junction>/libraries/wares.xml::$DATA'` writes_reference False (True with no junction); `touch '<junction>:s'` False | FIXED 2026-11-09: the caller passes `literal`; on Windows the path is resolved through _win_alias; an unresolved operand's literal head, and any link its first unresolved component may name, are followed too |
-| F371 | link_resolved read a path only as Win32 spells it, so a junction NAMED as Git Bash spells a name (`j` U+F07C for a `j` followed by a pipe character, or `j.`/`j ` with the trailing dot or space kept) was written through with no link seen | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at 470f8b35, through protect-bash.sh, a `touch` or `echo x >` onto `<w>/<junction>/libraries/x.xml` for three such junctions into reference/: 3 of 3 allowed; Git Bash's `touch` landed in the target for all three | FIXED 2026-11-11: both spellings are resolved (the Git Bash one verbatim), from the path as written; two spellings landing through links in different places are refused |
+| F371 | link_resolved read a path only as Win32 spells it, so a junction NAMED as Git Bash spells a name (`j` U+F07C for a `j` followed by a pipe character, or `j.`/`j ` with the trailing dot or space kept) was written through with no link seen | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at 470f8b35, through protect-bash.sh, a `touch` or `echo x >` onto `<w>/<junction>/libraries/x.xml` for three such junctions into reference/: 3 of 3 allowed; Git Bash's `touch` landed in the target for all three | FIXED 2026-11-11: both spellings are resolved (the Git Bash one verbatim), from the path as written; two spellings landing through links in different places are refused; CORRECTION 2026-11-11 (4.1.2 release review): relative operands, listed entries and their folder, a target holding U+F0xx (refused), and a budget regression from 33 folders were missed; fixed the same day |
+| F372 | an operand spelled `//?/C:/...`, `\\?\C:\...` or `//./C:/...` got no link reading: link_resolved and link_entries_matched required `X:/` | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at 0f6b5e3e, in-process facts(): 6 of 6 touch/rm through a junction into reference/ read False; Git Bash's `touch "//?/..."` landed in the target (1 of 1) | FIXED 2026-11-11: `_unverbatim` drops a verbatim/device drive prefix; UNC stays lexical |
+| F373 | `..` after a junction was collapsed lexically (norm; ntpath.realpath normalises first), while Git Bash resolves it through the link | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | Git Bash `touch` through `<w>/k/../f`, `k/../f`, `cd k; ../f`: 3 of 3 landed beside k's target; guard at 0f6b5e3e: 5 of 5 False | FIXED 2026-11-11 (Windows): `..` walked physically; lexical and physical readings through links to different places refused |
+| F374 | an unresolved RELATIVE operand (`"refj$X/..."`) got no link reading: link_head_resolved / link_entries_matched return on "not absolute" | **DEFECT (measured)** · PRE-ARC (F369, 4.1.1) | at 0f6b5e3e, in-process facts(): 3 of 3 False from a folder holding a junction into reference/ | FIXED 2026-11-11: both get the operand joined to its directory as received |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -13041,8 +13044,91 @@ it in argv). Only Git Bash's mapping is modelled; WSL and Cygwin proper were not
 own name needs the second spelling, under a variable component, is not followed by link_entries_matched (its listing
 uses the head as written).
 
-**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkNamesGitBashSpellsDifferently` (7 tests,
-Windows only) and 8 mutants labelled `msys spelling: ...` / `link entries: the prefix is read as Git Bash spells it`.
+CORRECTION 2026-11-11 (found by the 4.1.2 release review; fixed the same day): "FIXED" above covered absolute operands
+only, and the fix brought a refusal regression. MEASURED at 0f6b5e3e, in-process facts(), each a RED test before the
+change: (a) a RELATIVE operand reached link_resolved through join_cwd(), whose norm() reads `j.` as `j` and `j:k` as
+`j`, so from <w> `touch`/`echo x >`/`rm -f` of `'<name>/libraries/wares.xml'` for junctions `j.`, `j` U+F03A `k`,
+`s ` and `p` U+F07C `q` read the flag False, 12 of 12; a relative token holding `|` is parse debris, joined to the
+seedless directory (often none), so it got no link reading at all (1 of 1); and after `cd 'j.'` the directory in force
+was `j` (1 of 1). (b) link_entries_matched resolved a matching entry as Win32 opens it, so an entry `m.` or `n ` named by
+`m$X`/`n$X` was read as `m`/`n`: 2 of 2 False. (c) it listed the folder before the variable only as Win32 opens it, so
+`<w>/a|/refj$X` (not listable) and `<w>/b./refj$X` (lists `<w>/b`) read False: 2 of 2 (the SCOPE note above named
+this). (d) only the Git Bash landing was un-mapped before the comparison, so a target folder whose own name holds
+U+F07C compared unequal to itself and a write there was REFUSED (1 of 1). (e) the verbatim landing's `//?/` was cut
+with a slice, which turns `//?/UNC/h/s/x` into `UNC/h/s/x` (READ; no verdict measured to change, since norm() strips the
+prefix of a drive path, but the returned path was wrong). (f) the folder cache was keyed per SPELLING, so `C:/a` and
+`//?/C:/a` each spent one of the 64 realpaths: `rm -f` over operands in N folders shaped `d<i>/*.o`, `<w>/d<i>/*.o` or
+`<w>/d<i>/x.` was refused from N=33, where v4.1.1 refused from N=65 (the reviewer's budget_probe.py: refused for
+N=33..63 at the 4.1.2 head, not at v4.1.1; 9 of 9 subtests here). (g) a disagreement of the two spellings printed the
+budget's "so many different folders" reason. All seven are fixed: the link reading takes the path as the program
+receives it (`join_as_received`), entries are resolved verbatim by their own names and the folder is listed under both
+spellings, both landings are un-mapped, `_unverbatim` unwraps the result, a verbatim folder Win32 opens identically is
+cached under its plain spelling, and the disagreement is its own fact (`links_disagree`) with its own reason in
+protect-bash.sh and save_policy.py. NEAR-MISS in this round: the twin `touch "$X"` from <w> read writes_reference True
+after the fix, because a whole-variable relative operand is now listed like `"<w>/$X"` always was and <w> holds refj; that
+is the intended reading (the variable may name refj), so the twin moved to a folder with no link. `"` in a name is still
+UNMEASURED.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkNamesGitBashSpellsDifferently` (21 tests,
+Windows only), `TestLinkReadingOfRelativeAndDotDotOperands` (the cross-platform ones),
+`test_audit0924_hooks.py::TestLinkBudgetWholeHook::test_two_readings_landing_apart_have_their_own_reason`, and the
+mutants labelled `msys spelling: ...`, `link entries: ...`, `link reading: ...`, `link budget: ...(I2)`,
+`unverbatim: ...` and `link disagree: ...`.
+
+## F372 - An operand spelled `//?/C:/...` or `//./C:/...` got no link reading · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-11
+
+Found by the 4.1.2 release review. `link_resolved` (F360) and `link_entries_matched` returned "" unless the path,
+after its MSYS drive was rewritten, matched `^[A-Za-z]:/`, so a verbatim (`//?/`, also `\\?\` with backslashes) or
+device (`//./`) drive spelling was judged lexically only, where `_lexical_norm` reads it as the plain path. MEASURED
+2026-11-11: Git Bash's `touch "//?/<w>/c/refj/libraries/probe_vb.txt"` created the file in the junction's target (1 of 1;
+Git Bash refused the `//./` spelling, "No such file or directory", so `//./` is a Win32-only spelling, INFERRED not
+measured to be written through by PowerShell). At 0f6b5e3e, in-process facts(): `touch` and `rm -f` of
+`<prefix><w>/refj/libraries/wares.xml` for the three prefixes read writes_reference / rm_targets_reference False, 6 of
+6, and `touch "//?/<w>/refj$X/libraries/wares.xml"` False (1 of 1). Fix: `_unverbatim` drops a verbatim or device DRIVE
+prefix before the drive check, in both functions; a `//?/UNC/` path becomes `//host/share` and stays lexical, as UNC
+paths are. Twins: the same prefixes on a folder with no link, and `//?/UNC/host/share/x`, read False and not refused.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py` (generated copy `.claude/hooks/test_hook_facts.py`),
+`TestLinkNamesGitBashSpellsDifferently`: `test_RED_a_verbatim_or_device_spelled_operand_is_resolved` and
+`test_TWIN_a_verbatim_spelled_operand_with_no_link`; mutants `unverbatim: a verbatim or device drive prefix is dropped (P1)`, `link verbatim: ...`.
+
+## F373 - `..` after a junction was collapsed lexically; Git Bash resolves it through the link · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-11
+
+Found by the 4.1.2 release review. MEASURED 2026-11-11 with junction `k` -> `<ref>/libraries`: Git Bash's `touch
+<w>/k/../probe_abs.txt`, `touch k/../probe_rel2.txt` from <w>, and `cd k && touch ../probe_rel.txt` from <w> each
+created the file in `<ref>/`, 3 of 3: Git Bash takes `..` from the folder the link leads to. The guard read `..`
+lexically: the caller's norm() collapsed it for a relative operand, and for an absolute one `_resolve_spelling` handed
+the whole path to ntpath.realpath, which normalises before it resolves (MEASURED on 3.12.10: `realpath("<w>/k/../x")` is
+`<w>/x`, also for a `\\?\` path). At 0f6b5e3e, in-process facts(): those three forms, `rm -f <w>/k/../probe.txt` and
+`<w>/k/./../probe.txt` read False, 5 of 5. Fix (Windows only; READ posixpath._joinrealpath: POSIX realpath splits the
+RESOLVED path, so it is physical already): `_resolve_dot_dot` walks the components, resolving the folder before each
+`..` (a cached folder realpath inside the budget) and taking its parent. When no such folder is a link the two readings
+are one (cost MEASURED: 2 folder realpaths for `<w>/plain/sub/../x.txt`, where the whole-path realpath was 1). When one
+is, the lexical reading (Win32's, PowerShell's) is computed too: with no link it gives the physical landing; when both go
+through links to different places, links_unresolved and links_disagree (refused, its own reason). Twins: `..` with no
+link, through a link that stays outside the roots, `<w>/refj/libraries/../x.txt` (both readings land in `<ref>/`),
+`cp a.txt ../b.txt`: unchanged. Relative `..` operands reach the walk through `join_as_received` (F371 correction).
+SCOPE: only `..` is walked; a POSIX host is unchanged.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkReadingOfRelativeAndDotDotOperands` (`test_RED_dot_dot_after_a_link_is_physical`,
+its TWIN, `test_dot_dot_read_two_ways_landing_apart_is_refused`); the mutants labelled `dot dot: ...`.
+
+## F374 - An unresolved RELATIVE operand got no link reading · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-11
+
+Found by the 4.1.2 release review. `link_head_resolved` and `link_entries_matched` (F369) were given the operand as
+written, and both return on "not absolute", so a relative operand holding a variable or a `$(...)` was judged only as
+its text. At 0f6b5e3e, in-process facts() from a folder holding junction `refj` into reference/: `touch
+"refj$X/libraries/wares.xml"`, `touch "refj/$X/wares.xml"` and `touch refj/$(echo libraries)/wares.xml` read
+writes_reference False, 3 of 3, where `"<w>/refj$X/..."` read True. Fix: both are given the operand joined to its
+directory as the program receives it (`join_as_received`). Behaviour change to know: a whole-variable relative operand
+(`touch "$f"`, `rm -f "$f"`) in a folder holding a link into a protected root is now read as possibly naming that link,
+as `"<folder>/$f"` already was. Twins: the same operands with no link (`plain$X/x.xml`, `"$X"` from a folder with no
+link) read False and not refused.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py` (generated copy `.claude/hooks/test_hook_facts.py`),
+`TestLinkReadingOfRelativeAndDotDotOperands`: `test_RED_an_unresolved_relative_operand_is_read_through_its_link` and
+`test_TWIN_an_unresolved_relative_operand_with_no_link`; mutants `link head: a relative operand's head is joined to its directory (P3)`, `link entries: a relative
+operand is listed in its directory (P3)`.
 
 ## F365 - `_merge` modelled `<add pos="append">` as an append; the engine skips the node · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
 

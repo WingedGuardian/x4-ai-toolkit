@@ -413,6 +413,15 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None, deadlin
     if facts.get("operand_expansion_truncated"):
         raise ScopeError("Brace or array operands could not be expanded completely; some targets were "
                          "NEVER checked. Use literal targets or split this command before retrying.")
+    if facts.get("links_disagree"):
+        # 4.1.2 release review (I3): protect-bash.sh denies this too; same verdict and wording.
+        raise ScopeError("A path in this command reaches two different places depending on which program opens it "
+                         "(Git Bash keeps a trailing dot or space and writes characters such as | * : as other "
+                         "characters; Windows drops or rejects them; and a .. after a junction or symlink is taken "
+                         "from the link's target by Git Bash, from the path as written by Windows), and at least "
+                         "one of them goes through a junction or symlink, so the guard cannot tell which place "
+                         "would be written. Spell the path without trailing dots or spaces, those characters, or "
+                         "a .. after a link, and re-run.")
     if facts.get("links_unresolved"):
         # 4.1.1 review (link budget): protect-bash.sh denies this too; same verdict and wording.
         raise ScopeError("This command names files in so many different folders that the guard stopped "

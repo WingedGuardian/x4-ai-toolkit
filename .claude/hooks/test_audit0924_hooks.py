@@ -1532,6 +1532,37 @@ class TestLinkBudgetWholeHook(unittest.TestCase):
         v, reason = self.verdict("touch " + " ".join(q + self.W + "/d%d/f.xml" % i + q for i in range(65)))
         self.assertEqual(v, "deny", reason)                 # fail closed: the guard cannot know there is no link
         self.assertIn("different folders", reason)
+        self.assertNotIn("two different places", reason)
+
+    @unittest.skipUnless(os.name == "nt", "Git Bash's on-disk spelling of a name exists only on Windows")
+    def test_two_readings_landing_apart_have_their_own_reason(self):
+        # 4.1.2 release review (I3): this refusal printed the budget's "so many different folders" advice for a
+        # command naming one path. Junction `j` (what Win32 opens for `j.`) leads elsewhere, `j.` into reference.
+        import _winapi
+        q = chr(39)
+        other = self.tmp / "other"
+        other.mkdir(exist_ok=True)
+        made = [str(self.work / "j"), chr(92) * 2 + "?" + chr(92) + str(self.work) + chr(92) + "j."]
+        _winapi.CreateJunction(str(other), made[0])
+        cmd = "touch " + q + self.W + "/j./libraries/wares.xml" + q
+        try:
+            _winapi.CreateJunction(str(self.ref), made[1])
+            got = [self.verdict(cmd)]
+            # ...and protect-bash.sh's own rule: the hook's front door is the save bridge (save_policy.py), which
+            # refuses first, so the shell rule is reached only as the policy backend.
+            payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
+            p = subprocess.run([BASH, str(HOOKS / "protect-bash.sh"), "--harness-policy-backend"], input=payload,
+                               capture_output=True, text=True, encoding="utf-8", env=self.env, timeout=120)
+            h = json.loads(p.stdout)["hookSpecificOutput"]
+            got.append((h.get("permissionDecision", "advise"), h.get("permissionDecisionReason", "")))
+        finally:
+            for p in made:
+                if os.path.lexists(p):
+                    os.rmdir(p)              # the junction only, never its target
+        for v, reason in got:
+            self.assertEqual(v, "deny", reason)
+            self.assertIn("two different places", reason)
+            self.assertNotIn("different folders", reason)
 
 
 class TestSshChainWholeHookTime(unittest.TestCase):

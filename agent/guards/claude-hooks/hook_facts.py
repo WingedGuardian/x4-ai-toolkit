@@ -158,7 +158,10 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
         return ""
     s = p.replace(chr(92), "/")
     if os.name == "nt":
-        s = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", s)
+        # 4.1.2 release review (P1, pre-arc), MEASURED 2026-11-11: Git Bash's `touch "//?/<w>/refj/libraries/x"`
+        # wrote through the junction while this returned "" for anything not spelled `X:/`. A verbatim or device
+        # DRIVE prefix names the same drive path; a UNC one stays lexical (below), as before.
+        s = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", _unverbatim(s))
         if not re.match(r"^[A-Za-z]:/", s):
             return ""
         # 4.1.1 review A1: a realpath cannot be interrupted, and on a drive mapped to an offline server
@@ -175,9 +178,13 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
         if alt == s:
             return real
         other = _resolve_spelling("//?/" + alt, refuse)
-        other = other[4:] if other.startswith("//?/") else other
-        if real and other and _lexical_norm(real) != _lexical_norm(_unmsys(other)):
+        # 4.1.2 release review: unwrapped by _unverbatim (I5: a slice turned `//?/UNC/h/s/x` into `UNC/h/s/x`), and
+        # BOTH landings un-mapped before comparing (I4: a target folder that really holds U+F07C compared unequal
+        # to itself, and the write was refused).
+        other = _unverbatim(other)
+        if real and other and _lexical_norm(_unmsys(real)) != _lexical_norm(_unmsys(other)):
             _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+            _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse
         return real or other
     return _resolve_spelling(s, refuse)
 
@@ -210,6 +217,92 @@ def _native(s: str) -> str:
     return s.replace("/", chr(92)) if s.startswith("//?/") else s
 
 
+#: A verbatim (`//?/`, and the `/?/` one backslash pair of `\\\\?\\` in double quotes leaves: _WIN_PREFIX) or a
+#: device (`//./`) prefix, before a drive or `UNC/`. Case as written: realpath answers `\\\\?\\UNC\\`.
+_VERBATIM_DRIVE = re.compile(r"^(?:/{1,2}[?]|//[.])/+(?=[A-Za-z]:(?:/|$))")
+_VERBATIM_UNC = re.compile(r"^(?:/{1,2}[?]|//[.])/+UNC/", re.I)
+
+
+def _unverbatim(s: str) -> str:
+    """`s` (slashes) without a verbatim or device prefix: `//?/X:/a` is `X:/a`, `//?/UNC/h/s/a` is `//h/s/a`;
+    anything else (`//?/Volume{...}/a`, a plain path) as given. 4.1.2 release review (P1, I5)."""
+    m = _VERBATIM_DRIVE.match(s)
+    if m:
+        return s[m.end():]
+    m = _VERBATIM_UNC.match(s)
+    return "//" + s[m.end():] if m else s
+
+
+def _same_place(real: str, s: str) -> bool:
+    """Is `real` (a realpath answer for `s`) only a respelling of `s`, i.e. no link? On Windows realpath also expands
+    an 8.3 short name (CI, MEASURED at cba3a1ce: the runner's TEMP is C:/Users/RUNNER~1/..., so a plain folder there
+    read as a link); GetLongPathNameW expands short names and follows no link."""
+    return _lexical_norm(real) == _lexical_norm(s) or (
+        os.name == "nt" and _lexical_norm(real) == _lexical_norm(long_name(s)))
+
+
+def _dir_realpath(head: str, refuse: bool):
+    """The realpath of the folder `head`, once per hook call (cached in _LINK_DIRS); None when the budget is spent
+    or the filesystem cannot answer (_realpath_budgeted). 4.1.2 release review (I2), MEASURED with budget_probe.py:
+    the cache was keyed per SPELLING, so `C:/a` and `//?/C:/a` each spent one of the _MAX_LINK_RESOLVED realpaths for
+    a folder Win32 and a verbatim open name identically, and `rm -f` over operands in 33 folders (`d<i>/*.o`, `d<i>/x.`)
+    was refused (v4.1.1: from 65). A verbatim head _win_alias leaves unchanged is resolved under its plain spelling."""
+    key = head[4:] if head.startswith("//?/") and _win_alias(head[4:]) == head[4:] else head
+    rhead = _LINK_DIRS.get(key)
+    if rhead is None:
+        rhead = _realpath_budgeted(key, refuse)
+        if rhead is None:
+            return None
+        _LINK_DIRS[key] = rhead
+    return rhead
+
+
+def _resolve_dot_dot(s: str, refuse: bool) -> str:
+    """_resolve_spelling for a Windows path with a `..` component, read PHYSICALLY as Git Bash reads it, and compared
+    with the lexical reading Win32 (PowerShell, the file tools) and ntpath.realpath make. 4.1.2 release review (P2,
+    pre-arc), MEASURED 2026-11-11 with junction k -> <ref>/libraries: Git Bash's `touch <w>/k/../probe.txt`, `touch
+    k/../probe.txt` from <w> and `cd k && touch ../probe.txt` each created the file in <ref>/ (3 of 3), while realpath
+    collapsed `..` first (also for a `\\\\?\\` path, MEASURED on 3.12) and the guard read no link.
+
+    Each `..` takes the parent of the path so far RESOLVED (a cached folder realpath, inside the budget); `.` is
+    skipped. When no folder before a `..` is a link the two readings are one and the walked path is resolved as any
+    other. Otherwise: the physical landing when the lexical reading shows no link; when both show links and land in
+    different places, links_unresolved (when `refuse`) and the physical one."""
+    pre = "//?/" if s.startswith("//?/") else ""
+    parts = s[len(pre):].split("/")
+    walked, crossed = parts[0] + "/", False
+    for c in parts[1:]:
+        if c in ("", "."):
+            continue
+        if c != "..":
+            walked = walked.rstrip("/") + "/" + c
+            continue
+        if walked.endswith(":/"):
+            continue                        # `..` at a drive root stays there
+        r = _dir_realpath(pre + walked, refuse)
+        if r is None:
+            return ""
+        r = _unverbatim(r).rstrip("/")
+        crossed = crossed or not _same_place(r, walked)
+        walked = posixpath.dirname(r)
+        walked = walked + "/" if walked.endswith(":") or not walked else walked
+    res = _resolve_spelling(pre + walked, refuse)
+    if not crossed:
+        return res
+    phys = res or pre + walked
+    lex = _realpath_budgeted(s, refuse)
+    lex = "" if lex is None or _same_place(lex, s) else lex
+    phys_answer = "" if _same_place(phys, s) else phys
+    if not lex:
+        return phys_answer
+    if _lexical_norm(_unmsys(_unverbatim(lex))) != _lexical_norm(_unmsys(_unverbatim(phys))):
+        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+        _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse
+    # Only one landing is returned: when the physical one is where the text lands lexically, the caller's lexical
+    # entry judges it already, so the lexical reading's link is the one to add.
+    return phys_answer or lex
+
+
 def _resolve_spelling(s: str, refuse: bool) -> str:
     """link_resolved for ONE spelling of an absolute local path: a `C:/...` path as Win32 opens it, or a
     `//?/C:/...` one, opened verbatim. "" when nothing on it is a link or the filesystem cannot answer."""
@@ -222,18 +315,17 @@ def _resolve_spelling(s: str, refuse: bool) -> str:
     # deadline is checked before EACH uninterruptible call (every realpath, every lstat).
     head, leaf = posixpath.split(s)
     unknown = False
+    if os.name == "nt" and ".." in s.split("/"):
+        return _resolve_dot_dot(s, refuse)  # Git Bash reads `..` physically, Win32 lexically (P2)
     if (not leaf or leaf in (".", "..") or _SHORT_NAME.search(leaf)
             or any(c in (".", "..") for c in head.split("/"))):
         real = _realpath_budgeted(s, refuse)    # dot segments / a short leaf: the whole path, as before
     else:
         if head.endswith(":"):
             head += "/"                     # `C:` alone is the drive's CURRENT folder, never its root
-        rhead = _LINK_DIRS.get(head)
+        rhead = _dir_realpath(head, refuse)
         if rhead is None:
-            rhead = _realpath_budgeted(head, refuse)
-            if rhead is None:
-                return ""
-            _LINK_DIRS[head] = rhead
+            return ""
         if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
             _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
             return ""
@@ -255,11 +347,8 @@ def _resolve_spelling(s: str, refuse: bool) -> str:
         real = _realpath_budgeted(s, refuse) if is_link else rhead.rstrip("/") + "/" + leaf
     if real is None:
         return ""
-    # A link is reported only when realpath's answer is not merely a respelling of `p`. On Windows realpath
-    # also expands an 8.3 short name (CI, MEASURED at cba3a1ce: the runner's TEMP is C:/Users/RUNNER~1/...,
-    # so a plain folder there read as a link); GetLongPathNameW expands short names and follows no link.
-    same = _lexical_norm(real) == _lexical_norm(s) or (
-        os.name == "nt" and _lexical_norm(real) == _lexical_norm(long_name(s)))
+    # A link is reported only when realpath's answer is not merely a respelling of `p` (_same_place).
+    same = _same_place(real, s)
     if same and unknown:
         # The leaf's lstat could not answer, and realpath showed no link either. On POSIX realpath(strict=False)
         # IGNORES every lstat error (posixpath: `ignored_error = OSError`), so a link it could not read comes
@@ -300,47 +389,57 @@ def link_entries_matched(p: str, refuse: bool = True) -> list:
     if i == len(parts) or not head or not is_abs(head):
         return []
     if os.name == "nt":
-        head = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", head)
+        head = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", _unverbatim(head))     # `//?/C:/...` too (P1)
         if not re.match(r"^[A-Za-z]:", head) or _drive_type(head[0]) not in _LOCAL_DRIVE_TYPES:
             return []
         head = head if "/" in head else head + "/"
     comp = parts[i]
     cut = min(m.start() for m in (_EXPANSION.search(comp), _SUBST.search(comp)) if m)
     prefix = comp[:cut]
+    # (folder to list, the folder its entries are named under). 4.1.2 release review, I1c: the head was listed only as
+    # Win32 opens it, so a folder Git Bash made (`<w>/a|`, `<w>/b.`) was not listed (or `<w>/b` was); it is listed under
+    # Git Bash's spelling too, verbatim, when that differs. I1b: an entry is resolved by its OWN name, verbatim, under
+    # the folder as Win32 names it (abspath: GetFullPathNameW), so a junction named `m.` or `n ` is not read as `m`/`n`.
+    heads = [(head, head)]
     if os.name == "nt":
         # Win32's and Git Bash's spelling of the prefix (link_resolved): an entry starting with either.
         prefix = tuple({f("x/" + prefix).split("/", 1)[1].casefold() for f in (_win_alias, _msys_spelling)})
-    if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
-        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
-        return []
-    _LINK_PROBED[0] += 1
-    _check_deadline()
+        heads = [(head, "//?/" + os.path.abspath(head).replace(chr(92), "/"))]
+        if _msys_spelling(head) != _win_alias(head):
+            heads.append(("//?/" + _msys_spelling(head),) * 2)
     rest = "/".join(parts[i + 1:])
     out = []
-    try:
-        with os.scandir(head) as it:
-            for n, e in enumerate(it):
-                if n % 256 == 0:
-                    _check_deadline()
-                name = e.name.casefold() if os.name == "nt" else e.name
-                if not name.startswith(prefix):
-                    continue
-                try:
-                    st = e.stat(follow_symlinks=False)
-                except FileNotFoundError:
-                    continue                # gone since the listing: nothing lands through it
-                except OSError:
-                    # A matching entry whose lstat cannot answer may be a link: refused, never "no link".
-                    _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
-                    continue
-                if not (stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400):
-                    continue
-                real = _realpath_budgeted(e.path.replace(chr(92), "/"), refuse)
-                if real is None:
-                    return out
-                out.append(real.rstrip("/") + ("/" + rest if rest else ""))
-    except OSError:
-        return out
+    for listed, named in heads:
+        if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
+            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+            return out
+        _LINK_PROBED[0] += 1
+        _check_deadline()
+        try:
+            with os.scandir(_native(listed)) as it:
+                for n, e in enumerate(it):
+                    if n % 256 == 0:
+                        _check_deadline()
+                    name = e.name.casefold() if os.name == "nt" else e.name
+                    if not name.startswith(prefix):
+                        continue
+                    try:
+                        st = e.stat(follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue                # gone since the listing: nothing lands through it
+                    except OSError:
+                        # A matching entry whose lstat cannot answer may be a link: refused, never "no link".
+                        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+                        continue
+                    if not (stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400):
+                        continue
+                    real = _realpath_budgeted(named.rstrip("/") + "/" + e.name if os.name == "nt"
+                                              else e.path.replace(chr(92), "/"), refuse)
+                    if real is None:
+                        return out
+                    out.append(_unverbatim(real.replace(chr(92), "/")).rstrip("/") + ("/" + rest if rest else ""))
+        except OSError:
+            continue
     return out
 
 
@@ -371,6 +470,9 @@ _LINK_PROBED = [0]
 #: ...each folder's realpath, once per hook call.
 _LINK_DIRS: dict = {}
 _LINKS_UNRESOLVED = [False]
+#: ...of which: two readings of one operand (Win32's and Git Bash's spelling, or `..` read lexically and physically)
+#: landing through links in different places (4.1.2 release review, I3: the hook words this apart from the budget).
+_LINKS_DISAGREE = [False]
 _DRIVE_TYPES: dict = {}
 #: GetDriveTypeW: 2 removable, 3 fixed, 5 CD-ROM, 6 RAM disk. Not resolved: 0 unknown, 1 no root
 #: directory, 4 remote (a mapped network drive, whose server may be offline).
@@ -585,6 +687,24 @@ def join_cwd(cwd: str, p: str) -> str:
     if not cwd or not is_abs(cwd):
         return ""
     return norm(norm(cwd) + "/" + p)
+
+
+def join_as_received(cwd: str, p: str, spelled: str = "") -> str:
+    """`p` as the program receives it, for a LINK reading only: a relative `p` is the directory + "/" + `p` (backslashes
+    as slashes), with nothing normalised -- no `..` collapsed, no trailing dot, space or `:x` dropped. "" when the
+    directory is unknowable (join_cwd). `spelled`: that directory with its case and spelling kept (the physical cwd),
+    used when it names the same folder, so `cd j. && touch x` keeps the `j.` Git Bash opens.
+
+    4.1.2 release review (I1a), MEASURED 2026-11-11: link_resolved got join_cwd()'s answer, which norm() has read as
+    Win32 does, so from <w> `touch 'j./libraries/wares.xml'` (junction `j.` into reference/) read writes_reference
+    False; and `k/../f` reached it already collapsed (P2)."""
+    if is_abs(p):
+        return p
+    if not cwd or not is_abs(cwd):
+        return ""
+    if norm(spelled) == norm(cwd):        # equal to an absolute directory: `spelled` is one too
+        cwd = spelled
+    return cwd.replace(chr(92), "/").rstrip("/") + "/" + p.replace(chr(92), "/")
 
 
 #: The HOST's path semantics for physical evidence (LINUX GAP, v4.0 release review). On POSIX a
@@ -8711,6 +8831,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _LINK_PROBED[0] = 0
     _LINK_DIRS.clear()
     _LINKS_UNRESOLVED[0] = False
+    _LINKS_DISAGREE[0] = False
     _DRIVE_TYPES.clear()
     _ps_spent[0] = 0.0                  # the translation budget is per hook call, never per judgement
     try:
@@ -9125,10 +9246,14 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                     evidence.append(row)
                 # 4.1.1 final round (F360): a link on the path (a junction into reference/) is judged
                 # where it lands as well; every rule ORs over these entries, so the stricter stands.
+                # ...from the path AS THE PROGRAM RECEIVES IT (join_as_received; 4.1.2 release review I1a, P3): not
+                # long_name's or norm's answer, which is Win32's spelling only (a trailing dot or `:x` dropped, `..`
+                # collapsed). Parse debris whose seedless join is unknowable is read from the seeded directory: this
+                # reading only ADDS an entry, and only where a real link is on disk under that name.
+                pd_ = "" if execution_context else physical_cwd
+                seen = join_as_received(d, r, pd_ if d == c_cwd else "") or join_as_received(c_cwd, r, pd_)
                 if not unres:
-                    # ...from the path AS WRITTEN: long_name returns a short-named path normalised (a
-                    # trailing dot or `:x` dropped), which is Win32's spelling only (4.1.2, link_resolved).
-                    real = link_resolved(joined, literal=literal, refuse=not reads_only)
+                    real = link_resolved(seen, literal=literal, refuse=not reads_only)
                     if real:
                         out.append((real, False, r))
                 else:
@@ -9136,11 +9261,11 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                     # and `'<junction>/a${b}/f'` (a quoted brace is not literal_dollar_path) read their
                     # lexical text only, where `<reference>/$X/f` is caught by the root in its text. The
                     # head's landing place plus the rest as written is judged the same way (unresolved).
-                    real = link_head_resolved(r, refuse=not reads_only)
+                    real = link_head_resolved(seen or r, refuse=not reads_only)
                     if real:
                         out.append((real, True, real))
                     # ...and through a link the unresolved component itself may name (`<work>/refj$X/f`).
-                    for real in link_entries_matched(r, refuse=not reads_only):
+                    for real in link_entries_matched(seen or r, refuse=not reads_only):
                         out.append((real, True, real))
         return out
 
@@ -9887,6 +10012,7 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # 4.1.1 review (link budget): an operand whose links the per-call budget left unresolved is not "no
     # link" -- the hook refuses it (see link_resolved). Captured after every field, like the flag above.
     result["links_unresolved"] = _LINKS_UNRESOLVED[0]
+    result["links_disagree"] = _LINKS_DISAGREE[0]
     result["ssh_host_unplaced"] = _ssh_unplaced_destructive(result, roots, protected_save_folders)
     return result
 

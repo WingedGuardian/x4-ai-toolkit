@@ -452,6 +452,14 @@ fi
 # 4.1.1 review (link budget): link resolution is bounded per hook call (realpath once per folder, at most
 # _MAX_LINK_RESOLVED folders). An operand past the bound may sit behind a junction into a protected root,
 # so it is refused, never read as "no link". Same verdict as the truncations above.
+# 4.1.2 release review (I3): two readings of one path that land through links in DIFFERENT places (Git Bash's and
+# Win32's spelling of a name, or `..` read physically and lexically) also set links_unresolved; that cause has its
+# own words, because "too many folders" sends the user to split a command that names one path.
+if on links_disagree; then
+  x4_guard_check_inert
+  _X4_UNRELAXED=1
+  deny "A path in this command reaches two different places depending on which program opens it (Git Bash keeps a trailing dot or space and writes characters such as | * : as other characters; Windows drops or rejects them; and a .. after a junction or symlink is taken from the link's target by Git Bash, from the path as written by Windows), and at least one of them goes through a junction or symlink, so the guard cannot tell which place would be written. Spell the path without trailing dots or spaces, those characters, or a .. after a link, and re-run."
+fi
 if on links_unresolved; then
   x4_guard_check_inert
   _X4_UNRELAXED=1

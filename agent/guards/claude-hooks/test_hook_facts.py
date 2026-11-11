@@ -70,6 +70,9 @@ def _translated(text):
     counted like _measured. 4.1.2: tests comparing the translation TEXT indexed the result directly, so a
     timeout read as a wrong translation (MEASURED 2026-11-11: the pre-push gate at idle priority beside a
     running game failed test_a_maybe_pop_translates_as_a_pop_that_may_not_happen on `None != 'pushd ...'`)."""
+    # 4.1.2 release review (T2): the translator's per-call budget is reset only in facts(), so a call here inherited
+    # what earlier tests spent, and could be skipped on a timeout that never happened. Reset as facts() does.
+    H._ps_spent[0] = 0.0
     sh, _unknown, why = H.powershell_to_sh(text)
     if sh is None and H.subprocess is _subprocess:
         category = H.untranslated_category([why])
@@ -4880,8 +4883,8 @@ class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
     f = TestLinkBudgetFailsClosed.f
 
     def tearDown(self):
-        for p in getattr(self, "_made", []):
-            os.rmdir(p)                      # the junction only, never its target
+        for p in reversed(getattr(self, "_made", [])):
+            os.rmdir(p)                      # the junction only, never its target (a folder made in one: first)
         TestLinkBudgetFailsClosed.tearDown(self)
 
     def verbatim(self, name):
@@ -4963,7 +4966,297 @@ class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
         self.junction("j", other)            # Win32's `j.`
         self.junction("j.")                  # Git Bash's `j.`, into reference
         got = self.f("touch " + Q + self.W + "/j./libraries/wares.xml" + Q)
-        self.assertTrue(got["writes_reference"] or got["links_unresolved"])
+        # 4.1.2 release review (T3): the outcome for THIS fixture, not "either": refused, and refused as a
+        # disagreement between two programs' readings, which the hook words apart from the budget (I3).
+        self.assertTrue(got["links_unresolved"])
+        self.assertTrue(got["links_disagree"])
+        self.assertFalse(self.f("touch " + Q + self.W + "/plain.xml" + Q)["links_disagree"])   # per hook call
+
+    def test_TWIN_a_spent_budget_is_not_a_disagreement(self):
+        got = self.f("touch " + " ".join(Q + self.W + "/d%d/f.xml" % i + Q for i in range(H._MAX_LINK_RESOLVED + 1)))
+        self.assertTrue(got["links_unresolved"])
+        self.assertFalse(got["links_disagree"])
+        self.assertFalse(self.f("touch " + Q + self.L + "./libraries/wares.xml" + Q)["links_disagree"])
+
+    # --- 4.1.2 release review: the Git Bash spelling reached absolute operands only (I1a-c, I2, I4, I5, P1)
+    def mkdir(self, name):
+        os.mkdir(self.verbatim(name))
+        self._made = getattr(self, "_made", []) + [self.verbatim(name)]
+
+    def fc(self, cmd, cwd):
+        return H.facts({"tool_input": {"command": cmd}, "cwd": cwd}, self.roots)
+
+    def test_RED_a_relative_operand_keeps_git_bash_spelling(self):
+        # I1a, MEASURED 2026-11-11: from <W>, Git Bash's `touch 'j./libraries/x'` and `touch 'p|q/libraries/x'`
+        # landed in the junctions' target; the guard joined the operand through norm(), which reads `j.` as `j`.
+        for name in ("j.", "j" + chr(0xF03A) + "k", "s ", "p" + chr(0xF07C) + "q"):
+            self.junction(name)
+        for name in ("j.", "j:k", "s ", "p|q"):
+            p = Q + name + "/libraries/wares.xml" + Q
+            for cmd, key in (("touch " + p, "writes_reference"), ("echo x > " + p, "writes_reference"),
+                             (D + " -f " + p, "rm_targets_reference")):
+                with self.subTest(name=name, cmd=cmd[:8]):
+                    got = self.fc(cmd, self.W)
+                    self.assertTrue(got[key], cmd)
+                    self.assertFalse(got["links_unresolved"], cmd)
+
+    def test_RED_a_relative_operand_with_a_pipe_character_is_judged_from_the_cwd(self):
+        # I1a: a token carrying `|` is parse debris to the lexical rules (judged against the folder WITHOUT the
+        # session seed: here none), so it had no link reading at all.
+        self.junction("p" + chr(0xF07C) + "q")
+        got = self.fc("touch " + Q + "p|q/libraries/wares.xml" + Q, self.W)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_TWIN_a_relative_operand_with_no_known_directory_is_not_invented(self):
+        # With no cwd the directory is unknowable (join_cwd): `c/<rest of W>/refj/...` must not become `/c/...`.
+        got = H.facts({"tool_input": {"command": "touch " + Q + "c" + self.W[2:] + "/refj/libraries/wares.xml" + Q}},
+                      self.roots)
+        self.assertFalse(got["writes_reference"] or got["links_unresolved"])
+
+    def test_TWIN_relative_names_with_no_link_add_nothing(self):
+        self.mkdir("d" + chr(0xF07C))
+        self.mkdir("e.")
+        for cmd in ("touch " + Q + "d|/x.xml" + Q, "touch " + Q + "e./x.xml" + Q, "touch " + Q + "q|r.xml" + Q,
+                    D + " -f " + Q + "s:t/u." + Q, "echo x > " + Q + "a<b" + Q, "touch nul", "touch x.xml"):
+            with self.subTest(cmd=cmd):
+                got = self.fc(cmd, self.W)
+                self.assertFalse(got["writes_reference"] or got["rm_targets_reference"] or got["links_unresolved"], cmd)
+
+    def test_RED_a_listed_entry_is_resolved_by_its_own_name(self):
+        # I1b: the entry `m.` that `m$X` may name was resolved as Win32 opens `m.`, i.e. `m`: no link.
+        self.mkdir("t")
+        self.junction("t" + BS + "m.")
+        self.mkdir("u")
+        self.junction("u" + BS + "n ")
+        for sub, pre in (("t", "m"), ("u", "n")):
+            with self.subTest(sub=sub):
+                got = self.f("touch " + DQ + self.W + "/" + sub + "/" + pre + "$X/libraries/wares.xml" + DQ)
+                self.assertTrue(got["writes_reference"])
+                self.assertFalse(got["links_unresolved"])
+                # ...and the landing is returned as a plain drive path, never its verbatim spelling
+                for real in H.link_entries_matched(self.W + "/" + sub + "/" + pre + "$X/libraries/wares.xml"):
+                    self.assertTrue(real[:1].isalpha() and real[1:3] == ":/", real)
+
+    def test_RED_a_head_folder_git_bash_spelled_is_listed(self):
+        # I1c: the folder before the variable component was listed only as Win32 opens it, so `<W>/b./refj$X`
+        # listed `<W>/b` (absent) and `<W>/a|` could not be listed at all.
+        for head in ("a" + chr(0xF07C), "b."):
+            self.mkdir(head)
+            self.junction(head + BS + "refj")
+        for head in ("a|", "b."):
+            with self.subTest(head=head):
+                got = self.f("touch " + DQ + self.W + "/" + head + "/refj$X/libraries/wares.xml" + DQ)
+                self.assertTrue(got["writes_reference"])
+                self.assertFalse(got["links_unresolved"])
+
+    def test_TWIN_the_win32_listing_is_still_followed(self):
+        # PowerShell opens `<W>/b./refj$X` as `<W>/b/refj$X`: the folder Win32 lists, its entries named under it.
+        self.mkdir("b")
+        self.junction("b" + BS + "refj")
+        got = self.f("touch " + DQ + self.W + "/b./refj$X/libraries/wares.xml" + DQ)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_TWIN_listed_names_with_no_link_add_nothing(self):
+        for head in ("a" + chr(0xF07C), "b.", "t"):
+            self.mkdir(head)
+        self.mkdir("b." + BS + "refq")
+        self.mkdir("t" + BS + "m.")
+        for cmd in ("touch " + DQ + self.W + "/a|/refj$X/x.xml" + DQ, "touch " + DQ + self.W + "/b./refq$X/x.xml" + DQ,
+                    "touch " + DQ + self.W + "/t/m$X/x.xml" + DQ):
+            with self.subTest(cmd=cmd):
+                got = self.f(cmd)
+                self.assertFalse(got["writes_reference"] or got["links_unresolved"], cmd)
+
+    def test_RED_one_place_whose_target_has_a_mapped_name_is_not_refused(self):
+        # I4: only the Git Bash landing was un-mapped before the comparison, so a target folder that really holds
+        # U+F07C (a folder Git Bash made as `t|`) compared unequal to itself and the write was refused.
+        target = self.ref / ("t" + chr(0xF07C))
+        target.mkdir()
+        self.junction("jj", target)
+        got = self.f("touch " + Q + self.W + "/jj/sub./x.xml" + Q)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_the_git_bash_landing_is_returned_without_its_verbatim_prefix(self):
+        # I5: the verbatim reading's `//?/` was cut with a slice, which turns `//?/UNC/h/s/x` into `UNC/h/s/x`.
+        self.junction("j.")
+        work = pathlib.Path(os.path.realpath(self.work)).as_posix()
+        got = H.link_resolved(work + "/j./libraries/x.xml")
+        self.assertFalse(got.startswith("//"), got)
+        self.assertEqual(H._lexical_norm(got),
+                         H._lexical_norm(pathlib.Path(os.path.realpath(self.ref)).as_posix() + "/libraries/x.xml"))
+        from unittest import mock
+        unc = lambda s, refuse: "//?/UNC/host/share/x" if s.startswith("//?/") else ""
+        with mock.patch.object(H, "_resolve_spelling", unc):
+            self.assertEqual(H.link_resolved(work + "/q./x"), "//host/share/x")
+        for given, want in (("//?/C:/a/b", "C:/a/b"), ("//?/UNC/h/s/x", "//h/s/x"), ("//./C:/a", "C:/a"),
+                            ("/?/C:/a", "C:/a"), ("C:/a", "C:/a"), ("//h/s/x", "//h/s/x"), ("//?/Volume{1}/x", "//?/Volume{1}/x")):
+            with self.subTest(given=given):
+                self.assertEqual(H._unverbatim(given), want)
+
+    def test_RED_a_verbatim_or_device_spelled_operand_is_resolved(self):
+        # P1 (pre-arc), MEASURED 2026-11-11: Git Bash's `touch "//?/<W>/refj/libraries/x"` wrote through the junction,
+        # and link_resolved returned "" for anything not starting `X:/`.
+        for pre in ("//?/", "//./", BS + BS + "?" + BS):
+            p = Q + pre + self.W + "/refj/libraries/wares.xml" + Q
+            for cmd, key in (("touch " + p, "writes_reference"), (D + " -f " + p, "rm_targets_reference")):
+                with self.subTest(pre=pre, cmd=cmd[:8]):
+                    got = self.f(cmd)
+                    self.assertTrue(got[key], cmd)
+                    self.assertFalse(got["links_unresolved"], cmd)
+        with self.subTest(unresolved=True):          # ...and an unresolved one (link_entries_matched)
+            got = self.f("touch " + DQ + "//?/" + self.W + "/refj$X/libraries/wares.xml" + DQ)
+            self.assertTrue(got["writes_reference"])
+
+    def test_TWIN_a_verbatim_spelled_operand_with_no_link(self):
+        for cmd in ("touch " + Q + "//?/" + self.W + "/plain.xml" + Q, "touch " + Q + "//?/UNC/host/share/x.xml" + Q,
+                    "touch " + DQ + "//?/" + self.W + "/nolink$X/x.xml" + DQ):
+            with self.subTest(cmd=cmd):
+                got = self.f(cmd)
+                self.assertFalse(got["writes_reference"] or got["links_unresolved"], cmd)
+
+    def test_RED_one_folder_spelled_the_same_both_ways_costs_one_resolution(self):
+        # I2, MEASURED with the reviewer's budget_probe.py: `rm -f` over N operands in N folders, each spelled
+        # differently by Git Bash only in its LAST component (`*.o`, `x.`), was refused from N=33 (v4.1.1: N=65),
+        # because the folder was resolved once per spelling, `C:/a` and `//?/C:/a`.
+        shapes = (("abs glob", lambda i: self.W + "/d%d/*.o" % i), ("rel glob", lambda i: "d%d/*.o" % i),
+                  ("abs trailing dot", lambda i: self.W + "/d%d/x." % i))
+        for label, op in shapes:
+            for n, refused in ((33, False), (40, False), (H._MAX_LINK_RESOLVED - 1, False), (H._MAX_LINK_RESOLVED + 1, True)):
+                with self.subTest(shape=label, n=n):
+                    got = self.fc(D + " -f " + " ".join(op(i) for i in range(n)), self.W)
+                    self.assertEqual(got["links_unresolved"], refused)
+
+
+class TestLinkReadingOfRelativeAndDotDotOperands(unittest.TestCase):
+    """4.1.2 release review, pre-arc. P3: an unresolved RELATIVE operand (`touch "refj$X/libraries/wares.xml"` in a
+    folder holding junction refj) got no link reading, because link_head_resolved and link_entries_matched returned
+    on "not absolute". P2: Git Bash resolves `k/../f` PHYSICALLY, through k's target and then its parent: MEASURED
+    2026-11-11 with junction k -> <ref>/libraries, `touch <W>/k/../probe.txt`, `touch k/../probe.txt` from <W> and
+    `cd k && touch ../probe.txt` from <W> each created the file in <ref>/ (3 of 3), while the guard collapsed `..`
+    lexically (norm, and ntpath.realpath normalises before it resolves) and read writes_reference False."""
+
+    setUp = TestLinkBudgetFailsClosed.setUp
+    f = TestLinkBudgetFailsClosed.f
+
+    def tearDown(self):
+        for p in reversed(getattr(self, "_made", [])):
+            if os.name == "nt" and os.path.lexists(p):
+                os.rmdir(p)                  # the link only, never its target
+        TestLinkBudgetFailsClosed.tearDown(self)
+
+    def make_link(self, name, target):
+        p = str(self.work / name)
+        if os.name == "nt":
+            import _winapi
+            p = BS + BS + "?" + BS + p       # verbatim: Win32 would make `j.` as `j`
+            _winapi.CreateJunction(str(target), p)
+        else:
+            os.symlink(str(target), p)
+        self._made = getattr(self, "_made", []) + [p]
+
+    def fc(self, cmd, cwd):
+        return H.facts({"tool_input": {"command": cmd}, "cwd": cwd}, self.roots)
+
+    def test_RED_an_unresolved_relative_operand_is_read_through_its_link(self):
+        for cmd in ("touch " + DQ + "refj$X/libraries/wares.xml" + DQ, "touch " + DQ + "refj/$X/wares.xml" + DQ,
+                    "touch refj/$(echo libraries)/wares.xml"):
+            with self.subTest(cmd=cmd):
+                got = self.fc(cmd, self.W)
+                self.assertTrue(got["writes_reference"], cmd)
+                self.assertFalse(got["links_unresolved"], cmd)
+
+    def test_RED_parse_debris_is_read_from_the_seeded_directory(self):
+        # I1a: a relative token carrying `|` is judged by the lexical rules against the directory without the
+        # session seed (here none), so it had no link reading at all. Git Bash's `p|q` is `p` U+F07C `q` on disk.
+        name = "p" + (chr(0xF07C) if os.name == "nt" else "|") + "q"
+        self.make_link(name, self.ref)
+        got = self.fc("touch " + Q + "p|q/libraries/wares.xml" + Q, self.W)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_RED_a_cd_into_a_git_bash_spelled_junction(self):
+        # I1a: the directory a `cd` leaves in force keeps the spelling the program opened (`j.`), not norm()'s `j`
+        # (Win32's reading; on POSIX `j.` is simply another name).
+        self.make_link("j.", self.ref)
+        got = self.fc("cd " + Q + "j." + Q + " && touch libraries/wares.xml", self.W)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_TWIN_an_unresolved_relative_operand_with_no_link(self):
+        (self.work / "plain").mkdir()
+        P = self.W + "/plain"
+        # A WHOLE-variable operand (`"$X"`) may name any link in its folder: from <W>, which holds refj, it is read
+        # through refj (as `"<W>/$X"` was before), so its no-link twin runs from a folder holding none.
+        for cmd, cwd in (("touch " + DQ + "plain$X/x.xml" + DQ, self.W), ("touch " + DQ + "plain/$X/x.xml" + DQ, self.W),
+                         ("touch " + DQ + "$X" + DQ, P), ("touch " + DQ + "$X/x.xml" + DQ, P)):
+            with self.subTest(cmd=cmd):
+                got = self.fc(cmd, cwd)
+                self.assertFalse(got["writes_reference"] or got["links_unresolved"], cmd)
+
+    def test_RED_dot_dot_after_a_link_is_physical(self):
+        self.make_link("k", self.ref / "libraries")
+        for cmd, cwd, key in (("touch " + Q + self.W + "/k/../probe.txt" + Q, None, "writes_reference"),
+                              (D + " -f " + Q + self.W + "/k/../probe.txt" + Q, None, "rm_targets_reference"),
+                              ("touch k/../probe.txt", self.W, "writes_reference"),
+                              ("cd k && touch ../probe.txt", self.W, "writes_reference"),
+                              ("touch " + Q + self.W + "/k/./../probe.txt" + Q, None, "writes_reference")):
+            with self.subTest(cmd=cmd):
+                got = self.fc(cmd, cwd) if cwd else self.f(cmd)
+                self.assertTrue(got[key], cmd)
+                self.assertFalse(got["links_unresolved"], cmd)
+
+    def test_TWIN_dot_dot_with_no_link_or_a_link_outside_the_roots(self):
+        (self.work / "plain" / "sub").mkdir(parents=True)
+        other = pathlib.Path(self._td.name) / "other" / "deep"
+        other.mkdir(parents=True)
+        self.make_link("okj", other)
+        for cmd, cwd in (("touch " + Q + self.W + "/plain/sub/../x.txt" + Q, None), ("touch plain/sub/../../x.txt", self.W),
+                         ("touch " + Q + self.W + "/okj/../x.txt" + Q, None), ("cd plain && touch ../x.txt", self.W),
+                         ("cp a.txt ../b.txt", self.W)):
+            with self.subTest(cmd=cmd):
+                got = self.fc(cmd, cwd) if cwd else self.f(cmd)
+                self.assertFalse(got["writes_reference"] or got["links_unresolved"], cmd)
+        # A `..` crossing no link costs what its folders cost: the folder before it and the walked path's folder.
+        self.f("touch " + Q + self.W + "/plain/sub/../x.txt" + Q)
+        self.assertEqual(H._LINK_RESOLVED[0], 2 if os.name == "nt" else 1)
+        # ...and the same `..` that only a lexical reading crosses a link with: still judged where it lands.
+        got = self.f("touch " + Q + self.W + "/refj/libraries/../x.txt" + Q)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    @unittest.skipUnless(os.name == "nt", "the lexical reading of `..` is Win32's; POSIX realpath is physical only")
+    def test_dot_dot_read_two_ways_landing_apart_is_refused(self):
+        # Win32 (PowerShell, the file tools) collapses `refj/kk/..` to `refj`, Git Bash goes through kk's target.
+        other = pathlib.Path(self._td.name) / "other" / "deep"
+        other.mkdir(parents=True)
+        import _winapi
+        _winapi.CreateJunction(str(other), str(self.ref / "kk"))
+        self._made = [str(self.ref / "kk")]
+        got = self.f("touch " + Q + self.W + "/refj/kk/../x.txt" + Q)
+        self.assertTrue(got["links_unresolved"])
+        self.assertTrue(got["links_disagree"])
+
+
+class TestTranslatedResetsTheBudget(unittest.TestCase):
+    """4.1.2 release review (T2): _translated() calls H.powershell_to_sh outside facts(), so the per-call translator
+    budget H._ps_spent (reset only in facts()) carried over from earlier tests, and a skip could be blamed on a
+    timeout that did not happen."""
+
+    def test_a_budget_spent_by_an_earlier_call_is_not_a_skip(self):
+        from unittest import mock
+        text = "Get-ChildItem t2-budget-" + str(id(self))
+        H._ps_spent[0] = H._PS_BUDGET_S + 1.0
+        try:
+            with mock.patch.object(H, "_translate_ps", lambda t, timeout=0: ("ls t2", [], "")):
+                got = _translated(text)
+        except unittest.SkipTest as exc:     # a skip here is the defect itself, so it must read as a FAILURE
+            self.fail("skipped on a budget an earlier call spent: " + str(exc))
+        finally:
+            H._ps_spent[0] = 0.0
+        self.assertEqual(got, "ls t2")
 
 
 class TestBashDirectoryStackForms(unittest.TestCase):
