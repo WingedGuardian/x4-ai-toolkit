@@ -473,6 +473,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F372 | an operand spelled `//?/C:/...`, `\\?\C:\...` or `//./C:/...` got no link reading: link_resolved and link_entries_matched required `X:/` | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at 0f6b5e3e, in-process facts(): 6 of 6 touch/rm through a junction into reference/ read False; Git Bash's `touch "//?/..."` landed in the target (1 of 1) | FIXED 2026-11-11: `_unverbatim` drops a verbatim/device drive prefix; UNC stays lexical |
 | F373 | `..` after a junction was collapsed lexically (norm; ntpath.realpath normalises first), while Git Bash resolves it through the link | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | Git Bash `touch` through `<w>/k/../f`, `k/../f`, `cd k; ../f`: 3 of 3 landed beside k's target; guard at 0f6b5e3e: 5 of 5 False | FIXED 2026-11-11 (Windows): `..` walked physically; lexical and physical readings through links to different places refused |
 | F374 | an unresolved RELATIVE operand (`"refj$X/..."`) got no link reading: link_head_resolved / link_entries_matched return on "not absolute" | **DEFECT (measured)** · PRE-ARC (F369, 4.1.1) | at 0f6b5e3e, in-process facts(): 3 of 3 False from a folder holding a junction into reference/ | FIXED 2026-11-11: both get the operand joined to its directory as received |
+| F375 | Link and path spellings the guard still reads as written, found by the 4.1.2 release review round 2 (12 pre-arc shapes: a protected root that is itself a link, `\\?\Volume{GUID}`, PowerShell provider paths, braces through a junction, `$PWD`, a device-named junction as the head, and others) | **SCOPE LIMIT (measured / read / inferred, per row)** · PRE-ARC | in-process facts() at the round-2 fix, against the reviewers' scripts; per row below | OPEN 2026-11-11: none fixed; each row states what was not measured |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -13175,6 +13176,47 @@ link) read False and not refused.
 `test_TWIN_an_unresolved_relative_operand_with_no_link`, and for the scope `test_RED_a_relative_operand_that_STARTS_with_an_expansion_is_not_listed`
 and `test_TWIN_a_literal_prefix_or_a_literal_first_folder_is_still_read`; mutants `link head: a relative operand's head is joined to its directory (P3)`, `link entries: a relative
 operand is listed in its directory (P3)` and the three `link reading: ... (F374 scope)`.
+
+## F375 - Link and path spellings the guard still reads as written (4.1.2 release review, pre-arc, OPEN) · **SCOPE LIMIT** · PRE-ARC · confidence per row · OPEN 2026-11-11
+
+Found by the four reviewers of 4.1.2 round 2 (4140faa5 + 9895c730) and recorded, not fixed: none of these was introduced
+by the 4.1.2 range. "Measured" below means re-run here with the reviewers' scripts (scratchpad review2-*) against the
+round-2 fix, in-process facts(), unless the row says otherwise; no write was run against a real protected folder.
+
+1. A protected root that is ITSELF a junction is not matched by a landing reached through another link: root configured
+   as junction `S/refjn -> S/realref`, work junction `j -> refjn`, `touch '<w>/j/libraries/x.xml'` reads writes_reference
+   False (MEASURED here; the landing is spelled `realref`); a junction straight to `realref` reads False too. With the
+   root configured as `realref`, the junction `j2 -> realref` reads True (MEASURED, prov.py control). The v4.1.1 reading
+   is reported by the reviewer, not reproduced.
+2. A `\\?\Volume{GUID}\...` spelling of a protected path matches no rule: bash `touch` with slashes and with
+   backslashes, PowerShell `Set-Content`: 3 of 3 writes_reference False (MEASURED on the analyser; Win32 opens that
+   spelling as the same folder, MEASURED with isdir). That PowerShell writes through it is INFERRED; no write was run.
+3. A provider-qualified PowerShell path gets no link reading: `FileSystem::<w>\j2\libraries\x.xml` and
+   `Microsoft.PowerShell.Core\FileSystem::...` read False where the plain spelling reads True (MEASURED with facts();
+   PowerShell itself not run).
+4. `long_name()` (GetLongPathNameW on every `~digit` prefix, UNC and remote drives included, uncached, called from
+   `norm()`) and `_is_venv_interpreter`'s `os.path.isfile` run with no deadline check: INFERRED from the code, not
+   measured.
+5. A drive-relative `C:x` is read as `<cwd>/C`: READ (join_cwd and _win_alias).
+6. Deleting a junction that points at the game root resolves the leaf link, so it reads as deleting the game root
+   (probably a false hard deny): INFERRED; Git Bash's behaviour not measured.
+7. Rules that read operands without prep() get no link reading (`search_roots`, `xrcat_reunpack`,
+   `_subst_verb_at_root` / `verb_unresolved`, `_judge_link`'s target, `_program_writes_transcript`,
+   `copy_names_archive`): READ; all are read/performance rules or backstopped.
+8. `cd -P` is not tracked: `cd -P k/.. && touch libraries/x` is judged at <w>, not physically: READ, not measured.
+9. Braces through a junction: `touch <w>/{refj,plain}/x.xml` reads 0 in v4.1.1, 9368d5db and the fix (MEASURED), and Git
+   Bash's own `touch` created the file in the junction's target (MEASURED here, 1 of 1); a glob in the first component
+   (`ref*/x.xml`) reads 0 in all three (MEASURED; that a delete through it lands is INFERRED).
+10. `"$PWD/refj/x.xml"` is not read in any version: 9 of 9 (touch, rm, > in 3 folders) False in v4.1.1, 9368d5db and
+    the fix (MEASURED, compare.py).
+11. `cmd /c del <reference>\x.xml` produced no reference fact (only save_lift_blockers) in v4.1.1, 9368d5db and the
+    fix (MEASURED with facts()); whether protect-bash.sh refuses it another way was NOT checked: UNVERIFIED.
+12. A junction named like a device AS THE HEAD of an unresolved operand or as the last component: `touch
+    "<w>/nul/lib$X/x"` (junction `nul` into reference/) reads 0 in v4.1.1, 9368d5db and the fix (MEASURED, nulcase.py),
+    because the leaf `nul` is lstat-ed as Win32 opens it (the device) and the verbatim spelling equals the plain one.
+    The folder form `<w>/nul/x.xml` is fixed (F371 CORRECTION 2, B).
+
+**NO RE-DERIVATION: an OPEN register of shapes, each measured or reasoned as its row says; nothing here is fixed.**
 
 ## F365 - `_merge` modelled `<add pos="append">` as an append; the engine skips the node · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
 
