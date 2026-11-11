@@ -283,6 +283,12 @@ def _resolve_dot_dot(s: str, refuse: bool) -> str:
         if r is None:
             return ""
         r = _unverbatim(r).rstrip("/")
+        # A folder that resolves OFF the local drives (a share `//host/share`, a `//?/Volume{...}` path, a mapped
+        # remote drive) is not walked on: each further call could hang on a server (4.1.1 A1: one realpath of an
+        # unreachable UNC path took 21 s), and its parent is no drive path. Cannot tell: refused, no further call.
+        if not re.match(r"^[A-Za-z]:(/|$)", r) or _drive_type(r[0]) not in _LOCAL_DRIVE_TYPES:
+            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+            return ""
         crossed = crossed or not _same_place(r, walked)
         walked = posixpath.dirname(r)
         walked = walked + "/" if walked.endswith(":") or not walked else walked
@@ -705,6 +711,20 @@ def join_as_received(cwd: str, p: str, spelled: str = "") -> str:
     if norm(spelled) == norm(cwd):        # equal to an absolute directory: `spelled` is one too
         cwd = spelled
     return cwd.replace(chr(92), "/").rstrip("/") + "/" + p.replace(chr(92), "/")
+
+
+def _leads_with_expansion(p: str) -> bool:
+    """Is `p` a RELATIVE operand whose first component starts with an expansion or a substitution (`"$X"`, `"$X/a"`,
+    `$(mktemp)`, `"${OUT:-x}.txt"`)? Such an operand gets no link reading from its directory (4.1.2, decision on
+    F374): a leading `$X` / `$(...)` is usually an absolute path, and the rules deliberately do not judge an unresolved
+    relative operand against the cwd (the same `touch "$X"` inside the protected folder itself fires nothing), so
+    reading it through a NEIGHBOURING link was incoherent and flooded: MEASURED at 4140faa5, 11 of 480 corpus rows (all
+    from a folder holding junctions into reference/) turned into refusals. `refj$X/f` (a literal prefix) and `sub/$X/f`
+    (a literal first folder) are still read. An absolute operand never qualifies: its first component is `C:`, `` (a
+    leading `/`) or a drive letter, never an expansion, so no separate is-absolute test is needed."""
+    first = p.replace(chr(92), "/").split("/")[0]
+    at = [m.start() for m in (_EXPANSION.search(first), _SUBST.search(first)) if m]
+    return bool(at) and min(at) == 0
 
 
 #: The HOST's path semantics for physical evidence (LINUX GAP, v4.0 release review). On POSIX a
@@ -9261,6 +9281,9 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                     # and `'<junction>/a${b}/f'` (a quoted brace is not literal_dollar_path) read their
                     # lexical text only, where `<reference>/$X/f` is caught by the root in its text. The
                     # head's landing place plus the rest as written is judged the same way (unresolved).
+                    # A relative operand that STARTS with an expansion gets neither reading from its directory
+                    # (_leads_with_expansion): its head would be the cwd alone, and its listing the cwd's links.
+                    seen = r if _leads_with_expansion(r) else seen
                     real = link_head_resolved(seen or r, refuse=not reads_only)
                     if real:
                         out.append((real, True, real))

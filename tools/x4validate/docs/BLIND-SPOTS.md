@@ -13065,9 +13065,9 @@ receives it (`join_as_received`), entries are resolved verbatim by their own nam
 spellings, both landings are un-mapped, `_unverbatim` unwraps the result, a verbatim folder Win32 opens identically is
 cached under its plain spelling, and the disagreement is its own fact (`links_disagree`) with its own reason in
 protect-bash.sh and save_policy.py. NEAR-MISS in this round: the twin `touch "$X"` from <w> read writes_reference True
-after the fix, because a whole-variable relative operand is now listed like `"<w>/$X"` always was and <w> holds refj; that
-is the intended reading (the variable may name refj), so the twin moved to a folder with no link. `"` in a name is still
-UNMEASURED.
+after the fix, because a whole-variable relative operand was then listed like `"<w>/$X"` always was and <w> holds refj.
+It was first kept as the stricter reading; the corpus showed it refusing 11 of 480 ordinary rows, and it was scoped out
+the same day (F374 SCOPE). `"` in a name is still UNMEASURED.
 
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkNamesGitBashSpellsDifferently` (21 tests,
 Windows only), `TestLinkReadingOfRelativeAndDotDotOperands` (the cross-platform ones),
@@ -13108,10 +13108,16 @@ is, the lexical reading (Win32's, PowerShell's) is computed too: with no link it
 through links to different places, links_unresolved and links_disagree (refused, its own reason). Twins: `..` with no
 link, through a link that stays outside the roots, `<w>/refj/libraries/../x.txt` (both readings land in `<ref>/`),
 `cp a.txt ../b.txt`: unchanged. Relative `..` operands reach the walk through `join_as_received` (F371 correction).
-SCOPE: only `..` is walked; a POSIX host is unchanged.
+A folder before a `..` that resolves OFF the local drives (`//host/share`, `//?/Volume{...}`, a drive whose type is
+not local) is refused at once (links_unresolved, not links_disagree: cannot tell), with no further realpath or lstat,
+since a call on a server can outlast the hook (4.1.1 A1). MEASURED with a stubbed folder answer, at 4140faa5: 3 of 3
+shapes (share, volume, remote `Y:`) read links_unresolved False and the walk made further calls; now 4 of 4 subtests
+(the three plus a share with every drive type stubbed local) refused with 0 calls after the answer; the local twin is
+walked on. SCOPE: only `..` is walked; a POSIX host is unchanged.
 
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkReadingOfRelativeAndDotDotOperands` (`test_RED_dot_dot_after_a_link_is_physical`,
-its TWIN, `test_dot_dot_read_two_ways_landing_apart_is_refused`); the mutants labelled `dot dot: ...`.
+its TWIN, `test_dot_dot_read_two_ways_landing_apart_is_refused`, `test_RED_a_link_off_the_local_drives_before_a_dot_dot_is_refused_at_once`,
+`test_TWIN_a_local_answer_before_a_dot_dot_is_walked_on`); the mutants labelled `dot dot: ...`.
 
 ## F374 - An unresolved RELATIVE operand got no link reading · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-11
 
@@ -13120,15 +13126,21 @@ written, and both return on "not absolute", so a relative operand holding a vari
 its text. At 0f6b5e3e, in-process facts() from a folder holding junction `refj` into reference/: `touch
 "refj$X/libraries/wares.xml"`, `touch "refj/$X/wares.xml"` and `touch refj/$(echo libraries)/wares.xml` read
 writes_reference False, 3 of 3, where `"<w>/refj$X/..."` read True. Fix: both are given the operand joined to its
-directory as the program receives it (`join_as_received`). Behaviour change to know: a whole-variable relative operand
-(`touch "$f"`, `rm -f "$f"`) in a folder holding a link into a protected root is now read as possibly naming that link,
-as `"<folder>/$f"` already was. Twins: the same operands with no link (`plain$X/x.xml`, `"$X"` from a folder with no
+directory as the program receives it (`join_as_received`). SCOPE (decision 2026-11-11): a relative operand whose FIRST
+component STARTS with an expansion or substitution (`"$f"`, `"$TMPDIR/x"`, `$(mktemp)`, `"${OUT:-x}.txt"`) gets neither
+reading from its directory (`_leads_with_expansion`): such a value is usually an absolute path, and the rules do not judge
+an unresolved relative operand against the cwd (`touch "$X"` inside reference/ itself fires nothing), so reading it
+through a NEIGHBOURING link was incoherent. MEASURED at 4140faa5, which did read it: 11 of 480 corpus rows (160 commands
+x 3 folders), all from the folder holding junctions into reference/, turned into refusals; with the scope, 0 (and 11 of
+11 RED subtests read False). `refj$X/...` (literal prefix), `refj/$X/f` (literal first folder) and an absolute
+`"<folder>/$f"` (unchanged since v4.1.1) are still read. Twins: the same operands with no link (`plain$X/x.xml`, `"$X"` from a folder with no
 link) read False and not refused.
 
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py` (generated copy `.claude/hooks/test_hook_facts.py`),
 `TestLinkReadingOfRelativeAndDotDotOperands`: `test_RED_an_unresolved_relative_operand_is_read_through_its_link` and
-`test_TWIN_an_unresolved_relative_operand_with_no_link`; mutants `link head: a relative operand's head is joined to its directory (P3)`, `link entries: a relative
-operand is listed in its directory (P3)`.
+`test_TWIN_an_unresolved_relative_operand_with_no_link`, and for the scope `test_RED_a_relative_operand_that_STARTS_with_an_expansion_is_not_listed`
+and `test_TWIN_a_literal_prefix_or_a_literal_first_folder_is_still_read`; mutants `link head: a relative operand's head is joined to its directory (P3)`, `link entries: a relative
+operand is listed in its directory (P3)` and the three `link reading: ... (F374 scope)`.
 
 ## F365 - `_merge` modelled `<add pos="append">` as an append; the engine skips the node · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
 

@@ -5188,13 +5188,84 @@ class TestLinkReadingOfRelativeAndDotDotOperands(unittest.TestCase):
     def test_TWIN_an_unresolved_relative_operand_with_no_link(self):
         (self.work / "plain").mkdir()
         P = self.W + "/plain"
-        # A WHOLE-variable operand (`"$X"`) may name any link in its folder: from <W>, which holds refj, it is read
-        # through refj (as `"<W>/$X"` was before), so its no-link twin runs from a folder holding none.
         for cmd, cwd in (("touch " + DQ + "plain$X/x.xml" + DQ, self.W), ("touch " + DQ + "plain/$X/x.xml" + DQ, self.W),
                          ("touch " + DQ + "$X" + DQ, P), ("touch " + DQ + "$X/x.xml" + DQ, P)):
             with self.subTest(cmd=cmd):
                 got = self.fc(cmd, cwd)
                 self.assertFalse(got["writes_reference"] or got["links_unresolved"], cmd)
+
+    def test_RED_a_relative_operand_that_STARTS_with_an_expansion_is_not_listed(self):
+        # 4.1.2 (coordinator decision on P3): a leading `$X` / `$(...)` is usually an absolute path, and the rules do not
+        # judge an unresolved relative operand against the cwd (`touch "$X"` inside the protected folder itself fires
+        # nothing), so reading it through a neighbouring link was incoherent. MEASURED at 4140faa5: 11 of 480 corpus rows
+        # from a folder holding junctions into reference/ turned True. From <W>, which holds refj: all False again.
+        for cmd, key in (("cp a.txt " + DQ + "$OUT" + DQ, "writes_reference"), ("mv a.txt " + DQ + "$OUT" + DQ, "writes_reference"),
+                         (D + " -f " + DQ + "$f" + DQ, "rm_targets_reference"),
+                         (D + " -f " + DQ + "$TMPDIR/x" + DQ, "rm_targets_reference"),
+                         ("echo x > " + DQ + "$OUT" + DQ, "writes_reference"), ("touch " + DQ + "$X" + DQ, "writes_reference"),
+                         ("touch " + DQ + "$X/a.txt" + DQ, "writes_reference"), ("touch $(date +%s).log", "writes_reference"),
+                         ("touch " + DQ + "${OUT:-x}.txt" + DQ, "writes_reference"),
+                         ("echo x > " + DQ + "$(mktemp)" + DQ, "writes_reference"),
+                         (D + " -f " + DQ + "$X" + DQ + "/*.o", "rm_targets_reference")):
+            with self.subTest(cmd=cmd):
+                got = self.fc(cmd, self.W)
+                self.assertFalse(got[key] or got["links_unresolved"], cmd)
+
+    def test_TWIN_a_literal_prefix_or_a_literal_first_folder_is_still_read(self):
+        # ...while `refj$X/...` (a literal prefix), `refj/$X/f` (a literal first folder, joined and judged as for an
+        # absolute operand) and the absolute `"<W>/$f"` (v4.1.1 behaviour) are still read through refj.
+        for cmd, cwd in (("touch " + DQ + "refj$X/libraries/wares.xml" + DQ, self.W),
+                         ("touch " + DQ + "refj/$X/wares.xml" + DQ, self.W),
+                         ("touch " + DQ + self.W + "/$f" + DQ, None)):
+            with self.subTest(cmd=cmd):
+                got = self.fc(cmd, cwd) if cwd else self.f(cmd)
+                self.assertTrue(got["writes_reference"], cmd)
+
+    def walk_with(self, answer, remote=""):
+        """facts() of `touch <W>/k/../x.txt` with the folder before the `..` answering `answer` (the walk's first
+        _dir_realpath), and how many realpath/lstat calls followed that answer."""
+        from unittest import mock
+        real_dir, real_rp, real_lstat, real_dt = H._dir_realpath, H._realpath_budgeted, os.lstat, H._drive_type
+        state = {"answered": False, "after": 0}
+
+        def dir_rp(head, refuse):
+            if not state["answered"]:
+                state["answered"] = True
+                return answer
+            state["after"] += 1
+            return real_dir(head, refuse)
+
+        def counted(f):
+            def g(*a, **k):
+                state["after"] += state["answered"]
+                return f(*a, **k)
+            return g
+        with mock.patch.object(H, "_dir_realpath", dir_rp), \
+                mock.patch.object(H, "_realpath_budgeted", counted(real_rp)), \
+                mock.patch.object(H.os, "lstat", counted(real_lstat)), \
+                mock.patch.object(H, "_drive_type", lambda l: 3 if remote == "*" else 4 if remote and l.upper() == remote else real_dt(l)):
+            got = self.f("touch " + Q + self.W + "/k/../x.txt" + Q)
+        return got, state["after"]
+
+    @unittest.skipUnless(os.name == "nt", "the walk runs on Windows only (POSIX realpath is physical)")
+    def test_RED_a_link_off_the_local_drives_before_a_dot_dot_is_refused_at_once(self):
+        # 4.1.2 (coordinator review of _resolve_dot_dot): a folder before `..` that resolves to a network share, a
+        # volume path or a mapped (remote) drive was walked on, handing that path to more uninterruptible calls (4.1.1 A1:
+        # one realpath of an unreachable UNC path took 21 s). Now: cannot tell, refused, and no further call.
+        # `*`: every drive-type answer "local", so the drive-path test alone must refuse the share (one twin per clause).
+        for answer, remote in (("//host/share/x", ""), ("//?/Volume{0}/x", ""), ("Y:/x/y", "Y"), ("//host/share/x", "*")):
+            with self.subTest(answer=answer):
+                got, after = self.walk_with(answer, remote)
+                self.assertTrue(got["links_unresolved"])
+                self.assertFalse(got["links_disagree"])
+                self.assertEqual(after, 0)
+
+    @unittest.skipUnless(os.name == "nt", "the walk runs on Windows only (POSIX realpath is physical)")
+    def test_TWIN_a_local_answer_before_a_dot_dot_is_walked_on(self):
+        (self.work / "plain").mkdir()
+        got, after = self.walk_with(self.W + "/plain")
+        self.assertFalse(got["links_unresolved"] or got["writes_reference"])
+        self.assertGreater(after, 0)
 
     def test_RED_dot_dot_after_a_link_is_physical(self):
         self.make_link("k", self.ref / "libraries")

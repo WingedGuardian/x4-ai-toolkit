@@ -3273,6 +3273,28 @@ MUTANTS = [
      '_lexical_norm(_unmsys(_unverbatim(phys))):' + NL + '        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse' + NL,
      '_lexical_norm(_unmsys(_unverbatim(phys))):' + NL,
      'test_dot_dot_read_two_ways_landing_apart_is_refused'),
+    # --- 4.1.2, coordinator decisions after 4140faa5: a relative operand STARTING with an expansion is not read from
+    # its directory; a folder before `..` that resolves off the local drives is refused at once
+    ('link reading: a relative operand starting with an expansion gets no directory reading (F374 scope)',
+     '                    seen = r if _leads_with_expansion(r) else seen', '                    pass',
+     'test_RED_a_relative_operand_that_STARTS_with_an_expansion_is_not_listed'),
+    ('link reading: ...only when its first component has an expansion at all (F374 scope)',
+     '    return bool(at) and min(at) == 0', '    return min(at) == 0',
+     'test_TWIN_a_literal_prefix_or_a_literal_first_folder_is_still_read'),
+    ('link reading: ...only when that expansion is at the very start (F374 scope)',
+     '    return bool(at) and min(at) == 0', '    return bool(at)',
+     'test_TWIN_a_literal_prefix_or_a_literal_first_folder_is_still_read'),
+    ('dot dot: a folder resolving off a drive path is not walked on (P2)',
+     '        if not re.match(r"^[A-Za-z]:(/|$)", r) or _drive_type', '        if False or _drive_type',
+     'test_RED_a_link_off_the_local_drives_before_a_dot_dot_is_refused_at_once'),
+    ('dot dot: ...nor one on a drive that is not local (P2)',
+     ' or _drive_type(r[0]) not in _LOCAL_DRIVE_TYPES:' + NL + '            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse' + NL + '            return ""' + NL + '        crossed',
+     ':' + NL + '            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse' + NL + '            return ""' + NL + '        crossed',
+     'test_RED_a_link_off_the_local_drives_before_a_dot_dot_is_refused_at_once'),
+    ('dot dot: ...refused, never walked on (P2)',
+     '_LOCAL_DRIVE_TYPES:' + NL + '            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse' + NL + '            return ""' + NL + '        crossed',
+     '_LOCAL_DRIVE_TYPES:' + NL + '            return ""' + NL + '        crossed',
+     'test_RED_a_link_off_the_local_drives_before_a_dot_dot_is_refused_at_once'),
     ('dot dot: ...and named as a disagreement (P2)',
      '        _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse' + NL + '    # Only one landing', '    # Only one landing',
      'test_dot_dot_read_two_ways_landing_apart_is_refused'),
@@ -3381,6 +3403,9 @@ OS_ONLY = {
     "dot dot: a lexical reading with no link gives the physical one (P2)": _DOTDOT_ONLY,
     "dot dot: two readings landing apart are refused (P2)": _DOTDOT_ONLY,
     "dot dot: ...and named as a disagreement (P2)": _DOTDOT_ONLY,
+    "dot dot: a folder resolving off a drive path is not walked on (P2)": _DOTDOT_ONLY,
+    "dot dot: ...nor one on a drive that is not local (P2)": _DOTDOT_ONLY,
+    "dot dot: ...refused, never walked on (P2)": _DOTDOT_ONLY,
 }
 
 
