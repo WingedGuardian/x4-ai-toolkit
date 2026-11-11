@@ -388,8 +388,7 @@ MUTANTS = [
     # Each clause gets its OWN mutant. Mutating the whole feature to a no-op cannot
     # distinguish "the join is untested" from "some earlier guard covers it".
     ("a relative operand is joined to the cwd",
-     'out.append((r if unres else long_name(join_cwd(d, r)), unres, r))',
-     'out.append((r if unres else long_name(r), unres, r))',
+     'joined = r if unres else join_cwd(d, r)', 'joined = r',
      "test_cd_then_relative_delete_of_extensions_is_the_game_delete"),
     # The NAME backstop is the opposite call from hits_game_root, and the difference is
     # load-bearing: it must NOT skip unresolved operands, because on an unconfigured
@@ -2936,8 +2935,8 @@ MUTANTS = [
      'TestBashDirectoryStackForms.test_the_directory_in_force_after_each_form'),
     # --- 4.1.1 final round: a write through an existing link (F360)
     ('link: a target is judged where its link lands too (final)',
-     '                if not unres:' + NL + '                    real = link_resolved(out[-1][0], literal',
-     '                if False:' + NL + '                    real = link_resolved(out[-1][0], literal',
+     '                if not unres:' + NL + '                    # ...from the path AS WRITTEN',
+     '                if False:' + NL + '                    # ...from the path AS WRITTEN',
      'test_a_write_or_delete_through_the_link_is_the_reference'),
     ('link: ...only when a link changes it (final)',
      '    return "" if same else real', '    return real',
@@ -2958,8 +2957,8 @@ MUTANTS = [
      '    if _LINK_RESOLVED[0] >= _MAX_LINK_RESOLVED:',
      'test_the_deadline_is_checked_before_a_link_leafs_realpath'),
     ('link budget: the deadline is checked before each lstat',
-     '        _check_deadline()' + NL + '        try:' + NL + '            st = os.lstat(s)',
-     '        try:' + NL + '            st = os.lstat(s)',
+     '        _check_deadline()' + NL + '        try:' + NL + '            st = os.lstat(_native(s))',
+     '        try:' + NL + '            st = os.lstat(_native(s))',
      'test_the_deadline_is_checked_before_each_lstat'),
     ('link bound: at most _MAX_LINK_RESOLVED realpaths (A1)',
      '    if _LINK_RESOLVED[0] >= _MAX_LINK_RESOLVED:', '    if False:',
@@ -3038,7 +3037,7 @@ MUTANTS = [
      '    if not p or has_unresolved(p) or not is_abs(p):',
      'test_RED_a_literal_dollar_in_a_folder_name_behind_a_junction'),
     ('link literal: ...the caller passes what it knows',
-     'link_resolved(out[-1][0], literal=literal, refuse', 'link_resolved(out[-1][0], literal=False, refuse',
+     'link_resolved(joined, literal=literal, refuse', 'link_resolved(joined, literal=False, refuse',
      'test_RED_a_literal_dollar_in_a_folder_name_behind_a_junction'),
     ('link literal: a stream suffix is resolved as Windows opens it',
      '        s = _win_alias(s)' + NL, '',
@@ -3063,8 +3062,7 @@ MUTANTS = [
      '                if False:',
      'test_TWIN_a_variable_component_with_no_link_to_match'),
     ('link entries: the prefix is read as Windows opens it',
-     '        prefix = _win_alias("x/" + prefix).split("/", 1)[1].casefold()',
-     '        prefix = prefix.casefold()',
+     'for f in (_win_alias, _msys_spelling)})', 'for f in (_msys_spelling,)})',
      'test_RED_a_variable_inside_the_component_that_names_the_junction'),
     ('link entries: past the probe bound, links_unresolved',
      '    if _LINK_PROBED[0] >= _MAX_LINK_PROBED:' + NL + '        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse' + NL + '        return []',
@@ -3078,8 +3076,8 @@ MUTANTS = [
      '    if _LINK_RESOLVED[0] >= _MAX_LINK_RESOLVED:' + NL + '        _LINKS_UNRESOLVED[0] = True' + NL + '        return None',
      'test_RED_a_read_only_search_over_many_folders_is_not_refused'),
     ('link reads: ...the flag is passed down',
-     'real = link_resolved(out[-1][0], literal=literal, refuse=not reads_only)',
-     'real = link_resolved(out[-1][0], literal=literal, refuse=True)',
+     'real = link_resolved(joined, literal=literal, refuse=not reads_only)',
+     'real = link_resolved(joined, literal=literal, refuse=True)',
      'test_RED_a_read_only_search_over_many_folders_is_not_refused'),
     ('link ssh: an unplaced remote text past the link budget is advised',
      '"verb_unresolved",' + NL + '                    "links_unresolved")', '"verb_unresolved")',
@@ -3111,6 +3109,41 @@ MUTANTS = [
     ('dir stack: ...and splits the lanes (A3)',
      '        if v == "popd":' + NL + '            # Only an operand', '        if False:' + NL + '            # Only an operand',
      'test_the_reader_splits_a_pop_that_may_not_happen'),
+    # --- 4.1.2: F368's two clauses with no catching test, and Git Bash's spelling of a link's name
+    ('link budget: a path under a FILE (NotADirectoryError) is an answer, not "cannot tell"',
+     '        except (FileNotFoundError, NotADirectoryError):' + NL + '            is_link = False                 # nothing there',
+     '        except FileNotFoundError:' + NL + '            is_link = False                 # nothing there',
+     'test_TWIN_a_path_under_a_file_is_not_links_unresolved'),
+    ('link budget: an lstat ValueError is "cannot tell"',
+     '            is_link = unknown = True        # cannot tell: resolve the whole path',
+     '            is_link = unknown = False',
+     'test_RED_an_lstat_that_raises_ValueError_is_links_unresolved'),
+    ("msys spelling: Git Bash's spelling of the path is resolved too",
+     '        if alt == s:' + NL, '        if True:' + NL,
+     'test_RED_a_junction_named_with_a_character_git_bash_maps'),
+    ('msys spelling: ...control characters are mapped too',
+     ' + "".join(chr(i) for i in range(1, 32)))', ')',
+     'test_RED_a_junction_named_with_a_character_git_bash_maps'),
+    ('msys spelling: ...opened verbatim, so a trailing dot or space is kept',
+     '        other = _resolve_spelling("//?/" + alt, refuse)', '        other = _resolve_spelling(alt, refuse)',
+     'test_RED_a_junction_named_with_a_trailing_dot_or_space'),
+    ('msys spelling: ...the last component is lstat-ed verbatim',
+     '            st = os.lstat(_native(s))', '            st = os.lstat(s)',
+     'test_RED_a_junction_named_with_a_trailing_dot_or_space'),
+    ('msys spelling: two spellings landing in different places are refused',
+     '_lexical_norm(_unmsys(other)):' + NL + '            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse' + NL,
+     '_lexical_norm(_unmsys(other)):' + NL + '            pass' + NL,
+     'test_two_spellings_landing_in_different_places_are_refused'),
+    ('msys spelling: one place spelled two ways is not refused',
+     '_lexical_norm(_unmsys(other))', '_lexical_norm(other)',
+     'test_an_expansion_behind_a_junction_reads_as_it_does_on_the_root'),
+    ('msys spelling: ...resolved from the path as written, not its long-name form',
+     '                    real = link_resolved(joined, literal=literal, refuse=not reads_only)',
+     '                    real = link_resolved(out[-1][0], literal=literal, refuse=not reads_only)',
+     'test_RED_a_short_named_folder_keeps_git_bash_spelling'),
+    ('link entries: the prefix is read as Git Bash spells it',
+     'for f in (_win_alias, _msys_spelling)})', 'for f in (_win_alias,)})',
+     'test_RED_a_variable_in_a_mapped_junction_name'),
 ]
 
 SHIM = '''
@@ -3141,6 +3174,8 @@ NOT_A_RULE = {"background"}
 _DRIVE_TYPE_ONLY = ("nt", "link_resolved asks GetDriveTypeW only when os.name == 'nt'; its target "
                     "tests skip elsewhere (drive letters are a Windows notion). MEASURED: uncaught on "
                     "ubuntu shards 1, 2 and 4 of CI run 42517544460")
+_MSYS_ONLY = ("nt", "Git Bash's spelling of a name is resolved only when os.name == 'nt'; its target tests "
+              "skip elsewhere (TestLinkNamesGitBashSpellsDifferently)")
 OS_ONLY = {
     "link bound: a drive that is not local is not resolved (A1)": _DRIVE_TYPE_ONLY,
     "link bound: a remote drive is not local (A1)": _DRIVE_TYPE_ONLY,
@@ -3164,6 +3199,14 @@ OS_ONLY = {
     "link literal: a stream suffix is resolved as Windows opens it":
         ("nt", "_win_alias runs in link_resolved only when os.name == 'nt' (NTFS streams); elsewhere the "
                "lexical rules alone read `x::$DATA` as x"),
+    "msys spelling: Git Bash's spelling of the path is resolved too": _MSYS_ONLY,
+    "msys spelling: ...control characters are mapped too": _MSYS_ONLY,
+    "msys spelling: ...opened verbatim, so a trailing dot or space is kept": _MSYS_ONLY,
+    "msys spelling: ...the last component is lstat-ed verbatim": _MSYS_ONLY,
+    "msys spelling: two spellings landing in different places are refused": _MSYS_ONLY,
+    "msys spelling: one place spelled two ways is not refused": _MSYS_ONLY,
+    "msys spelling: ...resolved from the path as written, not its long-name form": _MSYS_ONLY,
+    "link entries: the prefix is read as Git Bash spells it": _MSYS_ONLY,
 }
 
 

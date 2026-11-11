@@ -9073,7 +9073,8 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                 # one-liners, every one a token no shell would treat as that path.
                 d = c_old if (_DEBRIS.search(r) or _DEVICE.match(r)) else c_cwd
                 # An 8.3 short name is its long name (FX-G2 item 3; see long_name).
-                out.append((r if unres else long_name(join_cwd(d, r)), unres, r))
+                joined = r if unres else join_cwd(d, r)
+                out.append((joined if unres else long_name(joined), unres, r))
                 qualifies_as_modlist = False
                 if simple_modlist_write and operation == 'write' and scope != 'tree' and not unres:
                     placed = physical_join('' if execution_context else physical_cwd, r,
@@ -9129,7 +9130,9 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                 # 4.1.1 final round (F360): a link on the path (a junction into reference/) is judged
                 # where it lands as well; every rule ORs over these entries, so the stricter stands.
                 if not unres:
-                    real = link_resolved(out[-1][0], literal=literal, refuse=not reads_only)
+                    # ...from the path AS WRITTEN: long_name returns a short-named path normalised (a
+                    # trailing dot or `:x` dropped), which is Win32's spelling only (4.1.2, link_resolved).
+                    real = link_resolved(joined, literal=literal, refuse=not reads_only)
                     if real:
                         out.append((real, False, r))
                 else:

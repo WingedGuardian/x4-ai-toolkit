@@ -469,6 +469,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F364 | A missing base `index/*.xml` registered nothing and recorded no skip, so every vanilla macro read as unregistered while the run looked clean | **DEFECT (measured)** · PRE-ARC | a worktree without `x4-paths.env`: 150 macros indexed instead of 4,695, 39 fit hits instead of 63, `skipped` empty | FIXED 2026-11-08: degraded skip when the reference has no index folder, plain skip for a partial reference or a DLC |
 | F368 | Past link_resolved's per-call budget of 64 realpaths a write/delete operand read as "no link", silently, so a junction into reference/ after 64 local decoys was allowed | **DEFECT (measured)** · IN-ARC (9a73c0a9) | at 5404046c: `touch <N decoys> <junction>/libraries/wares.xml` writes_reference True for N=63, False for N=64 and 200; 64 `touch` segments then `rm -f <junction>/x.xml` rm_targets_reference False | FIXED 2026-11-09: realpath cached per folder; past the budget `links_unresolved`, which protect-bash.sh and save_policy refuse |
 | F369 | link_resolved (F360) skipped any path has_unresolved() flagged, so a SINGLE-QUOTED `$` (`::$DATA`, a folder `a$b`) or a stream suffix on a junction left a write through the junction lexical only | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at a70dcedd, in-process facts(): `touch`/`echo x >` `'<junction>/libraries/wares.xml::$DATA'` writes_reference False (True with no junction); `touch '<junction>:s'` False | FIXED 2026-11-09: the caller passes `literal`; on Windows the path is resolved through _win_alias; an unresolved operand's literal head, and any link its first unresolved component may name, are followed too |
+| F371 | link_resolved read a path only as Win32 spells it, so a junction NAMED as Git Bash spells a name (`j` U+F07C for a `j` followed by a pipe character, or `j.`/`j ` with the trailing dot or space kept) was written through with no link seen | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at 470f8b35, through protect-bash.sh, a `touch` or `echo x >` onto `<w>/<junction>/libraries/x.xml` for three such junctions into reference/: 3 of 3 allowed; Git Bash's `touch` landed in the target for all three | FIXED 2026-11-11: both spellings are resolved (the Git Bash one verbatim), from the path as written; two spellings landing through links in different places are refused |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -12946,6 +12947,17 @@ verified by REASONING only (no Linux here); CI re-derives it. UNMEASURED: posixp
 HEAD component (EACCES on a folder the caller cannot search; INFERRED: a non-root write there fails anyway); that
 path is not made strict.
 
+CORRECTION 2026-11-11 (4.1.2): "each has a RED test and a mutant that its test catches" overclaimed. The 4.1.1
+reviewer found two clauses of the leaf lstat with no catching test: NotADirectoryError (an answer) and ValueError
+(cannot tell). Each now has a test (`test_TWIN_a_path_under_a_file_is_not_links_unresolved`,
+`test_RED_an_lstat_that_raises_ValueError_is_links_unresolved`) and a mutant; MEASURED locally with
+`verify-hook-tests.py --only`: both mutants caught, by that test only. Both tests stub lstat: on Windows a path
+under a file raises FileNotFoundError, so only the stub reaches the first clause there.
+Also MEASURED 2026-11-11, read-only, 21 ordinary and system paths on one Windows machine (pagefile, hives, protected
+folders, app-execution aliases): the leaf lstat raised something other than not-found for 2, the registry hives
+`System32/config/SAM` and `SYSTEM` (PermissionError), whose folder cannot be listed either. A write or delete naming
+one is refused as links_unresolved: "cannot tell" is the true answer there, so it is kept, not loosened.
+
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkBudgetFailsClosed`,
 `TestLinkResolutionIsBounded`, and `test_audit0924_hooks.py::TestLinkBudgetWholeHook`.
 
@@ -12996,6 +13008,41 @@ before (an extra entry naming the same place), but wrong as a fact.
 (generated copy `.claude/hooks/test_hook_facts.py`), e.g.
 `test_RED_an_ntfs_stream_suffix_behind_a_junction_is_judged_where_it_lands` and
 `test_RED_a_literal_dollar_in_a_folder_name_behind_a_junction`.
+
+## F371 - A junction named as Git Bash spells a name was written through with no link seen · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-11
+
+`hook_facts.link_resolved` (F360) resolved a path as Win32 opens it: `_win_alias` drops a trailing dot or space and a
+stream suffix, and a name holding a pipe character is ERROR_INVALID_NAME, read as "names no file". Git Bash (the MSYS
+runtime) opens neither that way. MEASURED 2026-11-11 with Git Bash's own `touch`, one fresh folder per name: a pipe,
+`*`, `?`, `<`, `>`, `:`, 0x01 and 0x1f in a name each landed as U+F000 plus that character's code; `pq.`, `pq ` and
+`pq..` landed as named. And through junctions named `j.`, `j ` and `j` U+F07C (made with the `\\?\` prefix), a
+`touch` of `<w>/<name>/p.txt` landed in the junction's target, 3 of 3. So the guard and the shell disagreed about which
+entry the text names, and the guard's entry did not exist: no link. First reported by the 4.1.1 reviewer for the pipe
+at cba3a1ce (in-process: writes_reference False, links_unresolved False). Through the real protect-bash.sh at
+470f8b35, with each junction leading into reference/: 3 of 3 allowed; the plain-folder twin and the reference-root
+control read allow and deny, as they should. With the fix: 3 of 3 denied, twin and control unchanged.
+
+The fix: link_resolved resolves both spellings, the second (`_msys_spelling`) only when it differs, opened verbatim
+(`\\?\`) so Win32 does not strip it. Either landing is judged in addition to the lexical path. When both land
+through links in DIFFERENT places the command is refused (links_unresolved), since one program goes one way and one
+the other; the two answers are compared with the mapping undone, so `<link>/libraries/*.xml` (one place, two
+spellings of the leaf) is not refused -- NEAR-MISS, caught by
+`test_an_expansion_behind_a_junction_reads_as_it_does_on_the_root`. link_entries_matched matches an entry starting
+with either spelling of the literal prefix.
+
+A second defect under it, found by running the new tests in a runner-like copy (TEMP spelled as an 8.3 short path):
+the caller handed link_resolved `long_name()`'s answer, and for a path with a `~N` component long_name returns it
+normalised -- `j.` as `j`, `j:k` as `j`. There the `:` case and every trailing-dot case still read no link (13 subtest
+failures), while the pipe passed. The resolver now gets the path as written. On a real install that shape occurs: a
+game root under `Program Files (x86)` has a short spelling.
+
+SCOPE, UNMEASURED: `"` is in the mapped set from the runtime's documentation, not measured (the probe could not pass
+it in argv). Only Git Bash's mapping is modelled; WSL and Cygwin proper were not measured. A link inside a link whose
+own name needs the second spelling, under a variable component, is not followed by link_entries_matched (its listing
+uses the head as written).
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkNamesGitBashSpellsDifferently` (7 tests,
+Windows only) and 8 mutants labelled `msys spelling: ...` / `link entries: the prefix is read as Git Bash spells it`.
 
 ## F365 - `_merge` modelled `<add pos="append">` as an append; the engine skips the node · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
 

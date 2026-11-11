@@ -4538,6 +4538,47 @@ class TestLinkBudgetFailsClosed(unittest.TestCase):
                     self.assertFalse(got["links_unresolved"])
                     self.assertFalse(got["writes_reference"] or got["rm_targets_reference"])
 
+    def _lstat_raising(self, leaf, exc):
+        real_lstat = os.lstat
+
+        def lstat(p, *a, **k):
+            if str(p).replace(BS, "/").lower().endswith("/" + leaf):
+                raise exc
+            return real_lstat(p, *a, **k)
+        return lstat
+
+    def test_TWIN_a_path_under_a_file_is_not_links_unresolved(self):
+        # 4.1.2 (F368's coverage claim): NotADirectoryError -- POSIX's answer for a path under a regular FILE --
+        # is an answer like FileNotFoundError, not "cannot tell". Simulated on every OS (Windows says
+        # FileNotFoundError here, so only the stub reaches the clause), with realpath as posixpath answers; and
+        # the real shape, which reaches it on POSIX.
+        from unittest import mock
+        target = self.W + "/under-a-file.xml"
+        with mock.patch.object(H.os, "lstat", self._lstat_raising("under-a-file.xml", NotADirectoryError(20, "not a dir"))), \
+                mock.patch.object(H.os.path, "realpath", lambda s, *a, **k: s):
+            for cmd in ("touch " + Q + target + Q, "rm -f " + Q + target + Q):
+                with self.subTest(cmd=cmd):
+                    self.assertFalse(self.f(cmd)["links_unresolved"])
+        (self.work / "plain.txt").write_bytes(b"x")
+        got = self.f("touch " + Q + self.W + "/plain.txt/x.xml" + Q)
+        self.assertFalse(got["links_unresolved"] or got["writes_reference"])
+
+    def test_RED_an_lstat_that_raises_ValueError_is_links_unresolved(self):
+        # 4.1.2 (F368's coverage claim): the ValueError clause (a name lstat will not take, e.g. an embedded NUL)
+        # is "cannot tell": refused for a write or delete when realpath shows no link, never set for a read use.
+        from unittest import mock
+        target = self.W + "/odd.xml"
+        with mock.patch.object(H.os, "lstat", self._lstat_raising("odd.xml", ValueError("embedded null"))), \
+                mock.patch.object(H.os.path, "realpath", lambda s, *a, **k: s):
+            for cmd in ("touch " + Q + target + Q, "rm -f " + Q + target + Q):
+                with self.subTest(cmd=cmd):
+                    self.assertTrue(self.f(cmd)["links_unresolved"], "failed open")
+            H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+            H._LINK_DIRS.clear()
+            H._LINKS_UNRESOLVED[0] = False
+            self.assertEqual(H.link_resolved(target, refuse=False), "")
+            self.assertFalse(H._LINKS_UNRESOLVED[0])
+
     @unittest.skipUnless(os.name == "nt", "8.3 short names are a Windows notion")
     def test_RED_a_short_name_spelling_of_a_plain_folder_is_not_a_link(self):
         # CI, MEASURED at cba3a1ce: the windows runner's TEMP is C:/Users/RUNNER~1/..., realpath expands it, and
@@ -4858,6 +4899,26 @@ class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
                     got = self.f(cmd)
                     self.assertTrue(got[key], cmd)
                     self.assertFalse(got["links_unresolved"], cmd)
+            with self.subTest(leaf=name):    # the junction as the LAST component: its own lstat, verbatim
+                self.assertTrue(self.f("touch " + Q + self.W + "/" + name + Q)["writes_reference"])
+
+    def test_RED_a_short_named_folder_keeps_git_bash_spelling(self):
+        # The caller handed link_resolved long_name()'s answer, which for a path with an 8.3 component comes back
+        # normalised: `j.` as `j`, `j:k` as `j`. MEASURED in a runner-like copy (TEMP spelled RUNNER~1): the two
+        # RED tests above failed for `:` and every trailing dot or space, and passed for `|`.
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        n = ctypes.windll.kernel32.GetShortPathNameW(str(self.work.parent), buf, 32768)
+        short = buf.value.replace(BS, "/") if 0 < n < 32768 else ""
+        if "~" not in short:
+            self.skipTest("no 8.3 short name on this volume")
+        self.junction("j.")
+        self.junction("j" + chr(0xF03A) + "k")
+        for name in ("j.", "j:k"):
+            with self.subTest(name=name):
+                got = self.f("touch " + Q + short + "/work/" + name + "/libraries/wares.xml" + Q)
+                self.assertTrue(got["writes_reference"])
+                self.assertFalse(got["links_unresolved"])
 
     def test_RED_a_variable_in_a_mapped_junction_name(self):
         self.junction("j" + chr(0xF07C) + "k")
