@@ -246,13 +246,26 @@ def _dir_realpath(head: str, refuse: bool):
     or the filesystem cannot answer (_realpath_budgeted). 4.1.2 release review (I2), MEASURED with budget_probe.py:
     the cache was keyed per SPELLING, so `C:/a` and `//?/C:/a` each spent one of the _MAX_LINK_RESOLVED realpaths for
     a folder Win32 and a verbatim open name identically, and `rm -f` over operands in 33 folders (`d<i>/*.o`, `d<i>/x.`)
-    was refused (v4.1.1: from 65). A verbatim head _win_alias leaves unchanged is resolved under its plain spelling."""
-    key = head[4:] if head.startswith("//?/") and _win_alias(head[4:]) == head[4:] else head
+    was refused (v4.1.1: from 65). A verbatim head _win_alias leaves unchanged is cached under its plain spelling.
+
+    4.1.2 release review round 2 (B), MEASURED (nulcase.py): "Win32 and a verbatim open name it identically" is false for
+    a DEVICE name: Win32 realpath answers `<w>/nul` unchanged, the verbatim one follows the junction named `nul` to its
+    target, so `touch '<w>/nul/x.'` read writes_reference 1 at 9368d5db and 0 after, and `touch '<w>/nul/x.xml'` 0 in
+    every version, while Git Bash's touch landed in the target. On Windows a plain drive folder is therefore RESOLVED
+    verbatim (a folder head has no dot segment, and a verbatim open reads it as Win32 does, device names aside, where the
+    verbatim answer is the true one) and the answer is unwrapped (_unverbatim). The budget is unchanged (budget_probe.py,
+    4 shapes x 7 sizes, as at v4.1.1). Since every drive folder is now opened verbatim, a `//?/` head is the same folder as
+    its text without the prefix, so the key is that text whatever _win_alias would make of it (`<w>/j.` and `<w>/j` are
+    two keys, two folders); the former "_win_alias leaves it unchanged" condition could no longer change an answer
+    (measured: its mutant survived --only), so it is gone."""
+    key = head[4:] if head.startswith("//?/") else head
     rhead = _LINK_DIRS.get(key)
     if rhead is None:
-        rhead = _realpath_budgeted(key, refuse)
+        # (Every Windows caller hands a `X:/...` folder: link_resolved and link_entries_matched check the drive first.)
+        rhead = _realpath_budgeted("//?/" + key if os.name == "nt" else key, refuse)
         if rhead is None:
             return None
+        rhead = _unverbatim(rhead)
         _LINK_DIRS[key] = rhead
     return rhead
 
@@ -290,8 +303,10 @@ def _resolve_dot_dot(s: str, refuse: bool) -> str:
             _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
             return ""
         crossed = crossed or not _same_place(r, walked)
-        walked = posixpath.dirname(r)
-        walked = walked + "/" if walked.endswith(":") or not walked else walked
+        # 4.1.2 release review round 2 (E): the parent of a drive root (`D:`) is itself; posixpath.dirname("D:") is "",
+        # which put the walk at `/`, the hook's current drive.
+        walked = r + "/" if re.match(r"^[A-Za-z]:$", r) else posixpath.dirname(r)
+        walked = walked + "/" if walked.endswith(":") else walked
     res = _resolve_spelling(pre + walked, refuse)
     if not crossed:
         return res
@@ -410,7 +425,12 @@ def link_entries_matched(p: str, refuse: bool = True) -> list:
     if os.name == "nt":
         # Win32's and Git Bash's spelling of the prefix (link_resolved): an entry starting with either.
         prefix = tuple({f("x/" + prefix).split("/", 1)[1].casefold() for f in (_win_alias, _msys_spelling)})
-        heads = [(head, "//?/" + os.path.abspath(head).replace(chr(92), "/"))]
+        # 4.1.2 release review round 2 (A), MEASURED (nulentries.py): os.path.abspath turned a last component named `nul`
+        # into the device `\\.\nul`, so the entries of a real folder `<w>/deep/nul` were named under `//./nul` and
+        # `touch "<w>/deep/nul/ref$X/x"` read 0 (v4.1.1 and 9368d5db: 1). The folder Win32 lists is `head` with
+        # trailing dots and spaces dropped (`<w>/deep/nul/*` lists the real folder: the v4.1.1 reading found its entry)
+        # and `..` collapsed lexically: _win_alias and normpath, which converts no device name.
+        heads = [(head, "//?/" + os.path.normpath(_win_alias(head)).replace(chr(92), "/"))]
         if _msys_spelling(head) != _win_alias(head):
             heads.append(("//?/" + _msys_spelling(head),) * 2)
     rest = "/".join(parts[i + 1:])
@@ -709,7 +729,11 @@ def join_as_received(cwd: str, p: str, spelled: str = "") -> str:
     if not cwd or not is_abs(cwd):
         return ""
     if norm(spelled) == norm(cwd):        # equal to an absolute directory: `spelled` is one too
-        cwd = spelled
+        # 4.1.2 release review round 2 (C), MEASURED: the shell resolved the DIRECTORY's `..` already, LOGICALLY (`cd
+        # "<w>/k/.." && pwd -P` is <w>), but an absolute cd target is spelled as written, so `cd '<w>/k/..' && touch x`
+        # was walked through k's target: a false writes_reference ({} at v4.1.1; also pushd, `/c/...`, Set-Location).
+        # Its dot segments are collapsed, its case and spelling kept (`j.`, U+F0xx, a leading `//`); `p` stays as is.
+        cwd = posixpath.normpath(spelled.replace(chr(92), "/"))
     return cwd.replace(chr(92), "/").rstrip("/") + "/" + p.replace(chr(92), "/")
 
 
@@ -722,7 +746,13 @@ def _leads_with_expansion(p: str) -> bool:
     from a folder holding junctions into reference/) turned into refusals. `refj$X/f` (a literal prefix) and `sub/$X/f`
     (a literal first folder) are still read. An absolute operand never qualifies: its first component is `C:`, `` (a
     leading `/`) or a drive letter, never an expansion, so no separate is-absolute test is needed."""
-    first = p.replace(chr(92), "/").split("/")[0]
+    parts = p.replace(chr(92), "/").split("/")
+    # 4.1.2 release review round 2 (D), MEASURED (dotx.py): `./"$f"`, `"./$f"`, `.//"$f"` are the same operand; only the
+    # first component was read, so they were still listed beside a junction (refused) where `"$f"` was not.
+    i = 0
+    while i < len(parts) - 1 and (parts[i] == "." or (parts[i] == "" and i > 0)):
+        i += 1
+    first = parts[i]
     at = [m.start() for m in (_EXPANSION.search(first), _SUBST.search(first)) if m]
     return bool(at) and min(at) == 0
 
@@ -9269,7 +9299,9 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                 # ...from the path AS THE PROGRAM RECEIVES IT (join_as_received; 4.1.2 release review I1a, P3): not
                 # long_name's or norm's answer, which is Win32's spelling only (a trailing dot or `:x` dropped, `..`
                 # collapsed). Parse debris whose seedless join is unknowable is read from the seeded directory: this
-                # reading only ADDS an entry, and only where a real link is on disk under that name.
+                # reading can only ADD an entry, where a real link is on disk under that name -- but it spends the link
+                # budget like any operand (4.1.2 release review round 2 (F), MEASURED with debris2.py: 80 debris operands
+                # in distinct folders read links_unresolved 0 at 9368d5db, 1 now; left as is, BLIND-SPOTS F371).
                 pd_ = "" if execution_context else physical_cwd
                 seen = join_as_received(d, r, pd_ if d == c_cwd else "") or join_as_received(c_cwd, r, pd_)
                 if not unres:

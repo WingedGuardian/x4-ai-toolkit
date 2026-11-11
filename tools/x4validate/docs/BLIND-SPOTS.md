@@ -13058,8 +13058,8 @@ U+F07C compared unequal to itself and a write there was REFUSED (1 of 1). (e) th
 with a slice, which turns `//?/UNC/h/s/x` into `UNC/h/s/x` (READ; no verdict measured to change, since norm() strips the
 prefix of a drive path, but the returned path was wrong). (f) the folder cache was keyed per SPELLING, so `C:/a` and
 `//?/C:/a` each spent one of the 64 realpaths: `rm -f` over operands in N folders shaped `d<i>/*.o`, `<w>/d<i>/*.o` or
-`<w>/d<i>/x.` was refused from N=33, where v4.1.1 refused from N=65 (the reviewer's budget_probe.py: refused for
-N=33..63 at the 4.1.2 head, not at v4.1.1; 9 of 9 subtests here). (g) a disagreement of the two spellings printed the
+`<w>/d<i>/x.` was refused from N=33, where v4.1.1 refused from N=65 (budget_probe.py / budget.py: refused for N=33..64
+in all 3 shapes at 9368d5db and 0f6b5e3e, not at v4.1.1; 12 of 12 such subtests here, N = 33, 40, 63, 64). (g) a disagreement of the two spellings printed the
 budget's "so many different folders" reason. All seven are fixed: the link reading takes the path as the program
 receives it (`join_as_received`), entries are resolved verbatim by their own names and the folder is listed under both
 spellings, both landings are un-mapped, `_unverbatim` unwraps the result, a verbatim folder Win32 opens identically is
@@ -13069,8 +13069,32 @@ after the fix, because a whole-variable relative operand was then listed like `"
 It was first kept as the stricter reading; the corpus showed it refusing 11 of 480 ordinary rows, and it was scoped out
 the same day (F374 SCOPE). `"` in a name is still UNMEASURED.
 
-**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkNamesGitBashSpellsDifferently` (21 tests,
-Windows only), `TestLinkReadingOfRelativeAndDotDotOperands` (the cross-platform ones),
+CORRECTION 2 2026-11-11 (4.1.2 release review round 2, four reviewers over 4140faa5 + 9895c730; fixed the same day). The
+first correction's fixes brought defects of their own, each MEASURED with the reviewers' scripts and a RED test first:
+(A) link_entries_matched named a listed entry under `os.path.abspath(head)`, which turns a last component `nul` into the
+device, so `touch "<w>/deep/nul/ref$X/x"` (a real folder `nul` holding junction `refj`) read writes_reference 1 / 1 / 0
+at v4.1.1 / 9368d5db / 9895c730 -- an ALLOW regression; the folder is now named `normpath(_win_alias(head))`. (B) the
+folder cache resolved a plain key with Win32's realpath, which answers a device-named folder `<w>/nul` unchanged, while
+Git Bash writes through a junction of that name (MEASURED by the reviewer with Git Bash's touch): `touch '<w>/nul/x.'`,
+`'<w>/nul/a|b'` and the delete of `'<w>/nul/x.'` read 1 at 9368d5db and 0 after; every Windows drive folder is now
+resolved verbatim (`//?/`) and the answer unwrapped, which also closes `touch '<w>/nul/x.xml'` (0 in every version
+before, PRE-ARC); the budget table is unchanged (budget.py: 28 of 28 rows as at v4.1.1). (C) an absolute `cd`/`pushd`/
+`Set-Location` to `<w>/k/..` (k a junction) kept its `..` in the directory's spelling, and the link reading walked a `..`
+the shell had already resolved LOGICALLY (`cd "<w>/k/.." && pwd -P` is <w>): `cd '<w>/k/..' && touch x` and four other
+spellings read writes_reference True (a false hard deny; {} at v4.1.1); the directory's dot segments are now collapsed,
+its spelling kept. (D) the leading-expansion scope read only the first component, so `./"$f"`, `"./$f"`, `.//"$f"`,
+`./$X`, `./$X/f`, `"./${X}.txt"` and `cp a.txt ./"$OUT"` were still refused beside a junction (7 of 7); leading `.` and
+empty components are now skipped. (E) `_resolve_dot_dot` took `posixpath.dirname("D:")` = "" for a link whose target is
+a drive root, so the walk went on at `/`, the current drive (stubbed: `Q:` became `/`); a drive root is now its own
+parent. (F) the parse-debris fallback spends the link budget (MEASURED, debris2.py: 80 debris operands in distinct
+folders read links_unresolved 0 at 9368d5db, 1 now); left as is: no rule that skips a token which cannot name a link
+was obviously right. (G) the unknown-cmdlet and `program_dynamic` loops call prep() with the LAST segment's
+`physical_cwd`; `spelled` is used only when it norm-equals the directory, so only a same-folder-different-spelling case
+is affected, and the ask those loops give is decided by the lexical entries; left as is, READ, not measured.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkNamesGitBashSpellsDifferently` (26 tests, the
+class Windows only), `TestLinkReadingOfRelativeAndDotDotOperands` (14 tests, 4 of them Windows only, and two Windows-only
+subtest groups: the `/c/...` and `Set-Location` spellings),
 `test_audit0924_hooks.py::TestLinkBudgetWholeHook::test_two_readings_landing_apart_have_their_own_reason`, and the
 mutants labelled `msys spelling: ...`, `link entries: ...`, `link reading: ...`, `link budget: ...(I2)`,
 `unverbatim: ...` and `link disagree: ...`.
@@ -13080,7 +13104,8 @@ mutants labelled `msys spelling: ...`, `link entries: ...`, `link reading: ...`,
 Found by the 4.1.2 release review. `link_resolved` (F360) and `link_entries_matched` returned "" unless the path,
 after its MSYS drive was rewritten, matched `^[A-Za-z]:/`, so a verbatim (`//?/`, also `\\?\` with backslashes) or
 device (`//./`) drive spelling was judged lexically only, where `_lexical_norm` reads it as the plain path. MEASURED
-2026-11-11: Git Bash's `touch "//?/<w>/c/refj/libraries/probe_vb.txt"` created the file in the junction's target (1 of 1;
+2026-11-11: Git Bash's `touch "//?/<w>/c/refj/libraries/probe_vb.txt"` (`c` a plain folder inside <w> holding the
+junction `refj`; not the `/c/` of a drive) created the file in the junction's target (1 of 1;
 Git Bash refused the `//./` spelling, "No such file or directory", so `//./` is a Win32-only spelling, INFERRED not
 measured to be written through by PowerShell). At 0f6b5e3e, in-process facts(): `touch` and `rm -f` of
 `<prefix><w>/refj/libraries/wares.xml` for the three prefixes read writes_reference / rm_targets_reference False, 6 of
@@ -13114,6 +13139,15 @@ since a call on a server can outlast the hook (4.1.1 A1). MEASURED with a stubbe
 shapes (share, volume, remote `Y:`) read links_unresolved False and the walk made further calls; now 4 of 4 subtests
 (the three plus a share with every drive type stubbed local) refused with 0 calls after the answer; the local twin is
 walked on. SCOPE: only `..` is walked; a POSIX host is unchanged.
+
+Round 2 (4.1.2 release review, 2026-11-11): a link whose target is a DRIVE ROOT is now its own parent (the walk had gone
+on at `/`, the current drive; F371 CORRECTION 2, E). When the lexical and physical readings land through links in
+different places only the physical landing is returned, so `touch '<w>/okj/../refj/x.xml'` (okj -> elsewhere) changed
+from writes_reference to links_unresolved + links_disagree: still refused, with the disagreement's reason (MEASURED by
+the reviewer, compare.py: 12 of 263 x 4 rows, all this shape). OPEN, MEASURED by the reviewer, not fixed: the LISTING
+(link_entries_matched) reads its folder LEXICALLY, so `touch "<w>/deep/x/kk/../../../cw$X/f"` (kk a junction) reads 0 in
+every version while Git Bash went through the link. OPEN, INFERRED: MSYS reads `/c/..` as `/`, the Git install root,
+where the walk stays at the drive root; it matters only if a protected root sits under the Git install.
 
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkReadingOfRelativeAndDotDotOperands` (`test_RED_dot_dot_after_a_link_is_physical`,
 its TWIN, `test_dot_dot_read_two_ways_landing_apart_is_refused`, `test_RED_a_link_off_the_local_drives_before_a_dot_dot_is_refused_at_once`,

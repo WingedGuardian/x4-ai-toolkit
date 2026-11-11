@@ -3186,21 +3186,14 @@ MUTANTS = [
      '":/", _unverbatim(head))', '":/", head)',
      'test_RED_a_verbatim_or_device_spelled_operand_is_resolved'),
     ('link budget: a folder spelled alike both ways is resolved once (I2)',
-     '    key = head[4:] if head.startswith("//?/") and _win_alias(head[4:]) == head[4:] else head', '    key = head',
+     '    key = head[4:] if head.startswith("//?/") else head', '    key = head',
      'test_RED_one_folder_spelled_the_same_both_ways_costs_one_resolution'),
     ('link budget: ...only a verbatim head is unwrapped (I2)',
-     'head[4:] if head.startswith("//?/") and _win_alias(head[4:])', 'head[4:] if _win_alias(head[4:])',
+     '    key = head[4:] if head.startswith("//?/") else head', '    key = head[4:]',
      'test_a_write_or_delete_through_the_link_is_the_reference'),
-    ('link budget: ...only one Win32 opens the same (I2)',
-     ' and _win_alias(head[4:]) == head[4:] else head', ' else head',
-     'test_RED_a_junction_named_with_a_trailing_dot_or_space'),
     ('link reading: an operand as the program receives it (I1a)',
      '    return cwd.replace(chr(92), "/").rstrip("/") + "/" + p.replace(chr(92), "/")', '    return join_cwd(cwd, p)',
      'test_RED_dot_dot_after_a_link_is_physical'),
-    ('link reading: ...an unknowable directory invents nothing (I1a)',
-     '    if not cwd or not is_abs(cwd):' + NL + '        return ""' + NL + '    if norm(spelled)',
-     '    if False:' + NL + '        return ""' + NL + '    if norm(spelled)',
-     'test_TWIN_a_relative_operand_with_no_known_directory_is_not_invented'),
     ("link reading: ...the cwd keeps the spelling Git Bash opened (I1a)",
      '                pd_ = "" if execution_context else physical_cwd', '                pd_ = ""',
      'test_RED_a_cd_into_a_git_bash_spelled_junction'),
@@ -3221,7 +3214,13 @@ MUTANTS = [
      '                    real = _realpath_budgeted(e.path.replace(chr(92), "/") if os.name == "nt"',
      'test_RED_a_listed_entry_is_resolved_by_its_own_name'),
     ('link entries: ...under the folder as Win32 names it (I1b)',
-     '        heads = [(head, "//?/" + os.path.abspath(head).replace(chr(92), "/"))]', '        heads = [(head, "//?/" + head)]',
+     '        heads = [(head, "//?/" + os.path.normpath(_win_alias(head)).replace(chr(92), "/"))]', '        heads = [(head, "//?/" + head)]',
+     'test_TWIN_the_win32_listing_is_still_followed'),
+    ('link entries: ...without turning a device name into the device (round 2, A)',
+     '"//?/" + os.path.normpath(_win_alias(head))', '"//?/" + os.path.abspath(_win_alias(head))',
+     'test_RED_a_folder_named_like_a_device_is_listed_under_its_own_name'),
+    ('link entries: ...with trailing dots dropped as Win32 lists it (round 2, A)',
+     '"//?/" + os.path.normpath(_win_alias(head))', '"//?/" + os.path.normpath(head)',
      'test_TWIN_the_win32_listing_is_still_followed'),
     ('link entries: ...and returned as a drive path (I1b)',
      '                    out.append(_unverbatim(real.replace(chr(92), "/")).rstrip("/")',
@@ -3255,7 +3254,7 @@ MUTANTS = [
      '        r = _dir_realpath(pre + walked, refuse)', '        r = pre + walked',
      'test_RED_dot_dot_after_a_link_is_physical'),
     ('dot dot: ...and its parent taken (P2)',
-     '        walked = posixpath.dirname(r)', '        walked = posixpath.dirname(walked.rstrip("/"))',
+     ' else posixpath.dirname(r)' + NL, ' else posixpath.dirname(walked.rstrip("/"))' + NL,
      'test_RED_dot_dot_after_a_link_is_physical'),
     ('dot dot: a link crossed is noticed (P2)',
      '        crossed = crossed or not _same_place(r, walked)', '        crossed = False',
@@ -3298,6 +3297,66 @@ MUTANTS = [
     ('dot dot: ...and named as a disagreement (P2)',
      '        _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse' + NL + '    # Only one landing', '    # Only one landing',
      'test_dot_dot_read_two_ways_landing_apart_is_refused'),
+    # --- 4.1.2 release review round 2 (2026-11-11): A-E and the clauses (I) that had no mutant. Left out as EQUIVALENT,
+    # each with its reason: `os.name == "nt" and` in _dir_realpath's verbatim choice (a POSIX key never starts `X:/`
+    # except the relative text `C:/x`, whose verbatim realpath on POSIX is a missing path returned as given, then
+    # unwrapped: the same answer); `phys_answer = phys` and `return phys_answer` without `or lex` (reached only when the
+    # physical landing is where the text lands lexically while the lexical reading goes through a link: two places, so
+    # refused either way, and the lexical place is the caller's own entry); `pd_ if d == c_cwd` (`spelled` is used only
+    # when it norm-equals the directory, and the physical cwd tracks c_cwd, so for d = c_old it is never used); in
+    # _leads_with_expansion `i < len(parts) - 1` and `and i > 0` (an unresolved operand has a `$` in some component that
+    # is neither `.` nor empty, so the loop stops before the end; a leading empty component is an ABSOLUTE operand,
+    # whose root head neither link reading uses); the `X:` -> `X:/` line after the drive-root rule (a bare `X:` is
+    # joined as `X:/c` or, ending the path, completed by _resolve_spelling's own `C:` rule). RETIRED in round 2, both
+    # equivalent since its fixes: `...only one Win32 opens the same (I2)` (every drive folder is now opened verbatim, so
+    # the condition was removed from the code) and `...an unknowable directory invents nothing (I1a)` (with cwd "" the
+    # `spelled` "" norm-equals it and normpath gives `.`, a RELATIVE reading every link reading rejects; the guard stays,
+    # as in join_cwd, and test_TWIN_a_relative_operand_with_no_known_directory_is_not_invented still pins the outcome);
+    # and `...only a plain drive key (round 2, B)` (once a `//?/` head is cached without its prefix, every key on Windows
+    # is a `X:/` drive folder, so the `re.match` was removed from the code: its mutant survived --only).
+    ('link budget: a folder is resolved verbatim (round 2, B)',
+     '_realpath_budgeted("//?/" + key if os.name == "nt" else key, refuse)',
+     '_realpath_budgeted(key, refuse)',
+     'test_RED_a_junction_named_like_a_device_is_resolved_verbatim'),
+    ('link budget: ...and the answer unwrapped (round 2, B)',
+     '        rhead = _unverbatim(rhead)' + NL, '',
+     'test_the_git_bash_landing_is_returned_without_its_verbatim_prefix'),
+    ('link reading: the directory\'s own dot segments are collapsed (round 2, C)',
+     '        cwd = posixpath.normpath(spelled.replace(chr(92), "/"))', '        cwd = spelled',
+     'test_RED_an_absolute_cd_through_a_link_and_dot_dot_is_logical'),
+    ('link reading: a leading `./` is skipped (round 2, D)',
+     'while i < len(parts) - 1 and (parts[i] == "." or (parts[i] == "" and i > 0)):', 'while False:',
+     'test_RED_a_relative_operand_that_STARTS_with_an_expansion_is_not_listed'),
+    ('link reading: ...a `.` component (round 2, D)',
+     '(parts[i] == "." or (parts[i] == "" and i > 0))', '(parts[i] == "" and i > 0)',
+     'test_RED_a_relative_operand_that_STARTS_with_an_expansion_is_not_listed'),
+    ('link reading: ...and an empty one after it (round 2, D)',
+     '(parts[i] == "." or (parts[i] == "" and i > 0))', '(parts[i] == ".")',
+     'test_RED_a_relative_operand_that_STARTS_with_an_expansion_is_not_listed'),
+    ('dot dot: a drive root is its own parent (round 2, E)',
+     'walked = r + "/" if re.match(r"^[A-Za-z]:$", r) else posixpath.dirname(r)', 'walked = posixpath.dirname(r)',
+     'test_RED_a_link_to_a_drive_root_keeps_its_drive'),
+    ('dot dot: the verbatim spelling is walked as such (round 2, I)',
+     '    pre = "//?/" if s.startswith("//?/") else ""', '    pre = ""',
+     'test_RED_a_dot_dot_after_a_junction_only_git_bash_names'),
+    ('dot dot: a lexical reading with no link is none (round 2, I)',
+     '    lex = "" if lex is None or _same_place(lex, s) else lex', '    lex = "" if lex is None else lex',
+     'test_RED_dot_dot_after_a_link_is_physical'),
+    ('dot dot: ...the lexical reading is compared at all (round 2, I)',
+     '    lex = "" if lex is None or _same_place(lex, s) else lex', '    lex = ""',
+     'test_dot_dot_read_two_ways_landing_apart_is_refused'),
+    ('dot dot: a read-only operand sets no disagreement (round 2, I)',
+     '        _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse' + NL + '    # Only one landing',
+     '        _LINKS_DISAGREE[0] = True' + NL + '    # Only one landing',
+     'test_dot_dot_read_two_ways_landing_apart_is_refused'),
+    ('msys spelling: a read-only operand sets no disagreement (round 2, I)',
+     '            _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse' + NL + '        return real or other',
+     '            _LINKS_DISAGREE[0] = True' + NL + '        return real or other',
+     'test_TWIN_a_read_only_operand_never_sets_a_disagreement'),
+    ('link reading: an absolute operand is read as written (round 2, I)',
+     '    if is_abs(p):' + NL + '        return p' + NL + '    if not cwd or not is_abs(cwd):' + NL + '        return ""' + NL + '    if norm(spelled)',
+     '    if False:' + NL + '        return p' + NL + '    if not cwd or not is_abs(cwd):' + NL + '        return ""' + NL + '    if norm(spelled)',
+     'test_a_write_or_delete_through_the_link_is_the_reference'),
 ]
 
 SHIM = '''
@@ -3386,10 +3445,6 @@ OS_ONLY = {
     "link entries: the head is listed under Git Bash's spelling too (I1c)": _MSYS_ONLY,
     "link entries: a listing that fails moves on to the next (I1c)": _MSYS_ONLY,
     "link budget: a folder spelled alike both ways is resolved once (I2)": _VERBATIM_ONLY,
-    "link budget: ...only one Win32 opens the same (I2)": _VERBATIM_ONLY,
-    "link reading: ...an unknowable directory invents nothing (I1a)":
-        ("nt", "only on Windows does the invented `/c/...` name a real drive path (Git Bash's drive spelling), "
-               "so only there can the invention reach a link"),
     "link disagree: two spellings landing apart are named (I3)": _DISAGREE_ONLY,
     "link disagree: the fact reaches the facts (I3)": _DISAGREE_ONLY,
     "link disagree: ...per hook call (I3)": _DISAGREE_ONLY,
@@ -3406,6 +3461,19 @@ OS_ONLY = {
     "dot dot: a folder resolving off a drive path is not walked on (P2)": _DOTDOT_ONLY,
     "dot dot: ...nor one on a drive that is not local (P2)": _DOTDOT_ONLY,
     "dot dot: ...refused, never walked on (P2)": _DOTDOT_ONLY,
+    "link budget: a folder is resolved verbatim (round 2, B)": _MSYS_ONLY,
+    "link budget: ...and the answer unwrapped (round 2, B)": _MSYS_ONLY,
+    "link entries: ...without turning a device name into the device (round 2, A)": _MSYS_ONLY,
+    "link entries: ...with trailing dots dropped as Win32 lists it (round 2, A)": _MSYS_ONLY,
+    "msys spelling: a read-only operand sets no disagreement (round 2, I)": _MSYS_ONLY,
+    "dot dot: a drive root is its own parent (round 2, E)": _DOTDOT_ONLY,
+    "dot dot: the verbatim spelling is walked as such (round 2, I)": _DOTDOT_ONLY,
+    "dot dot: a lexical reading with no link is none (round 2, I)": _DOTDOT_ONLY,
+    "dot dot: ...the lexical reading is compared at all (round 2, I)": _DOTDOT_ONLY,
+    "dot dot: a read-only operand sets no disagreement (round 2, I)": _DOTDOT_ONLY,
+    "link reading: the directory's own dot segments are collapsed (round 2, C)":
+        ("nt", "on POSIX physical_join already normalises an absolute cd target (posixpath.normpath), so the directory "
+               "reaching join_as_received has no dot segment there"),
 }
 
 

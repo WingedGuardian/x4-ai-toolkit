@@ -4204,8 +4204,11 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
         real_rp = os.path.realpath
 
         def fake_realpath(p, *a, **k):
-            if str(p).replace(BS, "/").lower().startswith("c:/w411"):      # a folder too: it is cached
-                self.calls.append(p)
+            # 4.1.2 release review round 2 (B): a folder is resolved verbatim (`\\?\C:\w411`), so the fake reads a path
+            # without that prefix, and records it so; the answer keeps the spelling it was asked in, as realpath does.
+            plain = H._unverbatim(str(p).replace(BS, "/"))
+            if plain.lower().startswith("c:/w411"):      # a folder too: it is cached
+                self.calls.append(plain if plain != str(p).replace(BS, "/") else p)
                 return p
             return real_rp(p, *a, **k)
         self.fake_realpath = fake_realpath
@@ -4222,8 +4225,11 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
         real_rp = os.path.realpath
 
         def rp(p, *a, **k):
-            seen.append(str(p))
-            return real_rp(p, *a, **k) if str(p)[:1].upper() not in "YZQ" else p
+            # 4.1.2 release review round 2: a folder is now resolved verbatim (`\\?\Y:\...`), so the drive is read
+            # without that prefix -- with it this test saw no `Y:` call at all, and both A1 mutants went uncaught.
+            p_ = H._unverbatim(str(p).replace(BS, "/"))
+            seen.append(p_)
+            return real_rp(p, *a, **k) if p_[:1].upper() not in "YZQ" else p
         types = {"Y": 4, "Z": 1, "Q": 0}
         with self.mock.patch.object(H.os.path, "realpath", rp), \
                 self.mock.patch.object(H, "_drive_type", lambda l: types.get(l.upper(), 3), create=True):
@@ -4281,14 +4287,14 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
         real_lstat = os.lstat
 
         def rp(p, *a, **k):
-            if str(p).replace(BS, "/").lower().startswith("c:/w411"):
+            if H._unverbatim(str(p).replace(BS, "/")).lower().startswith("c:/w411"):
                 self.calls.append(p)
                 clock[0] += realpath_cost
                 return p
             return os.path.realpath(p, *a, **k)
 
         def ls(p, *a, **k):
-            if str(p).replace(BS, "/").lower().startswith("c:/w411"):
+            if H._unverbatim(str(p).replace(BS, "/")).lower().startswith("c:/w411"):
                 lstats.append(p)
                 clock[0] += lstat_cost
                 if leaf_is_link:
@@ -4315,7 +4321,7 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
         clock = [1000.0]
 
         def slow(p, *a, **k):
-            if str(p).replace(BS, "/").lower().startswith("c:/w411/"):
+            if H._unverbatim(str(p).replace(BS, "/")).lower().startswith("c:/w411/"):
                 self.calls.append(p)
                 clock[0] += 10.0                                        # each one costs 10 s
                 return p
@@ -4332,7 +4338,7 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
         import time
 
         def slow(p, *a, **k):
-            if str(p).replace(BS, "/").lower().startswith("c:/w411/"):
+            if H._unverbatim(str(p).replace(BS, "/")).lower().startswith("c:/w411/"):
                 self.calls.append(p)
                 time.sleep(0.02)
                 return p
@@ -4972,6 +4978,59 @@ class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
         self.assertTrue(got["links_disagree"])
         self.assertFalse(self.f("touch " + Q + self.W + "/plain.xml" + Q)["links_disagree"])   # per hook call
 
+    def test_TWIN_a_read_only_operand_never_sets_a_disagreement(self):
+        # 4.1.2 release review round 2 (I): `or refuse` -- a search only reads, and never refuses on links.
+        other = pathlib.Path(self._td.name) / "other"
+        other.mkdir()
+        self.junction("j", other)
+        self.junction("j.")
+        got = self.f("grep foo " + Q + self.W + "/j./libraries/wares.xml" + Q)
+        self.assertFalse(got["links_disagree"] or got["links_unresolved"])
+
+    def test_RED_a_dot_dot_after_a_junction_only_git_bash_names(self):
+        # 4.1.2 release review round 2 (I): the verbatim (`//?/`) spelling walked by _resolve_dot_dot. `k.` is a junction
+        # only Git Bash opens (Win32 opens `k`, absent); `k./..` is the parent of its target.
+        self.junction("k.", self.ref / "libraries")
+        got = self.f("touch " + Q + self.W + "/k./../probe.txt" + Q)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_RED_a_folder_named_like_a_device_is_listed_under_its_own_name(self):
+        # 4.1.2 release review round 2 (A), MEASURED (nulentries.py): os.path.abspath turns a last component `nul` into the
+        # device, so an entry of a real folder `<w>/deep/nul` was named under `//./nul`; `touch "<w>/deep/nul/ref$X/x"` read
+        # writes_reference 1 / 1 / 0 (v4.1.1 / 9368d5db / 4140faa5).
+        self.mkdir("deep")
+        self.mkdir("deep" + BS + "nul")
+        self.junction("deep" + BS + "nul" + BS + "refj")
+        got = self.f("touch " + DQ + self.W + "/deep/nul/ref$X/x" + DQ)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_RED_a_junction_named_like_a_device_is_resolved_verbatim(self):
+        # 4.1.2 release review round 2 (B), MEASURED (nulcase.py): junction `<w>/nul` into reference; the folder cache resolved
+        # its plain key, and Win32 realpath answers `<w>/nul` unchanged (a device name), so `touch '<w>/nul/x.'` read 1 at
+        # 9368d5db and 0 after; `touch '<w>/nul/x.xml'` read 0 in every version (pre-arc), while Git Bash's touch landed
+        # in the target for both.
+        self.junction("nul")
+        for cmd, key in (("touch " + Q + self.W + "/nul/x." + Q, "writes_reference"),
+                         ("touch " + Q + self.W + "/nul/a|b" + Q, "writes_reference"),
+                         (D + " -f " + Q + self.W + "/nul/x." + Q, "rm_targets_reference"),
+                         ("touch " + Q + self.W + "/nul/x.xml" + Q, "writes_reference")):
+            with self.subTest(cmd=cmd):
+                got = self.f(cmd)
+                self.assertTrue(got[key], cmd)
+                self.assertFalse(got["links_unresolved"], cmd)
+
+    def test_TWIN_device_named_folders_with_no_link(self):
+        self.mkdir("nul")
+        self.mkdir("deep")
+        self.mkdir("deep" + BS + "nul")
+        for cmd in ("touch " + Q + self.W + "/nul/x." + Q, "touch " + Q + self.W + "/nul/x.xml" + Q,
+                    "touch " + DQ + self.W + "/deep/nul/ref$X/x" + DQ, "touch " + Q + self.W + "/con/x.xml" + Q):
+            with self.subTest(cmd=cmd):
+                got = self.f(cmd)
+                self.assertFalse(got["writes_reference"] or got["links_unresolved"], cmd)
+
     def test_TWIN_a_spent_budget_is_not_a_disagreement(self):
         got = self.f("touch " + " ".join(Q + self.W + "/d%d/f.xml" % i + Q for i in range(H._MAX_LINK_RESOLVED + 1)))
         self.assertTrue(got["links_unresolved"])
@@ -5085,6 +5144,9 @@ class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
         work = pathlib.Path(os.path.realpath(self.work)).as_posix()
         got = H.link_resolved(work + "/j./libraries/x.xml")
         self.assertFalse(got.startswith("//"), got)
+        # ...and Win32's landing too, now that a folder is resolved verbatim (round 2, B): unwrapped.
+        got = H.link_resolved(work + "/refj/libraries/x.xml")
+        self.assertTrue(got[:1].isalpha() and got[1:3] == ":/", got)
         self.assertEqual(H._lexical_norm(got),
                          H._lexical_norm(pathlib.Path(os.path.realpath(self.ref)).as_posix() + "/libraries/x.xml"))
         from unittest import mock
@@ -5124,7 +5186,8 @@ class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
         shapes = (("abs glob", lambda i: self.W + "/d%d/*.o" % i), ("rel glob", lambda i: "d%d/*.o" % i),
                   ("abs trailing dot", lambda i: self.W + "/d%d/x." % i))
         for label, op in shapes:
-            for n, refused in ((33, False), (40, False), (H._MAX_LINK_RESOLVED - 1, False), (H._MAX_LINK_RESOLVED + 1, True)):
+            for n, refused in ((33, False), (40, False), (H._MAX_LINK_RESOLVED - 1, False), (H._MAX_LINK_RESOLVED, False),
+                               (H._MAX_LINK_RESOLVED + 1, True)):
                 with self.subTest(shape=label, n=n):
                     got = self.fc(D + " -f " + " ".join(op(i) for i in range(n)), self.W)
                     self.assertEqual(got["links_unresolved"], refused)
@@ -5206,7 +5269,12 @@ class TestLinkReadingOfRelativeAndDotDotOperands(unittest.TestCase):
                          ("touch " + DQ + "$X/a.txt" + DQ, "writes_reference"), ("touch $(date +%s).log", "writes_reference"),
                          ("touch " + DQ + "${OUT:-x}.txt" + DQ, "writes_reference"),
                          ("echo x > " + DQ + "$(mktemp)" + DQ, "writes_reference"),
-                         (D + " -f " + DQ + "$X" + DQ + "/*.o", "rm_targets_reference")):
+                         (D + " -f " + DQ + "$X" + DQ + "/*.o", "rm_targets_reference"),
+                         # 4.1.2 release review round 2 (D): the `./` spellings of the same operands
+                         ("touch ./" + DQ + "$f" + DQ, "writes_reference"), ("touch " + DQ + "./$f" + DQ, "writes_reference"),
+                         ("touch .//" + DQ + "$f" + DQ, "writes_reference"), ("touch ./$X", "writes_reference"),
+                         ("touch ./$X/f", "writes_reference"), ("touch " + DQ + "./${X}.txt" + DQ, "writes_reference"),
+                         ("cp a.txt ./" + DQ + "$OUT" + DQ, "writes_reference")):
             with self.subTest(cmd=cmd):
                 got = self.fc(cmd, self.W)
                 self.assertFalse(got[key] or got["links_unresolved"], cmd)
@@ -5220,6 +5288,32 @@ class TestLinkReadingOfRelativeAndDotDotOperands(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 got = self.fc(cmd, cwd) if cwd else self.f(cmd)
                 self.assertTrue(got["writes_reference"], cmd)
+
+    def test_RED_an_absolute_cd_through_a_link_and_dot_dot_is_logical(self):
+        # 4.1.2 release review round 2 (C), MEASURED by the reviewer and here: `cd '<W>/k/..'` is resolved by the shell
+        # LOGICALLY (`cd "<W>/k/.." && pwd -P` is <W>), but the directory's spelling kept `..` and the link reading then
+        # walked it physically: every one of these read writes_reference True (a false hard deny), {} at v4.1.1.
+        self.make_link("k", self.ref / "libraries")
+        (self.work / "plain").mkdir()
+        heads = ["cd " + Q + self.W + "/k/.." + Q, "pushd " + Q + self.W + "/k/.." + Q, "cd " + Q + self.W + "/k/../plain" + Q]
+        if os.name == "nt":
+            heads.append("cd /" + self.W[0].lower() + self.W[2:] + "/k/..")
+        for head in heads:
+            with self.subTest(head=head):
+                got = self.fc(head + " && touch x", self.W)
+                self.assertFalse(got["writes_reference"] or got["links_unresolved"], head)
+        if os.name == "nt":
+            p = {"tool_name": "PowerShell", "cwd": self.W,
+                 "tool_input": {"command": "Set-Location " + Q + self.W + "/k/.." + Q + "; New-Item -ItemType File x"}}
+            got = _facts(p, self.roots)
+            self.assertFalse(got["writes_reference"] or got["links_unresolved"])
+
+    def test_TWIN_a_dot_dot_the_program_receives_is_still_physical(self):
+        self.make_link("k", self.ref / "libraries")
+        for cmd, want in (("cd k/.. && touch x", False), ("cd k && cd .. && touch x", False),
+                          ("touch k/../x", True), ("cd " + Q + self.W + "/k" + Q + " && touch ../x", True)):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.fc(cmd, self.W)["writes_reference"], want, cmd)
 
     def walk_with(self, answer, remote=""):
         """facts() of `touch <W>/k/../x.txt` with the folder before the `..` answering `answer` (the walk's first
@@ -5309,6 +5403,27 @@ class TestLinkReadingOfRelativeAndDotDotOperands(unittest.TestCase):
         got = self.f("touch " + Q + self.W + "/refj/kk/../x.txt" + Q)
         self.assertTrue(got["links_unresolved"])
         self.assertTrue(got["links_disagree"])
+        # 4.1.2 release review round 2 (I): a read-only operand never sets it (`or refuse`).
+        got = self.f("grep foo " + Q + self.W + "/refj/kk/../x.txt" + Q)
+        self.assertFalse(got["links_disagree"] or got["links_unresolved"])
+
+    @unittest.skipUnless(os.name == "nt", "the walk runs on Windows only (POSIX realpath is physical)")
+    def test_RED_a_link_to_a_drive_root_keeps_its_drive(self):
+        # 4.1.2 release review round 2 (E): a folder before `..` resolving to a drive root (`Q:`) had parent "", so the
+        # walk went on at `/`, the hook's current drive. The parent of a drive root is itself.
+        from unittest import mock
+        seen = {"n": 0, "root": ""}
+
+        def dir_rp(head, refuse):
+            seen["n"] += 1
+            return seen["root"] if seen["n"] == 1 else head
+        for root in ("Q:", "C:"):
+            seen["n"], seen["root"] = 0, root
+            with self.subTest(root=root), mock.patch.object(H, "_dir_realpath", dir_rp), \
+                    mock.patch.object(H, "_drive_type", lambda l: 3), \
+                    mock.patch.object(H, "_realpath_budgeted", lambda s, refuse=True: s):
+                got = H._resolve_dot_dot(self.W + "/k/../x.txt", True)
+                self.assertEqual(H._lexical_norm(got), H._lexical_norm(root + "/x.txt"))
 
 
 class TestTranslatedResetsTheBudget(unittest.TestCase):
