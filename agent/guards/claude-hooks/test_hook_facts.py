@@ -65,6 +65,21 @@ def _measured(f):
     return f
 
 
+def _translated(text):
+    """H.powershell_to_sh(text)[0], unless the REAL translator ran out of time making it: then SkipTest,
+    counted like _measured. 4.1.2: tests comparing the translation TEXT indexed the result directly, so a
+    timeout read as a wrong translation (MEASURED 2026-11-11: the pre-push gate at idle priority beside a
+    running game failed test_a_maybe_pop_translates_as_a_pop_that_may_not_happen on `None != 'pushd ...'`)."""
+    sh, _unknown, why = H.powershell_to_sh(text)
+    if sh is None and H.subprocess is _subprocess:
+        category = H.untranslated_category([why])
+        if category in _TRANSLATOR_OUT_OF_TIME:
+            _TRANSLATOR_SKIPS.append(category)
+            raise unittest.SkipTest("the real PowerShell translator ran out of time on this machine ("
+                                    + category + "): the translation was NOT measured")
+    return sh
+
+
 #: 4.1.1 review: the timeout skip needs a ceiling, or a runner where translation ALWAYS times out turns every
 #: PowerShell verdict test into a skip and the leg stays green. Counted here, enforced by __main__ (the CI legs run this
 #: file with plain python). X4_MAX_TRANSLATOR_SKIPS sets it (CI: 0 on Windows, 3 on Ubuntu); unset means 3.
@@ -5270,7 +5285,7 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
                       ("$env:D=" + Q + "C:/safe" + Q + "; " + Q + "y" + Q + " > " + DQ + "$env:D/x" + DQ, ': > "${D}"/x'),
                       ("$env:D=" + Q + "C:/safe" + Q + "; Set-Content " + DQ + "$env:D/x" + DQ + " y", ': > "${D}"/x')):
             with self.subTest(c=c):
-                self.assertEqual(H.powershell_to_sh(c)[0], sh)
+                self.assertEqual(_translated(c), sh)
 
     # 4.1.1 final round (BLIND-SPOTS location stack): Push-Location was read as a plain `cd` and Pop-Location not at
     # all, so after `Set-Location <reference>; Push-Location C:/safe; Pop-Location` a relative operand was judged in
@@ -5368,12 +5383,12 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
 
     def test_a_maybe_pop_translates_as_a_pop_that_may_not_happen(self):
         maybe = "popd ${X4_PS_LOCATION_STACK:+-n}"
-        self.assertEqual(H.powershell_to_sh("Push-Location -StackName $n C:/a; Pop-Location")[0],
+        self.assertEqual(_translated("Push-Location -StackName $n C:/a; Pop-Location"),
                          "pushd C:/a" + chr(10) + maybe + chr(10) + 'cd "${X4_PS_LOCATION_STACK:-.}"')
-        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Pop-Location -StackName $n")[0],
+        self.assertEqual(_translated("Push-Location C:/a; Pop-Location -StackName $n"),
                          "pushd C:/a" + chr(10) + maybe + chr(10) + 'cd "${X4_PS_LOCATION_STACK:-.}"')
         # a definite push under an unreadable one: PowerShell lands at one of them, so both pops may happen
-        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Push-Location -StackName $n C:/b; Pop-Location")[0],
+        self.assertEqual(_translated("Push-Location C:/a; Push-Location -StackName $n C:/b; Pop-Location"),
                          "pushd C:/a" + chr(10) + "pushd C:/b" + chr(10) + maybe + chr(10) + maybe)
 
     def test_the_reader_splits_a_pop_that_may_not_happen(self):
@@ -5381,18 +5396,18 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
         self.assertEqual(sorted(H.norm(d) for d in lanes[-1][1]), sorted([H.norm("C:/r"), H.norm("C:/s")]))
 
     def test_an_unmatched_pop_translates_as_the_current_and_an_unknown_location(self):
-        self.assertEqual(H.powershell_to_sh("Pop-Location")[0], 'cd "${X4_PS_LOCATION_STACK:-.}"')
-        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Pop-Location -StackName s")[0],
+        self.assertEqual(_translated("Pop-Location"), 'cd "${X4_PS_LOCATION_STACK:-.}"')
+        self.assertEqual(_translated("Push-Location C:/a; Pop-Location -StackName s"),
                          "pushd C:/a" + chr(10) + 'cd "${X4_PS_LOCATION_STACK:-.}"')
 
     def test_the_stack_translates_as_pushd_and_popd(self):
-        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Pop-Location")[0], "pushd C:/a" + chr(10) + "popd")
-        self.assertEqual(H.powershell_to_sh("Push-Location -StackName s C:/a; Push-Location C:/b; "
-                                            "Pop-Location -StackName s")[0],
+        self.assertEqual(_translated("Push-Location C:/a; Pop-Location"), "pushd C:/a" + chr(10) + "popd")
+        self.assertEqual(_translated("Push-Location -StackName s C:/a; Push-Location C:/b; "
+                                     "Pop-Location -StackName s"),
                          "pushd C:/a" + chr(10) + "pushd C:/b" + chr(10) + "popd" + chr(10) + "popd")
 
     def test_TWIN_a_local_variable_is_still_read_as_its_value(self):
-        self.assertEqual(H.powershell_to_sh("$D=" + Q + "C:/safe" + Q + "; Set-Location $D")[0], "cd C:/safe")
+        self.assertEqual(_translated("$D=" + Q + "C:/safe" + Q + "; Set-Location $D"), "cd C:/safe")
 
     def test_KNOWN_GAP_an_env_variable_this_command_assigned_is_not_read_as_its_value(self):
         """Pre-existing and accepted for 4.1.0: `$P=<path>` is read and `$env:P=<path>` is not. Reading it was P1, and it
@@ -5597,6 +5612,25 @@ class TestARealTranslatorTimeoutIsASkipNotAVerdict(unittest.TestCase):
             self.assertIn(H.PS_TIMED_OUT, str(cm.exception))
             self.assertEqual(len(_TRANSLATOR_SKIPS), before + 1)     # counted against the ceiling
             _TRANSLATOR_SKIPS.pop()                                   # this one was the test's own
+
+    def test_a_real_timeout_skips_a_translation_text_check_too(self):
+        import subprocess as sp
+
+        def timed_out(args, **kw):
+            raise sp.TimeoutExpired(args, kw["timeout"])
+        before = len(_TRANSLATOR_SKIPS)
+        with self.assertRaises(unittest.SkipTest) as cm:
+            self._with_run(timed_out, lambda: _translated("Get-Date"))
+        self.assertIn(H.PS_TIMED_OUT, str(cm.exception))
+        self.assertEqual(len(_TRANSLATOR_SKIPS), before + 1)         # counted against the ceiling
+        _TRANSLATOR_SKIPS.pop()                                       # this one was the test's own
+
+    def test_TWIN_a_translation_that_cannot_start_is_None_not_a_skip(self):
+        def cannot_start(args, **kw):
+            raise FileNotFoundError("fixture: no such PowerShell")
+        before = len(_TRANSLATOR_SKIPS)
+        self.assertIsNone(self._with_run(cannot_start, lambda: _translated("Get-Date")))
+        self.assertEqual(len(_TRANSLATOR_SKIPS), before)
 
     def test_TWIN_any_other_translation_failure_is_still_a_verdict(self):
         import subprocess as sp
