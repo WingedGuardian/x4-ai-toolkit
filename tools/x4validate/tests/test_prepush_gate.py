@@ -115,6 +115,10 @@ def test_RED_a_fixture_name_does_not_select_the_installer_tests_and_the_run_says
     assert selecting.referencing_tests(["CHANGELOG.md"]) == [OTHER]
     out = capsys.readouterr().out
     assert "not selected: " + INSTALL + " names CHANGELOG.md only as" in out
+    # ...and on the path a real gate run takes (main calls tests_for, which reports what it left out itself):
+    # 4.1.2 release review, MEASURED: with tests_for's own report removed, the four tests here stayed green.
+    assert selecting.tests_for(["CHANGELOG.md"]) == [OTHER]
+    assert capsys.readouterr().out.count("not selected: " + INSTALL) == 1
 
 
 def test_TWIN_any_other_changed_name_still_selects_them(selecting, capsys):
