@@ -4888,6 +4888,17 @@ class TestLinkResolutionOfLiteralSpellings(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "nt", "Git Bash's on-disk spelling of a name exists only on Windows")
+class TestLinksDisagreeIsSilentWithoutALink(unittest.TestCase):
+    """`links_disagree` is set only when two spellings of one operand land through links in different places. The
+    tests that make it fire need junctions (Windows), so on POSIX nothing named it as a must-NOT-fire rule and the
+    mutation gate's pinned-TRUE column read NONE (4.1.2 CI run 43264491216, ubuntu shard 7/8). These run anywhere."""
+
+    def test_no_link_on_any_operand_is_no_disagreement(self):
+        for cmd in ("touch C:/x4-no-such/a.xml", "echo x > /tmp/x4-no-such/b.xml", "rm -f relative.xml",
+                    "cp a.xml " + Q + "C:/x4-no-such/p|q/c.xml" + Q):
+            self.assertFalse(FC(cmd, GAME)["links_disagree"], cmd)
+
+
 class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
     """4.1.2. Git Bash does not open a name the way Win32 does. MEASURED 2026-11-11 with Git Bash's own `touch`:
     each of `|*?<>:` and a control character is written as U+F000 plus its code (`p|q` lands as p, U+F07C, q),

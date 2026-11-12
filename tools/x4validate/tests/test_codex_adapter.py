@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_testlib import UNKNOWN_EXECUTION_CWD, ADAPTER, FAKE_FINDING, FIX, HAS_PWSH, REPO, fake_validator, make_sandbox, native, process_alive, run_adapter as run
+from codex_testlib import ENGINE_FAILURES, UNKNOWN_EXECUTION_CWD, ADAPTER, FAKE_FINDING, FIX, HAS_PWSH, REPO, fake_validator, make_sandbox, native, process_alive, run_adapter as run
 
 
 @pytest.fixture
@@ -30,7 +30,12 @@ def test_rendered_adapter_exists():
 def test_bash_labelled_powershell_is_routed(sandbox):
     tmp, tk, env = sandbox
     cmd = f"Set-Content -Path '{tk / 'reference' / 'libraries' / 'wares.xml'}' -Value 'x'"
-    assert run(env, native("bash_powershell", tmp, command=cmd), shell="powershell")[0] == "deny"
+    # 4.1.2 CI: twice on ubuntu (runs 43199290697 cold-archive, 43264491216 installed-copy) this read "inert"
+    # while the other leg of the same commit passed; the reason was not kept. It is now, and an engine failure
+    # is not accepted as the policy's deny.
+    d, reason = run(env, native("bash_powershell", tmp, command=cmd), shell="powershell")
+    assert d == "deny", (d, reason)
+    assert not any(f in (reason or "") for f in ENGINE_FAILURES), reason
     assert run(env, native("bash_powershell", tmp, command=cmd), shell="bash")[0] != "deny"  # twin: routing decides
 
 
