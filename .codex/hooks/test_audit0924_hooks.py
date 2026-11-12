@@ -874,6 +874,10 @@ class TestF376CarrierKeepsTheOuterDirectoryE2E(_RR):
             ("deny", g + "bash -c " + dq + "sh -c " + q + rm + q + dq),
             ("deny", g + "echo y | bash -c " + q + rm + q),
             ("deny", g + "for i in 1; do bash -c " + q + rm + q + "; done"),
+            # 4.1.2 review: a text first reached from an EARLIER, harmless segment (deduped) still
+            # takes the later parent's directory on to its own children.
+            ("deny", "cd " + q + (self.tmp / "elsewhere").as_posix() + q + " && bash -c " + dq + "bash -c " + q + rm + q
+             + dq + "; " + g + "bash -c " + dq + "bash -c " + chr(92) + dq + "bash -c " + q + rm + q + chr(92) + dq + dq),
         ], tool="Bash")
 
     def test_powershell_set_location_then_a_carrier(self):

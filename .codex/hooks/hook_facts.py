@@ -5640,22 +5640,29 @@ def deletes_recursively(words: list) -> bool:
         if _verb_name(verb(c)) not in DELETE_VERBS or vt not in toks:
             continue
         for t in toks[toks.index(vt) + 1:]:
-            if t == "--recursive" or (re.match(r"^-[A-Za-z]+$", t) and set(t[1:]) & set("rR")):
+            if _is_recursive_flag(t):
                 return True
     return False
 
 
+def _is_recursive_flag(t: str) -> bool:
+    """`-r`/`-R` in a short cluster, or `--recursive` or any prefix of it GNU getopt accepts as
+    unique among rm's long options: `--r` .. `--recursive` (4.1.2 review, MEASURED: `rm --rec
+    <folder above reference>` was allowed). No other rm option starts with `r`."""
+    if len(t) > 2 and t.startswith("--"):
+        return "--recursive".startswith(t)
+    return bool(re.match(r"^-[A-Za-z]+$", t) and set(t[1:]) & set("rR"))
+
+
 def _removes_folders(seg: str) -> bool:
-    """F375 row 16: this delete segment's own flags make it recursive (`-r`/`-R` in any cluster,
-    `--recursive`). Read from the segment's tokens as written: deletes_recursively() re-joins the
-    words without their quotes and re-parses them, which records a QUOTED `'{1..64}'` as a brace
-    word (MEASURED: it set operand_expansion_truncated on a literal filename)."""
+    """F375 row 16: this delete segment's own flags make it recursive (_is_recursive_flag). Read
+    from the segment's tokens as written: deletes_recursively() re-joins the words without their
+    quotes and re-parses them, which records a QUOTED `'{1..64}'` as a brace word (MEASURED: it set operand_expansion_truncated on a literal filename)."""
     toks = tokens_of(seg)
     vt = _verb_token(seg)
     if vt not in toks:
         return False
-    return any(t == "--recursive" or (re.match(r"^-[A-Za-z]+$", t) and set(t[1:]) & set("rR"))
-               for t in toks[toks.index(vt) + 1:])
+    return any(_is_recursive_flag(t) for t in toks[toks.index(vt) + 1:])
 
 
 def named_game_roots(n: str) -> list:
@@ -9092,9 +9099,9 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # F376: ...but where a CARRIER segment hands it on, it runs where that segment runs: `cd
     # <game> && bash -c 'rm -rf extensions'` was ALLOWED while the plain spelling denied. Each
     # carried text is walked from every (directory, from_seed, unseeded, physical) its carrier
-    # segments have, in carried order (a parent before its children), AND from today's unknown
-    # directory, LAST, so no verdict gets weaker and the `cwd` fact read from the last segment
-    # stays the old one. A text reached by no carrier segment (a substitution, a reading) keeps
+    # segments have in any walk of their parent, spread to a fixpoint (below), AND from today's
+    # unknown directory, LAST, so no verdict gets weaker and the `cwd` fact read from the last
+    # segment stays the old one. A text reached by no carrier segment (a substitution, a reading) keeps
     # the old walk only. Past _MAX_CD_LANES seeds the directory is UNKNOWN and refused (C7).
     walks = {}
 
@@ -9119,29 +9126,43 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
         top = i_ == 0
         mine = [(base, True, "", base)] if (top or not moves) else seeds_of.get(c, []) + [unknown_seed]
         seeds_of[c] = mine = list(dict.fromkeys(mine))
-        if not moves:
-            continue
-        for seed in mine:
-            tr, ba, ph, fl = lanes_from(c, seed)
-            for child, routes in origins.items():
-                for parent, k in routes:
-                    if parent != c or k >= len(tr):
-                        continue
-                    ds, fs = tr[k][1], fl[k] if k < len(fl) else [True] * len(tr[k][1])
-                    uds = ba[k][1] if k < len(ba) else [""]
-                    pds = ph[k][1] if k < len(ph) else [""] * len(ds)
-                    for j, d0 in enumerate(ds):
-                        if not d0:
-                            continue
-                        got = seeds_of.setdefault(child, [])
-                        new = (d0, fs[j] if j < len(fs) else True,
-                               uds[j] if j < len(uds) else uds[0], pds[j] if j < len(pds) else "")
-                        if new in got:
-                            continue
-                        if len(got) >= _MAX_CD_LANES:
-                            _CD_LANES_TRUNCATED[0] = True
-                            break
-                        got.append(new)
+    # ...spread to a FIXPOINT, never in one pass over `carried`: carried_commands dedupes, so a text
+    # first reached from an earlier segment is listed before a LATER parent that hands it a seed,
+    # and one pass never took that seed on to the text's own children (4.1.2 review, MEASURED:
+    # `cd <elsewhere> && bash -c "bash -c 'rm ...'"; cd <game> && bash -c "bash -c \"bash -c
+    # 'rm -rf extensions'\""` was allowed). Every (text, seed) is walked once; at most
+    # _MAX_CD_LANES inherited seeds per text, past which the directory is unknown and refused (C7).
+    routes_from = {}
+    for child, routes in origins.items():
+        for parent, k in dict.fromkeys(routes):
+            if child != body:
+                routes_from.setdefault(parent, []).append((child, k))
+    inherited = {}
+    work = [(c, seed) for c in carried for seed in seeds_of[c]] if moves else []
+    while work:
+        c, seed = work.pop()
+        tr, ba, ph, fl = lanes_from(c, seed)
+        for child, k in routes_from.get(c, ()):
+            if k >= len(tr):
+                continue
+            ds, fs = tr[k][1], fl[k] if k < len(fl) else [True] * len(tr[k][1])
+            uds = ba[k][1] if k < len(ba) else [""]
+            pds = ph[k][1] if k < len(ph) else [""] * len(ds)
+            for j, d0 in enumerate(ds):
+                if not d0:
+                    continue
+                got = inherited.setdefault(child, [])
+                new = (d0, fs[j] if j < len(fs) else True,
+                       uds[j] if j < len(uds) else uds[0], pds[j] if j < len(pds) else "")
+                if new in got:
+                    continue
+                if len(got) >= _MAX_CD_LANES:
+                    _CD_LANES_TRUNCATED[0] = True
+                    break
+                got.append(new)
+                work.append((child, new))
+    for child, got in inherited.items():
+        seeds_of[child] = got + [unknown_seed]
     for c in all_cmds:
         # A spanning view is walked as the text it views (the top level's view as the top level).
         seeds = seeds_of.get(body if c == top_view else view_of.get(c, c), [unknown_seed])

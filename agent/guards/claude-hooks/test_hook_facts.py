@@ -10944,6 +10944,14 @@ class TestF376CarrierKeepsTheOuterDirectory(unittest.TestCase):
         self.assertTrue(F(many(H._MAX_CD_LANES + 1))["cd_lanes_truncated"])
         self.assertFalse(F(many(H._MAX_CD_LANES))["cd_lanes_truncated"])
 
+    def test_a_seed_from_a_LATER_parent_reaches_the_children_too(self):
+        # 4.1.2 review, MEASURED: carried texts are deduped, so `bash -c 'rm ...'` is first reached
+        # from the earlier, harmless segment; the later parent's <game> seed must still reach it.
+        inner = "bash -c " + DQ + "bash -c " + BS + DQ + "bash -c " + Q + self.RF + Q + BS + DQ + DQ
+        early = "cd " + Q + _ELSEWHERE + Q + " && bash -c " + DQ + "bash -c " + Q + self.RF + Q + DQ + "; "
+        self.assertTrue(F(self._g() + inner)["rm_hits_game"])
+        self.assertTrue(F(early + self._g() + inner)["rm_hits_game"])
+
     def test_one_deployed_mod_through_a_carrier_is_the_deployed_mod_ask(self):
         f = F("cd " + Q + GAME + "/extensions" + Q + " && bash -c " + Q + D + " -rf amod" + Q)
         self.assertTrue(f["rm_in_x4_dir"])
@@ -10960,10 +10968,13 @@ class TestF376CarrierKeepsTheOuterDirectory(unittest.TestCase):
         f = F("bash -c " + Q + self.RF + Q + " && cd " + Q + GAME + Q)
         self.assertFalse(f["rm_hits_game"] or f["rm_in_x4_dir"])
 
-    def test_TWIN_a_trap_runs_later_so_it_keeps_the_unknown_directory(self):
-        # A trap's text runs when the signal fires, in whatever directory is in force THEN.
-        f = F(self._g() + "trap " + Q + D + " -rf build" + Q + " EXIT")
-        self.assertFalse(f["rm_in_x4_dir"])
+    def test_GAP_a_trap_is_not_judged_in_any_directory(self):
+        """STILL UNCOVERED (F376), pinned so a change is seen: a trap's text runs when the signal
+        fires, in the directory in force THEN, so it is not given its segment's directory. `cd
+        <game>; trap 'rm -rf extensions' EXIT` really deletes at exit and is allowed, like a delete
+        inside $(...) or a heredoc fed to a shell after a cd."""
+        f = F(self._g() + "trap " + Q + self.RF + Q + " EXIT")
+        self.assertFalse(f["rm_hits_game"] or f["rm_in_x4_dir"])
 
     def test_TWIN_an_unknown_outer_directory_keeps_todays_reading(self):
         for pre in ("cd " + DQ + "$NOPE" + DQ + " && ", ""):
@@ -11007,6 +11018,19 @@ class TestF375AncestorOfARootIsDeniedLikeTheRoot(unittest.TestCase):
     def test_a_move_of_an_ancestor_moves_the_root_away(self):
         self.assertTrue(F("mv " + DQ + self.REF_PARENT + DQ + " /tmp/x").get(self.CR))
         self.assertTrue(F("mv " + DQ + self.GAME_PARENT + DQ + " /tmp/x").get(self.CG))
+
+    def test_every_unambiguous_prefix_of_recursive_is_recursive(self):
+        # GNU getopt accepts a unique prefix of a long option; among rm's options only --recursive
+        # starts `--rec` (`--r` alone is unique too: no other rm option starts with r).
+        for flag in ("--r", "--re", "--rec", "--recu", "--recursiv", "--recursive"):
+            self.assertTrue(F(D + " " + flag + " " + DQ + self.REF_PARENT + DQ).get(self.CR), flag)
+            self.assertTrue(H.deletes_recursively([D, flag, "x"]), flag)
+
+    def test_TWIN_other_long_options_are_not_recursive(self):
+        for flag in ("--verbose", "--force", "--dir", "--one-file-system", "--preserve-root",
+                     "--interactive", "--recursivex", "--rex"):
+            self.assertFalse(F(D + " " + flag + " " + DQ + self.REF_PARENT + DQ).get(self.CR), flag)
+            self.assertFalse(H.deletes_recursively([D, flag, "x"]), flag)
 
     def test_a_drive_root_contains_both(self):
         f = F(D + " -rf C:/")
