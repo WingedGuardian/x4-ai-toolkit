@@ -474,7 +474,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F373 | `..` after a junction was collapsed lexically (norm; ntpath.realpath normalises first), while Git Bash resolves it through the link | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | Git Bash `touch` through `<w>/k/../f`, `k/../f`, `cd k; ../f`: 3 of 3 landed beside k's target; guard at 0f6b5e3e: 5 of 5 False | FIXED 2026-11-11 (Windows) (residuals OPEN): `..` walked physically; lexical and physical readings through links to different places refused |
 | F374 | an unresolved RELATIVE operand (`"refj$X/..."`) got no link reading: link_head_resolved / link_entries_matched return on "not absolute" | **DEFECT (measured)** · PRE-ARC (F369, 4.1.1) | at 0f6b5e3e, in-process facts(): 3 of 3 False from a folder holding a junction into reference/ | FIXED 2026-11-11: both get the operand joined to its directory as received |
 | F375 | Link and path spellings the guard still reads as written, found by the 4.1.2 release review rounds 2-4 (16 rows, row 11 CLOSED: a protected root that is itself a link, `\\?\Volume{GUID}`, PowerShell provider paths, braces through a junction, `$PWD`, a device-named junction as the head, and others) | **SCOPE LIMIT (measured / read / inferred, per row)** · PRE-ARC | in-process facts() at the round-2 fix, against the reviewers' scripts; per row below | OPEN 2026-11-11: rows 1-15 not fixed (next release, user decision); row 16 (a recursive delete or move of a folder above the reference or game root) FIXED 2026-11-11 |
-| F376 | A command carried inside another shell (`bash -c`, `sh -c`, `eval`, `cmd /c`) does not see the `cd`/`pushd`/`Set-Location` before it, so a relative delete there reaches no rule | **DEFECT (measured)** · PRE-ARC · HIGH | through the whole hook, identical at 1b1a48aa and v4.1.1: 11 carried forms ALLOWED, 9 controls DENIED | FIXED 2026-11-11: a carried text is judged where its carrier segment runs; substitutions and a heredoc fed to a shell OPEN |
+| F376 | A command carried inside another shell (`bash -c`, `sh -c`, `eval`, `cmd /c`) does not see the `cd`/`pushd`/`Set-Location` before it, so a relative delete there reaches no rule | **DEFECT (measured)** · PRE-ARC · HIGH | through the whole hook, identical at 1b1a48aa and v4.1.1: 11 carried forms ALLOWED, 9 controls DENIED | FIXED 2026-11-11: a carried text is judged where its carrier segment runs; substitutions, a heredoc fed to a shell and a trap OPEN |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -13353,9 +13353,17 @@ last segment's physical cwd).
     MEASURED: an ancestor reached through a junction (prep's link rows are unresolved-flagged and are skipped here, F375
     row 6's shape), an unresolved operand that may be an ancestor (`"C:/Users/$X/.."`: never a hard deny, F93), the
     X4_CONFIG pass (still reads only the two reference facts), and the deployed-mod ask. **RE-DERIVED BY:**
-    `test_hook_facts.py::TestF375AncestorOfARootIsDeniedLikeTheRoot` (6 of its 10 tests fail on 0152fdb5; the other 4, TWINs,
-    pass on both) and `test_audit0924_hooks.py::TestF375AncestorDeleteWholeHook` (fails on 0152fdb5); 8 mutants
-    (`F375: ...` in scripts/verify-hook-tests.py), all caught.
+    `test_hook_facts.py::TestF375AncestorOfARootIsDeniedLikeTheRoot` and `test_audit0924_hooks.py::TestF375AncestorDeleteWholeHook`
+    (fails on 0152fdb5); 8 mutants (`F375: ...` in scripts/verify-hook-tests.py), all caught. CORRECTION 2026-11-12 (4.1.2
+    review): this said "6 of its 10 tests fail on 0152fdb5; the other 4, TWINs, pass on both"; the reviewer MEASURED 7 of
+    10. Re-measured here with the class as it now is (12 tests): 7 of 12 fail on 0152fdb5, the 6 positive tests and
+    `test_TWIN_an_unresolved_operand_is_not_read_as_an_ancestor` (its second, positive check `${A:-C:/Users}`); the other 5
+    TWINs pass on both. ADDED 2026-11-12 (4.1.2 review, MEASURED: `rm --rec <folder above reference>` was allowed): a
+    unique prefix of `--recursive` (`--r` .. `--recursive`; GNU getopt takes any unique prefix, and no other rm long option
+    starts with `r`: READ, rm's options --force --interactive --one-file-system --no-preserve-root --preserve-root
+    --recursive --dir --verbose) is recursive, in `_removes_folders` and in the older `deletes_recursively` (whose callers,
+    the xargs and archive rules, read it the same way now); `--verbose`, `--force`, `--dir`, `--recursivex` and the like are
+    not (`test_every_unambiguous_prefix_of_recursive_is_recursive` fails on 0152fdb5, its TWIN passes on both; 2 mutants).
 
 2026-11-11, USER DECISION (relayed by the 4.1.2 review lead): a PowerShell `..` through a junction stays REFUSED (the strict
 reading in F373: PowerShell takes `..` from the path as written, Git Bash through the link, and the guard reads it as Git Bash
@@ -13390,8 +13398,11 @@ release). SUPERSEDED 2026-11-11: the user approved the fix for 4.1.2 (below).
 **FIXED 2026-11-11 (4.1.2, fix lane r6).** READ: `_inner_commands` now reports which SEGMENT of its text carried each
 carried text (not a `trap`, whose text runs when the signal fires; not a reading or a whole-command variant, which carries
 its own `cd`s), `carried_commands` hands that on as (parent, segment) routes, and facts() walks every carried text from each
-(directory, from_seed, unseeded, physical) lane its carrier segment has in the parent's walk, parents first, AND from the old
-unknown directory, last (so no verdict can get weaker and the `cwd` fact is the old one). A text no carrier segment hands on
+(directory, from_seed, unseeded, physical) lane its carrier segment has in any walk of the parent, spread to a FIXPOINT
+(CORRECTION 2026-11-12, 4.1.2 review: this said "parents first", one pass over the deduped carried list, so a text first
+reached from an EARLIER segment never took a later parent's seed on to its own children; MEASURED end to end: prefixing `cd
+'<elsewhere>' && bash -c "bash -c 'rm -rf extensions'"; ` to a three-deep carrier after `cd '<game>'` made the deny an
+allow; now denied, `test_a_seed_from_a_LATER_parent_reaches_the_children_too`), AND from the old unknown directory, last (so no verdict can get weaker and the `cwd` fact is the old one). A text no carrier segment hands on
 (a substitution) keeps the old walk only. Past _MAX_CD_LANES seeds for one text the directory is unknown and refused (C7).
 MEASURED through the whole hook, base 0152fdb5 vs the fix (the front-door reviewer's probe.py, probe2-4 re-run as
 scratch r6/fd, fixture roots, nothing executed): every one of the 11 ALLOWED forms above is DENIED by the game or reference
@@ -13404,12 +13415,20 @@ and in a subshell, `pushd A; pushd B; popd` before one, PowerShell `Set-Location
 spelling. `cd <game> && cd - && bash -c '...'` is now DENIED like its plain spelling, which the cd tracker already reads as
 staying in <game> (`cd -` reaches no lane: READ, `_operands` drops `-`); a pre-existing strict reading, not new. Twins still
 ALLOWED: the carriers after a cd to an unrelated folder (bash -c, cmd //c rd, cmd //c del, eval), a `cd` AFTER the carrier,
-a `trap` after a cd into the game, and an unknown outer directory (`cd "$NOPE"`), which reads as before. STILL OPEN
-(MEASURED allowed at base and fix): a delete inside `$(...)`, backticks or `<(...)` after a cd (a substitution has no
+and an unknown outer directory (`cd "$NOPE"`), which reads as before. STILL OPEN (MEASURED allowed at base and fix): a
+`trap` after a cd (`cd <game>; trap 'rm -rf extensions' EXIT` deletes at exit and is allowed: its text runs in the
+directory in force when the signal fires, so it is given none; CORRECTION 2026-11-12, 4.1.2 review: this listed the
+trap as a twin that is correctly allowed; it is a gap, pinned by `test_GAP_a_trap_is_not_judged_in_any_directory`), a
+delete inside `$(...)`, backticks or `<(...)` after a cd (a substitution has no
 segment here: segments() can split inside it, and a nested one may run after a `cd` of its own), and a heredoc fed to a
 shell after a cd (`cd <game> && bash <<'EOF'`: the body is a top-level text, not handed on by a segment). INFERRED, not
 measured: `env -C <dir> bash -c ...` reads in the outer directory, as its plain `env -C <dir> rm ...` already does (MEASURED
-deny for both; a false refusal where <dir> is unprotected). Two existing tests pinned the old reading as a fixture
+deny for both; a false refusal where <dir> is unprotected). FAIL-CLOSED FALSE REFUSALS (MEASURED by the 4.1.2 reviewer,
+not re-run here), each after a cd into a protected root: `Start-Process -WorkingDirectory <other> cmd ...` and `sudo -i`
+(both run elsewhere, read as the outer directory), and `env -C` above; and one carried text handed on from 17 or more
+folders (more than _MAX_CD_LANES seeds) is refused as cd_lanes_truncated. COST (MEASURED by the reviewer, not re-run
+here): contrived shapes that fill 16 lanes reach the 18 s deadline and refuse; a 1,500-segment `bash -c` after a cd went
+2.0 s -> 6.7 s. Two existing tests pinned the old reading as a fixture
 assumption and were changed (READ): `test_TWIN_a_carrier_after_a_directory_change_is_not_seeded` (popd with an empty stack
 now leaves a carrier where the plain spelling is; a substitution carries the moves clauses) and the `SESSION_DELETE` of
 `TestProgramsThatRunProgramsReview` (now a substitution, so the reading-leak tests still see the directory-change test).
@@ -13419,10 +13438,10 @@ code): no fact became weaker on any row; apart from the two new facts appearing,
 True (an ADVISORY, not a prompt): a session's own probe script whose `$(v "eval 'rm -rf \"$G\"'")` is split by
 segments() into an `eval` segment after a `cd <toolkit>`, so the eval's text, quoted debris, joins the toolkit. Not
 intended; recorded rather than fixed (a parse fragment of a substitution, the shape lane F narrowed for $(...) verbs).
-**RE-DERIVED BY:** `test_hook_facts.py::TestF376CarrierKeepsTheOuterDirectory` (8 of its 12 tests fail on 0152fdb5; the
-4 TWIN tests pass on both), `test_audit0924_hooks.py::TestF376CarrierKeepsTheOuterDirectoryE2E` (2 of 3 fail on 0152fdb5);
-7 new mutants (`F376: ...`) and 6 re-anchored ones (lane F's carrier pair, K-I4, C7, the heredoc-body and bash -c mutants),
-all caught.
+**RE-DERIVED BY:** `test_hook_facts.py::TestF376CarrierKeepsTheOuterDirectory` (re-measured 2026-11-12, 13 tests: 9 fail
+on 0152fdb5; the 3 TWINs and the GAP test pass on both), `test_audit0924_hooks.py::TestF376CarrierKeepsTheOuterDirectoryE2E`
+(2 of 3 fail on 0152fdb5); 8 new mutants (`F376: ...`, the fixpoint one added 2026-11-12) and 6 re-anchored ones (lane F's
+carrier pair, K-I4, C7, the heredoc-body and bash -c mutants), all caught.
 
 ## F365 - `_merge` modelled `<add pos="append">` as an append; the engine skips the node · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
 
