@@ -214,8 +214,10 @@ def _unmsys(s: str) -> str:
 
 
 def _native(s: str) -> str:
-    """`s` for a file-system call: a `//?/` (verbatim) spelling takes backslashes, which that prefix requires."""
-    return s.replace("/", chr(92)) if s.startswith("//?/") else s
+    """`s` for a file-system call: a `//?/` (verbatim) spelling takes backslashes, which that prefix requires. Windows only:
+    4.1.2 release review round 4 (C2), simulated with the reviewer's posixsim.py, on POSIX `//?/x` is a path of its own,
+    and its backslashed form is a RELATIVE name there, resolved under the cwd."""
+    return s.replace("/", chr(92)) if os.name == "nt" and s.startswith("//?/") else s
 
 
 #: A verbatim (`//?/`, and the `/?/` one backslash pair of `\\\\?\\` in double quotes leaves: _WIN_PREFIX) or a

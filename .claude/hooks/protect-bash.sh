@@ -464,7 +464,7 @@ fi
 if on links_unresolved; then
   x4_guard_check_inert
   _X4_UNRELAXED=1
-  deny "This command names files in so many different folders that the guard stopped checking them for links (a junction or symlink into a protected folder), so some targets were NEVER checked. Split it into commands that each touch fewer folders and re-run. (Or the filesystem could not say whether one of its paths is a link: check that each path can be read. Or a path has a .. after a link that leads to a network share or another drive that is not local, which the guard does not follow: write that path without the .. in it.)"
+  deny "This command names files in so many different folders that the guard stopped checking them for links (a junction or symlink into a protected folder), so some targets were NEVER checked. Split it into commands that each touch fewer folders and re-run. (Or the filesystem could not say whether one of its paths is a link: check that each path can be read. Or a path has a .. after a link that leads to a network share, a volume path (a Volume{...} name) or another drive that is not local, which the guard does not follow: write that path without the .. in it.)"
 fi
 
 # === HARD BLOCK — delete the game installation ===

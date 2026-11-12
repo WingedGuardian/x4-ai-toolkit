@@ -3386,7 +3386,12 @@ MUTANTS = [
      'test_a_verbatim_looking_posix_folder_keeps_its_name'),
     ('link budget: ...and a folder is opened verbatim only there (round 3)',
      '_realpath_budgeted("//?/" + key if os.name == "nt" else key, refuse)', '_realpath_budgeted("//?/" + key, refuse)',
-     'test_a_write_or_delete_through_the_link_is_the_reference'),
+     # round 4 (C2): retargeted at the test the POSIX simulation (posixsim.py) shows red on this mutant
+     'test_a_verbatim_looking_posix_folder_keeps_its_name'),
+    ('link budget: ...nor backslashed off Windows (round 4, C2)',
+     'return s.replace("/", chr(92)) if os.name == "nt" and s.startswith("//?/") else s',
+     'return s.replace("/", chr(92)) if s.startswith("//?/") else s',
+     'test_a_verbatim_looking_posix_folder_keeps_its_name'),
     ('link bound: a leaf link is resolved inside the budget and the deadline (round 3, T2)',
      '        real = _realpath_budgeted(s, refuse) if is_link else',
      '        real = os.path.realpath(_native(s)).replace(chr(92), "/") if is_link else',
@@ -3436,7 +3441,8 @@ _DISAGREE_ONLY = ("nt", "only Windows code sets links_disagree (two spellings of
 _DOTDOT_ONLY = ("nt", "_resolve_dot_dot runs only when os.name == 'nt': POSIX realpath already reads `..` physically "
                 "(posixpath._joinrealpath splits the RESOLVED path)")
 _POSIX_KEY_ONLY = ("posix", "on Windows the clause is always true, so the mutant changes nothing there; on POSIX it keeps a "
-                   "`//?/` folder a path of its own and a folder resolved as written")
+                   "`//?/` folder a path of its own and a folder resolved as written (round 4: each of the three "
+                   "shown red only under a POSIX SIMULATION, posixsim.py; their first real run is the ubuntu CI legs)")
 OS_ONLY = {
     "link bound: a drive that is not local is not resolved (A1)": _DRIVE_TYPE_ONLY,
     "link bound: a remote drive is not local (A1)": _DRIVE_TYPE_ONLY,
@@ -3508,6 +3514,7 @@ OS_ONLY = {
     "dot dot: a drive-root parent is `X:/` (round 3, T4)": _DOTDOT_ONLY,
     "link budget: `//?/` is a prefix only on Windows (round 3, G3)": _POSIX_KEY_ONLY,
     "link budget: ...and a folder is opened verbatim only there (round 3)": _POSIX_KEY_ONLY,
+    "link budget: ...nor backslashed off Windows (round 4, C2)": _POSIX_KEY_ONLY,
     "link budget: a folder is resolved verbatim (round 2, B)": _MSYS_ONLY,
     "link budget: ...and the answer unwrapped (round 2, B)": _MSYS_ONLY,
     "link entries: ...without turning a device name into the device (round 2, A)": _MSYS_ONLY,

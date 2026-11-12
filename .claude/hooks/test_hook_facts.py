@@ -5330,50 +5330,69 @@ class TestLinkReadingOfRelativeAndDotDotOperands(unittest.TestCase):
         return dict(self.roots, game=(base / "game").as_posix(), profile=(base / "prof").as_posix(),
                     saves=(base / "prof" / "save").as_posix())
 
+    # 4.1.2 release review round 4 (C1), MEASURED by the reviewer (ddrive.py): these tests hard-coded `C:`, while GitHub's
+    # Windows runners check out (and so make <repo>/.test-sandbox) on D:, where the `C:/<rest>` control reads False. The
+    # drive is the sandbox's own; `above_the_root_on_another_drive` runs the same cases on D:-spelled text.
+    def above_the_root_cases(self, roots):
+        ref, game = roots["reference"], roots["game"]
+        drv = ref[:2]
+        up, bs_up = drv + "/../", drv + BS + ".." + BS
+        return [("touch " + Q + up + ref[3:] + "/x.xml" + Q, "writes_reference"),
+                ("echo x > " + Q + up + ref[3:] + "/x.xml" + Q, "writes_reference"),
+                (D + " -rf " + Q + up + ref[3:] + Q, "rm_targets_reference"),
+                (D + " -rf " + Q + bs_up + ref[3:].replace("/", BS) + Q, "rm_targets_reference"),
+                # a first folder that need not exist: the walk's realpath of it is non-strict
+                (D + " -rf " + Q + drv + "/x4-no-such/../../" + ref[3:] + Q, "rm_targets_reference"),
+                (D + " -rf " + Q + drv + "/./../" + ref[3:] + Q, "rm_targets_reference"),
+                (D + " -rf " + Q + up + game[3:] + Q, "rm_hits_game"),
+                (D + " -rf " + Q + up + roots["profile"][3:] + "/x.xml" + Q, "rm_in_profile"),
+                (D + " -rf " + Q + up + roots["saves"][3:] + "/s.xml" + Q, "rm_saves")], drv
+
+    def above_the_root_check(self, roots, cwd):
+        cases, drv = self.above_the_root_cases(roots)
+        for cmd, key in cases:
+            with self.subTest(cmd=cmd):
+                control = cmd
+                for spelled in (drv + "/x4-no-such/../../", drv + "/./../", drv + "/../", drv + BS + ".." + BS):
+                    control = control.replace(spelled, drv + ("/" if "/" in spelled else BS))
+                self.assertTrue(H.facts({"tool_input": {"command": control}}, roots)[key], "control: " + control)
+                self.assertTrue(H.facts({"tool_input": {"command": cmd}}, roots)[key], cmd)
+        ref = roots["reference"]
+        for cmd in (D + " -rf " + Q + "../" * 40 + ref[3:] + Q,
+                    "cd " + Q + drv + "/" + Q + " && " + D + " -rf " + Q + "../" + ref[3:] + Q):
+            with self.subTest(cmd=cmd[:40]):
+                self.assertTrue(H.facts({"tool_input": {"command": cmd}, "cwd": cwd}, roots)["rm_targets_reference"], cmd)
+        got = H.facts({"tool_input": {"command": D + " -rf " + Q + drv + "/../x4-no-such-user/nothing-here" + Q}}, roots)
+        self.assertFalse(any(got[k] for k in ("rm_targets_reference", "rm_hits_game", "rm_in_profile", "rm_saves",
+                                              "links_unresolved")))
+
     @unittest.skipUnless(os.name == "nt", "a drive root is a Windows notion")
     def test_RED_a_dot_dot_above_the_drive_root_stays_at_the_root(self):
         # 4.1.2 release review round 3 (G1), MEASURED by the reviewer (e2e.py, rootdotdot.py) and here: `C:/..` is `C:/`
         # (Git Bash's touch 'C:/../Users/.../probe' created the file under C:/Users), but norm() climbs above the drive
         # (`C:/../a/b` is `/a/b`, an OLD lexical bug), and v4.1.1 caught the shape only because realpath disagreed with that
         # wrong form. From 4140faa5 the walk clamped at the root, saw no link and returned "", so the delete of
-        # `'C:/../<ref>'` read rm_targets_reference False (v4.1.1 and 9368d5db: True): an ALLOW regression.
+        # `'C:/../<ref>'` read rm_targets_reference False (v4.1.1 and 9368d5db: True): an ALLOW regression. Also the two
+        # older shapes the same change closes (0 in every version before): a relative `..` that overshoots the drive root,
+        # and `..` from the drive root itself; and the TWIN onto no root.
         roots = self.above_the_root_roots()
-        ref, game = self.ref.as_posix(), roots["game"]
-        cases = [("touch " + Q + "C:/../" + ref[3:] + "/x.xml" + Q, "writes_reference"),
-                 ("echo x > " + Q + "C:/../" + ref[3:] + "/x.xml" + Q, "writes_reference"),
-                 (D + " -rf " + Q + "C:/../" + ref[3:] + Q, "rm_targets_reference"),
-                 (D + " -rf " + Q + "C:" + BS + ".." + BS + ref[3:].replace("/", BS) + Q, "rm_targets_reference"),
-                 (D + " -rf " + Q + "C:/Users/../../" + ref[3:] + Q, "rm_targets_reference"),
-                 (D + " -rf " + Q + "C:/./../" + ref[3:] + Q, "rm_targets_reference"),
-                 (D + " -rf " + Q + "C:/../" + game[3:] + Q, "rm_hits_game"),
-                 (D + " -rf " + Q + "C:/../" + roots["profile"][3:] + "/x.xml" + Q, "rm_in_profile"),
-                 (D + " -rf " + Q + "C:/../" + roots["saves"][3:] + "/s.xml" + Q, "rm_saves")]
-        for cmd, key in cases:
-            with self.subTest(cmd=cmd):
-                control = cmd.replace("C:/../", "C:/").replace("C:" + BS + ".." + BS, "C:" + BS).replace(
-                    "C:/Users/../../", "C:/").replace("C:/./../", "C:/")
-                self.assertTrue(H.facts({"tool_input": {"command": control}}, roots)[key], "control: " + control)
-                self.assertTrue(H.facts({"tool_input": {"command": cmd}}, roots)[key], cmd)
-        p = {"tool_name": "PowerShell", "tool_input": {"command": "Remove-Item -Recurse -Force " + Q + "C:" + BS + ".." + BS
+        self.above_the_root_check(roots, self.W)
+        ref = roots["reference"]
+        p = {"tool_name": "PowerShell", "tool_input": {"command": "Remove-Item -Recurse -Force " + Q + ref[:2] + BS + ".." + BS
                                                         + ref[3:].replace("/", BS) + Q}}
         self.assertTrue(_facts(p, roots)["rm_targets_reference"])
 
     @unittest.skipUnless(os.name == "nt", "a drive root is a Windows notion")
-    def test_RED_a_relative_dot_dot_past_the_drive_root(self):
-        # ...and the two older shapes the same change closes (0 in every version before, MEASURED by the reviewer):
-        # a relative `..` that overshoots the drive root, and `..` from the drive root itself.
-        ref = self.ref.as_posix()
-        for cmd, cwd in ((D + " -rf " + Q + "../" * 40 + ref[3:] + Q, self.W),
-                         ("cd " + Q + "C:/" + Q + " && " + D + " -rf " + Q + "../" + ref[3:] + Q, self.W)):
-            with self.subTest(cmd=cmd[:40]):
-                self.assertTrue(self.fc(cmd, cwd)["rm_targets_reference"], cmd)
-
-    @unittest.skipUnless(os.name == "nt", "a drive root is a Windows notion")
-    def test_TWIN_a_dot_dot_above_the_drive_root_onto_no_root(self):
-        roots = self.above_the_root_roots()
-        got = H.facts({"tool_input": {"command": D + " -rf " + Q + "C:/../Users/x4-no-such-user/nothing-here" + Q}}, roots)
-        self.assertFalse(any(got[k] for k in ("rm_targets_reference", "rm_hits_game", "rm_in_profile", "rm_saves",
-                                              "links_unresolved")))
+    def test_RED_above_the_root_on_another_drive(self):
+        # 4.1.2 release review round 4 (C1): the same cases with every root spelled on D: (a GitHub runner's checkout
+        # drive), as text to the analyser, with D: answered as a local drive (here it has no root directory).
+        from unittest import mock
+        base = "D:/a/x4-ai-toolkit/x4-ai-toolkit/.test-sandbox/x4abovethe"
+        roots = dict(ROOTS, reference=base + "/reference", game=base + "/game", profile=base + "/prof",
+                     saves=base + "/prof/save")
+        real = H._drive_type
+        with mock.patch.object(H, "_drive_type", lambda l: 3 if l.upper() == "D" else real(l)):
+            self.above_the_root_check(roots, base + "/work")
 
     @unittest.skipUnless(os.name == "nt", "the PowerShell front end and junctions: Windows")
     def test_a_powershell_dot_dot_after_a_junction_is_read_physically_by_design(self):
@@ -5391,9 +5410,12 @@ class TestLinkReadingOfRelativeAndDotDotOperands(unittest.TestCase):
     def test_a_verbatim_looking_posix_folder_keeps_its_name(self):
         # 4.1.2 release review round 3 (G3): the cache key dropped a leading `//?/` on every system; on POSIX
         # `//?/x4-no-such/a` would have been resolved as the RELATIVE `x4-no-such/a` (against the process cwd).
+        # Round 4 (C2), simulated (posixsim.py): `_native` backslashed it on every system too, so this asserted what POSIX
+        # never answers (posixpath.realpath collapses `//?/x` to `/?/x`). It asserts POSIX's own answer now.
+        import posixpath
         H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
         H._LINK_DIRS.clear()
-        self.assertTrue(H._dir_realpath("//?/x4-no-such/a", True).startswith("//?/"))
+        self.assertEqual(H._dir_realpath("//?/x4-no-such/a", True), posixpath.realpath("//?/x4-no-such/a"))
 
     @unittest.skipUnless(os.name == "nt", "a drive root is a Windows notion")
     def test_a_dot_dot_at_the_drive_root_costs_no_lookup_and_lands_on_the_root(self):
@@ -5787,9 +5809,10 @@ def _ps_verdict(command, roots=None):
     if not _PWSH:
         raise unittest.SkipTest("no PowerShell on this machine: the PowerShell front-end is not exercised here")
     f = _facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS if roots is None else roots)
-    assert not f.get("powershell_error") and not f.get("carrier_untranslated"), (
-        "the PowerShell translator gave no verdict: %r" % ({k: f.get(k) for k in ("powershell_error",
-                                                                            "carrier_untranslated", "untranslated_category")},))
+    # 4.1.2 release review round 4 (C4): a raise, not a bare `assert`, which `python -O` removes.
+    if f.get("powershell_error") or f.get("carrier_untranslated"):
+        raise AssertionError("the PowerShell translator gave no verdict: %r" % (
+            {k: f.get(k) for k in ("powershell_error", "carrier_untranslated", "untranslated_category")},))
     return f
 
 

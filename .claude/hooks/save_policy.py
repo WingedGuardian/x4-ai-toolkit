@@ -429,8 +429,8 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None, deadlin
                          "targets were NEVER checked. Split it into commands that each touch fewer folders "
                          "and re-run. (Or the filesystem could not say whether one of its paths is a link: "
                          "check that each path can be read. Or a path has a .. after a link that leads to a network "
-                         "share or another drive that is not local, which the guard does not follow: write that path "
-                         "without the .. in it.)")
+                         "share, a volume path (a Volume{...} name) or another drive that is not local, which the guard "
+                         "does not follow: write that path without the .. in it.)")
     if facts.get("carriers_truncated"):
         # protect-bash.sh denies this unconditionally; running that backend would expand
         # the whole command a second time inside the same 20 s deadline (MEASURED

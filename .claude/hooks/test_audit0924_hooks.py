@@ -1549,6 +1549,7 @@ class TestLinkBudgetWholeHook(unittest.TestCase):
             self.assertEqual(v, "deny", reason)
             self.assertIn("different folders", reason)
             self.assertIn("network share", reason)
+            self.assertIn("Volume{...}", reason)              # round 4 (C5): a letterless volume target too
 
     @unittest.skipUnless(os.name == "nt", "Git Bash's on-disk spelling of a name exists only on Windows")
     def test_two_readings_landing_apart_have_their_own_reason(self):
