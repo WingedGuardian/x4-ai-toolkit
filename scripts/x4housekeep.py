@@ -150,7 +150,7 @@ DEFAULTS = {
     "temp_prefixes": ["x4qa_", "x4gate_", "x4reg_gate_", "x4reader_", "x4diff_truth_", "x4stress_",
                       "x4-tool-audit-pytest-", "x4-pytest-batch-", "x4-mutation-result-", "x4-fake-install-",
                       "x4hk5_", "x4hk6_", "x4psfe_", "x4split_", "x4lanei_", "x4-vht-case-",
-                      "x4-acl-privilege-probe-", "x4f11kb_", "x4-pytest-session-"],
+                      "x4-acl-privilege-probe-", "x4f11kb_", "x4-pytest-session-", "x4anc_"],
     "temp_after_hours": 24,           # nothing in the dir or its direct children newer than this
     "sweep_every_hours": 6,           # session start launches a sweep at most this often
     "codex_sessions_warn_gib": 5,     # session note when ~/.codex/sessions passes this

@@ -985,6 +985,9 @@ def seeds(roots):
         ("game delete", d + " -rf " + QU + g + QU),
         ("extensions wholesale", d + " -rf " + QU + g + "/extensions" + QU),
         ("reference delete", d + " -rf " + QU + ref + QU),
+        # 4.1.2 (F375 row 16): a folder that CONTAINS a root is deleted with it.
+        ("folder above the game", d + " -rf " + QU + g.rsplit("/", 1)[0] + QU),
+        ("folder above reference", d + " -rf " + QU + ref.rsplit("/", 1)[0] + QU),
         ("parameter expansion exceeds complete-analysis bound",
          d + ' -rf "C:/guard-fixture/${A:+a}${B:+b}${C:+c}${D:+d}${E:+e}"'),
         ("one deployed mod", d + " -rf " + QU + g + "/extensions/amod" + QU),
