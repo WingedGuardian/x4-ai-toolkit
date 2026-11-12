@@ -187,6 +187,12 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
             _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
             _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse
         return real or other
+    # Off Windows a `C:/...` spelling (is_abs reads it as absolute) is a RELATIVE name: realpath would place it
+    # under the hook process's own cwd, a landing no program reaches. 4.1.2 CI (ubuntu, run 43157469519), and
+    # simulated here: `sed -i s/a/b/ /dev/null 2>/dev/null` from the game root read its debris `2>/dev/null` as
+    # `<hook cwd>/C:/<game>/2>/dev/null` and denied (test_parse_debris_is_not_joined_onto_the_seed).
+    if not s.startswith("/"):
+        return ""
     return _resolve_spelling(s, refuse)
 
 
