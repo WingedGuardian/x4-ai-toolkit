@@ -187,13 +187,16 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
             _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
             _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse
         return real or other
-    # Off Windows a `C:/...` spelling (is_abs reads it as absolute) is a RELATIVE name: realpath would place it
-    # under the hook process's own cwd, a landing no program reaches. 4.1.2 CI (ubuntu, run 43157469519), and
-    # simulated here: `sed -i s/a/b/ /dev/null 2>/dev/null` from the game root read its debris `2>/dev/null` as
-    # `<hook cwd>/C:/<game>/2>/dev/null` and denied (test_parse_debris_is_not_joined_onto_the_seed).
-    if not s.startswith("/"):
+    real = _resolve_spelling(s, refuse)
+    # Off Windows a `C:/...` spelling (is_abs reads it as absolute) is a RELATIVE name, which realpath places under
+    # the hook process's own cwd: a landing no program reaches. That answer alone is no link. 4.1.2 CI (ubuntu, run
+    # 43157469519): `sed -i s/a/b/ /dev/null 2>/dev/null` from the game root read its debris `2>/dev/null` as
+    # `<hook cwd>/C:/<game>/2>/dev/null` and denied (test_parse_debris_is_not_joined_onto_the_seed). The lookups still
+    # run, inside the budget and the deadline (TestLinkResolutionIsBounded; run 43199290697 went red without them).
+    if real and not s.startswith("/") and posixpath.normpath(real) == posixpath.normpath(
+            posixpath.join(os.getcwd().replace(chr(92), "/"), s)):
         return ""
-    return _resolve_spelling(s, refuse)
+    return real
 
 
 #: Characters Git Bash (the MSYS runtime) writes as U+F000 plus their code, because Win32 forbids them in
