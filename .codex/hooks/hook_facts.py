@@ -143,7 +143,8 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
     respells `p` (an 8.3 short name expanded) is no link (4.1.1 final round, F360). MEASURED at 7f4895a2: `>`, `touch` and `rm` through a junction into reference/ were allowed (3 of 3) while
     the file tools, which canonicalise, denied. The caller judges this path IN ADDITION to the
     lexical one, so the stricter verdict stands. os.path.realpath resolves the longest existing
-    prefix and keeps the rest as written (non-strict); a UNC or device path is left lexical.
+    prefix and keeps the rest as written (non-strict); a UNC or `\\\\?\\Volume{...}` path is left lexical, while a
+    verbatim or device DRIVE path (`//?/C:/...`, `//./C:/...`) is read as its drive path (F372).
 
     `literal`: the caller knows every `$` in `p` is a literal character (single-quoted or escaped), so
     has_unresolved() does not apply. On Windows each component is resolved as Win32 opens it
@@ -258,7 +259,9 @@ def _dir_realpath(head: str, refuse: bool):
     its text without the prefix, so the key is that text whatever _win_alias would make of it (`<w>/j.` and `<w>/j` are
     two keys, two folders); the former "_win_alias leaves it unchanged" condition could no longer change an answer
     (measured: its mutant survived --only), so it is gone."""
-    key = head[4:] if head.startswith("//?/") else head
+    # 4.1.2 release review round 3 (G3): only on Windows is `//?/` a prefix; on POSIX `//?/x` is a path of its own, and
+    # stripping it made the key the RELATIVE `x`.
+    key = head[4:] if os.name == "nt" and head.startswith("//?/") else head
     rhead = _LINK_DIRS.get(key)
     if rhead is None:
         # (Every Windows caller hands a `X:/...` folder: link_resolved and link_entries_matched check the drive first.)
@@ -309,7 +312,11 @@ def _resolve_dot_dot(s: str, refuse: bool) -> str:
         walked = walked + "/" if walked.endswith(":") else walked
     res = _resolve_spelling(pre + walked, refuse)
     if not crossed:
-        return res
+        # 4.1.2 release review round 3 (G1), MEASURED (reviewer: e2e.py through the real hook; here, RED tests): with no link
+        # crossed the walked path is still the landing when the LEXICAL reading puts the text elsewhere -- `..` above a
+        # drive root, where norm() climbs past the drive (`C:/../a` is `/a`, an old bug left as is) while the walk stays at
+        # `C:/`. Returning "" there turned the delete of `'C:/../<ref>'` from refused (v4.1.1, 9368d5db) into allowed.
+        return res or ("" if _same_place(pre + walked, s) else pre + walked)
     phys = res or pre + walked
     lex = _realpath_budgeted(s, refuse)
     lex = "" if lex is None or _same_place(lex, s) else lex
@@ -343,7 +350,11 @@ def _resolve_spelling(s: str, refuse: bool) -> str:
         real = _realpath_budgeted(s, refuse)    # dot segments / a short leaf: the whole path, as before
     else:
         if head.endswith(":"):
-            head += "/"                     # `C:` alone is the drive's CURRENT folder, never its root
+            # `C:` alone is the drive's CURRENT folder to Win32. Since round 2 (B) a folder is resolved verbatim, and
+            # `realpath('\\?\C:')` returns it unchanged (MEASURED on 3.12, round 3), so the hazard is gone; this line
+            # makes the cache key the drive ROOT (pinned by the `_LINK_DIRS.get(drive + "/")` assertion of
+            # test_a_file_at_a_drive_root_resolves_from_the_root_not_the_current_folder).
+            head += "/"
         rhead = _dir_realpath(head, refuse)
         if rhead is None:
             return ""

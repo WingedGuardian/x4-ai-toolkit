@@ -2239,7 +2239,7 @@ class TestTheFactStreamCannotBeForged(unittest.TestCase):
 
 
 class TestTheNameBackstopSurvivesARelativeOperand(unittest.TestCase):
-    """prep() stores join_cwd(cwd, resolved) in element 0, and join_cwd returns "" when
+    """prep() stores long_name(join_cwd(cwd, resolved)) in element 0, and join_cwd returns "" when
     the operand is RELATIVE and the shell's directory is unknowable. That is correct for
     the PATH rules -- inventing a root there would fire on unrelated work -- but it
     silently disarmed the NAME backstop, whose whole job is an operand that bears the
@@ -4172,6 +4172,8 @@ class TestWriteThroughAnExistingLink(unittest.TestCase):
         # resolver returns the long one, so this compares from the expanded folder names: the link's own folder
         # through realpath (which does not follow the link at its end), the target as realpath gives it.
         work = pathlib.Path(os.path.realpath(self.work)).as_posix()
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0          # outside facts(): a fresh budget by hand (round 3, T2)
+        H._LINK_DIRS.clear()
         self.assertEqual(H._lexical_norm(H.link_resolved(work + "/refj/libraries/x.xml")),
                          H._lexical_norm(pathlib.Path(os.path.realpath(self.ref)).as_posix() + "/libraries/x.xml"))
         self.assertEqual(H.link_resolved(work + "/x.xml"), "")
@@ -4184,7 +4186,9 @@ class TestWriteThroughAnExistingLink(unittest.TestCase):
         # junction on a local drive after 100 of them is still judged where it lands.
         from unittest import mock
         real = H._drive_type
-        decoys = " ".join("Y:/d/f%d.xml" % i for i in range(100))
+        # 4.1.2 release review round 3 (T2), MEASURED by the reviewer: with all 100 decoys in ONE folder the skip of a
+        # remote drive could be removed and the folder cache alone kept the budget; one folder each needs the skip.
+        decoys = " ".join("Y:/d%d/f.xml" % i for i in range(100))
         with mock.patch.object(H, "_drive_type", lambda l: 4 if l.upper() == "Y" else real(l)):
             got = self.f("touch " + decoys + " " + Q + self.link.as_posix() + "/libraries/wares.xml" + Q)
         self.assertTrue(got["writes_reference"])
@@ -4311,6 +4315,12 @@ class TestLinkResolutionIsBounded(unittest.TestCase):
         got, _ = self._timed(10.0, 0.0, True)
         self.assertIn("analysis_timeout", got)
         self.assertLessEqual(len(self.calls), 2)
+        # 4.1.2 release review round 3 (T2): the LEAF's realpath must go through the budgeted call, which checks the
+        # deadline: an lstat that spends the whole budget leaves the folder's realpath as the only one made.
+        self.calls.clear()
+        got, _ = self._timed(0.0, 20.0, True)
+        self.assertIn("analysis_timeout", got)
+        self.assertEqual(len(self.calls), 1)
 
     def test_the_deadline_is_checked_before_each_lstat(self):
         got, lstats = self._timed(0.0, 10.0, False, "C:/w411/f%d.xml")     # one folder: lstats back to back
@@ -4661,7 +4671,9 @@ class TestLinkBudgetFailsClosed(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
     def test_a_file_at_a_drive_root_resolves_from_the_root_not_the_current_folder(self):
-        # posixpath.split("C:/x") gives "C:", which realpath reads as the drive's CURRENT folder.
+        # posixpath.split("C:/x") gives "C:", which Win32 realpath reads as the drive's CURRENT folder. Since round 2 (B)
+        # folders are resolved verbatim, and `realpath('\\?\C:')` returns `\\?\C:` unchanged (MEASURED on 3.12, round 3),
+        # so that hazard is gone; `head += "/"` still makes the cache key the ROOT, which the last assertion pins.
         drive = os.path.splitdrive(os.getcwd())[0]
         self.assertNotEqual(os.path.normcase(os.getcwd()), os.path.normcase(drive + BS))
         H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0                  # outside facts(): a fresh budget by hand
@@ -5094,7 +5106,9 @@ class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
                 self.assertTrue(got["writes_reference"])
                 self.assertFalse(got["links_unresolved"])
                 # ...and the landing is returned as a plain drive path, never its verbatim spelling
-                for real in H.link_entries_matched(self.W + "/" + sub + "/" + pre + "$X/libraries/wares.xml"):
+                listed = H.link_entries_matched(self.W + "/" + sub + "/" + pre + "$X/libraries/wares.xml")
+                self.assertTrue(listed)                  # round 3 (T1): an empty list would assert nothing below
+                for real in listed:
                     self.assertTrue(real[:1].isalpha() and real[1:3] == ":/", real)
 
     def test_RED_a_head_folder_git_bash_spelled_is_listed(self):
@@ -5143,6 +5157,7 @@ class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
         self.junction("j.")
         work = pathlib.Path(os.path.realpath(self.work)).as_posix()
         got = H.link_resolved(work + "/j./libraries/x.xml")
+        self.assertTrue(got)                             # round 3 (T1): "" would pass the next line
         self.assertFalse(got.startswith("//"), got)
         # ...and Win32's landing too, now that a folder is resolved verbatim (round 2, B): unwrapped.
         got = H.link_resolved(work + "/refj/libraries/x.xml")
@@ -5308,6 +5323,95 @@ class TestLinkReadingOfRelativeAndDotDotOperands(unittest.TestCase):
             got = _facts(p, self.roots)
             self.assertFalse(got["writes_reference"] or got["links_unresolved"])
 
+    def above_the_root_roots(self):
+        base = pathlib.Path(self._td.name)
+        for d in ("game", "prof/save"):
+            (base / d).mkdir(parents=True, exist_ok=True)
+        return dict(self.roots, game=(base / "game").as_posix(), profile=(base / "prof").as_posix(),
+                    saves=(base / "prof" / "save").as_posix())
+
+    @unittest.skipUnless(os.name == "nt", "a drive root is a Windows notion")
+    def test_RED_a_dot_dot_above_the_drive_root_stays_at_the_root(self):
+        # 4.1.2 release review round 3 (G1), MEASURED by the reviewer (e2e.py, rootdotdot.py) and here: `C:/..` is `C:/`
+        # (Git Bash's touch 'C:/../Users/.../probe' created the file under C:/Users), but norm() climbs above the drive
+        # (`C:/../a/b` is `/a/b`, an OLD lexical bug), and v4.1.1 caught the shape only because realpath disagreed with that
+        # wrong form. From 4140faa5 the walk clamped at the root, saw no link and returned "", so the delete of
+        # `'C:/../<ref>'` read rm_targets_reference False (v4.1.1 and 9368d5db: True): an ALLOW regression.
+        roots = self.above_the_root_roots()
+        ref, game = self.ref.as_posix(), roots["game"]
+        cases = [("touch " + Q + "C:/../" + ref[3:] + "/x.xml" + Q, "writes_reference"),
+                 ("echo x > " + Q + "C:/../" + ref[3:] + "/x.xml" + Q, "writes_reference"),
+                 (D + " -rf " + Q + "C:/../" + ref[3:] + Q, "rm_targets_reference"),
+                 (D + " -rf " + Q + "C:" + BS + ".." + BS + ref[3:].replace("/", BS) + Q, "rm_targets_reference"),
+                 (D + " -rf " + Q + "C:/Users/../../" + ref[3:] + Q, "rm_targets_reference"),
+                 (D + " -rf " + Q + "C:/./../" + ref[3:] + Q, "rm_targets_reference"),
+                 (D + " -rf " + Q + "C:/../" + game[3:] + Q, "rm_hits_game"),
+                 (D + " -rf " + Q + "C:/../" + roots["profile"][3:] + "/x.xml" + Q, "rm_in_profile"),
+                 (D + " -rf " + Q + "C:/../" + roots["saves"][3:] + "/s.xml" + Q, "rm_saves")]
+        for cmd, key in cases:
+            with self.subTest(cmd=cmd):
+                control = cmd.replace("C:/../", "C:/").replace("C:" + BS + ".." + BS, "C:" + BS).replace(
+                    "C:/Users/../../", "C:/").replace("C:/./../", "C:/")
+                self.assertTrue(H.facts({"tool_input": {"command": control}}, roots)[key], "control: " + control)
+                self.assertTrue(H.facts({"tool_input": {"command": cmd}}, roots)[key], cmd)
+        p = {"tool_name": "PowerShell", "tool_input": {"command": "Remove-Item -Recurse -Force " + Q + "C:" + BS + ".." + BS
+                                                        + ref[3:].replace("/", BS) + Q}}
+        self.assertTrue(_facts(p, roots)["rm_targets_reference"])
+
+    @unittest.skipUnless(os.name == "nt", "a drive root is a Windows notion")
+    def test_RED_a_relative_dot_dot_past_the_drive_root(self):
+        # ...and the two older shapes the same change closes (0 in every version before, MEASURED by the reviewer):
+        # a relative `..` that overshoots the drive root, and `..` from the drive root itself.
+        ref = self.ref.as_posix()
+        for cmd, cwd in ((D + " -rf " + Q + "../" * 40 + ref[3:] + Q, self.W),
+                         ("cd " + Q + "C:/" + Q + " && " + D + " -rf " + Q + "../" + ref[3:] + Q, self.W)):
+            with self.subTest(cmd=cmd[:40]):
+                self.assertTrue(self.fc(cmd, cwd)["rm_targets_reference"], cmd)
+
+    @unittest.skipUnless(os.name == "nt", "a drive root is a Windows notion")
+    def test_TWIN_a_dot_dot_above_the_drive_root_onto_no_root(self):
+        roots = self.above_the_root_roots()
+        got = H.facts({"tool_input": {"command": D + " -rf " + Q + "C:/../Users/x4-no-such-user/nothing-here" + Q}}, roots)
+        self.assertFalse(any(got[k] for k in ("rm_targets_reference", "rm_hits_game", "rm_in_profile", "rm_saves",
+                                              "links_unresolved")))
+
+    @unittest.skipUnless(os.name == "nt", "the PowerShell front end and junctions: Windows")
+    def test_a_powershell_dot_dot_after_a_junction_is_read_physically_by_design(self):
+        # 4.1.2 release review round 3 (G2), a FALSE REFUSAL BY DESIGN. MEASURED by the reviewer with PowerShell itself:
+        # `New-Item -ItemType File '<w>\k\..\ps_probe.txt'` and `Push-Location <w>\k; New-Item ..\ps_probe2.txt` landed in
+        # <w> (PowerShell reads `..` lexically), while the guard reads every dialect's `..` physically, so this write is
+        # refused as a reference write (v4.1.1 allowed it). Kept: a Git Bash program started from PowerShell resolves the
+        # same text physically, and the analysis cannot know which program opens the path.
+        self.make_link("k", self.ref / "libraries")
+        f = _ps_verdict("Set-Content " + Q + self.W.replace("/", BS) + BS + "k" + BS + ".." + BS + "p.txt" + Q + " -Value x",
+                        self.roots)
+        self.assertTrue(f["writes_reference"])
+
+    @unittest.skipUnless(os.name == "posix", "a `//?/` prefix is a Windows spelling; on POSIX it is a path")
+    def test_a_verbatim_looking_posix_folder_keeps_its_name(self):
+        # 4.1.2 release review round 3 (G3): the cache key dropped a leading `//?/` on every system; on POSIX
+        # `//?/x4-no-such/a` would have been resolved as the RELATIVE `x4-no-such/a` (against the process cwd).
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+        H._LINK_DIRS.clear()
+        self.assertTrue(H._dir_realpath("//?/x4-no-such/a", True).startswith("//?/"))
+
+    @unittest.skipUnless(os.name == "nt", "a drive root is a Windows notion")
+    def test_a_dot_dot_at_the_drive_root_costs_no_lookup_and_lands_on_the_root(self):
+        # 4.1.2 release review round 3 (T4), MEASURED by the reviewer (probe_equiv.py, 13 paths): three clauses of the walk
+        # the table called equivalent are not. `..` AT the drive root is skipped without a lookup and `.` is skipped (each
+        # otherwise costs a realpath: 2 or 3 where 1 is right), and a parent that is a drive root is `X:/` (without it
+        # `C:/Users/..` returned `C:`, the drive's CURRENT folder to Win32).
+        drive, rest = self.W[:2], self.W[3:]
+        for p in (drive + "/../" + rest + "/x.txt", drive + "/./../" + rest + "/x.txt"):
+            with self.subTest(p=p[:12]):
+                H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+                H._LINK_DIRS.clear()
+                H.link_resolved(p)
+                self.assertEqual(H._LINK_RESOLVED[0], 1, p)
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+        H._LINK_DIRS.clear()
+        self.assertEqual(H.link_resolved(drive + "/Users/.."), "")
+
     def test_TWIN_a_dot_dot_the_program_receives_is_still_physical(self):
         self.make_link("k", self.ref / "libraries")
         for cmd, want in (("cd k/.. && touch x", False), ("cd k && cd .. && touch x", False),
@@ -5387,6 +5491,8 @@ class TestLinkReadingOfRelativeAndDotDotOperands(unittest.TestCase):
         # A `..` crossing no link costs what its folders cost: the folder before it and the walked path's folder.
         self.f("touch " + Q + self.W + "/plain/sub/../x.txt" + Q)
         self.assertEqual(H._LINK_RESOLVED[0], 2 if os.name == "nt" else 1)
+        # ...and it adds no landing of its own (round 3, G1: the walked path is returned only where the text lands elsewhere).
+        self.assertEqual(H.link_resolved(self.W + "/plain/sub/../x.txt"), "")
         # ...and the same `..` that only a lexical reading crosses a link with: still judged where it lands.
         got = self.f("touch " + Q + self.W + "/refj/libraries/../x.txt" + Q)
         self.assertTrue(got["writes_reference"])
@@ -5670,6 +5776,21 @@ class TestRRPreArcBash(unittest.TestCase):
 
 
 _PWSH = H._pwsh_exe()
+
+
+def _ps_verdict(command, roots=None):
+    """facts() of a PowerShell TOOL command whose verdict a test asserts. 4.1.2 release review round 3 (T3), MEASURED with
+    the reviewer's broken-translator stub: five archive-rule tests skipped on ANY powershell_error/carrier_untranslated,
+    so a translator returning no verdict passed green (4 of 4 skipped, 0 counted) on the Windows leg whose ceiling is 0.
+    Skipped only when there is no PowerShell at all; a REAL timeout is the counted skip (_facts); anything else
+    untranslated is a failure, never a skip."""
+    if not _PWSH:
+        raise unittest.SkipTest("no PowerShell on this machine: the PowerShell front-end is not exercised here")
+    f = _facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS if roots is None else roots)
+    assert not f.get("powershell_error") and not f.get("carrier_untranslated"), (
+        "the PowerShell translator gave no verdict: %r" % ({k: f.get(k) for k in ("powershell_error",
+                                                                            "carrier_untranslated", "untranslated_category")},))
+    return f
 
 
 @unittest.skipUnless(_PWSH, "no PowerShell on this machine: the PowerShell front-end "
@@ -6009,6 +6130,8 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
     # ---- twins ---------------------------------------------------------------------
     def test_TWIN_a_read_is_not_a_write(self):
         f = self.P("Get-Content " + Q + REF + "/libraries/wares.xml" + Q)
+        # round 3 (T3): an untranslated read is no read at all (powershell_error is a string, not True)
+        self.assertFalse(f.get("powershell_error") or f.get("carrier_untranslated"), f)
         self.assertFalse(any(v is True for k, v in f.items() if k != "from_powershell"), f)
 
     def test_the_OUTER_shells_redirect_is_not_part_of_the_payload(self):
@@ -9032,10 +9155,10 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
                     "tmux ls " + BS + "; ls " + BS + "; run " + self.inner(REF))
 
     def test_TWIN_a_backslash_ended_segment_of_another_program(self):
-        # Since 4.1.1 round 4/7 an escaped `;` does not split a segment, so the find row is ONE segment and
-        # never reaches the chain. The other rows end a segment in `\` before a REAL separator (an escaped
-        # backslash, an escaped blank): bash runs `run`/`new`/`send-keys` as commands of their own, and
-        # reading them as tmux commands would fire on nothing. MEASURED 2026-11-08: with `v == "tmux"`
+        # Since 4.1.1 round 4/7 an escaped `;` does not split a segment, so the find row was ONE segment and
+        # never reached the chain (removed in 4.1.2). The other rows end a segment in `\` before a REAL separator (an
+        # escaped backslash, an escaped blank): bash runs `run`/`new`/`send-keys` as commands of their own, and
+        # reading them as tmux commands fired on nothing. MEASURED 2026-11-08: with `v == "tmux"`
         # dropped from the chain start, these go True (CI run 42517544460 reported the mutant uncaught).
         # 4.1.2: the chain itself is removed, so the same holds after a tmux command (the last three rows;
         # 4.1.1 read them True). MEASURED old vs new over 343 spellings: 60 changed, all of this shape.
@@ -9548,9 +9671,7 @@ class TestGameArchiveShellWrites(unittest.TestCase):
     def test_powershell_forms_reach_the_rule(self):
         for cmd in ("Remove-Item '%s'", "Set-Content '%s' x", "Add-Content '%s' x", "Copy-Item a '%s'",
                     "Move-Item '%s' /c/o/x", "'x' | Out-File '%s'", "[IO.File]::Delete('%s')"):
-            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd % self.ARC}}, ROOTS)
-            if f.get("powershell_error") or f.get("carrier_untranslated"):
-                self.skipTest("no PowerShell parser on this machine")
+            f = _ps_verdict(cmd % self.ARC)
             self.assertTrue(f["writes_game_archive"], cmd)
 
     def test_contents_of_an_archive_named_operand_read_as_the_archive(self):
@@ -9563,9 +9684,7 @@ class TestGameArchiveShellWrites(unittest.TestCase):
     def test_TWIN_powershell_on_a_mod_or_reading_does_not_fire(self):
         for cmd, path in (("Remove-Item '%s'", self.MOD + "/ext_01.cat"), ("Copy-Item a '%s'", self.MOD + "/ext_01.cat"),
                           ("Get-FileHash '%s'", self.ARC), ("Copy-Item '%s' /c/o/x", self.ARC)):
-            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd % path}}, ROOTS)
-            if f.get("powershell_error") or f.get("carrier_untranslated"):
-                self.skipTest("no PowerShell parser on this machine")
+            f = _ps_verdict(cmd % path)
             self.assertFalse(f["writes_game_archive"], cmd)
 
     # --- 4.1.1 review: find expressions, a regex never run, an unknown game root, option words
@@ -10032,9 +10151,7 @@ class TestGameArchiveShellWrites(unittest.TestCase):
                           ("Move-Item '%s' /c/o/x" % (GAME + "/01.d`at"), True),
                           ("Remove-Item -LiteralPath '%s'" % (GAME + "/01.d`at"), False),
                           ("Remove-Item '%s'" % (GAME + "/notes`.txt"), False)):
-            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
-            if f.get("powershell_error") or f.get("carrier_untranslated"):
-                self.skipTest("no PowerShell parser on this machine")
+            f = _ps_verdict(cmd)
             self.assertEqual(f["writes_game_archive"], want, cmd)
 
     # --- round 4, 1: the find's root is itself a depth-0 entry
@@ -10131,10 +10248,7 @@ class TestGameArchiveShellWrites(unittest.TestCase):
 
     # --- round 4, 3 and 4: PowerShell backticks through a pipeline, and before a wildcard
     def _ps(self, cmd):
-        f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
-        if f.get("powershell_error") or f.get("carrier_untranslated"):
-            self.skipTest("no PowerShell parser on this machine")
-        return f
+        return _ps_verdict(cmd)                          # round 3 (T3): never a skip on a broken translator
 
     def test_a_backtick_in_an_upstream_path_is_read_both_ways(self):
         for cmd, want in (("Get-ChildItem -Path '%s' | Remove-Item" % (GAME + "/01.c`at"), True),
@@ -10707,7 +10821,8 @@ class TestLiteralDollarPathsPowerShell(unittest.TestCase):
     K = "rm_targets_reference"
 
     def P(self, command):
-        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
+        # round 3 (T3): through _facts, so a REAL translator timeout is the counted skip, not a failure
+        return _facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
 
     def test_a_single_quoted_or_backtick_escaped_dollar_names_the_sibling(self):
         for cmd in ("Remove-Item -LiteralPath " + Q + REF + "$x" + Q + " -Recurse",

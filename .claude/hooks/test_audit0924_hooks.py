@@ -1534,6 +1534,22 @@ class TestLinkBudgetWholeHook(unittest.TestCase):
         self.assertIn("different folders", reason)
         self.assertNotIn("two different places", reason)
 
+    def test_the_budget_reason_also_names_a_dot_dot_off_the_local_drives(self):
+        # 4.1.2 release review round 3 (G4): a `..` after a link leading off the local drives sets links_unresolved alone,
+        # and the agent was told only that the command named files in "so many different folders". The reason names
+        # that cause too, through the front door (save_policy.py) and protect-bash.sh's own rule (the policy backend).
+        q = chr(39)
+        cmd = "touch " + " ".join(q + self.W + "/d%d/f.xml" % i + q for i in range(65))
+        v, reason = self.verdict(cmd)
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
+        p = subprocess.run([BASH, str(HOOKS / "protect-bash.sh"), "--harness-policy-backend"], input=payload,
+                           capture_output=True, text=True, encoding="utf-8", env=self.env, timeout=120)
+        h = json.loads(p.stdout)["hookSpecificOutput"]
+        for v, reason in ((v, reason), (h.get("permissionDecision"), h.get("permissionDecisionReason", ""))):
+            self.assertEqual(v, "deny", reason)
+            self.assertIn("different folders", reason)
+            self.assertIn("network share", reason)
+
     @unittest.skipUnless(os.name == "nt", "Git Bash's on-disk spelling of a name exists only on Windows")
     def test_two_readings_landing_apart_have_their_own_reason(self):
         # 4.1.2 release review (I3): this refusal printed the budget's "so many different folders" advice for a

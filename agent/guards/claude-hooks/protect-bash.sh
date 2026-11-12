@@ -451,7 +451,8 @@ fi
 
 # 4.1.1 review (link budget): link resolution is bounded per hook call (realpath once per folder, at most
 # _MAX_LINK_RESOLVED folders). An operand past the bound may sit behind a junction into a protected root,
-# so it is refused, never read as "no link". Same verdict as the truncations above.
+# so it is refused, never read as "no link". Same verdict as the truncations above. 4.1.2 release review round 3
+# (G4): also set, alone, by a `..` after a link that leads off the local drives (_resolve_dot_dot): named below.
 # 4.1.2 release review (I3): two readings of one path that land through links in DIFFERENT places (Git Bash's and
 # Win32's spelling of a name, or `..` read physically and lexically) also set links_unresolved; that cause has its
 # own words, because "too many folders" sends the user to split a command that names one path.
@@ -463,7 +464,7 @@ fi
 if on links_unresolved; then
   x4_guard_check_inert
   _X4_UNRELAXED=1
-  deny "This command names files in so many different folders that the guard stopped checking them for links (a junction or symlink into a protected folder), so some targets were NEVER checked. Split it into commands that each touch fewer folders and re-run. (Or the filesystem could not say whether one of its paths is a link: check that each path can be read.)"
+  deny "This command names files in so many different folders that the guard stopped checking them for links (a junction or symlink into a protected folder), so some targets were NEVER checked. Split it into commands that each touch fewer folders and re-run. (Or the filesystem could not say whether one of its paths is a link: check that each path can be read. Or a path has a .. after a link that leads to a network share or another drive that is not local, which the guard does not follow: write that path without the .. in it.)"
 fi
 
 # === HARD BLOCK — delete the game installation ===

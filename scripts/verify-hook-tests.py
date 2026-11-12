@@ -3025,7 +3025,7 @@ MUTANTS = [
      '"no link".' + NL,
      'test_RED_a_matching_entry_whose_lstat_fails_is_links_unresolved'),
     ('link budget: a drive-root file is not resolved from the current folder',
-     '            head += "/"                     # `C:` alone', '            pass  # `C:` alone',
+     '            head += "/"' + NL, '            pass' + NL,
      'test_a_file_at_a_drive_root_resolves_from_the_root_not_the_current_folder'),
     ('link budget: ...the last-component probe count per hook call',
      '    _LINK_PROBED[0] = 0' + NL, '    pass' + NL,
@@ -3164,9 +3164,10 @@ MUTANTS = [
     # with its reason (so not a silent gap): `os.path.realpath(_native(s))` -> `realpath(s)` in _realpath_budgeted
     # (MEASURED on 3.12.10: ntpath.realpath turns `/` into `\` itself, so `//?/<w>/j./x`, `//?/<w>/s /x` and
     # `//?/<w>/k/../x` resolved exactly as their backslashed forms, 3 of 3; os.lstat does not, and its mutant is
-    # caught); the walk skipping `.` (realpath normalises a `.` it is given); the walk keeping `..` at a drive root
-    # (`C:` falls back to `/`, which Windows reads as the current drive's root: equivalent while the path is on the
-    # current drive, and the tests' are); and join_as_received's `if not cwd or` (is_abs("") is False).
+    # caught); and join_as_received's `if not cwd or` (is_abs("") is False). CORRECTION 2026-11-11 (4.1.2 release
+    # review round 3, T4): "the walk skipping `.`" and "the walk keeping `..` at a drive root", once listed here as
+    # equivalent, are NOT (MEASURED, probe_equiv.py: they change the realpath count in 1 and 5 of 13 paths); each now has
+    # a row (`dot dot: ... (round 3, T4)`).
     ('msys spelling: the Win32 landing is un-mapped too (I4)',
      '_lexical_norm(_unmsys(real)) != _lexical_norm(_unmsys(other))', '_lexical_norm(real) != _lexical_norm(_unmsys(other))',
      'test_RED_one_place_whose_target_has_a_mapped_name_is_not_refused'),
@@ -3186,10 +3187,10 @@ MUTANTS = [
      '":/", _unverbatim(head))', '":/", head)',
      'test_RED_a_verbatim_or_device_spelled_operand_is_resolved'),
     ('link budget: a folder spelled alike both ways is resolved once (I2)',
-     '    key = head[4:] if head.startswith("//?/") else head', '    key = head',
+     '    key = head[4:] if os.name == "nt" and head.startswith("//?/") else head', '    key = head',
      'test_RED_one_folder_spelled_the_same_both_ways_costs_one_resolution'),
     ('link budget: ...only a verbatim head is unwrapped (I2)',
-     '    key = head[4:] if head.startswith("//?/") else head', '    key = head[4:]',
+     '    key = head[4:] if os.name == "nt" and head.startswith("//?/") else head', '    key = head[4:]',
      'test_a_write_or_delete_through_the_link_is_the_reference'),
     ('link reading: an operand as the program receives it (I1a)',
      '    return cwd.replace(chr(92), "/").rstrip("/") + "/" + p.replace(chr(92), "/")', '    return join_cwd(cwd, p)',
@@ -3258,9 +3259,11 @@ MUTANTS = [
      'test_RED_dot_dot_after_a_link_is_physical'),
     ('dot dot: a link crossed is noticed (P2)',
      '        crossed = crossed or not _same_place(r, walked)', '        crossed = False',
-     'test_RED_dot_dot_after_a_link_is_physical'),
+     # round 3 (G1): with the walked landing returned even when no link was crossed, this flag decides only whether
+     # the LEXICAL reading is compared, so its catching test is the two-readings refusal
+     'test_dot_dot_read_two_ways_landing_apart_is_refused'),
     ('dot dot: no link crossed costs no lexical realpath (P2)',
-     '    if not crossed:' + NL + '        return res', '    if False:' + NL + '        return res',
+     '    if not crossed:' + NL + '        # 4.1.2 release review round 3 (G1)', '    if False:' + NL + '        # 4.1.2 release review round 3 (G1)',
      'test_TWIN_dot_dot_with_no_link_or_a_link_outside_the_roots'),
     ('dot dot: the walked place is the landing when it holds no link (P2)',
      '    phys = res or pre + walked', '    phys = res',
@@ -3298,16 +3301,20 @@ MUTANTS = [
      '        _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse' + NL + '    # Only one landing', '    # Only one landing',
      'test_dot_dot_read_two_ways_landing_apart_is_refused'),
     # --- 4.1.2 release review round 2 (2026-11-11): A-E and the clauses (I) that had no mutant. Left out as EQUIVALENT,
-    # each with its reason: `os.name == "nt" and` in _dir_realpath's verbatim choice (a POSIX key never starts `X:/`
-    # except the relative text `C:/x`, whose verbatim realpath on POSIX is a missing path returned as given, then
-    # unwrapped: the same answer); `phys_answer = phys` and `return phys_answer` without `or lex` (reached only when the
-    # physical landing is where the text lands lexically while the lexical reading goes through a link: two places, so
-    # refused either way, and the lexical place is the caller's own entry); `pd_ if d == c_cwd` (`spelled` is used only
+    # each with its reason: `phys_answer = phys` and `return phys_answer` without `or lex` (CORRECTED in round 3, T4, to
+    # cover a READ-ONLY operand too, whose landings profile_search_by_name reads: `phys_answer` differs from `phys` only
+    # when the physical landing is the text's own lexical place, which the caller's lexical entry already carries, so no
+    # rule, write or read, sees a new place; and `or lex` is reached only if the physical landing is that place while the
+    # lexical reading goes through a link, which cannot happen, since the walked path IS that lexical place and
+    # _resolve_spelling would find the same link on it -- INFERRED from the code, not measured); `pd_ if d == c_cwd` (`spelled` is used only
     # when it norm-equals the directory, and the physical cwd tracks c_cwd, so for d = c_old it is never used); in
     # _leads_with_expansion `i < len(parts) - 1` and `and i > 0` (an unresolved operand has a `$` in some component that
     # is neither `.` nor empty, so the loop stops before the end; a leading empty component is an ABSOLUTE operand,
     # whose root head neither link reading uses); the `X:` -> `X:/` line after the drive-root rule (a bare `X:` is
-    # joined as `X:/c` or, ending the path, completed by _resolve_spelling's own `C:` rule). RETIRED in round 2, both
+    # joined as `X:/c` or, ending the path, completed by _resolve_spelling's own `C:` rule: CORRECTION 2026-11-11, round 3
+    # T4, MEASURED by probe_equiv.py: NOT equivalent, `//?/C:/Users/..` returned `//?//?/C:` and `C:/Users/..` returned
+    # `C:`; it now has a row). The `os.name == "nt" and` note once here described code never committed; the committed
+    # clauses have rows since round 3 (G3). RETIRED in round 2, all three
     # equivalent since its fixes: `...only one Win32 opens the same (I2)` (every drive folder is now opened verbatim, so
     # the condition was removed from the code) and `...an unknowable directory invents nothing (I1a)` (with cwd "" the
     # `spelled` "" norm-equals it and normpath gives `.`, a RELATIVE reading every link reading rejects; the guard stays,
@@ -3357,6 +3364,33 @@ MUTANTS = [
      '    if is_abs(p):' + NL + '        return p' + NL + '    if not cwd or not is_abs(cwd):' + NL + '        return ""' + NL + '    if norm(spelled)',
      '    if False:' + NL + '        return p' + NL + '    if not cwd or not is_abs(cwd):' + NL + '        return ""' + NL + '    if norm(spelled)',
      'test_a_write_or_delete_through_the_link_is_the_reference'),
+    # --- 4.1.2 release review round 3 (2026-11-11): G1, G3, T2 and the three walk clauses (T4) once listed as equivalent
+    ('dot dot: a walked landing the text does not name lexically is returned (round 3, G1)',
+     '        return res or ("" if _same_place(pre + walked, s) else pre + walked)', '        return res',
+     'test_RED_a_dot_dot_above_the_drive_root_stays_at_the_root'),
+    ('dot dot: ...but not where the text lands anyway (round 3, G1)',
+     '("" if _same_place(pre + walked, s) else pre + walked)', '(pre + walked)',
+     'test_TWIN_dot_dot_with_no_link_or_a_link_outside_the_roots'),
+    ('dot dot: `.` is skipped without a lookup (round 3, T4)',
+     '        if c in ("", "."):' + NL, '        if c in ("",):' + NL,
+     'test_a_dot_dot_at_the_drive_root_costs_no_lookup_and_lands_on_the_root'),
+    ('dot dot: `..` at a drive root costs no lookup (round 3, T4)',
+     '        if walked.endswith(":/"):' + NL + '            continue', '        if False:' + NL + '            continue',
+     'test_a_dot_dot_at_the_drive_root_costs_no_lookup_and_lands_on_the_root'),
+    ('dot dot: a drive-root parent is `X:/` (round 3, T4)',
+     '        walked = walked + "/" if walked.endswith(":") else walked' + NL, '',
+     'test_a_dot_dot_at_the_drive_root_costs_no_lookup_and_lands_on_the_root'),
+    ('link budget: `//?/` is a prefix only on Windows (round 3, G3)',
+     '    key = head[4:] if os.name == "nt" and head.startswith("//?/") else head',
+     '    key = head[4:] if head.startswith("//?/") else head',
+     'test_a_verbatim_looking_posix_folder_keeps_its_name'),
+    ('link budget: ...and a folder is opened verbatim only there (round 3)',
+     '_realpath_budgeted("//?/" + key if os.name == "nt" else key, refuse)', '_realpath_budgeted("//?/" + key, refuse)',
+     'test_a_write_or_delete_through_the_link_is_the_reference'),
+    ('link bound: a leaf link is resolved inside the budget and the deadline (round 3, T2)',
+     '        real = _realpath_budgeted(s, refuse) if is_link else',
+     '        real = os.path.realpath(_native(s)).replace(chr(92), "/") if is_link else',
+     'test_the_deadline_is_checked_before_a_link_leafs_realpath'),
 ]
 
 SHIM = '''
@@ -3389,14 +3423,20 @@ _DRIVE_TYPE_ONLY = ("nt", "link_resolved asks GetDriveTypeW only when os.name ==
                     "ubuntu shards 1, 2 and 4 of CI run 42517544460")
 # 4.1.2 release review (T3): the reason named TestLinkNamesGitBashSpellsDifferently, which is not where every row's
 # target lives (`one place spelled two ways` targets a test that runs everywhere); what holds for every row is the code.
-_MSYS_ONLY = ("nt", "the code it mutates runs only when os.name == 'nt' (the Windows branches of link_resolved, "
-              "_resolve_spelling and link_entries_matched, and what they call), so elsewhere no test can reach it")
-_VERBATIM_ONLY = ("nt", "a `//?/` folder reaches _dir_realpath only from link_resolved's Windows branch (Git Bash's "
-                  "spelling, opened verbatim); elsewhere the clause is never reached")
+# 4.1.2 release review round 3 (T4): "runs only when os.name == 'nt'" was false for rows whose code also runs on POSIX
+# and acts there on nothing; the reasons below are true of every row they cover.
+_MSYS_ONLY = ("nt", "the code it mutates either runs only when os.name == 'nt' (the Windows branches of link_resolved, "
+              "_resolve_spelling and link_entries_matched, and what they call) or, where it also runs on POSIX, acts only "
+              "on what a POSIX path never carries (a `//?/` prefix, a U+F0xx name, a drive letter), so elsewhere no test "
+              "can see it")
+_VERBATIM_ONLY = ("nt", "a `//?/` folder reaches _dir_realpath only from Windows code (link_resolved's Git Bash spelling, "
+                  "and _resolve_dot_dot walking that spelling); elsewhere the clause is never reached")
 _DISAGREE_ONLY = ("nt", "only Windows code sets links_disagree (two spellings of a name, or `..` read two ways); "
                   "elsewhere the fact is False whatever this line does")
 _DOTDOT_ONLY = ("nt", "_resolve_dot_dot runs only when os.name == 'nt': POSIX realpath already reads `..` physically "
                 "(posixpath._joinrealpath splits the RESOLVED path)")
+_POSIX_KEY_ONLY = ("posix", "on Windows the clause is always true, so the mutant changes nothing there; on POSIX it keeps a "
+                   "`//?/` folder a path of its own and a folder resolved as written")
 OS_ONLY = {
     "link bound: a drive that is not local is not resolved (A1)": _DRIVE_TYPE_ONLY,
     "link bound: a remote drive is not local (A1)": _DRIVE_TYPE_ONLY,
@@ -3461,6 +3501,13 @@ OS_ONLY = {
     "dot dot: a folder resolving off a drive path is not walked on (P2)": _DOTDOT_ONLY,
     "dot dot: ...nor one on a drive that is not local (P2)": _DOTDOT_ONLY,
     "dot dot: ...refused, never walked on (P2)": _DOTDOT_ONLY,
+    "dot dot: a walked landing the text does not name lexically is returned (round 3, G1)": _DOTDOT_ONLY,
+    "dot dot: ...but not where the text lands anyway (round 3, G1)": _DOTDOT_ONLY,
+    "dot dot: `.` is skipped without a lookup (round 3, T4)": _DOTDOT_ONLY,
+    "dot dot: `..` at a drive root costs no lookup (round 3, T4)": _DOTDOT_ONLY,
+    "dot dot: a drive-root parent is `X:/` (round 3, T4)": _DOTDOT_ONLY,
+    "link budget: `//?/` is a prefix only on Windows (round 3, G3)": _POSIX_KEY_ONLY,
+    "link budget: ...and a folder is opened verbatim only there (round 3)": _POSIX_KEY_ONLY,
     "link budget: a folder is resolved verbatim (round 2, B)": _MSYS_ONLY,
     "link budget: ...and the answer unwrapped (round 2, B)": _MSYS_ONLY,
     "link entries: ...without turning a device name into the device (round 2, A)": _MSYS_ONLY,
