@@ -473,8 +473,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F372 | an operand spelled `//?/C:/...`, `\\?\C:\...` or `//./C:/...` got no link reading: link_resolved and link_entries_matched required `X:/` | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at 0f6b5e3e, in-process facts(): 6 of 6 touch/rm through a junction into reference/ read False; Git Bash's `touch "//?/..."` landed in the target (1 of 1) | FIXED 2026-11-11: `_unverbatim` drops a verbatim/device drive prefix; UNC stays lexical |
 | F373 | `..` after a junction was collapsed lexically (norm; ntpath.realpath normalises first), while Git Bash resolves it through the link | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | Git Bash `touch` through `<w>/k/../f`, `k/../f`, `cd k; ../f`: 3 of 3 landed beside k's target; guard at 0f6b5e3e: 5 of 5 False | FIXED 2026-11-11 (Windows) (residuals OPEN): `..` walked physically; lexical and physical readings through links to different places refused |
 | F374 | an unresolved RELATIVE operand (`"refj$X/..."`) got no link reading: link_head_resolved / link_entries_matched return on "not absolute" | **DEFECT (measured)** · PRE-ARC (F369, 4.1.1) | at 0f6b5e3e, in-process facts(): 3 of 3 False from a folder holding a junction into reference/ | FIXED 2026-11-11: both get the operand joined to its directory as received |
-| F375 | Link and path spellings the guard still reads as written, found by the 4.1.2 release review rounds 2-4 (16 rows, row 11 CLOSED: a protected root that is itself a link, `\\?\Volume{GUID}`, PowerShell provider paths, braces through a junction, `$PWD`, a device-named junction as the head, and others) | **SCOPE LIMIT (measured / read / inferred, per row)** · PRE-ARC | in-process facts() at the round-2 fix, against the reviewers' scripts; per row below | OPEN 2026-11-11: none fixed; each row states what was not measured |
-| F376 | A command carried inside another shell (`bash -c`, `sh -c`, `eval`, `cmd /c`) does not see the `cd`/`pushd`/`Set-Location` before it, so a relative delete there reaches no rule | **OPEN LIMIT (measured)** · PRE-ARC · HIGH | through the whole hook, identical at 1b1a48aa and v4.1.1: 11 carried forms ALLOWED, 9 controls DENIED | OPEN 2026-11-11: not fixed (decision) |
+| F375 | Link and path spellings the guard still reads as written, found by the 4.1.2 release review rounds 2-4 (16 rows, row 11 CLOSED: a protected root that is itself a link, `\\?\Volume{GUID}`, PowerShell provider paths, braces through a junction, `$PWD`, a device-named junction as the head, and others) | **SCOPE LIMIT (measured / read / inferred, per row)** · PRE-ARC | in-process facts() at the round-2 fix, against the reviewers' scripts; per row below | OPEN 2026-11-11: rows 1-15 not fixed (next release, user decision); row 16 (a recursive delete or move of a folder above the reference or game root) FIXED 2026-11-11 |
+| F376 | A command carried inside another shell (`bash -c`, `sh -c`, `eval`, `cmd /c`) does not see the `cd`/`pushd`/`Set-Location` before it, so a relative delete there reaches no rule | **DEFECT (measured)** · PRE-ARC · HIGH | through the whole hook, identical at 1b1a48aa and v4.1.1: 11 carried forms ALLOWED, 9 controls DENIED | FIXED 2026-11-11: a carried text is judged where its carrier segment runs; substitutions and a heredoc fed to a shell OPEN |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -13332,10 +13332,39 @@ last segment's physical cwd).
     search-above-reference rule (F127), not by a delete rule. No existing register entry decides this for deletes (searched:
     `ancestor`, `contains_root`, `parent of`); F127 is the search rule's own. Not measured: `mv` of an ancestor, PowerShell
     `Remove-Item`, the deployed-mod ask, and a drive-root delete.
+    **FIXED 2026-11-11 (4.1.2, fix lane r6).** New facts `rm_contains_reference` / `rm_contains_game`: a RESOLVED operand
+    of a delete that removes a folder whole (rm/rmdir/unlink/shred only with -r/-R/--recursive, which is how cmd's `rd` and
+    PowerShell's `Remove-Item` arrive; a trash verb; an unfiltered `find -delete`; what an `xargs rm -r` is fed) or of a move,
+    that is a PROPER ANCESTOR of the root (`contains_root`), is denied by protect-bash.sh with "this deletes or moves a
+    folder that contains ..." (two codex-rules rows). MEASURED through the whole hook (scratch r6/fd/anc_e2e.py and anc2.py,
+    base 0152fdb5 vs this fix, fixture roots, nothing executed): the 4 rows above that were ALLOWED are DENIED (parent of each
+    root, the common grandparent and great-grandparent); the other 7 are unchanged. Also MEASURED, base -> fix: `mv` of the
+    reference parent and of the grandparent, PowerShell `Remove-Item -Recurse`, `Remove-Item -Force`, plain `Remove-Item` and
+    `Move-Item` of the reference parent, `cd <ref> && rm -rf ..` and `rm -rf /`: allow -> deny; `rm -rf C:/`: deny (save
+    scope) -> deny (the new reason, which runs first). Twins still ALLOWED: `rm -rf <parent>/other`, a sibling-prefix name
+    (`<ref>x`, `<ref>` minus its last letter), `rm -f`, plain `rm`, `rmdir` and `unlink` of the parent, `cp -r` from or into
+    it, `ls -R`, `mv` of a sibling. STRICT, kept: PowerShell `Remove-Item` without `-Recurse` and cmd's `rd` without `/s` of
+    an ancestor are refused, because the translators already read both as `rm -rf`; on a folder that holds anything they
+    fail (INFERRED from their documented behaviour, not run); `rm -rf /` is refused (Git Bash's `/` is its install folder,
+    and GNU rm refuses `/` by itself). An rsync/robocopy purge of an ancestor was already refused as a delete inside the
+    root (MEASURED, rm_targets_reference), so it is not part of the new facts. STILL OPEN (MEASURED allowed at base and fix):
+    cmd's `del /s /q <ancestor>`, which deletes every FILE under it (the translation keeps no /s: `rm -f`), and a FILTERED
+    `find <ancestor> -name '*.xml' -delete` (find_scoped_deletes feeds only the in-tree rules, which use `under()`). NOT
+    MEASURED: an ancestor reached through a junction (prep's link rows are unresolved-flagged and are skipped here, F375
+    row 6's shape), an unresolved operand that may be an ancestor (`"C:/Users/$X/.."`: never a hard deny, F93), the
+    X4_CONFIG pass (still reads only the two reference facts), and the deployed-mod ask. **RE-DERIVED BY:**
+    `test_hook_facts.py::TestF375AncestorOfARootIsDeniedLikeTheRoot` (6 of its 10 tests fail on 0152fdb5; the other 4, TWINs,
+    pass on both) and `test_audit0924_hooks.py::TestF375AncestorDeleteWholeHook` (fails on 0152fdb5); 8 mutants
+    (`F375: ...` in scripts/verify-hook-tests.py), all caught.
 
-**NO RE-DERIVATION: an OPEN register of shapes, each measured or reasoned as its row says; nothing here is fixed.**
+2026-11-11, USER DECISION (relayed by the 4.1.2 review lead): a PowerShell `..` through a junction stays REFUSED (the strict
+reading in F373: PowerShell takes `..` from the path as written, Git Bash through the link, and the guard reads it as Git Bash
+does); and the rows of this entry other than row 16 go to the next release, not 4.1.2.
 
-## F376 - A command carried inside another shell loses the outer `cd` · **OPEN LIMIT (measured)** · PRE-ARC · severity HIGH · confidence 90% · OPEN 2026-11-11
+**NO RE-DERIVATION for rows 1-15: an OPEN register of shapes, each measured or reasoned as its row says. Row 16 is FIXED
+and re-derived by the tests it names.**
+
+## F376 - A command carried inside another shell loses the outer `cd` · **DEFECT (measured)** · PRE-ARC · severity HIGH · confidence 90% · FIXED 2026-11-11 (residuals OPEN)
 
 Found by the 4.1.2 release review round 3 (front-door reviewer); re-run here with that reviewer's probes (review3-frontdoor
 probe2.py, probe3.py, probe4.py) through the WHOLE hook (protect-bash.sh on stdin), fixture roots in the scratch folder,
@@ -13356,9 +13385,44 @@ with the payload cwd in <ref>.
 NOT CHECKED: `powershell -c` and `pwsh -c` after an outer cd; carriers nested two deep; `cd -` and `popd` before a carrier;
 a carrier in a pipeline or a `for` loop; whether the deployed-mod ask (not a hard block) behaves the same way; the
 PowerShell `&` and `Start-Process` forms. Not fixed here by decision of the review lead (F376 is recorded for a later
-release).
+release). SUPERSEDED 2026-11-11: the user approved the fix for 4.1.2 (below).
 
-**NO RE-DERIVATION: an OPEN register of measured shapes; the measurement is the reviewers' probes, re-run as stated.**
+**FIXED 2026-11-11 (4.1.2, fix lane r6).** READ: `_inner_commands` now reports which SEGMENT of its text carried each
+carried text (not a `trap`, whose text runs when the signal fires; not a reading or a whole-command variant, which carries
+its own `cd`s), `carried_commands` hands that on as (parent, segment) routes, and facts() walks every carried text from each
+(directory, from_seed, unseeded, physical) lane its carrier segment has in the parent's walk, parents first, AND from the old
+unknown directory, last (so no verdict can get weaker and the `cwd` fact is the old one). A text no carrier segment hands on
+(a substitution) keeps the old walk only. Past _MAX_CD_LANES seeds for one text the directory is unknown and refused (C7).
+MEASURED through the whole hook, base 0152fdb5 vs the fix (the front-door reviewer's probe.py, probe2-4 re-run as
+scratch r6/fd, fixture roots, nothing executed): every one of the 11 ALLOWED forms above is DENIED by the game or reference
+hard block; the 9 controls are unchanged; of 144 probe output lines the only changed rows are those forms (19 rows; the twin
+`cd '<elsewhere>' && cmd //c del x.xml` stays allowed). The NOT CHECKED forms, MEASURED now (scratch r6/e2e_probe.py,
+base -> fix): `powershell -c` and `pwsh -c` after an outer cd, two carriers nested, a carrier in a pipeline, in a `for` loop
+and in a subshell, `pushd A; pushd B; popd` before one, PowerShell `Set-Location <game>; & bash -c ...`,
+`Start-Process cmd -ArgumentList '/c rd /s /q extensions'`, `powershell -c` and `cmd /c rd`, and `Push-Location <ref>; cmd
+/c del x.xml`: allow -> deny; `cd <game>/extensions && bash -c 'rm -rf amod'`: allow -> the deployed-mod ASK, as the plain
+spelling. `cd <game> && cd - && bash -c '...'` is now DENIED like its plain spelling, which the cd tracker already reads as
+staying in <game> (`cd -` reaches no lane: READ, `_operands` drops `-`); a pre-existing strict reading, not new. Twins still
+ALLOWED: the carriers after a cd to an unrelated folder (bash -c, cmd //c rd, cmd //c del, eval), a `cd` AFTER the carrier,
+a `trap` after a cd into the game, and an unknown outer directory (`cd "$NOPE"`), which reads as before. STILL OPEN
+(MEASURED allowed at base and fix): a delete inside `$(...)`, backticks or `<(...)` after a cd (a substitution has no
+segment here: segments() can split inside it, and a nested one may run after a `cd` of its own), and a heredoc fed to a
+shell after a cd (`cd <game> && bash <<'EOF'`: the body is a top-level text, not handed on by a segment). INFERRED, not
+measured: `env -C <dir> bash -c ...` reads in the outer directory, as its plain `env -C <dir> rm ...` already does (MEASURED
+deny for both; a false refusal where <dir> is unprotected). Two existing tests pinned the old reading as a fixture
+assumption and were changed (READ): `test_TWIN_a_carrier_after_a_directory_change_is_not_seeded` (popd with an empty stack
+now leaves a carrier where the plain spelling is; a substitution carries the moves clauses) and the `SESSION_DELETE` of
+`TestProgramsThatRunProgramsReview` (now a substitution, so the reading-leak tests still see the directory-change test).
+Per item, old vs new over the real Bash history: MEASURED (scratch r6/compare.py: every unique Bash command with its cwd in the local transcripts, 64,929, in-process
+facts() of 0152fdb5 vs the fix, real root layout, read only; the 2,819 with a delete or move verb re-run on the final
+code): no fact became weaker on any row; apart from the two new facts appearing, 1 row differs, rm_in_x4_dir False ->
+True (an ADVISORY, not a prompt): a session's own probe script whose `$(v "eval 'rm -rf \"$G\"'")` is split by
+segments() into an `eval` segment after a `cd <toolkit>`, so the eval's text, quoted debris, joins the toolkit. Not
+intended; recorded rather than fixed (a parse fragment of a substitution, the shape lane F narrowed for $(...) verbs).
+**RE-DERIVED BY:** `test_hook_facts.py::TestF376CarrierKeepsTheOuterDirectory` (8 of its 12 tests fail on 0152fdb5; the
+4 TWIN tests pass on both), `test_audit0924_hooks.py::TestF376CarrierKeepsTheOuterDirectoryE2E` (2 of 3 fail on 0152fdb5);
+7 new mutants (`F376: ...`) and 6 re-anchored ones (lane F's carrier pair, K-I4, C7, the heredoc-body and bash -c mutants),
+all caught.
 
 ## F365 - `_merge` modelled `<add pos="append">` as an append; the engine skips the node · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
 
