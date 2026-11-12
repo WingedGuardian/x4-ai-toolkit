@@ -478,6 +478,12 @@ on rm_hits_game && deny "BLOCKED: cannot delete the X4 game installation directo
 # === HARD BLOCK — delete the reference folder (read-only base game data) ===
 on rm_targets_reference && deny "BLOCKED: reference/ is the read-only unpacked base game data (re-unpack only via bin/unpack-reference.sh)."
 
+# === HARD BLOCK — delete or move a folder that CONTAINS one of those roots (F375 row 16, 4.1.2) ===
+# A recursive delete (rm -r, rd /s, Remove-Item -Recurse, trash, an unfiltered find -delete, a purge) or a
+# move of a folder ABOVE the root takes the root with it. MEASURED at v4.1.1: the parent was allowed.
+on rm_contains_game && deny "BLOCKED: this deletes or moves a folder that contains the X4 game installation directory."
+on rm_contains_reference && deny "BLOCKED: this deletes or moves a folder that contains reference/, the read-only unpacked base game data (re-unpack only via bin/unpack-reference.sh)."
+
 # === HARD BLOCK — WRITE into the reference folder (read-only base game data) ===
 # The delete case above has been blocked for months; a WRITE had no rule at all, so a
 # truncating redirect, a `cp` or a `sed -i` into reference/ was ALLOW -- while the file

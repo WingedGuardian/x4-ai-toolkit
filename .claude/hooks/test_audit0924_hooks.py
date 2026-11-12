@@ -850,6 +850,107 @@ class TestRR3CmdCarrier(_RR):
         ], tool="Bash")
 
 
+class TestF376CarrierKeepsTheOuterDirectoryE2E(_RR):
+    """F376 (4.1.2), through the whole hook: a command carried inside another shell is judged in
+    the directory the OUTER `cd`/`pushd`/Set-Location put it in. Every row below was ALLOWED at
+    v4.1.1 (the reviewers' probe2-4) while the plain `cd <root> && <delete>` denied."""
+
+    def test_carriers_after_an_outer_cd_deny_like_the_plain_delete(self):
+        q, dq, de, rm = "'", '"', "d" + "el", "r" + "m -rf extensions"
+        g = "cd " + q + self.Gf + q + " && "
+        r = "cd " + q + self.Rf + q + " && "
+        self.expect([
+            ("deny", g + rm),                                    # control: the plain spelling
+            ("deny", g + "bash -c " + q + rm + q),
+            ("deny", g + "bash -c " + dq + rm + dq),
+            ("deny", g + "sh -c " + q + rm + q),
+            ("deny", g + "eval " + q + rm + q),
+            ("deny", g + "cmd //c rd /s /q extensions"),
+            ("deny", "pushd " + q + self.Gf + q + " && cmd //c rd /s /q extensions"),
+            ("deny", r + "cmd //c " + de + " x.xml"),
+            ("deny", r + "cmd //c " + dq + de + " x.xml" + dq),
+            ("deny", r + "cmd //c rd /s /q libraries"),
+            ("deny", r + "cmd /c " + de + " x.xml"),
+            ("deny", g + "bash -c " + dq + "sh -c " + q + rm + q + dq),
+            ("deny", g + "echo y | bash -c " + q + rm + q),
+            ("deny", g + "for i in 1; do bash -c " + q + rm + q + "; done"),
+        ], tool="Bash")
+
+    def test_powershell_set_location_then_a_carrier(self):
+        self.expect([
+            ("deny", "Set-Location " + "'" + self.R + "'; cmd /c " + "d" + "el x.xml"),
+            ("deny", "Set-Location " + "'" + self.R + "'; Remove-Item x.xml"),     # control
+        ])
+
+    def test_TWIN_carriers_after_a_cd_somewhere_plain_allow(self):
+        q, rm = "'", "r" + "m -rf extensions"
+        other = (self.tmp / "elsewhere").as_posix()
+        (self.tmp / "elsewhere").mkdir(exist_ok=True)
+        p = "cd " + q + other + q + " && "
+        self.expect([
+            ("allow", p + "bash -c " + q + rm + q),
+            ("allow", p + "cmd //c rd /s /q extensions"),
+            ("allow", p + "cmd //c " + "d" + "el x.xml"),
+            ("allow", "bash -c " + q + rm + q + " && cd " + q + self.Gf + q),
+        ], tool="Bash")
+
+
+
+class TestF375AncestorDeleteWholeHook(_RR):
+    """F375 row 16 (4.1.2), through the whole hook: a recursive delete or a move of a folder ABOVE the
+    reference root or the game root was ALLOWED (lane anc_e2e.py, identical at v4.1.1) while the roots
+    themselves hard-denied. Here the profile sits in another branch, so the save policy is not what
+    answers: <t>/A/B/r/reference, <t>/A/B/g/game, profile <t>/P/p/profile."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4anc_"))
+        t = cls.tmp
+        cls.B = t / "A" / "B"
+        cls.ref, cls.game = cls.B / "r" / "reference", cls.B / "g" / "game"
+        cls.prof = t / "P" / "p" / "profile"
+        for d in (cls.ref / "libraries", cls.game / "extensions", cls.prof / "save", cls.B / "r" / "other"):
+            d.mkdir(parents=True)
+        cls.env = _owned_env(t, X4_GAME=str(cls.game), X4_REFERENCE=str(cls.ref), X4_PROFILE=str(cls.prof),
+                             X4_DOCUMENTS=str(t / "documents"), X4_CONFIG=str(t / "none.env"))
+        cls.env.pop("CLAUDE_PROJECT_DIR", None)
+
+    def test_a_folder_above_a_root_is_denied_like_the_root(self):
+        q, rm = "'", "r" + "m -rf "
+        f = lambda p: q + p.as_posix() + q
+        bad = []
+        for path, says in ((self.ref.parent, "contains reference/"), (self.game.parent, "contains the X4 game"),
+                           (self.B, "contains"), (self.B.parent, "contains")):
+            for cmd in (rm + f(path), "r" + "m -r " + f(path), "mv " + f(path) + " " + q + str(self.tmp.as_posix()) + "/moved" + q,
+                        "cmd //c rd /s /q " + '"' + str(path) + '"'):
+                got, why = self.verdict_with(cmd, "Bash")
+                if got != "deny" or says not in why:
+                    bad.append((got, why[:80], cmd))
+        for cmd in ("Remove-Item -Recurse -Force '" + str(self.ref.parent) + "'",
+                    "Move-Item '" + str(self.game.parent) + "' '" + str(self.tmp / "moved") + "'"):
+            got, why = self.verdict_with(cmd, "PowerShell")
+            if got != "deny" or "contains" not in why:
+                bad.append((got, why[:80], cmd))
+        self.assertEqual(bad, [])
+
+    def test_the_roots_keep_their_own_reasons(self):
+        q, rm = "'", "r" + "m -rf "
+        self.assertIn("read-only unpacked", self.verdict_with(rm + q + self.ref.as_posix() + q, "Bash")[1])
+        self.assertIn("cannot delete the X4 game", self.verdict_with(rm + q + self.game.as_posix() + q, "Bash")[1])
+
+    def test_TWIN_siblings_and_non_recursive_deletes_of_an_ancestor_allow(self):
+        q = "'"
+        par = self.ref.parent.as_posix()
+        self.expect([
+            ("allow", "r" + "m -rf " + q + par + "/other" + q),
+            ("allow", "r" + "m -rf " + q + self.ref.as_posix() + "x" + q),
+            ("allow", "r" + "m -f " + q + par + q),
+            ("allow", "rmdir " + q + par + q),
+            ("allow", "mv " + q + par + "/other" + q + " " + q + par + "/other2" + q),
+        ], tool="Bash")
+
+
+
 class TestGM3ExtensionsRootE2E(_RR):
     """4.1.0 G-M3 and P1, through the REAL hook: the packet has to carry the configured root, and the
     ask has to name the mod. MEASURED at d0843965: every non-twin row allowed."""

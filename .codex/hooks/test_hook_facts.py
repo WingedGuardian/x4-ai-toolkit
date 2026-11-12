@@ -6525,13 +6525,22 @@ class TestRelativeOperandsResolveAgainstThePayloadCwd(unittest.TestCase):
         self.assertTrue(FC("bash -c '" + _REL_DEL + "'", TOOLKIT)["rm_targets_reference"])
 
     def test_TWIN_a_carrier_after_a_directory_change_is_not_seeded(self):
-        """A carried command is walked on its own and cannot see the `cd` around it, so
-        after any directory change it keeps the old "unknowable" -- never the session cwd,
-        which is no longer where it runs. One case per clause of the directory-change test."""
+        """After any directory change the session cwd is no longer where a carried command runs.
+        A carrier SEGMENT's text runs where that segment does (F376, 4.1.2: from `cd <elsewhere>`
+        it is <elsewhere>); a substitution has no segment here and keeps the old "unknowable".
+        One case per clause of the directory-change test."""
+        sub = "echo $(" + _REL_DEL + ")"
         for move in ("cd " + _ELSEWHERE, "pushd " + _ELSEWHERE, "popd"):
             with self.subTest(move=move):
+                self.assertFalse(FC(move + " && " + sub, TOOLKIT)["rm_targets_reference"])
+        for move in ("cd " + _ELSEWHERE, "pushd " + _ELSEWHERE):
+            with self.subTest(move=move, form="bash -c"):
                 self.assertFalse(FC(move + " && bash -c '" + _REL_DEL + "'", TOOLKIT)
                                  ["rm_targets_reference"])
+        # A popd with nothing pushed leaves the directory where it was, for the carrier as for
+        # the plain spelling.
+        self.assertEqual(FC("popd && bash -c '" + _REL_DEL + "'", TOOLKIT)["rm_targets_reference"],
+                         FC("popd && " + _REL_DEL, TOOLKIT)["rm_targets_reference"])
 
 
 class TestTheSeedIsNarrowedWhereTheReplayFoundFalsePositives(unittest.TestCase):
@@ -9246,7 +9255,10 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
         self.caught("exec -a x ev?l " + self.inner(REF))
 
     CD_READING = "tmux run " + Q + "cd /tmp && ls" + Q
-    SESSION_DELETE = "bash -c " + Q + D + " -rf extensions" + Q
+    # A SUBSTITUTION (F376, 4.1.2): a carrier segment's text now follows the outer directory
+    # whether or not anything moves, so only a text with no carrier segment still shows what
+    # the directory-change test decides.
+    SESSION_DELETE = "echo $(" + D + " -rf extensions)"
 
     def test_TWIN_a_reading_of_one_call_is_not_a_reading_of_the_next(self):
         """The same text typed by itself in the next call does change directory."""
@@ -10868,6 +10880,163 @@ class TestLiteralDollarPathsPowerShell(unittest.TestCase):
                     "Invoke-Expression " + DQ + "Remove-Item " + Q + REF + "`$x" + Q + DQ):
             f = self.P(cmd)
             self.assertTrue(f[self.K] or f.get("carrier_untranslated"), cmd)
+
+
+class TestF376CarrierKeepsTheOuterDirectory(unittest.TestCase):
+    """F376 (4.1.2): a command carried inside another shell was walked with NO directory once
+    anything changed directory, so `cd <game> && bash -c 'rm -rf extensions'` reached no rule
+    where the plain `cd <game> && rm -rf extensions` hard-denied. A carried text is now judged in
+    the directory the outer command's tracking says its carrier segment runs in, AS WELL AS the
+    old unknown directory (so no verdict can get weaker)."""
+    RF = D + " -rf extensions"
+
+    def _g(self):
+        return "cd " + Q + GAME + Q + " && "
+
+    def _r(self):
+        return "cd " + Q + REF + Q + " && "
+
+    def test_a_shell_carrier_after_cd_is_the_game_delete(self):
+        g, rf = self._g(), self.RF
+        for cmd in (g + "bash -c " + Q + rf + Q, g + "bash -c " + DQ + rf + DQ,
+                    g + "sh -c " + Q + rf + Q, "pushd " + Q + GAME + Q + " && bash -c " + Q + rf + Q):
+            self.assertTrue(F(cmd)["rm_hits_game"], cmd)
+
+    def test_eval_after_cd_is_the_game_delete(self):
+        self.assertTrue(F(self._g() + "eval " + Q + self.RF + Q)["rm_hits_game"])
+
+    def test_a_cmd_carrier_after_cd_is_the_game_or_reference_delete(self):
+        g, r, de = self._g(), self._r(), "d" + "el"
+        for cmd in (g + "cmd //c rd /s /q extensions",
+                    "pushd " + Q + GAME + Q + " && cmd //c rd /s /q extensions"):
+            self.assertTrue(F(cmd)["rm_hits_game"], cmd)
+        for cmd in (r + "cmd //c " + de + " x.xml", r + "cmd //c " + DQ + de + " x.xml" + DQ,
+                    r + "cmd //c rd /s /q libraries", r + "cmd /c " + de + " x.xml"):
+            self.assertTrue(F(cmd)["rm_targets_reference"], cmd)
+
+    def test_the_forms_the_same_walk_reaches(self):
+        # NOT CHECKED in F376 as filed: nested two deep, in a pipeline, in a for loop, in a subshell,
+        # after a popd that returns to the root, and a PowerShell host's -c.
+        g, rf = self._g(), self.RF
+        for cmd in (g + "bash -c " + DQ + "sh -c " + Q + rf + Q + DQ,
+                    g + "echo y | bash -c " + Q + rf + Q,
+                    g + "for i in 1; do bash -c " + Q + rf + Q + "; done",
+                    g + "( bash -c " + Q + rf + Q + " )",
+                    "pushd " + Q + GAME + Q + " && pushd /tmp && popd && bash -c " + Q + rf + Q):
+            self.assertTrue(F(cmd)["rm_hits_game"], cmd)
+
+    def test_an_unresolved_cd_inside_the_carrier_reads_as_in_the_plain_spelling(self):
+        # After an ABSOLUTE outer cd the 2026-09-02 sticky join applies inside the carrier too
+        # (the lane's from_seed travels with its directory).
+        inner = "cd " + DQ + "$NOPE" + DQ + " && " + self.RF
+        plain, carried = F(self._g() + inner), F(self._g() + "bash -c " + Q + inner + Q)
+        self.assertTrue(plain["rm_in_x4_dir"])
+        self.assertEqual(plain["rm_in_x4_dir"], carried["rm_in_x4_dir"])
+
+    def test_a_spanning_view_of_a_carried_text_keeps_its_directory(self):
+        # `A=$(echo a; echo b) rm ...` is read through its spanning view (FX-G6 / K I4).
+        f = F(self._g() + "bash -c " + Q + "A=$(echo a; echo b) " + self.RF + Q)
+        self.assertTrue(f["rm_hits_game"])
+
+    def test_past_the_lane_bound_the_seeds_are_refused(self):
+        # One carried text handed on from more directories than _MAX_CD_LANES: unknown, refused (C7).
+        many = lambda n: "; ".join("cd /w/d%d && bash -c " % i + Q + "true" + Q for i in range(n))
+        self.assertTrue(F(many(H._MAX_CD_LANES + 1))["cd_lanes_truncated"])
+        self.assertFalse(F(many(H._MAX_CD_LANES))["cd_lanes_truncated"])
+
+    def test_one_deployed_mod_through_a_carrier_is_the_deployed_mod_ask(self):
+        f = F("cd " + Q + GAME + "/extensions" + Q + " && bash -c " + Q + D + " -rf amod" + Q)
+        self.assertTrue(f["rm_in_x4_dir"])
+        self.assertFalse(f["rm_hits_game"])
+
+    def test_TWIN_a_carrier_after_cd_somewhere_plain_is_allowed(self):
+        p = "cd " + Q + _ELSEWHERE + Q + " && "
+        for cmd in (p + "bash -c " + Q + self.RF + Q, p + "cmd //c rd /s /q extensions",
+                    p + "eval " + Q + self.RF + Q):
+            f = F(cmd)
+            self.assertFalse(f["rm_hits_game"] or f["rm_in_x4_dir"] or f["rm_targets_reference"], cmd)
+
+    def test_TWIN_a_cd_AFTER_the_carrier_does_not_move_it(self):
+        f = F("bash -c " + Q + self.RF + Q + " && cd " + Q + GAME + Q)
+        self.assertFalse(f["rm_hits_game"] or f["rm_in_x4_dir"])
+
+    def test_TWIN_a_trap_runs_later_so_it_keeps_the_unknown_directory(self):
+        # A trap's text runs when the signal fires, in whatever directory is in force THEN.
+        f = F(self._g() + "trap " + Q + D + " -rf build" + Q + " EXIT")
+        self.assertFalse(f["rm_in_x4_dir"])
+
+    def test_TWIN_an_unknown_outer_directory_keeps_todays_reading(self):
+        for pre in ("cd " + DQ + "$NOPE" + DQ + " && ", ""):
+            plain, carried = F(pre + self.RF), F(pre + "bash -c " + Q + self.RF + Q)
+            self.assertEqual(plain["rm_hits_game"], carried["rm_hits_game"], pre)
+
+
+class TestF375AncestorOfARootIsDeniedLikeTheRoot(unittest.TestCase):
+    """F375 row 16 (4.1.2): a RECURSIVE delete (or a move) of a PROPER ANCESTOR of the reference
+    root or the game root reached no rule -- the delete rules use under(), which is the root or
+    inside it -- while the roots themselves hard-deny. Now it reads as deleting that root."""
+    CR, CG = "rm_contains_reference", "rm_contains_game"
+    REF_PARENT = REF.rsplit("/", 1)[0]          # the toolkit folder in these fixtures
+    GAME_PARENT = GAME.rsplit("/", 1)[0]
+
+    def test_a_recursive_delete_of_an_ancestor_of_reference(self):
+        for anc in (self.REF_PARENT, self.REF_PARENT.rsplit("/", 1)[0], "C:/Users/tester"):
+            for flag in ("-rf", "-r", "-R", "--recursive", "-fr"):
+                self.assertTrue(F(D + " " + flag + " " + DQ + anc + DQ).get(self.CR), (flag, anc))
+
+    def test_a_recursive_delete_of_an_ancestor_of_the_game(self):
+        for anc in (self.GAME_PARENT, "C:/Program Files (x86)/Steam", "C:/Program Files (x86)"):
+            self.assertTrue(F(D + " -rf " + DQ + anc + DQ).get(self.CG), anc)
+
+    def test_other_recursive_delete_spellings_reach_it(self):
+        win = self.REF_PARENT.replace("/", BS)
+        for cmd in ("cmd //c rd /s /q " + DQ + win + DQ, "cmd //c rmdir /s /q " + DQ + win + DQ,
+                    "cd " + DQ + REF + DQ + " && " + D + " -rf ..",
+                    "cd " + DQ + self.REF_PARENT + DQ + " && " + D + " -rf .",
+                    "find " + DQ + self.REF_PARENT + DQ + " -delete",
+                    "echo " + DQ + self.REF_PARENT + DQ + " | xargs " + D + " -rf",
+                    "trash " + DQ + self.REF_PARENT + DQ):
+            self.assertTrue(F(cmd).get(self.CR), cmd)
+
+    def test_TWIN_an_unresolved_operand_is_not_read_as_an_ancestor(self):
+        # F93: a hard deny needs a path the text resolves; `$X/..` may land anywhere.
+        self.assertFalse(F(D + " -rf " + DQ + "C:/Users/tester/$X/.." + DQ).get(self.CR))
+        # ...while an expansion whose every value is known still is one.
+        self.assertTrue(F(D + " -rf " + DQ + "${A:-C:/Users}" + DQ).get(self.CR))
+
+    def test_a_move_of_an_ancestor_moves_the_root_away(self):
+        self.assertTrue(F("mv " + DQ + self.REF_PARENT + DQ + " /tmp/x").get(self.CR))
+        self.assertTrue(F("mv " + DQ + self.GAME_PARENT + DQ + " /tmp/x").get(self.CG))
+
+    def test_a_drive_root_contains_both(self):
+        f = F(D + " -rf C:/")
+        self.assertTrue(f.get(self.CR) and f.get(self.CG))
+
+    def test_TWIN_the_root_itself_and_paths_inside_it_are_the_root_rules_not_this_one(self):
+        for cmd in (D + " -rf " + DQ + REF + DQ, D + " -rf " + DQ + REF + "/libraries" + DQ):
+            f = F(cmd)
+            self.assertFalse(f.get(self.CR), cmd)
+            self.assertTrue(f["rm_targets_reference"], cmd)
+        self.assertFalse(F(D + " -rf " + DQ + GAME + "/extensions/amod" + DQ).get(self.CG))
+
+    def test_TWIN_a_sibling_or_a_sibling_prefix_is_not_an_ancestor(self):
+        for cmd in (D + " -rf " + DQ + self.REF_PARENT + "/other" + DQ,
+                    D + " -rf " + DQ + REF + "x" + DQ, D + " -rf " + DQ + REF[:-1] + DQ,
+                    D + " -rf " + DQ + self.GAME_PARENT + "/Other Game" + DQ):
+            f = F(cmd)
+            self.assertFalse(f.get(self.CR) or f.get(self.CG), cmd)
+
+    def test_TWIN_a_non_recursive_delete_of_an_ancestor_removes_no_folder(self):
+        for cmd in (D + " -f " + DQ + self.REF_PARENT + DQ, D + " " + DQ + self.REF_PARENT + DQ,
+                    "rmdir " + DQ + self.REF_PARENT + DQ, "unlink " + DQ + self.REF_PARENT + DQ):
+            self.assertFalse(F(cmd).get(self.CR), cmd)
+        # (cmd's `rd` WITHOUT /s is translated as `rm -rf`, the stricter reading, so it is refused
+        # here too; on a folder that holds anything it would fail anyway.)
+
+    def test_TWIN_reading_or_copying_an_ancestor_is_not_a_delete(self):
+        for cmd in ("cp -r " + DQ + self.REF_PARENT + DQ + " /tmp/x", "ls -R " + DQ + self.REF_PARENT + DQ,
+                    "cp -r /tmp/x " + DQ + self.REF_PARENT + DQ):
+            self.assertFalse(F(cmd).get(self.CR), cmd)
 
 
 if __name__ == "__main__":

@@ -4571,7 +4571,8 @@ _MAX_CD_LANES = 16
 _CD_LANES_TRUNCATED = [False]
 
 
-def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None = None, *, physical=False) -> list:
+def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None = None, *, physical=False,
+              flags: list | None = None) -> list:
     """[(segment, [every directory that may be in force FOR it])], in command order --
     cwd_track()'s model with one LANE per possible directory (FX-G7, corpus #397).
 
@@ -4584,7 +4585,9 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
     lane j of every segment is one consistent history of `cd`s, and a rule judging a
     relative operand against every lane takes the strictest verdict (facts() ORs them).
     Lanes are split per candidate VALUE, which does not depend on `base`, so the seeded and
-    unseeded walks of one command have the same lanes in the same order."""
+    unseeded walks of one command have the same lanes in the same order.
+    `flags`, when given, receives per segment each lane's from_seed (F376: a carried text
+    inherits it with the directory, so its unresolved `cd` reads as the plain one does)."""
     #: Each lane: [cwd, from_seed, pushd stack].
     #: from_seed is True while the directory in force is still the SESSION's (the seed, or a resolved
     #: relative `cd` from it) -- no absolute `cd` has said where the shell is. Lane F,
@@ -4644,6 +4647,8 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
     out, lanes = [], [(base, from_seed, [])]
     for seg in segments(cmd):
         out.append((seg, [ln[0] for ln in lanes]))
+        if flags is not None:
+            flags.append([ln[1] for ln in lanes])
         v = verb(seg)
         ops = _operands(seg) if v in DIR_VERBS else []
         if v == "popd":
@@ -5638,6 +5643,19 @@ def deletes_recursively(words: list) -> bool:
             if t == "--recursive" or (re.match(r"^-[A-Za-z]+$", t) and set(t[1:]) & set("rR")):
                 return True
     return False
+
+
+def _removes_folders(seg: str) -> bool:
+    """F375 row 16: this delete segment's own flags make it recursive (`-r`/`-R` in any cluster,
+    `--recursive`). Read from the segment's tokens as written: deletes_recursively() re-joins the
+    words without their quotes and re-parses them, which records a QUOTED `'{1..64}'` as a brace
+    word (MEASURED: it set operand_expansion_truncated on a literal filename)."""
+    toks = tokens_of(seg)
+    vt = _verb_token(seg)
+    if vt not in toks:
+        return False
+    return any(t == "--recursive" or (re.match(r"^-[A-Za-z]+$", t) and set(t[1:]) & set("rR"))
+               for t in toks[toks.index(vt) + 1:])
 
 
 def named_game_roots(n: str) -> list:
@@ -8030,7 +8048,7 @@ def _env_candidate(seg: str) -> bool:
     return "nv" in seg and bool(_ENV_FLAG.search(seg))
 
 
-def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
+def _inner_commands(cmd: str, exact: set | None = None, origin: dict | None = None) -> list[str]:
     """Command strings hidden inside a wrapper, so the rules see them too.
 
     Carriers: a shell's `-c` argument, `eval`, `trap`, a shell reading stdin, and (HK-2)
@@ -8048,6 +8066,10 @@ def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
     expanded or re-quoted on the way in, so its `'REF$X'` may really be `reference/` itself.
     A text produced by any non-exact route is never exact, even if an exact route produced
     it too (4.1.1 port of 6cbeb825).
+
+    `origin`, when given, receives text -> {index of the segment that carries it} (F376):
+    each runs where that segment runs. A trap's text runs when its signal fires, and a
+    reading or a whole-command variant carries its own `cd`s, so neither gets one.
     """
     out = []
     exact_idx = set()
@@ -8068,6 +8090,7 @@ def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
             out.extend(substitutions(table.get(name, "")))
     for n, seg in enumerate(segs):
         written = seg
+        first = len(out)
         # F10: a command NAME from a variable. One this command assigns a bare name to is
         # spliced in first, so `R=eval; $R '<cmd>'` reaches the eval arm below (MEASURED:
         # allowed); one it cannot name contributes its speculative readings.
@@ -8198,6 +8221,9 @@ def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
             rest = [t for t, _ in toks[k + 1:] if not t.startswith("-")]
             if rest:
                 out.append(rest[0])
+        if origin is not None and v != "trap":
+            for t_ in out[first:]:
+                origin.setdefault(t_, set()).add(n)
     for n, remote in ssh_here.items():
         # ...each IN PLACE, as every carrier reading is: the remote command is expanded HERE first, so
         # `FZ=<ref>; ssh <host> rm -rf "$FZ"` sends the path (round 6, C). Every OTHER unplaced ssh is a
@@ -8292,7 +8318,7 @@ _READINGS_TRUNCATED = [False]
 
 
 def carried_commands(body: str, extra: list, dialects: dict | None = None, *,
-                     exact: dict | None = None) -> tuple:
+                     exact: dict | None = None, origins: dict | None = None) -> tuple:
     """Every command string reachable from `body`, following carriers.
 
     _inner_commands was applied EXACTLY ONCE, to the top level, so a command one
@@ -8313,6 +8339,9 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None, *,
     Bash parent handing on a `-c` argument the outer shell expanded nothing in (see
     _inner_commands). Anything not known exact is False, which keeps a `$` in it an
     unresolved expansion: the stricter reading.
+
+    `origins` (text -> [(parent text, segment index)]), when given, is filled for every route
+    that a carrier segment of a parent hands a text on (F376); a substitution has none.
     """
     edges = []                          # (parent, child, exact hand-off?) -- every route
 
@@ -8356,7 +8385,8 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None, *,
         for c in frontier:
             _check_deadline()
             exact_inners = set()
-            inners = _inner_commands(c, exact_inners)
+            seg_of = {}
+            inners = _inner_commands(c, exact_inners, seg_of)
             subs = substitutions(c)
             for i_, kind, handed in ([(x, WINDOWS_DIALECT if x in _WIN_DIALECT else "bash",
                                        x in exact_inners and x not in _WIN_DIALECT
@@ -8369,6 +8399,9 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None, *,
                         # Recorded BEFORE the dedup below: a text reached again by a
                         # non-exact route must lose exactness it was granted earlier.
                         edges.append((c, inner, handed and n_ == 0))
+                        if origins is not None:
+                            for k_ in sorted(seg_of.get(i_, ())) if i_ in inners else ():
+                                origins.setdefault(inner, []).append((c, k_))
                     if not inner or inner in seen:
                         continue
                     if c in _READING_TEXTS or i_ in _READING_TEXTS:
@@ -8996,8 +9029,10 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
         exact_bodies = exact_heredoc_bodies(spliced)
         exact_texts = {e: e in exact_bodies and extra.count(e) == 1 for e in extra}
         exact_texts[body] = body not in exact_texts
+    origins = {}
     all_cmds, carriers_truncated = carried_commands(body, extra, dialects,
-                                                    exact=None if no_exact else exact_texts)
+                                                    exact=None if no_exact else exact_texts,
+                                                    origins=origins)
     carriers_truncated = carriers_truncated or _READINGS_TRUNCATED[0]
     if not no_exact and (carriers_truncated or _no_literal_anywhere(
             [cmd, body] + list(extra) + list(all_cmds))):
@@ -9010,9 +9045,11 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # top level's own view is seeded with the session directory exactly as the top level is.
     top_view = _spanning_view(body)
     views = []
+    view_of = {}
     for c_ in all_cmds:
         v_ = _spanning_view(c_)
         if v_ != c_ and v_ not in all_cmds and v_ not in views:
+            view_of[v_] = c_
             if c_ in _READING_TEXTS:
                 _READING_TEXTS.add(v_)
             views.append(v_)
@@ -9052,24 +9089,76 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # known here, and it keeps today's "unknowable" rather than a guessed directory.
     moves = any(verb(s) in DIR_VERBS or verb(s) == "popd"
                 for c_ in all_cmds if c_ not in _READING_TEXTS for s in segments(c_))
-    for i_, c in enumerate(all_cmds):
-        top = i_ == 0 or c == top_view
-        tracked = cwd_lanes(c, base if (top or not moves) else "", seeded=True, roots=roots)
-        # The directory each segment had BEFORE lane F (no session seed), for the two
-        # rules whose verdict is an ASK outside the profile -- see `gitwipe_t` below.
-        # Lane j of one walk is lane j of the other (cwd_lanes splits per VALUE, not per
-        # directory), so a segment is judged once per (seeded, unseeded) lane pair (FX-G7).
-        bare = cwd_lanes(c, roots=roots)
-        physical = cwd_lanes(c, base if (top or not moves) else "", seeded=True,
-                             roots=roots, physical=True)
+    # F376: ...but where a CARRIER segment hands it on, it runs where that segment runs: `cd
+    # <game> && bash -c 'rm -rf extensions'` was ALLOWED while the plain spelling denied. Each
+    # carried text is walked from every (directory, from_seed, unseeded, physical) its carrier
+    # segments have, in carried order (a parent before its children), AND from today's unknown
+    # directory, LAST, so no verdict gets weaker and the `cwd` fact read from the last segment
+    # stays the old one. A text reached by no carrier segment (a substitution, a reading) keeps
+    # the old walk only. Past _MAX_CD_LANES seeds the directory is UNKNOWN and refused (C7).
+    walks = {}
+
+    def lanes_from(c, seed):
+        key = (c, seed)
+        if key not in walks:
+            d0, fs0, u0, p0 = seed
+            fl = []
+            walks[key] = (cwd_lanes(c, d0, seeded=fs0, roots=roots, flags=fl),
+                          # The directory each segment had BEFORE lane F (no session seed), for
+                          # the two rules whose verdict is an ASK outside the profile -- see
+                          # `gitwipe_t` below. Lane j of one walk is lane j of the other
+                          # (cwd_lanes splits per VALUE, not per directory), so a segment is
+                          # judged once per (seeded, unseeded) lane pair (FX-G7).
+                          cwd_lanes(c, u0, roots=roots),
+                          cwd_lanes(c, p0, seeded=fs0, roots=roots, physical=True), fl)
+        return walks[key]
+
+    unknown_seed = ("", True, "", "")
+    seeds_of = {}
+    for i_, c in enumerate(carried):
+        top = i_ == 0
+        mine = [(base, True, "", base)] if (top or not moves) else seeds_of.get(c, []) + [unknown_seed]
+        seeds_of[c] = mine = list(dict.fromkeys(mine))
+        if not moves:
+            continue
+        for seed in mine:
+            tr, ba, ph, fl = lanes_from(c, seed)
+            for child, routes in origins.items():
+                for parent, k in routes:
+                    if parent != c or k >= len(tr):
+                        continue
+                    ds, fs = tr[k][1], fl[k] if k < len(fl) else [True] * len(tr[k][1])
+                    uds = ba[k][1] if k < len(ba) else [""]
+                    pds = ph[k][1] if k < len(ph) else [""] * len(ds)
+                    for j, d0 in enumerate(ds):
+                        if not d0:
+                            continue
+                        got = seeds_of.setdefault(child, [])
+                        new = (d0, fs[j] if j < len(fs) else True,
+                               uds[j] if j < len(uds) else uds[0], pds[j] if j < len(pds) else "")
+                        if new in got:
+                            continue
+                        if len(got) >= _MAX_CD_LANES:
+                            _CD_LANES_TRUNCATED[0] = True
+                            break
+                        got.append(new)
+    for c in all_cmds:
+        # A spanning view is walked as the text it views (the top level's view as the top level).
+        seeds = seeds_of.get(body if c == top_view else view_of.get(c, c), [unknown_seed])
         heads = _for_headers(c)
-        for k, (s, ds) in enumerate(tracked):
-            uds = bare[k][1] if k < len(bare) else [""]
+        per_seed = [lanes_from(c, seed) for seed in seeds]
+        tracked = per_seed[-1][0]
+        for k, (s, _ds0) in enumerate(tracked):
             rs = resolve_verb(s, assigns)
             # The segment BEFORE each one in the same carried command: what feeds an xargs.
             prev = _stdin_producer([t[0] for t in tracked[:k]])
-            pds = physical[k][1] if physical else [""] * len(ds)
-            for d, ud, pd in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds)):
+            rows_k = []
+            for tr_, bare, physical, _fl in per_seed:
+                ds = tr_[k][1] if k < len(tr_) else [""]
+                uds = bare[k][1] if k < len(bare) else [""]
+                pds = physical[k][1] if physical and k < len(physical) else [""] * len(ds)
+                rows_k.extend(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds))
+            for d, ud, pd in dict.fromkeys(rows_k):
                 seg_dialect.append(dialects.get(c, "bash"))
                 seg_exact.append(exact_texts.get(c, False))
                 seg_for.append(k < len(heads) and heads[k])
@@ -9342,6 +9431,10 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     sed_t, out_t, search_files = [], [], []
     gitwipe_t, gitdiscard_t, gitwipe_pairs = [], [], []
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
+    # F375 row 16 (4.1.2): what a delete removes WHOLE -- a recursive rm (rd /s, Remove-Item -Recurse
+    # arrive as one), a trash or an unfiltered find -delete -- for the ancestor test. (An rsync or robocopy
+    # purge of a folder above reference/ already reads as a delete inside it: MEASURED, rm_targets_reference.)
+    rm_whole_t = []
     # For writes_game_archive only: moved rsync sources, folders receiving an archive-named
     # copy, what a listing feeds `xargs rm`, and (root operand, segment, mode) of each find that
     # deletes ("delete") or prints to an `xargs rm` ("print").
@@ -9410,8 +9503,12 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
         if execution_context:
             # Context-only evidence; ordinary save membership/rules unchanged.
             prep(git_wipes_worktree_targets(s), c_cwd, c_old, operation="delete")
+        at_ = len(rm_t)
         rm_t += prep(rm_paths(s), c_cwd, c_old, operation="delete")
         rm_t += prep(xargs_feed(s, prev), c_cwd, c_old, operation="delete")
+        # rmdir, unlink and a plain rm remove no folder that holds anything, so only a recursive one counts.
+        if verb(s) not in DELETE_VERBS or _removes_folders(s):
+            rm_whole_t += rm_t[at_:]
         rm_t += prep(rsync_deletes(s), c_cwd, c_old, operation="delete", scope="tree")
         robo_copy, robo_del, robo_mv = robocopy_effects(s)
         copy_t += prep(robo_copy, c_cwd, c_old, operation="write", scope="tree")
@@ -9819,6 +9916,13 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                          or rm_named_game),
         "rm_targets_reference": hit(rm_t + mv_src + scoped_rm_t, "reference",
                                     conservative=True),
+        # F375 row 16 (4.1.2): a folder ABOVE the root removed whole, or moved, takes the root with it.
+        # MEASURED at v4.1.1: `rm -rf` of the reference root's parent was allowed while the root itself
+        # hard-denied. A resolved operand only, as the root rules: an unresolved one is not an ancestor.
+        "rm_contains_reference": any(not u and contains_root(p_, roots.get("reference") or "")
+                                     for p_, u, _r in rm_whole_t + mv_src),
+        "rm_contains_game": any(not u and contains_root(p_, roots.get("game") or "")
+                                for p_, u, _r in rm_whole_t + mv_src),
         # A WRITE into reference/, which had no Bash rule at all -- only deletes were
         # covered, while protect-files.sh hard-blocks the same tree for Edit/Write and
         # CLAUDE.md lists it under "Hard blocked". MEASURED 2026-09-03: a truncating
