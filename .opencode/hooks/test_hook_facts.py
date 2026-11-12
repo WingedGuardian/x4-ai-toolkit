@@ -9105,6 +9105,12 @@ class TestProgramsThatRunPrograms(unittest.TestCase):
         self.assertTrue(base["rm_hits_game"] or base["rm_in_x4_dir"])
         self.assertEqual(base["rm_hits_game"], with_reading["rm_hits_game"])
         self.assertEqual(base["rm_in_x4_dir"], with_reading["rm_in_x4_dir"])
+        # 4.1.2 (F376): `bash -c` is now judged where its carrier segment runs, so it no longer needs `moves` to be
+        # False, and the mutant on this clause went uncaught (CI run 43199290697, windows shard 4/8). A `$(...)` has
+        # no carrier segment and still takes the session directory only when nothing moves (MEASURED in-process:
+        # real True/True, mutant False/False).
+        sub = FC("echo $(" + D + " -rf extensions); tmux run " + Q + "cd /tmp && ls" + Q, GAME)
+        self.assertTrue(sub["rm_hits_game"] and sub["rm_in_x4_dir"])
 
 
 class TestProgramsThatRunProgramsReview(unittest.TestCase):
