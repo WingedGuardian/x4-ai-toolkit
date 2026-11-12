@@ -5387,6 +5387,14 @@ class TestLinkReadingOfRelativeAndDotDotOperands(unittest.TestCase):
         # 4.1.2 release review round 4 (C1): the same cases with every root spelled on D: (a GitHub runner's checkout
         # drive), as text to the analyser, with D: answered as a local drive (here it has no root directory).
         from unittest import mock
+        import ctypes
+        # 4.1.2 release review round 5: only _drive_type is stubbed, so lstat and realpath still reach the REAL D:. Absent
+        # (type 1; MEASURED here: every call answers "not found" at once) and a fixed disk (3, a runner's checkout drive)
+        # both answer; an empty optical drive answers "not ready", which is read as "cannot tell" (links_unresolved), and
+        # a mapped network drive can stall each realpath (INFERRED from the 4.1.1 A1 measurement). Skipped by name there.
+        kind = ctypes.windll.kernel32.GetDriveTypeW("D:" + BS)
+        if kind not in (1, 3):
+            self.skipTest("D: is neither absent nor a fixed disk on this machine (drive type %d)" % kind)
         base = "D:/a/x4-ai-toolkit/x4-ai-toolkit/.test-sandbox/x4abovethe"
         roots = dict(ROOTS, reference=base + "/reference", game=base + "/game", profile=base + "/prof",
                      saves=base + "/prof/save")
