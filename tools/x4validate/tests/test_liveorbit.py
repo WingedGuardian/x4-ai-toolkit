@@ -330,6 +330,19 @@ def check_md_numeric_boolean_other_than_0_or_1_still_refused():
     r, _ = runtime(); r.execute(MDNUM); r.execute("prep();now=2;call('execute');local x=row('requested');x.dispatched=2;plain_deliver(x)")
     assert r.eval("last.status") != "running"
 
+
+def check_tick_before_the_session_is_bound_does_not_fault():
+    # Review r2-10: a deadline tick before the first session binding faulted the provider for good.
+    r, _ = runtime(); r.execute("local s=stamp;stamp=nil;tick();stamp=s;prep()")
+    assert r.eval("last.status") == "prepared"
+
+
+def check_tick_after_binding_still_faults_on_timeout():
+    # Twin: once bound, a missed deadline still faults.
+    r, _ = runtime(); r.execute("call('prepare');now=11;tick();call('status')")
+    assert r.eval("last.status") != "prepared"
+
+
 def _cases():
     out = []
     for name, fn in list(globals().items()):

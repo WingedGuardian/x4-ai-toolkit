@@ -189,7 +189,7 @@ return function(d)
     function api.tick()
         if retired or fault then return end
         local ok,why=pcall(function()local _,now=current();if pending then assert(now-pending.started<=10,'response timeout')end end)
-        if not ok then fail(why)end
+        if not ok and stamp then fail(why)end -- unbound: nothing to time out yet
     end
     local function send(phase,req,r,done)
         assert(not pending and not r.uncertain,'unresolved native response')

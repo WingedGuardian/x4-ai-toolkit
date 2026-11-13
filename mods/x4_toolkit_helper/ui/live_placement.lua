@@ -128,7 +128,8 @@ return function(d)
             local _,now=current()
             if pending then assert(now-pending.started<=10,'MD response timeout; no resend')end
         end)
-        if not ok then fail(reason)end
+        -- Before the first session binding there is nothing to time out (as roomentry/surface).
+        if not ok and stamp then fail(reason)end
     end
     local function send(phase,req,r,done)
         assert(not pending and not r.uncertain,'unresolved transport')

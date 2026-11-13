@@ -258,6 +258,19 @@ def check_md_numeric_booleans_prepare_execute_status():
     snap=r.eval("registry.status(req.id,req.session,req.digest).observations.snapshot")
     assert snap.controlled is True and snap.occupied is True and snap.dispatched is True
 
+
+def check_tick_before_the_session_is_bound_does_not_fault():
+    # Review r2-10: a deadline tick before the first session binding faulted the provider for good.
+    r,_=runtime();r.execute("local s=stamp;stamp=nil;tick();stamp=s")
+    assert r.eval("prep().status")=="prepared"
+
+
+def check_tick_after_binding_still_faults_on_timeout():
+    # Twin: once bound, a missed deadline still faults.
+    r,_=runtime();r.execute("registry.prepare(req);now=11;tick()")
+    assert r.eval("status().status")!="prepared"
+
+
 def _cases():
     out=[]
     for name,fn in list(globals().items()):
