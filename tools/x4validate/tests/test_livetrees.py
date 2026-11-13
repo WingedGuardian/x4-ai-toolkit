@@ -251,50 +251,63 @@ def test_unavailable_roots_are_announced_on_stderr(tmp_path, monkeypatch, capsys
     assert capsys.readouterr().err == ""
 
 
-# Delta review 2, M8: the ban is structural (AST), not a line-text heuristic.
-_JOURNAL_MODULES = ("_livepersistence.py", "_livepersistdispatch.py", "_livepersistport.py", "_liveaudio.py",
-                    "_livecapture.py", "_livecapturedispatch.py", "_liveclipport.py", "_livedialoginput.py",
-                    "_livedialogport.py", "_liveautomation.py")
+# Delta review 2, M8 / delta review 3, item 3: the ban is structural (AST). It flags
+# is_relative_to / commonpath / commonprefix, `x in y.parents`, and startswith on a path
+# turned into text (str/fspath/as_posix/normcase/normpath/abspath/realpath/relpath or an
+# f-string anywhere in the receiver).
+_TEXT_OF_PATH = {"str", "fspath", "as_posix", "normcase", "normpath", "abspath", "realpath", "relpath"}
+
+
+def _journal_modules():
+    """Every x4validate module that imports _livetrees (they all open journals)."""
+    root = Path(T.__file__).resolve().parent
+    return sorted(f for f in root.glob("*.py")
+                  if f.name != "_livetrees.py" and "from ._livetrees import" in f.read_text(encoding="utf-8"))
 
 
 def _path_comparisons(source: str) -> list[int]:
     import ast
     hits = []
     for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Compare):
+            for op, right in zip(node.ops, node.comparators):
+                if isinstance(op, (ast.In, ast.NotIn)) and isinstance(right, ast.Attribute) and right.attr == "parents":
+                    hits.append(node.lineno)
+            continue
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         name = node.func.attr
         if name in ("is_relative_to", "commonpath", "commonprefix"):
             hits.append(node.lineno)
         elif name == "startswith":
-            # A path turned into text and prefix-compared: the receiver chain contains
-            # str(...), os.fspath(...) or .as_posix().
-            chain = node.func.value
-            while True:
-                if isinstance(chain, ast.Call):
-                    f = chain.func
-                    if (isinstance(f, ast.Name) and f.id == "str") or \
-                            (isinstance(f, ast.Attribute) and f.attr in ("fspath", "as_posix")):
+            for sub in ast.walk(node.func.value):
+                if isinstance(sub, ast.JoinedStr):
+                    hits.append(node.lineno)
+                    break
+                if isinstance(sub, ast.Call):
+                    f = sub.func
+                    fname = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+                    if fname in _TEXT_OF_PATH:
                         hits.append(node.lineno)
                         break
-                    chain = f.value if isinstance(f, ast.Attribute) else None
-                elif isinstance(chain, ast.Attribute):
-                    chain = chain.value
-                else:
-                    break
     return hits
 
 
 def test_journal_modules_compare_paths_only_through_livetrees():
-    root = Path(T.__file__).resolve().parent
-    hits = {name: _path_comparisons((root / name).read_text(encoding="utf-8")) for name in _JOURNAL_MODULES}
+    modules = _journal_modules()
+    assert len(modules) >= 11, [m.name for m in modules]
+    hits = {m.name: _path_comparisons(m.read_text(encoding="utf-8")) for m in modules}
     assert {k: v for k, v in hits.items() if v} == {}
 
 
 @pytest.mark.parametrize("source,expected", [
     ("a.is_relative_to(b)", 1), ("os.path.commonpath([a, b])", 1), ("str(p).startswith('C:')", 1),
     ("p.as_posix().startswith('//')", 1), ("str(p).replace('x', 'y').startswith('//')", 1),
+    ("os.path.normcase(str(a)).startswith(os.path.normcase(str(b)))", 1), ("a in b.parents", 1),
+    ("a not in b.parents", 1), ("f'{a}'.startswith(str(b))", 1), ("os.path.normcase(a).startswith(b)", 1),
+    ("str(a).lower().startswith(x)", 1),
     ("label.startswith('x4live-')", 0), ("p.name.startswith(rid)", 0), ("r.payload.startswith('pong')", 0),
+    ("k in d.keys()", 0), ("verb.startswith('action_')", 0), ("p.parent == root", 0),
 ])
 def test_path_comparison_detector_control(source, expected):
     assert len(_path_comparisons(source)) == expected
