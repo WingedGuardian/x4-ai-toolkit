@@ -499,27 +499,49 @@ KEPT_FAILURE = x4pytest.KEPT_FAILURE
 mark_kept_failure = x4pytest.mark_kept_failure
 
 
-# --- LuaJIT error unwinding vs faulthandler (review r4-3, r5-M5) -----------------------
+# --- LuaJIT error unwinding vs faulthandler (review r4-3, r5-M5; delta minor 6) ----------
 # LuaJIT on Windows raises Lua errors as an SEH exception (code 0xE24C4A02) that lupa
 # catches. pytest's faulthandler still prints "Windows fatal exception" plus a full stack
 # for every one of them: MEASURED 2026-11-13, four Lua test files wrote 1,217 such dumps
-# (5.66 MB) for zero real crashes. Scope: only modules that run game Lua (test_live*.py
-# and test_modlua_rearm.py) run with faulthandler off; it is re-enabled after each
-# module, so every other test keeps crash dumps.
+# (5.66 MB) for zero real crashes. Scope: only a test module whose source runs a Lua
+# runtime (it names lupa / LuaRuntime) runs with faulthandler off, and it is re-enabled
+# after that module, so every other module (native ctypes ones included) keeps crash dumps.
+import contextlib as _contextlib
 import faulthandler as _faulthandler
 
+_LUA_MARKERS = ("lupa", "LuaRuntime")
 
-@pytest.fixture(scope="module", autouse=True)
-def _quiet_luajit_seh_dumps(request):
-    name = Path(str(request.node.path)).name
-    if not (name.startswith("test_live") or name == "test_modlua_rearm.py"):
-        yield
+
+def _runs_lua(module_path) -> bool:
+    try:
+        text = Path(str(module_path)).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return any(marker in text for marker in _LUA_MARKERS)
+
+
+@_contextlib.contextmanager
+def _faulthandler_off_for(module_path):
+    if not _runs_lua(module_path):
+        yield False
         return
     was = _faulthandler.is_enabled()
     if was:
         _faulthandler.disable()
     try:
-        yield
+        yield was
     finally:
         if was:
             _faulthandler.enable(file=sys.__stderr__, all_threads=True)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _quiet_luajit_seh_dumps(request):
+    with _faulthandler_off_for(request.node.path):
+        yield
+
+
+@pytest.fixture
+def faulthandler_scope():
+    """The context manager above, for test_faulthandler_scope.py."""
+    return _faulthandler_off_for
