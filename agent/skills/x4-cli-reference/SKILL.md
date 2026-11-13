@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-12 CLIs, 55 subcommands.
+12 CLIs, 56 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -45,6 +45,7 @@ Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `-
 | | `archive` | copy the dump OUT of uidata.xml, which X4 OVERWRITES on exit (ground truth has been lost this way once) |
 | | `mappings` | DERIVE candidate field mappings from a dump or a groundtruth TSV (proposals only - never auto-applied) |
 | | `query` | ask the RUNNING engine one question over the pipe |
+| | `equipment` | read fitted equipment for one issued live ship ID; experimental, bounded capture with explicit incomplete coverage |
 | | `pausestate` | READ whether the running game is paused, and whether THIS channel made the pause. Changes nothing; the safe check after a lost write reply |
 | | `pause` | WRITE: pause the running game. Refuses if it is already paused; exit 0 only when the engine reads back paused |
 | | `unpause` | WRITE: undo a pause THIS channel made. Refuses anyone else's pause; exit 0 only when the engine reads back running |

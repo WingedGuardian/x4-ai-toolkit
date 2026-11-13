@@ -215,11 +215,14 @@ and the generated staging trees through `scripts/x4basex_artifacts.py`, with no 
 > `x4live` is the least settled thing in this toolkit. **Do not use it on a save you
 > are actually playing.** Make a fresh save, or a copy, and use that.
 >
-> Being precise about why, because an overstated warning gets ignored: **it changes one
-> thing, and only when you ask.** `x4live pause` and `x4live unpause` pause and unpause
-> the running game; every other verb only reads. Nothing here changes a ship, a station,
-> the economy or a savegame, and the addon declares `save="false"` so it cannot bake
-> into a save. The reasons to be careful are narrower and real:
+> **Check which helper and command family you are using.** The legacy query interface
+> reads engine observations; its separate `pause` and `unpause` commands change pause
+> state only when requested. This isolated branch also contains an **offline automation
+> candidate**, described in [the automation guide](docs/live-automation-cli.md). Its
+> explicitly prepared actions can affect native menus, orders and camera state, and
+> reviewed installed providers may add other declared actions. It is not deployed or
+> runtime-qualified merely because its offline tests pass. `save="false"` does not
+> prove that executed actions cannot affect a saved world. Additional reasons for care:
 >
 > * `pause` and `unpause` change the game you have open. `unpause` only undoes a pause
 >   this channel made, and a UI reload (alt-enter, loading a save) forgets that, so such
@@ -243,10 +246,14 @@ quit-and-relaunch cycle for each question.
 It needs one thing inside the game, and **this toolkit ships it**: `mods/x4_toolkit_helper/`.
 Copy that folder into `{game}/extensions/`, or from `tools/x4validate` run
 `uv run python scripts/deploy-mod.py x4_toolkit_helper --apply`, which refuses a wrong target
-and re-reads what it wrote. It answers a fixed, enumerated vocabulary: read
-verbs, plus exactly two write verbs, `pause` and `unpause`, which take no arguments and report
-the pause state the engine reads back. It declares `save="false"` so it cannot bake into a save,
-and it adds no content, no menu and no MD script. Its one third-party dependency
+and re-reads what it wrote. That deployment command describes the established legacy
+helper. The automation candidate requires a separately reviewed complete composition
+of its bundle, public MD session provider and loader; copying this working folder is
+not a substitute for that qualification. The legacy interface has fixed read verbs
+and argument-free `pause`/`unpause`, reporting the engine's pause readback. The candidate
+adds a closed action registry and fixed installed-code MD channels, with source-bound
+sessions and durable action journals. Native acknowledgement is not proof of delivery,
+construction, arrival or visual correctness. Its third-party dependency
 (**Mod Support APIs**, `ws_2042901274`, from Steam Workshop or Nexus) is declared **optional**: the
 addon still loads without it and the snapshot half keeps working, while only the named-pipe verbs
 report the api unavailable. The two halves fail independently, deliberately.
@@ -259,6 +266,12 @@ a save load and on an alt-enter graphics change.
 
 See [`tools/x4validate/README.md`](tools/x4validate/README.md) for the verb list and the evidence
 tiers behind each answer.
+
+`x4live equipment <issued-ship-ID>` captures fitted engine, shield, turret and weapon
+identities with explicit empty, failed and unresolved slots. It reads one bounded capture
+through immutable pages and keeps native group summaries separate from slot counts.
+This equipment path is **offline-tested, runtime unqualified**; a complete capture is
+not a compatibility or functionality verdict. See [equipment coverage and limits](docs/live-equipment.md).
 
 ### Skills & subagents
 - `/find-session` — find the past agent session where something was discussed, down to the

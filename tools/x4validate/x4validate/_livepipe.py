@@ -191,8 +191,9 @@ NOT_MINIMIZED_DIAGNOSIS = (
     " MEASURED: X4's window is NOT minimized, so the frame loop should be running and this "
     "is NOT the usual cause -- do not go and un-minimize anything. Merely UNFOCUSED is fine "
     "(2026-08-30) and a PAUSED game still answers (2026-09-13). This is RETRYABLE, not a "
-    "failure: retry once, since the mod re-arms every ~2s. If it keeps failing, the game "
-    "is hung or the pipe name differs."
+    "failure: retry once, since the mod re-arms every ~2s. If it keeps failing, inspect "
+    "the helper and Mod Support APIs load errors and the configured pipe name; this "
+    "observation does not establish that the game is hung."
 )
 
 
@@ -508,31 +509,55 @@ LOG_LIVE_WINDOW_S = 300.0
 _LOAD_MARKER = "_LIVE loaded"
 
 
-def helper_loaded_this_session() -> bool | None:
-    """Did the helper mod log its load marker in a LIVE debug.txt? True / False / **None**.
-
-    None is returned whenever the question cannot be answered HONESTLY: no log path resolves,
-    the file cannot be read, or the log is older than `LOG_LIVE_WINDOW_S` and therefore cannot
-    be attributed to the current run. Staleness DOMINATES content in both directions -- a stale
-    log answers None whether or not it carries the marker -- because "the marker is in a file
-    from some earlier run" is a different claim from "the mod loaded this session".
-
-    ⚠ Like `game_is_running`, this only ever shapes a MESSAGE; it never decides an outcome. A
-    machine whose log is unreadable loses specificity and never gets a different verdict.
-    """
+def _recent_debug_text() -> str | None:
+    """Read the configured log within the existing recency bound; not a process-ID proof."""
     try:
         p = _paths.debug_log()
         if p is None:
             return None
-        st = p.stat()
-        if (time.time() - st.st_mtime) > LOG_LIVE_WINDOW_S:
-            return None          # cannot be tied to this run -- refuse, do not guess
-        text = p.read_text(encoding="utf-8", errors="replace")
+        if (time.time() - p.stat().st_mtime) > LOG_LIVE_WINDOW_S:
+            return None
+        return p.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        # silent-ok: None IS the channel here -- the documented third state, identical to the
-        # one a stale log returns. Nothing is discarded silently: the caller renders "I could
-        # not determine" instead of a claim, and this never decides an outcome (it only shapes
-        # a message), so a log we cannot read costs specificity and never changes a verdict.
+        # silent-ok: None is explicit unknown evidence, never an absent marker or mode-off claim.
+        return None
+
+
+def helper_ui_safe_mode_at_load() -> bool | None:
+    """Explicit value on the LATEST helper marker in a recent log, or unknown.
+
+    This is an at-load observation, not the current setting: toggles can happen
+    later. Recency does not prove process identity. Never read profile config or
+    search older markers when the latest marker omits/refuses the field.
+    """
+    text = _recent_debug_text()
+    if text is None:
+        return None
+    for line in reversed(text.splitlines()):
+        if _LOAD_MARKER not in line:
+            continue
+        values = [token.partition("=")[2] for token in line.split()
+                  if token.startswith("ui_safe_mode=")]
+        if len(values) == 1 and values[0] in ("true", "false"):
+            return values[0] == "true"
+        return None
+    return None
+
+
+def helper_loaded_this_session() -> bool | None:
+    """Is a helper load marker present in the recent configured log? True/False/None.
+
+    None is returned whenever the question cannot be answered HONESTLY: no log path resolves,
+    the file cannot be read, or the log is older than `LOG_LIVE_WINDOW_S` and therefore cannot
+    be treated as recent evidence. Staleness DOMINATES content in both directions -- a stale
+    log answers None whether or not it carries the marker. Even a recent log is not proof
+    of the current process or session; the historical function name is kept for compatibility.
+
+    ⚠ Like `game_is_running`, this only ever shapes a MESSAGE; it never decides an outcome. A
+    machine whose log is unreadable loses specificity and never gets a different verdict.
+    """
+    text = _recent_debug_text()
+    if text is None:
         return None
     return _LOAD_MARKER in text
 
@@ -616,7 +641,8 @@ def _frame_loop_text(minimized: bool | None) -> str:
 
 def _no_connection_reason(path: str, timeout: float, running: bool | None,
                           loaded: bool | None, deployed: bool | None,
-                          minimized: bool | None, not_loaded: str | None = None) -> str:
+                          minimized: bool | None, not_loaded: str | None = None,
+                          ui_safe_mode_at_load: bool | None = None) -> str:
     """The refusal text for "nothing connected", built from what was MEASURED.
 
     Pure and separate from the wait loop so every branch is testable without a pipe, a game, or
@@ -673,9 +699,19 @@ def _no_connection_reason(path: str, timeout: float, running: bool | None,
                 "is in the GAME-ROOT `extensions\\` folder (not the profile's), that it is "
                 "enabled, and that Mod Support APIs is installed too.")
     if running is True and loaded is True:
-        return (head + " MEASURED: the mod DID load this session (its marker is in a live "
-                "debug.txt), so this is NOT a deployment problem -- the game is not EXECUTING "
-                "the poll." + _frame_loop_text(minimized))
+        if ui_safe_mode_at_load is True:
+            return (head + " The latest helper load marker in the recently written debug log "
+                    "reports Protected UI Mode ON at load (ui_safe_mode=true). The live "
+                    "channel needs the native named-pipe library, which this mode can block. "
+                    "Review Protected UI Mode in the game's Extensions options; turning it "
+                    "off is your choice, and this tool does not change it. The marker does "
+                    "not prove the setting is still on, or that this is the only cause."
+                    + (_frame_loop_text(minimized) if minimized is True else ""))
+        return (head + " The recently written configured debug log contains a helper load "
+                "marker; that does not establish the current process or session. The "
+                "named-pipe connection was not established. Check the "
+                "helper and Mod Support APIs load errors and the configured pipe name."
+                + _frame_loop_text(minimized))
     return head + _frame_loop_text(minimized)
 
 
@@ -787,8 +823,9 @@ class LivePipe:
         """Block until the game connects, or refuse with a NON-ANSWER.
 
         A timeout here means nothing CONNECTED -- the game is not running, the helper is
-        not deployed or not yet initialised (it starts on game load, not at the menu), or
-        the game is running but not executing its frame loop. `_no_connection_reason`
+        not deployed or not yet initialised (it starts on game load, not at the menu),
+        its native pipe library failed to load, or its frame loop is not executing.
+        `_no_connection_reason`
         tells those apart from what it can measure; do not collapse them to "the mod is
         not loaded". It is a DIFFERENT state from "connected but silent", which `ask`
         reports, and the two must never be merged.
@@ -833,9 +870,12 @@ class LivePipe:
                 # Same condition again: a window state is only worth reporting while there is
                 # a process that owns one.
                 minimized = game_is_minimized() if running is not False else None
+                safe_mode = (helper_ui_safe_mode_at_load()
+                             if running is True and loaded is True else None)
                 raise LiveQueryUnavailable(
                     _no_connection_reason(self.path, self.timeout, running, loaded, deployed,
-                                          minimized, not_loaded=not_loaded))
+                                          minimized, not_loaded=not_loaded,
+                                          ui_safe_mode_at_load=safe_mode))
             time.sleep(0.05)
 
     # -- exchange ----------------------------------------------------------- #

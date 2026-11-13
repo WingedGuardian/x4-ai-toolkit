@@ -1,10 +1,11 @@
--- X4 Toolkit live query channel: a fixed READ vocabulary, plus TWO write verbs.
+-- X4 Toolkit live query channel: legacy reads/pause plus bound automation transport.
+-- Automation is a separate structured route with session identity, immutable
+-- preparation and durable host dispatch; it never uses the legacy pause wrapper.
 --
--- THE WRITES, stated first because they change what this file is: `pause` and
--- `unpause`, held in WRITE_VERBS (declared under `verbs`). They are the entire write
--- vocabulary. Neither takes an argument, neither touches a savegame, and each reports
--- what the engine READS BACK afterwards rather than what it meant to do. Every other
--- verb only reads. There is no eval, gated or otherwise.
+-- THE LEGACY WRITES: `pause` and `unpause`, held in WRITE_VERBS. Neither takes an
+-- argument or touches a savegame. Structured automation routes are separate: their
+-- fixed registered actions require bound session/preparation and host journaling.
+-- No arbitrary script evaluation is exposed by either route.
 --
 -- Answers a fixed vocabulary of questions from an external Python server over a
 -- named pipe, so the toolkit can ask the RUNNING engine something without a
@@ -57,7 +58,7 @@ local PROTO = 1
 --:
 --: Kept honest by `test_the_BUILD_constant_matches_the_file`, so editing the lua and
 --: forgetting to re-stamp this fails the suite rather than silently lying in game.
-local BUILD = "9c51735d"
+local BUILD = "6af2fbed"
 local TAG_CMD, TAG_REPLY = "MQ", "MR"
 
 -- Cap on echo, the ramp instrument. Generous: the point of the ramp is to FIND the
@@ -150,6 +151,7 @@ local last_replied_seq = nil
 --: Set by the dispatcher while a WRITE verb runs, cleared after. reply() consults it so
 --: that every write frame leads with its advisory row -- see WRITE_VERBS.
 local writing_verb = nil
+local automation_capture = nil
 
 --: A READ-BACK value renders true / false / unknown; a flag the VERB chose renders
 --: yes / no / unknown. Two vocabularies on purpose, so a mis-wired field reads as wrong
@@ -345,6 +347,13 @@ local MAX_ENUMERATE = 20000
 
 local function reply(seq, status, payload, unbounded)
     payload = payload or ""
+    if automation_capture then
+        assert(writing_verb==nil and seq==automation_capture.seq,"invalid bound read reply")
+        automation_capture.count=automation_capture.count+1
+        assert(automation_capture.count==1,"bound read emitted multiple replies")
+        automation_capture.status,automation_capture.payload=status,payload
+        return
+    end
     -- THE WRITE INVARIANT, enforced here once for the same reason as the size bound
     -- below: a write reply that does not lead with its advisory row is WRAPPED in one
     -- and turned into an ERR marked `reason=unwrapped acted=unknown`. A write verb that
@@ -446,6 +455,7 @@ end
 --   menu_docked.lua:105 GetPlayerObjectID
 --   menu_map.lua:587    GetComponentClass
 --   menu_playerinfo.lua:185-186, 205-206  the faction enumeration pairs
+--   menu_encyclopedia.lua:101  GetFactionRepresentative (the only vanilla cdef; menu_diplomacy.lua:1657 calls it)
 local ffi, C = nil, nil
 local ffi_ok, cdef_ok = false, false
 do
@@ -460,6 +470,7 @@ do
             UniverseID GetPlayerID(void);
             UniverseID GetPlayerObjectID(void);
             UniverseID GetPlayerOccupiedShipID(void);
+            UniverseID GetFactionRepresentative(const char* factionid);
             const char* GetComponentClass(UniverseID componentid);
             uint32_t GetNumAllFactionShips(const char* factionid);
             uint32_t GetAllFactionShips(UniverseID* result, uint32_t resultlen, const char* factionid);
@@ -585,7 +596,8 @@ end
 --: For OBJECT ids. Canonicalises, so every verb emits one string per object.
 local function issue(v)
     local s = wire(v)
-    issued_ids[s] = true
+    -- A reported null handle is absence, never permission to inspect object zero.
+    if s ~= "0ULL" then issued_ids[s] = true end
     return s
 end
 
@@ -713,6 +725,7 @@ verbs.probe = function(seq)
     -- reading: it identifies the build the GAME is running, which is not necessarily
     -- the build on disk.
     out[#out + 1] = "build=" .. BUILD
+    out[#out + 1] = "equipment_protocol=" .. (verbs.equipment and "1" or "unavailable")
     --: Reload bookkeeping. `build=` answers "is the game running the file on disk";
     --: these answer "has the chunk been re-executed since I last asked", which is a
     --: DIFFERENT question and the one that explains a rejected id. A reload keeps the
@@ -723,7 +736,10 @@ verbs.probe = function(seq)
     if cdef_ok then
         for _, name in ipairs({ "GetPlayerOccupiedShipID", "GetNumAllFactionStations",
                                 "GetComponentClass", "GetObjectPositionInSector",
-                                "GetNumAllFactions", "GetAllFactions" }) do
+                                "GetNumAllFactions", "GetAllFactions",
+                                "GetNumUpgradeSlots", "GetUpgradeSlotGroup",
+                                "GetUpgradeSlotCurrentComponent", "GetUpgradeSlotCurrentMacro",
+                                "GetNumUpgradeGroups", "GetUpgradeGroups2", "GetUpgradeGroupInfo2" }) do
             -- Indexing ffi.C for a symbol the engine does not export RAISES rather
             -- than returning nil, so this has to be pcall'd to be a probe at all.
             local rok, sym = pcall(function() return C[name] end)
@@ -765,14 +781,18 @@ verbs.probe = function(seq)
         out[#out + 1] = "contained_all_" .. PROBE_FACTION .. "="
                         .. (ok1 and shape(r1) or ("raised:" .. tostring(r1)))
         if cdef_ok then
+            local no_occupied_ship = false
             local ok2, r2 = pcall(function()
-                local ship = ConvertStringTo64Bit(tostring(C.GetPlayerOccupiedShipID()))
+                local raw = C.GetPlayerOccupiedShipID()
+                if wire(raw) == "0ULL" then no_occupied_ship = true; return nil end
+                local ship = ConvertStringTo64Bit(tostring(raw))
                 local sect = GetComponentData(ship, "sectorid")
                 local sector64 = ConvertStringTo64Bit(tostring(sect))
                 return GetContainedObjectsByOwner(PROBE_FACTION, sector64)
             end)
             out[#out + 1] = "contained_in_my_sector="
-                            .. (ok2 and shape(r2) or ("raised:" .. tostring(r2)))
+                            .. (ok2 and (no_occupied_ship and "<unavailable:no occupied ship>" or shape(r2))
+                                or ("raised:" .. tostring(r2)))
         end
     else
         out[#out + 1] = "contained_all_argon=<symbol absent>"
@@ -863,6 +883,10 @@ verbs.containerprobe = function(seq, faction)
     end)
     if not okship then
         reply(seq, "ERR", "could not read the player ship: " .. tostring(ship))
+        return
+    end
+    if wire(ship) == "0ULL" then
+        reply(seq, "ABSENT", "no occupied ship; container probe needs a ship sector")
         return
     end
     local oksid, sid = pcall(GetComponentData, ship, "sectorid")
@@ -1166,14 +1190,18 @@ verbs.player = function(seq)
         local ship_raw = C.GetPlayerOccupiedShipID()
         -- The cdata goes to `issue` directly rather than pre-stringified: `wire` is
         -- the ONE place that decides what an id looks like on the pipe.
-        local ship_str = issue(ship_raw)
-        local ship_id  = ConvertStringTo64Bit(ship_str)
+        local ship_str = wire(ship_raw)
 
         local out = { "occupiedship=" .. ship_str }
         -- The player ENTITY is a separate id from the ship they are sitting in, and
         -- conflating them is an easy way to inspect the wrong object.
         local pok, p_raw = pcall(C.GetPlayerID)
         if pok then out[#out + 1] = "playerid=" .. issue(p_raw) end
+
+        out[#out + 1] = "occupiedship_present=" .. tostring(ship_str ~= "0ULL")
+        if ship_str == "0ULL" then return out end
+        issue(ship_raw)
+        local ship_id = ConvertStringTo64Bit(ship_str)
 
         for _, kv in ipairs(read_fields(ship_id, DEFAULT_FIELDS)) do
             out[#out + 1] = kv
@@ -1336,6 +1364,293 @@ end
 
 local function is_ship(f)    return class_is(f.classid, "ship") end
 local function is_station(f) return class_is(f.realclassid, "station") end
+
+-- Read-only fitted-equipment capture. Native analogues: ship configuration's
+-- prepareComponentUpgradeSlots (1-based slots), GetUpgradeGroups2 and
+-- GetUpgradeGroupInfo2 (0-based returned buffer). This is ONE callback, not an
+-- engine-wide atomic snapshot, and has not yet been qualified in a live game.
+do
+    local SLOT_CAP, GROUP_CAP, CALL_CAP = 1024, 256, 8192
+    local ROW_BYTES, PAGE_BYTES, CACHE_BYTES, TTL = 240000, 30000, 262144, 60
+    local TYPES = {"engine", "shield", "turret", "weapon"}
+    local GROUP_TYPES = {"engine", "shield", "turret"}
+    local held, serial = nil, 0
+    -- Separate declarations: missing equipment support must not disable other verbs.
+    -- Reuse the native types when a UI menu declared them first. A private anonymous
+    -- equal-layout struct is NOT pointer-compatible with the retained native function
+    -- signature (measured with a real LuaJIT callback, without calling the engine).
+    local declared = false
+    if ffi then declared = pcall(function()
+        local function native_type(name, definition)
+            if not pcall(function() return ffi.typeof(name) end) then ffi.cdef(definition) end
+        end
+        native_type("UpgradeGroup", [[
+            typedef struct { const char* path; const char* group; } UpgradeGroup;
+        ]])
+        native_type("UpgradeGroup2", [[
+            typedef struct { UniverseID contextid; const char* path; const char* group; } UpgradeGroup2;
+        ]])
+        native_type("UpgradeGroupInfo", [[
+            typedef struct {
+                UniverseID currentcomponent; const char* currentmacro; const char* slotsize;
+                uint32_t count; uint32_t operational; uint32_t total;
+            } UpgradeGroupInfo;
+        ]])
+        ffi.cdef([[
+        size_t GetNumUpgradeSlots(UniverseID, const char*, const char*);
+        UpgradeGroup GetUpgradeSlotGroup(UniverseID, const char*, const char*, size_t);
+        UniverseID GetUpgradeSlotCurrentComponent(UniverseID, const char*, size_t);
+        const char* GetUpgradeSlotCurrentMacro(UniverseID, UniverseID, const char*, size_t);
+        uint32_t GetNumUpgradeGroups(UniverseID, const char*);
+        uint32_t GetUpgradeGroups2(UpgradeGroup2*, uint32_t, UniverseID, const char*);
+        UpgradeGroupInfo GetUpgradeGroupInfo2(UniverseID, const char*, UniverseID,
+                                             const char*, const char*, const char*);
+        ]])
+    end) end
+    local function integer(v)
+        local n = tonumber(v)
+        if not n or n ~= n or n < 0 or n > 9007199254740991 or n ~= math.floor(n) then return nil end
+        return n
+    end
+    local function clock()
+        local ok, n = pcall(getElapsedTime)
+        if not ok or type(n) ~= "number" or n < 0 or n ~= n or math.abs(n) == math.huge then return nil end
+        return n
+    end
+    local function escaped(v)
+        -- Percent-encode delimiters, percent itself, and terminal control bytes.
+        return (tostring(v):gsub("[%%%c|]", function(c) return string.format("%%%02X", c:byte()) end))
+    end
+    local function row(kind, fields)
+        local out = {kind}
+        for i = 1, #fields, 2 do out[#out + 1] = fields[i] .. "=" .. escaped(fields[i + 1]) end
+        return table.concat(out, "\t")
+    end
+    local function send_page(seq, token, page)
+        local now = clock()
+        if not held or held.token ~= token or held.issued ~= issued_ids then
+            reply(seq, "ERR", "equipment capture absent, reloaded or superseded; start a fresh capture") return
+        end
+        if not now or now < held.finish or now - held.finish > TTL then
+            held = nil
+            reply(seq, "ERR", "equipment capture expired or clock reset; start a fresh capture") return
+        end
+        if not page or page < 1 or page > #held.pages then
+            reply(seq, "ERR", "equipment page is outside this capture") return
+        end
+        -- Issue only verified fitted components on the page actually returned.
+        -- Incomplete captures and group summaries never grant identity authority.
+        for _, component in ipairs(held.identities[page] or {}) do
+            issued_ids[component] = true
+        end
+        reply(seq, "OK", held.pages[page])
+    end
+    verbs["equipment-page"] = function(seq, token, page, extra)
+        if extra or not page or not page:match("^[1-9]%d*$") or #page > 3 then
+            reply(seq, "ERR", "equipment-page requires capture token and positive page number") return
+        end
+        send_page(seq, token, tonumber(page))
+    end
+    verbs.equipment = function(seq, id_str, nonce, extra)
+        if extra or not nonce or #nonce ~= 32 or not nonce:match("^[0-9a-f]+$") then
+            reply(seq, "ERR", "equipment requires issued ship id and a fresh 32-hex UUID nonce") return
+        end
+        if not id_str or not id_str:match("^%d+ULL$") or not issued_ids[id_str] then
+            reply(seq, "ERR", "equipment id was not issued by this UI session; obtain a fresh ship id") return
+        end
+        if held and held.nonce == nonce then
+            reply(seq, "ERR", "equipment nonce was already used; generate a fresh UUID") return
+        end
+        -- Any accepted new request invalidates the previous capture, even if it fails.
+        held = nil
+        local issued_at_start = issued_ids
+        if not C or not declared then reply(seq, "ERR", "equipment FFI declarations unavailable") return end
+        local start = clock()
+        if not start then reply(seq, "ERR", "equipment UI elapsed clock unavailable") return end
+        local calls, errors, limited = 0, 0, false
+        local function call(fn)
+            if calls >= CALL_CAP then limited = true; errors = errors + 1; return nil end
+            calls = calls + 1
+            local ok, val = pcall(fn)
+            if not ok or val == nil then errors = errors + 1; return nil end
+            return val
+        end
+        local function textval(v, cstring)
+            if v == nil then errors = errors + 1; return nil end
+            local ok, s = pcall(function() return cstring and ffi.string(v) or v end)
+            if not ok or type(s) ~= "string" or s == "?" or #s > 256 then errors = errors + 1; return nil end
+            return s
+        end
+        local function handle(v)
+            if v == nil then errors = errors + 1; return nil end
+            local ok, s = pcall(wire, v)
+            if not ok or not s:match("^%d+ULL$") then errors = errors + 1; return nil end
+            return s
+        end
+        local function count(fn)
+            local n = call(fn)
+            if n == nil then return nil end
+            local i = integer(n)
+            if not i then errors = errors + 1 end
+            return i
+        end
+        local id = call(function() return ConvertStringTo64Bit(id_str) end)
+        if not id then reply(seq, "ERR", "equipment ship handle conversion failed") return end
+        local valid = call(function() return IsValidComponent(id) end)
+        if valid == false then reply(seq, "ABSENT", "equipment ship no longer exists") return end
+        if valid ~= true then reply(seq, "ERR", "equipment ship validity unreadable") return end
+        local cls = call(function() return GetComponentData(id, "classid") end)
+        local ship = call(function() return class_is(cls, "ship") end)
+        if ship ~= true then reply(seq, "ERR", "equipment requires a verified live ship class") return end
+
+        local rows, used, visits, kept, unknown = {}, 0, 0, 0, 0
+        local totals, captured, slot_identities = {}, {}, {}
+        local enum_complete = true
+        local function add(s)
+            if used + #s + 1 > ROW_BYTES then limited = true; return false end
+            rows[#rows + 1] = s
+            used = used + #s + 1
+            return true
+        end
+        for _, typ in ipairs(TYPES) do
+            local n = count(function() return C.GetNumUpgradeSlots(id, "", typ) end)
+            totals[typ], captured[typ] = n or "?", 0
+            if n == nil then enum_complete = false end
+            for slot = 1, math.min(n or 0, SLOT_CAP - visits) do
+                if limited then break end
+                visits = visits + 1
+                local before = errors
+                local g = call(function() return C.GetUpgradeSlotGroup(id, "", typ, slot) end)
+                local path = g and textval(g.path, true) or nil
+                local group = g and textval(g.group, true) or nil
+                local comp = handle(call(function() return C.GetUpgradeSlotCurrentComponent(id, typ, slot) end))
+                local direct = typ == "engine" or (path == ".." and group == "")
+                local slotmacro
+                if direct then
+                    slotmacro = textval(call(function() return C.GetUpgradeSlotCurrentMacro(id, 0, typ, slot) end), true)
+                end
+                local macro, state = nil, "unknown"
+                if comp and comp ~= "0ULL" then
+                    local cid = call(function() return readable_id(comp) end)
+                    local live = cid and call(function() return IsValidComponent(cid) end)
+                    if live == true then
+                        macro = textval(call(function() return GetComponentData(cid, "macro") end), false)
+                        if macro and macro ~= "" then state = "installed" end
+                    else errors = errors + 1 end
+                    if direct and slotmacro and macro and slotmacro ~= macro then
+                        state = "unknown"; errors = errors + 1
+                    end
+                elseif comp == "0ULL" and direct and slotmacro == "" then
+                    state = "empty"
+                end
+                if errors > before then state = "unknown" end
+                local s = row("SLOT", {"type",typ,"slot",slot,"path",path or "?","group",group or "?",
+                    "component",comp or "?","macro",macro or "?","slot_macro",slotmacro or "?",
+                    "state",state,"read",errors == before and "ok" or "failed"})
+                if not add(s) then break end
+                if state == "installed" then slot_identities[s] = comp end
+                kept = kept + 1; captured[typ] = captured[typ] + 1
+                if state == "unknown" then unknown = unknown + 1 end
+            end
+            if n == nil or captured[typ] ~= n then enum_complete = false end
+        end
+
+        -- Group summaries are NOT fitted slots and are never added to slot totals.
+        local ng = count(function() return C.GetNumUpgradeGroups(id, "") end)
+        local returned, group_kept, group_summaries = nil, 0, 0
+        if ng == nil then enum_complete = false end
+        if ng and ng > GROUP_CAP then limited = true; enum_complete = false end
+        local capacity = math.min(ng or 0, GROUP_CAP)
+        if capacity > 0 and calls < CALL_CAP then
+            local buf = ffi.new("UpgradeGroup2[?]", capacity)
+            returned = count(function() return C.GetUpgradeGroups2(buf, capacity, id, "") end)
+            if not returned or returned > capacity then
+                errors = errors + 1; enum_complete = false
+                returned = nil  -- never index an unproven buffer boundary
+            else
+                if returned ~= ng then enum_complete = false end
+                for i = 0, returned - 1 do
+                    local g, before = buf[i], errors
+                    local context = handle(g.contextid)
+                    local path, group = textval(g.path, true), textval(g.group, true)
+                    if not add(row("GROUP", {"index",i,"context",context or "?","path",path or "?",
+                        "group",group or "?","read",errors == before and "ok" or "failed"})) then break end
+                    group_kept = group_kept + 1
+                    -- Root/empty descriptors are enumerated but not group summaries,
+                    -- matching the native menu. Failed identities remain explicit.
+                    if context and path and group and (path ~= ".." or group ~= "") then
+                        for _, typ in ipairs(GROUP_TYPES) do
+                            local old = errors
+                            local info = call(function()
+                                return C.GetUpgradeGroupInfo2(id, "", g.contextid, path, group, typ)
+                            end)
+                            local comp, macro, size, cnt, operational, total
+                            if info then
+                                comp = handle(info.currentcomponent)
+                                macro, size = textval(info.currentmacro, true), textval(info.slotsize, true)
+                                cnt, operational, total = integer(info.count), integer(info.operational), integer(info.total)
+                                if not cnt or not operational or not total then errors = errors + 1 end
+                            end
+                            if not add(row("SUMMARY", {"index",i,"type",typ,"context",context,
+                                "path",path,"group",group,"component",comp or "?","macro",macro or "?",
+                                "size",size or "?","count",cnt or "?","operational",operational or "?",
+                                "total",total or "?","read",errors == old and "ok" or "failed"})) then break end
+                            group_summaries = group_summaries + 1
+                        end
+                    end
+                    if used >= ROW_BYTES or calls >= CALL_CAP then limited = true; break end
+                end
+            end
+        elseif ng == 0 then returned = 0 end
+        if group_kept ~= (ng or -1) then enum_complete = false end
+        local still_valid = call(function() return IsValidComponent(id) end)
+        if still_valid ~= true then errors = errors + 1 end
+        local finish = clock()
+        if not finish or finish < start then reply(seq, "ERR", "equipment capture clock reset") return end
+        serial = serial + 1
+        local token = nonce .. "-" .. serial
+        local bodies, current, bytes = {}, {}, 0
+        local identities, page_identities = {}, {}
+        for _, s in ipairs(rows) do
+            if bytes + #s + 1 > PAGE_BYTES then
+                bodies[#bodies + 1] = table.concat(current, "\n"); current, bytes = {}, 0
+                identities[#bodies] = page_identities; page_identities = {}
+            end
+            current[#current + 1] = s; bytes = bytes + #s + 1
+            if slot_identities[s] then page_identities[#page_identities + 1] = slot_identities[s] end
+        end
+        bodies[#bodies + 1] = table.concat(current, "\n")
+        identities[#bodies] = page_identities
+        local pages, retained = {}, 0
+        local fitting_complete = enum_complete and not limited and errors == 0 and unknown == 0
+        for page, body in ipairs(bodies) do
+            local head = row("EQUIPMENT", {"version",1,"token",token,"ship",id_str,"build",BUILD,
+                "loaded_at",LOADED_AT,"start",start,"finish",finish,"clock","ui_elapsed",
+                "atomic",false,"page",page,"pages",#bodies,
+                "enumeration_complete",enum_complete and not limited,"reads_complete",errors == 0,
+                "equipment_identities_complete",fitting_complete,"errors",errors,"limited",limited,
+                "slots",kept,"unknown_slots",unknown,"groups_reported",ng or "?",
+                "groups_returned",returned or "?","groups",group_kept,"summaries",group_summaries,
+                "engine_reported",totals.engine,"engine_captured",captured.engine,
+                "shield_reported",totals.shield,"shield_captured",captured.shield,
+                "turret_reported",totals.turret,"turret_captured",captured.turret,
+                "weapon_reported",totals.weapon,"weapon_captured",captured.weapon,
+                "calls",calls,"slot_cap",SLOT_CAP,"group_cap",GROUP_CAP,"call_cap",CALL_CAP,
+                "row_bytes_cap",ROW_BYTES,"page_bytes_cap",MAX_PAYLOAD,"cache_bytes_cap",CACHE_BYTES,"ttl",TTL})
+            local payload = head .. "\n" .. body
+            if #payload > MAX_PAYLOAD then reply(seq, "ERR", "equipment page exceeds bound") return end
+            pages[page] = payload; retained = retained + #payload
+        end
+        if retained > CACHE_BYTES then reply(seq, "ERR", "equipment cache exceeds bound") return end
+        if issued_ids ~= issued_at_start or issued_ids[id_str] ~= true then
+            reply(seq, "ERR", "equipment identity epoch changed during capture") return
+        end
+        held = {token=token, nonce=nonce, finish=finish, issued=issued_at_start, pages=pages,
+            identities=fitting_complete and identities or {}}
+        send_page(seq, token, 1)
+    end
+end
+
 
 --: Returns true/false, or nil if it could not be decided (Helper missing, or a class
 --: lookup raised). nil is NOT false -- "could not tell" and "no" must never render
@@ -1768,6 +2083,30 @@ verbs.objects = function(seq, ...)
     end
     opts.sector, opts.class, opts.faction = sector, class, faction
     run_enumeration(seq, opts)
+end
+
+--: representative <faction>: the faction's representative NPC, ISSUED so a bound action may name it (the
+--: licence menu takes the trader as its param[3]; without one the trader is the player's own computer).
+--: READ vanilla: declared menu_encyclopedia.lua:101 (only cdef), called this way at menu_diplomacy.lua:1657.
+--: Read-only; 0ULL -> ABSENT.
+verbs.representative = function(seq, faction)
+    if not cdef_ok then
+        reply(seq, "ERR", "representative needs the ffi cdef block, which did not load")
+        return
+    end
+    if type(faction) ~= "string" or #faction > 64 or not faction:match("^%a[%w_]*$") then
+        reply(seq, "ERR", "representative needs a faction id, e.g. representative terrantrader")
+        return
+    end
+    local ok, raw = pcall(C.GetFactionRepresentative, faction)
+    if not ok then reply(seq, "ERR", "GetFactionRepresentative raised: " .. tostring(raw)) return end
+    local wok, s = pcall(wire, raw)
+    if not wok then reply(seq, "ERR", "could not convert the representative id") return end
+    if s == "0ULL" then reply(seq, "ABSENT", "faction " .. faction .. " has no representative") return end
+    issue(raw)
+    local nok, name = pcall(GetComponentData, ConvertStringTo64Bit(s), "name")
+    local shown = nok and (tostring(name):gsub("|", "/")) or "?"
+    reply(seq, "OK", "representative=" .. s .. "|faction=" .. faction .. "|name=" .. shown)
 end
 
 verbs.stations = function(seq, faction, ...)
@@ -2956,6 +3295,111 @@ verbs.pausestate = function(seq)
                             or "running"))
 end
 
+-- Dedicated structured transport. It never enters the legacy pause advisory path.
+-- Legacy reads remain usable but cannot qualify a session-bound campaign result.
+local automation,automation_failure=nil,nil
+local AUTOMATION_VERBS={}
+local AUTOMATION_READS={ping=true,probe=true,player=true,component=true,equipment=true,
+    ["equipment-page"]=true,objects=true,stations=true,ships=true,macro=true,
+    ext=true,errors=true,pausestate=true,representative=true}
+local function automation_read(verb,args)
+    assert(AUTOMATION_READS[verb] and type(verbs[verb])=="function","unknown bound read")
+    assert(automation_capture==nil,"nested read refused")
+    local captured={seq="automation-read",count=0}
+    automation_capture=captured
+    local ok,why=pcall(verbs[verb],captured.seq,table_unpack(args))
+    automation_capture=nil
+    assert(ok,"bound read failed: "..tostring(why))
+    assert(captured.count==1,"bound read did not reply exactly once")
+    return captured.status,captured.payload
+end
+-- Only identities emitted by this live helper instance may enter native actions.
+-- Native globals can return doubles: reject unsafe conversions instead of guessing.
+local function automation_resolve_issued(token,kind)
+    assert(type(token)=="string" and issued_ids[token]==true,"identity was not issued by this helper")
+    assert(kind=="object" or kind=="ship" or kind=="station" or kind=="sector","unknown identity kind")
+    local digits
+    local converted
+    if kind=="sector" then
+        digits=token:match("^ID: ([1-9]%d*)$")
+        assert(digits,"issued sector token required")
+    else
+        digits=token:match("^([1-9]%d*)ULL$")
+        assert(digits,"issued object token required")
+    end
+    assert(#digits<=20 and (#digits<20 or digits<="18446744073709551615"),"identity overflow")
+    if kind=="sector" then converted=ConvertIDTo64Bit(ConvertStringToLuaID(token))
+    else converted=ConvertStringTo64Bit(token) end
+    if type(converted)=="number" then
+        assert(converted==converted and converted>0 and converted<9007199254740992
+            and converted%1==0,"native identity conversion is not exact")
+        converted=ffi.new("uint64_t",converted)
+    end
+    assert(type(converted)=="cdata" and ffi.istype("uint64_t",converted)
+        and tostring(converted)==digits.."ULL","native identity roundtrip mismatch")
+    if kind=="object" then
+        local valid_id=ConvertStringTo64Bit(tostring(converted))
+        assert((type(valid_id)=="cdata" and ffi.istype("uint64_t",valid_id)) or
+            (type(valid_id)=="number" and valid_id==valid_id and valid_id>0
+                and valid_id<9007199254740992 and valid_id%1==0),"validity identity conversion is not exact")
+        assert(wire(valid_id)==tostring(converted) and IsValidComponent(valid_id)==true,
+            "issued object is no longer valid")
+    else
+        assert(C.IsComponentClass(converted,kind)==true,"issued identity class mismatch")
+    end
+    assert(issued_ids[token]==true,"issued identity retired during resolution")
+    return converted
+end
+local function ensure_automation()
+    assert(automation_failure==nil,automation_failure)
+    if automation then return automation end
+    local bundle=rawget(_G,"X4ToolkitAutomationBundle")
+    assert(type(bundle)=="table" and type(bundle.new)=="function","automation bundle not loaded")
+    local ok,result=pcall(function()
+        local current=bundle.new({ffi=ffi,C=C,read=automation_read,
+            read_verbs=AUTOMATION_READS,globals=_G,Helper=Helper,
+            resolve_issued=automation_resolve_issued,clock=function() return C.GetCurrentGameTime() end})
+        assert(type(current)=="table" and type(current.encode)=="function"
+            and type(current.ui_state)=="function" and type(current.dispose)=="function"
+            and type(current.session)=="table" and type(current.session.tick)=="function"
+            and type(current.router)=="table" and type(current.router.connect)=="function"
+            and type(current.router.bound)=="function","malformed automation bundle instance")
+        return current
+    end)
+    if not ok then
+        automation_failure="automation bootstrap unavailable: "..tostring(result)
+        error(automation_failure)
+    end
+    automation=result
+    return automation
+end
+AUTOMATION_VERBS.ui_state=function(seq,challenge,extra)
+    assert(extra==nil,"ui_state requires one challenge")
+    local current=ensure_automation()
+    -- The installed bundle supplies its encoder through this bounded bridge.
+    reply(seq,"OK",current.encode(current.ui_state(challenge)))
+end
+AUTOMATION_VERBS.session_connect=function(seq,...)
+    local current=ensure_automation()
+    assert(type(Helper)=="table" and type(Helper.addDelayedOneTimeCallbackOnUpdate)=="function",
+           "session timeout scheduler unavailable")
+    local now=getElapsedTime()
+    assert(type(now)=="number" and now==now and now>=0 and now<math.huge,"UI clock unavailable")
+    -- Register the deadline BEFORE sending. No retry is hidden in this callback.
+    Helper.addDelayedOneTimeCallbackOnUpdate(function()
+        if automation==current then current.session.tick() end
+    end,false,now+10.25)
+    current.router.connect({...},function(status,payload) reply(seq,status,payload) end)
+end
+AUTOMATION_VERBS.bound=function(seq,...)
+    local args={...}
+    if args[6]=="action_execute" then
+        DebugError("X4TOOLKIT_LIVE AUTOMATION WRITE attempt seq="..tostring(seq))
+    end
+    local current=ensure_automation()
+    reply(seq,"OK",current.router.bound(args))
+end
+
 on_message = function(msg)
     if type(msg) ~= "string" or msg == "" then return end
     -- The api's reserved data-channel sentinels. Dispatching on one would answer a
@@ -3004,7 +3448,7 @@ on_message = function(msg)
     if seq == nil or verb == nil then return end
 
     writing_verb = nil
-    local fn, is_write = verbs[verb], false
+    local fn, is_write = AUTOMATION_VERBS[verb] or verbs[verb], false
     if WRITE_VERBS[verb] ~= nil then
         if fn ~= nil then
             reply(seq, "ERR", "verb " .. tostring(verb) .. " is in BOTH the read and the "
@@ -3055,10 +3499,38 @@ on_message = function(msg)
     writing_verb = nil
 end
 
+-- Read the engine option, never infer it from config defaults or change it.
+-- Vanilla analogue: ego_gameoptions/gameoptions.lua's extension security button.
+local function ui_safe_mode_at_load()
+    if type(GetUISafeModeOption) ~= "function" then return "unknown" end
+    local ok, value = pcall(GetUISafeModeOption)
+    if not ok or type(value) ~= "boolean" then return "unknown" end
+    return value and "true" or "false"
+end
+
 Init = function()
     -- FIRST action, before any pipe logic. See the contracts note at the top.
     DebugError("X4TOOLKIT_LIVE loaded: proto=" .. PROTO .. " pipe=" .. PIPE
-               .. " build=" .. BUILD)
+               .. " build=" .. BUILD .. " ui_safe_mode=" .. ui_safe_mode_at_load())
+    if type(RegisterEvent)=="function" then
+        local hooked,hook_error=pcall(RegisterEvent,"X4ToolkitSession.Invalidated",function()
+            issued_ids={}
+            if automation then
+                local old=automation
+                automation=nil
+                local ok,result=pcall(old.dispose)
+                if not ok or result~=true then
+                    automation_failure="automation load retirement failed: "..tostring(result)
+                end
+            end
+        end)
+        if not hooked then
+            automation_failure="automation invalidation hook unavailable: "..tostring(hook_error)
+            DebugError("X4TOOLKIT_LIVE "..automation_failure)
+        end
+    else
+        automation_failure="automation invalidation hook unavailable"
+    end
 
     -- ⚠ IDS DO NOT SURVIVE A SAVE LOAD, AND THE ALLOWLIST MUST NOT EITHER.
     --
@@ -3140,6 +3612,25 @@ Init = function()
         DebugError("X4TOOLKIT_LIVE armed continuous read on " .. PIPE
                    .. " (re-arms itself on disconnect)")
     end
+end
+
+-- UI-only startup uses the supported per-pipe module before the world MD loader.
+-- It does not initialize shared MSA polling or create a world session.
+local ui_bundle=rawget(_G,"X4ToolkitAutomationBundle")
+if type(ui_bundle)=="table" and type(ui_bundle.start_ui)=="function" then
+    local ui_ok,ui_result=pcall(function()
+        assert(ffi and C,"native UI FFI unavailable")
+        -- Native helper.lua declares this exact signature; declare our own dependency
+        -- before the first lookup instead of relying on another addon having run.
+        ffi.cdef([[ bool IsStartmenu(void); ]])
+        if C.IsStartmenu()~=true then return "NOT_START_MENU" end
+        local direct=require("extensions.sn_mod_support_apis.ui.named_pipes.Pipes")
+        local result=ui_bundle.start_ui({globals=_G,C=C,Helper=Helper,pipes=direct})
+        assert(type(result)=="table" and type(result.status)=="string","malformed UI startup result")
+        return result.status
+    end)
+    DebugError("X4TOOLKIT_UI_START "..(ui_ok and "OBSERVED " or "UNAVAILABLE ")..tostring(ui_result)
+        .." build="..tostring(ui_bundle.build))
 end
 
 -- The pipes api and Register_OnLoad_Init are both provided by sn_mod_support_apis.

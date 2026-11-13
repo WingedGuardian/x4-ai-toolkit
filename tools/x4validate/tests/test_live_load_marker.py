@@ -284,7 +284,9 @@ def test_NOT_RUNNING_names_the_game_and_does_not_mention_the_mod():
 def test_RUNNING_and_LOADED_points_at_the_frame_loop_not_the_deployment():
     msg = lp._no_connection_reason(r"\\.\pipe\x4live", 10.0,
                                    running=True, loaded=True, deployed=True, minimized=None)
-    assert "DID load" in msg
+    assert "contains a helper load marker" in msg
+    assert "does not establish the current process or session" in msg
+    assert "DID load this session" not in msg
     assert "MINIMIZE" in msg, "this is the case the minimized hint is for"
 
 
@@ -313,7 +315,7 @@ def test_a_LOADED_marker_OUTRANKS_a_not_deployed_read():
     game -- it is NOT evidence that the mod never loaded."""
     msg = lp._no_connection_reason(r"\\.\pipe\x4live", 10.0,
                                    running=True, loaded=True, deployed=False, minimized=None)
-    assert "DID load" in msg and "NOT in the set the engine would load" not in msg
+    assert "contains a helper load marker" in msg and "NOT in the set the engine would load" not in msg
 
 
 def test_MENU_no_save_loaded_does_NOT_say_not_installed():
@@ -349,3 +351,98 @@ def test_every_message_names_the_pipe_and_the_timeout(loaded, deployed):
     msg = lp._no_connection_reason(r"\\.\pipe\x4live", 7.0,
                                    running=True, loaded=loaded, deployed=deployed, minimized=None)
     assert r"\\.\pipe\x4live" in msg and "7" in msg
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("true", True), ("false", False), ("unknown", None), ("1", None),
+    ("trueish", None), ("TRUE", None), ("", None),
+])
+def test_protected_mode_requires_explicit_boolean_marker(tmp_path, monkeypatch, value, expected):
+    _with_log(monkeypatch, _log(tmp_path, f"X4TOOLKIT{MARKER}: proto=1 ui_safe_mode={value}\n"))
+    assert lp.helper_ui_safe_mode_at_load() is expected
+
+
+@pytest.mark.parametrize("last", [
+    f"X4TOOLKIT{MARKER}: ui_safe_mode=false",
+    f"X4TOOLKIT{MARKER}: ui_safe_mode=unknown",
+    f"X4TOOLKIT{MARKER}: proto=1",
+    f"X4TOOLKIT{MARKER}: ui_safe_mode=true ui_safe_mode=false",
+])
+def test_latest_marker_supersedes_earlier_true(tmp_path, monkeypatch, last):
+    body = f"X4TOOLKIT{MARKER}: ui_safe_mode=true\n{last}\n"
+    _with_log(monkeypatch, _log(tmp_path, body))
+    expected = False if last.endswith("ui_safe_mode=false") and last.count("ui_safe_mode=") == 1 else None
+    assert lp.helper_ui_safe_mode_at_load() is expected
+
+
+@pytest.mark.parametrize("body", [
+    f"X4TOOLKIT{MARKER}: ui_safe_mode=true\n",
+    f"X4TOOLKIT{MARKER}: ui_safe_mode=false\n",
+])
+def test_stale_mode_evidence_is_unknown(tmp_path, monkeypatch, body):
+    _with_log(monkeypatch, _log(tmp_path, body, age_s=lp.LOG_LIVE_WINDOW_S + 60))
+    assert lp.helper_ui_safe_mode_at_load() is None
+
+
+def test_mode_field_without_a_marker_is_not_evidence(tmp_path, monkeypatch):
+    _with_log(monkeypatch, _log(tmp_path, "ui_safe_mode=true\n"))
+    assert lp.helper_ui_safe_mode_at_load() is None
+
+
+def test_unreadable_mode_log_is_unknown(tmp_path, monkeypatch):
+    _with_log(monkeypatch, tmp_path / "missing")
+    assert lp.helper_ui_safe_mode_at_load() is None
+    _with_log(monkeypatch, None)
+    assert lp.helper_ui_safe_mode_at_load() is None
+
+
+def test_explicit_mode_marker_names_user_choice_not_a_hung_game(tmp_path, monkeypatch):
+    _with_log(monkeypatch, _log(tmp_path, f"X4TOOLKIT{MARKER}: ui_safe_mode=true\n"))
+    msg = lp._no_connection_reason("pipe", 7, running=True, loaded=True, deployed=True,
+                                  minimized=False,
+                                  ui_safe_mode_at_load=lp.helper_ui_safe_mode_at_load())
+    assert "Protected UI Mode ON at load" in msg and "your choice" in msg
+    assert "does not prove the setting is still on" in msg
+    assert "hung" not in msg and "not EXECUTING" not in msg
+
+
+@pytest.mark.parametrize("mode", [False, None])
+def test_false_or_unknown_mode_does_not_invent_a_cause(mode):
+    msg = lp._no_connection_reason("pipe", 7, running=True, loaded=True, deployed=True,
+                                  minimized=False, ui_safe_mode_at_load=mode)
+    assert "connection was not established" in msg
+    assert "Protected UI Mode ON" not in msg and "not EXECUTING" not in msg
+    assert "does not establish that the game is hung" in msg
+
+
+def test_mode_evidence_does_not_override_closed_game():
+    msg = lp._no_connection_reason("pipe", 7, running=False, loaded=True, deployed=True,
+                                  minimized=False, ui_safe_mode_at_load=True)
+    assert "NOT RUNNING" in msg and "Protected UI Mode ON" not in msg
+
+
+def test_mode_diagnosis_preserves_measured_minimized_state():
+    msg = lp._no_connection_reason("pipe", 7, running=True, loaded=True, deployed=True,
+                                  minimized=True, ui_safe_mode_at_load=True)
+    assert "Protected UI Mode ON at load" in msg and "window is MINIMIZED" in msg
+
+
+def test_actual_timeout_path_consumes_explicit_mode_marker(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    def listening(*args):
+        error = OSError("still listening")
+        error.winerror = 536
+        raise error
+
+    monkeypatch.setattr(lp, "_win32", lambda: (
+        SimpleNamespace(ConnectNamedPipe=listening), None,
+        SimpleNamespace(ERROR_PIPE_CONNECTED=535, ERROR_PIPE_LISTENING=536, ERROR_NO_DATA=232)))
+    monkeypatch.setattr(lp, "game_is_running", lambda: True)
+    monkeypatch.setattr(lp, "game_is_minimized", lambda: False)
+    monkeypatch.setattr(lp, "helper_deployment", lambda: (True, None))
+    _with_log(monkeypatch, _log(tmp_path, f"X4TOOLKIT{MARKER}: ui_safe_mode=true\n"))
+    pipe = lp.LivePipe(name="test", timeout=0)
+    with pytest.raises(lp.LiveQueryUnavailable, match="Protected UI Mode ON at load"):
+        pipe.wait_for_game()
+    assert not pipe._connected

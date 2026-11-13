@@ -20,6 +20,7 @@ x4live = "x4validate._livecli:main"
 x4fresh = "x4validate._freshcli:main"
 
 [project.optional-dependencies]
+capture = ["Pillow>=13.0,<14"]
 geometry = [
     "numpy>=2.2,<3",
     "scipy>=1.15,<2",

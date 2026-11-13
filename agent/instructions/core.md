@@ -251,9 +251,12 @@ knowledgebase/notes file alone (explicit path); never push.
 ## x4live is EXPERIMENTAL — say so before you use it
 
 **Before running any `x4live` command against the user's game, tell them it is experimental and
-recommend a throwaway save** — unprompted. Only `pause`/`unpause` write, and only when asked;
-its answers are EVIDENCE, not truth (they have been wrong). → the **`x4-live`** skill has the
-detail and the traps.
+recommend a throwaway save** — unprompted. Legacy queries read observations; pause/unpause
+and the experimental automation action interface can change game state. Use only the
+explicitly authorized action scope, verified deployed source and bound session; offline
+candidate tests do not establish runtime qualification. Never replay an uncertain action.
+Launches still require their own immediate approval. Answers are EVIDENCE, not truth
+(they have been wrong). → the **`x4-live`** skill has the detail and the traps.
 
 ## Nexus Mod Research (Standing Rule)
 

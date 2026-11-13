@@ -407,6 +407,23 @@ def test_the_load_marker_is_emitted_BEFORE_any_pipe_work(lua):
     assert "_LIVE loaded" in logs[0]
 
 
+@pytest.mark.parametrize("setup,expected", [
+    ("function GetUISafeModeOption() return true end", "true"),
+    ("function GetUISafeModeOption() return false end", "false"),
+    ("GetUISafeModeOption = nil", "unknown"),
+    ("function GetUISafeModeOption() error('unavailable') end", "unknown"),
+    ("function GetUISafeModeOption() return 1 end", "unknown"),
+    ("function GetUISafeModeOption() return 'false' end", "unknown"),
+])
+def test_first_load_marker_reads_mode_without_changing_it(lua_factory, setup, expected):
+    rt = lua_factory(pre=setup + "\nfunction SetUISafeModeOption() error('must not write') end")
+    init(rt)
+    logs = list(g(rt, "log").values())
+    assert "_LIVE loaded" in logs[0]
+    assert "ui_safe_mode=" + expected in logs[0]
+    assert len(g(rt, "sched_reads")) == 1
+
+
 # --------------------------------------------------------------------------- #
 # THE HANG GUARD -- the reason this file exists
 # --------------------------------------------------------------------------- #

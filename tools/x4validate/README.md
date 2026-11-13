@@ -223,6 +223,7 @@ uv run x4live mappings                     # PROPOSE new field mappings (never a
 
 # ---- the LIVE half. Needs the game RUNNING and the query mod deployed.
 uv run x4live query ping                   # is it there? (`pausestate` says whether it is paused)
+uv run x4live equipment <issued-ship-ID>    # read fitted slots/groups; JSON, explicit partial coverage
 uv run x4live query macro shiptypes_s ship_arg_s_scout_01_a_macro hull
 uv run x4live query ext ws_2042901274      # is this extension loaded, per the engine
 uv run x4live ramp                         # MEASURE the message-size cap
@@ -240,9 +241,10 @@ Every other tool here reasons about **files**. This one reports what X4 itself h
 memory, which makes it the toolkit's only **oracle** — the one thing that can show our
 merged tree is wrong rather than merely self-consistent.
 
-The channel needs no pipe, no launch flag and no permissions grant: a read-only lua
-probe assigns a TSV payload to a lua global declared as a `<savedvariable>`, and the
+This offline snapshot channel needs no pipe or launch flag: a Lua probe reads
+engine observations into a global declared as a `<savedvariable>`, and the
 engine serialises it into `{profile}/uidata.xml`.
+That UI userdata write is distinct from the live pipe and automation action paths.
 
 ⚠ **`uidata.xml` is only readable while the game is CLOSED.** MEASURED: 342,342 bytes
 closed, **61 bytes** (`<uidata version="1"/>`) while running — X4 truncates it at startup
@@ -252,6 +254,14 @@ a naive reader run mid-session reports "0 extensions" in the grammar of a real a
 
 
 #### What you must install for the live half
+
+The read-only `equipment` command retrieves engine/shield/turret/weapon models for one
+ship ID already issued by this UI session. It reports native counts and read failures,
+distinguishes empty from unresolved slots, and automatically retrieves bounded immutable
+pages. Exit 0 means the requested identities were fully captured; exit 3 means partial
+coverage or refusal/malformed capture. Neither means the fittings are compatible or
+functional. This new path is offline-tested and runtime unqualified.
+See [the protocol, native analogues and limits](../../docs/live-equipment.md).
 
 `x4live` is the only tool here that needs anything inside the game. **One extension, and
 one third-party dependency you install yourself:**
@@ -264,6 +274,13 @@ one third-party dependency you install yourself:**
 The dependency is declared **optional**, deliberately. Without Mod Support APIs the
 addon still loads and the **uidata half keeps working**; only the pipe verbs report that
 the api is unavailable. The two halves fail independently.
+
+The live pipe also needs the dependency's native library, which **Protected UI Mode**
+can block. If you choose to use the channel, review that setting in the game's
+Extensions options; the toolkit never disables it for you. The helper LOAD marker
+records the engine's true/false/unknown setting at load. The refusal diagnostic can
+report that evidence, but cannot infer the current setting from missing config or
+prove a hung game from a missing connection.
 
 **Everything else in this toolkit needs neither.** The other ten commands read files and
 archives on disk.
@@ -314,11 +331,17 @@ engine's.
 
 Because `uidata.xml` is unreadable mid-session, the offline oracle above can only ever
 answer about a game that has been **closed**. `query` is the complement: a fixed
-vocabulary of questions asked of the running engine over a named pipe. It only reads, and
-it refuses the two write verbs by name; they have subcommands of their own (below).
+vocabulary of questions asked of the running engine over a named pipe. Legacy `query`
+only reads and refuses pause/unpause plus the dedicated automation transport names.
+Pause/unpause have separate subcommands below. The isolated `automation` candidate
+also supports prepared native actions through a bound session and durable journal;
+see [its scope and limitations](../../docs/live-automation-cli.md). It is not a
+general-purpose Lua/MD evaluator. Its offline checks do not establish deployment
+or runtime qualification.
 
-We create the pipe and the game connects to it, which is why the game-side mod is four
-files and **zero MD**: `sn_mod_support_apis`' `pipes.lua` opens a *client* handle and does
+We create the pipe and the game connects to it. The established legacy helper used
+four files and no MD; the automation candidate adds a public MD session provider and
+bundled Lua modules. `sn_mod_support_apis`' `pipes.lua` opens a *client* handle and does
 not care who served it, so `Pipe_Server_Host`, `Register_Module` and `permissions.json`
 are all unnecessary. Requires `pywin32` (a Windows-only dev dependency); without it the
 command refuses with rc 2 naming the reason, and every offline subcommand still works.
@@ -618,8 +641,8 @@ handled here — it is a secret, not a path, and must never be written to a file
 - `x4validate/_livepipe.py` — the live query channel: named-pipe transport plus an
   eight-clause frame contract (truncation, corruption, protocol skew, FIFO desync).
 - `x4validate/_livecli.py` — `x4live`: dump / extensions / errors / oracle / archive /
-  mappings / query / pausestate / pause / unpause / harvest / ffi-census / groundtruth /
-  ramp (the 14 subcommands of `x4live --help`, 2026-09-26). The only
+  mappings / query / equipment / pausestate / pause / unpause / harvest / ffi-census / groundtruth /
+  ramp. The only
   tool that compares our model against the ENGINE rather than against more files.
 - `x4validate/_freshness.py` — the two-axis fingerprint every persisted artifact carries, and
   the per-folder **content vector** it is folded from. Deliberately NOT in `ENGINE_SOURCES`:

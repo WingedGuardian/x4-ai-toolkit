@@ -24,8 +24,10 @@ TWO RULES THIS CLI EXISTS TO KEEP, both learned expensively elsewhere:
 A dump that is missing, stale or malformed exits 2 or 3 and never 0: "I could not
 ask" must not look like "there is no disagreement".
 
-THE WRITE HALF. Exactly two verbs change the running game, `pause` and `unpause`, and
-each has its own subcommand (`WRITE_VERBS`). They take no arguments, print a banner on
+THE LEGACY WRITE HALF. `pause` and `unpause` each have their own subcommand
+(`WRITE_VERBS`). Journaled actions use the separate experimental `automation`
+subcommand; its transport verbs are also refused by `query`.
+The legacy pause commands take no arguments, print a banner on
 stderr before sending, and exit 0 only when the engine's own read-back agrees with what
 was asked. `unpause` undoes only a pause this channel made. `pausestate` is their READ
 half, and the only safe next step when a write's reply is lost: the command is sent
@@ -1258,7 +1260,7 @@ def _live_open(pipe: str | None, timeout: float):
         lp.close()
 
 
-#: The ENTIRE write vocabulary. Mirrors the game-side mod's WRITE_VERBS table, and
+#: The legacy pause vocabulary. Mirrors the game-side mod's WRITE_VERBS table, and
 #: tests/test_modlua_rearm.py fails if the two ever differ.
 WRITE_VERBS = ("pause", "unpause")
 
@@ -1402,6 +1404,21 @@ def cmd_pausestate(pipe: str | None, timeout: float, out=None) -> int:
     return 0
 
 
+def cmd_equipment(ship: str, pipe: str | None, timeout: float, out=None) -> int:
+    """Read one bounded equipment capture; incomplete identities exit 3, never 0."""
+    import json
+    from . import _liveequipment
+
+    out = sys.stdout if out is None else out
+    try:
+        with _live_open(pipe, timeout) as lp:
+            result = _liveequipment.fetch(lp, ship, uuid.uuid4().hex)
+    except ValueError as exc:
+        return _fmt_rc(str(exc), 3)
+    print(json.dumps(result, ensure_ascii=True, indent=2), file=out)
+    return 0 if result["status"] == "complete" else 3
+
+
 def cmd_query(verb: str, args: list[str], pipe: str | None, timeout: float,
               out=None) -> int:
     """Ask the RUNNING engine one fixed-vocabulary question.
@@ -1414,6 +1431,9 @@ def cmd_query(verb: str, args: list[str], pipe: str | None, timeout: float,
     subcommands, which announce the write first.
     """
     out = out or sys.stdout
+    from ._liveautomationcli import RESERVED_VERBS
+    if verb in RESERVED_VERBS:
+        return _fmt_rc("automation transport requires the dedicated `x4live automation` path", 2)
     if verb in WRITE_VERBS:
         return _fmt_rc(
             f"`{verb}` is a WRITE verb, and `query` only asks questions. Use "
@@ -2583,6 +2603,11 @@ def cmd_harvest(pipe: str | None, timeout: float, out_file: str | None = None,
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
+    actual_argv = sys.argv[1:] if argv is None else argv
+    if actual_argv and actual_argv[0] == "automation":
+        from ._liveautomationcli import main as automation_main
+        return automation_main(actual_argv[1:])
+
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except (AttributeError, ValueError):
@@ -2596,6 +2621,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--file", help="read this uidata.xml instead of the profile's")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("automation", help="experimental session-bound agent commands; see automation --help")
 
     sub.add_parser("dump", help="what the probe captured, with its denominators")
 
@@ -2686,6 +2713,12 @@ def main(argv: list[str] | None = None) -> int:
     pq.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
     pq.add_argument("--timeout", type=float, default=10.0,
                     help="seconds to wait for the game, and for each reply (default: %(default)s)")
+
+    pe = sub.add_parser("equipment", help="read fitted equipment for one issued live ship ID; "
+                        "experimental, bounded capture with explicit incomplete coverage")
+    pe.add_argument("ship", help="opaque ship ID issued by this UI session, e.g. from query player")
+    pe.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
+    pe.add_argument("--timeout", type=float, default=10.0, help="seconds per pipe reply")
 
     # ---- the WRITE half: the entire write vocabulary, one subcommand per verb. Each
     # prints a banner on stderr before sending, takes no verb arguments, and exits 0
@@ -2778,6 +2811,8 @@ def main(argv: list[str] | None = None) -> int:
                               groundtruth=args.from_groundtruth)
         if args.cmd == "archive":
             return cmd_archive(args.file, args.out)
+        if args.cmd == "equipment":
+            return cmd_equipment(args.ship, args.pipe, args.timeout)
         if args.cmd == "query":
             return cmd_query(args.verb, args.args, args.pipe, args.timeout)
         if args.cmd == "pausestate":

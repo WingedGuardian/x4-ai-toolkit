@@ -778,7 +778,9 @@ jobs:
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar
         # geometry code would ship with its tests never run here. The cold legs below install
         # WITHOUT the extra, so the no-numpy path (plain x4similar) is still exercised.
-        run: uv run --frozen --extra geometry python -m pytest -q -rs
+        # Capture is optional for users; this full qualification leg must execute
+        # the real decoder tests rather than silently omit their controls.
+        run: uv run --frozen --extra geometry --extra capture python -m pytest -q -rs
 
       # The two COLD verifications (verify-cold.sh, plain and --archive) used to end this job on Linux: 47 and 61
       # minutes AFTER its 48-minute suite (run ci/v4.0.1-rc15), 156 of the job's 167 minutes in series. They are

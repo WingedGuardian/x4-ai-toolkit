@@ -4,12 +4,12 @@
 
 ```text
 usage: x4live [-h] [--version] [--file FILE]
-              {dump,extensions,errors,oracle,archive,mappings,query,pausestate,pause,unpause,harvest,ffi-census,groundtruth,ramp} ...
+              {dump,extensions,errors,oracle,archive,mappings,query,equipment,pausestate,pause,unpause,harvest,ffi-census,groundtruth,ramp} ...
 
 Read what the running engine saw, out of the profile's uidata.xml, and diff it against our model.
 
 positional arguments:
-  {dump,extensions,errors,oracle,archive,mappings,query,pausestate,pause,unpause,harvest,ffi-census,groundtruth,ramp}
+  {dump,extensions,errors,oracle,archive,mappings,query,equipment,pausestate,pause,unpause,harvest,ffi-census,groundtruth,ramp}
     dump                what the probe captured, with its denominators
     extensions          the engine's extension list, diffed PER ITEM
     errors              the engine's own error log, as captured
@@ -19,6 +19,8 @@ positional arguments:
     mappings            DERIVE candidate field mappings from a dump or a groundtruth TSV
                         (proposals only - never auto-applied)
     query               ask the RUNNING engine one question over the pipe
+    equipment           read fitted equipment for one issued live ship ID; experimental, bounded
+                        capture with explicit incomplete coverage
     pausestate          READ whether the running game is paused, and whether THIS channel made the
                         pause. Changes nothing; the safe check after a lost write reply
     pause               WRITE: pause the running game. Refuses if it is already paused; exit 0
@@ -151,6 +153,20 @@ options:
   -h, --help         show this help message and exit
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
   --timeout TIMEOUT  seconds to wait for the game, and for each reply (default: 10.0)
+```
+
+## `x4live equipment`
+
+```text
+usage: x4live equipment [-h] [--pipe PIPE] [--timeout TIMEOUT] ship
+
+positional arguments:
+  ship               opaque ship ID issued by this UI session, e.g. from query player
+
+options:
+  -h, --help         show this help message and exit
+  --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
+  --timeout TIMEOUT  seconds per pipe reply
 ```
 
 ## `x4live pausestate`
