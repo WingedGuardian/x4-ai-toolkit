@@ -98,8 +98,14 @@ def check_md_native_owned_handle_timer_and_foreign_guard():
                   "player.age ge $Record.$age + 1.2s", "$Record.$target.sector == player.sector"):
         assert token in startguard
     assert xml.index(b'name="$Record.$consumed" exact="true"') < xml.index(b'<play_cutscene')
-    assert root.xpath("//cue[@name='BoundedStop']/delay/@exact") == ["parent.$Record.$duration * 1s"]
-    assert "parent.$Record == md.X4ToolkitOrbit.State.$Busy" in root.xpath("//cue[@name='BoundedStop']/actions/do_if/@value")[0]
+    gate = "(@parent.$Record.$op == 'start' or @parent.$Record.$op == 'follow') and @parent.$Record.$dispatched"
+    # F370: no event-less <conditions> on this sub-cue; the gate is in the delay and the actions.
+    assert not root.xpath("//cue[@name='BoundedStop']/conditions")
+    assert root.xpath("//cue[@name='BoundedStop']/delay/@exact") == [
+        "(if " + gate + " and @parent.$Record.$duration then parent.$Record.$duration else 0) * 1s"]
+    stopguard = root.xpath("//cue[@name='BoundedStop']/actions/do_if/@value")[0]
+    assert stopguard.startswith(gate + " and ")
+    assert "parent.$Record == md.X4ToolkitOrbit.State.$Busy" in stopguard
     stopped = root.xpath("//cue[@name='Stopped']/actions/do_if")[0]
     assert "event.param2 == md.X4ToolkitOrbit.State.$Busy.$scene" in stopped.get("value")
     assert not root.xpath("//cue[@name='Snapshot']//play_cutscene | //cue[@name='Status']//stop_cutscene")
@@ -119,7 +125,7 @@ def check_follow_native_equal_endpoint_source_contract():
     for field in ("distance", "yaw", "pitch"):
         assert params[field+"_start"]["number"] == params[field+"_end"]["number"] == "$Record.$"+field
     assert "follow_start" in receipt["actions"]
-    assert "or @parent.$Record.$op == 'follow'" in root.xpath("//cue[@name='BoundedStop']/conditions/check_value/@value")[0]
+    assert "or @parent.$Record.$op == 'follow'" in root.xpath("//cue[@name='BoundedStop']/actions/do_if/@value")[0]
     assert "or $Record.$op == 'follow'" in play.getparent().getparent().get("value")
 
 

@@ -63,7 +63,7 @@ def prepare(capacity_profile=None):
    put(new,"$Target","component.{@$R.$target}")
    ready=n(new,"do_if",value="$Target.exists and $Target.isclass.ship and not $Target.isclass.spacesuit and "
     "$Target.isoperational and $Target.isplayerowned and $Target.sector == player.sector and $Target.isphysicsready and "
-    "$Target.macro.boundingbox.exists and $Target.speed le 1mps and $Target.attention ge attention.visible and "+
+    "$Target.macro.boundingbox.exists and $Target.speed le 1m and $Target.attention ge attention.visible and "+
     " and ".join("$Target."+dim+" gt 0m and $Target."+dim+" le 100km" for dim in ("width","height","length"))+" and "+
     " and ".join("$Target.macro.boundingbox.center."+axis+" ge -10000km and $Target.macro.boundingbox.center."+axis+" le 10000km" for axis in "xyz"))
    put(ready,"$Exists","true");put(ready,"$Ready","true");put(ready,"$Sector","$Target.sector")
@@ -85,7 +85,7 @@ def prepare(capacity_profile=None):
     hit=n(branch,"do_if",value="$HitValue != null and $SurfaceRotation != null")
     put(hit,"$Found","true");put(hit,"$Hit",vector("$HitValue"));put(hit,"$Frame",basis("$SurfaceRotation"))
     stable=n(branch,"do_if",value="$Target.exists and $Target.isoperational and $Target.isplayerowned and "
-     "$Target.isphysicsready and $Target.sector == $Sector and player.sector == $Sector and $Target.speed le 1mps and "
+     "$Target.isphysicsready and $Target.sector == $Sector and player.sector == $Sector and $Target.speed le 1m and "
      "$Target.relativeposition.{$Sector}.distanceto.{$HostPosition} le 1m and "+
      " and ".join("$Target.relativerotation.{$Sector}."+b+".distanceto.{$HostRotation."+b+"} le 0.001m" for b in ("forward","right","up"))+
      " and @$R.$session == @"+PUBLIC+".$session and @$R.$generation == @"+PUBLIC+".$generation and "

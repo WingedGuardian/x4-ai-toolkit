@@ -177,10 +177,12 @@ def prepare(capacity_profile=None):
         if phase == "execute":
             children = n(cue, "cues")
             timer = n(children, "cue", name="BoundedStop")
-            n(n(timer, "conditions"), "check_value", value="(@parent.$Record.$op == 'start' or @parent.$Record.$op == 'follow') and @parent.$Record.$dispatched")
-            n(timer, "delay", exact="parent.$Record.$duration * 1s")
+            # F370: the engine rejects a check_value-only <conditions> here ("event condition
+            # required"); the gate lives in the delay (0 when false) and in the actions.
+            gate = "(@parent.$Record.$op == 'start' or @parent.$Record.$op == 'follow') and @parent.$Record.$dispatched"
+            n(timer, "delay", exact="(if " + gate + " and @parent.$Record.$duration then parent.$Record.$duration else 0) * 1s")
             a = n(timer, "actions")
-            yes = n(a, "do_if", value="parent.$Record == " + ROOT + ".$Busy and @parent.$Record.$scene and "
+            yes = n(a, "do_if", value=gate + " and parent.$Record == " + ROOT + ".$Busy and @parent.$Record.$scene and "
                 "not @parent.$Record.$stop_requested and not @parent.$Record.$stopped")
             put(yes, "parent.$Record.$stop_requested", "true")
             n(yes, "stop_cutscene", cutscene="parent.$Record.$scene")
