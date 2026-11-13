@@ -197,6 +197,11 @@ def test_native_backend_exact_calls_with_fake_win32(monkeypatch):
     u.ShowWindowAsync=Fn(lambda h,flag:calls.append(('show',h,flag))or 1)
     u.SetForegroundWindow=Fn(lambda h:calls.append(('foreground',h))or 1)
     monkeypatch.setattr(ctypes,'WinDLL',lambda *a,**k:u)
+    # Review r4-5: also close the other loader, so a product change to ctypes.windll
+    # fails here instead of changing the REAL foreground window.
+    class Refuse:
+        def __getattr__(self,name):raise AssertionError('real Win32 loader reached: '+name)
+    monkeypatch.setattr(ctypes,'windll',Refuse())
     peer={'pid':42,'creation_filetime':'1','image':'X4.exe'}
     window={'hwnd':'23','pid':42,'width':0,'height':0,'minimized':True,'scope':'OS_WINDOW_METADATA_NOT_CAPTURE_QUALIFIED'}
     def resolve(p,*,allow_minimized):assert p==peer and allow_minimized is True;return copy.deepcopy(window)

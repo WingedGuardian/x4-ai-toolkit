@@ -250,6 +250,10 @@ def test_review_record_drift_prevents_input(tmp_path,monkeypatch):
     assert b.sent==[]
 
 
+class _RefuseLoader:
+    def __getattr__(self,name):raise AssertionError('real Win32 loader reached: '+name)
+
+
 def test_actual_ctypes_event_layout_calls_only_fake_win32(monkeypatch):
     if m.os.name!='nt':pytest.skip('Windows ctypes ABI only; no OS input')
     calls=[]
@@ -264,6 +268,9 @@ def test_actual_ctypes_event_layout_calls_only_fake_win32(monkeypatch):
     class DLL:
         def __getattr__(self,name):fn=Fn(name);setattr(self,name,fn);return fn
     monkeypatch.setattr(m.ctypes,'WinDLL',lambda *a,**k:DLL())
+    # Review r4-5: also close the other loader, so a product change to ctypes.windll
+    # fails here instead of reaching REAL Win32 input.
+    monkeypatch.setattr(m.ctypes,'windll',_RefuseLoader())
     backend=m.WindowsDigits();assert calls==[]
     result=backend.send_pair(2)
     assert result['inserted']==2 and calls==[(2,m.ctypes.sizeof(backend.INPUT),[(1,0,2,8,0,0),(1,0,2,10,0,0)])]
@@ -351,6 +358,9 @@ def test_actual_windows_preflight_uses_only_fake_symbols_and_refuses_unknowns(mo
     class DLL:
         def __getattr__(self,name):fn=Fn(name);setattr(self,name,fn);return fn
     monkeypatch.setattr(m.ctypes,'WinDLL',lambda *a,**k:DLL())
+    # Review r4-5: also close the other loader, so a product change to ctypes.windll
+    # fails here instead of reaching REAL Win32 input.
+    monkeypatch.setattr(m.ctypes,'windll',_RefuseLoader())
     monkeypatch.setattr(m,'window_for_peer',lambda peer,expected:row.copy())
     backend=m.WindowsDigits()
     def observe():state=backend.snapshot({'pid':42},row);return backend.translate(2,state)
