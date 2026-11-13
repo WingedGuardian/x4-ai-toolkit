@@ -1,8 +1,11 @@
 """x4xref: a `<diff>` document's patch STRUCTURE is not script behaviour.
 
 The `<diff>` root and its operation children (`add`, `replace`, `remove`) were indexed
-as `action` rows -- MEASURED on a real install: 3,580 such rows, and 331 of the 690 rows
-the nested-patch fix added. Their CHILDREN are the patched-in script and stay indexed,
+as `action` rows. MEASURED on a real install (index rebuilt before and after): 2,541
+structure rows removed -- diff 458, add 1,364, remove 47, replace 672 -- including 331 of
+the 690 rows the nested-patch fix added; the 1,439 `replace` rows that remain are the
+schema's own string-replacement element. (An earlier count of 3,580 was an arithmetic
+slip; the op-NAMED action rows totalled 3,980, real `replace` elements included.) Their CHILDREN are the patched-in script and stay indexed,
 with the enclosing cue taken from the op's `sel` where the selector names one.
 
 `add`, `replace` and `remove` are ALSO real MD/aiscript elements (READ via X4CodeSense
