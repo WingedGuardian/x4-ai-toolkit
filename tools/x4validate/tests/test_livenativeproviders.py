@@ -320,6 +320,34 @@ def test_actual_order_submission_and_owned_cancel(runtime):
     assert runtime.eval("#orders") == 0
 
 
+def test_actual_cancel_after_failed_id_readback_reaches_the_bound_creation(runtime):
+    # Delta review 2, M1: after the id readback following CreateOrder3 failed, the
+    # submission carries no order_id, and order.cancel required one, so the adapter's
+    # creation-index fallback was unreachable through the shipped provider route.
+    runtime.execute(constant("test_liveorders.py", "SETUP"))
+    runtime.globals().order_factory = runtime.execute(source("orders"))
+    runtime.execute("""
+        deps.orders=order_factory(d);setup();idfail_after_create=true
+        prepare('order.submit',{kind='dock',ship='ship',target='target',policy='require_empty'})
+    """)
+    assert runtime.eval("execute().status") == "unknown"
+    assert runtime.eval("#orders") == 1
+    runtime.execute("prepare('order.cancel',{submission=string.rep('1',32)},'2')")
+    assert runtime.eval("execute().status") == "running"
+    runtime.execute("time=11")
+    assert runtime.eval("status().status") == "completed"
+    assert runtime.eval("#orders") == 0
+
+
+def test_cancel_without_an_id_is_refused_when_the_submission_has_one(runtime):
+    # Twin: omitting order_id is accepted only when the owned submission has none.
+    runtime.execute("native_status='ORDER_OBSERVED';prepare('order.submit',{kind='dock',ship='ship',target='target',policy='require_empty'});execute()")
+    before = runtime.eval("writes")
+    r = runtime.execute("return prepare('order.cancel',{submission=string.rep('1',32)},'2')")
+    assert r.status == "unknown"
+    assert runtime.eval("writes") == before
+
+
 def actual_menu(runtime, fixture):
     runtime.execute("ffi=require('ffi')")
     runtime.globals().decl = constant('test_livemenu.py', 'DECL')
