@@ -137,7 +137,7 @@
     "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions; sys.setprofile trace and source copies are process-local / tmp_path"
   },
   "test_xref_diff_wrappers.py": {
-    "sha256": "f26742821749e1b028ff27ff537b70f2b56916adc1441314d7842fba5e8669ff",
+    "sha256": "95fd794017e3b3481f56a130aaa7ac412613d24375a0445ab3d5571de0684758",
     "mode": "parallel",
     "reviewed": true,
     "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions"
