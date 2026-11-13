@@ -10,7 +10,7 @@ _spec.loader.exec_module(_fixture)
 
 
 def build(with_button=True):
-    r = _fixture.runtime.__wrapped__()
+    r = _fixture.make_runtime()
     if with_button:
         r.execute("options_adapter.prepare_button=pre;setup()")
     return r

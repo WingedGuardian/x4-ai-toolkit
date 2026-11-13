@@ -56,8 +56,7 @@ end
             raise TimeoutError("lost after native handling")
         return self.mutate(raw) if self.mutate else raw
 
-@pytest.fixture
-def case(tmp_path):
+def make_case(tmp_path):
     root=tmp_path/"client";root.mkdir();authroot=tmp_path/"authority";authroot.mkdir()
     state={"peer":copy.deepcopy(PEER),"now":10,"approved":True}
     def decide(context):
@@ -69,6 +68,11 @@ def case(tmp_path):
     client=StartClient(pipe,root,lambda:copy.deepcopy(state["peer"]),"9000000",BUILD,authority,
                        desktop="explicit test desktop",focus="visible test window")
     return client,pipe,authority,state
+
+@pytest.fixture
+def case(tmp_path):
+    return make_case(tmp_path)
+
 
 def check_actual_native_chain_bound_no_fake_world(case):
     client,pipe,authority,state=case
@@ -353,5 +357,5 @@ def test_actual_host_lua_chain(name,args,tmp_path):
 
 if __name__=="__main__":
     assert sys.argv[1].startswith("check_")
-    globals()[sys.argv[1]](case.__wrapped__(Path(sys.argv[3])),*json.loads(sys.argv[2]))
+    globals()[sys.argv[1]](make_case(Path(sys.argv[3])),*json.loads(sys.argv[2]))
     print("CONTROL_PASSED")

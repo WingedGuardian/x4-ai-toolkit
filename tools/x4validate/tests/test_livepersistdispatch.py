@@ -16,7 +16,7 @@ SID="1"*32;LID="2"*32
 def setup(tmp):
     spec=importlib.util.spec_from_file_location("host_observer_fixture",Path(__file__).with_name("test_livepersistence_host.py"))
     m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
-    fixture=m.case.__wrapped__(tmp);v,state,save,journal=fixture
+    fixture=m.make_case(tmp);v,state,save,journal=fixture
     spec2=importlib.util.spec_from_file_location("native_fixture",Path(__file__).with_name("test_livepersistence.py"))
     f=importlib.util.module_from_spec(spec2);spec2.loader.exec_module(f)
     rt=f.luajit.LuaRuntime(unpack_returned_tuples=True);rt.execute(f.SETUP)

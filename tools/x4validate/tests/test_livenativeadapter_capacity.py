@@ -132,7 +132,7 @@ def test_dispose_sentinel_is_unknown_not_fabricated_usage(name):
 
 def assembly(actual=True):
     f = fixture("nativeassembly")
-    r = f.runtime.__wrapped__()
+    r = f.make_runtime()
     if actual:
         for name, _, _, _ in CASES:
             r.globals().modules[name] = r.execute(f.source(name))
@@ -173,7 +173,7 @@ def test_capacity_route_exact_zero_arguments(args):
 ])
 def test_malformed_or_missing_counter_never_becomes_partial_success(mutation):
     f = fixture("nativeassembly")
-    r = f.runtime.__wrapped__()
+    r = f.make_runtime()
     r.execute("modules.menu.new=function()local t=fake('menu');local old=t.capacity;t.capacity=function()local v=old();"
               + mutation + ";return v end;return t end")
     f.construct(r)
@@ -182,7 +182,7 @@ def test_malformed_or_missing_counter_never_becomes_partial_success(mutation):
 
 def test_identity_loss_during_counter_read_refuses_encoded_evidence():
     f = fixture("nativeassembly")
-    r = f.runtime.__wrapped__()
+    r = f.make_runtime()
     r.execute("modules.menu.new=function()local t=fake('menu');local old=t.capacity;t.capacity=function()current=nil;return old()end;return t end")
     f.construct(r)
     assert r.execute("return assembly.read('native_adapter_capacity',{})")[0] == "ERR"
@@ -224,7 +224,7 @@ def test_actual_router_boundpipe_readcapture_costs_one_read_and_no_adapter_or_sd
 
 def test_dense_used_limits_and_historical_stamps_cross_actual_wire_encoder():
     f = fixture('nativeassembly')
-    r = f.runtime.__wrapped__()
+    r = f.make_runtime()
     r.execute("""original_fake=fake;function fake(name)
       local t=original_fake(name);local old=t.capacity
       t.capacity=function()local v=old();for _,b in pairs(v.budgets)do b.used=b.limit end

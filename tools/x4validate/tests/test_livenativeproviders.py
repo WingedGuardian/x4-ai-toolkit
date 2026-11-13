@@ -19,8 +19,7 @@ def constant(test, name):
                 and any(isinstance(t, ast.Name) and t.id == name for t in n.targets))
 
 
-@pytest.fixture
-def runtime():
+def make_runtime():
     rt = luajit.LuaRuntime(unpack_returned_tuples=True)
     rt.execute("""
         REV=string.rep('a',64); NONCE=string.rep('b',32); GEN=string.rep('c',32)
@@ -76,6 +75,10 @@ def runtime():
     rt.globals().camera_factory = rt.execute(source("camera"))
     rt.execute("setup()")
     return rt
+
+@pytest.fixture
+def runtime():
+    return make_runtime()
 
 
 @pytest.mark.parametrize("action,args", [

@@ -15,8 +15,7 @@ IDENT={"provider":STAMP["provider"],"revision":STAMP["revision"],"session":STAMP
        "peer":{"pid":123,"creation_filetime":"123456","image":"C:/game/X4.exe"},
        "world_token":"world","world_lineage":"UNKNOWN"}
 
-@pytest.fixture
-def case(tmp_path):
+def make_case(tmp_path):
     profile=tmp_path/"X4"/"12345";(profile/"save").mkdir(parents=True)
     journal=tmp_path/"journal";journal.mkdir()
     state={"time":10,"identity":copy.deepcopy(IDENT),"rows":[],"saveable":True}
@@ -27,6 +26,11 @@ def case(tmp_path):
                    catalogue=catalogue,clock=lambda:state["time"],
                    profile_peer=lambda:{"peer":copy.deepcopy(IDENT["peer"]),"profile_id":"12345"})
     return v,state,profile/"save",journal
+
+@pytest.fixture
+def case(tmp_path):
+    return make_case(tmp_path)
+
 
 def create(case, *, compressed=True, body=None):
     v,state,folder,journal=case

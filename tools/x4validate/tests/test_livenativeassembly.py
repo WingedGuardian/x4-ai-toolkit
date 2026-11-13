@@ -11,8 +11,7 @@ def source(name):
     return (UI / ("live_" + name + ".lua")).read_text(encoding="utf-8")
 
 
-@pytest.fixture
-def runtime():
+def make_runtime():
     rt = luajit.LuaRuntime(unpack_returned_tuples=True)
     rt.execute("""
         ffi=require('ffi');calls=0;disposed={};constructed={};last_read=nil
@@ -86,6 +85,10 @@ def runtime():
     """)
     rt.globals().module = rt.execute(source("nativeassembly"))
     return rt
+
+@pytest.fixture
+def runtime():
+    return make_runtime()
 
 
 def construct(rt):
