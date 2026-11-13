@@ -311,12 +311,16 @@ return function(d)
             local index=uint(C.CreateOrder3(r.ship,r.order,false,false,false),64)
             if index==0 then r.status="NOT_CREATED";return end
             r.index=index
-            -- The order exists: bind it for cancellation NOW, before any readback can throw.
-            -- Cancellation re-verifies the order by id and definition before removing it,
-            -- and reads the id at this index itself if the readback below fails.
-            r.created_bound=true
             r.order_id=id(C.GetOrderID(r.ship,index))
             local created=queue(r.ship)
+            -- The id read back from OUR CreateOrder3 index, present exactly once with our
+            -- definition, is our creation: bind it for cancellation BEFORE the stricter
+            -- checks below, so a failure there cannot leave it in the queue uncancellable.
+            local own=0
+            for _,v in ipairs(created.rows) do
+                if v.id==r.order_id and v.orderdef==r.order then own=own+1 end
+            end
+            if own==1 then r.created_bound=true end
             assert(created.count==1 and created.rows[1].queueidx==index and
                 created.rows[1].id==r.order_id and created.rows[1].orderdef==r.order and
                 created.rows[1].enabled==false and equal(created.default,r.before.default),
@@ -389,8 +393,8 @@ return function(d)
     function api.prepare_cancel(submission_ticket,expected_order_id)
         local ok,out=pcall(function()
             local s=records[submission_ticket]
-            assert(s and s.consumed and s.created_bound and s.index and
-                (expected_order_id==s.order_id),"only exact locally journaled creation can be cancelled")
+            assert(s and s.consumed and s.created_bound and s.order_id and
+                expected_order_id==s.order_id,"only exact locally journaled creation can be cancelled")
             assert(not s.cancel_attempted,"cancellation already attempted; no retry")
             local e,t=stamp()
             assert(e==s.epoch,"submission belongs to another lifecycle")
@@ -398,16 +402,6 @@ return function(d)
             assert(ship==s.ship,"submission ship changed")
             local pilot=cancel_eligible(ship)
             local before=queue(ship)
-            if s.order_id==nil then
-                -- The id readback after creation failed: read it at the creation index, and
-                -- only if the order there has our definition.
-                local found
-                for _,v in ipairs(before.rows) do
-                    if v.queueidx==s.index and v.orderdef==s.order then found=v end
-                end
-                assert(found,"created order not found at its creation index")
-                s.order_id=found.id
-            end
             local target=locate_owned(before,s)
             assert(C.RemoveOrder(ship,target.queueidx,false,true)==true,"native cancellation unavailable")
             assert(equal(queue(ship),before) and d.epoch()==e,"queue or lifecycle changed during cancellation preparation")

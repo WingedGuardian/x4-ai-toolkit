@@ -169,11 +169,8 @@ return function(d)
                 end
             else assert(a.x==nil and a.y==nil and a.z==nil,"object order takes no position") end
         elseif req.action=="order.cancel" then
-            -- order_id may be omitted only for a submission whose id readback failed
-            -- after creation; the orders adapter then reads it at the creation index.
-            arguments(a,{submission=true},{order_id=true})
-            assert(hex(a.submission,32),"owned submission request required")
-            if a.order_id~=nil then id(a.order_id) end
+            arguments(a,{submission=true,order_id=true})
+            assert(hex(a.submission,32),"owned submission request required");id(a.order_id)
         elseif req.action=="camera.restore" then
             arguments(a,{view=true});assert(hex(a.view,32),"owned view request required")
         else arguments(a,{target=true});assert(text(a.target),"issued target required") end
@@ -261,8 +258,7 @@ return function(d)
         elseif r.request.action=="order.cancel" then
             local s=records[a.submission]
             assert(s and s.request.action=="order.submit" and s.dispatched and s.ticket
-                and s.executed and s.executed.order_id==a.order_id
-                and (a.order_id~=nil or s.executed.action_attempted==true),"only exact owned creation")
+                and s.executed and s.executed.order_id==a.order_id,"only exact owned creation")
             r.submission=s
             return adapters.orders.prepare_cancel(s.ticket,a.order_id)
         elseif r.request.action=="camera.restore" then
