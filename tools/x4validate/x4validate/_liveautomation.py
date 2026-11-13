@@ -14,6 +14,7 @@ from ._liveuiidentity import UILink
 from ._livepeerprofile import ProfilePeer
 from ._livereadpages import query_capture
 from ._livepipe import Reply
+from ._livetrees import overlap_reason, protected_roots
 
 
 def _directory(path, *, create=False):
@@ -50,6 +51,11 @@ class AutomationClient:
         if mode not in ("fresh","resume"):
             raise SessionUnavailable("explicit fresh or resume mode required")
         root=_directory(root)
+        # A journal never overlaps the game install, the reference folder or the
+        # personal tree (every profile and its saves); checked before the pipe is used.
+        overlap=overlap_reason(root,protected_roots(image=image))
+        if overlap:
+            raise ActionRefused(overlap)
         peer=ProfilePeer(pipe._h,image,profile_id)
         # Qualification uses the same connected pipe handle, never a process list guess.
         ui=UILink(pipe,SessionJournal(root/"ui-generations"),peer,build)

@@ -4,6 +4,7 @@ No save/load dispatch or approval issuance. Opaque handles are local capabilitie
 for observations only; serialization cannot recreate them or authorize a write.
 """
 from __future__ import annotations
+from ._livetrees import overlaps, personal_tree
 import copy
 import gzip
 import hashlib
@@ -80,7 +81,7 @@ def _file(path, max_bytes):
 class SlotVerifier:
     """Trusted identity/catalogue callbacks must come from the qualified live link.
 
-    The journal is outside the profile. Existing saves are only read. Each
+    The journal is outside the personal tree (every profile). Existing saves are only read. Each
     reservation consumes a unique journal filename even after process restart.
     """
     def __init__(self, profile, journal, *, identity, catalogue, profile_peer, clock=time.monotonic,
@@ -89,8 +90,7 @@ class SlotVerifier:
         self.profile=_route(profile,directory=True)
         self.save=_route(self.profile/"save",directory=True)
         self.journal=_route(journal,directory=True)
-        _require(not self.journal.is_relative_to(self.profile) and
-                 not self.profile.is_relative_to(self.journal),"journal/profile overlap")
+        _require(not overlaps(self.journal, personal_tree(self.profile)),"journal/personal tree overlap")
         _require(callable(identity) and callable(catalogue) and callable(profile_peer) and callable(clock),"trusted observers required")
         _require(_finite(settle_seconds) and 1<=settle_seconds<=60,"invalid settlement interval")
         for value in (max_members,max_file_bytes,max_total_bytes,max_expanded_bytes):

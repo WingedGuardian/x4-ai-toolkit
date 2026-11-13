@@ -17,7 +17,7 @@ IDENT={"provider":STAMP["provider"],"revision":STAMP["revision"],"session":STAMP
 
 @pytest.fixture
 def case(tmp_path):
-    profile=tmp_path/"12345";(profile/"save").mkdir(parents=True)
+    profile=tmp_path/"X4"/"12345";(profile/"save").mkdir(parents=True)
     journal=tmp_path/"journal";journal.mkdir()
     state={"time":10,"identity":copy.deepcopy(IDENT),"rows":[],"saveable":True}
     def catalogue():
