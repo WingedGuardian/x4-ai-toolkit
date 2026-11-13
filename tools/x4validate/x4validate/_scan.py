@@ -30,6 +30,8 @@ packed copy, because the engine would not fall through either.
 
 from __future__ import annotations
 
+import fnmatch
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator
@@ -39,15 +41,55 @@ from lxml import etree
 from . import _cat, _merge
 
 
+#: The marker an unscanned FOLDER carries in its rendering, so a reader of a stored
+#: list (x4xref's `.notindexed` sidecar) can tell it from a file that would not parse.
+FOLDER_MARKER = "(FOLDER NOT SCANNED: could not be listed)"
+
+
 @dataclass
 class Unreadable:
-    """A file the scanner found but could not parse. Never discard these."""
+    """A file the scanner found but could not parse -- or, with *folder*, a folder it
+    could not LIST, so nothing inside it was scanned. Never discard these."""
     vpath: str
     why: str
     packed: bool = False
+    folder: bool = False
+    mod: str = ""
 
     def __str__(self) -> str:
+        if self.folder:
+            where = (f"mod folder '{self.mod}'" if not self.vpath
+                     else f"folder '{self.vpath}' of mod '{self.mod}'")
+            return f"{where} {FOLDER_MARKER}: {self.why}"
         return f"{self.vpath} ({'packed' if self.packed else 'loose'}): {self.why}"
+
+
+def _list_dir(path: Path) -> list[Path]:
+    """One directory's entries, sorted. A seam so a listing failure can be tested."""
+    return sorted(path.iterdir())
+
+
+def _walk_xml(root: Path, mod_dir: Path,
+              unreadable: list[Unreadable] | None) -> Iterator[Path]:
+    """Every `*.xml` under *root*, like `root.rglob("*.xml")` (same platform case rule,
+    symlinked folders not followed) -- except that a subfolder which cannot be LISTED is
+    appended to *unreadable* as an unscanned folder, where rglob skipped it silently and
+    its files read as absent."""
+    def onerror(exc: OSError) -> None:
+        if unreadable is None:
+            return  # silent-ok: the caller passed no channel (see iter_mod_xml's contract)
+        where = Path(exc.filename) if exc.filename else root
+        try:
+            rel = where.relative_to(mod_dir).as_posix() + "/"
+        except ValueError:
+            rel = str(where)
+        unreadable.append(Unreadable(rel, f"could not list this folder, so its files were "
+                                          f"NOT scanned: {exc}", folder=True, mod=mod_dir.name))
+
+    for dirpath, _dirs, files in os.walk(root, onerror=onerror):
+        for name in files:
+            if fnmatch.fnmatch(name, "*.xml"):
+                yield Path(dirpath) / name
 
 
 #: A predicate takes the mod-relative virtual path (forward slashes, original
@@ -124,8 +166,8 @@ def _scan_roots(mod_dir: Path, predicate: Predicate | None,
     """Directories to rglob. Narrowed by a predicate's `.prefixes` when it has any.
 
     None when a mod folder that EXISTS cannot be listed: that is appended to
-    *unreadable* and the caller reads nothing more from it (its catalogs live in the same
-    folder), so the miss is disclosed instead of reading as an empty mod."""
+    *unreadable* as an unscanned FOLDER naming the mod, and the caller skips the LOOSE
+    walk only -- its catalogs are still read (`_cat` raises if they cannot be either)."""
     prefixes = getattr(predicate, "prefixes", None)
     if not prefixes:
         return [mod_dir]
@@ -145,15 +187,15 @@ def _scan_roots(mod_dir: Path, predicate: Predicate | None,
     # `_merge.overlay_root` refuses; this enumeration does not model which one loads.
     heads = {p.strip("/").split("/")[0].lower() for p in prefixes}
     try:
-        children = sorted(mod_dir.iterdir())
+        children = _list_dir(mod_dir)
     except FileNotFoundError:
         return []  # silent-ok: an ABSENT folder has no loose files to walk -- an absence,
         # not a read failure (the literal `is_dir()` test gave the same answer).
     except OSError as exc:
         if unreadable is not None:
             unreadable.append(Unreadable(
-                ".", f"could not list the mod folder, so none of its files (loose or "
-                     f"packed) were scanned: {exc}"))
+                "", f"could not list the mod folder, so its loose files were NOT scanned "
+                    f"(its catalogs were still read): {exc}", folder=True, mod=mod_dir.name))
         return None
     return [c for c in children if c.name.lower() in heads and c.is_dir()]
 
@@ -171,10 +213,10 @@ def iter_mod_xml(
     """
     yielded: set[str] = set()
 
-    roots = _scan_roots(mod_dir, predicate, unreadable)
-    if roots is None:
-        return  # recorded in *unreadable* by _scan_roots
-    loose = sorted(p for root in roots for p in root.rglob("*.xml"))
+    # None: the mod folder could not be listed (recorded by _scan_roots). Only the LOOSE
+    # walk is skipped; the catalogs below are still read.
+    roots = _scan_roots(mod_dir, predicate, unreadable) or []
+    loose = sorted(p for root in roots for p in _walk_xml(root, mod_dir, unreadable))
     for path in loose:
         if not path.is_file():
             continue
@@ -229,10 +271,10 @@ def iter_mod_xml_bytes(
     losing the channel it already reported.
     """
     yielded: set[str] = set()
-    roots = _scan_roots(mod_dir, predicate, unreadable)
-    if roots is None:
-        return  # recorded in *unreadable* by _scan_roots
-    loose = sorted(p for root in roots for p in root.rglob("*.xml"))
+    # None: the mod folder could not be listed (recorded by _scan_roots). Only the LOOSE
+    # walk is skipped; the catalogs below are still read.
+    roots = _scan_roots(mod_dir, predicate, unreadable) or []
+    loose = sorted(p for root in roots for p in _walk_xml(root, mod_dir, unreadable))
     for path in loose:
         if not path.is_file():
             continue

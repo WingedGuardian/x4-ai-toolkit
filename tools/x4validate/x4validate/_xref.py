@@ -30,7 +30,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from x4validate import _paths, _effective, _merge, _mutation, _registry, _freshness
+from x4validate import _paths, _effective, _merge, _mutation, _registry, _freshness, _scan
 from x4validate import __version__
 from x4validate._xrefindex import (  # noqa: F401 -- re-exported: callers import them from here
     _CUE_EDGE_TAGS, _SCRIPT_DIRS, _SKIP_TAGS, SCRIPT_SCOPE, XrefRow, _iter_mod_files,
@@ -242,8 +242,13 @@ def _exclusions(tsv: Path | None) -> str:
     lines = [ln for ln in _sidecar(tsv).read_text(encoding="utf-8").splitlines() if ln.strip()]
     if not lines:
         return ""
-    return (f" — EXCEPT {len(lines)} file(s) that would not parse and are not in the "
-            f"index at all (see {_sidecar(tsv).name})")
+    folders = sum(1 for ln in lines if _scan.FOLDER_MARKER in ln)
+    files = len(lines) - folders
+    parts = ([f"{files} file(s) that would not parse"] if files else []) + (
+        [f"{folders} folder(s) that could not be listed, so nothing in them was scanned"]
+        if folders else [])
+    return (f" — EXCEPT {' and '.join(parts)}; none of these are in the index "
+            f"(see {_sidecar(tsv).name})")
 
 
 def _expected_dlc() -> int | None:
@@ -452,8 +457,9 @@ def main(argv: list[str] | None = None) -> int:
         if unreadable:
             # The index is the denominator behind every negative answer below.
             # A file missing from it must be named, not quietly absent.
-            print(f"\n  NOT INDEXED — {len(unreadable)} file(s) would not parse; "
-                  "any 'no references' answer excludes them:", file=sys.stderr)
+            print(f"\n  NOT INDEXED — {len(unreadable)} file(s) that would not parse or "
+                  "folder(s) that could not be listed; any 'no references' answer "
+                  "excludes them:", file=sys.stderr)
             for u in unreadable:
                 print(f"   - {u}", file=sys.stderr)
         return 0
