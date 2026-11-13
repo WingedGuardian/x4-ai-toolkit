@@ -355,3 +355,18 @@ def test_actual_bounded_subprocess_drain_started_sink(setup):
         row=a.records[h]
         if "work" in row:
             row["work"]["cancel"].set();assert row["work"]["done"].wait(3)
+
+
+# Review r1-9: source_pins read tools/native_audio/process_loopback.cpp from the repo
+# layout; outside a toolkit checkout (a wheel install) that raised FileNotFoundError.
+def test_source_pins_refuse_plainly_without_the_native_source(tmp_path, monkeypatch):
+    from x4validate import _liveaudio
+    monkeypatch.setattr(_liveaudio, "NATIVE_SOURCE", tmp_path / "absent" / "process_loopback.cpp")
+    with pytest.raises(_liveaudio.AudioUnavailable, match="process_loopback.cpp"):
+        _liveaudio.source_pins()
+
+
+def test_source_pins_include_the_native_source_in_a_checkout():
+    # Twin: in this checkout the source is found and pinned.
+    from x4validate import _liveaudio
+    assert len(_liveaudio.source_pins()["process_loopback.cpp"]) == 64

@@ -32,12 +32,18 @@ class AudioUnavailable(ValueError):
 def need(ok,why):
     if not ok: raise AudioUnavailable(why)
 
+# The native helper's source lives in the toolkit checkout (tools/native_audio), not in
+# the x4validate package; an installed wheel does not carry it.
+NATIVE_SOURCE=Path(__file__).resolve().parent.parents[1]/"native_audio"/"process_loopback.cpp"
+
 def source_pins():
     root=Path(__file__).resolve().parent
     names=("_liveaudio.py","_liveclip.py","_livepersistence.py","_liveactions.py")
-    cpp=root.parents[1]/"native_audio"/"process_loopback.cpp"
+    need(NATIVE_SOURCE.is_file(),
+         "process_loopback.cpp not found beside this x4validate; audio capture needs the toolkit checkout "
+         "(tools/native_audio), whose source the helper binary embeds and every stream header is checked against")
     return read_pins() | {n:hashlib.sha256((root/n).read_bytes()).hexdigest() for n in names} | {
-        "process_loopback.cpp":hashlib.sha256(cpp.read_bytes()).hexdigest()}
+        "process_loopback.cpp":hashlib.sha256(NATIVE_SOURCE.read_bytes()).hexdigest()}
 
 def _header(raw,*,peer,duration,native_source_sha256,synthetic):
     """Same fixed header for started observation and complete stream validation."""
