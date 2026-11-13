@@ -57,6 +57,12 @@ return function(d)
         end
         return s
     end
+    local function present()
+        -- Read-only observation of the public session; never faults the channel.
+        local ok,s=pcall(public)
+        if ok and type(s)=="table" and s.provider=="x4-live-session-v1" then return s end
+        return nil
+    end
     local function exact(value)
         if type(value)=="number" then
             assert(value==value and value>0 and value<9007199254740992 and value%1==0,"unsafe native identity")
@@ -86,6 +92,9 @@ return function(d)
         listener=fn
         protected(native.RegisterEvent,event,function()
             if disposed or fault or not stamp then return end
+            -- No public session (the gap between connections, e.g. probe -> resume) is
+            -- not a protocol fault: leave the queue for the next reply event.
+            if not present() then return end
             protected(function() current();listener() end)
         end)
     end
@@ -94,12 +103,20 @@ return function(d)
             current();assert(controls[control] and type(body)=="table","unlisted MD control")
             assert(tick and timers<timer_limit,"deadline callback unavailable or capacity exhausted")
             local deadline=now()+timer_interval
+            local armed=current()
+            local owner_session,owner_generation=armed.session,armed.generation
             timers=timers+1
             local fired=false
             schedule(function()
                 if fired then return end;fired=true
                 timers=timers-1
                 if disposed or fault then return end
+                -- A deadline belongs to the connection that armed it. Fired with no
+                -- public session (the next connection's probe -> resume gap) or under
+                -- another session/generation, it is stale: it must neither fault this
+                -- channel nor tick on the newer connection's behalf.
+                local s=present()
+                if not s or s.session~=owner_session or s.generation~=owner_generation then return end
                 protected(function() current();tick() end)
             end,false,deadline)
             current();native.AddUITriggeredEvent(screen,control,body)

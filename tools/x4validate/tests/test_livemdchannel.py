@@ -131,3 +131,37 @@ def test_uncertain_native_send_cannot_be_retried():
     r.execute("api.arm_tick(function() end)")
     refused(r,"api.send('connect',{})");refused(r,"api.send('connect',{})")
     assert r.eval("sends")==1
+
+
+# ROR handover defect (a), MEASURED once in game: a deadline armed by the previous
+# connection fired inside the next connection's probe->resume gap, where the public
+# session reads absent, and faulted the channel for good ("canonical public session
+# missing"). A deadline belongs to the connection that armed it.
+def test_stale_deadline_in_session_gap_does_not_fault_or_tick():
+    r=runtime();r.execute("api.arm_tick(function() ticks=ticks+1 end);api.send('request',{})")
+    r.execute("local s=stamp;stamp=nil;timers[1]();stamp=s")
+    assert r.eval("ticks")==0
+    assert r.eval("api.capacity().faulted") is False
+    assert r.eval("api.read()[1].item")=="one"
+
+
+def test_stale_deadline_from_other_generation_does_not_touch_new_connection():
+    r=runtime();r.execute("api.arm_tick(function() ticks=ticks+1 end);api.send('request',{})")
+    r.execute("stamp={provider=stamp.provider,revision=stamp.revision,session=stamp.session,"
+              "generation=string.rep('e',32),world_token=stamp.world_token};timers[1]()")
+    assert r.eval("ticks")==0 and r.eval("api.capacity().faulted") is False
+    assert r.eval("api.capacity().scheduled_callbacks_used")==0
+
+
+def test_reply_event_in_session_gap_waits_instead_of_faulting():
+    r=runtime();r.execute("api.subscribe(function() drains=drains+1 end);api.read()")
+    r.execute("local s=stamp;stamp=nil;callbacks[1]();stamp=s")
+    assert r.eval("drains")==0 and r.eval("api.capacity().faulted") is False
+    r.execute("callbacks[1]()")
+    assert r.eval("drains")==1
+
+
+def test_deadline_of_current_connection_still_ticks_after_gap():
+    # Twin: the same connection's deadline, fired with the session present, still runs.
+    r=runtime();r.execute("api.arm_tick(function() ticks=ticks+1 end);api.send('request',{});timers[1]()")
+    assert r.eval("ticks")==1
