@@ -56,8 +56,8 @@ DESCRIPTION=(
     "completion. An uncertain action must be reconciled, never automatically replayed. save=false does "
     "not mean executed actions cannot persist in a saved world. The fixed command interfaces expose no "
     "arbitrary Lua/MD evaluation. Object IDs expire with the UI/session; enumerations are not necessarily "
-    "complete censuses. Live pipe transport requires Mod Support APIs, which the UI addon declares as a "
-    "load-order dependency; whether anything loads without it is not yet measured. This automation composition is an offline candidate awaiting runtime qualification."
+    "complete censuses. Mod Support APIs is a required dependency of the extension and its UI addon; "
+    "the live pipe transport needs it. This automation composition is an offline candidate awaiting runtime qualification."
 )
 
 

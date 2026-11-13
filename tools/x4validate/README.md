@@ -271,9 +271,10 @@ one third-party dependency you install yourself:**
 | **X4 Toolkit Helper** | ships with this toolkit under `mods/`. Copy it into `{game}/extensions/`, or run `uv run python scripts/deploy-mod.py x4_toolkit_helper --apply`, which refuses a wrong target and re-reads what it wrote. It answers a fixed, enumerated vocabulary: read verbs, plus exactly two argument-free write verbs, `pause` and `unpause`, and no eval of any kind | `mods/x4_toolkit_helper/` |
 | **Mod Support APIs** (`ws_2042901274`) | supplies the named-pipe lua the pipe half calls | Steam Workshop / Nexus |
 
-The dependency is declared **optional**, deliberately. Without Mod Support APIs the
-addon still loads and the **uidata half keeps working**; only the pipe verbs report that
-the api is unavailable. The two halves fail independently.
+The dependency is **required** (helper version 102 and later): the manifest and the UI
+addon both declare it, and the UI declaration fixes the load order the pipe half needs.
+Earlier versions marked it optional; what X4 loads of the helper without it was never
+measured, so install it.
 
 The live pipe also needs the dependency's native library, which **Protected UI Mode**
 can block. If you choose to use the channel, review that setting in the game's

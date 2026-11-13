@@ -19,7 +19,7 @@
 - The helper's generated MD no longer uses two constructs the engine rejects: a speed check written as `1mps` (no such unit; it is now `1m`) and a condition-only sub-cue in the orbit camera's stop timer. A new test scans every generated MD file for both (BLIND-SPOTS F370).
 - The helper's extensions now read MD reply flags as the 1 and 0 that MD sends. They expected Lua `true`/`false`, so real replies would have been refused or misread (found by reading the code; not yet seen in game).
 - A reply deadline left over from the previous connection no longer breaks the helper's MD channel for good when it fires while the next connection is still connecting ("canonical public session missing").
-- The helper's UI now declares its load-order dependency on Mod Support APIs. Without it, another addon could reorder the UI load so the pipe never started. Whether the helper loads at all without Mod Support APIs is not yet measured, so install it.
+- The helper (now version 102) requires Mod Support APIs: its manifest no longer marks it optional, and its UI declares it too. Without the UI declaration, another addon could reorder the UI load so the pipe never started.
 - `bin/xrcat` refuses to pack a folder holding a file whose full path is 260 characters or longer, and lists those files. XRCatTool 1.11 leaves such a file out of the catalog with only an "Illegal file" line and still exits 0.
 
 ## v4.1.1 — 2026-11-10

@@ -29,7 +29,7 @@
           The pipe half requires Mod Support APIs (sn_mod_support_apis) at load time:
           its named_pipes modules and Register_OnLoad_Init. MEASURED in game: without
           this declaration another addon reordered the UI load and that require failed.
-          What X4 does with this addon when Mod Support APIs is ABSENT is not measured.
+          content.xml declares the same dependency as required.
         -->
         <dependency name="sn_mod_support_apis"/>
         <dependency name="ego_detailmonitorHelper"/>

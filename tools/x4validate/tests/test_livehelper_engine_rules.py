@@ -106,3 +106,10 @@ def test_ui_addon_declares_its_mod_support_apis_load_order_dependency():
     for root in (source, composed):
         names = [node.get("name") for node in root.findall("environment/dependency")]
         assert names == ["sn_mod_support_apis", "ego_detailmonitorHelper"], names
+
+
+def test_manifest_requires_mod_support_apis_like_the_ui_addon():
+    # Review r2-3: content.xml marked the dependency optional while ui.xml requires it.
+    manifest = E.fromstring((ROOT / "mods/x4_toolkit_helper/content.xml").read_bytes())
+    deps = {node.get("id"): node.get("optional") for node in manifest.findall("dependency") if node.get("id")}
+    assert "ws_2042901274" in deps and deps["ws_2042901274"] in (None, "false", "0"), deps
