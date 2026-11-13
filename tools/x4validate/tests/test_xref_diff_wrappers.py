@@ -177,3 +177,41 @@ import pytest  # noqa: E402
 ])
 def test_op_context_names_a_cue_only_when_unambiguous(tag, sel, pos, want):
     assert _ctx(tag, sel, pos) == want
+
+
+# --- review delta 5: after the named cue, only WHITELISTED steps -----------------
+# Every remaining step must be a plain child step naming a literal element other than
+# `cue` (predicates allowed). `*`, node(), an axis, `.`, `..` or `//` give "".
+
+@pytest.mark.parametrize("tag,sel,pos,want", [
+    ("add", "cue[@name='a']/cues/*[@name='b']/actions", None, ""),
+    ("add", "cue[@name='a']/cues/*/actions", None, ""),
+    ("add", "cue[@name='a']/cues/*", None, ""),
+    ("add", "//cue[@name='a']/cues/*[1]/conditions", None, ""),
+    ("add", "//cue[@name='a']/*/*/actions", None, ""),
+    ("add", "//cue[@name='a']/cues/cue[@name='b']/conditions", None, "b"),
+    ("add", "//cue[@name='a']/cues/self::cue/actions", None, ""),
+    ("add", "//cue[@name='a']/cues/child::cue[@name='b']/actions", None, ""),
+    ("add", "//cue[@name='a][x']/actions", None, "a][x"),
+    ("add", "//cue[@name=\"a'b\"]/actions", None, "a'b"),
+    ("add", "//cue[@name='a'][@instantiate='true']/actions", None, ""),
+    ("add", "//cue[ @name = 'a' ]/actions", None, "a"),
+    ("add", "//cue [@name='a']/actions", None, "a"),
+    ("add", "//*[@name='a']/actions", None, ""),
+    ("add", "//cue[@name='a']/actions | //cue[@name='b']/actions", None, ""),
+    ("add", "(//cue[@name='a'])[1]/actions", None, ""),
+    ("add", "//cue[@name='a']/actions/do_if[@value='$x/y']", None, "a"),
+    ("add", "//cue[@name='a']/actions/do_if[@value='a|b']", None, "a"),
+    ("add", "//cue[@name='a']/cues/cue[@name='b']/descendant-or-self::actions", None, ""),
+    ("add", "//cue[@name='a']/cues/node()/actions", None, ""),
+    ("add", "//cue[@name='a']/cues/Cue[@name='b']/actions", None, ""),
+    ("add", "//cue[@name='a']/following-sibling::cue[1]/actions", None, ""),
+    ("replace", "//cue[@name='a']/cues/*[@name='b']/actions", None, ""),
+    ("add", "//cue[@name='a']/cues/*[@name='b']", "after", "a"),
+    ("add", "//cue[@name='a']/cues/cue[@name='b']/cues/*", None, ""),
+    ("add", "//cue[@name='a']/cues/cue[@name='b']/", None, "b"),
+    ("add", "//cue[@name='a']/.", None, ""),
+    ("add", "//cue[@name='a']/cues/cue[@name='b']/conditions[.//x]/../..", None, ""),
+])
+def test_op_context_whitelist_after_the_named_cue(tag, sel, pos, want):
+    assert _ctx(tag, sel, pos) == want
