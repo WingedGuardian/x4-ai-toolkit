@@ -298,3 +298,35 @@ def test_an_old_scope_index_does_not_claim_nested_coverage(nested_index, capsys)
     out = capsys.readouterr().out
     assert "extensions/<owner>/" not in out
     assert "script scope unrecorded or different" in out
+
+
+# --- the narrowed walk finds a differently-cased loose folder on EVERY OS ------
+
+def test_scan_roots_return_the_on_disk_spelling(tmp_path):
+    """`_scan_roots` built `mod_dir / "extensions"` literally. Windows answers that
+    case-insensitively; a POSIX filesystem does not, so a loose `Extensions/` or `MD/`
+    folder was never walked there although the predicate is case-insensitive. The
+    roots must be the folders ON DISK, which this checks on any OS: a literal join
+    keeps the lowercase spelling even where it resolves."""
+    mod = tmp_path / "moda"
+    for d in ("Extensions/Owner/MD", "MD", "AIScripts", "libraries"):
+        (mod / d).mkdir(parents=True)
+    roots = _scan._scan_roots(mod, _scan.under_nested("md/", "aiscripts/"))
+    assert sorted(r.name for r in roots) == ["AIScripts", "Extensions", "MD"]
+
+
+def test_twin_scan_roots_lowercase_and_absent(tmp_path):
+    mod = tmp_path / "moda"
+    (mod / "md").mkdir(parents=True)
+    (mod / "libraries").mkdir()
+    roots = _scan._scan_roots(mod, _scan.under("md/", "aiscripts/"))
+    assert [r.name for r in roots] == ["md"]
+    assert _scan._scan_roots(tmp_path / "missing", _scan.under("md/")) == []
+
+
+def test_mixed_case_nested_patch_is_indexed(tmp_path, hermetic):
+    ext = tmp_path / "ext"
+    _mod(ext, "moda", {"Extensions/OwnerB/MD/patch.xml":
+                       '<diff><add sel="//cues"><cue name="CasedCue"/></add></diff>'})
+    assert ("moda", "Extensions/OwnerB/MD/patch.xml", "CasedCue") in _cuedefs(
+        _index(tmp_path, ext))
