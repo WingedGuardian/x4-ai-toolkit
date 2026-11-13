@@ -224,6 +224,8 @@ class DialogInput:
     def context(self, actor_handle):
         self._current(); need(actor_handle in self.actors, 'local actor ticket required')
         row = self.actors[actor_handle]; receipt = self.client.status(row['request']['id'])
+        need(receipt['status'] not in ('refused', 'failed'),
+             'actor snapshot ' + str(receipt['status']) + ': ' + str(receipt.get('reason', '')))
         if receipt['status'] != 'completed':
             return None
         o = receipt.get('observations', {}); s = o.get('snapshot', {})
@@ -442,6 +444,8 @@ class DialogInput:
              r['request']['id']!=self.contexts[t['context']]['actor_request'] and
              self._now()-r['started']<=3, 'fresh post-input actor snapshot required')
         receipt=self.client.status(r['request']['id'])
+        need(receipt['status'] not in ('refused','failed'),
+             'post-input snapshot '+str(receipt['status'])+': '+str(receipt.get('reason','')))
         if receipt['status']!='completed':return {'status':'PENDING','selection_verified':False}
         o=receipt.get('observations',{});s=o.get('snapshot',{})
         need(o.get('proof_scope')=='CONVERSATION_SNAPSHOT_ONLY' and o.get('read_only') is True and

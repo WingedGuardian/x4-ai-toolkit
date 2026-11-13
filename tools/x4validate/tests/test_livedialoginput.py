@@ -391,3 +391,26 @@ def test_clip_file_cap_is_the_recorders(tmp_path,monkeypatch):
         return real(path,cap)
     monkeypatch.setattr(m,'_file',spy);p.frame(h,ct)
     assert caps and set(caps)=={_liveclip.MAX_BYTES}
+
+
+# Delta review 2, M5: a terminal refused/failed snapshot was reported as still pending.
+@pytest.mark.parametrize('terminal',['refused','failed'])
+def test_terminal_snapshot_refusal_is_returned_not_pending(tmp_path,monkeypatch,terminal):
+    p,c,clips,b=setup(tmp_path,monkeypatch);h=p.begin_actor()
+    c.status=lambda i:{'status':terminal,'reason':'synthetic native refusal'}
+    with pytest.raises(m.InputUnavailable,match=terminal):p.context(h)
+
+
+def test_running_snapshot_is_still_pending(tmp_path,monkeypatch):
+    # Twin: a non-terminal status keeps returning None.
+    p,c,clips,b=setup(tmp_path,monkeypatch);h=p.begin_actor()
+    c.status=lambda i:{'status':'running'}
+    assert p.context(h) is None
+
+
+@pytest.mark.parametrize('terminal',['refused','failed'])
+def test_terminal_post_input_snapshot_refusal_is_returned_not_pending(tmp_path,monkeypatch,terminal):
+    p,c,clips,b=setup(tmp_path,monkeypatch);r,ct,_=reviewed(p,c,clips,tmp_path);t=p.prepare(r,ct)
+    p.execute(t,context(p));c.t+=0.1;a=p.begin_actor()
+    c.status=lambda i:{'status':terminal,'reason':'synthetic native refusal'}
+    with pytest.raises(m.InputUnavailable,match=terminal):p.outcome(t,a)
