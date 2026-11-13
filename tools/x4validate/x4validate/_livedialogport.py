@@ -4,7 +4,7 @@ No launch/focus/automatic replay. Capture and input are explicit separate method
 Use an existing production AutomationClient; this is not a raw command/eval port.
 """
 from __future__ import annotations
-from ._livetrees import journal_refusal
+from ._livetrees import journal_refusal, overlaps
 import copy
 import hashlib
 import os
@@ -38,7 +38,7 @@ class DialogPort:
         why=journal_refusal(self.root,profile=engine.clips.profile)
         need(why is None,'port journal cannot be in personal tree: '+str(why))
         for other in (engine.root,engine.clips.root,engine.clips.recorder.journal):
-            need(self.root!=other and not self.root.is_relative_to(other) and not other.is_relative_to(self.root),
+            need(not overlaps(self.root,other),
                  'port and evidence journals must be separate nonnested directories')
         self.directory=self.root.stat().st_dev,self.root.stat().st_ino
         self.synthetic,self.clock,self.sleep=synthetic,clock,sleep
@@ -214,7 +214,7 @@ def connect_dialog(client,profile,journals,*,ffmpeg,ffmpeg_sha256,observer_revis
     roots={k:_route(v,directory=True)for k,v in journals.items()}
     for a,p in roots.items():
         for b,q in roots.items():
-            if a!=b:need(p!=q and not p.is_relative_to(q),'distinct nonnested journal roots required')
+            if a!=b:need(not overlaps(p,q),'distinct nonnested journal roots required')
     clips=connect_clips(client,profile,{'port':roots['clip_port'],'recorder':roots['clip_recorder']},
                         ffmpeg=ffmpeg,ffmpeg_sha256=ffmpeg_sha256)
     engine=DialogInput(client,clips,roots['input'],observer_revision=observer_revision,

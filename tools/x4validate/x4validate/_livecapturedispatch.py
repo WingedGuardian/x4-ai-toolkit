@@ -5,7 +5,7 @@ reservation bookkeeping. Ambiguous effects quarantine this owner; no retries or
 automatic journal reopening are provided.
 """
 from __future__ import annotations
-from ._livetrees import journal_refusal
+from ._livetrees import journal_refusal, overlaps
 import copy
 import hashlib
 import json
@@ -33,8 +33,7 @@ class CaptureDispatcher:
         need(_hex(revision,64) and _hex(native_revision,64),"qualified adapter/native revisions required")
         self.client=client;self.root=_route(journal,directory=True)
         observer_root=_route(observer_journal,directory=True)
-        need(self.root!=observer_root and not self.root.is_relative_to(observer_root)
-             and not observer_root.is_relative_to(self.root),"distinct capture journals required")
+        need(not overlaps(self.root,observer_root),"distinct capture journals required")
         self.revision=revision;self.native_revision=native_revision
         self.records={};self.active=None;self.fault=None;self.sequence=0
         need(type(synthetic)is bool,"explicit synthetic evidence switch required")

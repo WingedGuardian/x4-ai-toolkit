@@ -4,7 +4,7 @@ No save/load dispatch or approval issuance. Opaque handles are local capabilitie
 for observations only; serialization cannot recreate them or authorize a write.
 """
 from __future__ import annotations
-from ._livetrees import journal_refusal
+from ._livetrees import journal_refusal, verbatim_or_device
 import copy
 import gzip
 import hashlib
@@ -47,7 +47,7 @@ def _route(path, *, directory=False):
     # A verbatim (//?/) or device (//./) spelling, with either slash, survives resolve()
     # unchanged, so the noncanonical check below cannot see it; it is never the plain
     # path, so refuse it.
-    _require(not str(path).replace(chr(92),"/").startswith(("//?/","//./")),
+    _require(not verbatim_or_device(path),
              "verbatim or device path refused; use the plain drive path")
     for p in (path,*path.parents):
         try:

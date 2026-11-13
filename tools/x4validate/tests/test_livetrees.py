@@ -249,3 +249,52 @@ def test_unavailable_roots_are_announced_on_stderr(tmp_path, monkeypatch, capsys
     # Twin: once announced, the same gap is not repeated on every call.
     T.journal_refusal(tmp_path / "j", profile=tmp_path / "X4" / "1")
     assert capsys.readouterr().err == ""
+
+
+# Delta review 2, M8: the ban is structural (AST), not a line-text heuristic.
+_JOURNAL_MODULES = ("_livepersistence.py", "_livepersistdispatch.py", "_livepersistport.py", "_liveaudio.py",
+                    "_livecapture.py", "_livecapturedispatch.py", "_liveclipport.py", "_livedialoginput.py",
+                    "_livedialogport.py", "_liveautomation.py")
+
+
+def _path_comparisons(source: str) -> list[int]:
+    import ast
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        name = node.func.attr
+        if name in ("is_relative_to", "commonpath", "commonprefix"):
+            hits.append(node.lineno)
+        elif name == "startswith":
+            # A path turned into text and prefix-compared: the receiver chain contains
+            # str(...), os.fspath(...) or .as_posix().
+            chain = node.func.value
+            while True:
+                if isinstance(chain, ast.Call):
+                    f = chain.func
+                    if (isinstance(f, ast.Name) and f.id == "str") or \
+                            (isinstance(f, ast.Attribute) and f.attr in ("fspath", "as_posix")):
+                        hits.append(node.lineno)
+                        break
+                    chain = f.value if isinstance(f, ast.Attribute) else None
+                elif isinstance(chain, ast.Attribute):
+                    chain = chain.value
+                else:
+                    break
+    return hits
+
+
+def test_journal_modules_compare_paths_only_through_livetrees():
+    root = Path(T.__file__).resolve().parent
+    hits = {name: _path_comparisons((root / name).read_text(encoding="utf-8")) for name in _JOURNAL_MODULES}
+    assert {k: v for k, v in hits.items() if v} == {}
+
+
+@pytest.mark.parametrize("source,expected", [
+    ("a.is_relative_to(b)", 1), ("os.path.commonpath([a, b])", 1), ("str(p).startswith('C:')", 1),
+    ("p.as_posix().startswith('//')", 1), ("str(p).replace('x', 'y').startswith('//')", 1),
+    ("label.startswith('x4live-')", 0), ("p.name.startswith(rid)", 0), ("r.payload.startswith('pong')", 0),
+])
+def test_path_comparison_detector_control(source, expected):
+    assert len(_path_comparisons(source)) == expected

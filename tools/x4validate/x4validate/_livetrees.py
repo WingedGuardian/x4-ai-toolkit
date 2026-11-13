@@ -50,6 +50,11 @@ def overlaps(a, b) -> bool:
     return (ib is not None and ib in _chain(ra)) or (ia is not None and ia in _chain(rb))
 
 
+def verbatim_or_device(path) -> bool:
+    """True for a //?/ (verbatim) or //./ (device) spelling, with either slash."""
+    return str(path).replace(chr(92), "/").startswith(("//?/", "//./"))
+
+
 def personal_tree(profile) -> Path:
     """The folder that holds every profile: the parent of one profile folder."""
     return Path(profile).resolve().parent
