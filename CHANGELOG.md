@@ -25,7 +25,7 @@
 - `x4live equipment` exit codes: a malformed ship ID exits 2 before anything is sent; the game answering that the ship no longer exists, was not issued in this session or is not a ship exits 1; any other refusal (an unreadable ship class, an expired or superseded capture, missing support in the helper) and any incomplete or malformed capture still exit 3.
 - `x4live --file X automation` now refuses with exit 2 instead of crashing.
 - `x4live automation` and the save/load modules refuse a journal folder inside (or containing) the game install, the reference folder or your Egosoft profiles folder.
-- Helper fixes found by reading the code (not yet seen in game): an order that fails a check after it was created can now be cancelled; reply rows left in a save from an earlier session are ignored instead of breaking the reply channel; the placement and orbit camera extensions no longer break for good on a timer tick that runs before the session is set up.
+- Helper fixes found by reading the code (not yet seen in game): an order the helper creates is removed again in the same step, and the action reported as failed ("rolled back"), when any check between creating and enabling it fails, including reading back its id; if that removal fails, the result says the order is left in the queue and at which index; reply rows left in a save from an earlier session are ignored instead of breaking the reply channel; the placement and orbit camera extensions no longer break for good on a timer tick that runs before the session is set up.
 
 ## v4.1.1 — 2026-11-10
 

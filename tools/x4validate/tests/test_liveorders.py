@@ -56,6 +56,7 @@ C.GetDefaultOrder=function(buf)
  fill(buf,{order=defaultdef,enabled=true},0);return true
 end
 C.GetOrderID=function(_,index)
+ if idfail_after_create and created_once then idfail_after_create=false;error("order id readback failed") end
  return wrongid and u("6") or (orders[index] and orders[index].id or zero)
 end
 C.GetOrderQueueCurrentIdx=function() return current or (#orders>0 and 1 or 0) end
@@ -66,6 +67,7 @@ C.CreateOrder3=function(s,name,def,override,temp)
  if createerror then error("unknown create outcome") end
  if createzero then return 0 end
  orders[#orders+1]={order=name,enabled=createdenabled or false,id=orderid}
+ created_once=true
  return #orders
 end
 C.EnableOrder=function(s,index)
@@ -235,9 +237,6 @@ def check_prepare_drift_consumed_without_calls(code):
 @pytest.mark.parametrize("code,status,callcount", [
     ("createzero=true", "NOT_CREATED", 1),
     ("createerror=true", "UNCERTAIN", 1),
-    ("createdenabled=true", "UNCERTAIN", 1),
-    ("paramerror=true", "UNCERTAIN", 2),
-    ("paramwrong=true", "UNCERTAIN", 2),
     ("enableerror=true", "UNCERTAIN", 3),
     ("enableunknown=true", "UNCERTAIN", 3),
     ("enablefalse=true", "PARTIAL_CREATED_NOT_ENABLED", 3),
@@ -332,7 +331,7 @@ def check_empty_queue_never_guesses_current_native_index():
 
 
 @pytest.mark.parametrize("code,status", [("namedpoint=true", "ORDER_OBSERVED"),
-    ("namedpoint=true;missingpoint=true", "UNCERTAIN"), ("mixedpoint=true", "UNCERTAIN")])
+    ("namedpoint=true;missingpoint=true", "ROLLED_BACK"), ("mixedpoint=true", "ROLLED_BACK")])
 def check_native_position_readback_shapes(code, status):
     r = build(code)
     p = r.globals().api.prepare("ship", "move", "target", "require_empty", r.table_from([0.1, 20, 0]))
@@ -341,7 +340,8 @@ def check_native_position_readback_shapes(code, status):
     assert p["position"][1] != 0.1 and p["position_format"] == "NATIVE_FLOAT32_XYZ"
     out = r.globals().api.execute(p["ticket"])
     assert out["status"] == status, out["reason"]
-    assert len(r.globals().calls) == (3 if status == "ORDER_OBSERVED" else 2)
+    # ORDER_OBSERVED: create, param, enable. ROLLED_BACK: create, param, remove.
+    assert len(r.globals().calls) == 3
 
 
 @pytest.mark.parametrize("fields", ["int32_t x,y,z,yaw,pitch,roll;", "double x,y,z,yaw,pitch,roll;",
@@ -415,14 +415,41 @@ def check_cancel_requires_own_bound_creation_and_exact_id():
     assert r.globals().api.prepare_cancel(p["ticket"],"18446744073709551615")["status"]=="REFUSED"
 
 
-def check_failed_execute_after_creation_leaves_its_own_order_cancellable():
-    # Review r2-7: a check failing AFTER CreateOrder3 left the created order in the queue
-    # with no way to cancel it. The id read back from our own creation index, present
-    # exactly once with our definition, is bound for cancellation before the strict checks.
+# Delta review 3, item 1: a failure between CreateOrder3 and EnableOrder rolls the still
+# disabled order back in the same execute, at the creation index, definition-checked.
+@pytest.mark.parametrize("code,calls", [
+    ("createdenabled=true", ["create", "remove"]),     # r2-7: strict check after creation
+    ("idfail_after_create=true", ["create", "remove"]),  # the id readback itself fails
+    ("paramerror=true", ["create", "param", "remove"]),
+    ("paramwrong=true", ["create", "param", "remove"]),
+])
+def check_failure_before_enable_rolls_the_order_back(code, calls):
+    r=build(code)
+    p=prepare(r);out=r.globals().api.execute(p["ticket"])
+    assert out["status"]=="ROLLED_BACK" and "rolled back" in out["reason"], out["reason"]
+    assert out["action_attempted"] is True and out["automatic_cleanup"] is True
+    assert r.eval("#orders")==0
+    assert [c[1] for c in r.globals().calls.values()]==calls
+    assert r.globals().api.execute(p["ticket"])["status"]=="ROLLED_BACK"
+
+
+@pytest.mark.parametrize("failure", ["remove_false=true", "remove_error=true", "cancel_disabled=true"])
+def check_failed_rollback_is_reported_with_the_index(failure):
+    r=build("createdenabled=true;"+failure)
+    p=prepare(r);out=r.globals().api.execute(p["ticket"])
+    assert out["status"]=="ROLLBACK_FAILED" and "left in the queue at index 1" in out["reason"], out["reason"]
+    assert r.eval("#orders")==1
+
+
+def check_rolled_back_submission_never_cancels_a_later_order():
+    # A later same-definition order at the creation index is never touched by any cancel.
     r=build("createdenabled=true")
-    p=prepare(r);result=r.globals().api.execute(p["ticket"])
-    assert result["status"]=="UNCERTAIN" and result["order_id"]
-    assert r.globals().api.prepare_cancel(p["ticket"],result["order_id"])["status"]=="PREPARED"
+    p=prepare(r);r.globals().api.execute(p["ticket"])
+    r.execute("orders[1]={order='DockAndWait',enabled=true,id=u('55')}")
+    before=len(list(r.globals().calls.values()))
+    for oid in (None,"55","18446744073709551615"):
+        assert r.globals().api.prepare_cancel(p["ticket"],oid)["status"]=="REFUSED"
+    assert len(list(r.globals().calls.values()))==before and r.eval("#orders")==1
 
 
 @pytest.mark.parametrize("code",[
@@ -475,13 +502,13 @@ def check_cancel_reentry_and_second_ticket_never_repeat_mutation():
     assert len(r.globals().calls)==4
 
 
-def check_cancel_can_remove_bound_partial_disabled_creation():
+def check_partial_disabled_creation_is_rolled_back_not_left_for_cancel():
+    # Delta review 3: a failure before EnableOrder rolls back in the same execute, so no
+    # partial disabled creation is left for a later cancel.
     r=build("paramerror=true");p=prepare(r)
     result=r.globals().api.execute(p["ticket"])
-    assert result["status"]=="UNCERTAIN"
-    c=r.globals().api.prepare_cancel(p["ticket"],result["order_id"])
-    assert c["status"]=="PREPARED",c["reason"]
-    assert r.globals().api.execute_cancel(c["ticket"])["status"]=="ORDER_REMOVAL_OBSERVED"
+    assert result["status"]=="ROLLED_BACK" and r.eval("#orders")==0
+    assert r.globals().api.prepare_cancel(p["ticket"],"18446744073709551615")["status"]=="REFUSED"
 
 
 def check_cancel_prepared_evidence_is_immutable():

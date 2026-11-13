@@ -293,6 +293,31 @@ return function(d)
         end
         assert(matches==1,"missing or duplicate destination parameter")
     end
+    -- The order definition at one queue index, read without the id calls (an id readback
+    -- failure is one of the things a rollback must survive). Returns def, queue count.
+    local function definition_at(ship,index)
+        local n=uint(C.GetNumOrders(ship),64)
+        if n==0 then return nil,0 end
+        local buf=ffi.new("Order3[?]",n)
+        assert(uint(C.GetOrders3(buf,n,ship),64)==n,"order count drift")
+        for i=0,n-1 do
+            local rw=row(buf[i],false)
+            if rw.queueidx==index then return rw.orderdef,n end
+        end
+        return nil,n
+    end
+    local function roll_back(r,index,why)
+        r.created_bound=false;r.order_id=nil;r.rollback_reason=tostring(why)
+        local done,err=pcall(function()
+            local def,n=definition_at(r.ship,index)
+            assert(def==r.order,"the order at the creation index is not the requested definition")
+            assert(C.RemoveOrder(r.ship,index,false,true)==true,"native removal unavailable")
+            assert(C.RemoveOrder(r.ship,index,false,false)==true,"native removal refused")
+            local _,after=definition_at(r.ship,index)
+            assert(after==n-1,"the queue did not shrink by one")
+        end)
+        if done then r.status="ROLLED_BACK" else r.status="ROLLBACK_FAILED";r.rollback_error=tostring(err) end
+    end
     function api.execute(ticket)
         local r=records[ticket]
         if not r then return refuse("unknown ticket") end
@@ -311,28 +336,27 @@ return function(d)
             local index=uint(C.CreateOrder3(r.ship,r.order,false,false,false),64)
             if index==0 then r.status="NOT_CREATED";return end
             r.index=index
-            r.order_id=id(C.GetOrderID(r.ship,index))
-            local created=queue(r.ship)
-            -- The id read back from OUR CreateOrder3 index, present exactly once with our
-            -- definition, is our creation: bind it for cancellation BEFORE the stricter
-            -- checks below, so a failure there cannot leave it in the queue uncancellable.
-            local own=0
-            for _,v in ipairs(created.rows) do
-                if v.id==r.order_id and v.orderdef==r.order then own=own+1 end
-            end
-            if own==1 then r.created_bound=true end
-            assert(created.count==1 and created.rows[1].queueidx==index and
-                created.rows[1].id==r.order_id and created.rows[1].orderdef==r.order and
-                created.rows[1].enabled==false and equal(created.default,r.before.default),
-                "created queue is not the sole disabled requested order")
-            -- (created_bound set above; this stricter proof gates further dispatch only)
-            local dest=g.ConvertStringToLuaID(tostring(r.target))
-            if r.point then dest={dest,{r.point[1],r.point[2],r.point[3]}} end
-            g.SetOrderParam(r.ship,index,1,nil,dest)
-            param_readback(r,index)
-            assert(eligibility(r.ship,r.order,r.target)==r.pilot and d.epoch()==r.epoch,
-                "eligibility changed after creation")
-            assert(id(C.GetOrderID(r.ship,index))==r.order_id,"created order rebound")
+            -- Everything between creation and EnableOrder runs in this same call, while the
+            -- order is still disabled. If any of it fails (the id readback included), the
+            -- order is rolled back right here, at its creation index, definition-checked:
+            -- nothing else can have changed the queue in between. No deferred cleanup.
+            local checked,why=pcall(function()
+                r.order_id=id(C.GetOrderID(r.ship,index))
+                local created=queue(r.ship)
+                assert(created.count==1 and created.rows[1].queueidx==index and
+                    created.rows[1].id==r.order_id and created.rows[1].orderdef==r.order and
+                    created.rows[1].enabled==false and equal(created.default,r.before.default),
+                    "created queue is not the sole disabled requested order")
+                local dest=g.ConvertStringToLuaID(tostring(r.target))
+                if r.point then dest={dest,{r.point[1],r.point[2],r.point[3]}} end
+                g.SetOrderParam(r.ship,index,1,nil,dest)
+                param_readback(r,index)
+                assert(eligibility(r.ship,r.order,r.target)==r.pilot and d.epoch()==r.epoch,
+                    "eligibility changed after creation")
+                assert(id(C.GetOrderID(r.ship,index))==r.order_id,"created order rebound")
+            end)
+            if not checked then roll_back(r,index,why);return end
+            r.created_bound=true -- every creation check passed: cancellable by its exact id
             local enabled=C.EnableOrder(r.ship,index)
             assert(type(enabled)=="boolean","unknown enable result")
             r.enable_return=enabled
@@ -348,10 +372,18 @@ return function(d)
             r.status=enabled and found.enabled and "ORDER_OBSERVED" or "PARTIAL_CREATED_NOT_ENABLED"
         end)
         if not ok then r.status=r.attempted and "UNCERTAIN" or "REFUSED" end
-        return {status=r.status,reason=ok and "native state observed; arrival not proved" or tostring(err),
+        local reason=ok and "native state observed; arrival not proved" or tostring(err)
+        if r.status=="ROLLED_BACK" then
+            reason="a creation check failed, so the created order was rolled back: "..r.rollback_reason
+        elseif r.status=="ROLLBACK_FAILED" then
+            reason="a creation check failed and the rollback failed; the order is left in the queue at index "
+                ..tostring(r.index)..": "..r.rollback_reason.."; rollback: "..r.rollback_error
+        end
+        return {status=r.status,reason=reason,
             ticket=ticket,action_attempted=r.attempted==true,queue_index=r.index,order_id=r.order_id,
             enable_return=r.enable_return,after=r.after,arrival_verified=false,
-            ui_route_verified=false,automatic_retry=false,automatic_cleanup=false}
+            ui_route_verified=false,automatic_retry=false,
+            automatic_cleanup=r.status=="ROLLED_BACK" or r.status=="ROLLBACK_FAILED"}
     end
     -- Exact cancellation is restricted to a proven creation in this adapter instance.
     -- Native analogue: menu_map.lua5507-5511 checkonly then RemoveOrder(false,false).

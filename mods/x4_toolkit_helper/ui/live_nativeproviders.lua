@@ -197,6 +197,11 @@ return function(d)
             o.native_action_attempted="UNKNOWN"
             if type(native.action_attempted)=="boolean" then o.native_action_attempted=native.action_attempted end
             if type(native.native_pause_possible)=="boolean" then o.native_pause_possible=native.native_pause_possible end
+            -- A rolled-back order creation says why, and where an unremoved order is left.
+            if (native.status=="ROLLED_BACK" or native.status=="ROLLBACK_FAILED") and type(native.reason)=="string" then
+                o.native_reason=native.reason:sub(1,512)
+                if type(native.queue_index)=="number" then o.queue_index=native.queue_index end
+            end
             for _,k in ipairs({"order_id","ship","container","mode"}) do
                 if type(native[k])=="string" and #native[k]<=128 then o[k]=native[k] end
             end
@@ -386,7 +391,9 @@ return function(d)
                 elseif result.status=="DISPATCHED_UNVERIFIED" or result.status=="ORDER_OBSERVED"
                     or result.status=="PARTIAL_CREATED_NOT_ENABLED" or result.status=="REQUESTED"
                     or result.status=="ORDER_REMOVAL_OBSERVED" then state="running"
-                elseif result.status=="NOT_CREATED" or result.status=="NOT_REMOVED" or result.status=="NATIVE_REFUSED" then state="failed" end
+                elseif result.status=="NOT_CREATED" or result.status=="NOT_REMOVED" or result.status=="NATIVE_REFUSED"
+                    or result.status=="ROLLED_BACK" then state="failed" end
+                -- ROLLBACK_FAILED stays "unknown": the order is left in the queue (reported).
                 local response=output(r,state,"native dispatch/readback; reconcile without repeating execute",result)
                 r.dispatch_readback_qualified=true
                 return response

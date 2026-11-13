@@ -320,6 +320,42 @@ def test_actual_order_submission_and_owned_cancel(runtime):
     assert runtime.eval("#orders") == 0
 
 
+def _actual_orders(runtime, code):
+    runtime.execute(constant("test_liveorders.py", "SETUP"))
+    runtime.globals().order_factory = runtime.execute(source("orders"))
+    runtime.execute("deps.orders=order_factory(d);setup();" + code + """
+        prepare('order.submit',{kind='dock',ship='ship',target='target',policy='require_empty'})""")
+
+
+def test_actual_failed_readback_rolls_back_through_the_provider(runtime):
+    # Delta review 3, item 1, through the provider with the actual orders adapter.
+    _actual_orders(runtime, "idfail_after_create=true")
+    out = runtime.eval("execute()")
+    assert out.status == "failed" and out.observations.native_status == "ROLLED_BACK"
+    assert "rolled back" in out.observations.native_reason
+    assert runtime.eval("#orders") == 0
+    assert runtime.eval("status().status") == "failed"
+
+
+def test_actual_failed_rollback_is_reported_not_completed(runtime):
+    _actual_orders(runtime, "createdenabled=true;remove_false=true")
+    out = runtime.eval("execute()")
+    assert out.status == "unknown" and out.observations.native_status == "ROLLBACK_FAILED"
+    assert "left in the queue at index 1" in out.observations.native_reason
+    runtime.execute("time=11")
+    assert runtime.eval("status().status") != "completed"
+    assert runtime.eval("#orders") == 1
+
+
+def test_actual_rolled_back_submission_cannot_be_cancelled_later(runtime):
+    _actual_orders(runtime, "createdenabled=true")
+    assert runtime.eval("execute().status") == "failed"
+    runtime.execute("orders[1]={order='DockAndWait',enabled=true,id=u('55')}")
+    r = runtime.execute("return prepare('order.cancel',{submission=string.rep('1',32),order_id='55'},'2')")
+    assert r.status in ("refused", "unknown")
+    assert runtime.eval("#orders") == 1
+
+
 def actual_menu(runtime, fixture):
     runtime.execute("ffi=require('ffi')")
     runtime.globals().decl = constant('test_livemenu.py', 'DECL')
