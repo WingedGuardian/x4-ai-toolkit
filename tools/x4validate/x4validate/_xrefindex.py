@@ -159,7 +159,8 @@ def _op_context(op: etree._Element) -> str:
 
     * The content's container is the selected node -- or, for a `replace` or a
       `pos="before"/"after"` insert, the selected node's PARENT, so the final step is
-      dropped (whatever its predicates: it is the node being replaced or flanked).
+      dropped (whatever its predicates: it is the node being replaced or flanked) --
+      unless that node is reached through `//`, which leaves its parent unknown: "".
     * Of the container path, the LAST `cue` step must be exactly `cue[@name='literal']`
       (either quote style); an `or`, a position, `not(@name)`, a function or a second
       predicate gives "".
@@ -172,6 +173,10 @@ def _op_context(op: etree._Element) -> str:
     if not steps:
         return ""
     if op.tag == "replace" or op.get("pos") in ("before", "after"):
+        # The content lands in the PARENT of the final node. Reached through `//`,
+        # that parent may sit in any nested (possibly unnamed) cue: not known.
+        if steps[-1].descendant:
+            return ""
         steps = steps[:-1]
     cue_at = max((i for i, s in enumerate(steps) if s.test == "cue"), default=None)
     if cue_at is None:
