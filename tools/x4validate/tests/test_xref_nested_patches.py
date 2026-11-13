@@ -330,3 +330,29 @@ def test_mixed_case_nested_patch_is_indexed(tmp_path, hermetic):
                        '<diff><add sel="//cues"><cue name="CasedCue"/></add></diff>'})
     assert ("moda", "Extensions/OwnerB/MD/patch.xml", "CasedCue") in _cuedefs(
         _index(tmp_path, ext))
+
+
+# --- a mod folder that cannot be LISTED is a non-answer, not an empty mod (review M-4) --
+
+def test_an_unlistable_mod_folder_is_recorded_unreadable(tmp_path, monkeypatch):
+    mod = tmp_path / "moda"
+    (mod / "md").mkdir(parents=True)
+    (mod / "md" / "x.xml").write_text(_md("X", "C"), encoding="utf-8")
+    real = Path.iterdir
+
+    def deny(self):
+        if self == mod:
+            raise PermissionError(13, "Access is denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "iterdir", deny)
+    unreadable: list = []
+    got = list(_scan.iter_mod_xml(mod, _scan.under_nested("md/", "aiscripts/"), unreadable))
+    assert got == []
+    assert len(unreadable) == 1 and "could not list" in unreadable[0].why
+
+
+def test_twin_an_absent_mod_folder_records_nothing(tmp_path):
+    unreadable: list = []
+    assert list(_scan.iter_mod_xml(tmp_path / "missing", _scan.under("md/"), unreadable)) == []
+    assert unreadable == []
