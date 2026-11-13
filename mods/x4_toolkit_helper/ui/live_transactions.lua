@@ -1,5 +1,5 @@
 -- Read-only native build queue observation. No registration, transport, or writes.
--- Native contract/provenance and runtime limits: docs/live-transactions-qualification.md.
+-- Native contract/provenance and runtime limits: its live-transactions-qualification development record (in the toolkit's git repository, not in release downloads).
 local M = {}
 local MAX_PHASE = 32
 local MAX_TEXT = 256

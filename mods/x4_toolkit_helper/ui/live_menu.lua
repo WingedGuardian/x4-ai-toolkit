@@ -1,5 +1,5 @@
 -- Actual registered ShipConfigurationMenu adapter; no registration or implicit actions.
--- Native provenance and qualification limits: docs/live-menu-qualification.md.
+-- Native provenance and qualification limits: its live-menu-qualification development record (in the toolkit's git repository, not in release downloads).
 local function new(d)
     for _, k in ipairs({"menus", "cell_id", "epoch", "now", "resolve_issued",
         "open_menu", "convert_params", "convert_id", "widget_state", "set_dropdown_current"}) do

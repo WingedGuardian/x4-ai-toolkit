@@ -14,7 +14,10 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 DROPPED = ("docs/superpowers/plans/", "docs/handoffs/", "docs/SUBAGENT-BRIEF.md",
            "docs/REVIEW-SCOPE.md", "docs/AUDIT-framework-2026-10-01.md", "docs/audits/",
-           "docs/superpowers/specs/", "tools/x4validate/docs/superpowers/specs/")
+           "docs/superpowers/specs/", "tools/x4validate/docs/superpowers/specs/",
+           # x4live development and qualification records (2026-11-13): public in the
+           # repository, not in the release download.
+           "docs/live-dev/")
 KEPT = ("docs/superpowers/measurements/",)
 
 
@@ -105,3 +108,26 @@ def test_archive_matches_the_document_policy_and_retains_repair_docs():
     measured = [p for p in tracked if p.startswith(KEPT)]
     assert measured and all(p in shipped for p in measured)
     assert {"README.md", "ADAPTING.md", "RETENTION.md"} <= shipped
+
+
+# 2026-11-13: shipped source files must not point a user at a file the release drops.
+# Markdown links are covered above; this covers path mentions in code and config that
+# ships (comments and help text included). Prose mentions in .md files are allowed
+# (the CHANGELOG says where the records moved).
+_SOURCE_SUFFIXES = (".py", ".lua", ".sh", ".xml", ".json", ".toml", ".ps1", ".txt")
+
+
+def test_no_shipped_source_names_a_dropped_path():
+    tracked = [p for p in _tracked() if p.endswith(_SOURCE_SUFFIXES) or "/" not in p and "." not in p]
+    ignored = export_ignored(tracked)
+    this = Path(__file__).resolve().relative_to(REPO).as_posix()
+    hits = []
+    for p in tracked:
+        if ignored[p] or p == this:
+            continue
+        text = (REPO / p).read_text(encoding="utf-8", errors="replace")
+        # Scoped to the x4live records: older dropped papers are named on purpose by the
+        # tests that guard them (test_adapting_doc, test_verify_mod_pack, ...).
+        if "docs/live-dev/" in text:
+            hits.append(f"{p} names docs/live-dev/")
+    assert hits == [], hits

@@ -1,5 +1,5 @@
 -- Read-only player state from native trader APIs; no grant/payment/learn calls.
--- Source and limits: docs/live-playerstate-qualification.md.
+-- Source and limits: its live-playerstate-qualification development record (in the toolkit's git repository, not in release downloads).
 return function(d)
     local ffi,C,g=d.ffi,d.C,d.globals
     assert(ffi and C and type(g)=="table","native state dependencies")

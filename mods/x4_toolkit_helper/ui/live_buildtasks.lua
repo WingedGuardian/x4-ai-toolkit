@@ -1,5 +1,5 @@
 -- Read-only native build-task census. No submission, cancellation or queue edits.
--- See docs/live-buildtasks-qualification.md for scope and runtime limits.
+-- See its live-buildtasks-qualification development record (in the toolkit's git repository, not in release downloads) for scope and runtime limits.
 return function(d)
     local ffi,C,g=d.ffi,d.C,d.globals
     assert(ffi and C and type(g)=="table","native dependencies required")

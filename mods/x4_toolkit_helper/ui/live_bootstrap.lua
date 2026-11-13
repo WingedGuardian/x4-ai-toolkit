@@ -1,6 +1,6 @@
 -- Fixed public bootstrap. Bundle generation injects these own-code factories;
 -- there is no dynamic module name or arbitrary native/script dispatch.
--- Native wrapper evidence is listed in docs/live-bootstrap-qualification.md.
+-- Native wrapper evidence is listed in its live-bootstrap-qualification development record (in the toolkit's git repository, not in release downloads).
 local singleton
 return function(deps)
     local function hex(v,n)

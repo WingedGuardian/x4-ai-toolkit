@@ -85,6 +85,9 @@ docs/AUDIT-framework-2026-10-01.md export-ignore
 docs/audits/ export-ignore
 docs/superpowers/specs/ export-ignore
 tools/x4validate/docs/superpowers/specs/ export-ignore
+# x4live development and qualification records (2026-11-13): public in the repository,
+# not product documentation; the user guide is docs/x4live.md.
+docs/live-dev/ export-ignore
 
 # Maintainer-only: the isolated tool-audit harness (its README: "a local audit instrument,
 # not a shipped CLI"). Tracked for maintainers; excluded from the bundle (v4.0.0 review R5-12).

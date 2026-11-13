@@ -1,5 +1,5 @@
 -- Native OptionsMenu only. No world-session substitute or automatic NewGame call.
--- Provenance and unimplemented host authorization: docs/live-startmenu-qualification.md.
+-- Provenance and unimplemented host authorization: its live-startmenu-qualification development record (in the toolkit's git repository, not in release downloads).
 local function new(d)
     for _,k in ipairs({"menus","now","ui_binding","is_startmenu","cell_id","button_active",
         "valid_widget","current_row","select_row","open_menu","read_text","authorize_start"}) do

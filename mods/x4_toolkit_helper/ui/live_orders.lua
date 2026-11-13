@@ -1,5 +1,5 @@
 -- Bounded native owned-ship orders. No transport, registration or implicit calls.
--- Source and runtime limits: docs/live-orders-qualification.md.
+-- Source and runtime limits: its live-orders-qualification development record (in the toolkit's git repository, not in release downloads).
 return function(d)
     local ffi,C,g=d.ffi,d.C,d.globals
     assert(ffi and C and type(g)=="table","native order dependencies")
