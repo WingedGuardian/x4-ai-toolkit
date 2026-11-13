@@ -24,12 +24,17 @@ from . import _paths
 
 
 def _identity(path):
-    """(st_dev, st_ino) of an existing path; None when absent or not identifiable
-    (an inode number of 0 does not identify anything)."""
+    """(st_dev, st_ino) of an existing path; None when it does not exist or the file
+    system has no inode numbers (0 identifies nothing). Any other failure to read it
+    raises: an unreadable identity is not evidence of a different folder."""
     try:
         st = os.stat(path)
-    except (OSError, ValueError):
+    except (FileNotFoundError, NotADirectoryError):
+        # silent-ok: an absent path cannot contain or be the other folder, so there is no
+        # identity to compare; the lexical comparison in overlaps() still applies.
         return None
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read the identity of {path}: {exc}") from exc
     return (st.st_dev, st.st_ino) if st.st_ino else None
 
 

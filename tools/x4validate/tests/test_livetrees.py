@@ -311,3 +311,31 @@ def test_journal_modules_compare_paths_only_through_livetrees():
 ])
 def test_path_comparison_detector_control(source, expected):
     assert len(_path_comparisons(source)) == expected
+
+
+# Delta review 4, item 0: an identity that cannot be read is not "a different folder".
+def test_unreadable_identity_refuses_instead_of_passing(tmp_path, monkeypatch):
+    game = tmp_path / "Game"
+    game.mkdir()
+    monkeypatch.setattr(_paths, "game_root", lambda: game)
+    monkeypatch.setattr(_paths, "reference", lambda: None)
+    real = _os.stat
+
+    def stat(path, *a, **k):
+        if Path(path).resolve() == game.resolve():
+            raise PermissionError(13, "denied", str(path))
+        return real(path, *a, **k)
+    monkeypatch.setattr(T.os, "stat", stat)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    with pytest.raises(ValueError, match="cannot read the identity"):
+        T.journal_refusal(elsewhere, profile=tmp_path / "X4" / "1")
+
+
+def test_absent_protected_folder_is_simply_not_matched(tmp_path, monkeypatch):
+    # Twin: a configured folder that does not exist cannot contain the journal.
+    monkeypatch.setattr(_paths, "game_root", lambda: tmp_path / "no-such-game")
+    monkeypatch.setattr(_paths, "reference", lambda: None)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    assert T.journal_refusal(elsewhere, profile=tmp_path / "X4" / "1") is None
