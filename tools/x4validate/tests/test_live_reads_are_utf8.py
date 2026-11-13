@@ -14,5 +14,6 @@ def test_no_bare_read_text_in_live_tests():
     files = sorted(HERE.glob("test_live*.py")) + [HERE / "test_xrcat_maxpath.py", HERE / "test_modlua_rearm.py"]
     assert len(files) > 100, "population check: the live test files moved"
     hits = [f"{f.name}:{n}" for f in files if f.name != Path(__file__).name
-            for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1) if BARE.search(line)]
+            for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1)
+            if BARE.search(re.sub(r"`[^`]*`", "", line))]  # prose in backticks quotes code
     assert hits == []
