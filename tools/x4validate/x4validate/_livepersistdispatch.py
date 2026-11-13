@@ -4,6 +4,7 @@ No CLI authorization flags, process launches, native calls on import, or save wr
 The native port and policy/guard callbacks are trusted integration dependencies.
 """
 from __future__ import annotations
+import os
 from ._livetrees import journal_refusal
 import copy
 import hashlib
@@ -93,8 +94,11 @@ class PersistenceAuthority:
                  action.get("operations")==["write" if context["operation"]=="SAVE" else "read"]*len(action["paths"]),
                  "exact guard action required")
             for path in action["paths"]:
-                need(isinstance(path,str) and Path(path).is_absolute() and
-                     Path(path).parent==Path(context["save_directory"]),"guard scope outside named save directory")
+                # Lexically, Path("<save>/..").parent is <save>: refuse any ".." and compare
+                # the normalised path, so a scope can only name a file directly in <save>.
+                need(isinstance(path,str) and Path(path).is_absolute() and ".." not in Path(path).parts and
+                     Path(os.path.normpath(path)).parent==Path(os.path.normpath(context["save_directory"])),
+                     "guard scope outside named save directory")
             guard=guard_reply(self.check(copy.deepcopy(action)))
         else:
             need(mode=="EXPLICIT_NAMED_PROFILE_NATIVE_EFFECT_EXCEPTION",

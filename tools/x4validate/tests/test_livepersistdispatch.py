@@ -146,6 +146,19 @@ def check_exact_guard_callback_route_and_advisory(tmp):
     evidence=json.loads(next(c["a"].journal.glob("*-issued.json")).read_text(encoding="utf-8"))
     assert evidence["guard_qualified"] is True
 
+@pytest.mark.parametrize("spelling",["save/..","save/../save_001.xml.gz","save/sub/../../save_001.xml.gz"])
+def check_guard_scope_outside_the_save_folder_refuses(tmp,spelling):
+    # Delta review 2, M6: Path("<save>/..").parent == <save> lexically, so a guard scope
+    # naming the PARENT of the save folder passed as "inside the named save directory".
+    c=setup(tmp);t=c["d"].reserve_save(SID,"save_001");old=c["a"].decide;checked=[]
+    c["a"].decide=lambda x:{**old(x),"mode":"CANONICAL_GUARD"}
+    path=str(c["save"])+spelling[len("save"):]
+    c["a"].effects=lambda x:{"status":"EXACT_NATIVE_EFFECTS_SOURCE_QUALIFIED","source":"SYNTHETIC ONLY",
+        "action":{"api_version":1,"surface":"files","paths":[path],"operations":["write"]}}
+    c["a"].check=lambda action:(checked.append(action) or good_guard())
+    with pytest.raises(PersistenceUnavailable,match="guard scope"):c["d"].execute(t)
+    assert checked==[] and c["rt"].globals().nc("save")==0
+
 @pytest.mark.parametrize("mutation",["peer","save_file","native_rows","journal"])
 def check_drift_inside_policy_refuses_before_native(tmp,mutation):
     c=setup(tmp);t=c["d"].reserve_save(SID,"save_001");old=c["a"].decide
