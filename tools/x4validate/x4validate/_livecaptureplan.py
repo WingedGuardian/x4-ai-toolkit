@@ -24,6 +24,9 @@ def _count(v,name,maximum=2**53-1):
     return v
 
 
+_TOOLKIT_ROOT=Path(__file__).resolve().parents[3]
+
+
 def _receipts(values,profile):
     out={}
     if values is None:return out
@@ -38,7 +41,11 @@ def _receipts(values,profile):
         if r.get('capacity_profile')!=profile:raise ValueError('receipt capacity profile mismatch')
         if not isinstance(r.get('source_sha256'),dict) or not r['source_sha256']:raise ValueError('receipt source pins missing')
         for path,digest in r['source_sha256'].items():
-            if hashlib.sha256(Path(path).read_bytes()).hexdigest()!=digest:raise ValueError('receipt source changed')
+            # Receipts name their sources repo-relative (older ones absolute); a relative
+            # key is read from the toolkit checkout this module belongs to.
+            source=Path(path) if Path(path).is_absolute() else _TOOLKIT_ROOT/path
+            if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest()!=digest:
+                raise ValueError('receipt source changed or missing: '+str(path))
         expected={'capture':('capture_history','capture_calls'),'orbit':('orbit_history','orbit_calls'),
                   'roomentry':('roomentry_records','roomentry_calls')}[kind]
         if r.get('provider_limits')!={'records':profile[expected[0]],'calls':profile[expected[1]]}:
