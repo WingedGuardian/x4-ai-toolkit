@@ -31,6 +31,8 @@ SBX_TMP="$(mktemp -d "$_SBX/hooks.XXXXXX")"
 # Test writes must never follow a caller's configured backup store. Individual
 # backup-failure probes below override this only with their own fixture paths.
 unset X4_BACKUPS
+# A caller's staging folders (X4_STAGING_DIRS) would turn game-install write probes into allows.
+unset X4_STAGING_DIRS
 # The sandbox itself is removed too, not just its child. Leaving it behind made the
 # hygiene check at the end of this file report the suite's OWN sandbox as a stray.
 trap 'rm -rf "$SBX_TMP"; rmdir "$_SBX" 2>/dev/null' EXIT
