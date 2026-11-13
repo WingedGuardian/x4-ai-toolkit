@@ -93,6 +93,60 @@ def test_a_failing_diff_is_a_refusal_not_an_empty_list(checkout, stepless, capsy
     assert ran == []
 
 
+INSTALL = "tools/x4validate/tests/test_install_over_existing.py"
+OTHER = "tools/x4validate/tests/test_other.py"
+
+
+@pytest.fixture
+def selecting(checkout, monkeypatch):
+    """The gate pointed at a checkout holding a stand-in for the installer test (which writes a fixture CHANGELOG.md
+    and runs install.sh) and another test that names CHANGELOG.md."""
+    gate = _module()
+    monkeypatch.setattr(gate, "REPO", checkout)
+    monkeypatch.setattr(gate, "PKG", checkout / "tools" / "x4validate")
+    (checkout / INSTALL).write_text("(dest / 'CHANGELOG.md').write_text('x')\nrun('install.sh')\n", encoding="utf-8")
+    (checkout / OTHER).write_text("assert open('CHANGELOG.md').read()\n", encoding="utf-8")
+    return gate
+
+
+def test_RED_a_fixture_name_does_not_select_the_installer_tests_and_the_run_says_so(selecting, capsys):
+    """MEASURED 2026-11-11: the installer tests were 2,209 s of the changed-file step's 2,575 s, selected on every push
+    by the name of a fixture they write. Left out for that name alone, and never quietly."""
+    assert selecting.referencing_tests(["CHANGELOG.md"]) == [OTHER]
+    out = capsys.readouterr().out
+    assert "not selected: " + INSTALL + " names CHANGELOG.md only as" in out
+    # ...and on the path a real gate run takes (main calls tests_for, which reports what it left out itself):
+    # 4.1.2 release review, MEASURED: with tests_for's own report removed, the four tests here stayed green.
+    assert selecting.tests_for(["CHANGELOG.md"]) == [OTHER]
+    assert capsys.readouterr().out.count("not selected: " + INSTALL) == 1
+
+
+def test_TWIN_any_other_changed_name_still_selects_them(selecting, capsys):
+    assert selecting.referencing_tests(["install.sh"]) == [INSTALL]
+    assert selecting.referencing_tests(["docs/x.md", "CHANGELOG.md", "install.sh"]) == [INSTALL, OTHER]
+    assert "not selected" not in capsys.readouterr().out
+
+
+def test_TWIN_the_exemption_is_one_pair_not_a_name_or_a_file(selecting, capsys):
+    # Another test naming CHANGELOG.md is still selected (above); the installer test's own change still runs it.
+    assert selecting.tests_for([INSTALL]) == [INSTALL]
+    assert selecting.tests_for(["CHANGELOG.md", INSTALL]) == [INSTALL, OTHER]
+    assert "not selected" not in capsys.readouterr().out
+
+
+def test_every_exempted_pair_still_describes_the_real_test():
+    """A stale row excuses nothing it should: each exempted test exists and still spells that name."""
+    gate = _module()
+    assert gate.NOT_A_REFERENCE, "the table is empty: delete this test with it"
+    for (rel, name), why in gate.NOT_A_REFERENCE.items():
+        assert (REPO / rel).is_file(), rel
+        assert name in (REPO / rel).read_text(encoding="utf-8", errors="replace"), (rel, name)
+        assert why.strip()
+    # ...and the installer row is a fixture write, not a read of the repository's file: the name appears once.
+    text = (REPO / INSTALL).read_text(encoding="utf-8", errors="replace")
+    assert text.count("CHANGELOG.md") == 1 and '(dest / "CHANGELOG.md").write_text(' in text
+
+
 LOUD = "import sys\nprint('FIRST LINE')\nfor i in range(100): print('line', i)\nsys.exit(1)\n"
 
 

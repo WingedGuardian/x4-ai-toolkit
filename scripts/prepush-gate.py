@@ -84,12 +84,15 @@ def changed_files(base):
     return [l.replace("\\", "/") for l in r.stdout.splitlines() if l.strip()]
 
 
-def referencing_tests(changed):
+def referencing_tests(changed, left_out=None):
     """Every test file whose TEXT names a changed file's basename.
 
     Stem matching alone missed the Skyrim toolkit's CI run 41254615914 (3 deterministic reds on all 8 legs): the
     push changed workflow and build files, and the tests asserting on them by name shared no stem with them. A test
     that spells the changed file is the one that goes red on it, so select by reference as well.
+
+    A test left out under NOT_A_REFERENCE is appended to `left_out` as (test, names) for the caller to report, or
+    printed here when no list is given.
     """
     names = {Path(p).name for p in changed if not re.fullmatch(r"tools/x4validate/tests/test_[^/]+\.py", p)}
     # A test can also reach a workflow through its folder (a glob of .github/workflows), naming no file: this missed
@@ -104,9 +107,37 @@ def referencing_tests(changed):
             text = f.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if any(n in text for n in names):
-            out.append(f.relative_to(REPO).as_posix())
+        rel = f.relative_to(REPO).as_posix()
+        named = sorted(n for n in names if n in text)
+        fixture_only = [n for n in named if (rel, n) in NOT_A_REFERENCE]
+        if len(named) > len(fixture_only):
+            out.append(rel)
+        elif fixture_only:
+            if left_out is None:
+                print(_left_out_line(rel, fixture_only))
+            else:
+                left_out.append((rel, fixture_only))
     return out
+
+
+def _left_out_line(rel, names):
+    """A narrowing step says so: never dropped quietly."""
+    return "   not selected: {} names {} only as {}".format(rel, ", ".join(names), NOT_A_REFERENCE[(rel, names[0])])
+
+
+#: (test file, changed file's name) -> why that test's text spelling the name is NOT a reference to the repository's
+#: file. referencing_tests selects by text, so a test that writes a FIXTURE with a common name is selected by every
+#: push that touches the real one. Only a pair listed here is left out, only when no other changed name is in the
+#: test, and the run says so. Full CI still runs the file. Each row needs a measurement, and the test must still be
+#: selected by the files it does depend on.
+#:   MEASURED 2026-11-11 (two gate runs, 3,245 s and 3,041 s; the changed-file step 2,660 s and 2,584 s): timed per
+#:   file, test_install_over_existing.py was 2,209 s of 2,575 s (86%), selected by ONE match: line 3337 writes a
+#:   fixture CHANGELOG.md into a scratch install. Nearly every push changes CHANGELOG.md. The installers read only the
+#:   DESTINATION's CHANGELOG (the previous install's version heading), which that test supplies itself.
+NOT_A_REFERENCE = {
+    ("tools/x4validate/tests/test_install_over_existing.py", "CHANGELOG.md"):
+        "the name of a fixture it writes into a scratch install (it never reads the repository's)",
+}
 
 
 def tests_for(changed):
@@ -120,11 +151,15 @@ def tests_for(changed):
             stem = Path(p).stem.replace("-", "_")
             want.extend(Path(f).relative_to(REPO).as_posix()
                         for f in glob.glob(str(PKG / "tests" / ("test_*" + stem + "*.py"))))
-    want.extend(referencing_tests(changed))
+    left_out = []
+    want.extend(referencing_tests(changed, left_out))
     out = []
     for t in want:
         if t not in out and (REPO / t).is_file():
             out.append(t)
+    for rel, names in left_out:
+        if rel not in out:              # selected another way (its own change, its stem): nothing was left out
+            print(_left_out_line(rel, names))
     return out
 
 

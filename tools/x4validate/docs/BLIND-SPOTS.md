@@ -182,11 +182,11 @@ memory or from another session -- a remembered id was stale within a day here.
 | F77 | `--registry` was honoured by every read and ignored by the one path that WRITES | **DEFECT** · ✅ **FIXED** | `x4modlist --registry <somewhere> snapshot` resolved the override for every read and then wrote its output into the DEFAULT registry's folder anyway: `_changed.snapshots_dir()` called `_registry.require(DEFAULT_REGISTRY, ...)` unconditionally, while every neighbouring command threads `args.registry`. FOUND 2026-08-29 by adding a `snapshot` cell to `gates/qa_sweep.py` — the sweep points every `x4modlist` cell at a THROWAWAY copy precisely so a gate cannot mutate the state it inspects, and this one wrote a real snapshot into `dev/_registry/snapshots/`. ⚠ The direction is what makes it dangerous: it does not fail, it writes to the wrong place and reports success. A documented override that ONE path ignores is worse than no override, because everything else honouring it is what earns the trust | ✅ **FIXED 2026-08-29** — `snapshots_dir(registry=None)`, threaded from `args.registry` through `take_snapshot` and `cmd_snapshot`, normalised via `_registry._registry_file` so a directory and a registry FILE both work. The READ side was fixed with it: `load_baseline("latest", registry)` looked in the same wrong place, and fixing only the write would have left `--registry X changed --since latest` writing to X and reading from the default — a half-taught lookup chain is a subtler bug than the one it replaces. 5 tests including a falsification twin (no-argument call must NOT return the test directory, or the other assertions would pass for a function that ignored its argument); 3 pre-existing monkeypatch stubs updated for the new signature, which is how the suite proved the change reached them |
 | F78 | three PUBLISHED surfaces sat outside every port check's population | **DEFECT** · ✅ **FIXED** | `scripts/verify-port.py` proves the dev package matches the mirror, and its population is `git ls-files` of ONE repo scoped to `tools/x4validate`. **`.claude/hooks/` and `.claude/skills/` live in the GAME-ROOT `.claude` directory, which is not a git repository at all, and `tools/basex` is its OWN repository** — so all three ship and none was ever compared. MEASURED 2026-08-29: the shipped `protect-bash.sh` was **3,445 bytes** against **17,722** in daily use, its regression suite had **never shipped at all**, six skills were behind the ones in use, `tools/basex` had **6 of 19 files differing** with one public file (`smoke-basex.sh`) absent locally. Third and fourth occurrence of F73/F76's shape — a guard whose population excludes the thing under test — in two more directions | ✅ **FIXED 2026-08-29** — `gates/published_surface_drift.py` compares all three surfaces, with two properties that were both got wrong first: **(a) line endings are not drift.** The first measurement compared raw BYTES and reported every skill and every basex file as differing, with a telltale +N/-N of equal counts; normalised, **9 of 37** really differed. That is `diff -rq`'s exact failure (52 differences, 12 real) reproduced by an instrument written by someone who had already recorded the trap. **(b) it never prints a bare "differs".** It reports lines present on each side SEPARATELY and refuses to name a winner, because six shipped skills were "behind" and still carried cross-platform work — an interpreter pin, Linux profile locations, `$X4_MODS`-based registry resolution — that the newer local copies lacked. Acting on "differs" would have destroyed it. Drift closed 9 → **2**, both NAMED in the baseline (a peer's uncommitted WIP, and a local `.bak`), and the accepted list is printed by name rather than as a count. 12 tests |
 | F79 | **every hook we ship was INERT in production** — `cat /dev/stdin` returns nothing in the hook environment | **DEFECT** · ✅ **FIXED** | All five hooks read their JSON payload with `INPUT=$(cat /dev/stdin)`. MEASURED 2026-08-29 by a purpose-built spike: that returns **ZERO BYTES** in the Claude Code hook environment, while a bare `cat` returns the payload — **7 of 7 probes, 0 vs 641–2,840 bytes**, PreToolUse and PostToolUse alike. The failure is invisible by construction: a hook that reads nothing falls through its first guard clause and exits 0, which is **byte-identical to deciding "this is fine"**. So `protect-bash.sh` (rm the game dir, `git add -A`, unscoped searches), `protect-files.sh` (the hard block on `reference/`, `.cat`/`.dat`, the game install), `backup-before-edit.sh` (the entire audit trail), `search-scope.sh` and `x4validate-on-edit.sh` were **all doing nothing, for weeks, in public releases as well as locally**. ⚠ **THE SUITES WERE GREEN THROUGHOUT**, because a suite pipes stdin explicitly (`printf … \| bash hook`) and `/dev/stdin` resolves fine that way. Green in the harness, dead in production — this register's founding shape, sitting underneath every instrument used to hunt it. **Independent confirmation:** no `AUDIT_LOG.txt` existed in the game root or the workspace at all, and the only one anywhere held 17 entries, **all of them the test suite's synthetic `/tmp/tmp.XXXX/…/wares.xml` fixture — not one real edit in five weeks**, while `CLAUDE.md` stated every edit was auto-backed-up | ✅ **FIXED 2026-08-29** — one shared `x4_hook_input()` in `_x4-env.sh` (bare `cat`), used by all five; **0 executable uses of `/dev/stdin` remain**. Plus `x4_require_input`, because the deeper defect is that **a hook could not distinguish "I received no input" from "the input said allow"** — silence IS consent, and that is precisely how this hid. The suite gained **5 probes that close stdin** rather than piping it, reproducing the PRODUCTION condition a pipe never can; proven by falsification (reverting one hook turns both the runtime and static probes red, rc 1, restore byte-identical). **E2E-verified unconfounded by permission mode**: a real `Write` produced an `AUDIT_LOG.txt` where none had ever existed, plus a backup containing the ORIGINAL content — a side effect, not a decision, so bypass mode cannot mask it |
-| F80 | the SUBJECT is one shared repo while the REGISTRY of that subject is forked per session | **DEFECT (structural)** · ⚠ **OPEN** | `tools/basex` is its own git repository, shared by every session. The guard that lists its test files — `TEST_FILES` in `tools/x4validate*/tests/test_basex_tests_are_not_orphaned.py` — lives in the **branch-per-session** x4validate worktrees. So a commit to basex is visible to every session **instantly**, while the registry naming it is not. MEASURED 2026-08-29: committing `tools/basex/test_x4v_tree.py` turned a concurrent session's suite red (`BaseX test file(s) present but NOT in TEST_FILES`) and they could not quote a clean suite number until they hand-applied a one-line change on their own branch. **This is guaranteed to recur** for every basex commit, and no amount of care on either side prevents it — it is a repo-boundary mismatch that the test merely reveals, not fragility in the test. ⚠ The peer's first reading was *"this file is untracked"*, which was a WRONG-REPO observation: from inside `tools/x4validate`, git cannot see a different repository, so everything under `tools/basex` reads as untracked regardless of basex's own index | ⚠ **OPEN — no fix attempted, and the obvious ones are worse.** Weakening the orphan guard would reintroduce the silent-orphan defect it exists to prevent (23 tests that passed and were collected by nothing). Moving `TEST_FILES` into basex would put a guard about x4validate's collection inside a repo that knows nothing about it. Merging the repos is a much larger decision. **Recorded so the next session recognises the shape in seconds instead of diagnosing it as an untracked file**, and so the cost is visible if it recurs often enough to justify a real fix |
+| F80 | the SUBJECT is one shared repo while the REGISTRY of that subject is forked per session | **DEFECT (structural)** · ⚠ **OPEN** | `tools/basex` is its own git repository, shared by every session. The guard that lists its test files — `TEST_FILES` in `tools/x4validate*/tests/test_basex_tests_are_not_orphaned.py` — lives in the **branch-per-session** x4validate worktrees. So a commit to basex is visible to every session **instantly**, while the registry naming it is not. MEASURED 2026-08-29: committing `tools/basex/test_x4v_tree.py` turned a concurrent session's suite red (`BaseX test file(s) present but NOT in TEST_FILES`) and they could not quote a clean suite number until they hand-applied a one-line change on their own branch. **This is guaranteed to recur** for every basex commit, and no amount of care on either side prevents it — it is a repo-boundary mismatch that the test merely reveals, not fragility in the test. ⚠ The peer's first reading was *"this file is untracked"*, which was a WRONG-REPO observation: from inside `tools/x4validate`, git cannot see a different repository, so everything under `tools/basex` reads as untracked regardless of basex's own index | ⚠ **OPEN — no fix attempted, and the obvious ones are worse.** Weakening the orphan guard would reintroduce the silent-orphan defect it exists to prevent (23 tests that passed and were collected by nothing). Moving `TEST_FILES` into basex would put a guard about x4validate's collection inside a repo that knows nothing about it. Merging the repos is a much larger decision. **Recorded so the next session recognises the shape in seconds instead of diagnosing it as an untracked file**, and so the cost is visible if it recurs often enough to justify a real fix · STATUS NOTE 2026-11-11: the separate `tools/basex` repository was RETIRED 2026-09-14 (F105's note); the arrangement this row describes no longer exists, so the defect cannot recur in that form (OBSOLETE, not re-measured). |
 | F81 | the live mod's save-load safety hook has **never once fired**, and a `probe` field reporting the symbol as PRESENT is what hid it | **DEFECT** (dead guard) + **DISCLOSURE** (a check that could not fail) · confidence 97% | The mod clears its id allowlist on a save load via `RegisterEvent("Lua_Loader.Send_Priority_Ready", …)`, because a REUSED handle in a different save would return another object's data under the id you asked about. MEASURED 2026-08-29/30 across a game start AND a save load: the handler's log line appears **0 times**, while `RegisterEvent absent` and `could not hook game load` are **also 0** — so it registers cleanly and never runs. It **cannot** run: it subscribes from inside `Init`, and `Init` is itself driven by that signal, so it always registers AFTER the event; and the chunk is rebuilt on every load, replacing the listener before it could fire. **Structurally dead.** ⚠ Three things hid it, and each is the register's own signature shape: (a) `probe` reported `RegisterEvent=function` and PRESENCE WAS READ AS WORKING — a symbol existing says nothing about a callback executing; (b) the unit test covering the hook was GREEN throughout, because it asserts the callback behaves correctly *if called*, which is true and which licensed a false belief about production; (c) a code comment asserted "loading a save does NOT re-run Init", which is **false** — a save load IS a full UI reload | ✅ **DISCLOSURE FIXED 2026-08-30.** The safety itself was never absent: MEASURED end-to-end with a control, an id accepted before a save load is refused after it — but by **chunk re-creation**, not by the mechanism written to provide it. So the hook is kept as defence in depth and **instrumented** (`load_hook_fired`, reported by `probe`) so its deadness is visible rather than re-assumed, its log line now says out loud that it had never appeared, and the false comment is corrected with the measurement. Pinned by two tests that assert BOTH states of the field, since one hard-coded to `false` would look identical in game. ★ The durable lesson: **this was nearly "fixed" by persisting the allowlist across reloads — which would have deleted the only clearing that actually works.** A dead guard is dangerous twice: once because it does nothing, and again because removing what compensates for it looks safe |
 | F82 | the hook rule set's false-positive rate: ~1,700 of 2,949 non-allow verdicts are noise, in SIX rules of one shape | **DEFECT (measured)** · ⚠ **OPEN — rules not yet edited** | ⚠ SUPERSEDED FIGURES: the first measurement ("deny 8.89%", 10,852 commands, per-rule table) was taken while the live hook was REDEPLOYED mid-run and with only `command` in the payload — see F83; those numbers are history, not baseline. **RE-MEASURED 2026-08-30 on a STABLE hook** (sha identical before, after and at read-back; all three fields sent; 11,340 of 11,340 distinct commands; validated by a second full pass with the stricter instrument: 11,340 shared, **0 changed**, stderr noise 0): **allow 8,391 (73.99%) · advise 1,406 (12.40%) · ask 200 (1.76%) · deny 1,343 (11.84%)**. Every non-allow verdict classified (2,949 of 2,949, buckets sum, every bucket hand-checked from full text): redirect advisory **1,294 of 1,320 FP** (`2>/dev/null` + a game path anywhere; 25 are `>>` appends) · Documents `ask` **193 of 196 FP** (same shape, in a rule added the same night) · LONG JOB **125 of 144 FP** (mention, not invocation) · reference search **67 of 80 FP** (subdirectory-scoped, which the rule's own comment promises to allow) · cp/mv **49 of 86 FP** (copies OUT of the game) · game-delete **7 of 8 FP** (a `.zip` NAMED after the game) · workspace-root **12 of 20 FP** (scoped, or a non-recursive grep the regex reached across segments). **Genuine and staying:** TIMEOUT-above-cap 449 of 449 (newly measurable — the field never reached the hook before), `/tmp` 226 of 227, `git add -A` 186 of 190, and 43 manual-reviewed | ⚠ OPEN: measured, classified, and NOT yet fixed — the user's standing order is re-derive first, edit nothing, then one rule per commit with a prediction stated before each re-measure (`uv run python gates/hook_false_positives.py` compares per rule over the intersection of commands). Classifier: session scratchpad `classify.py`, three of its own bugs fixed before the buckets held |
 | F83 | the instrument that measured F82 had FIVE defects of the narrowing-step shape, and the hook it measures had the stdin defect one layer in | **DEFECT (measured)** · ✅ FIXED 2026-08-30 | `gates/hook_false_positives.py` v1: (1) recorded while the live hook was REDEPLOYED mid-run (launch 22:28, deploy 00:08:29, finish 00:15:36 — three independent timestamps; bash re-reads the script per spawn); (2) stored 25 EXAMPLES per rule and no counts — eight rules read exactly 25; (3) overwrote its own baseline every run, so nothing could be diffed; (4) sent only `command` — the hook also reads `run_in_background` and `timeout`, so every backgrounded long job replayed as FOREGROUND and the cap rule could never fire; (5) read a per-command hook FAILURE as allow — MEASURED by review probe: `JQ=no_such_binary` gives rc 0, empty stdout, stderr noise. And the hook itself: `< <(jq ...)` loses jq's exit status, so a failed parse exited 0; the first fix reported that THROUGH jq and stayed silent | Rewritten TDD-first (31 tests, every one watched fail): sha256 of both hook files + `x4-paths.env` before AND after, paths re-resolved at the end, void on drift; uncapped `counts_by_rule` that must sum; `--record` vs compare over the INTERSECTION of commands with moved-pair reporting; all three fields sent RAW; rc≠0 or empty-verdict-with-stderr → refusal, rc 2/3 never 1. Mirror hooks: captured parse with a jq-FREE literal `ask` (67/67 probes, 5 new, all seen red first). **RE-DERIVED BY:** `tests/test_hook_false_positives_gate.py`, `scripts/test-hooks.sh` parser-contract probes |
-| F84 | an ADVISORY exits the hook, so every rule below it is unreachable: 298 measured-genuine refusals were suppressed by a note | **DEFECT (measured)** · ⚠ OPEN | `advise()`, like `deny()` and `ask()`, ended in `exit 0`. But an advisory is an ALLOW THAT CARRIES A NOTE, not a decision — and it sat at rule 8 of 19, so a command that earned one never reached the eleven rules below it. MEASURED 2026-08-30 by commenting out the six advisory/ask rule bodies and replaying the **1,846** commands they catch (controls held: known-bad still refused, stage-everything still refused): **1,548 fall through to `allow`, and 298 to a REFUSAL further down** — TIMEOUT-above-the-cap **130**, shared-tmp **64**, durable truncating-open **35**, exit-status-after-a-pipeline **27**, profile-manifest-by-NAME **26**, stage-everything **11**, durable redirect 4, in-place-edit 1. Every one of those rules was classified **genuine** in F82 (TIMEOUT 449/449, shared-tmp 226/227, stage-everything 186/190). So the noisy rules were not merely noisy — they were **suppressing correct refusals**, including the guard against a silently-clamped 10-minute timeout and the one against searching the profile by name (CLAUDE.md #30) | ⚠ Two consequences beyond the fix. (1) **F82's per-rule table is CONDITIONAL, not independent** — each count is "what this rule caught GIVEN every rule above it already ran", and it was presented as though the rules were independent. (2) The predicted effect of scoping the six rules INVERTS on one axis: refusals do not fall to ~1,135, they RISE to ~1,416, and correctly so, while advisories fall 1,406 → ~50 and confirmations 200 → ~7. Fix: `advise` accumulates and is emitted once at the end; the two terminal verdicts stay terminal. **RE-DERIVED BY:** `scripts/test-hooks.sh` § *an advisory never masks a later verdict* (5 probes) |
+| F84 | an ADVISORY exits the hook, so every rule below it is unreachable: 298 measured-genuine refusals were suppressed by a note | **DEFECT (measured)** · ⚠ OPEN | `advise()`, like `deny()` and `ask()`, ended in `exit 0`. But an advisory is an ALLOW THAT CARRIES A NOTE, not a decision — and it sat at rule 8 of 19, so a command that earned one never reached the eleven rules below it. MEASURED 2026-08-30 by commenting out the six advisory/ask rule bodies and replaying the **1,846** commands they catch (controls held: known-bad still refused, stage-everything still refused): **1,548 fall through to `allow`, and 298 to a REFUSAL further down** — TIMEOUT-above-the-cap **130**, shared-tmp **64**, durable truncating-open **35**, exit-status-after-a-pipeline **27**, profile-manifest-by-NAME **26**, stage-everything **11**, durable redirect 4, in-place-edit 1. Every one of those rules was classified **genuine** in F82 (TIMEOUT 449/449, shared-tmp 226/227, stage-everything 186/190). So the noisy rules were not merely noisy — they were **suppressing correct refusals**, including the guard against a silently-clamped 10-minute timeout and the one against searching the profile by name (CLAUDE.md #30) | ⚠ Two consequences beyond the fix. (1) **F82's per-rule table is CONDITIONAL, not independent** — each count is "what this rule caught GIVEN every rule above it already ran", and it was presented as though the rules were independent. (2) The predicted effect of scoping the six rules INVERTS on one axis: refusals do not fall to ~1,135, they RISE to ~1,416, and correctly so, while advisories fall 1,406 → ~50 and confirmations 200 → ~7. Fix: `advise` accumulates and is emitted once at the end; the two terminal verdicts stay terminal. **RE-DERIVED BY:** `scripts/test-hooks.sh` § *an advisory never masks a later verdict* (5 probes) · STATUS NOTE 2026-11-11: the body records the fix (advise accumulates, deny/ask stay terminal) and its CONFIRMED re-measure of 2026-08-30; READ now: `advise()` in protect-bash.sh appends to ADVICE and does not exit, and scripts/test-hooks.sh has the section `an advisory never masks a later verdict`. The OPEN above is stale: FIXED 2026-08-30. |
 | F85 | the engine SILENTLY IGNORES an unrecognised sector container and returns the WHOLE GALAXY, labelled as the sector you asked for | **DEFECT** (silent wrong answer) · confidence 99% | MEASURED 2026-08-30, same faction seconds apart: `ID: 514068` -> **310** objects; `ID:` -> **1961**; `NOT_A_SECTOR` -> **1961**; deliberate `-` -> 1961. No error, no flag, **6.3x the data**. The register's signature defect INVERTED: a step that FAILED to narrow, reporting as though it had. Certain to bite, because sector tokens are **not stable across launches** — Argon Prime was `ID: 4305`, `ID: 5936`, `ID: 514068`, `ID: 4303` over four launches — so a token reused from an earlier session is the ORDINARY case. ⚠ Found by a BROKEN INSTRUMENT: an unquoted shell variable split the token, and the nonsensical count was chased instead of shrugged at | ✅ **FIXED 2026-08-30.** Token shape validated (`^ID:%s*%d+$`) in both `run_enumeration` and `compare`, refusing with the measurement and where to get a fresh token; `-`/`galaxy` stay a deliberate galaxy request. 2 tests, 2 mutants. ⚠ We validate the SHAPE, not the identity: a well-formed token for a sector that no longer exists is still silently widened |
 | F86 | `GetComponentData` rejects a raw `UniverseID` cdata by returning nothing about any object — and does NOT raise | **DEFECT** · confidence 99% | Vanilla always converts first (`ConvertStringTo64Bit(tostring(...))`) or passes a LuaID. Given a raw cdata from an ffi buffer it returns values that describe nothing. MEASURED 2026-08-30: the galaxy-wide path reported **`enumerated=1539 unclassified=1539 unreadable=0`** — every object unreadable with ZERO read failures, a reply that was well-formed, correctly counted and about nothing. The offline fake accepted any id shape, so the conversion looked optional | ✅ **FIXED 2026-08-30.** `readable_id()` converts only the canonical ULL rendering; LuaIDs (`userdata`) pass through. The fake now returns nils for a ULL-shaped id so the omission FAILS a test. Pinned by asserting the wide path `matched` its rows — the old test asserted only `enumerated`, which counts handles returned and is blind to whether any could be read. ★ Found in one query by `unclassified=`, a counter added days earlier for an UNRELATED crash: **a narrowing counter pays for itself in the bug it was not written for** |
 | F87 | a two-repo lockstep was "verified" by two sessions reading the WORKING TREE, while the committed state — the only state a port ships — disagreed for two days | **DEFECT (measured)** · ✅ FIXED 2026-08-30 | A lua mod's `<savedvariable>` name must equal a Python constant or the channel silently decodes zero of everything. A peer reported the de-brand rename complete and lockstep-consistent; I replied that I had "verified every claim". Both of us had read the FILE ON DISK. MEASURED afterwards: `git show HEAD:` on the mod gave the OLD name while the working tree gave the new one, with both files modified and unstaged, and the toolkit half committed 72 seconds after the mod files were written — one operation, two repos, one of them committed. My own `scripts/verify-port.py` carries the rule in its header (*compare COMMITTED BLOBS, not working-tree files*) and I did the opposite while using the word "verified" | ★ **Not a wrong query and not a narrowed population — the QUESTION was right, the POPULATION was right, and the instrument answered correctly. The ARTIFACT was wrong.** Nothing local objects, because both artifacts exist, both are readable, and only one of them ships. Same family as the peer's own root cause the same hour (*"I read the PRODUCER and never the CONSUMER"*): producer-vs-consumer · disk-vs-blob · working-tree-vs-HEAD. **The control is one line: assert the two sides agree IN THE SAME VIEW** — one comparison of the pair that ships, not two eyeball checks of two artifacts. Now the gate for the port. **RE-DERIVED BY:** the port gate comparing the mod's committed `<savedvariable>` against the CLI's committed `DEFAULT_VAR` in a single command |
@@ -433,9 +433,9 @@ memory or from another session -- a remembered id was stale within a day here.
 | F328 | build-release.sh skipped the version check for `tags/` and `refs/tags/` spellings | **DEFECT (measured)** · PRE-ARC | 6 fixture cases red before, green after; archive failure ruled out as the refuser | FIXED 2026-10-26 - strip the prefix before matching |
 | F329 | A heredoc program fed to python/node could write a host transcript | **DEFECT (measured)** · PRE-ARC | 9 heredoc shapes allowed before; replay 0 of 42,910 changed | FIXED 2026-10-26 - the same write-call patterns over an interpreter's stdin program |
 | F330 | `'<literal>' \| iex` was refused as not completely evaluated | **DEFECT (measured)** · PRE-ARC | 2 benign forms refused, 2 delete twins; replay 0 of 10 iex rows changed | FIXED 2026-10-26 - a lone constant piped into a bare iex is read as `iex '<literal>'` |
-| F331 | A Windows-form write through a junction was judged as the path spelled, not the file reached | **DEFECT (measured)** · PRE-ARC | 24 of 24 Windows-form junction writes allowed (reference/game/profile/saves); 72 of 72 link-creating commands allowed; replay 0 of 3,447 changed | FIXED 2026-10-26 - protect-files resolves a drive-form path through its links, fail closed; link CREATION into a protected root refused by its target (protect-bash); Bash-channel writes through pre-existing links, hardlinks to existing files and trusted linked toolkit folders stay residual |
+| F331 | A Windows-form write through a junction was judged as the path spelled, not the file reached | **DEFECT (measured)** · PRE-ARC | 24 of 24 Windows-form junction writes allowed (reference/game/profile/saves); 72 of 72 link-creating commands allowed; replay 0 of 3,447 changed | FIXED 2026-10-26 - protect-files resolves a drive-form path through its links, fail closed; link CREATION into a protected root refused by its target (protect-bash); Bash-channel writes through pre-existing links, hardlinks to existing files and trusted linked toolkit folders stay residual · SUPERSEDED IN PART 2026-11-11: the Bash/PowerShell-channel residual for writes through pre-existing junctions and symlinks is closed by F360 and F371-F374 for JUNCTIONS on Windows (MEASURED: the Bash forms touch, `echo >`, cp and rm through a junction into reference/ refused, tests in test_hook_facts.py; a PowerShell write through a junction is pinned only with a `..` after it, `test_a_powershell_dot_dot_after_a_junction_is_read_physically_by_design`); a symbolic link is exercised only by the POSIX CI legs, never on Windows; hardlinks and the trusted linked toolkit folder remain as stated. |
 | F332 | A delete INSIDE the game install (extensions/ and deployed mods included) only ADVISED where the workspace rule says deleting inside an X4 directory asks | **POLICY DRIFT (read)** · PRE-ARC (bd45eef, 2026-10-02) | test-hooks: 3 rows red at ba370f9 (advise, want ask); audit0924: 4 rows red; replay 2026-10-27: 53 of 53,662 game-root commands advise -> ask, 110 stay advise, 0 other facts changed | CHANGED 2026-10-26, NARROWED 2026-10-27 (user) - rm_deployed_mod asks once per command naming every mod; other game-install deletes advise; install/extensions wholesale and reference/ stay deny |
-| F333 | Three deployed-mod delete shapes the shell guard does not read: a python `shutil.rmtree` literal, a path through a junction to `extensions/`, and a root held in an unknown variable | **OPEN LIMIT (measured)** · PRE-ARC | release review of the 4.0.1 deployed-mod rule (2026-10-27): each allowed at a1d876a, ba370f9 and the merged head alike, in sandbox roots | open; see entry |
+| F333 | Three deployed-mod delete shapes the shell guard does not read: a python `shutil.rmtree` literal, a path through a junction to `extensions/`, and a root held in an unknown variable | **OPEN LIMIT (measured)** · PRE-ARC | release review of the 4.0.1 deployed-mod rule (2026-10-27): each allowed at a1d876a, ba370f9 and the merged head alike, in sandbox roots | open; see entry · NOTE 2026-11-11: shape (b), a path through a junction to `extensions/`, is read since F360 (4.1.1): MEASURED, the deployed-mod ask fact fires through such a junction at v4.1.1 and now (facts() only). |
 | F334 | `x4housekeep report` crashed on a name Windows lists but cannot reach (trailing `.`/space), and its scratchpad size row could never pass a junction | **DEFECT (measured)** · PRE-ARC | real report: FileNotFoundError on 2 such names; after the fix the row reads `>= 3.16 GiB` with 2 names and 6 links named; delete/move paths already failed closed (4 sites read) | FIXED 2026-10-31 - report rows give a lower bound naming what was not counted; delete paths unchanged |
 | F335 | A diff op whose `sel` ends in `/text()` is not applied by `_merge`, and nothing reports it | **OPEN LIMIT (measured)** · PRE-ARC | toy t-file: `replace .../t[@id='4']/text()` leaves the old text, node replace applies; corpus x4raw 2026-11-01: 0 of 22,457 `@sel` contain `text()` (two query shapes) | open; no installed mod uses it; see entry |
 | F336 | The BaseX builders swallow a refused `DROP DB` (`>/dev/null 2>&1 \|\| true`), so a reader holding the DB turns into a confusing receipt refusal | **OPEN LIMIT (measured)** · PRE-ARC | M2 2026-11-01, private DBPATH: with a reader attached `DROP DB` rc 1 "opened by another process", reader unaffected (3\|3); control without reader: DROP + ALTER rc 0 | SUPERSEDED 2026-11-07 by F361: the builders no longer DROP; its ALTER claim is corrected there |
@@ -469,6 +469,12 @@ memory or from another session -- a remembered id was stale within a day here.
 | F364 | A missing base `index/*.xml` registered nothing and recorded no skip, so every vanilla macro read as unregistered while the run looked clean | **DEFECT (measured)** · PRE-ARC | a worktree without `x4-paths.env`: 150 macros indexed instead of 4,695, 39 fit hits instead of 63, `skipped` empty | FIXED 2026-11-08: degraded skip when the reference has no index folder, plain skip for a partial reference or a DLC |
 | F368 | Past link_resolved's per-call budget of 64 realpaths a write/delete operand read as "no link", silently, so a junction into reference/ after 64 local decoys was allowed | **DEFECT (measured)** · IN-ARC (9a73c0a9) | at 5404046c: `touch <N decoys> <junction>/libraries/wares.xml` writes_reference True for N=63, False for N=64 and 200; 64 `touch` segments then `rm -f <junction>/x.xml` rm_targets_reference False | FIXED 2026-11-09: realpath cached per folder; past the budget `links_unresolved`, which protect-bash.sh and save_policy refuse |
 | F369 | link_resolved (F360) skipped any path has_unresolved() flagged, so a SINGLE-QUOTED `$` (`::$DATA`, a folder `a$b`) or a stream suffix on a junction left a write through the junction lexical only | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at a70dcedd, in-process facts(): `touch`/`echo x >` `'<junction>/libraries/wares.xml::$DATA'` writes_reference False (True with no junction); `touch '<junction>:s'` False | FIXED 2026-11-09: the caller passes `literal`; on Windows the path is resolved through _win_alias; an unresolved operand's literal head, and any link its first unresolved component may name, are followed too |
+| F371 | link_resolved read a path only as Win32 spells it, so a junction NAMED as Git Bash spells a name (`j` U+F07C for a `j` followed by a pipe character, or `j.`/`j ` with the trailing dot or space kept) was written through with no link seen | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) + IN-ARC regressions of the first fix, fixed in 4.1.2 | at 470f8b35, through protect-bash.sh, a `touch` or `echo x >` onto `<w>/<junction>/libraries/x.xml` for three such junctions into reference/: 3 of 3 allowed; Git Bash's `touch` landed in the target for all three | FIXED 2026-11-11: both spellings are resolved (the Git Bash one verbatim), from the path as written; two spellings landing through links in different places are refused; CORRECTION 2026-11-11 (4.1.2 release review): relative operands, listed entries and their folder, a target holding U+F0xx (refused), and a budget regression from 33 folders were missed; fixed the same day |
+| F372 | an operand spelled `//?/C:/...`, `\\?\C:\...` or `//./C:/...` got no link reading: link_resolved and link_entries_matched required `X:/` | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at 0f6b5e3e, in-process facts(): 6 of 6 touch/rm through a junction into reference/ read False; Git Bash's `touch "//?/..."` landed in the target (1 of 1) | FIXED 2026-11-11: `_unverbatim` drops a verbatim/device drive prefix; UNC stays lexical |
+| F373 | `..` after a junction was collapsed lexically (norm; ntpath.realpath normalises first), while Git Bash resolves it through the link | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | Git Bash `touch` through `<w>/k/../f`, `k/../f`, `cd k; ../f`: 3 of 3 landed beside k's target; guard at 0f6b5e3e: 5 of 5 False | FIXED 2026-11-11 (Windows) (residuals OPEN): `..` walked physically; lexical and physical readings through links to different places refused |
+| F374 | an unresolved RELATIVE operand (`"refj$X/..."`) got no link reading: link_head_resolved / link_entries_matched return on "not absolute" | **DEFECT (measured)** · PRE-ARC (F369, 4.1.1) | at 0f6b5e3e, in-process facts(): 3 of 3 False from a folder holding a junction into reference/ | FIXED 2026-11-11: both get the operand joined to its directory as received |
+| F375 | Link and path spellings the guard still reads as written, found by the 4.1.2 release review rounds 2-4 (16 rows, row 11 CLOSED: a protected root that is itself a link, `\\?\Volume{GUID}`, PowerShell provider paths, braces through a junction, `$PWD`, a device-named junction as the head, and others) | **SCOPE LIMIT (measured / read / inferred, per row)** · PRE-ARC | in-process facts() at the round-2 fix, against the reviewers' scripts; per row below | OPEN 2026-11-11: rows 1-15 not fixed (next release, user decision); row 16 (a recursive delete or move of a folder above the reference or game root) FIXED 2026-11-11 |
+| F376 | A command carried inside another shell (`bash -c`, `sh -c`, `eval`, `cmd /c`) does not see the `cd`/`pushd`/`Set-Location` before it, so a relative delete there reaches no rule | **DEFECT (measured)** · PRE-ARC · HIGH | through the whole hook, identical at 1b1a48aa and v4.1.1: 11 carried forms ALLOWED, 9 controls DENIED | FIXED 2026-11-11: a carried text is judged where its carrier segment runs; substitutions, a heredoc fed to a shell and a trap OPEN |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -5092,6 +5098,11 @@ shape in seconds — *shared subject, forked registry* — instead of spending t
 "untracked file" that was never untracked. If it recurs often enough to be measured in hours rather
 than minutes, that is the trigger to reconsider the repository split itself.
 
+STATUS NOTE 2026-11-11: F105 records that "the topology fix WAS taken" -- the separate BaseX repository was retired
+2026-09-14 with the dev repository, and `tools/basex/` lives in this repository. The shared-subject / forked-registry
+arrangement above therefore no longer exists: OBSOLETE (READ from F105; not re-measured). The OPEN in the heading is
+history.
+
 ## F82 — the hook rule set denies 8.89% of real historical work · **DEFECT (measured)** · confidence 97% · ⚠ OPEN 2026-08-30
 
 > ⚠ **SUPERSEDED 2026-08-30 (later the same day).** Every number below this banner was measured while the live hook was
@@ -5258,6 +5269,12 @@ in-place-edit 1. Every rule accounted for, no unexplained remainder.
 2,000 mark, which is the right shape — but the corpus grew 11,340 -> 11,529 while two peer sessions
 were writing transcripts, so the first 2,000 commands are not the same 2,000 in both runs. Progress
 counters are not comparable across runs; the intersection-by-item-hash is.
+
+STATUS NOTE 2026-11-11: the "OPEN" in the heading is stale. The fix is in the body ("advise accumulates ... deny and
+ask stay terminal") with its targeted re-measure CONFIRMED 2026-08-30, and READ today: `advise()` in
+agent/guards/claude-hooks/protect-bash.sh appends to `ADVICE` and returns, and scripts/test-hooks.sh carries
+`an advisory never masks a later verdict`. Status: FIXED 2026-08-30 (the old text is kept as history).
+
 ## F87 — the right question, asked of the wrong ARTIFACT · **DEFECT (measured)** · confidence 99% · ✅ FIXED 2026-08-30
 
 **RE-DERIVED BY:** the port gate that compares the mod's committed `<savedvariable>` name against
@@ -10125,6 +10142,9 @@ the guards refuse agent writes to `.claude/projects/**/*.jsonl` and `.codex/sess
 Fix needs an upstream harness change. The residual 10%: the exact path count at which the line
 exceeds the limit depends on path lengths and was not measured.
 
+NOTE 2026-11-11: "vendored, pinned `12a87ea`" was the pin when this was written; the lock has moved since
+(`b4ec7b1` at 4.1.2). Read the current pin in `tools/modding-harness.lock.json`, not here.
+
 ## F290 — Interpreter programs and carriers whose text is not in the command pass the Bash guard · **OPEN LIMIT (measured)** · confidence 95% · OPEN (accepted residual)
 
 SUPERSEDED IN PART 2026-10-20: F314 now reviews/refuses opaque programs explicitly
@@ -11618,6 +11638,17 @@ scripts/verify-hook-tests.py ("F331 link", "F331 review").
 (`test_windows_form_write_through_a_link_follows_the_real_target`,
 `test_windows_form_link_resolution_failure_is_inert`).
 
+SUPERSEDED IN PART 2026-11-11 (4.1.2 release review round 3): the first RESIDUAL bullet ("the Bash/PowerShell channel ...
+ALLOWED in every form ... (36 of 36)") no longer holds for junctions and symlinks: F360 (4.1.1) judges a shell write or
+delete where an existing link sends it, and F371-F374 extend that to Git Bash's spellings, relative and unresolved
+operands, verbatim drive paths and `..`. MEASURED here: `touch`, `echo >`, `cp` and `rm` through a junction into a stand-in
+reference/ are refused (TestWriteThroughAnExistingLink), and PowerShell `Remove-Item` through one is
+rm_targets_reference (review2-guards preshapes.py, v4.1.1 and now). CORRECTION 2026-11-11 (round 4): on Windows these are
+JUNCTIONS; a symbolic link is measured only where the same test makes one, on the POSIX CI legs. And PowerShell
+`Set-Content` through a junction IS pinned, but only with a `..` after it
+(`test_a_powershell_dot_dot_after_a_junction_is_read_physically_by_design`); a plain `Set-Content` through a junction was
+not measured. Hardlinks and a trusted linked toolkit subfolder remain residual exactly as written above.
+
 ## F332 - A delete inside the game install only advised · **POLICY DRIFT (read)** · PRE-ARC · confidence 95% · CHANGED 2026-10-26 · NARROWED 2026-10-27
 
 READ: bd45eef (2026-10-02, user decision "an ask I always approve protects nothing"; 54 of 54
@@ -11668,6 +11699,12 @@ refused since F331);
 at the end of the path, so it does not match a mod path beneath it.
 UNMEASURED (inferred from the code): the extensions path is derived from the game root only, so a
 setup with `X4_EXTENSIONS` set and no `X4_GAME` would not fire the deployed-mod ask.
+
+SUPERSEDED IN PART 2026-11-11 (4.1.2 release review round 3, probed first): shape (b) no longer holds. MEASURED
+in-process (lane deployed_probe.py, a scratch `<game>/extensions/mymod` with `content.xml`): `rm -rf <junction to
+extensions>/mymod`, `rm -f <junction to the mod>/content.xml` and `rm -rf <junction to the mod>` read rm_deployed_mod True
+at v4.1.1 and at the 4.1.2 fix, as the direct spelling does: F360 (4.1.1) follows the link. Measured with facts() only,
+not through the whole hook. Shapes (a) and (c) were not re-measured.
 
 ## F334 - housekeep report crashed on unaddressable names and never measured past a junction · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-10-31
 
@@ -11993,6 +12030,11 @@ node, perl or ruby (all reported by the review, none re-run here).
 
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py`.
 
+SUPERSEDED IN PART 2026-11-11 (4.1.2 release review round 3): "A symlinked `extensions` folder is judged by its spelling
+(the shell channel is lexical through existing links ...)" -- MEASURED in-process with a JUNCTION to `extensions/` (not a
+symlink): the deployed-mod ask fact fires through it at v4.1.1 and now (see F333's note). A symbolic link (not a
+junction) to `extensions/` was not measured.
+
 ## F349 - The installed copy's test suite was never run, and was red · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-03
 
 `SETUP_PROMPT.txt` tells a new user to run the suite in their installed toolkit and promises no failures. CI ran the suite
@@ -12043,6 +12085,9 @@ that is not where it was keeps the switch on): `off` refuses and names the folde
 Related, from the same lane: a lock rule that names another account no longer counts as locking the current user, so
 locking adds the user's own rule and `status` does not count that save as protected; a hand-made deny rule naming a group
 is not read as binding, so locking fails loudly instead of reporting protection that is not there.
+
+NOTE 2026-11-11: "The pinned core (`7c4cc26`)" was the pin when this was written; the lock has moved since (`b4ec7b1`
+at 4.1.2). Read the current pin in `tools/modding-harness.lock.json`, not here.
 
 ## F351 - A held sentinel record delays the report by one look · **SCOPE LIMIT (measured)** · IN-ARC · confidence 80% · FIXED 2026-11-03
 
@@ -12723,6 +12768,10 @@ bound is now 32, the segment readings bound, and past it the command is `carrier
 `TestRRPreArcBash.test_an_xargs_item_past_the_reading_bound_is_never_dropped` and its twin in `test_hook_facts.py`;
 mutants labelled `(A1)` and `(A2)` in `scripts/verify-hook-tests.py`.
 
+SUPERSEDED IN PART 2026-11-11 (4.1.2 release review): "a UNC or device path stays lexical" -- a verbatim or device
+DRIVE path (`//?/C:/...`, `//./C:/...`) is read as its drive path since F372; a UNC path and a `\\?\Volume{...}` path
+stay lexical (F375 row 2). "RESIDUAL: past 64 resolved operands a junction is judged by spelling only" -- superseded by
+F368 (4.1.1): past the bound the operand is links_unresolved and the command is refused, never read as "no link".
 
 ## F361 - A failed BaseX build left the database MISSING, and `ALTER DB` onto an existing name is not safe · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-07
 
@@ -12946,6 +12995,17 @@ verified by REASONING only (no Linux here); CI re-derives it. UNMEASURED: posixp
 HEAD component (EACCES on a folder the caller cannot search; INFERRED: a non-root write there fails anyway); that
 path is not made strict.
 
+CORRECTION 2026-11-11 (4.1.2): "each has a RED test and a mutant that its test catches" overclaimed. The 4.1.1
+reviewer found two clauses of the leaf lstat with no catching test: NotADirectoryError (an answer) and ValueError
+(cannot tell). Each now has a test (`test_TWIN_a_path_under_a_file_is_not_links_unresolved`,
+`test_RED_an_lstat_that_raises_ValueError_is_links_unresolved`) and a mutant; MEASURED locally with
+`verify-hook-tests.py --only`: both mutants caught, by that test only. Both tests stub lstat: on Windows a path
+under a file raises FileNotFoundError, so only the stub reaches the first clause there.
+Also MEASURED 2026-11-11, read-only, 21 ordinary and system paths on one Windows machine (pagefile, hives, protected
+folders, app-execution aliases): the leaf lstat raised something other than not-found for 2, the registry hives
+`System32/config/SAM` and `SYSTEM` (PermissionError), whose folder cannot be listed either. A write or delete naming
+one is refused as links_unresolved: "cannot tell" is the true answer there, so it is kept, not loosened.
+
 **RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkBudgetFailsClosed`,
 `TestLinkResolutionIsBounded`, and `test_audit0924_hooks.py::TestLinkBudgetWholeHook`.
 
@@ -12996,6 +13056,405 @@ before (an extra entry naming the same place), but wrong as a fact.
 (generated copy `.claude/hooks/test_hook_facts.py`), e.g.
 `test_RED_an_ntfs_stream_suffix_behind_a_junction_is_judged_where_it_lands` and
 `test_RED_a_literal_dollar_in_a_folder_name_behind_a_junction`.
+
+SUPERSEDED IN PART 2026-11-11 (4.1.2): "the head's folder is listed once ... One listing is one probe" -- since F371
+CORRECTION (c) the folder is listed under up to two spellings (Win32's and Git Bash's), one probe each.
+
+## F371 - A junction named as Git Bash spells a name was written through with no link seen · **DEFECT (measured)** · PRE-ARC + IN-ARC regressions of the first fix, fixed in 4.1.2 · confidence 90% · FIXED 2026-11-11
+
+`hook_facts.link_resolved` (F360) resolved a path as Win32 opens it: `_win_alias` drops a trailing dot or space and a
+stream suffix, and a name holding a pipe character is ERROR_INVALID_NAME, read as "names no file". Git Bash (the MSYS
+runtime) opens neither that way. MEASURED 2026-11-11 with Git Bash's own `touch`, one fresh folder per name: a pipe,
+`*`, `?`, `<`, `>`, `:`, 0x01 and 0x1f in a name each landed as U+F000 plus that character's code; `pq.`, `pq ` and
+`pq..` landed as named. And through junctions named `j.`, `j ` and `j` U+F07C (made with the `\\?\` prefix), a
+`touch` of `<w>/<name>/p.txt` landed in the junction's target, 3 of 3. So the guard and the shell disagreed about which
+entry the text names, and the guard's entry did not exist: no link. First reported by the 4.1.1 reviewer for the pipe
+at cba3a1ce (in-process: writes_reference False, links_unresolved False). Through the real protect-bash.sh at
+470f8b35, with each junction leading into reference/: 3 of 3 allowed; the plain-folder twin and the reference-root
+control read allow and deny, as they should. With the fix: 3 of 3 denied, twin and control unchanged.
+
+The fix: link_resolved resolves both spellings, the second (`_msys_spelling`) only when it differs, opened verbatim
+(`\\?\`) so Win32 does not strip it. Either landing is judged in addition to the lexical path. When both land
+through links in DIFFERENT places the command is refused (links_unresolved), since one program goes one way and one
+the other; the two answers are compared with the mapping undone, so `<link>/libraries/*.xml` (one place, two
+spellings of the leaf) is not refused -- NEAR-MISS, caught by
+`test_an_expansion_behind_a_junction_reads_as_it_does_on_the_root`. link_entries_matched matches an entry starting
+with either spelling of the literal prefix.
+
+A second defect under it, found by running the new tests in a runner-like copy (TEMP spelled as an 8.3 short path):
+the caller handed link_resolved `long_name()`'s answer, and for a path with a `~N` component long_name returns it
+normalised -- `j.` as `j`, `j:k` as `j`. There the `:` case and every trailing-dot case still read no link (13 subtest
+failures), while the pipe passed. The resolver now gets the path as written. On a real install that shape occurs: a
+game root under `Program Files (x86)` has a short spelling.
+
+SCOPE, UNMEASURED: `"` is in the mapped set from the runtime's documentation, not measured (the probe could not pass
+it in argv). Only Git Bash's mapping is modelled; WSL and Cygwin proper were not measured. A link inside a link whose
+own name needs the second spelling, under a variable component, is not followed by link_entries_matched (its listing
+uses the head as written). [Closed by CORRECTION (c), 2026-11-11.]
+
+CORRECTION 2026-11-11 (found by the 4.1.2 release review; fixed the same day): "FIXED" above covered absolute operands
+only, and the fix brought a refusal regression. MEASURED at 0f6b5e3e, in-process facts(), each a RED test before the
+change: (a) a RELATIVE operand reached link_resolved through join_cwd(), whose norm() reads `j.` as `j` and `j:k` as
+`j`, so from <w> `touch`/`echo x >`/`rm -f` of `'<name>/libraries/wares.xml'` for junctions `j.`, `j` U+F03A `k`,
+`s ` and `p` U+F07C `q` read the flag False, 12 of 12; a relative token holding `|` is parse debris, joined to the
+seedless directory (often none), so it got no link reading at all (1 of 1); and after `cd 'j.'` the directory in force
+was `j` (1 of 1). (b) link_entries_matched resolved a matching entry as Win32 opens it, so an entry `m.` or `n ` named by
+`m$X`/`n$X` was read as `m`/`n`: 2 of 2 False. (c) it listed the folder before the variable only as Win32 opens it, so
+`<w>/a|/refj$X` (not listable) and `<w>/b./refj$X` (lists `<w>/b`) read False: 2 of 2 (the SCOPE note above named
+this). (d) only the Git Bash landing was un-mapped before the comparison, so a target folder whose own name holds
+U+F07C compared unequal to itself and a write there was REFUSED (1 of 1). (e) the verbatim landing's `//?/` was cut
+with a slice, which turns `//?/UNC/h/s/x` into `UNC/h/s/x` (READ; no verdict measured to change, since norm() strips the
+prefix of a drive path, but the returned path was wrong). (f) the folder cache was keyed per SPELLING, so `C:/a` and
+`//?/C:/a` each spent one of the 64 realpaths: `rm -f` over operands in N folders shaped `d<i>/*.o`, `<w>/d<i>/*.o` or
+`<w>/d<i>/x.` was refused from N=33, where v4.1.1 refused from N=65 (budget_probe.py / budget.py: refused for N=33..64
+in all 3 shapes at 9368d5db and 0f6b5e3e, not at v4.1.1; 12 of 12 such subtests here, N = 33, 40, 63, 64). (g) a disagreement of the two spellings printed the
+budget's "so many different folders" reason. All seven are fixed: the link reading takes the path as the program
+receives it (`join_as_received`), entries are resolved verbatim by their own names and the folder is listed under both
+spellings, both landings are un-mapped, `_unverbatim` unwraps the result, a verbatim folder Win32 opens identically is
+cached under its plain spelling, and the disagreement is its own fact (`links_disagree`) with its own reason in
+protect-bash.sh and save_policy.py. NEAR-MISS in this round: the twin `touch "$X"` from <w> read writes_reference True
+after the fix, because a whole-variable relative operand was then listed like `"<w>/$X"` always was and <w> holds refj.
+It was first kept as the stricter reading; the corpus showed it refusing 11 of 480 ordinary rows, and it was scoped out
+the same day (F374 SCOPE). `"` in a name is still UNMEASURED.
+
+CORRECTION 2 2026-11-11 (4.1.2 release review round 2, four reviewers over 4140faa5 + 9895c730; fixed the same day). The
+first correction's fixes brought defects of their own, each MEASURED with the reviewers' scripts and a RED test first:
+(A) link_entries_matched named a listed entry under `os.path.abspath(head)`, which turns a last component `nul` into the
+device, so `touch "<w>/deep/nul/ref$X/x"` (a real folder `nul` holding junction `refj`) read writes_reference 1 / 1 / 0
+at v4.1.1 / 9368d5db / 9895c730 -- an ALLOW regression; the folder is now named `normpath(_win_alias(head))`. (B) the
+folder cache resolved a plain key with Win32's realpath, which answers a device-named folder `<w>/nul` unchanged, while
+Git Bash writes through a junction of that name (MEASURED by the reviewer with Git Bash's touch): `touch '<w>/nul/x.'`,
+`'<w>/nul/a|b'` and the delete of `'<w>/nul/x.'` read 1 at 9368d5db and 0 after; every Windows drive folder is now
+resolved verbatim (`//?/`) and the answer unwrapped, which also closes `touch '<w>/nul/x.xml'` (0 in every version
+before, PRE-ARC); the budget table is unchanged (budget.py: 28 of 28 rows as at v4.1.1). (C) an absolute `cd`/`pushd`/
+`Set-Location` to `<w>/k/..` (k a junction) kept its `..` in the directory's spelling, and the link reading walked a `..`
+the shell had already resolved LOGICALLY (`cd "<w>/k/.." && pwd -P` is <w>): `cd '<w>/k/..' && touch x` and four other
+spellings read writes_reference True (a false hard deny; {} at v4.1.1); the directory's dot segments are now collapsed,
+its spelling kept. (D) the leading-expansion scope read only the first component, so `./"$f"`, `"./$f"`, `.//"$f"`,
+`./$X`, `./$X/f`, `"./${X}.txt"` and `cp a.txt ./"$OUT"` were still refused beside a junction (7 of 7); leading `.` and
+empty components are now skipped. (E) `_resolve_dot_dot` took `posixpath.dirname("D:")` = "" for a link whose target is
+a drive root, so the walk went on at `/`, the current drive (stubbed: `Q:` became `/`); a drive root is now its own
+parent. (F) the parse-debris fallback spends the link budget (MEASURED, debris2.py: 80 debris operands in distinct
+folders read links_unresolved 0 at 9368d5db, 1 now); left as is: no rule that skips a token which cannot name a link
+was obviously right. (G) the unknown-cmdlet and `program_dynamic` loops call prep() with the LAST segment's
+`physical_cwd`; `spelled` is used only when it norm-equals the directory, so only a same-folder-different-spelling case
+is affected, and the ask those loops give is decided by the lexical entries; left as is, READ, not measured.
+
+CORRECTION 3 2026-11-11 (4.1.2 release review round 3, eight reviewers over 1b1a48aa). (G1) An ALLOW regression from
+4140faa5: a `..` ABOVE a drive root. norm() climbs past the drive (`C:/../a/b` is `/a/b`, MEASURED at v4.1.1 and now: an
+old bug, left as is, F375 row 13); v4.1.1 caught `rm -rf 'C:/../<ref>'` only because realpath disagreed with that wrong
+form, and once the walk (F373) clamped at `C:/` it saw no link and returned "", so the landing never became an entry.
+MEASURED (rootdotdot.py; through the real hook by the reviewer, e2e.py): touch, `echo >`, `rm -rf` of `C:/../<ref>`,
+`C:\..\<ref>`, `C:/Users/../../<ref>`, `C:/./../<ref>`, `/c/../<ref>` and PowerShell Remove-Item read 1 at v4.1.1 and
+9368d5db, 0 at 4140faa5, 9895c730 and 1b1a48aa, 1 now; RED tests also for the game root, the profile and the saves. Fixed:
+with no link crossed the walked path is returned when the text does not land there lexically. Over the reviewer's 1,692
+rows (lane_r3check.py) exactly 33 change against 1b1a48aa, all this shape, all 0 -> 1. The change also closes two shapes 0
+in every version before (pinned): a relative `..` overshooting the drive root, and `cd 'C:/' && rm -rf '../<ref>'`. (G2) A
+PowerShell `..` after a junction is read physically too: a refusal kept by design (F373). (G3) `_dir_realpath` dropped a
+leading `//?/` from its cache key on every system (on POSIX `//?/x` became the relative `x`): READ, now Windows only, with
+a POSIX test. (G4) A `..` after a link leading off the local drives sets links_unresolved alone, and the agent was shown
+only the budget's "so many different folders" text: the text now names that cause too (both front doors). (G5) Stale
+comments: `C:` as the drive's current folder (`realpath('\\?\C:')` returns it unchanged, MEASURED on 3.12, so with
+verbatim folders the hazard is gone), link_resolved's "a UNC or device path is left lexical" (false for a DRIVE path since
+F372), the removed tmux chain in the present tense, prep()'s element 0. Tests that could not fail were fixed in the same
+round (an assertion that passed on "", a loop over an empty list, remote decoys in one folder, the leaf realpath's deadline,
+and PowerShell verdict tests that skipped on any untranslated result: with a broken translator stubbed, 4 skipped and 1
+passed, now 9 of 9 fail), and the mutation table's equivalence notes were corrected (three walk clauses measured NOT
+equivalent now have rows).
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkNamesGitBashSpellsDifferently` (26 tests, the
+class Windows only), `TestLinkReadingOfRelativeAndDotDotOperands` (19 tests at round 4, counted with ast: 8 Windows only, 1 POSIX only, and two Windows-only
+subtest groups: the `/c/...` and `Set-Location` spellings),
+`test_audit0924_hooks.py::TestLinkBudgetWholeHook::test_two_readings_landing_apart_have_their_own_reason`, and the
+mutants labelled `msys spelling: ...`, `link entries: ...`, `link reading: ...`, `link budget: ...(I2)`,
+`unverbatim: ...` and `link disagree: ...`.
+
+## F372 - An operand spelled `//?/C:/...` or `//./C:/...` got no link reading · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-11
+
+Found by the 4.1.2 release review. `link_resolved` (F360) and `link_entries_matched` returned "" unless the path,
+after its MSYS drive was rewritten, matched `^[A-Za-z]:/`, so a verbatim (`//?/`, also `\\?\` with backslashes) or
+device (`//./`) drive spelling was judged lexically only, where `_lexical_norm` reads it as the plain path. MEASURED
+2026-11-11: Git Bash's `touch "//?/<w>/c/refj/libraries/probe_vb.txt"` (`c` a plain folder inside <w> holding the
+junction `refj`; not the `/c/` of a drive) created the file in the junction's target (1 of 1;
+Git Bash refused the `//./` spelling, "No such file or directory", so `//./` is a Win32-only spelling, INFERRED not
+measured to be written through by PowerShell). At 0f6b5e3e, in-process facts(): `touch` and `rm -f` of
+`<prefix><w>/refj/libraries/wares.xml` for the three prefixes read writes_reference / rm_targets_reference False, 6 of
+6, and `touch "//?/<w>/refj$X/libraries/wares.xml"` False (1 of 1). Fix: `_unverbatim` drops a verbatim or device DRIVE
+prefix before the drive check, in both functions; a `//?/UNC/` path becomes `//host/share` and stays lexical, as UNC
+paths are. Twins: the same prefixes on a folder with no link, and `//?/UNC/host/share/x`, read False and not refused.
+v4.1.1 reading (MEASURED 2026-11-11, round 4, lane r4_v411.py, the same junctions in a scratch sandbox, facts()): `touch` through `//?/` and `//./`, and `rm -f` through `//?/`, of `<w>/c/refj/libraries/wares.xml`: 3 of 3 False at v4.1.1, all True now; the PRE-ARC label rests on this, not on the 0f6b5e3e reading above.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py` (generated copy `.claude/hooks/test_hook_facts.py`),
+`TestLinkNamesGitBashSpellsDifferently`: `test_RED_a_verbatim_or_device_spelled_operand_is_resolved` and
+`test_TWIN_a_verbatim_spelled_operand_with_no_link`; mutants `unverbatim: a verbatim or device drive prefix is dropped (P1)`, `link verbatim: ...`.
+
+## F373 - `..` after a junction was collapsed lexically; Git Bash resolves it through the link · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-11 (residuals OPEN)
+
+Found by the 4.1.2 release review. MEASURED 2026-11-11 with junction `k` -> `<ref>/libraries`: Git Bash's `touch
+<w>/k/../probe_abs.txt`, `touch k/../probe_rel2.txt` from <w>, and `cd k && touch ../probe_rel.txt` from <w> each
+created the file in `<ref>/`, 3 of 3: Git Bash takes `..` from the folder the link leads to. The guard read `..`
+lexically: the caller's norm() collapsed it for a relative operand, and for an absolute one `_resolve_spelling` handed
+the whole path to ntpath.realpath, which normalises before it resolves (MEASURED on 3.12.10: `realpath("<w>/k/../x")` is
+`<w>/x`, also for a `\\?\` path). At 0f6b5e3e, in-process facts(): those three forms, `rm -f <w>/k/../probe.txt` and
+`<w>/k/./../probe.txt` read False, 5 of 5. Fix (Windows only; READ posixpath._joinrealpath: POSIX realpath splits the
+RESOLVED path, so it is physical already): `_resolve_dot_dot` walks the components, resolving the folder before each
+`..` (a cached folder realpath inside the budget) and taking its parent. When no such folder is a link the two readings
+are one (cost MEASURED: 2 folder realpaths for `<w>/plain/sub/../x.txt`, where the whole-path realpath was 1). When one
+is, the lexical reading (Win32's, PowerShell's) is computed too: with no link it gives the physical landing; when both go
+through links to different places, links_unresolved and links_disagree (refused, its own reason). Twins: `..` with no
+link, through a link that stays outside the roots, `<w>/refj/libraries/../x.txt` (both readings land in `<ref>/`),
+`cp a.txt ../b.txt`: unchanged. Relative `..` operands reach the walk through `join_as_received` (F371 correction).
+A folder before a `..` that resolves OFF the local drives (`//host/share`, `//?/Volume{...}`, a drive whose type is
+not local) is refused at once (links_unresolved, not links_disagree: cannot tell), with no further realpath or lstat,
+since a call on a server can outlast the hook (4.1.1 A1). MEASURED with a stubbed folder answer, at 4140faa5: 3 of 3
+shapes (share, volume, remote `Y:`) read links_unresolved False and the walk made further calls; now 4 of 4 subtests
+(the three plus a share with every drive type stubbed local) refused with 0 calls after the answer; the local twin is
+walked on. SCOPE: only `..` is walked; a POSIX host is unchanged.
+
+Round 2 (4.1.2 release review, 2026-11-11): a link whose target is a DRIVE ROOT is now its own parent (the walk had gone
+on at `/`, the current drive; F371 CORRECTION 2, E). When the lexical and physical readings land through links in
+different places only the physical landing is returned, so `touch '<w>/okj/../refj/x.xml'` (okj -> elsewhere) changed
+from writes_reference to links_unresolved + links_disagree: still refused, with the disagreement's reason (MEASURED by
+the reviewer, compare.py: 12 of 263 x 4 rows, all this shape). OPEN, MEASURED by the reviewer, not fixed: the LISTING
+(link_entries_matched) reads its folder LEXICALLY, so `touch "<w>/deep/x/kk/../../../cw$X/f"` (kk a junction) reads 0 in
+every version while Git Bash went through the link. MSYS `/c/..`: see F375 row 15 (one statement).
+
+Round 3 (4.1.2 release review, 2026-11-11). A FALSE REFUSAL BY DESIGN (G2): PowerShell reads `k\..` LEXICALLY --
+MEASURED by the reviewer with PowerShell itself: `New-Item -ItemType File '<w>\k\..\ps_probe.txt'` and
+`Push-Location <w>\k; New-Item ..\ps_probe2.txt` landed in <w> -- while the walk reads every dialect's `..` physically,
+so `Set-Content '<w>\k\..\p.txt'` (k a junction into reference/) is refused as a reference write, where v4.1.1 allowed
+it. Kept: a Git Bash program started from PowerShell resolves the same text physically, and the analysis cannot know
+which program opens the path (pinned: `test_a_powershell_dot_dot_after_a_junction_is_read_physically_by_design`). Also
+round 3: `..` above a drive root returned no landing once the walk clamped at the root (an in-arc regression, F371
+CORRECTION 3, G1), fixed.
+
+v4.1.1 reading (MEASURED 2026-11-11, round 4, lane r4_v411.py, the same junctions in a scratch sandbox, facts()): `touch <w>/k/../probe.txt`, `touch k/../probe.txt` from <w> and `cd k && touch ../probe.txt` from <w>: 3 of 3 False at v4.1.1, all True now; the PRE-ARC label rests on this, not on the 0f6b5e3e reading above.
+
+Round 4 (2026-11-11). The same drive-root overshoot is left in the LINK-CROSSED branch, on the strict side (C3, READ, and
+MEASURED by the code reviewer): there the lexical reading compared is realpath's, which climbs above the drive, so
+`touch 'C:/../<w>/k/../x.xml'` is refused with the "two different places" reason instead of the reference block. Still a
+refusal; not changed. The MSYS `/c/..` case is stated once, in F375 row 15.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkReadingOfRelativeAndDotDotOperands` (`test_RED_dot_dot_after_a_link_is_physical`,
+its TWIN, `test_dot_dot_read_two_ways_landing_apart_is_refused`, `test_RED_a_link_off_the_local_drives_before_a_dot_dot_is_refused_at_once`,
+`test_TWIN_a_local_answer_before_a_dot_dot_is_walked_on`); the mutants labelled `dot dot: ...`.
+
+## F374 - An unresolved RELATIVE operand got no link reading · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-11
+
+Found by the 4.1.2 release review. `link_head_resolved` and `link_entries_matched` (F369) were given the operand as
+written, and both return on "not absolute", so a relative operand holding a variable or a `$(...)` was judged only as
+its text. At 0f6b5e3e, in-process facts() from a folder holding junction `refj` into reference/: `touch
+"refj$X/libraries/wares.xml"`, `touch "refj/$X/wares.xml"` and `touch refj/$(echo libraries)/wares.xml` read
+writes_reference False, 3 of 3, where `"<w>/refj$X/..."` read True. Fix: both are given the operand joined to its
+directory as the program receives it (`join_as_received`). SCOPE (decision 2026-11-11): a relative operand whose FIRST
+component STARTS with an expansion or substitution (`"$f"`, `"$TMPDIR/x"`, `$(mktemp)`, `"${OUT:-x}.txt"`) gets neither
+reading from its directory (`_leads_with_expansion`): such a value is usually an absolute path, and the rules do not judge
+an unresolved relative operand against the cwd (`touch "$X"` inside reference/ itself fires nothing), so reading it
+through a NEIGHBOURING link was incoherent. MEASURED at 4140faa5, which did read it: 11 of 480 corpus rows (160 commands
+x 3 folders), all from the folder holding junctions into reference/, turned into refusals; with the scope, 0 (and 11 of
+11 RED subtests read False). `refj$X/...` (literal prefix), `refj/$X/f` (literal first folder) and an absolute
+`"<folder>/$f"` (unchanged since v4.1.1) are still read. Twins: the same operands with no link (`plain$X/x.xml`, `"$X"` from a folder with no
+link) read False and not refused.
+v4.1.1 reading (MEASURED 2026-11-11, round 4, lane r4_v411.py, the same junctions in a scratch sandbox, facts()): `touch "refj$X/libraries/wares.xml"` and `touch "refj/$X/wares.xml"` from <w>: 2 of 2 False at v4.1.1, all True now; the PRE-ARC label rests on this, not on the 0f6b5e3e reading above.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py` (generated copy `.claude/hooks/test_hook_facts.py`),
+`TestLinkReadingOfRelativeAndDotDotOperands`: `test_RED_an_unresolved_relative_operand_is_read_through_its_link` and
+`test_TWIN_an_unresolved_relative_operand_with_no_link`, and for the scope `test_RED_a_relative_operand_that_STARTS_with_an_expansion_is_not_listed`
+and `test_TWIN_a_literal_prefix_or_a_literal_first_folder_is_still_read`; mutants `link head: a relative operand's head is joined to its directory (P3)`, `link entries: a relative
+operand is listed in its directory (P3)` and the three `link reading: ... (F374 scope)`.
+
+## F375 - Link and path spellings the guard still reads as written (4.1.2 release review, pre-arc, OPEN) · **SCOPE LIMIT** · PRE-ARC · confidence per row · OPEN 2026-11-11
+
+Found by the four reviewers of 4.1.2 round 2 (4140faa5 + 9895c730) and recorded, not fixed. "Measured" below means
+re-run here with the reviewers' scripts (scratchpad review2-*) against the round-2 fix, in-process facts(), unless the row
+says otherwise; no write was run against a real protected folder. WHAT IS KNOWN ABOUT EACH ROW'S AGE (corrected
+2026-11-11, round 3): rows 1, 2, 3, 9, 10 and 12 were measured at v4.1.1 too and read the same there (rows 1-3 re-run at
+v4.1.1 in round 3: 1 False, 2 3 of 3 False, 3 False where plain is True), so they predate the 4.1.2 range; rows 4-8 are
+READ or INFERRED from code the range did not change; rows 13-15 (round 3) say their own. Related residuals live in
+F373 (the listing's lexical head, MSYS `/c/..`) and F371 CORRECTION 2 (F: debris spends the budget; G: two loops use the
+last segment's physical cwd).
+
+1. A protected root that is ITSELF a junction is not matched by a landing reached through another link: root configured
+   as junction `S/refjn -> S/realref`, work junction `j -> refjn`, `touch '<w>/j/libraries/x.xml'` reads writes_reference
+   False (MEASURED here; the landing is spelled `realref`); a junction straight to `realref` reads False too. With the
+   root configured as `realref`, the junction `j2 -> realref` reads True (MEASURED, prov.py control). At v4.1.1 the same
+   readings (MEASURED in round 3, at_v411.py: the junction through the root-junction, the junction to `realref` and the
+   physical spelling all False with the root configured as `refjn`).
+2. A `\\?\Volume{GUID}\...` spelling of a protected path matches no rule: bash `touch` with slashes and with
+   backslashes, PowerShell `Set-Content`: 3 of 3 writes_reference False (MEASURED on the analyser; Win32 opens that
+   spelling as the same folder, MEASURED with isdir). That PowerShell writes through it is INFERRED; no write was run.
+3. A provider-qualified PowerShell path gets no link reading: `FileSystem::<w>\j2\libraries\x.xml` and
+   `Microsoft.PowerShell.Core\FileSystem::...` read False where the plain spelling reads True (MEASURED with facts();
+   PowerShell itself not run).
+4. `long_name()` (GetLongPathNameW on every `~digit` prefix, UNC and remote drives included, uncached, called from
+   `norm()`) and `_is_venv_interpreter`'s `os.path.isfile` run with no deadline check: INFERRED from the code, not
+   measured.
+5. A drive-relative `C:x` is read as `<cwd>/C`: READ (join_cwd and _win_alias).
+6. Deleting a junction that points at the game root resolves the leaf link, so it reads as deleting the game root
+   (probably a false hard deny): INFERRED; Git Bash's behaviour not measured.
+7. Rules that read operands without prep() get no link reading (`search_roots`, `xrcat_reunpack`,
+   `_subst_verb_at_root` / `verb_unresolved`, `_judge_link`'s target, `_program_writes_transcript`,
+   `copy_names_archive`): READ; all are read/performance rules or backstopped.
+8. `cd -P` is not tracked: `cd -P k/.. && touch libraries/x` is judged at <w>, not physically: READ, not measured.
+9. Braces through a junction: `touch <w>/{refj,plain}/x.xml` reads 0 in v4.1.1, 9368d5db and the fix (MEASURED), and Git
+   Bash's own `touch` created the file in the junction's target (MEASURED here, 1 of 1); a glob in the first component
+   (`ref*/x.xml`) reads 0 in all three (MEASURED; that a delete through it lands is INFERRED).
+10. `"$PWD/refj/x.xml"` is not read in any version: 9 of 9 (touch, rm, > in 3 folders) False in v4.1.1, 9368d5db and
+    the fix (MEASURED, compare.py).
+11. CLOSED 2026-11-11 (round 3) as not a gap: `cmd /c del <reference>\x.xml` produced no reference fact in facts() only
+    in its UNQUOTED Bash form, where bash strips the unquoted backslashes before cmd sees the path (INFERRED from quoting
+    rules, not run). Through the real hook (front-door reviewer's probe.py, re-run here at 1b1a48aa and v4.1.1): every
+    quoted spelling is DENIED by the reference hard block in both versions -- `/c` and `//c`, `cmd.exe`, PowerShell, both
+    slashes, `/c/...`, through a junction, `del /s`, `erase`, a wildcard, `cd /d` inside the carrier; the other allowed
+    shape, `cmd //c "del "<path>""`, leaves the path unquoted to bash the same way. Was: "UNVERIFIED".
+12. A junction named like a device AS THE HEAD of an unresolved operand or as the last component: `touch
+    "<w>/nul/lib$X/x"` (junction `nul` into reference/) reads 0 in v4.1.1, 9368d5db and the fix (MEASURED, nulcase.py),
+    because the leaf `nul` is lstat-ed as Win32 opens it (the device) and the verbatim spelling equals the plain one.
+    The folder form `<w>/nul/x.xml` is fixed (F371 CORRECTION 2, B).
+13. (round 3) `norm()` climbs above a drive root: `norm('C:/../a/b')` is `/a/b` at v4.1.1 and now (MEASURED). The link
+    reading compensates for the delete and write shapes (F371 CORRECTION 3, G1); norm() itself is unchanged, so a rule
+    that reads only the lexical form still sees `/a/b`.
+14. (round 3) `cd 'C:/..' && rm -rf '<ref path without C:>'` reads 0 in v4.1.1, 9368d5db, 4140faa5, 9895c730 and now
+    (MEASURED, rootdotdot.py): the cd tracker, not closed by G1.
+15. (round 3; MEASURED in round 4) In MSYS `/c/..` is `/`, the Git install root: in Git Bash `cd /c/.. && pwd -W` prints
+    `C:/Program Files/Git`, while `cd C:/.. && pwd -W` and `cd //?/C:/.. && pwd -W` print `C:/` (re-run here, read-only).
+    The guard reads `/c/../x` as `C:/x`, so the delete of `'/c/../<ref path without C:>'` is refused (as at v4.1.1; 0 at
+    4140faa5 and 9895c730, MEASURED rootdotdot.py; allowed at 1b1a48aa per the code reviewer): a FALSE REFUSAL on the
+    strict side, since Git Bash would delete under the Git install folder instead.
+16. (round 4) Deleting an ANCESTOR of the reference root or the game root reaches no rule. MEASURED through the whole hook
+    (lane anc_e2e.py: protect-bash.sh on stdin, scratch roots, nothing executed), identical at the r4 worktree and v4.1.1:
+    `rm -rf` of the reference root's parent, of the game root's parent, and of their common grandparent and
+    great-grandparent (a folder holding no profile) are ALLOWED, while the roots themselves are DENIED by their hard blocks.
+    The profile and saves are different: the profile's parent and grandparent, and the profile itself as the saves' parent,
+    are DENIED ("save scope refused: whole save-folder move/delete is refused"), by the save policy. READ: the delete rules
+    use `under()` (path at or inside a root) and the game-root check compares equality and globs; `contains_root()` (a
+    PROPER ANCESTOR test, hook_facts.py ~674) is used only by the icacls/takeown rules, `_judge_link` and the
+    search-above-reference rule (F127), not by a delete rule. No existing register entry decides this for deletes (searched:
+    `ancestor`, `contains_root`, `parent of`); F127 is the search rule's own. Not measured: `mv` of an ancestor, PowerShell
+    `Remove-Item`, the deployed-mod ask, and a drive-root delete.
+    **FIXED 2026-11-11 (4.1.2, fix lane r6).** New facts `rm_contains_reference` / `rm_contains_game`: a RESOLVED operand
+    of a delete that removes a folder whole (rm/rmdir/unlink/shred only with -r/-R/--recursive, which is how cmd's `rd` and
+    PowerShell's `Remove-Item` arrive; a trash verb; an unfiltered `find -delete`; what an `xargs rm -r` is fed) or of a move,
+    that is a PROPER ANCESTOR of the root (`contains_root`), is denied by protect-bash.sh with "this deletes or moves a
+    folder that contains ..." (two codex-rules rows). MEASURED through the whole hook (scratch r6/fd/anc_e2e.py and anc2.py,
+    base 0152fdb5 vs this fix, fixture roots, nothing executed): the 4 rows above that were ALLOWED are DENIED (parent of each
+    root, the common grandparent and great-grandparent); the other 7 are unchanged. Also MEASURED, base -> fix: `mv` of the
+    reference parent and of the grandparent, PowerShell `Remove-Item -Recurse`, `Remove-Item -Force`, plain `Remove-Item` and
+    `Move-Item` of the reference parent, `cd <ref> && rm -rf ..` and `rm -rf /`: allow -> deny; `rm -rf C:/`: deny (save
+    scope) -> deny (the new reason, which runs first). Twins still ALLOWED: `rm -rf <parent>/other`, a sibling-prefix name
+    (`<ref>x`, `<ref>` minus its last letter), `rm -f`, plain `rm`, `rmdir` and `unlink` of the parent, `cp -r` from or into
+    it, `ls -R`, `mv` of a sibling. STRICT, kept: PowerShell `Remove-Item` without `-Recurse` and cmd's `rd` without `/s` of
+    an ancestor are refused, because the translators already read both as `rm -rf`; on a folder that holds anything they
+    fail (INFERRED from their documented behaviour, not run); `rm -rf /` is refused (Git Bash's `/` is its install folder,
+    and GNU rm refuses `/` by itself). An rsync/robocopy purge of an ancestor was already refused as a delete inside the
+    root (MEASURED, rm_targets_reference), so it is not part of the new facts. STILL OPEN (MEASURED allowed at base and fix):
+    cmd's `del /s /q <ancestor>`, which deletes every FILE under it (the translation keeps no /s: `rm -f`), and a FILTERED
+    `find <ancestor> -name '*.xml' -delete` (find_scoped_deletes feeds only the in-tree rules, which use `under()`). NOT
+    MEASURED: an ancestor reached through a junction (prep's link rows are unresolved-flagged and are skipped here, F375
+    row 6's shape), an unresolved operand that may be an ancestor (`"C:/Users/$X/.."`: never a hard deny, F93), the
+    X4_CONFIG pass (still reads only the two reference facts), and the deployed-mod ask. **RE-DERIVED BY:**
+    `test_hook_facts.py::TestF375AncestorOfARootIsDeniedLikeTheRoot` and `test_audit0924_hooks.py::TestF375AncestorDeleteWholeHook`
+    (fails on 0152fdb5); 8 mutants (`F375: ...` in scripts/verify-hook-tests.py), all caught. CORRECTION 2026-11-12 (4.1.2
+    review): this said "6 of its 10 tests fail on 0152fdb5; the other 4, TWINs, pass on both"; the reviewer MEASURED 7 of
+    10. Re-measured here with the class as it now is (12 tests): 7 of 12 fail on 0152fdb5, the 6 positive tests and
+    `test_TWIN_an_unresolved_operand_is_not_read_as_an_ancestor` (its second, positive check `${A:-C:/Users}`); the other 5
+    TWINs pass on both. ADDED 2026-11-12 (4.1.2 review, MEASURED: `rm --rec <folder above reference>` was allowed): a
+    unique prefix of `--recursive` (`--r` .. `--recursive`; GNU getopt takes any unique prefix, and no other rm long option
+    starts with `r`: READ, rm's options --force --interactive --one-file-system --no-preserve-root --preserve-root
+    --recursive --dir --verbose) is recursive, in `_removes_folders` and in the older `deletes_recursively` (whose callers,
+    the xargs and archive rules, read it the same way now); `--verbose`, `--force`, `--dir`, `--recursivex` and the like are
+    not (`test_every_unambiguous_prefix_of_recursive_is_recursive` fails on 0152fdb5, its TWIN passes on both; 2 mutants).
+
+17. (4.1.2 CI and final review, 2026-11-13) Off Windows, a drive-spelled operand (`C:/x`) is a RELATIVE name, but
+    `is_abs()` reads it as absolute, so it is never joined to the session directory; `link_resolved` hands it to
+    posixpath.realpath, which places it under the HOOK PROCESS's own cwd. MEASURED with a POSIX simulation (hook_facts with
+    os shimmed to posixpath, posixpath's getcwd pinned; scratch review7/posixprobe.py, MSYS_NO_PATHCONV=1): from a POSIX game
+    root, with the hook cwd equal to it, `rm -rf C:/x` reads rm_in_x4_dir True and `rm -rf C:/../extensions` rm_hits_game
+    True at v4.1.1 and now (physically right: from that cwd both reach the game folder once a `C:` folder exists), and False
+    with the hook cwd elsewhere. The same reading put a test fixture's debris (`2>/dev/null` joined to the Windows-spelled
+    fixture game root) under that root on ubuntu CI (run 43157469519). A guard change dropping the hook-cwd answer
+    (e4c5fbb7, 67f9e6fe) made the first two WEAKER than v4.1.1 (final review), so it was reverted: hook_facts is as at
+    9e13a1a9, and `test_parse_debris_is_not_joined_onto_the_seed` uses POSIX-spelled roots off Windows (it and its mutant
+    are red/green on both systems, MEASURED with the simulation). OPEN: joining a drive-spelled operand to the SESSION
+    directory on POSIX (the proper fix) is not done; the reading is right only when the hook cwd is the shell's.
+
+2026-11-11, USER DECISION (relayed by the 4.1.2 review lead): a PowerShell `..` through a junction stays REFUSED (the strict
+reading in F373: PowerShell takes `..` from the path as written, Git Bash through the link, and the guard reads it as Git Bash
+does); and the rows of this entry other than row 16 go to the next release, not 4.1.2.
+
+**NO RE-DERIVATION for rows 1-15 and 17: an OPEN register of shapes, each measured or reasoned as its row says. Row 16 is FIXED
+and re-derived by the tests it names.**
+
+## F376 - A command carried inside another shell loses the outer `cd` · **DEFECT (measured)** · PRE-ARC · severity HIGH · confidence 90% · FIXED 2026-11-11 (residuals OPEN)
+
+Found by the 4.1.2 release review round 3 (front-door reviewer); re-run here with that reviewer's probes (review3-frontdoor
+probe2.py, probe3.py, probe4.py) through the WHOLE hook (protect-bash.sh on stdin), fixture roots in the scratch folder,
+nothing executed. Identical at 1b1a48aa and v4.1.1. A carried command is walked on its own (hook_facts, verbatim: "once
+anything does, where it runs is not known here"), so a relative operand inside it is judged with no directory.
+
+ALLOWED (each would delete inside a protected root):
+* `cd '<game>' && bash -c 'rm -rf extensions'`, the same with double quotes, `sh -c '...'`, and `eval '...'`;
+* `cd '<game>' && cmd //c rd /s /q extensions`, and `pushd '<game>' && cmd //c rd /s /q extensions`;
+* `cd '<ref>' && cmd //c del x.xml`, `cmd //c "del x.xml"`, `cmd //c rd /s /q libraries`, `cmd /c del x.xml`;
+* PowerShell `Set-Location '<ref>'; cmd /c del x.xml`.
+
+DENIED (controls): the plain `cd '<game>' && rm -rf extensions`; `cd '<game>' && ( rm -rf extensions )`, `env rm ...` and
+`xargs rm ...`; `bash -c 'cd <game> && rm -rf extensions'` (the cd inside the carrier); `cmd //c del x.xml` and
+`rm -f x.xml` with the payload cwd in <ref>; PowerShell `Set-Location '<ref>'; Remove-Item x.xml`, and `cmd /c del x.xml`
+with the payload cwd in <ref>.
+
+NOT CHECKED: `powershell -c` and `pwsh -c` after an outer cd; carriers nested two deep; `cd -` and `popd` before a carrier;
+a carrier in a pipeline or a `for` loop; whether the deployed-mod ask (not a hard block) behaves the same way; the
+PowerShell `&` and `Start-Process` forms. Not fixed here by decision of the review lead (F376 is recorded for a later
+release). SUPERSEDED 2026-11-11: the user approved the fix for 4.1.2 (below).
+
+**FIXED 2026-11-11 (4.1.2, fix lane r6).** READ: `_inner_commands` now reports which SEGMENT of its text carried each
+carried text (not a `trap`, whose text runs when the signal fires; not a reading or a whole-command variant, which carries
+its own `cd`s), `carried_commands` hands that on as (parent, segment) routes, and facts() walks every carried text from each
+(directory, from_seed, unseeded, physical) lane its carrier segment has in any walk of the parent, spread to a FIXPOINT
+(CORRECTION 2026-11-12, 4.1.2 review: this said "parents first", one pass over the deduped carried list, so a text first
+reached from an EARLIER segment never took a later parent's seed on to its own children; MEASURED end to end: prefixing `cd
+'<elsewhere>' && bash -c "bash -c 'rm -rf extensions'"; ` to a three-deep carrier after `cd '<game>'` made the deny an
+allow; now denied, `test_a_seed_from_a_LATER_parent_reaches_the_children_too`), AND from the old unknown directory, last (so no verdict can get weaker and the `cwd` fact is the old one). A text no carrier segment hands on
+(a substitution) keeps the old walk only. Past _MAX_CD_LANES seeds for one text the directory is unknown and refused (C7).
+MEASURED through the whole hook, base 0152fdb5 vs the fix (the front-door reviewer's probe.py, probe2-4 re-run as
+scratch r6/fd, fixture roots, nothing executed): every one of the 11 ALLOWED forms above is DENIED by the game or reference
+hard block; the 9 controls are unchanged; of 144 probe output lines the only changed rows are those forms (19 rows; the twin
+`cd '<elsewhere>' && cmd //c del x.xml` stays allowed). The NOT CHECKED forms, MEASURED now (scratch r6/e2e_probe.py,
+base -> fix): `powershell -c` and `pwsh -c` after an outer cd, two carriers nested, a carrier in a pipeline, in a `for` loop
+and in a subshell, `pushd A; pushd B; popd` before one, PowerShell `Set-Location <game>; & bash -c ...`,
+`Start-Process cmd -ArgumentList '/c rd /s /q extensions'`, `powershell -c` and `cmd /c rd`, and `Push-Location <ref>; cmd
+/c del x.xml`: allow -> deny; `cd <game>/extensions && bash -c 'rm -rf amod'`: allow -> the deployed-mod ASK, as the plain
+spelling. `cd <game> && cd - && bash -c '...'` is now DENIED like its plain spelling, which the cd tracker already reads as
+staying in <game> (`cd -` reaches no lane: READ, `_operands` drops `-`); a pre-existing strict reading, not new. Twins still
+ALLOWED: the carriers after a cd to an unrelated folder (bash -c, cmd //c rd, cmd //c del, eval), a `cd` AFTER the carrier,
+and an unknown outer directory (`cd "$NOPE"`), which reads as before. STILL OPEN (MEASURED allowed at base and fix): a
+`trap` after a cd (`cd <game>; trap 'rm -rf extensions' EXIT` deletes at exit and is allowed: its text runs in the
+directory in force when the signal fires, so it is given none; CORRECTION 2026-11-12, 4.1.2 review: this listed the
+trap as a twin that is correctly allowed; it is a gap, pinned by `test_GAP_a_trap_is_not_judged_in_any_directory`), a
+delete inside `$(...)`, backticks or `<(...)` after a cd (a substitution has no
+segment here: segments() can split inside it, and a nested one may run after a `cd` of its own), and a heredoc fed to a
+shell after a cd (`cd <game> && bash <<'EOF'`: the body is a top-level text, not handed on by a segment). INFERRED, not
+measured: `env -C <dir> bash -c ...` reads in the outer directory, as its plain `env -C <dir> rm ...` already does (MEASURED
+deny for both; a false refusal where <dir> is unprotected). FAIL-CLOSED FALSE REFUSALS (MEASURED by the 4.1.2 reviewer,
+not re-run here), each after a cd into a protected root: `Start-Process -WorkingDirectory <other> cmd ...` and `sudo -i`
+(both run elsewhere, read as the outer directory), and `env -C` above; and one carried text handed on from 17 or more
+folders (more than _MAX_CD_LANES seeds) is refused as cd_lanes_truncated. COST (MEASURED by the reviewer, not re-run
+here): contrived shapes that fill 16 lanes reach the 18 s deadline and refuse; a 1,500-segment `bash -c` after a cd went
+2.0 s -> 6.7 s. Two existing tests pinned the old reading as a fixture
+assumption and were changed (READ): `test_TWIN_a_carrier_after_a_directory_change_is_not_seeded` (popd with an empty stack
+now leaves a carrier where the plain spelling is; a substitution carries the moves clauses) and the `SESSION_DELETE` of
+`TestProgramsThatRunProgramsReview` (now a substitution, so the reading-leak tests still see the directory-change test).
+Per item, old vs new over the real Bash history: MEASURED (scratch r6/compare.py: every unique Bash command with its cwd in the local transcripts, 64,929, in-process
+facts() of 0152fdb5 vs the fix, real root layout, read only; the 2,819 with a delete or move verb re-run on the final
+code): no fact became weaker on any row; apart from the two new facts appearing, 1 row differs, rm_in_x4_dir False ->
+True (an ADVISORY, not a prompt): a session's own probe script whose `$(v "eval 'rm -rf \"$G\"'")` is split by
+segments() into an `eval` segment after a `cd <toolkit>`, so the eval's text, quoted debris, joins the toolkit. Not
+intended; recorded rather than fixed (a parse fragment of a substitution, the shape lane F narrowed for $(...) verbs).
+**RE-DERIVED BY:** `test_hook_facts.py::TestF376CarrierKeepsTheOuterDirectory` (re-measured 2026-11-12, 13 tests: 9 fail
+on 0152fdb5; the 3 TWINs and the GAP test pass on both), `test_audit0924_hooks.py::TestF376CarrierKeepsTheOuterDirectoryE2E`
+(2 of 3 fail on 0152fdb5); 8 new mutants (`F376: ...`, the fixpoint one added 2026-11-12) and 6 re-anchored ones (lane F's
+carrier pair, K-I4, C7, the heredoc-body and bash -c mutants), all caught.
 
 ## F365 - `_merge` modelled `<add pos="append">` as an append; the engine skips the node · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
 

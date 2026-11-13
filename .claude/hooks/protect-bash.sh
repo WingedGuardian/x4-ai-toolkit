@@ -451,11 +451,20 @@ fi
 
 # 4.1.1 review (link budget): link resolution is bounded per hook call (realpath once per folder, at most
 # _MAX_LINK_RESOLVED folders). An operand past the bound may sit behind a junction into a protected root,
-# so it is refused, never read as "no link". Same verdict as the truncations above.
+# so it is refused, never read as "no link". Same verdict as the truncations above. 4.1.2 release review round 3
+# (G4): also set, alone, by a `..` after a link that leads off the local drives (_resolve_dot_dot): named below.
+# 4.1.2 release review (I3): two readings of one path that land through links in DIFFERENT places (Git Bash's and
+# Win32's spelling of a name, or `..` read physically and lexically) also set links_unresolved; that cause has its
+# own words, because "too many folders" sends the user to split a command that names one path.
+if on links_disagree; then
+  x4_guard_check_inert
+  _X4_UNRELAXED=1
+  deny "A path in this command reaches two different places depending on which program opens it (Git Bash keeps a trailing dot or space and writes characters such as | * : as other characters; Windows drops or rejects them; and a .. after a junction or symlink is taken from the link's target by Git Bash, from the path as written by Windows), and at least one of them goes through a junction or symlink, so the guard cannot tell which place would be written. Spell the path without trailing dots or spaces, those characters, or a .. after a link, and re-run."
+fi
 if on links_unresolved; then
   x4_guard_check_inert
   _X4_UNRELAXED=1
-  deny "This command names files in so many different folders that the guard stopped checking them for links (a junction or symlink into a protected folder), so some targets were NEVER checked. Split it into commands that each touch fewer folders and re-run. (Or the filesystem could not say whether one of its paths is a link: check that each path can be read.)"
+  deny "This command names files in so many different folders that the guard stopped checking them for links (a junction or symlink into a protected folder), so some targets were NEVER checked. Split it into commands that each touch fewer folders and re-run. (Or the filesystem could not say whether one of its paths is a link: check that each path can be read. Or a path has a .. after a link that leads to a network share, a volume path (a Volume{...} name) or another drive that is not local, which the guard does not follow: write that path without the .. in it.)"
 fi
 
 # === HARD BLOCK — delete the game installation ===
@@ -468,6 +477,12 @@ on rm_hits_game && deny "BLOCKED: cannot delete the X4 game installation directo
 
 # === HARD BLOCK — delete the reference folder (read-only base game data) ===
 on rm_targets_reference && deny "BLOCKED: reference/ is the read-only unpacked base game data (re-unpack only via bin/unpack-reference.sh)."
+
+# === HARD BLOCK — delete or move a folder that CONTAINS one of those roots (F375 row 16, 4.1.2) ===
+# A recursive delete (rm -r, rd /s, Remove-Item -Recurse, trash, an unfiltered find -delete, a purge) or a
+# move of a folder ABOVE the root takes the root with it. MEASURED at v4.1.1: the parent was allowed.
+on rm_contains_game && deny "BLOCKED: this deletes or moves a folder that contains the X4 game installation directory."
+on rm_contains_reference && deny "BLOCKED: this deletes or moves a folder that contains reference/, the read-only unpacked base game data (re-unpack only via bin/unpack-reference.sh)."
 
 # === HARD BLOCK — WRITE into the reference folder (read-only base game data) ===
 # The delete case above has been blocked for months; a WRITE had no rule at all, so a

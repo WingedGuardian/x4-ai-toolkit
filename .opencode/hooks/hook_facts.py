@@ -143,11 +143,13 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
     respells `p` (an 8.3 short name expanded) is no link (4.1.1 final round, F360). MEASURED at 7f4895a2: `>`, `touch` and `rm` through a junction into reference/ were allowed (3 of 3) while
     the file tools, which canonicalise, denied. The caller judges this path IN ADDITION to the
     lexical one, so the stricter verdict stands. os.path.realpath resolves the longest existing
-    prefix and keeps the rest as written (non-strict); a UNC or device path is left lexical.
+    prefix and keeps the rest as written (non-strict); a UNC or `\\\\?\\Volume{...}` path is left lexical, while a
+    verbatim or device DRIVE path (`//?/C:/...`, `//./C:/...`) is read as its drive path (F372).
 
     `literal`: the caller knows every `$` in `p` is a literal character (single-quoted or escaped), so
-    has_unresolved() does not apply. On Windows each component is resolved as Windows opens it
-    (_win_alias: an NTFS stream suffix and trailing dots/spaces dropped). 4.1.1 review (link budget round
+    has_unresolved() does not apply. On Windows each component is resolved as Win32 opens it
+    (_win_alias: an NTFS stream suffix and trailing dots/spaces dropped) and as Git Bash does (_msys_spelling;
+    4.1.2: a junction named `j` U+F07C or `j.` was written through by Git Bash and read as no link). 4.1.1 review (link budget round
     2), MEASURED at a70dcedd: `touch '<junction>/libraries/wares.xml::$DATA'` read writes_reference False,
     because has_unresolved() read the literal `$DATA` as a variable, and `touch '<junction>:s'` (a write
     to it lands in a stream of the TARGET folder, MEASURED) False, because the leaf lstat'd as no link.
@@ -157,15 +159,183 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
         return ""
     s = p.replace(chr(92), "/")
     if os.name == "nt":
-        s = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", s)
+        # 4.1.2 release review (P1, pre-arc), MEASURED 2026-11-11: Git Bash's `touch "//?/<w>/refj/libraries/x"`
+        # wrote through the junction while this returned "" for anything not spelled `X:/`. A verbatim or device
+        # DRIVE prefix names the same drive path; a UNC one stays lexical (below), as before.
+        s = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", _unverbatim(s))
         if not re.match(r"^[A-Za-z]:/", s):
             return ""
-        s = _win_alias(s)
         # 4.1.1 review A1: a realpath cannot be interrupted, and on a drive mapped to an offline server
         # one took 21 s (MEASURED: realpath of an unreachable UNC path), so two such operands outran the
         # hook's 30 s and the call failed OPEN. Only a local drive is resolved.
         if _drive_type(s[0]) not in _LOCAL_DRIVE_TYPES:
             return ""
+        # Two programs, two spellings of one text: Win32 (PowerShell, the file tools) opens `j.` as `j` and
+        # rejects `j|`; Git Bash opens `j.` as written and `j|` as j U+F07C (_msys_spelling). Both are resolved,
+        # the second only when it differs; when both land through links in different places, refused.
+        alt = _msys_spelling(s)
+        s = _win_alias(s)
+        real = _resolve_spelling(s, refuse)
+        if alt == s:
+            return real
+        other = _resolve_spelling("//?/" + alt, refuse)
+        # 4.1.2 release review: unwrapped by _unverbatim (I5: a slice turned `//?/UNC/h/s/x` into `UNC/h/s/x`), and
+        # BOTH landings un-mapped before comparing (I4: a target folder that really holds U+F07C compared unequal
+        # to itself, and the write was refused).
+        other = _unverbatim(other)
+        if real and other and _lexical_norm(_unmsys(real)) != _lexical_norm(_unmsys(other)):
+            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+            _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse
+        return real or other
+    return _resolve_spelling(s, refuse)
+
+
+#: Characters Git Bash (the MSYS runtime) writes as U+F000 plus their code, because Win32 forbids them in
+#: a name. MEASURED 2026-11-11 with Git Bash's own `touch`: `|*?<>:` and 0x01-0x1f each became U+F0xx; `"`
+#: (in the runtime's documented set, not measured here: the probe could not pass it in argv) is included.
+_MSYS_MAPPED = frozenset('|*?<>:"' + "".join(chr(i) for i in range(1, 32)))
+
+
+def _msys_spelling(s: str) -> str:
+    """`s` (an absolute `C:/...` path with slashes) as Git Bash names it on disk: each component after the
+    drive with its _MSYS_MAPPED characters as U+F000 plus their code, and trailing dots and spaces KEPT
+    (MEASURED: `pq.` and `pq ` are written as named, where Win32 opens `pq`). For a file-system call, this
+    spelling needs the `\\\\?\\` prefix, which keeps Win32 from stripping those trailing characters."""
+    parts = s.split("/")
+    return "/".join(parts[:1] + ["".join(chr(0xF000 + ord(c)) if c in _MSYS_MAPPED else c for c in part)
+                                 for part in parts[1:]])
+
+
+def _unmsys(s: str) -> str:
+    """_msys_spelling's mapping undone, to compare where two spellings land (`<dir>/*.xml` and `<dir>/` U+F02A
+    `.xml` name one place, spelled by two programs)."""
+    return "".join(chr(ord(c) - 0xF000) if 0xF000 < ord(c) < 0xF080 and chr(ord(c) - 0xF000) in _MSYS_MAPPED
+                   else c for c in s)
+
+
+def _native(s: str) -> str:
+    """`s` for a file-system call: a `//?/` (verbatim) spelling takes backslashes, which that prefix requires. Windows only:
+    4.1.2 release review round 4 (C2), simulated with the reviewer's posixsim.py, on POSIX `//?/x` is a path of its own,
+    and its backslashed form is a RELATIVE name there, resolved under the cwd."""
+    return s.replace("/", chr(92)) if os.name == "nt" and s.startswith("//?/") else s
+
+
+#: A verbatim (`//?/`, and the `/?/` one backslash pair of `\\\\?\\` in double quotes leaves: _WIN_PREFIX) or a
+#: device (`//./`) prefix, before a drive or `UNC/`. Case as written: realpath answers `\\\\?\\UNC\\`.
+_VERBATIM_DRIVE = re.compile(r"^(?:/{1,2}[?]|//[.])/+(?=[A-Za-z]:(?:/|$))")
+_VERBATIM_UNC = re.compile(r"^(?:/{1,2}[?]|//[.])/+UNC/", re.I)
+
+
+def _unverbatim(s: str) -> str:
+    """`s` (slashes) without a verbatim or device prefix: `//?/X:/a` is `X:/a`, `//?/UNC/h/s/a` is `//h/s/a`;
+    anything else (`//?/Volume{...}/a`, a plain path) as given. 4.1.2 release review (P1, I5)."""
+    m = _VERBATIM_DRIVE.match(s)
+    if m:
+        return s[m.end():]
+    m = _VERBATIM_UNC.match(s)
+    return "//" + s[m.end():] if m else s
+
+
+def _same_place(real: str, s: str) -> bool:
+    """Is `real` (a realpath answer for `s`) only a respelling of `s`, i.e. no link? On Windows realpath also expands
+    an 8.3 short name (CI, MEASURED at cba3a1ce: the runner's TEMP is C:/Users/RUNNER~1/..., so a plain folder there
+    read as a link); GetLongPathNameW expands short names and follows no link."""
+    return _lexical_norm(real) == _lexical_norm(s) or (
+        os.name == "nt" and _lexical_norm(real) == _lexical_norm(long_name(s)))
+
+
+def _dir_realpath(head: str, refuse: bool):
+    """The realpath of the folder `head`, once per hook call (cached in _LINK_DIRS); None when the budget is spent
+    or the filesystem cannot answer (_realpath_budgeted). 4.1.2 release review (I2), MEASURED with budget_probe.py:
+    the cache was keyed per SPELLING, so `C:/a` and `//?/C:/a` each spent one of the _MAX_LINK_RESOLVED realpaths for
+    a folder Win32 and a verbatim open name identically, and `rm -f` over operands in 33 folders (`d<i>/*.o`, `d<i>/x.`)
+    was refused (v4.1.1: from 65). A verbatim head _win_alias leaves unchanged is cached under its plain spelling.
+
+    4.1.2 release review round 2 (B), MEASURED (nulcase.py): "Win32 and a verbatim open name it identically" is false for
+    a DEVICE name: Win32 realpath answers `<w>/nul` unchanged, the verbatim one follows the junction named `nul` to its
+    target, so `touch '<w>/nul/x.'` read writes_reference 1 at 9368d5db and 0 after, and `touch '<w>/nul/x.xml'` 0 in
+    every version, while Git Bash's touch landed in the target. On Windows a plain drive folder is therefore RESOLVED
+    verbatim (a folder head has no dot segment, and a verbatim open reads it as Win32 does, device names aside, where the
+    verbatim answer is the true one) and the answer is unwrapped (_unverbatim). The budget is unchanged (budget_probe.py,
+    4 shapes x 7 sizes, as at v4.1.1). Since every drive folder is now opened verbatim, a `//?/` head is the same folder as
+    its text without the prefix, so the key is that text whatever _win_alias would make of it (`<w>/j.` and `<w>/j` are
+    two keys, two folders); the former "_win_alias leaves it unchanged" condition could no longer change an answer
+    (measured: its mutant survived --only), so it is gone."""
+    # 4.1.2 release review round 3 (G3): only on Windows is `//?/` a prefix; on POSIX `//?/x` is a path of its own, and
+    # stripping it made the key the RELATIVE `x`.
+    key = head[4:] if os.name == "nt" and head.startswith("//?/") else head
+    rhead = _LINK_DIRS.get(key)
+    if rhead is None:
+        # (Every Windows caller hands a `X:/...` folder: link_resolved and link_entries_matched check the drive first.)
+        rhead = _realpath_budgeted("//?/" + key if os.name == "nt" else key, refuse)
+        if rhead is None:
+            return None
+        rhead = _unverbatim(rhead)
+        _LINK_DIRS[key] = rhead
+    return rhead
+
+
+def _resolve_dot_dot(s: str, refuse: bool) -> str:
+    """_resolve_spelling for a Windows path with a `..` component, read PHYSICALLY as Git Bash reads it, and compared
+    with the lexical reading Win32 (PowerShell, the file tools) and ntpath.realpath make. 4.1.2 release review (P2,
+    pre-arc), MEASURED 2026-11-11 with junction k -> <ref>/libraries: Git Bash's `touch <w>/k/../probe.txt`, `touch
+    k/../probe.txt` from <w> and `cd k && touch ../probe.txt` each created the file in <ref>/ (3 of 3), while realpath
+    collapsed `..` first (also for a `\\\\?\\` path, MEASURED on 3.12) and the guard read no link.
+
+    Each `..` takes the parent of the path so far RESOLVED (a cached folder realpath, inside the budget); `.` is
+    skipped. When no folder before a `..` is a link the two readings are one and the walked path is resolved as any
+    other. Otherwise: the physical landing when the lexical reading shows no link; when both show links and land in
+    different places, links_unresolved (when `refuse`) and the physical one."""
+    pre = "//?/" if s.startswith("//?/") else ""
+    parts = s[len(pre):].split("/")
+    walked, crossed = parts[0] + "/", False
+    for c in parts[1:]:
+        if c in ("", "."):
+            continue
+        if c != "..":
+            walked = walked.rstrip("/") + "/" + c
+            continue
+        if walked.endswith(":/"):
+            continue                        # `..` at a drive root stays there
+        r = _dir_realpath(pre + walked, refuse)
+        if r is None:
+            return ""
+        r = _unverbatim(r).rstrip("/")
+        # A folder that resolves OFF the local drives (a share `//host/share`, a `//?/Volume{...}` path, a mapped
+        # remote drive) is not walked on: each further call could hang on a server (4.1.1 A1: one realpath of an
+        # unreachable UNC path took 21 s), and its parent is no drive path. Cannot tell: refused, no further call.
+        if not re.match(r"^[A-Za-z]:(/|$)", r) or _drive_type(r[0]) not in _LOCAL_DRIVE_TYPES:
+            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+            return ""
+        crossed = crossed or not _same_place(r, walked)
+        # 4.1.2 release review round 2 (E): the parent of a drive root (`D:`) is itself; posixpath.dirname("D:") is "",
+        # which put the walk at `/`, the hook's current drive.
+        walked = r + "/" if re.match(r"^[A-Za-z]:$", r) else posixpath.dirname(r)
+        walked = walked + "/" if walked.endswith(":") else walked
+    res = _resolve_spelling(pre + walked, refuse)
+    if not crossed:
+        # 4.1.2 release review round 3 (G1), MEASURED (reviewer: e2e.py through the real hook; here, RED tests): with no link
+        # crossed the walked path is still the landing when the LEXICAL reading puts the text elsewhere -- `..` above a
+        # drive root, where norm() climbs past the drive (`C:/../a` is `/a`, an old bug left as is) while the walk stays at
+        # `C:/`. Returning "" there turned the delete of `'C:/../<ref>'` from refused (v4.1.1, 9368d5db) into allowed.
+        return res or ("" if _same_place(pre + walked, s) else pre + walked)
+    phys = res or pre + walked
+    lex = _realpath_budgeted(s, refuse)
+    lex = "" if lex is None or _same_place(lex, s) else lex
+    phys_answer = "" if _same_place(phys, s) else phys
+    if not lex:
+        return phys_answer
+    if _lexical_norm(_unmsys(_unverbatim(lex))) != _lexical_norm(_unmsys(_unverbatim(phys))):
+        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+        _LINKS_DISAGREE[0] = _LINKS_DISAGREE[0] or refuse
+    # Only one landing is returned: when the physical one is where the text lands lexically, the caller's lexical
+    # entry judges it already, so the lexical reading's link is the one to add.
+    return phys_answer or lex
+
+
+def _resolve_spelling(s: str, refuse: bool) -> str:
+    """link_resolved for ONE spelling of an absolute local path: a `C:/...` path as Win32 opens it, or a
+    `//?/C:/...` one, opened verbatim. "" when nothing on it is a link or the filesystem cannot answer."""
     # Bounded per hook call, and inside the analysis deadline (past it the command is refused). The folder
     # is resolved once per hook call (cached), and the last component is followed only when lstat says it
     # is a link, so a long list of files in a few folders spends a few resolutions. 4.1.1 review (link
@@ -175,42 +345,44 @@ def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
     # deadline is checked before EACH uninterruptible call (every realpath, every lstat).
     head, leaf = posixpath.split(s)
     unknown = False
+    if os.name == "nt" and ".." in s.split("/"):
+        return _resolve_dot_dot(s, refuse)  # Git Bash reads `..` physically, Win32 lexically (P2)
     if (not leaf or leaf in (".", "..") or _SHORT_NAME.search(leaf)
             or any(c in (".", "..") for c in head.split("/"))):
         real = _realpath_budgeted(s, refuse)    # dot segments / a short leaf: the whole path, as before
     else:
         if head.endswith(":"):
-            head += "/"                     # `C:` alone is the drive's CURRENT folder, never its root
-        rhead = _LINK_DIRS.get(head)
+            # `C:` alone is the drive's CURRENT folder to Win32. Since round 2 (B) a folder is resolved verbatim, and
+            # `realpath('\\?\C:')` returns it unchanged (MEASURED on 3.12, round 3), so the hazard is gone; this line
+            # makes the cache key the drive ROOT (pinned by the `_LINK_DIRS.get(drive + "/")` assertion of
+            # test_a_file_at_a_drive_root_resolves_from_the_root_not_the_current_folder).
+            head += "/"
+        rhead = _dir_realpath(head, refuse)
         if rhead is None:
-            rhead = _realpath_budgeted(head, refuse)
-            if rhead is None:
-                return ""
-            _LINK_DIRS[head] = rhead
+            return ""
         if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
             _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
             return ""
         _LINK_PROBED[0] += 1
         _check_deadline()
         try:
-            st = os.lstat(s)
+            st = os.lstat(_native(s))
             is_link = stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & 0x400)
         except (FileNotFoundError, NotADirectoryError):
             is_link = False                 # nothing there: it lands where its folder resolves
         except OSError as exc:
-            # A name Windows rejects (ERROR_INVALID_NAME 123: a glob's `*`/`?`, `<`, `|`) names no file, so no
-            # link either; MEASURED: `<save>/*` from a PowerShell Get-ChildItem raised it. Anything else: cannot tell.
+            # A name Win32 rejects (ERROR_INVALID_NAME 123: a glob's `*`/`?`, `<`, `|`) names no file ON THIS
+            # SPELLING, so no link either; MEASURED: `<save>/*` from a PowerShell Get-ChildItem raised it. Git Bash
+            # opens such a name under its own spelling, which link_resolved resolves too (_msys_spelling).
+            # Anything else: cannot tell.
             is_link = unknown = getattr(exc, "winerror", None) != 123
         except ValueError:
             is_link = unknown = True        # cannot tell: resolve the whole path
         real = _realpath_budgeted(s, refuse) if is_link else rhead.rstrip("/") + "/" + leaf
     if real is None:
         return ""
-    # A link is reported only when realpath's answer is not merely a respelling of `p`. On Windows realpath
-    # also expands an 8.3 short name (CI, MEASURED at cba3a1ce: the runner's TEMP is C:/Users/RUNNER~1/...,
-    # so a plain folder there read as a link); GetLongPathNameW expands short names and follows no link.
-    same = _lexical_norm(real) == _lexical_norm(s) or (
-        os.name == "nt" and _lexical_norm(real) == _lexical_norm(long_name(s)))
+    # A link is reported only when realpath's answer is not merely a respelling of `p` (_same_place).
+    same = _same_place(real, s)
     if same and unknown:
         # The leaf's lstat could not answer, and realpath showed no link either. On POSIX realpath(strict=False)
         # IGNORES every lstat error (posixpath: `ignored_error = OSError`), so a link it could not read comes
@@ -251,46 +423,62 @@ def link_entries_matched(p: str, refuse: bool = True) -> list:
     if i == len(parts) or not head or not is_abs(head):
         return []
     if os.name == "nt":
-        head = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", head)
+        head = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", _unverbatim(head))     # `//?/C:/...` too (P1)
         if not re.match(r"^[A-Za-z]:", head) or _drive_type(head[0]) not in _LOCAL_DRIVE_TYPES:
             return []
         head = head if "/" in head else head + "/"
     comp = parts[i]
     cut = min(m.start() for m in (_EXPANSION.search(comp), _SUBST.search(comp)) if m)
     prefix = comp[:cut]
+    # (folder to list, the folder its entries are named under). 4.1.2 release review, I1c: the head was listed only as
+    # Win32 opens it, so a folder Git Bash made (`<w>/a|`, `<w>/b.`) was not listed (or `<w>/b` was); it is listed under
+    # Git Bash's spelling too, verbatim, when that differs. I1b: an entry is resolved by its OWN name, verbatim, under
+    # the folder as Win32 names it (abspath: GetFullPathNameW), so a junction named `m.` or `n ` is not read as `m`/`n`.
+    heads = [(head, head)]
     if os.name == "nt":
-        prefix = _win_alias("x/" + prefix).split("/", 1)[1].casefold()
-    if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
-        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
-        return []
-    _LINK_PROBED[0] += 1
-    _check_deadline()
+        # Win32's and Git Bash's spelling of the prefix (link_resolved): an entry starting with either.
+        prefix = tuple({f("x/" + prefix).split("/", 1)[1].casefold() for f in (_win_alias, _msys_spelling)})
+        # 4.1.2 release review round 2 (A), MEASURED (nulentries.py): os.path.abspath turned a last component named `nul`
+        # into the device `\\.\nul`, so the entries of a real folder `<w>/deep/nul` were named under `//./nul` and
+        # `touch "<w>/deep/nul/ref$X/x"` read 0 (v4.1.1 and 9368d5db: 1). The folder Win32 lists is `head` with
+        # trailing dots and spaces dropped (`<w>/deep/nul/*` lists the real folder: the v4.1.1 reading found its entry)
+        # and `..` collapsed lexically: _win_alias and normpath, which converts no device name.
+        heads = [(head, "//?/" + os.path.normpath(_win_alias(head)).replace(chr(92), "/"))]
+        if _msys_spelling(head) != _win_alias(head):
+            heads.append(("//?/" + _msys_spelling(head),) * 2)
     rest = "/".join(parts[i + 1:])
     out = []
-    try:
-        with os.scandir(head) as it:
-            for n, e in enumerate(it):
-                if n % 256 == 0:
-                    _check_deadline()
-                name = e.name.casefold() if os.name == "nt" else e.name
-                if not name.startswith(prefix):
-                    continue
-                try:
-                    st = e.stat(follow_symlinks=False)
-                except FileNotFoundError:
-                    continue                # gone since the listing: nothing lands through it
-                except OSError:
-                    # A matching entry whose lstat cannot answer may be a link: refused, never "no link".
-                    _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
-                    continue
-                if not (stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400):
-                    continue
-                real = _realpath_budgeted(e.path.replace(chr(92), "/"), refuse)
-                if real is None:
-                    return out
-                out.append(real.rstrip("/") + ("/" + rest if rest else ""))
-    except OSError:
-        return out
+    for listed, named in heads:
+        if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
+            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+            return out
+        _LINK_PROBED[0] += 1
+        _check_deadline()
+        try:
+            with os.scandir(_native(listed)) as it:
+                for n, e in enumerate(it):
+                    if n % 256 == 0:
+                        _check_deadline()
+                    name = e.name.casefold() if os.name == "nt" else e.name
+                    if not name.startswith(prefix):
+                        continue
+                    try:
+                        st = e.stat(follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue                # gone since the listing: nothing lands through it
+                    except OSError:
+                        # A matching entry whose lstat cannot answer may be a link: refused, never "no link".
+                        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+                        continue
+                    if not (stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400):
+                        continue
+                    real = _realpath_budgeted(named.rstrip("/") + "/" + e.name if os.name == "nt"
+                                              else e.path.replace(chr(92), "/"), refuse)
+                    if real is None:
+                        return out
+                    out.append(_unverbatim(real.replace(chr(92), "/")).rstrip("/") + ("/" + rest if rest else ""))
+        except OSError:
+            continue
     return out
 
 
@@ -304,7 +492,7 @@ def _realpath_budgeted(s: str, refuse: bool = True):
         return None
     _LINK_RESOLVED[0] += 1
     try:
-        return os.path.realpath(s).replace(chr(92), "/")
+        return os.path.realpath(_native(s)).replace(chr(92), "/")
     except Exception:
         # A realpath that raised is a non-answer, never "no link" (CI round for 4.1.1): refused when `refuse`.
         _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
@@ -321,6 +509,9 @@ _LINK_PROBED = [0]
 #: ...each folder's realpath, once per hook call.
 _LINK_DIRS: dict = {}
 _LINKS_UNRESOLVED = [False]
+#: ...of which: two readings of one operand (Win32's and Git Bash's spelling, or `..` read lexically and physically)
+#: landing through links in different places (4.1.2 release review, I3: the hook words this apart from the budget).
+_LINKS_DISAGREE = [False]
 _DRIVE_TYPES: dict = {}
 #: GetDriveTypeW: 2 removable, 3 fixed, 5 CD-ROM, 6 RAM disk. Not resolved: 0 unknown, 1 no root
 #: directory, 4 remote (a mapped network drive, whose server may be offline).
@@ -535,6 +726,48 @@ def join_cwd(cwd: str, p: str) -> str:
     if not cwd or not is_abs(cwd):
         return ""
     return norm(norm(cwd) + "/" + p)
+
+
+def join_as_received(cwd: str, p: str, spelled: str = "") -> str:
+    """`p` as the program receives it, for a LINK reading only: a relative `p` is the directory + "/" + `p` (backslashes
+    as slashes), with nothing normalised -- no `..` collapsed, no trailing dot, space or `:x` dropped. "" when the
+    directory is unknowable (join_cwd). `spelled`: that directory with its case and spelling kept (the physical cwd),
+    used when it names the same folder, so `cd j. && touch x` keeps the `j.` Git Bash opens.
+
+    4.1.2 release review (I1a), MEASURED 2026-11-11: link_resolved got join_cwd()'s answer, which norm() has read as
+    Win32 does, so from <w> `touch 'j./libraries/wares.xml'` (junction `j.` into reference/) read writes_reference
+    False; and `k/../f` reached it already collapsed (P2)."""
+    if is_abs(p):
+        return p
+    if not cwd or not is_abs(cwd):
+        return ""
+    if norm(spelled) == norm(cwd):        # equal to an absolute directory: `spelled` is one too
+        # 4.1.2 release review round 2 (C), MEASURED: the shell resolved the DIRECTORY's `..` already, LOGICALLY (`cd
+        # "<w>/k/.." && pwd -P` is <w>), but an absolute cd target is spelled as written, so `cd '<w>/k/..' && touch x`
+        # was walked through k's target: a false writes_reference ({} at v4.1.1; also pushd, `/c/...`, Set-Location).
+        # Its dot segments are collapsed, its case and spelling kept (`j.`, U+F0xx, a leading `//`); `p` stays as is.
+        cwd = posixpath.normpath(spelled.replace(chr(92), "/"))
+    return cwd.replace(chr(92), "/").rstrip("/") + "/" + p.replace(chr(92), "/")
+
+
+def _leads_with_expansion(p: str) -> bool:
+    """Is `p` a RELATIVE operand whose first component starts with an expansion or a substitution (`"$X"`, `"$X/a"`,
+    `$(mktemp)`, `"${OUT:-x}.txt"`)? Such an operand gets no link reading from its directory (4.1.2, decision on
+    F374): a leading `$X` / `$(...)` is usually an absolute path, and the rules deliberately do not judge an unresolved
+    relative operand against the cwd (the same `touch "$X"` inside the protected folder itself fires nothing), so
+    reading it through a NEIGHBOURING link was incoherent and flooded: MEASURED at 4140faa5, 11 of 480 corpus rows (all
+    from a folder holding junctions into reference/) turned into refusals. `refj$X/f` (a literal prefix) and `sub/$X/f`
+    (a literal first folder) are still read. An absolute operand never qualifies: its first component is `C:`, `` (a
+    leading `/`) or a drive letter, never an expansion, so no separate is-absolute test is needed."""
+    parts = p.replace(chr(92), "/").split("/")
+    # 4.1.2 release review round 2 (D), MEASURED (dotx.py): `./"$f"`, `"./$f"`, `.//"$f"` are the same operand; only the
+    # first component was read, so they were still listed beside a junction (refused) where `"$f"` was not.
+    i = 0
+    while i < len(parts) - 1 and (parts[i] == "." or (parts[i] == "" and i > 0)):
+        i += 1
+    first = parts[i]
+    at = [m.start() for m in (_EXPANSION.search(first), _SUBST.search(first)) if m]
+    return bool(at) and min(at) == 0
 
 
 #: The HOST's path semantics for physical evidence (LINUX GAP, v4.0 release review). On POSIX a
@@ -4338,7 +4571,8 @@ _MAX_CD_LANES = 16
 _CD_LANES_TRUNCATED = [False]
 
 
-def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None = None, *, physical=False) -> list:
+def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None = None, *, physical=False,
+              flags: list | None = None) -> list:
     """[(segment, [every directory that may be in force FOR it])], in command order --
     cwd_track()'s model with one LANE per possible directory (FX-G7, corpus #397).
 
@@ -4351,7 +4585,9 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
     lane j of every segment is one consistent history of `cd`s, and a rule judging a
     relative operand against every lane takes the strictest verdict (facts() ORs them).
     Lanes are split per candidate VALUE, which does not depend on `base`, so the seeded and
-    unseeded walks of one command have the same lanes in the same order."""
+    unseeded walks of one command have the same lanes in the same order.
+    `flags`, when given, receives per segment each lane's from_seed (F376: a carried text
+    inherits it with the directory, so its unresolved `cd` reads as the plain one does)."""
     #: Each lane: [cwd, from_seed, pushd stack].
     #: from_seed is True while the directory in force is still the SESSION's (the seed, or a resolved
     #: relative `cd` from it) -- no absolute `cd` has said where the shell is. Lane F,
@@ -4411,6 +4647,8 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
     out, lanes = [], [(base, from_seed, [])]
     for seg in segments(cmd):
         out.append((seg, [ln[0] for ln in lanes]))
+        if flags is not None:
+            flags.append([ln[1] for ln in lanes])
         v = verb(seg)
         ops = _operands(seg) if v in DIR_VERBS else []
         if v == "popd":
@@ -5402,9 +5640,29 @@ def deletes_recursively(words: list) -> bool:
         if _verb_name(verb(c)) not in DELETE_VERBS or vt not in toks:
             continue
         for t in toks[toks.index(vt) + 1:]:
-            if t == "--recursive" or (re.match(r"^-[A-Za-z]+$", t) and set(t[1:]) & set("rR")):
+            if _is_recursive_flag(t):
                 return True
     return False
+
+
+def _is_recursive_flag(t: str) -> bool:
+    """`-r`/`-R` in a short cluster, or `--recursive` or any prefix of it GNU getopt accepts as
+    unique among rm's long options: `--r` .. `--recursive` (4.1.2 review, MEASURED: `rm --rec
+    <folder above reference>` was allowed). No other rm option starts with `r`."""
+    if len(t) > 2 and t.startswith("--"):
+        return "--recursive".startswith(t)
+    return bool(re.match(r"^-[A-Za-z]+$", t) and set(t[1:]) & set("rR"))
+
+
+def _removes_folders(seg: str) -> bool:
+    """F375 row 16: this delete segment's own flags make it recursive (_is_recursive_flag). Read
+    from the segment's tokens as written: deletes_recursively() re-joins the words without their
+    quotes and re-parses them, which records a QUOTED `'{1..64}'` as a brace word (MEASURED: it set operand_expansion_truncated on a literal filename)."""
+    toks = tokens_of(seg)
+    vt = _verb_token(seg)
+    if vt not in toks:
+        return False
+    return any(_is_recursive_flag(t) for t in toks[toks.index(vt) + 1:])
 
 
 def named_game_roots(n: str) -> list:
@@ -7797,7 +8055,7 @@ def _env_candidate(seg: str) -> bool:
     return "nv" in seg and bool(_ENV_FLAG.search(seg))
 
 
-def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
+def _inner_commands(cmd: str, exact: set | None = None, origin: dict | None = None) -> list[str]:
     """Command strings hidden inside a wrapper, so the rules see them too.
 
     Carriers: a shell's `-c` argument, `eval`, `trap`, a shell reading stdin, and (HK-2)
@@ -7815,6 +8073,10 @@ def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
     expanded or re-quoted on the way in, so its `'REF$X'` may really be `reference/` itself.
     A text produced by any non-exact route is never exact, even if an exact route produced
     it too (4.1.1 port of 6cbeb825).
+
+    `origin`, when given, receives text -> {index of the segment that carries it} (F376):
+    each runs where that segment runs. A trap's text runs when its signal fires, and a
+    reading or a whole-command variant carries its own `cd`s, so neither gets one.
     """
     out = []
     exact_idx = set()
@@ -7826,7 +8088,6 @@ def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
     dynamic = {}                         # F10: segment index -> its readings
     carrying = {}                        # _program_carrier_readings: the same, kept apart
     handled = {}                         # ...and the not-found handler's, read once
-    tmux_chain = False                   # the last segment was a tmux command ending in `\\;`
     ssh_here = {}                        # round 6, C: segment index -> its unplaced remote commands
     not_found_handler = "command_not_found_handle" in cmd
     if "@P}" in cmd:
@@ -7836,6 +8097,7 @@ def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
             out.extend(substitutions(table.get(name, "")))
     for n, seg in enumerate(segs):
         written = seg
+        first = len(out)
         # F10: a command NAME from a variable. One this command assigns a bare name to is
         # spliced in first, so `R=eval; $R '<cmd>'` reaches the eval arm below (MEASURED:
         # allowed); one it cannot name contributes its speculative readings.
@@ -7858,9 +8120,6 @@ def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
         carried_here = _program_carrier_readings(seg, v, vt, segs[n - 1] if n and pipes[n] else None)
         if len(_SSH_UNPLACED) > unplaced:
             ssh_here[n] = _SSH_UNPLACED[unplaced:]
-        if tmux_chain:
-            carried_here = carried_here + _tmux_readings(_raw_words(seg))
-        tmux_chain = (tmux_chain or v == "tmux") and seg.rstrip().endswith(chr(92))
         if not_found_handler:
             # A function bash calls with the words of any command it cannot find. It may run
             # them, whichever word it starts from.
@@ -7969,6 +8228,9 @@ def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
             rest = [t for t, _ in toks[k + 1:] if not t.startswith("-")]
             if rest:
                 out.append(rest[0])
+        if origin is not None and v != "trap":
+            for t_ in out[first:]:
+                origin.setdefault(t_, set()).add(n)
     for n, remote in ssh_here.items():
         # ...each IN PLACE, as every carrier reading is: the remote command is expanded HERE first, so
         # `FZ=<ref>; ssh <host> rm -rf "$FZ"` sends the path (round 6, C). Every OTHER unplaced ssh is a
@@ -8063,7 +8325,7 @@ _READINGS_TRUNCATED = [False]
 
 
 def carried_commands(body: str, extra: list, dialects: dict | None = None, *,
-                     exact: dict | None = None) -> tuple:
+                     exact: dict | None = None, origins: dict | None = None) -> tuple:
     """Every command string reachable from `body`, following carriers.
 
     _inner_commands was applied EXACTLY ONCE, to the top level, so a command one
@@ -8084,6 +8346,9 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None, *,
     Bash parent handing on a `-c` argument the outer shell expanded nothing in (see
     _inner_commands). Anything not known exact is False, which keeps a `$` in it an
     unresolved expansion: the stricter reading.
+
+    `origins` (text -> [(parent text, segment index)]), when given, is filled for every route
+    that a carrier segment of a parent hands a text on (F376); a substitution has none.
     """
     edges = []                          # (parent, child, exact hand-off?) -- every route
 
@@ -8127,7 +8392,8 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None, *,
         for c in frontier:
             _check_deadline()
             exact_inners = set()
-            inners = _inner_commands(c, exact_inners)
+            seg_of = {}
+            inners = _inner_commands(c, exact_inners, seg_of)
             subs = substitutions(c)
             for i_, kind, handed in ([(x, WINDOWS_DIALECT if x in _WIN_DIALECT else "bash",
                                        x in exact_inners and x not in _WIN_DIALECT
@@ -8140,6 +8406,9 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None, *,
                         # Recorded BEFORE the dedup below: a text reached again by a
                         # non-exact route must lose exactness it was granted earlier.
                         edges.append((c, inner, handed and n_ == 0))
+                        if origins is not None:
+                            for k_ in sorted(seg_of.get(i_, ())) if i_ in inners else ():
+                                origins.setdefault(inner, []).append((c, k_))
                     if not inner or inner in seen:
                         continue
                     if c in _READING_TEXTS or i_ in _READING_TEXTS:
@@ -8665,6 +8934,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _LINK_PROBED[0] = 0
     _LINK_DIRS.clear()
     _LINKS_UNRESOLVED[0] = False
+    _LINKS_DISAGREE[0] = False
     _DRIVE_TYPES.clear()
     _ps_spent[0] = 0.0                  # the translation budget is per hook call, never per judgement
     try:
@@ -8766,8 +9036,10 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
         exact_bodies = exact_heredoc_bodies(spliced)
         exact_texts = {e: e in exact_bodies and extra.count(e) == 1 for e in extra}
         exact_texts[body] = body not in exact_texts
+    origins = {}
     all_cmds, carriers_truncated = carried_commands(body, extra, dialects,
-                                                    exact=None if no_exact else exact_texts)
+                                                    exact=None if no_exact else exact_texts,
+                                                    origins=origins)
     carriers_truncated = carriers_truncated or _READINGS_TRUNCATED[0]
     if not no_exact and (carriers_truncated or _no_literal_anywhere(
             [cmd, body] + list(extra) + list(all_cmds))):
@@ -8780,9 +9052,11 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # top level's own view is seeded with the session directory exactly as the top level is.
     top_view = _spanning_view(body)
     views = []
+    view_of = {}
     for c_ in all_cmds:
         v_ = _spanning_view(c_)
         if v_ != c_ and v_ not in all_cmds and v_ not in views:
+            view_of[v_] = c_
             if c_ in _READING_TEXTS:
                 _READING_TEXTS.add(v_)
             views.append(v_)
@@ -8822,24 +9096,90 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # known here, and it keeps today's "unknowable" rather than a guessed directory.
     moves = any(verb(s) in DIR_VERBS or verb(s) == "popd"
                 for c_ in all_cmds if c_ not in _READING_TEXTS for s in segments(c_))
-    for i_, c in enumerate(all_cmds):
-        top = i_ == 0 or c == top_view
-        tracked = cwd_lanes(c, base if (top or not moves) else "", seeded=True, roots=roots)
-        # The directory each segment had BEFORE lane F (no session seed), for the two
-        # rules whose verdict is an ASK outside the profile -- see `gitwipe_t` below.
-        # Lane j of one walk is lane j of the other (cwd_lanes splits per VALUE, not per
-        # directory), so a segment is judged once per (seeded, unseeded) lane pair (FX-G7).
-        bare = cwd_lanes(c, roots=roots)
-        physical = cwd_lanes(c, base if (top or not moves) else "", seeded=True,
-                             roots=roots, physical=True)
+    # F376: ...but where a CARRIER segment hands it on, it runs where that segment runs: `cd
+    # <game> && bash -c 'rm -rf extensions'` was ALLOWED while the plain spelling denied. Each
+    # carried text is walked from every (directory, from_seed, unseeded, physical) its carrier
+    # segments have in any walk of their parent, spread to a fixpoint (below), AND from today's
+    # unknown directory, LAST, so no verdict gets weaker and the `cwd` fact read from the last
+    # segment stays the old one. A text reached by no carrier segment (a substitution, a reading) keeps
+    # the old walk only. Past _MAX_CD_LANES seeds the directory is UNKNOWN and refused (C7).
+    walks = {}
+
+    def lanes_from(c, seed):
+        key = (c, seed)
+        if key not in walks:
+            d0, fs0, u0, p0 = seed
+            fl = []
+            walks[key] = (cwd_lanes(c, d0, seeded=fs0, roots=roots, flags=fl),
+                          # The directory each segment had BEFORE lane F (no session seed), for
+                          # the two rules whose verdict is an ASK outside the profile -- see
+                          # `gitwipe_t` below. Lane j of one walk is lane j of the other
+                          # (cwd_lanes splits per VALUE, not per directory), so a segment is
+                          # judged once per (seeded, unseeded) lane pair (FX-G7).
+                          cwd_lanes(c, u0, roots=roots),
+                          cwd_lanes(c, p0, seeded=fs0, roots=roots, physical=True), fl)
+        return walks[key]
+
+    unknown_seed = ("", True, "", "")
+    seeds_of = {}
+    for i_, c in enumerate(carried):
+        top = i_ == 0
+        mine = [(base, True, "", base)] if (top or not moves) else seeds_of.get(c, []) + [unknown_seed]
+        seeds_of[c] = mine = list(dict.fromkeys(mine))
+    # ...spread to a FIXPOINT, never in one pass over `carried`: carried_commands dedupes, so a text
+    # first reached from an earlier segment is listed before a LATER parent that hands it a seed,
+    # and one pass never took that seed on to the text's own children (4.1.2 review, MEASURED:
+    # `cd <elsewhere> && bash -c "bash -c 'rm ...'"; cd <game> && bash -c "bash -c \"bash -c
+    # 'rm -rf extensions'\""` was allowed). Every (text, seed) is walked once; at most
+    # _MAX_CD_LANES inherited seeds per text, past which the directory is unknown and refused (C7).
+    routes_from = {}
+    for child, routes in origins.items():
+        for parent, k in dict.fromkeys(routes):
+            if child != body:
+                routes_from.setdefault(parent, []).append((child, k))
+    inherited = {}
+    work = [(c, seed) for c in carried for seed in seeds_of[c]] if moves else []
+    while work:
+        c, seed = work.pop()
+        tr, ba, ph, fl = lanes_from(c, seed)
+        for child, k in routes_from.get(c, ()):
+            if k >= len(tr):
+                continue
+            ds, fs = tr[k][1], fl[k] if k < len(fl) else [True] * len(tr[k][1])
+            uds = ba[k][1] if k < len(ba) else [""]
+            pds = ph[k][1] if k < len(ph) else [""] * len(ds)
+            for j, d0 in enumerate(ds):
+                if not d0:
+                    continue
+                got = inherited.setdefault(child, [])
+                new = (d0, fs[j] if j < len(fs) else True,
+                       uds[j] if j < len(uds) else uds[0], pds[j] if j < len(pds) else "")
+                if new in got:
+                    continue
+                if len(got) >= _MAX_CD_LANES:
+                    _CD_LANES_TRUNCATED[0] = True
+                    break
+                got.append(new)
+                work.append((child, new))
+    for child, got in inherited.items():
+        seeds_of[child] = got + [unknown_seed]
+    for c in all_cmds:
+        # A spanning view is walked as the text it views (the top level's view as the top level).
+        seeds = seeds_of.get(body if c == top_view else view_of.get(c, c), [unknown_seed])
         heads = _for_headers(c)
-        for k, (s, ds) in enumerate(tracked):
-            uds = bare[k][1] if k < len(bare) else [""]
+        per_seed = [lanes_from(c, seed) for seed in seeds]
+        tracked = per_seed[-1][0]
+        for k, (s, _ds0) in enumerate(tracked):
             rs = resolve_verb(s, assigns)
             # The segment BEFORE each one in the same carried command: what feeds an xargs.
             prev = _stdin_producer([t[0] for t in tracked[:k]])
-            pds = physical[k][1] if physical else [""] * len(ds)
-            for d, ud, pd in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds)):
+            rows_k = []
+            for tr_, bare, physical, _fl in per_seed:
+                ds = tr_[k][1] if k < len(tr_) else [""]
+                uds = bare[k][1] if k < len(bare) else [""]
+                pds = physical[k][1] if physical and k < len(physical) else [""] * len(ds)
+                rows_k.extend(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds))
+            for d, ud, pd in dict.fromkeys(rows_k):
                 seg_dialect.append(dialects.get(c, "bash"))
                 seg_exact.append(exact_texts.get(c, False))
                 seg_for.append(k < len(heads) and heads[k])
@@ -9023,7 +9363,8 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                 # one-liners, every one a token no shell would treat as that path.
                 d = c_old if (_DEBRIS.search(r) or _DEVICE.match(r)) else c_cwd
                 # An 8.3 short name is its long name (FX-G2 item 3; see long_name).
-                out.append((r if unres else long_name(join_cwd(d, r)), unres, r))
+                joined = r if unres else join_cwd(d, r)
+                out.append((joined if unres else long_name(joined), unres, r))
                 qualifies_as_modlist = False
                 if simple_modlist_write and operation == 'write' and scope != 'tree' and not unres:
                     placed = physical_join('' if execution_context else physical_cwd, r,
@@ -9078,8 +9419,16 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                     evidence.append(row)
                 # 4.1.1 final round (F360): a link on the path (a junction into reference/) is judged
                 # where it lands as well; every rule ORs over these entries, so the stricter stands.
+                # ...from the path AS THE PROGRAM RECEIVES IT (join_as_received; 4.1.2 release review I1a, P3): not
+                # long_name's or norm's answer, which is Win32's spelling only (a trailing dot or `:x` dropped, `..`
+                # collapsed). Parse debris whose seedless join is unknowable is read from the seeded directory: this
+                # reading can only ADD an entry, where a real link is on disk under that name -- but it spends the link
+                # budget like any operand (4.1.2 release review round 2 (F), MEASURED with debris2.py: 80 debris operands
+                # in distinct folders read links_unresolved 0 at 9368d5db, 1 now; left as is, BLIND-SPOTS F371).
+                pd_ = "" if execution_context else physical_cwd
+                seen = join_as_received(d, r, pd_ if d == c_cwd else "") or join_as_received(c_cwd, r, pd_)
                 if not unres:
-                    real = link_resolved(out[-1][0], literal=literal, refuse=not reads_only)
+                    real = link_resolved(seen, literal=literal, refuse=not reads_only)
                     if real:
                         out.append((real, False, r))
                 else:
@@ -9087,11 +9436,14 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                     # and `'<junction>/a${b}/f'` (a quoted brace is not literal_dollar_path) read their
                     # lexical text only, where `<reference>/$X/f` is caught by the root in its text. The
                     # head's landing place plus the rest as written is judged the same way (unresolved).
-                    real = link_head_resolved(r, refuse=not reads_only)
+                    # A relative operand that STARTS with an expansion gets neither reading from its directory
+                    # (_leads_with_expansion): its head would be the cwd alone, and its listing the cwd's links.
+                    seen = r if _leads_with_expansion(r) else seen
+                    real = link_head_resolved(seen or r, refuse=not reads_only)
                     if real:
                         out.append((real, True, real))
                     # ...and through a link the unresolved component itself may name (`<work>/refj$X/f`).
-                    for real in link_entries_matched(r, refuse=not reads_only):
+                    for real in link_entries_matched(seen or r, refuse=not reads_only):
                         out.append((real, True, real))
         return out
 
@@ -9100,6 +9452,10 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     sed_t, out_t, search_files = [], [], []
     gitwipe_t, gitdiscard_t, gitwipe_pairs = [], [], []
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
+    # F375 row 16 (4.1.2): what a delete removes WHOLE -- a recursive rm (rd /s, Remove-Item -Recurse
+    # arrive as one), a trash or an unfiltered find -delete -- for the ancestor test. (An rsync or robocopy
+    # purge of a folder above reference/ already reads as a delete inside it: MEASURED, rm_targets_reference.)
+    rm_whole_t = []
     # For writes_game_archive only: moved rsync sources, folders receiving an archive-named
     # copy, what a listing feeds `xargs rm`, and (root operand, segment, mode) of each find that
     # deletes ("delete") or prints to an `xargs rm` ("print").
@@ -9168,8 +9524,12 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
         if execution_context:
             # Context-only evidence; ordinary save membership/rules unchanged.
             prep(git_wipes_worktree_targets(s), c_cwd, c_old, operation="delete")
+        at_ = len(rm_t)
         rm_t += prep(rm_paths(s), c_cwd, c_old, operation="delete")
         rm_t += prep(xargs_feed(s, prev), c_cwd, c_old, operation="delete")
+        # rmdir, unlink and a plain rm remove no folder that holds anything, so only a recursive one counts.
+        if verb(s) not in DELETE_VERBS or _removes_folders(s):
+            rm_whole_t += rm_t[at_:]
         rm_t += prep(rsync_deletes(s), c_cwd, c_old, operation="delete", scope="tree")
         robo_copy, robo_del, robo_mv = robocopy_effects(s)
         copy_t += prep(robo_copy, c_cwd, c_old, operation="write", scope="tree")
@@ -9577,6 +9937,13 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
                          or rm_named_game),
         "rm_targets_reference": hit(rm_t + mv_src + scoped_rm_t, "reference",
                                     conservative=True),
+        # F375 row 16 (4.1.2): a folder ABOVE the root removed whole, or moved, takes the root with it.
+        # MEASURED at v4.1.1: `rm -rf` of the reference root's parent was allowed while the root itself
+        # hard-denied. A resolved operand only, as the root rules: an unresolved one is not an ancestor.
+        "rm_contains_reference": any(not u and contains_root(p_, roots.get("reference") or "")
+                                     for p_, u, _r in rm_whole_t + mv_src),
+        "rm_contains_game": any(not u and contains_root(p_, roots.get("game") or "")
+                                for p_, u, _r in rm_whole_t + mv_src),
         # A WRITE into reference/, which had no Bash rule at all -- only deletes were
         # covered, while protect-files.sh hard-blocks the same tree for Edit/Write and
         # CLAUDE.md lists it under "Hard blocked". MEASURED 2026-09-03: a truncating
@@ -9838,6 +10205,7 @@ def _facts(payload: dict, roots: dict, *, evidence: list | None = None, executio
     # 4.1.1 review (link budget): an operand whose links the per-call budget left unresolved is not "no
     # link" -- the hook refuses it (see link_resolved). Captured after every field, like the flag above.
     result["links_unresolved"] = _LINKS_UNRESOLVED[0]
+    result["links_disagree"] = _LINKS_DISAGREE[0]
     result["ssh_host_unplaced"] = _ssh_unplaced_destructive(result, roots, protected_save_folders)
     return result
 

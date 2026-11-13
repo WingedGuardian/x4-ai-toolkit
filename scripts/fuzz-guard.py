@@ -985,6 +985,9 @@ def seeds(roots):
         ("game delete", d + " -rf " + QU + g + QU),
         ("extensions wholesale", d + " -rf " + QU + g + "/extensions" + QU),
         ("reference delete", d + " -rf " + QU + ref + QU),
+        # 4.1.2 (F375 row 16): a folder that CONTAINS a root is deleted with it.
+        ("folder above the game", d + " -rf " + QU + g.rsplit("/", 1)[0] + QU),
+        ("folder above reference", d + " -rf " + QU + ref.rsplit("/", 1)[0] + QU),
         ("parameter expansion exceeds complete-analysis bound",
          d + ' -rf "C:/guard-fixture/${A:+a}${B:+b}${C:+c}${D:+d}${E:+e}"'),
         ("one deployed mod", d + " -rf " + QU + g + "/extensions/amod" + QU),
@@ -1187,12 +1190,16 @@ def resolve_roots():
 #:     folders than the per-call link budget, a pathological INPUT SIZE (and real folders
 #:     on disk) like carriers_truncated; covered by TestLinkBudgetFailsClosed and
 #:     test_audit0924_hooks.py::TestLinkBudgetWholeHook.
+#:   * links_disagree (4.1.2 release review, I3) -- needs two junctions on disk whose names two programs spell
+#:     apart (`j` and `j.`), or a `..` after one; the fuzzer judges text with no such folders; covered by
+#:     TestLinkNamesGitBashSpellsDifferently, TestLinkReadingOfRelativeAndDotDotOperands and
+#:     test_audit0924_hooks.py::TestLinkBudgetWholeHook.
 #: All of these are covered by unit tests (test_hook_facts.py, test_codex_long_jobs.py)
 #: instead. If a mutator ever gains the ability to reach one, drop it from here and the
 #: floor rises by itself.
 #: Module level, 2026-09-09, so the suite can assert the seed floor against the SAME
 #: exemption set the run uses -- a second copy in a test is a second thing to drift.
-STRUCTURAL = {"carriers_truncated", "links_unresolved", "timeout_over_cap", "git_wipe_from_session_dir",
+STRUCTURAL = {"carriers_truncated", "links_unresolved", "links_disagree", "timeout_over_cap", "git_wipe_from_session_dir",
               "longjob_codex", "timeout_over_cap_codex"}
 
 #: (label, scope, old, new) -- each MUST apply exactly ONCE, and within `scope`
