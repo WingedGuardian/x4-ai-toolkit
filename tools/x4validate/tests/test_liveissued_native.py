@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from lupa.luajit21 import LuaRuntime
 
-SOURCE=(Path(__file__).resolve().parents[3]/"mods/x4_toolkit_helper/ui/live_query.lua").read_text()
+SOURCE=(Path(__file__).resolve().parents[3]/"mods/x4_toolkit_helper/ui/live_query.lua").read_text(encoding="utf-8")
 WIRE=SOURCE.split("local function wire(v)",1)[1].split("--: For OBJECT ids.",1)[0]
 RESOLVER=SOURCE.split("local function automation_resolve_issued(token,kind)",1)[1].split("local function ensure_automation()",1)[0]
 

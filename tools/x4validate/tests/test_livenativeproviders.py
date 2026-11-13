@@ -522,7 +522,7 @@ def test_options_never_complete_from_dispatch_or_status(runtime, action, args, p
 
 
 def actual_options(runtime):
-    tree = ast.parse(Path(__file__).with_name("test_liveoptions.py").read_text())
+    tree = ast.parse(Path(__file__).with_name("test_liveoptions.py").read_text(encoding="utf-8"))
     build = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "build")
     call = next(n for n in ast.walk(build) if isinstance(n, ast.Call)
                 and isinstance(n.func, ast.Attribute) and n.func.attr == "execute"

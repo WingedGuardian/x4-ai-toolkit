@@ -22,8 +22,8 @@ def runtime(action='open'):
         function run() return registry.execute(req.id,req.session,req.digest) end
         function status() return registry.status(req.id,req.session,req.digest) end
     """)
-    r.globals().factory=r.execute((UI/'live_commmenu_provider.lua').read_text())
-    r.globals().core=r.execute((UI/'live_actions.lua').read_text())
+    r.globals().factory=r.execute((UI/'live_commmenu_provider.lua').read_text(encoding="utf-8"))
+    r.globals().core=r.execute((UI/'live_actions.lua').read_text(encoding="utf-8"))
     r.execute("""
         context_adapter={observe=function() reads=reads+1;return {status='OBSERVED',rows={}} end,
             prepare=function(context,role,actor) prepares=prepares+1;assert(context=='context' and role=='info_shiptrader' and actor=='43');return {status='PREPARED',ticket='context-private'} end,

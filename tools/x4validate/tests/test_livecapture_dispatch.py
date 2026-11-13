@@ -18,7 +18,7 @@ ROOT=Path(__file__).resolve().parents[3]
 def setup(tmp):
     from PIL import Image
     rt=A.runtime()
-    rt.globals().codec=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actionwire.lua").read_text())()
+    rt.globals().codec=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actionwire.lua").read_text(encoding="utf-8"))()
     identity={"provider":"x4-live-session-v1","revision":"9"*64,"session":"a"*32,"ui_generation":"b"*32,
               "world_token":"world","world_lineage":"UNKNOWN","load_generation":1,
               "peer":{"pid":42,"creation_filetime":"1234","image":"C:/synthetic/X4.exe"}}
@@ -41,8 +41,8 @@ def setup(tmp):
     for name in ("automation","observer","dispatch"):(tmp/name).mkdir()
     save=tmp/"personal"/"123"/"save";save.mkdir(parents=True)
     rt.globals().savefolder=str(save)
-    rt.globals().camerafactory=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_camerastate.lua").read_text())
-    rt.globals().routerfactory=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_automation.lua").read_text())
+    rt.globals().camerafactory=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_camerastate.lua").read_text(encoding="utf-8"))
+    rt.globals().routerfactory=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_automation.lua").read_text(encoding="utf-8"))
     rt.execute("""
     ffi=require('ffi');uiage=100;envelopeage=5000;camera_calls=0;camera_yaw=1;camera_ref=123ULL
     C={GetCameraRotation=function()return ffi.new('Rotation',{camera_yaw,2,3})end,
@@ -207,7 +207,7 @@ def check_camera_pair_actual_raw_evidence_and_no_pose(tmp_path):
         assert e["receipt"]["capture"]["started_age"]==5000
         assert e["observation"]["interval"]["started"]==100
         assert e["transcript"]["frames"][0]["verb"]=="read_capture"
-        assert json.loads(Path(sample["journal"]).read_text())==e
+        assert json.loads(Path(sample["journal"]).read_text(encoding="utf-8"))==e
     assert c["rt"].eval("camera_calls")==2
     c["d"].status(h);c["d"].status(h)
     assert c["d"].receipt(h)["camera_observations"]==pair

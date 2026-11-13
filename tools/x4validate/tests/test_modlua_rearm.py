@@ -2176,7 +2176,7 @@ def test_GetMacroUnitStorageCapacity_is_NOT_in_the_object_id_list(lua_factory):
 
     ⚠ The explicit skip is load-bearing. `lua_factory` guards MOD_LUA is None, but only
     when it is CALLED -- this test takes the fixture and never invokes it, so on a
-    fresh clone with no dev tree it sailed past the guard into `None.read_text()`.
+    fresh clone with no dev tree it sailed past the guard into `None.read_text(encoding="utf-8")`.
     MEASURED by scripts/verify-cold.sh, which is the only run that has no dev tree.
     """
     if MOD_LUA is None:

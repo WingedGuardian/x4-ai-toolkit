@@ -12,8 +12,8 @@ g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
 
 def runtime(mode='licence',lua_subject=False,profile=None):
     r=make(mode);files,receipt=g.prepare()
-    r.globals().sdk=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actions.lua').read_text())
-    r.globals().wire_factory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text())
+    r.globals().sdk=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actions.lua').read_text(encoding="utf-8"))
+    r.globals().wire_factory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text(encoding="utf-8"))
     r.execute('''
         wire=wire_factory();registry=sdk();disposers={};converted=0;property_reads=0;context_reads=0
         X4ToolkitAutomationBundle={register_extension=function(v)descriptor=v end}

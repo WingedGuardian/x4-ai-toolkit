@@ -14,13 +14,13 @@ def make(profile="interactive",real=False):
     files,receipt=g.prepare(profile)
     r=LuaRuntime(unpack_returned_tuples=True)
     for key in ("actions","actionwire","automation","mdchannel"):
-        r.globals()[key]=r.execute((ROOT/("mods/x4_toolkit_helper/ui/live_"+key+".lua")).read_text())
+        r.globals()[key]=r.execute((ROOT/("mods/x4_toolkit_helper/ui/live_"+key+".lua")).read_text(encoding="utf-8"))
     r.globals().profile=profile;r.globals().real_channel=real
     r.globals().caprevision=receipt["capacity_profile"]["revision"]
     scope={"__file__":str(ROOT/g.PATHS["capacity"])}
     exec(compile((ROOT/g.PATHS["capacity"]).read_bytes(),scope["__file__"],"exec"),scope)
     r.globals().resolver=r.execute(scope["lua_source"]())
-    r.globals().surface_factory=r.execute((ROOT/g.PATHS["provider"]).read_text())
+    r.globals().surface_factory=r.execute((ROOT/g.PATHS["provider"]).read_text(encoding="utf-8"))
     r.execute("""
         ffi=require('ffi');ship=ffi.cast('uint64_t',-1);sector=ffi.new('uint64_t',13)
         age=0;sends=0;reads=0;clears=0;disposals=0;queue={};hooks={}

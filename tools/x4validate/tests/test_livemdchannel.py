@@ -24,7 +24,7 @@ def runtime(setup=""):
         public_current=function() return stamp end,
         config={screen='Fixture',event='Fixture.Replies',queue='$fixture_replies',controls={connect=true,request=true}}}
     """)
-    r.execute(setup);r.globals().factory=r.execute(SOURCE.read_text())
+    r.execute(setup);r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute("api=factory(d)")
     return r
 

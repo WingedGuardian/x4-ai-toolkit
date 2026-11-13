@@ -68,7 +68,7 @@ def test_throwing_adapter_consumes_execution_and_never_retries():
     # Registered function object is immutable; its behavior is changed through its
     # external flag, not by replacing a registration after the fact.
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "calls[#calls+1] = phase",
         "calls[#calls+1] = phase; if phase=='execute' then error('after write') end"))
@@ -83,7 +83,7 @@ def test_throwing_adapter_consumes_execution_and_never_retries():
 
 def test_async_execution_lost_ack_can_be_reconciled_by_read_only_status():
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "elseif phase == 'execute' then done({status='running',reason='',observations={}})",
         "elseif phase == 'execute' then missing_ack=done"))
@@ -95,7 +95,7 @@ def test_async_execution_lost_ack_can_be_reconciled_by_read_only_status():
 
 def test_callback_for_old_session_cannot_complete_current_request():
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "elseif phase == 'execute' then done({status='running',reason='',observations={}})",
         "elseif phase == 'execute' then callback=done"))
@@ -111,7 +111,7 @@ def test_callback_for_old_session_cannot_complete_current_request():
 ])
 def test_invalid_prepare_outcome_never_enables_execute(body):
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "done({status='prepared',reason='',observations={}})", f"done({body})"))
     assert r.eval("registry.prepare(request).status") == "unknown"
@@ -121,7 +121,7 @@ def test_invalid_prepare_outcome_never_enables_execute(body):
 
 def test_mutating_provider_cannot_rebind_stored_request():
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace("calls[#calls+1] = phase",
         "calls[#calls+1] = phase; req.arguments.case='changed'"))
     r.execute("registry.prepare(request)")
@@ -131,7 +131,7 @@ def test_mutating_provider_cannot_rebind_stored_request():
 
 def test_double_callback_is_not_a_success():
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "done({status='prepared',reason='',observations={}})",
         "done({status='prepared',reason='',observations={}}); "
@@ -167,7 +167,7 @@ def test_request_capacity_never_evicts_old_execution_records():
 
 def test_lost_status_reply_can_be_superseded_without_redispatch():
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "else done({status='completed',reason='',observations={measured=false}}) end",
         "else callbacks=callbacks or {}; callbacks[#callbacks+1]=done end"))
@@ -182,7 +182,7 @@ def test_lost_status_reply_can_be_superseded_without_redispatch():
 
 def test_duplicate_execute_callback_is_sticky_not_reconciled_into_success():
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "elseif phase == 'execute' then done({status='running',reason='',observations={}})",
         "elseif phase == 'execute' then "
@@ -203,7 +203,7 @@ def test_revision_is_from_immutable_registration_not_mutable_provider_or_observa
 
 def test_lost_prepare_ack_recovers_readiness_without_repeating_prepare():
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "if phase == 'prepare' then done({status='prepared',reason='',observations={}})",
         "if phase == 'prepare' then oldprepare=done").replace(
@@ -222,7 +222,7 @@ def test_pending_readiness_blocks_dispatch_and_old_status_cannot_unblock_it():
     # The prepare ack is LOST (never delivered), so both status() calls are genuine readiness checks; an ack that
     # did arrive is reported as-is (test_async_prepare_ack_is_observable_by_status_and_executes).
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "if phase == 'prepare' then done({status='prepared',reason='',observations={}})",
         "if phase == 'prepare' then lost=done").replace(
@@ -240,7 +240,7 @@ def test_pending_readiness_blocks_dispatch_and_old_status_cannot_unblock_it():
 
 def test_unknown_preparation_requires_fresh_readiness_without_protocol_fault():
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "if phase == 'prepare' then done({status='prepared',reason='',observations={}})",
         "if phase == 'prepare' then done({status='unknown',reason='ack timeout',observations={}})").replace(
@@ -257,7 +257,7 @@ def test_unknown_preparation_requires_fresh_readiness_without_protocol_fault():
 @pytest.mark.parametrize("outcome", ["completed", "running", "failed"])
 def test_prepare_status_cannot_invent_execution(outcome):
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "if phase == 'prepare' then done({status='prepared',reason='',observations={}})",
         "if phase == 'prepare' then missing=done").replace(
@@ -272,7 +272,7 @@ def test_prepare_status_cannot_invent_execution(outcome):
 def _async_runtime():
     """Prepare AND status answered later (an MD-backed provider replies on a later frame), as in game."""
     r = LuaRuntime(unpack_returned_tuples=True)
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute(SETUP.replace(
         "if phase == 'prepare' then done({status='prepared',reason='',observations={}})",
         "if phase == 'prepare' then pack=done").replace(

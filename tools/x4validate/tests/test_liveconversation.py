@@ -31,7 +31,7 @@ def runtime():
         end
         function deliver(r) queue={r};drain() end
     """)
-    lua.globals().factory=lua.execute(SOURCE.read_text())
+    lua.globals().factory=lua.execute(SOURCE.read_text(encoding="utf-8"))
     lua.execute("api=factory{channel=channel,revision=revision}")
     return lua
 

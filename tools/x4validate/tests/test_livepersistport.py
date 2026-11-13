@@ -24,8 +24,8 @@ def setup(tmp):
     extension=load(ROOT/"scripts/live_persistence_extension.py","extension")
     sources={k:(ROOT/p).read_bytes() for k,p in extension.SOURCES.items()}
     outputs,receipt=extension.build(sources)
-    rt.globals().core=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actions.lua").read_text())
-    rt.globals().wirefactory=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actionwire.lua").read_text())
+    rt.globals().core=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actions.lua").read_text(encoding="utf-8"))
+    rt.globals().wirefactory=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actionwire.lua").read_text(encoding="utf-8"))
     rt.execute("""
         registry=core();codec=wirefactory()
         X4ToolkitAutomationBundle={register_extension=function(x) descriptor=x end}
@@ -254,9 +254,9 @@ def check_sdk_outer_outcome_cannot_promote_retained_native_result(tmp,mutation):
 def check_lazy_provider_binding_and_sticky_loss(tmp,failure):
     from lupa.luajit21 import LuaRuntime
     rt=LuaRuntime(unpack_returned_tuples=True)
-    rt.globals().factory=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_persistenceprovider.lua").read_text())
-    rt.globals().core=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actions.lua").read_text())
-    rt.globals().wire=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actionwire.lua").read_text())
+    rt.globals().factory=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_persistenceprovider.lua").read_text(encoding="utf-8"))
+    rt.globals().core=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actions.lua").read_text(encoding="utf-8"))
+    rt.globals().wire=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actionwire.lua").read_text(encoding="utf-8"))
     rt.globals().failure=failure
     rt.execute("""
         registry=core(); codec=wire(); age=10; calls=0; reads=0; disposed=0

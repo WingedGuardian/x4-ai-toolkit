@@ -74,8 +74,8 @@ d={ffi=ffi,C=C,globals=g,
 def build(code=""):
     r=luajit.LuaRuntime(unpack_returned_tuples=True)
     r.execute(SETUP)
-    r.globals().wire=r.execute(SOURCE.with_name("live_actionwire.lua").read_text())()
-    r.globals().factory=r.execute(SOURCE.read_text())
+    r.globals().wire=r.execute(SOURCE.with_name("live_actionwire.lua").read_text(encoding="utf-8"))()
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute("api=factory(d)")
     r.execute(code)
     return r
@@ -206,7 +206,7 @@ def check_retained_native_buffer_signature():
 @pytest.mark.parametrize("old,new",[("int64_t price","uint64_t price"),("uint32_t queueposition","int32_t queueposition"),("const char *macro,*factionid","const char *factionid,*macro")])
 def check_incompatible_native_layout(old,new):
     r=luajit.LuaRuntime(unpack_returned_tuples=True);r.execute(SETUP.replace(old,new))
-    r.globals().factory=r.execute(SOURCE.read_text())
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"))
     ok,why=r.eval("function()return pcall(factory,d)end")()
     assert not ok and "ABI" in str(why)
 

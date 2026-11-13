@@ -223,7 +223,7 @@ def check_native_blueprint_pointer_uses_existing_type():
 def check_bad_native_layout_refuses(layout):
     r=luajit.LuaRuntime(unpack_returned_tuples=True)
     r.execute(SETUP.replace("const char *macro,*ware,*productionmethodid;",layout))
-    r.globals().factory=r.execute(SOURCE.read_text())
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"))
     ok,why=r.eval("function()return pcall(factory,d)end")()
     assert not ok and "blueprint ABI" in str(why)
 

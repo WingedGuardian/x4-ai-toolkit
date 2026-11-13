@@ -12,8 +12,8 @@ g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
 def runtime(real_channel=False):
     r=LuaRuntime(unpack_returned_tuples=True);files,receipt=g.prepare()
     for name in ("actions","actionwire"):
-        r.globals()[name]=r.execute((ROOT/f"mods/x4_toolkit_helper/ui/live_{name}.lua").read_text())
-    r.globals().mdfactory=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_mdchannel.lua").read_text())
+        r.globals()[name]=r.execute((ROOT/f"mods/x4_toolkit_helper/ui/live_{name}.lua").read_text(encoding="utf-8"))
+    r.globals().mdfactory=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_mdchannel.lua").read_text(encoding="utf-8"))
     r.globals().real_channel=real_channel
     r.execute("""
         ffi=require('ffi');u=function(s)return ffi.new('uint64_t',s)end

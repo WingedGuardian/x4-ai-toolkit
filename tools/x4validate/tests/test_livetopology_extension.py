@@ -31,7 +31,7 @@ def check_mid_generation_source_drift_refused(target):
 
 def check_generated_loader_actual_observer_provider_sdk_and_delayed_reply():
     files,receipt=g.prepare();r=runtime()
-    r.globals().sdk=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actions.lua").read_text())
+    r.globals().sdk=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actions.lua").read_text(encoding="utf-8"))
     r.execute("X4ToolkitAutomationBundle={register_extension=function(v) descriptor=v end}")
     r.execute(files["ui/live_topology_extension.lua"].decode())
     assert r.eval("descriptor.providers['x4-topology-observer-v1']")==receipt["revision"]

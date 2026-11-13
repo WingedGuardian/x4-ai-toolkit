@@ -15,8 +15,8 @@ from x4validate._livepeerprofile import ProfilePeer
 
 def setup(tmp,kind='capture'):
     rt,_=N.runtime(kind)
-    rt.globals().wirefactory=rt.execute((N.O.ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text())
-    rt.globals().routerfactory=rt.execute((N.O.ROOT/'mods/x4_toolkit_helper/ui/live_automation.lua').read_text())
+    rt.globals().wirefactory=rt.execute((N.O.ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text(encoding="utf-8"))
+    rt.globals().routerfactory=rt.execute((N.O.ROOT/'mods/x4_toolkit_helper/ui/live_automation.lua').read_text(encoding="utf-8"))
     rt.execute("""wire=wirefactory();router=routerfactory{session={current=function()return stamp end},wire=wire,
       registry=registry,build='12345678',age=function()return 5 end,ui_authorize=function()return false end,
       read_verbs={},read=function()error('no reads')end}""")

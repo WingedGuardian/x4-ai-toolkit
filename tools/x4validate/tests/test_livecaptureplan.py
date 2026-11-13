@@ -179,7 +179,7 @@ def test_actual_generated_capacity_route_to_read_evidence_to_planner(tmp_path):
     # SDK, router, codec, pages and host collector. Native counter data is synthetic.
     src=B.synthetic()
     for key in ('actions','wire','automation'):src[key]=(B.ROOT/B.B.SOURCES[key]).read_bytes()
-    tree=ast.parse(Path(B.__file__).read_text())
+    tree=ast.parse(Path(B.__file__).read_text(encoding="utf-8"))
     fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='test_generated_bundle_capacity_crosses_actual_router_codec_boundpipe_and_readcapture')
     src['bootstrap']=next(ast.literal_eval(n.value)for n in ast.walk(fn) if isinstance(n,ast.Assign)
         and isinstance(n.value,ast.Constant) and isinstance(n.value.value,bytes))

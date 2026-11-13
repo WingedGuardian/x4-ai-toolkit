@@ -22,7 +22,7 @@ def runtime(capacity_profile=None):
     r.globals().capacity_name=receipt['capacity_profile']['name']
     r.globals().capacity_revision=receipt['capacity_profile']['revision']
     for name in ("actions", "actionwire"):
-        r.globals()[name] = r.execute((ROOT / f"mods/x4_toolkit_helper/ui/live_{name}.lua").read_text())
+        r.globals()[name] = r.execute((ROOT / f"mods/x4_toolkit_helper/ui/live_{name}.lua").read_text(encoding="utf-8"))
     r.execute("""
         ffi=require('ffi');ship=ffi.cast('uint64_t',-1);now=0;sends=0;reads=0;clears=0;disposals=0
         stamp={provider='x4-live-session-v1',revision=string.rep('a',64),session=string.rep('b',32),

@@ -14,7 +14,7 @@ B=importlib.util.module_from_spec(spec);spec.loader.exec_module(B)
 def capture_runtime(name):
     parts,receipt=C.P.prepare_parts(capacity_profile=name)
     r=LuaRuntime(unpack_returned_tuples=True);g=r.globals()
-    g.real_sdk=r.execute(C.P.SDK.read_text())
+    g.real_sdk=r.execute(C.P.SDK.read_text(encoding="utf-8"))
     g.real_adapter=r.execute(parts['ui/x4_capture_adapter.lua'].decode())
     g.capacity=r.execute(B.lua_source());g.capacity_name=name
     g.revision=receipt['revision'];g.mdrevision=receipt['native_revision']
@@ -122,7 +122,7 @@ def test_malformed_profile_identity_refuses_before_native(kind,field):
     r.globals().resolver=r.execute(B.lua_source());r.globals().field=field
     r.execute("calls=0;function bad(n)local v=resolver(n);v[field]='wrong';return v end")
     path='live_orbit.lua' if kind=='orbit' else 'live_capture_adapter.lua'
-    r.globals().factory=r.execute((ROOT/'mods/x4_toolkit_helper/ui'/path).read_text())
+    r.globals().factory=r.execute((ROOT/'mods/x4_toolkit_helper/ui'/path).read_text(encoding="utf-8"))
     if kind=='orbit':
         r.execute("""d={ffi={},capacity_profile='campaign_v1',capacity_resolver=bad,
           encode=function()end,resolve_issued=function()end,channel={}}
@@ -148,7 +148,7 @@ assert(adapter.capacity().calls_used==limit and adapter.capacity().calls_limit==
 
 def test_capture_capacity_observations_fit_actual_wire_and_are_copied():
     r,_=capture_runtime('campaign_v1')
-    r.globals().wirefactory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text())
+    r.globals().wirefactory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text(encoding="utf-8"))
     r.execute("""
 prep();out=exec();w=wirefactory()
 assert(#w.encode({payload=w.encode(out),reserved=string.rep('x',900)})<=4096)
@@ -163,12 +163,12 @@ assert(adapter.capacity().history_limit==4096)
 def test_missing_campaign_resolver_refuses_without_native_call(kind):
     r=LuaRuntime(unpack_returned_tuples=True);r.execute("calls=0")
     if kind=='orbit':
-        r.globals().factory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_orbit.lua').read_text())
+        r.globals().factory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_orbit.lua').read_text(encoding="utf-8"))
         r.execute("""d={ffi={},capacity_profile='campaign_v1',encode=function()end,resolve_issued=function()end,channel={}}
 for _,k in ipairs({'public_current','now','send','read','clear','subscribe','arm_tick','component_id','dispose'}) do
 d.channel[k]=function()calls=calls+1;error('native')end end""")
         result=r.eval('pcall(factory,d)')
     else:
-        r.globals().factory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_capture_adapter.lua').read_text())
+        r.globals().factory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_capture_adapter.lua').read_text(encoding="utf-8"))
         result=r.eval("pcall(factory,{}, {}, {capacity_profile='campaign_v1'})")
     assert result[0] is False and r.eval('calls')==0

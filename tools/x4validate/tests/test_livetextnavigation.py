@@ -51,7 +51,7 @@ def make(domain="encyclopedia",extra=""):
             m.buttonScriptMap={{layer=6,tableobj=20,row=2,col=1,type='onClick',button=31,script=wrapped}}
         """)
     if extra:r.execute(extra)
-    r.globals().factory=r.execute(SOURCE.read_text());r.execute("api=factory(d)")
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"));r.execute("api=factory(d)")
     return r
 
 def prepare(r,action,arg=None):

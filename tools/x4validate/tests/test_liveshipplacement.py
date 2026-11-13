@@ -12,7 +12,7 @@ g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
 def make(profile='interactive',real_channel=False):
     files,receipt=g.prepare(profile);r=LuaRuntime(unpack_returned_tuples=True)
     for name in ('actions','actionwire','automation','mdchannel'):
-        r.globals()[name]=r.execute((ROOT/f'mods/x4_toolkit_helper/ui/live_{name}.lua').read_text())
+        r.globals()[name]=r.execute((ROOT/f'mods/x4_toolkit_helper/ui/live_{name}.lua').read_text(encoding="utf-8"))
     r.globals().profile=profile;r.globals().capacity_revision=receipt['capacity_profile']['revision']
     r.globals().real_channel=real_channel
     capacity_scope={'__file__':str(ROOT/g.PATHS['capacity'])}

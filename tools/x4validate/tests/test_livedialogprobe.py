@@ -4,7 +4,7 @@ import pytest
 from lupa.luajit21 import LuaRuntime
 
 ROOT=Path(__file__).resolve().parents[3]
-SOURCE=(ROOT/'mods/x4_toolkit_helper/ui/live_dialogprobe.lua').read_text()
+SOURCE=(ROOT/'mods/x4_toolkit_helper/ui/live_dialogprobe.lua').read_text(encoding="utf-8")
 
 
 def runtime():
@@ -199,7 +199,7 @@ def test_bounded_maximum_mapping_payload_with_actual_wire_encoder():
         end
         g.GetDialogOption=function()return string.rep('x',1024),true,false,string.rep('x',128),string.rep('x',1024)end
     """)
-    r.globals().wirefactory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text())
+    r.globals().wirefactory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text(encoding="utf-8"))
     payload=r.eval('wirefactory().encode(probe.capture())')
     assert len(payload.encode())<32000
     assert r.eval('writes')==0

@@ -24,7 +24,7 @@ deps={ffi=ffi,C=C,current=function()return stamp end,now=function()return time e
  activity=function()return activity end,resolve_issued=function(token,kind)
  assert(token=='ship' and kind=='ship');return 42ULL end}
 """+code)
-    r.globals().factory=r.execute(SOURCE.read_text())
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute("api=factory(deps)")
     return r
 

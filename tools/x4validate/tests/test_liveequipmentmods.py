@@ -55,8 +55,8 @@ current=function()return stamp end,now=function()return clock end,encode=functio
 """
 def build(code="",setup=SETUP):
     r=luajit.LuaRuntime(unpack_returned_tuples=True);r.execute(setup)
-    r.globals().wire=r.execute(SOURCE.with_name("live_actionwire.lua").read_text())()
-    r.globals().factory=r.execute(SOURCE.read_text());r.execute("api=factory(d)");r.execute(code);return r
+    r.globals().wire=r.execute(SOURCE.with_name("live_actionwire.lua").read_text(encoding="utf-8"))()
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"));r.execute("api=factory(d)");r.execute(code);return r
 def read(r,kind="ship"):
     return r.globals().api.read("ship",kind,None if kind in ("ship","engine") else "part")
 @pytest.mark.parametrize("kind",["ship","engine","weapon","turret","shield","grouped_turret"])
@@ -102,7 +102,7 @@ def check_unsupported_target_before_native():
 def check_wrong_abi_before_native(old,new):
     assert old in SETUP
     r=luajit.LuaRuntime(unpack_returned_tuples=True);r.execute(SETUP.replace(old,new))
-    r.globals().factory=r.execute(SOURCE.read_text());ok,_=r.eval("function()return pcall(factory,d)end")()
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"));ok,_=r.eval("function()return pcall(factory,d)end")()
     assert not ok and r.globals().calls==0 and r.globals().groups==0
 
 def check_retained_native_pointer_signature():

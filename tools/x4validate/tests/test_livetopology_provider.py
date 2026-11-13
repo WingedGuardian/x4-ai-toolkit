@@ -7,8 +7,8 @@ ROOT=Path(__file__).resolve().parents[3]
 
 def runtime():
     r=observer_runtime()
-    r.globals().provider=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_topology_provider.lua").read_text())
-    r.globals().sdk=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actions.lua").read_text())
+    r.globals().provider=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_topology_provider.lua").read_text(encoding="utf-8"))
+    r.globals().sdk=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actions.lua").read_text(encoding="utf-8"))
     r.execute("""
         watch=api
         providerapi=provider{observer=watch,revision=string.rep('f',64),

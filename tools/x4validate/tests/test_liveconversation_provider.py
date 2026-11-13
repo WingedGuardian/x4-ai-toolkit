@@ -22,8 +22,8 @@ def runtime():
         function run() return registry.execute(req.id,req.session,req.digest) end
         function status() return registry.status(req.id,req.session,req.digest) end
     """)
-    r.globals().factory=r.execute((UI/'live_conversation_provider.lua').read_text())
-    r.globals().core=r.execute((UI/'live_actions.lua').read_text())
+    r.globals().factory=r.execute((UI/'live_conversation_provider.lua').read_text(encoding="utf-8"))
+    r.globals().core=r.execute((UI/'live_actions.lua').read_text(encoding="utf-8"))
     r.execute("api=factory{revision=REV,public_current=function() return stamp end,observer=observer};registry=core();registry.register(api.spec)")
     return r
 

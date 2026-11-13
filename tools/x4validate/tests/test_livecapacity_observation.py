@@ -56,7 +56,7 @@ def runtime(kind,profile='campaign_v1'):
 @pytest.mark.parametrize('profile',['interactive','campaign_v1'])
 def test_sample_one_sdk_record_one_call_no_md_record_inference(kind,profile):
     r,_=runtime(kind,profile)
-    r.globals().wirefactory=r.execute((O.ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text())
+    r.globals().wirefactory=r.execute((O.ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text(encoding="utf-8"))
     r.execute("""
       wire=wirefactory()
       p=usage_prepare();assert(p.status=='prepared' and send_count()==0)

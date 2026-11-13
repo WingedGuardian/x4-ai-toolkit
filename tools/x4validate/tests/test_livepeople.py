@@ -55,8 +55,8 @@ current=function()return stamp end,now=function()return clock end,encode=functio
 """
 def build(code="",setup=SETUP):
     r=luajit.LuaRuntime(unpack_returned_tuples=True);r.execute(setup)
-    r.globals().wire=r.execute(SOURCE.with_name("live_actionwire.lua").read_text())()
-    r.globals().factory=r.execute(SOURCE.read_text());r.execute("api=factory(d)");r.execute(code);return r
+    r.globals().wire=r.execute(SOURCE.with_name("live_actionwire.lua").read_text(encoding="utf-8"))()
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"));r.execute("api=factory(d)");r.execute(code);return r
 def capture(r):return r.globals().api.capture("ship",r.globals().nonce)
 def pages(r,c):
     rows=[];offset=0
@@ -120,7 +120,7 @@ def check_nonce_reuse_and_supersession():
 ])
 def check_bad_abi_no_calls(old,new):
     r=luajit.LuaRuntime(unpack_returned_tuples=True);r.execute(SETUP.replace(old,new))
-    r.globals().factory=r.execute(SOURCE.read_text());ok,_=r.eval("function()return pcall(factory,d)end")()
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"));ok,_=r.eval("function()return pcall(factory,d)end")()
     assert not ok and r.globals().calls==0 and r.globals().fills==0
 
 def check_retained_native_signature():

@@ -208,14 +208,14 @@ def test_incomplete_journal_refuses_without_repair(tmp_path):
     path.write_text("{", encoding="utf-8")
     with pytest.raises(S.SessionUnavailable, match="unreadable"):
         link.probe()
-    assert path.read_text() == "{"
+    assert path.read_text(encoding="utf-8") == "{"
 
 
 def test_duplicate_journal_key_refused(tmp_path):
     _, journal, link = setup(tmp_path)
     start(link)
     path = journal.path / "00000001.json"
-    path.write_text(path.read_text().replace('"version":1', '"version":1,"version":1'))
+    path.write_text(path.read_text(encoding="utf-8").replace('"version":1', '"version":1,"version":1'))
     with pytest.raises(S.SessionUnavailable, match="duplicate"):
         journal.records()
 
@@ -330,7 +330,7 @@ def test_journal_file_root_refused(tmp_path):
     path.write_text("preserved")
     with pytest.raises(S.SessionUnavailable, match="not a directory"):
         S.SessionJournal(path).records()
-    assert path.read_text() == "preserved"
+    assert path.read_text(encoding="utf-8") == "preserved"
 
 
 def test_journal_link_root_refused(tmp_path):

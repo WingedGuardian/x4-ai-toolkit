@@ -29,8 +29,8 @@ def setup(tmp):
             if pairs and all(type(k) is int for k,_ in pairs):return [from_lua(x[i]) for i in range(1,len(pairs)+1)]
             return {k:from_lua(z) for k,z in pairs}
         return x
-    native=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_persistence.lua").read_text())
-    gate=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_persistencegate.lua").read_text())
+    native=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_persistence.lua").read_text(encoding="utf-8"))
+    gate=rt.execute((ROOT/"mods/x4_toolkit_helper/ui/live_persistencegate.lua").read_text(encoding="utf-8"))
     rt.globals().nativefactory=native
     rt.execute("d.native=nativefactory")
     api=gate(rt.globals().d)
@@ -142,7 +142,7 @@ def check_exact_guard_callback_route_and_advisory(tmp):
         "action":{"api_version":1,"surface":"files","paths":[str(c["save"]/"save_001.xml.gz")],"operations":["write"]}}
     c["a"].check=lambda action:(checked.append(action) or good_guard())
     assert c["d"].execute(t)["status"]=="SAVE_REQUESTED" and len(checked)==1
-    evidence=json.loads(next(c["a"].journal.glob("*-issued.json")).read_text())
+    evidence=json.loads(next(c["a"].journal.glob("*-issued.json")).read_text(encoding="utf-8"))
     assert evidence["guard_qualified"] is True
 
 @pytest.mark.parametrize("mutation",["peer","save_file","native_rows","journal"])

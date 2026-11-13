@@ -32,7 +32,7 @@ def make(section='description',setup=''):
     r.globals().section=section
     r.execute("tbl.numcolumns=section=='index' and 6 or section=='detail' and 5 or 1;for i=2,tbl.numcolumns do row[i]={type='icon',colspan=1}end")
     if setup:r.execute(setup)
-    r.globals().factory=r.execute(SOURCE.read_text());r.execute('api=factory(d)')
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"));r.execute('api=factory(d)')
     return r
 
 

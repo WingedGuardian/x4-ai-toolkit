@@ -10,7 +10,7 @@ g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
 
 def runtime():
     r=build();files,receipt=g.prepare()
-    r.globals().sdk=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actions.lua").read_text())
+    r.globals().sdk=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actions.lua").read_text(encoding="utf-8"))
     r.execute("""
         X4ToolkitAutomationBundle={register_extension=function(v)descriptor=v end}
         registrations={};lua_conversions=0;property_reads=0;registry=sdk()

@@ -57,7 +57,7 @@ def runtime(extra=""):
     r=_build(extra=extra)
     for key,file in (("wireFactory","live_actionwire.lua"),("coreFactory","live_actions.lua"),
                      ("routerFactory","live_automation.lua")):
-        r.globals()[key]=r.execute((UI/file).read_text())
+        r.globals()[key]=r.execute((UI/file).read_text(encoding="utf-8"))
     r.execute("""
       constructors=0;disposals=0;ticks=0;pending_reply=nil
       stamp={provider='x4-live-session-v1',revision=string.rep('c',64),

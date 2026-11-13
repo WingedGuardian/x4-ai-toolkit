@@ -39,7 +39,7 @@ def build(before=''):
         function prep() p=api.prepare_select(m.currentOption,2,3,30,'1','High','number','5');return p end
         function subprep() p=api.prepare_submenu(m.currentOption,'example_options','example_options');return p end
     """+before)
-    r.globals().factory=r.execute(SOURCE.read_text());r.execute('api=factory(d)');return r
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"));r.execute('api=factory(d)');return r
 
 
 def check_pure_constructor_observation_and_index_value_mapping():

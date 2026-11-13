@@ -28,7 +28,7 @@ def runtime():
     r=LuaRuntime(unpack_returned_tuples=True)
     for name,file in (("wireFactory","live_actionwire"),("coreFactory","live_actions"),
                       ("routerFactory","live_automation")):
-        r.globals()[name]=r.execute((ROOT/f"mods/x4_toolkit_helper/ui/{file}.lua").read_text())
+        r.globals()[name]=r.execute((ROOT/f"mods/x4_toolkit_helper/ui/{file}.lua").read_text(encoding="utf-8"))
     r.execute("""
     stamp={provider='x4-live-session-v1',revision=string.rep('c',64),
            session=string.rep('a',32),generation=string.rep('b',32),world_token=string.rep('d',32)}

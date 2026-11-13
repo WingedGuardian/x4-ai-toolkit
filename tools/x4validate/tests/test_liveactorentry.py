@@ -10,7 +10,7 @@ SOURCE = ROOT / 'mods/x4_toolkit_helper/ui/live_actorentry.lua'
 def runtime(profile=None):
     r = LuaRuntime(unpack_returned_tuples=True)
     r.execute('ffi=require("ffi")')
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute('''
       reads=0;writes=0;time=10;currentroom=20ULL;currentactor=42ULL
       natives={42ULL,43ULL};possible=true;displayed=true;kind='comm';instant=true
@@ -168,7 +168,7 @@ def test_last_current_callback_rebinds_message_before_effect_is_refused():
 
 def test_max_uint64_actor_and_actual_codec_adaptive_page_preserve_exact_ids():
     r=runtime()
-    r.globals().wire_factory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text())
+    r.globals().wire_factory=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actionwire.lua').read_text(encoding="utf-8"))
     r.execute('''
       wire=wire_factory();d.encode=wire.encode
       natives={18446744073709551615ULL,43ULL,44ULL,45ULL,46ULL,47ULL,48ULL,49ULL}
@@ -205,6 +205,6 @@ def test_same_offset_double_action_id_is_rejected_before_any_native_call():
     r.execute('''ffi=require('ffi');ffi.cdef[[typedef struct {
       double id;const char* text;const char* type;bool ispossible;bool istobedisplayed;
     } UIAction;]];function never()error('native callback called')end''')
-    r.globals().factory=r.execute(SOURCE.read_text())
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"))
     ok,reason=r.eval("pcall(factory,{ffi=ffi,C={},globals={},current=never,now=never,encode=never,component_id=never,actor_info=never})")
     assert not ok and 'uint32 representation' in reason

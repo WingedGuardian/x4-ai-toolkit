@@ -271,7 +271,7 @@ def test_corrupt_history_refuses_before_observing_or_dispatching(tmp_path, damag
         (journal.path / "dispatch.json").write_text('{"id":"wrong","digest":"wrong"}')
     else:
         path = journal.path / "observation-000001.json"
-        path.write_text(path.read_text().replace('"version":1', '"version":2,"version":1'))
+        path.write_text(path.read_text(encoding="utf-8").replace('"version":1', '"version":2,"version":1'))
     with pytest.raises(ActionUncertain):
         journal.observe(transport)
     with pytest.raises(ActionUncertain):

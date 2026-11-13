@@ -25,7 +25,7 @@ def runtime():
             table_valid=function(v) return v==20 end}
         function prepare() p=api.prepare('context','info_shiptrader','43');return p end
     """)
-    r.globals().factory=r.execute(SOURCE.read_text());r.execute('api=factory(d)');return r
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"));r.execute('api=factory(d)');return r
 
 
 def test_constructor_is_pure_and_actual_row_dispatch_remains_unverified():

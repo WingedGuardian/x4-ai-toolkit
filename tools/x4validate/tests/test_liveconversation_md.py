@@ -70,7 +70,7 @@ def test_reply_fields_and_queue_bound_match_real_lua_contract():
     root,receipt=tree();reply=root.xpath("//append_to_list")[0]
     assert re.findall(r"(?:\[|,)\$(\w+)=",reply.get("exact"))==receipt["fields"]
     assert any(p.get("value")=="player.entity."+g.QUEUE+".count lt 64" for p in reply.iterancestors())
-    lua=(SOURCE.parents[1]/"mods/x4_toolkit_helper/ui/live_conversation.lua").read_text()
+    lua=(SOURCE.parents[1]/"mods/x4_toolkit_helper/ui/live_conversation.lua").read_text(encoding="utf-8")
     declared=lua.split("local fields={",1)[1].split("}",1)[0]
     assert re.findall(r'"([a-z_]+)"',declared)==receipt["fields"]
 

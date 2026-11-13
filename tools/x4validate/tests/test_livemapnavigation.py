@@ -30,7 +30,7 @@ def runtime():
             open_menu=function(name,p)assert(name=='MapMenu' and p[6]=='infomode');callback()end}
         function prep()p=api.prepare('context','left','objectinfo');return p end
     """)
-    r.globals().factory=r.execute(SOURCE.read_text());r.execute('api=factory(d)');return r
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"));r.execute('api=factory(d)');return r
 
 
 def check_tab_handler_once_no_ui_effect_claim():

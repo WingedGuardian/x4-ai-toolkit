@@ -28,7 +28,7 @@ def runtime():
             widget_state=function(widget) assert(widget==30);return {active=native_active} end}
         function prepare() p=api.prepare('context','ENTITY','43');return p end
     """)
-    r.globals().factory=r.execute(SOURCE.read_text());r.execute('api=factory(d)')
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"));r.execute('api=factory(d)')
     return r
 
 

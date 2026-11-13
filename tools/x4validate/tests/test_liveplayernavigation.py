@@ -68,7 +68,7 @@ deps={ffi=ffi,C=C,globals=g,current=function()return stamp end,now=function()ret
  assert(token=='target' and kind=='object');return 200ULL
  end}
 """+code)
-    r.globals().factory=r.execute(SOURCE.read_text())
+    r.globals().factory=r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute("api=factory(deps)")
     return r
 

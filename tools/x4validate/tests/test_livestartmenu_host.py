@@ -131,7 +131,7 @@ def check_peer_change_during_reply_refuses(case):
 
 def check_ui_allocation_tamper_refuses(case):
     c,p,a,s=case;c.bind()
-    path=next(c.allocations.path.iterdir());row=json.loads(path.read_text());row["session"]="f"*32
+    path=next(c.allocations.path.iterdir());row=json.loads(path.read_text(encoding="utf-8"));row["session"]="f"*32
     path.write_text(json.dumps(row))
     before=len(p.packets)
     with pytest.raises(SessionUnavailable):c.observe()
@@ -164,7 +164,7 @@ def check_authority_is_opaque_exact_one_use(case):
     c,p,a,s=case
     context={"test":"bound observation only"}
     handle=a.issue(context)
-    for invalid in (True,{},json.loads(next(a.root.glob("*issued.json")).read_text()),object()):
+    for invalid in (True,{},json.loads(next(a.root.glob("*issued.json")).read_text(encoding="utf-8")),object()):
         with pytest.raises(SessionUnavailable):a.consume(invalid,context)
     with pytest.raises(SessionUnavailable):a.consume(handle,{"test":"other"})
     assert a.consume(handle,context)["decision"]["source"]=="AGENT_RECORDED_CONVERSATION"
@@ -180,7 +180,7 @@ def check_authority_freshness_and_record(case,mutation):
 
 def check_request_journal_changed_refuses(case):
     c,p,a,s=case;c.bind();r=c.prepare("start","argongamestart");rid=r["request_id"]
-    path=c.requests/(rid+"-request.json");value=json.loads(path.read_text());value["option"]="other"
+    path=c.requests/(rid+"-request.json");value=json.loads(path.read_text(encoding="utf-8"));value["option"]="other"
     path.write_text(json.dumps(value))
     with pytest.raises(SessionUnavailable):c.execute(rid)
     assert not list(p.rt.globals().calls.values())
@@ -209,7 +209,7 @@ def check_request_changed_inside_policy_callback_refuses(case):
     c,p,a,s=case;c.bind();r=c.prepare("start","argongamestart");original=a.decide
     def drift(context):
         path=c.requests/(r["request_id"]+"-request.json")
-        row=json.loads(path.read_text());row["option"]="other";path.write_text(json.dumps(row))
+        row=json.loads(path.read_text(encoding="utf-8"));row["option"]="other";path.write_text(json.dumps(row))
         return original(context)
     a.decide=drift;before=len(p.packets)
     with pytest.raises(SessionUnavailable):c.execute(r["request_id"])

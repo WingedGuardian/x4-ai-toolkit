@@ -193,8 +193,8 @@ def test_actual_router_boundpipe_readcapture_costs_one_read_and_no_adapter_or_sd
     from x4validate._livebound import BoundPipe
     from x4validate._liveautomation import AutomationClient
     r = assembly()
-    r.globals().corefactory = r.execute((UI / 'live_actions.lua').read_text())
-    r.globals().routerfactory = r.execute((UI / 'live_automation.lua').read_text())
+    r.globals().corefactory = r.execute((UI / 'live_actions.lua').read_text(encoding="utf-8"))
+    r.globals().routerfactory = r.execute((UI / 'live_automation.lua').read_text(encoding="utf-8"))
     r.execute("""
       current={provider='x4-live-session-v1',revision=string.rep('c',64),
         session=string.rep('a',32),generation=string.rep('b',32),world_token=string.rep('d',32)}

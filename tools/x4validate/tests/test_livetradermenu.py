@@ -71,7 +71,7 @@ def make(mode='licence'):
     if mode == 'blueprint':
         r.execute("m.mode='blueprint';row.rowdata[2]='ware';row.index=2;top.rows={cat,row}")
     r.execute('rebuild_wrappers()')
-    r.globals().factory = r.execute(SOURCE.read_text())
+    r.globals().factory = r.execute(SOURCE.read_text(encoding="utf-8"))
     r.execute('api=factory(d)')
     return r
 

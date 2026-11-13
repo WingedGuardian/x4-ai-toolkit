@@ -6,8 +6,8 @@ from lupa.luajit21 import LuaRuntime
 ROOT=Path(__file__).resolve().parents[3]
 def runtime():
     r=LuaRuntime(unpack_returned_tuples=True)
-    r.globals().wirefactory=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actionwire.lua").read_text())
-    r.globals().factory=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_topology.lua").read_text())
+    r.globals().wirefactory=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_actionwire.lua").read_text(encoding="utf-8"))
+    r.globals().factory=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_topology.lua").read_text(encoding="utf-8"))
     r.execute("""
         now=0;sends=0;reads=0;clears=0;disposed=0;id=string.rep('d',32);rev=string.rep('e',64)
         stamp={provider='x4-live-session-v1',revision=string.rep('a',64),session=string.rep('b',32),

@@ -310,7 +310,7 @@ decl=sys.argv[2].replace("bool displayRemoveOption,active,hasOverrideColor;",
                        "uint8_t displayRemoveOption,active,hasOverrideColor;")
 r.globals().decl=decl
 r.execute("ffi.cdef(decl)")
-r.globals().m=r.execute(Path(sys.argv[1]).read_text())
+r.globals().m=r.execute(Path(sys.argv[1]).read_text(encoding="utf-8"))
 r.execute("calls=0; C=setmetatable({},{__index=function() calls=calls+1;error('native called') end})")
 ok,error=r.eval("function() return pcall(m.native_reader,ffi,C,{}) end")()
 assert not ok and "bool field type" in str(error)

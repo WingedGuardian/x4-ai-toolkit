@@ -36,7 +36,7 @@ def test_fresh_cue_does_not_default_failed_find_to_empty():
     assert root.xpath("//do_if[@value='typeof @$Found == datatype.list']")
     assert root.xpath("//set_value[@name='$Total' and @exact='-1']")
 def test_reply_and_row_fields_match_lua_exact_shapes():
-    root,receipt=tree();lua=(SOURCE.parents[1]/"mods/x4_toolkit_helper/ui/live_topology.lua").read_text()
+    root,receipt=tree();lua=(SOURCE.parents[1]/"mods/x4_toolkit_helper/ui/live_topology.lua").read_text(encoding="utf-8")
     for label,key in (("fields","fields"),("row_fields","row_fields")):
         declared=lua.split("local "+label+"={",1)[1].split("}",1)[0]
         assert re.findall(r"'([a-z_]+)'",declared)==receipt[key]

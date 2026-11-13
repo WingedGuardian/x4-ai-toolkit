@@ -38,7 +38,7 @@ def client(tmp_path):
 
 def test_preparation_reserved_before_transport_and_never_replayed(tmp_path):
     c,b=client(tmp_path);c.prepare(REQUEST)
-    assert json.loads((c.pending/(REQUEST["id"]+".json")).read_text())==REQUEST
+    assert json.loads((c.pending/(REQUEST["id"]+".json")).read_text(encoding="utf-8"))==REQUEST
     with pytest.raises(ActionRefused):c.prepare(REQUEST)
     assert b.calls==["action_prepare"]
 

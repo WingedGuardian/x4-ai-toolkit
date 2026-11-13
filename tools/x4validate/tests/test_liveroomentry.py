@@ -16,8 +16,8 @@ def runtime(real_channel=False,constructor_failure=False,capacity_profile=None):
     r.globals().capacity_name=resolve(capacity_profile)['name']
     r.globals().capacity_revision=resolve(capacity_profile)['revision']
     for name in ("actions","actionwire"):
-        r.globals()[name]=r.execute((ROOT/f"mods/x4_toolkit_helper/ui/live_{name}.lua").read_text())
-    r.globals().mdfactory=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_mdchannel.lua").read_text())
+        r.globals()[name]=r.execute((ROOT/f"mods/x4_toolkit_helper/ui/live_{name}.lua").read_text(encoding="utf-8"))
+    r.globals().mdfactory=r.execute((ROOT/"mods/x4_toolkit_helper/ui/live_mdchannel.lua").read_text(encoding="utf-8"))
     r.globals().real_channel=real_channel
     r.globals().constructor_failure=constructor_failure
     r.execute("""

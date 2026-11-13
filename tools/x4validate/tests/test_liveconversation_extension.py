@@ -36,7 +36,7 @@ def test_source_drift_during_pure_generation_refused():
 
 def test_generated_loader_constructs_then_registers_actual_provider_without_snapshot():
     files,receipt=g.prepare();r=LuaRuntime(unpack_returned_tuples=True)
-    r.globals().core=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actions.lua').read_text())
+    r.globals().core=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actions.lua').read_text(encoding="utf-8"))
     r.execute("""
         ffi=require('ffi');callbacks={};sends=0;stamp={provider='x4-live-session-v1',revision=string.rep('a',64),
             session=string.rep('b',32),generation=string.rep('c',32),world_token='world'}
@@ -74,7 +74,7 @@ def test_generated_loader_registers_and_dispatches_actual_comm_wrapper():
     # Reuse the literal known native model fixture, then consume this actual loader.
     from test_livecommmenu import runtime
     r=runtime();files,_=g.prepare()
-    r.globals().core=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actions.lua').read_text())
+    r.globals().core=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actions.lua').read_text(encoding="utf-8"))
     r.execute("""
         X4ToolkitAutomationBundle={register_extension=function(d) descriptor=d end}
         channel={public_current=function() return stamp end,now=function() return time end,
@@ -109,7 +109,7 @@ def test_generated_loader_registers_and_dispatches_actual_comm_wrapper():
 def test_generated_loader_dispatches_actual_actor_context_adapter_and_sdk():
     from test_liveactorcontext import runtime
     r=runtime();files,_=g.prepare()
-    r.globals().core=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actions.lua').read_text())
+    r.globals().core=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actions.lua').read_text(encoding="utf-8"))
     r.execute("""
         X4ToolkitAutomationBundle={register_extension=function(d) descriptor=d end}
         channel={public_current=function() return stamp end,now=function() return time end,
@@ -145,7 +145,7 @@ def test_generated_loader_dispatches_actual_actor_context_adapter_and_sdk():
 def test_generated_loader_dispatches_actual_map_route():
     from test_livemapnavigation import runtime
     r=runtime();files,_=g.prepare()
-    r.globals().core=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actions.lua').read_text())
+    r.globals().core=r.execute((ROOT/'mods/x4_toolkit_helper/ui/live_actions.lua').read_text(encoding="utf-8"))
     r.execute("""
         ffi=require('ffi');X4ToolkitAutomationBundle={register_extension=function(d)descriptor=d end}
         channel={public_current=d.public_current,now=d.clock,arm_tick=function()end,subscribe=function()end,
