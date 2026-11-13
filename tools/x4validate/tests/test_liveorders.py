@@ -43,7 +43,10 @@ function fill(b,r,i)
  b.issyncpointreached=sync or false;b.istemporder=false
 end
 C={}
-C.GetNumOrders=function() return badcount or #orders end
+C.GetNumOrders=function()
+ if numorders_fail_after_remove and removed_once then error('queue read failed') end
+ return badcount or #orders
+end
 C.GetOrders3=function(buf,n)
  for i=0,n-1 do
   fill(buf[i],orders[i+1],i+1)
@@ -56,7 +59,11 @@ C.GetDefaultOrder=function(buf)
  fill(buf,{order=defaultdef,enabled=true},0);return true
 end
 C.GetOrderID=function(_,index)
- if idfail_after_create and created_once then idfail_after_create=false;error("order id readback failed") end
+ if idfail_after_create and created_once then
+  idfail_after_create=false
+  if swap_def_on_idfail then orders[index].order='Wait' end
+  error("order id readback failed")
+ end
  return wrongid and u("6") or (orders[index] and orders[index].id or zero)
 end
 C.GetOrderQueueCurrentIdx=function() return current or (#orders>0 and 1 or 0) end
@@ -86,7 +93,7 @@ C.RemoveOrder=function(s,index,playercancelled,checkonly)
   if check_cancel_drift then orders[#orders+1]={order='Wait',enabled=false,id=u('77')};check_cancel_drift=false end
   return not cancel_disabled
  end
- calls[#calls+1]={"remove",index}
+ calls[#calls+1]={"remove",index};removed_once=true
  if cancel_reenter then reentered_cancel=api.execute_cancel(cancel_ticket) end
  if remove_error then error("removal uncertain") end
  if remove_false then return false end
@@ -439,6 +446,33 @@ def check_failed_rollback_is_reported_with_the_index(failure):
     p=prepare(r);out=r.globals().api.execute(p["ticket"])
     assert out["status"]=="ROLLBACK_FAILED" and "left in the queue at index 1" in out["reason"], out["reason"]
     assert r.eval("#orders")==1
+
+
+# Delta review 4, items 1-2: the rollback's own checks.
+def check_rollback_refuses_a_different_definition_at_the_index():
+    # The definition check: something else at the creation index is never removed.
+    r=build("idfail_after_create=true;swap_def_on_idfail=true")
+    p=prepare(r);out=r.globals().api.execute(p["ticket"])
+    assert out["status"]=="ROLLBACK_FAILED" and "not the requested definition" in out["reason"], out["reason"]
+    assert "is left in the queue at index 1" in out["reason"]
+    assert [c[1] for c in r.globals().calls.values()]==["create"] and r.eval("#orders")==1
+
+
+def check_rollback_whose_queue_does_not_shrink_says_may_be_left():
+    # The shrink check: removal reported, order still queued.
+    r=build("createdenabled=true;remove_keeps=true")
+    p=prepare(r);out=r.globals().api.execute(p["ticket"])
+    assert out["status"]=="ROLLBACK_FAILED" and "did not shrink" in out["reason"], out["reason"]
+    assert "may be left in the queue at index 1" in out["reason"] and r.eval("#orders")==1
+
+
+def check_rollback_whose_queue_cannot_be_reread_says_may_be_left():
+    # rb_probe scenario C: removed, then the confirming queue read throws.
+    r=build("createdenabled=true;numorders_fail_after_remove=true")
+    p=prepare(r);out=r.globals().api.execute(p["ticket"])
+    assert out["status"]=="ROLLBACK_FAILED", out["reason"]
+    assert "may be left in the queue at index 1" in out["reason"]
+    assert "could not be confirmed" in out["reason"] and r.eval("#orders")==0
 
 
 def check_rolled_back_submission_never_cancels_a_later_order():
