@@ -109,8 +109,18 @@ return function(d)
     local function distance(a,b,first)
         local sum=0;for i=first,first+2 do sum=sum+(a[i]-b[i])^2 end;return math.sqrt(sum)
     end
+    -- MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0 (vanilla
+    -- ego_detailmonitorhelper/helper.lua:8824 tests a blackboard flag with ~= 0). Exactly 1/0
+    -- of the NAMED reply fields become booleans; any other value is left for the checks to refuse.
+    local function md_flags(row,names)
+        for _,k in ipairs(names) do
+            if row[k]==1 then row[k]=true elseif row[k]==0 then row[k]=false end
+        end
+    end
     local function validate(row,p)
         assert(type(row)=='table' and getmetatable(row)==nil,'reply row')
+        md_flags(row,{'md_busy','target_exists','pose_observed','eligible','position_match',
+            'orientation_match','dispatched','consumed','busy'})
         local usage=p.phase=='capacity';local fields={};local n=0
         for _,k in ipairs(common)do fields[k]=true;n=n+1 end
         for _,k in ipairs(usage and usagefields or nativefields)do fields[k]=true;n=n+1 end

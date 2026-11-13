@@ -319,6 +319,37 @@ def check_native_dynamic_preview_cannot_falsely_prepare_singleton():
     r,_=runtime();r.execute("req.arguments.selector='dynamicrooms';registry.prepare(req);deliver(row('prepared'));run()")
     assert r.eval("sends")==1
 
+# MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0
+# (KB 2026-11-10; ROR handover defect (b)). MDNUM re-encodes every boolean of a
+# synthetic reply the way the engine delivers it.
+MDNUM = """
+function mdnum(v)
+    if v==true then return 1 elseif v==false then return 0 end
+    if type(v)=='table' and getmetatable(v)==nil then
+        local o={};for k,x in pairs(v) do o[k]=mdnum(x) end;return o
+    end
+    return v
+end
+plain_deliver=deliver;function deliver(v) return plain_deliver(mdnum(v)) end
+"""
+
+
+def check_md_numeric_booleans_transport_and_entered_room():
+    r,_=runtime();r.execute(MDNUM);r.execute("registry.prepare(req);deliver(row('prepared'));run();deliver(row('dispatched'));v=status()")
+    assert r.eval("v.status")!="completed"
+    r.execute("local x=row('dispatched');x.positioned=true;x.entered=true;deliver(x);v=status()")
+    assert r.eval("v.status")=="completed"
+    assert r.eval("v.observations.snapshot.entered") is True
+    assert r.eval("v.observations.snapshot.positioned") is True
+
+
+def check_md_numeric_incomplete_scope_room_count_reads_as_unknown():
+    # MD writes `if $ScopeComplete then $RoomCount else false`: the false arrives as 0.
+    r,_=runtime();r.execute(MDNUM);r.execute("req.arguments.selector='dynamicrooms';registry.prepare(req);local x=row('refused');x.room_exists=false;x.room=ffi.new('uint64_t',0);x.room_macro='';x.scope_count=17;x.scope_complete=false;x.room_count=false;x.candidates={};x.candidate_macros={};deliver(x);v=registry.status(req.id,req.session,req.digest)")
+    assert r.eval("v.observations.snapshot.scope_complete") is False
+    assert r.eval("v.observations.snapshot.room_count") is False
+    assert r.eval("v.status")=="refused"
+
 def _cases():
     out=[]
     for name,fn in list(globals().items()):

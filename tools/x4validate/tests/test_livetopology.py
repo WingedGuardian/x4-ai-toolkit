@@ -148,6 +148,26 @@ def check_identity_drift_during_initial_subscribe_sends_nothing():
     assert r.execute("return pcall(api.begin,id,'gates','sector_macro')")[0] is False
     assert r.eval("sends")==0
 
+# MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0
+# (KB 2026-11-10; ROR handover defect (b)). MDNUM re-encodes every boolean of a
+# synthetic reply the way the engine delivers it.
+MDNUM = """
+function mdnum(v)
+    if v==true then return 1 elseif v==false then return 0 end
+    if type(v)=='table' and getmetatable(v)==nil then
+        local o={};for k,x in pairs(v) do o[k]=mdnum(x) end;return o
+    end
+    return v
+end
+plain_deliver=deliver;function deliver(v) return plain_deliver(mdnum(v)) end
+"""
+
+
+def check_md_numeric_booleans_gate_row_and_stable_snapshot():
+    r=runtime();r.execute(MDNUM);r.execute("api.begin(id,'gates','sector_macro');deliver(row(1))")
+    assert r.eval("api.poll(id).enumeration_complete") is True
+    assert r.eval("api.page(id,0).rows[1].active") is False
+
 def _cases():
     out=[]
     for name,fn in list(globals().items()):

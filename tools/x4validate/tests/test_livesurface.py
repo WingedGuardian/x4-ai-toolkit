@@ -295,3 +295,27 @@ def test_fault_delivery_exception_cannot_strand_the_other_request():
         provider_spec.invoke('prepare',other,function(v)other_result=v end)
     ''')
     assert r.eval('other_result.status')=='refused' and r.eval('callback_count')==1
+
+
+# MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0
+# (KB 2026-11-10; ROR handover defect (b)). MDNUM re-encodes every boolean of a
+# synthetic reply the way the engine delivers it.
+MDNUM = """
+function mdnum(v)
+    if v==true then return 1 elseif v==false then return 0 end
+    if type(v)=='table' and getmetatable(v)==nil then
+        local o={};for k,x in pairs(v) do o[k]=mdnum(x) end;return o
+    end
+    return v
+end
+plain_deliver=deliver;function deliver(v) return plain_deliver(mdnum(v)) end
+"""
+
+
+def test_md_numeric_booleans_one_sample_completes():
+    r,unused=make();r.execute(MDNUM)
+    r.execute("prepare();execute();deliver(row())")
+    out=r.eval("status()")
+    assert out.status=="completed"
+    assert out.observations.snapshot.surface_found is True
+    assert out.observations.snapshot.target_exists is True

@@ -102,8 +102,20 @@ return function(d)
             and r.action==req.action and r.selector==selector and r.choice_token==choice,'request changed')end
         return s,now,token,selector,choice
     end
+    -- MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0 (vanilla
+    -- ego_detailmonitorhelper/helper.lua:8824 tests a blackboard flag with ~= 0). Exactly 1/0
+    -- of the NAMED reply fields become booleans; any other value is left for the checks to refuse.
+    local function md_flags(row,names)
+        for _,k in ipairs(names) do
+            if row[k]==1 then row[k]=true elseif row[k]==0 then row[k]=false end
+        end
+    end
     local function validate(row,p)
         assert(type(row)=='table' and getmetatable(row)==nil,'reply row')
+        md_flags(row,{'target_exists','room_exists','entered','controlled','dispatched','consumed',
+            'positioned','scope_complete','choice_required','md_busy'})
+        -- MD writes `if $ScopeComplete then $RoomCount else false`; that false arrives as 0.
+        if row.scope_complete==false and row.room_count==0 then row.room_count=false end
         local selected=p.phase=='capacity' and usage_fields or fields
         local expected={};for _,k in ipairs(selected)do expected[k]=true end
         local n=0;for k in pairs(row)do assert(expected[k],'unknown reply field');n=n+1 end

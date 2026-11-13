@@ -339,6 +339,34 @@ def check_factory_rechecks_consumed_sources(target):
         return raw
     with patch.object(Path,'read_bytes',changed),pytest.raises(AssertionError):g.prepare()
 
+# MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0
+# (KB 2026-11-10; ROR handover defect (b)). MDNUM re-encodes every boolean of a
+# synthetic reply the way the engine delivers it.
+MDNUM = """
+function mdnum(v)
+    if v==true then return 1 elseif v==false then return 0 end
+    if type(v)=='table' and getmetatable(v)==nil then
+        local o={};for k,x in pairs(v) do o[k]=mdnum(x) end;return o
+    end
+    return v
+end
+plain_deliver=deliver;function deliver(v) return plain_deliver(mdnum(v)) end
+"""
+
+
+def check_md_numeric_booleans_dispatch_and_basis_match():
+    r,_=make();r.execute(MDNUM);r.execute('dispatched()')
+    assert r.eval('status().status')=='running'
+    r.execute("x=row('dispatched');x.age=6;x.pose=x.desired;x.position_match=true;x.orientation_match=true;x.busy=false;deliver(x)")
+    assert r.eval('status().status')=='completed'
+
+
+def check_md_numeric_busy_flag_in_capacity_sample():
+    r,_=make();r.execute(MDNUM);r.execute("req.action='capacity_observe';req.arguments={}")
+    r.eval('registry.prepare(req)');r.eval('execute()');r.execute("deliver(row('observed'))")
+    out=r.eval('status()');assert out.status=='completed'
+    assert out.observations.snapshot.md_busy is False
+
 def _cases():
     out=[]
     for name,fn in list(globals().items()):

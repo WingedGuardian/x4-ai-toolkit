@@ -78,8 +78,17 @@ return function(d)
         return a.kind=="COMPONENT" and a.component==b.component or
             a.kind=="TEMPLATE" and a.context==b.context and a.seed==b.seed
     end
+    -- MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0 (vanilla
+    -- ego_detailmonitorhelper/helper.lua:8824 tests a blackboard flag with ~= 0). Exactly 1/0
+    -- of the NAMED reply fields become booleans; any other value is left for the checks to refuse.
+    local function md_flags(row,names)
+        for _,k in ipairs(names) do
+            if row[k]==1 then row[k]=true elseif row[k]==0 then row[k]=false end
+        end
+    end
     local function validate(r)
         assert(type(r)=="table" and getmetatable(r)==nil,"plain snapshot required")
+        md_flags(r,{"history_matches","stable","active_before","active_after"})
         local n=0;for k in pairs(r) do assert(allowed[k],"unknown snapshot field");n=n+1 end
         assert(n==#fields,"missing snapshot fields")
         assert(r.kind=="SNAPSHOT" and r.provider=="x4-conversation-observer-v1" and r.revision==revision,"wrong observer producer")

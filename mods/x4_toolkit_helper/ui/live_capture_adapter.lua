@@ -114,12 +114,21 @@ return function(sdk, env, options)
             if age-p.age>10 then fail("CAPTURE_REPLY_TIMEOUT_QUARANTINED_NO_REPLAY");return end
         end
     end
+    -- MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0 (vanilla
+    -- ego_detailmonitorhelper/helper.lua:8824 tests a blackboard flag with ~= 0). Exactly 1/0
+    -- of the NAMED reply fields become booleans; any other value is left for the checks to refuse.
+    local function md_flags(row,names)
+        for _,k in ipairs(names) do
+            if row[k]==1 then row[k]=true elseif row[k]==0 then row[k]=false end
+        end
+    end
     local function receipt(row,preflight)
         fields(row,{version=true,id=true,session=true,digest=true,status=true,observations=true,reason=true},7)
         assert(row.version==1 and hex(row.id,32) and hex(row.session,32) and hex(row.digest,64)
             and type(row.reason)=="string" and #row.reason<=4096,"receipt identity")
         local o=row.observations
         assert(type(o)=="table" and type(o.bridge_call)=="string","transport correlation missing")
+        md_flags(o,{'file_confirmed','visual_pass','reservation_released','md_busy'})
         local p=pending[o.bridge_call]
         if not p then assert(not seen[o.bridge_call],"duplicate delivered capture reply");return end
         current()

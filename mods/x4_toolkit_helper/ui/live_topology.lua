@@ -63,8 +63,16 @@ return function(d)
         assert(out:match('^[1-9]%d*$') and #out<=20 and (#out<20 or out<='18446744073709551615'),'exact uint64 component required')
         return out
     end
+    -- MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0 (vanilla
+    -- ego_detailmonitorhelper/helper.lua:8824 tests a blackboard flag with ~= 0). Exactly 1/0
+    -- of the NAMED reply fields become booleans; any other value is left for the checks to refuse.
+    local function md_flags(row,names)
+        for _,k in ipairs(names) do
+            if row[k]==1 then row[k]=true elseif row[k]==0 then row[k]=false end
+        end
+    end
     local function native_row(r,kind)
-        shape(r,row_fields);assert(type(r.exists)=='boolean' and text(r.macro),'row identity state')
+        shape(r,row_fields);md_flags(r,{'exists','active'});assert(type(r.exists)=='boolean' and text(r.macro),'row identity state')
         local out={exists=r.exists,macro=r.macro}
         if not r.exists then
             assert(r.object==0 and r.macro=='' and r.active==-1,'contradictory missing object')
@@ -96,7 +104,7 @@ return function(d)
         return out
     end
     local function validate(r)
-        shape(r,fields)
+        shape(r,fields);md_flags(r,{'stable'})
         assert(pending and r.kind=='SNAPSHOT' and r.provider=='x4-topology-observer-v1' and r.revision==revision
             and r.request==pending.id and r.session==stamp.session and r.generation==stamp.generation
             and r.world_token==stamp.world_token and r.query_kind==pending.kind and r.sector_macro==pending.sector,'snapshot binding')

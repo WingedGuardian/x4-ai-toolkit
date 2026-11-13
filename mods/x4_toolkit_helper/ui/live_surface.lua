@@ -92,8 +92,17 @@ return function(d)
     local common={'kind','revision','id','digest','call','phase','session','generation','world_token','public_revision','age','status','reason'}
     local sample={'target','target_exists','sector','physics_ready','sample_observed','surface_found','face','origin','surface_position','surface_frame','host_pose','bbox_centre','dimensions'}
     local usage={'md_used','md_limit','md_queued','md_queue_limit','capacity_profile','capacity_revision'}
+    -- MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0 (vanilla
+    -- ego_detailmonitorhelper/helper.lua:8824 tests a blackboard flag with ~= 0). Exactly 1/0
+    -- of the NAMED reply fields become booleans; any other value is left for the checks to refuse.
+    local function md_flags(row,names)
+        for _,k in ipairs(names) do
+            if row[k]==1 then row[k]=true elseif row[k]==0 then row[k]=false end
+        end
+    end
     local function validate(v,p)
         assert(type(v)=='table' and getmetatable(v)==nil,'plain native reply')
+        md_flags(v,{'target_exists','physics_ready','sample_observed','surface_found','md_busy'})
         local names,n={},0
         for _,group in ipairs({common,p.phase=='capacity' and usage or sample})do
             for _,k in ipairs(group)do names[k]=true;n=n+1 end

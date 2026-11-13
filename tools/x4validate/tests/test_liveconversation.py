@@ -134,3 +134,25 @@ def test_disposal_failure_is_sticky_and_success_is_idempotent():
     assert r.eval("api.dispose()") is False and r.eval("disposed")==1
     r=runtime();assert r.eval("api.dispose()") is True
     assert r.eval("api.dispose()") is True and r.eval("disposed")==1
+
+
+# MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0
+# (KB 2026-11-10; ROR handover defect (b)). MDNUM re-encodes every boolean of a
+# synthetic reply the way the engine delivers it.
+MDNUM = """
+function mdnum(v)
+    if v==true then return 1 elseif v==false then return 0 end
+    if type(v)=='table' and getmetatable(v)==nil then
+        local o={};for k,x in pairs(v) do o[k]=mdnum(x) end;return o
+    end
+    return v
+end
+plain_deliver=deliver;function deliver(v) return plain_deliver(mdnum(v)) end
+"""
+
+
+def test_md_numeric_booleans_snapshot_qualifies():
+    r=runtime();r.execute(MDNUM);r.execute("api.begin(id);deliver(row())")
+    plain=runtime();plain.execute("api.begin(id);deliver(row())")
+    assert r.eval("api.poll(id).status")==plain.eval("api.poll(id).status")
+    assert r.eval("api.poll(id).status")!="PENDING"

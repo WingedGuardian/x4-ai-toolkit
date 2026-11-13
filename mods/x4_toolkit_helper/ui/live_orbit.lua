@@ -111,8 +111,17 @@ return function(d)
         end
         return s,now,op,a
     end
+    -- MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0 (vanilla
+    -- ego_detailmonitorhelper/helper.lua:8824 tests a blackboard flag with ~= 0). Exactly 1/0
+    -- of the NAMED reply fields become booleans; any other value is left for the checks to refuse.
+    local function md_flags(row,names)
+        for _,k in ipairs(names) do
+            if row[k]==1 then row[k]=true elseif row[k]==0 then row[k]=false end
+        end
+    end
     local function validate(row,p)
         assert(type(row)=='table' and getmetatable(row)==nil,'reply row')
+        md_flags(row,{'consumed','dispatched','stopped','stop_requested','external','fullscreen','md_busy'})
         local expected={};for _,k in ipairs(fields)do expected[k]=true end
         local denominator=#fields
         if p.phase=='snapshot'then

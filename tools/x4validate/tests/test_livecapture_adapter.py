@@ -101,6 +101,19 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(l.eval("result.observations.reservation_released"))
         self.assertFalse(l.eval("result.observations.file_completion_qualified"))
         self.assertFalse(l.eval("result.observations.visual_pass"))
+    def test_md_numeric_booleans_capture_and_release(self):
+        # MD true/false arrive as 1/0 (KB 2026-11-10, ROR handover defect (b)).
+        l=runtime();l.execute("""
+            function mdnum(v)
+                if v==true then return 1 elseif v==false then return 0 end
+                if type(v)=='table' and getmetatable(v)==nil then local o={};for k,x in pairs(v) do o[k]=mdnum(x) end;return o end
+                return v
+            end
+            mutator=function(r) local c=mdnum(r);for k in pairs(c) do r[k]=c[k] end end
+            prep();exec();releaseprep();result=exec()""")
+        self.assertEqual(l.eval("result.status"),"completed")
+        self.assertIs(l.eval("result.observations.reservation_released"),True)
+        self.assertIs(l.eval("result.observations.visual_pass"),False)
     def test_only_confirmed_release_allows_next_capture(self):
         l=runtime();l.execute("prep();exec();releaseprep();exec()")
         self.assertEqual(l.eval("prep().status"),"prepared")

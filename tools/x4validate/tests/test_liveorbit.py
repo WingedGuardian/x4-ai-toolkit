@@ -236,7 +236,7 @@ def check_read_only_snapshot_actual_sdk_and_wire():
     "x.session=string.rep('f',32)", "x.generation=string.rep('f',32)", "x.world_token='other'",
     "x.public_revision=string.rep('f',64)", "x.revision=string.rep('f',64)", "x.extra=true", "x.reason=nil",
     "x.target=ffi.new('uint64_t',3)", "x.target='18446744073709551615ULL'", "x.age=-1", "x.age=0/0",
-    "x.pitch=math.huge", "x.yaw='0'", "x.zoom=-1", "x.external=1", "x.status='observed'",
+    "x.pitch=math.huge", "x.yaw='0'", "x.zoom=-1", "x.external=2", "x.status='observed'",
     "x.dispatched=true", "x.consumed=true", "x.stopped=true"])
 def check_bad_preparation_never_dispatches(change):
     r, _ = runtime(); r.execute("call('prepare');local x=row('prepared');" + change + ";deliver(x);call('execute')")
@@ -299,6 +299,36 @@ def check_actual_sdk_start_stop_dispatch_and_wire():
     assert r.eval("v.status") != "completed" and len(r.eval("encoded").encode()) <= 4096
     assert not r.eval("v.observations.target_distance_verified")
 
+# MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0
+# (KB 2026-11-10; ROR handover defect (b)). MDNUM re-encodes every boolean of a
+# synthetic reply the way the engine delivers it.
+MDNUM = """
+function mdnum(v)
+    if v==true then return 1 elseif v==false then return 0 end
+    if type(v)=='table' and getmetatable(v)==nil then
+        local o={};for k,x in pairs(v) do o[k]=mdnum(x) end;return o
+    end
+    return v
+end
+plain_deliver=deliver;function deliver(v) return plain_deliver(mdnum(v)) end
+"""
+
+
+def check_md_numeric_booleans_complete_owned_stop():
+    r, _ = runtime(); r.execute(MDNUM); r.execute("""
+        start();owner=req.id
+        req=request('orbit_stop','f',{owner=owner});prep();call('execute');deliver(row('stop_requested'))
+    """)
+    assert r.eval("last.status") == "running"
+    r.execute("call('status');local x=row('requested');x.stopped=true;x.stop_requested=true;deliver(x)")
+    assert r.eval("last.status") == "completed"
+    assert r.eval("last.observations.snapshot.stopped") is True
+
+
+def check_md_numeric_boolean_other_than_0_or_1_still_refused():
+    # Twin: only exactly 1/0 are MD booleans; any other number is still refused.
+    r, _ = runtime(); r.execute(MDNUM); r.execute("prep();now=2;call('execute');local x=row('requested');x.dispatched=2;plain_deliver(x)")
+    assert r.eval("last.status") != "running"
 
 def _cases():
     out = []

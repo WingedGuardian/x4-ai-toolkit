@@ -154,7 +154,7 @@ def check_sdk_running_is_not_occupied_or_controlled():
     "x.world_token='other'","x.public_revision=string.rep('f',64)","x.revision=string.rep('f',64)",
     "x.kind='OTHER'","x.extra=true","x.reason=nil","x.target=ffi.new('uint64_t',3)",
     "x.target='18446744073709551615ULL'","x.target_exists=false","x.age=0/0","x.age=math.huge",
-    "x.age=-1","x.controlled=1","x.status='completed'","x.dispatched=true","x.consumed=true"])
+    "x.age=-1","x.controlled=2","x.status='completed'","x.dispatched=true","x.consumed=true"])
 def check_malformed_reply_never_executes(change):
     r,_=runtime();r.execute("registry.prepare(req);local x=row('prepared');"+change+";deliver(x);v=run()")
     assert r.eval("sends")==1 and r.eval("v.status")!="completed"
@@ -231,6 +231,32 @@ def check_md_settlement_binds_same_request_and_target_before_releasing():
             "$Record.$world_token == $R.$world_token","$Record.$public_revision == $R.$public_revision"):
             assert required in guard
         assert "($Occupied or $Controlled)" in guard and "$Record.$dispatched" in guard
+
+# MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0
+# (KB 2026-11-10; ROR handover defect (b)). MDNUM re-encodes every boolean of a
+# synthetic reply the way the engine delivers it.
+MDNUM = """
+function mdnum(v)
+    if v==true then return 1 elseif v==false then return 0 end
+    if type(v)=='table' and getmetatable(v)==nil then
+        local o={};for k,x in pairs(v) do o[k]=mdnum(x) end;return o
+    end
+    return v
+end
+plain_deliver=deliver;function deliver(v) return plain_deliver(mdnum(v)) end
+"""
+
+
+def check_md_numeric_booleans_prepare_execute_status():
+    r,_=runtime();r.execute(MDNUM);r.execute("prep()")
+    if r.eval("sentphase")=="status":r.execute("deliver(row('prepared'))")
+    r.execute("run()");assert r.eval("sentphase")=="execute"
+    r.execute("deliver(row('dispatched'));v=status()")
+    assert r.eval("v.status") in ("running","unknown")
+    r.execute("local x=row('dispatched');x.occupied=true;x.controlled=true;deliver(x);v=status()")
+    if r.eval("sentphase")=="status":r.execute("local x=row('dispatched');x.occupied=true;x.controlled=true;deliver(x)")
+    snap=r.eval("registry.status(req.id,req.session,req.digest).observations.snapshot")
+    assert snap.controlled is True and snap.occupied is True and snap.dispatched is True
 
 def _cases():
     out=[]
