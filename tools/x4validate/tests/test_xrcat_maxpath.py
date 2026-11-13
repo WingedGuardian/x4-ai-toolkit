@@ -35,14 +35,19 @@ def _windows_spelling(path: Path) -> str:
     return "Z:" + str(path.resolve()).replace("/", "\\")
 
 
-def _make_file(folder: Path, total: int) -> str:
-    """Create folder/d/<name>.xml whose absolute Windows spelling is exactly `total` characters."""
+def _u16(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _make_file(folder: Path, total: int, head: str = "") -> str:
+    """Create folder/d/<head><pad>.xml whose absolute Windows spelling is exactly `total` UTF-16 units."""
     prefix = _windows_spelling(folder) + "\\d\\"
-    pad = total - len(prefix) - len(".xml")
+    pad = total - _u16(prefix) - _u16(head) - len(".xml")
     assert pad >= 1, "test folder too deep for this length"
-    full_win = prefix + "y" * pad + ".xml"
-    assert len(full_win) == total
-    target = folder / "d" / ("y" * pad + ".xml")
+    name = head + "y" * pad + ".xml"
+    full_win = prefix + name
+    assert _u16(full_win) == total
+    target = folder / "d" / name
     if WINDOWS:
         os.makedirs("\\\\?\\" + str((folder / "d").resolve()), exist_ok=True)
         with open("\\\\?\\" + str(target.resolve()), "wb") as fh:
@@ -64,7 +69,7 @@ def _fake_tool(tmp: Path) -> Path:
 def _run(tmp: Path, args):
     fake = _fake_tool(tmp)
     env = {**os.environ, "XRCATTOOL": fake.as_posix()}
-    return subprocess.run([_bash(), WRAPPER.as_posix(), *args], capture_output=True, text=True, env=env, timeout=60)
+    return subprocess.run([_bash(), WRAPPER.as_posix(), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
 
 
 def _src(tmp_path: Path) -> Path:
@@ -105,3 +110,48 @@ def test_unpack_of_a_catalog_is_not_preflighted(tmp_path):
     result = _run(tmp_path, ["-in", str(cat), "-out", str(tmp_path / "out")])
     assert result.returncode == 0, result.stdout + result.stderr
     assert (tmp_path / "ran.txt").exists()
+
+
+# Review finding r1-1: the length was counted in UTF-8 BYTES. MEASURED with the real
+# tool: e-acute names still pack at 259 UTF-16 units and are skipped at 260, and a
+# Cyrillic name is skipped at any length ("Illegal file k?.xml", exit 0) because the
+# tool writes names in the ANSI code page (1252 here), where e-acute and the euro exist.
+E_ACUTE = "\u00e9" * 20
+
+
+def test_non_ascii_name_of_259_units_runs_the_tool(tmp_path):
+    if not WINDOWS:
+        pytest.skip("the tool-runs branch needs Wine off Windows")
+    src = _src(tmp_path)
+    _make_file(src, 259, E_ACUTE)
+    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "ran.txt").exists()
+
+
+def test_non_ascii_name_of_260_units_is_refused(tmp_path):
+    src = _src(tmp_path)
+    long_path = _make_file(src, 260, E_ACUTE)
+    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
+    assert result.returncode != 0 and not (tmp_path / "ran.txt").exists()
+    assert "260  " in result.stderr and long_path in result.stderr
+
+
+@pytest.mark.parametrize("name", ["k\u0436.xml", "s\U0001F600.xml"])
+def test_short_name_beyond_latin1_is_refused(tmp_path, name):
+    src = _src(tmp_path)
+    (src / name).write_bytes(b"<x/>")
+    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
+    assert result.returncode != 0 and not (tmp_path / "ran.txt").exists()
+    assert "U+00FF" in result.stderr and name in result.stderr
+
+
+@pytest.mark.parametrize("name", ["a\u00e9.xml", "c\u00ff.xml"])
+def test_short_latin1_name_runs_the_tool(tmp_path, name):
+    # Twin of the U+00FF clause: Latin-1 names pack.
+    if not WINDOWS:
+        pytest.skip("the tool-runs branch needs Wine off Windows")
+    src = _src(tmp_path)
+    (src / name).write_bytes(b"<x/>")
+    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
+    assert result.returncode == 0, result.stdout + result.stderr

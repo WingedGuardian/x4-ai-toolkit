@@ -21,6 +21,12 @@ XRCATTOOL="${XRCATTOOL:-XRCatTool.exe}"
 # naming each such path. Off Windows the tool runs under Wine, where a unix path
 # is spelt Z:\...; that spelling is what is checked there (not measured under Wine).
 # Every file is checked, including any an -include/-exclude filter would drop.
+# Length is counted in UTF-16 units, as Windows counts MAX_PATH (MEASURED: with
+# e-acute names the cutoff is still 259/260 units). The tool also writes names in
+# the system ANSI code page: MEASURED here (code page 1252) a Cyrillic name was
+# skipped the same silent way ("Illegal file k?.xml", exit 0) while e-acute and
+# the euro sign packed. So a name with a character above U+00FF is refused too
+# (conservative: some code pages could pack it).
 _xrcat_is_windows() {
   case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*|Windows*) return 0;; esac
   return 1
@@ -30,9 +36,23 @@ _xrcat_winroot() {
   local a; a=$(cd "$1" 2>/dev/null && pwd -P) || return 1
   printf 'Z:%s' "${a//\//\\}"
 }
+# UTF-16 length of a UTF-8 string, counted byte-wise (no UTF-8 locale needed):
+# bytes - continuation bytes + 4-byte sequences (each is a surrogate pair).
+_xrcat_u16len() {
+  local LC_ALL=C s="$1" cont lead4
+  cont="${s//[^$'\x80'-$'\xbf']/}"
+  lead4="${s//[^$'\xf0'-$'\xf7']/}"
+  echo $(( ${#s} - ${#cont} + ${#lead4} ))
+}
+# True when the UTF-8 string holds a character above U+00FF (a lead byte 0xC4+).
+_xrcat_beyond_latin1() {
+  local LC_ALL=C
+  case "$1" in *[$'\xc4'-$'\xff']*) return 0;; esac
+  return 1
+}
 _xrcat_preflight() {
-  local prev="" a root list rc rel w n shown=0
-  local -a long=()
+  local prev="" a root list rc rel w n u shown=0
+  local -a long=() odd=()
   for a in "$@"; do
     if [ "$prev" = "-in" ] && [ -d "$a" ]; then
       root=$(_xrcat_winroot "$a") || { echo "xrcat: REFUSED: cannot resolve the input folder: $a" >&2; return 2; }
@@ -46,15 +66,24 @@ _xrcat_preflight() {
       fi
       while IFS= read -r -d '' rel; do
         rel="${rel#./}"; w="$root\\${rel//\//\\}"
-        if [ "${#w}" -ge 260 ]; then long+=("${#w}  $w"); fi
+        u=$(_xrcat_u16len "$w")
+        if [ "$u" -ge 260 ]; then long+=("$u  $w"); fi
+        if _xrcat_beyond_latin1 "$rel"; then odd+=("$w"); fi
       done < "$list"
       rm -f "$list"
     fi
     prev="$a"
   done
+  if [ "${#odd[@]}" -gt 0 ]; then
+    echo "xrcat: REFUSED: ${#odd[@]} input file name(s) hold a character above U+00FF." >&2
+    echo "xrcat: XRCatTool 1.11 writes names in the system ANSI code page and leaves a name it cannot write out of the catalog, still exiting 0. Rename them." >&2
+    for w in "${odd[@]:0:50}"; do echo "xrcat:   $w" >&2; done
+    [ "${#odd[@]}" -gt 50 ] && echo "xrcat:   ... and $(( ${#odd[@]} - 50 )) more" >&2
+    return 3
+  fi
   n=${#long[@]}
   [ "$n" -eq 0 ] && return 0
-  echo "xrcat: REFUSED: $n input file(s) have an absolute path of 260 or more characters (Windows MAX_PATH)." >&2
+  echo "xrcat: REFUSED: $n input file(s) have an absolute path of 260 or more UTF-16 units (Windows MAX_PATH)." >&2
   echo "xrcat: XRCatTool 1.11 leaves such a file out of the catalog and still exits 0. Stage the mod under a shorter folder and pack again." >&2
   for w in "${long[@]}"; do
     if [ "$shown" -ge 50 ]; then echo "xrcat:   ... and $((n - shown)) more" >&2; break; fi
