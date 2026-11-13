@@ -416,7 +416,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F311 | Prior-run cleanup bypassed the Recycle Bin and pruned measured baselines | **DEFECT (measured/read)** | Two installers, two BaseX builders, two shell drivers, deploy and probe removal | FIXED 2026-10-20 - shared recoverable removal and baseline retention |
 | F312 | Restoring an older backup destroyed the current destination | **DEFECT (read/measured)** | Restore entry point and byte-preservation controls | FIXED 2026-10-20 - retain current bytes before publishing the restore |
 | F313 | Steam title lookup leaked incomplete HTTP reads out of refresh | **DEFECT (measured)** | Three transport failures and the real no-title twin | FIXED 2026-10-20 - HTTPException maps to SteamUnavailable |
-| F314 | Opaque programs naming saves bypassed review and preservation | **DEFECT (measured)** | Named/bulk/embedded scope, reader twins, 26,346-payload replay and 31 per-item verdicts | FIXED 2026-10-20 - possible-access review after preservation; unresolved scope refused |
+| F314 | Opaque programs naming saves bypassed review and preservation | **DEFECT (measured)** | Named/bulk/embedded scope, reader twins, 26,346-payload replay and 31 per-item verdicts | FIXED 2026-10-20 - possible-access review after preservation; unresolved scope refused. SUPERSEDED IN PART 2026-11-06 (#19): the review is now a deny naming the remedy (copy to scratch, or `x4save` by save name), returned before preservation |
 | F315 | Unknown tools in hook-only deployments raised ValueError before routing | **DEFECT (measured)** | Actual installed reproduction and Codex/OpenCode hook-only fixtures | FIXED 2026-10-20 - resolve the configured external runtime when local tools are absent |
 | F316 | Pytest itself pruned shared earlier-run temp outside ownership checks | **DEFECT (measured)** | Main/BaseX startup, seeded foreign run, explicit-path twins | FIXED 2026-10-20 - per-invocation owned scratch and refusal of existing basetemp |
 | F317 | Deduplication chmod reached outside live files through existing hard links | **DEFECT (measured)** | Canonical/duplicate external-link refusals, late-link refusal, three-copy twin | FIXED 2026-10-20 - retain unqualified links and count only links created by this apply |
@@ -438,7 +438,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F333 | Three deployed-mod delete shapes the shell guard does not read: a python `shutil.rmtree` literal, a path through a junction to `extensions/`, and a root held in an unknown variable | **OPEN LIMIT (measured)** · PRE-ARC | release review of the 4.0.1 deployed-mod rule (2026-10-27): each allowed at a1d876a, ba370f9 and the merged head alike, in sandbox roots | open; see entry |
 | F334 | `x4housekeep report` crashed on a name Windows lists but cannot reach (trailing `.`/space), and its scratchpad size row could never pass a junction | **DEFECT (measured)** · PRE-ARC | real report: FileNotFoundError on 2 such names; after the fix the row reads `>= 3.16 GiB` with 2 names and 6 links named; delete/move paths already failed closed (4 sites read) | FIXED 2026-10-31 - report rows give a lower bound naming what was not counted; delete paths unchanged |
 | F335 | A diff op whose `sel` ends in `/text()` is not applied by `_merge`, and nothing reports it | **OPEN LIMIT (measured)** · PRE-ARC | toy t-file: `replace .../t[@id='4']/text()` leaves the old text, node replace applies; corpus x4raw 2026-11-01: 0 of 22,457 `@sel` contain `text()` (two query shapes) | open; no installed mod uses it; see entry |
-| F336 | The BaseX builders swallow a refused `DROP DB` (`>/dev/null 2>&1 \|\| true`), so a reader holding the DB turns into a confusing receipt refusal | **OPEN LIMIT (measured)** · PRE-ARC | M2 2026-11-01, private DBPATH: with a reader attached `DROP DB` rc 1 "opened by another process", reader unaffected (3\|3); control without reader: DROP + ALTER rc 0 | open; fails CLOSED (declare_database refuses); see entry |
+| F336 | The BaseX builders swallow a refused `DROP DB` (`>/dev/null 2>&1 \|\| true`), so a reader holding the DB turns into a confusing receipt refusal | **OPEN LIMIT (measured)** · PRE-ARC | M2 2026-11-01, private DBPATH: with a reader attached `DROP DB` rc 1 "opened by another process", reader unaffected (3\|3); control without reader: DROP + ALTER rc 0 | SUPERSEDED 2026-11-07 by F361: the builders no longer DROP; its ALTER claim is corrected there |
 | F337 | OpenCode runs no session-start canary, so the KB note, housekeep sweep and x4fresh auto-rebuild never start there | **OPEN LIMIT (read)** · PRE-ARC | `opencode_plugin.mjs:427-439` session path renders preferences only (`opencode.py:234`); Claude and Codex both run session-canary.sh | open; see entry |
 | F338 | `x4effective dump --annotate` reports who WON each node, and keeps no attribute history inside a replaced subtree | **SCOPE LIMIT (read)** · IN-ARC | `_provenance.Recorder.elem_replaced` drops the old subtree's attribute records (by design); after a whole-file replace (`full_override`) no node has a record, so none is annotated and the header names the replacing origin instead. Real-data run 2026-11-01 on `aiscripts/order.fight.escort.xml` (base + 5 mods): 109 annotated nodes, all attributed to a mod and op line | documented in `--help`; not fixed |
 | F339 | `x4save vars` prints tables, lists and groups as `type#<id>` and does not expand or search them | **SCOPE LIMIT (measured)** · IN-ARC | a 9.0 save stores a table variable as a reference id resolved elsewhere in the save; on save_020 the KUDA config cue alone holds 3 such tables (`$byShipId`, `$defaultOrdersByShipId`, `$lxl_isStrictMaintainDistance`) | stated in output and `--help`; expansion is a follow-up |
@@ -458,6 +458,17 @@ memory or from another session -- a remembered id was stale within a day here.
 | F354 | Save locks cannot be turned on in 4.1.0: a lock binds the game too | **SCOPE LIMIT (measured)** · IN-ARC | `save-lock on` refuses and the sentinel never locks; the core's locking code stays, unused | OPEN by owner ruling 2026-11-04 |
 | F353 | `x4effective dump` answered a bare path to a DLC-only file with the UNPATCHED file, and a mod-shipped file in a DLC tree as absent | **FIXED (measured)** · PRE-ARC | 588 of 716 patched DLC documents returned the unpatched tree at the bare path; 113 read as absent; 14 unchanged; 1 named two documents. | `tests/test_dump_dlc_owned_bare_path.py`; `_merge` and the engine fingerprint untouched |
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
+| F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 321 of 2177 moved, all to deny, ask or advise; `find -exec` writes to what it finds now reach this rule. Round 7: 473 of 2469 moved vs 28f260ee, all stronger. Round 8: 556 of 2623, all stronger | FIXED 2026-11-05 |
+| F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own; a find that moves or writes what it finds never reached the archive rule; round 7: an analysis with no deadline failed open; round 8: a positional fill grew as uses x arguments | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
+| F358 | A complete copy of a mod-owned macro file at a nested path was modelled as REPLACING the owner's document; the engine MERGES it (two same-named macros), so later un-indexed selectors passed x4validate and the engine skipped them | **DEFECT (measured)** · PRE-ARC | GitHub issue #17: engine skipped 3 ops (debug.txt 2026-11-05, 2026-11-06), x4validate predicted 0; live census 213 active mods: 2 nested full copies over a mod-supplied file, both this case | FIXED 2026-11-06 for `.../macros/*_macro.xml` only; copy order and the engine's choice of copy UNMEASURED and disclosed by every reader; every other class (118 live at a DLC's nested path, INFERRED the largest exposure) and a plain-path full copy still a replacement and DISCLOSED as unmeasured |
+| F359 | With `X4_MODS` set to the extensions folder, the file guard alone allowed a typed delete of the whole folder, a DLC and a mod | **DEFECT (measured)** · PRE-ARC | 5 of 5 targets allowed by protect-files.sh alone; x4guard and the neutral delete already denied/asked. A DLC file EDIT in that layout was only advised; owner ruling 2026-11-07: denied in every layout | FIXED 2026-11-06 (deletes), 2026-11-07 (edits) |
+| F360 | A shell write whose target comes from xargs's stdin, or passes through an existing junction, reaches no write rule | **DEFECT (measured)** · PRE-ARC | `echo <config> \| xargs touch` and `echo <reference file> \| xargs touch` allowed; 3 of 3 shell writes through a junction into reference/ allowed where the file tool denies | FIXED 2026-11-07 |
+| F361 | A failed, killed or refused BaseX build left x4raw/x4eff MISSING (the builders dropped first); and BaseX `ALTER DB` onto an existing name REPLACES it, or with a reader on it fails and DAMAGES it | **DEFECT (measured)** · PRE-ARC | 2026-11-05: 8 killed builds in a row left both databases missing for hours. BaseX 12.4, private DBPATH, n=2: ALTER onto an unopened existing name rc 0 and the target holds the source's data; onto a reader-held name rc 1 "could not be renamed" and the target lost `inf.basex` (unreadable), source kept | FIXED 2026-11-07 (4.1.1): build-then-swap, `tools/basex/dbswap.py`; see entry |
+| F362 | The location stack was not modelled: PowerShell `Push-Location` read as a `cd`, `Pop-Location` ignored; bash's bare `pushd`, `pushd +N`/`-N`/`-n`, `popd -n`/`+N` read as a plain push or ignored | **DEFECT (measured)** · PRE-ARC | at 7f4895a2, 9 of 11 PowerShell probes and 10 of 14 bash rows judged the relative operand in the wrong folder (1 a false deny) | FIXED 2026-11-07 |
+| F363 | `check_connections` proved a loadout port EXISTS, never that the equipment FITS it, that a `<groups>` name matches the component's spelling, or that a ship macro's own `<connection ref>` exists | **SCOPE LIMIT (measured)** · PRE-ARC | 218 active+DEV mods: ROR 63 tag / 278 case / 209 ref hits; 12 other mods carry dangling refs (VRO included), XUP 10 tag mismatches; rule rejects 0 of 1421 vanilla leaves; a real save shows 0 of 10 mismatched preset weapons installed | FIXED 2026-11-08 as INFO `fit` findings; promotion to warn awaits a second ship class |
+| F364 | A missing base `index/*.xml` registered nothing and recorded no skip, so every vanilla macro read as unregistered while the run looked clean | **DEFECT (measured)** · PRE-ARC | a worktree without `x4-paths.env`: 150 macros indexed instead of 4,695, 39 fit hits instead of 63, `skipped` empty | FIXED 2026-11-08: degraded skip when the reference has no index folder, plain skip for a partial reference or a DLC |
+| F368 | Past link_resolved's per-call budget of 64 realpaths a write/delete operand read as "no link", silently, so a junction into reference/ after 64 local decoys was allowed | **DEFECT (measured)** · IN-ARC (9a73c0a9) | at 5404046c: `touch <N decoys> <junction>/libraries/wares.xml` writes_reference True for N=63, False for N=64 and 200; 64 `touch` segments then `rm -f <junction>/x.xml` rm_targets_reference False | FIXED 2026-11-09: realpath cached per folder; past the budget `links_unresolved`, which protect-bash.sh and save_policy refuse |
+| F369 | link_resolved (F360) skipped any path has_unresolved() flagged, so a SINGLE-QUOTED `$` (`::$DATA`, a folder `a$b`) or a stream suffix on a junction left a write through the junction lexical only | **DEFECT (measured)** · PRE-ARC (F360, 4.1.1) | at a70dcedd, in-process facts(): `touch`/`echo x >` `'<junction>/libraries/wares.xml::$DATA'` writes_reference False (True with no junction); `touch '<junction>:s'` False | FIXED 2026-11-09: the caller passes `literal`; on Windows the path is resolved through _win_alias; an unresolved operand's literal head, and any link its first unresolved component may name, are followed too |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -7449,7 +7460,8 @@ printed as a hit (BX-5).
 `test_bx1_every_partial_or_unreadable_address_is_refused`,
 `test_bx1_TWIN_a_whole_database_zero_is_still_confirmed`,
 `test_bx1_a_zero_from_a_query_naming_NO_database_is_not_a_negative`,
-`test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped`,
+`test_bx3_a_build_never_drops_the_live_database_or_its_licence` (2026-11-07, F361: it replaced
+the drop-order test test_bx3_the_old_coverage_licence_is_revoked_before_the_db_is_dropped; the builders no longer drop),
 `test_bx4_offsetting_per_root_errors_do_not_license_a_negative`,
 `test_bx5_a_database_argparse_rejects_is_never_advised`.
 
@@ -11111,6 +11123,14 @@ tests/test_audit0924_runtime.py.
 
 ## F314 - Opaque save access bypassed preservation · **DEFECT (measured)** · confidence 97% · FIXED 2026-10-20
 
+SUPERSEDED IN PART 2026-11-06 (4.1.1, issue #19): the possible-access REVIEW below is now a
+DENY. An ask made the user judge a call the agent can reshape: the deny names the saves, a copy
+command into the agent's scratch directory and `x4save vars|info|check <save name>`. It returns
+before preservation, so no backup is written for a call that does not run. MEASURED on fixture
+roots: `cp`/`Copy-Item` of a save to scratch, a script reading the scratch copy and `x4save`
+by save name all pass with no prompt and no backup (7 of 7); `x4save` given a save PATH is
+denied like any opaque program. Bulk, unresolved and known-tool save verdicts are unchanged.
+
 SUPERSEDED MEASUREMENT 2026-10-20: the 31-match price below is the earlier
 parser. F321 records the final 34-match replay and all per-item comparisons.
 
@@ -11694,6 +11714,8 @@ drops nothing, then `x4basex_artifacts.py --declare-db` refuses ("database still
 and the build stops: it fails CLOSED, but the message names the receipt, not the reader. This is also the
 basis for a build-then-swap design: a swap blocked by a reader is refused atomically and can retry.
 
+**SUPERSEDED 2026-11-07 (F361).** The builders no longer run `DROP DB`. The ALTER sentence above is too broad: MEASURED 2026-11-07 (n=2), `ALTER DB a b` with `b` existing and NOT open succeeds and REPLACES `b`; it is refused only when a reader holds `b`, and that refusal leaves `b` damaged. See F361.
+
 ## F337 - OpenCode has no session-start canary · **OPEN LIMIT (read)** · PRE-ARC · confidence 85%
 
 READ 2026-11-01: OpenCode's only session-start path is `experimental.chat.system.transform`
@@ -11952,6 +11974,7 @@ NOT READ (the lane's list; the first three re-probed at this commit with the gua
 * `Pop-Location` is not modelled. `Set-Location <reference>; Push-Location C:/safe; Pop-Location; Remove-Item x` is not
   flagged (`rm_targets_reference` false, probed): the relative path is judged in the pushed folder. PRE-ARC; the fix is a
   translator change that needs its own review, so it is a decision for the next release, and no test pins it.
+  **FIXED 2026-11-07 (4.1.1 final round): see F362.**
 * A PowerShell `$P` assigned twice is judged against its first value (the translation of `$P=<safe>; $P=<reference>;
   Remove-Item -Recurse $P/x` is `rm -rf <safe>/x`, probed: not flagged).
 * The deployed-mod ask does not follow `$X4_EXTENSIONS` through another variable (`E="$X4_EXTENSIONS"`) or `:-` default
@@ -12104,6 +12127,875 @@ compares against the first baseline folder only, because later layers' manifests
 denominator is every stacked run; MEASURED on fixtures only, with no real mods.
 
 **NO RE-DERIVATION: a scope statement; the fixture behaviour is pinned by the x4diff tests, not this sentence.**
+
+## F356 - Shell writes, moves and deletes of game archives were only advised · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-05
+
+The file tools deny a write to `<game>/*.cat|dat` and `<game>/extensions/ego_dlc_*/*.cat|dat`. The shell route only advised, or
+for an append or `touch` said nothing, and a DLC delete asked. `writes_game_archive` now denies them, from the channels the fact
+pipeline already had, plus a whole DLC folder deleted or moved, as the typed-delete refusal treats it.
+
+MEASURED through `protect-bash.sh` at 7753cc2c and after, on fixture roots; nothing ran. 288 forms:
+
+| group | forms | before | after |
+|---|---:|---|---|
+| names or may reach an archive | 213 | 125 advise, 31 allow, 33 ask, 24 deny | 8 advise, 20 allow, 4 ask, 181 deny |
+| a mod's archive, reads, other files | 75 | 23 advise, 30 allow, 17 ask, 5 deny | the same, 0 moved |
+
+The 32 not denied, which sum to the difference:
+
+| why | forms |
+|---|---:|
+| correctly not an archive: another name, or a mod | 6 |
+| contents unknown from the text: a tree copy, or an extraction into the game (`cp -r`, `rsync`, `robocopy`, `unzip`, `tar`, `7z`, `Expand-Archive`) and `git clean`, which asks | 8 |
+| unresolved folder or name (`rm "<game>/$X"`, `rm "$X/01.dat"`) | 2 |
+| the probe's own wording: an unquoted path with a space, and `/o` read as a robocopy switch; each respelled form denies | 2 |
+| **unmodelled write shape, OPEN**: `wget -O`, `perl -i`, `awk -i inplace`, `patch`, `fsutil file` (3), `XRCatTool -out`, `python -c`, `gzip`, `zip -m`, `git rm`, `find -exec mv`, `cmd` with a leading redirect | 14 |
+
+The same 14 shapes were tried at `reference/` as the control: all 14 raise no write or delete fact there either, so they are a gap
+in the pipeline and not in this rule.
+
+LIMITS. Archive names in patterns are tried against samples READ from one install. `.cat` or `.dat` deeper than a DLC or root folder
+is not covered, and neither is a separately configured extensions folder. A filtered find over the game with a test the text cannot
+decide (`-size`, `-newer`) is denied. A plain shell write to any other game file stays advisory by design.
+
+**REVIEW 2026-11-05 (4.1.1), each row MEASURED through `protect-bash.sh` at 7753cc2c, c3078f29 and the fix, fixture roots:**
+
+| row | 7753cc2c | c3078f29 | fix |
+|---|---|---|---|
+| `find <game> -regex '(.*)*zzz' -delete` | advise, 0.4 s | still running at 40 s, killed | advise, 0.4 s |
+| `find <game> ... -delete` with GNU's escaped-group `-regex` for cat or dat, a negated group `! ( -name '*.xml' )`, or `-name '*.xml' -prune -o` | advise | advise | deny |
+| TWIN `find <game> -name '*.xml' -delete` | advise | advise | advise |
+| `rm <...>/X4 Foundations/01.dat`, `X4_GAME` unset or empty | allow | allow | deny |
+| TWIN, no root: another game's `.dat`, `Documents/Egosoft/X4/01.dat`, `Documents/x.dat` | allow | allow | allow |
+| `rsync --exclude='*.dat'` and `robocopy /XF *.dat` into the game; `ls` or `find` of the game piped to `xargs -I{} rm <elsewhere>/{}` | advise | deny | advise |
+| `find <game> -name '*.dat'` or `ls <game>/*.dat` piped to `xargs -I{} rm {}` | advise | deny | deny |
+
+The cause of the hang: the rule handed the user's `-regex` to Python's `re`, which backtracks without bound. Now no user regex
+is run. A `find` expression is parsed (groups, `!`, `-a`, `-o`, `,`, the action that deletes or prints) and each sample archive
+walks it with three values; a test the text cannot decide may go either way. A `-regex` is decided only by the literal text every
+match must end with, and with an alternation anywhere it is undecided. Past 400 words or 32 nested groups, or on any word it cannot
+read, the expression may reach every sample. With no configured game root, a path through a segment named `X4 Foundations` (the
+`rm -rf <game>` name check, GAME_ROOTISH, without its profile spelling) is the game. Over the 324 forms the slowest hook call took
+1.7 s; the unit bound is 1 s per parse, killed at 60 s.
+
+The 288 earlier forms: 0 moved from c3078f29 to the fix, per item.
+
+DECIDED, kept: a folder directly under `extensions/` named `ego_dlc_*` is DLC, as the file tools' `is_dlc_folder` reads it, so
+`rm <game>/extensions/ego_dlc_mymod/ext_01.cat` denies (it asked at 7753cc2c). `chmod +w <archive>` denies and `chmod -w` is
+allowed: the modify-target reader takes `-w` as an option, so the archive reads as the mode; removing a permission changes no
+data, and `chmod -w` at `reference/` is read the same way.
+
+**Unmodelled shapes, OPEN. This list is what review has found, not a census.** Each allows at the game root (MEASURED), and each
+of the 14 above plus these is unread at `reference/` as well, except where noted:
+- path spellings `/cygdrive/c/...`, `/mnt/c/...`, `//localhost/C$/...`;
+- `find -L`, `find -H` (and `-P`): an option before the root ends the root list, so no root is read;
+- a filter between the producer and the delete: `find <game>`, then `grep dat`, then `xargs rm`, in one pipeline;
+- `ls <game> | while read f; do rm "<game>/$f"; done`: an unresolved name, advised at the game; `reference/` DENIES it, because
+  its delete rule reads an unresolved name under the root conservatively. Owner decision whether this rule should too;
+- `xcopy`;
+- `xargs -i` and `xargs --replace` with no attached value: the shared wrapper table reads the next word as their value, so the
+  delete verb is never seen. `-I R`, `-IR` and `--replace=R` are read. **CLOSED 2026-11-07 (4.1.1 review A4):** `-i`
+  and `--replace` no longer take a separate value in the wrapper table, and `_xargs_replace` reads `-i`/`--replace` as `{}`
+  and `-iX` as `X` (only the words after the last `xargs`). `-e[eof]`/`-l[n]` attach their values and were never listed.
+
+**REVIEW ROUND 2 2026-11-05 (4.1.1).** MEASURED through `protect-bash.sh` at e5eb547e and at the fix, fixture roots (the
+reviewer's c1 to c8, and c3 again with no game root and with the real install path as root); nothing ran. 705 rows paired
+per item: 78 moved, every one toward deny (61 allow, 12 ask and 5 advise became deny), 0 weakened, 0 unpaired.
+
+| row | form | e5eb547e | fix |
+|---|---|---|---|
+| R2 F1 | `rm <ventures>/ext_v7*`, `find <ventures> -name 'ext_v7*' -delete` | ask | deny |
+| R2 F1 | `find <game> -name ext_v710.cat`, `10.cat`, `ext_03_diff_v900.dat`, `'ext_v7*'` with `-delete` | advise | deny |
+| R2 F1 | `find <game>/extensions -name 'ext_v7*' \| xargs rm`, `ls <ventures>/ext_v7* \| xargs rm` | ask | deny |
+| R2 F2 | `find <game>/extensions -maxdepth 1 -name 'ego_dlc_*' -exec rm -rf {} +`, and `\| xargs rm -rf` | ask | deny |
+| R2 F3 | `cd <game> && find -name '*.dat' -delete`, `cd <game> && ls \| xargs rm` | allow | deny |
+| R2 F4 | `-exec env rm`, `-exec busybox rm`, `-exec cmd /c del` | allow | deny |
+| R2 F5 | `find <game> -name '*.[^x]at' -delete`, `-name '\0\1.dat'` | advise | deny |
+| R2 F7 | `rm D:/SteamLibrary/steamapps/common/X4 Foundations/01.dat`, root configured elsewhere | allow | deny |
+| R2 F8 | `rm <dlc>/content.xml`, `rm -rf <dlc>/libraries` | ask | deny |
+| TWIN (test-hooks.sh) | `find <extensions> -maxdepth 1 -name deployed -exec rm -rf {} +` | ask | ask |
+| TWIN | `ls`, `cat`, `sha256sum`, `git status` in the game; `cp <archive> /c/o/x`; a mod's `ext_01.cat`; `.claude/` cleanups; the profile | unchanged | unchanged |
+
+What changed. No list of archive names: a name or pattern is an archive when some lower-case name ending `.cat` or `.dat` could
+match it, decided by intersecting the two globs (`_glob_meet`), never by samples. A `find` walks symbolic entries (any archive in
+the game folder or a DLC folder; for a recursive delete also a DLC folder, `extensions/` and the game folder themselves); a
+`-name`/`-path` is True only when it holds for every name with that ending, False when it can hold for none, else unknown. A
+backslash or `[^` is read every way a tool might read it and never counts as holding for every name. A find, or the producer
+of an `xargs rm`, with no path is `.`. `-exec` reads its verb through the shared wrapper table and carrier walk. The folder-name
+fallback is ADDED to a configured root. User ruling 2026-11-05: a delete or move of anything inside an official DLC folder
+denies; an `ego_dlc_*` folder is never named in the deployed-mod confirmation. A mod folder delete keeps its ask.
+
+DECIDED, conservative (each a deny where no archive is touched): F6 `find <game> -regex '.*/deployed/.*\.dat' -delete`;
+`-name 'ego_dlc_*' -exec rm {} +` without `-r` (`ego_dlc_x.cat` is a name an archive could have); a glob that could name a DLC
+folder only in theory, `rm <game>/extensions/*a*a*...` (c4, ask before); `-name '*\*'`, which only the literal reading of the
+backslash lets reach an archive; any folder named `X4 Foundations`, a backup copy included. Found by the per-item diff and fixed:
+`touch --reference='<archive>' /c/o/x` (allow at e5eb547e) denied in a first run, because the fallback read the option word as a path; allow again at the fix.
+
+LIMITS, round 2. A filtered find from ABOVE a DLC folder (`find <game> -name '*.bak' -delete`) is judged on archives and DLC
+folders only, not on the DLC's other files, so a game-root cache cleanup keeps its verdict; a root at or inside a DLC folder
+denies whatever it matches. Shell WRITES to a DLC's other files keep the in-tree advisory. Only this rule and the `xargs` feed read
+a path-less find as `.`; the in-tree advisory still does not (`cd <game> && find -name '*.xml' -delete` allows). The paragraph
+above saying names are "tried against samples" is SUPERSEDED by this section.
+
+**Open after round 2, added to the list above (MEASURED allow or advise at the fix, reviewer rows):** a backtick substitution,
+`` rm `echo <archive>` `` (advise; the shared tokenizer splits it into words, so `identity_subst` never sees one token, while
+`$(echo <archive>)` denies); `xargs -I{} mv {} <x>`, `xargs -I{} sh -c 'rm {}'`, `xargs sh -c 'rm "$@"' _`, `xargs cp -t`;
+`-exec mv`, `-exec cp <x> {}`, `-exec dd of={}`, `-exec truncate -s0 {}`; `perl -pi`, `python -c`, `tar -C`, `unzip -d`,
+`7z -o`, `wget -O`, `gzip`, `git clean` (asks); a filter (`sort`, `grep`) or a `while read` loop between the producer and the
+delete, and `xargs rm < <list>`; `find -L`/`-H`/`-P`; `xargs -i`/`--replace` with no value (closed by 4.1.1 review A4, above); PowerShell
+`gci <game> -Recurse | ? Extension -eq '.dat' | ri` (advise) and, with no root, `Remove-Item "$env:X4_GAME\01.dat"` (allow).
+`/cygdrive/c/...`, `/mnt/c/...` and UNC spellings now deny when the path runs through a folder named `X4 Foundations` (the
+fallback); other spellings of a renamed install stay open.
+
+Timing: no new-path parse over 1 s in the unit bound, and the slowest c3 call alone took 0.96 s (0.71 s at e5eb547e); the slowest probe call, 8.2 s, is c5's many-operand `rm`, 8.2 s at
+e5eb547e too.
+
+**REVIEW ROUND 3 2026-11-05 (4.1.1).** MEASURED through `protect-bash.sh` at cac38adb and at the fix, fixture roots (c1 to c8,
+c3 with no root and with the real install path, the reviewer's r1 to r7, and 31 rows of this round's own); nothing ran. 889 rows
+paired per item, 0 unpaired: 30 moved. 27 toward deny; 3 deny to ask, each the requested D fix below.
+
+| row | form | cac38adb | fix | moved rows |
+|---|---|---|---|---:|
+| A | `find <ext> -name '*[Ā-ā]...x3000 q' -o -name ego_dlc_boron -exec rm -rf {} +` | deny in 65 s (past the 30 s hook timeout, so unjudged) | deny in 1.5 s | 0 |
+| B | `find <game> -name '*.[[:alpha:]]at' -delete`, `-name '*.c[[:alpha:]]t' -exec rm`, the extensions and second-install forms | advise, ask or allow | deny | 5 |
+| C | `rm D:/Backup/X4*Foundations/01.cat`, `X4?F...`, `X4[[:space:]]F...`, `X4*/01.cat`; `.../steamapps/common/X4*` and `/*/01.cat`; `find .../steamapps/common -name '*.cat' -delete` | allow | deny | 9 |
+| D | `find <ext> -maxdepth 1 -name 'zzz_*' -exec rm -rf {} +` | deny | ask (mod confirmation) | 3 |
+| E | `find <ext> -name content.xml -delete`, `-name '*.xml' -delete`, `\| xargs rm`, the same with `cd <ext>` or cwd `<ext>` | ask or allow | deny | 8 |
+| F | PowerShell `Remove-Item '<game>\01.c`at'` | advise | deny | 3 |
+| loop | `ls <game> \| while read f; do rm "<game>/$f"; done` (user decision 2026-11-05) | advise | deny | 2 |
+| TWIN | `-LiteralPath '...01.c`at'`; `find <game> -name content.xml -delete`; `find .../steamapps/common -name '*.txt' -delete`; `rm "$TMP"` from the game | unchanged | unchanged | 0 |
+
+What changed. A: `_glob_meet` stops after 50,000 tried characters and answers "may meet", which every caller reads as the wider
+verdict; a `-regex` is decided by its last 64 literal characters only. B: a bracket holding `[:class:]`, `[=c=]` or `[.c.]` closes
+after the class and reads as any one character, never as covering every name; `_win_alias` no longer reads the class's colon as
+an NTFS stream. C: a folder segment that is a pattern meeting `x4 foundations` names an install, if it has two or more literal
+characters or sits directly under `steamapps/common`; a `find` rooted at a `steamapps/common` folder is judged as if the install
+were in it (archives and DLC folders only). D: a global `-maxdepth` or `-mindepth` drops the entries it cannot reach. E: a find
+rooted AT `extensions/` (or a pattern for it) reaches every file in every DLC folder, at any depth and name. Loop: a name holding
+`$` directly in the game folder may be an archive's; the `xargs` item is left to the producer's reader.
+
+DECIDED, conservative, kept: `cd <game> && find -type d -empty -delete` and `rm <game>/extensions/*/*.bak` deny;
+`find <ext> -maxdepth 1 -type d -name '*_old' -exec rm -rf {} +` denies, because `*_old` can name a DLC folder `ego_dlc_old` and
+there is no DLC name list by design (round 2, F1); `find <ext> -mindepth 2 -path '*/deployed/*' -name '*.cat' -delete` (c6,
+ask before) denies, because a DLC folder may hold a subfolder named `deployed` (READ: 2 of 8 DLC folders hold `videos/`). A
+pattern past the meet bound denies whatever it could have matched.
+
+DECIDED, not done: E from the game folder or above. `find <game> -name content.xml -delete` stays advise and
+`find . -name __pycache__ -exec rm -rf {} +` from the game folder stays as before: the game folder is a repository here, and that
+cleanup is routine. `rm D:/Backup/*/01.cat` stays allow: a bare `*` segment is read as the install name only under
+`steamapps/common`. A find rooted above `steamapps/common` (`find /d/SteamLibrary ...`) is not read as reaching an install.
+A `while read` loop whose delete names no game folder (`find <game> ... | while read f; do rm "$f"`) stays open.
+
+Timing: the slowest call is still c5's many-operand `rm`, 9.1 s (8.2 s at cac38adb); no other over 2.3 s. The crafted rows r4
+to r6 took 29, 4.7, 12.9 and 65 s at cac38adb and 0.9 to 1.5 s at the fix.
+
+**REVIEW ROUND 4 2026-11-06 (4.1.1).** MEASURED through `protect-bash.sh` at 69fb8a6e, at cac38adb and at the fix, fixture
+roots (every set of round 3, the reviewer's three round-4 hook sets, and 37 rows of this round's own); nothing ran. 988 rows paired
+per item, 0 unpaired. Against 69fb8a6e 31 moved: 28 toward deny, 1 allow to advise, 2 deny to ask (row 4). Against
+cac38adb 67 moved; the 6 weaker rows are the 5 requested D asks (`-maxdepth 1 -name 'zzz_*' -exec rm -rf {} +`, and its
+`-mindepth 1` form) and `find <game> -maxdepth 0 | xargs rm` (deny to advise, already at 69fb8a6e: only the root is printed, and a
+plain `rm` cannot remove a folder).
+
+**Round 3 correction.** Round 3's accounting above missed one weakening. D's depth filter removed the deeper entries that had
+masked a skip of the root itself, so `find <game> -maxdepth 0 | xargs rm -rf` and its `-print0`, `-mindepth 0` and `cd <game> &&
+find .` forms went deny to advise or allow, and the `extensions/` form deny to ask, at 69fb8a6e. Fixed below (1).
+
+| row | form | 69fb8a6e | fix |
+|---|---|---|---|
+| 1 | `find <game> -maxdepth 0 \| xargs rm -rf` (also `-print0`, `-mindepth 0`, `xargs -r rm -rf --`), `cd <game> && find . -maxdepth 0 ...`, `find <ext> -maxdepth 0 ...`, a globbed install root | advise, allow or ask | deny |
+| 7 | `find <game> -name '*.cat' -exec echo hi \; -delete`, `-exec sha256sum {} \; -delete`, `find <ext> -name 'ego_dlc_*' -exec echo hi \; -exec rm -rf {} +`, `-execdir`, `-ok`/`-okdir` | allow | deny |
+| 3 | PowerShell `Get-ChildItem -Path '<game>/01.c`at' \| Remove-Item`, `Get-Item '<game>/0?.c`at' \| Remove-Item` | advise | deny |
+| 4 | PowerShell `Remove-Item -Path '<ext>/zzz_my`[1`]mod' -Recurse` | deny ("cannot delete the X4 game installation directory") | ask (mod confirmation) |
+| 5 | `find /d/Games/X4*Foundations -name '*.cat' -delete` | allow | deny |
+| 6 | `rm "<game>/`cat list`"`, `rm "<game>/$f/01.cat"` | advise | deny |
+| TWIN | `find <game> -maxdepth 0 \| xargs rm`; a mod folder at depth 0 with `-exec rm -rf`; `-exec sha256sum {} \;` alone; `-LiteralPath '...01.c`at'`; `rm "<game>/$f/notes.txt"`; `rm "<ext>/$x/ext_01.cat"` (a mod's own archive, its ask) | unchanged | unchanged |
+
+What changed. 1: a `find`'s start folder is a depth-0 entry; when it is the game folder, `extensions/`, a DLC folder or a folder
+above them, a recursive delete of what the find prints or runs on reaches it, whatever `-maxdepth` says. 7, root cause: `segments()`
+split a command at a backslash-escaped `;`, so `find ... -exec echo {} \; -delete` became two commands and find's reader never saw
+the `-delete`; the quoted `';'` spelling was denied. `segments()` and `piped_in()` now read an escaped character as literal, as
+the shell does, so every reader of the segment sees the whole command (MEASURED for `find_can_reach_archive`; by construction
+for the older `_find_delete` and anything else after a `\;`, `\|` or `\&`). The tmux reader, which relied on the old split for `tmux ls\; run '<cmd>'`, now splits
+a word ending in `\;` itself. A `\+` reaches find as `+`. 3: the backtick-unquoted spelling is now also read
+for the `-Path` of a `Get-Item`, `Get-ChildItem`, `Resolve-Path`, `Convert-Path` or `Get-ItemProperty` feeding the delete;
+`-LiteralPath` keeps it literal. 4: a backtick before a wildcard character keeps that character literal in PowerShell, so that
+spelling is no longer unquoted into a glob. 5: a globbed install name counts as the last segment, as the literal name does.
+6: a backtick pair counts as a name filled in at run time, as `$(...)` does, and so does a `$` or backtick folder directly in the
+game folder holding an archive name (it may be `.` or `extensions/ego_dlc_x`). Not under `extensions/`: `rm "<ext>/$MOD/ext_01.cat"`
+is how a packed mod is retired.
+
+NOT FIXED, open: a bare `rm "$f"` (or `ls | while read f; do rm "$f"; done`) run from inside the game or a DLC folder stays
+allow: an unresolved relative operand is never joined to the shell's folder, and the archive check has no cwd to join it to.
+NOT FIXED, PRE-ARC (present at v4.1.0, MEASURED): `rm -rf '<ext>/zzz_my[1]mod'` and `Remove-Item -LiteralPath
+'<ext>/zzz_my[1]mod' -Recurse` deny as "the game installation directory": `glob_covers` reads quoted brackets as a glob and a
+glob last segment as "the folder's contents". Holding the release does not fix it; recorded for 4.1.1's after-list.
+NOTE (2): the glob meet bound is per match, not per hook. Inputs that still take over 20 s (130 slow `-name` tests, 300 crafted
+operands; 20.5 s through the hook at 69fb8a6e and at the fix) are denied by the backend's deadline, so they fail closed.
+
+Timing, whole hook, final run: c5's many-operand `rm` 8.6 s (10.2 s at 69fb8a6e); the reviewer's four budget rows 3.5 to
+20.6 s, as at 69fb8a6e; no other row over 2.5 s.
+
+**REVIEW ROUND 5 2026-11-06 (4.1.1).** MEASURED through `protect-bash.sh` at 7753cc2c (v4.1.0), at 24775c29 and at the fix,
+fixture roots (every set of round 4, the reviewer's three round-5 hook sets, and 237 rows of this round's own, one carrier per
+row family); nothing ran. 1526 rows paired per item, 0 unpaired. Against 24775c29 91 moved: 86 toward deny, 5 deny to advise,
+ask or allow (the depth-0 `-type f` rows below, each back to its v4.1.0 verdict).
+
+| row | form | 24775c29 | fix |
+|---|---|---|---|
+| 1 | `watch -n1 echo a\; rm -rf <ref>`, the same through `wsl`, `wsl --`, `ssh localhost`, a `$R` command name, `... \| parallel`, a not-found handler, with `\&\&`, `\|`, `\|\|` or escaped blanks; with `git add -A`; `watch echo a\; rm -rf "<game>"` | allow (ask for `$R rm`) | deny |
+| 2 | `eval git add -A`, `eval git add --all`, `eval -- git add -A`, `eval echo a\; git add -A` | allow (the first three also at v4.1.0) | deny |
+| 3 | `find <game> -maxdepth 0 -type f \| xargs rm -rf`, `-xtype f`, the `extensions/` and parent forms | deny | advise, ask, allow (as v4.1.0) |
+| TWIN | `watch -x`, `watch --exec`, `wsl -e`, `nohup`, `busybox`, `timeout`, `xargs`, `ssh otherhost` with `echo a\; ...`; `eval git add -p`; `-type d`, `-type l`, `! -type f`, `-type $T` at depth 0 | unchanged | unchanged |
+
+What changed. 1, root cause: round 4 made `segments()` read `\;` as literal, which is right for bash, but the readers of
+programs that hand their words to a shell had relied on the old split. `_as_program` only opened QUOTED words. It now also
+re-reads an escaped blank or operator for a carrier that joins its words for a shell: `watch` without `-x`/`--exec`, `wsl`
+without `-e`/`--exec`, `ssh` to this machine, a not-found handler, and a `parallel` template with no `:::`; a command name
+held in a variable (it may be eval) and eval itself do too. With an escape there is one more reading, with each quoted word
+kept whole: the re-reading shell splits a quoted `"<game>"` at its blank (so it would delete `<steam>/X4` and `Foundations`),
+and v4.1.0 judged the quoted path. 2, root cause pre-arc: the eval reader dropped every word starting with `-`, its command's
+flags included. 3: a `find`'s depth-0 root is a folder or a link to one, so a `-type`/`-xtype` list naming neither skips it;
+any other entry, and a type not written as letters, stays undecided.
+
+Every row weaker than v4.1.0 (89 of 1526; first written as 90, which counted the `printf` row below twice, corrected in round 6), each the shell's own reading: the 4 the reviewer named (`echo '...' \| bash` with an
+escaped pipe prints; `tmux ls\;run` is one tmux word; `watch -x` and `nohup` echo); 84 of this round's rows, an escaped
+separator handed to a program that runs its words directly or takes one word as its text (`watch -x`, `wsl -e`, `busybox`,
+`toybox`, `winpty`, `pkexec`, `runuser`, `chroot`, `flock`, `nsenter`, `unshare`, `taskset`, `chrt`, `screen`, `nohup`, `sudo`,
+`timeout`, `nice`, `env`, `command`, `exec`, `xargs`, `setsid`, `stdbuf`, `doas`, `bash -c`, `su -c`, `script -c`, `flock -c`,
+`trap`, `ssh otherhost`, and `tmux new`/`run-shell`, where the `;` ends the tmux command and `rm` is no tmux command); and
+`printf '%s' a\; rm -rf <x> \| bash`, which prints `a;rm-rf<x>`. v4.1.0 denied these only because it split at the `\;`.
+READ (round 6), not run here: `sudo -s` and `sudo -i` escape the words they hand the shell, so their `;` stays literal.
+sudo's `parse_args()`, as quoted in Qualys's CVE-2021-3156 ("Baron Samedit") advisory, concatenates the arguments in shell
+mode and puts a backslash before every character for which `!isalnum(c) && c != '_' && c != '-' && c != '$'` (its lines
+587-595 and 590-591). The advisory quotes the sudo source of that time; a later sudo was not read.
+
+FIXED in round 6 (F357), was PRE-ARC (allow at v4.1.0 too, MEASURED): `find . -exec sh -c echo\ a\;\ rm\ -rf\ <ref> \;`:
+`_exec_deletes` joined find's decoded words, losing which ones were one word, so the `-c` text read as `echo`. It now quotes
+each word back, and the -exec command is a reading of its own.
+
+Timing, whole hook: c5's many-operand `rm` 8.7 s (8.3 s at 24775c29); the reviewer's four budget rows 3.7 to 20.5 s, as
+before; no other row over 2.5 s. A first lane run spanned a machine sleep and reported three rows at 18,965 s (#31); rerun.
+
+**RE-DERIVED BY:** `TestGameArchiveShellWrites` in `test_hook_facts.py`, 103 `game archive` mutants in `scripts/verify-hook-tests.py` (120 with the `glob:`, `recursion:`, `xargs:` and `find -exec` ones), plus 23 round-3 mutants, one per clause (labels ending `(A)` to `(E)` and `(loop)`), 14 round-4 mutants (labels ending `(r4, N)`; the 4 PowerShell ones are run by hand, since the table mutates `hook_facts.py` only), 22 round-5 mutants (labels ending `(r5, N)`), `TestArchiveGlobWholeHookTime` in `test_audit0924_hooks.py`, and the archive probes in `scripts/test-hooks.sh`.
+
+**Changelog text as of the 4.1.1 final round, kept here in full** (the changelog now carries a user-facing summary that points here):
+
+> A shell command that writes, moves or deletes a base-game or official DLC `.cat` or `.dat`, or deletes or moves anything inside an official DLC folder (`extensions/ego_dlc_*`, including its `content.xml` and subfolders, and the folder itself), is now refused, as the file-edit tools already refused those writes. Before, most of these only got a note, an append or `touch` got nothing, and a delete inside a DLC folder asked for confirmation as if the DLC were a deployed mod. This covers redirects, `cp`, `mv`, `tee`, `truncate`, `dd of=`, `sed -i`, `install`, `rsync`, `robocopy`, `rm`, `find -delete`, `find -exec` (also through `env`, `busybox`, `sudo`, `nice` or `cmd /c del`), `xargs rm`, and the PowerShell equivalents (a backtick in `-Path`, which quotes the next character there, is read both ways, also in the `-Path` of a `Get-Item` or `Get-ChildItem` piped to the delete). Any file name or pattern that could end in `.cat` or `.dat` directly in the game folder or a DLC folder counts, so new archive names from a game patch are covered without a list. A `find` with no path, or a bare `ls` piped to `xargs rm`, is read as the current folder. A recursive delete of a folder that holds the DLC, such as `find <game>/extensions -name 'ego_dlc_*' -exec rm -rf {} +` or `ls <game>/extensions | xargs rm -rf`, is refused too, and so is a `find` started at `extensions/` that deletes any file a DLC folder could hold, such as `find <game>/extensions -name content.xml -delete`; a `-maxdepth 1` that reaches only the mod folders keeps the mod confirmation. This adds friction for modders: `find <game>/extensions -name '*.bak' -delete`, and `find . -name __pycache__ -exec rm -rf {} +` run from `extensions/`, are now refused; start the `find` at the mod's own folder (`<game>/extensions/<mod>`) instead. A `find` that starts at the game folder, `extensions/`, a DLC folder or a folder above them and removes what it finds recursively (`| xargs rm -rf`, `-exec rm -rf`) is refused even with `-maxdepth 0`, since the start folder is itself found. A `\;` that ends one `-exec` no longer hides the `-delete` or `-exec rm` after it. A name filled in at run time directly in the game folder, as in `ls <game> | while read f; do rm "<game>/$f"; done`, `rm "<game>/$f/01.cat"` or a backtick substitution, is refused, as the same loop already was under `reference/`. Reading an archive, copying one out, and deploying or removing a mod's own packed archive are unchanged, with one exception: any folder directly under the game's `extensions/` whose name starts with `ego_dlc_` counts as official DLC, as it already did for the file-edit tools, so a mod folder named like `ego_dlc_mymod` gets the DLC refusal. A `find` is judged by reading its whole expression (groups, `!`, `-o`, `-prune`, and which action deletes), and a test it cannot decide from the text, such as `-size`, any `-regex` that could end in an archive name, or a `-name` with a backslash or `[^`, is treated as possibly matching. A POSIX class such as `[[:alpha:]]` is read as any one character, and a pattern too large to decide quickly is treated as matching, so a crafted pattern can no longer run the guard past its time limit. A `-regex` is never run by the guard. A path through a folder named `X4 Foundations`, or through a folder pattern that could be that name (`X4*`, `X4?Foundations`, also as a `find`'s start folder), is treated as a game folder whether or not one is configured, so a second install is covered, and a `find` over a Steam library's `steamapps/common` folder is judged as if the game were in it; this is the same name check that already guards against `rm -rf` of the game folder. `chmod` with a mode such as `000` or `+w` is refused, but a mode written like an option, `-w`, is read as an option and not checked; it only removes a permission and changes no data. Other programs that can write a file, such as `perl -i`, `wget -O`, `gzip`, `tar -C` and `xcopy`, are still not recognised, and neither are some path spellings (`/cygdrive/c`, `/mnt/c`, `//localhost/C$`), `find -L`, a filter between the listing and the delete, a `while read` loop whose delete does not name the game folder (a bare `rm "$f"` run from inside the game or a DLC folder included), or a command substitution in backticks elsewhere; see BLIND-SPOTS F356.
+
+
+## F357 - A `find -exec` command, and the command an argv wrapper runs, reached no rule of its own · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-06
+
+GitHub issue [#18](https://github.com/WingedGuardian/x4-ai-toolkit/issues/18). Found by the 4.1.1 review, round 6.
+
+**The defect.** The guard read a `find` only through `_find_delete`: does its `-exec` command delete, and if so, under the
+start folder. The command itself was never judged, so `find . -exec rm -rf <ref> \;` (also `-execdir`, `-ok`, `-okdir`, `{} +`),
+`find . -exec rm '<game>/01.cat' \;`, `find . -exec git add -A \;` and `find . -exec sh -c 'rm -rf <ref>' \;` were ALLOW at
+v4.1.0 and at 28f260ee (MEASURED through the hook). Separately, programs that run their argv but were in no table hid the
+command they carried: `sshpass`, `autossh`, `torsocks`, `valgrind`, `caffeinate`, `start`, `mintty -e`, `gsudo`, `gdb --args`,
+and an unknown wrapper in front of `ssh`, `watch` or `wsl`. v4.1.0 denied some of the escaped forms (`sshpass -p x ssh
+localhost echo a\; rm -rf <ref>`) only through the old `\;` split; the unescaped forms were allowed in v4.1.0 too.
+
+**The fix.** (A) `_find_exec_readings`: each -exec command is a carrier reading, spliced in place like every other one, so
+every rule judges it. find runs the words as argv, so each is quoted back; `{}` is `<start>/${xargs_item}` (one reading per
+start, up to 4); `-execdir`/`-okdir` read in the start, in an unknown folder below it, and in the start's parent with `{}` as
+`./<name>`; `+` ends an -exec only right after `{}` (else find refuses the command and runs nothing); a find that can only
+match a regenerable cache drops a bare `{}`. `_exec_deletes` quotes its words back and reads every segment of a carried text.
+(B) The six argv carriers joined `_ARGV_CARRIERS`; `gdb --args`, `start` (switches, `/D <dir>`, a double-quoted title) and
+`autossh` (`-M <port>`, then an ssh) are read by `_special_carrier_readings`; gsudo is read as joining for a shell (INFERRED
+from its documentation of running the caller's shell, not measured; it only adds readings). An unknown program whose first
+operand is `ssh`, `watch` or `wsl` gets the words from there as a reading (`echo`, `printf`, `man`, `which` and other
+printers excluded). (C) The remote command of an `ssh <host>` that is not recognised as this machine is judged by the whole
+rule set after the verdict, as written and spliced into the command around it (this machine expands `"$FZ"` first; the
+spliced form counts only for a fact the command does not already have). A destructive result sets `ssh_host_unplaced`, an
+ADVISORY only: never an ask or a deny.
+
+**Localhost recognition (C), MEASURED by the reviewer through the hook:** catches `127.0.0.x`, `0.0.0.0`, `::1`, `[::1]`,
+`user@`, `-p`, `-l`, `-o Port=`, `-J`, `-F`, `ssh://`, `$(hostname)`, `$HOSTNAME`, `$COMPUTERNAME`, this computer's name, and
+`.local`. Not recognised, and now advised instead: a LAN address, a Tailscale address or name, an `~/.ssh/config` alias.
+
+**Measured, through `protect-bash.sh`, fixture roots, nothing run:** every probe set of rounds 3 to 5, the reviewer's six
+round-6 sets, and 283 rows of this round's own, at 7753cc2c (v4.1.0), 28f260ee and the fix: 2063 rows paired per item, 0
+unpaired; with D's 114 rows, 2177. Against 28f260ee 321 moved, all stronger: 270 allow to deny, 50 allow to advise (31 ssh to
+an unplaced host; the rest writes in a mod folder or to non-archive files in the game folder, now seen by the copy and delete
+rules), 1 allow to ask (a mod folder's entries moved
+away). 0 weaker. The `scripts/test-hooks.sh` probes (265 protect-bash rows) replayed through the three trees: 10 moved, all
+this round's new probes; 0 weaker than 28f260ee; 2 weaker than v4.1.0, round 5's `watch -x` and `nohup` twins.
+
+Weaker than v4.1.0: 141 rows. 89 are round 5's justified list, all still weaker (two of them, `ssh otherhost echo a\; ...`,
+now advise rather than allow). The other 52 are rows new in this round's sets, every one of a class round 5 justified: an escaped separator
+handed to a program that runs its words directly (`torsocks`, `valgrind`, `caffeinate`, `start`, `mintty -e`, `gdb --args`,
+`time`, `wsl -e`, `watch -tx`, `docker run ... echo`, `R=echo; $R`), `sudo -s`/`-i` (F356, now READ), `watch` given an
+escape the re-reading shell keeps literal (`watch 'echo a\; rm ...'`, `watch echo 'a\;' rm ...`), and `ssh` to an unplaced
+host (deny to advise). v4.1.0 denied them only because it split at the `\;`.
+
+**(D), added the same day at the coordinator's request:** a `find` that CHANGES what it finds now reaches the archive rule.
+`find <game> -name '*.dat' -exec mv {} <dir> \;` (and `cp x {}`, `dd of={}`, `truncate`, `tee`, `sed -i`, `perl -i`, `touch`,
+`chmod`, `install`, a shell text writing `"{}"`; `-execdir`, `-ok`, `{} +`) and `find ... | xargs mv -t|-I{} cp x {}|sed -i|touch|
+truncate|chmod` advised or allowed (allow at v4.1.0, MEASURED). An -exec whose command moves `{}` ("move") or writes it or into
+it ("write") is now a find action, and an xargs fed by a find that does either is a print mode, both through
+`find_can_reach_archive` with its `-maxdepth`/`-type` handling. Whether `{}` is changed is read by the readers every other
+write uses (copy and move destinations, redirects, truncate/dd, sed -i, output flags, touch/chmod/chown/ln) plus `perl -i`,
+with `{}` as a sentinel path; so the entry as a SOURCE (`-exec cp {} <backup>/`, `xargs cp -t <backup>`) stays allowed. A
+folder counts when moved away, and when written into only if it is a DLC folder; a write or move reaches every file in a DLC
+folder from any root that holds one (a delete still only from `extensions/`, by the F356 decision). `{}` with a literal tail
+(`{}.bak`) names an archive only if the tail can end one. FRICTION, by design: from the game folder `find . -name '*.py'
+-exec sed -i ... {} +` is denied (a DLC folder could hold such a file as far as the text says); `-prune` is not modelled, so
+`-path '*/extensions' -prune -o ...` does not help. In a mod folder, `find <mod> -name '*.xml' -exec sed -i ... {} \;` is
+denied by the existing in-place sed rule (its direct `sed -i <mod>/x.xml` form is denied at v4.1.0 too), not by this one; the
+other mod-folder writes keep no archive verdict (advise or ask from the delete and copy rules).
+
+D measured: 114 rows of its own (`r6d`), RED at 28f260ee (67 expectation misses) and 1 at the fix (the sed -i row above);
+the per-item comparison below includes them.
+
+**Not fixed.** `perl -i` is read only for a find's or xargs's entry; a top-level `perl -i <game>/...` stays the unmodelled
+shape F356 lists. A remote command over 8 per command, or nested past 4 ssh hops, is
+not judged for the advisory. The test-hooks replay of `C1: a brace-expanded save delete` asks in all three trees where the
+live suite denies: a replay environment difference, not a change.
+
+Timing, whole hook: median per-row ratio to 28f260ee 1.11 over the lanes (p90 1.42; the lanes ran an hour apart), 1.08 run
+back to back over c7; c5's many-operand `rm` 8.7 s (9.3 s); the four budget rows 3.6 to 20.6 s, bounded by the backend
+deadline. Four c7 PowerShell rows (5.8 to 7.7 s) and two test-hooks replay rows (18 s, one of them in every tree) were
+re-run: 0.5 to 0.9 s, a stall of the machine, not of the hook (#31). No other row over 2.5 s.
+
+**RE-DERIVED BY:** `TestRound6FindExecAndCarriers` in `test_hook_facts.py` (14 tests), 40 mutants labelled `(r6, A|B|C|D)` in
+`scripts/verify-hook-tests.py`, the round-6 probes in `scripts/test-hooks.sh`, and the `ssh to an unplaced host` seed in
+`scripts/fuzz-guard.py` (its 164 mutators weaken it 0 times).
+
+**REVIEW ROUND 7 2026-11-06 (4.1.1), an independent review of 28f260ee..9cd83006: SHIP AFTER FIXES.**
+
+1, HIGH, in range (C). `_ssh_unplaced_destructive` ran facts() on every remote command and every spliced text, and each
+spliced text still held every other ssh segment, so the walk recursed to `_MAX_SSH_DEPTH` with 8 + 8 branches a level.
+MEASURED by the reviewer at 9cd83006: in-process `ssh a ls && ssh b ls && ...` 2 segments 0.02 s, 5 1.47 s, 6 8.4 s; through
+the hook 7 segments and `&& rm -rf <ref>` denied in 33.0 s, 9 segments timed out at 128 s. Claude Code's hook timeout is
+30 s and a hook that times out does not block, so both failed OPEN. MEASURED here at 9cd83006 (this round's `r7c` rows):
+the harmless 7-, 9- and 10-segment chains answered in 21 to 116 s. Fixed three ways: (a) a spliced text has every OTHER
+unplaced ssh segment replaced by `:`; (b) the advisory has a budget per hook call (24 facts() runs, 2 s, a memo by text) and
+ADVISES when it is spent or when more than 8 distinct remote commands exist, and it runs after the verdict, which it never
+changes; (c) the analysis itself has a DEADLINE (`_ANALYSIS_BUDGET_S`, 18 s; the save bridge passes its own 20 s budget less
+2 s for the rule backend), checked in the carrier walk, the segment loop, the find reach test and the glob walk. Past it
+facts() returns `analysis_timeout`, the analyser exits 6, and protect-bash.sh and the save bridge DENY with a remedy.
+Before, nothing bounded facts() as a whole: the save bridge's 20 s budget was checked only after the analysis returned. Now:
+10 and 20 harmless segments 0.05 and 0.09 s in-process; through the hook every chain row answered in under 1 s.
+NOTE: the four budget rows (`h` 45-48) still take 3.6 and 20.6 s and deny, as before: the analysis part is 6.3 s
+(MEASURED in-process), the rest is the save bridge and backend, which its 20 s budget refuses. They fail closed.
+
+2, MEDIUM. (a) A `sh -c`/`bash -c` text is now also read with `$0`..`$9`, `${N}`, `$@`, `$*` filled in from the words
+after it (quoted as the shell would; not inside single quotes, nor escaped), so `sh -c 'rm -rf "$1"' _ <ref>` (allow at
+v4.1.0, MEASURED), `-exec sh -c 'echo > "$1"' _ {} ;` and `xargs -n1 sh -c 'mv "$0" "$0.old"'` are judged by what they
+touch. (b) `-exec rsync --remove-source-files {} <dir>` moves the entry, as the plain form already did. (c) `gzip`, `xz`,
+`bzip2`, `lzma`, `lzip`, `compress`, `pigz`, `pbzip2`, `zstd --rm` (each unless `-k`/`--keep`/`-c`/`--stdout`/`-t`/`-l`) and
+`rename` move their operands, plain and inside a find (plain `gzip <game>/01.cat` was allow at v4.1.0, MEASURED). (d) `sort`,
+`uniq`, `grep` (pattern only), `head`, `tail`, `tr`, `cat` (no file) and `tee` between a find and its xargs pass the find on.
+
+3, backlog. FIXED: `gfind` is `find`; `fd`/`fdfind -x`/`--exec`/`-X`/`--exec-batch` are carriers (`{}`, `{/}`, `{//}`, `{.}`,
+`{/.}`, or the result appended). OPEN, recorded only (MEASURED allow at the fix, as at v4.1.0): `find -files0-from <list>`
+(the start points are in a file); `locate <name> | xargs rm` (absolute paths from a database); `cd <ref> && git ls-files |
+xargs rm` and `cd <ref> && ls | xargs rm` alike (an unresolved relative operand is never joined to the folder, the open row
+in F356); `-exec "$CMD" {}`; `-exec python -c "shutil.rmtree(...)"` (a Python write is not modelled anywhere); `bash -c
+'for f; do ... "$f"; done' _ {} +` (a loop over the positional parameters); a `sed` between find and xargs. `-execdir git clean
+-fdx` asks, as the plain `git -C <game> clean -fdx` does.
+
+4, nit. A find whose `sed -i` may reach DLC content now gets the edit-tool remedy (both facts set), not the XRCatTool one.
+
+Measured through `protect-bash.sh` at 7753cc2c (v4.1.0), 28f260ee, 9cd83006 and the fix, fixture roots, nothing run: every
+earlier set, the reviewer's round-7 sets (`rv6` a, c, d, w2, one, t, s, with `{TK}` and `{E}` substituted) and 102 rows of
+this round's own: 2469 rows paired per item, 0 unpaired. Against 9cd83006 66 moved: 53 allow to deny and 1 allow to ask (2a
+to 2d and 3; the ask is `rename` of a file in a mod folder, as `mv` there asks); 7 TIMEOUT (over 120 s) and 5 deny or advise
+on harmless ssh chains, which 9cd83006 reached only after 21 to 116 s; now allow, or advise where more than 8 distinct remote
+commands go unjudged. Against 28f260ee 473 moved, all stronger, 0 weaker. Weaker than v4.1.0: 152, the 141 of round 6 plus
+11 rows of the reviewer's new sets, every one of round 5's justified classes and equally weaker at 28f260ee. The
+`scripts/test-hooks.sh` probes (273 protect-bash rows) through the four trees: 0 weaker than 28f260ee; against 9cd83006 7
+moved, 1 to allow (the ten-segment harmless chain, which 9cd83006 denied after 120 s).
+
+**RE-DERIVED BY (round 7):** 9 more tests in `TestRound6FindExecAndCarriers`, `TestSshChainWholeHookTime` in
+`test_audit0924_hooks.py` (10 and 20 segments through the whole hook under 2 s; rc 6 denies; the sed remedy), 21 mutants
+labelled `(r7, N)`, and 8 more probes in `scripts/test-hooks.sh`.
+
+**REVIEW ROUND 8 2026-11-06 (4.1.1), an independent review of 9cd83006..a933b5c0: DO NOT SHIP until F1.**
+
+F1, HIGH, a regression of round 7's `"$@"` fill. `sh -c 'echo "$@" x n' _ a0..a(n-1)` filled n x n words: MEASURED by
+the reviewer at a933b5c0, in-process n=200 6.5 s, 300 18.8 s, 400 33.4 s with no deadline firing (the result fields after the
+segment loop had no checkpoint); through the hook n=400 with `&& rm -rf <ref>` denied after 38.3 s (0.7 s at 9cd83006), past
+the 30 s timeout. MEASURED here at a933b5c0: the harmless n=200..600 rows 22 to 42 s. Fixed: a fill has a budget (4 x its
+input + 4096 characters); each parameter is filled IN FULL at its first use, so no argument is ever hidden, and a later use
+past the budget is an unknown value. Looking for the same shape elsewhere: a segment keeps at most 32 carrier readings and the
+carried texts at most 400,000 characters together, else `carriers_truncated` (a refusal) -- 200 `-exec` actions were 6.8 s;
+and `_find_delete` read each -exec as everything after it, quadratic (6 s at 200 actions), now only up to its terminator. The
+ssh splice (bounded in round 7) and the find/xargs `{}` fill (one sentinel) do not multiply. Deadline checkpoints now also in
+`segments()` and the word walk. In-process now: n=400 0.6 s, 600 0.8 s, 1000 2.4 s; 200 -exec actions 0.6 s.
+
+F2: a PowerShell translation was bounded by its own cap and the PowerShell budget, not by the analysis deadline; it now is,
+and with no time left it is an analysis timeout (a refusal). A call cut short by the deadline is not cached.
+
+F3: fixed -- a variable assigned a positional (`sh -c 'd=$1; rm -rf "$d"' _ <ref>`, `d="$1"`; allow at v4.1.0, MEASURED);
+fd's `--search-path` and `--base-directory`; fd's reach test, through the find an `fd ... -x|-X` amounts to (`fd . <game> -x
+rm` advised where `find <game> -exec rm {} ;` denies; pattern as `-regex`, `-e` as `-name '*.ext'`, `-g` as `-name`, `-d` as
+`-maxdepth`); short options with an attached value (`gzip -S.lck`, `xz -Ccrc32`: the value's letters were read as the keep and
+stdout flags; allow at v4.1.0 too); more replacing programs: `gunzip`, `unxz`, `bunzip2`, `unlzma`, `uncompress`, `unpigz`,
+`unzstd`/`brotli` with `--rm`, `zip -m`, `tar --remove-files`, and a decompressor's output (`gunzip <game>/01.cat.gz`) as a
+write. (e): `sed` (without `-i`), `awk` and `cut` between a find and its xargs pass the find on. Quirk: an empty `"$@"` is now
+no word (it was `''`, read as the working folder), and behind xargs it is the producer's items, so `find <ref> | xargs sh -c
+'rm -rf "$@"' _` denies naming reference/. OPEN, listed (MEASURED allow at the fix, as at v4.1.0): `shift` (the filled `$1`
+is then the old one, so the filled reading is wrong but adds nothing; the unfilled one stays unresolved), `set -- <x>` inside
+the text, `"${@:2}"` and other parameter slicing; perl `rename` expressions are read as files.
+
+Measured through `protect-bash.sh` at 7753cc2c (v4.1.0), 28f260ee, 9cd83006, a933b5c0 and the fix, fixture roots, nothing
+run: every earlier set, the reviewer's round-8 sets (`rv7r` a to d) and 61 rows of this round's own: 2623 rows paired, 0
+unpaired. Against a933b5c0 41 moved: 32 allow to deny and 4 advise to deny (F1 truncation of 50/200-action finds, F3, (e),
+the quirk), 1 allow to ask (`gunzip` of a file in a mod folder, as `gzip` there asks), 1 allow to advise (`find <game> -name
+'*.dat' | xargs sh -c 'rm "$@"' _`, now reading the items), and 3 deny to allow: harmless `echo "$@" x n` rows that a933b5c0
+denied only after 22 to 42 s (now 1.0 to 1.3 s). Against 28f260ee 556 moved, all stronger, 0 weaker. Weaker than v4.1.0: the
+same 152 rows as round 7, 0 new. `scripts/test-hooks.sh` (279 protect-bash rows) through the five trees: 0 weaker than
+28f260ee or a933b5c0; against a933b5c0 4 moved, this round's new probes. Timing: no row over 2.5 s but c5 (8.6 s) and the
+four budget rows (3.6, 20.5 to 20.6 s, as before).
+
+**RE-DERIVED BY (round 8):** 9 more tests in `TestRound6FindExecAndCarriers`, `test_execdir_rm_of_an_archive_fires`, a wide twin in
+`test_a_TANGLED_command_says_so_instead_of_passing_quietly` (the deep one takes ~14 s, near the deadline, so a slow runner
+may refuse it by the deadline instead -- either is a refusal), a whole-hook timing test at n=400 and 600 in
+`TestSshChainWholeHookTime`, 19 mutants labelled `(r8 ...)`, and 6 more probes in `scripts/test-hooks.sh`.
+
+**Changelog text as of the 4.1.1 final round, kept here in full** (the changelog now carries a user-facing summary that points here):
+
+> The command a `find` runs with `-exec`, `-execdir`, `-ok` or `-okdir` is now judged as a command of its own ([#18](https://github.com/WingedGuardian/x4-ai-toolkit/issues/18)). Before, the guard only asked whether it deleted what the `find` found, so `find . -exec rm -rf <reference> \;`, `find . -exec rm '<game>/01.cat' \;`, `find . -exec git add -A \;` and `find . -exec sh -c 'rm -rf <reference>' \;` were allowed (in v4.1.0 too). The `{}` is read as an entry inside the folder the `find` starts from, and `-execdir` as running in that entry's folder. A `find` that can only match a Python cache keeps its cleanup allowed. A shell text written as one escaped word, as in `-exec sh -c echo\ a\;\ rm\ -rf\ <x> \;`, is read whole. `sshpass`, `autossh`, `torsocks`, `valgrind`, `caffeinate`, `start` (with its `/b`, `/wait` and title), `mintty -e`, `gsudo` and `gdb --args` are now read as running the command they are given, and an unknown program whose first word is `ssh`, `watch` or `wsl` is read as possibly running it. A command that would be refused or confirmed here, sent by `ssh` to a host the guard does not recognise as this machine (a LAN address, a Tailscale name, an `~/.ssh/config` alias), now gets a note saying the guard cannot tell whether that host is this machine; it is still allowed. A `find` whose `-exec` (or `-execdir`, `-ok`, `{} +`) moves, renames, overwrites or edits what it finds (`mv`, `cp`/`install`/`tee` onto it, `dd of=`, `truncate`, `sed -i`, `perl -i`, `touch`, `chmod`, a redirect), or that feeds such a command through `xargs` (`xargs mv -t`, `xargs -I{} cp x {}`, `xargs sed -i`), is now refused when its tests could match a base-game or DLC archive, or anything inside a DLC folder, under where it starts; writing into a DLC folder or moving `extensions/` away counts too. Copying what it finds out (`-exec cp {} <backup>/`, `xargs cp -t <backup>`) and reading it are unchanged. This adds friction: from the game folder, `find . -name '*.py' -exec sed -i ... {} +` is refused, since the guard cannot rule out a DLC folder holding such a file; start the `find` at the folder you mean; the refusal names the edit tool as the remedy. The guard's analysis now has a deadline: a command it cannot analyse in time is refused, rather than let through unchecked when the hook's own 30-second timeout runs out. The `ssh` note is computed within a small budget of its own and never delays the verdict. A `sh -c` or `bash -c` text is read with its `$0`, `$1`, `$@` filled in from the words after it, so `sh -c 'rm -rf "$1"' _ <reference>` and `find ... -exec sh -c 'echo > "$1"' _ {} \;` are judged by what they touch. `gzip`, `xz`, `bzip2`, `lzma`, `pigz`, `zstd --rm` and `rename`, which replace or rename the file they are given, now count as moving it away (also inside a `find -exec`), as does `rsync --remove-source-files` inside one; `gzip -k`, `gzip -c` and their kin keep the file and are unchanged. `sort`, `uniq`, `grep`, `head`, `tail`, `tr`, `cat` and `tee` between a `find` and its `xargs` no longer hide the find from the archive rule. `gfind` is read as `find`, and `fd -x`/`-X` (and `fdfind`) as running its command on each result, with the same reach test as `find -exec` (so `fd . <game> -x rm` is refused like `find <game> -exec rm {} \;`) and its `--search-path`/`--base-directory` read. A variable assigned a positional parameter is followed (`sh -c 'd=$1; rm -rf "$d"' _ <reference>`), and `"$@"` behind `xargs` is what xargs reads. `gunzip`, `unxz`, `bunzip2` and the other decompressors, `brotli --rm`, `zip -m` and `tar --remove-files` also count as taking their files away, a decompressor as writing the unpacked file, and an option value written onto its flag (`gzip -S.lck`, `xz -Ccrc32`) is no longer read as more flags. `sed` (without `-i`), `awk` and `cut` between a `find` and its `xargs` pass the find on as well.
+
+
+## F358 - A nested full copy of a mod-owned macro file was modelled as a replacement; the engine merges it · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-06 for macro files only
+
+GitHub issue #17. `cpsdo_vro` ships complete `<macros>` copies of two `cpsdo_zb_modpack` files at
+`extensions/cpsdo_zb_modpack/assets/fx/weaponfx/macros/` (`bullet_cpsdo_turret_m_ion_01_mk4_macro.xml`,
+`bullet_cpsdo_turret_xl_ion_01_mk6_macro.xml`). MEASURED, engine log on two launches (2026-11-05, 2026-11-06): a later
+mod's `/macros/macro[@name='X']/properties/...` ops were skipped with "Multiple matching nodes", 3 ops in all, so the
+merged document holds two macros of each name. `apply_overlay` sent a non-diff root outside the union and script dirs
+to "full" (`tree = oroot`), so `dump --chain` showed one macro, x4validate passed the selectors and `x4debug crosscheck`
+predicted 0 of the 3 skips.
+
+MEASURED census, 213 active mods, loose and packed: 1,556 XML files at `extensions/<x>/...`, 139 of them complete
+files. 2 sit over a file a MOD supplies as a complete document (the two above); 19 macro files sit over a mod that does
+not ship the file (the copy IS the document, unchanged); 118 sit at an unpacked DLC's nested path
+`extensions/ego_dlc_*/...` (81 other assets, 31 macro files, 6 libraries). Those 118 are the SAME nested shape as the
+measured merge, with a DLC as the owner; the engine's behaviour for them is UNMEASURED and they keep the replacement
+model. INFERRED: they are the largest unmodelled exposure of this kind, since 31 of them are macro copies that would
+duplicate a DLC macro if a DLC owner merges the same way. 2 files could not be read and are not in the census.
+
+Fixed: `_merge.merges_nested_copy` names the class (`.../macros/*_macro.xml`, owner a mod, root tag equal), and
+`apply_overlay(..., nested_on_mod=True)` appends its children with no dedupe (mode `merge`). The flag is passed
+explicitly by every door that applies a nested patch: `_build_owned`, `build_effective`'s plain door,
+`_compat._walk_positions` and `_compat_state.trace`. x4diff's layer stack does not pass it. x4compat now reports a HARD
+row per name defined twice, with no live-value owner, instead of FULL-OVERRIDE. x4validate gives the copying mod an
+INFO naming those names.
+
+Real modlist, before -> after (read-only): `dump --chain` for both files went 1 -> 2 macros,
+`cpsdo_vro:full(nested:...)` -> `cpsdo_vro:merge(nested:...)`. The patcher's current `[1]`/`[2]` ops: 4 `if=` guarded
+no-ops -> 0, 0 errors either way. A scratch copy of the patcher with the old un-indexed selectors: x4validate 0 -> 3
+"matched 2 nodes" errors; crosscheck against the issue's three log lines went from 3 OBSERVED ONLY to 3 agreed. x4compat
+on the live list, every item compared: collisions 414 -> 414, exactly 2 FULL-OVERRIDE rows replaced by 2 HARD rows on
+the same files, `guarded_off` 1,874 -> 1,870 (the patcher's 4 `[2]` ops), every other list identical.
+
+The copies differ (READ in the merged dump, copy [1] vs [2]: m_ion_mk4 bullet speed 2500 vs 1500, damage 250 vs
+500; xl_ion_mk6 speed 5000 vs 8100, damage 1500 vs 1200), so WHICH copy a reader returns matters. UNMEASURED: the copy order in the merged tree
+(the model puts the owner's first, then the copies in load order) and which copy the engine uses for values. Review
+round 2 makes every reader say so instead of choosing silently:
+
+- a merge adds a `MergeResult.unmeasured` line naming the copy order and the engine's choice as unmeasured, so
+  `x4effective dump` prints it; x4validate's merge INFO and x4compat's HARD row carry the same words;
+- `x4effective show` (`_one_entity`) already took the lowest id with a NOTE; for same-named macros in one document the
+  NOTE now says they are copies in one merged document, names copy [1] and says the engine's choice is unmeasured.
+  The lowest id is copy [1] because the store numbers entities as it walks the merged tree (READ, `_effective.py`);
+- `x4live`'s `_store_props` took `fetchone()` with no ORDER BY; it now takes the lowest id and announces the
+  duplicate once per name per run, with the same unmeasured status;
+- `gates/consistency_audit.from_merge` / `from_dump` returned the first macro of the name, which could compare a
+  store row from one copy against the other copy and flake. A name defined more than once in its file is now NOT
+  compared: it returns a `_DUPLICATE` sentinel and the gate prints a named, counted "not compared" line.
+
+Other UNMEASURED cases, disclosed instead of changed: any other class at a nested path (libraries, index, md,
+aiscripts, t, components, other assets; see also F303); a nested copy over a DLC (above); a mod's complete file at a
+plain base-game path. These keep the old model. `MergeResult.unmeasured` carries one line per such step,
+`x4effective dump` prints it, and x4validate gives one aggregated INFO per kind for the mod's own files (the DLC's
+nested path is its own kind, not "a plain path").
+
+Not changed, a LATENT lead: `_similarity.extract_ship_vector` reads the first `<macro>` of a file. The census found
+0 ship macro files among the merged copies (both are bullets), so nothing it reads today is duplicated; a ship macro
+merged this way would be compared on copy [1] with no note.
+
+The same log's `Multiple matching nodes` lines for `cpsdo_faction` wares (issue's "possibly related") are a different
+case: `x4debug crosscheck cpsdo_faction` on the live log 2026-11-06, 192 distinct engine skips, 192 agreed, OBSERVED ONLY 0.
+The KB records the cause (two `<production>` children, 2026-08-13).
+
+**RE-DERIVED BY:** `tests/test_nested_full_copy_merges.py` and `tests/test_compat_owner_full_override.py` (which now
+pins the clobber model on a non-macro path). Round 1: the release review measured 13 of its 15 tests RED on the base
+commit (3 of them only by a TypeError on the new keyword: the DLC-owner, lone-copy and root-tag twins) and 2 twins
+green. Round 2 added one falsification twin per clause and per door; 19 hand mutants from the review plus 7 for the
+round-2 disclosures, 26 of 26 killed (scratch harness `mut.py` + `mut17r2_extra.py`, every file restored
+byte-identical).
+
+## F359 - With the mods root set to the extensions folder, the file guard allowed a typed delete of the whole folder or a DLC · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-06
+
+Found by the 4.1.0 release session; owner ruling: deleting the whole extensions folder or a DLC is denied, a mod folder keeps
+its confirmation. `protect-files.sh` whitelists everything under `X4_MODS` before the deployed-delete block, so with
+`X4_MODS=<game>/extensions` (the single-location layout written out) that block never ran. MEASURED with `protect-files.sh`
+ALONE on a `DeleteFile` payload (`test_mods_root_at_extensions_file_guard_alone`), before the fix: 5 of 5 targets ALLOWED
+(the folder, `ego_dlc_boron`, `ego_dlc_boron/content.xml`, a mod, a mod file), where the policy is deny, deny, deny, ask,
+ask. Through `x4guard check --kind delete` and the neutral `agent-harness` delete the same targets already came out deny /
+ask, because the shell guard's verdict was combined in (before the fix, as expected: 8 of 8 through `x4guard check`, 3 of 3
+through the neutral delete): the hole was the file channel by itself.
+
+Fix: the whitelist is skipped only for a typed delete under `X4_EXTENSIONS` (`x4_typed_delete`, the existing tool-name
+test, now one function used in both places). Ordinary edits under that mods root stay allowed
+(`test_TWIN_mods_root_at_extensions_keeps_ordinary_writes_allowed`).
+
+**OPEN, not in the ruling's scope.** An Edit or Write of a file INSIDE a DLC folder, MEASURED with the file guard alone (4
+payloads each: Edit/Write x `libraries/wares.xml`/`content.xml`): `X4_MODS=<extensions>` -> advise, 4 of 4;
+`X4_MODS` unset -> ask (the deployed-mod confirmation), 4 of 4; `X4_MODS` elsewhere -> deny, 4 of 4. A DLC edit is
+refused in one of the three layouts only; whether it should always deny is the owner's call.
+
+**CLOSED 2026-11-07 (4.1.1 final round), owner ruling: DLC content is game content, denied for writes, edits and deletes in
+every layout.** `protect-files.sh` now tests the canonical path's first segment below the extensions root (`X4_EXTENSIONS`,
+else the game's `extensions/`) for `ego_dlc_*` BEFORE the mods-root whitelist and the deployed-mod ask; a pure-shell case on
+the already-memoised canonical path gates it, so only a path naming `ego_dlc_` pays for the roots. RED before the fix: 5 of 7
+new `scripts/test-hooks.sh` probes (no mods root: 2 asked; mods root = extensions: 2 allowed, 1 advised); the two twins (a
+folder `ego_dlc_x` inside a mod, a mod named `my_ego_dlc_fix`) stay allowed. Not changed: a SHELL write into a DLC or the
+game folder (`touch`, `>`) is advised or allowed by design, as before (deletes and archives are denied, F356).
+
+**RE-DERIVED BY:** the `mods_root_at_extensions` tests in `tests/test_deployed_retirement_policy.py`; the `a DLC file edit`,
+`mods root = extensions: a DLC ...` and `...ego_dlc below a mod's own folder` probes in `scripts/test-hooks.sh`.
+
+## F360 - A shell write whose target arrives on xargs's stdin, or passes through an existing junction, reaches no write rule · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-07
+
+MEASURED 2026-11-06 through `x4guard check --kind shell --shell bash`, fixture toolkit, decide-only (nothing ran):
+
+| command | verdict |
+|---|---|
+| `touch <toolkit>/x4-paths.env` | deny (the path-config rule) |
+| `echo x \| xargs tee <toolkit>/x4-paths.env` | deny (the path-config rule) |
+| `echo <toolkit>/x4-paths.env \| xargs touch` | **ALLOW** |
+| `printf '%s' <toolkit>/x4-paths.env \| xargs -I{} touch {}` | **ALLOW** |
+| `echo <reference>/libraries/wares.xml \| xargs touch` | **ALLOW** |
+| `xargs touch <toolkit>/x4-paths.env < /dev/null` | deny, but INERT: "save mutation has no absolute physical path", not the policy |
+| `xargs touch <reference file> < /dev/null` | deny, INERT, same reason |
+
+So a `touch` (a write: it creates the file, or bumps its time) fed its target by xargs from stdin reaches no write rule; the
+literal-operand form is refused only because the save bridge cannot place it. Not fixed here: the xargs reader lives in
+`hook_facts.py`'s find/xargs code, which another lane owned at the time.
+
+Junctions, MEASURED the same way with a real junction `<tmp>/work/lnk -> <toolkit>/reference` (created by the probe
+script, outside the guard): `echo x > lnk/libraries/wares.xml`, `touch lnk/libraries/wares.xml` and `rm
+lnk/libraries/wares.xml` were ALLOWED (3 of 3), while the file tool's write of the same path was DENIED (reference is
+read-only). Shell write targets are judged by their spelling; the file guard canonicalises through links. Creating such a
+link with the guard watching is denied (F331), so this needs a link that already exists. Not fixed: a canonicalising
+pass over every shell write target is a design change for the release session to weigh (cost per command, a missing
+path, a link created earlier in the same command).
+
+**FIXED 2026-11-07 (4.1.1 final round).** xargs: `_xargs_item_readings` reads `echo|printf <x> | xargs <cmd> [args]` as
+`<cmd> [args] <x>` (or `<cmd>` with `-I`'s replacement string replaced by each of up to 8 items), a command of its own, so
+every write rule judges it as the literal spelling. Only an echo/printf feeds a reading (its words ARE the items, unsplit as
+`xargs_feed` reads them: xargs would split a blank-holding word, so the reading is the stricter one); a find's or a listing's
+items stay with the find and listing readers. Links: `prep()` also judges each resolved absolute target at
+`link_resolved()` (`os.path.realpath`, non-strict: the longest existing prefix resolved, the rest kept) when that differs;
+every rule ORs over the entries, so the stricter verdict stands; a UNC or device path stays lexical. Cost MEASURED on the
+probe set: about +0.05 s per command (0.30 -> 0.36 s). RED at 7f4895a2: 26 xargs subtests (24 reference writes over 12
+xargs forms x 2 producers, 2 config writes); 6 link subtests + 2 tests. Probes (decide-only, junctions made in the hook
+sandbox to sandbox targets): 13 of 13 junction writes/deletes and 13 of 14 xargs writes moved allow -> deny; `echo <dlc
+file> | xargs touch` stays allowed, as `touch <dlc file>` is (shell writes into the game folder are advised or allowed by
+design).
+
+RESIDUAL (not fixed): a link created EARLIER IN THE SAME COMMAND does not exist when the hook runs, so it is still judged by
+spelling (creating one into a protected tree is denied, F331); xargs's own splitting of a blank-holding item, and items
+from `xargs -a <file>` / `-d`, are not modelled.
+
+**RE-DERIVED BY:** `TestRRPreArcBash.test_an_xargs_fed_write_is_judged_like_its_literal`,
+`test_an_xargs_fed_write_to_the_path_config_is_the_config_write`, `test_TWIN_an_xargs_fed_write_elsewhere_or_a_read_does_not_fire`,
+`TestWriteThroughAnExistingLink` (all three tests) in `test_hook_facts.py`; mutants `xargs write: ... (final)` and
+`link: ... (final)` in `scripts/verify-hook-tests.py`.
+
+**4.1.1 review, 2026-11-07 (A1, A2).** A1: `link_resolved` ran an uninterruptible `os.path.realpath` on every
+absolute write/delete operand, and MEASURED one on an unreachable network path took 21 s, so two operands on a
+drive mapped to an offline server could outrun the hook's 30 s (fail OPEN). It now resolves only a drive whose
+`GetDriveTypeW` is local (removable, fixed, CD-ROM, RAM disk; asked once per drive per hook call), checks the
+analysis deadline before each realpath, and makes at most 64 per hook call. Skipping a resolution gives up only
+the ADDED second reading; the lexical verdict stands. RESIDUAL: past 64 resolved operands a junction is judged by
+spelling only, and a junction on a local drive that points to a network share is still one uninterruptible
+realpath (bounded by the count, not by time). A2: `_xargs_item_readings` built `-I` readings for the first 8 items
+and dropped the rest silently (`printf '%s\n' 1 .. 8 <reference file> | xargs -I{} touch {}` was allowed); the
+bound is now 32, the segment readings bound, and past it the command is `carriers_truncated` (refused).
+
+**RE-DERIVED BY (A1, A2):** `TestLinkResolutionIsBounded` (6 tests) and
+`TestWriteThroughAnExistingLink.test_TWIN_skipped_remote_operands_leave_the_local_junction_judged`,
+`TestRRPreArcBash.test_an_xargs_item_past_the_reading_bound_is_never_dropped` and its twin in `test_hook_facts.py`;
+mutants labelled `(A1)` and `(A2)` in `scripts/verify-hook-tests.py`.
+
+
+## F361 - A failed BaseX build left the database MISSING, and `ALTER DB` onto an existing name is not safe · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-07
+
+MEASURED 2026-11-05: eight `x4fresh` BaseX builds in a row were killed by a job-wrapper memory cap. Each builder
+ran `DROP DB` before building (`build-corpus.sh`, `build-effective.sh`), so every kill left x4raw and x4eff missing
+for hours, and every `ask.py` corpus query refused in that time. A failed build should leave an answer about the
+previous world, labelled STALE, not no answer at all.
+
+**The BaseX behaviour the fix rests on**, MEASURED 2026-11-07 on BaseX 12.4 / Java 24.0.1, in a private DBPATH
+confirmed through `INFO` before any CREATE (two scratch probes; the damage row reproduced in both, n=2):
+
+| case | rc | outcome |
+|---|---|---|
+| ALTER `a` `b`, `b` exists, nobody holds it | 0 | `b` now holds `a`'s data: **replaced, no refusal** |
+| ALTER `a` `b`, a reader holds `b` | 1 "Database 'a' could not be renamed." | `a` kept; **`b` lost `inf.basex` and is unreadable** |
+| ALTER `a` `c`, a reader holds `a` | 1 "Database 'a' is opened by another process." | nothing changed; reader result correct |
+| DROP `a`, a reader holds `a` | 1, same message | nothing changed |
+| ALTER / DROP of an absent database | ALTER 1 "not found"; DROP **0** | DROP's rc proves nothing |
+| two ALTERs in one `-c` script, first refused | 1 | script stops; second not run |
+| two ALTERs in one `-c` script, second refused | 1 | first done: the live name is ABSENT |
+
+So F336's "ALTER onto an existing name is refused" held only because a reader was attached, and that refusal
+damages the target.
+
+**Fix (4.1.1).** `tools/basex/dbswap.py`. The builders write `<db>__next` (receipted before CREATE), reconcile and
+stamp `coverage-<db>__next.json` with `<db>`'s pre-build snapshot (`staleness.py --write --db <db> --coverage
+...`), then `swap` verifies it (stamped, names `<db>__next`, document count equal to its report, no pending
+snapshot left), parks `coverage-<db>.json`, renames `<db>` to `<db>__old`, renames `<db>__next` into place, writes
+`coverage-<db>.json` (its `db` field rewritten: ask.py ignores a report naming another database) and drops
+`<db>__old`. Every rename first checks that its target is absent. A journal (`swap-<db>.json`) records the phase;
+the next build, or `dbswap.py recover`, goes forward when the next generation was already verified, else restores
+the old one. A reader on the live database refuses the swap with everything put back (rc 7, retryable as is).
+`prepare` refuses a build that cannot hold two generations above the disk floor (system drive min(pagefile,
+50 GiB), else min(5%, 50 GiB)); there is deliberately no drop-first fallback. `x4fresh status` names an
+interrupted swap and its remedy, and a leftover `<db>__next`.
+
+**Population.** READ 2026-11-07: `DROP DB` in non-comment lines of `tools/basex/*.sh` and `*.py` was in the two
+builders and in `smoke-basex.sh`, which drops only its own sandbox database. The gap between the two renames is
+one BaseX command; a query started in it gets "not found", as before, but for about a second instead of a build.
+
+**Review fix round (2026-11-07).** An independent review found nothing stopped two builders racing: a second `prepare` -> `recover` could undo a first build's swap at phase `begun`, a rollback could race a commit (both pass the target-absent check, then ALTER replaces one generation with the other), `prepare` could drop the first build's `__next` between CREATE and coverage, and the two shared `pending-fingerprint-<db>.json`. Fixed by `build-<db>.lock`, created with O_EXCL and naming its owner (the builder shell's OS pid) and time, held from before `prepare` to after the swap and checked by every `prepare`/`swap`/`recover`; a lock is stale only when its owner is not running, judged by the process AND its start time (a reused pid does not count). `recover` also refuses a journal whose writer is still running. Also: `_drop_old` re-checks the `__old` receipt, the `__next` receipt is retired once `__next` becomes `<db>`, the disk floor is read on the resolved DBPATH and says when the pagefile size is unknown, a first build is budgeted by a stated estimate, and preflight/ask.py names an in-progress or interrupted swap instead of "not built". The reviewer's 24 mutants plus 15 for the new code: all killed (see RE-DERIVED BY). Still a judgement, not a proof: a lock is only as good as the liveness check, and a builder that is suspended (not dead) keeps its lock.
+
+**Not covered.** The rename window is not atomic: BaseX offers no swap. A report with an unexplained deficit is
+still swapped in (as before; it then refuses negatives). `x4fresh rebuild --auto` still does not start BaseX
+builds unattended, and a swap refused by a reader is not retried automatically. No real-corpus rebuild was run
+(the shared databases serve other sessions); the end-to-end run used small databases in a private home.
+
+**RE-DERIVED BY:** `tools/basex/test_dbswap.py` (a fake BaseX with the measured replace semantics: success, build
+failure, killed mid-build, 7 verification failures, a lock on the live and on the old generation, a kill before
+each BaseX step, a crash between the renames, an unaccounted `__old`, disk), its real-BaseX test (reader refusal,
+then the swap), 13 of 13 mutants killed, then the review round's 24 plus 15 new ones (lock, receipts, disk), all killed; the lock tests (a second builder refused, a dead or reused-pid lock taken over and reported); `test_bx3_a_build_never_drops_the_live_database_or_its_licence`
+(builder step order); the `test_freshcli.py` swap-status tests; the `test_staleness.py` next-generation stamp.
+
+## F362 - The location stack was not modelled: Push-Location read as a cd, Pop-Location ignored, bash's other pushd/popd forms misread · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-07
+
+Recorded open under F348 (`Pop-Location` is not modelled). MEASURED at 7f4895a2 with the sandbox hook, decide-only: from
+`Set-Location <reference>`, `Push-Location <mod>; Pop-Location; Remove-Item x.xml` (and the `pushd`/`popd`, `-Path`,
+`-LiteralPath`, `-PassThru`, nested, `-StackName` and `Set-Location -StackName` spellings, and a payload cwd of
+`<reference>`) was advised or allowed: 9 of 11 probes; the reverse (`Set-Location <mod>; Push-Location <reference>;
+Pop-Location; Remove-Item x.xml`) was a false DENY. Bash's plain `pushd`/`popd` were modelled, but a bare `pushd` (swap),
+`pushd +N`/`-N` (rotate), `pushd -n <dir>` (add below the top, no cd), `popd -n` and `popd +N` were read as a plain push
+(`pushd +1` as a cd into `<dir>/+1`) or ignored: 10 of 14 rows wrong.
+
+Fix: `ps_translate.ps1` emits `pushd` for a push and `popd` for a pop of a push this command made, tracking each push's
+stack name (PowerShell has named stacks, bash one). A pop of its own push under later pushes of other stacks pops through
+them and marks the emitted stack lost (every later pop is then unknown). A pop the translation cannot match (a stack pushed
+before the command, a name never pushed, an unreadable name) emits `cd "${X4_PS_LOCATION_STACK:-.}"`: two lanes, the
+current folder and an unknown one, so the current folder's verdict is never lost. MEASURED (pwsh 7): `Set-Location
+-StackName <none>` is refused and the default stays, `Pop-Location` on an empty default stack is a silent no-op, and a pop
+of a missing named stack errors without moving, so a name this command never pushed leaves the default unchanged. In
+`hook_facts.cwd_lanes`, `_dirstack_forms` models the bash forms on bash's list (the folder in force, then the stack).
+
+RESIDUAL (not fixed, judged rare): an unreadable `-StackName` (`$n`) may be the default stack; a pop of a readable name
+reaches its own push even under a `?` push that may have been the same stack (both CLOSED 2026-11-07 by 4.1.1 review
+A3, below); and an unmatched pop in a host that keeps
+its runspace may land on an earlier location, which only the unknown lane stands for. One hand-run translator mutant is
+equivalent: dropping the `popd` alias changes no verdict, because an unmodelled command passes through as the same `popd`.
+
+Moved rows (per item over every probe set): the reverse case above moved deny -> advise (`f9:11`), the one new row weaker
+than 4.1.0, and correct (PowerShell is back in the mod folder).
+
+**RE-DERIVED BY:** `TestHK1PowerShellFrontEnd.test_a_pop_returns_to_the_location_its_push_left`,
+`test_a_pop_the_command_cannot_match_keeps_the_current_location_too`, `test_TWIN_the_pop_restores_a_location_outside_the_root`,
+`test_TWIN_with_no_pop_the_pushed_location_is_in_force`, `test_TWIN_after_popping_past_another_stack_a_later_pop_is_not_guessed`,
+`test_an_unmatched_pop_translates_as_the_current_and_an_unknown_location`, `test_the_stack_translates_as_pushd_and_popd`,
+`TestBashDirectoryStackForms.test_the_directory_in_force_after_each_form` in `test_hook_facts.py`; mutants `dir stack: ...
+(final)` in `scripts/verify-hook-tests.py` (the translator's ten were run by hand: 9 caught, 1 equivalent).
+
+**CLOSED 2026-11-07 (4.1.1 review A3).** MEASURED (review): `Set-Location <reference>; Push-Location <safe>
+-StackName $n; Pop-Location; Remove-Item libraries/wares.xml` and the mirror (`Push-Location <safe>; Pop-Location
+-StackName $n`) were allowed, judged in `<safe>`; with `$n` unset pwsh uses the default stack and is back in
+`<reference>`. The unmatched-pop fallback did not help: `cd "${X4_PS_LOCATION_STACK:-.}"` lands in the current folder
+or an unresolved one, never the pushed-from folder. Now an unreadable name MAY be any stack: a pop that may or may
+not reach a push is `popd ${X4_PS_LOCATION_STACK:+-n}`, and `cwd_lanes` splits a popd whose operand has several
+values into one lane per value (popped / not popped), so every candidate folder is judged and the strictest
+verdict stands. After such a pop the emitted stack is marked lost, as before. RED: 9 (6 probe subtests, 3
+translation/reader tests).
+
+**RE-DERIVED BY (A3):** `TestHK1PowerShellFrontEnd.test_an_unreadable_stack_name_may_be_the_default_stack`,
+`test_TWIN_an_unreadable_stack_name_judges_only_the_candidate_folders`, `test_a_maybe_pop_translates_as_a_pop_that_may_not_happen`,
+`test_the_reader_splits_a_pop_that_may_not_happen` in `test_hook_facts.py`; mutants labelled `(A3)`.
+
+## F363 - `check_connections` verified that a loadout port EXISTS, never that the equipment FITS it · **SCOPE LIMIT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-08 as INFO
+
+The connection check answered one question: does the `path` of a loadout leaf name a connection the hull component
+defines. It never asked whether the equipment macro's attachment tags are accepted by that slot, whether a `<groups>`
+entry names a group the component spells the same way, or whether a ship macro's own `<connection ref=X>` exists on
+its component. A 7.x-era mod can pass every existing check and still define hulls whose preset engines fit none of
+their engine ports.
+
+MEASURED 2026-11-08, `check_fitting_compatibility` over 216 active installed mods plus two DEV mods (218 scanned, 0
+dropped, 0 errors), reference + 8 DLC: the ported ROR base mod alone carries 63 tag mismatches, 278 case-only group
+names and 209 macro connection refs to connections its components do not define. Among the other mods scanned (216 or
+217: the run's record, commit 449ba680, does not say whether the second DEV mod is in this population): 12 tag
+mismatches (XUP 10, xenon_backup 2; verified in source, e.g. an engine slot tagged `standardplatformcollision` with the
+space missing), 52 dangling macro connection refs across 12 mods including VRO (`ship_lint_frigate_akita` macro names
+`con_shipstorage_xs_01`, its component has `con_shipstorage_s_01`), and 0 case-only group names. Vanilla controls for
+the rule: 0 of 1421 direct leaves and 0 of 386 `exact=` groups rejected; 0 of 882 group entries case-only; 0 of 1776
+macro connection refs dangling; but 84 of 1505 vanilla direct leaves point at a port that does not exist.
+Group entries (added 2026-11-09, v4.1.1 review): judged as a hit when NO slot of the entry's group accepts the
+macro, because vanilla groups mix kinds; that reading rejects 1 of 946 resolvable vanilla entries (a
+`libraries/loadouts.xml` turret in a carrier group holding only engines and shields), while "every slot accepts it"
+would reject 945 of 946 (MEASURED 2026-11-09, base + 8 DLC, read-only scratch control mirroring the code). 36
+vanilla entries name a group their component lacks by exact name; those are not tag-judged and are counted in the note.
+
+Every finding is INFO on purpose: the tag rule is Egosoft's documented one and it never rejects a vanilla direct leaf,
+but ENGINE enforcement of a mismatched preset is MEASURED only for weapons, in one save (RUNTIME EVIDENCE below), and
+UNMEASURED for other kinds; mods that ship dangling refs demonstrably run. A hit is a suspect for an in-game fitting
+readback, not a verdict. Promotion to warn needs more of that runtime evidence (see RUNTIME EVIDENCE).
+
+Tier A caveat, same as `check_connections`: 24 of the 52 cross-mod refs are one mod's macro judged against the vanilla
+component because the component it means is redefined by a dependency the Tier A tree does not load.
+
+The corpus numbers above (218 mods, 63 / 278 / 209, the vanilla controls) are MEASURED 2026-11-08 by one run over the
+installed set at that date (recorded in commit 449ba680); no test or gate re-derives them, and they will drift with
+the modlist.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_fit_compat.py` re-derives the BEHAVIOUR on synthetic fixtures, not the
+corpus numbers: each clause fires on a one-input change and stays silent on its twin; the quiet shapes (unreadable
+component, unresolvable or ambiguous equipment, unresolvable hull component, diff fragments) are skips, never
+findings; one finding per macro; nothing is ever an error.
+
+**LIMIT (open, 2026-11-08 v4.1.1 review): files are read AS STORED, not merged.** The check reads the component and
+macro file the index names, never the effective tree, so a connection, slot tag or group that a diff (from the mod
+itself or another) adds to a component is invisible. Consequence: a false "fails the documented tag rule" or a false
+"names no component connection" on any hull whose component is patched. The rate is UNMEASURED. Likewise, leaves and
+group entries inside diff ops that patch an existing macro or loadout, and macro `<connection ref>`s such ops add
+(elements, or a `ref` attribute set via `sel=.../connection.../@ref` or `type="@ref"`), cannot be judged from stored
+files; since v4.1.1 they are recorded as a "diff fragment not judged" skip, once per file, instead of passing silently. A hull
+whose component cannot be resolved is a skip naming the macro, and `report.notes` states macros judged / skipped.
+
+RUNTIME EVIDENCE for the tag clause (2026-11-08, read-only save census, KNOWLEDGEBASE.md § Engine-does-not-install-preset-weapons):
+in a real 9.0 save, XUP lc4 destroyers whose preset weapons fail the rule carry 0 weapons on 10 of 10 ships, while the
+same mod's compatible destroyers carry 2 on 11 of 11. MEASURED for weapons; engines and shields INFERRED by the same
+slot-tag mechanism. This is the evidence promotion to `warn` would rest on; it stays INFO until a second ship class confirms.
+
+## F364 - A missing base `index/*.xml` registered nothing and said nothing · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
+
+`_resolve.build_index` read the reference and DLC indexes, and when `_read_source` returned None for a file that was
+not there it `continue`d. The index then held only the mod's own entries, every vanilla macro and component read as
+unregistered, and no skip was recorded. The run looked clean.
+
+MEASURED 2026-11-08: a fresh git worktree without the untracked `x4-paths.env` resolved `Config().reference` to a
+folder that did not exist (`Config` does not refuse a nonexistent path by design; it refuses only an UNRESOLVED one).
+`build_index` registered 150 macros (the mod's own) instead of 4,695; the fitting check above reported 39 tag hits
+where the same code with the real reference reports 63; `report.skipped` was empty. The instrument, not the subject.
+
+Now: a reference with NO `index/` folder (including a reference folder that does not exist) is a degraded skip naming
+the path and pointing at `x4-paths.env` / `--reference`. A reference that has `index/` but lacks one file is a plain
+skip: that shape is a minimal tree, not a wrong one. A missing DLC index is a plain skip naming the DLC. `report=None`
+callers are unchanged.
+
+CORRECTION 2026-11-08 (own regression, caught by CI run 42458249635 on 67e64d18): the first fix degraded on ANY missing
+reference index file. `test_audit0924_validate.py::test_va6_nested_patch_for_a_disabled_target_is_not_a_path_mismatch`
+builds a reference with `index/macros.xml` only, and its control `assert not rep.degraded` went red on all five CI jobs.
+The local targeted run had not included that file. The rule was broader than the measured failure (a missing folder);
+narrowed to the folder test, with a twin for each side.
+
+**RE-DERIVED BY:** `tools/x4validate/tests/test_index_missing_is_degraded.py`.
+
+## F368 - Past the link budget an operand read as "no link" · **DEFECT (measured)** · IN-ARC · confidence 95% · FIXED 2026-11-09
+
+`hook_facts.link_resolved` (F360) judges a write or delete operand also where an existing junction or symlink sends
+it. 9a73c0a9 (4.1.1 review A1) bounded it to `_MAX_LINK_RESOLVED = 64` realpaths per hook call, for latency, and past
+the bound it returned "" -- the same value as "nothing on this path is a link". The docstring argued that skipping
+only gives up added strictness; that is true of one operand and false of the class, because the operand the budget
+skips is the one an adversary places last. A step that narrows its data and reports success.
+
+MEASURED at 5404046c (in-process facts, junction under the worktree's `.test-sandbox`): `touch <N local decoy files>
+<work>/refj/libraries/wares.xml` with `refj` a junction to the configured reference read writes_reference True for
+N=63 and False for N=64 and N=200; `N` `touch` segments then `; rm -f <work>/refj/x.xml` read rm_targets_reference
+False at N=64. Through the whole hook (protect-bash.sh, JSON payload) both shapes were ALLOWED. Before 9a73c0a9 there
+was no bound and both were caught. The test `test_realpath_calls_are_capped_per_hook_call` and its mutant pinned the
+fail-open as the intended behaviour.
+
+Now: the folder of an operand is resolved once per hook call (cached), and its last component is followed only when
+`lstat` says it is a link (S_ISLNK, or FILE_ATTRIBUTE_REPARSE_POINT for a junction; an lstat that cannot answer
+resolves the whole path), so files in one folder spend one realpath. An operand past either bound (64 realpaths,
+4096 last-component probes) sets the fact `links_unresolved`; protect-bash.sh DENIES it and save_policy raises
+ScopeError, each with "split it into commands that each touch fewer folders". Remote and rootless drives are still
+not resolved and do not spend the budget (by design, A1). Measured after: 64 and 200 one-folder decoys -> writes_reference
+True; 64 decoys in distinct folders -> links_unresolved True (deny); 200 one-folder files with no junction -> allow;
+65 distinct folders with no junction -> deny (fail closed: the guard cannot know there is no link). Latency, median of
+7 in-process facts() calls: 200 files in one folder 369 -> 346 ms, 200 files in 200 folders 685 -> 674 ms (no change
+beyond noise).
+
+UNMEASURED: how often real commands name more than 64 distinct local folders (no command corpus in this tree);
+such a command is now refused where it was allowed.
+
+CI round (cba3a1ce, 2026-11-09), MEASURED on ubuntu CI: `test_a_last_component_lstat_cannot_read_is_resolved_whole` failed. It stubs `os.lstat`, which is the process's: on POSIX `posixpath.realpath(strict=False)` IGNORES every lstat
+error (`ignored_error = OSError`, READ in CPython 3.13 `posixpath.py`) and returns the component as written, so an
+lstat that cannot answer read as "no link" -- the same narrowing again, one layer down. And `_realpath_budgeted`
+returned None on an exception, which the callers also read as "no link". Now: a realpath that raises sets
+`links_unresolved` (when `refuse`); a leaf whose lstat failed (anything but FileNotFoundError) with realpath showing
+no link sets it; a matching entry in link_entries_matched whose lstat fails sets it. A missing path (FileNotFoundError,
+NotADirectoryError) is an answer and sets nothing, and so is Windows' ERROR_INVALID_NAME (123) for a leaf such as `*`:
+NEAR-MISS, MEASURED in the local hook suites: the first cut read it as "cannot tell" and two PowerShell save-folder
+tests (`Get-ChildItem <save> | Remove-Item`) lost their verdict to links_unresolved. Each has a RED test that fails on cba3a1ce's code (MEASURED on Windows; the leaf one
+simulates posixpath's realpath) and a mutant that its test catches. The POSIX branch of the original test (real posixpath, `links_unresolved` True) is
+verified by REASONING only (no Linux here); CI re-derives it. UNMEASURED: posixpath also ignores an lstat error on a
+HEAD component (EACCES on a folder the caller cannot search; INFERRED: a non-root write there fails anyway); that
+path is not made strict.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkBudgetFailsClosed`,
+`TestLinkResolutionIsBounded`, and `test_audit0924_hooks.py::TestLinkBudgetWholeHook`.
+
+## F369 - A literal `$` or a stream suffix kept a write through a junction lexical · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-09
+
+`hook_facts.link_resolved` (F360) returned "" for any path `has_unresolved()` flags, before looking at the filesystem.
+`has_unresolved` reads the text: a `$` followed by a name is an expansion to it, also when the shell never expands
+it (single quotes, an escaped `\$`). prep() already knew (`literal_dollar_path`), and did not pass it on. The NTFS
+spelling `x::$DATA` IS x (_win_alias, FX-G2 item 3), so the class is every literal `$` in a path behind a link.
+
+MEASURED at a70dcedd (in-process facts(), junction `refj` -> the configured reference under the worktree's
+`.test-sandbox`): `touch '<work>/refj/libraries/wares.xml::$DATA'` and `echo x > '<same>'` read writes_reference
+False, True for the same spelling without the junction; `:s:$DATA` the same; `touch '<work>/refj:s'` False (MEASURED
+on NTFS: a write to `<junction>:s` creates the stream on the TARGET folder), because the leaf lstat'd as no link;
+`'<work>/refj/a$b/x.xml'` False. And an UNRESOLVED operand was never resolved at all: `touch "<junction>/$X/x.xml"`
+and `rm -rf "<junction>/$(echo x)"` (8 of 12 junction spellings, both quotings) read False where `<reference>/$X/x.xml` is caught by the root in its text.
+
+Now: prep() passes `literal`; on Windows link_resolved resolves `_win_alias(path)`; an unresolved operand's literal
+head (the components before the first one has_unresolved flags) is resolved and judged, with the rest as written, as
+an unresolved operand. Also in this round: operands that feed only read checks (search_files: the profile-by-name
+rule) no longer set `links_unresolved` past the budget (a `grep -rn` over 65 folders was refused; links within the
+budget are still resolved for it), and the ssh advisory judges a remote text's own `links_unresolved` (it was absent
+from `_SSH_DESTRUCTIVE`, and the nested facts() inherited the outer flag).
+
+Re-review of 180263b8, MEASURED: a variable INSIDE the component that names the junction was still missed (the head
+is followed only up to the whole components before it): `touch "<work>/refj$X/libraries/wares.xml"`, `"<work>/ref${X}j/..."`,
+`echo x > "<junction>::$INDEX_ALLOCATION/libraries/wares.xml"` (double-quoted), `rm -rf "<work>/refj$X"` and
+`rm -rf <work>/refj$(echo)` read False. Now (link_entries_matched) the head's folder is listed once and every entry
+that starts with the component's literal prefix (through _win_alias on Windows) and is a symlink or reparse point is
+resolved, its target plus the rest judged as an unresolved operand. One listing is one probe, each link one realpath
+of the budget; past it links_unresolved (search operands excepted). A folder that cannot be listed adds nothing.
+Over the reviewer's corpus plus 13 such commands (1,710) vs 180263b8: 45 stricter, 0 weaker; `rm -rf "<work>/$X"` (an empty prefix:
+every link in the folder) is among the stricter, by design.
+
+UNMEASURED: how often a real command names an expansion behind a link; each such operand now spends link budget, and
+one listing of its folder.
+
+CI round (cba3a1ce, 2026-11-09), MEASURED on the windows CI runner: `link_head_resolved(<work>/$X/x.xml)` with no link
+returned the path, because the runner's TEMP is `C:/Users/RUNNER~1/...` and realpath expands the 8.3 short name, so
+any respelling read as a link. Reproduced locally with a short name made under `.test-sandbox` (GetShortPathNameW):
+link_head_resolved and link_resolved of the short spelling of a plain folder returned its long form. Now link_resolved
+reports no link when realpath's answer equals `long_name(p)` (GetLongPathNameW: expands short names, follows no link);
+a junction reached through the short spelling is still followed (twin). Tests: `TestLinkBudgetFailsClosed::
+test_RED_a_short_name_spelling_of_a_plain_folder_is_not_a_link` and its `_simulated` twin (volume-independent). INFERRED, not measured: harmless for verdicts
+before (an extra entry naming the same place), but wrong as a fact.
+
+**RE-DERIVED BY:** `agent/guards/claude-hooks/test_hook_facts.py::TestLinkResolutionOfLiteralSpellings`
+(generated copy `.claude/hooks/test_hook_facts.py`), e.g.
+`test_RED_an_ntfs_stream_suffix_behind_a_junction_is_judged_where_it_lands` and
+`test_RED_a_literal_dollar_in_a_folder_name_behind_a_junction`.
 
 ## F365 - `_merge` modelled `<add pos="append">` as an append; the engine skips the node · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-08
 

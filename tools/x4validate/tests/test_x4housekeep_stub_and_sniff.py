@@ -513,3 +513,67 @@ def test_the_hard_link_class_is_not_refused_for_want_of_a_bin(monkeypatch):
     monkeypatch.setattr(hk, "_is_link", lambda _p: False)
     assert "no Recycle Bin" in hk.landing_refusal("C:/x/y")
     assert "no Recycle Bin" not in hk.landing_refusal("C:/x/y", "hard links stay on local volumes")
+
+
+# -------------------------------------------------------------------- 4.1.1: a malformed stub record is a clean refusal
+
+_GOOD_HASH = "0" * 64
+
+MALFORMED_RECORDS = {
+    "top level is a list": "[1, 2]",
+    "top level is null": "null",
+    "top level is a string": '"source_hashes"',
+    "source_hashes missing": "{}",
+    "source_hashes is a list": '{"source_hashes": ["notes.md"]}',
+    "source_hashes is a string": '{"source_hashes": "notes.md"}',
+    "source_hashes is null": '{"source_hashes": null}',
+    "source_hashes is a number": '{"source_hashes": 7}',
+    "a hash is a number": '{"source_hashes": {"notes.md": 5}}',
+    "a hash is nested garbage": '{"source_hashes": {"notes.md": {"x": [1, {"y": null}]}}}',
+    "a hash is not hex": '{"source_hashes": {"notes.md": "not-a-sha256"}}',
+    "a name is empty": '{"source_hashes": {"": "%s"}}' % _GOOD_HASH,
+    "nesting too deep to parse": '{"source_hashes": ' + "[" * 200000 + "]" * 200000 + "}",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(MALFORMED_RECORDS))
+def test_a_malformed_stub_record_is_a_clean_refusal_and_the_item_stays(tmp_path, shape):
+    """MEASURED 2026-11-06 before the fix: a list or a string in `source_hashes` passed `set(hashes)` and then crashed
+    `_kept_changes` on `.get` (AttributeError), a too-deep record crashed the parse (RecursionError) -- each escaping
+    stub_state and stopping the whole plan -- and a number or nested value was silently compared as a hash. Each shape is
+    now "record cannot be read", the folder is kept, and nothing in it is planned."""
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old\n"})
+    (t / "ARCHIVED.md").write_text("# Archived\n\n<!-- " + MALFORMED_RECORDS[shape] + " -->\n", encoding="utf-8")
+    doc = hk.plan(cfg, now=now + LATER)
+    notes = doc["coverage"]["archive_inventory"]["stub_notes"]
+    assert len(notes) == 1 and "record cannot be read" in notes[0] and "1 other item(s)" in notes[0], notes
+    assert not [a for a in doc["actions"] if str(t) in json.dumps(a)], "nothing in a folder with an unreadable record"
+    assert (t / "notes.md").read_bytes() == b"old\n" and (t / "ARCHIVED.md").exists()
+
+
+def test_TWIN_a_well_formed_record_still_compares(tmp_path):
+    """The control for every shape above: the same folder with a readable record is compared, not refused."""
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old\n"})
+    (t / "ARCHIVED.md").write_text(
+        "# Archived\n\n<!-- " + json.dumps({"source_hashes": {"notes.md": _GOOD_HASH}}) + " -->\n", encoding="utf-8")
+    notes = _notes(cfg, now)
+    assert len(notes) == 1 and "edited since" in notes[0] and "cannot be read" not in notes[0], notes
+
+
+def test_a_huge_stub_is_refused_unread(tmp_path, monkeypatch):
+    """A stub past the record cap is not read into memory to look for its record."""
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old\n"})
+    monkeypatch.setattr(hk, "STUB_RECORD_MAX_BYTES", 1024)
+    (t / "ARCHIVED.md").write_text("# Archived\n\n<!-- {\"source_hashes\": {}} -->\n" + "x" * 4096, encoding="utf-8")
+    real = Path.read_text
+    monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: pytest.fail("read " + str(self))
+                        if self.name == "ARCHIVED.md" else real(self, *a, **k))
+    notes = _notes(cfg, now)
+    assert len(notes) == 1 and "record cannot be read" in notes[0] and "too large" in notes[0], notes
+
+
+def test_the_refusal_names_why_the_record_cannot_be_read(tmp_path):
+    cfg, t, now = _archived(tmp_path, **{"notes.md": b"old\n"})
+    (t / "ARCHIVED.md").write_text('# A\n\n<!-- {"source_hashes": ["notes.md"]} -->\n', encoding="utf-8")
+    notes = _notes(cfg, now)
+    assert "source_hashes is list, not an object" in notes[0], notes

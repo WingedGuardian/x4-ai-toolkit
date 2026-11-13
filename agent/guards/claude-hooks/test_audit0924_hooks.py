@@ -214,6 +214,98 @@ def engine_failure(reason):
     return any(failure in (reason or "") for failure in ENGINE_FAILURES)
 
 
+#: 4.1.1 (CI run 41992260237): what a refusal says when the REAL translator ran out of time --
+#: the raw rc-4 reason, or the save bridge's category. Fail-closed is right; the case then
+#: measured nothing, so it is SKIPPED (counted, named), never passed and never failed.
+#: A nested `powershell -c` that times out is NOT recognisable here: its ask names no cause.
+TRANSLATOR_OUT_OF_TIME = ("PowerShell could not be run (TimeoutExpired)",
+                          "the PowerShell translation budget for one command",
+                          _H.PS_TIMED_OUT, _H.PS_BUDGET_SPENT)
+
+
+#: 4.1.1 review: the timeout skip needs a ceiling, or a runner where translation ALWAYS times out turns every
+#: PowerShell verdict test into a skip and the leg stays green. Counted here, enforced by __main__ (the CI legs run this
+#: file with plain python). X4_MAX_TRANSLATOR_SKIPS sets it (CI: 0 on Windows, 3 on Ubuntu); unset means 3.
+_TRANSLATOR_SKIPS = []
+
+
+def translator_skip_ceiling(count, raw=None):
+    """0 when `count` named translator-timeout skips are within the ceiling, else 1 (and says why)."""
+    raw = os.environ.get("X4_MAX_TRANSLATOR_SKIPS", "3") if raw is None else raw
+    try:
+        cap = int(raw)
+    except ValueError:
+        print("X4_MAX_TRANSLATOR_SKIPS=%r is not a number: the ceiling cannot be applied, which is a FAILURE" % raw)
+        return 1
+    print("translator-timeout skips: %d (ceiling %d)" % (count, cap))
+    if count > cap:
+        print("FAILED: %d PowerShell verdict test(s) skipped because the translator ran out of time, over the ceiling "
+              "of %d: the PowerShell front-end was not measured on this run" % (count, cap))
+        return 1
+    return 0
+
+
+def skip_if_translator_out_of_time(reason):
+    for said in TRANSLATOR_OUT_OF_TIME:
+        if said in (reason or ""):
+            _TRANSLATOR_SKIPS.append(said)
+            raise unittest.SkipTest("the real PowerShell translator ran out of time on this machine ("
+                                    + said + "): the verdict was NOT measured")
+
+
+class TestTheTranslatorSkipHasACeiling(unittest.TestCase):
+    """4.1.1 review: past the ceiling the leg FAILS; an unusable ceiling fails too; within it, it passes."""
+
+    def test_over_the_ceiling_fails_and_within_it_passes(self):
+        self.assertEqual(translator_skip_ceiling(4, "3"), 1)
+        self.assertEqual(translator_skip_ceiling(3, "3"), 0)
+        self.assertEqual(translator_skip_ceiling(1, "0"), 1)
+        self.assertEqual(translator_skip_ceiling(0, "0"), 0)
+
+    def test_an_unusable_ceiling_is_a_failure_not_a_pass(self):
+        self.assertEqual(translator_skip_ceiling(0, ""), 1)
+        self.assertEqual(translator_skip_ceiling(0, "three"), 1)
+
+class TestATranslatorTimeoutReasonIsRecognised(unittest.TestCase):
+    """The words matched above are the words the guard EMITS: the rc-4 reason is produced here by
+    the real ipc() with `subprocess.run` stubbed to time out (nothing is executed)."""
+
+    def _rc4_reason(self, exc):
+        saved = (subprocess.run, _H._pwsh_exe)
+
+        def run(args, **kw):
+            raise exc(args, kw["timeout"]) if exc is subprocess.TimeoutExpired else exc("fixture")
+        subprocess.run, _H._pwsh_exe = run, (lambda: "pwsh")
+        _H._PS_CACHE.clear()
+        try:
+            rc, raw, _f = _H.ipc({"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}}, {})
+        finally:
+            subprocess.run, _H._pwsh_exe = saved
+            _H._PS_CACHE.clear()
+        self.assertEqual(rc, 4)
+        return raw.decode("utf-8")
+
+    def test_the_real_timeout_reason_skips(self):
+        before = len(_TRANSLATOR_SKIPS)
+        try:
+            with self.assertRaises(unittest.SkipTest):
+                skip_if_translator_out_of_time("X4 GUARD: ... " + self._rc4_reason(subprocess.TimeoutExpired))
+            self.assertEqual(_TRANSLATOR_SKIPS[before:], ["PowerShell could not be run (TimeoutExpired)"])
+            for category in (_H.PS_TIMED_OUT, _H.PS_BUDGET_SPENT):
+                with self.assertRaises(unittest.SkipTest):
+                    skip_if_translator_out_of_time("Shell scope could not be completely evaluated ("
+                                                   + category + "); retry")
+            self.assertEqual(len(_TRANSLATOR_SKIPS), before + 3)        # every one counted against the ceiling
+        finally:
+            del _TRANSLATOR_SKIPS[before:]                             # this test's own, never the run's real ones
+
+    def test_TWIN_other_refusals_are_verdicts(self):
+        skip_if_translator_out_of_time("X4 GUARD: ... " + self._rc4_reason(FileNotFoundError))
+        skip_if_translator_out_of_time("Shell scope could not be completely evaluated "
+                                       "(no PowerShell available); use literal targets")
+        skip_if_translator_out_of_time("")
+
+
 @unittest.skipUnless(_H._pwsh_exe(), "no PowerShell here: the front-end cannot be exercised "
                                      "(without one normal dispatch refuses PowerShell commands)")
 class _PSE2E(unittest.TestCase):
@@ -254,6 +346,7 @@ class _PSE2E(unittest.TestCase):
         if not p.stdout.strip():
             return "allow", ""
         h = json.loads(p.stdout)["hookSpecificOutput"]
+        skip_if_translator_out_of_time(h.get("permissionDecisionReason", ""))
         return h.get("permissionDecision", "advise"), h.get("permissionDecisionReason", "")
 
     def assert_scope_refusal(self, command, tool="PowerShell"):
@@ -505,6 +598,7 @@ class TestPSEmptyTranslation(_PSE2E):
         if not p.stdout.strip():
             return "allow", ""
         h = json.loads(p.stdout)["hookSpecificOutput"]
+        skip_if_translator_out_of_time(h.get("permissionDecisionReason", ""))
         return h.get("permissionDecision", "advise"), h.get("permissionDecisionReason", "")
 
     def test_empty_with_unresolved_parts_refuses_with_a_real_reason(self):
@@ -981,7 +1075,9 @@ class TestHygieneDeniesInBash(_RR):
             if depth == 0:
                 return "echo " + tag
             return " ".join("$(" + build(depth - 1, n, tag + chr(97 + i)) + ")" for i in range(n))
-        return "echo " + build(8, 3)
+        # Depth 6 = 1,093 substitutions, over 4x the walk's _MAX_CARRIED (250), so the bound trips. Depth 8 (9,841)
+        # took 13-16 s idle against the save step's 20 s deadline, and under load that deadline's refusal won instead.
+        return "echo " + build(6, 3)
 
     def test_an_unparseable_bash_command_denies_with_a_reason(self):
         v, r = self.verdict_with("echo 'unterminated", tool="Bash")
@@ -1016,7 +1112,10 @@ class TestRRPreArcBash(_RR):
         self.expect([
             ("deny", "echo '" + Rf + "' | xargs rm -rf"),
             ("deny", "printf '%s' '" + Gf + "' | xargs -0 rm -rf"),
-            ("ask", "find '" + Gf + "/extensions' -name '*.bak' | xargs rm -f"),    # 2026-10-27: rm_deployed_mod
+            # 2026-10-27: rm_deployed_mod asked; from extensions/ the find also reaches every DLC folder,
+            # which denies (user ruling 2026-11-05, 4.1.1 review round 3 E). One mod keeps the ask.
+            ("deny", "find '" + Gf + "/extensions' -name '*.bak' | xargs rm -f"),
+            ("ask", "find '" + Gf + "/extensions/amod' -name '*.bak' | xargs rm -f"),
             ("deny", "for f in '" + Rf + "'/*; do rm -rf \"$f\"; done"),
             ("deny", "for d in build '" + Gf + "'; do rm -rf \"$d\"; done"),
             ("deny", "t=$(realpath -m '" + Rf + "/libraries'); rm -rf \"$t\""),
@@ -1322,5 +1421,201 @@ class TestF11UncommittedKnowledgebase(unittest.TestCase):
         self.assertNotIn("SECRET-CONTENT-LINE", out)
 
 
+@unittest.skipUnless(BASH, "no Git Bash: protect-bash.sh cannot be run")
+class TestArchiveGlobWholeHookTime(unittest.TestCase):
+    """4.1.1 review round 3, A, MEASURED: a crafted -name of 3,000 one-range sets ran protect-bash.sh
+    37.6 s. The hook's timeout is 30 s, and a hook that times out does not block, so the delete it
+    names would have gone ahead unjudged. The whole hook, through bash, must answer within 10 s of a
+    plain command's time on the same machine -- and answer deny."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4psfe_"))
+        cls.game = cls.tmp / "X4 Foundations"
+        (cls.game / "extensions" / "ego_dlc_boron").mkdir(parents=True)
+        cls.env = _owned_env(cls.tmp, X4_GAME=str(cls.game), X4_REFERENCE=str(cls.tmp / "reference"),
+                             X4_CONFIG=str(cls.tmp / "none.env"))
+        cls.env.pop("CLAUDE_PROJECT_DIR", None)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def run_hook(self, command):
+        import time
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        t = time.perf_counter()
+        try:
+            p = subprocess.run([BASH, str(HOOKS / "protect-bash.sh")], input=payload, capture_output=True,
+                               text=True, encoding="utf-8", env=self.env, timeout=120)
+        except subprocess.TimeoutExpired:
+            self.fail("protect-bash.sh still running after 120 s")
+        secs = time.perf_counter() - t
+        self.assertEqual(p.returncode, 0, p.stderr[-400:])
+        verdict = json.loads(p.stdout)["hookSpecificOutput"].get("permissionDecision") if p.stdout.strip() else "allow"
+        return verdict, secs
+
+    def test_a_crafted_glob_is_denied_in_time(self):
+        ranges = "".join("[%s-%s]" % (chr(0x100 + 3 * i), chr(0x101 + 3 * i)) for i in range(3000))
+        ext = str(self.game / "extensions").replace(chr(92), "/")
+        crafted = ("find '" + ext + "' -name '*" + ranges + "q' -o -name ego_dlc_boron -exec rm -rf {} +")
+        _v, plain = self.run_hook("find '" + ext + "' -name '*.txt' -print")
+        verdict, secs = self.run_hook(crafted)
+        self.assertEqual(verdict, "deny")
+        # The regression this guards took 37.6 s (reviewer) / 65 s (ad1125dd) through the hook, past its 30 s
+        # timeout. Fixed, crafted - plain is 1.03-1.09 s idle (MEASURED 3 runs, 2026-11-08) and was 2.0 s on the
+        # Windows CI runner (crafted 2.4 s, plain 0.4 s; run 42517544460), so 2.0 s flaked. 10 s still fails it.
+        self.assertLess(secs - plain, 10.0, "crafted %.1f s, plain %.1f s" % (secs, plain))
+
+
+@unittest.skipUnless(BASH, "no Git Bash: protect-bash.sh cannot be run")
+class TestLinkBudgetWholeHook(unittest.TestCase):
+    """4.1.1 review (link budget), MEASURED at 5404046c: 64 local decoy files ahead of an operand through a
+    junction into reference/ spent link_resolved's per-call budget, and the junction operand read as "no link"
+    -- the write was allowed. Through the whole hook: decoys in one folder are now resolved once and the write
+    is denied as a reference write; past the budget (distinct folders) the hook denies with a reason to act on;
+    a long one-folder list with no junction stays allowed. The fixture lives under <repo>/.test-sandbox."""
+
+    @classmethod
+    def setUpClass(cls):
+        sbx = REPO / ".test-sandbox"
+        sbx.mkdir(exist_ok=True)
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4linkhook_", dir=str(sbx)))
+        cls.ref = cls.tmp / "reference"
+        (cls.ref / "libraries").mkdir(parents=True)
+        cls.work = cls.tmp / "work"
+        cls.work.mkdir()
+        cls.link = cls.work / "refj"
+        try:
+            if os.name == "nt":
+                import _winapi
+                _winapi.CreateJunction(str(cls.ref), str(cls.link))
+            else:
+                os.symlink(str(cls.ref), str(cls.link))
+        except (OSError, ImportError, AttributeError) as exc:
+            shutil.rmtree(cls.tmp, ignore_errors=True)
+            raise unittest.SkipTest("cannot make a link here: " + repr(exc))
+        cls.env = _owned_env(cls.tmp, X4_REFERENCE=str(cls.ref), X4_CONFIG=str(cls.tmp / "none.env"))
+        cls.env.pop("CLAUDE_PROJECT_DIR", None)
+        cls.W, cls.L = cls.work.as_posix(), cls.link.as_posix()
+
+    @classmethod
+    def tearDownClass(cls):
+        if os.name == "nt" and cls.link.exists():
+            os.rmdir(cls.link)               # the junction only, never its target
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def verdict(self, command):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        p = subprocess.run([BASH, str(HOOKS / "protect-bash.sh")], input=payload, capture_output=True,
+                           text=True, encoding="utf-8", env=self.env, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr[-400:])
+        if not p.stdout.strip():
+            return "allow", ""
+        h = json.loads(p.stdout)["hookSpecificOutput"]
+        return h.get("permissionDecision", "advise"), h.get("permissionDecisionReason", "")
+
+    def test_decoys_then_a_junction_into_reference_is_denied(self):
+        q = chr(39)
+        one = " ".join(q + self.W + "/f%d.xml" % i + q for i in range(64))
+        many = " ".join(q + self.W + "/d%d/f.xml" % i + q for i in range(64))
+        for decoys, why in ((one, "reference"), (many, "different folders")):
+            with self.subTest(why=why):
+                v, reason = self.verdict("touch " + decoys + " " + q + self.L + "/libraries/wares.xml" + q)
+                self.assertEqual(v, "deny", reason)
+                self.assertIn(why, reason)
+
+    def test_CONTROL_long_lists_with_no_junction(self):
+        q = chr(39)
+        v, reason = self.verdict("touch " + " ".join(q + self.W + "/f%d.xml" % i + q for i in range(200)))
+        self.assertEqual(v, "allow", reason)
+        v, reason = self.verdict("touch " + " ".join(q + self.W + "/d%d/f.xml" % i + q for i in range(65)))
+        self.assertEqual(v, "deny", reason)                 # fail closed: the guard cannot know there is no link
+        self.assertIn("different folders", reason)
+
+
+class TestSshChainWholeHookTime(unittest.TestCase):
+    """4.1.1 review round 7, 1, MEASURED at 9cd83006: the ssh advisory re-judged every spliced text with
+    the other ssh segments still in it, so `ssh a ls && ...` with 7 segments and an `rm -rf <ref>` took
+    33 s and 9 segments 128 s -- past the hook's 30 s timeout, where a hook does not block. The whole
+    hook must answer within 2 s of a plain command's time, with the payload's own verdict."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="x4psfe_"))
+        cls.ref = cls.tmp / "reference"
+        cls.ref.mkdir()
+        cls.env = _owned_env(cls.tmp, X4_REFERENCE=str(cls.ref), X4_CONFIG=str(cls.tmp / "none.env"))
+        cls.env.pop("CLAUDE_PROJECT_DIR", None)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def run_hook(self, command, args=(), raw=None):
+        import time
+        payload = raw if raw is not None else json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        t = time.perf_counter()
+        try:
+            # BYTES: text mode would turn the backend packet's newlines into CRLF on Windows.
+            p = subprocess.run([BASH, str(HOOKS / "protect-bash.sh"), *args], input=payload.encode("utf-8"),
+                               capture_output=True, env=self.env, timeout=120)
+        except subprocess.TimeoutExpired:
+            self.fail("protect-bash.sh still running after 120 s")
+        secs = time.perf_counter() - t
+        self.assertEqual(p.returncode, 0, p.stderr[-400:])
+        out = p.stdout.decode("utf-8", "replace")
+        hso = json.loads(out)["hookSpecificOutput"] if out.strip() else {}
+        self.last_reason = hso.get("permissionDecisionReason", "")
+        return hso.get("permissionDecision", "allow"), secs
+
+    def test_ssh_chains_answer_in_time(self):
+        ref = str(self.ref).replace(chr(92), "/")
+        _v, plain = self.run_hook("ls")
+        for n in (10, 20):
+            chain = " && ".join("ssh h%d ls" % i for i in range(n))
+            for tail, want in (("", "allow"), (" && rm -rf '" + ref + "'", "deny")):
+                verdict, secs = self.run_hook(chain + tail)
+                self.assertEqual(verdict, want, (n, tail))
+                self.assertLess(secs - plain, 2.0, "%d segments%s: %.1f s, plain %.1f s" % (n, tail, secs, plain))
+
+    def test_a_repeated_positional_fill_answers_in_time(self):
+        # 4.1.1 review round 8, F1, MEASURED at a933b5c0: n=400 denied after 38.3 s (past the 30 s
+        # timeout, where a hook does not block). Each must still deny, within 10 s of a plain command: fixed,
+        # n=600 - plain is 0.95-1.0 s idle (MEASURED 3 runs, 2026-11-08) and was 2.9 s on the Windows CI runner
+        # (3.2 s, plain 0.3 s; run 42517544460), so the earlier 2.5 s flaked. 10 s still fails the 38 s shape.
+        ref = str(self.ref).replace(chr(92), "/")
+        _v, plain = self.run_hook("ls")
+        for n in (400, 600):
+            cmd = ("sh -c 'echo " + " ".join(['"$@"'] * n) + "' _ " + " ".join("a%d" % i for i in range(n))
+                   + " && rm -rf '" + ref + "'")
+            verdict, secs = self.run_hook(cmd)
+            self.assertEqual(verdict, "deny", n)
+            self.assertLess(secs - plain, 10.0, "n=%d: %.1f s, plain %.1f s" % (n, secs, plain))
+
+    def test_a_find_sed_in_the_game_folder_names_the_edit_tool(self):
+        # Round 7, 4: the remedy for an in-place sed of game files is the edit tool, not XRCatTool.
+        game = self.env["X4_GAME"].replace(chr(92), "/")
+        verdict, _s = self.run_hook("find '" + game + "' -name '*.xml' -exec sed -i s/a/b/ {} +")
+        self.assertEqual(verdict, "deny")
+        self.assertIn("file-edit tool", self.last_reason)
+        # Twin: a move of the archives keeps the archive message.
+        verdict, _s = self.run_hook("find '" + game + "' -name '*.cat' -exec mv {} /c/o ';'")
+        self.assertEqual(verdict, "deny")
+        self.assertNotIn("file-edit tool", self.last_reason)
+
+    def test_an_analysis_past_its_deadline_is_a_deny(self):
+        # The backend reading the analyser's rc 6 (round 7, 1): refused, never allowed.
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}})
+        verdict, _s = self.run_hook(None, ("--harness-policy-backend", "--facts-stdin"),
+                                    raw="6\n" + payload + "\nthe deadline passed")
+        self.assertEqual(verdict, "deny")
+        # Twin: rc 0 with an empty fact stream for the same payload is not refused.
+        verdict, _s = self.run_hook(None, ("--harness-policy-backend", "--facts-stdin"),
+                                    raw="0\n" + payload + "\n__X4_COMMAND__\nls")
+        self.assertNotEqual(verdict, "deny")
+
+
 if __name__ == "__main__":
-    unittest.main()
+    _run = unittest.main(exit=False)
+    sys.exit((0 if _run.result.wasSuccessful() else 1) or translator_skip_ceiling(len(_TRANSLATOR_SKIPS)))

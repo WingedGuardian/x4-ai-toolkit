@@ -87,6 +87,26 @@ if [ -n "$_x4_kbin" ]; then
   done
 fi
 
+# DEPLOYED-TREE DRIFT (4.1.1). Do this root's .claude/, .codex/ and .agents/ still match what the toolkit
+# would deploy? Nothing compared them between deploys, so an undeployed toolkit update left every session
+# here on the old guards, silently. ONLY $X4_TOOLKIT's script (like the sweep below), run on THIS hook
+# tree's root; it caches by size+mtime in the folder above the hooks and logs its own elapsed time there.
+# Silent when in sync; one line when it cannot check (never a silence that reads as "in sync").
+# Any spelling of off, as the note below and both Python launchers read it: OFF started a launcher that then did nothing.
+_x4_switch_off() { case "$1" in [Oo][Ff][Ff]) return 0 ;; esac; return 1; }
+if ! _x4_switch_off "${X4_DEPLOY_DRIFT:-}"; then
+  _x4_dd="${X4_TOOLKIT:-}/scripts/x4deploydrift.py"
+  _x4_ddpy="$(x4_python)"
+  if [ -z "${X4_TOOLKIT:-}" ] || [ ! -f "$_x4_dd" ]; then
+    echo "[x4 deploy] could not check whether the deployed agent files match the toolkit: scripts/x4deploydrift.py not found under \$X4_TOOLKIT (${X4_TOOLKIT:-unset})."
+  elif [ -z "$_x4_ddpy" ]; then
+    echo "[x4 deploy] could not check whether the deployed agent files match the toolkit: no usable python."
+  else
+    "$_x4_ddpy" -B "$_x4_dd" "$HOOK_DIR/../.." --state "$HOOK_DIR/.." </dev/null 2>/dev/null \
+      || echo "[x4 deploy] could not check whether the deployed agent files match the toolkit: the check exited $?."
+  fi
+fi
+
 # Anchor personal notes to THIS hook tree, independently of inherited tool roots.
 # AFTER the GUARDS OFF banner (K7, v4.0 release review): preferences can run to 4 KiB, and
 # printed first they pushed the banner past the head the harness preview keeps (#38).
@@ -137,8 +157,6 @@ HK_NOTE="$HOOK_DIR/../housekeep-session.txt"
 HK=""
 [ -f "${X4_TOOLKIT:-}/scripts/x4housekeep.py" ] && HK="$X4_TOOLKIT/scripts/x4housekeep.py"
 _x4_hkpy="$(x4_python)"
-# Any spelling of off, as the note below and both Python launchers read it: OFF started a launcher that then did nothing.
-_x4_switch_off() { case "$1" in [Oo][Ff][Ff]) return 0 ;; esac; return 1; }
 if [ -n "$HK" ] && [ -n "$_x4_hkpy" ] && ! _x4_switch_off "${X4_HOUSEKEEP_SWEEP:-}" \
    && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
   ( "$_x4_hkpy" -B "$HK" session "$HK_NOTE" </dev/null >/dev/null 2>&1 & )

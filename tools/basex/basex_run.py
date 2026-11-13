@@ -103,3 +103,18 @@ def run_query(xquery: str, cwd: Path) -> tuple[int, str, str]:
         raise RuntimeError(f"BaseX output is not valid UTF-8 ({exc}); no result was "
                            f"accepted") from exc
     return out.returncode, text, err
+
+
+def run_command(command: str, cwd: Path) -> tuple[int, str]:
+    """Run one BaseX COMMAND (`ALTER DB a b`, `DROP DB a`, `INFO`) in *cwd*; return (returncode, output text).
+
+    A command travels as a `-c` ARGUMENT, the channel issue #7 moved queries off: the JVM decodes argv in the
+    platform charset. So only ASCII is accepted here -- dbswap's commands name the toolkit's own databases and
+    nothing else -- and anything else is refused rather than sent through a channel that may alter it.
+    """
+    if not command.isascii():
+        raise RuntimeError(f"refusing a non-ASCII BaseX command (argv is decoded in the platform charset): "
+                           f"{command!r}")
+    out = subprocess.run(["java", *JVM_PROPS, "-cp", "BaseX.jar", "org.basex.BaseX", "-c", command],
+                         cwd=cwd, capture_output=True, check=False, timeout=600)
+    return out.returncode, _text(out.stdout, "replace") + _text(out.stderr, "replace")

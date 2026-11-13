@@ -253,7 +253,7 @@ def _taken_before(path: Path, db: str) -> dict:
 
 
 def write(coverage_path: Path, reference: Path, extensions: Path,
-          engine_dir: Path, taken_before: Path | None = None) -> dict:
+          engine_dir: Path, taken_before: Path | None = None, db: str = "") -> dict:
     """Stamp *coverage_path* in place, preserving every existing key.
 
     Additive on purpose: `status` and `supports_negative_claim` are what make a
@@ -262,8 +262,12 @@ def write(coverage_path: Path, reference: Path, extensions: Path,
 
     `taken_before`: stamp the snapshot of the world the build read, and use it up (it describes that build and no
     later one; this process's own hand-off file). Never recomputed if unusable: that is the defect it exists to stop.
+
+    `db`: the database the fingerprint is FOR, when the report is not named after it. A build-then-swap build
+    (dbswap.py) reconciles `coverage-x4eff__next.json`, but the world it read is x4eff's: the snapshot was taken
+    for x4eff and x4eff's engine axis includes build-effective.py (ENGINE_EXTRA), which `x4eff__next` would miss.
     """
-    db = coverage_path.stem.replace("coverage-", "")
+    db = db or coverage_path.stem.replace("coverage-", "")
     fp = _taken_before(taken_before, db) if taken_before else fingerprint(reference, extensions, engine_dir, db)
     data = {}
     if coverage_path.is_file():
@@ -447,7 +451,7 @@ def main(argv=None) -> int:
     if args.write:
         try:
             fp = write(cov, reference, extensions, engine,
-                       Path(args.taken_before) if args.taken_before else None)
+                       Path(args.taken_before) if args.taken_before else None, db=args.db)
         except SnapshotUnusable as exc:
             print(f"cannot stamp {args.db}: {exc}", file=sys.stderr)
             return 6

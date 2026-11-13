@@ -231,10 +231,21 @@ decide ask protect-files.sh "$(fj "$GAME/extensions/deployed/x.xml")" "deployed 
 #      ...and a MANIFEST must reach it too: the manifest advisory sits above this rule
 #      and used to exit, so it never did (F84).
 decide ask protect-files.sh "$(fj "$GAME/extensions/deployed/content.xml")" "a deployed manifest still confirms"
+#      4.1.1 (user ruling): DLC content is GAME content in every layout -- an edit denies, never asks.
+decide deny protect-files.sh "$(fj "$GAME/extensions/ego_dlc_boron/libraries/wares.xml")" "a DLC file edit, no mods root: game content"
+decide deny protect-files.sh "$(fj "$GAME/extensions/EGO_DLC_Boron/content.xml")" "a DLC manifest edit, any spelling, no mods root"
 #  (b) mods root IS the extensions folder: the deployed copy IS the source, so this is
 #      ordinary work and must not prompt at all.
 export X4_MODS="$GAME/extensions"
 decide allow protect-files.sh "$(fj "$GAME/extensions/deployed/x.xml")" "deployed edit IS the source"
+#      ...but a DLC folder in that root is still the game's (4.1.1 user ruling): before, the
+#      mods-root whitelist allowed it (a manifest only advised).
+decide deny protect-files.sh "$(fj "$GAME/extensions/ego_dlc_boron/libraries/wares.xml")" "mods root = extensions: a DLC file edit denies"
+decide deny protect-files.sh "$(fj "$GAME/extensions/ego_dlc_boron/content.xml")" "mods root = extensions: a DLC manifest edit denies"
+decide deny protect-files.sh "$(fj "$GAME/extensions/ego_dlc_boron/../ego_dlc_split/t/0001-l044.xml")" "mods root = extensions: a dotted spelling into a DLC denies"
+#      Twins: a mod whose NAME merely contains ego_dlc below its first segment, and a mod beside it.
+decide allow protect-files.sh "$(fj "$GAME/extensions/probe/ego_dlc_x/x.xml")" "mods root = extensions: ego_dlc below a mod's own folder is the mod's"
+decide allow protect-files.sh "$(fj "$GAME/extensions/my_ego_dlc_fix/x.xml")" "mods root = extensions: a mod named *ego_dlc* is a mod"
 export X4_MODS="$_sm" X4_EXTENSIONS="$_se" X4_GAME="$_sg"
 
 
@@ -418,6 +429,162 @@ decide ask   protect-bash.sh "$(cj "rm -f '$X4_GAME/extensions/deployed/ext_01.c
 decide ask   protect-bash.sh "$(cj "DST='$X4_GAME/extensions/deployed'; rm -rf \"\$DST\"")"   "a variable deploy destination confirms, not blocks"
 decide advise protect-bash.sh "$(cj "rm -f '$X4_GAME/notes.txt'")"   "TWIN: a game-root file outside extensions/ keeps the advisory"
 decide advise protect-bash.sh "$(cj "rm -rf '$X4_GAME/.claude/backups/x'")"   "TWIN: the game's .claude/ keeps the advisory"
+
+# THE SHELL'S ARCHIVE BLOCK (4.1.1). protect-files.sh has always denied a write to these; every
+# shell form only advised, or said nothing for an append. A MOD's own archive keeps its verdict.
+_arc="$X4_GAME/01.dat"; _dlc="$X4_GAME/extensions/ego_dlc_boron"; _mod="$X4_GAME/extensions/deployed"
+decide deny   protect-bash.sh "$(cj "echo x > '$_arc'")"             "archive: truncating redirect"
+decide deny   protect-bash.sh "$(cj "echo x >> '$_arc'")"            "archive: append, which no rule saw"
+decide deny   protect-bash.sh "$(cj "echo x | tee '$_arc'")"         "archive: tee"
+decide deny   protect-bash.sh "$(cj "cp a '$_arc'")"                 "archive: cp destination"
+decide deny   protect-bash.sh "$(cj "cp /c/o/01.dat '$X4_GAME/'")"   "archive: cp into the folder under that name"
+decide deny   protect-bash.sh "$(cj "mv a '$_arc'")"                 "archive: mv destination"
+decide deny   protect-bash.sh "$(cj "mv '$_arc' /c/o/x")"            "archive: mv source"
+decide deny   protect-bash.sh "$(cj "rm '$_arc'")"                   "archive: rm"
+decide deny   protect-bash.sh "$(cj "truncate -s 0 '$_arc'")"        "archive: truncate"
+decide deny   protect-bash.sh "$(cj "dd if=a of='$_arc'")"           "archive: dd of="
+decide deny   protect-bash.sh "$(cj "install a '$_arc'")"            "archive: install"
+decide deny   protect-bash.sh "$(cj "rsync a '$_arc'")"              "archive: rsync destination"
+decide deny   protect-bash.sh "$(cj "robocopy /c/o '$X4_GAME' 01.dat")" "archive: robocopy by name"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' -delete")" "archive: filtered find -delete"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' | xargs rm")" "archive: find piped to xargs rm"
+decide deny   protect-bash.sh "$(cj "rm '$X4_GAME/01.DAT'")"         "archive: any case"
+decide deny   protect-bash.sh "$(cj "rm '$_dlc/ext_01.cat'")"        "DLC archive: rm, which only asked"
+decide deny   protect-bash.sh "$(cj "echo x > '$_dlc/ext_01.dat'")"  "DLC archive: redirect"
+decide deny   protect-bash.sh "$(cj "rm -rf '$_dlc'")"               "a whole DLC folder, as the file tools refuse it"
+decide allow  protect-bash.sh "$(cj "sha256sum '$_arc'")"            "TWIN: hashing an archive reads it"
+decide allow  protect-bash.sh "$(cj "cp '$_arc' /c/o/x")"            "TWIN: copying an archive OUT reads it"
+decide allow  protect-bash.sh "$(cj "XRCatTool -in '$_arc' -out /c/o/x")" "TWIN: XRCatTool reading an archive"
+decide advise protect-bash.sh "$(cj "cp a '$_mod/ext_01.cat'")"      "TWIN: packing into a mod keeps the deploy advisory"
+decide advise protect-bash.sh "$(cj "echo x > '$_mod/ext_01.dat'")"  "TWIN: a redirect into a mod's archive keeps its advisory"
+decide allow  protect-bash.sh "$(cj "echo x >> '$_mod/ext_01.dat'")" "TWIN: an append to a mod's archive stays as it was"
+decide allow  protect-bash.sh "$(cj "python dev/_tools/deploy.py deployed")" "TWIN: deploy.py itself"
+decide deny   protect-bash.sh "$(cj "rm -rf '$_dlc/libraries'")"     "a DLC subfolder: game content, not a mod (user 2026-11-05)"
+decide deny   protect-bash.sh "$(cj "rm '$_dlc/content.xml'")"       "a DLC's content.xml: game content, not a mod (user 2026-11-05)"
+decide ask    protect-bash.sh "$(cj "rm -rf '$_mod/libraries'")"     "TWIN: a deployed mod's subfolder keeps its confirmation"
+decide advise protect-bash.sh "$(cj "cp a '$X4_GAME/notes.txt'")"    "TWIN: a plain game-root file keeps the deploy advisory"
+decide advise protect-bash.sh "$(cj "cp /c/o/notes.txt '$X4_GAME/'")" "TWIN: another name into the folder keeps it too"
+# 4.1.1 review rows: a find expression is read whole and a -regex is never run; option words and
+# an xargs -I destination elsewhere are not targets; no configured game root uses the folder name.
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -regex '.*\.\(cat\|dat\)' -delete")" "archive: find -regex in GNU's escaped-group spelling"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' ! \( -name '*.xml' \) -delete")" "archive: find with a negated group"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.xml' -prune -o -delete")" "archive: find whose OR branch deletes with no test"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' | xargs -I{} rm {}")" "archive: find to xargs -I rm of the item itself"
+decide advise protect-bash.sh "$(cj "find '$X4_GAME' -name '*.xml' -delete")" "TWIN: find -name '*.xml' -delete keeps its advisory"
+decide advise protect-bash.sh "$(cj "find '$X4_GAME' -regex '(.*)*zzz' -delete")" "TWIN: a backtracking -regex is not run and keeps its advisory"
+decide advise protect-bash.sh "$(cj "rsync -a --exclude='*.dat' src/ '$X4_GAME/'")" "TWIN: an rsync exclude pattern is not a target"
+decide advise protect-bash.sh "$(cj "robocopy src '$X4_GAME' /E /XF *.dat")" "TWIN: a robocopy /XF pattern is not a target"
+decide advise protect-bash.sh "$(cj "ls '$X4_GAME' | xargs -I{} rm /c/o/backup/{}")" "TWIN: ls to xargs -I rm into another folder"
+decide advise protect-bash.sh "$(cj "find '$X4_GAME' | xargs -I{} rm /c/o/backup/{}")" "TWIN: find to xargs -I rm into another folder"
+# 4.1.1 review round 2: no list of archive names, a recursive delete of a found DLC folder, no path
+# is `.`, -exec through a wrapper, a second install by its folder name.
+_ven="$X4_GAME/extensions/ego_dlc_ventures"
+decide deny   protect-bash.sh "$(cj "rm '$_ven/'ext_v7*")"            "archive: a DLC stem no list named (ext_v710)"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name ext_03_diff_v900.dat -delete")" "archive: find -name for an unlisted stem"
+decide deny   protect-bash.sh "$(cj "ls '$_ven/'ext_v7* | xargs rm")" "archive: a listing of unlisted stems to xargs rm"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME/extensions' -maxdepth 1 -name 'ego_dlc_*' -exec rm -rf {} +")" "a found DLC folder, deleted recursively"
+decide deny   protect-bash.sh "$(cj "cd '$X4_GAME' && find -name '*.dat' -delete")" "archive: find with no path searches the current folder"
+decide deny   protect-bash.sh "$(cj "cd '$X4_GAME' && ls | xargs rm")"  "archive: a bare ls lists the current folder"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name 01.dat -exec env rm {} +")" "archive: -exec env rm"
+decide deny   protect-bash.sh "$(cj "rm '/d/SteamLibrary/steamapps/common/X4 Foundations/01.dat'")" "archive: a second install, by its folder name"
+decide ask    protect-bash.sh "$(cj "find '$X4_GAME/extensions' -maxdepth 1 -name deployed -exec rm -rf {} +")" "TWIN: a found mod folder keeps its confirmation"
+decide allow  protect-bash.sh "$(cj "cd '$X4_GAME' && find -name '*.xml' -delete")" "TWIN: no path, another name is not an archive (the in-tree advisory never read a path-less find: F356)"
+decide allow  protect-bash.sh "$(cj "find '$X4_GAME' -name 01.dat -exec env sha256sum {} +")" "TWIN: -exec env of a reader"
+decide allow  protect-bash.sh "$(cj "cd '$X4_GAME' && git status")"  "TWIN: git status in the game folder"
+decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")" "TWIN: with a game root, another game's .dat"
+# 4.1.1 review round 3: a POSIX class, a globbed install folder, a Steam library, -maxdepth, any
+# file a DLC holds from extensions/, a name filled in at run time.
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.[[:alpha:]]at' -delete")" "archive: a POSIX class in a -name"
+decide deny   protect-bash.sh "$(cj "rm /d/Backup/X4*Foundations/01.cat")" "archive: a globbed install folder name"
+decide deny   protect-bash.sh "$(cj "find /d/SteamLibrary/steamapps/common -name '*.cat' -delete")" "archive: a find over a Steam library"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME/extensions' -name content.xml -delete")" "a find at extensions/ reaches every DLC's files (user 2026-11-05)"
+decide deny   protect-bash.sh "$(cj "ls '$X4_GAME' | while read f; do rm '$X4_GAME/'\"\$f\"; done")" "archive: a name filled in at run time (user 2026-11-05)"
+decide ask    protect-bash.sh "$(cj "find '$X4_GAME/extensions' -maxdepth 1 -name 'zzz_mine_*' -exec rm -rf {} +")" "TWIN: -maxdepth 1 reaches mod folders, not a DLC's archives"
+decide allow  protect-bash.sh "$(cj "find /d/SteamLibrary/steamapps/common -name '*.txt' -delete")" "TWIN: a find over a Steam library for other files"
+decide allow  protect-bash.sh "$(cj "rm /d/Backup/*/01.cat")" "TWIN: a bare * folder is not read as the install name (F356)"
+decide ask    protect-bash.sh "$(cj "find '$_mod' -name '*.bak' -delete")" "TWIN: a find in one mod keeps its confirmation"
+# 4.1.1 review round 4: the find's root at depth 0, an escaped -exec terminator, a globbed install
+# name as the last segment, a run-time folder in the game folder.
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -maxdepth 0 -print0 | xargs -0 rm -rf")" "a depth-0 root removed whole: the game folder"
+decide deny   protect-bash.sh "$(cj "cd '$X4_GAME/extensions' && find . -maxdepth 0 | xargs rm -rf")" "a depth-0 root removed whole: extensions/ from its own folder"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' -exec echo hi \\; -delete")" "archive: an action after an escaped -exec terminator"
+decide deny   protect-bash.sh "$(cj "find /d/Games/X4*Foundations -name '*.cat' -delete")" "archive: a find rooted at a globbed install name"
+decide deny   protect-bash.sh "$(cj "rm '$X4_GAME/'\"\$f\"'/01.cat'")" "archive: a run-time folder directly in the game folder"
+decide ask    protect-bash.sh "$(cj "find '$_mod' -maxdepth 0 -exec rm -rf {} +")" "TWIN: a depth-0 mod folder keeps its confirmation"
+decide advise protect-bash.sh "$(cj "find '$X4_GAME' -maxdepth 0 | xargs rm")" "TWIN: a depth-0 root a plain rm cannot remove"
+decide allow  protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' -exec sha256sum {} \\;")" "TWIN: an escaped terminator with nothing deleting after it"
+# 4.1.1 review round 5: a carrier that joins its words for a shell re-reads an escaped separator;
+# eval keeps its command's flags; the depth-0 root is a folder.
+decide deny   protect-bash.sh "$(cj "watch -n1 echo a\\; rm -rf '$X4_REFERENCE'")" "watch joins for a shell: an escaped ; separates"
+decide deny   protect-bash.sh "$(cj "wsl echo a\\; git add -A")" "wsl joins for a shell: an escaped ; separates"
+decide deny   protect-bash.sh "$(cj "ssh localhost echo a\\&\\& rm -rf '$X4_REFERENCE'")" "ssh to this machine: an escaped && separates"
+decide deny   protect-bash.sh "$(cj "eval git add -A")" "eval keeps the flags of the command it runs"
+decide allow  protect-bash.sh "$(cj "watch -x echo a\\; rm -rf '$X4_REFERENCE'")" "TWIN: watch -x runs its words directly"
+decide allow  protect-bash.sh "$(cj "nohup echo a\\; git add -A")" "TWIN: nohup runs its words directly"
+decide allow  protect-bash.sh "$(cj "eval git add -p")" "TWIN: eval of an ordinary git add"
+decide advise protect-bash.sh "$(cj "find '$X4_GAME' -maxdepth 0 -type f | xargs rm -rf")" "TWIN: a depth-0 root a -type f skips"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -maxdepth 0 -type d | xargs rm -rf")" "a depth-0 root a -type d matches"
+# 4.1.1 review round 6 (GitHub issue #18): a find's -exec command is a command of its own; wrappers
+# that run their argv carry it; a destructive command to an ssh host the guard cannot place is advised.
+decide deny   protect-bash.sh "$(cj "find . -exec rm -rf '$X4_REFERENCE' \;")" "find -exec: the command itself is judged"
+decide deny   protect-bash.sh "$(cj "find . -execdir git add -A \;")" "find -execdir: git add -A is judged"
+decide deny   protect-bash.sh "$(cj "find . -exec sh -c 'rm -rf \"$X4_REFERENCE\"' {} +")" "find -exec: a shell's text is judged"
+decide deny   protect-bash.sh "$(cj "sshpass -p x ssh localhost rm -rf '$X4_REFERENCE'")" "sshpass runs the ssh it is given"
+decide deny   protect-bash.sh "$(cj "torsocks git add -A")" "torsocks runs its argv"
+decide deny   protect-bash.sh "$(cj "start wsl echo a\; git add -A")" "start runs wsl, which joins for a shell"
+decide deny   protect-bash.sh "$(cj "foo ssh localhost echo a\; git add -A")" "an unknown wrapper before ssh: the ssh is read"
+decide advise protect-bash.sh "$(cj "ssh otherhost rm -rf '$X4_REFERENCE'")" "ssh to a host the guard cannot place: advised"
+decide allow  protect-bash.sh "$(cj "find . -name '*.pyc' -exec rm {} +")" "TWIN: a cache cleanup through find -exec"
+decide allow  protect-bash.sh "$(cj "find . -exec grep -l x {} +")" "TWIN: find -exec of a reader"
+decide allow  protect-bash.sh "$(cj "sshpass -p x ssh otherhost ls")" "TWIN: sshpass to another host, a harmless command"
+decide allow  protect-bash.sh "$(cj "ssh otherhost ls")" "TWIN: ssh to another host, a harmless command"
+decide allow  protect-bash.sh "$(cj "valgrind ./a.out")" "TWIN: valgrind of a program"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' -exec mv {} /c/o \\;")" "find -exec mv of what it finds: an archive moved away"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' | xargs sed -i s/a/b/")" "find | xargs sed -i: an archive rewritten"
+decide allow  protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' -exec cp {} /c/backup/ \\;")" "TWIN: find -exec copying archives OUT"
+decide allow  protect-bash.sh "$(cj "find '$X4_GAME' -name '*.dat' | xargs cp -t /c/backup")" "TWIN: find | xargs cp -t copying archives OUT"
+# 4.1.1 review round 7: the ssh advisory is bounded; sh -c positional parameters; replacing compressors;
+# pass-on filters between find and xargs; gfind and fd -x.
+_ch="ssh h0 ls && ssh h1 ls && ssh h2 ls && ssh h3 ls && ssh h4 ls && ssh h5 ls && ssh h6 ls && ssh h7 ls && ssh h8 ls && ssh h9 ls"
+decide deny   protect-bash.sh "$(cj "$_ch && rm -rf '$X4_REFERENCE'")" "ten ssh segments, then a delete of reference/: denied in time"
+decide allow  protect-bash.sh "$(cj "$_ch")" "TWIN: ten harmless ssh segments"
+decide deny   protect-bash.sh "$(cj "sh -c 'rm -rf \"\$1\"' _ '$X4_REFERENCE'")" "sh -c reads its positional parameters"
+decide deny   protect-bash.sh "$(cj "gzip '$X4_GAME/01.cat'")" "gzip replaces an archive"
+decide allow  protect-bash.sh "$(cj "gzip -k '$X4_GAME/01.cat'")" "TWIN: gzip -k keeps it"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' | sort | xargs mv -t /c/o")" "find | sort | xargs mv: archives moved away"
+decide deny   protect-bash.sh "$(cj "gfind '$X4_GAME' -name '*.cat' -delete")" "gfind is find"
+decide deny   protect-bash.sh "$(cj "fd . '$X4_REFERENCE' -x rm")" "fd -x runs a command per result"
+# 4.1.1 review round 8: a bounded positional fill; positionals through a variable; option values of
+# replacing programs; sed between find and xargs; fd's reach test.
+_at=""; for _i in $(seq 400); do _at="$_at \"\$@\""; done
+decide deny   protect-bash.sh "$(cj "sh -c 'echo$_at' _ $(seq -s ' ' 400) && rm -rf '$X4_REFERENCE'")" "400 repeated \"\$@\" fills, then a delete of reference/: denied in time"
+decide deny   protect-bash.sh "$(cj "sh -c 'd=\$1; rm -rf \"\$d\"' _ '$X4_REFERENCE'")" "a positional through a variable"
+decide deny   protect-bash.sh "$(cj "gzip -S.lck '$X4_GAME/01.cat'")" "gzip with an attached suffix value replaces an archive"
+decide deny   protect-bash.sh "$(cj "find '$X4_GAME' -name '*.cat' | sed s/x/y/ | xargs mv -t /c/o")" "find | sed | xargs mv: archives moved away"
+decide deny   protect-bash.sh "$(cj "fd . '$X4_GAME' -x rm")" "fd -x rm in the game folder: the find reach test"
+decide allow  protect-bash.sh "$(cj "zip /c/o/a.zip '$X4_GAME/01.cat'")" "TWIN: zip without -m copies an archive out"
+# 4.1.1 literal-dollar port (6cbeb825, 51129cde, ed667b4a): a `$` literal in every layer is part of
+# the name (the sibling of reference/); any layer that may expand it, or re-run the word, keeps it unknown.
+decide deny   protect-bash.sh "$(cj "sh -c 'rm -rf \"$X4_REFERENCE\$x\"'")" "literal \$: an inner shell that expands it keeps it unknown"
+decide deny   protect-bash.sh "$(cj "rm(){ eval command rm \"\$@\"; }; rm -rf '$X4_REFERENCE\$x'")" "literal \$: a function that may re-run the word keeps it unknown"
+decide deny   protect-bash.sh "$(cj "rm -rf \$'$X4_REFERENCE\\x00junk'")" "an ANSI-C word ends at its NUL"
+decide deny   protect-bash.sh "$(cj "sudo -su root rm -rf '$X4_REFERENCE'")" "a sudo flag cluster takes its value"
+decide advise protect-bash.sh "$(cj "rm -rf '$X4_REFERENCE\$x'")" "TWIN: a single-quoted \$ names the sibling of reference/ (a toolkit delete: advised)"
+decide advise protect-bash.sh "$(cj "bash -c \"rm -rf '$X4_REFERENCE\\\$x'\"")" "TWIN: a \$ literal in both layers names the sibling"
+_sg="$X4_GAME"; _se="$X4_EXTENSIONS"; export X4_GAME="" X4_EXTENSIONS=""
+decide deny   protect-bash.sh "$(cj "rm '/c/games/X4 Foundations/01.dat'")" "archive: no game root configured, the install's folder name"
+decide allow  protect-bash.sh "$(cj "rm '/c/games/Other Game/01.dat'")"     "TWIN: no game root, another game's .dat"
+export X4_GAME="$_sg" X4_EXTENSIONS="$_se"
+if command -v pwsh >/dev/null 2>&1 || command -v powershell >/dev/null 2>&1; then
+  _psq(){ printf '{"tool_name":"PowerShell","tool_input":{"command":%s}}' "$(printf '%s' "$1" | jq -Rs .)"; }
+  decide deny protect-bash.sh "$(_psq "Remove-Item '$_arc'")"        "archive: Remove-Item"
+  decide deny protect-bash.sh "$(_psq "Set-Content '$_arc' x")"      "archive: Set-Content"
+  decide deny protect-bash.sh "$(_psq "Copy-Item a '$_dlc/ext_01.cat'")" "DLC archive: Copy-Item"
+  decide ask  protect-bash.sh "$(_psq "Remove-Item '$_mod/ext_01.cat'")" "TWIN: Remove-Item in a mod keeps its confirmation"
+else
+  skip "archive: Remove-Item (no PowerShell)"; skip "archive: Set-Content (no PowerShell)"
+  skip "DLC archive: Copy-Item (no PowerShell)"; skip "TWIN: Remove-Item in a mod (no PowerShell)"
+fi
 decide ask   protect-bash.sh "$(cj "rm -rf '$X4_GAME/extensions/a' '$X4_GAME/extensions/b/x' '$X4_GAME/extensions/c'")"   "several deployed mods in one command confirm"
 # ...ONCE, naming every mod (user 2026-10-27): one prompt per command, never per file.
 _mm=$(cj "rm -rf '$X4_GAME/extensions/a' '$X4_GAME/extensions/b/x' '$X4_GAME/extensions/c' '$X4_GAME/extensions/a/y'" | bash "$HOOKS/protect-bash.sh" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
@@ -598,7 +765,18 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 
 
 # Two new file cases in each layout, plus two shell cases: 333 + 2*2 + 2.
-EXPECT=339
+# The archive block adds 19 denies + 10 twins + 4 PowerShell: 339 + 33.
+# The 4.1.1 review rows add 5 denies + 7 twins: 372 + 12.
+# Round 2 adds 9 denies (8 rows and a DLC's content.xml) + 6 twins (5 rows and a mod subfolder's
+# ask); the DLC subfolder probe flipped from ask to deny is not new: 384 + 15.
+# Round 3 adds 5 denies + 4 twins: 399 + 9.
+# Round 4 adds 5 denies + 3 twins: 408 + 8.
+# Round 5 adds 5 denies + 4 twins: 416 + 9.
+# Round 6 adds 7 denies + 1 advisory + 5 twins: 425 + 13; its find-write part 2 denies + 2 twins: 438 + 4.
+# Round 7 adds 6 denies + 2 twins: 442 + 8.
+# Round 8 adds 5 denies + 1 twin: 450 + 6.
+# The literal-dollar port adds 4 denies + 2 twins (advised, not denied): 456 + 6.
+EXPECT=469
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written

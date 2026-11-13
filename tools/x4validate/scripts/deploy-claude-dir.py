@@ -383,8 +383,8 @@ def is_guard(name: str) -> bool:
     return "hooks" in parts or "rules" in parts or name in ("settings.json", ".codex/hooks.json")
 
 
-#: Why no commit can be checked at all: an install from a release zip, or no git on PATH. Telling that copy to push to a
-#: ci/ branch would be advice it cannot follow.
+#: Why no commit can be checked at all: an install from a release zip, or no git on PATH. Telling that copy to open a
+#: pull request would be advice it cannot follow.
 NO_COMMIT = "this toolkit copy is not a git checkout (a release zip, or git cannot run here), so it has no commit to check"
 #: A conclusion that says CI ran on this commit and did not pass. Anything else without a success is no answer.
 CI_RED = {"failure", "timed_out", "startup_failure"}
@@ -584,7 +584,8 @@ def main(argv: list[str] | None = None) -> int:
                 remedy = ("If this copy came from a release you trust, re-run with --unverified-guards REASON, "
                           "naming the release." if why == NO_COMMIT else
                           "Fix what git says first, or pass --unverified-guards REASON." if "git could not read" in why
-                          else "Push it to a ci/ branch first, or pass --unverified-guards REASON.")
+                          else "Open a pull request for it and mark it ready for review, so the full "
+                          "qualification runs CI on this commit, or pass --unverified-guards REASON.")
                 print(f"REFUSING: this deploy changes guard code ({', '.join(guards)}) and {why}. Guard "
                       f"changes go live only after review and a green CI run on the exact commit. Nothing "
                       f"was written. {remedy}", file=sys.stderr)

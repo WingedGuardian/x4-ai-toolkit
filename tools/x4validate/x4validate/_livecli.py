@@ -453,12 +453,29 @@ def _agree(a: str, b: str) -> bool:
     return abs(fa - fb) <= max(abs(fa), abs(fb)) * 1e-6 + 1e-9
 
 
+#: Duplicated macro names `_store_props` has already announced this run.
+_ANNOUNCED_DUPLICATES: set[str] = set()
+
+
 def _store_props(con, macro: str) -> dict[str, str] | None:
-    """Every effective property of *macro*, or None when the store has no such entity."""
-    ent = con.execute("SELECT id FROM entities WHERE kind=? AND name=?",
-                      ("macro", macro)).fetchone()
-    if ent is None:
+    """Every effective property of *macro*, or None when the store has no such entity.
+
+    Several entities can share the name (issue #17: a nested full copy MERGES, so one
+    document holds two same-named macros with different values). The lowest id is
+    taken -- deterministic, copy [1] in document order -- and the choice is ANNOUNCED
+    on stderr, never made silently."""
+    ents = con.execute("SELECT * FROM entities WHERE kind=? AND name=? ORDER BY id",
+                       ("macro", macro)).fetchall()
+    if not ents:
         return None
+    ent = ents[0]
+    if len(ents) > 1 and macro not in _ANNOUNCED_DUPLICATES:
+        _ANNOUNCED_DUPLICATES.add(macro)        # once per name per run, not per lookup
+        print(f"NOTE: {len(ents)} entities share the macro name {macro!r} "
+              f"(ids {', '.join(str(e['id']) for e in ents)}); using id={ent['id']} "
+              f"({ent['vpath'] if 'vpath' in ent.keys() else '?'}), the first in the "
+              "store. Which one the engine uses is "
+              "UNMEASURED.", file=sys.stderr)
     rows = con.execute("SELECT prop, value FROM attrs WHERE entity_id=?",
                        (ent["id"],)).fetchall()
     return {r["prop"]: r["value"] for r in rows}

@@ -98,6 +98,19 @@ x4_file_name_match() {
   return "$rc"
 }
 
+# A typed delete (tool_name DeleteFile), never the internal write-only batch. Removal semantics
+# come from the tool name only, never from free-form tool_input metadata.
+x4_typed_delete() {
+  [ "$_X4_FILE_BATCH" = 0 ] || return 1
+  if [ "${JQ_OK:-0}" = 1 ]; then
+    printf '%s' "$INPUT" | "$JQ" -e '.tool_name == "DeleteFile"' >/dev/null 2>&1
+  elif [ -n "$PY" ]; then
+    X4_IN="$INPUT" "$PY" -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["X4_IN"]).get("tool_name") == "DeleteFile" else 1)' >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
 x4_file_policy() {
 # === HARD BLOCK — read-only reference data (unpacked base game, never edit) ===
 # X4_REFERENCE defaults to $X4_TOOLKIT/reference, so this covers the default layout too.
@@ -314,7 +327,34 @@ esac
 # Both workspace branches below only allow. Test the configured mod root first
 # so an ordinary mod file need not traverse unrelated toolkit subdirectories.
 # All hard blocks, transcript checks and advisories above still run first.
-x4_under "$FILE_PATH" "${X4_MODS:-}" && return 0
+# 4.1.1 (user ruling): DLC content is GAME content, in every layout. An official DLC folder
+# (`extensions/ego_dlc_*`, the FIRST segment below the extensions root, judged on the canonical
+# path so no spelling, `..` or link reaches past it) is denied for a write, an edit and a delete
+# -- before the mods-root whitelist below, which allowed it when X4_MODS is the extensions folder
+# (a manifest there was only advised), and before the deployed-mod ask when no mods root is set.
+# Same first-segment test as the typed-delete branch below and _merge.is_dlc_folder. The roots
+# are X4_EXTENSIONS and, when that is unset, the game's own extensions/ (a mods root set to it
+# with X4_EXTENSIONS unset reached the whitelist too). COST: the canonical file path is already
+# memoised; only a path whose canonical form names an ego_dlc_ segment pays for the roots.
+x4_canon_memo "$FILE_PATH"; _dlc_fp="$_X4_CANON_RESULT"
+case "$_dlc_fp" in
+  */ego_dlc_*)
+    for _dlc_r in "${X4_EXTENSIONS:-}" "${X4_GAME:+${X4_GAME%[/\\]}/extensions}"; do
+      [ -n "$_dlc_r" ] || continue
+      x4_canon_memo "$_dlc_r"; _dlc_root="${_X4_CANON_RESULT%/}"
+      [ -n "$_dlc_root" ] || continue
+      case "$_dlc_fp" in "$_dlc_root"/*) ;; *) continue ;; esac
+      _dlc_seg="${_dlc_fp#"$_dlc_root"/}"
+      case "${_dlc_seg%%/*}" in
+        ego_dlc_*) deny "BLOCKED: $FILE_PATH is DLC content, which belongs to the game install, not a mod: never written, edited or deleted. Patch it from your own mod (a diff at extensions/<dlc>/... inside your mod folder); use Steam to manage a DLC."; return 0 ;;
+      esac
+    done ;;
+esac
+# 4.1.1 (user ruling): a mods root AT or above the extensions folder must not whitelist a typed
+# delete there -- the extensions block below denies the whole folder and a DLC, and asks for a mod.
+if x4_under "$FILE_PATH" "${X4_MODS:-}"; then
+  x4_under "$FILE_PATH" "$X4_EXTENSIONS" && x4_typed_delete || return 0
+fi
 x4_canon_memo "$X4_TOOLKIT"; _tkc="${_X4_CANON_RESULT%/}"
 x4_canon_memo "$FILE_PATH";  _fpc="$_X4_CANON_RESULT"
 for sub in "${_X4_WORK_SUBS[@]}"; do
@@ -416,13 +456,7 @@ if x4_under "$FILE_PATH" "$X4_EXTENSIONS"; then
   # check. Never take removal semantics from free-form tool_input metadata, and
   # never let the internal write-only batch borrow them.
   local _deployed_delete=0
-  if [ "$_X4_FILE_BATCH" = 0 ]; then
-    if [ "${JQ_OK:-0}" = 1 ]; then
-      printf '%s' "$INPUT" | "$JQ" -e '.tool_name == "DeleteFile"' >/dev/null 2>&1 && _deployed_delete=1
-    elif [ -n "$PY" ]; then
-      X4_IN="$INPUT" "$PY" -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["X4_IN"]).get("tool_name") == "DeleteFile" else 1)' >/dev/null 2>&1 && _deployed_delete=1
-    fi
-  fi
+  x4_typed_delete && _deployed_delete=1
   if [ "$_deployed_delete" = 1 ]; then
     # Only a deployed MOD is a retirement. The whole extensions folder and a DLC stay blocked,
     # judged by the CANONICAL target (x4_under above followed any junction or symlink), so no

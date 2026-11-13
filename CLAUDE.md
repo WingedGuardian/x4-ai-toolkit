@@ -131,7 +131,7 @@ Search with **Glob** for file names and the **Grep** tool for contents (never `g
 
 ### Hard blocked
 - Writing to `reference\` (read-only base game data, ever)
-- Directly writing `.cat` / `.dat` files (use XRCatTool)
+- Writing, moving or deleting a base-game or DLC `.cat` / `.dat` (use XRCatTool)
 - `sed -i` on a game or profile file (edit through your file-edit tool, which is backed up first)
 - Deleting the game installation folder itself (or its whole `extensions` folder), or anything in
   `reference\`

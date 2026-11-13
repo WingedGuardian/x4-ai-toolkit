@@ -39,6 +39,7 @@ import itertools
 import importlib.util
 import re
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -68,6 +69,9 @@ _PROVIDER = re.compile(r"^(microsoft[.]powershell[.]core/)?filesystem::")
 _SLASHES = re.compile(r"/{2,}")
 
 
+_POSIX_CLASS = re.compile(r"\[:[A-Za-z]*:\]")
+
+
 def _win_alias(s: str) -> str:
     """Each `/`-separated component as WINDOWS opens it: an NTFS stream suffix dropped
     (`x::$DATA` IS x, `dir::$INDEX_ALLOCATION` IS dir, `x:alt` is a stream OF x) and trailing
@@ -84,7 +88,9 @@ def _win_alias(s: str) -> str:
     out = []
     for n, c in enumerate(s.split("/")):
         if c and c not in (".", ".."):
-            i = c.find(":")
+            # A glob's POSIX class (`X4[[:space:]]Foundations`) is not a stream: no Windows name
+            # holds a colon, so `[:name:]` can only be a pattern (4.1.1 review round 3, C).
+            i = _POSIX_CLASS.sub(lambda m: "#" * len(m.group()), c).find(":")
             # Not in the FIRST component of a relative token: there a colon is a drive-relative
             # `C:x` or a command NAME (verb() reads names through norm -- `C:toolsrm` must stay
             # that word, test_an_UNQUOTED_windows_path_is_not_that_command_at_all). A relative
@@ -127,6 +133,210 @@ def long_name(p: str) -> str:
     except Exception:
         pass
     return p
+
+
+def link_resolved(p: str, literal: bool = False, refuse: bool = True) -> str:
+    """The path a write or delete of `p` reaches through an EXISTING link on it (a symlink or a Windows
+    junction), when that differs from `p` as written; "" when nothing on it is a link, it is not an
+    absolute drive path, or the filesystem cannot answer -- which, when `refuse`, also sets links_unresolved
+    (a realpath that raised, a leaf lstat that failed with realpath showing no link); a realpath that only
+    respells `p` (an 8.3 short name expanded) is no link (4.1.1 final round, F360). MEASURED at 7f4895a2: `>`, `touch` and `rm` through a junction into reference/ were allowed (3 of 3) while
+    the file tools, which canonicalise, denied. The caller judges this path IN ADDITION to the
+    lexical one, so the stricter verdict stands. os.path.realpath resolves the longest existing
+    prefix and keeps the rest as written (non-strict); a UNC or device path is left lexical.
+
+    `literal`: the caller knows every `$` in `p` is a literal character (single-quoted or escaped), so
+    has_unresolved() does not apply. On Windows each component is resolved as Windows opens it
+    (_win_alias: an NTFS stream suffix and trailing dots/spaces dropped). 4.1.1 review (link budget round
+    2), MEASURED at a70dcedd: `touch '<junction>/libraries/wares.xml::$DATA'` read writes_reference False,
+    because has_unresolved() read the literal `$DATA` as a variable, and `touch '<junction>:s'` (a write
+    to it lands in a stream of the TARGET folder, MEASURED) False, because the leaf lstat'd as no link.
+    `refuse=False` (operands only read checks use): past the budget the path is left lexical WITHOUT
+    setting links_unresolved -- no write or delete verdict reads such an operand."""
+    if not p or (not literal and has_unresolved(p)) or not is_abs(p):
+        return ""
+    s = p.replace(chr(92), "/")
+    if os.name == "nt":
+        s = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", s)
+        if not re.match(r"^[A-Za-z]:/", s):
+            return ""
+        s = _win_alias(s)
+        # 4.1.1 review A1: a realpath cannot be interrupted, and on a drive mapped to an offline server
+        # one took 21 s (MEASURED: realpath of an unreachable UNC path), so two such operands outran the
+        # hook's 30 s and the call failed OPEN. Only a local drive is resolved.
+        if _drive_type(s[0]) not in _LOCAL_DRIVE_TYPES:
+            return ""
+    # Bounded per hook call, and inside the analysis deadline (past it the command is refused). The folder
+    # is resolved once per hook call (cached), and the last component is followed only when lstat says it
+    # is a link, so a long list of files in a few folders spends a few resolutions. 4.1.1 review (link
+    # budget), MEASURED at 5404046c: past the bound this returned "" -- "no link" -- silently, so 64 local
+    # decoys before a junction operand made a write into reference/ read as allowed. An operand past the
+    # bound now sets links_unresolved, which the hook REFUSES: it is never read as "no link". The analysis
+    # deadline is checked before EACH uninterruptible call (every realpath, every lstat).
+    head, leaf = posixpath.split(s)
+    unknown = False
+    if (not leaf or leaf in (".", "..") or _SHORT_NAME.search(leaf)
+            or any(c in (".", "..") for c in head.split("/"))):
+        real = _realpath_budgeted(s, refuse)    # dot segments / a short leaf: the whole path, as before
+    else:
+        if head.endswith(":"):
+            head += "/"                     # `C:` alone is the drive's CURRENT folder, never its root
+        rhead = _LINK_DIRS.get(head)
+        if rhead is None:
+            rhead = _realpath_budgeted(head, refuse)
+            if rhead is None:
+                return ""
+            _LINK_DIRS[head] = rhead
+        if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
+            _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+            return ""
+        _LINK_PROBED[0] += 1
+        _check_deadline()
+        try:
+            st = os.lstat(s)
+            is_link = stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & 0x400)
+        except (FileNotFoundError, NotADirectoryError):
+            is_link = False                 # nothing there: it lands where its folder resolves
+        except OSError as exc:
+            # A name Windows rejects (ERROR_INVALID_NAME 123: a glob's `*`/`?`, `<`, `|`) names no file, so no
+            # link either; MEASURED: `<save>/*` from a PowerShell Get-ChildItem raised it. Anything else: cannot tell.
+            is_link = unknown = getattr(exc, "winerror", None) != 123
+        except ValueError:
+            is_link = unknown = True        # cannot tell: resolve the whole path
+        real = _realpath_budgeted(s, refuse) if is_link else rhead.rstrip("/") + "/" + leaf
+    if real is None:
+        return ""
+    # A link is reported only when realpath's answer is not merely a respelling of `p`. On Windows realpath
+    # also expands an 8.3 short name (CI, MEASURED at cba3a1ce: the runner's TEMP is C:/Users/RUNNER~1/...,
+    # so a plain folder there read as a link); GetLongPathNameW expands short names and follows no link.
+    same = _lexical_norm(real) == _lexical_norm(s) or (
+        os.name == "nt" and _lexical_norm(real) == _lexical_norm(long_name(s)))
+    if same and unknown:
+        # The leaf's lstat could not answer, and realpath showed no link either. On POSIX realpath(strict=False)
+        # IGNORES every lstat error (posixpath: `ignored_error = OSError`), so a link it could not read comes
+        # back as written. CI, MEASURED at cba3a1ce on ubuntu: this read as "no link". Cannot tell = refused.
+        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+    return "" if same else real
+
+
+def link_head_resolved(p: str, refuse: bool = True) -> str:
+    """For an operand that cannot be resolved (an expansion or a substitution in it): where its literal
+    head -- the absolute components before the first one carrying either -- lands through a link, plus
+    the rest as written; "" when the head is not absolute or holds no link (link_resolved). A glob or
+    brace component in the head is resolved as written: realpath is non-strict (MEASURED on Windows:
+    `<junction>/lib*/$X` resolves its head)."""
+    parts = p.replace(chr(92), "/").split("/")
+    i = next((n for n, c in enumerate(parts) if has_unresolved(c)), len(parts))
+    head = "/".join(parts[:i])
+    if i == len(parts) or not head or not is_abs(head):
+        return ""
+    real = link_resolved(head, refuse=refuse)
+    return real.rstrip("/") + "/" + "/".join(parts[i:]) if real else ""
+
+
+def link_entries_matched(p: str, refuse: bool = True) -> list:
+    """For an operand that cannot be resolved: where it lands through each LINK its first unresolved
+    component may name, plus the rest as written. The component is read as a pattern -- its literal text
+    before the first expansion or substitution, then anything (`refj$X`, `ref${X}j`, `refj$(echo)` all
+    start `ref`) -- and every entry of the literal head's folder that starts so and is a symlink or a
+    reparse point is resolved. Re-review of 180263b8, MEASURED: `touch "<work>/refj$X/libraries/wares.xml"`
+    and `rm -rf <work>/refj$(echo)` read no link, where `<reference>$X/...` is caught by the root in its text.
+    On Windows the literal prefix is read through _win_alias, so `refj::$INDEX_ALLOCATION` matches refj.
+    One listing is one probe and each link found one realpath of link_resolved's budget; past it
+    links_unresolved (when `refuse`), never "no link". A folder that cannot be listed (absent, denied, not a
+    local drive) adds nothing: the operand is judged as written, unresolved, as before this reading."""
+    parts = p.replace(chr(92), "/").split("/")
+    i = next((n for n, c in enumerate(parts) if has_unresolved(c)), len(parts))
+    head = "/".join(parts[:i])
+    if i == len(parts) or not head or not is_abs(head):
+        return []
+    if os.name == "nt":
+        head = _MSYS_DRIVE.sub(lambda m: m.group(1) + ":/", head)
+        if not re.match(r"^[A-Za-z]:", head) or _drive_type(head[0]) not in _LOCAL_DRIVE_TYPES:
+            return []
+        head = head if "/" in head else head + "/"
+    comp = parts[i]
+    cut = min(m.start() for m in (_EXPANSION.search(comp), _SUBST.search(comp)) if m)
+    prefix = comp[:cut]
+    if os.name == "nt":
+        prefix = _win_alias("x/" + prefix).split("/", 1)[1].casefold()
+    if _LINK_PROBED[0] >= _MAX_LINK_PROBED:
+        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+        return []
+    _LINK_PROBED[0] += 1
+    _check_deadline()
+    rest = "/".join(parts[i + 1:])
+    out = []
+    try:
+        with os.scandir(head) as it:
+            for n, e in enumerate(it):
+                if n % 256 == 0:
+                    _check_deadline()
+                name = e.name.casefold() if os.name == "nt" else e.name
+                if not name.startswith(prefix):
+                    continue
+                try:
+                    st = e.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue                # gone since the listing: nothing lands through it
+                except OSError:
+                    # A matching entry whose lstat cannot answer may be a link: refused, never "no link".
+                    _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+                    continue
+                if not (stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400):
+                    continue
+                real = _realpath_budgeted(e.path.replace(chr(92), "/"), refuse)
+                if real is None:
+                    return out
+                out.append(real.rstrip("/") + ("/" + rest if rest else ""))
+    except OSError:
+        return out
+    return out
+
+
+def _realpath_budgeted(s: str, refuse: bool = True):
+    """os.path.realpath of `s` with slashes, inside link_resolved's per-call budget: None when the budget is
+    spent (and, when `refuse`, links_unresolved is set -- a refusal, never "no link") or the filesystem
+    cannot answer (a realpath that raised also sets links_unresolved, when `refuse`)."""
+    _check_deadline()
+    if _LINK_RESOLVED[0] >= _MAX_LINK_RESOLVED:
+        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+        return None
+    _LINK_RESOLVED[0] += 1
+    try:
+        return os.path.realpath(s).replace(chr(92), "/")
+    except Exception:
+        # A realpath that raised is a non-answer, never "no link" (CI round for 4.1.1): refused when `refuse`.
+        _LINKS_UNRESOLVED[0] = _LINKS_UNRESOLVED[0] or refuse
+        return None
+
+
+#: link_resolved's per-hook-call bounds (4.1.1 review A1); facts() resets them. Past either bound an
+#: operand is links_unresolved (refused), never "no link" (4.1.1 review, link budget).
+_MAX_LINK_RESOLVED = 64
+_LINK_RESOLVED = [0]
+#: ...the lstat of each operand's last component (cheap on a local drive; bounded all the same).
+_MAX_LINK_PROBED = 4096
+_LINK_PROBED = [0]
+#: ...each folder's realpath, once per hook call.
+_LINK_DIRS: dict = {}
+_LINKS_UNRESOLVED = [False]
+_DRIVE_TYPES: dict = {}
+#: GetDriveTypeW: 2 removable, 3 fixed, 5 CD-ROM, 6 RAM disk. Not resolved: 0 unknown, 1 no root
+#: directory, 4 remote (a mapped network drive, whose server may be offline).
+_LOCAL_DRIVE_TYPES = frozenset((2, 3, 5, 6))
+
+
+def _drive_type(letter: str) -> int:
+    """GetDriveTypeW of `letter:` (0 when it cannot be asked), cached per drive per hook call."""
+    key = letter.upper()
+    if key not in _DRIVE_TYPES:
+        try:
+            import ctypes
+            _DRIVE_TYPES[key] = int(ctypes.windll.kernel32.GetDriveTypeW(key + ":" + chr(92)))
+        except Exception:
+            _DRIVE_TYPES[key] = 0
+    return _DRIVE_TYPES[key]
 
 
 def _lexical_norm(p: str) -> str:
@@ -452,6 +662,24 @@ def _scan(s: str):
         yield c, inq
 
 
+def _scan_ops(s: str):
+    """_scan for the walks that find where a command ENDS (segments, piped_in): a character a
+    backslash escapes outside quotes is literal there, as a quoted one is. `find ... -exec echo {}
+    \\; -delete` is ONE command: split at the `\\;`, find lost everything after it, so the
+    -delete reached no rule while the `';'` spelling was denied (4.1.1 review round 4, 7). Only
+    these two walks: blank_quoted must keep the `r` of `\\rm`."""
+    esc = False
+    for _i, c, inq, _k in _qwalk(s):
+        if esc:
+            esc = False
+            yield c, True
+            continue
+        # A quoted backslash needs no `not inq`: its closing quote always comes before the next
+        # unquoted character and clears the flag (the mutation gate cannot tell the two apart).
+        esc = c == chr(92)
+        yield c, inq
+
+
 def join_continuations(s: str) -> str:
     """Remove backslash-newline, which bash removes before it does anything else.
 
@@ -605,7 +833,8 @@ def segments(cmd: str, raw: bool = False) -> list[str]:
     """Split on shell separators that are OUTSIDE quotes. A `|` inside grep -E 'a|b'
     is not a pipeline. `raw`: the same pieces before _unwrap (reserved words kept), one per
     segment, in the same order."""
-    parts, buf, chars = [], [], list(_scan(cmd))
+    _check_deadline()                   # round 8, F1
+    parts, buf, chars = [], [], list(_scan_ops(cmd))
     i = 0
     while i < len(chars):
         c, inq = chars[i]
@@ -645,6 +874,33 @@ def segments(cmd: str, raw: bool = False) -> list[str]:
     return [_unwrap(p) for p in parts if p.strip()]
 
 
+#: 4.1.1: stages that write nothing themselves and may feed the final `tee` of a mod-list write.
+_MODLIST_PIPE_PRODUCERS = frozenset({":", "echo", "printf", "cat"})
+
+
+def _modlist_tee_pipeline(cmd: str, segs: list) -> bool:
+    """`echo x | tee <profile>/content.xml` (4.1.1): ONE pipeline whose every stage but the last
+    is a producer above and whose last stage is `tee` -- the same data write as `echo x > <file>`,
+    which the mod-list exemption already covers. Anything joined by `;`, `&&` or `||`, a stage
+    that is not one of those, or a segment walked in more than one directory, keeps the
+    ordinary confirmation. Each written path still qualifies on its own (profile_modlist_write)."""
+    if len(segs) < 2 or piped_in(cmd) != [False] + [True] * (len(segs) - 1):
+        return False
+    return (_bare_command(segs[-1], {"tee"})
+            and all(_bare_command(s, _MODLIST_PIPE_PRODUCERS) for s in segs[:-1]))
+
+
+def _bare_command(seg: str, names) -> bool:
+    """The stage's LITERAL first word is one of `names`, and it is the command run: no wrapper (xargs, sudo, env,
+    timeout, nice, command...) and no assignment prefix. verb() sees through those, and `xargs tee <modlist>` APPENDS
+    its stdin to tee's files (4.1.1 review: `echo <save> | xargs tee <modlist>` truncates the save)."""
+    toks = tokens(seg)
+    if not toks:                # an assignment prefix (`X=1 tee`) is a first word that is not `tee`
+        return False
+    first = _verb_name(toks[0][0])
+    return first in names and _verb_name(verb(seg)) == first
+
+
 def piped_in(cmd: str) -> list:
     """For each segment segments(cmd) returns, in order: is it fed by a PIPE (`|`)?
 
@@ -653,7 +909,7 @@ def piped_in(cmd: str) -> list:
     reads the tool's own (empty) stdin, not ls's output (v3.3.0 release review, found by
     this lane's history replay -- pairing on ANY separator asked on `command -v pwsh`).
     """
-    out, buf, chars, sep = [], [], list(_scan(cmd)), ""
+    out, buf, chars, sep = [], [], list(_scan_ops(cmd)), ""
     i = 0
 
     def close(next_sep):
@@ -868,11 +1124,19 @@ _ANSI_C_SIMPLE = {'a': chr(7), 'b': chr(8), 'e': chr(27), 'E': chr(27),
 
 
 def _ansi_c_decode(body: str) -> str:
-    """Decode one ANSI-C quoted body.
+    r"""Decode one ANSI-C quoted body.
 
     The hex and octal forms are the ones that matter: two different spellings of
     `rm` that reached `_verb_name` as literal escape text and came out as `x6d`
     and `155`. B2, MEASURED as a total bypass of all three hard blocks.
+
+    The result STOPS at the first NUL, however it is spelled (`\x00`, `\0`, `\000`,
+    `\400`, `\u0000`, `\U00000000`, `\c@`, or a raw NUL): bash builds a C string, so
+    `$'<reference>\x00junk'` IS `<reference>` -- and was read as the sibling
+    `<reference>junk` (MEASURED in review of 6cbeb825; the gap is older than that).
+    `\c` and `\u`/`\U` up to 0x7F are decoded as bash does (MEASURED with Git Bash
+    `printf`), so `$'<ref>\u002flibraries'` is a path inside reference/; a `\u`/`\U`
+    above 0x7F is locale-dependent in bash and is kept as written.
     """
     out = []
     i = 0
@@ -883,16 +1147,29 @@ def _ansi_c_decode(body: str) -> str:
             i += 1
             continue
         n = body[i + 1]
-        if n == 'x':
+        if n in 'xuU':
             h = ''
             j = i + 2
-            while j < len(body) and len(h) < 2 and body[j] in '0123456789abcdefABCDEF':
+            width = {'x': 2, 'u': 4, 'U': 8}[n]
+            while j < len(body) and len(h) < width and body[j] in '0123456789abcdefABCDEF':
                 h += body[j]
                 j += 1
-            if h:
+            if h and (n == 'x' or int(h, 16) <= 0x7F):
+                # \x is a BYTE. \u/\U above 0x7F depend on the locale: MEASURED in Git
+                # Bash (no LANG), `\u00e9` became one byte, `\uD800`, `\U0010FFFF` and
+                # `\u041B` stayed as their escape TEXT -- whose backslash is a separator
+                # there. Such an escape is left exactly as written (the pre-change reading).
                 out.append(chr(int(h, 16)))
                 i = j
                 continue
+        elif n == 'c' and i + 2 < len(body):
+            x = body[i + 2]
+            j = i + 3
+            if x == chr(92) and j < len(body) and body[j] == chr(92):
+                j += 1                          # bash: `\c\\` is control-backslash
+            out.append(chr(127) if x == '?' else chr(ord(x.upper()) & 0x1F))
+            i = j
+            continue
         elif n in '01234567':
             o = ''
             j = i + 1
@@ -909,7 +1186,7 @@ def _ansi_c_decode(body: str) -> str:
         # An unknown escape keeps its backslash, as bash does.
         out.append(c)
         i += 1
-    return ''.join(out)
+    return ''.join(out).split(chr(0), 1)[0]
 
 
 #: C1 (v4.0 release review): the dequoted text of every word whose UNQUOTED part holds a
@@ -951,21 +1228,34 @@ def _has_brace_expansion(m: str) -> bool:
     return False
 
 
-def tokens(seg: str) -> list[tuple[str, bool]]:
+def tokens(seg: str, *, literal_expansions: dict | None = None) -> list[tuple[str, bool]]:
     """(text, was_quoted) per token. Quotes are stripped from the text; a
     backslash-escaped space JOINS, which is why `X4\\ Foundations` must stay one token
     -- the bash tokeniser split it and the game-delete block stopped firing.
 
-    A word whose unquoted part holds a brace expansion is recorded in _BRACE_WORDS (C1)."""
+    A word whose unquoted part holds a brace expansion is recorded in _BRACE_WORDS (C1).
+
+    `literal_expansions`, when given, receives text -> "no `$` in this word is
+    expansion-active" (every `$` single-quoted, escaped, or ANSI-C decoded; no unquoted
+    glob or brace character). A text spelled both ways in one segment is False: one
+    occurrence never qualifies another (see facts' literal_dollar_path)."""
     out, buf, quoted, started = [], [], False, False
     mbuf = []                               # buf with every quoted/escaped char as NUL
+    xbuf = []                               # only expansion-active characters survive
     q = ""
+    unterminated = False                    # a `$'...` run that never closed
     i = 0
 
     def emit():
         text = "".join(buf)
         if "{" in mbuf and _has_brace_expansion("".join(mbuf)):
             _BRACE_WORDS.add(text)
+        if literal_expansions is not None:
+            # An UNQUOTED glob or brace character also disqualifies the word: the shell
+            # may replace it with other text, so its spelling here proves nothing.
+            literal_expansions[text] = (literal_expansions.get(text, True)
+                                        and not has_unresolved("".join(xbuf))
+                                        and not any(ch in mbuf for ch in "*?[{"))
         out.append((text, quoted))
 
     while i < len(seg):
@@ -978,18 +1268,23 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
                 i += 1
                 buf.append(seg[i])
                 mbuf.append(chr(0))
+                xbuf.append(chr(0))
             else:
                 buf.append(c)
                 mbuf.append(chr(0))
+                xbuf.append(chr(0) if q == "'" else c)
         elif c in "\"'":
             # ANSI-C / locale quoting: `$'rm'` and `$"rm"` are the word `rm`. The `$`
             # is a quoting SIGIL, not part of the name. Without this the token was
             # `$rm` AND flagged quoted, so verb()'s `if quoted: return t` handed every
             # verb-keyed rule a name no rule has ever heard of -- a total bypass.
-            dollar = bool(buf) and buf[-1] == "$"
+            # Only an UNQUOTED, unescaped `$` is a sigil: in `'dir$'"/x"` and `\$'x'` the
+            # `$` is a character of the name (literal-dollar port, 6cbeb825).
+            dollar = bool(buf) and buf[-1] == "$" and mbuf[-1] == "$"
             if dollar:
                 buf.pop()
                 mbuf.pop()
+                xbuf.pop()
             if dollar and c == chr(39):
                 # $'...' -- take the WHOLE run and decode it. Popping the sigil was
                 # only half the job: inside a single-quoted run this loop appends
@@ -1008,7 +1303,9 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
                 dec = _ansi_c_decode(''.join(body))
                 buf.append(dec)
                 mbuf.extend(chr(0) * len(dec))
+                xbuf.extend(chr(0) * len(dec))
                 quoted = started = True
+                unterminated = unterminated or j >= len(seg)
                 i = j + 1
                 continue
             q = c
@@ -1017,19 +1314,26 @@ def tokens(seg: str) -> list[tuple[str, bool]]:
             i += 1
             buf.append(seg[i])          # \<space> joins; \x keeps x
             mbuf.append(chr(0))         # an escaped `{` / `,` is literal (C1)
+            xbuf.append(chr(0))
             started = True
         elif c.isspace():
             if started:
                 emit()
             buf, quoted, started = [], False, False
             mbuf = []
+            xbuf = []
         else:
             buf.append(c)
             mbuf.append(c)
+            xbuf.append(c)
             started = True
         i += 1
     if started:
         emit()
+        if (q or unterminated) and literal_expansions is not None:
+            # An UNTERMINATED quote: what a shell does with this word is not this parse's
+            # to say, so it proves nothing literal.
+            literal_expansions[out[-1][0]] = False
     return out
 
 
@@ -1931,6 +2235,115 @@ def _opener_feeds(opener: str, sink) -> bool:
     return any(sink(sg) for c in cands for sg in segments(c))
 
 
+# ------------------------------------------------- literal `$` in a path (4.1.1)
+# Ported by hand from session/literal-dollar-v2 (6cbeb825, 51129cde, ed667b4a): a `$` that
+# EVERY shell layer keeps literal -- single-quoted, escaped, ANSI-C decoded -- is part of the
+# name, so `rm -rf '<root>$R1234'` names the sibling `<root>$R1234` (a Recycle Bin item)
+# rather than an unknown scope. Only texts a shell parses exactly as written qualify (see
+# facts: exact_texts), and nothing qualifies in a command that can re-run a word as shell
+# text. Every rule below only ever takes the qualification AWAY: the old, unresolved reading.
+
+#: A command that DEFINES something able to re-run a later word as shell text: a function
+#: (`rm(){ eval command rm "$@"; }`), an alias (`alias rm='eval rm'`), a sourced file, a
+#: trap, a builtin switched off, or their PowerShell counterparts. Once any is present
+#: `rm -rf '<ref>$X'` may expand `$X` after all (MEASURED in Git Bash: the function form
+#: removed `<ref>`), so NO text in such a command is exact (see facts). Matched over the
+#: raw command, quotes and all: a match inside a string only costs strictness.
+_REDEFINES = re.compile(
+    r"(?:^|[\s;&|({`!])(?:function|alias|source|trap|enable|shopt|declare|typeset|export|"
+    r"readonly|local|unalias|unset|hash|filter|set-alias|new-alias|sal|nal|"
+    r"import-module|ipmo|set-item|new-item|ni|si|"
+    # PowerShell's eval: a definition built at run time evades every pattern here, as
+    # `eval $'rm\x28\x29 ...'` does in bash (4.1.1 port: no literal anywhere beside one).
+    r"iex|invoke-expression|icm|invoke-command|new-module|nmo|add-type)(?=[\s;&|)}(\"']|$)"
+    r"|(?:^|[\s;&|({`!])\.(?=\s)"
+    r"|[^\s;&|()<>'\"]\s*\(\s*\)"
+    r"|(?:function|alias|variable):|scriptblock|invokecommand|newscriptblock"
+    r"|BASH_ENV|ENV=|PROMPT_COMMAND|BASH_FUNC_|BASH_ALIASES|BASH_CMDS",
+    re.IGNORECASE)
+
+
+def _redefines_commands(text: str) -> bool:
+    """Might `text` define a function or alias -- anything a LATER word can run through?"""
+    return bool(_REDEFINES.search(text or ""))
+
+
+#: A command name that is a plain word: nothing a quote, escape or expansion built.
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9_./:+@%,~-]+")
+#: A shell flag that loads startup files or enables aliases (`-i`, `-l`, `-O`/`+O`).
+_SHELL_RC_FLAG = re.compile(r"^(?:[-+][A-Za-z]*[ilO][A-Za-z]*|--login|--rcfile|--init-file"
+                            r"|--rcfile=.*|--init-file=.*)$")
+
+
+def _no_literal_anywhere(texts) -> bool:
+    """BROAD rule: may anything in this command re-run a word as shell text, so that NO
+    `$` in it can be called literal? True when any text (the command, every carried or
+    decoded inner command) holds: a definition `_REDEFINES` sees; an `eval`, `source` or
+    `.` anywhere; a command name that is not a plain word (a variable, a substitution, a
+    quoted or escaped spelling such as `"rm"'()'` -- a definition can be BUILT at run time,
+    `eval $'rm\\x28\\x29 {...}'`); or a shell started with startup files or aliases
+    (`-i`, `-l`, `-O`, `+O`, `--rcfile`, `--init-file`, `--login`). Over-matching only
+    restores the old, stricter reading."""
+    for text in texts:
+        if not text:
+            continue
+        if _redefines_commands(text):
+            return True
+        for seg in segments(text):
+            words_ = [t for t, _q in tokens(seg)]
+            if any(_verb_name(t) in ("eval", "source") for t in words_):
+                return True
+            name = _verb_token(seg) or ""
+            if name and (name == "." or has_unresolved(name) or not _PLAIN_NAME.fullmatch(name)):
+                return True
+            if any(_verb_name(t) in _SHELLS for t in words_) and any(
+                    _SHELL_RC_FLAG.match(t) for t in words_):
+                return True
+    return False
+
+
+#: sudo options that make it hand the command to a SHELL's `-c` (`-s`, `-i` and long
+#: forms, in any cluster such as `-is`, `-su root`, `-Es`). sudo backslash-escapes every
+#: character there EXCEPT `$`, so `sudo -s rm -rf '<ref>$X'` expands `$X` in that shell.
+_SUDO_SHELL = re.compile(r"^(?:-[A-Za-z]*[si][A-Za-z]*|--shell|--login)$")
+
+
+def _reparsing_wrapper(seg: str) -> bool:
+    """Does a wrapper in this segment run the command through a shell that re-parses it
+    (sudo -s / -i)? Any option token after a `sudo` word counts -- an over-match is only
+    stricter. Such a segment is never exact, nor is a `-c` string it carries."""
+    words_ = [t for t, _q in tokens(seg)]
+    for k, w in enumerate(words_):
+        if _verb_name(w) == "sudo":
+            return any(_SUDO_SHELL.match(t) for t in words_[k + 1:] if t.startswith("-"))
+    return False
+
+
+def exact_heredoc_bodies(cmd: str) -> set:
+    """Top-level heredoc bodies that a shell parses EXACTLY as written: a QUOTED delimiter
+    (`<<'EOF'`, so nothing in the body was expanded) on an opening line that is ONE plain
+    shell command reading its program from stdin, with no other redirection that could
+    replace that stdin. Anything else -- an unquoted delimiter, a body reaching the shell
+    through a pipe (`cat <<'EOF' | sed ... | bash` may rewrite it), a substitution, a
+    second heredoc on the line -- is not proven exact, so its `$` stays unresolved.
+    Bodies are returned as facts() keeps them (comments stripped)."""
+    docs, _kept = _heredoc_walk(cmd)
+    exact, loose = set(), set()
+    for opener, _term, expands, body in docs:
+        text = strip_comments(chr(10).join(body))
+        segs_ = segments(opener)
+        plain = blank_quoted(opener)
+        ok = (not expands and len(segs_) == 1 and len(_heredoc_opens(opener)) == 1
+              and plain.count("<") == 2 and ">(" not in plain and "$(" not in plain
+              and chr(96) not in plain)
+        if ok:
+            sg = _unwrap(segs_[0])
+            ok = (sg == segs_[0].strip() and _verb_name(verb(sg)) in _EXACT_SHELLS
+                  and _reads_stdin_program(sg) and not has_unresolved(_verb_token(sg) or ""))
+        (exact if ok else loose).add(text)
+    return exact - loose
+
+
 def heredoc_substitutions(cmd: str) -> list[str]:
     """The commands an EXPANDING heredoc body runs: every `$(...)` and backtick in it.
 
@@ -2097,6 +2510,8 @@ def _verb_name(t: str) -> str:
     n = posixpath.basename(norm(t))
     if n.endswith(".exe"):
         n = n[:-4]
+    if n == "gfind":
+        n = "find"                      # GNU find's name on macOS and the BSDs (4.1.1 review round 7, 3)
     return n or t
 
 
@@ -2133,7 +2548,9 @@ _WRAPPER_VALUE_OPTS = {
     "exec": {"-a"},
     "doas": {"-u", "-C"},
     "timeout": {"-s", "--signal", "-k", "--kill-after"},
-    "xargs": {"-I", "-i", "--replace", "-n", "--max-args", "-P", "--max-procs",
+    # `-i` and `--replace` take NO separate value (GNU: an optional one ATTACHED, `-iX`, `--replace=X`);
+    # listed here they ate the verb (4.1.1 review A4). `-e`/`-l` likewise attach theirs and are not listed.
+    "xargs": {"-I", "-n", "--max-args", "-P", "--max-procs",
               "-d", "--delimiter", "-E", "-L", "--max-lines", "-s", "--max-chars",
               "-a", "--arg-file"},
     "nice": {"-n", "--adjustment"},
@@ -2199,6 +2616,7 @@ def _span_open(word: str) -> bool:
 def _scan_words(seg: str, spans: bool) -> tuple:
     """_raw_words' walk: (words, None) -- or, when a span is still open at the end,
     (words so far, (index of the word that opened it, its start offset in `seg`))."""
+    _check_deadline()                   # round 8, F1: the word walk is the hot path of every reader
     out, buf, stack = [], [], []
     esc, last, opened = False, "", None      # opened: (len(out), buf-start) of the outer span
     inner = []                               # the word being read INSIDE a span (case/esac)
@@ -2378,8 +2796,21 @@ def _verb_word(seg: str, learned: bool = True) -> tuple[str, int | None]:
             wrapper = name
             continue
         if t.startswith("-"):
-            if t in _WRAPPER_VALUE_OPTS.get(wrapper, ()):
+            opts_ = _WRAPPER_VALUE_OPTS.get(wrapper, ())
+            if t in opts_:
                 want_value = learned or t not in _LATER_VALUE_OPTS.get(wrapper, ())
+            elif learned and len(t) > 2 and t[1] != "-":
+                # ...or a CLUSTER of short flags ending in one that takes a value: `sudo -su
+                # root rm ...` -- `root` is -u's value, not the command (MEASURED on
+                # session/literal-dollar-v2, 51129cde: verb() read `root`, so even `sudo -su root
+                # rm -rf <reference>` reached no delete rule). getopt order: the FIRST
+                # value-taking letter ends the cluster and the rest of the word is its value
+                # (`-uroot`); only when it is the LAST letter does the value come next. sudo's
+                # `-h` takes no separate value in a cluster (`-Eh` is help). learned=False keeps
+                # the old reading, which _value_word_readings still judges.
+                k_ = next((k for k, ch in enumerate(t[1:], 1) if "-" + ch in opts_
+                           and not (wrapper == "sudo" and ch == "h")), None)
+                want_value = k_ == len(t) - 1
             continue
         if seen_wrapper and _WRAPPER_ARG.match(t):
             continue                    # a duration or a placeholder, not a command
@@ -2603,9 +3034,11 @@ def dynamic_program_readings(seg: str) -> list:
         # blank or an operator. Joining a quoted plain path changes nothing an eval would run,
         # but un-quotes it for the text rules -- MEASURED in the corpus replay, a quoted
         # script path then read as a foreground long job (4 historical commands).
+        # An escaped one too, which an eval re-reads as a separator: _requoted reads it with each
+        # quoted word kept whole (4.1.1 review round 5, 1).
         joined = " ".join(t for t, _q in toks) if any(
             q and _EVAL_SPLITS.search(t) for t, q in toks) else rest
-        for r in (rest, joined):
+        for r in [rest, joined] + _requoted(toks, _escapes_a_split(rest)):
             if r and r not in out:
                 out.append(r)
         first = toks[0][0].lower() if toks else ""
@@ -3245,6 +3678,14 @@ def rsync_deletes(seg: str) -> list[str]:
 _ROBO_SWITCH = re.compile(r"^/{1,2}[A-Za-z]+(:[^/]*)?$")
 
 
+def _robocopy_ops(seg: str) -> list:
+    """A robocopy's non-switch words: SRC, DST, then any file names."""
+    toks = tokens_of(seg)
+    k = _verb_at(seg, 0)                # P1: see _verb_at
+    return [t for t in toks[k + 1:] if not _ROBO_SWITCH.match(t)
+            and not t.startswith(("<", ">")) and not re.match(r"^\d+>", t)]
+
+
 def robocopy_effects(seg: str) -> tuple:
     """(copy destinations, deleted-content targets, moved sources) of a robocopy.
     `robocopy SRC DST /MIR` (or /PURGE) deletes what DST has and SRC lacks -- with an
@@ -3254,8 +3695,7 @@ def robocopy_effects(seg: str) -> tuple:
     toks = tokens_of(seg)
     k = _verb_at(seg, 0)                # P1: see _verb_at
     sw = [t.lstrip("/").split(":", 1)[0].lower() for t in toks[k + 1:] if _ROBO_SWITCH.match(t)]
-    ops = [t for t in toks[k + 1:] if not _ROBO_SWITCH.match(t)
-           and not t.startswith(("<", ">")) and not re.match(r"^\d+>", t)]
+    ops = _robocopy_ops(seg)
     if len(ops) < 2:
         return [], [], []
     src, dst = ops[0], ops[1]
@@ -3321,6 +3761,14 @@ def xargs_feed(seg: str, prev) -> list[str]:
         return []
     if not any(_verb_name(t) == "xargs" for t in toks[:toks.index(vt)]):
         return []
+    return _producer_items(prev)
+
+
+def _producer_items(prev) -> list[str]:
+    """What a producer hands an `xargs` (xargs_feed): an echo/printf's words, a find's or a listing's
+    folders as `<folder>/${XARGS_ITEM}`."""
+    if prev is None:
+        return []
     pv = verb(prev)
     if pv in ("echo", "printf"):
         pt = tokens(prev)
@@ -3339,9 +3787,11 @@ def xargs_feed(seg: str, prev) -> list[str]:
         names = [ft[i + 1] for i, t in enumerate(ft[:-1]) if t in ("-name", "-iname")]
         if names and all(n in _REGENERABLE for n in names):
             return []
-        # find's PATHS only -- its predicates' values are not places.
-        return [o.rstrip("/" + chr(92)) + "/${XARGS_ITEM}" for o in _find_roots(prev)]
-    return [o.rstrip("/" + chr(92)) + "/${XARGS_ITEM}" for o in _operands(prev)]
+        # find's PATHS only -- its predicates' values are not places. None is `.` (GNU find),
+        # and a bare `ls` lists `.` too (4.1.1 review round 2, F3).
+        return [o.rstrip("/" + chr(92)) + "/${XARGS_ITEM}" for o in _find_roots(prev) or ["."]]
+    return [o.rstrip("/" + chr(92)) + "/${XARGS_ITEM}"
+            for o in _operands(prev) or (["."] if pv in ("ls", "dir") else [])]
 
 
 def _find_roots(seg: str) -> list:
@@ -3400,6 +3850,9 @@ def _narrows(toks: list, i: int) -> bool:
 
 #: find operators that make the expression an OR, so one test no longer bounds the set.
 _FIND_OR = {"-o", "-or", ","}
+#: The filters whose value names an entry, so the text can decide what they match.
+_FIND_NAME_TESTS = {"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename",
+                    "-regex", "-iregex"}
 
 
 def _only_regenerable(toks: list) -> bool:
@@ -3454,8 +3907,9 @@ def find_scoped_deletes(seg: str) -> list:
     return [] if _only_regenerable(toks) else paths
 
 
-def _find_delete(seg: str) -> tuple:
-    """(paths a `find` deletes under, whether a NARROWING filter scopes it)."""
+def _find_delete(seg: str, default_root: bool = False) -> tuple:
+    """(paths a `find` deletes under, whether a NARROWING filter scopes it). `default_root`: a
+    find with no path searches `.`, as GNU find does (the archive rule only, 4.1.1 round 2 F3)."""
     if verb(seg) != "find":
         return [], False
     toks = [t for t, q in tokens(seg)]
@@ -3478,20 +3932,13 @@ def _find_delete(seg: str) -> tuple:
             # `/bin/rm` and `rm.exe` onto `rm` -- so the rule caught the one form it was
             # written against and missed `-execdir` (which find's own documentation
             # recommends OVER -exec), `-ok`, `-okdir`, and any absolute spelling.
-            if t in _FIND_EXEC and i + 1 < len(toks):
-                nxt = _verb_name(toks[i + 1])
-                if nxt in DELETE_VERBS:
-                    deletes = True
-                    break
-                # `find <root> -exec bash -c '<cmd>' _ {} ;` -- the shell is a carrier
-                # here exactly as it is anywhere else, so it goes through the same walk
-                # rather than a second implementation.
-                if nxt in _SHELLS:
-                    rest = " ".join(toks[i + 1:])
-                    if any(_verb_name(verb(x)) in DELETE_VERBS
-                           for x in _inner_commands(rest)):
-                        deletes = True
-                        break
+            # The command, or a shell carrying one (`-exec bash -c '<cmd>' _ {} ;`): _exec_deletes,
+            # shared with the archive rule's expression reader.
+            # Only this action's words, up to its terminator (round 8, F1): the rest of the expression
+            # read as one command made 200 -exec actions quadratic (6 s).
+            if t in _FIND_EXEC and _exec_deletes(toks[i + 1:_exec_end(toks, i)]):
+                deletes = True
+                break
     if not deletes:
         return [], filtered
     # find's PATHS are the operands before the first predicate (a `-flag`) -- counted
@@ -3507,7 +3954,7 @@ def _find_delete(seg: str) -> tuple:
         if not quoted and t.startswith("-"):
             break
         out.append(t)
-    return out, filtered
+    return (out or (["."] if default_root else [])), filtered
 
 
 #: Verbs that DESTROY a file's content in place without deleting it. AUDIT-2026-09-24
@@ -3542,6 +3989,122 @@ def clobber_targets(seg: str) -> list[str]:
         # `conv=notrunc` still OVERWRITES from the start, so it is not an exemption.
         return [t[3:] for t, _q in tokens(seg) if t.startswith("of=") and len(t) > 3]
     return []
+
+
+#: Compressors and decompressors that REPLACE their operand by default (`gzip x` leaves only `x.gz`,
+#: `gunzip x.gz` only `x`), unless told to keep it, write to stdout, test or list (4.1.1 review round
+#: 7, 2; round 8 added the decompressors). zstd, unzstd and brotli keep it unless given --rm.
+_REPLACING = frozenset({"gzip", "gunzip", "bzip2", "bunzip2", "xz", "unxz", "lzma", "unlzma", "lzip", "compress",
+                        "uncompress", "pigz", "unpigz", "pbzip2", "zstd", "unzstd", "brotli"})
+_RM_TO_REPLACE = frozenset({"zstd", "unzstd", "brotli"})
+_KEEPING_LONG = frozenset({"--keep", "--stdout", "--to-stdout", "--test", "--list"})
+#: Their short options that take a VALUE, attached (`-S.lck`) or as the next word (round 8, F3: the
+#: letters of `-S.lck` and `-Ccrc32` were read as flags, so `c` and `k` in them hid the replacement).
+_REPLACING_VALUE_SHORT = {"gzip": "S", "gunzip": "S", "pigz": "Sbp", "unpigz": "Sbp", "xz": "CFMST",
+                          "unxz": "CFMST", "lzma": "CFMST", "unlzma": "CFMST", "zstd": "oDT", "unzstd": "oDT",
+                          "brotli": "oqwS", "lzip": "bmoS", "pbzip2": "pbm", "compress": "b"}
+_REPLACING_VALUE_LONG = frozenset({"--suffix", "--format", "--check", "--threads", "--memlimit", "--memory",
+                                   "--output", "--dict", "--quality", "--lgwin", "--block-size"})
+_DECOMPRESSING = {"gunzip", "bunzip2", "unxz", "unlzma", "uncompress", "unpigz", "unzstd"}
+_PACKED_SUFFIX = re.compile(r"[.](?:gz|z|xz|lzma|bz2|lz|Z|zst|br|tgz)$", re.IGNORECASE)
+
+
+def _replacing_parse(seg: str):
+    """(name, short flags, long flags, operands) of a replacing (de)compressor, or None."""
+    v = verb(seg)
+    if v not in _REPLACING:
+        return None
+    toks = tokens(seg)
+    shorts, longs, ops, i, k = set(), set(), [], _verb_at(seg, 0) + 1, len(toks)
+    values = _REPLACING_VALUE_SHORT.get(v, "")
+    while i < k:
+        t, q = toks[i]
+        i += 1
+        if q or not t.startswith("-") or t == "-":
+            ops.append(t)
+            continue
+        if t == "--":
+            ops += [x for x, _q in toks[i:]]
+            break
+        if t.startswith("--"):
+            name = t.partition("=")[0]
+            longs.add(name)
+            if name in _REPLACING_VALUE_LONG and "=" not in t:
+                i += 1
+            continue
+        for j, c in enumerate(t[1:]):
+            if c in values:
+                if not t[j + 2:]:
+                    i += 1                  # the value is the next word
+                break
+            shorts.add(c)
+    return v, shorts, longs, _drop_redirects(ops)
+
+
+def replaced_sources(seg: str) -> list[str]:
+    """What a replacing (de)compressor, `rename`, `zip -m` or `tar --remove-files` takes away: each a
+    move of its operand, as `mv` is. `rename FROM TO FILE...` (util-linux) and `rename EXPR FILE...`
+    (perl) alike: every operand after the first may be a file, read conservatively."""
+    v = verb(seg)
+    if v == "rename":
+        return _operands(seg)[1:]
+    if v == "zip":
+        toks = tokens(seg)
+        flags = [t for t, q in toks if not q and t.startswith("-") and not t.startswith("--")]
+        moves = any("m" in f[1:] for f in flags) or "--move" in tokens_of(seg)
+        return _operands(seg)[1:] if moves else []
+    if v == "tar":
+        return _tar_removed(seg)
+    got = _replacing_parse(seg)
+    if got is None:
+        return []
+    v, shorts, longs, ops = got
+    if v in _RM_TO_REPLACE and "--rm" not in longs:
+        return []
+    if longs & _KEEPING_LONG or shorts & set("kctl"):
+        return []
+    return ops
+
+
+def decompress_outputs(seg: str) -> list[str]:
+    """The files a replacing decompressor WRITES: each operand without its packed suffix
+    (`gunzip <game>/01.cat.gz` writes `<game>/01.cat`; round 8, F3)."""
+    got = _replacing_parse(seg)
+    if got is None:
+        return []
+    v, shorts, longs, ops = got
+    if not (v in _DECOMPRESSING or "d" in shorts or longs & {"--decompress", "--uncompress"}):
+        return []
+    if longs & _KEEPING_LONG - {"--keep"} or shorts & set("ctl"):
+        return []
+    return [_PACKED_SUFFIX.sub("", o) for o in ops if _PACKED_SUFFIX.search(o)]
+
+
+def _tar_removed(seg: str) -> list[str]:
+    """The files `tar --remove-files` takes away: its operands, without the archive (`-f X`, `fX`
+    in an old-style cluster) or a `-C <dir>` value."""
+    toks = tokens(seg)
+    words = [t for t, _q in toks[_verb_at(seg, 0) + 1:]]
+    if "--remove-files" not in words:
+        return []
+    out, i = [], 0
+    while i < len(words):
+        w = words[i]
+        i += 1
+        if w.startswith("--"):
+            if w in ("--file", "--directory", "--exclude", "--files-from") and "=" not in w:
+                i += 1
+            continue
+        if w.startswith("-") or (i == 1 and re.fullmatch(r"[A-Za-z]+", w) and "f" in w):
+            body = w.lstrip("-")
+            for j, c in enumerate(body):
+                if c in "fCbHKLNTVX":
+                    if not body[j + 1:]:
+                        i += 1
+                    break
+            continue
+        out.append(w)
+    return out
 
 
 def move_sources(seg: str) -> list[str]:
@@ -3721,6 +4284,47 @@ def cwd_track(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
             for d in dict.fromkeys(ds)]
 
 
+_DIRSTACK_N = re.compile(r"^[+-][0-9]+$")
+
+
+def _dirstack_forms(v: str, words: list, cwd: str, from_seed: bool, stack: list, join=None):
+    """(cwd, from_seed, stack) after the pushd/popd forms that are not "push this directory" or "pop the top", or
+    None for those two (cwd_lanes reads them). 4.1.1 final round, MEASURED at 7f4895a2: from `cd <reference>; pushd
+    <mod>`, a bare `pushd` (swap the top two), `pushd +1` (rotate) and `pushd -n <dir>` (add <dir> below the top, no
+    cd) all leave bash in <reference>, and each was read as staying in <mod> (or moving to `<mod>/+1`), so a relative
+    delete there was advised instead of denied. bash's list is the directory in force, then `stack` from its end;
+    +N counts from the left of that list, -N from the right, and a number past its end changes nothing (bash refuses)."""
+    if v == "pushd" and not words:
+        if stack:                                     # swap the top two
+            top = stack.pop()
+            stack.append((cwd, from_seed))
+            return (top[0], top[1], stack)
+        return (cwd, from_seed, stack)
+    first = words[0] if words else ""
+    if v == "pushd" and first == "-n":
+        if len(words) > 1 and not _DIRSTACK_N.match(words[1]):
+            stack.append(((join or join_cwd)(cwd, words[1]), from_seed and not is_abs(words[1])))
+        return (cwd, from_seed, stack)
+    if v == "popd" and first == "-n":
+        if stack:
+            stack.pop()                               # the entry below the top goes, no cd
+        return (cwd, from_seed, stack)
+    if not _DIRSTACK_N.match(first):
+        return None
+    dirs = [(cwd, from_seed)] + stack[::-1]
+    n = int(first[1:])
+    idx = n if first[0] == "+" else len(dirs) - 1 - n
+    if not 0 <= idx < len(dirs):
+        return (cwd, from_seed, stack)
+    if v == "pushd":                                  # rotate: entry idx becomes the top
+        dirs = dirs[idx:] + dirs[:idx]
+    elif idx == 0:                                    # popd +0: the top goes, as a plain popd
+        dirs = dirs[1:] or dirs
+    else:                                             # popd +N: entry N goes, no cd
+        dirs = dirs[:idx] + dirs[idx + 1:]
+    return (dirs[0][0], dirs[0][1], dirs[1:][::-1])
+
+
 #: How many directories cwd_lanes() keeps in force at once (FX-G7). Each `cd` whose target
 #: has several values (an unassigned variable: resolve_variants) splits every lane; past
 #: this bound a lane takes the value that lands under a configured root instead (the
@@ -3769,6 +4373,16 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
     def step(seg, v, lane, tgt):
         """One lane through one segment; `tgt` is the value its cd/pushd takes in this lane."""
         cwd, from_seed, stack = lane[0], lane[1], list(lane[2])
+        if v in ("pushd", "popd"):
+            words = _operands(seg, include_flags=True)
+            if v == "popd" and words and has_unresolved(words[0]):
+                # A pop that may not happen (4.1.1 review A3: the PowerShell translator's `popd
+                # ${X4_PS_LOCATION_STACK:+-n}`): this lane takes one of the operand's values.
+                words = ([tgt] if tgt else []) + words[1:]
+            moved = _dirstack_forms(v, words, cwd, from_seed, stack,
+                                    physical_join if physical else join_cwd)
+            if moved is not None:
+                return moved
         if v in DIR_VERBS:
             ops = _operands(seg)
             if ops:
@@ -3799,6 +4413,9 @@ def cwd_lanes(cmd: str, base: str = "", seeded: bool = False, roots: dict | None
         out.append((seg, [ln[0] for ln in lanes]))
         v = verb(seg)
         ops = _operands(seg) if v in DIR_VERBS else []
+        if v == "popd":
+            # Only an operand with several values splits the lanes; a plain popd form is read in step().
+            ops = [o for o in _operands(seg, include_flags=True)[:1] if has_unresolved(o)]
         if not ops:
             lanes = [step(seg, v, ln, "") for ln in lanes]
             continue
@@ -4519,6 +5136,1081 @@ def glob_covers(operand, target, *, expand_braces=True):
 GAME_ROOTISH = re.compile(r"(x4 foundations|egosoft/x4)(/extensions)?$", re.I)
 
 
+# ------------------------------------------------- base-game and official DLC archives
+# The file tools refuse a write to <game>/*.cat|dat and <game>/extensions/ego_dlc_*/*.cat|dat;
+# a shell write, move or delete of the same file was only advised (some were plain allows), and
+# only a Steam verify restores one. MEASURED 2026-11-05 through the deployed hooks, same at v4.0.0.
+# A MOD's own ext_*.cat is not here: packing and retiring a mod stays with the deploy rules.
+# Only ever fed text; the disk is never read, and an unresolved folder proves nothing.
+_ARCHIVE_EXT = re.compile(r"[.](cat|dat)$")
+#: No list of archive NAMES: a pattern is an archive when SOME name ending .cat or .dat could
+#: match it. The stems differ per DLC and grow with patches (READ 2026-11-05: ventures alone has
+#: ext_v610, ext_v620, ext_v700, ext_v710 and two _diff_v900 pairs), so a sample list went stale
+#: once already (4.1.1 review round 2, F1).
+_ARCHIVE_ENDINGS = (".cat", ".dat")
+#: The parts of a glob, as tokens: ("lit", c) one character; ("one", neg, chars, ranges) one
+#: character in (or, neg, outside) the set; ("star", neg, chars, ranges) any run of such characters.
+_GLOB_ALL = ("star", True, frozenset(), ())               # anything, `/` included
+_GLOB_SEGMENT = ("star", True, frozenset("/"), ())         # anything inside one path segment
+#: A name on disk: one segment, lower case. Every archive and DLC folder name READ is lower case.
+_GLOB_DISK_NAME = ("star", True, frozenset("/"), (("A", "Z"),))
+
+
+def _is_pattern(text: str) -> bool:
+    return any(c in text for c in _OPERAND_PATTERN_CHARS)
+
+
+def _glob_lit(text: str) -> list:
+    return [("lit", c) for c in text]
+
+
+def _glob_parse(pat: str, slash: bool, escapes: bool, caret: bool) -> list:
+    """A glob as tokens. `slash`: `*`, `?` and a bracket may match `/` (find -path), or not (a
+    shell path, find -name). `escapes`: a backslash quotes the next character. `caret`: `[^` is a
+    negation, as `[!` is."""
+    out, i, n = [], 0, len(pat)
+    noslash = frozenset() if slash else frozenset("/")
+    while i < n:
+        c = pat[i]
+        if c == chr(92) and escapes and i + 1 < n:
+            out.append(("lit", pat[i + 1]))
+            i += 2
+        elif c == "*":
+            if not (out and out[-1][0] == "star"):
+                out.append(("star", True, noslash, ()))
+            i += 1
+        elif c == "?":
+            out.append(("one", True, noslash, ()))
+            i += 1
+        elif c == "[":
+            j = i + 1
+            neg = j < n and (pat[j] == "!" or (caret and pat[j] == "^"))
+            j += neg
+            # A `]` first in the set is a member. A POSIX class (`[:alpha:]`, `[=a=]`, `[.a.]`)
+            # holds a `]` of its own, so the set closes after it, not at it (4.1.1 review round 3, B).
+            k, close, has_class = (j + 1 if j < n and pat[j] == "]" else j), -1, False
+            while k < n:
+                if pat[k] == "[" and k + 1 < n and pat[k + 1] in ":=.":
+                    end = pat.find(pat[k + 1] + "]", k + 2)
+                    if end >= 0:
+                        has_class, k = True, end + 2
+                        continue
+                if pat[k] == "]":
+                    close = k
+                    break
+                k += 1
+            if close < 0:
+                out.append(("lit", c))
+                i += 1
+                continue
+            if has_class:
+                # Read as ANY one character, negated or not: wider than the set, so a meet it
+                # finds may be false but none is missed. Marked, so _glob_covers never relies on it.
+                out.append(("one", True, noslash, (), "class"))
+                i = close + 1
+                continue
+            body, chars, ranges, m = pat[j:close], set(), [], 0
+            while m < len(body):
+                if m + 2 < len(body) and body[m + 1] == "-":
+                    ranges.append((body[m], body[m + 2]))
+                    m += 3
+                else:
+                    chars.add(body[m])
+                    m += 1
+            if neg:
+                chars |= noslash
+            out.append(("one", neg, frozenset(chars), tuple(ranges)))
+            i = close + 1
+        else:
+            out.append(("lit", c))
+            i += 1
+    return out
+
+
+def _glob_accepts(t: tuple, c: str) -> bool:
+    if t[0] == "lit":
+        return t[1] == c
+    hit = c in t[2] or any(lo <= c <= hi for lo, hi in t[3])
+    return hit != t[1]
+
+
+#: The bound on one _glob_meet: characters tried. Its cost is positions x positions x stand-in
+#: characters, and a crafted pattern of 3,000 one-range sets ran the hook 37.6 s (4.1.1 review round
+#: 3, A, MEASURED), past its 30 s timeout -- and a hook that times out does not block. Past the bound
+#: the answer is "may meet", which every caller reads as the wider verdict.
+_GLOB_MAX_STEPS = 50000
+
+
+def _glob_meet(a: list, b: list) -> bool:
+    """Some string matches both token lists. A walk over pairs of positions; a character is tried
+    from a literal on either side, else from stand-ins that cover every class: each character the
+    patterns name, a range's ends and their neighbours, and one that nothing names. True, unread,
+    past _GLOB_MAX_STEPS."""
+    alpha = {"/", chr(0xE000)}
+    for t in a + b:
+        if t[0] == "lit":
+            alpha.add(t[1])
+        else:
+            alpha |= t[2]
+            for lo, hi in t[3]:
+                alpha |= {lo, hi, chr(ord(lo) + 1), chr(ord(hi) + 1), chr(max(ord(lo) - 1, 0)),
+                          chr(max(ord(hi) - 1, 0))}
+    _check_deadline()                   # round 7, 1: many bounded walks still add up
+    seen, todo, steps = set(), [(0, 0)], 0
+    while todo:
+        i, j = todo.pop()
+        if (i, j) in seen:
+            continue
+        seen.add((i, j))
+        if not len(seen) & 4095:
+            _check_deadline()               # round 7, 1: the analysis deadline covers the glob walk
+        if i == len(a) and j == len(b):
+            return True
+        if i < len(a) and a[i][0] == "star":
+            todo.append((i + 1, j))
+        if j < len(b) and b[j][0] == "star":
+            todo.append((i, j + 1))
+        if i == len(a) or j == len(b):
+            continue
+        ta, tb = a[i], b[j]
+        cands = (ta[1],) if ta[0] == "lit" else (tb[1],) if tb[0] == "lit" else alpha
+        steps += len(cands)
+        if steps > _GLOB_MAX_STEPS:
+            return True
+        for c in cands:
+            if _glob_accepts(ta, c) and _glob_accepts(tb, c):
+                todo.append((i + (ta[0] != "star"), j + (tb[0] != "star")))
+    return False
+
+
+def _glob_may_meet(pat: str, other: list, slash: bool = False, tail: tuple = ()) -> bool:
+    """`pat` (then the tokens `tail`) and the tokens `other` can match one string, under every
+    reading a tool might give `pat`: a backslash as an escape or as itself, `[^` as a negation or
+    as a member (F5)."""
+    for esc in ((True, False) if chr(92) in pat else (True,)):
+        for caret in ((True, False) if "[^" in pat else (False,)):
+            if _glob_meet(_glob_parse(pat, slash, esc, caret) + list(tail), other):
+                return True
+    return False
+
+
+def _glob_covers(pat: str, ending: str, slash: bool) -> bool:
+    """Every name ending in `ending` matches `pat`: leading `*`s, then characters that each accept
+    their place in the ending. A backslash or `[^` is never read this way (F5)."""
+    if chr(92) in pat or "[^" in pat or not pat.startswith("*"):
+        return False
+    # Read with `[^` as a negation, its widest reading: only the refusal above keeps it from counting.
+    toks = _glob_parse(pat, slash, True, True)
+    if any(len(t) > 4 for t in toks):
+        return False                    # a POSIX class is read only as "any character"
+    while toks and toks[0][0] == "star":
+        toks = toks[1:]
+    if len(toks) > len(ending) or any(t[0] == "star" for t in toks):
+        return False
+    return all(_glob_accepts(t, c) for t, c in zip(toks, ending[len(ending) - len(toks):]))
+
+
+#: The operand xargs_feed gives an `xargs rm` fed by another command, as norm() spells it.
+_XARGS_ITEM = "${xargs_item}"
+
+
+def _may_name_archive(name: str) -> bool:
+    """A file name, or a pattern for one, that some .cat or .dat could have."""
+    if _ARCHIVE_EXT.search(name):
+        return True
+    # A name the shell fills in at run time (`ls <game> | while read f; do rm "<game>/$f"`) may be
+    # any archive's, as the same loop under reference/ is denied (user decision 2026-11-05). The
+    # xargs item stands for what a producer prints, which the find and listing readers judge.
+    # A backtick pair is the older spelling of $(...) (4.1.1 review round 4, 6).
+    if name.startswith(_XARGS_ITEM) and not re.search(r"[$`*?\[]", name[len(_XARGS_ITEM):]):
+        # A find's `{}` with a literal tail (`{}.bak`, round 6): an archive only if the tail can end one.
+        tail = name[len(_XARGS_ITEM):].lower()
+        return bool(tail) and any(tail.endswith(e) if len(tail) >= len(e) else e.endswith(tail)
+                                  for e in _ARCHIVE_ENDINGS)
+    # No `name != _XARGS_ITEM` clause: the bare item returned above (an empty tail is no archive), so it was
+    # dead -- the mutation gate could not kill it (4.1.1 final round).
+    if "$" in name or name.count(chr(96)) >= 2:
+        return True
+    return _is_pattern(name) and any(_glob_may_meet(name, [_GLOB_DISK_NAME] + _glob_lit(e))
+                                     for e in _ARCHIVE_ENDINGS)
+
+
+def _is_dlc_folder(n: str, g: str) -> bool:
+    """`n`, normalised, is an official DLC folder, or a pattern reaching one. Same test as the
+    file tools' DLC refusal: the segment directly below the game's extensions/ is ego_dlc_*."""
+    prefix = g + "/extensions/ego_dlc_"
+    if n.startswith(prefix) and "/" not in n[len(prefix):]:
+        return True
+    return _is_pattern(n) and _glob_may_meet(n, _glob_lit(prefix) + [_GLOB_SEGMENT])
+
+
+def _in_dlc_folder(n: str, g: str) -> bool:
+    """`n` is INSIDE an official DLC folder, at any depth, or a pattern reaching inside one. User
+    ruling 2026-11-05: a delete or move there is denied as an archive's is, never asked as a mod's."""
+    prefix = g + "/extensions/ego_dlc_"
+    if n.startswith(prefix) and "/" in n[len(prefix):].rstrip("/"):
+        return True
+    return _is_pattern(n) and _glob_may_meet(n, _glob_lit(prefix) + [_GLOB_SEGMENT, ("lit", "/"),
+                                                                     _GLOB_ALL])
+
+
+def _is_archive_home(n: str, g: str) -> bool:
+    """`n` is a folder whose direct .cat and .dat files belong to the game."""
+    if n == g or _is_dlc_folder(n, g):
+        return True
+    return _is_pattern(n) and n.count("/") == g.count("/") and fnmatch.fnmatchcase(g, n)
+
+
+def _is_game_archive(n: str, g: str) -> bool:
+    """`n` names a direct .cat or .dat in the game root or a DLC, or a pattern reaching one."""
+    home, sep, name = n.rpartition("/")
+    if not sep:
+        return False
+    if not _is_archive_home(home, g):
+        # A folder filled in at run time directly in the game folder may be `.` or
+        # `extensions/ego_dlc_x` (4.1.1 review round 4, 6: `rm "<game>/$f/01.cat"` was advised).
+        below = home[len(g) + 1:] if home.startswith(g + "/") else ""
+        if not below or "/" in below or ("$" not in below and below.count(chr(96)) < 2):
+            return False
+    return _may_name_archive(name)
+
+
+def _removes_game_archive(n: str, g: str) -> bool:
+    """A delete or move of `n` takes an archive away, the DLC folder holding them, or anything
+    else inside a DLC folder (F8). `<x>/*` is how the PowerShell front end spells
+    `Get-ChildItem <x> | Remove-Item`, so <x> counts too."""
+    return (_is_game_archive(n, g) or _is_dlc_folder(n, g) or _in_dlc_folder(n, g)
+            or (n.endswith("/*") and _is_game_archive(n[:-2], g)))
+
+
+def _holds_a_dlc(n: str, g: str) -> bool:
+    """`n` is the game's extensions/, the game folder, or a folder above it, or a pattern for one:
+    a RECURSIVE delete of it takes every official DLC with it (F2)."""
+    cands = [g + "/extensions", g] + [g[:i] for i in range(len(g)) if g[i] == "/" and i]
+    if not _is_pattern(n):
+        return n.rstrip("/") in cands
+    return any(_glob_may_meet(n, _glob_lit(c)) for c in cands)
+
+
+def deletes_recursively(words: list) -> bool:
+    """The delete verb among `words` (a command's words, wrappers and carriers included) removes
+    folders whole: `rm -r`/`-R`/`--recursive` in any cluster, as the translated `rd /s` is too."""
+    text = " ".join(words)
+    for c in [text] + _inner_commands(text):
+        toks = tokens_of(c)
+        vt = _verb_token(c)
+        if _verb_name(verb(c)) not in DELETE_VERBS or vt not in toks:
+            continue
+        for t in toks[toks.index(vt) + 1:]:
+            if t == "--recursive" or (re.match(r"^-[A-Za-z]+$", t) and set(t[1:]) & set("rR")):
+                return True
+    return False
+
+
+def named_game_roots(n: str) -> list:
+    """The game folders a normalised path names by the install's folder name, for a machine with
+    no configured game root. The same name test as the `rm -rf <game>` backstop (GAME_ROOTISH,
+    rm_named_game), at a whole path segment, and only its `x4 foundations` spelling: the other one
+    is the PROFILE, whose stray .dat files are not the game's. An option word (`--reference=<path>`,
+    which a reader may keep as a target) is not a path, so it names no game folder."""
+    if n.startswith("-"):
+        return []
+    out, at = [], 0
+    while True:
+        at = n.find("/", at + 1)
+        p = n if at < 0 else n[:at]
+        m = GAME_ROOTISH.search(p)
+        if (m and m.group(1).lower() == "x4 foundations" and not m.group(2)
+                and (m.start() == 0 or p[m.start() - 1] == "/")):
+            out.append(p)
+        elif _globs_install_name(p):
+            # The last segment too, as the literal name counts there (4.1.1 review round 4, 5:
+            # `find /d/Games/X4*Foundations -name '*.cat' -delete` was allowed).
+            out.append(p)
+        if at < 0:
+            return out
+
+
+#: The install's folder name as a path segment, for a pattern to meet: `X4*Foundations`, `X4?F...`.
+_INSTALL_NAME = _glob_lit("x4 foundations")
+
+
+def _globs_install_name(p: str) -> bool:
+    """The last segment of `p` is a pattern that may spell the install's folder name (4.1.1 review
+    round 3, C). One that spells it with fewer than two literal characters (`*`, `?*`) is read so
+    only directly under steamapps/common: elsewhere `C:/*/01.dat` names every folder, not a game."""
+    head, _sep, last = p.rpartition("/")
+    if not last or not _is_pattern(last):
+        return False
+    lits = sum(1 for t in _glob_parse(last, False, True, False) if t[0] == "lit")
+    if lits < 2 and not head.endswith("/steamapps/common"):
+        return False
+    return _glob_may_meet(last, _INSTALL_NAME)
+
+
+#: rsync options whose value is the NEXT word when not joined by `=`: a filter rule, a list file,
+#: a folder, a program. `--exclude '*.dat'` names what is NOT copied, so it is never a source.
+_RSYNC_VALUE_OPTS = {"--exclude", "--include", "--filter", "-f", "--exclude-from", "--include-from",
+                     "--files-from", "-e", "--rsh", "--rsync-path", "--log-file", "--log-file-format",
+                     "-T", "--temp-dir", "--partial-dir", "--compare-dest", "--copy-dest", "--link-dest",
+                     "--backup-dir", "--suffix", "--chmod", "--chown", "--usermap", "--groupmap", "-B",
+                     "--block-size", "--max-size", "--min-size", "--bwlimit", "--timeout", "--contimeout",
+                     "--port", "--password-file", "--out-format", "--skip-compress", "--iconv", "--info",
+                     "--debug", "--sockopts", "--modify-window", "--max-delete", "--protocol",
+                     "--checksum-choice", "--compress-choice", "--compress-level", "-M", "--remote-option",
+                     "--write-batch", "--read-batch", "--only-write-batch", "--stop-after", "--stop-at"}
+
+
+def _copy_sources(seg: str) -> list:
+    """A copy's words other than its destination, an option, or an rsync option's value."""
+    toks = tokens_of(seg)
+    values = ({toks[i + 1] for i, t in enumerate(toks[:-1]) if t in _RSYNC_VALUE_OPTS}
+              if verb(seg) == "rsync" else set())
+    dests = copy_dests(seg)
+    return [o for o in _operands(seg) if o not in dests and not o.startswith("-") and o not in values]
+
+
+def _robocopy_names(seg: str) -> list:
+    """The file names a robocopy copies: the words after SRC and DST, up to its next switch. The
+    words after a switch, as in `/XF *.dat`, are that switch's own and name what is skipped."""
+    seen, out = 0, []
+    for t in tokens_of(seg)[_verb_at(seg, 0) + 1:]:     # P1: see _verb_at
+        if _ROBO_SWITCH.match(t):
+            if seen >= 2:
+                break
+            continue
+        if t.startswith(("<", ">")) or re.match(r"^\d+>", t):
+            continue
+        seen += 1
+        if seen > 2:
+            out.append(t)
+    return out
+
+
+def copy_names_archive(seg: str) -> bool:
+    """A copy whose SOURCE is named as an archive: into a directory it lands under that name."""
+    v = verb(seg)
+    if v == "robocopy":
+        names = _robocopy_names(seg)
+    elif v in COPY_VERBS:
+        names = _copy_sources(seg)
+    else:
+        return False
+    return any(_ARCHIVE_EXT.search(norm(o)) for o in names)
+
+
+def rsync_moved_sources(seg: str) -> list:
+    """`rsync --remove-source-files` takes its sources away, as `mv` does. Fed to this rule only:
+    a wider reach for the same flag is a separate change."""
+    if verb(seg) != "rsync" or "--remove-source-files" not in tokens_of(seg):
+        return []
+    return _copy_sources(seg)
+
+
+def _xargs_replace(seg: str) -> tuple:
+    """(replacement string or None, the delete verb's words that carry it) of `xargs -I R rm ...`:
+    `-I R`, `-IR`, `--replace=R`, and GNU's older spellings `-i` / `--replace` (`{}`) and `-iR` (4.1.1
+    review A4; before it the wrapper table read the word after a bare `-i` as its value, F356). Only the
+    xargs's own options count, the words between the last `xargs` and the verb."""
+    toks = tokens_of(seg)
+    vt = _verb_token(seg)
+    if vt not in toks:
+        return None, []
+    vi = toks.index(vt)
+    xi = max((i for i, t in enumerate(toks[:vi]) if _verb_name(t) == "xargs"), default=-1)
+    repl = None
+    for i, t in enumerate(toks[:vi]):
+        if i <= xi:
+            continue
+        if t == "-I" and i + 1 < vi:
+            repl = toks[i + 1]
+        elif t.startswith("-I") and len(t) > 2:
+            repl = t[2:]
+        elif t.startswith("--replace="):
+            repl = t[len("--replace="):]
+        elif t in ("-i", "--replace"):
+            repl = "{}"
+        elif t.startswith("-i") and len(t) > 2:
+            repl = t[2:]
+    if not repl:
+        return None, []
+    return repl, [w for w in toks[vi + 1:] if repl in w]
+
+
+def xargs_passes_item(seg: str) -> bool:
+    """The item an `xargs rm` reads is itself an operand: no -I, or a word that starts with it."""
+    repl, words = _xargs_replace(seg)
+    return repl is None or any(w.startswith(repl) for w in words)
+
+
+def xargs_replaced_folders(seg: str, prev) -> list:
+    """`xargs -I{} rm <dir>/{}` deletes inside <dir>, whatever the producer printed: `<dir>/*`."""
+    if not xargs_feed(seg, prev):
+        return []
+    repl, words = _xargs_replace(seg)
+    return [w[:w.index(repl)] + "*" for w in words if not w.startswith(repl)]
+
+
+def xargs_listed_operands(seg: str, prev) -> list:
+    """What a producer other than find hands an `xargs rm`, read as named: `ls <game>/*.dat`.
+    find's own operands include its tests, so it goes through find_can_reach_archive."""
+    if not xargs_feed(seg, prev) or verb(prev) == "find" or not xargs_passes_item(seg):
+        return []
+    # A bare `ls` lists the current directory (4.1.1 review round 2, F3).
+    return _operands(prev) or (["."] if verb(prev) in ("ls", "dir") else [])
+
+
+# ---- find expressions. Parsed, never run: a regex the user wrote is not handed to `re`, because
+# `-regex '(.*)*zzz'` backtracked for minutes, past the hook's own timeout (4.1.1 review, MEASURED).
+#: Always true, no value: positional options, -true, -prune (which only stops descent).
+_FIND_TRUE0 = {"-depth", "-d", "-xdev", "-mount", "-follow", "-noleaf", "-daystart", "-warn",
+               "-nowarn", "-ignore_readdir_race", "-noignore_readdir_race", "-true", "-prune"}
+#: Always true, one value.
+_FIND_TRUE1 = {"-maxdepth", "-mindepth", "-regextype"}
+#: Tests the text cannot decide, no value and one value.
+_FIND_UNKNOWN0 = {"-empty", "-readable", "-writable", "-executable", "-nouser", "-nogroup", "-quit"}
+_FIND_UNKNOWN1 = {"-size", "-user", "-group", "-uid", "-gid", "-perm", "-links",
+                  "-inum", "-mtime", "-atime", "-ctime", "-mmin", "-amin", "-cmin", "-used", "-fstype",
+                  "-context", "-samefile", "-newer", "-anewer", "-cnewer", "-lname", "-ilname"}
+_FIND_NEWER_XY = re.compile(r"^-newer[aBcmt][aBcmt]$")
+#: Bounds: past them the expression is not read, and an unread expression may reach anything.
+_FIND_MAX_WORDS, _FIND_MAX_DEPTH = 400, 32
+#: Escaped, these stand for themselves in every regex dialect find accepts.
+_RX_SELF_ESCAPES = set("./-_")
+
+
+def _exec_deletes(words: list) -> bool:
+    """`-exec <words>` deletes: the command is a delete verb, or a shell carrying one."""
+    if not words:
+        return False
+    # Through the shared wrapper table (verb) and carrier walk (_inner_commands), as any other
+    # command: `-exec env rm`, `-exec busybox rm`, `-exec cmd /c del` (4.1.1 review round 2, F4).
+    # `find <root> -exec bash -c '<cmd>' _ {} ;` is the same carrier as anywhere else.
+    # Each word QUOTED back (4.1.1 review round 6, A): find hands its words over as argv, so
+    # `sh -c echo\ a\;\ rm\ -rf\ <x>` is ONE word holding a whole program; joined bare, it fell
+    # apart at its blanks and the shell's text read as `echo`. And every SEGMENT of a carried
+    # text, not only its first: `sh -c 'echo a; rm -rf <x>'`.
+    text = " ".join(_sh_quote(w) for w in words)
+    if _verb_name(verb(text)) in DELETE_VERBS:
+        return True
+    return any(_verb_name(verb(s)) in DELETE_VERBS for x in _inner_commands(text) for s in segments(x))
+
+
+def _exec_end(words: list, i: int) -> int:
+    """The index of the terminator of the -exec at `i` (`;`, or `+` right after `{}`), or len(words)."""
+    j = i + 1
+    while j < len(words) and words[j] != ";" and (words[j] != "+" or words[j - 1] != "{}"):
+        j += 1
+    return j
+
+
+#: The entry a find or an xargs hands its command, as a path no other operand can spell (round 6, D).
+_FIND_ENTRY = "/x4-find-entry/" + "entry"
+_PERL_IN_PLACE = re.compile(r"^-[A-Za-z]*i")
+
+
+def _is_entry(p: str) -> bool:
+    return p == _FIND_ENTRY or p.startswith(_FIND_ENTRY + "/")
+
+
+def _entry_effect(text: str):
+    """"move" when a command (a carried text too) moves or renames _FIND_ENTRY, "write" when it
+    writes it or into it, else None. The same readers every other write uses: copy and move
+    destinations, redirects, truncate/dd, sed -i, output flags, touch/chmod/chown/ln, plus
+    `perl -i`. The entry as a SOURCE being copied elsewhere is no change (`cp {} <backup>/`)."""
+    effect = None
+    for x in [text] + _inner_commands(text):
+        for s in segments(x):
+            if any(_is_entry(h) for h in move_sources(s) + replaced_sources(s) + rsync_moved_sources(s)):
+                return "move"
+            hits = (copy_dests(s) + [t for _m, t in redirects(s)] + clobber_targets(s) + sed_in_place_targets(s)
+                    + output_targets(s) + modify_targets(s) + decompress_outputs(s))
+            toks = tokens(s)
+            if _verb_name(verb(s)) == "perl" and any(not q and _PERL_IN_PLACE.match(t) for t, q in toks):
+                hits += [t for t, _q in toks]
+            if any(_is_entry(h) for h in hits):
+                effect = "write"
+    return effect
+
+
+def _exec_entry_effect(words: list):
+    """_entry_effect of an -exec command, `{}` standing for the entry."""
+    if not words or not any("{}" in w for w in words):
+        return None
+    return _entry_effect(" ".join(_sh_quote(w.replace("{}", _FIND_ENTRY)) for w in words))
+
+
+#: Programs that pass their stdin on (filtered or not) when given no input file (round 7, 2), so
+#: `find ... | sort | xargs mv -t <dir>` is read as fed by the find. tee writes files and passes it on.
+_STDIN_FILTERS = frozenset({"sort", "uniq", "head", "tail", "tr", "cat", "tee", "grep", "egrep", "fgrep",
+                            "sed", "awk", "gawk", "mawk", "cut"})       # round 8 (e): sed, awk, cut
+
+
+def _passes_stdin_through(seg: str) -> bool:
+    v = verb(seg)
+    if v not in _STDIN_FILTERS:
+        return False
+    if v in ("tee", "tr"):
+        return True
+    ops = [o for o in _operands(seg) if not re.fullmatch(r"[+-]?[0-9]+", o)]
+    if v == "sed":
+        flags = [t for t in tokens_of(seg) if t.startswith("-")]
+        if any(f.startswith("--in-place") or (not f.startswith("--") and "i" in f[1:]) for f in flags):
+            return False                     # sed -i edits files; it passes nothing on
+        return len(ops) <= 1 + sum(1 for f in flags if f in ("-e", "-f", "--expression", "--file"))
+    if v == "cut":
+        ops = [o for o in ops if len(o) > 1]  # `-d ,`: a one-character delimiter is no file
+    return len(ops) <= (1 if v in ("grep", "egrep", "fgrep", "awk", "gawk", "mawk") else 0)
+
+
+def _stdin_producer(before: list):
+    """The segment whose output reaches the next one: the one just before it, or, through pass-on
+    filters (_STDIN_FILTERS), a find further back -- only a find, which the find readers judge."""
+    if not before:
+        return None
+    j = len(before) - 1
+    while j > 0 and _passes_stdin_through(before[j]):
+        j -= 1
+    if j < len(before) - 1 and verb(before[j]) == "find":
+        return before[j]
+    return before[-1]
+
+
+def find_entry_write_roots(seg: str) -> list:
+    """The starting points of a find whose -exec moves or writes what it finds (round 6, D)."""
+    if verb(seg) != "find" or not ("-exec" in seg or "-ok" in seg):
+        return []
+    words = tokens_of(seg)
+    for i, t in enumerate(words):
+        if t in _FIND_EXEC:
+            j = _exec_end(words, i)
+            if j < len(words) and _exec_entry_effect(words[i + 1:j]):
+                return _find_roots(seg) or ["."]
+    return []
+
+
+def xargs_entry_effect(seg: str, prev):
+    """"move"/"write" when an `xargs <cmd>` fed by a find moves or writes each item: `{}`-style
+    replacement (-I R) or the item appended, as xargs does (round 6, D)."""
+    if prev is None or verb(prev) != "find":
+        return None
+    toks = tokens_of(seg)
+    vt = _verb_token(seg)
+    if vt not in toks or not any(_verb_name(t) == "xargs" for t in toks[:toks.index(vt)]):
+        return None
+    words = toks[toks.index(vt):]
+    repl, _w = _xargs_replace(seg)
+    words = [w.replace(repl, _FIND_ENTRY) for w in words] if repl else words + [_FIND_ENTRY]
+    return _entry_effect(" ".join(_sh_quote(w) for w in words))
+
+
+#: How many items of an echo/printf an `xargs -I` reading is built for (_xargs_item_readings). More is
+#: too tangled to analyse (carriers_truncated, a refusal), never a silent cut (4.1.1 review A2: the
+#: 9th item of 8 was dropped, so a reference file there was allowed). The segment bound is the same.
+_XARGS_ITEMS = 32                       # = _MAX_SEGMENT_READINGS, defined further down
+
+
+def _xargs_item_readings(seg: str, prev) -> list:
+    """`echo <x> | xargs <cmd> [args]` runs `<cmd> [args] <x>` (or `<cmd>` with -I's replacement string
+    replaced by <x>): that command, as a reading in its own right (4.1.1 final round, F360). Only the delete
+    verbs read xargs' stdin (xargs_feed), so `echo <x4-paths.env> | xargs touch` and `echo <reference file> |
+    xargs truncate -s 0` reached no write rule while the literal spellings were denied. Only an echo/printf
+    feeds a reading: its words ARE the items, judged like the literal operands, unsplit as xargs_feed reads
+    them (xargs splits a blank-holding word, so the reading is the stricter one). A find's or a listing's
+    items are entries the guard cannot name, which the find and listing readers already judge."""
+    if verb(prev) not in ("echo", "printf"):
+        return []
+    toks = tokens_of(seg)
+    vt = _verb_token(seg)
+    if vt not in toks or not any(_verb_name(t) == "xargs" for t in toks[:toks.index(vt)]):
+        return []
+    items = _producer_items(prev)
+    if not items:
+        return []
+    ran = _drop_redirects(toks[toks.index(vt):])
+    repl, _w = _xargs_replace(seg)
+    if repl:
+        if len(items) > _XARGS_ITEMS:
+            _READINGS_TRUNCATED[0] = True
+        return [" ".join(_sh_quote(w.replace(repl, item)) for w in ran) for item in items[:_XARGS_ITEMS]]
+    return [" ".join(_sh_quote(w) for w in ran + items)]
+
+
+#: fd's options that take a value, so its search paths can be told from them (_fd_exec_readings).
+_FD_VALUE_OPTS = frozenset({"-e", "--extension", "-t", "--type", "-E", "--exclude", "-d", "--max-depth",
+                            "--min-depth", "--exact-depth", "-j", "--threads", "-S", "--size", "--changed-within",
+                            "--changed-before", "-o", "--owner", "--base-directory", "--path-separator",
+                            "--max-results", "-c", "--color", "--ignore-file", "--format", "--batch-size"})
+_FD_PLACEHOLDER = re.compile(r"[{](?:/|//|[.]|/[.])?[}]")
+
+
+def _fd_exec_readings(seg: str) -> list:
+    """`fd [pattern] [path...] -x|-X <cmd>` runs <cmd> per result (or once for all), with `{}`, `{/}`,
+    `{//}`, `{.}`, `{/.}` standing for the result, or the result appended when none is given: a carrier
+    like find's -exec (4.1.1 review round 7, 3). A result is an entry under each search path."""
+    paths, ran, _opts = _fd_parse(seg)
+    if not ran:
+        return []
+    out = []
+    for root in paths[:_FIND_EXEC_ROOTS]:
+        item = _sh_quote(root.rstrip("/") + "/") + _XARGS_ITEM
+        if any(_FD_PLACEHOLDER.search(w) for w in ran):
+            parts = [item.join(_sh_quote(p) if p else "" for p in _FD_PLACEHOLDER.split(w))
+                     if _FD_PLACEHOLDER.search(w) else _sh_quote(w) for w in ran]
+        else:
+            parts = [_sh_quote(w) for w in ran] + [item]
+        out.append(" ".join(parts))
+    return list(dict.fromkeys(out))
+
+
+def _fd_parse(seg: str) -> tuple:
+    """(search paths, the -x/-X command, {option: value}) of an `fd` (round 8, F3). The pattern is
+    the first operand and the paths the rest; `--search-path` adds a path and stops the first
+    operand being one, `--base-directory` is where relative paths start."""
+    toks = tokens(seg)
+    words = [t for t, _q in toks[_verb_at(seg, 0) + 1:]]
+    pos, search, opts, i, ran = [], [], {}, 0, None
+    while i < len(words):
+        w = words[i]
+        if w in ("-x", "--exec", "-X", "--exec-batch"):
+            ran = words[i + 1:]
+            break
+        name, eq, val = w.partition("=")
+        if name == "--search-path" and (eq or i + 1 < len(words)):
+            search.append(val if eq else words[i + 1])
+            i += 1 if eq else 2
+            continue
+        if w.startswith("-") and w != "-":
+            if name in _FD_VALUE_OPTS and not eq and i + 1 < len(words):
+                opts.setdefault(name, []).append(words[i + 1])
+                i += 2
+            else:
+                opts.setdefault(name, []).append(val if eq else "")
+                i += 1
+            continue
+        pos.append(w)
+        i += 1
+    if ran and ran[-1] == ";":
+        ran = ran[:-1]
+    paths = search + pos[1:] if search else pos[1:]
+    base = (opts.get("--base-directory") or [""])[-1]
+    paths = [p if (not base or is_abs(p)) else base.rstrip("/") + "/" + p for p in paths] or [base or "."]
+    return paths, ran, opts
+
+
+def _fd_as_find(seg: str):
+    """The `find` an `fd ... -x|-X <cmd>` amounts to, for the find readers' reach test (round 8, F3: `fd .
+    <game> -x rm` only advised where `find <game> -exec rm {} ;` denies). The pattern becomes a
+    `-regex` (fd matches it anywhere in the name; read conservatively), `-e EXT` a `-name '*.EXT'`,
+    `-g GLOB` a `-name`, `-d N` a `-maxdepth`; the command runs once per result with `{}`."""
+    paths, ran, opts = _fd_parse(seg)
+    if not ran:
+        return None
+    toks = tokens(seg)
+    words = [t for t, _q in toks[_verb_at(seg, 0) + 1:]]
+    first = next((w for w in words if not w.startswith("-")), None)
+    pattern = None if opts.get("--search-path") or first in (None, "-x", "-X", "--exec", "--exec-batch") \
+        else first
+    expr = []
+    for d in (opts.get("-d") or opts.get("--max-depth") or [])[-1:]:
+        expr += ["-maxdepth", d]
+    exts = (opts.get("-e") or []) + (opts.get("--extension") or [])
+    if exts:
+        expr += ["("] + sum((["-o", "-name", "*." + e.lstrip(".")] for e in exts), [])[1:] + [")"]
+    if "-g" in opts or "--glob" in opts:
+        if pattern:
+            expr += ["-name", pattern]
+    elif pattern and pattern not in (".", "", "^", ".*"):
+        expr += ["-regex", ".*" + pattern + ".*"]
+    cmd = [_FD_PLACEHOLDER.sub("{}", w) for w in ran]
+    if not any("{}" in w for w in cmd):
+        cmd.append("{}")
+    return " ".join(["find"] + [_sh_quote(p) for p in paths[:_FIND_EXEC_ROOTS]] + [_sh_quote(w) for w in expr]
+                    + ["-exec"] + [_sh_quote(w) for w in cmd] + ["';'"])
+
+
+#: How many starting points a find's -exec readings are built for (_find_exec_readings).
+_FIND_EXEC_ROOTS = 4
+
+
+def _find_exec_readings(seg: str) -> list:
+    """Each command a find's -exec/-execdir/-ok/-okdir runs, as a command in its own right (4.1.1
+    review round 6, A; GitHub issue #18). The delete rules read a find only as deleting under its
+    starting point, so `find . -exec rm -rf <reference> \\;`, `-exec git add -A \\;` and `-exec sh
+    -c '<cmd>' \\;` reached no rule. find runs the words as argv, so each is quoted back as written
+    and nothing is re-split; `{}` is an entry the guard cannot name, under the starting point
+    (`<root>/${xargs_item}`, as xargs_feed spells one). `-execdir`/`-okdir` run in the entry's own
+    folder: under the starting point, in it, or (for the starting point itself) its parent, with
+    `{}` as `./<name>` -- one reading each. A find that can only match a regenerable cache
+    (_only_regenerable) drops a bare `{}`, so its cleanup stays the hygiene it always was."""
+    toks = tokens(seg)
+    start = _verb_at(seg, 0) + 1        # P1: see _verb_at
+    words = [t for t, _q in toks[start:]]
+    roots = []
+    for t, quoted in toks[start:]:
+        if not quoted and t.startswith(("-", "(", "!")):
+            break
+        roots.append(t)
+    roots = roots[:_FIND_EXEC_ROOTS] or ["."]
+    regenerable = _only_regenerable([t for t, _q in toks])
+    out, i = [], len(roots)
+    while i < len(words):
+        if words[i] not in _FIND_EXEC:
+            i += 1
+            continue
+        act, j = words[i], i + 1
+        while j < len(words) and not (words[j] == ";" or (words[j] == "+" and words[j - 1] == "{}")):
+            j += 1
+        ran, i = words[i + 1:j], j + 1
+        if j >= len(words) or not ran:
+            continue                     # find refuses an unterminated -exec and runs nothing
+        for root in roots:
+            base = root.rstrip("/" + chr(92)) or root
+            if act in ("-exec", "-ok"):
+                places = [("", _sh_quote(base + "/") + _XARGS_ITEM)]
+            else:
+                parent, slash, name = base.replace(chr(92), "/").rpartition("/")
+                if name in ("", ".", ".."):
+                    parent, name = base + "/..", "."
+                elif slash and (not parent or parent.endswith(":")):
+                    parent += "/"
+                places = [("cd " + _sh_quote(base) + " && ", "./" + _XARGS_ITEM),
+                          ("cd " + _sh_quote(base + "/") + _XARGS_ITEM + " && ", "./" + _XARGS_ITEM),
+                          ("cd " + _sh_quote(parent or ".") + " && ", _sh_quote("./" + name))]
+            for cd, item in places:
+                parts = []
+                for w in ran:
+                    if w == "{}" and regenerable:
+                        continue
+                    pieces = w.split("{}")
+                    parts.append(item.join(_sh_quote(p) if p else "" for p in pieces) if len(pieces) > 1
+                                 else _sh_quote(w))
+                out.append(cd + " ".join(parts))
+            if act in ("-exec", "-ok") and "{}" not in "".join(ran):
+                break                    # the same command whatever the root: read it once
+    return list(dict.fromkeys(out))
+
+
+def _find_parse(words: list):
+    """(tree, has an action, (mindepth, maxdepth)) for a find expression, or None when it cannot be
+    read. The depths are find's global options, None when not given (the last one counts, as in
+    GNU find).
+
+    Nodes: ("and"|"or"|",", [nodes]), ("not", node), ("const", True|False|None),
+    ("name", test, value), ("act", "delete"|"print"|"exec", value). None is "cannot tell"."""
+    if len(words) > _FIND_MAX_WORDS:
+        return None
+    pos, acted, depth = 0, False, {}
+
+    def take():
+        nonlocal pos
+        if pos >= len(words):
+            raise ValueError("a test with no value")
+        pos += 1
+        return words[pos - 1]
+
+    def primary():
+        nonlocal pos, acted
+        w = take()
+        if w in _FIND_NAME_TESTS:
+            return ("name", w, take())
+        if w in _FIND_TRUE0:
+            return ("const", True)
+        if w == "-false":
+            return ("const", False)
+        if w in _FIND_TRUE1:
+            v = take()
+            if w in ("-maxdepth", "-mindepth"):
+                # A depth not spelled as a number (`$N`) bounds nothing that can be read.
+                depth[w] = int(v) if v.isdigit() else None
+            return ("const", True)
+        if w in _FIND_UNKNOWN0:
+            return ("const", None)
+        if w in ("-type", "-xtype"):
+            return ("name", w, take())     # decided only for an entry known to be a folder
+        if w in _FIND_UNKNOWN1 or _FIND_NEWER_XY.match(w):
+            take()
+            return ("const", None)
+        acted = True
+        if w == "-delete":
+            return ("act", "delete", True)
+        if w in ("-print", "-print0", "-ls"):
+            return ("act", "print", True)
+        if w == "-printf":
+            take()
+            return ("act", "print", True)
+        if w in ("-fprint", "-fprint0", "-fls"):
+            take()
+            return ("const", True)
+        if w == "-fprintf":
+            take()
+            take()
+            return ("const", True)
+        if w in _FIND_EXEC:
+            start = pos
+            while pos < len(words) and words[pos] not in (";", "+"):
+                pos += 1
+            if pos >= len(words) or pos == start:
+                raise ValueError("an unterminated -exec")
+            pos += 1
+            ran = words[start:pos - 1]
+            if not _exec_deletes(ran):
+                # A command that CHANGES the entry (round 6, D): moves it ("move") or writes it.
+                return ("act", _exec_entry_effect(ran) or "exec", None)
+            # A recursive delete also removes a matched FOLDER whole (F2).
+            return ("act", "rdelete" if deletes_recursively(ran) else "delete", None)
+        raise ValueError("an unknown primary")
+
+    def unary(depth):
+        nonlocal pos
+        negate = False
+        while pos < len(words) and words[pos] in ("!", "-not"):
+            negate, pos = not negate, pos + 1
+        if pos < len(words) and words[pos] == "(":
+            if depth >= _FIND_MAX_DEPTH:
+                raise ValueError("too deep")
+            pos += 1
+            node = chain(depth + 1, 0)
+            if take() != ")":
+                raise ValueError("an unclosed group")
+        else:
+            node = primary()
+        return ("not", node) if negate else node
+
+    _LEVELS = ((",",), ("-o", "-or"), ("-a", "-and"))
+
+    def chain(depth, level):
+        # comma, then OR, then AND (implicit between adjacent terms), lowest binding first
+        def sub():
+            return unary(depth) if level == 2 else chain(depth, level + 1)
+        nonlocal pos
+        items = [sub()]
+        while pos < len(words) and words[pos] != ")":
+            if words[pos] in _LEVELS[level]:
+                pos += 1
+            elif level < 2 or words[pos] in (",", "-o", "-or"):
+                break
+            items.append(sub())
+        return items[0] if len(items) == 1 else (_LEVELS[level][0], items)
+
+    try:
+        tree = chain(0, 0) if words else ("const", True)
+    except ValueError:
+        return None
+    if pos != len(words):
+        return None
+    return tree, acted, (depth.get("-mindepth"), depth.get("-maxdepth"))
+
+
+def _literal_tail(pat: str, specials: str, self_escapes: set) -> str:
+    """The literal text every full match of `pat` must END with; '' when none can be read."""
+    out, i = [], len(pat) - 1
+    while i >= 0:
+        c, j = pat[i], i - 1
+        while j >= 0 and pat[j] == chr(92):
+            j -= 1
+        if (i - 1 - j) % 2:                         # escaped
+            if c not in self_escapes:
+                break
+            out.append(c)
+            i = j
+            continue
+        if c in specials or c == chr(92):
+            break
+        out.append(c)
+        i -= 1
+    return "".join(reversed(out))
+
+
+def _glob_fold(toks: list) -> list:
+    """Tokens with every literal lower-cased, for a case-folding test."""
+    return [("lit", t[1].lower()) if t[0] == "lit" else t for t in toks]
+
+
+def _find_name_test(kind: str, value: str, hay: list, name: list, ending: str):
+    """True, False, or None (cannot tell) for one entry. `hay` is the path as find prints it, as
+    tokens (a `*` stands for a root not spelled as plain text); `name` is the entry's own name and
+    `ending` the text every such name ends with. Names are not listed: an entry is any lower-case
+    name with its ending (READ: every archive and DLC folder name is lower case on disk)."""
+    fold = kind.startswith("-i")
+    v = value.lower() if fold else value
+    if fold:
+        hay, name = _glob_fold(hay), _glob_fold(name)
+    if kind in ("-name", "-iname"):
+        if not _glob_may_meet(v, name):
+            return False
+        return True if _glob_covers(v, ending, False) else None
+    if kind in ("-regex", "-iregex"):
+        # Never run. A regex whose every match must END in text no entry can end in cannot
+        # match; anything else may. An alternation anywhere means no ending is required.
+        if "|" in v:
+            return None
+        escapes = len(v[:-1]) - len(v[:-1].rstrip(chr(92)))
+        body = v[:-1] if v.endswith("$") and escapes % 2 == 0 else v
+        # Only its last characters: a match ending in all of it ends in them, so a False stays
+        # sound, and a crafted tail of thousands cannot outrun the meet's bounds (round 3, A).
+        tail = _literal_tail(body, ".^$*+?{}[]()|", _RX_SELF_ESCAPES)[-64:]
+        if not tail:
+            return None
+        return None if _glob_meet([_GLOB_ALL] + _glob_lit(tail), hay) else False
+    if not _glob_may_meet(v, hay, slash=True):
+        return False
+    return True if _glob_covers(v, ending, True) else None
+
+
+def _find_eval(node, test, reach: list, modes: tuple):
+    """Three-valued: True, False, None. An action in `modes` reached on any path, certain or not,
+    is recorded in `reach`; an AND stops at a False, an OR at a True, as find does."""
+    kind = node[0]
+    if kind == "const":
+        return node[1]
+    if kind == "name":
+        return test(node[1], node[2])
+    if kind == "act":
+        if node[1] in modes:
+            reach.append(node)
+        return node[2]
+    if kind == "not":
+        v = _find_eval(node[1], test, reach, modes)
+        return None if v is None else not v
+    val = None
+    if kind == "-a":
+        val = True
+        for sub in node[1]:
+            v = _find_eval(sub, test, reach, modes)
+            if v is False:
+                return False
+            val = val if v is True else None
+    elif kind == "-o":
+        val = False
+        for sub in node[1]:
+            v = _find_eval(sub, test, reach, modes)
+            if v is True:
+                return True
+            val = val if v is False else None
+    else:                               # `,`: every part runs, the last one's value is the value
+        for sub in node[1]:
+            val = _find_eval(sub, test, reach, modes)
+    return val
+
+
+def _archive_entries(g: str) -> list:
+    """(path, name, ending, is a folder, DLC content) for what a find over the game may remove: an
+    archive in the game folder or in a DLC folder; for a recursive delete only, a DLC folder,
+    extensions/ and the game folder themselves (F2); and anything else inside a DLC folder, at any
+    depth and under any name (F8, 4.1.1 review round 3, E). Paths and names are glob tokens."""
+    dlc = _glob_lit(g + "/extensions/ego_dlc_") + [_GLOB_DISK_NAME]
+    out = []
+    for e in _ARCHIVE_ENDINGS:
+        name = [_GLOB_DISK_NAME] + _glob_lit(e)
+        out.append((_glob_lit(g + "/") + name, name, e, False, False))
+        out.append((dlc + [("lit", "/")] + name, name, e, False, False))
+    out.append((dlc, _glob_lit("ego_dlc_") + [_GLOB_DISK_NAME], "", True, False))
+    out.append((_glob_lit(g + "/extensions"), _glob_lit("extensions"), "extensions", True, False))
+    # The install folder's own name, in any case: it is spelled `X4 Foundations` on disk.
+    base = g.rpartition("/")[2]
+    out.append((_glob_lit(g), [("one", False, frozenset((c.lower(), c.upper())), ()) for c in base],
+                base, True, False))
+    out.append((dlc + [("lit", "/"), _GLOB_ALL], [_GLOB_SEGMENT], "", False, True))
+    return out
+
+
+def _entry_depths(rel: list) -> tuple:
+    """(least, most) depth below a find's root of an entry whose path below it is `rel`; most is
+    None when a token may hold any number of `/`."""
+    least = 1 + sum(1 for t in rel if t == ("lit", "/"))
+    deep = any(t[0] != "lit" and _glob_accepts(t, "/") for t in rel)
+    return least, (None if deep else least)
+
+
+def find_can_reach_archive(seg: str, root: str, raw: str, g: str, mode: str, rec: bool = False) -> bool:
+    """Can a `find` from `root` (as written: `raw`) delete, or print to an `xargs rm` (`mode`
+    "print"; `rec` when that rm is recursive), a base-game or DLC archive, or remove a folder that
+    holds one? Mode "delete" also counts an -exec that moves or writes the entry (round 6, D), and
+    modes "move"/"write" are a find printing to an `xargs` that moves or writes each item. Each entry under `root` walks the expression as find would, three-valued: a test the
+    text cannot decide may go either way, and an action reached on either branch counts. An
+    expression it cannot read may reach every entry. A root in or at a DLC folder is denied
+    whatever it matches (F8).
+
+    A root AT extensions/ also reaches every other file in a DLC folder (F8, round 3 E); a root at
+    the game folder or above does not, by decision: from there `find . -name __pycache__ -exec rm
+    -rf {} +` is routine repository cleanup (BLIND-SPOTS F356). A global -maxdepth or -mindepth
+    drops the entries it cannot reach (round 3, D)."""
+    r = root.rstrip("/")
+    if _is_dlc_folder(r, g) or _in_dlc_folder(r, g):
+        return True
+    file_modes = ("delete", "rdelete", "write", "move") if mode == "delete" else ("print",)
+    dir_modes = {"delete": ("rdelete", "move"), "print": ("print",) if rec else (), "move": ("print",),
+                 "write": ()}[mode]
+    # Writing INTO a folder harms only a DLC folder (anything in it is game content); moving one
+    # away removes it like a delete (round 6, D).
+    dlc_dir_modes = dir_modes + {"delete": ("write",), "write": ("print",)}.get(mode, ())
+    plain = raw.replace(chr(92), "/").rstrip("/")
+    if any(c in plain for c in "$~`") or _is_pattern(plain) or not plain:
+        plain = None
+    ext = g + "/extensions"
+    at_ext = (r == ext) if not _is_pattern(r) else _glob_may_meet(r, _glob_lit(ext))
+    entries = []
+    # A write or a move reaches every file in a DLC folder from any root that holds one: the routine
+    # cleanup the delete exemption below keeps is a delete, never a rewrite (round 6, D).
+    changes = ("write", "move") if mode == "delete" else ("print",) if mode in ("write", "move") else ()
+    wide = bool(changes) and _holds_a_dlc(r, g)
+    for path, name, ending, folder, content in _archive_entries(g):
+        modes = (dlc_dir_modes if ending == "" else dir_modes) if folder else file_modes
+        if content and not at_ext:
+            modes = changes if wide else ()
+        if not modes:
+            continue
+        if _is_pattern(r):
+            if not _glob_may_meet(r, path, tail=(("lit", "/"), _GLOB_ALL)):
+                continue
+            hay = [_GLOB_ALL, ("lit", "/")] + name
+            span = (1, None)
+        else:
+            head = r + "/"
+            if len(path) <= len(head) or "".join(t[1] for t in path[:len(head)] if t[0] == "lit") != head \
+                    or any(t[0] != "lit" for t in path[:len(head)]):
+                continue
+            rel = path[len(head):]
+            hay = (_glob_lit(plain + "/") if plain is not None else [_GLOB_ALL, ("lit", "/")]) + rel
+            span = _entry_depths(rel)
+        entries.append((hay, name, ending, modes, span, False))
+    # The root itself is a depth-0 entry. A recursive delete of a root that is the game folder,
+    # extensions/ or a folder above them takes every DLC with it, whatever -maxdepth says. The walk
+    # above only sees entries BELOW the root, which deeper entries masked until -maxdepth 0 dropped
+    # them (4.1.1 review round 4, 1: `find <game> -maxdepth 0 | xargs rm -rf` advised).
+    if _holds_a_dlc(r, g):
+        base = (plain or r).rpartition("/")[2]
+        if plain is None or _is_pattern(r):
+            hay, name, ending = [_GLOB_ALL], [_GLOB_SEGMENT], ""
+        else:
+            hay, name, ending = _glob_lit(plain), _glob_lit(base), base
+        entries.append((hay, name, ending, dir_modes, (0, 0), True))
+    if not entries:
+        return False
+    k = _verb_at(seg, 0) + 1            # P1: see _verb_at
+    parsed = _find_parse(tokens_of(seg)[k + len(_find_roots(seg)):])
+    if parsed is None:
+        return True
+    tree, acted, (mind, maxd) = parsed
+    entries = [e for e in entries
+               if (maxd is None or e[4][0] <= maxd) and (mind is None or e[4][1] is None or e[4][1] >= mind)]
+    for hay, name, ending, modes, _span, folder in entries:
+        _check_deadline()
+        def test(kind, value, hay=hay, name=name, ending=ending, folder=folder):
+            if kind in ("-type", "-xtype"):
+                # The root is a folder, or a link to one: a type naming neither skips it (4.1.1
+                # review round 5, 3: `find <game> -maxdepth 0 -type f | xargs rm -rf` was denied).
+                # Any other entry, and a type not spelled as letters, cannot be told.
+                return False if folder and re.fullmatch(r"[bcpfsD](?:,[bcpfsD])*", value) else None
+            return _find_name_test(kind, value, hay, name, ending)
+        reach = []
+        v = _find_eval(tree, test, reach, modes)
+        if reach or ("print" in modes and not acted and v is not False):
+            return True
+    return False
+
+
 
 
 def _quote_kinds(s: str) -> list:
@@ -4665,6 +6357,81 @@ def _reads_stdin_program(seg: str) -> bool:
 #: C2 was fixed -- the here-string is the program, so the single carrier whose payload is
 #: plainly visible in the command text was the one we declined to inspect.
 _REDIR_WORD = ("<<<", "<", ">", ">>", "<>", ">|", "<<", "<<-")
+
+
+_POSITIONAL = re.compile(r"[$](?:[{]([0-9]+|[@*])[}]|([0-9@*]))")
+
+
+#: What a positional fill may add beyond its own input (4.1.1 review round 8, F1). Each parameter is
+#: filled IN FULL at its first use, so no argument is ever hidden; a later use past the budget is an
+#: unknown value instead. MEASURED at a933b5c0: `sh -c 'echo "$@" x400' _ a0..a399` filled 160,000
+#: words and the hook ran 38 s, past its 30 s timeout.
+_POSITIONAL_EXTRA = 4096
+_POSITIONAL_UNKNOWN = "${x4_positional}"
+
+
+def _positional_text(text: str, args: list) -> str:
+    """`text` with `$0`..`$9`, `${N}`, `$@`, `$*` (quoted or not) replaced by `args` (args[0] is `$0`),
+    as the shell running `sh -c TEXT ARGS...` fills them in. A parameter past the last argument is
+    empty, and an empty `"$@"` is no word at all. Inside double quotes the value is escaped for them;
+    elsewhere it is quoted as one word each, so a value with a blank stays one operand (4.1.1 review
+    round 7, 2). Bounded: see _POSITIONAL_EXTRA."""
+    if "$" not in text or not args:
+        return text
+    kinds = {i: k for i, _c, _inq, k in _qwalk(text)}
+    out, last, seen = [], 0, set()
+    budget = 4 * (len(text) + sum(len(a) + 1 for a in args)) + _POSITIONAL_EXTRA
+    for m in _POSITIONAL.finditer(text):
+        k = kinds.get(m.start(), "")
+        if k in ("'", "$'") or (m.start() and text[m.start() - 1] == chr(92)):
+            continue
+        name = m.group(1) or m.group(2)
+        vals = args[1:] if name in "@*" else ([args[int(name)]] if int(name) < len(args) else [""])
+        start, end = m.start(), m.end()
+        if name in seen and budget <= 0:
+            rep = _POSITIONAL_UNKNOWN           # past the budget: unknown, never dropped
+        elif name == "@" and not vals and k == chr(34) and text[start - 1:start] == chr(34) \
+                and text[end:end + 1] == chr(34):
+            start, end, rep = start - 1, end + 1, ""   # an empty "$@" is no word
+        elif k == chr(34) and name == "@":
+            # "$@" is one word per argument: `"pre$@post"` is "pre<a1>" "<a2>post".
+            rep = (chr(34) + " " + chr(34)).join(
+                re.sub(r"([" + chr(92) + chr(92) + chr(34) + "$`])", chr(92) + chr(92) + r"\1", x) for x in vals)
+        elif k == chr(34):
+            rep = re.sub(r"([" + chr(92) + chr(92) + chr(34) + "$`])", chr(92) + chr(92) + r"\1", " ".join(vals))
+        else:
+            rep = " ".join(_sh_quote(x) for x in vals if x)
+        seen.add(name)
+        budget -= len(rep)
+        out.append(text[last:start])
+        out.append(rep)
+        last = end
+    return "".join(out) + text[last:] if out else text
+
+
+def _inline_assigned(filled: str, text: str) -> str:
+    """`filled` with each variable it ASSIGNS a filled value to (`d=$1` became `d='<x>'`) written out
+    where it is read, as the shell would (round 8, F3: `sh -c 'd=$1; rm -rf "$d"' _ <ref>`). The
+    unfilled text assigns the same names an unknown value, and assignments() keeps the FIRST one it
+    meets, so without this the fill never reached the delete."""
+    was, now = assignments(text), assignments(filled)
+    names = [k for k, v in now.items() if was.get(k) != v and not has_unresolved(v)]
+    if not names:
+        return filled
+    kinds = {i: k for i, _c, _inq, k in _qwalk(filled)}
+    pat = re.compile(r"[$](?:[{](" + "|".join(map(re.escape, names)) + r")[}]|(" + "|".join(map(re.escape, names))
+                     + r")(?![A-Za-z0-9_]))")
+    out, last = [], 0
+    for m in pat.finditer(filled):
+        k = kinds.get(m.start(), "")
+        if k in ("'", "$'"):
+            continue
+        v = now[m.group(1) or m.group(2)]
+        out.append(filled[last:m.start()])
+        out.append(re.sub(r"([" + chr(92) + chr(92) + chr(34) + "$`])", chr(92) + chr(92) + r"\1", v)
+                   if k == chr(34) else _sh_quote(v))
+        last = m.end()
+    return "".join(out) + filled[last:]
 
 
 def _drop_redirects(toks: list[str]) -> list[str]:
@@ -4934,12 +6701,17 @@ def powershell_to_sh(text: str) -> tuple:
     if remaining < 0.5:
         return None, [], ("the PowerShell translation budget for one command (%.0f s) is "
                           "spent, so this part was not analysed" % _PS_BUDGET_S)
+    left = (_DEADLINE[0] - _clock()) if _DEADLINE[0] is not None else _PS_CALL_CAP_S
+    if left <= 0:
+        raise AnalysisTimeout()         # round 8, F2: no time left before the analysis deadline
+    cap = min(_PS_CALL_CAP_S, remaining, left)
     t0 = _clock()
     try:
-        got = _translate_ps(text, min(_PS_CALL_CAP_S, remaining))
+        got = _translate_ps(text, cap)
     finally:
         _ps_spent[0] += max(0.0, _clock() - t0)
-    _PS_CACHE[text] = got
+    if got[0] is not None or cap >= min(_PS_CALL_CAP_S, remaining):
+        _PS_CACHE[text] = got           # a call cut short by the deadline is not a verdict on the text
     return got
 
 
@@ -5389,7 +7161,23 @@ _ARGV_CARRIERS = {
     "taskset": ({"-c", "--cpu-list"}, 0, True),
     "chrt": ({"-T", "-P", "-D"}, 0, True),
     "screen": ({"-S", "-c", "-T", "-h", "-p", "-t", "-e", "-s"}, 0, False),
+    # 4.1.1 review round 6, B: each ran its argv unseen (MEASURED: `sshpass -p x ssh localhost
+    # rm -rf <reference>`, `torsocks git add -A`, `mintty -e bash -c '<cmd>'` were allowed).
+    "sshpass": ({"-p", "-f", "-d", "-P"}, 0, False),
+    "torsocks": ({"-u", "--user", "-p", "--pass", "-a", "--address", "-P", "--port"}, 0, False),
+    "valgrind": (frozenset(), 0, False),
+    "caffeinate": ({"-t", "-w"}, 0, False),
+    "mintty": ({"-c", "--config", "-C", "--loadconfig", "-h", "--hold", "-i", "--icon", "-l", "--log",
+                "-o", "--option", "-p", "--position", "-s", "--size", "-t", "--title", "-T", "--class",
+                "-w", "--window", "-B", "--Border", "-R", "--Report", "--dir"}, 0, False),
+    "gsudo": ({"-u", "--user", "-i", "--integrity"}, 0, False),
 }
+#: Carriers whose program sits behind a word of their own, read by _special_carrier_readings: `gdb
+#: --args <cmd>`, `start [/switch]... ["title"] <cmd>` (cmd.exe's, which Git Bash's `start` calls),
+#: and `autossh -M <port> <ssh arguments>`, which IS an ssh.
+_SPECIAL_CARRIERS = frozenset({"gdb", "start", "autossh"})
+#: start's switches that take the next word as their value (`/D <dir>`, `/NODE <n>`, `/AFFINITY <m>`).
+_START_VALUE_SWITCHES = frozenset({"/d", "/node", "/affinity"})
 _NUMERIC_WORD = re.compile(r"0[xX][0-9a-fA-F]+|[0-9][0-9,-]*")
 
 #: Programs that run TEXT given to a `-c` option, exactly as `bash -c` does. The extra shells are
@@ -5450,14 +7238,58 @@ def _program_at(words: list, opts, positional: int = 0, numeric: bool = False):
     return None
 
 
-def _as_program(words: list) -> list:
+def _escapes_a_split(text: str) -> bool:
+    """`text` has a backslash before a blank or an operator: `a\\;`, `rm\\ -rf`. Unquoted, the word
+    holds the character literally, and a shell that is handed the words joined reads it as a
+    separator again."""
+    if chr(92) not in text:
+        return False
+    esc = False
+    for _i, c, _inq, _k in _qwalk(text):
+        if esc:
+            if _EVAL_SPLITS.match(c):
+                return True
+            esc = False
+            continue
+        # A quoted backslash needs no `not inq`: a quoted split character is the other clause of
+        # every caller (the mutation gate cannot tell the two apart).
+        esc = c == chr(92)
+    return False
+
+
+def _as_program(words: list, shell: bool = False) -> list:
     """Readings of `words` as a program: as written (run as argv), and with quoted words opened
-    (run through a shell, which re-reads a quoted `rm -rf x` as three words)."""
+    (run through a shell, which re-reads a quoted `rm -rf x` as three words). `shell`: the carrier
+    joins its words for a shell (`watch`, `wsl`, `ssh`), which re-reads an ESCAPED separator too
+    (`watch echo a\\; rm -rf x`); a carrier that runs its words as argv keeps it literal (4.1.1
+    review round 5, 1: segments() stopped splitting at `\\;` in round 4)."""
     rest = " ".join(words)
     toks = tokens(rest)
-    if not any(q and _EVAL_SPLITS.search(t) for t, q in toks):
+    escaped = shell and _escapes_a_split(rest)
+    if not (any(q and _EVAL_SPLITS.search(t) for t, q in toks) or escaped):
         return [rest]
-    return [rest, " ".join(t for t, _q in toks)]
+    return [rest, " ".join(t for t, _q in toks)] + _requoted(toks, escaped)
+
+
+def _requoted(toks: list, escaped: bool) -> list:
+    """With an escaped separator, the words again with each QUOTED one kept whole. The shell that
+    re-reads them splits a quoted `"<game>"` at its blank, so `watch echo a\\; rm -rf "<game>"`
+    deletes `<steam>/X4` and `Foundations`; 4.1.0 judged the quoted path, and so does this
+    reading (4.1.1 review round 5, 1)."""
+    return [" ".join(_sh_quote(t) if q else t for t, q in toks)] if escaped else []
+
+
+def _joins_for_a_shell(v: str, options: list) -> bool:
+    """An argv carrier that hands its words to a shell: `watch` without -x/--exec, `wsl` without
+    -e/--exec. `options`: the words before the program."""
+    heads = [_head(w) for w in options]
+    if v == "watch":
+        return not any(h == "--exec" or re.fullmatch(r"-[A-Za-z]*x[A-Za-z]*", h) for h in heads)
+    if v == "wsl":
+        return not any(h in ("-e", "--exec") for h in heads)
+    # INFERRED, not measured here: gsudo hands its words to the shell it was called from (`bash -c`
+    # under Git Bash). Read as joining, which only ADDS readings (4.1.1 review round 6, B).
+    return v == "gsudo"
 
 
 def _text_option(words: list) -> list:
@@ -5620,6 +7452,33 @@ def _is_this_machine(host: str) -> bool:
         n.lower() for n in own if n}
 
 
+#: The remote commands of an `ssh <host>` the guard cannot place (not recognised as this machine),
+#: for this facts() call, and how deep facts() is in judging them (round 6, C): `ssh a ssh b <cmd>`
+#: is one level more, and _MAX_SSH_DEPTH bounds it.
+_SSH_UNPLACED: list = []
+#: ...and the same commands spliced into the command around them, which this machine expands first.
+_SSH_UNPLACED_SPLICED: list = []
+_SSH_NESTED = [0]
+#: Per hook call (round 7, 1): judgements already made, by text, and how many facts() runs the advisory
+#: spent. Past _MAX_SSH_JUDGED runs, or _SSH_ADVISORY_S seconds, the advisory stops and ADVISES (it could
+#: not judge the rest); it never costs the verdict, which is computed before it.
+_SSH_MEMO: dict = {}
+_SSH_JUDGED = [0]
+_MAX_SSH_JUDGED = 24                  # every remote and spliced text of _MAX_SSH_UNPLACED ssh segments, and more
+_SSH_ADVISORY_S = 2.0
+_MAX_SSH_DEPTH = 4                    # as deep as the carrier walk goes (_MAX_CARRIER_DEPTH)
+#: How many of them facts() judges; past it the rest are not judged, and the advisory says nothing
+#: about them (it is advice, never a verdict).
+_MAX_SSH_UNPLACED = 8
+#: The facts that make a remote command DESTRUCTIVE had it run here: each is a deny or an ask in
+#: protect-bash.sh, or the in-X4-folder delete advisory.
+_SSH_DESTRUCTIVE = ("rm_hits_game", "rm_targets_reference", "writes_reference", "writes_game_archive",
+                    "writes_host_transcript", "writes_agent_settings", "link_into_protected", "rm_in_profile",
+                    "rm_deployed_mod", "rm_in_x4_dir", "rm_saves", "writes_profile_other", "git_wipes_x4_dir",
+                    "git_wipe_from_session_dir", "sed_i_in_game_or_profile", "git_add_all",
+                    "durable_truncating_redirect", "program_dynamic_protected", "verb_unresolved",
+                    "links_unresolved")
+
 #: ssh options whose value runs on THIS machine, whatever the destination.
 _SSH_LOCAL_COMMAND = re.compile(r"(?:proxycommand|localcommand|knownhostscommand)\s*[= ]\s*(.*)", re.I | re.S)
 
@@ -5636,13 +7495,21 @@ def _ssh_readings(words: list) -> list:
         m = _SSH_LOCAL_COMMAND.fullmatch(value)
         if m:
             out.append(m.group(1))
-    if at is None or at >= len(words) or not _is_this_machine(_head(words[at])):
+    if at is None or at >= len(words):
         return out
     tail = words[at + 1:]
     k = _program_at(tail, _SSH_VALUE_OPTS)
     if k is None or k >= len(tail):
         return out
-    return out + ["cd " + _UNKNOWN_CWD + " && " + r for r in _as_program(tail[k:])]
+    remote = ["cd " + _UNKNOWN_CWD + " && " + r for r in _as_program(tail[k:], True)]
+    if not _is_this_machine(_head(words[at])):
+        # Another machine's paths are not this one's protected folders, so these are no reading
+        # here. But the guard cannot tell a LAN address, a Tailscale name or an ~/.ssh/config
+        # alias for this machine from another one: facts() judges them apart and only ADVISES
+        # (4.1.1 review round 6, C).
+        _SSH_UNPLACED.extend(remote)
+        return out
+    return out + remote
 
 
 def _parallel_readings(words: list, prev) -> list:
@@ -5655,7 +7522,9 @@ def _parallel_readings(words: list, prev) -> list:
     tail = words[at:]
     sep = next((i for i, w in enumerate(tail) if _head(w) in _PARALLEL_SEPS), None)
     if sep is None:
-        return ["xargs " + " ".join(tail)]
+        # The template still runs through a shell, which re-reads an escaped separator (4.1.1
+        # review round 5, 1: `... | parallel echo a\\; rm -rf <x>`).
+        return ["xargs " + r for r in _as_program(tail, True)]
     template, args, in_file = tail[:sep], [], False
     for w in tail[sep:]:
         t = _head(w)
@@ -5692,7 +7561,13 @@ def _tmux_readings(words: list) -> list:
             break
     chunk = []
     for w in words[i:] + [";"]:
-        if _head(w) != ";":
+        h = _head(w)
+        if h != ";" and h.endswith(";") and w.endswith(chr(92) + ";"):
+            # `tmux ls\; run '<cmd>'`: a separator glued to the word before it. segments() split
+            # there until it learned that `\;` is literal (4.1.1 review round 4, 7).
+            chunk.append(w[:-2])
+            h = ";"
+        if h != ";":
             chunk.append(w)
             continue
         if chunk:
@@ -5820,7 +7695,15 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
         out.extend(_env_split_readings(seg))
     if "exec" in seg or "sudo" in seg:
         out.extend(_value_word_readings(seg))
+    if v == "find" and ("-exec" in seg or "-ok" in seg):
+        out.extend(_find_exec_readings(seg))
+    if v in ("fd", "fdfind") and ("-x" in seg or "-X" in seg or "--exec" in seg):
+        out.extend(_fd_exec_readings(seg))
+    if prev is not None and "xargs" in seg:
+        out.extend(_xargs_item_readings(seg, prev))
     if v not in _ALL_CARRIER_VERBS:
+        if v not in _NOT_RUNNERS and v not in WRAPPERS and _MAY_CARRY_JOINER.search(seg):
+            out.extend(_joiner_behind_unknown(seg))
         return out
     words = _raw_words(_verb_word_text(seg)[1].strip())
     if v in _ARGV_CARRIERS:
@@ -5830,11 +7713,13 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
             tail = words[at:]
             if v == "screen" and _head(tail[0]) in ("stuff", "exec"):
                 tail = tail[1:]
-            readings = _as_program(tail) if tail else []
+            readings = _as_program(tail, _joins_for_a_shell(v, words[:at])) if tail else []
             if v == "wsl":
                 # WSL spells this machine's drives /mnt/<drive>/.
                 readings += [_WSL_MOUNT.sub(lambda m: m.group(1) + ":", r) for r in readings if "/mnt/" in r]
             out.extend(readings)
+    if v in _SPECIAL_CARRIERS:
+        out.extend(_special_carrier_readings(v, words))
     if v in _TEXT_C_CARRIERS:
         out.extend(_text_option(words))
     if v == "ssh":
@@ -5848,7 +7733,58 @@ def _program_carrier_readings(seg: str, v: str, vt: str, prev) -> list:
     return out
 
 
-_ALL_CARRIER_VERBS = frozenset(_ARGV_CARRIERS) | _TEXT_C_CARRIERS | {"ssh", "parallel", "tmux", "mapfile", "readarray"}
+def _special_carrier_readings(v: str, words: list) -> list:
+    """The program `gdb --args`, `start` and `autossh` run (_SPECIAL_CARRIERS)."""
+    heads = [_head(w) for w in words]
+    if v == "gdb":
+        # Without --args gdb's operand is a program FILE it loads, not one it runs.
+        at = heads.index("--args") + 1 if "--args" in heads else None
+        return _as_program(words[at:]) if at is not None and at < len(words) else []
+    if v == "autossh":
+        k = 0
+        while k < len(words):
+            if heads[k] == "-M":
+                k += 2
+            elif heads[k] in ("-f", "-V") or heads[k].startswith("-M"):
+                k += 1
+            else:
+                break
+        return ["ssh " + " ".join(words[k:])] if k < len(words) else []
+    # start: `/b`, `/wait`, `/min`, `/D <dir>`, then an optional DOUBLE-QUOTED title, then the program.
+    k = 0
+    while k < len(words) and heads[k][:1] == "/" and len(heads[k]) > 1 and "/" not in heads[k][1:]:
+        k += 2 if heads[k].lower() in _START_VALUE_SWITCHES else 1
+    if k < len(words) and words[k][:1] == chr(34):
+        k += 1
+    return _as_program(words[k:]) if k < len(words) else []
+
+
+#: Verbs that print or look up the words after them rather than running them, for
+#: _joiner_behind_unknown: `echo ssh localhost rm -rf <x>` runs nothing.
+_NOT_RUNNERS = frozenset({"echo", "printf", "man", "which", "type", "whereis", "whatis", "apropos", "info",
+                          "help", "tldr", "hash", "alias", "unalias", "complete", "compgen", "declare",
+                          "local", "export", "readonly", "set", "unset", "grep", "egrep", "fgrep", "rg"})
+_SHELL_JOINERS = ("ssh", "watch", "wsl")
+_MAY_CARRY_JOINER = re.compile(r"(?<![A-Za-z0-9_.-])(?:ssh|watch|wsl)(?:[.]exe)?(?![A-Za-z0-9_.-])")
+
+
+def _joiner_behind_unknown(seg: str) -> list:
+    """`<unknown wrapper> [-opts] ssh|watch|wsl ...`: a program this file does not know, whose first
+    operand is a carrier that joins its words for a shell, may be running it -- `sshpass`-like tools
+    nobody has listed yet. The words from that carrier on are a reading of their own, so its escaped
+    separator is re-read as it would be (4.1.1 review round 6, B). Additive, like every reading."""
+    words = _raw_words(_verb_word_text(seg)[1].strip())
+    k = next((i for i, w in enumerate(words) if not _head(w).startswith("-")), None)
+    if k is None or k + 1 >= len(words) or _verb_name(_head(words[k])) not in _SHELL_JOINERS:
+        return []
+    return [" ".join(words[k:])]
+
+
+_ALL_CARRIER_VERBS = (frozenset(_ARGV_CARRIERS) | _TEXT_C_CARRIERS | _SPECIAL_CARRIERS
+                      | {"ssh", "parallel", "tmux", "mapfile", "readarray"})
+#: The shells whose `-c` text (or quoted-delimiter heredoc) may be EXACT: zsh is left out because
+#: it reads .zshenv on every run (see _carries_program_text), so its text is not all it runs.
+_EXACT_SHELLS = frozenset({"bash", "sh", "dash", "ksh"})
 #: The command names a glob must be able to spell before its name counts as unknown.
 _GLOB_SPELLABLE = (DELETE_VERBS | COPY_VERBS | _TRASH_VERBS | WRAPPERS | _ALL_CARRIER_VERBS | set(_SHELLS)
                    | {"eval", "source", ".", "trap", "ln", "mklink", "touch", "truncate", "dd", "sed", "find",
@@ -5861,15 +7797,27 @@ def _env_candidate(seg: str) -> bool:
     return "nv" in seg and bool(_ENV_FLAG.search(seg))
 
 
-def _inner_commands(cmd: str) -> list[str]:
+def _inner_commands(cmd: str, exact: set | None = None) -> list[str]:
     """Command strings hidden inside a wrapper, so the rules see them too.
 
     Carriers: a shell's `-c` argument, `eval`, `trap`, a shell reading stdin, and (HK-2)
     `cmd /c` and a PowerShell host's -Command/-EncodedCommand. Each takes TEXT and runs
     it as a command, so anything it carries is invisible to every rule that inspects
     segments.
+
+    `exact`, when given, receives the carried texts that are BYTE-FOR-BYTE what the inner
+    shell is handed: a `-c` argument (bash/sh/dash/ksh, the segment as written) in which the
+    OUTER shell expanded nothing (every `$` and backtick quoted or escaped, no unquoted glob
+    or brace). Only such a text keeps its own quoting as evidence that a `$` in it is
+    literal (see facts' literal_dollar_path). Every other carrier -- eval, a heredoc or
+    here-string, echo | sh, a translated cmd/PowerShell command, a substitution, a reading,
+    positional parameters filled in, ssh/watch/wsl and the other joiners -- may have been
+    expanded or re-quoted on the way in, so its `'REF$X'` may really be `reference/` itself.
+    A text produced by any non-exact route is never exact, even if an exact route produced
+    it too (4.1.1 port of 6cbeb825).
     """
     out = []
+    exact_idx = set()
     segs = segments(cmd)
     pipes = piped_in(cmd)
     if len(pipes) != len(segs):          # never guess the pairing short: assume piped
@@ -5879,6 +7827,7 @@ def _inner_commands(cmd: str) -> list[str]:
     carrying = {}                        # _program_carrier_readings: the same, kept apart
     handled = {}                         # ...and the not-found handler's, read once
     tmux_chain = False                   # the last segment was a tmux command ending in `\\;`
+    ssh_here = {}                        # round 6, C: segment index -> its unplaced remote commands
     not_found_handler = "command_not_found_handle" in cmd
     if "@P}" in cmd:
         # `${P@P}` runs prompt expansion, whose `$(...)` executes, over P's stored value.
@@ -5886,6 +7835,7 @@ def _inner_commands(cmd: str) -> list[str]:
         for name in set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)@P\}", cmd)):
             out.extend(substitutions(table.get(name, "")))
     for n, seg in enumerate(segs):
+        written = seg
         # F10: a command NAME from a variable. One this command assigns a bare name to is
         # spliced in first, so `R=eval; $R '<cmd>'` reaches the eval arm below (MEASURED:
         # allowed); one it cannot name contributes its speculative readings.
@@ -5903,7 +7853,11 @@ def _inner_commands(cmd: str) -> list[str]:
             if readings:
                 carrying[n] = readings
         v = _verb_name(vt)              # one read per segment: this walk runs on every hook call
+        _check_deadline()
+        unplaced = len(_SSH_UNPLACED)
         carried_here = _program_carrier_readings(seg, v, vt, segs[n - 1] if n and pipes[n] else None)
+        if len(_SSH_UNPLACED) > unplaced:
+            ssh_here[n] = _SSH_UNPLACED[unplaced:]
         if tmux_chain:
             carried_here = carried_here + _tmux_readings(_raw_words(seg))
         tmux_chain = (tmux_chain or v == "tmux") and seg.rstrip().endswith(chr(92))
@@ -5911,11 +7865,18 @@ def _inner_commands(cmd: str) -> list[str]:
             # A function bash calls with the words of any command it cannot find. It may run
             # them, whichever word it starts from.
             whole = _raw_words(seg)
-            readings = [r for k in (0, 1) if whole[k:] for r in _as_program(whole[k:])]
+            readings = [r for k in (0, 1) if whole[k:] for r in _as_program(whole[k:], True)]
             if readings:
                 handled[n] = readings
         if carried_here:
-            carrying[n] = carrying.get(n, []) + list(dict.fromkeys(carried_here))
+            carried_here = list(dict.fromkeys(carried_here))
+            if len(carried_here) > _MAX_SEGMENT_READINGS:
+                # Each reading is the WHOLE command again (_reading_variants): unbounded, the text
+                # grows as readings x length (round 8: 200 -exec actions ran 6.8 s). Past the bound
+                # the command is too tangled to analyse, and says so (carriers_truncated).
+                _READINGS_TRUNCATED[0] = True
+                carried_here = carried_here[:_MAX_SEGMENT_READINGS]
+            carrying[n] = carrying.get(n, []) + carried_here
         if v in ("cmd",) + _PS_EXES:
             translated = _windows_carrier(seg, cmd, segs[n - 1] if n and pipes[n] else None)
             _WIN_DIALECT.update(translated)
@@ -5960,7 +7921,27 @@ def _inner_commands(cmd: str) -> list[str]:
                     # it, so a two-statement command any script writes lost the block.
                     # EVERY value (FX-G6 / reviewer K C1, found by fuzz-guard): one resolve()
                     # judged `bash -c 'rm -rf "${NOPE:+zz}<ref>"'` as the alternate only.
-                    out.extend(resolve_variants(toks[_shell_text_at(toks, i + 1, t)][0], assignments(cmd)))
+                    at = _shell_text_at(toks, i + 1, t)
+                    arg = toks[at][0]
+                    values = resolve_variants(arg, assignments(cmd))
+                    if (exact is not None and seg == written and v in _EXACT_SHELLS
+                            and arg in values and not _reparsing_wrapper(seg)):
+                        lx = {}
+                        tokens(seg, literal_expansions=lx)
+                        if lx.get(arg, False) and arg not in _BRACE_WORDS:
+                            exact_idx.add(len(out) + values.index(arg))
+                    out.extend(values)
+                    # ...and with its positional parameters filled in from the words after it
+                    # (round 7, 2): `sh -c 'rm -rf "$1"' _ <ref>`, `-exec sh -c 'echo > "$1"' _ {} ;`.
+                    args = _drop_redirects([w for w, _q in toks[at + 1:]])
+                    prev_ = segs[n - 1] if n and pipes[n] else None
+                    if prev_ is not None and any(_verb_name(w) == "xargs" for w, _q in toks[:i]):
+                        # `... | xargs sh -c '<cmd> "$@"' _`: xargs appends what it reads, so "$@" is
+                        # the producer's items, not empty (round 8: an empty fill read as `.`).
+                        args = args + _producer_items(_stdin_producer(segs[:n]))
+                    filled = _positional_text(toks[at][0], args)
+                    if filled != toks[at][0]:
+                        out.append(_inline_assigned(filled, toks[at][0]))
                     break
         elif v == "eval":
             # `eval` concatenates its arguments and runs the result.
@@ -5972,9 +7953,13 @@ def _inner_commands(cmd: str) -> list[str]:
             # token also picks up an absolute spelling, which verb() now normalises.
             k = next((i for i, (t, _) in enumerate(toks)
                       if _verb_name(t) == "eval"), 0)
-            parts = [t for t, _ in toks[k + 1:] if not t.startswith("-")]
+            # Every word is the command's, its flags included (4.1.1 review round 5, 2: `eval git
+            # add -A` read as `git add`). eval's own `--` stays: a reading of `-- git add -A` is
+            # still judged as git (the mutation gate cannot tell a step over it apart).
+            parts = [t for t, _ in toks[k + 1:]]
             if parts:
                 out.extend(resolve_variants(" ".join(parts), assignments(cmd)))   # FX-G6 / K C1
+                out.extend(_requoted(toks[k + 1:], _escapes_a_split(seg)))
         elif v == "trap":
             # `trap <cmd> <SIGNAL...>` runs its first operand as a command when the
             # signal fires. That operand is normally single-quoted, which is exactly
@@ -5984,6 +7969,12 @@ def _inner_commands(cmd: str) -> list[str]:
             rest = [t for t, _ in toks[k + 1:] if not t.startswith("-")]
             if rest:
                 out.append(rest[0])
+    for n, remote in ssh_here.items():
+        # ...each IN PLACE, as every carrier reading is: the remote command is expanded HERE first, so
+        # `FZ=<ref>; ssh <host> rm -rf "$FZ"` sends the path (round 6, C). Every OTHER unplaced ssh is a
+        # no-op there, so one judgement never re-judges the rest (round 7, 1: n segments recursed n deep).
+        others = {m: [":"] for m in ssh_here if m != n}
+        _SSH_UNPLACED_SPLICED.extend(_reading_variants(cmd, segs, {n: remote, **others}))
     out.extend(_reading_variants(cmd, segs, dynamic))
     rewritten = _value_readings(cmd, segs)
     if rewritten:
@@ -6000,6 +7991,9 @@ def _inner_commands(cmd: str) -> list[str]:
                     for t in _reading_variants(cmd, segs, handled)]
         _READING_TEXTS.update(variants)
         out.extend(variants)
+    if exact is not None:
+        loose = {t for k, t in enumerate(out) if k not in exact_idx}
+        exact.update(out[k] for k in exact_idx if out[k] not in loose)
     return out
 
 
@@ -6060,8 +8054,16 @@ _MAX_CARRIER_DEPTH = 4
 #: only reason the number in it is now true.)
 _MAX_CARRIED = 250
 
+#: Round 8 (F1): the readings of one segment, and the characters of every carried text together. A
+#: reading or a fill repeats the command around it, so a count bound alone still let the TEXT grow
+#: quadratically. Past either, the walk stops and reports carriers_truncated (a refusal).
+_MAX_SEGMENT_READINGS = 32
+_MAX_CARRIED_CHARS = 400000
+_READINGS_TRUNCATED = [False]
 
-def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tuple:
+
+def carried_commands(body: str, extra: list, dialects: dict | None = None, *,
+                     exact: dict | None = None) -> tuple:
     """Every command string reachable from `body`, following carriers.
 
     _inner_commands was applied EXACTLY ONCE, to the top level, so a command one
@@ -6075,18 +8077,46 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
     `dialects` (text -> "bash"/"windows", seeded with `body`) is filled for every text:
     a PowerShell/cmd translation is Windows-spelled, a shell carrier's text is Bash, and
     a substitution keeps its parent's dialect (LINUX GAP).
+
+    `exact` (text -> bool), when given, is SEEDED by the caller for `body` and each
+    `extra` (True only where that text is exactly what a shell parses) and is filled for
+    every text returned: exact only when EVERY route that reaches it is exact -- an exact
+    Bash parent handing on a `-c` argument the outer shell expanded nothing in (see
+    _inner_commands). Anything not known exact is False, which keeps a `$` in it an
+    unresolved expansion: the stricter reading.
     """
+    edges = []                          # (parent, child, exact hand-off?) -- every route
+
+    def finish(result, trunc):
+        if exact is not None:
+            # A root (`body`, an `extra`) starts from its seed; a carried text starts
+            # True and is lowered by any route into it that is not an exact hand-off.
+            roots_ = {body, *extra}
+            ex = {t: (exact.get(t, False) if t in roots_ else True) for t in result}
+            ex[body] = exact.get(body, False)
+            changed = True
+            while changed:              # only ever LOWERS a value, so it terminates
+                changed = False
+                for parent, child, handed in edges:
+                    if ex.get(child, False) and not (handed and ex.get(parent, False)):
+                        ex[child] = False
+                        changed = True
+            exact.clear()
+            exact.update(ex)
+        return result, trunc
+
     d = {} if dialects is None else dialects
     d.setdefault(body, "bash")
     seen = {body}
     out = [body]
     frontier = [body]
     truncated = False
+    size = len(body) + sum(len(e) for e in extra)
     for e in extra:
         d.setdefault(e, WINDOWS_DIALECT if e in _WIN_DIALECT else "bash")
         if e not in seen:
             if len(out) >= _MAX_CARRIED:
-                return out, True
+                return finish(out, True)
             seen.add(e)
             out.append(e)
             frontier.append(e)
@@ -6095,32 +8125,44 @@ def carried_commands(body: str, extra: list, dialects: dict | None = None) -> tu
     for depth in range(_MAX_CARRIER_DEPTH + 1):
         nxt = []
         for c in frontier:
-            inners = _inner_commands(c)
+            _check_deadline()
+            exact_inners = set()
+            inners = _inner_commands(c, exact_inners)
             subs = substitutions(c)
-            for i_, kind in ([(x, WINDOWS_DIALECT if x in _WIN_DIALECT else "bash") for x in inners]
-                             + [(x, d.get(c, "bash")) for x in subs]):
-                for inner in _carrier_parts(i_):
+            for i_, kind, handed in ([(x, WINDOWS_DIALECT if x in _WIN_DIALECT else "bash",
+                                       x in exact_inners and x not in _WIN_DIALECT
+                                       and d.get(c, "bash") == "bash")
+                                      for x in inners]
+                                     + [(x, d.get(c, "bash"), False) for x in subs]):
+                for n_, inner in enumerate(_carrier_parts(i_)):
                     if inner:
                         d.setdefault(inner, kind)
+                        # Recorded BEFORE the dedup below: a text reached again by a
+                        # non-exact route must lose exactness it was granted earlier.
+                        edges.append((c, inner, handed and n_ == 0))
                     if not inner or inner in seen:
                         continue
                     if c in _READING_TEXTS or i_ in _READING_TEXTS:
                         _READING_TEXTS.add(inner)
                     if depth == _MAX_CARRIER_DEPTH:
-                        return out, True
+                        return finish(out, True)
                     seen.add(inner)
                     nxt.append(inner)
+                    size += len(inner)
+                    if size > _MAX_CARRIED_CHARS:
+                        out.extend(nxt)
+                        return finish(out, True)
                     if len(out) + len(nxt) >= _MAX_CARRIED:
                         # STOP, and SAY SO. Dropping the rest and returning a verdict
                         # would be a step that narrows its data and reports success --
                         # the shape behind every tool defect found in this workspace.
                         out.extend(nxt)
-                        return out[:_MAX_CARRIED], True
+                        return finish(out[:_MAX_CARRIED], True)
         if not nxt:
             break
         out.extend(nxt)
         frontier = nxt
-    return out, truncated
+    return finish(out, truncated)
 
 
 def _ipc_value(key: str, v) -> str:
@@ -6590,8 +8632,54 @@ def _carries_program_text(seg: str) -> bool:
     return False
 
 
+#: THE ANALYSIS DEADLINE for one hook call, in seconds (4.1.1 review round 7, 1). Claude Code gives the
+#: hook 30 s and a hook that times out does NOT block, so an analysis that outran it failed OPEN (MEASURED
+#: at 9cd83006: nine `ssh <host> ls` segments took 128 s and were allowed). Every bounded walk below
+#: checks it; past it the command is refused (`analysis_timeout`), never allowed. The save bridge passes
+#: its own, earlier deadline (save_policy.HOOK_BUDGET_S, less the backend's share).
+_ANALYSIS_BUDGET_S = 18.0
+_DEADLINE = [None]
+
+
+class AnalysisTimeout(Exception):
+    """The analysis deadline passed: the command was not fully analysed."""
+
+
+def _check_deadline():
+    d = _DEADLINE[0]
+    if d is not None and _clock() > d:
+        raise AnalysisTimeout()
+
+
 def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution_context: bool = False,
-          protected_save_folders=()) -> dict:
+          protected_save_folders=(), deadline: float | None = None) -> dict:
+    """The facts of one command (_facts), within the analysis deadline. A judgement nested inside one
+    (the ssh advisory) shares its caller's deadline and lets a timeout reach it."""
+    if _SSH_NESTED[0]:
+        return _facts(payload, roots, evidence=evidence, execution_context=execution_context,
+                      protected_save_folders=protected_save_folders)
+    _DEADLINE[0] = deadline if deadline is not None else _clock() + _ANALYSIS_BUDGET_S
+    _SSH_MEMO.clear()
+    _SSH_JUDGED[0] = 0
+    _LINK_RESOLVED[0] = 0               # link_resolved's realpath budget and drive cache: per hook call
+    _LINK_PROBED[0] = 0
+    _LINK_DIRS.clear()
+    _LINKS_UNRESOLVED[0] = False
+    _DRIVE_TYPES.clear()
+    _ps_spent[0] = 0.0                  # the translation budget is per hook call, never per judgement
+    try:
+        return _facts(payload, roots, evidence=evidence, execution_context=execution_context,
+                      protected_save_folders=protected_save_folders)
+    except AnalysisTimeout:
+        return {"command": (payload.get("tool_input") or {}).get("command") or "",
+                "analysis_timeout": "the guard's analysis deadline passed before this command was fully "
+                                    "analysed"}
+    finally:
+        _DEADLINE[0] = None
+
+
+def _facts(payload: dict, roots: dict, *, evidence: list | None = None, execution_context: bool = False,
+           protected_save_folders=()) -> dict:
     inp = payload.get("tool_input") or {}
     cmd = inp.get("command") or ""
     timeout = inp.get("timeout", 0)
@@ -6605,12 +8693,14 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     _WIN_DIALECT.clear()
     _BRACE_WORDS.clear()                # C1: per call, like the two above
     _READING_TEXTS.clear()
+    del _SSH_UNPLACED[:]                # round 6, C: per call (a nested judgement clears its own)
+    del _SSH_UNPLACED_SPLICED[:]
+    _READINGS_TRUNCATED[0] = False
     _EXTENSIONS_ROOT[0] = (roots.get("extensions")
                            or (roots["game"].rstrip("/" + chr(92)) + "/extensions" if roots.get("game") else "")
                            ).replace(chr(92), "/")
     _CD_LANES_TRUNCATED[0] = False      # C7: per call
     _OPERAND_EXPANSION_TRUNCATED[0] = False
-    _ps_spent[0] = 0.0                  # the translation budget is per hook call
 
     # THE POWERSHELL TOOL (AUDIT-2026-09-24 HK-1). It had no PreToolUse guard at all, so
     # every rule below was one tool choice away from not existing. Its command is
@@ -6660,7 +8750,30 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             extra.append(sh_)
     # Which dialect spelled each command's paths (LINUX GAP): see carried_commands.
     dialects = {body: WINDOWS_DIALECT if from_powershell else "bash"}
-    all_cmds, carriers_truncated = carried_commands(body, extra, dialects)
+    # LITERAL `$` (4.1.1 port of 6cbeb825/51129cde/ed667b4a): which texts a shell parses
+    # exactly as they are spelled here -- the top level itself, and quoted-delimiter heredoc
+    # bodies fed straight to a shell. Everything else is seeded False, and carried_commands
+    # lowers, never raises. NOTHING is exact when the command can redefine what a later word
+    # runs through (function, alias, source, trap ...), names a startup-steering variable,
+    # holds a raw NUL (the text bash receives ends there), is a remote command judged for an
+    # unplaced ssh (the remote shell re-parses it), or holds no `$` at all (nothing to qualify).
+    raw_cmd = inp.get("command") or ""
+    no_exact = ("$" not in cmd or _SSH_NESTED[0] > 0 or _SHELL_STARTUP_ENV[0]
+                or _redefines_commands(raw_cmd) or _redefines_commands(cmd)
+                or chr(0) in raw_cmd or chr(0) in cmd)
+    exact_texts = {} if no_exact else {e: False for e in extra}
+    if not no_exact:
+        exact_bodies = exact_heredoc_bodies(spliced)
+        exact_texts = {e: e in exact_bodies and extra.count(e) == 1 for e in extra}
+        exact_texts[body] = body not in exact_texts
+    all_cmds, carriers_truncated = carried_commands(body, extra, dialects,
+                                                    exact=None if no_exact else exact_texts)
+    carriers_truncated = carriers_truncated or _READINGS_TRUNCATED[0]
+    if not no_exact and (carriers_truncated or _no_literal_anywhere(
+            [cmd, body] + list(extra) + list(all_cmds))):
+        # (A PowerShell tool command is read here as its TRANSLATION; its raw text went
+        # through _redefines_commands above. Bash rules over PowerShell syntax misread it.)
+        exact_texts = {}
     # ...and each one with its separator-holding substitutions collapsed (FX-G6 / reviewer
     # K I4): `A=$(echo a; echo b) rm -rf <game>` -- see _spanning_view. Inserted after the
     # top level, so the last command (and the `cwd` fact read from it) is unchanged; the
@@ -6701,6 +8814,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # otherwise reaches no verb-keyed rule at all, hard blocks included.
     seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect = [], [], [], [], []
     seg_for = []                        # F331: is THIS segment a `for` header (_for_headers)?
+    seg_exact = []                      # is the segment's text exactly what a shell parses?
     base = session_cwd(payload)
     # A carried command (bash -c, a heredoc fed to a shell, $(...)) is walked on its own,
     # so it cannot see a `cd` made around it. When nothing anywhere changes directory it
@@ -6723,10 +8837,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             uds = bare[k][1] if k < len(bare) else [""]
             rs = resolve_verb(s, assigns)
             # The segment BEFORE each one in the same carried command: what feeds an xargs.
-            prev = tracked[k - 1][0] if k else None
+            prev = _stdin_producer([t[0] for t in tracked[:k]])
             pds = physical[k][1] if physical else [""] * len(ds)
             for d, ud, pd in dict.fromkeys(zip(ds, uds if len(uds) == len(ds) else uds[:1] * len(ds), pds)):
                 seg_dialect.append(dialects.get(c, "bash"))
+                seg_exact.append(exact_texts.get(c, False))
                 seg_for.append(k < len(heads) and heads[k])
                 seg_cwd.append((rs, d))
                 seg_prev.append(prev)
@@ -6829,11 +8944,37 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # One recognized data-write primitive only. Compound commands can change a
     # destination's kind or link state before a later write. Retain their prior
     # profile confirmation rather than infer future filesystem state from now.
-    simple_modlist_write = (len(all_cmds) == 1 and len(seg_cwd) == 1
-        and _verb_name(verb(seg_cwd[0][0])) in {':', 'echo', 'printf', 'cat', 'tee', 'cp', 'touch'}
+    simple_modlist_write = (len(all_cmds) == 1
+        and (len(seg_cwd) == 1
+             and _verb_name(verb(seg_cwd[0][0])) in {':', 'echo', 'printf', 'cat', 'tee', 'cp', 'touch'}
+             or _modlist_tee_pipeline(all_cmds[0], [s for s, _d in seg_cwd]))
         and not any(marker in body for marker in ('$(', '`', '<(', '>(')))
 
-    def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file", copy_sources=None):
+    literal_expansions = {}
+
+    def literal_words(seg, exact_text):
+        # Which of this segment's words have NO expansion-active `$` -- but only when the
+        # segment's text is exactly what a shell parses (seg_exact) and no wrapper in it runs the
+        # command through a re-parsing shell (sudo -s). In a command handed on by eval, an
+        # unquoted heredoc, `echo | sh`, ssh/watch/wsl and the other carriers, a translated
+        # cmd/PowerShell line, or a `-c` string the outer shell expanded, `'REF$X'` may already
+        # be `REF<value of X>`, i.e. reference/ itself: those texts are never exact. (The
+        # carrier's OWN segment -- `ssh host rm '<x>$X'` -- reaches no operand rule as `rm`; a
+        # per-word carrier test here was MEASURED unobservable through every rule and dropped.)
+        found = {}
+        if exact_text and not _reparsing_wrapper(seg):
+            tokens(seg, literal_expansions=found)
+        return found
+
+    def literal_dollar_path(path):
+        # Only a plain absolute path whose dollars were all quoted/escaped, in a segment a
+        # shell parses exactly as written (literal_words). Pattern membership and relative
+        # execution scope remain unqualified.
+        return ("$" in path and literal_expansions.get(path, False) and is_abs(path)
+                and not any(char in path for char in "*?[]{}"))
+
+    def prep(paths, c_cwd, c_old, expand=True, operation="", scope="file", copy_sources=None,
+             reads_stdin=False, reads_only=False):
         """(path resolved where it runs, unresolvable?, the token as written). A whole
         array reference -- a for-loop variable, `"${A[@]}"` -- yields one entry PER
         element (resolve_all).
@@ -6845,16 +8986,22 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         (`for g in ...; do ... > /tmp/g_$g.txt`), which is friction on rules the
         pre-arc note never concerned -- so it was scoped out, not shipped.
 
-        `c_old` is the segment's directory WITHOUT the session seed (lane F); see below."""
+        `c_old` is the segment's directory WITHOUT the session seed (lane F); see below.
+
+        `reads_only=True` for operands that feed READ checks only (search_files): their links are still
+        resolved within the budget, but past it they never set links_unresolved (link_resolved `refuse`).
+        4.1.1 review (link budget round 2), MEASURED at a70dcedd: `grep -rn foo` over files in 65 folders
+        was refused."""
         out = []
         for p in paths:
+            literal = literal_dollar_path(p)
             # expand=False: resolved exactly as before this lane -- loop words and
             # `$(...)` values are not substituted, so such an operand stays unresolved.
             # C6 (v4.0 release review): EVERY value here too. One resolve() judged
             # `> "${NOPE:+x}<reference>/libraries/wares.xml"` as the alternate only -- ADVISED
             # where the plain path denies (broken since FX-G5 47d06cd; 0801a1a fixed the
             # other rules only). resolve_variants' first value is the plain resolve().
-            rs = resolve_all(p, assigns) if expand else resolve_variants(p, plain_assigns)
+            rs = [p] if literal else (resolve_all(p, assigns) if expand else resolve_variants(p, plain_assigns))
             for r in rs:
                 # A LEADING ROOT VARIABLE IS ITS ROOT, for every operand (FX-G2 items 1-2,
                 # v4.0.0 delta review). Only `cd` (R2-P1) and the icacls rule substituted it,
@@ -6865,8 +9012,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                 # "$X4_TOOLKIT/x4-paths.env" were ALLOWED (34 of 40 probes) while the literal
                 # path was refused. The variable NAME identifies the root (ROOT_VARS); a root
                 # that is not configured is left unsubstituted, exactly as before.
-                r = subst_root_var(r, roots)
-                unres = has_unresolved(r)
+                r = r if literal else subst_root_var(r, roots)
+                unres = not literal and has_unresolved(r)
                 # PARSE DEBRIS IS NOT JOINED ONTO THE SESSION SEED (lane F). `c_old` is the
                 # directory this segment had before the seed existed; a token carrying a
                 # quote, a paren, a redirect or a pipe character, or naming a Windows
@@ -6882,7 +9029,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                     placed = physical_join('' if execution_context else physical_cwd, r,
                                            posix_bash=POSIX_HOST and cur_dialect[0] != WINDOWS_DIALECT)
                     source_files = None
-                    if scope == 'copy-destination':
+                    # 4.1.1: `tee` copies its STDIN, as `echo x > <file>` does; it has no source
+                    # operand to check, and an empty source list disqualified every tee.
+                    if scope == 'copy-destination' and not reads_stdin:
                         source_files = []
                         for source in copy_sources or []:
                             for resolved in resolve_all(source, assigns):
@@ -6906,7 +9055,8 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                     physical = physical_join("" if execution_context else physical_cwd, r,
                                              posix_bash=posix_bash)
                     row = {"operation": operation, "path": physical, "dialect": cur_dialect[0],
-                                     "raw": r, "unresolved": unres or not physical or has_unresolved(physical)
+                                     "raw": r, "unresolved": unres or not physical
+                                     or (not literal and has_unresolved(physical))
                                      or bool(_DEBRIS.search(r)) or bool(_DEBRIS.search(physical))
                                      # C1: an unquoted brace-expanded word names SEVERAL paths
                                      # (or none), never the one literal path written here.
@@ -6915,14 +9065,34 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                     if copy_sources is not None:
                         sources = []
                         for source in copy_sources:
-                            for resolved in resolve_all(source, assigns):
-                                resolved = subst_root_var(resolved, roots)
+                            source_literal = literal_dollar_path(source)
+                            for resolved in ([source] if source_literal else resolve_all(source, assigns)):
+                                resolved = resolved if source_literal else subst_root_var(resolved, roots)
                                 placed = physical_join(physical_cwd, resolved, posix_bash=posix_bash)
-                                sources.append({"path": placed, "unresolved": not placed or has_unresolved(resolved)
-                                                or has_unresolved(placed) or bool(_DEBRIS.search(resolved))
+                                sources.append({"path": placed, "unresolved": not placed
+                                                or (not source_literal and (has_unresolved(resolved)
+                                                                            or has_unresolved(placed)))
+                                                or bool(_DEBRIS.search(resolved))
                                                 or source in _BRACE_WORDS or resolved in _BRACE_WORDS})
                         row["copy_sources"] = sources
                     evidence.append(row)
+                # 4.1.1 final round (F360): a link on the path (a junction into reference/) is judged
+                # where it lands as well; every rule ORs over these entries, so the stricter stands.
+                if not unres:
+                    real = link_resolved(out[-1][0], literal=literal, refuse=not reads_only)
+                    if real:
+                        out.append((real, False, r))
+                else:
+                    # ...and an UNRESOLVED operand's literal head (link budget round 2): `<junction>/$X/f`
+                    # and `'<junction>/a${b}/f'` (a quoted brace is not literal_dollar_path) read their
+                    # lexical text only, where `<reference>/$X/f` is caught by the root in its text. The
+                    # head's landing place plus the rest as written is judged the same way (unresolved).
+                    real = link_head_resolved(r, refuse=not reads_only)
+                    if real:
+                        out.append((real, True, real))
+                    # ...and through a link the unresolved component itself may name (`<work>/refj$X/f`).
+                    for real in link_entries_matched(r, refuse=not reads_only):
+                        out.append((real, True, real))
         return out
 
     cur_dialect = ["bash"]                # the dialect of the segment prep() is reading
@@ -6930,6 +9100,11 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     sed_t, out_t, search_files = [], [], []
     gitwipe_t, gitdiscard_t, gitwipe_pairs = [], [], []
     scoped_rm_t, mod_t, subst_rm_t = [], [], []
+    # For writes_game_archive only: moved rsync sources, folders receiving an archive-named
+    # copy, what a listing feeds `xargs rm`, and (root operand, segment, mode) of each find that
+    # deletes ("delete") or prints to an `xargs rm` ("print").
+    archive_moved_t, archive_into_t, archive_listed_t, archive_finds = [], [], [], []
+    archive_listed_rec_t = []           # ...and what a listing feeds a RECURSIVE `xargs rm` (F2)
     search_seg, git_all = False, False
     transcript_copy = False             # M1, see _copy_lands_a_transcript
     # H1 follow-up, see _inline_program_writes_transcript; a heredoc PROGRAM is judged once,
@@ -6949,8 +9124,10 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
                                          for folder in protected_save_folders}
     save_mentions = [re.compile(re.escape(folder) + r"(?=$|[/\s\"'`<>);,*?\[\]{}$])")
                      for folder in save_spellings if folder]
-    for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0], is_for_ in zip(
-            seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect, seg_for):
+    for (s, c_cwd), prev, c_old, physical_cwd, cur_dialect[0], is_for_, exact_ in zip(
+            seg_cwd, seg_prev, unseeded, physical_dirs, seg_dialect, seg_for, seg_exact):
+        _check_deadline()
+        literal_expansions = literal_words(s, exact_)
         if (save_folders and evidence is not None and not execution_context
                 and verb(s) not in SAVE_MODELLED_VERBS and not _carries_program_text(s)
                 and not _save_read_only_program(s)):
@@ -6998,10 +9175,32 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         copy_t += prep(robo_copy, c_cwd, c_old, operation="write", scope="tree")
         rm_t += prep(robo_del, c_cwd, c_old, operation="delete", scope="tree")
         mv_src += prep(robo_mv, c_cwd, c_old, operation="move", scope="tree")
-        mod_t += prep(modify_targets(s), c_cwd, c_old, operation="write")
+        mod_t += prep(modify_targets(s) + decompress_outputs(s), c_cwd, c_old, operation="write")
         # A FILTERED find-delete removes entries INSIDE its tree: it feeds every in-tree
         # delete rule, and never the whole-install hard block (see find_scoped_deletes).
         scoped_rm_t += prep(find_scoped_deletes(s), c_cwd, c_old, operation="delete", scope="filtered-tree")
+        archive_moved_t += prep(rsync_moved_sources(s), c_cwd, c_old)
+        listed_ = prep(xargs_listed_operands(s, prev), c_cwd, c_old)
+        archive_listed_t += listed_
+        archive_listed_t += prep(xargs_replaced_folders(s, prev), c_cwd, c_old)
+        xargs_rec = bool(listed_ or verb(prev or "") == "find") and deletes_recursively(tokens_of(s))
+        if xargs_rec:
+            archive_listed_rec_t += listed_
+        archive_finds += [(op, s, "delete", True)
+                          for op in prep(_find_delete(s, default_root=True)[0], c_cwd, c_old)]
+        archive_finds += [(op, s, "delete", True)
+                          for op in prep(find_entry_write_roots(s), c_cwd, c_old)]
+        fd_find = _fd_as_find(s) if verb(s) in ("fd", "fdfind") else None
+        if fd_find:
+            archive_finds += [(op, fd_find, "delete", True)
+                              for op in prep(_find_delete(fd_find)[0] + find_entry_write_roots(fd_find), c_cwd, c_old)]
+        x_effect = xargs_entry_effect(s, prev)
+        if x_effect:
+            x_roots = _find_roots(prev) or ["."]
+            archive_finds += [(op, prev, x_effect, False) for op in prep(x_roots, c_cwd, c_old)]
+        if xargs_feed(s, prev) and verb(prev) == "find" and xargs_passes_item(s):
+            archive_finds += [(op, prev, "print", xargs_rec)
+                              for op in prep(_find_roots(prev) or ["."], c_cwd, c_old)]
         # A command name that arrives by substitution MAY be rm: its operands feed the X4
         # directory delete ADVISORY (FX-G4 / BLIND-SPOTS F183, MEASURED: `$(echo rm) -rf
         # <game>/libraries` was a plain allow where `rm -rf` advises). Advisory only; an
@@ -7013,10 +9212,12 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             subst_rm_t += prep(_operands(s), c_old, c_old)
         # truncate / dd of=are truncating writes, judged as `>` is (see clobber_targets).
         redir_t += [("truncate",) + o for o in prep(clobber_targets(s), c_cwd, c_old, False, operation="write")]
-        mv_src += prep(move_sources(s), c_cwd, c_old, operation="move")
+        mv_src += prep(move_sources(s) + replaced_sources(s), c_cwd, c_old, operation="move")
         dests_ = prep(copy_dests(s), c_cwd, c_old, operation="write", scope="copy-destination",
-                      copy_sources=exact_copy_sources(s))
+                      copy_sources=exact_copy_sources(s), reads_stdin=_bare_command(s, {"tee"}))
         copy_t += dests_
+        if copy_names_archive(s):
+            archive_into_t += dests_ + prep(robo_copy, c_cwd, c_old)
         transcript_copy = transcript_copy or _copy_lands_a_transcript(s, dests_, assigns)
         transcript_inline = transcript_inline or _inline_program_writes_transcript(s, c_cwd, assigns)
         for tgt_, at_, kind_ in ([] if is_for_ else _segment_links(s, assigns)):     # F331
@@ -7025,7 +9226,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
             link_unresolved = link_unresolved or j_ == "unresolved"
         sed_t +=prep(sed_in_place_targets(s), c_cwd, c_old, operation="write")
         out_t += prep(output_targets(s), c_cwd, c_old, False, operation="write")
-        search_files += prep(search_paths(s, require_recursive=False), c_cwd, c_old)
+        search_files += prep(search_paths(s, require_recursive=False), c_cwd, c_old, reads_only=True)
         # UNSEEDED, deliberately (lane F). `git clean -f` / `reset --hard` name no path, so
         # with the session seed EVERY one run from the game or toolkit root becomes an ASK
         # -- a new prompt outside the profile, which the user has ruled out (2026-10-02:
@@ -7104,6 +9305,9 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # unknown cmdlet's RELATIVE arguments are not known to be paths at all. MEASURED in the
     # replay: 2 historical rows, both a user-defined PowerShell function called with
     # relative names from the game root -- each would have become a new prompt.
+    # A cmdlet the guard does not model may re-parse its argument (Invoke-Expression inside a
+    # module function), so no `$` in its operands is literal: the old reading.
+    literal_expansions = {}
     for (s, _c), c_old in zip(seg_cwd, unseeded):
         if verb(s) == "x4-unknown-cmdlet":
             ops = prep(_operands(s), c_old, c_old)
@@ -7123,6 +9327,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # name that is a ROOT variable (`"$X4_GAME/X4.exe"`) is a known program, not this case.
     program_dynamic = False
     for (s, _c), c_old in zip(seg_cwd, unseeded):
+        # (literal_expansions stays empty: a program the guard cannot name may re-parse anything.)
         if not _dynamic_program(s):
             continue
         if (not has_unresolved(subst_root_var(resolve(_verb_token(s), assigns), roots))
@@ -7297,7 +9502,48 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
 
     _mods = list(dict.fromkeys(_deployed_mods(rm_t + mv_src + subst_rm_t)
                                + _deployed_mods(scoped_rm_t, filtered=True)))
+    # An official DLC is not a deployed mod: removing one of its files is denied with the archives
+    # (user ruling 2026-11-05, 4.1.1 review round 2 F8), so it never reaches the mod confirmation.
+    _dlc_named = [m for m in _mods if m.startswith("ego_dlc_")]
+    _mods = [m for m in _mods if not m.startswith("ego_dlc_")]
     _mod_list = ", ".join(_mods[:10]) + (f" and {len(_mods) - 10} more" if len(_mods) > 10 else "")
+
+    # A shell write, move or delete of a base-game or official DLC archive (see _is_game_archive).
+    def _spellings(ops):
+        # Unquoted braces expand as glob_covers reads them; `p or raw` as rm_named_game does.
+        for path, _u, raw in ops:
+            n = norm(path or raw)
+            yield from (_brace_expand(n) if norm(raw) in brace_patterns else [n])
+
+    def _games(n):
+        # The configured game root, AND the install's folder name in the path, as rm_named_game
+        # reads it: a second install is an install too (4.1.1 review round 2, F7).
+        return list(dict.fromkeys(([_g] if _g else []) + named_game_roots(n)))
+
+    def _hits(ops, test):
+        return any(test(n, g) for n in _spellings(ops) for g in _games(n))
+
+    def _find_games(n):
+        # ...and, for a find, a Steam library's common/ folder: the install's usual parent, so it may
+        # hold one (4.1.1 review round 3, C). Its archives and DLC folders, as for any root above
+        # extensions/ (see find_can_reach_archive).
+        out = _games(n)
+        lib = n.rstrip("/")
+        return out + ([lib + "/x4 foundations"] if lib.endswith("/steamapps/common") else [])
+
+    _archive_written = copy_t + redir_t_all + sed_t + out_t + mod_t
+    _archive_removed = rm_t + mv_src + archive_moved_t
+    writes_game_archive = (
+        _hits(_archive_written, _is_game_archive)
+        or _hits(_archive_removed, _removes_game_archive)
+        or _hits(archive_moved_t, _is_archive_home)
+        or _hits(archive_into_t, _is_archive_home)
+        or _hits(archive_listed_t, lambda n, g: _is_game_archive(n, g) or _is_archive_home(n, g))
+        or _hits(archive_listed_rec_t, _holds_a_dlc)
+        or bool(_dlc_named)
+        or any(find_can_reach_archive(seg_, n, op[2], g, mode_, rec_)
+               for op, seg_, mode_, rec_ in archive_finds for n in _spellings([op])
+               for g in dict.fromkeys(_find_games(n))))
     result = {
         "command": cmd,
         "timeout": timeout,
@@ -7355,6 +9601,7 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
         # tree had the wider channel and the hard-blocked one the narrower.
         "writes_reference": hit(copy_t + [(pp, uu, rr) for _m, pp, uu, rr in redir_t]
                                 + sed_t + out_t + mod_t, "reference"),
+        "writes_game_archive": writes_game_archive,
         "rm_in_x4_dir": any(hit(rm_t + mv_src + scoped_rm_t, k, conservative=True) for k in
                             ("game", "profile", "mods", "toolkit")) or rm_named_game
                         or hit(subst_rm_t, "game"),
@@ -7588,7 +9835,52 @@ def facts(payload: dict, roots: dict, *, evidence: list | None = None, execution
     # Several fields above evaluate glob membership; capture scope AFTER every
     # field has run so a late overflow cannot disappear from the result.
     result["operand_expansion_truncated"] = _OPERAND_EXPANSION_TRUNCATED[0]
+    # 4.1.1 review (link budget): an operand whose links the per-call budget left unresolved is not "no
+    # link" -- the hook refuses it (see link_resolved). Captured after every field, like the flag above.
+    result["links_unresolved"] = _LINKS_UNRESOLVED[0]
+    result["ssh_host_unplaced"] = _ssh_unplaced_destructive(result, roots, protected_save_folders)
     return result
+
+
+def _ssh_unplaced_destructive(outer: dict, roots: dict, protected_save_folders=()) -> bool:
+    """Would a remote command of an `ssh <host>` the guard cannot place be destructive, had it run on
+    THIS machine (4.1.1 review round 6, C)? Each is judged by the whole rule set on its own, last, so
+    nothing it sets can reach this command's verdict -- the answer is only an advisory, because the
+    host is most likely another machine, whose paths are not this one's protected folders. A remote
+    command spliced into the command around it counts only for a fact `outer` (this command's own
+    facts) does not already have: the rest of that text is this command, already judged."""
+    distinct = list(dict.fromkeys(_SSH_UNPLACED))
+    if len(distinct) > _MAX_SSH_UNPLACED and not _SSH_NESTED[0]:
+        return True                      # more remote commands than are judged: advise (round 7, 1)
+    remote = distinct[:_MAX_SSH_UNPLACED]
+    spliced = [t for t in dict.fromkeys(_SSH_UNPLACED_SPLICED) if t not in remote][:_MAX_SSH_UNPLACED]
+    if not remote or _SSH_NESTED[0] >= _MAX_SSH_DEPTH:
+        return False
+    keys = _SSH_DESTRUCTIVE + ("ssh_host_unplaced",)
+    was = _DEADLINE[0]
+    soon = _clock() + _SSH_ADVISORY_S
+    _DEADLINE[0] = soon if was is None else min(was, soon)
+    _SSH_NESTED[0] += 1
+    try:
+        for text, whole in [(t, True) for t in remote] + [(t, False) for t in spliced]:
+            if text not in _SSH_MEMO:
+                if _SSH_JUDGED[0] >= _MAX_SSH_JUDGED:
+                    return True              # the budget is spent with texts unjudged: advise (round 7, 1)
+                _SSH_JUDGED[0] += 1
+                # The remote text's OWN link verdict (the outer one is captured already): a remote text
+                # over the link budget is advised (links_unresolved is in _SSH_DESTRUCTIVE).
+                _LINKS_UNRESOLVED[0] = False
+                sub = facts({"tool_name": "Bash", "tool_input": {"command": text}}, roots,
+                            protected_save_folders=protected_save_folders)
+                _SSH_MEMO[text] = {k for k in keys if sub.get(k)}
+            if any(whole or not outer.get(k) for k in _SSH_MEMO[text]):
+                return True
+        return False
+    except Exception:                    # noqa: BLE001 -- unjudged (a timeout too) is advised, never clean
+        return True
+    finally:
+        _SSH_NESTED[0] -= 1
+        _DEADLINE[0] = was
 
 
 # ----------------------------------------------------------------------- CLI
@@ -7619,14 +9911,18 @@ def ipc_roots(head: str) -> dict:
     return roots
 
 
-def ipc(payload: dict, roots: dict, *, evidence: list | None = None, protected_save_folders=()):
+def ipc(payload: dict, roots: dict, *, evidence: list | None = None, protected_save_folders=(),
+        deadline: float | None = None):
     """(exit code, stdout bytes, facts) exactly as main() reports them to protect-bash.sh.
 
     K5 (v4.0 release review): the save bridge computes the facts ONCE with this and hands the
     same bytes to the Bash backend (`--facts-stdin`), instead of a second process re-parsing
     the command and re-running the PowerShell translation -- that doubled the hook's latency.
     """
-    f = facts(payload, roots, evidence=evidence, protected_save_folders=protected_save_folders)
+    f = facts(payload, roots, evidence=evidence, protected_save_folders=protected_save_folders, deadline=deadline)
+    if f.get("analysis_timeout"):
+        # rc 6: the analysis deadline passed (round 7, 1). Nothing was fully analysed: the caller DENIES.
+        return 6, str(f["analysis_timeout"]).encode("utf-8", "replace"), f
     if f.get("powershell_error"):
         # rc 4 + the reason on stdout: the caller ASKS with it. Nothing was analysed, so
         # no fact line may be emitted -- a partial stream would read as a clean pass.

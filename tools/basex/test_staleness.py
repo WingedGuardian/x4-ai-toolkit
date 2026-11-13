@@ -426,6 +426,22 @@ def test_a_stamp_from_nothing_refuses_rather_than_recomputing(tmp_path):
     assert "fingerprint" not in json.loads(cov.read_text()), "a refused stamp writes nothing"
 
 
+def test_a_next_generation_report_is_stamped_for_its_base_database(tmp_path):
+    """Build-then-swap (dbswap.py): the build reconciles coverage-x4eff__next.json, but the snapshot is x4eff's
+    and so is the engine axis (build-effective.py is folded in for x4eff only). Deriving the database from the
+    file name refused the stamp, and would have hashed the wrong engine axis."""
+    ref, ext, engine = _fake_tree(tmp_path)
+    cov = tmp_path / "coverage-x4eff__next.json"
+    cov.write_text(json.dumps({"db": "x4eff__next", "status": "complete"}))
+    pending = tmp_path / "pending.json"
+    staleness.snapshot(pending, ref, ext, engine, "x4eff")
+    with pytest.raises(staleness.SnapshotUnusable):
+        staleness.write(cov, ref, ext, engine, taken_before=pending)
+    fp = staleness.write(cov, ref, ext, engine, taken_before=pending, db="x4eff")
+    assert fp == staleness.fingerprint(ref, ext, engine, "x4eff")
+    assert fp["engine"] != staleness.fingerprint(ref, ext, engine, "x4eff__next")["engine"]
+
+
 def test_the_cli_refuses_an_unusable_snapshot_with_the_stamp_failure_rc(tmp_path, monkeypatch, capsys):
     ref, ext, engine = _fake_tree(tmp_path)
     monkeypatch.setattr(staleness, "_defaults", lambda: (ref, ext, engine))

@@ -5,13 +5,18 @@ owner-aware BASE, so `_analyze_vpath` skipped it outright -- which also dropped 
 overriders, so `len(overriders) >= 2` never fired. MEASURED live: v3.3.1 reported 2 rows
 "'cpsdo_vro' clobbers the rest" (full files at
 extensions/cpsdo_zb_modpack/assets/fx/weaponfx/macros/...); master reported none, silently.
+
+Issue #17 (2026-11-06): those two live rows are MACRO files, which the engine is MEASURED to
+MERGE at a nested path (both macros exist), so they are no longer FULL-OVERRIDE rows -- see
+`test_nested_full_copy_merges.py`. This file pins the clobber model for the classes that keep
+it (engine behaviour UNMEASURED, disclosed), so REL is deliberately NOT `.../macros/*_macro.xml`.
 """
 
 from __future__ import annotations
 
 from x4validate import _compat, _merge
 
-REL = "assets/fx/macros/bullet_x_macro.xml"
+REL = "assets/fx/bullet_x.xml"
 FULL = '<macros><macro name="bullet_x_macro" class="bullet"><properties v="{}"/></macro></macros>'
 
 

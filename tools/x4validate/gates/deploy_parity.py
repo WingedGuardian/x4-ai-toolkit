@@ -259,7 +259,7 @@ def population(claude: Path, spec: TargetSpec = CLAUDE) -> set[str]:
 
 
 def compare_file(repo_file: Path, game_file: Path, name: str,
-                 spec: TargetSpec = CLAUDE) -> Row:
+                 spec: TargetSpec = CLAUDE, count_lines: bool = True) -> Row:
     if not game_file.is_file():
         return Row(name, ONLY_REPO)
     if not repo_file.is_file():
@@ -273,7 +273,7 @@ def compare_file(repo_file: Path, game_file: Path, name: str,
     if in_rewrite_scope(name, spec) and any(
             repo.replace(spec.rewrite_from, to) == game for to in spec.rewrite_to):
         return Row(name, IDENTICAL_REWRITTEN)
-    return _drift(name, repo, game)
+    return _drift(name, repo, game) if count_lines else Row(name, DRIFT)
 
 
 def _drift(name: str, repo: bytes, game: bytes) -> Row:
@@ -285,7 +285,8 @@ def _drift(name: str, repo: bytes, game: bytes) -> Row:
     return Row(name, DRIFT, game_only, repo_only)
 
 
-def compare_rendered(source_dir: Path, template_rel: str, game_dir: Path, name: str) -> Row:
+def compare_rendered(source_dir: Path, template_rel: str, game_dir: Path, name: str,
+                     count_lines: bool = True) -> Row:
     """A file whose deployed form is the source template rendered for the GAME root.
     Equal as canonical JSON is parity (the installer's own check-codex rule), so a
     deployed file that differs only in formatting is left alone -- Codex re-asks for
@@ -301,14 +302,20 @@ def compare_rendered(source_dir: Path, template_rel: str, game_dir: Path, name: 
     a, b = canonical_json(have), canonical_json(want.encode("utf-8"))
     if a is not None and a == b:
         return Row(name, IDENTICAL_RENDERED)
+    if not count_lines:
+        return Row(name, DRIFT)
     return _drift(name, want.encode("utf-8"), _norm(have))
 
 
 def compare_trees(repo_claude: Path, game_claude: Path,
-                  spec: TargetSpec = CLAUDE) -> list[Row]:
+                  spec: TargetSpec = CLAUDE, count_lines: bool = True) -> list[Row]:
+    """count_lines=False skips the line diff of a drifted file (its DRIFT row then carries 0/0):
+    the session-start check (scripts/x4deploydrift.py) names files, and difflib over a large
+    drifted hook is most of a warm comparison's cost."""
     names = sorted(population(repo_claude, spec) | population(game_claude, spec))
-    rows = [compare_file(repo_claude / n, game_claude / n, n, spec) for n in names]
-    rows += [compare_rendered(repo_claude, tmpl, game_claude, n) for n, tmpl in spec.rendered]
+    rows = [compare_file(repo_claude / n, game_claude / n, n, spec, count_lines) for n in names]
+    rows += [compare_rendered(repo_claude, tmpl, game_claude, n, count_lines)
+             for n, tmpl in spec.rendered]
     return sorted(rows, key=lambda r: r.name)
 
 

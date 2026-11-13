@@ -74,8 +74,9 @@ was built (Python / lxml). It checks:
 
 It also ships **`x4modlist`** (mod-registry triage via the Nexus API; `x4modlist downloads DIR...`
 reads the manifests inside downloaded `.zip`/`.7z`/`.rar` mods and says which are newer than what is
-installed, extracting nothing), **`x4save`** (`info`, `check`, and `vars <pattern> [save]`, which prints
-the MD variables a save stores and where they live) and an **XSD-based 7.x→9.0 migration checker**.
+installed, extracting nothing), **`x4save`** (`info`, `check`, `vars <pattern> [save]`, which prints
+the MD variables a save stores and where they live, and `census`, which counts its ships, turrets and
+stations by macro, owner or parent) and an **XSD-based 7.x→9.0 migration checker**.
 
 ```bash
 cd tools/x4validate
@@ -128,8 +129,10 @@ build could not include; `x4fresh rebuild` rebuilds what is not FRESH, one build
 records the losses you understand so the note stops repeating them (a changed set speaks again).
 
 At every session start (Claude Code and Codex; OpenCode has no session-start hook) the hook prints the
-previous run's note and starts `x4fresh rebuild --auto` in the background. That run rebuilds only the effective
-store and the xref index (BaseX is never rebuilt unattended), waits while the game runs, and writes a note that
+previous run's note and starts `x4fresh rebuild --auto` in the background. That run rebuilds the effective
+store and the xref index, and refreshes the BaseX databases in the background once the game is closed and your mods
+have been unchanged for 30 minutes (only a database you built once before; `X4_FRESH_BASEX_AUTO=off` starts no new one, and a builder checks it once when it takes its own lock, so one already waiting out the quiet period must be stopped by the pid `x4fresh status` shows;
+`X4_FRESH_BASEX_QUIET_MIN` changes the wait). It waits while the game runs, and writes a note that
 is empty only when everything this machine can build is fresh and complete. To stop it, set `X4_FRESH_AUTO=off`
 in the environment you start the agent from (`X4_HOUSEKEEP_SWEEP=off` stops it as well, with the temp sweep).
 `X4_FRESH_DEFER_WHILE` (default `X4.exe;X4`) names the processes it waits for and `X4_JOB_WRAPPER` puts a
@@ -196,8 +199,8 @@ finding unless it can state its denominator, and then says *"NEGATIVE CONFIRMED 
 documents"* with every exclusion named. It also refuses to answer at all from a stale index rather
 than serving you a confidently wrong number.
 
-**Be honest with yourself about the cost before you start:** Java 17+, roughly 3 GB of disk, and a
-build measured in minutes, not seconds. BaseX itself is bundled (BSD-3-Clause, 5.2 MB) so there is
+**Be honest with yourself about the cost before you start:** Java 21+, roughly 3 GB of disk, and a
+build measured in minutes, not seconds. BaseX itself is bundled (BSD-3-Clause, 5.8 MiB) so there is
 nothing extra to download. See [`tools/basex/README.md`](tools/basex/README.md) for the install, the
 freshness contract and the exit codes, and `tools/basex/QUERIES.md` for worked queries.
 
@@ -305,8 +308,10 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
   an earlier action can change a later destination into a directory or link.
   A program whose writes the guard cannot read, such as `python -c`, is not
   judged by this rule at all.
-  An opaque program naming saves requires review; its named pairs are preserved first,
-  and unresolved save scope is refused. A separate profile confirmation never skips
+  An opaque program naming saves (a script, `python -c`, an unknown binary) is refused,
+  never asked about: the refusal tells the agent to run it on a copy in its scratch
+  directory or to read the save with `x4save` by save name. Unresolved save scope is
+  refused too. A separate profile confirmation never skips
   save preservation or bulk approval.
   They cover every tool that can change a file: Bash, **PowerShell** (parsed by PowerShell's
   own parser and judged by the same rules as Bash — it needs `pwsh` or Windows PowerShell,
@@ -540,7 +545,7 @@ one; until it has one, the toolkit's guards do not protect it.
 - **uv** (+ Python 3.13) — for x4validate (https://docs.astral.sh/uv/)
 - **XRCatTool** (from Egosoft) — to unpack your own game to `reference/` (run via `bin/xrcat`)
 - **Wine** — only on **Linux/macOS**, to run XRCatTool (a Windows `.exe`)
-- **Java 17+** — *optional*, only for the BaseX corpus search described above. Nothing else needs a
+- **Java 21+** — *optional*, only for the BaseX corpus search described above. Nothing else needs a
   JVM, and the rest of the toolkit works without it.
 
 ### Platform support
@@ -852,3 +857,7 @@ MIT — see [LICENSE](LICENSE). X4: Foundations is a trademark of Egosoft GmbH.
 - [Claude Code](https://claude.ai/code) by Anthropic, [Codex](https://github.com/openai/codex) by OpenAI, [OpenCode](https://opencode.ai)
 - x4validate built on [lxml](https://lxml.de/); mod metadata via the [Nexus Mods API](https://api-docs.nexusmods.com/)
 - Sibling project: [skyrimvr-claude-toolkit](https://github.com/WingedGuardian/skyrimvr-claude-toolkit)
+
+## Development CI
+
+Use draft pull requests for fast feedback, then mark ready for full qualification. See the [CI workflow](docs/ci-workflow.md).

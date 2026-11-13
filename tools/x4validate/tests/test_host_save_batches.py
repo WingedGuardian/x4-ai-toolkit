@@ -158,6 +158,37 @@ def transactions(root):
     return list((root / ".modding-agent-harness/backups/saves/transactions").glob("*.json"))
 
 
+# 4.1.1 port of 6cbeb825: a literal-`$` batch (Recycle Bin items) through the rendered Codex
+# adapter. The hook only judges; the fixtures must be untouched afterwards.
+@pytest.mark.parametrize('kind', ['literal-batch', 'reference', 'expanding', 'relative'])
+def test_native_codex_dollar_paths_prove_only_literal_absolute_targets(tmp_path, kind):
+    require_native_codex(REPO)
+    if not (shutil.which('pwsh') or shutil.which('powershell')):
+        pytest.skip('PowerShell parser unavailable')
+    tmp, root, env, _files = prepare(tmp_path)
+    env['X4_CODEX_SHELL'] = 'powershell'
+    parent = Path(env['X4_REFERENCE']) if kind == 'reference' else tmp / 'outside' / '$Recycle.Bin'
+    parent.mkdir(parents=True, exist_ok=True)
+    targets = [parent / (prefix + str(i)) for i in range(8) for prefix in ('$R', '$I')]
+    for target in targets:
+        target.write_bytes(b'guard-only fixture; never delete')
+    quote = '"' if kind == 'expanding' else "'"
+    paths = [str(p) if kind != 'relative' else p.name for p in targets]
+    command = '\n'.join('Remove-Item -LiteralPath ' + quote + p + quote + ' -Force' for p in paths)
+    payload = native('bash_powershell', root, command=command)
+    payload['tool_input'].pop('workdir', None)  # observed missing execution workdir contract
+    decision, reason = run_adapter(env, payload)
+    if kind == 'literal-batch':
+        assert decision in ('allow', 'advise'), (decision, reason)
+    elif kind == 'reference':
+        assert decision == 'deny', (decision, reason)
+        assert 'reference' in reason.lower() and 'INERT' not in reason, reason
+    else:
+        assert decision == 'inert' and 'not allowed' in reason, (decision, reason)
+    assert all(p.read_bytes() == b'guard-only fixture; never delete' for p in targets)
+    assert not transactions(root)
+
+
 @pytest.mark.parametrize("host", ["codex", "opencode"])
 @pytest.mark.parametrize("count", [1, 3])
 def test_rendered_hosts_preserve_opaque_named_saves_or_refuse_bulk(tmp_path, host, count):
@@ -171,11 +202,11 @@ def test_rendered_hosts_preserve_opaque_named_saves_or_refuse_bulk(tmp_path, hos
         result = open_run(env, open_call(root, "bash", {"command": command, "workdir": str(root)}, shell="bash"))
         decision, reason = result["decision"], result["reason"]
         assert not result["inert"], result
-    # The Codex fixture decoder recovers the ask marker from its wire-level deny.
-    # OpenCode exposes that same refusal directly as deny.
-    assert decision == ("ask" if host == "codex" and count == 1 else "deny"), (decision, reason)
-    assert len(transactions(root)) == (1 if count == 1 else 0)
-    assert ("backup verified" if count == 1 else "SAVE_ACCESS_APPROVAL") in reason
+    # #19 (4.1.1): an opaque program naming saves is denied with a remedy, never asked, and the
+    # deny returns before preservation -- on every host, one save or many.
+    assert decision == "deny", (decision, reason)
+    assert not transactions(root)
+    assert "opaque program" in reason and "x4save vars" in reason, reason
     assert all(p.read_bytes() == p.name.encode() for p in files)
 
 

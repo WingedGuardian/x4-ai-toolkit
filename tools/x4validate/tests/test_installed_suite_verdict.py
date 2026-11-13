@@ -175,8 +175,8 @@ def _verdict_args(run: str) -> dict:
 
 
 def _installed_copy_job():
-    from ruamel.yaml import YAML
-    ci = YAML(typ="safe").load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    from ci_workflow import load_ci
+    ci = load_ci(ROOT)    # ci.yml + full-qualification.yml: the full jobs moved to the second file
     job = ci["jobs"]["installed-copy"]
     steps = {s.get("id") or s.get("name"): s for s in job["steps"]}
     verdict = next(s for s in job["steps"] if "installed_suite_verdict.py" in str(s.get("run", "")))

@@ -900,3 +900,39 @@ def test_TWIN_a_documents_folder_that_cannot_be_listed_is_still_named_as_unread(
         raise PermissionError("denied")
     monkeypatch.setattr(Path, "iterdir", refuse)
     assert profile in mod.save_folders(roots)
+
+
+def _account_world(world, monkeypatch, tmp_path):
+    mod, roots, saves, tk = world
+    docs = tmp_path / "docs"
+    acct = docs / "Egosoft" / "X4" / "12345678" / "save"
+    acct.mkdir(parents=True)
+    s = acct / "save_001.xml.gz"
+    s.write_bytes(b"x")
+    monkeypatch.setattr(mod, "_known_documents", lambda: [docs])
+    monkeypatch.setattr(mod.save_policy, "folders", lambda _roots: (saves,))
+    return mod, roots, docs / "Egosoft" / "X4", s
+
+
+def test_a_failed_account_listing_is_unknown_never_removed(world, monkeypatch, tmp_path):
+    """4.1.1: `iterdir` of Egosoft/X4 failing while the core's `scandir` of the same folder works left the account save
+    folders out of the look and read every save in them as removed. Simulated: only Path.iterdir refuses."""
+    mod, roots, profile, s = _account_world(world, monkeypatch, tmp_path)
+    assert mod.report(roots, now=1000.0) == ("", False)
+    with monkeypatch.context() as held:
+        def refuse(self):
+            raise PermissionError(13, "denied", str(self))
+        held.setattr(Path, "iterdir", refuse)
+        text, _loud = mod.report(roots, now=1010.0)
+    assert "removed" not in text and str(profile) in text, text
+    _bump(s, b"changed after the gap")          # the row survived the gap: a later change is still seen
+    text, loud = mod.report(roots, now=1030.0)
+    assert loud and "modified: " + str(s) in text, text
+
+
+def test_TWIN_an_account_folder_that_is_really_gone_still_reads_as_gone(world, monkeypatch, tmp_path):
+    mod, roots, profile, s = _account_world(world, monkeypatch, tmp_path)
+    assert mod.report(roots, now=1000.0) == ("", False)
+    s.unlink()
+    s.parent.rmdir()
+    assert "removed: " + str(s) in mod.report(roots, now=1010.0)[0]

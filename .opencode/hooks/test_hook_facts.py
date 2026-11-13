@@ -15,6 +15,7 @@ happened four times.
 """
 import os
 import pathlib
+import subprocess as _subprocess
 import sys
 import unittest
 
@@ -44,10 +45,56 @@ DEL_GAME = D + ' -rf "' + GAME + '"'
 DEL_REF = D + ' -rf "' + REF + '"'
 
 
+#: 4.1.1: what the REAL translator says when it ran out of time. The guard refuses (fail-closed,
+#: correct), but a test that asserts a translation VERDICT then measured nothing: CI run
+#: 41992260237 failed a twin on `PowerShell could not be run (TimeoutExpired)` (10 s cap, slow
+#: ubuntu runner). Such a run is SKIPPED, counted and named -- never passed, never failed.
+_TRANSLATOR_OUT_OF_TIME = (H.PS_TIMED_OUT, H.PS_BUDGET_SPENT)
+
+
+def _measured(f):
+    """*f*, unless the REAL PowerShell translator timed out producing it: then SkipTest.
+
+    Only the real one: a test that stubs `H.subprocess` to time out (TestHK1TranslationBudget)
+    is measuring the refusal itself, and must keep failing if it changes."""
+    if (H.subprocess is _subprocess
+            and f.get("untranslated_category") in _TRANSLATOR_OUT_OF_TIME):
+        _TRANSLATOR_SKIPS.append(f["untranslated_category"])
+        raise unittest.SkipTest("the real PowerShell translator ran out of time on this machine ("
+                                + f["untranslated_category"] + "): the verdict was NOT measured")
+    return f
+
+
+#: 4.1.1 review: the timeout skip needs a ceiling, or a runner where translation ALWAYS times out turns every
+#: PowerShell verdict test into a skip and the leg stays green. Counted here, enforced by __main__ (the CI legs run this
+#: file with plain python). X4_MAX_TRANSLATOR_SKIPS sets it (CI: 0 on Windows, 3 on Ubuntu); unset means 3.
+_TRANSLATOR_SKIPS = []
+
+
+def translator_skip_ceiling(count, raw=None):
+    """0 when `count` named translator-timeout skips are within the ceiling, else 1 (and says why)."""
+    raw = os.environ.get("X4_MAX_TRANSLATOR_SKIPS", "3") if raw is None else raw
+    try:
+        cap = int(raw)
+    except ValueError:
+        print("X4_MAX_TRANSLATOR_SKIPS=%r is not a number: the ceiling cannot be applied, which is a FAILURE" % raw)
+        return 1
+    print("translator-timeout skips: %d (ceiling %d)" % (count, cap))
+    if count > cap:
+        print("FAILED: %d PowerShell verdict test(s) skipped because the translator ran out of time, over the ceiling "
+              "of %d: the PowerShell front-end was not measured on this run" % (count, cap))
+        return 1
+    return 0
+
+
+def _facts(payload, roots, **kw):
+    return _measured(H.facts(payload, roots, **kw))
+
+
 def F(command, timeout=0, background=False, roots=None):
     payload = {"tool_input": {"command": command, "timeout": timeout,
                               "run_in_background": background}}
-    return H.facts(payload, ROOTS if roots is None else roots)
+    return _facts(payload, ROOTS if roots is None else roots)
 
 
 # ---------------------------------------------------------------- primitives
@@ -504,6 +551,9 @@ class TestDeletePredicates(unittest.TestCase):
         # under test shadows it (CLAUDE.md #26).
         p = REF.replace("/reference", "/./reference")
         self.assertTrue(F(D + ' -rf "' + p + '"')["rm_targets_reference"])
+        # 4.1.1: link resolution (realpath) judges the same delete a second time and also removes the `.`, so on a
+        # drive it can resolve, the verdict above holds without this normaliser. Pin the lexical reading itself.
+        self.assertEqual(H._lexical_norm(p), H._lexical_norm(REF))
 
     def test_dotdot_segment_is_canonicalised(self):
         p = REF.replace("/reference", "/other/../reference")
@@ -775,7 +825,7 @@ class TestMiscPredicates(unittest.TestCase):
             payload["x4_execution_host"] = host
         else:
             payload["tool_input"]["x4_execution_host"] = host
-        return H.facts(payload, ROOTS)
+        return _facts(payload, ROOTS)
 
     def test_a_codex_shell_long_job_is_not_a_foreground_long_job(self):
         self.assertFalse(self._host("uv run python gates/corpus_sweep.py", "codex")["longjob_foreground"])
@@ -821,7 +871,7 @@ class TestMiscPredicates(unittest.TestCase):
         """Clause: `background is not True` -- a job already in the background needs no note."""
         payload = {"tool_input": {"command": "uv run python gates/corpus_sweep.py",
                                   "run_in_background": True}, "x4_execution_host": "codex"}
-        self.assertFalse(H.facts(payload, ROOTS)["longjob_codex"])
+        self.assertFalse(_facts(payload, ROOTS)["longjob_codex"])
 
     def test_TWIN_the_codex_advisory_needs_the_TOP_LEVEL_host(self):
         self.assertFalse(self._host("uv run python gates/corpus_sweep.py", "codex",
@@ -898,7 +948,7 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
         for cmd in ('tools/agent-harness.py save-lock off', './tools/agent-harness.py save-lock on',
                     r'tools\agent-harness.py save-lock off', r'.\tools\agent-harness.py save-lock on',
                     'pipenv run python tools/agent-harness.py save-lock on'):
-            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
+            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
             self.assertTrue(f["save_lock_decision"], cmd)
 
     def test_TWIN_the_harness_as_a_program_reading_the_save_locks_is_not_a_decision(self):
@@ -915,8 +965,15 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
             self.assertFalse(F(cmd)["save_lock_decision"], cmd)
 
     def test_a_save_lock_action_the_guard_cannot_read_is_asked(self):
+        # The xargs rows whose items come from a FILE: since the 4.1.1 xargs item readings
+        # (e1ab153b) an `echo on |` producer is read as `... save-lock on` by itself, so only
+        # an action xargs supplies from text the guard cannot see needs the `"xargs" in toks`
+        # clause. MEASURED 2026-11-08: with that clause removed the echo row stays True and
+        # the two file rows go False (CI run 42517544460 reported the mutant uncaught).
         for cmd in ('python tools/agent-harness.py save-lock "$ACTION"',
-                    'echo on | xargs python tools/agent-harness.py save-lock'):
+                    'echo on | xargs python tools/agent-harness.py save-lock',
+                    'cat action.txt | xargs python tools/agent-harness.py save-lock',
+                    'xargs python tools/agent-harness.py save-lock < action.txt'):
             self.assertTrue(F(cmd)["save_lock_decision"], cmd)
 
     def test_TWIN_reading_or_naming_the_save_locks_is_not_a_decision(self):
@@ -1165,7 +1222,7 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
                 self.assertEqual(f["rm_deployed_mod_names"], "", c)
 
     def test_rm_deployed_mod_also_reads_a_powershell_delete(self):
-        f = H.facts({"tool_name": "PowerShell", "tool_input": {
+        f = _facts({"tool_name": "PowerShell", "tool_input": {
             "command": "Remove-Item -Recurse " + DQ + GAME + "/extensions/deployed" + DQ}}, ROOTS)
         self.assertTrue(f["rm_deployed_mod"], f)
 
@@ -1178,7 +1235,7 @@ class TestPreviouslyUnprobedRules(unittest.TestCase):
                         ("Bash", "find " + Q + E + "a" + Q + " " + Q + E + "b" + Q + " " + Q + E + "c" + Q
                          + " -name " + Q + "*.bak" + Q + " | xargs " + D + " -f")):
             with self.subTest(tool=tool, c=c):
-                f = H.facts({"tool_name": tool, "tool_input": {"command": c}}, ROOTS)
+                f = _facts({"tool_name": tool, "tool_input": {"command": c}}, ROOTS)
                 self.assertEqual(f["rm_deployed_mod_names"], "a, b, c", c)
 
     def test_a_filtered_find_over_extensions_names_any_matching_mod(self):
@@ -1254,7 +1311,7 @@ class TestBareSystemPythonOnToolkitCode(unittest.TestCase):
 
     def test_the_payload_cwd_is_where_the_shell_starts(self):
         def f(cwd):
-            return H.facts({"tool_input": {"command": "python -m pytest -q"}, "cwd": cwd},
+            return _facts({"tool_input": {"command": "python -m pytest -q"}, "cwd": cwd},
                            ROOTS)["bare_python_on_project_code"]
         self.assertTrue(f(TOOLKIT + "/tools/x4validate"))
         self.assertTrue(f("C:" + BS + "tk" + BS + "tools" + BS + "x4validate" + BS + "tests"))
@@ -2100,8 +2157,14 @@ class TestCarriersNest(unittest.TestCase):
                 return "echo " + tag
             return " ".join("$(" + build(depth - 1, n, tag + chr(97 + i)) + ")"
                             for i in range(n))
+        # A WIDE command reaches the count bound fast, so a slow machine cannot hide it behind the
+        # analysis deadline (round 8: the deep one below takes ~14 s, near that deadline).
+        f = F("echo " + " ".join("$(echo a%d)" % i for i in range(300)))
+        self.assertTrue(f["carriers_truncated"], "the walk was cut short and said nothing")
         f = F("echo " + build(8, 3))
-        self.assertTrue(f["carriers_truncated"],
+        # ~14 s on a quick machine (MEASURED, round 8); a slower one may reach the analysis deadline
+        # first (round 7), which is the other refusal: either way it says so.
+        self.assertTrue(f.get("carriers_truncated") or f.get("analysis_timeout"),
                         "the walk was cut short and said nothing")
 
     def test_the_cap_is_reported_by_carried_commands_itself(self):
@@ -2204,7 +2267,18 @@ class TestALineContinuationIsNotASeparator(unittest.TestCase):
     the other 6 have no whitespace to break at. This is how anyone writes a long command.
     """
     def test_the_game_root(self):
-        self.assertTrue(F(D + " -rf " + CONT + '  "' + GAME + '"')["rm_hits_game"])
+        """The first spelling breaks at a space, which segments() no longer splits on
+        (its scan treats the escaped newline as escaped), so it stays a delete even
+        with the splice removed. The other two break INSIDE a word -- after the verb
+        with no space, and in the middle of it -- where only the splice rejoins the
+        verb: unspliced, the verb is `rm<NL>` or `r<NL>m`. MEASURED 2026-11-08: with
+        `spliced = cmd` the first stays True and the other two go False, which is why
+        they are here (CI run 42517544460 reported the mutant uncaught)."""
+        for cmd in (D + " -rf " + CONT + '  "' + GAME + '"',
+                    D + CONT + ' -rf "' + GAME + '"',
+                    D[0] + CONT + D[1:] + ' -rf "' + GAME + '"'):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(F(cmd)["rm_hits_game"], cmd)
 
     def test_the_reference_tree(self):
         self.assertTrue(F(D + " -rf " + CONT + '  "' + REF + '"')["rm_targets_reference"])
@@ -2480,6 +2554,13 @@ class TestFindRunsACommandFourWays(unittest.TestCase):
 
     def test_execdir_is_a_delete(self):
         self.assertTrue(F('find "' + GAME + '" -execdir ' + D + ' -rf {} +')["rm_hits_game"])
+
+    def test_execdir_rm_of_an_archive_fires(self):
+        # Round 8: the -execdir readings also catch the depth-0 root, so the archive reach of a
+        # filtered -execdir/-okdir delete is what pins that both are read as deleting.
+        for act, term in (("-execdir", " {} +"), ("-okdir", " {} ;"), ("-ok", " {} ;")):
+            cmd = 'find "' + GAME + '" -name "*.cat" ' + act + " " + D + term
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
 
     def test_okdir_is_a_delete(self):
         self.assertTrue(F('find "' + GAME + '" -okdir ' + D + ' -rf {} ;')["rm_hits_game"])
@@ -4012,6 +4093,750 @@ class TestRRPowerShellHostPayload(unittest.TestCase):
         self.assertFalse(H._ps_reads_stdin("bash <<EOF"))
 
 
+class TestWriteThroughAnExistingLink(unittest.TestCase):
+    """4.1.1 final round (F360): a shell write, touch or delete through an EXISTING junction or symlink into
+    reference/ was allowed (3 of 3) while the file tools, which canonicalise, denied. Each target is now also
+    judged where the link sends it. The links are made in a temporary folder, to a temporary 'reference'."""
+
+    def setUp(self):
+        import tempfile
+        self._td = tempfile.TemporaryDirectory()
+        base = pathlib.Path(self._td.name)
+        self.ref = base / "reference"
+        (self.ref / "libraries").mkdir(parents=True)
+        self.work = base / "work"
+        self.work.mkdir()
+        self.link = self.work / "refj"
+        try:
+            if os.name == "nt":
+                import _winapi
+                _winapi.CreateJunction(str(self.ref), str(self.link))
+            else:
+                os.symlink(str(self.ref), str(self.link))
+        except (OSError, ImportError, AttributeError) as exc:
+            self._td.cleanup()
+            self.skipTest("cannot make a link here: " + repr(exc))
+        self.roots = dict(ROOTS, reference=self.ref.as_posix())
+
+    def tearDown(self):
+        if os.name == "nt" and self.link.exists():
+            os.rmdir(self.link)              # the junction only, never its target
+        self._td.cleanup()
+
+    def f(self, cmd, cwd=None):
+        p = {"tool_input": {"command": cmd}}
+        if cwd:
+            p["cwd"] = cwd
+        return _facts(p, self.roots)
+
+    def test_a_write_or_delete_through_the_link_is_the_reference(self):
+        L = self.link.as_posix()
+        for cmd, flag in (("echo x > " + Q + L + "/x.xml" + Q, "writes_reference"),
+                          ("touch " + Q + L + "/libraries/wares.xml" + Q, "writes_reference"),
+                          ("cp /tmp/a " + Q + L + "/libraries/" + Q, "writes_reference"),
+                          ("rm -f " + Q + L + "/x.xml" + Q, "rm_targets_reference"),
+                          ("rm -rf " + Q + L + "/libraries" + Q, "rm_targets_reference"),
+                          ("cd " + Q + L + Q + " && rm -f x.xml", "rm_targets_reference")):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(self.f(cmd)[flag], cmd)
+        self.assertTrue(self.f("touch refj/x.xml", cwd=self.work.as_posix())["writes_reference"])
+
+    def test_TWIN_no_link_on_the_path_or_a_read_fires_nothing(self):
+        W = self.work.as_posix()
+        for cmd, flag in (("touch " + Q + W + "/x.xml" + Q, "writes_reference"),
+                          ("touch " + Q + W + "/nolink/refj/x.xml" + Q, "writes_reference"),
+                          ("rm -f " + Q + W + "/x.xml" + Q, "rm_targets_reference")):
+            with self.subTest(cmd=cmd):
+                self.assertFalse(self.f(cmd)[flag], cmd)
+
+    def test_link_resolved_names_the_target_only_through_a_link(self):
+        # The temp folder may be spelled with an 8.3 short name (a GitHub Windows runner's is RUNNER~1), and the
+        # resolver returns the long one, so this compares from the expanded folder names: the link's own folder
+        # through realpath (which does not follow the link at its end), the target as realpath gives it.
+        work = pathlib.Path(os.path.realpath(self.work)).as_posix()
+        self.assertEqual(H._lexical_norm(H.link_resolved(work + "/refj/libraries/x.xml")),
+                         H._lexical_norm(pathlib.Path(os.path.realpath(self.ref)).as_posix() + "/libraries/x.xml"))
+        self.assertEqual(H.link_resolved(work + "/x.xml"), "")
+        self.assertEqual(H.link_resolved("refj/x.xml"), "")              # relative: nothing to resolve
+        self.assertEqual(H.link_resolved(self.link.as_posix() + "/${X}"), "")   # unresolved
+
+    @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
+    def test_TWIN_skipped_remote_operands_leave_the_local_junction_judged(self):
+        # 4.1.1 review A1: a remote drive is not resolved and does not spend the per-call budget, so a
+        # junction on a local drive after 100 of them is still judged where it lands.
+        from unittest import mock
+        real = H._drive_type
+        decoys = " ".join("Y:/d/f%d.xml" % i for i in range(100))
+        with mock.patch.object(H, "_drive_type", lambda l: 4 if l.upper() == "Y" else real(l)):
+            got = self.f("touch " + decoys + " " + Q + self.link.as_posix() + "/libraries/wares.xml" + Q)
+        self.assertTrue(got["writes_reference"])
+
+
+class TestLinkResolutionIsBounded(unittest.TestCase):
+    """4.1.1 review A1: link_resolved ran an uninterruptible realpath on EVERY absolute write or delete
+    operand. MEASURED: one realpath of an unreachable network path took 21 s, so two operands on a drive
+    mapped to an offline server outran the hook's 30 s, and a hook that times out does not block. Now a
+    drive that is not local is never resolved (its type asked once per drive per call), the analysis
+    deadline is checked before each realpath, and a hook call makes at most _MAX_LINK_RESOLVED of them."""
+
+    def setUp(self):
+        from unittest import mock
+        self.mock = mock
+        self.calls = []
+        real_rp = os.path.realpath
+
+        def fake_realpath(p, *a, **k):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411"):      # a folder too: it is cached
+                self.calls.append(p)
+                return p
+            return real_rp(p, *a, **k)
+        self.fake_realpath = fake_realpath
+
+    def run_facts(self, cmd, types=None):
+        types = types or {}
+        with self.mock.patch.object(H.os.path, "realpath", self.fake_realpath), \
+                self.mock.patch.object(H, "_drive_type", lambda l: types.get(l.upper(), 3), create=True):
+            return H.facts({"tool_input": {"command": cmd}}, ROOTS)
+
+    @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
+    def test_a_remote_or_rootless_drive_is_never_resolved(self):
+        seen = []
+        real_rp = os.path.realpath
+
+        def rp(p, *a, **k):
+            seen.append(str(p))
+            return real_rp(p, *a, **k) if str(p)[:1].upper() not in "YZQ" else p
+        types = {"Y": 4, "Z": 1, "Q": 0}
+        with self.mock.patch.object(H.os.path, "realpath", rp), \
+                self.mock.patch.object(H, "_drive_type", lambda l: types.get(l.upper(), 3), create=True):
+            H.facts({"tool_input": {"command": "touch Y:/share/x.xml Z:/b/y.xml Q:/c/z.xml"}}, ROOTS)
+        self.assertEqual([p for p in seen if p[:1].upper() in "YZQ"], [])
+
+    @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
+    def test_TWIN_a_local_drive_is_still_resolved(self):
+        self.run_facts("touch C:/w411/a.xml", types={"C": 3})
+        self.assertEqual(len(self.calls), 1)
+
+    @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
+    def test_the_drive_type_is_asked_once_per_drive_per_call(self):
+        import ctypes
+        asked = []
+        k32 = ctypes.windll.kernel32
+        real = k32.GetDriveTypeW
+
+        def gdt(root):
+            asked.append(root)
+            return real(root)
+        with self.mock.patch.object(k32, "GetDriveTypeW", gdt), \
+                self.mock.patch.object(H.os.path, "realpath", self.fake_realpath):
+            cmd = "touch " + " ".join("C:/w411/f%d.xml" % i for i in range(10))
+            H.facts({"tool_input": {"command": cmd}}, ROOTS)
+            H.facts({"tool_input": {"command": cmd}}, ROOTS)
+        self.assertEqual([r[:1].upper() for r in asked], ["C", "C"])     # once per drive, per hook call
+
+    def test_realpath_calls_are_capped_per_hook_call(self):
+        # 200 distinct folders: at most _MAX_LINK_RESOLVED realpaths, and the rest FAIL CLOSED (4.1.1 review,
+        # link budget: past the cap an operand was read as "no link", silently, and a junction got through).
+        cmd = "touch " + " ".join("C:/w411/d%d/f.xml" % i for i in range(200))
+        got = self.run_facts(cmd)
+        self.assertEqual(len(self.calls), H._MAX_LINK_RESOLVED)
+        self.assertTrue(got["links_unresolved"])
+        self.calls.clear()
+        got = self.run_facts(cmd)                                       # per hook call, not per process
+        self.assertEqual(len(self.calls), H._MAX_LINK_RESOLVED)
+        self.assertTrue(got["links_unresolved"])
+        self.calls.clear()
+        got = self.run_facts("touch C:/w411/d0/f.xml")                  # ...and the flag is per hook call too
+        self.assertFalse(got["links_unresolved"])
+
+    def test_a_folder_is_resolved_once_per_hook_call(self):
+        got = self.run_facts("touch " + " ".join("C:/w411/f%d.xml" % i for i in range(200)))
+        self.assertEqual(self.calls, ["C:/w411"])
+        self.assertFalse(got["links_unresolved"])
+        self.calls.clear()
+        self.run_facts("touch C:/w411/f0.xml")                          # the folder cache is per hook call
+        self.assertEqual(self.calls, ["C:/w411"])
+
+    def _timed(self, realpath_cost, lstat_cost, leaf_is_link, pattern="C:/w411/d%d/f.xml"):
+        import stat as st_
+        clock, lstats = [1000.0], []
+        real_lstat = os.lstat
+
+        def rp(p, *a, **k):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411"):
+                self.calls.append(p)
+                clock[0] += realpath_cost
+                return p
+            return os.path.realpath(p, *a, **k)
+
+        def ls(p, *a, **k):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411"):
+                lstats.append(p)
+                clock[0] += lstat_cost
+                if leaf_is_link:
+                    return os.stat_result((st_.S_IFLNK | 0o777, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+                raise FileNotFoundError(2, "no", str(p))
+            return real_lstat(p, *a, **k)
+        with self.mock.patch.object(H.os.path, "realpath", rp), self.mock.patch.object(H.os, "lstat", ls),                 self.mock.patch.object(H, "_clock", lambda: clock[0]),                 self.mock.patch.object(H, "_drive_type", lambda l: 3, create=True):
+            got = H.facts({"tool_input": {"command": "touch " + " ".join(
+                pattern % i for i in range(5))}}, ROOTS)
+        return got, lstats
+
+    def test_the_deadline_is_checked_before_a_link_leafs_realpath(self):
+        # Folder realpath, lstat, then the leaf's own realpath: the leaf's must be preceded by a check too.
+        got, _ = self._timed(10.0, 0.0, True)
+        self.assertIn("analysis_timeout", got)
+        self.assertLessEqual(len(self.calls), 2)
+
+    def test_the_deadline_is_checked_before_each_lstat(self):
+        got, lstats = self._timed(0.0, 10.0, False, "C:/w411/f%d.xml")     # one folder: lstats back to back
+        self.assertIn("analysis_timeout", got)
+        self.assertLessEqual(len(lstats), 2)
+
+    def test_the_deadline_is_checked_before_each_realpath(self):
+        clock = [1000.0]
+
+        def slow(p, *a, **k):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411/"):
+                self.calls.append(p)
+                clock[0] += 10.0                                        # each one costs 10 s
+                return p
+            return os.path.realpath(p, *a, **k)
+        with self.mock.patch.object(H.os.path, "realpath", slow), \
+                self.mock.patch.object(H, "_clock", lambda: clock[0]), \
+                self.mock.patch.object(H, "_drive_type", lambda l: 3, create=True):
+            got = H.facts({"tool_input": {"command": "touch " + " ".join(
+                "C:/w411/d%d/f.xml" % i for i in range(5))}}, ROOTS)
+        self.assertIn("analysis_timeout", got)                          # refused, never allowed
+        self.assertLessEqual(len(self.calls), 2)
+
+    def test_whole_hook_time_with_many_slow_operands(self):
+        import time
+
+        def slow(p, *a, **k):
+            if str(p).replace(BS, "/").lower().startswith("c:/w411/"):
+                self.calls.append(p)
+                time.sleep(0.02)
+                return p
+            return os.path.realpath(p, *a, **k)
+        cmd = "rm -f " + " ".join("C:/w411/d%d/f.xml" % i for i in range(400))   # 400 folders: none cached
+        t0 = time.monotonic()
+        with self.mock.patch.object(H.os.path, "realpath", slow), \
+                self.mock.patch.object(H, "_drive_type", lambda l: 3, create=True):
+            got = H.facts({"tool_input": {"command": cmd}}, ROOTS)
+        took = time.monotonic() - t0
+        self.assertNotIn("analysis_timeout", got)
+        self.assertLessEqual(len(self.calls), 64)
+        self.assertTrue(got["links_unresolved"])    # ...and the rest are refused, never "no link"
+        self.assertLess(took, 6.0, took)            # uncapped: 400 x 20 ms = 8 s of realpath alone
+
+
+def _sandbox_base():
+    """<repo>/.test-sandbox when this file sits in a checkout (the harness's own gitignored scratch base), so
+    a junction a test makes never lands in the system temp folder; the default temp folder otherwise."""
+    here = pathlib.Path(__file__).resolve().parent
+    for d in (here,) + tuple(here.parents):
+        if (d / ".git").exists():
+            sbx = d / ".test-sandbox"
+            sbx.mkdir(exist_ok=True)
+            return str(sbx)
+    return None
+
+
+class TestLinkBudgetFailsClosed(unittest.TestCase):
+    """4.1.1 review (link budget): link_resolved returned "" -- "no link" -- once _MAX_LINK_RESOLVED realpaths
+    had been spent in one hook call, silently. MEASURED at 5404046c: `touch <64 local decoys> <junction into
+    reference>/libraries/wares.xml` read writes_reference False (True with 63 decoys), and 64 touch segments
+    then `rm -f <junction>/x.xml` read rm_targets_reference False. Now realpath is cached per folder, so decoys
+    in one folder spend one, and an operand past the budget is links_unresolved, which the hook refuses."""
+
+    def setUp(self):
+        import tempfile
+        self._td = tempfile.TemporaryDirectory(prefix="x4linkbudget_", dir=_sandbox_base())
+        base = pathlib.Path(self._td.name)
+        self.ref = base / "reference"
+        (self.ref / "libraries").mkdir(parents=True)
+        self.work = base / "work"
+        self.work.mkdir()
+        self.link = self.work / "refj"
+        try:
+            if os.name == "nt":
+                import _winapi
+                _winapi.CreateJunction(str(self.ref), str(self.link))
+            else:
+                os.symlink(str(self.ref), str(self.link))
+        except (OSError, ImportError, AttributeError) as exc:
+            self._td.cleanup()
+            self.skipTest("cannot make a link here: " + repr(exc))
+        self.roots = dict(ROOTS, reference=self.ref.as_posix())
+        self.W = self.work.as_posix()
+        self.L = self.link.as_posix()
+
+    def tearDown(self):
+        if os.name == "nt" and self.link.exists():
+            os.rmdir(self.link)              # the junction only, never its target
+        self._td.cleanup()
+
+    def f(self, cmd):
+        return H.facts({"tool_input": {"command": cmd}}, self.roots)
+
+    def one_folder(self, n):
+        return " ".join(Q + self.W + "/f%d.xml" % i + Q for i in range(n))
+
+    def many_folders(self, n):
+        return " ".join(Q + self.W + "/d%d/f.xml" % i + Q for i in range(n))
+
+    def test_RED_decoys_then_a_junction_is_never_read_as_no_link(self):
+        target = Q + self.L + "/libraries/wares.xml" + Q
+        for decoys in (self.one_folder(H._MAX_LINK_RESOLVED), self.many_folders(H._MAX_LINK_RESOLVED),
+                       self.many_folders(3 * H._MAX_LINK_RESOLVED)):
+            with self.subTest(n=decoys.count(" ") + 1, folders=decoys.count("/d")):
+                got = self.f("touch " + decoys + " " + target)
+                self.assertTrue(got["writes_reference"] or got.get("links_unresolved"), "failed open")
+
+    def test_RED_many_segments_then_rm_through_the_junction(self):
+        rm = "; rm -f " + Q + self.L + "/x.xml" + Q
+        for segs in ("; ".join("touch " + Q + self.W + "/f%d.xml" % i + Q for i in range(H._MAX_LINK_RESOLVED)),
+                     "; ".join("touch " + Q + self.W + "/d%d/f.xml" % i + Q for i in range(H._MAX_LINK_RESOLVED))):
+            with self.subTest(folders=segs.count("/d")):
+                got = self.f(segs + rm)
+                self.assertTrue(got["rm_targets_reference"] or got.get("links_unresolved"), "failed open")
+
+    def test_decoys_in_one_folder_spend_one_resolution_and_the_junction_is_judged(self):
+        got = self.f("touch " + self.one_folder(4 * H._MAX_LINK_RESOLVED) + " " + Q + self.L + "/libraries/wares.xml" + Q)
+        self.assertTrue(got["writes_reference"])
+        self.assertFalse(got["links_unresolved"])
+        got = self.f("; ".join("touch " + Q + self.W + "/f%d.xml" % i + Q for i in range(4 * H._MAX_LINK_RESOLVED))
+                     + "; rm -f " + Q + self.L + "/x.xml" + Q)
+        self.assertTrue(got["rm_targets_reference"])
+        self.assertFalse(got["links_unresolved"])
+
+    def test_past_the_budget_the_operand_is_links_unresolved(self):
+        got = self.f("touch " + self.many_folders(H._MAX_LINK_RESOLVED) + " " + Q + self.L + "/libraries/wares.xml" + Q)
+        self.assertTrue(got["links_unresolved"])
+
+    def test_CONTROL_long_lists_with_no_junction(self):
+        # One folder: nothing to refuse, the budget is not spent (an ALLOW). Past the budget in distinct folders:
+        # links_unresolved even with no link anywhere, because the guard cannot know that (a DENY, split it).
+        got = self.f("touch " + self.one_folder(4 * H._MAX_LINK_RESOLVED))
+        self.assertFalse(got["writes_reference"] or got["links_unresolved"])
+        got = self.f("touch " + self.many_folders(H._MAX_LINK_RESOLVED - 1))
+        self.assertFalse(got["writes_reference"] or got["links_unresolved"])
+        got = self.f("touch " + self.many_folders(H._MAX_LINK_RESOLVED + 1))
+        self.assertFalse(got["writes_reference"])
+        self.assertTrue(got["links_unresolved"])
+
+    def test_a_link_leaf_in_a_cached_folder_is_still_followed(self):
+        # The folder cache must not hide a link that IS the last component: the folder resolves to itself.
+        got = self.f("touch " + Q + self.W + "/a.xml" + Q + " " + Q + self.L + Q)
+        self.assertTrue(got["writes_reference"])
+        got = self.f("rm -rf " + Q + self.W + "/a.xml" + Q + " " + Q + self.L + Q)
+        self.assertTrue(got["rm_targets_reference"])
+
+    def test_the_last_component_probe_is_bounded_too(self):
+        from unittest import mock
+        with mock.patch.object(H, "_MAX_LINK_PROBED", 3):
+            self.assertFalse(self.f("touch " + self.one_folder(3))["links_unresolved"])
+            self.assertFalse(self.f("touch " + self.one_folder(3))["links_unresolved"])    # reset per hook call
+            self.assertTrue(self.f("touch " + self.one_folder(4))["links_unresolved"])
+
+    def test_a_last_component_lstat_cannot_read_is_resolved_whole(self):
+        from unittest import mock
+        real_lstat = os.lstat
+
+        def lstat(p, *a, **k):
+            if str(p).replace(BS, "/").lower().rstrip("/").endswith("/refj"):
+                raise PermissionError(13, "denied", str(p))
+            return real_lstat(p, *a, **k)
+        with mock.patch.object(H.os, "lstat", lstat):
+            got = self.f("touch " + Q + self.L + Q)
+        # The stub is the process's os.lstat, so on POSIX realpath's own lstat fails too, and posixpath's
+        # non-strict realpath IGNORES that (CI, MEASURED at cba3a1ce on ubuntu: read as "no link"). The property
+        # on every OS: never silently no link. Windows' realpath does not lstat, so there it resolves whole.
+        self.assertTrue(got["writes_reference"] or got["links_unresolved"], "failed open")
+        if os.name == "nt":
+            self.assertTrue(got["writes_reference"])
+        else:
+            self.assertTrue(got["links_unresolved"])
+
+    def test_RED_a_leaf_lstat_error_with_a_realpath_showing_no_link_is_links_unresolved(self):
+        # Both OSes: the leaf lstat cannot answer and realpath gives the path back as written (what posixpath does
+        # when ITS lstat fails). Cannot tell is refused for a write or delete, and never set for a read-only use.
+        from unittest import mock
+        real_lstat = os.lstat
+
+        def lstat(p, *a, **k):
+            if str(p).replace(BS, "/").lower().endswith("/denied.xml"):
+                raise PermissionError(13, "denied", str(p))
+            return real_lstat(p, *a, **k)
+        target = self.W + "/denied.xml"
+        with mock.patch.object(H.os, "lstat", lstat), \
+                mock.patch.object(H.os.path, "realpath", lambda s, *a, **k: s):
+            for cmd in ("touch " + Q + target + Q, "rm -f " + Q + target + Q):
+                with self.subTest(cmd=cmd):
+                    self.assertTrue(self.f(cmd)["links_unresolved"], "failed open")
+            H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+            H._LINK_DIRS.clear()
+            H._LINKS_UNRESOLVED[0] = False
+            self.assertEqual(H.link_resolved(target, refuse=False), "")
+            self.assertFalse(H._LINKS_UNRESOLVED[0])
+
+    def test_RED_a_realpath_that_raises_is_links_unresolved(self):
+        from unittest import mock
+
+        def realpath(s, *a, **k):
+            raise OSError(5, "I/O error", s)
+        with mock.patch.object(H.os.path, "realpath", realpath):
+            got = self.f("touch " + Q + self.W + "/d0/f.xml" + Q)
+        self.assertTrue(got["links_unresolved"], "a realpath that raised read as no link")
+
+    def test_RED_a_matching_entry_whose_lstat_fails_is_links_unresolved(self):
+        # link_entries_matched: an entry that matches the unresolved component's prefix but cannot be lstat'd
+        # may be the link. Before this round the OSError ended the listing as "no link". A vanished entry
+        # (FileNotFoundError) is an answer, and skipped (TWIN).
+        from unittest import mock
+        real_scandir = os.scandir
+
+        class Entry:
+            def __init__(self, e, exc):
+                self.name, self.path, self._exc = e.name, e.path, exc
+
+            def stat(self, follow_symlinks=True):
+                raise self._exc
+
+        class Listing:
+            def __init__(self, path, exc):
+                self._it, self._exc = real_scandir(path), exc
+
+            def __enter__(self):
+                return (Entry(e, self._exc) if e.name == "refj" else e for e in self._it)
+
+            def __exit__(self, *a):
+                self._it.close()
+        cmd = "touch " + DQ + self.W + "/refj$X/libraries/wares.xml" + DQ
+        for exc, want in ((PermissionError(13, "denied"), True), (FileNotFoundError(2, "gone"), False)):
+            with self.subTest(exc=type(exc).__name__):
+                with mock.patch.object(H.os, "scandir", lambda p, exc=exc: Listing(p, exc)):
+                    got = self.f(cmd)
+                self.assertEqual(got["links_unresolved"], want)
+
+    def test_TWIN_a_name_windows_rejects_is_not_links_unresolved(self):
+        # A literal glob or `<`/`?` leaf: Windows' lstat raises ERROR_INVALID_NAME (123), which is an answer (no
+        # such file can exist), not "cannot tell". MEASURED: before this twin, `Get-ChildItem <save> | Remove-Item`
+        # read links_unresolved and lost its save-folder verdict. POSIX: lstat says FileNotFoundError.
+        for leaf in ("*.xml", "a?b.xml", "a<b.xml"):
+            for cmd in ("touch " + Q + self.W + "/" + leaf + Q, "rm -f " + Q + self.W + "/" + leaf + Q):
+                with self.subTest(cmd=cmd):
+                    self.assertFalse(self.f(cmd)["links_unresolved"])
+
+    def test_TWIN_a_missing_path_is_not_links_unresolved(self):
+        # FileNotFoundError is an answer (nothing there), not a failure: a missing leaf, a missing folder.
+        for p in (self.W + "/no-such-file.xml", self.W + "/no/such/folder/f.xml"):
+            for cmd in ("touch " + Q + p + Q, "rm -f " + Q + p + Q):
+                with self.subTest(cmd=cmd):
+                    got = self.f(cmd)
+                    self.assertFalse(got["links_unresolved"])
+                    self.assertFalse(got["writes_reference"] or got["rm_targets_reference"])
+
+    @unittest.skipUnless(os.name == "nt", "8.3 short names are a Windows notion")
+    def test_RED_a_short_name_spelling_of_a_plain_folder_is_not_a_link(self):
+        # CI, MEASURED at cba3a1ce: the windows runner's TEMP is C:/Users/RUNNER~1/..., realpath expands it, and
+        # link_head_resolved reported a plain folder as a link. Independent of TEMP: a short name made here.
+        import ctypes
+        long_dir = self.work / "a plain folder with a long name"
+        long_dir.mkdir()
+        buf = ctypes.create_unicode_buffer(32768)
+        n = ctypes.windll.kernel32.GetShortPathNameW(str(long_dir), buf, 32768)
+        short = buf.value.replace(BS, "/")
+        if not 0 < n < 32768 or short.lower() == long_dir.as_posix().lower():
+            self.skipTest("this volume gives no 8.3 short names")
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+        H._LINK_DIRS.clear()
+        H._LINKS_UNRESOLVED[0] = False
+        self.assertEqual(H.link_head_resolved(short + "/$X/x.xml"), "")
+        self.assertEqual(H.link_resolved(short + "/x.xml"), "")
+        self.assertEqual(H.link_resolved(short), "")
+        self.assertFalse(H._LINKS_UNRESOLVED[0])
+        # TWIN: a junction reached through the short spelling is still a link.
+        j = long_dir / "refj2"
+        import _winapi
+        _winapi.CreateJunction(str(self.ref), str(j))
+        try:
+            self.assertEqual(H.link_head_resolved(short + "/refj2/$X/x.xml").lower(),
+                             (self.ref.resolve().as_posix() + "/$X/x.xml").lower())
+            self.assertTrue(self.f("touch " + Q + short + "/refj2/libraries/wares.xml" + Q)["writes_reference"])
+        finally:
+            os.rmdir(j)                      # the junction only, never its target
+
+    @unittest.skipUnless(os.name == "nt", "8.3 short names are a Windows notion")
+    def test_RED_a_respelled_realpath_of_a_plain_folder_is_not_a_link_simulated(self):
+        # The same rule with the respelling simulated, so it is measured on a volume with short names disabled.
+        from unittest import mock
+        fake_short = self.W + "/PLAIN~1"
+        fake_long = self.W + "/plain folder long"
+        pathlib.Path(fake_long).mkdir()
+        real_realpath = os.path.realpath
+        real_long_name = H.long_name
+
+        def realpath(s, *a, **k):
+            return real_realpath(s.replace(fake_short, fake_long), *a, **k)
+
+        def long_name(p):
+            # Wraps the REAL long_name: on a CI runner the sandbox itself sits under a real short name
+            # (C:/Users/RUNNER~1/...), which realpath expands too (run 42758872772 failed on exactly that).
+            return real_long_name(p.replace(fake_short, fake_long))
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+        H._LINK_DIRS.clear()
+        with mock.patch.object(H.os.path, "realpath", realpath), mock.patch.object(H, "long_name", long_name):
+            self.assertEqual(H.link_head_resolved(fake_short + "/$X/x.xml"), "")
+        # CONTROL: without the long-name reading the same respelling IS reported, so the test can go red.
+        H._LINK_DIRS.clear()
+        with mock.patch.object(H.os.path, "realpath", realpath), mock.patch.object(H, "long_name", lambda p: p):
+            self.assertNotEqual(H.link_head_resolved(fake_short + "/$X/x.xml"), "")
+
+    @unittest.skipUnless(os.name == "nt", "drive letters are a Windows notion")
+    def test_a_file_at_a_drive_root_resolves_from_the_root_not_the_current_folder(self):
+        # posixpath.split("C:/x") gives "C:", which realpath reads as the drive's CURRENT folder.
+        drive = os.path.splitdrive(os.getcwd())[0]
+        self.assertNotEqual(os.path.normcase(os.getcwd()), os.path.normcase(drive + BS))
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0                  # outside facts(): a fresh budget by hand
+        H._LINK_DIRS.clear()
+        self.assertEqual(H.link_resolved(drive + "/x4-no-such-file-here.xml"), "")
+        self.assertEqual(H._LINK_DIRS.get(drive + "/"), drive + "/")
+
+    def test_save_policy_refuses_links_unresolved(self):
+        import save_policy
+        cmd = "touch " + self.many_folders(H._MAX_LINK_RESOLVED + 1)
+        # save_policy reads the save roots as PHYSICAL absolute paths; the generic `C:/...` fixture is not one on
+        # POSIX (CI, MEASURED at cba3a1ce on ubuntu: "save mutation has no absolute physical path"). Real ones here.
+        prof = pathlib.Path(self._td.name) / "profile"
+        roots = dict(self.roots, profile=prof.as_posix(), saves=(prof / "save").as_posix())
+        with self.assertRaises(save_policy.ScopeError) as ctx:
+            save_policy.shell_evidence({"tool_name": "Bash", "tool_input": {"command": cmd}}, roots)
+        self.assertIn("link", str(ctx.exception))
+
+
+class TestLinkResolutionOfLiteralSpellings(unittest.TestCase):
+    """4.1.1 review (link budget round 2). link_resolved skipped any path has_unresolved() flagged, so a
+    SINGLE-QUOTED `$` -- a literal character, never an expansion -- left the path lexical only. MEASURED at
+    a70dcedd: `touch '<junction into reference>/libraries/wares.xml::$DATA'` and `echo x > '<same>'` read
+    writes_reference False (True with no junction), and `touch '<junction>:s'` (MEASURED: a write to it
+    lands in a stream of the TARGET folder) False. Read-only search operands past the link budget set
+    links_unresolved, refusing a `grep -rn` over many folders, which no write/delete verdict reads."""
+
+    setUp = TestLinkBudgetFailsClosed.setUp
+    tearDown = TestLinkBudgetFailsClosed.tearDown
+    f = TestLinkBudgetFailsClosed.f
+    many_folders = TestLinkBudgetFailsClosed.many_folders
+
+    def test_RED_an_ntfs_stream_suffix_behind_a_junction_is_judged_where_it_lands(self):
+        tails = ["/libraries/wares.xml::$DATA", "/libraries/wares.xml:s:$DATA", "/libraries/wares.xml:s"]
+        if os.name == "nt":
+            tails += [":s", "::$DATA", "::$INDEX_ALLOCATION/libraries/x.xml"]
+        for tail in tails:
+            p = Q + self.L + tail + Q
+            for cmd in ("touch " + p, "echo x > " + p, "cp " + Q + self.W + "/a.xml" + Q + " " + p):
+                with self.subTest(cmd=cmd):
+                    self.assertTrue(self.f(cmd)["writes_reference"], cmd)
+            with self.subTest(rm=tail):
+                self.assertTrue(self.f("rm -f " + p)["rm_targets_reference"], tail)
+        if os.name == "nt":
+            # The same rule at the resolver, on a LONG spelling of the junction. Run 42770446123: a CI runner's
+            # sandbox sits under an 8.3 short name (C:/Users/RUNNER~1), whose expansion also reduced the stream
+            # suffix, so removing `_win_alias` went uncaught there. No short name is on this spelling.
+            long_l = os.path.realpath(self.work).replace("\\", "/") + "/refj"
+            want = os.path.realpath(self.ref).replace("\\", "/").lower()
+            for tail in (":s", "::$DATA"):
+                with self.subTest(resolver=tail):
+                    H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+                    H._LINK_DIRS.clear()
+                    got = H.link_resolved(long_l + tail, literal=True).replace("\\", "/").lower()
+                    self.assertTrue(got.startswith(want), (tail, got))
+
+    def test_RED_a_literal_dollar_in_a_folder_name_behind_a_junction(self):
+        (self.ref / "a$b").mkdir()
+        for p in (Q + self.L + "/a$b/x.xml" + Q, Q + self.L + "/a$b" + Q, Q + self.L + "/a${b}/x.xml" + Q,
+                  DQ + self.L + "/a" + BS + "$b/x.xml" + DQ):
+            with self.subTest(p=p):
+                self.assertTrue(self.f("touch " + p)["writes_reference"], p)
+                self.assertTrue(self.f("echo x > " + p)["writes_reference"], p)
+
+    def test_TWIN_an_expansion_is_still_not_resolved_as_a_link(self):
+        # `$X` unquoted or double-quoted is a variable: the path is unknown, not literal (the existing rule).
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+        H._LINK_DIRS.clear()
+        self.assertEqual(H.link_resolved(self.L + "/$X/x.xml"), "")
+        self.assertEqual(H.link_resolved(self.L + "/$(echo x)/x.xml"), "")
+        self.assertNotEqual(H.link_resolved(self.L + "/$X/x.xml", literal=True), "")
+        # ...its literal head is followed, the rest kept as written: still an unresolved operand.
+        self.assertEqual(H.link_head_resolved(self.L + "/$X/x.xml").lower(),
+                         (self.ref.resolve().as_posix() + "/$X/x.xml").lower())
+        self.assertEqual(H.link_head_resolved(self.W + "/$X/x.xml"), "")       # no link on the head
+        self.assertEqual(H.link_head_resolved("$X/x.xml"), "")                 # no literal head
+        self.assertEqual(H.link_head_resolved(self.L + "/x.xml"), "")          # nothing unresolved
+
+    def test_an_expansion_behind_a_junction_reads_as_it_does_on_the_root(self):
+        # The lexical rule catches `<reference>/$X/x.xml` by the root in its text; the junction spelling agrees.
+        for tail in ("/$X/x.xml", "/libraries/*.xml", "/$(echo x)", "/lib*/$X/x.xml", "/l{a,b}/$X"):
+            for verb in ("touch ", "rm -rf "):
+                key = "rm_targets_reference" if verb == "rm -rf " else "writes_reference"
+                for quote in (DQ, ""):
+                    with self.subTest(cmd=verb + tail, q=quote):
+                        direct = self.f(verb + quote + self.ref.as_posix() + tail + quote)[key]
+                        via = self.f(verb + quote + self.L + tail + quote)
+                        self.assertTrue(direct, "control: the root spelling is caught")
+                        self.assertEqual(via[key], direct)
+                        self.assertFalse(via["links_unresolved"])
+
+    def test_TWIN_a_stream_suffix_with_no_link_still_reads_as_its_file(self):
+        p = self.ref.as_posix() + "/libraries/wares.xml"
+        for tail in ("::$DATA", ":s", ""):
+            with self.subTest(tail=tail):
+                self.assertTrue(self.f("touch " + Q + p + tail + Q)["writes_reference"])
+        got = self.f("touch " + Q + self.W + "/plain.xml::$DATA" + Q)
+        self.assertFalse(got["writes_reference"] or got["links_unresolved"])
+
+    def test_RED_a_variable_inside_the_component_that_names_the_junction(self):
+        # Re-review of 180263b8: link_head_resolved followed only WHOLE components before the variable, so a
+        # variable inside the junction's own name read as no link, where the reference-root spelling is caught.
+        lib = "/libraries/wares.xml"
+        cases = [("touch " + DQ + self.W + "/refj$X" + lib + DQ, "writes_reference"),
+                 ("touch " + DQ + self.W + "/ref${X}j" + lib + DQ, "writes_reference"),
+                 ("rm -rf " + DQ + self.W + "/refj$X" + DQ, "rm_targets_reference"),
+                 ("rm -rf " + self.W + "/refj$(echo)", "rm_targets_reference")]
+        if os.name == "nt":
+            cases.append(("echo x > " + DQ + self.L + "::$INDEX_ALLOCATION" + lib + DQ, "writes_reference"))
+        for cmd, key in cases:
+            with self.subTest(cmd=cmd):
+                got = self.f(cmd)
+                self.assertTrue(got[key], cmd)
+                self.assertFalse(got["links_unresolved"], cmd)
+
+    def test_TWIN_a_variable_component_with_no_link_to_match(self):
+        # No link in the folder, or only a NON-link entry matching the prefix: nothing is added.
+        (self.work / "refdir").mkdir()
+        for cmd in ("touch " + DQ + self.W + "/refd$X/x.xml" + DQ, "rm -rf " + DQ + self.W + "/zz$X" + DQ,
+                    "rm -rf " + DQ + self.W + "/refdir/$X" + DQ):
+            with self.subTest(cmd=cmd):
+                got = self.f(cmd)
+                self.assertFalse(got["writes_reference"] or got["rm_targets_reference"] or got["links_unresolved"], cmd)
+        H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+        H._LINK_DIRS.clear()
+        self.assertEqual(H.link_entries_matched(self.W + "/refd$X/x.xml"), [])
+        self.assertEqual(H.link_entries_matched(self.W + "/x.xml"), [])          # nothing unresolved
+        self.assertEqual(H.link_entries_matched(self.W + "/no-such-dir/r$X"), [])  # cannot be listed: as before
+        got = H.link_entries_matched(self.W + "/r$X/f")
+        self.assertEqual([g.lower() for g in got], [(self.ref.resolve().as_posix() + "/f").lower()])
+
+    def test_a_variable_component_spends_the_link_budget(self):
+        from unittest import mock
+        with mock.patch.object(H, "_MAX_LINK_PROBED", 0):
+            self.assertTrue(self.f("touch " + DQ + self.W + "/refj$X/x.xml" + DQ)["links_unresolved"])
+            self.assertFalse(self.f("grep foo " + DQ + self.W + "/refj$X/x.xml" + DQ)["links_unresolved"])
+        for refuse in (True, False):
+            H._LINK_RESOLVED[0] = H._LINK_PROBED[0] = 0
+            H._LINK_DIRS.clear()
+            H._LINKS_UNRESOLVED[0] = False
+            with mock.patch.object(H, "_MAX_LINK_PROBED", 0):
+                self.assertEqual(H.link_entries_matched(self.W + "/refj$X/x.xml", refuse=refuse), [])
+            self.assertEqual(H._LINKS_UNRESOLVED[0], refuse)
+            H._LINK_PROBED[0] = 0
+            with mock.patch.object(H, "_MAX_LINK_RESOLVED", 0):
+                self.assertEqual(H.link_entries_matched(self.W + "/refj$X/x.xml", refuse=refuse), [])
+            self.assertEqual(H._LINKS_UNRESOLVED[0], refuse)
+        H._LINKS_UNRESOLVED[0] = False
+
+    def test_RED_a_read_only_search_over_many_folders_is_not_refused(self):
+        many = self.many_folders(H._MAX_LINK_RESOLVED + 1)
+        for cmd in ("grep -rn foo " + many, "grep -n foo " + many, "rg foo " + many):
+            with self.subTest(cmd=cmd[:12]):
+                self.assertFalse(self.f(cmd)["links_unresolved"], cmd[:40])
+
+    def test_TWIN_writes_over_many_folders_are_still_refused(self):
+        many = self.many_folders(H._MAX_LINK_RESOLVED + 1)
+        for cmd in ("touch " + many, "rm -f " + many, "grep foo " + many + "; touch " + Q + self.L + "/x.xml" + Q,
+                    "grep -rn foo " + many + " > " + Q + self.L + "/out.txt" + Q):
+            with self.subTest(cmd=cmd[:12]):
+                got = self.f(cmd)
+                self.assertTrue(got["links_unresolved"] or got["writes_reference"], cmd[:40])
+
+    def test_a_search_still_resolves_links_within_the_budget(self):
+        # The profile-by-name rule reads the search operand where it lands (a junction into the profile).
+        prof = pathlib.Path(self._td.name) / "profile"
+        prof.mkdir()
+        pj = self.work / "profj"
+        if os.name == "nt":
+            import _winapi
+            _winapi.CreateJunction(str(prof), str(pj))
+        else:
+            os.symlink(str(prof), str(pj))
+        try:
+            roots = dict(self.roots, profile=prof.as_posix())
+            got = H.facts({"tool_input": {"command": "grep -rn foo " + Q + pj.as_posix() + "/content.xml" + Q}}, roots)
+            self.assertTrue(got["profile_search_by_name"])
+        finally:
+            if os.name == "nt":
+                os.rmdir(pj)
+            else:
+                os.unlink(pj)
+
+    def test_RED_an_unplaced_ssh_command_past_the_link_budget_is_advised(self):
+        # The remote text is judged under min(outer deadline, now + _SSH_ADVISORY_S), and a timeout there is
+        # advised BY DESIGN ("unjudged is advised, never clean"). The asserts below are about which facts reach
+        # the remote's verdict, not about speed: give the nested judgement room, so a loaded machine (MEASURED:
+        # 1 of 3 whole-file runs under an 8% CPU cap read ssh_host_unplaced True at the last assert) cannot
+        # turn a logic test into a timing one. The timeout branch itself is pinned elsewhere.
+        from unittest import mock
+        patcher = mock.patch.object(H, "_SSH_ADVISORY_S", 60.0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        many = " ".join(self.W + "/d%d/f.xml" % i for i in range(H._MAX_LINK_RESOLVED + 1))
+        got = self.f("ssh otherhost touch " + many + " " + self.L + "/libraries/wares.xml")
+        self.assertFalse(got["links_unresolved"])          # the outer command is not refused for it
+        self.assertTrue(got["ssh_host_unplaced"])
+        got = self.f("ssh otherhost touch " + self.W + "/d0/f.xml")
+        self.assertFalse(got["ssh_host_unplaced"] or got["links_unresolved"])
+        # The remote text is judged on its own links: the outer command's own overflow is not the remote's.
+        got = self.f("touch " + self.many_folders(H._MAX_LINK_RESOLVED + 1) + "; ssh otherhost ls")
+        self.assertTrue(got["links_unresolved"])
+        self.assertFalse(got["ssh_host_unplaced"])
+
+    def test_TWIN_a_remote_text_left_unjudged_by_its_deadline_is_advised(self):
+        # The branch the test above takes time out of: a remote text the nested judgement runs out of time on
+        # is advised, never read as clean. No time at all makes it deterministic; normal time is the control.
+        from unittest import mock
+        self.assertFalse(self.f("ssh otherhost ls")["ssh_host_unplaced"])
+        with mock.patch.object(H, "_SSH_ADVISORY_S", -1.0):
+            self.assertTrue(self.f("ssh otherhost ls")["ssh_host_unplaced"])
+
+
+class TestBashDirectoryStackForms(unittest.TestCase):
+    """4.1.1 final round: bash's other pushd/popd forms. A bare `pushd` swaps the top two, `pushd +N`/`-N` rotate,
+    `pushd -n <dir>` adds <dir> below the top without a cd, `popd -n` and `popd +N` remove an entry without a cd.
+    Each was read as a plain push (or ignored), so a relative delete was judged in the wrong folder."""
+
+    def test_the_directory_in_force_after_each_form(self):
+        r, m = Q + REF + Q, Q + "C:/work/mod" + Q
+        for head, in_ref in (("cd " + r + "; pushd " + m + "; pushd; ", True),
+                             ("cd " + m + "; pushd " + r + "; pushd; ", False),
+                             ("cd " + r + "; pushd -n " + m + "; ", True),
+                             ("cd " + m + "; pushd -n " + r + "; popd; ", True),
+                             ("cd " + r + "; pushd " + m + "; pushd +1; ", True),
+                             ("cd " + r + "; pushd " + m + "; pushd -0; ", True),
+                             ("cd " + r + "; pushd " + m + "; pushd +0; ", False),
+                             ("cd " + r + "; pushd " + m + "; pushd +5; ", False),
+                             ("cd " + r + "; pushd " + m + "; popd -n; ", False),
+                             ("cd " + m + "; pushd " + r + "; popd +1; ", True),
+                             ("cd " + r + "; pushd " + m + "; popd +0; ", True),
+                             ("cd " + m + "; pushd; ", False),
+                             # a later popd sees what -n and +N removed
+                             ("cd " + m + "; pushd " + r + "; popd -n; popd; ", True),
+                             ("cd " + m + "; pushd " + r + "; popd +1; popd; ", True)):
+            c = head + "rm -f x.xml"
+            with self.subTest(c=c):
+                self.assertEqual(F(c)["rm_targets_reference"], in_ref, c)
+
+
 class TestRRPreArcBash(unittest.TestCase):
     """The reviewer's pre-arc notes, unit level (E2E in test_audit0924_hooks.py)."""
 
@@ -4037,6 +4862,91 @@ class TestRRPreArcBash(unittest.TestCase):
         self.assertTrue(f["rm_in_x4_dir"])
         self.assertFalse(f["rm_hits_game"])
         self.assertFalse(F("find . -name '*.pyc' | xargs rm -f")["rm_in_x4_dir"])
+
+    # 4.1.1 final round (F360): an xargs-fed WRITE. Only the delete verbs read xargs' stdin, so `echo <reference file>
+    # | xargs touch` reached no write rule while `touch <reference file>` was denied. The echo/printf's words are the
+    # operands: the command xargs runs is a reading of its own.
+    XARGS_WRITES = ("xargs touch", "xargs truncate -s 0", "xargs chmod 644", "xargs sed -i s/a/b/",
+                    "xargs tee < /dev/null", "xargs cp /tmp/a.xml", "xargs mv /tmp/a.xml", "xargs -n1 touch",
+                    "xargs -0 touch", "xargs -I{} touch {}", "xargs -I % cp /tmp/a.xml %", "xargs sudo touch")
+
+    def test_an_xargs_fed_write_is_judged_like_its_literal(self):
+        for producer in ("echo " + Q + REF + "/libraries/wares.xml" + Q,
+                         "printf '%s" + chr(92) + "n' " + Q + REF + "/libraries/wares.xml" + Q):
+            for x in self.XARGS_WRITES:
+                c = producer + " | " + x
+                with self.subTest(c=c):
+                    self.assertTrue(F(c)["writes_reference"], c)
+                    self.assertTrue(F(x.replace("xargs ", "").replace("-n1 ", "").replace("-0 ", "")
+                                      .replace("-I{} ", "").replace(" {}", "").replace("-I % ", "").replace(" %", "")
+                                      .replace("sudo ", "").replace(" < /dev/null", "")
+                                      + " " + Q + REF + "/libraries/wares.xml" + Q)["writes_reference"], x)
+
+    def test_an_xargs_fed_write_to_the_path_config_is_the_config_write(self):
+        cfg = TOOLKIT + "/x4-paths.env"
+        roots = dict(ROOTS, reference=cfg, config=cfg)
+        for c in ("echo " + Q + cfg + Q + " | xargs touch", "echo " + Q + cfg + Q + " | xargs -I{} cp /tmp/x {}"):
+            with self.subTest(c=c):
+                self.assertTrue(_facts({"tool_input": {"command": c}, "cwd": _ELSEWHERE}, roots)["writes_reference"], c)
+
+    def test_an_xargs_item_past_the_reading_bound_is_never_dropped(self):
+        # 4.1.1 review A2: `xargs -I` readings were built for the first 8 items only, so a reference file as the
+        # 9th item was allowed. Past the bound the command is too tangled to analyse, and says so.
+        ref = Q + REF + "/libraries/wares.xml" + Q
+        for n in (8, H._XARGS_ITEMS):
+            c = "printf '%s" + chr(92) + "n' " + " ".join(str(i) for i in range(1, n + 1)) + " " + ref \
+                + " | xargs -I{} touch {}"
+            with self.subTest(n=n):
+                f = F(c)
+                self.assertTrue(f["writes_reference"] or f["carriers_truncated"], c)
+        c = "printf '%s" + chr(92) + "n' " + " ".join(str(i) for i in range(H._XARGS_ITEMS + 1)) + " " + ref \
+            + " | xargs -I{} touch {}"
+        self.assertTrue(F(c)["carriers_truncated"], c)
+
+    def test_TWIN_items_within_the_bound_are_not_truncated(self):
+        c = "printf '%s" + chr(92) + "n' " + " ".join("/tmp/f%d" % i for i in range(H._XARGS_ITEMS)) \
+            + " | xargs -I{} touch {}"
+        f = F(c)
+        self.assertFalse(f["carriers_truncated"], c)
+        self.assertFalse(f["writes_reference"], c)
+        # without -I every item is one reading, so no bound applies
+        c = "printf '%s" + chr(92) + "n' " + " ".join("/tmp/f%d" % i for i in range(100)) + " | xargs touch"
+        self.assertFalse(F(c)["carriers_truncated"], c)
+
+    def test_the_old_gnu_replace_spellings_are_read(self):
+        # 4.1.1 review A4: GNU `xargs -i` is `-I{}` (an optional replacement ATTACHED: `-iX`), and `--replace`
+        # with no `=` is `{}`. The wrapper table read the next word as their value, so the verb was never seen.
+        ref = Q + REF + "/libraries/wares.xml" + Q
+        for x in ("xargs -i cp /dev/null {}", "xargs -i touch {}", "xargs -iX cp /dev/null X",
+                  "xargs --replace cp /dev/null {}", "xargs -i -n1 touch {}", "xargs -l touch", "xargs -e touch",
+                  "xargs -l1 touch", "xargs -eEOF touch"):
+            c = "echo " + ref + " | " + x
+            with self.subTest(c=c):
+                self.assertTrue(F(c)["writes_reference"], c)
+        self.assertTrue(F("echo " + Q + REF + Q + " | xargs -i rm -rf {}")["rm_targets_reference"])
+        self.assertEqual(H._xargs_replace("xargs -i cp a {}")[0], "{}")
+        self.assertEqual(H._xargs_replace("xargs -iX cp a X")[0], "X")
+        self.assertEqual(H._xargs_replace("xargs --replace cp a {}")[0], "{}")
+        self.assertEqual(H.verb("xargs -i cp /dev/null {}"), "cp")
+        self.assertIsNone(H._xargs_replace("sudo -i xargs touch a")[0])   # only xargs's own options count
+
+    def test_TWIN_old_replace_spelling_elsewhere_does_not_fire(self):
+        for c in ("echo /tmp/a.xml | xargs -i cp /dev/null {}", "echo " + Q + REF + "/x.xml" + Q
+                  + " | xargs -i cp {} /tmp/out.xml", "echo " + Q + REF + "/x.xml" + Q + " | xargs -i cat {}"):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["writes_reference"], c)
+
+    def test_TWIN_an_xargs_fed_write_elsewhere_or_a_read_does_not_fire(self):
+        for c in ("echo /tmp/a.xml | xargs touch", "echo " + Q + REF + "/x.xml" + Q + " | xargs cat",
+                  "echo " + Q + REF + "/x.xml" + Q + " | xargs grep -n ware",
+                  "echo " + Q + REF + "/x.xml" + Q + " | xargs -I{} cp {} /tmp/out.xml",
+                  "echo " + Q + REF + "/x.xml" + Q + " ; xargs touch",
+                  "echo " + Q + REF + "/x.xml" + Q + " | touch /tmp/a",
+                  "echo " + Q + REF + "/x.xml" + Q + " | touch /tmp/xargs.log",
+                  "find " + Q + REF + Q + " -name x.xml | xargs touch",
+                  "cat " + Q + REF + "/list.txt" + Q + " | xargs touch"):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["writes_reference"], c)
 
     def test_for_loop_and_arrays_expand_every_element(self):
         self.assertEqual(H.assignments("for f in a 'b c' d; do echo; done")["f"], "(a 'b c' d)")
@@ -4135,7 +5045,7 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
     same ones."""
 
     def P(self, command):
-        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
+        return _facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
 
     def test_remove_item_recurse_reference_is_the_reference_block(self):
         f = self.P("Remove-Item -Recurse " + Q + REF + Q)
@@ -4192,7 +5102,14 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
         for head in (at + d + "Push-Location $env:D; Pop-Location; ",
                      at + d + "Set-Location $env:D; Set-Location " + Q + REF + Q + "; ",
                      at + d,
-                     at + "foreach ($i in 1,2) {" + d + "Push-Location $env:D; Pop-Location}; "):
+                     at + "foreach ($i in 1,2) {" + d + "Push-Location $env:D; Pop-Location}; ",
+                     # A cd to the name that is NOT undone: `$env:` stays a name, so the target is unresolved
+                     # and the 2026-09-02 sticky join keeps the root it left. Since the 4.1.1 location stack
+                     # (e1ab153b) a Pop-Location restores the root by itself, so the rows above no longer
+                     # reach that join; these two are what the "cd to an unknown name" mutant needs.
+                     # MEASURED 2026-11-08: both go False with the join blanked (CI run 42517544460).
+                     at + d + "Set-Location $env:D; ",
+                     at + d + "Push-Location $env:D; "):
             for tail, flag in (("Remove-Item x", "rm_targets_reference"), ("Set-Content out.txt y", "writes_reference"),
                                (Q + "y" + Q + " > out.txt", "writes_reference")):
                 with self.subTest(c=head + tail):
@@ -4207,12 +5124,131 @@ class TestHK1PowerShellFrontEnd(unittest.TestCase):
     def test_an_assigned_env_variable_translates_once_as_a_name(self):
         """The structural form: a second pass reintroduced in any shape adds a line here."""
         for c, sh in (("$env:D=" + Q + "C:/safe" + Q + "; Set-Location $env:D", 'cd "${D}"'),
-                      ("$env:D=" + Q + "C:/safe" + Q + "; Push-Location $env:D", 'cd "${D}"'),
+                      ("$env:D=" + Q + "C:/safe" + Q + "; Push-Location $env:D", 'pushd "${D}"'),
                       ("$env:D=" + Q + "C:/safe" + Q + "; Remove-Item -Recurse $env:D/x", 'rm -rf "${D}"/x'),
                       ("$env:D=" + Q + "C:/safe" + Q + "; " + Q + "y" + Q + " > " + DQ + "$env:D/x" + DQ, ': > "${D}"/x'),
                       ("$env:D=" + Q + "C:/safe" + Q + "; Set-Content " + DQ + "$env:D/x" + DQ + " y", ': > "${D}"/x')):
             with self.subTest(c=c):
                 self.assertEqual(H.powershell_to_sh(c)[0], sh)
+
+    # 4.1.1 final round (BLIND-SPOTS location stack): Push-Location was read as a plain `cd` and Pop-Location not at
+    # all, so after `Set-Location <reference>; Push-Location C:/safe; Pop-Location` a relative operand was judged in
+    # C:/safe, where PowerShell is back in <reference>. The stack is modelled: a push is `pushd`, a pop whose push this
+    # command made is `popd`, and a pop the translation cannot match keeps the current directory AND adds an unknown one.
+    LOC_TAILS = (("Remove-Item x", "rm_targets_reference"), ("Set-Content out.txt y", "writes_reference"))
+
+    def _at_ref(self, middle):
+        return "Set-Location " + Q + REF + Q + "; " + middle
+
+    def test_a_pop_returns_to_the_location_its_push_left(self):
+        safe = Q + "C:/safe" + Q
+        for middle in ("Push-Location " + safe + "; Pop-Location; ",
+                       "pushd " + safe + "; popd; ",
+                       "Push-Location -Path " + safe + "; Pop-Location -PassThru; ",
+                       "Push-Location -LiteralPath " + safe + "; Pop-Location; ",
+                       "Push-Location " + safe + "; Push-Location C:/w2; Pop-Location; Pop-Location; ",
+                       "Push-Location -StackName s " + safe + "; Pop-Location -StackName s; ",
+                       "Push-Location -StackName s " + safe + "; Push-Location C:/w2; Pop-Location -StackName s; ",
+                       "Set-Location -StackName s; Push-Location " + safe + "; Pop-Location; ",
+                       "Set-Location -StackName $n; Push-Location " + safe + "; Pop-Location; ",
+                       "Push-Location; Set-Location " + safe + "; Pop-Location; ",
+                       # under a push to an unreadable stack, the pop still reaches its own push
+                       "Push-Location " + safe + "; Push-Location -StackName $n C:/w2; Pop-Location; ",
+                       # the default changed to a stack pushed before, so the pop takes ITS entry
+                       "Push-Location -StackName s " + safe + "; Set-Location -StackName s; Pop-Location; ",
+                       # a stack never pushed: PowerShell refuses it and keeps the default
+                       "Push-Location " + safe + "; Set-Location -StackName t; Pop-Location; ",
+                       "Push-Location -StackName $n C:/w1; Push-Location C:/w2; Pop-Location -StackName $n; "):
+            for tail, flag in self.LOC_TAILS:
+                c = self._at_ref(middle + tail)
+                with self.subTest(c=c):
+                    self.assertTrue(self.P(c)[flag], c)
+
+    def test_a_pop_the_command_cannot_match_keeps_the_current_location_too(self):
+        """A pop of a stack this command did not push (a host that keeps its runspace) lands somewhere unknown; the
+        current location stays one of the candidates, so a relative operand there is still judged."""
+        for middle in ("Pop-Location; ", "popd; ", "Pop-Location -StackName $n; ",
+                       "Push-Location -StackName $n C:/w2; Set-Location " + Q + REF + Q + "; Pop-Location; "):
+            for tail, flag in self.LOC_TAILS:
+                c = self._at_ref(middle + tail)
+                with self.subTest(c=c):
+                    self.assertTrue(self.P(c)[flag], c)
+
+    def test_TWIN_the_pop_restores_a_location_outside_the_root(self):
+        for middle in ("Set-Location C:/work; Push-Location " + Q + REF + Q + "; Pop-Location; ",
+                       "Set-Location C:/work; pushd " + Q + REF + Q + "; popd; "):
+            for tail, flag in self.LOC_TAILS:
+                c = middle + tail
+                with self.subTest(c=c):
+                    self.assertFalse(self.P(c)[flag], c)
+
+    def test_TWIN_with_no_pop_the_pushed_location_is_in_force(self):
+        # The second: PowerShell has no stack `other` to pop, so it stays in C:/safe.
+        for middle in ("Push-Location C:/safe; ", "Push-Location C:/safe; Pop-Location -StackName other; "):
+            for tail, flag in self.LOC_TAILS:
+                c = self._at_ref(middle + tail)
+                with self.subTest(c=c):
+                    self.assertFalse(self.P(c)[flag], c)
+
+    def test_TWIN_after_popping_past_another_stack_a_later_pop_is_not_guessed(self):
+        """Popping stack s past a later default push: PowerShell keeps that default entry, bash's one stack does
+        not. A later default pop must not be matched to the EARLIER default push (back in <reference>, where
+        PowerShell is in C:/w1): it is unknown, the current location kept."""
+        for tail, flag in self.LOC_TAILS:
+            c = self._at_ref("Push-Location C:/w0; Push-Location -StackName s C:/w1; Push-Location C:/w2; "
+                             "Pop-Location -StackName s; Pop-Location; " + tail)
+            with self.subTest(c=c):
+                self.assertFalse(self.P(c)[flag], c)
+
+    def test_an_unreadable_stack_name_may_be_the_default_stack(self):
+        """4.1.1 review A3: an unreadable -StackName ($n unset is the DEFAULT stack in real pwsh) was its own stack, so
+        a default pop after a push to it, and the mirror, were judged where the command already was (C:/safe) while
+        PowerShell may be back in <reference>. Both outcomes are now judged: the pop returns, or it does not."""
+        safe = Q + "C:/safe" + Q
+        for middle in ("Push-Location " + safe + " -StackName $n; Pop-Location; ",
+                       "Push-Location " + safe + "; Pop-Location -StackName $n; ",
+                       "Push-Location -StackName $n " + safe + "; Push-Location -StackName $m C:/w2; Pop-Location; "
+                       "Pop-Location; "):
+            for tail, flag in self.LOC_TAILS:
+                c = self._at_ref(middle + tail)
+                with self.subTest(c=c):
+                    self.assertTrue(self.P(c)[flag], c)
+        for tail, flag in (("Remove-Item libraries/wares.xml", "rm_targets_reference"),):
+            c = self._at_ref("Push-Location " + safe + " -StackName $n; Pop-Location; " + tail)
+            self.assertTrue(self.P(c)[flag], c)
+
+    def test_TWIN_an_unreadable_stack_name_judges_only_the_candidate_folders(self):
+        for c in ("Set-Location C:/work; Push-Location C:/safe -StackName $n; Pop-Location; ",
+                  "Set-Location C:/work; Push-Location C:/safe; Pop-Location -StackName $n; ",
+                  self._at_ref("Push-Location C:/w1; Push-Location C:/safe -StackName $n; Pop-Location -StackName t; ")):
+            for tail, flag in self.LOC_TAILS:
+                with self.subTest(c=c + tail):
+                    self.assertFalse(self.P(c + tail)[flag], c + tail)
+
+    def test_a_maybe_pop_translates_as_a_pop_that_may_not_happen(self):
+        maybe = "popd ${X4_PS_LOCATION_STACK:+-n}"
+        self.assertEqual(H.powershell_to_sh("Push-Location -StackName $n C:/a; Pop-Location")[0],
+                         "pushd C:/a" + chr(10) + maybe + chr(10) + 'cd "${X4_PS_LOCATION_STACK:-.}"')
+        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Pop-Location -StackName $n")[0],
+                         "pushd C:/a" + chr(10) + maybe + chr(10) + 'cd "${X4_PS_LOCATION_STACK:-.}"')
+        # a definite push under an unreadable one: PowerShell lands at one of them, so both pops may happen
+        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Push-Location -StackName $n C:/b; Pop-Location")[0],
+                         "pushd C:/a" + chr(10) + "pushd C:/b" + chr(10) + maybe + chr(10) + maybe)
+
+    def test_the_reader_splits_a_pop_that_may_not_happen(self):
+        lanes = H.cwd_lanes("cd C:/r; pushd C:/s; popd ${X4_PS_LOCATION_STACK:+-n}; rm x", "C:/b")
+        self.assertEqual(sorted(H.norm(d) for d in lanes[-1][1]), sorted([H.norm("C:/r"), H.norm("C:/s")]))
+
+    def test_an_unmatched_pop_translates_as_the_current_and_an_unknown_location(self):
+        self.assertEqual(H.powershell_to_sh("Pop-Location")[0], 'cd "${X4_PS_LOCATION_STACK:-.}"')
+        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Pop-Location -StackName s")[0],
+                         "pushd C:/a" + chr(10) + 'cd "${X4_PS_LOCATION_STACK:-.}"')
+
+    def test_the_stack_translates_as_pushd_and_popd(self):
+        self.assertEqual(H.powershell_to_sh("Push-Location C:/a; Pop-Location")[0], "pushd C:/a" + chr(10) + "popd")
+        self.assertEqual(H.powershell_to_sh("Push-Location -StackName s C:/a; Push-Location C:/b; "
+                                            "Pop-Location -StackName s")[0],
+                         "pushd C:/a" + chr(10) + "pushd C:/b" + chr(10) + "popd" + chr(10) + "popd")
 
     def test_TWIN_a_local_variable_is_still_read_as_its_value(self):
         self.assertEqual(H.powershell_to_sh("$D=" + Q + "C:/safe" + Q + "; Set-Location $D")[0], "cd C:/safe")
@@ -4390,6 +5426,81 @@ class TestHK1TranslationBudget(unittest.TestCase):
         self.assertEqual(self.calls, [H._PS_CALL_CAP_S, H._PS_CALL_CAP_S])
 
 
+class TestARealTranslatorTimeoutIsASkipNotAVerdict(unittest.TestCase):
+    """4.1.1 (CI run 41992260237): a twin failed on `PowerShell could not be run (TimeoutExpired)`.
+    The guard's refusal is right; the TEST measured nothing. Patched at `subprocess.run` (the
+    REAL module stays in place), so this is the shape a slow runner produces. Nothing runs."""
+
+    def _with_run(self, run, fn):
+        import subprocess as sp
+        saved = (sp.run, H._pwsh_exe)
+        sp.run, H._pwsh_exe = run, (lambda: "pwsh")
+        H._PS_CACHE.clear()
+        try:
+            return fn()
+        finally:
+            sp.run, H._pwsh_exe = saved
+            H._PS_CACHE.clear()
+
+    def test_a_real_timeout_skips_with_its_reason(self):
+        import subprocess as sp
+
+        def timed_out(args, **kw):
+            raise sp.TimeoutExpired(args, kw["timeout"])
+        for call in (lambda: _facts({"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}},
+                                    ROOTS),
+                     lambda: F('pwsh -c "Get-Date"')):
+            before = len(_TRANSLATOR_SKIPS)
+            with self.assertRaises(unittest.SkipTest) as cm:
+                self._with_run(timed_out, call)
+            self.assertIn(H.PS_TIMED_OUT, str(cm.exception))
+            self.assertEqual(len(_TRANSLATOR_SKIPS), before + 1)     # counted against the ceiling
+            _TRANSLATOR_SKIPS.pop()                                   # this one was the test's own
+
+    def test_TWIN_any_other_translation_failure_is_still_a_verdict(self):
+        import subprocess as sp
+
+        def cannot_start(args, **kw):
+            raise FileNotFoundError("fixture: no such PowerShell")
+        f = self._with_run(cannot_start, lambda: _facts(
+            {"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}}, ROOTS))
+        self.assertTrue(f.get("powershell_error"))                 # refused, and NOT skipped
+        self.assertEqual(f["untranslated_category"], "PowerShell could not be started")
+        self.assertIsNot(H.subprocess.run, cannot_start)           # the stub was undone
+
+    def test_TWIN_a_stubbed_timeout_is_measured_not_skipped(self):
+        """TestHK1TranslationBudget replaces H.subprocess: its timeouts are the subject."""
+        import subprocess as sp
+        import types
+
+        def timed_out(args, **kw):
+            raise sp.TimeoutExpired(args, kw["timeout"])
+        saved = (H.subprocess, H._pwsh_exe)
+        H.subprocess = types.SimpleNamespace(run=timed_out, TimeoutExpired=sp.TimeoutExpired,
+                                             SubprocessError=sp.SubprocessError)
+        H._pwsh_exe = lambda: "pwsh"
+        H._PS_CACHE.clear()
+        try:
+            f = F('pwsh -c "Get-Date"')
+        finally:
+            H.subprocess, H._pwsh_exe = saved
+            H._PS_CACHE.clear()
+        self.assertTrue(f["carrier_untranslated"])
+
+
+class TestTheTranslatorSkipHasACeiling(unittest.TestCase):
+    """4.1.1 review: past the ceiling the leg FAILS; an unusable ceiling fails too; within it, it passes."""
+
+    def test_over_the_ceiling_fails_and_within_it_passes(self):
+        self.assertEqual(translator_skip_ceiling(4, "3"), 1)
+        self.assertEqual(translator_skip_ceiling(3, "3"), 0)
+        self.assertEqual(translator_skip_ceiling(1, "0"), 1)
+        self.assertEqual(translator_skip_ceiling(0, "0"), 0)
+
+    def test_an_unusable_ceiling_is_a_failure_not_a_pass(self):
+        self.assertEqual(translator_skip_ceiling(0, ""), 1)
+        self.assertEqual(translator_skip_ceiling(0, "three"), 1)
+
 class TestPowerShellStartsWithoutNetworkCalls(unittest.TestCase):
     """4.0.1: the translator's PowerShell runs with telemetry and the update check OFF (each a
     network call at startup, paid once per parsed command), and keeps the rest of the env."""
@@ -4449,7 +5560,7 @@ class TestHK1FailsClosedWithoutPowerShell(unittest.TestCase):
         os.environ["X4_PWSH"] = "x4-no-such-powershell-binary"
         H._PS_CACHE.clear()
         try:
-            f = H.facts({"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}},
+            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": "Get-Date"}},
                         ROOTS)
             self.assertIn("no PowerShell", f.get("powershell_error", ""))
             self.assertTrue(F("powershell -c Get-Date")["carrier_untranslated"])
@@ -4466,7 +5577,7 @@ def FC(command, cwd, **kw):
     payload = {"tool_input": {"command": command}}
     if cwd is not _NO_CWD:
         payload["cwd"] = cwd
-    return H.facts(payload, ROOTS)
+    return _facts(payload, ROOTS)
 
 
 _NO_CWD = object()
@@ -4506,7 +5617,7 @@ class TestARootVariableCdIsTheRoot(unittest.TestCase):
         roots = dict(ROOTS, reference="")
         payload = {"tool_input": {"command": 'cd "$X4_REFERENCE" && ' + D + " -rf libraries"},
                    "cwd": _ELSEWHERE}
-        self.assertFalse(H.facts(payload, roots)["rm_targets_reference"])
+        self.assertFalse(_facts(payload, roots)["rm_targets_reference"])
 
     def test_what_follows_the_variable_is_kept(self):
         self.assertTrue(FC('cd "$X4_REFERENCE/$SUB" && ' + D + ' -rf x', _ELSEWHERE)["rm_targets_reference"])
@@ -4517,9 +5628,9 @@ class TestARootVariableCdIsTheRoot(unittest.TestCase):
         read as staying in the session dir (cwd TOOLKIT holds reference/ here)."""
         payload = {"tool_input": {"command": 'cd "$X4_GAME" && ' + D + " -rf reference/libraries"},
                    "cwd": TOOLKIT}
-        self.assertFalse(H.facts(payload, dict(ROOTS, game=""))["rm_targets_reference"])
+        self.assertFalse(_facts(payload, dict(ROOTS, game=""))["rm_targets_reference"])
         payload["tool_input"]["command"] = D + " -rf reference/libraries"            # control
-        self.assertTrue(H.facts(payload, dict(ROOTS, game=""))["rm_targets_reference"])
+        self.assertTrue(_facts(payload, dict(ROOTS, game=""))["rm_targets_reference"])
 
     def test_TWIN_an_assignment_in_the_command_wins_over_the_root(self):
         cmd = 'X4_REFERENCE=/c/tmp/x; cd "$X4_REFERENCE" && ' + D + " -rf libraries"
@@ -4878,17 +5989,17 @@ class TestG2ARootVariableOperandIsItsRoot(unittest.TestCase):
                     'echo a > "$X4_CONFIG"',
                     D + ' "$X4_TOOLKIT/x4-paths.env"'):
             with self.subTest(cmd=cmd):
-                f = H.facts({"tool_input": {"command": cmd}, "cwd": _ELSEWHERE}, roots)
+                f = _facts({"tool_input": {"command": cmd}, "cwd": _ELSEWHERE}, roots)
                 self.assertTrue(f["writes_reference"] or f["rm_targets_reference"], cmd)
         # TWIN: the config ALONE (the old pass) cannot resolve the toolkit variable.
-        f = H.facts({"tool_input": {"command": 'echo a > "$X4_TOOLKIT/x4-paths.env"'}},
+        f = _facts({"tool_input": {"command": 'echo a > "$X4_TOOLKIT/x4-paths.env"'}},
                     {"reference": cfg})
         self.assertFalse(f["writes_reference"])
 
     # --- one falsification twin per clause ---
     def test_TWIN_an_unconfigured_root_is_not_substituted(self):
         """Clause: the root is configured. Unset, the token stays unresolved as before."""
-        f = H.facts({"tool_input": {"command": 'echo x > "$X4_REFERENCE/libraries/w.xml"'}},
+        f = _facts({"tool_input": {"command": 'echo x > "$X4_REFERENCE/libraries/w.xml"'}},
                     dict(ROOTS, reference=""))
         self.assertFalse(f["writes_reference"])
 
@@ -4974,7 +6085,7 @@ class TestG2WindowsPathAliases(unittest.TestCase):
             self.assertEqual(H.norm(got), H.norm(longdir + "/new/f.xml"))
             roots = dict(ROOTS, reference=longdir.replace(BS, "/"))
             payload = {"tool_input": {"command": 'echo x > "' + sdir.replace(BS, "/") + '/w.xml"'}}
-            self.assertTrue(H.facts(payload, roots)["writes_reference"])
+            self.assertTrue(_facts(payload, roots)["writes_reference"])
             # TWIN: a path with no `~<digit>` is returned untouched (no syscall)
             self.assertEqual(H.long_name(longdir + "/x"), longdir + "/x")
 
@@ -5604,7 +6715,7 @@ class TestInlineInterpreterWriteOntoATranscript(unittest.TestCase):
 
 def _evidence(command, cwd=TOOLKIT, roots=None):
     ev = []
-    H.facts({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd},
+    _facts({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd},
             ROOTS if roots is None else roots, evidence=ev)
     return ev
 
@@ -5710,7 +6821,7 @@ class TestP1AnAssignmentPrefixIsOneWordWhateverSpanItHolds(unittest.TestCase):
 
 
 def _blockers(command, tool="Bash"):
-    return H.facts({"tool_name": tool, "tool_input": {"command": command}, "cwd": TOOLKIT},
+    return _facts({"tool_name": tool, "tool_input": {"command": command}, "cwd": TOOLKIT},
                    ROOTS).get("save_lift_blockers") or []
 
 
@@ -6569,7 +7680,7 @@ class TestF10PowerShellUnreadableCommandName(unittest.TestCase):
     translated with the name as a literal, so no rule knew a delete was possible."""
 
     def P(self, command):
-        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
+        return _facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
 
     def test_each_unreadable_name_shape_reaches_the_plain_commands_rule(self):
         for c in ("& $R Remove-Item " + Q + REF + Q, ". $R Remove-Item " + Q + REF + Q,
@@ -6805,7 +7916,7 @@ class TestF331PowerShellLinkCreation(unittest.TestCase):
     CreateSymbolicLink as a truncation of it -- so no rule saw the target."""
 
     def P(self, command):
-        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command},
+        return _facts({"tool_name": "PowerShell", "tool_input": {"command": command},
                         "cwd": _ELSEWHERE}, ROOTS)
 
     def _shapes(self, t):
@@ -7267,7 +8378,18 @@ class TestProgramsThatRunProgramsReview(unittest.TestCase):
                     "tmux ls " + BS + "; ls " + BS + "; run " + self.inner(REF))
 
     def test_TWIN_a_backslash_ended_segment_of_another_program(self):
-        self.assertFalse(F("find . -name x -exec ls {} " + BS + "; run " + self.inner(REF))["rm_targets_reference"])
+        # Since 4.1.1 round 4/7 an escaped `;` does not split a segment, so the find row is ONE segment and
+        # never reaches the chain. The other rows end a segment in `\` before a REAL separator (an escaped
+        # backslash, an escaped blank): bash runs `run`/`new`/`send-keys` as commands of their own, and
+        # reading them as tmux commands would fire on nothing. MEASURED 2026-11-08: with `v == "tmux"`
+        # dropped from the chain start, these go True (CI run 42517544460 reported the mutant uncaught).
+        for c in ("find . -name x -exec ls {} " + BS + "; run " + self.inner(REF),
+                  "ls " + BS + BS + "; run " + self.inner(REF),
+                  "ls " + BS + " ; run " + self.inner(REF),
+                  "echo " + BS + BS + " && new " + self.inner(REF),
+                  "printf x" + BS + BS + "; send-keys " + self.inner(REF)):
+            with self.subTest(c=c):
+                self.assertFalse(F(c)["rm_targets_reference"], c)
 
     def test_read_options_before_the_name(self):
         ref = DQ + "$P" + DQ
@@ -7379,6 +8501,1570 @@ class TestProfileModlistWritePolicy(unittest.TestCase):
                    + '; echo fixture > ' + Q + str(self.profile / 'content.xml') + Q)
         self.assertTrue(F(command, roots=self.roots)['writes_profile_other'])
 
+    def test_tee_onto_the_modlist_is_the_same_write_as_a_redirect(self):
+        """4.1.1: `tee` was disqualified by its (absent) source operand, and a pipeline into it by
+        having two segments, so both asked where `echo x > <modlist>` did not."""
+        m = Q + str(self.profile / 'content.xml') + Q
+        for command in ('tee ' + m, 'echo x | tee ' + m, 'printf x | cat | tee -a ' + m + ' > /dev/null',
+                        ': | tee ' + m):
+            with self.subTest(command=command):
+                facts = F(command, roots=self.roots)
+                self.assertTrue(facts['writes_profile'], command)
+                self.assertFalse(facts['writes_profile_other'], command)
+
+    def test_TWIN_tee_onto_anything_else_or_from_a_writer_keeps_its_confirmation(self):
+        m = Q + str(self.profile / 'content.xml') + Q
+        c = Q + str(self.profile / 'config.xml') + Q
+        for command in ('echo x | tee ' + c, 'echo x | tee ' + m + ' ' + c,
+                        'echo x | tee ' + m + ' | tee ' + c, 'echo x; tee ' + m,
+                        'mkdir -p ' + m + ' | tee ' + m, 'echo x && echo y | tee ' + m,
+                        'echo $(date) | tee ' + m):
+            with self.subTest(command=command):
+                self.assertTrue(F(command, roots=self.roots)['writes_profile_other'], command)
+
+    def test_TWIN_a_wrapped_tee_is_not_the_exempt_write(self):
+        """4.1.1 review: verb() sees through wrappers, so `xargs tee <modlist>` counted as tee -- and xargs APPENDS
+        its stdin to tee's arguments: `echo <save> | xargs tee <modlist>` truncates the save. Only a stage whose
+        literal first word is `tee` is the mod-list write; any wrapper or prefix keeps the confirmation."""
+        m = Q + str(self.profile / 'content.xml') + Q
+        s = Q + str(self.profile / 'save' / 'a.xml.gz') + Q
+        for command in ('echo ' + s + ' | xargs tee ' + m, 'xargs tee ' + m + ' < ' + s,
+                        'echo x | sudo tee ' + m, 'echo x | env X=1 tee ' + m, 'echo x | timeout 5 tee ' + m,
+                        'echo x | nice tee ' + m, 'echo x | command tee ' + m, 'sudo tee ' + m,
+                        'X=1 tee ' + m, 'echo x | parallel tee ' + m, 'echo x | sudo echo y | tee ' + m):
+            with self.subTest(command=command):
+                self.assertTrue(F(command, roots=self.roots)['writes_profile_other'], command)
+
+    def test_a_tee_that_only_READS_a_save_is_still_the_exempt_write(self):
+        """`cat <save> | tee <modlist>` reads the save and writes only the mod list."""
+        m = Q + str(self.profile / 'content.xml') + Q
+        s = Q + str(self.profile / 'save' / 'a.xml.gz') + Q
+        facts = F('cat ' + s + ' | tee ' + m, roots=self.roots)
+        self.assertFalse(facts['writes_profile_other'])
+        self.assertFalse(facts.get('rm_saves'))
+
+
+class TestGameArchiveShellWrites(unittest.TestCase):
+    """A shell command that changes a base-game or official DLC archive gets the deny the file
+    tools give it. Only a Steam verify restores those files. Parse-only: nothing here runs.
+    A MOD's own archive stays with the deploy and retirement rules."""
+    ARC = GAME + "/01.dat"
+    DLC = GAME + "/extensions/ego_dlc_boron"
+    CAT = DLC + "/ext_01.cat"
+    MOD = GAME + "/extensions/amod"
+
+    def Q(self, path):
+        return '"' + path + '"'
+
+    # --- one test per write channel: copy_t, redirects, truncate, sed_t, out_t, mod_t
+    def test_a_redirect_onto_an_archive_fires_truncating_or_appending(self):
+        for form in ("echo x > ", "echo x >> ", "echo x 2> ", "echo x &> "):
+            self.assertTrue(F(form + self.Q(self.ARC))["writes_game_archive"], form)
+
+    def test_a_copy_destination_on_an_archive_fires(self):
+        for form in ("cp a ", "mv a ", "install a ", "rsync a ", "echo x | tee "):
+            self.assertTrue(F(form + self.Q(self.ARC))["writes_game_archive"], form)
+
+    def test_truncate_and_dd_on_an_archive_fire(self):
+        self.assertTrue(F("truncate -s 0 " + self.Q(self.ARC))["writes_game_archive"])
+        self.assertTrue(F("dd if=a of=" + self.Q(self.ARC))["writes_game_archive"])
+
+    def test_sed_in_place_on_an_archive_fires(self):
+        self.assertTrue(F("sed -i s/a/b/ " + self.Q(self.ARC))["writes_game_archive"])
+
+    def test_an_output_flag_on_an_archive_fires(self):
+        self.assertTrue(F("curl -o " + self.Q(self.ARC) + " http://x/y")["writes_game_archive"])
+
+    def test_touch_on_an_archive_fires(self):
+        self.assertTrue(F("touch " + self.Q(self.ARC))["writes_game_archive"])
+
+    # --- the two delete channels
+    def test_a_delete_of_an_archive_fires(self):
+        for form in ("rm ", "rm -f ", "unlink ", "shred "):
+            self.assertTrue(F(form + self.Q(self.ARC))["writes_game_archive"], form)
+
+    def test_a_move_away_of_an_archive_fires(self):
+        self.assertTrue(F("mv " + self.Q(self.ARC) + " /c/o/x")["writes_game_archive"])
+
+    def test_rsync_removing_its_source_archive_fires(self):
+        self.assertTrue(F("rsync --remove-source-files " + self.Q(self.ARC) + " /c/o/")
+                        ["writes_game_archive"])
+
+    def test_TWIN_rsync_keeping_its_source_is_a_read(self):
+        self.assertFalse(F("rsync " + self.Q(self.ARC) + " /c/o/")["writes_game_archive"])
+
+    # --- which folders hold an archive
+    def test_an_official_dlc_archive_fires(self):
+        self.assertTrue(F("rm " + self.Q(self.CAT))["writes_game_archive"])
+        self.assertTrue(F("echo x > " + self.Q(self.CAT))["writes_game_archive"])
+        self.assertTrue(F("rm " + self.Q(GAME + "/extensions/ego_dlc_mini_01/ext_01_sig.dat"))
+                        ["writes_game_archive"])
+
+    def test_the_game_root_itself_holds_archives(self):
+        self.assertTrue(F("rm " + self.Q(GAME + "/version.dat"))["writes_game_archive"])
+
+    def test_TWIN_a_mods_own_archive_does_not_fire(self):
+        for form in ("rm ", "cp a ", "mv a ", "echo x > ", "echo x >> ", "truncate -s 0 "):
+            self.assertFalse(F(form + self.Q(self.MOD + "/ext_01.cat"))["writes_game_archive"], form)
+
+    def test_TWIN_a_dlc_shaped_folder_elsewhere_does_not_fire(self):
+        for path in (self.MOD + "/extensions/ego_dlc_boron/ext_01.cat",    # inside a mod
+                     GAME + "/extensions/ego_dlcx/ext_01.cat",             # not ego_dlc_
+                     GAME + "x/01.dat",                                    # a sibling folder
+                     GAME + "/sub/x.dat",                                  # deeper in the game
+                     "/c/o/01.dat"):
+            self.assertFalse(F("rm " + self.Q(path))["writes_game_archive"], path)
+
+    def test_TWIN_a_mod_folder_delete_keeps_its_one_confirmation(self):
+        f = F('rm -rf ' + self.Q(self.MOD) + ' ' + self.Q(GAME + "/extensions/bmod"))
+        self.assertFalse(f["writes_game_archive"])
+        self.assertTrue(f["rm_deployed_mod"])
+
+    def test_TWIN_no_game_root_and_no_install_name_means_no_rule(self):
+        # The archive itself, with no root, is test_an_unknown_game_root_falls_back_to_the_install_folder_name.
+        roots = dict(ROOTS, game="")
+        self.assertFalse(F("rm /01.dat", roots=roots)["writes_game_archive"])
+        self.assertFalse(F("rm " + self.Q("C:/Games/X4/01.dat"), roots=roots)["writes_game_archive"])
+
+    # --- which names are archives
+    def test_TWIN_another_extension_does_not_fire(self):
+        for name in ("x.txt", "x.xml", "01.zip", "01.cat.bak", "01.dat.tmp", "01.dat.x", "01cat"):
+            self.assertFalse(F("rm " + self.Q(GAME + "/" + name))["writes_game_archive"], name)
+            self.assertFalse(F("echo x > " + self.Q(GAME + "/" + name))["writes_game_archive"], name)
+
+    def test_any_case_and_path_spelling_fires(self):
+        for path in (GAME + "/01.DAT", GAME.upper() + "/EXTENSIONS/EGO_DLC_BORON/EXT_01.CAT",
+                     "/c/" + GAME[3:] + "/01.dat", GAME + "/./01.dat", GAME + "//01.dat",
+                     GAME + "/sub/../01.dat", GAME + "/01.dat.", GAME + "/01.dat::$DATA"):
+            self.assertTrue(F("rm '" + path + "'")["writes_game_archive"], path)
+
+    def test_a_root_variable_and_a_directory_change_fire(self):
+        self.assertTrue(F('rm "$X4_GAME/01.dat"')["writes_game_archive"])
+        self.assertTrue(F("cd " + self.Q(self.DLC) + " && rm ext_01.cat")["writes_game_archive"])
+        self.assertTrue(FC("rm 01.dat", GAME)["writes_game_archive"])
+
+    def test_TWIN_a_relative_name_elsewhere_does_not_fire(self):
+        self.assertFalse(FC("rm 01.dat", "/c/o")["writes_game_archive"])
+        self.assertFalse(FC("rm ext_01.dat", self.MOD)["writes_game_archive"])
+
+    def test_an_unknown_stem_with_a_visible_archive_ending_fires(self):
+        self.assertTrue(F('rm "' + GAME + '/$X.dat"')["writes_game_archive"])
+
+    def test_TWIN_an_unresolved_folder_proves_nothing(self):
+        # `rm "<game>/$X"` fires from round 3: see test_a_name_filled_in_at_run_time_may_be_an_archive.
+        self.assertFalse(F('rm "$X/01.dat"')["writes_game_archive"])
+        self.assertFalse(F('rm "' + GAME + '/extensions/$X/ext_01.cat"')["writes_game_archive"])
+
+    # --- globs: a pattern is present in the text, so what it covers is decidable
+    def test_a_glob_naming_archives_fires(self):
+        for pat in ("/*.dat", "/*.cat", "/0?.cat", "/0[1-9].dat"):
+            self.assertTrue(F('echo x > "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_a_bare_glob_covering_an_archive_name_fires(self):
+        for pat in ("/*", "/0*", "/lang*"):
+            self.assertTrue(F('touch "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_TWIN_a_bare_glob_covering_no_archive_name_does_not_fire(self):
+        # "/x*" and "/ext*" fired from round 2 (F1): x.dat and ext.dat could be there.
+        for pat in ("/*.xml", "/x*.xml", "/*.txt", "/*.[!cd]at", "/*.d[!a]t"):
+            self.assertFalse(F('touch "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_a_folder_glob_reaching_a_dlc_fires(self):
+        for pat in ("/extensions/ego_dlc_*/ext_01.cat", "/extensions/*/ext_01.cat"):
+            self.assertTrue(F('rm "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_TWIN_a_folder_glob_missing_every_dlc_does_not_fire(self):
+        # "/*/*/*/x.dat" reaches inside a DLC folder, which is denied from round 2 (F8).
+        for pat in ("/extensions/a*/ext_01.cat", "/*/x.dat", "/extensions/[a-d]*/ext_01.cat"):
+            self.assertFalse(F('rm "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_a_pattern_for_the_game_folder_itself_fires(self):
+        self.assertTrue(F('rm "' + GAME.replace("X4 F", "X4?F") + '/01.dat"')["writes_game_archive"])
+
+    def test_a_pattern_for_a_game_folder_not_on_disk_fires(self):
+        """The row above passes without _is_archive_home's pattern clause (the mutation gate MEASURED it uncaught
+        at 7f4895a2): `X4?Foundations` still names the install, so named_game_roots reads the pattern itself as a
+        game root. A pattern that names no install (`*`, `X[4]*`) reaches the game only through the clause; a
+        game root that does not exist keeps the operand a pattern on any machine."""
+        g = "C:/NoSuchSteam/common/X4 Foundations"
+        for pat in ("*", "X[4]*"):
+            with self.subTest(pat=pat):
+                self.assertTrue(F('rm "C:/NoSuchSteam/common/' + pat + '/01.dat"', roots=dict(ROOTS, game=g))
+                                ["writes_game_archive"])
+                self.assertFalse(F('rm "C:/NoSuchSteam/common/' + pat + '/01.txt"', roots=dict(ROOTS, game=g))
+                                 ["writes_game_archive"])
+
+    def test_TWIN_a_pattern_above_the_game_folder_does_not_fire(self):
+        self.assertFalse(F('rm "C:/*/01.dat"')["writes_game_archive"])
+
+    def test_a_brace_list_of_archives_fires(self):
+        self.assertTrue(F('rm "' + GAME + '"/{01.dat,x.txt}')["writes_game_archive"])
+
+    def test_TWIN_a_brace_list_of_other_names_does_not_fire(self):
+        self.assertFalse(F('rm "' + GAME + '"/{a,b}.txt')["writes_game_archive"])
+
+    # --- a whole DLC folder holds the archives, like the file tools' DLC refusal
+    def test_deleting_or_moving_a_whole_dlc_folder_fires(self):
+        for cmd in ("rm -rf " + self.Q(self.DLC), "rm -rf " + self.Q(self.DLC + "/"),
+                    "mv " + self.Q(self.DLC) + " /c/o/x", "rm -rf " + self.Q(self.DLC) + "/*",
+                    'rm -rf "' + GAME + '/extensions/ego_dlc_b"*'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_delete_or_move_inside_a_dlc_folder_is_denied_not_asked(self):
+        # User ruling 2026-11-05 (4.1.1 review round 2, F8): an official DLC is game content, so a
+        # delete of ANY of its files denies as an archive's does. It asked, as a DEPLOYED MOD.
+        for cmd in ("rm -rf " + self.Q(self.DLC + "/libraries"), "rm " + self.Q(self.DLC + "/content.xml"),
+                    "rm " + self.Q(self.DLC + "/libraries/x.dat"), "mv " + self.Q(self.DLC + "/content.xml") + " /c/o/x",
+                    'rm "' + GAME + '"/extensions/*/libraries', 'rm "' + GAME + '"/*/*/*/x.dat',
+                    "find " + self.Q(self.DLC) + ' -name "*.xml" -delete',
+                    "ls " + self.Q(self.DLC + "/libraries") + " | xargs rm",
+                    "rsync -a --delete src/ " + self.Q(self.DLC + "/libraries/")):
+            f = F(cmd)
+            self.assertTrue(f["writes_game_archive"], cmd)
+            self.assertNotIn("ego_dlc", f["rm_deployed_mod_names"], cmd)
+
+    def test_inside_a_dlc_folder_by_the_install_name_alone(self):
+        # No configured root, so no mod list either: only the DLC-folder readers can see these.
+        dlc = "/d/games/X4 Foundations/extensions/ego_dlc_boron"
+        for cmd in ("rm -rf " + self.Q(dlc + "/libraries"), "find " + self.Q(dlc) + ' -name "*.xml" -delete'):
+            self.assertTrue(F(cmd, roots=self.NOGAME)["writes_game_archive"], cmd)
+
+    def test_a_substituted_delete_inside_a_dlc_is_denied(self):
+        self.assertTrue(F("$(echo rm) -rf " + self.Q(self.DLC + "/libraries"))["writes_game_archive"])
+
+    def test_a_write_through_a_dlc_folder_glob_fires(self):
+        # `ego_dlc_*` is read by the plain prefix test; a pattern before the prefix needs the glob reader.
+        for pat in ("/extensions/e*/ext_01.dat", "/extensions/*/ext_01.dat", "/*/ego_dlc_boron/ext_01.dat"):
+            self.assertTrue(F('echo x > "' + GAME + '"' + pat)["writes_game_archive"], pat)
+
+    def test_TWIN_a_write_deeper_in_a_dlc_is_not_an_archive(self):
+        for cmd in ('echo x > "' + self.DLC + '"/*/x.dat', "echo x > " + self.Q(self.DLC + "/libraries/x.dat")):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_configured_root_with_another_name_is_read(self):
+        roots = dict(ROOTS, game="D:/Games/X4")
+        self.assertTrue(F("rm " + self.Q("D:/Games/X4/01.dat"), roots=roots)["writes_game_archive"])
+        self.assertFalse(F("rm " + self.Q("D:/Games/X4/x.txt"), roots=roots)["writes_game_archive"])
+
+    def test_TWIN_a_mod_subfolder_delete_keeps_its_one_confirmation(self):
+        for cmd in ("rm -rf " + self.Q(self.MOD + "/libraries"), "rm " + self.Q(self.MOD + "/content.xml"),
+                    'rm "' + GAME + '"/extensions/a*/libraries'):
+            f = F(cmd)
+            self.assertFalse(f["writes_game_archive"], cmd)
+            self.assertTrue(f["rm_deployed_mod"], cmd)
+
+    def test_a_dlc_is_never_named_as_a_deployed_mod(self):
+        f = F("rm -rf " + self.Q(self.MOD) + " " + self.Q(self.DLC + "/libraries"))
+        self.assertTrue(f["writes_game_archive"])
+        self.assertEqual(f["rm_deployed_mod_names"], "amod")
+
+    def test_TWIN_a_write_at_a_dlc_folder_is_not_a_delete_of_it(self):
+        self.assertFalse(F("cp a " + self.Q(self.DLC))["writes_game_archive"])
+
+    # --- a directory destination: the source's name decides
+    def test_an_archive_named_source_into_a_home_folder_fires(self):
+        for cmd in ("cp /c/o/01.dat " + self.Q(GAME), "cp /c/o/01.dat " + self.Q(GAME + "/"),
+                    "cp -t " + self.Q(GAME) + " 01.dat", "mv /c/o/ext_01.cat " + self.Q(self.DLC + "/"),
+                    "rsync -a /c/o/01.dat " + self.Q(GAME + "/"), "cp /c/o/*.cat " + self.Q(GAME)):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_robocopy_of_a_named_archive_into_a_home_folder_fires(self):
+        self.assertTrue(F("robocopy /c/o " + self.Q(GAME) + " 01.dat")["writes_game_archive"])
+
+    def test_robocopy_moving_a_dlc_folder_away_fires(self):
+        self.assertTrue(F("robocopy " + self.Q(self.DLC) + " /c/o/x /MOVE")["writes_game_archive"])
+
+    def test_TWIN_robocopy_without_an_archive_name_does_not_fire(self):
+        self.assertFalse(F("robocopy /c/o " + self.Q(GAME))["writes_game_archive"])
+        self.assertFalse(F("robocopy /c/o " + self.Q(GAME) + " a.txt")["writes_game_archive"])
+
+    def test_TWIN_another_source_or_a_mod_destination_does_not_fire(self):
+        for cmd in ("cp /c/o/a.txt " + self.Q(GAME), "cp -r /c/o/pack/. " + self.Q(GAME + "/"),
+                    "cp /c/o/ext_01.cat " + self.Q(self.MOD + "/"), "cp /c/o/*.cat " + self.Q(self.MOD),
+                    "mv /c/o/amod " + self.Q(GAME + "/extensions/")):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- find: a filter decides what the walk reaches
+    def test_a_find_delete_named_for_an_archive_fires(self):
+        for filt in ("-name 01.dat", '-name "*.dat"', '-maxdepth 1 -name "*.cat"', '-iname "*.CAT"'):
+            self.assertTrue(F("find " + self.Q(GAME) + " " + filt + " -delete")["writes_game_archive"], filt)
+
+    def test_a_find_exec_rm_named_for_an_archive_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + " -name 01.dat -exec rm {} +")["writes_game_archive"])
+
+    def test_a_find_path_filter_for_an_archive_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -path "*/01.dat" -delete')["writes_game_archive"])
+
+    def test_a_find_regex_filter_for_an_archive_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -regex ".*dat" -delete')["writes_game_archive"])
+
+    def test_a_find_filter_it_cannot_read_may_reach_an_archive(self):
+        self.assertTrue(F("find " + self.Q(GAME) + " -size +1G -delete")["writes_game_archive"])
+
+    def test_a_find_regex_it_cannot_parse_may_reach_an_archive(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -regex "[" -delete')["writes_game_archive"])
+
+    def test_a_find_root_pattern_reaching_a_dlc_fires(self):
+        self.assertTrue(F('find "' + GAME + '/extensions/ego_dlc_"* -name "*.cat" -delete')
+                        ["writes_game_archive"])
+
+    def test_a_negated_find_filter_that_spares_archives_elsewhere_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -not -name "*.xml" -delete')["writes_game_archive"])
+        self.assertTrue(F("find " + self.Q(GAME) + ' ! -name "*.xml" -delete')["writes_game_archive"])
+
+    def test_TWIN_a_negated_find_filter_excluding_archives_does_not_fire(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -not -name "*.?at" -delete')["writes_game_archive"])
+
+    def test_a_find_OR_filter_reaching_an_archive_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -name "*.xml" -o -name "*.dat" -delete')
+                        ["writes_game_archive"])
+
+    def test_a_find_OR_of_tests_with_no_name_reaches_an_archive(self):
+        self.assertTrue(F("find " + self.Q(GAME) + " -type f -o -type d | xargs rm")["writes_game_archive"])
+
+    def test_TWIN_a_find_AND_filter_needs_one_name_to_pass_both(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -name "*.xml" -name "*.dat" -delete')
+                         ["writes_game_archive"])
+
+    def test_TWIN_a_find_filter_for_something_else_does_not_fire(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -name "*.xml" -delete')["writes_game_archive"])
+        self.assertFalse(F("find " + self.Q(GAME) + " -name __pycache__ -exec rm -rf {} +")["writes_game_archive"])
+
+    def test_a_find_over_extensions_reaches_a_dlc(self):
+        self.assertTrue(F("find " + self.Q(GAME + "/extensions") + " -name ext_01.cat -delete")
+                        ["writes_game_archive"])
+        self.assertTrue(F("find " + self.Q(self.DLC) + ' -name "*.cat" -delete')["writes_game_archive"])
+
+    def test_TWIN_a_find_in_one_mod_does_not_fire(self):
+        f = F("find " + self.Q(self.MOD) + ' -name "*.cat" -delete')
+        self.assertFalse(f["writes_game_archive"])
+        self.assertTrue(f["rm_deployed_mod"])
+
+    def test_TWIN_a_find_that_only_lists_is_a_read(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -name "*.dat"')["writes_game_archive"])
+
+    def test_an_unfiltered_find_delete_of_a_dlc_fires(self):
+        self.assertTrue(F("find " + self.Q(self.DLC) + " -delete")["writes_game_archive"])
+
+    # --- xargs: the producer's text names what is deleted
+    def test_find_piped_to_xargs_rm_fires(self):
+        self.assertTrue(F("find " + self.Q(GAME) + ' -name "*.dat" | xargs rm')["writes_game_archive"])
+
+    def test_TWIN_find_piped_to_xargs_rm_elsewhere_does_not_fire(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -name "*.xml" | xargs rm')["writes_game_archive"])
+        self.assertFalse(F("find " + self.Q(self.MOD) + " | xargs rm")["writes_game_archive"])
+
+    def test_TWIN_find_piped_to_a_reader_does_not_fire(self):
+        self.assertFalse(F("find " + self.Q(GAME) + ' -name "*.dat" | xargs sha256sum')["writes_game_archive"])
+
+    def test_a_listing_of_archives_piped_to_xargs_rm_fires(self):
+        self.assertTrue(F('ls "' + GAME + '"/*.dat | xargs rm')["writes_game_archive"])
+
+    def test_a_listing_of_a_home_folder_piped_to_xargs_rm_fires(self):
+        self.assertTrue(F("ls " + self.Q(GAME) + " | xargs rm")["writes_game_archive"])
+        self.assertTrue(F("ls " + self.Q(self.DLC) + " | xargs rm -rf")["writes_game_archive"])
+
+    def test_TWIN_a_listing_of_a_mod_piped_to_xargs_rm_does_not_fire(self):
+        self.assertFalse(F("ls " + self.Q(self.MOD) + " | xargs rm")["writes_game_archive"])
+
+    def test_TWIN_a_listing_piped_to_a_reader_does_not_fire(self):
+        self.assertFalse(F('ls "' + GAME + '"/*.dat | xargs sha256sum')["writes_game_archive"])
+
+    # --- reading stays allowed
+    def test_TWIN_reading_an_archive_does_not_fire(self):
+        for cmd in ("ls ", "sha256sum ", "stat ", "cat ", "grep -c foo "):
+            self.assertFalse(F(cmd + self.Q(self.ARC))["writes_game_archive"], cmd)
+        for cmd in ("cp " + self.Q(self.ARC) + " /c/o/x", "cat " + self.Q(self.ARC) + " > /c/o/x",
+                    "dd if=" + self.Q(self.ARC) + " of=/c/o/x", 'echo "rm ' + self.ARC + '"',
+                    "XRCatTool -in " + self.Q(self.ARC) + " -out /c/o/x"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_carriers_and_wrappers_reach_the_rule(self):
+        for cmd in ("bash -c 'rm " + self.Q(self.ARC) + "'", "sudo rm " + self.Q(self.ARC),
+                    "eval 'rm " + self.Q(self.ARC) + "'", "cmd /c del " + self.Q(self.ARC),
+                    'F=' + self.Q(self.ARC) + '; echo x > "$F"',
+                    'for f in 01 02; do rm "' + GAME + '/$f.dat"; done'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_powershell_forms_reach_the_rule(self):
+        for cmd in ("Remove-Item '%s'", "Set-Content '%s' x", "Add-Content '%s' x", "Copy-Item a '%s'",
+                    "Move-Item '%s' /c/o/x", "'x' | Out-File '%s'", "[IO.File]::Delete('%s')"):
+            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd % self.ARC}}, ROOTS)
+            if f.get("powershell_error") or f.get("carrier_untranslated"):
+                self.skipTest("no PowerShell parser on this machine")
+            self.assertTrue(f["writes_game_archive"], cmd)
+
+    def test_contents_of_an_archive_named_operand_read_as_the_archive(self):
+        # the PowerShell front end's `Get-ChildItem <x> | Remove-Item`
+        self.assertTrue(F('rm -rf "' + GAME + '/*.dat/*"')["writes_game_archive"])
+
+    def test_TWIN_contents_of_another_operand_do_not(self):
+        self.assertFalse(F('rm -rf "' + GAME + '/*.xml/*"')["writes_game_archive"])
+
+    def test_TWIN_powershell_on_a_mod_or_reading_does_not_fire(self):
+        for cmd, path in (("Remove-Item '%s'", self.MOD + "/ext_01.cat"), ("Copy-Item a '%s'", self.MOD + "/ext_01.cat"),
+                          ("Get-FileHash '%s'", self.ARC), ("Copy-Item '%s' /c/o/x", self.ARC)):
+            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd % path}}, ROOTS)
+            if f.get("powershell_error") or f.get("carrier_untranslated"):
+                self.skipTest("no PowerShell parser on this machine")
+            self.assertFalse(f["writes_game_archive"], cmd)
+
+    # --- 4.1.1 review: find expressions, a regex never run, an unknown game root, option words
+    def find_(self, expr, root=None, tail=" -delete"):
+        return F("find " + self.Q(root or GAME) + " " + expr + tail)["writes_game_archive"]
+
+    def test_a_backtracking_find_regex_is_never_run_and_returns_at_once(self):
+        # MEASURED by the 4.1.1 reviewer: `-regex '(.*)*zzz'` spun the hook for minutes. The
+        # facts run in a child that is killed at 60 s; the call itself must take under 1 s.
+        import json
+        import subprocess
+        code = ("import json, sys, time; sys.path.insert(0, sys.argv[1]); import hook_facts as H; "
+                "t = time.perf_counter(); H.facts(json.loads(sys.argv[2]), json.loads(sys.argv[3])); "
+                "print(time.perf_counter() - t)")
+        here = str(pathlib.Path(__file__).resolve().parent)
+        for expr in ("-regex " + Q + "(.*)*zzz" + Q, "-iregex " + Q + "(x+x+)+y" + Q,
+                     "! -regex " + Q + "(.*)*(.*)*(.*)*q" + Q,
+                     "-name " + Q + "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b" + Q,
+                     "-path " + Q + "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b" + Q):
+            payload = {"tool_input": {"command": "find " + self.Q(GAME) + " " + expr + " -delete"}}
+            try:
+                p = subprocess.run([sys.executable, "-I", "-c", code, here, json.dumps(payload),
+                                    json.dumps(ROOTS)], capture_output=True, text=True, timeout=60)
+            except subprocess.TimeoutExpired:
+                self.fail("facts() still running after 60 s, killed: " + expr)
+            self.assertEqual(p.returncode, 0, p.stderr[-400:])
+            self.assertLess(float(p.stdout.strip().splitlines()[-1]), 1.0, expr)
+
+    def test_a_find_regex_it_cannot_decide_may_reach_an_archive(self):
+        for rx in (".*" + BS + "." + BS + "(cat" + BS + "|dat" + BS + ")",      # GNU emacs spelling
+                   ".*" + BS + ".(cat|dat)", ".*", ".*dat", "(.*)*dat",
+                   ".*" + BS + ".dat|.*" + BS + ".xml"):                       # an alternation
+            self.assertTrue(self.find_("-regex " + Q + rx + Q), rx)
+        self.assertTrue(self.find_("-iregex " + Q + ".*" + BS + ".DAT" + Q))
+        # the root's own spelling is part of what -iregex folds
+        self.assertTrue(self.find_("-iregex " + Q + ".*x4 FOUNDATIONS/01" + BS + ".dat" + Q))
+        # ...with a leading `/`, which only the game folder's own (folded) name can satisfy
+        self.assertTrue(self.find_("-iregex " + Q + ".*/x4 FOUNDATIONS/01" + BS + ".dat" + Q))
+
+    def test_TWIN_a_find_regex_whose_ending_no_archive_has_does_not_fire(self):
+        for rx in (".*" + BS + ".xml", ".*" + BS + ".xml$", "(.*)*zzz"):
+            self.assertFalse(self.find_("-regex " + Q + rx + Q), rx)
+
+    def test_a_negated_regex_may_always_reach_an_archive(self):
+        # `.*t` may match every sample and proves none: its negation may hold for each of them.
+        self.assertTrue(self.find_("! -regex " + Q + ".*t" + Q))
+
+    def test_a_negated_find_group_is_modelled(self):
+        self.assertTrue(self.find_("! ( -name " + Q + "*.xml" + Q + " )"))
+        self.assertTrue(self.find_("! " + BS + "( -name " + Q + "*.xml" + Q + " " + BS + ")"))
+        self.assertTrue(self.find_("-not ( -name a.xml -o -name b.txt )"))
+
+    def test_TWIN_a_group_or_negated_group_sparing_archives_does_not_fire(self):
+        self.assertFalse(self.find_(BS + "( -name " + Q + "*.xml" + Q + " -o -name " + Q + "*.txt" + Q + " " + BS + ")"))
+        self.assertFalse(self.find_("! " + BS + "( -name " + Q + "*.dat" + Q + " -o -name " + Q + "*.cat" + Q + " " + BS + ")"))
+
+    def test_an_OR_whose_other_side_has_no_test_fires(self):
+        self.assertTrue(self.find_("-name " + Q + "*.xml" + Q + " -prune -o"))
+        self.assertTrue(self.find_("-name " + Q + "*.xml" + Q + " -prune -o -print", tail=" | xargs rm"))
+
+    def test_TWIN_an_OR_that_prunes_the_archives_first_does_not_fire(self):
+        self.assertFalse(self.find_("-name " + Q + "*.?at" + Q + " -prune -o -name " + Q + "*.xml" + Q))
+        self.assertFalse(self.find_("-name " + Q + "*.?at" + Q + " -prune -o"))
+
+    def test_an_expression_it_cannot_parse_may_reach_an_archive(self):
+        for expr in ("-frobnicate", "( -name a.xml", "-name a.xml )", "-exec rm {}"):
+            self.assertTrue(self.find_(expr), expr)
+
+    def test_a_case_sensitive_name_in_capitals_may_still_match(self):
+        # -name is case-sensitive: `! -name '*.?AT'` spares no lower-case archive.
+        self.assertTrue(self.find_("! -name " + Q + "*.?AT" + Q))
+
+    def test_TWIN_a_case_folding_name_in_capitals_decides(self):
+        self.assertFalse(self.find_("! -iname " + Q + "*.?AT" + Q))
+
+    def test_only_the_deleting_action_is_judged(self):
+        self.assertTrue(self.find_("-name x.txt -print -o", tail=" -delete"))
+        self.assertFalse(self.find_("-name " + Q + "*.xml" + Q + " -delete -o -print", tail=""))
+
+    def test_a_path_filter_under_a_pattern_root_reads_only_its_ending(self):
+        root = 'find "' + GAME + '/extensions/ego_dlc_"* -path '
+        self.assertTrue(F(root + Q + "*/ext_01.cat" + Q + " -delete")["writes_game_archive"])
+        # A DLC pattern root deletes inside a DLC whatever the filter (F8); a game-root pattern does not.
+        self.assertTrue(F(root + Q + "*/x.xml" + Q + " -delete")["writes_game_archive"])
+        groot = 'find "' + GAME[:-1] + '"* -path '
+        self.assertTrue(F(groot + Q + "*/01.dat" + Q + " -delete")["writes_game_archive"])
+        self.assertFalse(F(groot + Q + "*/x.xml" + Q + " -delete")["writes_game_archive"])
+        self.assertTrue(F('find "$X4_GAME" -path ' + Q + "*/01.dat" + Q + " -delete")["writes_game_archive"])
+
+    def test_TWIN_a_find_printing_to_a_file_feeds_xargs_nothing(self):
+        self.assertFalse(self.find_("-fprint /c/o/list", tail=" | xargs rm"))
+
+    def test_a_find_expression_past_the_bounds_may_reach_an_archive(self):
+        wide = " -o ".join("-name a%d.xml" % i for i in range(220))
+        deep = (BS + "( ") * 40 + "-name a.xml" + (" " + BS + ")") * 40
+        self.assertTrue(self.find_(wide), "wide")
+        self.assertTrue(self.find_(deep), "deep")
+
+    def test_TWIN_a_find_expression_within_the_bounds_is_read(self):
+        wide = " -o ".join("-name a%d.xml" % i for i in range(20))
+        deep = (BS + "( ") * 10 + "-name a.xml" + (" " + BS + ")") * 10
+        self.assertFalse(self.find_(wide), "wide")
+        self.assertFalse(self.find_(deep), "deep")
+
+    def test_TWIN_a_find_name_filter_for_something_else_keeps_its_verdict(self):
+        for tail in (" -delete", " -exec rm {} +", " | xargs rm"):
+            self.assertFalse(self.find_("-name " + Q + "*.xml" + Q, tail=tail), tail)
+
+    # --- an unknown game root: the install's folder name, as the rm -rf <game> backstop reads it
+    NOGAME = dict(ROOTS, game="")
+
+    def test_an_unknown_game_root_falls_back_to_the_install_folder_name(self):
+        for cmd in ("rm " + self.Q(self.ARC), "echo x >> " + self.Q(self.CAT), "rm -rf " + self.Q(self.DLC),
+                    "rm " + self.Q("/d/games/x4 foundations/02.cat"),
+                    "find " + self.Q(GAME) + ' -name "*.dat" -delete', "cp /c/o/01.dat " + self.Q(GAME)):
+            self.assertTrue(F(cmd, roots=self.NOGAME)["writes_game_archive"], cmd)
+
+    def test_TWIN_an_unknown_game_root_leaves_other_dat_files_alone(self):
+        for path in ("C:/Program Files (x86)/Steam/steamapps/common/Skyrim/01.dat",
+                     "C:/Users/tester/Documents/Egosoft/X4/12345678/01.dat",
+                     "C:/Users/tester/Documents/Egosoft/X4/01.dat", GAME + "/extensions/01.dat",
+                     "C:/Users/tester/Documents/x.dat", "/01.dat",
+                     "C:/x/notX4 Foundations/01.dat", GAME + "/extensions/amod/ext_01.cat",
+                     GAME + "/sub/x.dat"):
+            self.assertFalse(F("rm " + self.Q(path), roots=self.NOGAME)["writes_game_archive"], path)
+
+    def test_a_configured_root_keeps_the_folder_name_fallback_for_a_second_install(self):
+        # 4.1.1 review round 2 (F7): the configured root is ADDED to, not replaced.
+        for path in ("D:/SteamLibrary/steamapps/common/X4 Foundations/01.dat",
+                     "D:/SteamLibrary/steamapps/common/X4 Foundations/extensions/ego_dlc_boron/ext_01.cat"):
+            self.assertTrue(F("rm " + self.Q(path))["writes_game_archive"], path)
+
+    def test_TWIN_an_option_word_naming_an_archive_is_not_a_path(self):
+        # touch reads the archive's times and writes /c/o/x. modify_targets keeps the quoted option
+        # word, and the folder-name fallback must not read it as a path (4.1.1 round 2 probe c6).
+        cmd = "touch --reference=" + Q + GAME + "/01.dat" + Q + " /c/o/x"
+        self.assertFalse(F(cmd)["writes_game_archive"])
+        self.assertFalse(F(cmd, roots=self.NOGAME)["writes_game_archive"])
+
+    def test_TWIN_a_configured_root_and_another_games_dat_files(self):
+        for path in ("C:/Program Files (x86)/Steam/steamapps/common/Skyrim/01.dat",
+                     "D:/SteamLibrary/steamapps/common/X4 Foundations/sub/01.dat",
+                     PROF + "/01.dat", "C:/Users/tester/Documents/Egosoft/X4/01.dat"):
+            self.assertFalse(F("rm " + self.Q(path))["writes_game_archive"], path)
+
+    # --- option words are not targets
+    def test_TWIN_an_exclude_pattern_is_not_a_copied_name(self):
+        for cmd in ("rsync -a --exclude=" + Q + "*.dat" + Q + " src/ " + self.Q(GAME + "/"),
+                    "rsync -a --exclude " + Q + "*.dat" + Q + " src/ " + self.Q(GAME + "/"),
+                    "rsync -a --filter " + Q + "- *.cat" + Q + " src/ " + self.Q(GAME + "/"),
+                    "robocopy src " + self.Q(GAME) + " /E /XF *.dat",
+                    "robocopy src " + self.Q(GAME) + " /XF 01.dat 02.cat /E"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_robocopy_names_before_its_switches_still_count(self):
+        self.assertTrue(F("robocopy /c/o " + self.Q(GAME) + " 01.dat /E")["writes_game_archive"])
+
+    def test_rsync_moving_everything_out_of_a_home_folder_fires(self):
+        self.assertTrue(F("rsync -a --remove-source-files " + self.Q(GAME + "/") + " /c/o/")
+                        ["writes_game_archive"])
+
+    def test_TWIN_rsync_moving_a_subfolder_out_does_not_fire(self):
+        self.assertFalse(F("rsync -a --remove-source-files " + self.Q(GAME + "/sub/") + " /c/o/")
+                         ["writes_game_archive"])
+
+    # --- xargs -I: the item lands where the replacement string sits
+    def test_TWIN_xargs_replacing_into_another_folder_does_not_fire(self):
+        for prod in ("ls " + self.Q(GAME), "find " + self.Q(GAME), "find " + self.Q(GAME) + ' -name "*.dat"'):
+            for xa in ("xargs -I{} rm /d/o/backup/{}", "xargs -I {} rm /d/o/backup/{}",
+                       "xargs --replace=@ rm /d/o/backup/@"):
+                self.assertFalse(F(prod + " | " + xa)["writes_game_archive"], prod + " | " + xa)
+
+    def test_xargs_replacing_the_item_itself_still_fires(self):
+        for cmd in ('find "' + GAME + '" -name "*.dat" | xargs -I{} rm {}',
+                    'ls "' + GAME + '"/*.dat | xargs -I {} rm -f {}',
+                    'find "' + GAME + '" -name "*.dat" | xargs --replace=@ rm @'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_xargs_replacing_into_a_home_folder_fires(self):
+        self.assertTrue(F("ls /c/o | xargs -I{} rm " + self.Q(GAME) + "/{}")["writes_game_archive"])
+
+    # --- 4.1.1 review round 2. F1: no fixed list of archive names
+    VENT = GAME + "/extensions/ego_dlc_ventures"
+
+    def test_any_name_an_archive_could_have_fires_on_every_path(self):
+        # READ 2026-11-05: ventures has ext_v620/v700/v710 and ext_03_diff_v900, none of them sampled.
+        for cmd in ('rm "' + GAME + '"/1*', 'touch "' + GAME + '"/x*', 'rm "' + GAME + '"/[0-9][0-9].?at',
+                    "find " + self.Q(GAME) + " -name " + Q + "ext_v7*" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name ext_v710.cat -delete",
+                    "find " + self.Q(GAME) + " -name ext_03_diff_v900.dat -delete",
+                    "find " + self.Q(GAME) + " -name 10.cat -delete",
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "ext_v7*" + Q + " | xargs rm",
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*_v900*" + Q + " -exec rm {} +",
+                    'ls "' + self.VENT + '/"ext_v7* | xargs rm', 'rm "' + self.VENT + '/"ext_v7*',
+                    'echo x > "' + GAME + '"/?0.cat'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_name_no_archive_could_have_does_not_fire(self):
+        for cmd in ('rm "' + GAME + '"/x*.xml', "find " + self.Q(GAME) + " -name " + Q + "ext_v7*.txt" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.[!cd]at" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.xml" + Q + " | xargs rm",
+                    "find " + self.Q(GAME) + " -name EXT_V710.CAT -delete",      # -name keeps case
+                    "find " + self.Q(GAME) + " -name EXT_v710.cat -delete"):     # ...in the stem too
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_name_test_true_for_every_archive_still_spares_them(self):
+        for expr in ("! -name " + Q + "*.?at" + Q, "-not -name " + Q + "*t" + Q, "! -name " + Q + "*" + Q,
+                     "! -path " + Q + "*.[cd]at" + Q):
+            self.assertFalse(self.find_(expr), expr)
+
+    # --- F5: a backslash or `[^` in a -name is read every way a tool might read it
+    def test_a_name_with_a_backslash_or_caret_may_match_and_never_spares(self):
+        for expr in ("-name " + Q + "*.[^x]at" + Q, "-name " + Q + BS + "0" + BS + "1.dat" + Q,
+                     "! -name " + Q + "*.[^x]at" + Q, "! -name " + Q + "*" + BS + ".dat" + Q,
+                     "-name " + Q + "*.[^d]at" + Q):
+            self.assertTrue(self.find_(expr), expr)
+
+    def test_every_reading_of_a_backslash_or_caret_is_tried(self):
+        # `[^cd]` read as a set holding ^, c and d matches .cat; `d\a` read literally matches no
+        # archive but read as an escape is `da`; `*\at` read as an escape covers every archive.
+        for expr in ("-name " + Q + "*.[^cd]at" + Q, "-name " + Q + "*.d" + BS + "at" + Q,
+                     "! -name " + Q + "*" + BS + "at" + Q,
+                     "-name " + Q + "*" + BS + "*" + Q):    # only the literal reading reaches an archive
+            self.assertTrue(self.find_(expr), expr)
+
+    def test_TWIN_a_caret_name_no_archive_could_have_does_not_fire(self):
+        self.assertFalse(self.find_("-name " + Q + "*.[^x]ml" + Q))
+
+    # --- F2: a recursive delete of a directory the find matches
+    def test_a_recursive_delete_of_a_found_dlc_folder_fires(self):
+        ext = self.Q(GAME + "/extensions")
+        for cmd in ("find " + ext + " -maxdepth 1 -name " + Q + "ego_dlc_*" + Q + " -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name " + Q + "ego_dlc_*" + Q + " | xargs rm -rf",
+                    "find " + ext + " -maxdepth 1 -type d -name " + Q + "ego*" + Q + " -exec rm -r {} ;",
+                    "find " + ext + " -name " + Q + "ego_dlc_*" + Q + " -exec bash -c " + DQ + "rm -rf $1" + DQ + " _ {} ;",
+                    "find " + self.Q(GAME) + " -maxdepth 1 -name extensions -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name ego_dlc_boron -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name ego_dlc_boron | xargs rm -r",
+                    "ls " + ext + " | xargs rm -rf"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_non_recursive_or_other_folder_delete_does_not_fire(self):
+        ext = self.Q(GAME + "/extensions")
+        # `-name 'ego_dlc_*'` without -r still fires: ego_dlc_x.cat is a name an archive could have.
+        for cmd in ("find " + ext + " -maxdepth 1 -name ego_dlc_boron -exec rm {} +",
+                    "find " + ext + " -maxdepth 1 -name amod -exec rm -rf {} +",
+                    "find " + self.Q(GAME) + " -name __pycache__ -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name ego_dlc_boron | xargs rm",
+                    "ls " + ext + " | xargs rm", "ls " + self.Q(self.MOD) + " | xargs rm -rf"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- F3: no path operand is the current directory
+    def test_a_find_or_listing_with_no_path_reads_the_current_directory(self):
+        for cmd in ("cd " + self.Q(GAME) + " && find -name " + Q + "*.dat" + Q + " -delete",
+                    "cd " + self.Q(GAME) + " && find -name " + Q + "*.dat" + Q + " | xargs rm",
+                    "cd " + self.Q(GAME) + " && ls | xargs rm",
+                    "cd " + self.Q(self.DLC) + " && find -delete"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_no_path_elsewhere_or_a_read_does_not_fire(self):
+        for cmd in ("cd " + self.Q(GAME) + " && find -name " + Q + "*.xml" + Q + " -delete",
+                    "cd " + self.Q(GAME) + " && ls", "cd " + self.Q(GAME) + " && find -name " + Q + "*.dat" + Q,
+                    "cd /c/o && find -name " + Q + "*.dat" + Q + " -delete", "cd /c/o && ls | xargs rm",
+                    "cd " + self.Q(self.MOD) + " && ls | xargs rm",
+                    "cd " + self.Q(GAME) + " && ls | xargs sha256sum"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- F4: -exec through a wrapper
+    def test_a_find_exec_through_a_wrapper_fires(self):
+        for ex in ("-exec env rm {} +", "-exec busybox rm {} +", "-exec cmd /c del {} ;",
+                   "-exec nice -n 5 rm {} ;", "-exec sudo rm -f {} +", "-execdir env rm {} +"):
+            self.assertTrue(self.find_("-name 01.dat " + ex, tail=""), ex)
+
+    def test_TWIN_a_find_exec_of_a_wrapped_reader_does_not_fire(self):
+        for ex in ("-exec env cat {} +", "-exec busybox sha256sum {} +", "-exec cmd /c type {} ;",
+                   "-exec nice -n 5 sha256sum {} ;"):
+            self.assertFalse(self.find_("-name 01.dat " + ex, tail=""), ex)
+
+    # --- the glob reader itself
+    def test_glob_meet_is_exact_on_small_cases(self):
+        def may(p, q):
+            return H._glob_meet(H._glob_parse(p, False, True, True), H._glob_parse(q, False, True, True))
+        for p, q, want in (("*.dat", "01.dat", True), ("*.dat", "01.cat", False), ("[a-c]x", "[b-d]x", True),
+                           ("[a-c]x", "[d-f]x", False), ("[!a]", "a", False), ("[^a]", "b", True),
+                           ("?", "", False), ("*", "", True), ("a*b", "*c", False), ("a*c", "ab*", True),
+                           ("x/*", "x/a", True), ("*", "a/b", False), ("[a-z]", "[!a-y]", True),
+                           (BS + "*", "*", True), (BS + "*", "a", False)):
+            self.assertEqual(may(p, q), want, (p, q))
+
+    def test_no_new_reading_takes_over_a_second(self):
+        import json
+        import subprocess
+        code = ("import json, sys, time; sys.path.insert(0, sys.argv[1]); import hook_facts as H; "
+                "t = time.perf_counter(); H.facts(json.loads(sys.argv[2]), json.loads(sys.argv[3])); "
+                "print(time.perf_counter() - t)")
+        here = str(pathlib.Path(__file__).resolve().parent)
+        star = "[a-z]*" * 30
+        for cmd in ('rm "' + GAME + '"/' + star + ".?at", "find " + self.Q(GAME) + " -name " + Q + star + Q + " -delete",
+                    "find " + self.Q(GAME) + " -path " + Q + "*/" * 40 + "*" + Q + " -exec rm -rf {} +",
+                    'rm "' + GAME + '/extensions/' + "*" * 50 + '/x"'):
+            payload = {"tool_input": {"command": cmd}}
+            p = subprocess.run([sys.executable, "-I", "-c", code, here, json.dumps(payload),
+                                json.dumps(ROOTS)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr[-400:])
+            self.assertLess(float(p.stdout.strip().splitlines()[-1]), 1.0, cmd[:80])
+
+    # --- 4.1.1 review round 3. A: a crafted glob cannot outrun the hook's timeout
+    @staticmethod
+    def _ranges(k):
+        return "".join("[%s-%s]" % (chr(0x100 + 3 * i), chr(0x101 + 3 * i)) for i in range(k))
+
+    def _facts_time(self, cmd):
+        import json
+        import subprocess
+        code = ("import json, sys, time; sys.path.insert(0, sys.argv[1]); import hook_facts as H; "
+                "t = time.perf_counter(); f = H.facts(json.loads(sys.argv[2]), json.loads(sys.argv[3])); "
+                "print(time.perf_counter() - t, f['writes_game_archive'])")
+        here = str(pathlib.Path(__file__).resolve().parent)
+        payload = {"tool_input": {"command": cmd}}
+        try:
+            p = subprocess.run([sys.executable, "-I", "-c", code, here, json.dumps(payload), json.dumps(ROOTS)],
+                               capture_output=True, text=True, encoding="utf-8", timeout=60)
+        except subprocess.TimeoutExpired:
+            self.fail("facts() still running after 60 s, killed: " + cmd[:80])
+        self.assertEqual(p.returncode, 0, p.stderr[-400:])
+        secs, verdict = p.stdout.strip().splitlines()[-1].split()
+        return float(secs), verdict == "True"
+
+    def test_a_glob_past_the_meet_bound_is_read_as_may_match_at_once(self):
+        # MEASURED by the round-3 reviewer: 3,000 ranges ran the hook 37.6 s, past its 30 s timeout.
+        # 1,200 took 4.9 s unbounded here (MEASURED, 4.1.1 round 3) and 0.14 s bounded. Past the
+        # bound the -name may match, so the find deletes the DLC folder it also names.
+        for tail in (" -o -name ego_dlc_boron -exec rm -rf {} +", " -delete"):
+            cmd = "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*" + self._ranges(1200) + "q" + Q + tail
+            secs, verdict = self._facts_time(cmd)
+            self.assertTrue(verdict, tail)
+            self.assertLess(secs, 1.0, tail)
+
+    def test_TWIN_a_glob_within_the_meet_bound_is_still_decided(self):
+        # 30 ranges and a `q` no archive ends in: read in full, so it matches nothing.
+        cmd = "find " + self.Q(GAME) + " -name " + Q + "*" + self._ranges(30) + "q" + Q + " -delete"
+        self.assertEqual(self._facts_time(cmd)[1], False)
+
+    # --- B: a POSIX class closes after its own `]`
+    def test_a_posix_class_in_a_bracket_may_match_any_character(self):
+        for cmd in ("find " + self.Q(GAME) + " -name " + Q + "*.[[:alpha:]]at" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.c[[:alpha:]]t" + Q + " -exec rm {} +",
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*.[[:alpha:]]at" + Q + " -delete",
+                    "find " + Q + "D:/S/steamapps/common/X4 Foundations" + Q + " -name " + Q + "*.[[:digit:]]at" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.[![:digit:]]at" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.[=c=]at" + Q + " -delete",
+                    "rm " + self.Q(GAME) + "/01.c[[:alpha:]]t", "mv " + self.Q(GAME) + "/0[[:digit:]].cat /c/o/"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_posix_class_in_a_name_no_archive_has(self):
+        for cmd in ("find " + self.Q(GAME) + " -name " + Q + "*.[[:alpha:]]ml" + Q + " -delete",
+                    "rm " + self.Q(GAME) + "/x[[:alpha:]].xml"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_posix_class_never_covers_every_archive(self):
+        # Read as "any character", so it cannot say every archive matches: the negation spares none.
+        self.assertTrue(self.find_("! -name " + Q + "*.[[:alpha:]]at" + Q))
+        self.assertFalse(self.find_("! -name " + Q + "*.?at" + Q))
+
+    # --- C: a pattern for the install's folder name
+    def test_a_globbed_install_folder_name_is_an_install(self):
+        for cmd in ("rm D:/Backup/X4*Foundations/01.cat", "rm D:/Backup/X4?Foundations/01.cat",
+                    "rm D:/Backup/X4[[:space:]]Foundations/01.cat", "rm D:/Backup/X4*/01.cat",
+                    "rm D:/SteamLibrary/steamapps/common/X4*/01.cat",
+                    "rm D:/SteamLibrary/steamapps/common/*/01.cat",
+                    "rm D:/Backup/X4*/extensions/ego_dlc_boron/content.xml"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+            self.assertTrue(F(cmd, roots=self.NOGAME)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_folder_pattern_that_is_not_the_install_name(self):
+        for cmd in ("rm D:/Backup/*/01.cat", "rm D:/Backup/?*/01.cat", "rm D:/Backup/Y4*/01.cat",
+                    "rm D:/Backup/X4*/notes.txt", "rm D:/Backup/X4*/sub/01.cat"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_find_over_a_steam_library_may_reach_an_install(self):
+        lib = "/d/SteamLibrary/steamapps/common"
+        for expr in ("-name " + Q + "*.cat" + Q + " -delete", "-maxdepth 2 -name 01.dat -delete",
+                     "-name " + Q + "*" + Q + " -exec rm -rf {} +"):
+            self.assertTrue(F("find " + lib + " " + expr)["writes_game_archive"], expr)
+
+    def test_TWIN_a_find_over_a_steam_library_for_other_files(self):
+        lib = "/d/SteamLibrary/steamapps/common"
+        for cmd in ("find " + lib + " -name " + Q + "*.txt" + Q + " -delete",
+                    "find " + lib + " -name __pycache__ -exec rm -rf {} +",
+                    "find " + lib + " -maxdepth 1 -name " + Q + "*.cat" + Q + " -delete",
+                    "find /d/SteamLibrary/other/common -name " + Q + "*.cat" + Q + " -delete"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- D: -maxdepth and -mindepth
+    def test_a_depth_limited_find_over_extensions_keeps_the_mod_confirmation(self):
+        ext = self.Q(GAME + "/extensions")
+        for cmd in ("find " + ext + " -maxdepth 1 -name " + Q + "zzz_mine_*" + Q + " -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name deployed_old -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name content.xml -delete"):
+            f = F(cmd)
+            self.assertFalse(f["writes_game_archive"], cmd)
+            self.assertTrue(f["rm_deployed_mod"], cmd)
+
+    def test_TWIN_a_depth_that_reaches_a_dlc_still_fires(self):
+        ext = self.Q(GAME + "/extensions")
+        for cmd in ("find " + ext + " -maxdepth 2 -name " + Q + "zzz_mine_*" + Q + " -exec rm -rf {} +",
+                    "find " + ext + " -name " + Q + "zzz_mine_*" + Q + " -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth 1 -name " + Q + "ego_dlc_*" + Q + " -exec rm -rf {} +",
+                    "find " + ext + " -maxdepth $N -name " + Q + "zzz_mine_*" + Q + " -exec rm -rf {} +",
+                    "find " + self.Q(GAME) + " -maxdepth 1 -name " + Q + "*.cat" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -mindepth 3 -name " + Q + "*.cat" + Q + " -delete",
+                    "find " + ext + " -mindepth 5 -name content.xml -delete"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_depth_no_archive_sits_at(self):
+        for cmd in ("find " + self.Q(GAME) + " -maxdepth 0 -name " + Q + "*.cat" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -mindepth 4 -name " + Q + "*.cat" + Q + " -delete"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- E: from extensions/, a find deletes inside every DLC folder whatever the file
+    def test_a_find_at_extensions_deleting_any_file_a_dlc_may_hold_fires(self):
+        ext = GAME + "/extensions"
+        for cmd in ("find " + self.Q(ext) + " -name content.xml -delete",
+                    "find " + self.Q(ext) + " -name " + Q + "*.xml" + Q + " -delete",
+                    "find " + self.Q(ext) + " -name content.xml | xargs rm",
+                    "find " + self.Q(ext) + " -name videos -exec rm -rf {} +",
+                    # Two of these were twins in round 2: from extensions/ they reach every DLC folder.
+                    "find " + self.Q(ext) + " -name " + Q + "*.xml" + Q + " | xargs rm",
+                    "find " + self.Q(ext) + " -name __pycache__ -exec rm -rf {} +",
+                    "cd " + self.Q(ext) + " && find -name " + Q + "*.xml" + Q + " -delete",
+                    'find "' + GAME + '/ext"* -name content.xml -delete'):
+            f = F(cmd)
+            self.assertTrue(f["writes_game_archive"], cmd)
+            self.assertNotIn("ego_dlc", f["rm_deployed_mod_names"], cmd)
+        self.assertTrue(FC("find -name " + Q + "*.xml" + Q + " -delete", ext)["writes_game_archive"])
+
+    def test_TWIN_a_find_from_the_game_folder_or_one_mod_for_other_files(self):
+        # From the game folder only archives and DLC folders count: `find . -name __pycache__
+        # -exec rm -rf {} +` there is repository cleanup (decided, BLIND-SPOTS F356).
+        for cmd in ("find " + self.Q(GAME) + " -name content.xml -delete",
+                    "find " + self.Q(self.MOD) + " -name " + Q + "*.xml" + Q + " -delete",
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*.xml" + Q,
+                    "find " + self.Q(GAME + "/extensions") + " -name " + Q + "*.xml" + Q + " | xargs grep x",
+                    'find "' + GAME + '/extensions/a"* -name content.xml -delete'):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- the user decision of 2026-11-05: a name filled in at run time, as under reference/
+    def test_a_name_filled_in_at_run_time_may_be_an_archive(self):
+        for cmd in ("ls " + self.Q(GAME) + ' | while read f; do rm "' + GAME + '/$f"; done',
+                    "ls " + self.Q(GAME) + ' | while read -r f; do rm -f "' + GAME + '/${f}"; done',
+                    'rm "' + GAME + '/$X"', 'rm "$X4_GAME/$X"'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_run_time_name_in_a_mod_or_a_find_item(self):
+        for cmd in ("ls " + self.Q(self.MOD) + ' | while read f; do rm "' + self.MOD + '/$f"; done',
+                    'rm -rf "' + GAME + '/extensions/$DST"',
+                    "find " + self.Q(GAME) + " -name " + Q + "*.xml" + Q + " | xargs rm"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- F: PowerShell's -Path reads a backtick as a quote
+    def test_a_backtick_in_a_powershell_path_is_read_both_ways(self):
+        for cmd, want in (("Remove-Item '%s'" % (GAME + "/01.d`at"), True),
+                          ("Remove-Item -Path '%s'" % (GAME + "/0`1.dat"), True),
+                          ("Move-Item '%s' /c/o/x" % (GAME + "/01.d`at"), True),
+                          ("Remove-Item -LiteralPath '%s'" % (GAME + "/01.d`at"), False),
+                          ("Remove-Item '%s'" % (GAME + "/notes`.txt"), False)):
+            f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
+            if f.get("powershell_error") or f.get("carrier_untranslated"):
+                self.skipTest("no PowerShell parser on this machine")
+            self.assertEqual(f["writes_game_archive"], want, cmd)
+
+    # --- round 4, 1: the find's root is itself a depth-0 entry
+    def _gone(self, f):
+        return f["writes_game_archive"] or f["rm_hits_game"]
+
+    def test_a_recursive_delete_of_a_root_holding_a_dlc_at_depth_0_fires(self):
+        ext = GAME + "/extensions"
+        for cmd in ("find " + self.Q(GAME) + " -maxdepth 0 -print0 | xargs -0 rm -rf",
+                    "find " + self.Q(GAME) + " -maxdepth 0 | xargs rm -rf",
+                    "find " + self.Q(GAME) + " -mindepth 0 -maxdepth 0 | xargs -r rm -rf --",
+                    "find " + self.Q(ext) + " -maxdepth 0 -print0 | xargs -0 rm -rf",
+                    "find " + self.Q(GAME) + " -maxdepth 0 -exec rm -rf {} +",
+                    "find " + self.Q(ext) + " -maxdepth 0 -exec rm -rf {} +",
+                    "find " + self.Q(ext + "/ego_dlc_boron") + " -maxdepth 0 -exec rm -rf {} +",
+                    "find " + self.Q(ext + "/ego_dlc_boron") + " -maxdepth 0 | xargs rm -rf",
+                    "find " + self.Q(GAME.rpartition("/")[0]) + " -maxdepth 0 -exec rm -rf {} +",
+                    "find " + self.Q(GAME.rpartition("/")[0]) + " -maxdepth 0 | xargs rm -rf"):
+            self.assertTrue(self._gone(F(cmd)), cmd)
+        for cmd in ("find . -maxdepth 0 -print0 | xargs -0 rm -rf", "find . -maxdepth 0 -exec rm -rf {} +"):
+            self.assertTrue(self._gone(FC(cmd, GAME)), cmd)
+        # A root the text cannot spell as one path: read as any root.
+        for roots in (ROOTS, self.NOGAME):
+            for cmd in ("find /d/Games/X4*Foundations -maxdepth 0 | xargs rm -rf",
+                        "find /d/Games/X4*Foundations -maxdepth 0 -name " + Q + "X4 Foundations" + Q + " | xargs rm -rf"):
+                self.assertTrue(self._gone(F(cmd, roots=roots)), cmd)
+
+    def test_TWIN_a_depth_0_root_that_is_not_removed_whole_or_holds_no_dlc(self):
+        ext = GAME + "/extensions"
+        for cmd in ("find " + self.Q(GAME) + " -maxdepth 0 | xargs rm",            # not recursive
+                    "find " + self.Q(GAME) + " -maxdepth 0 -name " + Q + "*.cat" + Q + " -delete",
+                    "find " + self.Q(GAME) + " -maxdepth 0 -name zzz -exec rm -rf {} +",
+                    "find " + self.Q(GAME) + " -mindepth 1 -maxdepth 1 -name zzz -exec rm -rf {} +",
+                    "find " + self.Q(ext) + " -mindepth 1 -maxdepth 1 -name " + Q + "zzz_*" + Q + " -exec rm -rf {} +",
+                    "find " + self.Q(self.MOD) + " -maxdepth 0 -exec rm -rf {} +",    # a mod: its ask
+                    "find " + self.Q(self.MOD) + " -maxdepth 0 | xargs rm -rf"):
+            self.assertFalse(self._gone(F(cmd)), cmd)
+        self.assertFalse(self._gone(FC("find . -name __pycache__ -exec rm -rf {} +", GAME)))
+        self.assertTrue(F("find " + self.Q(self.MOD) + " -maxdepth 0 -exec rm -rf {} +")["rm_deployed_mod"])
+
+    # --- round 4, 7: a backslash-escaped `;` ends an -exec and the command goes on
+    def test_an_escaped_terminator_ends_the_exec_and_find_reads_on(self):
+        bs, ext = chr(92), GAME + "/extensions"
+        for term in (bs + ";", Q + ";" + Q, DQ + ";" + DQ):
+            for cmd in ("find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -exec echo hi " + term + " -delete",
+                        "find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -exec sha256sum {} " + term + " -delete",
+                        "find " + self.Q(ext) + " -name " + Q + "ego_dlc_*" + Q + " -exec echo hi " + term
+                        + " -exec rm -rf {} +",
+                        "find " + self.Q(ext) + " -name " + Q + "ego_dlc_*" + Q + " -execdir echo hi " + term
+                        + " -execdir rm -rf {} " + bs + "+",
+                        "find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -ok echo hi " + term
+                        + " -okdir rm {} " + term,
+                        "find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -exec echo {} " + term
+                        + " -exec echo {} " + term + " -delete"):
+                self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_an_escaped_terminator_with_nothing_deleting_after_it(self):
+        bs = chr(92)
+        for cmd in ("find " + self.Q(GAME) + " -name " + Q + "*.xml" + Q + " -exec echo hi " + bs + "; -delete",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -exec sha256sum {} " + bs + ";",
+                    "find " + self.Q(GAME) + " -name " + Q + "*.cat" + Q + " -exec sha256sum {} " + bs + "; ; echo done"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_an_escaped_operator_does_not_split_a_command(self):
+        bs = chr(92)
+        for cmd, n in (("echo a " + bs + "; b", 1), ("echo a " + bs + "| b " + bs + "& c", 1),
+                       ("echo a " + bs + bs + "; b", 2), ("echo a; b", 2), ("echo " + Q + bs + Q + "; b", 2)):
+            self.assertEqual(len(H.segments(cmd)), n, cmd)
+            self.assertEqual(len(H.piped_in(cmd)), n, cmd)
+
+    # --- round 4, 5: a globbed install name as the root's last segment
+    def test_a_find_rooted_at_a_globbed_install_name(self):
+        for roots in (ROOTS, self.NOGAME):
+            self.assertTrue(F("find /d/Games/X4*Foundations -name " + Q + "*.cat" + Q + " -delete",
+                              roots=roots)["writes_game_archive"])
+        for cmd in ("find /d/Games/X4*Foundations -name " + Q + "*.txt" + Q + " -delete",
+                    "find /d/Games/Y4* -name " + Q + "*.cat" + Q + " -delete"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- round 4, 6: names filled in at run time
+    def test_a_backtick_name_or_a_run_time_folder_in_the_game_folder(self):
+        bt = chr(96)
+        for cmd in ('rm "' + GAME + "/" + bt + "cat list" + bt + '"', 'rm "' + GAME + '/$f/01.cat"',
+                    'rm "' + GAME + "/" + bt + "x" + bt + '/01.cat"'):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_run_time_folder_holding_no_archive_or_not_in_the_game_folder(self):
+        for cmd in ('rm "' + GAME + '/$f/notes.txt"', 'rm "' + GAME + '/a/$f/01.cat"',
+                    'rm "' + GAME + '/' + chr(96) + 'x/01.cat"', 'rm "' + GAME + '/notes' + chr(96) + '.txt"'):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+        f = F('rm "' + GAME + '/extensions/$x/ext_01.cat"')     # a mod's own archive: its ask
+        self.assertFalse(f["writes_game_archive"])
+        self.assertTrue(f["rm_deployed_mod"])
+
+    # --- round 4, 3 and 4: PowerShell backticks through a pipeline, and before a wildcard
+    def _ps(self, cmd):
+        f = _facts({"tool_name": "PowerShell", "tool_input": {"command": cmd}}, ROOTS)
+        if f.get("powershell_error") or f.get("carrier_untranslated"):
+            self.skipTest("no PowerShell parser on this machine")
+        return f
+
+    def test_a_backtick_in_an_upstream_path_is_read_both_ways(self):
+        for cmd, want in (("Get-ChildItem -Path '%s' | Remove-Item" % (GAME + "/01.c`at"), True),
+                          ("Get-Item '%s' | Remove-Item" % (GAME + "/0?.c`at"), True),
+                          ("Get-ChildItem -LiteralPath '%s' | Remove-Item" % (GAME + "/01.c`at"), False),
+                          ("Get-Item -LiteralPath '%s' | Remove-Item" % (GAME + "/01.c`at"), False),
+                          ("Get-Item '%s' | Remove-Item" % (GAME + "/notes`.txt"), False)):
+            self.assertEqual(self._ps(cmd)["writes_game_archive"], want, cmd)
+
+    def test_a_backtick_before_a_wildcard_keeps_a_mod_folder_its_ask(self):
+        f = self._ps("Remove-Item -Path '%s' -Recurse" % (GAME + "/extensions/zzz_my`[1`]mod"))
+        self.assertFalse(f["rm_hits_game"])
+        self.assertFalse(f["writes_game_archive"])
+        self.assertTrue(f["rm_deployed_mod"])
+        # Twin: a backtick before an ordinary character is still unquoted.
+        self.assertTrue(self._ps("Remove-Item -Path '%s'" % (GAME + "/0`1.dat"))["writes_game_archive"])
+
+    # --- round 5, 1: a carrier that joins its words for a shell re-reads an escaped separator
+    def _payloads(self):
+        return ((D + " -rf " + Q + REF + Q, "rm_targets_reference"), ("git add -A", "git_add_all"),
+                (D + " " + BS + DQ + self.ARC + BS + DQ, "writes_game_archive"))
+
+    def test_an_escaped_separator_reaches_the_shell_a_carrier_hands_its_words_to(self):
+        for pre in ("watch -n1 ", "watch ", "wsl ", "wsl -d Ubuntu ", "wsl -- ", "ssh localhost ",
+                    "$R ", "echo 1 | parallel ", "command_not_found_handle() { eval " + DQ + "$*" + DQ + "; }; zz "):
+            for sep in (BS + "; ", BS + "&" + BS + "& ", BS + "| ", BS + "|" + BS + "| "):
+                for pay, key in self._payloads():
+                    cmd = pre + "echo a " + sep + pay
+                    self.assertTrue(F(cmd)[key], cmd)
+            # escaped blanks too: one word to the carrier, three to its shell
+            cmd = pre + D + BS + " -rf" + BS + " " + Q + REF + Q
+            self.assertTrue(F(cmd)["rm_targets_reference"], cmd)
+
+    def test_an_escaped_separator_before_a_quoted_path_judges_the_path_whole(self):
+        # The re-reading shell splits a quoted path at its blank; 4.1.0 judged it whole, and still does.
+        for pre in ("watch -n1 ", "ssh localhost ", "$R ", "eval ", "time eval "):
+            for pay in (D + " -rf " + DQ + GAME + DQ, D + " " + Q + self.ARC + Q):
+                cmd = pre + "echo a " + BS + "; " + pay
+                self.assertTrue(self._gone(F(cmd)), cmd)
+
+    def test_TWIN_a_carrier_that_runs_its_words_directly_keeps_the_separator_literal(self):
+        for pre in ("watch -x ", "watch --exec ", "watch -n1 -x ", "wsl -e ", "wsl --exec ", "nohup ", "busybox ",
+                    "timeout 5 ", "echo 1 | xargs ", "ssh otherhost "):
+            for pay, key in self._payloads():
+                cmd = pre + "echo a " + BS + "; " + pay
+                self.assertFalse(F(cmd)[key], cmd)
+        # and an unescaped quoted word with no separator stays one reading
+        self.assertFalse(F("watch -n1 echo " + Q + "a b" + Q)["rm_targets_reference"])
+
+    # --- round 5, 2: eval's operands keep their own flags
+    def test_eval_keeps_the_flags_of_the_command_it_runs(self):
+        for cmd in ("eval git add -A", "eval git add --all", "eval -- git add -A", "time eval git add -A",
+                    "eval echo a " + BS + "; git add -A", "eval echo a " + BS + "; git add --all"):
+            self.assertTrue(F(cmd)["git_add_all"], cmd)
+
+    def test_TWIN_eval_of_an_ordinary_git_add(self):
+        for cmd in ("eval git add -p", "eval git add file.txt", "eval echo -A"):
+            self.assertFalse(F(cmd)["git_add_all"], cmd)
+
+    # --- round 5, 3: the depth-0 root is a folder, so a -type naming no folder skips it
+    def test_TWIN_a_depth_0_root_skipped_by_its_type(self):
+        for t in ("f", "p", "s", "f,p"):
+            for tool in ("-type", "-xtype"):
+                cmd = "find " + self.Q(GAME) + " -maxdepth 0 " + tool + " " + t + " | xargs rm -rf"
+                self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+        cmd = "find " + self.Q(GAME + "/..") + " -maxdepth 0 -type f -exec rm -rf {} +"
+        self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_depth_0_root_matched_by_its_type_still_fires(self):
+        for expr in ("-type d", "-type l", "-type f,d", "! -type f", "-not -type f", "-type $T", "-xtype d",
+                     "-type f -o -type d"):
+            for tail in (" | xargs rm -rf", " -exec rm -rf {} +"):
+                cmd = "find " + self.Q(GAME) + " -maxdepth 0 " + expr + tail
+                self.assertTrue(self._gone(F(cmd)), cmd)
+        # Below the root, a file test still reaches the archives.
+        for cmd in ("find " + self.Q(GAME) + " -maxdepth 1 -type f | xargs rm -rf",
+                    "find " + self.Q(GAME) + " -type f -name " + Q + "*.cat" + Q + " -delete"):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+
+class TestRound6FindExecAndCarriers(unittest.TestCase):
+    """4.1.1 review round 6 (GitHub issue #18). A: a find's -exec command is a command in its own
+    right. B: wrappers that run their argv carry the command. C: a destructive command sent to an
+    ssh host the guard cannot place is advised."""
+    ARC = GAME + "/01.dat"
+    MOD = GAME + "/extensions/zzz_mymod"
+    END = " " + BS + ";"
+
+    def _payloads(self):
+        return ((D + " -rf " + Q + REF + Q, "rm_targets_reference"), ("git add -A", "git_add_all"),
+                (D + " " + Q + self.ARC + Q, "writes_game_archive"),
+                ("sh -c " + Q + D + " -rf " + REF + Q, "rm_targets_reference"),
+                ("bash -c " + Q + "echo a; git add -A" + Q, "git_add_all"),
+                ("env " + D + " -rf " + Q + REF + Q, "rm_targets_reference"))
+
+    # --- A: the -exec command
+    def test_a_find_exec_command_is_judged_as_a_command(self):
+        for act in ("-exec", "-execdir", "-ok", "-okdir"):
+            for term in (self.END, " {} +") if act in ("-exec", "-execdir") else (self.END,):
+                for pay, key in self._payloads():
+                    cmd = "find . " + act + " " + pay + term
+                    self.assertTrue(F(cmd)[key], cmd)
+        # among other actions, and with the terminator quoted
+        for cmd in ("find . -exec echo {} " + BS + "; -exec git add -A " + BS + ";",
+                    "find . -exec git add -A " + BS + "; -print", "find . -exec git add -A " + Q + ";" + Q):
+            self.assertTrue(F(cmd)["git_add_all"], cmd)
+
+    def test_a_shell_text_of_one_escaped_word_keeps_its_separator(self):
+        # F356: the words were decoded and joined bare, so the text fell apart at its blanks.
+        cmd = "find . -exec sh -c echo" + BS + " a" + BS + ";" + BS + " " + D + BS + " -rf" + BS + " " + REF + self.END
+        self.assertTrue(F(cmd)["rm_targets_reference"], cmd)
+        self.assertTrue(H._exec_deletes(["sh", "-c", "echo a; " + D + " x"]))
+        self.assertTrue(H._exec_deletes(["sh", "-c", "echo a " + D + " x"]) is False)
+
+    def test_TWIN_harmless_finds_keep_their_verdict(self):
+        keys = ("rm_targets_reference", "git_add_all", "writes_game_archive", "rm_in_x4_dir", "rm_hits_game",
+                "copy_into_game_or_profile")
+        for cmd in ("find . -name " + Q + "*.pyc" + Q + " -exec " + D + " {} +",
+                    "find . -name __pycache__ -type d -exec " + D + " -rf {} +",
+                    "find " + Q + GAME + Q + " -name __pycache__ -exec " + D + " -rf {} +",
+                    "find . -exec grep -l x {} +", "find . -exec git -C {} status" + self.END,
+                    "find . -type f -exec wc -l {} +", "find . -exec echo " + D + " -rf " + Q + REF + Q + self.END,
+                    "find /tmp -name x -exec cp /c/o/x {}" + self.END,
+                    # `+` ends an -exec only right after `{}`: find refuses this and runs nothing
+                    "find . -exec " + D + " -rf " + Q + REF + Q + " +"):
+            f = F(cmd)
+            self.assertEqual([k for k in keys if f[k]], [], cmd)
+
+    def test_the_entry_is_a_path_under_the_starting_point(self):
+        self.assertTrue(F("find " + Q + GAME + Q + " -name x -exec cp /c/o/x {}" + self.END)["copy_into_game_or_profile"])
+        self.assertTrue(F("find " + Q + self.MOD + Q + " -exec " + D + " -rf {} +")["rm_deployed_mod"])
+
+    def test_execdir_runs_in_the_entry_folder(self):
+        cp = "cp /c/o/x 01.cat"
+        self.assertTrue(F("find " + Q + GAME + Q + " -execdir " + cp + self.END)["writes_game_archive"])
+        # the starting point itself: from its parent
+        cmd = "find " + Q + GAME + Q + " -maxdepth 0 -execdir cp /c/o/x " + Q + "X4 Foundations/01.cat" + Q + self.END
+        self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        # Twin: -exec runs where the command runs, not in the entry's folder.
+        self.assertFalse(F("find " + Q + GAME + Q + " -exec " + cp + self.END)["writes_game_archive"])
+
+    # --- B: wrappers that run their argv
+    def test_a_wrapper_that_runs_its_argv_carries_the_command(self):
+        for pre in ("sshpass -p x ssh localhost ", "sshpass -f /tmp/pw ssh localhost ", "sshpass -e ssh localhost ",
+                    "autossh -M 0 localhost ", "autossh -M 0 -f localhost ", "torsocks ", "torsocks -u a ",
+                    "valgrind ", "valgrind --tool=memcheck ", "caffeinate -i ", "caffeinate -t 5 ", "start ",
+                    "start /b ", "start /b /wait " + DQ + "t" + DQ + " ", "start " + DQ + "title" + DQ + " ",
+                    "mintty -e ", "mintty -t x -e ", "gsudo ", "gsudo -n ", "gdb --args ", "gdb -q --args ",
+                    "start wsl ", "nohup sshpass -p x ssh localhost "):
+            for pay, key in self._payloads():
+                cmd = pre + pay
+                self.assertTrue(F(cmd)[key], cmd)
+        for pre in ("find . -exec watch ", "find . -exec ssh localhost ", "start wsl ", "sshpass -p x ssh localhost ",
+                    "autossh -M 0 localhost ", "gsudo "):
+            for pay, key in self._payloads()[:2]:
+                cmd = pre + "echo a" + BS + "; " + pay + (self.END if pre.startswith("find") else "")
+                self.assertTrue(F(cmd)[key], cmd)
+
+    def test_an_unknown_wrapper_before_a_shell_joining_carrier(self):
+        for pre in ("foo ", "foo -q "):
+            for joiner in ("ssh localhost ", "watch ", "wsl "):
+                for pay, key in self._payloads()[:2]:
+                    cmd = pre + joiner + "echo a" + BS + "; " + pay
+                    self.assertTrue(F(cmd)[key], cmd)
+
+    def test_TWIN_harmless_wrapper_use(self):
+        keys = ("rm_targets_reference", "git_add_all", "writes_game_archive", "rm_in_x4_dir")
+        for cmd in ("sshpass -p x ssh host ls", "valgrind ./a.out", "start notepad", "start " + DQ + DQ + " notepad",
+                    "torsocks curl https://x", "mintty -e bash", "gdb ./a.out " + D + " -rf " + Q + REF + Q,
+                    "echo ssh localhost " + D + " -rf " + Q + REF + Q, "torsocks echo a" + BS + "; git add -A",
+                    "valgrind echo a" + BS + "; " + D + " -rf " + Q + REF + Q, "autossh -M 0 -f -N host",
+                    # an unknown program's first operand counts only when it is ssh, watch or wsl
+                    "mycli git add -A --via ssh"):
+            f = F(cmd)
+            self.assertEqual([k for k in keys if f[k]], [], cmd)
+
+    # --- C: an ssh host the guard cannot place
+    def test_a_destructive_command_to_an_unplaced_host_is_advised(self):
+        for host in ("otherhost", "192.168.1.5", "me@100.64.0.7", "-p 2222 box.tailnet.ts.net"):
+            for pay in (D + " -rf " + Q + REF + Q, Q + D + " -rf " + REF + Q, "git add -A",
+                        "echo a" + BS + "; " + D + " -rf " + Q + REF + Q):
+                f = F("ssh " + host + " " + pay)
+                self.assertTrue(f["ssh_host_unplaced"], host + " " + pay)
+                self.assertFalse(f["rm_targets_reference"] or f["git_add_all"], host + " " + pay)
+        for cmd in ("sshpass -p x ssh otherhost git add -A", "ssh a ssh b git add -A",
+                    "find . -exec ssh otherhost git add -A" + self.END):
+            self.assertTrue(F(cmd)["ssh_host_unplaced"], cmd)
+
+    def test_the_remote_command_is_expanded_here_first(self):
+        # This machine expands the words before ssh sends them (found by fuzz-guard's mutators).
+        for cmd in ("FZ=" + DQ + REF + "QQ" + DQ + "; ssh otherhost " + D + " -rf " + DQ + "${FZ%QQ}" + DQ,
+                    "FZA=(" + DQ + REF + DQ + "); ssh otherhost " + D + " -rf " + DQ + "${FZA[0]}" + DQ):
+            self.assertTrue(F(cmd)["ssh_host_unplaced"], cmd)
+
+    # --- D: a find that CHANGES what it finds reaches the archive rule
+    WRITES = ("mv {} /c/o", "mv /c/o/x {}", "cp /c/o/x {}", "dd if=/dev/zero of={} count=1", "truncate -s0 {}",
+              "tee {}", "sed -i s/a/b/ {}", "perl -pi -e s/a/b/ {}", "chmod 644 {}", "touch {}",
+              "install /c/o/x {}", "sh -c " + Q + "cp /c/o/x " + DQ + "{}" + DQ + Q)
+
+    def test_a_find_that_changes_what_it_finds_can_reach_an_archive(self):
+        g, x = Q + GAME + Q, Q + GAME + "/extensions" + Q
+        for w in self.WRITES:
+            for act in ("-exec", "-execdir", "-ok"):
+                cmd = "find " + g + " -name " + Q + "*.dat" + Q + " " + act + " " + w + self.END
+                self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+            if w.endswith("{}"):
+                cmd = "find " + g + " -name " + Q + "*.dat" + Q + " -exec " + w + " +"
+                self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+            # ...and anything in a DLC folder, from extensions/ or from the game folder
+            for root in (x, g):
+                cmd = "find " + root + " -name content.xml -exec " + w + self.END
+                self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        for xa in ("xargs mv -t /c/o", "xargs -I{} mv {} /c/o", "xargs -I{} cp /c/o/x {}", "xargs touch",
+                   "xargs sed -i s/a/b/", "xargs truncate -s0", "xargs chmod 644"):
+            cmd = "find " + g + " -name " + Q + "*.cat" + Q + " | " + xa
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        for cmd in ("find " + x + " -maxdepth 1 -type d -exec cp /c/o/f {}" + self.END,      # into a DLC folder
+                    "find " + x + " -maxdepth 1 -type d -exec cp /c/o/f {}/" + self.END,
+                    "find " + x + " -maxdepth 0 -exec mv {} /c/o" + self.END):               # extensions/ moved away
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_copying_what_a_find_finds_out_is_no_write(self):
+        g, m = Q + GAME + Q, Q + self.MOD + Q
+        for cmd in ("find " + g + " -name " + Q + "*.dat" + Q + " -exec cp {} /c/backup/" + self.END,
+                    "find " + g + " -name " + Q + "*.dat" + Q + " -exec cp -t /c/backup {} +",
+                    "find " + g + " -name " + Q + "*.dat" + Q + " -exec sha256sum {} +",
+                    "find " + g + " -name " + Q + "*.dat" + Q + " -execdir cp {} /c/backup/" + self.END,
+                    "find " + g + " -name " + Q + "*.dat" + Q + " -exec cp {} {}.bak" + self.END,
+                    "find " + g + " -name " + Q + "*.dat" + Q + " | xargs cp -t /c/backup",
+                    "find " + g + " -name " + Q + "*.dat" + Q + " | xargs -I{} cp {} /c/backup/",
+                    "find " + m + " -exec cp {} /c/backup/" + self.END,
+                    "find " + m + " -name " + Q + "*.cat" + Q + " -exec cp /c/o/x {}" + self.END,
+                    "find " + Q + GAME + "/extensions" + Q + " -maxdepth 1 -name " + Q + "zzz_*" + Q
+                    + " -exec cp -r /c/o/mod {}" + self.END,
+                    "find " + Q + GAME + "/.." + Q + " -maxdepth 1 -exec cp /c/o/x {}" + self.END,
+                    "find " + g + " -maxdepth 1 -type f -name " + Q + "*.txt" + Q + " -exec mv {} /c/o" + self.END,
+                    "find /tmp -name " + Q + "*.dat" + Q + " -exec mv {} /c/o" + self.END,
+                    # `+` not after `{}` ends nothing: find refuses the command and runs nothing
+                    "find " + g + " -name " + Q + "*.dat" + Q + " -exec touch {} x +"):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+        for w in self.WRITES:
+            cmd = "find " + m + " -name " + Q + "*.xml" + Q + " -exec " + w + self.END
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+            cmd = "find " + m + " -name " + Q + "*.xml" + Q + " | xargs " + w.replace(" {}", "")
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- round 7, 1: the advisory has a budget, and the analysis a deadline
+    def _chain(self, n, tail=""):
+        return " && ".join("ssh h%d ls" % i for i in range(n)) + tail
+
+    def test_a_chain_of_harmless_ssh_commands_is_quick_and_quiet(self):
+        import time
+        for n in (10, 20):
+            t = time.perf_counter()
+            f = F(self._chain(n))
+            secs = time.perf_counter() - t
+            self.assertFalse(f["ssh_host_unplaced"], n)
+            self.assertLess(secs, 2.0, "%d ssh segments: %.1f s" % (n, secs))
+            t = time.perf_counter()
+            f = F(self._chain(n, " && " + D + " -rf " + Q + REF + Q))
+            self.assertTrue(f["rm_targets_reference"], n)
+            self.assertLess(time.perf_counter() - t, 2.0, n)
+            self.assertTrue(F(self._chain(n, " && ssh z git add -A"))["ssh_host_unplaced"], n)
+
+    def test_a_spent_advisory_budget_advises(self):
+        was = H._MAX_SSH_JUDGED
+        H._MAX_SSH_JUDGED = 0
+        try:
+            self.assertTrue(F("ssh otherhost ls")["ssh_host_unplaced"])
+        finally:
+            H._MAX_SSH_JUDGED = was
+        # More distinct remote commands than are judged: advised, not passed quietly.
+        self.assertTrue(F("; ".join("ssh h%d ls%d" % (i, i) for i in range(H._MAX_SSH_UNPLACED + 1)))["ssh_host_unplaced"])
+        self.assertFalse(F("; ".join("ssh h%d ls%d" % (i, i) for i in range(H._MAX_SSH_UNPLACED)))["ssh_host_unplaced"])
+
+    def test_an_analysis_past_its_deadline_is_refused(self):
+        payload = {"tool_input": {"command": "ls"}}
+        f = H.facts(payload, ROOTS, deadline=H._clock() - 1)
+        self.assertTrue(f.get("analysis_timeout"))
+        rc, out, _f = H.ipc(payload, ROOTS, deadline=H._clock() - 1)
+        self.assertEqual(rc, 6)
+        self.assertFalse(H.facts(payload, ROOTS).get("analysis_timeout"))
+
+    # --- round 7, 2: positional parameters, rsync, replacing compressors, rename, pass-on filters
+    def test_a_shell_texts_positional_parameters_are_its_operands(self):
+        g = Q + GAME + Q
+        for cmd, key in (("sh -c " + Q + D + " -rf " + DQ + "$1" + DQ + Q + " _ " + Q + REF + Q, "rm_targets_reference"),
+                         ("bash -c " + Q + D + " -rf " + DQ + "$@" + DQ + Q + " _ " + Q + REF + Q, "rm_targets_reference"),
+                         ("sh -c " + Q + D + " " + DQ + "${1}" + DQ + Q + " _ " + Q + self.ARC + Q, "writes_game_archive"),
+                         ("find " + g + " -name " + Q + "*.cat" + Q + " -exec sh -c " + Q + "echo > " + DQ + "$1" + DQ + Q
+                          + " _ {}" + self.END, "writes_game_archive"),
+                         ("find " + g + " -name " + Q + "*.cat" + Q + " | xargs -n1 sh -c " + Q + "mv " + DQ + "$0" + DQ
+                          + " " + DQ + "$0.old" + DQ + Q, "writes_game_archive")):
+            self.assertTrue(F(cmd)[key], cmd)
+        self.assertEqual(H._positional_text("a " + DQ + "$@" + DQ, ["_", "x y", "z"]), "a " + DQ + "x y" + DQ + " " + DQ + "z" + DQ)
+
+    def test_TWIN_a_positional_parameter_that_is_only_read(self):
+        for cmd in ("sh -c " + Q + "echo " + DQ + "$1" + DQ + Q + " _ " + Q + REF + Q,
+                    "sh -c " + Q + "echo " + Q + Q + "$1" + Q + Q + Q + " _ " + Q + REF + Q):
+            self.assertFalse(F(cmd)["rm_targets_reference"], cmd)
+        self.assertEqual(H._positional_text("echo " + BS + "$1", ["_", "x"]), "echo " + BS + "$1")
+        self.assertEqual(H._positional_text("echo " + Q + "$1" + Q, ["_", "x"]), "echo " + Q + "$1" + Q)
+
+    def test_a_replacing_compressor_rename_or_moving_rsync_moves_its_operand(self):
+        g = Q + GAME + Q
+        for z in ("gzip", "xz", "bzip2", "lzma", "pigz", "zstd --rm", "rename .cat .bak"):
+            for cmd in (z + " " + Q + self.ARC + Q,
+                        "find " + g + " -name " + Q + "*.dat" + Q + " -exec " + z + " {}" + self.END):
+                self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        cmd = "find " + g + " -name " + Q + "*.dat" + Q + " -exec rsync -a --remove-source-files {} /tmp/bk/" + self.END
+        self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_a_compressor_that_keeps_its_operand(self):
+        for z in ("gzip -k", "gzip -c", "xz --keep", "bzip2 -t", "zstd", "gzip -l", "gzip --stdout"):
+            cmd = z + " " + Q + self.ARC + Q
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+        cmd = "find " + Q + GAME + Q + " -name " + Q + "*.dat" + Q + " -exec rsync -a {} /tmp/bk/" + self.END
+        self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_a_pass_on_filter_between_find_and_xargs(self):
+        for f in ("sort", "uniq", "grep cat", "head -n 5", "tail -5", "tr a b", "cat", "tee /c/o/l", "sort | uniq"):
+            cmd = "find " + Q + GAME + Q + " -name " + Q + "*.cat" + Q + " | " + f + " | xargs mv -t /c/o"
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+            cmd = "find " + Q + GAME + Q + " -name " + Q + "*.cat" + Q + " | " + f + " | xargs cp -t /c/o"
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+        # Twin: a filter reading a FILE does not pass the find's output on.
+        cmd = "find " + Q + GAME + Q + " -name " + Q + "*.cat" + Q + " | sort /c/o/list | xargs mv -t /c/o"
+        self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    # --- round 7, 3: gfind is find; fd -x/-X runs a command per result
+    def test_gfind_and_fd_exec(self):
+        self.assertTrue(F("gfind " + Q + GAME + Q + " -name " + Q + "*.cat" + Q + " -delete")["writes_game_archive"])
+        for cmd, key in (("fd . " + Q + REF + Q + " -x " + D, "rm_targets_reference"),
+                         ("fd -e xml . " + Q + REF + Q + " -x " + D + " -rf {}", "rm_targets_reference"),
+                         ("fdfind . " + Q + REF + Q + " --exec " + D + " {/}", "rm_targets_reference"),
+                         ("fd x -X git add -A", "git_add_all")):
+            self.assertTrue(F(cmd)[key], cmd)
+        for cmd in ("fd . /tmp -x cat", "fd -e py -x wc -l"):
+            self.assertFalse(F(cmd)["rm_targets_reference"] or F(cmd)["git_add_all"], cmd)
+
+    # --- round 8, F1: no fill or reading may multiply the text
+    def test_a_repeated_positional_fill_is_bounded(self):
+        import time
+        for n in (400, 600):
+            cmd = ("sh -c " + Q + "echo " + " ".join([DQ + "$@" + DQ] * n) + Q + " _ "
+                   + " ".join("a%d" % i for i in range(n)) + " && " + D + " -rf " + Q + REF + Q)
+            t = time.perf_counter()
+            f = F(cmd)
+            self.assertTrue(f["rm_targets_reference"], n)
+            # The regression this guards took 38 s (round 8 F1); fixed, n=600 is ~1-1.6 s idle and was 3.5 s on a
+            # loaded machine (pre-push gate, 2026-11-08), so 2.5 s flaked. 10 s still fails the 38 s shape.
+            self.assertLess(time.perf_counter() - t, 10.0, n)
+        args = ["x"] + ["a%d" % i for i in range(400)]
+        text = " ".join([DQ + "$@" + DQ] * 400)
+        self.assertLess(len(H._positional_text(text, args)), 8 * len(text) + 8 * 4096)
+        # Every parameter is filled at its FIRST use, past the budget too: nothing is hidden.
+        filled = H._positional_text(text + " " + D + " " + DQ + "$0" + DQ, [REF] + args[1:])
+        self.assertIn(REF, filled)
+
+    def test_an_empty_quoted_at_is_no_word(self):
+        self.assertEqual(H._positional_text(D + " -rf " + DQ + "$@" + DQ, ["_"]), D + " -rf ")
+        # ...and behind xargs it is what xargs reads
+        self.assertTrue(F("find " + Q + REF + Q + " | xargs sh -c " + Q + D + " -rf " + DQ + "$@" + DQ + Q
+                          + " _")["rm_targets_reference"])
+        f = F("find /tmp | xargs sh -c " + Q + D + " -rf " + DQ + "$@" + DQ + Q + " _")
+        self.assertFalse(f["rm_targets_reference"] or f["rm_in_x4_dir"])
+
+    def test_a_positional_through_a_variable(self):
+        for cmd in ("sh -c " + Q + "d=$1; " + D + " -rf " + DQ + "$d" + DQ + Q + " _ " + Q + REF + Q,
+                    "sh -c " + Q + "d=" + DQ + "$1" + DQ + "; " + D + " -rf $d" + Q + " _ " + Q + REF + Q):
+            self.assertTrue(F(cmd)["rm_targets_reference"], cmd)
+        cmd = "sh -c " + Q + "d=$1; echo " + DQ + "$d" + DQ + Q + " _ " + Q + REF + Q
+        self.assertFalse(F(cmd)["rm_targets_reference"], cmd)
+
+    def test_many_find_actions_are_bounded(self):
+        import time
+        t = time.perf_counter()
+        f = F("find . " + " ".join("-exec echo %d {} %s;" % (i, BS) for i in range(200)))
+        self.assertLess(time.perf_counter() - t, 2.5)
+        self.assertTrue(f["carriers_truncated"])
+        self.assertTrue(F("find . " + " ".join("-exec echo %d {} %s;" % (i, BS) for i in range(40)))["carriers_truncated"])
+        self.assertFalse(F("find . -exec echo {} " + BS + "; -exec wc -l {} +")["carriers_truncated"])
+        big = " ".join("$(echo %s)" % (chr(97 + i) * 200000) for i in range(3))
+        self.assertTrue(H.carried_commands("echo " + big, [])[1])
+
+    def test_a_powershell_translation_is_bounded_by_the_deadline(self):
+        seen, real, was = [], H._translate_ps, H._DEADLINE[0]
+        H._translate_ps = lambda text, timeout=0: seen.append(timeout) or (None, [], "stub")
+        try:
+            H._ps_spent[0] = 0.0
+            H._DEADLINE[0] = H._clock() + 1.0
+            H.powershell_to_sh("Get-ChildItem round8-a-" + str(id(self)))
+            self.assertLessEqual(seen[-1], 1.0)
+            H._DEADLINE[0] = H._clock() - 1.0
+            with self.assertRaises(H.AnalysisTimeout):
+                H.powershell_to_sh("Get-ChildItem round8-b-" + str(id(self)))
+        finally:
+            H._translate_ps, H._DEADLINE[0] = real, was
+
+    # --- round 8, F3: replacing programs parsed properly, and more of them
+    def test_replacing_programs_and_their_option_values(self):
+        for cmd in ("gzip -S.lck ", "xz -Ccrc32 ", "xz -T 4 ", "zip -m /c/o/a.zip ", "tar -czf /c/o/a.tgz --remove-files ",
+                    "tar czf /c/o/a.tgz --remove-files ", "brotli --rm ", "unxz "):
+            self.assertTrue(F(cmd + Q + self.ARC + Q)["writes_game_archive"], cmd)
+        self.assertTrue(F("gunzip " + Q + self.ARC + ".gz" + Q)["writes_game_archive"])
+
+    def test_TWIN_replacing_programs_that_keep_the_file(self):
+        for cmd in ("gzip -k ", "xz -kT4 ", "zip /c/o/a.zip ", "tar czf /c/o/a.tgz ", "brotli ", "gunzip -c "):
+            self.assertFalse(F(cmd + Q + self.ARC + Q)["writes_game_archive"], cmd)
+        self.assertFalse(F("gunzip -c " + Q + self.ARC + ".gz" + Q)["writes_game_archive"])
+
+    def test_sed_awk_and_cut_pass_the_find_on(self):
+        g = Q + GAME + Q
+        for f in ("sed s/x/y/", "sed -e s/x/y/", "awk " + Q + "{print}" + Q, "cut -c1-", "cut -d , -f 1"):
+            cmd = "find " + g + " -name " + Q + "*.cat" + Q + " | " + f + " | xargs mv -t /c/o"
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        cmd = "find " + g + " -name " + Q + "*.cat" + Q + " | sed -i s/x/y/ | xargs mv -t /c/o"
+        self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_fd_reaches_like_find(self):
+        g = Q + GAME + Q
+        for cmd in ("fd . " + g + " -x " + D, "fd -e cat . " + g + " -x gzip", "fd . " + g + " -X " + D):
+            self.assertTrue(F(cmd)["writes_game_archive"], cmd)
+        self.assertTrue(F("fd --search-path " + Q + REF + Q + " -x " + D)["rm_targets_reference"])
+        for cmd in ("fd . " + g + " -x cat", "fd -e xml . " + Q + self.MOD + Q + " -x gzip", "fd . /tmp -x " + D):
+            self.assertFalse(F(cmd)["writes_game_archive"], cmd)
+
+    def test_TWIN_this_commands_own_delete_is_not_the_remote_one(self):
+        f = F(D + " -rf " + Q + GAME + "/x" + Q + "; ssh otherhost ls")
+        self.assertTrue(f["rm_in_x4_dir"])
+        self.assertFalse(f["ssh_host_unplaced"])
+
+    def test_TWIN_a_harmless_command_or_this_machine_is_not_that_advisory(self):
+        for cmd in ("ssh otherhost ls", "ssh otherhost " + D + " -rf /tmp/x", "ssh otherhost", "git push origin master",
+                    "ssh otherhost " + Q + "cat /etc/hosts" + Q):
+            self.assertFalse(F(cmd)["ssh_host_unplaced"], cmd)
+        f = F("ssh localhost " + D + " -rf " + Q + REF + Q)
+        self.assertTrue(f["rm_targets_reference"])
+        self.assertFalse(f["ssh_host_unplaced"])
+
+
+class TestLiteralDollarPaths(unittest.TestCase):
+    """4.1.1 port of session/literal-dollar-v2 (6cbeb825, 51129cde, ed667b4a), re-applied by hand.
+    A `$` every shell layer keeps literal is part of the name: `<reference>$x` is the SIBLING of
+    reference/, not reference/ with an unknown tail. Any layer that may expand it -- or anything that
+    may re-run the word as shell text -- keeps the old, unresolved reading (the TWIN tests).
+    The sibling path the literal reading names is `REF + "$x"`; the reference rule must not fire."""
+    K = "rm_targets_reference"
+    LIT = Q + REF + "$x" + Q                       # 'REF$x'
+
+    def ref(self, cmd):
+        return F(cmd)[self.K]
+
+    # --- the top level
+    def test_a_quoted_or_escaped_dollar_names_the_sibling(self):
+        for cmd in (D + " -rf " + self.LIT, D + " -rf " + REF + BS + "$x", D + " -rf $" + Q + REF + BS + "x24x" + Q,
+                    "env " + D + " -rf " + self.LIT, "timeout 5 " + D + " -rf " + self.LIT):
+            self.assertFalse(self.ref(cmd), cmd)
+
+    def test_TWIN_a_dollar_the_shell_expands_stays_unresolved(self):
+        for cmd in (D + " -rf " + DQ + REF + "$x" + DQ, D + " -rf " + Q + REF + Q + "$x",
+                    D + " -rf " + self.LIT + "*", D + " -rf " + Q + REF + "$x" + Q + "{a,b}",
+                    D + " -rf " + Q + REF + "$x*" + Q,                  # a pattern spelling
+                    D + " -rf " + Q + REF + "$x"):           # an unterminated quote proves nothing
+            self.assertTrue(self.ref(cmd), cmd)
+
+    def test_a_quoted_dollar_is_no_ansi_c_sigil(self):
+        # `'dir$'"/x"` is the name `dir$/x`; `\$'x'` is `$x`. Before, the `$` was popped as a sigil.
+        self.assertEqual(H.words(Q + "a$" + Q + DQ + "/x" + DQ), ["a$/x"])
+        self.assertEqual(H.words(BS + "$" + Q + "x" + Q), ["$x"])
+        self.assertEqual(H.words("$" + Q + BS + "x72" + BS + "x6d" + Q), [D])
+
+    # --- the ANSI-C decoder
+    def test_an_ansi_c_word_ends_at_its_first_nul(self):
+        for body in ("ab" + BS + "x00cd", "ab" + BS + "0cd", "ab" + BS + "400cd", "ab" + BS + "u0000cd",
+                     "ab" + BS + "c@cd", "ab" + chr(0) + "cd"):
+            self.assertEqual(H._ansi_c_decode(body), "ab", body)
+        self.assertTrue(self.ref(D + " -rf $" + Q + REF + BS + "x00junk" + Q))
+
+    def test_ansi_c_u_and_c_escapes_decode_as_git_bash_does(self):
+        self.assertEqual(H._ansi_c_decode("a" + BS + "u002fb"), "a/b")
+        self.assertEqual(H._ansi_c_decode("a" + BS + "U00000041b"), "aAb")
+        self.assertEqual(H._ansi_c_decode("a" + BS + "uD800b"), "a" + BS + "uD800b")
+        self.assertEqual(H._ansi_c_decode("a" + BS + "x4142b"), "aA42b")
+        self.assertEqual(H._ansi_c_decode(BS + "cA"), chr(1))
+
+    # --- a shell's -c text and a heredoc
+    def test_a_shell_c_text_literal_in_every_layer_names_the_sibling(self):
+        for cmd in ("bash -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ,
+                    "sh -c " + Q + D + " -rf " + Q + DQ + Q + DQ + Q + REF + "$x" + Q + DQ + Q + DQ + Q + Q,
+                    "bash <<" + Q + "EOF" + Q + chr(10) + D + " -rf " + self.LIT + chr(10) + "EOF"):
+            self.assertFalse(self.ref(cmd), cmd)
+
+    def test_TWIN_an_inner_layer_that_may_expand_keeps_it_unresolved(self):
+        for cmd in ("bash -c " + DQ + D + " -rf " + self.LIT + DQ,                    # outer expands
+                    "sh -c " + Q + D + " -rf " + DQ + REF + "$x" + DQ + Q,           # inner expands
+                    "sh -c " + Q + D + " -rf " + DQ + "$1" + DQ + Q + " _ " + self.LIT,
+                    "zsh -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ,      # .zshenv
+                    "sudo -s bash -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ,
+                    "bash <<EOF" + chr(10) + D + " -rf " + self.LIT + chr(10) + "EOF",
+                    "cat <<" + Q + "EOF" + Q + " | bash" + chr(10) + D + " -rf " + self.LIT + chr(10) + "EOF",
+                    "bash <<" + Q + "EOF" + Q + " < /dev/null" + chr(10) + D + " -rf " + self.LIT + chr(10) + "EOF",
+                    "echo " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ + " | bash",
+                    "bash -c " + Q + D + " -rf " + Q + DQ + Q + DQ + Q + REF + "$x" + Q + DQ + Q + DQ + Q
+                    + " #" + Q + "*",                                     # outer glob may rewrite it
+                    "BASHOPTS=expand_aliases bash -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ):
+            self.assertTrue(self.ref(cmd), cmd)
+
+    def test_TWIN_a_carrier_that_joins_words_for_a_shell_keeps_it_unresolved(self):
+        for pre in ("ssh localhost ", "watch ", "wsl ", "parallel ", "sshpass -p x ssh localhost "):
+            cmd = pre + D + " -rf " + self.LIT + (" ::: x" if pre == "parallel " else "")
+            self.assertTrue(self.ref(cmd), cmd)
+        for cmd in ("su -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ,
+                    "script -c " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ + " /dev/null"):
+            self.assertTrue(self.ref(cmd), cmd)
+
+    def test_an_unplaced_ssh_host_is_judged_with_the_dollar_unresolved(self):
+        # The remote shell re-parses what ssh joins, so its nested judgement has no literal at all.
+        # (The toolkit root is moved away from reference/'s parent, so the sibling is in no root.)
+        roots = dict(ROOTS, toolkit="C:/Users/tester/tk", mods="C:/Users/tester/tk/dev")
+        cmd = "ssh example.com " + DQ + D + " -rf " + Q + REF + BS + "$x" + Q + DQ
+        self.assertTrue(F(cmd, roots=roots)["ssh_host_unplaced"], cmd)
+
+    # --- anything that can re-run a word as shell text
+    def test_TWIN_a_definition_or_eval_anywhere_keeps_every_dollar_unresolved(self):
+        for pre in (D + "(){ eval command " + D + " " + DQ + "$@" + DQ + "; }; ",
+                    "alias " + D + "=" + Q + "eval " + D + Q + "; ",
+                    "eval true; ", "source /tmp/x; ", ". /tmp/x; ", "R=eval; $R true; ",
+                    DQ + "eval" + DQ + " true; ", "BASH_ENV=/tmp/x true; ", "bash -i -c true; ",
+                    DQ + "$NOPE" + DQ + " true; ",
+                    "bash --rcfile /tmp/rc -c true; "):
+            cmd = pre + D + " -rf " + self.LIT
+            self.assertTrue(self.ref(cmd), cmd)
+        # ...a definition DECODED from a carried `$'...'` text, which the raw command does not show
+        inner = D + " -rf " + BS + Q + REF + "$x" + BS + Q
+        for pre in ("function" + BS + "x20" + D + " { sh -c " + DQ + "/bin/" + D + " $*" + DQ + "; }; ",
+                    "alias" + BS + "x20" + D + "=x; ", "trap" + BS + "x20x EXIT; "):
+            cmd = "bash -c $" + Q + pre + inner + Q
+            self.assertTrue(self.ref(cmd), cmd)
+
+    def test_TWIN_sudo_through_a_shell_keeps_it_unresolved(self):
+        for flag in ("-s", "-i", "--shell", "--login", "-is", "-E -s"):
+            cmd = "sudo " + flag + " " + D + " -rf " + self.LIT
+            self.assertTrue(self.ref(cmd), cmd)
+        self.assertFalse(self.ref("sudo -u root " + D + " -rf " + self.LIT))
+
+    def test_a_clustered_wrapper_flag_takes_its_value(self):
+        for cmd in ("sudo -su root " + D + " -rf " + Q + REF + Q, "sudo -Eu root " + D + " -rf " + Q + REF + Q,
+                    "sudo -Eh " + D + " -rf " + Q + REF + Q):
+            self.assertTrue(self.ref(cmd), cmd)
+        self.assertEqual(H.verb("sudo -su root " + D + " x"), D)
+        self.assertEqual(H.verb("sudo -Eh " + D + " x"), D)        # -h takes no value in a cluster
+        self.assertEqual(H.verb("sudo -uroot " + D + " x"), D)
+
+    def test_only_an_absolute_literal_path_qualifies(self):
+        # A relative literal path is read exactly as the expanding spelling is: where it runs is
+        # not this parse's to prove, so it gains no qualification either way.
+        for pre in ("cd " + Q + REF + Q + " && ", ""):
+            lit = F(pre + D + " -rf " + Q + "$x" + Q)
+            dyn = F(pre + D + " -rf " + DQ + "$x" + DQ)
+            self.assertEqual(lit[self.K], dyn[self.K], pre)
+            self.assertEqual(lit["rm_in_x4_dir"], dyn["rm_in_x4_dir"], pre)
+
+
+@unittest.skipUnless(_PWSH, "no PowerShell on this machine: the PowerShell front-end cannot be "
+                     "exercised here")
+class TestLiteralDollarPathsPowerShell(unittest.TestCase):
+    """The same port through the PowerShell front end: `'..$x'` and a backtick-escaped `$` are
+    literal; a double-quoted `$x`, a function, alias or Invoke-Expression anywhere is not."""
+    K = "rm_targets_reference"
+
+    def P(self, command):
+        return H.facts({"tool_name": "PowerShell", "tool_input": {"command": command}}, ROOTS)
+
+    def test_a_single_quoted_or_backtick_escaped_dollar_names_the_sibling(self):
+        for cmd in ("Remove-Item -LiteralPath " + Q + REF + "$x" + Q + " -Recurse",
+                    "Remove-Item -LiteralPath " + DQ + REF + "`$x" + DQ + " -Recurse"):
+            self.assertFalse(self.P(cmd)[self.K], cmd)
+
+    def test_TWIN_an_expanding_or_redefining_command_keeps_it_unresolved(self):
+        lit = "Remove-Item -LiteralPath " + Q + REF + "$x" + Q + " -Recurse"
+        for cmd in ("Remove-Item -LiteralPath " + DQ + REF + "$x" + DQ + " -Recurse",
+                    "function f { 1 }; " + lit, "Set-Alias f g; " + lit,
+                    "iex " + Q + "1" + Q + "; " + lit,
+                    "Invoke-Expression " + DQ + "Remove-Item " + Q + REF + "`$x" + Q + DQ):
+            f = self.P(cmd)
+            self.assertTrue(f[self.K] or f.get("carrier_untranslated"), cmd)
+
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    _run = unittest.main(verbosity=2, exit=False)
+    sys.exit((0 if _run.result.wasSuccessful() else 1) or translator_skip_ceiling(len(_TRANSLATOR_SKIPS)))

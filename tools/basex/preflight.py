@@ -22,12 +22,20 @@ surfaced as an error blaming the wrong component -- or blaming nothing at all:
                        ask.py's ZERO-RESULT path, which an unbuilt DB can never
                        reach. Worst first-run experience in the tool.
 
-THE JAVA FLOOR IS MEASURED, NOT ASSUMED. Read out of the shipped jar itself:
-`Implementation-Version: 12.4`, `Build-Jdk-Spec: 17`, and `org/basex/BaseX.class`
-carries bytecode major **61**. Major 61 IS Java 17 -- an older JVM does not run
-it slowly, it refuses to load the class at all. (`Main-Class` is `BaseXGUI`,
-which is why every caller uses `java -cp BaseX.jar org.basex.BaseX` and never
-`java -jar`.)
+THE JAVA FLOOR IS MEASURED, NOT ASSUMED. Read out of the shipped jar itself
+(BaseX 13.0, since toolkit 4.1.1): `Implementation-Version: 13.0`,
+`Build-Jdk-Spec: 21`, and `org/basex/BaseX.class` carries bytecode major **65**.
+Major 65 IS Java 21 -- an older JVM does not run it slowly, it refuses to load
+the class at all. (`Main-Class` is `BaseXGUI`, which is why every caller uses
+`java -cp BaseX.jar org.basex.BaseX` and never `java -jar`.) Until 4.1.0 the jar
+was 12.4: Java 17, major 61. `test_the_pins_are_read_from_the_jar_that_ships`
+holds these constants to the vendored jar.
+
+THE JAR VERSION IS CHECKED EXACTLY. The jar's manifest must say
+`Implementation-Version: 13.0`; any other version, or a file whose manifest
+cannot be read, is refused. The toolkit's BaseX facts (the dbswap rename
+semantics, the lock texts, the error texts) are MEASURED on that version only, so
+a different jar is an untested configuration, not a compatible one.
 
 Stdlib only, and it deliberately does NOT import x4validate: this must be able
 to report "you have no JVM" on a machine where nothing else is configured
@@ -45,10 +53,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-#: Bytecode major 61. See the module docstring -- read from the jar, not chosen.
-MIN_JAVA = 17
-BASEX_VERSION = "12.4"
+#: Bytecode major 65 = Java 21. See the module docstring -- read from the jar, not chosen.
+MIN_JAVA = 21
+CLASS_MAJOR = 65
+BASEX_VERSION = "13.0"
 BASEX_URL = "https://basex.org/download/"
+#: The official jar of exactly BASEX_VERSION (basex.org/download links it). SHA-256 of the copy the toolkit ships:
+#: 022bc5a4ec057591d6c577b3e0c1ef6f0c71373f68ddb5cad3d3b2afb2c83a8d (basex.org publishes no checksum).
+BASEX_JAR_URL = "https://files.basex.org/releases/13.0/BaseX130.jar"
 #: 0-byte upstream marker pinning BaseX's home to the directory holding it.
 #: Absent, BaseX relocates to $HOME/basex and build/verify disagree silently.
 HOME_MARKER = ".basexhome"
@@ -78,30 +90,65 @@ def _java() -> str | None:
                 "you get 'BaseX query failed: [WinError 2]', which blames BaseX for a "
                 "missing JVM.")
     try:
-        out = subprocess.run([exe, "-version"], capture_output=True, text=True,
-                             check=False, timeout=30)
+        blob = _java_banner(exe)
     except (OSError, subprocess.SubprocessError) as exc:
         return f"java was found at {exe} but could not be run ({exc})."
-    # Both spellings occur: `java version "24.0.1"` and `openjdk version "17.0.2"`,
-    # plus the pre-9 form `java version "1.8.0_402"` whose major is the SECOND field.
-    blob = (out.stderr or "") + (out.stdout or "")
-    m = re.search(r'version\s+"(\d+)(?:\.(\d+))?', blob)
-    if not m:
+    major = _java_major(blob)
+    if major is None:
         # Do NOT guess a pass. An unparseable banner is a non-answer, and this
         # module exists so a non-answer cannot read as an answer.
-        first = blob.strip().splitlines()[0] if blob.strip() else "(no output)"
         return (f"java at {exe} printed a version banner this check could not parse:\n"
-                f"    {first}\n"
+                f"    {_first_line(blob)}\n"
                 f"    Refusing to assume it is >= {MIN_JAVA}. Check by hand with "
                 f"`java -version`.")
-    major = int(m.group(1))
-    if major == 1:  # the 1.8 spelling -> 8
-        major = int(m.group(2) or 0)
     if major < MIN_JAVA:
-        return (f"java at {exe} is version {major}; BaseX {BASEX_VERSION} needs "
-                f"{MIN_JAVA} or newer.\n    Its classes are bytecode major 61, so an "
+        return (f"java at {exe} is version {major}; BaseX {BASEX_VERSION} needs Java "
+                f"{MIN_JAVA} or newer.\n    Its classes are bytecode major {CLASS_MAJOR}, so an "
                 f"older JVM refuses to load them outright -- you would get "
                 f"UnsupportedClassVersionError, not a slow run.")
+    return None
+
+
+def _java_banner(exe: str) -> str:
+    out = subprocess.run([exe, "-version"], capture_output=True, text=True, check=False, timeout=30)
+    return (out.stderr or "") + (out.stdout or "")
+
+
+def _java_major(blob: str) -> int | None:
+    """The major version a `java -version` banner names, or None when it cannot be parsed.
+    Both spellings occur: `java version "24.0.1"` and `openjdk version "17.0.2"`, plus the
+    pre-9 form `java version "1.8.0_402"` whose major is the SECOND field."""
+    m = re.search(r'version\s+"(\d+)(?:\.(\d+))?', blob)
+    if not m:
+        return None
+    major = int(m.group(1))
+    return int(m.group(2) or 0) if major == 1 else major
+
+
+def _first_line(blob: str) -> str:
+    return blob.strip().splitlines()[0] if blob.strip() else "(no output)"
+
+
+def real_basex_unavailable(jar: Path) -> str | None:
+    """Why the vendored jar cannot be RUN here, as a one-line test skip reason, or None when it can.
+
+    For the tests that start the real jar in a private home: "java is on PATH" is not enough, since
+    BaseX 13.0 refuses to load on Java below MIN_JAVA (4.1.1 review: those tests failed on Java 17-20
+    instead of skipping). The version comes from the same parser the preflight refuses on."""
+    if not Path(jar).is_file():
+        return f"needs the vendored BaseX jar (none at {jar})"
+    exe = shutil.which("java")
+    if exe is None:
+        return f"needs Java {MIN_JAVA}+ (none on PATH)"
+    try:
+        blob = _java_banner(exe)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"needs Java {MIN_JAVA}+ (java could not be run: {type(exc).__name__})"
+    major = _java_major(blob)
+    if major is None:
+        return f"needs Java {MIN_JAVA}+ (version unreadable: {_first_line(blob)})"
+    if major < MIN_JAVA:
+        return f"needs Java {MIN_JAVA}+ (found {major})"
     return None
 
 
@@ -109,8 +156,9 @@ def _jar(basex_dir: Path) -> str | None:
     jar = basex_dir / "BaseX.jar"
     if not jar.is_file():
         return (f"BaseX.jar not found at {jar}\n"
-                f"    Download BaseX {BASEX_VERSION} from {BASEX_URL} and put BaseX.jar "
-                f"there. The jar alone is enough -- lib/ is NOT needed (verified).\n"
+                f"    It ships with the toolkit: reinstall it, or download BaseX {BASEX_VERSION} "
+                f"({BASEX_JAR_URL}, listed at {BASEX_URL}) and save it there as BaseX.jar. "
+                f"The jar alone is enough -- lib/ is NOT needed (verified).\n"
                 f"    Without it java reports 'Could not find or load main class "
                 f"org.basex.BaseX', which does not say what to do about it.")
     if not (basex_dir / HOME_MARKER).is_file():
@@ -122,7 +170,33 @@ def _jar(basex_dir: Path) -> str | None:
                 f"{basex_dir / 'data'} -- the build SUCCEEDS and is then reported as "
                 f"never built (MEASURED both directions, 2026-08-25).\n"
                 f"    Fix:  touch {basex_dir / HOME_MARKER}")
-    return None
+    return _jar_version(jar)
+
+
+def _jar_version(jar: Path) -> str | None:
+    """Refuse any jar that is not exactly BASEX_VERSION -- including one whose version cannot be read."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(jar) as z:
+            manifest = z.read("META-INF/MANIFEST.MF").decode("utf-8", errors="replace")
+    except (OSError, KeyError, zipfile.BadZipFile) as exc:
+        return (f"could not read the BaseX version from {jar} ({exc}).\n"
+                f"    It is not a readable jar, so its version is unknown; this toolkit needs BaseX "
+                f"{BASEX_VERSION}.\n    Replace it with the jar the toolkit ships, or {BASEX_JAR_URL}")
+    m = re.search(r"^Implementation-Version:[ \t]*(\S+)[ \t]*\r?$", manifest, re.M)
+    if m is None:
+        return (f"{jar} names no Implementation-Version in its manifest, so it cannot be told apart "
+                f"from another BaseX.\n    This toolkit needs BaseX {BASEX_VERSION}: replace it with "
+                f"the jar the toolkit ships, or {BASEX_JAR_URL}")
+    found = m.group(1)
+    if found == BASEX_VERSION:
+        return None
+    return (f"BaseX {found} found at {jar}; this toolkit needs BaseX {BASEX_VERSION} "
+            f"(Java {MIN_JAVA} or newer).\n"
+            f"    The jar ships with the toolkit, so an update that left the old jar behind is the usual cause: "
+            f"reinstall the toolkit, or download {BASEX_JAR_URL} and save it as {jar}.\n"
+            f"    Databases built by BaseX 12.4 open in {BASEX_VERSION}; nothing needs rebuilding for the "
+            f"version change itself.")
 
 
 def _dbpath(basex_dir: Path) -> Path:
@@ -145,6 +219,15 @@ def _db(basex_dir: Path, db: str) -> str | None:
     path = _dbpath(basex_dir) / db
     if path.is_dir():
         return None
+    # Build-then-swap (dbswap.py): between its two renames the live name is briefly absent, and a killed swap can
+    # leave it absent. Calling that "never built" sends the reader to a full rebuild; the journal or build lock
+    # says which it is.
+    busy = [n for n in (f"swap-{db}.json", f"build-{db}.lock") if (basex_dir / n).exists()]
+    if busy:
+        return (f"the '{db}' database is absent because a swap is in progress or was interrupted "
+                f"({', '.join(busy)} present).\n"
+                f"    Wait for a running build, or finish an interrupted swap:\n"
+                f"    cd tools/x4validate && uv run python ../basex/dbswap.py recover --db {db}")
     script = "build-corpus.sh" if db == "x4raw" else "build-effective.sh"
     return (f"the '{db}' database has not been built (nothing at {path}).\n"
             f"    Run:  bash {script}\n"

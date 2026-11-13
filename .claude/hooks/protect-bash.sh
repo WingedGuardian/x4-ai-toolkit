@@ -250,6 +250,12 @@ if [ "$PARSE_RC" = 5 ]; then
   _X4_UNRELAXED=1     # an inability: X4_GUARD=off never relaxes it below ask (R1-F2)
   deny "This PowerShell command does not parse, so the guard could evaluate NO rule against it -- and PowerShell would reject it too: ${FACTS_RAW:-no reason given}. Fix the syntax and re-run."
 fi
+# rc 6: the analysis outran its deadline (4.1.1 review round 7, 1). A hook that outruns Claude Code's
+# timeout does not block at all, so a slow analysis failed OPEN; now it is a DENY with a remedy.
+if [ "$PARSE_RC" = 6 ]; then
+  _X4_UNRELAXED=1
+  deny "This command took the guard too long to analyse (${FACTS_RAW:-deadline passed}), so it was NEVER fully checked against the rules. Split it into simpler commands, or put it in a script file, and re-run."
+fi
 # rc 4: a PowerShell TOOL command could not be translated (no PowerShell was found to
 # parse it, it failed, or the budget ran out), and the reason is on stdout. ASK,
 # as an unparseable Bash command does below -- nothing was analysed, so this is neither
@@ -443,6 +449,15 @@ if on operand_expansion_truncated; then
   deny "Brace or array operands could not be expanded completely; some targets were NEVER checked. Use literal targets or split this command before retrying."
 fi
 
+# 4.1.1 review (link budget): link resolution is bounded per hook call (realpath once per folder, at most
+# _MAX_LINK_RESOLVED folders). An operand past the bound may sit behind a junction into a protected root,
+# so it is refused, never read as "no link". Same verdict as the truncations above.
+if on links_unresolved; then
+  x4_guard_check_inert
+  _X4_UNRELAXED=1
+  deny "This command names files in so many different folders that the guard stopped checking them for links (a junction or symlink into a protected folder), so some targets were NEVER checked. Split it into commands that each touch fewer folders and re-run. (Or the filesystem could not say whether one of its paths is a link: check that each path can be read.)"
+fi
+
 # === HARD BLOCK — delete the game installation ===
 # The target must be a real path in the tree, OR bear the game's name while not being
 # an archive. MEASURED 2026-08-30: 7 of 8 refusals here were a .zip merely NAMED after
@@ -460,6 +475,16 @@ on rm_targets_reference && deny "BLOCKED: reference/ is the read-only unpacked b
 # channel (protect-files.sh) hard-blocks the identical write for Edit/Write, and
 # CLAUDE.md lists it under "Hard blocked". Two channels, one tree, opposite verdicts.
 on writes_reference && deny "BLOCKED: reference/ is the read-only unpacked base game data — never write into it (re-unpack only via bin/unpack-reference.sh). Work in a mod folder under extensions/ instead."
+
+# === HARD BLOCK — WRITE, MOVE or DELETE a base-game or official DLC archive ===
+# The file channel (protect-files.sh) denies these; the shell only advised, or said nothing for
+# an append. MEASURED 2026-11-05. The base archives run to about 10 GB each. A mod's own
+# archive is not this rule: deploy.py, cp and `rm -rf <mod>` keep their verdicts below.
+# An in-place sed of game files that MAY reach DLC content: the remedy is the edit tool (round 7, 4).
+if on sed_i_in_game_or_profile && on writes_game_archive; then
+  deny "BLOCKED: in-place sed edit (sed -i) of files in the game folder, and these may include official DLC content or a .cat/.dat archive, which is never edited in place. Use your file-edit tool instead (Edit, apply_patch) on the files you mean: it is backed up, checked by protect-files.sh, and fails loudly on a non-unique match. A find that starts at your own mod's folder reaches no DLC file. Command: $COMMAND"
+fi
+on writes_game_archive && deny "BLOCKED: this writes, moves or deletes a base-game or official DLC archive (.cat/.dat), or deletes or moves something in an official DLC folder (extensions/ego_dlc_*, which is game content, not a deployed mod). Only a Steam verify restores them. Read it freely, pack with bin/xrcat (XRCatTool) into your own mod folder, and repair the game through Steam's Verify Integrity. Command: $COMMAND"
 
 # === HARD BLOCK — WRITE or DELETE the toolkit's PATH CONFIG (v4.0 release review R1-F1/R1-P1) ===
 # Every guard reads its roots from x4-paths.env; an agent that could rewrite it could move or
@@ -548,7 +573,9 @@ fi
 on rm_in_profile && [ "$_harness_save_qualified" != 1 ] && ask "DELETING IN YOUR X4 PROFILE (mod list, config, saves) -- not reproducible. Confirm: $COMMAND"
 # 2026-10-27 (user): removing a DEPLOYED MOD (a folder in the game's extensions/, or
 # anything inside one) ASKS -- ONE prompt per command, naming every mod it touches. Every
-# other X4-directory delete keeps the bd45eef advisory below.
+# other X4-directory delete keeps the bd45eef advisory below. An official DLC folder
+# (ego_dlc_*) is not a mod: its deletes are denied above (user ruling 2026-11-05), and
+# hook_facts never names one here.
 _t="${FACTS_NL#*
 rm_deployed_mod_names	}"
 RM_MODS="${_t%%
@@ -556,6 +583,13 @@ RM_MODS="${_t%%
 _rm_mod=0; on rm_deployed_mod && _rm_mod=1
 on rm_deployed_mod && ask "CONFIRM REMOVING DEPLOYED MOD(S) from the game's extensions/: $RM_MODS. One answer covers this whole command. Command: $COMMAND"
 on rm_in_x4_dir && [ "$_rm_mod" != 1 ] && advise "This deletes files in an X4 directory (game files, mod sources or the toolkit). Make sure it is what you meant -- check git status afterwards, and redeploy if you removed a deployed mod by mistake. Command: $COMMAND"
+
+# === ADVISORY — a destructive command sent to an ssh host the guard cannot place ===
+# 4.1.1 review round 6, C (GitHub issue #18): `ssh <host> rm -rf <reference>` is judged as running
+# here only when <host> is recognisably this machine (loopback, this computer's name, a variable).
+# A LAN address, a Tailscale name or an ~/.ssh/config alias may be this machine too, and the guard
+# cannot tell -- so an advisory, never an ask or a deny: the host is usually another machine.
+on ssh_host_unplaced && advise "This sends a command to an ssh host the guard cannot place, and that command would be refused or confirmed had it run on THIS machine (a delete, a write into a protected folder, git add -A). The guard recognises loopback addresses and this computer's own name only; a LAN address, a Tailscale name or an ~/.ssh/config alias may still be this machine. Make sure the host is the one you mean. Command: $COMMAND"
 
 # === CONFIRM — destructive git inside an X4 directory ===
 # git IGNORES the read-only attribute. MEASURED 2026-09-04: `git checkout HEAD~1 -- f`
@@ -616,8 +650,8 @@ on sed_i_in_game_or_profile && deny "BLOCKED: in-place sed edit (sed -i) of a fi
 
 # === CONFIRM — direct reference to .cat/.dat archives ===
 # DROPPED 2026-08-29: this fired on any command whose TEXT mentioned a .cat -- including
-# an `echo` that merely discussed one. Writing a .cat is already covered by
-# protect-files.sh, which checks the actual TARGET PATH rather than the command text.
+# an `echo` that merely discussed one. A shell write to a game or DLC archive is judged by
+# writes_game_archive above, on its TARGET PATH, and file tools by protect-files.sh.
 
 
 # =============================================================================

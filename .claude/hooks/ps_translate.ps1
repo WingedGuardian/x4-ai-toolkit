@@ -126,6 +126,75 @@ $script:Unknown = New-Object Collections.Generic.List[string]
 function Unknown([string]$why) { if (-not $script:Unknown.Contains($why)) { $script:Unknown.Add($why) } }
 $script:Depth = 0
 
+# THE LOCATION STACK (4.1.1 final round). Push-Location was read as a plain `cd` and Pop-Location not
+# at all, so after `Set-Location <reference>; Push-Location C:/safe; Pop-Location` a relative operand
+# was judged in C:/safe while PowerShell was back in <reference>. A push is now `pushd` and a pop of
+# a push this command made is `popd`, which the hook's reader already models. PowerShell has NAMED
+# stacks (-StackName; Set-Location -StackName changes the default); bash has one, so each emitted
+# pushd records its stack's name here, in order. A name the translator cannot read is '?<text>':
+# the same text is the same stack, and it MAY be any other stack, the default included (an unset
+# `$n` is the default stack in pwsh). 4.1.1 review A3: it was read as a stack of its own, so
+# `Set-Location <reference>; Push-Location C:/safe -StackName $n; Pop-Location` (and the mirror)
+# was judged in C:/safe while PowerShell may be back in <reference>. A pop that may or may not
+# reach a push is now `popd ${X4_PS_LOCATION_STACK:+-n}`, which the reader splits into two
+# lanes (popped, not popped), so every candidate folder is judged and the strictest verdict
+# stands. A pop it cannot match lands somewhere unknown (a stack pushed before this command, in
+# a host that keeps its runspace): $LOC_UNKNOWN keeps the current directory AND adds an unknown
+# one. Once a pop popped past another stack's entries, or may have, the emitted stack no longer
+# mirrors PowerShell's, and every later pop is unknown.
+$script:LocPushes = New-Object Collections.Generic.List[string]
+$script:LocDefault = 'default'
+$script:LocLost = $false
+$LOC_UNKNOWN = 'cd "${X4_PS_LOCATION_STACK:-.}"'
+$LOC_MAYBE_POP = 'popd ${X4_PS_LOCATION_STACK:+-n}'
+function LocMatch([string]$e, [string]$s) {
+    if ($e -eq $s) { return 'yes' }
+    if ($e.StartsWith('?') -or $s.StartsWith('?')) { return 'maybe' }
+    return 'no'
+}
+function LocStack($binding) {
+    $b = Bound $binding @('StackName')
+    if ($null -eq $b) { return $script:LocDefault }
+    $v = @(BVals $binding @('StackName')) | Select-Object -First 1
+    if ($null -ne $b.Value -and ($null -eq $v -or -not (IsResolved ([string]$v)))) {
+        return '?' + $b.Value.Extent.Text.ToLowerInvariant()
+    }
+    $v = ([string]$v).ToLowerInvariant()
+    if ($v -eq '') { return 'default' }
+    return $v
+}
+function LocPop([string]$s) {
+    if ($script:LocLost) { return @($LOC_UNKNOWN) }
+    $maybe = -1                         # the deepest push this pop MAY reach (an unreadable name)
+    for ($i = $script:LocPushes.Count - 1; $i -ge 0; $i--) {
+        $m = LocMatch $script:LocPushes[$i] $s
+        if ($m -eq 'no') { continue }
+        if ($m -eq 'maybe') { $maybe = $i; continue }
+        # Its own push, possibly under later pushes of other stacks. PowerShell lands where that push
+        # left; bash gets there by popping all of them, and the emitted stack then no longer mirrors
+        # PowerShell's. Under a push that MAY be this stack, PowerShell may stop there instead: each
+        # pop may or may not happen, so every folder in between is judged.
+        $k = $script:LocPushes.Count - $i
+        $script:LocPushes.RemoveRange($i, $k)
+        if ($maybe -ge 0) {
+            $script:LocLost = $true
+            return @(1..$k | ForEach-Object { $LOC_MAYBE_POP })
+        }
+        if ($k -gt 1) { $script:LocLost = $true }
+        return @(1..$k | ForEach-Object { 'popd' })
+    }
+    if ($maybe -ge 0) {
+        # Only pushes that MAY be this stack: PowerShell pops one of them, or one pushed before this
+        # command (unknown), or none.
+        $k = $script:LocPushes.Count - $maybe
+        $script:LocLost = $true
+        return @(@(1..$k | ForEach-Object { $LOC_MAYBE_POP }) + @($LOC_UNKNOWN))
+    }
+    # No push of this stack in the command: PowerShell pops one pushed before it, or none. The
+    # pushes this command made are untouched either way.
+    return @($LOC_UNKNOWN)
+}
+
 function Flatten($ast) {
     # An expression we do not evaluate: keep what it NAMES. `Join-Path $env:X4_REFERENCE
     # 'libraries'` becomes "${X4_REFERENCE}/libraries", which is what it means.
@@ -202,7 +271,7 @@ $ALIASES = @{
     'ren' = 'rename-item'; 'rni' = 'rename-item'
     'sc' = 'set-content'; 'ac' = 'add-content'; 'clc' = 'clear-content'; 'ni' = 'new-item'
     'md' = 'new-item'; 'mkdir' = 'new-item'
-    'cd' = 'set-location'; 'sl' = 'set-location'; 'chdir' = 'set-location'; 'pushd' = 'push-location'
+    'cd' = 'set-location'; 'sl' = 'set-location'; 'chdir' = 'set-location'; 'pushd' = 'push-location'; 'popd' = 'pop-location'
     'gci' = 'get-childitem'; 'ls' = 'get-childitem'; 'dir' = 'get-childitem'; 'gi' = 'get-item'
     'iwr' = 'invoke-webrequest'; 'irm' = 'invoke-restmethod'; 'cli' = 'clear-item'
     'sp' = 'set-itemproperty'; 'rp' = 'remove-itemproperty'; 'cpp' = 'copy-itemproperty'; 'mp' = 'move-itemproperty'
@@ -399,6 +468,20 @@ function Resolve-Output($p) {
     return (Unres $p)
 }
 
+# -Path is a WILDCARD, where a backtick quotes the next character: `Remove-Item '01.c`at'` removes
+# 01.cat (4.1.1 review round 3, F). -LiteralPath keeps the backtick. The unquoted spelling is judged
+# beside the written one, so this can only widen a verdict. A backtick before a wildcard character
+# keeps it literal, so that one stays as written: unquoted, `zzz_my`[1`]mod` read as a glob that
+# deletes all of extensions/ (round 4, 4). Used for the deleting cmdlet's own -Path and for the
+# -Path of a Get-Item / Get-ChildItem feeding it (round 4, 3).
+function WithUnquoted($r) {
+    $bare = @($r.paths | Where-Object { ([string]$_).Contains('`') } |
+        ForEach-Object { ([string]$_) -replace '`([^`\[\]*?])', '$1' } |
+        Where-Object { -not (@($r.paths) -ccontains $_) })
+    if ($bare.Count) { return (RT $r.known (@($r.paths) + $bare) $r.filter $false $r.recurse) }
+    return $r
+}
+
 # The paths a bound parameter holds, or $null when it is not bound.
 function BTarget($binding, [string[]]$names) {
     $b = Bound $binding $names
@@ -461,6 +544,7 @@ function Resolve-Produced([CommandAst]$cmd, $pipe) {
         if ($null -eq $base) { $base = & $fed }
         if ($null -eq $base) { $base = RT $true @('.') }
         $base = Finalize $base
+        if ($null -ne (Bound $b @('Path'))) { $base = WithUnquoted $base }
         if ($cn -ne 'get-childitem') { return $base }
         $f = @(BVals $b @('Filter', 'Include')) | Select-Object -First 1
         return (RT $base.known $base.paths $f $true (IsSet $b 'Recurse'))
@@ -585,6 +669,7 @@ function Targets([CommandAst]$c, $binding, [string[]]$names, [bool]$delete = $fa
     # variable. Read as a path it named the root its variable name spells (MEASURED in
     # this lane's replay: an ask on clearing X4_* variables before an installer test).
     $r = RT $r.known @($r.paths | Where-Object { [string]$_ -notmatch $NON_FS_PROVIDER }) $r.filter $false $r.recurse
+    if ($null -ne (Bound $binding @('Path'))) { $r = WithUnquoted $r }
     if ($delete -and (-not $r.known -or (AnyOpaque $r.paths))) {
         Unknown "$($c.GetCommandName()): a delete target the guard cannot resolve: $($c.Extent.Text)"
     }
@@ -808,9 +893,27 @@ function Translate-Command([CommandAst]$c) {
             }
             return $lines
         }
-        { $_ -in 'set-location', 'push-location' } {
+        'set-location' {
             $p = @(BVals $binding @('Path', 'LiteralPath')) | Select-Object -First 1
             if ($p) { $lines.Add("cd $(Q $p)") }
+            # `Set-Location -StackName s` makes s the default stack. MEASURED (pwsh 7): a stack that
+            # does not exist is refused ("Cannot find path") and the default stays, so a name this
+            # command never pushed leaves it; an unreadable name becomes its own '?' token.
+            if ($null -ne (Bound $binding @('StackName'))) {
+                $s = LocStack $binding
+                if ($s.StartsWith('?') -or $s -eq 'default' -or $script:LocPushes.Contains($s)) { $script:LocDefault = $s }
+            }
+            return $lines
+        }
+        'push-location' {
+            $p = @(BVals $binding @('Path', 'LiteralPath')) | Select-Object -First 1
+            # No path: the current location is pushed and stays in force.
+            $lines.Add($(if ($p) { "pushd $(Q $p)" } else { 'pushd .' }))
+            $script:LocPushes.Add((LocStack $binding))
+            return $lines
+        }
+        'pop-location' {
+            foreach ($l in (LocPop (LocStack $binding))) { $lines.Add($l) }
             return $lines
         }
         'select-string' {
@@ -1127,7 +1230,7 @@ function IsLiteralName($ast) {
 #: The command names a partly-readable name (`"$($R)-Item"`) is matched against: every name
 #: this translator models, so a reading reaches the rule its plain spelling reaches.
 $MODELLED_NAMES = @($WRITERS) + @($ALIASES.Keys) + @('invoke-expression', 'start-process', 'set-location',
-                    'push-location', 'tee-object', 'new-object', 'select-string')
+                    'push-location', 'pop-location', 'tee-object', 'new-object', 'select-string')
 
 # The SPECULATIVE readings of a command whose name cannot be read, each translated as
 # PowerShell -- ADDITIVE, none assumed to be the one that runs:

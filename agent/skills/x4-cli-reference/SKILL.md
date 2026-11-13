@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-12 CLIs, 54 subcommands.
+12 CLIs, 55 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -67,10 +67,11 @@ Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `-
 | | `changed` | localise a moved content fingerprint: WHICH mod changed, and how |
 | | `snapshot` | record the current mod vector as a cheap baseline (~0.1s), for the gap between expensive rebuilds |
 | | `downloads` | read the manifests inside downloaded archives and compare them with what is installed: newer, same, older, not installed. Read-only. Exit 3 when anything was unreadable or a manifest unusable |
-| **`x4save`** | | Read an X4 savegame: what is baked into it, what it references that the live tree no longer defines, and its MD variables. |
+| **`x4save`** | | Read an X4 savegame: what is baked into it, what it references that the live tree no longer defines, its MD variables, and a count of its components (ships, turrets, stations) by macro, owner or parent. |
 | | `info` | header: build, playtime, and the SAVE-BAKED extensions |
 | | `check` | macro references the live tree no longer defines |
 | | `vars` | named variables whose name matches a pattern: MD cue variables, AI-script and blackboard values, each labelled with where it lives (pass a save NAME, not a path into the save folder; only gzipped *.xml.gz saves are read, a plain .xml save is not) |
+| | `census` | count <component> elements (ships, turrets, stations, modules...) grouped by macro, owner, class or parent, with the scanned denominator (pass a save NAME) |
 | **`x4similar`** | | Advisory fuzzy same-ship detection across the ships base, DLC and installed mods define, scored at their EFFECTIVE values (base + DLC + the enabled mods in load order, so a <diff>-patched ship carries its patched numbers). |
 | **`x4stats`** | | Advisory numeric comparison of mod content vs the effective game. |
 | | `wares` | compare a candidate mod's wares to same-group peers |

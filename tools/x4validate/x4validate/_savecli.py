@@ -1,5 +1,5 @@
-"""Read an X4 savegame: what is baked into it, what it references that is gone, and its
-MD variables.
+"""Read an X4 savegame: what is baked into it, what it references that is gone, its
+MD variables, and a census of its components (`census`, in _savecensus.py).
 
 A save is the only artifact the ENGINE wrote. It answers two questions no manifest
 can, and both were measured in-game on 2026-08-26 (the measurements are summarised
@@ -455,7 +455,8 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="x4save",
         description="Read an X4 savegame: what is baked into it, what it "
-                    "references that the live tree no longer defines, and its MD variables.")
+                    "references that the live tree no longer defines, its MD variables, and a count "
+                    "of its components (ships, turrets, stations) by macro, owner or parent.")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -479,7 +480,62 @@ def main(argv: list[str] | None = None) -> int:
     pv.add_argument("save", nargs="?", help="save name, e.g. save_020, or a path "
                                             "(default: newest)")
 
+    from . import _savecensus
+    pn = sub.add_parser(
+        "census",
+        help="count <component> elements (ships, turrets, stations, modules...) grouped by macro, "
+             "owner, class or parent, with the scanned denominator (pass a save NAME)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Count every <component> in a save, filtered by class/owner/macro globs and grouped by\n"
+            "the --by keys. Read-only and streamed. Pass a save NAME (save_016), not a path into\n"
+            "the save folder: the save guard refuses a path given to a program it cannot see into.\n"
+            "An owner is the component's owner=, else its nearest ancestor component's. 'Parent' is\n"
+            "the nearest ancestor of --parent-class, searched up to the component's own station or\n"
+            "ship_* (so a turret on a docked ship belongs to the ship) unless --parent-anywhere."),
+        epilog=(
+            "examples:\n"
+            "  # Xenon ships by macro\n"
+            "  x4save census save_016 --class 'ship_*' --owner xenon --by macro\n"
+            "  # Xenon turrets by macro, split station vs ship (parent defaults to station,ship_*)\n"
+            "  x4save census save_016 --class turret --owner xenon --by parent-class,macro\n"
+            "  # Xenon L turrets by station module macro, and the station they are on\n"
+            "  x4save census save_016 --class turret --owner xenon --macro 'turret_xen_l_*' \\\n"
+            "      --parent-class @module --by macro,parent-macro,station-macro\n"
+            "\n"
+            "exit: 0 matches found, 1 no component matched (the scanned count is printed),\n"
+            "2 the save could not be read or an argument was refused."))
+    pn.add_argument("save", nargs="?", help="save name, e.g. save_016, or a path (default: newest)")
+    pn.add_argument("--class", dest="classes", action="append", metavar="GLOB",
+                    help="component class glob(s), comma-separated or repeated, case-insensitive "
+                         "(e.g. 'ship_*', turret, station)")
+    pn.add_argument("--owner", dest="owners", action="append", metavar="GLOB",
+                    help="owner faction glob(s) (e.g. xenon); matched against the inherited owner")
+    pn.add_argument("--macro", dest="macros", action="append", metavar="GLOB",
+                    help="macro glob(s) (e.g. 'turret_xen_l_*')")
+    pn.add_argument("--by", default="macro", metavar="KEYS",
+                    help="comma-separated group keys from: " + ", ".join(_savecensus.KEYS) + " (default: macro)")
+    pn.add_argument("--parent-class", dest="parent_classes", action="append", metavar="GLOB",
+                    help="which ancestor counts as the parent for parent-class/parent-macro (default "
+                         "station,ship_*); @module = the station-module classes ("
+                         + ",".join(_savecensus.MODULE_CLASSES) + ")")
+    pn.add_argument("--parent-anywhere", action="store_true",
+                    help="let the parent and station-macro search continue past the component's own "
+                         "station or ship_* (e.g. a docked ship's turret then finds the dock module)")
+    pn.add_argument("--limit", type=int, default=0, help="groups to print, largest first (default 0 = all)")
+    pn.add_argument("--json", action="store_true", help="machine-readable output (schema x4save.census/1)")
+
     args = p.parse_args(argv)
+    if args.cmd == "census":
+        try:
+            by = _savecensus.parse_by(args.by)
+            parents = _savecensus.split_list(args.parent_classes)
+            _savecensus.expand_parent(parents or list(_savecensus.DEFAULT_PARENT))
+            if args.limit < 0:
+                raise _savecensus.CensusArgumentError("--limit must be 0 (all) or more")
+        except _savecensus.CensusArgumentError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     if args.cmd == "vars":
         try:
             re.compile(args.pattern)
@@ -492,6 +548,11 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_info(path)
         if args.cmd == "vars":
             return cmd_vars(path, args.pattern)
+        if args.cmd == "census":
+            return _savecensus.cmd_census(
+                path, classes=_savecensus.split_list(args.classes), owners=_savecensus.split_list(args.owners),
+                macros=_savecensus.split_list(args.macros), parent_classes=parents,
+                parent_anywhere=args.parent_anywhere, by=by, limit=args.limit, as_json=args.json)
         return cmd_check(path, limit=args.limit)
     except (SaveUnreadable, _effective.EmptyReference) as exc:
         # rc 2, never 0: a save that could not be read is a NON-ANSWER.

@@ -93,6 +93,21 @@ def test_database_declaration_does_not_create_receipts_for_unknown_names(tmp_pat
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("db", ["x4raw__next", "x4eff__next"])
+def test_a_next_generation_gets_its_creation_receipt_before_create(tmp_path, db):
+    """Build-then-swap (dbswap.py) builds into <db>__next; its receipt is what later lets dbswap drop a leftover."""
+    marker = a.declare_database(db, proof=ready, artifact_root=tmp_path)
+    assert marker.name == f"disposition-{db}.json"
+    assert Path(json.loads(marker.read_text())["path"]).name == db
+
+
+@pytest.mark.parametrize("db", ["x4raw__old", "x4raw__nextx", "x4raw_next"])
+def test_only_the_next_generation_name_is_declarable(tmp_path, db):
+    """<db>__old is created by dbswap's own rename, which writes its receipt; nothing else is ours."""
+    with pytest.raises(ValueError, match="not a toolkit-owned"):
+        a.declare_database(db, proof=ready, artifact_root=tmp_path)
+
+
 def test_database_receipts_cannot_be_created_inside_reference(tmp_path):
     with pytest.raises(OSError, match="overlaps an input"):
         a.declare_database("x4eff", proof=ready, artifact_root=tmp_path, sources=(tmp_path,))
@@ -194,10 +209,16 @@ def test_failure_is_reported_and_never_falls_back(tmp_path, monkeypatch, capsys)
 def test_native_database_rebuild_keeps_only_the_current_generation(tmp_path, redirected):
     import shutil
     import subprocess
+    import importlib.util
     java = shutil.which("java")
     jar = a.ARTIFACT_ROOT / "basex/BaseX.jar"
-    if not java or not jar.is_file():
-        pytest.skip("native lifecycle requires the installed Java/BaseX runtime")
+    # The preflight's own version parser: "java is on PATH" also passed Java 17-20, on which BaseX 13.0 cannot load.
+    spec = importlib.util.spec_from_file_location("artifacts_test_preflight", a.ARTIFACT_ROOT / "preflight.py")
+    preflight = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(preflight)
+    why = preflight.real_basex_unavailable(jar)
+    if why:
+        pytest.skip(f"native lifecycle: {why}")
     root = tmp_path / "fixture"
     home = root / "basex"
     home.mkdir(parents=True)
@@ -223,7 +244,12 @@ def test_native_database_rebuild_keeps_only_the_current_generation(tmp_path, red
         cfg = home / ".basex"
         content, replaced = re.subn(r"^DBPATH = .*$", lambda match: "DBPATH = " + str(data),
                                     cfg.read_text(encoding="utf-8"), flags=re.M)
-        assert replaced == 1
+        # BaseX 12.4 wrote every option into a new .basex; 13.0 (the jar since 4.1.1) writes only
+        # comments, so there is no DBPATH line to replace: add one. The INFO check below proves
+        # the redirection took effect either way.
+        assert replaced in (0, 1), replaced
+        if not replaced:
+            content = content.rstrip("\n") + "\nDBPATH = " + str(data) + "\n"
         cfg.write_text(content, encoding="utf-8")
         info = run("-c", "INFO")
         assert str(data).replace(chr(92), "/").lower() in info.replace(chr(92), "/").lower(), info

@@ -13,7 +13,7 @@ that repeat the one before. The policy this tool implements is RETENTION.md; rea
             [--only CLASS[,CLASS]]                   (skips the scans no listed class needs)
     python scripts/x4housekeep.py apply plan.json     re-check each action, then do exactly those
             [--only CLASS[,CLASS]]                   (recreatable, build, link, gzip, launch, snapshot, scratch, archive, expire)
-    python scripts/x4housekeep.py sweep-temp          recycle the toolkit's own stale temp dirs (see "temp sweep")
+    python scripts/x4housekeep.py sweep-temp          delete/recycle the toolkit's own stale temp dirs ("temp sweep")
     python scripts/x4housekeep.py session STATE.txt   sweep-temp, then write the session-start disk note to STATE.txt
     --config FILE   default <toolkit>/x4-housekeep.json (x4-housekeep.json.example ships)
 
@@ -60,7 +60,7 @@ _BACKUP_SPEC.loader.exec_module(certainty)
 from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from x4temp import owns_temp
+from x4temp import MARKER as TEMP_RECEIPT, identity as temp_identity, owns_temp
 
 TOOLKIT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = TOOLKIT_ROOT / "x4-housekeep.json"
@@ -74,6 +74,8 @@ SAVE_NAME = re.compile(r"^(?:save_\d+|quicksave|autosave_\d+)\.xml(?:\.gz)?$")
 SAVE_ROOT = re.compile(rb"(?:\xef\xbb\xbf)?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<savegame[\s>/]", re.S)
 SAVE_SNIFF_BYTES = 4096
 STUB_COMPARE_BYTES = 64 << 20   # per stubbed folder and plan: what is read to compare kept files with the stub's record
+STUB_RECORD_MAX_BYTES = 32 << 20  # a stub larger than this is not read to find its record: "cannot be read", kept
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 def is_save(low: str) -> bool:
@@ -599,6 +601,47 @@ def _kept_changes(folder: Path, small: list, hashes: dict) -> tuple:
     return new, edited, skipped
 
 
+class StubRecordError(ValueError):
+    """An archive stub's record cannot be read; the message says why, for the report."""
+
+
+def stub_record(stub: Path) -> dict:
+    """The JSON record in an archive stub, with `source_hashes` checked to be what archiving writes: an object of
+    non-empty relative names to lowercase sha256 hex. Anything else -- a list, a string, null, a number, a nested value,
+    a record too deep to parse, a stub too large to read -- is StubRecordError, never a value handed on. MEASURED
+    2026-11-06: a list or a string here passed `set()` and crashed `_kept_changes` on `.get`, and a too-deep record
+    crashed the parse (RecursionError), each stopping the whole plan; a number or nested value was compared as a hash
+    and reported as an edit. Only `source_hashes` is read here, so only it is checked."""
+    try:
+        size = stub.stat().st_size
+    except OSError as exc:
+        raise StubRecordError("the stub cannot be read ({})".format(type(exc).__name__)) from exc
+    if size > STUB_RECORD_MAX_BYTES:
+        raise StubRecordError("the stub is too large to read ({} bytes)".format(size))
+    try:
+        text = stub.read_text(encoding="utf-8")
+        record = json.loads(text.rsplit("<!-- ", 1)[1].split(" -->", 1)[0])
+    except IndexError as exc:
+        raise StubRecordError("the stub holds no record") from exc
+    except (OSError, ValueError, RecursionError) as exc:   # UnicodeDecodeError and JSONDecodeError are ValueErrors
+        raise StubRecordError("the record is not readable JSON ({})".format(type(exc).__name__)) from exc
+    if not isinstance(record, dict):
+        raise StubRecordError("the record is {}, not an object".format(
+            "null" if record is None else type(record).__name__))
+    if "source_hashes" not in record:
+        raise StubRecordError("the record has no source_hashes")
+    hashes = record["source_hashes"]
+    if not isinstance(hashes, dict):
+        raise StubRecordError("source_hashes is {}, not an object".format(
+            "null" if hashes is None else type(hashes).__name__))
+    for name, value in hashes.items():
+        if not name:
+            raise StubRecordError("source_hashes has an empty name")
+        if not isinstance(value, str) or not SHA256_HEX.fullmatch(value):
+            raise StubRecordError("source_hashes[{!r}] is not a sha256 hex string".format(name[:80]))
+    return record
+
+
 def stub_state(folder: Path, guard) -> str:
     """'' when an archived folder holds only its stub and what archiving keeps, unchanged (`_kept_extra` included, the set
     archiving itself used, which git or a project doc vouches for whatever its bytes). Otherwise what else is there, in
@@ -622,12 +665,11 @@ def stub_state(folder: Path, guard) -> str:
     if not rest and not small:
         return ""
     try:
-        text = (folder / ha.STUB).read_text(encoding="utf-8")
-        hashes = json.loads(text.rsplit("<!-- ", 1)[1].split(" -->", 1)[0])["source_hashes"]
+        hashes = stub_record(folder / ha.STUB)["source_hashes"]
         named = set(hashes)
-    except (OSError, ValueError, IndexError, KeyError, TypeError):
-        return "{}: has an {} but its record cannot be read, and {} other item(s) are here: nothing shows any of them " \
-               "is in a zip; kept, not archived again".format(folder, ha.STUB, len(rest) + len(small))
+    except StubRecordError as exc:
+        return "{}: has an {} but its record cannot be read ({}), and {} other item(s) are here: nothing shows any of " \
+               "them is in a zip; kept, not archived again".format(folder, ha.STUB, exc, len(rest) + len(small))
     new_kept, edited, skipped = _kept_changes(folder, small, hashes)
     new = new_kept + [f for f in rest if f.relative_to(folder).as_posix() not in named]
     named_left = len(rest) + len(new_kept) - len(new)
@@ -1625,12 +1667,18 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
 
 
 # --------------------------------------------------------------------------- temp sweep
-# The toolkit's own leftover temp dirs go to the Recycle Bin like everything else -- never a permanent delete (user
-# ruling 2026-10-18: "There's never a good reason to just outright delete. Never."). Three gates stand between a dir
-# and the bin: the name is one the toolkit creates, nothing in it or its direct children changed for
-# temp_after_hours, and the dir can be renamed (Windows refuses that while any process holds a file open inside it).
-# A dir the bin will not take stays where it is and is named in the session note. Same code as the Skyrim
-# toolkit's tools/housekeep.py.
+# Gates before anything leaves: the name is one the toolkit creates, its receipt says the toolkit owns it and its
+# producer declared it disposable, nothing in it is protected, nothing in it changed for temp_after_hours, and the dir
+# can be renamed (Windows refuses that while any process holds a file open inside it).
+# 4.1.1 (user deletion policy 2026-10-30, RETENTION.md): a dir that passes every gate and carries the version-2
+# `.x4-temp-owner.json` receipt -- written by the toolkit when it CREATED the empty dir, purpose "disposable temporary
+# workspace" -- holds nothing that could be the only copy, so it is DELETED permanently: the Recycle Bin frees nothing
+# on the same drive (15.45 GiB of dead test workspaces piled up there). Everything else that passes (an explicit
+# obsolete decision, the other disposition receipt) still goes to the Recycle Bin, and a dir the bin will not take
+# stays where it is and is named in the session note. A version-1 receipt names an owner, not a disposition, so it is
+# kept and counted; so is a dir holding a file dated in the future (a clock oddity, never read as "inactive").
+# The Skyrim toolkit's tools/housekeep.py shares the recycle path, not (yet) this delete.
+TEMP_FUTURE_SLACK_S = 300     # a file this far past now is a clock oddity, not activity
 
 def _has_bin() -> bool:
     """recycle() is Windows-only. Off Windows the sweep KEEPS what it found (and says so) rather than raising: a raise
@@ -1676,23 +1724,85 @@ def temp_candidates(cfg, temp: Path):
             yield Path(e.path), "toolkit temp"
 
 
-def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler=None) -> dict:
-    """Recycle every candidate that passes the gates, in one batch. What the bin refuses stays where it is."""
+def _temp_receipt(p: Path) -> dict | None:
+    """The `.x4-temp-owner.json` receipt as written, or None (absent, a link, oversized, unreadable)."""
+    marker = Path(p) / TEMP_RECEIPT
+    try:
+        if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > 4096:
+            return None
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # silent-ok: an unreadable receipt is no receipt, so the folder is kept
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def deletable_temp(p: Path, toolkit) -> bool:
+    """The producer's own disposition receipt, exactly: version 2, this toolkit, this directory, purpose "disposable
+    temporary workspace" (x4temp.mark_owned_temp writes it into the EMPTY dir it just created). Nothing else -- an
+    ownership-only v1 receipt, the other disposition receipt, an obsolete decision -- makes a dir deletable."""
+    return _temp_receipt(p) == {"v": 2, "toolkit": temp_identity(toolkit), "directory": temp_identity(p),
+                                "purpose": "disposable temporary workspace"}
+
+
+#: Dropped by the test suite's conftest in a FAILED test's tmp_path: the folder is kept as failure evidence.
+KEPT_FAILURE = ".x4-kept-failure"
+
+
+def _size_and_kept_failure(p: Path) -> tuple:
+    """(bytes, holds a kept failed-test folder?) in one walk; walk_files raises on a link inside."""
+    size, failure = 0, False
+    for f in walk_files(p):
+        failure = failure or f.name == KEPT_FAILURE
+        size += f.stat().st_size
+    return size, failure
+
+
+def delete_tree(paths, toolkit) -> dict:
+    """{path: None when gone, else why it is not}. Re-reads each receipt immediately before; a link anywhere in the
+    tree refuses it (walk_files), so nothing outside the dir is reached. Never falls back to anything else."""
+    out = {}
+    for p in paths:
+        p = Path(p)
+        try:
+            if not deletable_temp(p, toolkit):
+                out[str(p)] = "receipt changed since it was checked; not deleted"
+                continue
+            list(walk_files(p, include_dirs=True))           # raises on a link or reparse point inside
+
+            def writable(func, path, _exc):
+                os.chmod(path, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
+                func(path)
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(p, onexc=writable)
+            else:
+                shutil.rmtree(p, onerror=writable)
+            out[str(p)] = "still present after the delete" if os.path.lexists(p) else None
+        except OSError as exc:
+            out[str(p)] = "delete failed ({}: {}); what is left stays".format(type(exc).__name__, exc)
+    return out
+
+
+def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler=None, deleter=None) -> dict:
+    """Delete what the producer's receipt says is disposable, recycle the rest that passes the gates, in one batch
+    each. What the bin refuses or a delete leaves stays where it is."""
     temp = Path(temp or tempfile.gettempdir())
     now = time.time() if now is None else now
     cutoff = now - cfg["temp_after_hours"] * 3600
-    rows = {"recycled": 0, "kept: changed recently": 0, "kept: in use": 0,
-            "kept: disposability unverified": 0,
+    rows = {"deleted": 0, "recycled": 0, "kept: changed recently": 0, "kept: in use": 0,
+            "kept: disposability unverified": 0, "kept: ownership-only receipt (v1)": 0,
+            "kept: dated in the future (clock oddity)": 0,
             "kept: ownership unverified": 0, "kept: protected": 0, "kept: no Recycle Bin on this OS": 0,
             "failed": 0}
-    ready = []
+    ready, doomed = [], []
     failed = []
+    deleted, kept_named = [], []
     try:
         candidates = list(temp_candidates(cfg, temp))
         guard = Guard(cfg)
     except OSError as exc:
         rows["failed"] = 1
-        return {"rows": rows, "failed": [str(exc)], "temp": str(temp), "preflight_error": str(exc)}
+        return {"rows": rows, "failed": [str(exc)], "temp": str(temp), "preflight_error": str(exc),
+                "deleted": deleted, "kept": kept_named}
     for p, _why in candidates:
         try:
             explicit = not certainty.obsolete_reason(p, cfg)
@@ -1700,21 +1810,49 @@ def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler
                 rows["kept: ownership unverified"] += 1
                 continue
             if not certainty.disposable_temp(p, cfg['root']) and not explicit:
-                rows['kept: disposability unverified'] += 1
+                if (_temp_receipt(p) or {}).get("v") == 1:
+                    rows["kept: ownership-only receipt (v1)"] += 1
+                    kept_named.append("{} (ownership-only v1 receipt)".format(p))
+                else:
+                    rows['kept: disposability unverified'] += 1
                 continue
             if protected_inside(guard, p):
                 rows["kept: protected"] += 1
                 continue
-            if _newest_shallow(p) > cutoff:
+            newest = _newest_shallow(p)
+            if newest > now + TEMP_FUTURE_SLACK_S:
+                rows["kept: dated in the future (clock oddity)"] += 1
+                kept_named.append("{} (newest file dated {})".format(
+                    p, time.strftime("%Y-%m-%d %H:%M", time.localtime(newest))))
+                continue
+            if newest > cutoff:
                 rows["kept: changed recently"] += 1
                 continue
             if _in_use(p):
                 rows["kept: in use"] += 1
+            elif deletable_temp(p, cfg["root"]):
+                # A link inside never gets here: the gates above walk the tree and refuse it (reported, kept), and
+                # delete_tree walks it again. Failure evidence goes to the bin (release-session policy, 4.1.1).
+                size, failure = _size_and_kept_failure(p)
+                if failure:
+                    ready.append(p)
+                    kept_named.append("{} (holds a failed test's folder: recycled, not deleted)".format(p))
+                else:
+                    doomed.append((p, size))
             else:
                 ready.append(p)
         except (OSError, ValueError) as exc:
             rows["failed"] += 1
             failed.append("{} ({})".format(p, exc))
+    if doomed:
+        sizes = {str(p): n for p, n in doomed}
+        for p, err in (deleter or delete_tree)([p for p, _n in doomed], cfg["root"]).items():
+            if err:
+                rows["failed"] += 1
+                failed.append("{}  ({})".format(p, err))
+            else:
+                rows["deleted"] += 1
+                deleted.append((p, sizes.get(p, 0)))
     if recycler is None and not _has_bin():
         rows["kept: no Recycle Bin on this OS"] = len(ready)
         ready = []
@@ -1724,7 +1862,7 @@ def sweep_temp(cfg, temp: Path | None = None, now: float | None = None, recycler
             failed.append("{}  ({})".format(p, err))
         else:
             rows["recycled"] += 1
-    return {"rows": rows, "failed": failed, "temp": str(temp)}
+    return {"rows": rows, "failed": failed, "temp": str(temp), "deleted": deleted, "kept": kept_named}
 
 
 def worktree_count(root: Path) -> int | None:
@@ -1785,10 +1923,17 @@ def session(cfg, state: Path) -> int:
     r = res["rows"]
     if res.get("preflight_error"):
         notes.append("temp cleanup skipped; no recycling attempted")
-    elif r["recycled"] or r["failed"]:
-        notes.append("moved {} leftover temp dir(s) to the Recycle Bin{}".format(
-            r["recycled"], "; {} check/recycling failure(s); affected items LEFT IN PLACE".format(
+    elif r["recycled"] or r["failed"] or r.get("deleted"):
+        gone = res.get("deleted") or []
+        notes.append("{}moved {} leftover temp dir(s) to the Recycle Bin{}".format(
+            "permanently deleted {} receipted disposable temp dir(s) ({:.2f} GiB); ".format(
+                len(gone), sum(n for _p, n in gone) / GIB) if gone else "",
+            r["recycled"], "; {} check/recycling/delete failure(s); affected items LEFT IN PLACE".format(
                 r["failed"]) if r["failed"] else ""))
+    odd = r.get("kept: dated in the future (clock oddity)", 0) + r.get("kept: ownership-only receipt (v1)", 0)
+    if odd:
+        notes.append("{} toolkit temp dir(s) kept for a person to decide (a file dated in the future, or an "
+                     "ownership-only v1 receipt): {}".format(odd, "; ".join((res.get("kept") or [])[:3])))
     if r["kept: no Recycle Bin on this OS"]:
         notes.append("{} leftover toolkit temp dir(s) kept: x4housekeep recycles on Windows only".format(
             r["kept: no Recycle Bin on this OS"]))
@@ -1972,6 +2117,10 @@ def _main(argv) -> int:
         print("toolkit temp dirs under {}: {} considered".format(res["temp"], sum(rows.values())))
         for k, v in rows.items():                     # every row prints, zeros included; they sum to the total
             print("  {:>6}  {}".format(v, k))
+        for p, n in res.get("deleted", []):
+            print("  DELETED  {}  ({:.1f} MiB)".format(p, n / 2 ** 20))
+        for p in res.get("kept", []):
+            print("  KEPT     " + p)
         for p in res["failed"]:
             print("  FAILED   " + p)
         return 1 if res["failed"] else 0

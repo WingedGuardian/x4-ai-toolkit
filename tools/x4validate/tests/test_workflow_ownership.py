@@ -23,7 +23,11 @@ def test_workflow_actions_are_pinned_and_jobs_bounded():
             block = body[header.end():headers[index + 1].start() if index + 1 < len(headers) else len(body)]
             jobs += 1
             timeouts = re.findall(r"^    timeout-minutes:\s*(\d+)\s*(?:#.*)?$", block, re.M)
-            assert len(timeouts) == 1 and 0 < int(timeouts[0]) <= 360, (path, name)
+            if re.search(r"^    uses:", block, re.M):
+                assert name == "qualification" and "uses: ./.github/workflows/full-qualification.yml" in block
+                assert not timeouts and (root / ".github/workflows/full-qualification.yml").is_file()
+            else:
+                assert len(timeouts) == 1 and 0 < int(timeouts[0]) <= 360, (path, name)
         uses = re.findall(r"^\s*-?\s*uses:\s*(\S+)", text, re.M)
         assert uses, path
         for action in uses:

@@ -146,7 +146,7 @@ def test_x4effective_dump_names_the_load_order_record(env, monkeypatch, capsys):
     from x4validate import _effectivecli as C
     _ext, _tmp, cfg = env
     monkeypatch.setattr(C._merge, "build_effective", lambda *a, **k: types.SimpleNamespace(
-        tree=etree.fromstring("<wares/>"), sources=["base"], skipped=[]))
+        tree=etree.fromstring("<wares/>"), sources=["base"], skipped=[], unmeasured=[]))
     C._cmd_dump(types.SimpleNamespace(reference=str(cfg.reference),
                                       vpath="libraries/wares.xml", chain=False))
     got = capsys.readouterr()

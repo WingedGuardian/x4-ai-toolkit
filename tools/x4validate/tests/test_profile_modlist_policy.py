@@ -268,7 +268,9 @@ def test_shell_profile_parent_link_cannot_gain_modlist_exemption(guard, tmp_path
     import os
     from test_file_guard_batch import _make_link
     g, roots = guard
-    actual = tmp_path / 'actual-profile'
+    # Inside the fixture's sandbox, not tmp_path: since 4.1.1 the guard also judges where a link leads, and on
+    # Linux tmp_path is under /tmp, which the shell guard refuses outright -- the verdict this test is not about.
+    actual = roots['X4_DOCUMENTS'].parent / 'actual-profile'
     actual.mkdir()
     link = roots['X4_PROFILE']
     _make_link('junction' if os.name == 'nt' else 'symlink', link, actual, request)

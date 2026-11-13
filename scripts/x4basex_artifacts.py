@@ -17,6 +17,9 @@ import sys
 
 ARTIFACT_ROOT = Path(__file__).resolve().parents[1] / "tools" / "basex"
 RECEIPT = ".x4-basex-disposable.json"
+#: The databases a builder may declare before CREATE DB: the live names, and the next generation that
+#: tools/basex/dbswap.py swaps in (build-then-swap, 4.1.1). `<db>__old` is not here: dbswap's own rename makes it.
+DECLARABLE = ("x4raw", "x4eff", "x4raw__next", "x4eff__next")
 
 
 def plain(path):
@@ -184,7 +187,7 @@ def database_target(artifact_root, db, sources=()):
 
 def declare_database(db, *, proof, artifact_root=ARTIFACT_ROOT, sources=()):
     """Declare before native CREATE DB, outside the database's private format."""
-    if db not in {"x4raw", "x4eff"}:
+    if db not in DECLARABLE:
         raise ValueError("not a toolkit-owned BaseX database")
     proof()
     root = plain(artifact_root)
@@ -211,7 +214,7 @@ def declare_database(db, *, proof, artifact_root=ARTIFACT_ROOT, sources=()):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", nargs="*")
-    parser.add_argument("--declare-db", choices=("x4raw", "x4eff"))
+    parser.add_argument("--declare-db", choices=DECLARABLE)
     parser.add_argument("--artifact-root", default=str(ARTIFACT_ROOT))
     parser.add_argument("--reference")
     args = parser.parse_args(argv)

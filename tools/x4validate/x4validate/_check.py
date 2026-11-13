@@ -1376,6 +1376,98 @@ def check_nested_diff(vpath: str, root: etree._Element, report: Report) -> None:
                    vpath, el.sourceline or 0)
 
 
+#: How many vpaths one aggregated UNMEASURED disclosure names before "and N more".
+_MERGE_NOTE_SAMPLE = 5
+
+
+def _child_names(root: etree._Element) -> set[str]:
+    """@name (else @id) of *root*'s element children: the names a merge duplicates."""
+    return {c.get("name") or c.get("id") for c in root
+            if isinstance(c.tag, str)} - {None}
+
+
+def check_complete_file_merge(complete: list[tuple[str, etree._Element | None]],
+                              config: _merge.Config, report: Report) -> None:
+    """Say how the merge model treats each COMPLETE (non-diff) file of this mod that
+    meets an existing document, and whether the engine was measured doing that (#17).
+
+    * Nested full copy of a MOD-owned macro file (`_merge.merges_nested_copy`):
+      MERGED, MEASURED. One INFO per file naming the names that now exist twice, since
+      any un-indexed selector on them -- this mod's or a later one's -- is skipped.
+    * Any other nested full copy over a file its owner supplies, and a full copy at a
+      plain path over a base-game/DLC file outside the union/script dirs: modelled as a
+      replacement (or keyed union), engine behaviour UNMEASURED. ONE aggregated INFO per
+      kind, never one per file, so a big overhaul cannot flood the report.
+
+    The owner of a nested path is looked up among the merged roots only (Tier B); Tier A
+    merges no other mod, so it says nothing about nested copies there. A root is read only
+    for a nested path, so a caller may pass None for any other (check_sel_resolution does)."""
+    owned = config.packed_dlc_names()
+    roots = {p.name.lower(): p for p in (*config.overlays, *config.final_overlays)}
+    nested_unmeasured: list[str] = []
+    plain_unmeasured: list[str] = []
+    dlc_unmeasured: list[str] = []      # extensions/ego_dlc_*/...: #17's shape, DLC owner
+    dlc = config.dlc_dirs()
+    for vpath, root in complete:
+        nested = _merge._nested_target(vpath, owned)
+        if nested is not None:
+            owner_dir = roots.get(nested[0].lower())
+            if owner_dir is None or nested[0].lower() in owned:
+                continue
+            try:
+                oroot = _merge.overlay_root(owner_dir, nested[1], [])
+            except (etree.LxmlError, OSError, ValueError):
+                continue   # silent-ok: readability is check_readability's channel
+            if oroot is None or oroot.tag == "diff":
+                continue   # nothing to merge into: the copy IS the document
+            if _merge.merges_nested_copy(nested[1]) and oroot.tag == root.tag:
+                dup = sorted(_child_names(root) & _child_names(oroot))
+                report.add("info", "merge",
+                           f"complete copy of '{owner_dir.name}'s macro file at a nested "
+                           f"path: the engine MERGES it into '{owner_dir.name}'s document "
+                           f"(MEASURED, issue #17), so both copies exist"
+                           + (f" -- {len(dup)} name(s) now defined twice "
+                              f"({', '.join(dup[:_MERGE_NOTE_SAMPLE])}); any selector on "
+                              f"them without an index matches 2 nodes and the engine "
+                              f"skips it" if dup else "")
+                           + f"; {_merge.COPY_ORDER_UNMEASURED}", vpath)
+                continue
+            nested_unmeasured.append(vpath)
+            continue
+        low = vpath.lower()
+        if (low.startswith(_merge._ADDITIVE_DIRS) or low.startswith(_merge._SCRIPT_REGISTRY_DIRS)
+                or _merge._is_text_vpath(vpath)):
+            continue
+        if (config.reference / vpath).is_file() or any(
+                _merge.overlay_root(d, vpath, []) is not None for d in dlc):
+            parts = vpath.split("/")
+            if (len(parts) >= 3 and parts[0].lower() == "extensions"
+                    and _merge.is_dlc_folder(parts[1])):
+                dlc_unmeasured.append(vpath)
+            else:
+                plain_unmeasured.append(vpath)
+
+    def disclose(paths: list[str], what: str) -> None:
+        if not paths:
+            return
+        shown = ", ".join(paths[:_MERGE_NOTE_SAMPLE])
+        more = (f" and {len(paths) - _MERGE_NOTE_SAMPLE} more"
+                if len(paths) > _MERGE_NOTE_SAMPLE else "")
+        report.add("info", "merge",
+                   f"{len(paths)} complete (non-diff) file(s) {what}; the toolkit models "
+                   "each as a replacement (a keyed union or an inert script in the "
+                   "registry dirs), and the engine's behaviour for this "
+                   "case is UNMEASURED (issue #17 measured only a nested full copy of a "
+                   f"mod-owned macro file, which MERGES): {shown}{more}")
+
+    disclose(nested_unmeasured,
+             "at a nested path over a file the owning mod supplies")
+    disclose(dlc_unmeasured,
+             "at a DLC's nested path (extensions/ego_dlc_*/...: the shape issue #17 "
+             "measured for a MOD owner, here over a file the DLC supplies)")
+    disclose(plain_unmeasured, "at a base-game path the game already supplies")
+
+
 def check_sel_resolution(mod_dir: Path, config: _merge.Config, report: Report) -> None:
     """Flag any non-silent op whose sel= matches nothing in the merged base+DLC tree.
 
@@ -1385,10 +1477,18 @@ def check_sel_resolution(mod_dir: Path, config: _merge.Config, report: Report) -
     checked = found = 0
     seen_skips: set[str] = set()
     payload = []  # one parse pass serves both the nested-diff check and the denominator
+    # 4.1.1 review B4: a parsed root is kept only where check_complete_file_merge reads one (a nested path); a
+    # plain path needs its vpath alone. MEASURED on the largest installed mod by complete XML (309 files, 7.0 MB):
+    # keeping every root raised this pass's peak working set from 149 MB to 227 MB.
+    owned = config.packed_dlc_names()
+    complete: list[tuple[str, etree._Element | None]] = []
     for vpath, root in iter_mod_xml_roots(mod_dir):
         check_nested_diff(vpath, root, report)
         if vpath.lower() != MANIFEST:
             payload.append(vpath)
+            if root.tag != "diff":
+                complete.append((vpath, root if _merge._nested_target(vpath, owned) is not None else None))
+    check_complete_file_merge(complete, config, report)
     for vpath, diff_root in iter_diff_files(mod_dir):
         found += 1
         checked += _sel_check_file(vpath, diff_root, config, report, seen_skips)
@@ -1920,6 +2020,277 @@ def check_connections(mod_dir: Path, config: _merge.Config, report: Report) -> N
         # Centralized loadouts.xml: <loadout macro="M">
         for lo in root.xpath("//loadout[@macro]"):
             check_loadout(lo, component_of_macro(lo.get("macro")), vpath, f"for {lo.get('macro')}")
+
+
+#: Loadout leaves whose `macro=` is equipment with an attachment connection (BLIND-SPOTS F363).
+_FIT_LEAF_KINDS = ("engine", "shield", "turret", "weapon")
+_FIT_GROUP_KINDS = {"engines": "engine", "shields": "shield", "turrets": "turret"}
+#: A diff `sel` that targets a connection's `ref` attribute (`.../connection[@ref='x']/@ref`).
+_DIFF_REF_ATTR = re.compile(r"connection(\[[^\]]*\])*/@ref\s*$")
+
+
+def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Report) -> None:
+    """The three fitting questions `check_connections` never asked (BLIND-SPOTS F363). ALL INFO.
+
+    `check_connections` proves a loadout `path` names a connection that EXISTS. It says nothing about
+    whether the equipment FITS that connection, whether a `<groups>` entry names a group the component
+    spells the same way, or whether a ship macro's own `<connection ref=X>` exists on its component.
+    A 7.x-era mod ported to 9.0 can be clean on existence and still spawn hulls with no engines.
+
+    1. **Tag fit** (documented rule, Egosoft "Tags and flags" rev 368.5: every tag on the equipment
+       component's `component`-tagged attachment connection, except `component` itself, must be on
+       the slot). Control: the rule rejects 0 of 1421 resolvable vanilla direct leaves (MEASURED
+       2026-11-08, base + 8 DLC). A `<groups>` entry is judged against the slots of its group: it is a
+       hit when NO slot of the group accepts the macro. Vanilla groups mix kinds (engines and shields in
+       one group), so "every slot accepts it" would reject 945 of 946 resolvable vanilla entries; the
+       any-slot reading rejects 1 of 946, a `libraries/loadouts.xml` turret placed in a carrier group
+       that holds only engines and shields (MEASURED 2026-11-09, base + 8 DLC). An entry whose group
+       the component lacks by exact name is not tag-judged and is counted in the note. Engine
+       enforcement: MEASURED for weapons in one save (mismatched preset weapons not installed,
+       BLIND-SPOTS F363 RUNTIME EVIDENCE), UNMEASURED for other kinds; a hit is a suspect for an
+       in-game fitting readback, which is why every finding here is INFO, never an error.
+    2. **Group name case**: a `<groups>` entry whose `group=` matches no component connection group
+       exactly but matches one case-insensitively. Vanilla has 0 such entries in 882 (same run), so
+       case folding has no vanilla precedent either way.
+    3. **Macro connection refs**: `<macro><connections><connection ref=X>` where X is not a connection
+       of the macro's component. Vanilla: 0 of 1776 across 362 ship macros (same run). The first
+       ported mod this ran on had 209 (MEASURED 2026-11-08 over 216 active + 2 DEV mods, BLIND-SPOTS F363).
+
+    Skips, never silent: an unreadable component, an equipment macro with no single resolvable
+    attachment (unregistered, missing, or ambiguous), and a hull whose component cannot be resolved
+    (unregistered, file missing, or no `<component ref>`) are each recorded once with `report.skip`, and
+    what hangs off them is not judged. Leaves, group entries and macro `<connection ref>`s (elements, or
+    a `ref` attribute added/replaced by `sel=.../connection.../@ref` or `type="@ref"`) inside diff ops
+    that patch an EXISTING macro or loadout are recorded as "diff fragment not judged", once per file. `report.notes` carries
+    the denominator: macros judged (or "0 examined"), macros skipped, group entries not tag-judged, diff
+    files with unjudged fragments.
+
+    SCOPE LIMIT: component and macro files are read AS STORED (the file the index names), not as
+    merged. A slot, tag or connection that a diff adds to a component is invisible here, so a hit can
+    be a false "fails the tag rule" or a false "names no component connection". Treat a hit on a
+    component another mod patches as unconfirmed until checked against the merged tree.
+    """
+    mod_overlay = [mod_dir]
+    macro_index = _resolve.build_index(config, mod_overlay, _resolve.MACRO_INDEX, report)
+    component_index = _resolve.build_index(config, mod_overlay, _resolve.COMPONENT_INDEX, report)
+    comp_cache: dict[str, dict | None] = {}
+    attach_cache: dict[str, frozenset[str] | None] = {}
+    skipped_macros: set[str] = set()
+
+    def ports_of(comp_ref: str | None) -> dict | None:
+        if not comp_ref:
+            return None
+        if comp_ref not in comp_cache:
+            cf = _resolve.read_indexed(component_index, comp_ref)
+            ports = _resolve.connection_tags_of(cf.data) if cf else None
+            if cf and ports is None:
+                report.skip("fitting checks",
+                            f"component '{comp_ref}' ({cf.display.name}): unreadable, its fittings were not judged")
+            comp_cache[comp_ref] = ports
+        return comp_cache[comp_ref]
+
+    def component_of_macro(macro_name: str):
+        """(component ref or None, macro class, why-not) for a REGISTERED macro; why-not is '' on success."""
+        mf = _resolve.read_indexed(macro_index, macro_name)
+        if mf is None:
+            why = ("is not registered in index/macros.xml" if macro_name not in macro_index
+                   else "is registered but its file is missing")
+            return None, "", why
+        try:
+            mr = _merge.parse_bytes(mf.data)
+        except etree.XMLSyntaxError:
+            return None, "", f"file ({mf.display.name}) will not parse"
+        node = mr.xpath(f"//macro[@name={_resolve._xq(macro_name)}]")
+        if not node:
+            return None, "", f"file ({mf.display.name}) does not define it"
+        refs = node[0].xpath("./component/@ref")
+        return (refs[0] if refs else None), node[0].get("class") or "", "" if refs else "has no <component ref>"
+
+    # Hull-level coverage (v4.1.1 review): a hull whose component cannot be resolved used to drop out with
+    # no record, so its leaves, groups and refs were never judged and a clean run said nothing about it.
+    judged_hulls: set[str] = set()
+    skipped_hulls: set[str] = set()
+
+    def hull_ports(macro_name: str, comp_ref: str | None, why_not: str = "") -> dict | None:
+        """Ports of a hull's component, or None after recording ONE skip for this macro."""
+        if comp_ref:
+            ports = ports_of(comp_ref)
+            if ports is not None:
+                return ports
+            if comp_ref not in component_index:
+                why_not = f"component '{comp_ref}' is not registered in index/components.xml"
+            elif _resolve.read_indexed(component_index, comp_ref) is None:
+                why_not = f"component '{comp_ref}' is registered but its file is missing"
+            else:
+                why_not = ""  # unreadable component: ports_of already recorded it, once per component
+        else:
+            why_not = why_not or "has no <component ref>"
+        if macro_name not in skipped_hulls:
+            skipped_hulls.add(macro_name)
+            if why_not:
+                report.skip("fitting checks", f"macro '{macro_name}': {why_not}; its loadouts and connection "
+                            "refs were not judged")
+        return None
+
+    def required_tags(equip_macro: str) -> frozenset[str] | None:
+        """Attachment tags of an equipment macro, or None (unresolvable: skipped once, never judged)."""
+        if equip_macro in attach_cache:
+            return attach_cache[equip_macro]
+        res = None
+        comp_ref, _cls, _why = component_of_macro(equip_macro)
+        ports = ports_of(comp_ref)
+        if ports:
+            att = [tags for tags, _g in ports.values() if "component" in tags]
+            if len(att) == 1:
+                res = att[0] - {"component"}
+        if res is None and equip_macro not in skipped_macros:
+            skipped_macros.add(equip_macro)
+            report.skip("fitting checks",
+                        f"equipment macro '{equip_macro}': no single component-tagged attachment could be "
+                        "resolved, leaves naming it were not judged")
+        attach_cache[equip_macro] = res
+        return res
+
+    # ONE finding per ship macro, not one per leaf: the first ported mod this ran on produced 550 per-item
+    # lines beside its 31 real errors, which is the flood that trains a reader to ignore the output.
+    # Per-item detail is in the counts' examples here; a caller that needs every item walks the same tree itself.
+    per_macro: dict[str, dict] = {}
+    groups_unjudged = 0
+    skips_before = sum(1 for s in report.skipped if s.what == "fitting checks")
+
+    def bucket(macro_name: str, vpath: str, line: int, cls: str) -> dict:
+        b = per_macro.get(macro_name)
+        if b is None:
+            # Label by what the macro IS: the loadout-library branch reaches any macro class, not only ships.
+            label = (f"ship macro '{macro_name}'" if cls.startswith("ship_")
+                     else f"macro '{macro_name}' (class '{cls or '?'}')")
+            b = per_macro[macro_name] = dict(vpath=vpath, line=line, label=label, tag=[], gtag=[], case=[], ref=[],
+                                             leaves=0, gfit=0, groups=0, refs=0)
+            judged_hulls.add(macro_name)
+        return b
+
+    def judge_loadout(lo, comp_ref: str | None, vpath: str, macro_name: str, cls: str, why_not: str = "") -> None:
+        nonlocal groups_unjudged
+        ports = hull_ports(macro_name, comp_ref, why_not)
+        if ports is None:
+            return
+        b = bucket(macro_name, vpath, lo.sourceline or 0, cls)
+        groups_exact = {g for _t, g in ports.values() if g}
+        groups_fold = {g.lower(): g for g in groups_exact}
+        for leaf in lo.xpath("./macros/*[@macro][@path]"):
+            if leaf.tag not in _FIT_LEAF_KINDS:
+                continue
+            port = (leaf.get("path") or "").rsplit("/", 1)[-1]
+            if port not in ports:
+                continue  # existence is check_connections' finding
+            need = required_tags(leaf.get("macro"))
+            if need is None:
+                continue
+            b["leaves"] += 1
+            missing = sorted(need - ports[port][0])
+            if missing:
+                b["tag"].append(f"{leaf.tag} '{leaf.get('macro')}' on '{port}' needs {missing}, slot has "
+                                f"[{' '.join(sorted(ports[port][0]))}]")
+        for g in lo.xpath("./groups/*[@group]"):
+            if g.tag not in _FIT_GROUP_KINDS:
+                continue
+            b["groups"] += 1
+            name = (g.get("group") or "").strip()
+            if name and name not in groups_exact and name.lower() in groups_fold:
+                b["case"].append(f"'{name}' vs component '{groups_fold[name.lower()]}'")
+            # Tag rule on a group entry: the macro goes into slots of ONE connection group, and vanilla groups mix
+            # kinds (engines and shields share a carrier's group), so the judged reading is "NO slot of the group
+            # accepts it". "Every slot accepts it" rejects 945 of 946 resolvable vanilla entries; this rejects 1.
+            if name not in groups_exact or not g.get("macro"):
+                groups_unjudged += 1  # no exact-name group to judge against (case-only is its own finding above)
+                continue
+            need = required_tags(g.get("macro"))
+            if need is None:
+                continue
+            b["gfit"] += 1
+            slots = [tags for tags, grp in ports.values() if grp == name]
+            if not any(need <= tags for tags in slots):
+                b["gtag"].append(f"{g.tag} '{g.get('macro')}' in '{name}' needs {sorted(need)}, "
+                                 f"none of its {len(slots)} slot(s) has them all")
+
+    fragment_files = 0
+    for vpath, root in iter_mod_xml_roots(mod_dir):
+        for macro in root.xpath("//macro[@name]"):
+            crefs = macro.xpath("./component/@ref")
+            comp_ref = crefs[0] if crefs else None
+            cls = macro.get("class") or ""
+            if not cls.startswith("ship_"):
+                continue
+            for lo in macro.xpath(".//loadout"):
+                judge_loadout(lo, comp_ref, vpath, macro.get("name"), cls)
+            ports = hull_ports(macro.get("name"), comp_ref)
+            if ports is None:
+                continue
+            b = bucket(macro.get("name"), vpath, macro.sourceline or 0, cls)
+            for conn in macro.xpath("./connections/connection[@ref]"):
+                ref = conn.get("ref") or ""
+                if not ref:
+                    continue
+                b["refs"] += 1
+                if ref not in ports:
+                    b["ref"].append(f"'{ref}' (component '{comp_ref}')")
+        for lo in root.xpath("//loadout[@macro]"):
+            comp_ref, cls, why_not = component_of_macro(lo.get("macro"))
+            judge_loadout(lo, comp_ref, vpath, lo.get("macro"), cls, why_not)
+        if root.tag == "diff":
+            # A diff op that adds leaves or group entries INTO an existing macro or loadout has neither a <macro>
+            # nor a <loadout macro=> ancestor here, so it cannot be judged without the merged tree. Say so, once
+            # per file, rather than let it read as judged-and-clean.
+            frag = [e for e in root.xpath("//*[@macro][@path] | //*[@group]")
+                    if (e.tag in _FIT_LEAF_KINDS or e.tag in _FIT_GROUP_KINDS)
+                    and not e.xpath("ancestor::macro | ancestor::loadout[@macro]")]
+            # The same blind spot for clause 3: a <connection ref> added into an existing macro, or a ref attribute
+            # added/replaced on one. A component's own <connection name=> carries no ref, so it is not counted.
+            refs = [e for e in root.xpath("//connection[@ref]") if not e.xpath("ancestor::macro")]
+            refs += [op for op in root.xpath("./add | ./replace")
+                     if _DIFF_REF_ATTR.search(op.get("sel") or "")
+                     or (op.get("type") == "@ref" and "connection" in (op.get("sel") or ""))]
+            if frag or refs:
+                fragment_files += 1
+                what = []
+                if frag:
+                    what.append(f"{len(frag)} loadout leaf/group element(s)")
+                if refs:
+                    what.append(f"{len(refs)} macro connection ref(s)")
+                report.skip("fitting checks", f"{vpath}: {' and '.join(what)} inside diff ops that patch an "
+                            "existing macro or loadout -- diff fragment not judged")
+
+    # The denominator. Nothing examined must never read as judged-and-clean, and "(see NOT CHECKED)" appears only
+    # when this check actually recorded a skip there.
+    new_skips = sum(1 for s in report.skipped if s.what == "fitting checks") - skips_before
+    if judged_hulls or skipped_hulls:
+        head = f"{len(judged_hulls)} macro(s) judged, {len(skipped_hulls)} skipped"
+    else:
+        head = "0 macro(s) examined (no ship macro or library loadout in this mod)"
+    report.notes.append(f"fitting checks: {head}; {groups_unjudged} group entries not tag-judged (no component "
+                        f"group of that exact name); {fragment_files} diff file(s) with loadout fragments not judged"
+                        + (f" ({new_skips} skip(s), see NOT CHECKED)" if new_skips else ""))
+
+    for macro_name, b in per_macro.items():
+        if not (b["tag"] or b["gtag"] or b["case"] or b["ref"]):
+            continue
+        parts = []
+        if b["tag"]:
+            parts.append(f"{len(b['tag'])} of {b['leaves']} preset leaves fail the documented tag rule "
+                         f"(e.g. {'; '.join(b['tag'][:2])})")
+        if b["gtag"]:
+            parts.append(f"{len(b['gtag'])} of {b['gfit']} group entries fit no slot of their group under the "
+                         f"documented tag rule (e.g. {'; '.join(b['gtag'][:2])})")
+        if b["case"]:
+            parts.append(f"{len(b['case'])} of {b['groups']} group names match the component only by case "
+                         f"(e.g. {b['case'][0]})")
+        if b["ref"]:
+            parts.append(f"{len(b['ref'])} of {b['refs']} macro connection refs name no component connection "
+                         f"(e.g. {b['ref'][0]})")
+        report.add("info", "fit", f"{b['label']}: " + "; ".join(parts)
+                   + ". Engine enforcement: MEASURED for weapons in one save (mismatched presets not installed), "
+                   "UNMEASURED for other kinds; a hit is a suspect for an in-game fitting readback",
+                   b["vpath"], b["line"])
 
 
 def check_module_groups(mod_dir: Path, config: _merge.Config, report: Report) -> None:
@@ -2839,6 +3210,7 @@ def validate(
     check_references(mod_dir, runtime, report)
     check_file_existence(mod_dir, runtime, report)
     check_connections(mod_dir, runtime, report)
+    check_fitting_compatibility(mod_dir, runtime, report)  # INFO only: tag fit, group case, macro refs (F363)
     check_module_groups(mod_dir, runtime, report)  # runtime: a later mod's group is still real
     check_page_collisions(mod_dir, config, report)
     check_text_sanity(mod_dir, config, report)
