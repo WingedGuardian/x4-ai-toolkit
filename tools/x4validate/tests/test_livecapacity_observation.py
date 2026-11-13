@@ -79,7 +79,7 @@ def test_sample_one_sdk_record_one_call_no_md_record_inference(kind,profile):
     "o.revision=string.rep('0',64)","v.session=string.rep('0',32)",
     "o.world_token='old-world'","o.public_revision=string.rep('0',64)",
     "o.md_used=true","o.md_used=-1","o.md_used=mdlimit+1","o.md_limit=1",
-    "o.md_busy=0","o.md_queued=64","o.md_queue_limit=65","o.md_used=nil",
+    "o.md_busy=2","o.md_queued=64","o.md_queue_limit=65","o.md_used=nil",
 ])
 def test_foreign_malformed_or_stale_sample_never_qualifies(kind,change):
     r,_=runtime(kind)
