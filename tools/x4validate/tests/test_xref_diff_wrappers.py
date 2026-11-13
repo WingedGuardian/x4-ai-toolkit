@@ -1,12 +1,14 @@
 """x4xref: a `<diff>` document's patch STRUCTURE is not script behaviour.
 
 The `<diff>` root and its operation children (`add`, `replace`, `remove`) were indexed
-as `action` rows. MEASURED on a real install (index rebuilt before and after): 2,541
-structure rows removed -- diff 458, add 1,364, remove 47, replace 672 -- including 331 of
-the 690 rows the nested-patch fix added; the 1,439 `replace` rows that remain are the
-schema's own string-replacement element. (An earlier count of 3,580 was an arithmetic
-slip; the op-NAMED action rows totalled 3,980, real `replace` elements included.) Their CHILDREN are the patched-in script and stay indexed,
-with the enclosing cue taken from the op's `sel` where the selector names one.
+as `action` rows. MEASURED per row on a real install (index rebuilt before and after):
+2,524 structure rows removed -- diff 458, add 1,364, remove 47, replace 655 -- including
+331 of the 690 rows the nested-patch fix added; the 1,456 `replace` rows that remain are
+the schema's own string-replacement element. (Earlier counts of 3,580 and 1,439 were
+counting slips: an arithmetic error, and distinct rows counted instead of rows.) Their
+CHILDREN are the patched-in script and stay indexed,
+with the enclosing cue taken from the op's `sel` only where the selector names it
+unambiguously (see `_op_context`); otherwise the cue is left empty.
 
 `add`, `replace` and `remove` are ALSO real MD/aiscript elements (READ via X4CodeSense
 describe_element over md.xsd and aiscripts.xsd: `add`/`remove` hold existing_people /
@@ -106,3 +108,60 @@ def test_twin_a_non_op_child_of_a_diff_is_still_indexed():
     """Not an op, so not patch structure we understand: indexed as before, never dropped."""
     rows = _rows("""<diff><find_ship name="$s"/></diff>""")
     assert [(r.kind, r.name) for r in rows] == [("action", "find_ship")]
+
+
+# --- the enclosing cue: a NAME only when the selector states it unambiguously -----
+#
+# A wrong cue name is worse than an empty one: `cue X` would list the row under a cue
+# it is not in. Each shape below was MEASURED wrong by a review probe of the first cut,
+# which took the last `cue[@name=...]` text anywhere in the selector.
+
+def _ctx(tag, sel, pos=None):
+    op = etree.Element(tag)
+    op.set("sel", sel)
+    if pos:
+        op.set("pos", pos)
+    etree.SubElement(op, "cue", name="NEW")
+    d = etree.Element("diff")
+    d.append(op)
+    rows: list = []
+    _xref._walk(d, "m", "md/x.xml", rows)
+    return [r.cue for r in rows if r.kind == "cuedef"][0]
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("tag,sel,pos,want", [
+    # positives
+    ("add", "//cue[@name='a']/actions", None, "a"),
+    ("add", '//cue[@name="a"]/actions', None, "a"),
+    ("add", "//cue[ @name = 'a' ]/actions", None, "a"),
+    ("add", "/mdscript/cues/cue[@name='a']/cues/cue[@name='b']", None, "b"),
+    ("add", "//cue[@name='p']//cue[@name='q']/actions", None, "q"),
+    ("add", "//cue[@name='a']", "prepend", "a"),
+    ("add", "//cue[@name='a']/@checkinterval", None, "a"),
+    ("replace", "/mdscript/cues/cue[@name='a']/cues/cue[@name='b']", None, "a"),
+    ("replace", "//cue[@name='a']/conditions/check_value/@value", None, "a"),
+    ("add", "//cue[@name='p']/cues/cue[@name='a']", "after", "p"),
+    ("replace", "//cue[@name='p']/cues/cue[@name='a'][1]", None, "p"),
+    ("add", "//cue[@name='p']/cues/cue[@name='a'][1]", "after", "p"),
+    # no cue, or no PARENT cue, named
+    ("add", "/mdscript/cues", None, ""),
+    ("add", "//cue[@name='a']", "before", ""),
+    ("add", "//library[@name='lib']/actions", None, ""),
+    # ambiguous: empty, never a wrong name
+    ("add", "//cue[@name='a' or @name='b']/actions", None, ""),
+    ("add", "//cue[@name='p']/cues/cue[@name='a' or @name='b']/actions", None, ""),
+    ("add", "//cue[@name='p']/cues/cue[starts-with(@name,'x')]/actions", None, ""),
+    ("add", "//cue[@name='p']/cues/cue[2]/actions", None, ""),
+    ("add", "//cue[@name='p']/cues/cue[@name='a']/cues/cue[not(@name)]/actions", None, ""),
+    ("add", "//cue[@name='p']/cues/cue[@name='a'][1]/actions", None, ""),
+    ("add", "//cue[@name='p']//actions", None, ""),
+    ("add", "//cue[@name='p']/cues/cue[@name='a']/..", None, ""),
+    ("add", "//cue[@name='p']/cues/cue[@name='a']/../cue[@name='b']", "after", ""),
+    ("add", "//cue[@name='a/b']/actions", None, "a/b"),          # a slash inside quotes
+    ("add", "//cue[@name='x]y']/actions", None, "x]y"),          # a bracket inside quotes
+])
+def test_op_context_names_a_cue_only_when_unambiguous(tag, sel, pos, want):
+    assert _ctx(tag, sel, pos) == want
