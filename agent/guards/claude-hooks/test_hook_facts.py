@@ -6591,9 +6591,21 @@ class TestTheSeedIsNarrowedWhereTheReplayFoundFalsePositives(unittest.TestCase):
     def test_parse_debris_is_not_joined_onto_the_seed(self):
         """`2>/dev/null` read as a sed -i target and an escaped quote as a path, both under
         the game root -- hard denies on probe harnesses."""
-        self.assertFalse(FC("sed -i s/a/b/ /dev/null 2>/dev/null", GAME)["sed_i_in_game_or_profile"])
-        self.assertFalse(FC("sed -i s/a/b/ " + BS + DQ + "f.xml" + BS + DQ, GAME)
-                         ["sed_i_in_game_or_profile"])
+        # Off Windows the fixture roots are Windows-spelled, and `C:/...` there is a RELATIVE name the guard reads through
+        # the hook process's own cwd (pre-arc; BLIND-SPOTS F375 row 17): 4.1.2 CI (ubuntu, run 43157469519) read this
+        # debris under that "game root". A guard change dropping that reading made `rm -rf C:/x` from a real POSIX game
+        # root weaker than v4.1.1 (4.1.2 final review, MEASURED), so the guard is unchanged and POSIX gets POSIX roots.
+        roots, game = ROOTS, GAME
+        if os.name != "nt":
+            roots = {k: "/x4fixture" + v.split(":", 1)[1] for k, v in ROOTS.items()}
+            game = roots["game"]
+
+        def fc(cmd):
+            return _facts({"tool_input": {"command": cmd}, "cwd": game}, roots)
+        self.assertFalse(fc("sed -i s/a/b/ /dev/null 2>/dev/null")["sed_i_in_game_or_profile"])
+        self.assertFalse(fc("sed -i s/a/b/ " + BS + DQ + "f.xml" + BS + DQ)["sed_i_in_game_or_profile"])
+        # ...and the same operands clean ARE joined there (the rule can fire on these roots at all)
+        self.assertTrue(fc("sed -i s/a/b/ f.xml")["sed_i_in_game_or_profile"])
 
     def test_TWIN_a_clean_relative_operand_from_the_seed_still_fires(self):
         self.assertTrue(FC("sed -i s/a/b/ libraries/x.xml", GAME)["sed_i_in_game_or_profile"])

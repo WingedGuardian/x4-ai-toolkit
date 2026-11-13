@@ -13365,11 +13365,24 @@ last segment's physical cwd).
     the xargs and archive rules, read it the same way now); `--verbose`, `--force`, `--dir`, `--recursivex` and the like are
     not (`test_every_unambiguous_prefix_of_recursive_is_recursive` fails on 0152fdb5, its TWIN passes on both; 2 mutants).
 
+17. (4.1.2 CI and final review, 2026-11-13) Off Windows, a drive-spelled operand (`C:/x`) is a RELATIVE name, but
+    `is_abs()` reads it as absolute, so it is never joined to the session directory; `link_resolved` hands it to
+    posixpath.realpath, which places it under the HOOK PROCESS's own cwd. MEASURED with a POSIX simulation (hook_facts with
+    os shimmed to posixpath, posixpath's getcwd pinned; scratch review7/posixprobe.py, MSYS_NO_PATHCONV=1): from a POSIX game
+    root, with the hook cwd equal to it, `rm -rf C:/x` reads rm_in_x4_dir True and `rm -rf C:/../extensions` rm_hits_game
+    True at v4.1.1 and now (physically right: from that cwd both reach the game folder once a `C:` folder exists), and False
+    with the hook cwd elsewhere. The same reading put a test fixture's debris (`2>/dev/null` joined to the Windows-spelled
+    fixture game root) under that root on ubuntu CI (run 43157469519). A guard change dropping the hook-cwd answer
+    (e4c5fbb7, 67f9e6fe) made the first two WEAKER than v4.1.1 (final review), so it was reverted: hook_facts is as at
+    9e13a1a9, and `test_parse_debris_is_not_joined_onto_the_seed` uses POSIX-spelled roots off Windows (it and its mutant
+    are red/green on both systems, MEASURED with the simulation). OPEN: joining a drive-spelled operand to the SESSION
+    directory on POSIX (the proper fix) is not done; the reading is right only when the hook cwd is the shell's.
+
 2026-11-11, USER DECISION (relayed by the 4.1.2 review lead): a PowerShell `..` through a junction stays REFUSED (the strict
 reading in F373: PowerShell takes `..` from the path as written, Git Bash through the link, and the guard reads it as Git Bash
 does); and the rows of this entry other than row 16 go to the next release, not 4.1.2.
 
-**NO RE-DERIVATION for rows 1-15: an OPEN register of shapes, each measured or reasoned as its row says. Row 16 is FIXED
+**NO RE-DERIVATION for rows 1-15 and 17: an OPEN register of shapes, each measured or reasoned as its row says. Row 16 is FIXED
 and re-derived by the tests it names.**
 
 ## F376 - A command carried inside another shell loses the outer `cd` · **DEFECT (measured)** · PRE-ARC · severity HIGH · confidence 90% · FIXED 2026-11-11 (residuals OPEN)
