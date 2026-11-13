@@ -363,3 +363,67 @@ def test_absent_protected_folder_is_simply_not_matched(tmp_path, monkeypatch):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     assert T.journal_refusal(elsewhere, profile=tmp_path / "X4" / "1") is None
+
+
+# --- an unreadable identity is a REFUSAL, never a bare ValueError (delta review 5, M-1) --
+#
+# `_identity` raises ValueError when a path exists but its identity cannot be read. Callers
+# such as _liveclip/_livefocus/_livestartmenu catch only their own refusal types, so that
+# ValueError escaped as a traceback. `journal_refusal` now turns it into a refusal sentence,
+# which every caller already converts into its own refusal type.
+
+def _deny_stat(monkeypatch, blocked: Path):
+    real = _os.stat
+
+    def stat(path, *a, **k):
+        if Path(path) == blocked:
+            raise PermissionError(13, "Access is denied", str(path))
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(T.os, "stat", stat)
+
+
+def _configure(monkeypatch, game, ref=None, prof=None):
+    monkeypatch.setattr(_paths, "game_root", lambda: game)
+    monkeypatch.setattr(_paths, "reference", lambda: ref)
+    monkeypatch.setattr(_paths, "profile", lambda: prof)
+
+
+def test_an_unreadable_protected_root_refuses_and_says_why(tmp_path, monkeypatch):
+    game = tmp_path / "game"; game.mkdir()
+    journal = tmp_path / "journal"; journal.mkdir()
+    _configure(monkeypatch, game)
+    _deny_stat(monkeypatch, game.resolve())
+    why = T.journal_refusal(journal)
+    assert why is not None
+    assert "configured protected root" in why and "could not be read" in why
+    assert "refused until it is reachable" in why
+
+
+def test_an_unreadable_journal_folder_refuses_without_a_traceback(tmp_path, monkeypatch):
+    game = tmp_path / "game"; game.mkdir()
+    journal = tmp_path / "journal"; journal.mkdir()
+    _configure(monkeypatch, game)
+    _deny_stat(monkeypatch, journal.resolve())
+    why = T.journal_refusal(journal)
+    assert why is not None and "journal folder" in why and "could not be read" in why
+
+
+def test_twin_readable_roots_still_accept(tmp_path, monkeypatch):
+    game = tmp_path / "game"; game.mkdir()
+    journal = tmp_path / "journal"; journal.mkdir()
+    _configure(monkeypatch, game)
+    assert T.journal_refusal(journal) is None
+
+
+def test_startmenu_callers_raise_their_own_refusal_type(tmp_path, monkeypatch):
+    from x4validate._livesession import SessionUnavailable
+    from x4validate._livestartmenu import ConversationAuthority, StartClient
+    game = tmp_path / "game"; game.mkdir()
+    journal = tmp_path / "journal"; journal.mkdir()
+    _configure(monkeypatch, game)
+    _deny_stat(monkeypatch, game.resolve())
+    with pytest.raises(SessionUnavailable, match="refused until it is reachable"):
+        ConversationAuthority(journal, lambda *a: None)
+    with pytest.raises(SessionUnavailable, match="refused until it is reachable"):
+        StartClient(None, journal, None, "1", 1, None, desktop=None, focus=None)
