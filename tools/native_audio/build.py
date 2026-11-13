@@ -37,7 +37,13 @@ def main():
     r=subprocess.run(argv,cwd=output,env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
                      timeout=120,creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0)
     print(r.stdout.decode("utf-8","replace"))
-    if r.returncode:raise SystemExit(r.returncode)
+    if r.returncode:
+        # The outputs did not exist before this run (checked above), so whatever the
+        # failed compile left is this run's own partial output: remove it, so the
+        # next attempt is not refused for it.
+        for x in (exe,obj):
+            if x.is_file():x.unlink()
+        raise SystemExit(r.returncode)
     if {str(x):sha(x) for x in inputs}!=before:raise ValueError("build inputs changed")
     value={"status":"COMPILED_NOT_RUNTIME_QUALIFIED","source_sha256":sha(source),"helper_sha256":sha(exe),
            "observed_inputs":before,"compiler_argv":argv,
