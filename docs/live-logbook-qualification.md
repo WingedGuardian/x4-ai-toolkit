@@ -25,11 +25,10 @@ requested/returned counts, native total, next index and whether this window cove
 the total at observation. Multiple windows are not an atomic whole-log census.
 
 Offline evidence:27 native controls passed;154 assembly,
-bundle and composition controls passed (4592fd269db1), including actual observer
+bundle and composition controls passed, including actual observer
 zero/unavailable handling through the fixed read route. Independent review found
 no blocking issue and requested the precise projected-read stability wording.
-The final projected-wording successor passed all 181 combined controls, zero skips
-(5b9e9c9394c3); independent wiring review is clear. Synthetic fixtures
+The final projected-wording successor passed all 181 combined controls, zero skips; independent wiring review is clear. Synthetic fixtures
 are not measurements from X4. No deployment or game action occurred.
 
 Integration adds this observer to the public source-bound bundle and its native

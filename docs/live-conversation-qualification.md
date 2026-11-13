@@ -113,7 +113,7 @@ execution interface or direct purchase call was introduced.
 
 V3 source now includes the fixed built-right-information-row context route
 described in live-actorcontext-qualification.md. Current V3 passes 175/175
-resource-admitted controls (zero skips,81446daefd70 child 0). Closed-map navigation and radial
+resource-admitted controls (zero skips child 0). Closed-map navigation and radial
 selection are still absent; dispatch and independently observed outcomes remain
 separate. The old 51/70/127-control evidence is historical. V3's separate receipt
 binds 15 source inputs and rechecks 52 unchanged schema/source pins, retaining the

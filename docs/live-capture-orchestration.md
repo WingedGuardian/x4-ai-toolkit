@@ -30,9 +30,7 @@ Valid native UNAVAILABLE remains missing context and does not prevent independen
 Qualification is currently bounded integration evidence: actual SDK/codec/ActionJournal and file observer, with synthetic MD replies, synthetic native path responses and temporary image files. The dedicated observer suite is complete for its 35 controls; actual native runtime and visual-content qualification remain separate requirements.
 
 Optional-install collection is now checked separately. With the capture extra,
-the 35 observer controls plus 4 geometry/CI policy controls passed 39/39, zero skips
-(c8c3377ffe4f). With Pillow imports deliberately unavailable, the independent
-missing-decoder control passed and 34 image-dependent controls explicitly skipped
-(ea9afbf21899); those skips are not passes. The isolated full-qualification
+the 35 observer controls plus 4 geometry/CI policy controls passed 39/39, zero skips. With Pillow imports deliberately unavailable, the independent
+missing-decoder control passed and 34 image-dependent controls explicitly skipped; those skips are not passes. The isolated full-qualification
 workflow requests both geometry and capture extras so image controls execute.
 No shared workflow branch, remote CI run or release was changed by this fix.

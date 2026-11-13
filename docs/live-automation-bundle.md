@@ -152,7 +152,7 @@ native_save_path to the closed native read vocabulary. It returns the engine's
 save-folder observation only, never an inferred screenshot root. Integrated 164
 controls passed, followed by 135 affected controls after two additional actual
 observer/assembly tests; the unchanged 31 path controls retain their prior result.
-Both runs had zero skips (81fba399d320, a6631cd43e7f). No runtime qualification is
+Both runs had zero skips. No runtime qualification is
 implied by these controlled native doubles.
 
 ## Catalog capacity for combined diagnostics
@@ -163,7 +163,7 @@ extensions together with a separate private fixture extension. Provider-ID
 collision, descriptor copying, per-descriptor provider bounds and lifecycle
 freeze checks remain enforced.
 
-Bundle/helper controls passed 132/132, zero skips (430a7c359580), with independent
+Bundle/helper controls passed 132/132, zero skips, with independent
 source review. A nine-descriptor construction control verifies every declared
 provider revision and registration; it uses synthetic providers and does not
 prove the actual nine implementations work together in the engine. The test was

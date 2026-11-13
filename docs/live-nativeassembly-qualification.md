@@ -5,7 +5,7 @@ the actual paths observer and preserving its canonical stamp or UNAVAILABLE
 payload. Its disposer is owned by the assembly; construction queries nothing.
 The actual observer-through-assembly controls cover both a successful exact path
 and an unavailable getter. Final affected 135 controls passed, zero skips; unchanged 31 native-path controls passed in the prior combined
-run 81fba399d320. Independent READ review is clear. No screenshot root is inferred
+run. Independent READ review is clear. No screenshot root is inferred
 and no actual game path was queried.
 
 Offline-qualified; runtime remains unverified. No native game call, deployment,

@@ -69,9 +69,9 @@ clock failure is UNCERTAIN with action_attempted preserved.
 
 ## Qualification
 
-MEASURED offline:46 standalone controls passed (2cd418030af0).
+MEASURED offline:46 standalone controls passed.
 The final combined module/provider/assembly/bundle/composition group passed 306
-with zero skips (0dc841115722). This includes each real primitive through the
+with zero skips. This includes each real primitive through the
 actual SDK registry, unchanged once-only semantics, native-ID wrapper reads,
 current-ship mismatch, wrong docking target, partial/unknown state, expired
 preparations and post-write uncertainty.

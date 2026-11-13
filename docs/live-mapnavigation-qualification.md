@@ -24,8 +24,7 @@ diagnostics appeared in the existing actor-context tests. Independent READ revie
 found no source blocker in those modules or their subsequent V4 integration.
 
 The initial V4 integration attempt was NOT_LAUNCHED at RAM 27.14/31.84GiB under
-the running-game20% free floor. After resources recovered, fresh admission
-f8f81740f1c6 ran the exact four-file suite: 121/121 PASS, zero skips, pytest 15.97s,
+the running-game20% free floor. After resources recovered, a fresh admission ran the exact four-file suite: 121/121 PASS, zero skips, pytest 15.97s,
 child 16.6s and exit 0. Files: test_livemapnavigation, test_liveactorcontext,
 test_livecommmenu_provider and test_liveconversation_extension. Existing direct
 Lua tests emitted caught SEH diagnostics; this is not diagnostic-free execution.

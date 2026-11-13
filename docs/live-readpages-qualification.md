@@ -8,6 +8,6 @@ The router retains one capture, at most 32,000 bytes, and a bounded history of 4
 
 Independent source review found a clock rollback gap between the source's finish timestamp and the enclosing reply. The router now rejects that rollback; the host also checks the finish against the qualified envelope age. The 10-to-20-to-15 counterexample is covered.
 
-MEASURED: resource-gated regression command covering test_livereadpages.py, test_livebound.py, test_liveautomation.py and test_livecli.py passed 236 controls with one skip (2.34 seconds, receipt 93de6048510d). The skipped legacy archive test needs X4_MODS ground-truth data; it is not a pass. The first invocation named a nonexistent test file and ran no tests; the corrected invocation above is the evidence.
+MEASURED: resource-gated regression command covering test_livereadpages.py, test_livebound.py, test_liveautomation.py and test_livecli.py passed 236 controls with one skip (2.34 seconds, receipt). The skipped legacy archive test needs X4_MODS ground-truth data; it is not a pass. The first invocation named a nonexistent test file and ran no tests; the corrected invocation above is the evidence.
 
 Controls include empty and 32,000-byte captures, UTF-8 page boundaries, one source invocation, preserved error statuses, changing live source after capture, mixed/missing/duplicate pages, superseded and expired captures, byte-count lies and clock rollback. Native transport timing and complete in-game workflow remain unverified.

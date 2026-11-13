@@ -34,8 +34,8 @@ Offline qualification: 284 tests passed, zero skips. These cover bundle/bootstra
 extensions, profile identity/substitution, fixed-read routing and actual SDK/router
 constructor forwarding, plus actual generated-bundle/router/codec through BoundPipe
 and host ReadCapture. Review caught a table-versus-encoded-string return defect:
-the added whole-chain control failed before the correction (`78932ba26ee9`) and
-passes after it. The earlier 209-check constructor group (`d428d741b47c`) did not
+the added whole-chain control failed before the correction and
+passes after it. The earlier 209-check constructor group did not
 exercise that full read path. Native calls were synthetic. This receipt does not
 include the separate provider/host capacity
 suites or establish a combined full-campaign runtime result.
@@ -44,7 +44,7 @@ No installed mod, profile, save, UI focus or game state changed. Canonical MD
 qualification belongs to the individual changed extension generators; a later
 immutable combined freeze must pin their exact qualified source and outputs.
 
-Additional constructor qualification: `6db7c2db3f3a` passed all six real nine-loader
+Additional constructor qualification passed all six real nine-loader
 lifecycle controls under each selected profile (12 tests, zero skips). It exercises
 actual shared LuaJIT factories, registration, cleanup and failure handling with
 native calls forbidden before world readiness. Six interactive cases overlap the

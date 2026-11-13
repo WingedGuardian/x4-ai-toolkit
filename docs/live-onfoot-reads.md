@@ -17,10 +17,10 @@ probe, containerprobe, its later wire-rendering observation and player. The two
 probe/player paths and containerprobe prerequisite are guarded; the later
 wire-only observation does not pass the handle to an object getter.
 
-MEASURED offline: the five new controls failed before the fix (080865ff38fa).
+MEASURED offline: the five new controls failed before the fix.
 The initial correction passed 259 controls. Independent review caught a conflation
 between a nil native list and no occupied ship; its separate flag plus regression
-passed 260 controls, zero skips (93f0e427430f). The group includes the full legacy
+passed 260 controls, zero skips. The group includes the full legacy
 Lua suite, raw evidence and new on-foot cases. These use a real Lua interpreter
 with synthetic engine boundaries. No claim of zero in-game errors follows until
 an approved run verifies the on-foot native control. BUILD 52fae046 identifies the

@@ -14,6 +14,6 @@ FFI verification checks unsigned identity width/type, struct size/alignment/fiel
 
 The bundle hashes this module and shared disposal retires it. Standalone controls
 passed 47 with zero skips; combined assembly/bundle/
-composition/main controls passed 399 with zero skips (bbfa60e25634), including
+composition/main controls passed 399 with zero skips, including
 actual zero-window and getter-failure distinctions through assembly.
 Independent source and wiring reviews are clear.

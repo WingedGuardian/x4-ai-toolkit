@@ -7,7 +7,7 @@ private ticket before dispatch. Stop is an explicit operator request; retirement
 does not stop unrelated player activity or restore state automatically.
 
 Independent source review found no blocker. Thirty synthetic-native controls
-passed under resource-budget run 3d9e38d3def9. These cover eligibility, occupied
+passed. These cover eligibility, occupied
 ship identity, changed session/state, clock rollback, duplicate dispatch,
 retirement and exceptions after dispatch. No game was launched by these tests.
 
