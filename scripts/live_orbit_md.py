@@ -1,6 +1,6 @@
 """Pure bounded native orbit proposal; no output writes or game calls.
 
-Positive native sources: scenario_mining_1.xml:244-248,295-301 owns the
+Positive native sources: extensions/ego_dlc_timelines/md/scenario_mining_1.xml:244-248,295-301 owns the
 OrbitParameterized handle; story_diplomacy_intro.xml:9087-9096 delays its
 foreign-scene check; scenario_tutorials.xml:3497-3517 reads camera angles/zoom.
 """

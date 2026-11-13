@@ -1,7 +1,7 @@
 """Pure diagnostic room-entry proposal, copied from native player-room sequences.
 
-scenario_transport_refugees.xml:419-440 supplies waypoint, transport-success
-and room-position actions. gs_boron2.xml:252-280 supplies leave-control and
+extensions/ego_dlc_timelines/md/scenario_transport_refugees.xml:419-440 supplies waypoint, transport-success
+and room-position actions. extensions/ego_dlc_boron/md/gs_boron2.xml:252-280 supplies leave-control and
 the already-listening sibling stopped-control cue. No game data is embedded.
 """
 from pathlib import Path

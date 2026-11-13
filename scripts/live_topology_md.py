@@ -1,7 +1,7 @@
 """Pure topology snapshot proposal. Never applies XML or changes game topology.
 
 Native analogues: upkeep_management.xml:25 clusters; inituniverse.xml:33-37
-sectors/zones; setup_dlc_boron.xml:263-266,1482 gates/exit sector.
+sectors/zones; extensions/ego_dlc_boron/md/setup_dlc_boron.xml:263-266,1482 gates/exit sector.
 Find defaults cover normal clusters; find_zone excludes highways.
 """
 from __future__ import annotations
