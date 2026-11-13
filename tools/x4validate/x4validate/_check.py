@@ -885,6 +885,15 @@ def check_readability(mod_dir: Path, config: _merge.Config, report: Report) -> N
     for _ in _scan.iter_mod_xml(mod_dir, unreadable=unreadable):
         pass
     for u in unreadable:
+        if u.folder:
+            # A folder that could not be LISTED: nothing in it was examined, and no file
+            # is known to be malformed. Not a parse failure, so not worded as one.
+            report.skip("this folder was not examined at all",
+                        f"{u}: its files were not checked")
+            report.add("warn", "parse",
+                       f"{u}: a folder that could not be listed, so its files were not "
+                       "checked", u.vpath or None)
+            continue
         segments = {s.lower() for s in u.vpath.split("/")[:-1]}
         scratch = bool(segments & SCRATCH_DIRS)
         report.skip("this file was not examined at all",
