@@ -59,24 +59,127 @@ class XrefRow:
 #: people selections and a string replacement), so they are skipped only in the op
 #: position (direct children of a `<diff>` root), never through `_SKIP_TAGS`.
 _DIFF_OPS = frozenset({"add", "replace", "remove"})
-_SEL_CUE = re.compile(r"""cue\s*\[\s*@name\s*=\s*(['"])(.*?)\1\s*\]""")
-_SEL_ENDS_AT_CUE = re.compile(r"""cue\s*\[\s*@name\s*=\s*(['"]).*?\1\s*\]\s*$""")
+#: The ONE predicate shape that names a cue: `[@name='literal']`, either quote style.
+_NAME_PRED = re.compile(r"""\s*@name\s*=\s*(?:'([^']*)'|"([^"]*)")\s*""")
+
+
+@dataclass(frozen=True)
+class _Step:
+    test: str                  # node test, e.g. "cue", "actions", "..", "@value"
+    preds: tuple[str, ...]     # top-level predicate bodies, brackets stripped
+    descendant: bool           # reached through `//`
+
+
+def _sel_steps(sel: str) -> list[_Step] | None:
+    """Split an XPath selector into location steps, respecting quotes and brackets.
+
+    None for a selector this cannot split cleanly (unbalanced brackets or quotes): the
+    caller then names no cue, rather than guessing."""
+    raw: list[str] = []
+    cur: list[str] = []
+    depth, quote = 0, ""
+    for ch in sel:
+        if quote:
+            cur.append(ch)
+            if ch == quote:
+                quote = ""
+        elif ch in ("'", '"'):
+            quote = ch
+            cur.append(ch)
+        elif ch == "[":
+            depth += 1
+            cur.append(ch)
+        elif ch == "]":
+            depth -= 1
+            if depth < 0:
+                return None
+            cur.append(ch)
+        elif ch == "/" and depth == 0:
+            raw.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    if quote or depth:
+        return None
+    raw.append("".join(cur))
+    steps: list[_Step] = []
+    descendant = False
+    for i, text in enumerate(raw):
+        text = text.strip()
+        if not text:
+            # A leading "/" gives one empty segment; a "//" gives an empty one before
+            # the step it introduces, which is then reached as a descendant.
+            if i > 0:
+                descendant = True
+            continue
+        test, preds, buf, depth, quote = "", [], [], 0, ""
+        for ch in text:
+            if quote:
+                buf.append(ch)
+                if ch == quote:
+                    quote = ""
+            elif ch in ("'", '"') and depth:
+                quote = ch
+                buf.append(ch)
+            elif ch == "[":
+                if depth:
+                    buf.append(ch)
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth:
+                    buf.append(ch)
+                else:
+                    preds.append("".join(buf))
+                    buf = []
+            elif depth:
+                buf.append(ch)
+            else:
+                test += ch
+        steps.append(_Step(test.strip(), tuple(preds), descendant))
+        descendant = False
+    return steps
+
+
+def _cue_name(step: _Step) -> str | None:
+    """The literal of a `cue[@name='x']` step with exactly that one predicate, else None."""
+    if step.test != "cue" or len(step.preds) != 1:
+        return None
+    m = _NAME_PRED.fullmatch(step.preds[0])
+    if m is None:
+        return None
+    return m.group(1) if m.group(1) is not None else m.group(2)
 
 
 def _op_context(op: etree._Element) -> str:
     """The cue that ENCLOSES what a diff op inserts, read from its `sel`, or "".
 
-    The last `cue[@name=...]` step of the selector -- unless the selector ENDS at that
-    cue and the op puts its content in that cue's place (a `replace`) or beside it
-    (`pos="before"/"after"`), where the enclosing cue is the one before it. A selector
-    naming no cue (`/mdscript/cues`, `//attention/actions`) gives "", as before.
+    A WRONG name is worse than none (`cue X` would list the row under a cue it is not
+    in), so a name is returned only when the selector states it unambiguously:
+
+    * The content's container is the selected node -- or, for a `replace` or a
+      `pos="before"/"after"` insert, the selected node's PARENT, so the final step is
+      dropped (whatever its predicates: it is the node being replaced or flanked).
+    * Of the container path, the LAST `cue` step must be exactly `cue[@name='literal']`
+      (either quote style); an `or`, a position, `not(@name)`, a function or a second
+      predicate gives "".
+    * No step after it may be `..`, `//`-descendant, or another `cue`/axis step
+      (`cue[2]`, `cue[not(@name)]`): the content could then sit in a different cue.
+    A selector with no cue step (`/mdscript/cues`, `//attention/actions`,
+    `//library[...]`) gives "", as before.
     """
-    sel = op.get("sel", "")
-    names = [m.group(2) for m in _SEL_CUE.finditer(sel)]
-    if names and _SEL_ENDS_AT_CUE.search(sel) and (
-            op.tag == "replace" or op.get("pos") in ("before", "after")):
-        names = names[:-1]
-    return names[-1] if names else ""
+    steps = _sel_steps(op.get("sel", ""))
+    if not steps:
+        return ""
+    if op.tag == "replace" or op.get("pos") in ("before", "after"):
+        steps = steps[:-1]
+    cue_at = max((i for i, s in enumerate(steps) if s.test == "cue"), default=None)
+    if cue_at is None:
+        return ""
+    for s in steps[cue_at + 1:]:
+        if s.descendant or s.test == ".." or "::" in s.test or s.test == ".":
+            return ""
+    return _cue_name(steps[cue_at]) or ""
 
 
 def _walk(root: etree._Element, source: str, vpath: str, out: list[XrefRow]) -> None:
