@@ -466,7 +466,9 @@ def test_an_unlistable_mod_folder_with_no_predicate_is_named_as_the_mod_folder(t
 
     monkeypatch.setattr(os, "scandir", deny)
     unreadable: list = []
-    list(_scan.iter_mod_xml(mod, None, unreadable))
+    # The loose WALK of the mod folder (no prefix predicate). The catalog read that
+    # follows in iter_mod_xml lists the same folder and raises, as documented.
+    list(_scan._walk_xml(mod, mod, unreadable))
     assert [str(u).split(" (")[0] for u in unreadable] == ["mod folder 'moda'"]
 
 

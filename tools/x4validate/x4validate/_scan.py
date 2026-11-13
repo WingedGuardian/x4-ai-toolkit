@@ -79,10 +79,17 @@ def _walk_xml(root: Path, mod_dir: Path,
         if unreadable is None:
             return  # silent-ok: the caller passed no channel (see iter_mod_xml's contract)
         where = Path(exc.filename) if exc.filename else root
-        try:
-            rel = where.relative_to(mod_dir).as_posix() + "/"
-        except ValueError:
-            rel = str(where)
+        if where == root and isinstance(exc, (FileNotFoundError, NotADirectoryError)):
+            return  # silent-ok: a walk ROOT that does not exist (or is not a folder) is an
+            # absence, not a read failure -- the same rule _scan_roots applies to the mod
+            # folder, and what rglob answered before.
+        if where == mod_dir:
+            rel = ""   # rendered as "mod folder '<name>'"
+        else:
+            try:
+                rel = where.relative_to(mod_dir).as_posix() + "/"
+            except ValueError:
+                rel = str(where)
         unreadable.append(Unreadable(rel, f"could not list this folder, so its files were "
                                           f"NOT scanned: {exc}", folder=True, mod=mod_dir.name))
 
