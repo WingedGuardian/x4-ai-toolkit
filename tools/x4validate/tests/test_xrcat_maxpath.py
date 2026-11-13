@@ -239,12 +239,19 @@ def test_missing_iconv_is_named():
     assert out.stdout.strip() == "iconv is not available to check names against code page 1252", out
 
 
-@pytest.mark.parametrize("env", [{"X4_XRCAT_ACP": "65001"}, {"X4_XRCAT_ICONV": "true"}, {"X4_XRCAT_ACP": ""}])
+# Each case is one the removed seams WOULD have passed: code page 1251 encodes Cyrillic, and
+# an iconv that always succeeds encodes anything. The assertion names the refusal itself, so
+# a run that fails for another reason (no Wine off Windows) cannot satisfy it.
+@pytest.mark.parametrize("env", [{"X4_XRCAT_ACP": "1251"},
+                                 {"X4_XRCAT_ACP": "1251", "X4_XRCAT_ICONV": "true"},
+                                 {"X4_XRCAT_ICONV": "true"}])
 def test_no_environment_variable_weakens_the_refusal(tmp_path, env):
-    # The old seams let a production environment pass a Cyrillic name (MEASURED by the review).
+    if "X4_XRCAT_ACP" not in env and not WINDOWS:
+        pytest.skip("off Windows no code page is read, so an iconv override alone changed nothing")
     src = _src(tmp_path)
     (src / "kж.xml").write_bytes(b"<x/>")
     result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")], **env)
+    assert "xrcat: REFUSED" in result.stderr and "kж.xml" in result.stderr, result.stderr
     assert result.returncode != 0 and not (tmp_path / "ran.txt").exists()
 
 

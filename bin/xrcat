@@ -125,8 +125,10 @@ _xrcat_preflight() {
   done
   return 3
 }
-# Sourced (by the tests, to call the functions above), stop here: nothing below runs and
-# no environment variable can change what an executed xrcat checks.
+# Sourced (by the tests, to call the functions above), stop here: nothing below runs.
+# The checks read no xrcat-specific variable (the former X4_XRCAT_ACP/X4_XRCAT_ICONV test
+# seams are gone). They do use the user's own environment (PATH, the iconv and reg it
+# finds, exported shell functions, BASH_ENV); that environment is trusted, not defended.
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
 _xrcat_preflight "$@" || exit $?
 
