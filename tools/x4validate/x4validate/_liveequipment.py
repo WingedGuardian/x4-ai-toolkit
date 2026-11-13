@@ -61,7 +61,7 @@ class EquipmentRefused(ValueError):
     # Engine answers ABOUT THE REQUESTED ID (live_query.lua equipment verb), the only
     # non-OK replies that are findings rather than non-answers.
     ID_ANSWERS = ("equipment id was not issued by this UI session",
-                  "equipment requires a verified live ship class")
+                  "equipment target is not a ship")
 
     def is_finding(self) -> bool:
         if self.page != 1:

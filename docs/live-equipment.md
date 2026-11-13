@@ -46,9 +46,10 @@ reading equipment again.
 
 Exit 0 means complete requested identity coverage. A malformed ship ID exits 2
 before any pipe opens. Exit 1 is a finding about the ID, only on the first request:
-the ship no longer exists (ABSENT), was not issued by this UI session, or is not a
-live ship. Any other refusal (an expired or superseded capture while paging, missing
-FFI declarations, no clock), partial coverage or malformed protocol exits 3. Pipe-level failures retain x4live's existing
+the ship no longer exists (ABSENT), was not issued by this UI session, or is
+definitely not a ship. Any other refusal (a class the helper could not read, an
+expired or superseded capture while paging, missing FFI declarations, no clock),
+partial coverage or malformed protocol exits 3. Pipe-level failures retain x4live's existing
 transport exit codes. No automatic retry, game launch, pause or control action occurs.
 JSON escapes control characters; equipment text cannot inject additional rows.
 

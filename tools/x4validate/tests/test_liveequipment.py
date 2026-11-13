@@ -584,7 +584,8 @@ def _cli(monkeypatch, pipe):
 @pytest.mark.parametrize("status,payload,expected", [
     ("ABSENT", "equipment ship no longer exists", 1),
     ("ERR", "equipment id was not issued by this UI session; obtain a fresh ship id", 1),
-    ("ERR", "equipment requires a verified live ship class", 1),
+    ("ERR", "equipment target is not a ship", 1),
+    ("ERR", "equipment ship class unreadable", 3),
     ("ERR", "equipment FFI declarations unavailable", 3),
     ("ERR", "equipment UI elapsed clock unavailable", 3),
     ("ERR", "equipment ship validity unreadable", 3),
@@ -611,3 +612,24 @@ def test_cli_bad_ship_argument_is_rc2_before_the_pipe(monkeypatch, ship):
     monkeypatch.setattr(_livecli, "_live_open", lambda *a: opened.append(a))
     assert _livecli.cmd_equipment(ship, None, 10, io.StringIO()) == 2
     assert opened == []
+
+
+# Delta review 2, I-2: a non-ship and an UNREADABLE class sent the same ERR text, so a
+# non-answer (Helper missing, class unreadable, lookup raising) exited 1 as a finding.
+@pytest.mark.parametrize("code,payload", [
+    ('_G.component_data.classid="station"', "equipment target is not a ship"),
+    ('_G.nil_fields={classid=true}', "equipment ship class unreadable"),
+    ('Helper.isComponentClass=nil', "equipment ship class unreadable"),
+    ('Helper.isComponentClass=function() error("boom") end', "equipment ship class unreadable"),
+])
+def test_non_ship_and_unreadable_class_are_different_answers(code, payload):
+    r = ask(setup(code), 2, "equipment", SHIP, NONCE)
+    assert r.status == "ERR" and r.payload.startswith(payload), r.payload
+
+
+def test_every_id_answer_is_text_the_helper_actually_sends():
+    # Keeps E.EquipmentRefused.ID_ANSWERS in step with live_query.lua.
+    src = MOD_LUA.read_text(encoding="utf-8")
+    for text in E.EquipmentRefused.ID_ANSWERS:
+        assert f'"{text}' in src, text
+    assert "equipment ship class unreadable" not in E.EquipmentRefused.ID_ANSWERS

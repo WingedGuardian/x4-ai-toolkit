@@ -58,7 +58,7 @@ local PROTO = 1
 --:
 --: Kept honest by `test_the_BUILD_constant_matches_the_file`, so editing the lua and
 --: forgetting to re-stamp this fails the suite rather than silently lying in game.
-local BUILD = "6af2fbed"
+local BUILD = "f1a62152"
 local TAG_CMD, TAG_REPLY = "MQ", "MR"
 
 -- Cap on echo, the ramp instrument. Generous: the point of the ramp is to FIND the
@@ -1501,7 +1501,11 @@ do
         if valid ~= true then reply(seq, "ERR", "equipment ship validity unreadable") return end
         local cls = call(function() return GetComponentData(id, "classid") end)
         local ship = call(function() return class_is(cls, "ship") end)
-        if ship ~= true then reply(seq, "ERR", "equipment requires a verified live ship class") return end
+        -- A definite "not a ship" is an answer about the id; an unreadable class (no
+        -- Helper, no classid, the lookup raising) is a non-answer. Different texts:
+        -- the host treats only the first as a finding.
+        if ship == false then reply(seq, "ERR", "equipment target is not a ship") return end
+        if ship ~= true then reply(seq, "ERR", "equipment ship class unreadable") return end
 
         local rows, used, visits, kept, unknown = {}, 0, 0, 0, 0
         local totals, captured, slot_identities = {}, {}, {}
