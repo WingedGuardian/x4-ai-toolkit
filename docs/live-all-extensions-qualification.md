@@ -27,7 +27,7 @@ forbidden and counted. The loaders and MD candidates remain in memory.
 Conversation registers two providers, so the eight public extensions declare
 nine providers. The native bundle adds one. A ninth synthetic fixture descriptor
 adds one more to test the required catalogue occupancy without distributing or
-importing private ROR code. This does not qualify the actual private fixture.
+importing private campaign code. This does not qualify the actual private fixture.
 
 The tests verify exact provider revisions through the actual SDK registry with
 the public session deliberately unready. Requests remain unknown; no prepared

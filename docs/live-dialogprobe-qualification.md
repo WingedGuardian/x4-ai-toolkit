@@ -269,12 +269,10 @@ found a missing post-second-read retirement check and an oversized16-binding
 representation; both were corrected before this qualification. No native game
 query, input, focus, deployment or profile/save operation was performed.
 
-Additional installed-source research used the supported packed reader, without
-extraction (job90f2bf89e607). Scoped catalog selection: pagination1 of6 members,
-SNAPI19 of34, kuertee UI Extensions0 of23 readable Lua/XML/Markdown members under
-the selected UI/dialogue paths; kuertee's packed UI code is XPL and was not
-interpreted as readable Lua. This is not an installed-mod corpus absence proof.
-Pagination's MD uses add_player_choice and conversation events. SNAPI's
+Additional research read the dependency Mod Support APIs (SNAPI) and some other
+UI mods through the packed reader, without extraction. It is not a corpus-wide
+absence proof. The other mods' dialogue code uses add_player_choice and
+conversation events; packed code that is not plain Lua was not interpreted. SNAPI's
 `ui/hotkey/interface.lua` registers directtextinput on its local Scene/UIContract
 to suppress external hotkeys; its Process_Message forwards custom hotkeys to MD.
 Neither inspected path establishes dispatch into the core dialog1 event.

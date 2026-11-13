@@ -9,7 +9,7 @@ The result preserves time, title, text, category, entityname and factionname.
 Money/bonus and other unprojected fields are not observed. It neither opens nor
 clears a menu and does not acknowledge notifications. Ticker notifications are
 explicitly outside this instrument. Indices are window positions, not durable
-event IDs; matching text or time alone does not establish a causal ROR event.
+event IDs; matching text or time alone does not establish a causal campaign event.
 
 Two projected reads and two totals must agree under the same canonical public
 stamp and nondecreasing game time. This catches ordinary races but does not prove
@@ -35,4 +35,4 @@ are not measurements from X4. No deployment or game action occurred.
 Integration adds this observer to the public source-bound bundle and its native
 assembly lifecycle. The read remains subject to outer session/build/profile and
 transport qualification. Final combined source packet and runtime controls remain
-required before accepting an ROR logbook case.
+required before accepting a campaign logbook case.

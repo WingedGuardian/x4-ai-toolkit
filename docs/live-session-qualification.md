@@ -30,7 +30,7 @@ probe and explicit resume of the exact latest recorded session. UI reload uses a
 new UI generation and the same load nonce. Authoritative MD invalidation after a
 save load requires a new host allocation even when loading the same old save.
 
-The public provider ID is `x4-live-session-v1`. Private ROR adapters consume its
+The public provider ID is `x4-live-session-v1`. Private campaign adapters consume its
 nonce as a secondary binding; they cannot act as the public world authority.
 Every public query reply must carry exactly the five native identity stamp fields
 `provider`, `revision`, `session`, `generation`, `world_token` and pass

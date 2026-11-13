@@ -74,8 +74,8 @@ The host-supplied authorize_start(context, callback) is a trusted dependency.
 Production must consult applicable explicit authorization for this campaign,
 profile and desktop/focus effect, and bind it to the exact UI/process identity,
 request and game-start ID. An approved campaign can cover creating new worlds in
-its already-running disposable game. Actual process launches/restarts still need
-the user's fresh launch-specific confirmation immediately before launch. Caller
+its already-running disposable game. The toolkit never launches or restarts the
+game process. Caller
 JSON, a CLI flag alone or a constant true callback cannot implement the policy
 boundary. The native menu module does not issue consent or perform guard evaluation.
 

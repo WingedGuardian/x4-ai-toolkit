@@ -1,8 +1,8 @@
 # Explicit X4 restore and foreground action
 
 Offline candidate only. No real restore, foreground change, capture, input, or
-game launch has been performed to qualify it. A runtime invocation needs approval
-that names its desktop/focus impact. It is never called automatically by connect,
+game launch has been performed to qualify it. It changes which window has focus,
+so call it only deliberately. It is never called automatically by connect,
 queries, capture or dialogue input.
 
 The supported route is `FocusPort(existing_client, existing_task_journal)`,

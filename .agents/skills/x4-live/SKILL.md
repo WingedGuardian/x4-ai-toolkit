@@ -60,8 +60,8 @@ Read the current automation guide and exact deployed source before using it.
 Automation requires a source-bound public session, measured process/profile and
 UI identity, declared provider revision and durable action journal. Preparation
 does not dispatch execution; accepted execution does not prove gameplay completion.
-Reconcile an uncertain outcome with status, never resend it. No automation
-development or test approval authorizes a game launch. The helper also has these
+Reconcile an uncertain outcome with status, never resend it. The toolkit never
+launches the game. The helper also has these
 established behaviors:
 
 * the addon loads into a RUNNING game, and `engine_probe` runs automatically at load;

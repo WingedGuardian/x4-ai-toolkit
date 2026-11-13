@@ -7,7 +7,7 @@ unverified. The adapter now observes and dispatches built callback buttons and
 closes the current in-world OptionsMenu. Neither operation accepts a user-supplied
 function, MD cue or arbitrary menu name.
 
-Native displayOption buttons use table rowdata with a callback. Actual ROR uses
+Native displayOption buttons use table rowdata with a callback. A private campaign uses
 SN API Make_Button: interface.lua259–278 passes boolean selectable rowdata,
 459–466 attaches its widget callback, and606 onward signals the MD row/column
 closure. Those are separately tested shapes. The latter exposes a built-only
@@ -46,7 +46,7 @@ test_liveoptions_close.py and test_livenativeproviders.py. This includes MSA
 boolean rows, built-ID versus invented-ID refusal, disabled/dynamic/drifting
 models, one-shot close, native special-state exclusion, final lifetime expiry,
 SDK closed schemas and later-only visibility completion. It is not a game test.
-The preceding184-pass native-row-only run is historical, not ROR button proof.
+The preceding184-pass native-row-only run is historical, not campaign button proof.
 The final normalized-visibility supplement passed23/23 close controls, zero
 skips, rb0aef2b124ffb, explicitly covering both native false and nil. It overlaps
 the224-control group; the results are not an additive unique denominator.

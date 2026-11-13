@@ -2,7 +2,7 @@
 
 `live_session.lua` returns a factory `new(env)`. It is wired into the isolated
 bootstrap/bundle candidate, not a deployed provider or native save/load qualification. It depends on
-the public `X4ToolkitSession` MD proposal and has no private ROR dependency.
+the public `X4ToolkitSession` MD proposal and has no private campaign dependency.
 
 Initial unit, MEASURED 2026-11-09: 50 actual-Lua behavioral controls passed, zero skips,
 `pytest -q -ra -p no:cacheprovider tests/test_livesession_lua.py`, resource ledger

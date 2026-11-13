@@ -71,7 +71,7 @@ bypass this prerequisite. The adapter remains unavailable until the actual menu 
 This unit therefore supports a bounded transporter mechanism once that prerequisite is met;
 it does not close the entire automated room-entry acceptance case. It does not prove rendered
 menu-row coverage, accessibility by walking, docking, a safe route to the transporter, ordinary
-travel, room asset correctness, or any ROR gameplay result.
+travel, room asset correctness, or any campaign gameplay result.
 
 The LuaJIT controls use synthetic native/menu state and actual module/codec execution.
 They cover exact uint64/ABI, count/fill/row drift, zero versus unreadable, captured-target

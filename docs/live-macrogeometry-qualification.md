@@ -1,6 +1,6 @@
 # Optional compiled macro geometry observation
 
-ARCHIVED prototype: user decision2026-11-09 disregards Extra Data API. This unit
+ARCHIVED prototype: a 2026-11-09 decision dropped the third-party library it wraps. This unit
 is not loaded by any helper (it is not in ui.xml or the automation bundle), though
 its file still sits in mods/x4_toolkit_helper/ui and its tests still run.
 The70-control source revision is preserved at bb4fb0d1; the documentation below
@@ -8,7 +8,7 @@ describes that historical standalone unit, not planned integration. No dependenc
 installation or calibration is scheduled. Keep source history; do not consume
 this prototype as a qualified runtime capability.
 
-This standalone factory uses the installed Extra Data API's interface only. It does not bundle, execute on import, install or reproduce that library's pointer-reading implementation. It is not wired into the public helper or an SDK provider yet.
+This standalone factory uses an installed third-party geometry library's interface only. It does not bundle, execute on import, install or reproduce that library's pointer-reading implementation. It is not wired into the public helper or an SDK provider yet.
 
 Construction takes trusted callbacks `current`, `game_build`, `dependency`, `external`, `encode` and a copied `expected` declaration. Construction and `availability()` perform no callback, engine or external API calls. Explicit `boxes(macro)` and `connections(macro, offset)` reads require a current canonical public stamp and matching game-build/dependency declaration before invoking the external getter. They never call `ExtraData.Available()`.
 
@@ -32,7 +32,7 @@ The external library can allocate and scan internally before returning. This wra
 
 ## Source contract and qualification
 
-READ: Extra Data API1.03 packed Lua uses interface version100; source lines664–666 define box output,698–735 connection rows,1122–1141 nil box behavior,1221–1234 ordered multiple returns,1270–1274 initializing Available. The reviewed archive/Lua identities are recorded privately; no third-party source is shipped here. Named native menu callers provide size classes and station-plot dimensions, which do not establish an equivalent compiled-macro box interface. This is a scoped source comparison, not a negative corpus claim.
+READ: that library's packed Lua (the reviewed version) uses interface version 100; source lines664–666 define box output,698–735 connection rows,1122–1141 nil box behavior,1221–1234 ordered multiple returns,1270–1274 initializing Available. The reviewed archive/Lua identities are recorded privately; no third-party source is shipped here. Named native menu callers provide size classes and station-plot dimensions, which do not establish an equivalent compiled-macro box interface. This is a scoped source comparison, not a negative corpus claim.
 
 The public connection getter at1183–1190 strips internal tagIds before returning rows; this adapter correctly excludes that internal field. A repeat nil connection result retains its checked source/stamp metadata and uncalibrated tier without inventing a zero denominator.
 
