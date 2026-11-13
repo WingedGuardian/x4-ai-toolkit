@@ -558,3 +558,39 @@ def test_reader_enforces_row_bytes_independently_of_page_and_cache_bounds():
         def ask(self, *args): return SimpleNamespace(status="OK", payload=payloads.pop(0))
     with pytest.raises(ValueError, match="captured-row byte"):
         E.fetch(Replay(), SHIP, NONCE)
+
+
+# Review r1-3: exit codes follow `x4live query`: a bad argument is a non-answer decided
+# before any pipe opens (2); the engine answering ABSENT or ERR is a finding (1); a
+# malformed or incomplete capture stays 3.
+class _Answer:
+    def __init__(self, status):
+        self.status = status
+    def ask(self, *args):
+        return SimpleNamespace(status=self.status, payload="synthetic engine answer")
+
+
+@pytest.mark.parametrize("status", ["ABSENT", "ERR"])
+def test_cli_engine_absent_or_err_is_a_finding(monkeypatch, status):
+    class Context:
+        def __enter__(self): return _Answer(status)
+        def __exit__(self, *args): pass
+    monkeypatch.setattr(_livecli, "_live_open", lambda *a: Context())
+    assert _livecli.cmd_equipment(SHIP, None, 10, io.StringIO()) == 1
+
+
+@pytest.mark.parametrize("ship", ["0ULL", "abc", "12"])
+def test_cli_bad_ship_argument_is_rc2_before_the_pipe(monkeypatch, ship):
+    opened = []
+    monkeypatch.setattr(_livecli, "_live_open", lambda *a: opened.append(a))
+    assert _livecli.cmd_equipment(ship, None, 10, io.StringIO()) == 2
+    assert opened == []
+
+
+def test_cli_other_engine_status_or_malformed_reply_stays_rc3(monkeypatch):
+    # Twin: a status that is neither OK, ABSENT nor ERR is not a finding.
+    class Context:
+        def __enter__(self): return _Answer("TORN")
+        def __exit__(self, *args): pass
+    monkeypatch.setattr(_livecli, "_live_open", lambda *a: Context())
+    assert _livecli.cmd_equipment(SHIP, None, 10, io.StringIO()) == 3

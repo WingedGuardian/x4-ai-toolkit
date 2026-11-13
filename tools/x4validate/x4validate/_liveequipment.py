@@ -48,6 +48,14 @@ def record(line: str) -> tuple[str, dict[str, str]]:
     return parts[0], result
 
 
+class EquipmentRefused(ValueError):
+    """The engine answered the capture request with a non-OK status (kept in `status`)."""
+
+    def __init__(self, status: str, message: str):
+        super().__init__(message)
+        self.status = status
+
+
 def fetch(pipe, ship: str, nonce: str) -> dict:
     """Retrieve one bounded capture through an existing open LivePipe."""
     if not HANDLE.fullmatch(ship) or ship == "0ULL":
@@ -63,7 +71,8 @@ def fetch(pipe, ship: str, nonce: str) -> dict:
         response = pipe.ask("equipment", ship, nonce) if next_page == 1 else pipe.ask(
             "equipment-page", header["token"], str(next_page))
         if response.status != "OK":
-            raise ValueError(f"equipment capture refused ({response.status}): {response.payload}")
+            raise EquipmentRefused(response.status,
+                                   f"equipment capture refused ({response.status}): {response.payload}")
         payload = response.payload
         encoded = len(payload.encode("utf-8"))
         total_bytes += encoded

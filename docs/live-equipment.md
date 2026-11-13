@@ -44,8 +44,9 @@ reading equipment again.
   It says nothing about compatible loadouts, ammunition, crew, damage performance,
   correct equipment choices or whether the ship can fight.
 
-Exit 0 means complete requested identity coverage. Partial coverage, a refused
-capture or malformed protocol exits 3. Pipe-level failures retain x4live's existing
+Exit 0 means complete requested identity coverage. A malformed ship ID exits 2
+before any pipe opens. The engine answering ABSENT or ERR exits 1 (a finding, as
+for `x4live query`). Partial coverage, any other refusal or malformed protocol exits 3. Pipe-level failures retain x4live's existing
 transport exit codes. No automatic retry, game launch, pause or control action occurs.
 JSON escapes control characters; equipment text cannot inject additional rows.
 
