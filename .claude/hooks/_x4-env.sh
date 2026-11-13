@@ -369,6 +369,11 @@ x4_config_banner() {
     esac
     printf '%s\n' "[x4 config] $_x4_cfg is read as DATA, never run, and these lines were IGNORED (line:reason): $_x4_cfg_ignored. Reasons: shape = not KEY=value; key = not an X4_* key; subst = \$( ) or a backtick; operator = an unquoted ; & | < >; guard = X4_GUARD/X4_GUARD_CHECK. Fix them by hand; check with: python \"$_x4_cfg_tk/scripts/x4doctor.py\""
   fi
+  # X4_STAGING_DIRS entries that fail the placement rules (x4_staging_roots): ignored, never silently.
+  if [ -n "${X4_STAGING_DIRS:-}" ]; then
+    x4_staging_roots
+    [ -n "$_X4_STAGE_WARN" ] && printf '%s\n' "[x4 config] $_X4_STAGE_WARN Writes there stay refused as game-install writes. Fix the entry in $_x4_cfg_tk/x4-paths.env (see x4-paths.env.example)."
+  fi
   case "$_x4_cfg_src" in
     none|explicit-missing)
       [ "$_x4_ref_defaulted" = 1 ] || return 0
@@ -668,6 +673,119 @@ x4_under() {
   x4_canon_memo "$1"; f="$_X4_CANON_RESULT"
   x4_canon_memo "$2"; d="${_X4_CANON_RESULT%/}"
   case "$f" in "$d"/*|"$d") return 0;; *) return 1;; esac
+}
+
+# --- X4_STAGING_DIRS: inert download collections inside the game folder (4.2) ----------------
+# Some users keep downloaded-but-not-installed mods in a folder directly inside the game install,
+# outside extensions/. The game loads nothing from such a folder, but protect-files.sh denied every
+# file written there as "in the game installation". X4_STAGING_DIRS names those folders, separated
+# by `;` (quote the value in x4-paths.env: an unquoted ; is refused there). An entry is a folder
+# NAME (resolved against X4_GAME) or a full path. Empty (the default) = nothing changes.
+# An entry is ACCEPTED only when every rule below holds; otherwise it is IGNORED, and the reason
+# is recorded in _X4_STAGE_WARN, which the game-install refusal and the session banner print:
+#   * X4_GAME is set, and the entry's CANONICAL path equals the canonical game folder plus the
+#     entry's own last name -- a DIRECT child, and not itself a link or junction (a link resolves
+#     elsewhere and fails the equality, so it cannot carry the exemption to what it points at);
+#   * the name is not extensions/, an ego_dlc_* folder, a folder the game reads loose files from
+#     (a top-level catalog folder: libraries, md, aiscripts, ... and any top-level folder of
+#     reference/), an agent/git folder (.claude, .codex, .agents, .opencode, .git, .agent-sessions)
+#     or reference, nor -- when the toolkit IS the game folder -- one of the toolkit's own folders;
+#   * it is not, does not contain and is not inside reference/, extensions/, the profile, the
+#     saves, the mods root, the backups, the path config or the toolkit root;
+#   * it is a folder or absent, and holds no .cat/.dat archive at its top level.
+# Computed ONCE per process (a batch shares it); a root that cannot be resolved rejects the entry
+# and never poisons the verdict's own fail-closed canonicalisation flag.
+# Out: _X4_STAGE_ROOTS (accepted canonical roots, newline-separated), _X4_STAGE_WARN.
+_X4_STAGE_DONE=""
+x4_staging_roots() {
+  [ -n "$_X4_STAGE_DONE" ] && return 0
+  _X4_STAGE_DONE=1; _X4_STAGE_ROOTS=""; _X4_STAGE_WARN=""
+  [ -n "${X4_STAGING_DIRS:-}" ] || return 0
+  local saved_err="$_X4_CANON_ERROR" rest="${X4_STAGING_DIRS};" e p n name c g why r rc d tk nm=0 ng=0 nc=0
+  local -a hits
+  while [ -n "$rest" ]; do
+    e="${rest%%;*}"; rest="${rest#*;}"
+    e="${e#"${e%%[![:space:]]*}"}"; e="${e%"${e##*[![:space:]]}"}"
+    [ -n "$e" ] || continue
+    why=""
+    _X4_CANON_ERROR=""
+    if [ -z "${X4_GAME:-}" ]; then
+      why="X4_GAME is not set, so no folder can be placed inside the game install"
+    else
+      case "$e" in /*|\\*|[A-Za-z]:*) p="$e" ;; *) p="${X4_GAME%[/\\]}/$e" ;; esac
+      x4_canon_memo "$X4_GAME"; g="${_X4_CANON_RESULT%/}"
+      x4_canon_memo "$p"; c="${_X4_CANON_RESULT%/}"
+      n="$(x4_norm "$p")" || _X4_CANON_ERROR=1
+      name="${n##*/}"
+      if [ -n "$_X4_CANON_ERROR" ] || [ -z "$g" ] || [ -z "$c" ]; then
+        why="it could not be resolved through its links"
+      elif [ -z "$name" ] || [ "$name" = . ] || [ "$name" = .. ] || [ "$c" != "$g/$name" ]; then
+        why="it is not a folder directly inside the game folder (or it is a link or junction to somewhere else)"
+      fi
+    fi
+    if [ -z "$why" ]; then
+      x4_canon_memo "$X4_TOOLKIT"; tk="${_X4_CANON_RESULT%/}"
+      case "$name" in
+        extensions|ego_dlc_*|aiscripts|assets|cutscenes|index|libraries|maps|md|music|particles|\
+        sfx|shadergl|t|textures|ui|vf|voice|voice-*)
+          why="the game reads '$name' itself (extensions, DLC or a catalog folder)" ;;
+        .claude|.codex|.agents|.opencode|.git|.agent-sessions|reference)
+          why="'$name' is an agent, git or toolkit folder (in a separate install the game folder's .claude/ is the deployed agent tree)" ;;
+      esac
+      if [ -z "$why" ] && [ -d "${X4_REFERENCE:-}" ]; then
+        shopt -q nocasematch && nm=1; shopt -s nocasematch
+        for d in "$X4_REFERENCE"/*/; do
+          d="${d%/}"; [[ "${d##*/}" == "$name" ]] && { why="reference/ has a top-level '$name' folder, so the game reads it"; break; }
+        done
+        [ "$nm" = 1 ] || shopt -u nocasematch
+      fi
+      if [ -z "$why" ] && [ "$tk" = "$g" ]; then
+        case "$name" in
+          .github|agent|bin|docs|mods|scripts|tools|dev|dist)
+            why="'$name' is one of the toolkit's own folders" ;;
+        esac
+      fi
+      if [ -z "$why" ]; then
+        for r in "${X4_REFERENCE:-}" "${X4_EXTENSIONS:-}" "${X4_GAME%[/\\]}/extensions" "${X4_PROFILE:-}" \
+                 "${X4_SAVES:-}" "${X4_MODS:-}" "${X4_BACKUPS:-}" "${X4_CONFIG:-}" "${_x4_cfg:-}" "$X4_TOOLKIT"; do
+          [ -n "$r" ] || continue
+          x4_canon_memo "$r"; rc="${_X4_CANON_RESULT%/}"
+          [ -n "$rc" ] || continue
+          if [ "$r" = "$X4_TOOLKIT" ]; then
+            case "$rc" in "$c"|"$c"/*) why="it is or contains the toolkit root"; break ;; esac
+            continue
+          fi
+          case "$c" in "$rc"|"$rc"/*) why="it is inside, or is, a protected folder ($r)"; break ;; esac
+          case "$rc" in "$c"/*) why="it contains a protected folder ($r)"; break ;; esac
+        done
+      fi
+      if [ -z "$why" ] && [ -n "$_X4_CANON_ERROR" ]; then
+        why="a protected folder could not be resolved through its links"
+      fi
+      if [ -z "$why" ]; then
+        x4_winpath "$p" || why="it could not be resolved"
+      fi
+      if [ -z "$why" ] && [ -e "$_X4_WP" ]; then
+        if [ ! -d "$_X4_WP" ] || [ -L "$_X4_WP" ]; then
+          why="it exists and is not a plain folder"
+        else
+          shopt -q nullglob && ng=1; shopt -q nocaseglob && nc=1
+          shopt -s nullglob nocaseglob
+          hits=("$_X4_WP"/*.cat "$_X4_WP"/*.dat)
+          [ "$ng" = 1 ] || shopt -u nullglob; [ "$nc" = 1 ] || shopt -u nocaseglob
+          [ "${#hits[@]}" -gt 0 ] && why="it holds .cat/.dat game archives at its top level"
+        fi
+      fi
+    fi
+    if [ -n "$why" ]; then
+      _X4_STAGE_WARN="${_X4_STAGE_WARN:+$_X4_STAGE_WARN }X4_STAGING_DIRS entry '$e' is IGNORED: $why."
+    else
+      _X4_STAGE_ROOTS="${_X4_STAGE_ROOTS:+$_X4_STAGE_ROOTS
+}$c"
+    fi
+  done
+  _X4_CANON_ERROR="$saved_err"
+  return 0
 }
 
 # --- user documents ----------------------------------------------------------

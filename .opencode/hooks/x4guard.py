@@ -268,6 +268,18 @@ def is_agent_settings(path: str | None) -> bool:
 def guard_payload(kind: str, shell: str | None, command: str | None, path: str | None,
                   content: str | None = None, edit: dict | None = None, patch: bool = False,
                   execution_host: str = "") -> dict:
+    payload = _guard_payload(kind, shell, command, path, content, edit, patch, execution_host)
+    if kind == "move":
+        # The SOURCE of a move is judged as a write (below) plus an `rm -rf` of it. The marker
+        # lets protect-files.sh refuse the X4_STAGING_DIRS write exemption to it: a move takes
+        # the file OUT of the folder, which is a removal, not a write. It can only make a
+        # verdict stricter, so a forged marker in an agent's own Write gains nothing.
+        payload["tool_input"]["x4_move_source"] = True
+    return payload
+
+
+def _guard_payload(kind: str, shell: str | None, command: str | None, path: str | None,
+                   content: str | None, edit: dict | None, patch: bool, execution_host: str) -> dict:
     if kind == "shell":
         # `cwd` at the TOP level, where Claude Code and Codex put it: a relative operand is judged
         # from the caller's directory, so `check` and the hooks agree (lane F). The Codex adapter
