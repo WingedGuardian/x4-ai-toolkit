@@ -119,8 +119,13 @@ class all_of:
         return all(p(vpath) for p in self.predicates)
 
 
-def _scan_roots(mod_dir: Path, predicate: Predicate | None) -> list[Path]:
-    """Directories to rglob. Narrowed by a predicate's `.prefixes` when it has any."""
+def _scan_roots(mod_dir: Path, predicate: Predicate | None,
+                unreadable: list[Unreadable] | None = None) -> list[Path] | None:
+    """Directories to rglob. Narrowed by a predicate's `.prefixes` when it has any.
+
+    None when a mod folder that EXISTS cannot be listed: that is appended to
+    *unreadable* and the caller reads nothing more from it (its catalogs live in the same
+    folder), so the miss is disclosed instead of reading as an empty mod."""
     prefixes = getattr(predicate, "prefixes", None)
     if not prefixes:
         return [mod_dir]
@@ -141,9 +146,15 @@ def _scan_roots(mod_dir: Path, predicate: Predicate | None) -> list[Path]:
     heads = {p.strip("/").split("/")[0].lower() for p in prefixes}
     try:
         children = sorted(mod_dir.iterdir())
-    except OSError:
-        return []  # silent-ok: an absent or unreadable mod dir has no loose files to walk,
-        # the same answer the literal `is_dir()` test gave; packed members are read separately.
+    except FileNotFoundError:
+        return []  # silent-ok: an ABSENT folder has no loose files to walk -- an absence,
+        # not a read failure (the literal `is_dir()` test gave the same answer).
+    except OSError as exc:
+        if unreadable is not None:
+            unreadable.append(Unreadable(
+                ".", f"could not list the mod folder, so none of its files (loose or "
+                     f"packed) were scanned: {exc}"))
+        return None
     return [c for c in children if c.name.lower() in heads and c.is_dir()]
 
 
@@ -160,8 +171,10 @@ def iter_mod_xml(
     """
     yielded: set[str] = set()
 
-    loose = sorted(p for root in _scan_roots(mod_dir, predicate)
-                   for p in root.rglob("*.xml"))
+    roots = _scan_roots(mod_dir, predicate, unreadable)
+    if roots is None:
+        return  # recorded in *unreadable* by _scan_roots
+    loose = sorted(p for root in roots for p in root.rglob("*.xml"))
     for path in loose:
         if not path.is_file():
             continue
@@ -216,8 +229,10 @@ def iter_mod_xml_bytes(
     losing the channel it already reported.
     """
     yielded: set[str] = set()
-    loose = sorted(p for root in _scan_roots(mod_dir, predicate)
-                   for p in root.rglob("*.xml"))
+    roots = _scan_roots(mod_dir, predicate, unreadable)
+    if roots is None:
+        return  # recorded in *unreadable* by _scan_roots
+    loose = sorted(p for root in roots for p in root.rglob("*.xml"))
     for path in loose:
         if not path.is_file():
             continue

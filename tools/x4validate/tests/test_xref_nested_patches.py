@@ -356,3 +356,21 @@ def test_twin_an_absent_mod_folder_records_nothing(tmp_path):
     unreadable: list = []
     assert list(_scan.iter_mod_xml(tmp_path / "missing", _scan.under("md/"), unreadable)) == []
     assert unreadable == []
+
+
+def test_an_unlistable_mod_reaches_the_xref_exclusions(tmp_path, hermetic, monkeypatch):
+    """...so `x4xref` writes it to the .notindexed sidecar every negative renders."""
+    ext = tmp_path / "ext"
+    mod = _mod(ext, "moda", {"md/x.xml": _md("X", "C")})
+    real = Path.iterdir
+
+    def deny(self):
+        if self == mod:
+            raise PermissionError(13, "Access is denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "iterdir", deny)
+    unreadable: list = []
+    rows = _index(tmp_path, ext, unreadable)
+    assert not [r for r in rows if r.source == "moda"]
+    assert [u.vpath for u in unreadable] == ["."]
