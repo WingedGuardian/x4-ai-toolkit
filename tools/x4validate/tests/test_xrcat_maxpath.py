@@ -143,7 +143,7 @@ def test_short_name_beyond_latin1_is_refused(tmp_path, name):
     (src / name).write_bytes(b"<x/>")
     result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
     assert result.returncode != 0 and not (tmp_path / "ran.txt").exists()
-    assert "U+00FF" in result.stderr and name in result.stderr
+    assert "code page" in result.stderr and name in result.stderr
 
 
 @pytest.mark.parametrize("name", ["a\u00e9.xml", "c\u00ff.xml"])
@@ -155,3 +155,33 @@ def test_short_latin1_name_runs_the_tool(tmp_path, name):
     (src / name).write_bytes(b"<x/>")
     result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# Delta review minor 4: the rule follows the machine's ANSI code page (GetACP), not an
+# assumed 1252, and covers the input root itself, not only the names under it.
+def _acp():
+    import ctypes
+    return ctypes.windll.kernel32.GetACP()
+
+
+def test_euro_name_follows_the_ansi_code_page(tmp_path):
+    if not WINDOWS:
+        pytest.skip("Windows code page only")
+    src = _src(tmp_path)
+    (src / "c\u20ac.xml").write_bytes(b"<x/>")
+    try:
+        "c\u20ac.xml".encode("cp%d" % _acp())
+        encodable = True
+    except (UnicodeEncodeError, LookupError):
+        encodable = False
+    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
+    assert (result.returncode == 0) is encodable, result.stderr
+
+
+def test_input_root_with_an_unencodable_name_is_refused(tmp_path):
+    src = tmp_path / "\u0436src"
+    src.mkdir()
+    (src / "content.xml").write_bytes(b"<x/>")
+    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
+    assert result.returncode != 0 and not (tmp_path / "ran.txt").exists()
+    assert "code page" in result.stderr

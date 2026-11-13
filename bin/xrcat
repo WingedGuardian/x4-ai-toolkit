@@ -25,8 +25,11 @@ XRCATTOOL="${XRCATTOOL:-XRCatTool.exe}"
 # e-acute names the cutoff is still 259/260 units). The tool also writes names in
 # the system ANSI code page: MEASURED here (code page 1252) a Cyrillic name was
 # skipped the same silent way ("Illegal file k?.xml", exit 0) while e-acute and
-# the euro sign packed. So a name with a character above U+00FF is refused too
-# (conservative: some code pages could pack it).
+# the euro sign packed. So any path (the -in root included) that is not encodable
+# in this machine's ANSI code page (the registry's ACP) is refused too. INFERRED,
+# not measured: other code pages behave the same way for their own repertoire.
+# When the code page cannot be read (and under Wine, where it was not measured),
+# only ASCII paths pass, and the refusal says why.
 _xrcat_is_windows() {
   case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*|Windows*) return 0;; esac
   return 1
@@ -44,15 +47,25 @@ _xrcat_u16len() {
   lead4="${s//[^$'\xf0'-$'\xf7']/}"
   echo $(( ${#s} - ${#cont} + ${#lead4} ))
 }
-# True when the UTF-8 string holds a character above U+00FF (a lead byte 0xC4+).
-_xrcat_beyond_latin1() {
+# This machine's ANSI code page number, or nothing when it cannot be read.
+_xrcat_acp() {
+  _xrcat_is_windows || return 0
+  MSYS2_ARG_CONV_EXCL='*' reg query 'HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage' /v ACP 2>/dev/null \
+    | sed -n 's/.*ACP[[:space:]]*REG_SZ[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1
+}
+# True when the UTF-8 string cannot be written in code page $2 (ASCII always can;
+# with no code page, any non-ASCII byte counts as unwritable).
+_xrcat_unencodable() {
   local LC_ALL=C
-  case "$1" in *[$'\xc4'-$'\xff']*) return 0;; esac
-  return 1
+  case "$1" in *[$'\x80'-$'\xff']*) ;; *) return 1;; esac
+  [ -n "$2" ] || return 0
+  if printf '%s' "$1" | iconv -f UTF-8 -t "CP$2" >/dev/null 2>&1; then return 1; fi
+  return 0
 }
 _xrcat_preflight() {
-  local prev="" a root list rc rel w n u shown=0
+  local prev="" a root list rc rel w n u shown=0 acp
   local -a long=() odd=()
+  acp=$(_xrcat_acp)
   for a in "$@"; do
     if [ "$prev" = "-in" ] && [ -d "$a" ]; then
       root=$(_xrcat_winroot "$a") || { echo "xrcat: REFUSED: cannot resolve the input folder: $a" >&2; return 2; }
@@ -68,15 +81,19 @@ _xrcat_preflight() {
         rel="${rel#./}"; w="$root\\${rel//\//\\}"
         u=$(_xrcat_u16len "$w")
         if [ "$u" -ge 260 ]; then long+=("$u  $w"); fi
-        if _xrcat_beyond_latin1 "$rel"; then odd+=("$w"); fi
+        if _xrcat_unencodable "$w" "$acp"; then odd+=("$w"); fi
       done < "$list"
       rm -f "$list"
     fi
     prev="$a"
   done
   if [ "${#odd[@]}" -gt 0 ]; then
-    echo "xrcat: REFUSED: ${#odd[@]} input file name(s) hold a character above U+00FF." >&2
-    echo "xrcat: XRCatTool 1.11 writes names in the system ANSI code page and leaves a name it cannot write out of the catalog, still exiting 0. Rename them." >&2
+    if [ -n "$acp" ]; then
+      echo "xrcat: REFUSED: ${#odd[@]} input path(s) cannot be written in this machine's ANSI code page ($acp)." >&2
+    else
+      echo "xrcat: REFUSED: ${#odd[@]} input path(s) hold non-ASCII characters and the ANSI code page could not be read (or this is Wine, where it was not measured)." >&2
+    fi
+    echo "xrcat: XRCatTool 1.11 writes names in the ANSI code page and leaves a name it cannot write out of the catalog, still exiting 0. Rename them (or the input folder)." >&2
     for w in "${odd[@]:0:50}"; do echo "xrcat:   $w" >&2; done
     [ "${#odd[@]}" -gt 50 ] && echo "xrcat:   ... and $(( ${#odd[@]} - 50 )) more" >&2
     return 3
