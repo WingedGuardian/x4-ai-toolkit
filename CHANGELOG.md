@@ -29,6 +29,12 @@
 - `x4live automation` and the save/load modules refuse a journal folder inside (or containing) the game install, the reference folder or your Egosoft profiles folder.
 - Helper fixes found by reading the code (not yet seen in game): an order the helper creates is removed again in the same step, and the action reported as failed ("rolled back"), when any check between creating and enabling it fails, including reading back its id; if that removal fails, the result says the order is left in the queue and at which index; reply rows left in a save from an earlier session are ignored instead of breaking the reply channel; the placement and orbit camera extensions no longer break for good on a timer tick that runs before the session is set up.
 
+- x4xref now indexes a mod's extension-nested script patches (`extensions/<owner>/md/...` and `.../aiscripts/...`, at any depth, loose or packed). Before, they were never read, so a cue defined only in such a patch was reported as a real negative (measured on one install: 72 such files in 35 mods, 690 rows, were missing). Rows show the full nested path, so the patched file's owner is visible (BLIND-SPOTS F377).
+- x4xref no longer lists `<diff>` patch structure (the `diff` root and its `add`/`replace`/`remove` operations) as actions. The content they patch in is still indexed, now with its enclosing cue when the operation's selector names one. Real `add`/`remove`/`replace` script elements are unchanged.
+- An x4xref index now records a digest of the code that builds it, and its script scope. Before, a change to that code left an old index FRESH and still certifying negatives (BLIND-SPOTS F378). **An index built by an earlier version reads STALE and cannot certify a negative until it is rebuilt (`x4xref build`, or `x4fresh rebuild`).**
+- `x4validate --debug` attributes engine errors to a mod's scripts using only its direct `md/` and `aiscripts/` files, so a nested patch can never stand in for a direct script of the same name; exprlint now also lints nested patches.
+- Loose `Extensions/`, `MD/` and `AIScripts/` folders spelled with other capitalisation are now found on case-sensitive filesystems.
+
 ## v4.1.1 — 2026-11-10
 
 - After updating, expect `x4fresh status` to report your derived stores as STALE: this release changes the merge engine and catalog reader, which every store's engine fingerprint covers. Run `x4fresh rebuild` once.

@@ -476,6 +476,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F374 | an unresolved RELATIVE operand (`"refj$X/..."`) got no link reading: link_head_resolved / link_entries_matched return on "not absolute" | **DEFECT (measured)** · PRE-ARC (F369, 4.1.1) | at 0f6b5e3e, in-process facts(): 3 of 3 False from a folder holding a junction into reference/ | FIXED 2026-11-11: both get the operand joined to its directory as received |
 | F375 | Link and path spellings the guard still reads as written, found by the 4.1.2 release review rounds 2-4 (16 rows, row 11 CLOSED: a protected root that is itself a link, `\\?\Volume{GUID}`, PowerShell provider paths, braces through a junction, `$PWD`, a device-named junction as the head, and others) | **SCOPE LIMIT (measured / read / inferred, per row)** · PRE-ARC | in-process facts() at the round-2 fix, against the reviewers' scripts; per row below | OPEN 2026-11-11: rows 1-15 not fixed (next release, user decision); row 16 (a recursive delete or move of a folder above the reference or game root) FIXED 2026-11-11 |
 | F376 | A command carried inside another shell (`bash -c`, `sh -c`, `eval`, `cmd /c`) does not see the `cd`/`pushd`/`Set-Location` before it, so a relative delete there reaches no rule | **DEFECT (measured)** · PRE-ARC · HIGH | through the whole hook, identical at 1b1a48aa and v4.1.1: 11 carried forms ALLOWED, 9 controls DENIED | FIXED 2026-11-11: a carried text is judged where its carrier segment runs; substitutions, a heredoc fed to a shell and a trap OPEN |
+| F377 | x4xref enumerated only `md/` and `aiscripts/` at the root of each mod, so a mod's `extensions/<owner>/` script patches were never indexed and a cue defined only there was certified a real negative | **DEFECT (measured)** · PRE-ARC | one install, old vs new index: 72 script files in 35 mods (690 rows) missing; 0 unreadable, so the exclusions channel was silent; a known cue answered "no references under ANY kind" | FIXED 2026-11-13: mods and DLC walked with `_scan.under_nested`; base stays direct-only; script scope stamped in the sidecar |
+| F378 | An x4xref index never went stale when the code that builds it changed: `check_index` did not compare engine sources and no index-building module was hashed | **DEFECT (read)** · PRE-ARC | READ: `check_index` passed `engine_dependent=False` and no index-building module was in `ENGINE_SOURCES` (4.2.0 release review); MEASURED after the fix: an index built at the commit before the digest reads STALE, exit 2 | FIXED 2026-11-13: `x4xref build` stamps a digest of `_freshness.XREF_SOURCES`; a missing or different digest reads STALE |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -13532,3 +13534,27 @@ condition. Run-time evidence is the only check for both today. Proposed, not don
 against the set vanilla uses, with a corpus census first (INFO before it gates).
 
 **NO RE-DERIVATION: the measurement is the engine log of that run and the two 0-finding static runs.**
+
+## F377 - x4xref never indexed a mod's extension-nested script patches · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-13
+
+`_xref._iter_mod_files` used `_scan.under("md/", "aiscripts/")`, which matches path starts only, so a patch at
+`extensions/<owner>/md/<file>.xml` inside a mod was never enumerated. Nothing reported it: the files were not
+unreadable, just never listed, so the index read complete and a cue defined only in such a patch answered "no
+references under ANY kind", labelled a real negative. MEASURED on one install (old index at 3f4dde88 vs the fixed
+build, rows compared per item): 72 script files in 35 mods were missing (65 md, 7 aiscripts, all one level deep),
+690 rows; 0 rows removed, 0 unexplained; 0 base and 0 DLC rows changed. Fix: `_scan.under_nested` (repeated
+`extensions/<owner>/` prefixes, case-insensitive, empty owner refused) for mods and DLC; the reference root's own
+walk stays direct-only because its `extensions/` is the DLC (a test pins that DLC is counted once). The sidecar
+records the script scope, and every negative names it.
+Re-derived by `tests/test_xref_nested_patches.py` and `tests/test_nested_script_consumers.py`.
+
+## F378 - an x4xref index stayed FRESH when the code that builds it changed · **DEFECT (read)** · PRE-ARC · confidence 90% · FIXED 2026-11-13
+
+`check_index` called `compare(..., engine_dependent=False)`, and neither `_xref.py` nor `_scan.py` was an engine
+source, so an edit to the walk, the skipped tags or the file listing left every existing index FRESH and still
+certifying negatives built by the old code (the shape that let F377 go unnoticed). Fix: the index-building code moved
+to `_xrefindex.py` (CLI text stays out, so a help-text edit does not stale the index); `_freshness.XREF_SOURCES` lists
+the modules a traced build runs, pinned both ways by a test; `x4xref build` stamps their digest before reading any
+file, and a missing or different digest reads STALE ("index code changed") in `check_index` and `x4fresh status`.
+MEASURED: an index built at the commit before the digest reads STALE, exit 2.
+Re-derived by `tests/test_xref_index_code.py`.
