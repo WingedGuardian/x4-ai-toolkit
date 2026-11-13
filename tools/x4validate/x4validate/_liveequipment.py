@@ -49,11 +49,26 @@ def record(line: str) -> tuple[str, dict[str, str]]:
 
 
 class EquipmentRefused(ValueError):
-    """The engine answered the capture request with a non-OK status (kept in `status`)."""
+    """The engine answered a capture request with a non-OK status.
 
-    def __init__(self, status: str, message: str):
+    Keeps `status`, the engine's `payload` and the `page` it answered (1 = the request).
+    """
+
+    def __init__(self, status: str, message: str, *, payload: str = "", page: int = 1):
         super().__init__(message)
-        self.status = status
+        self.status, self.payload, self.page = status, payload, page
+
+    # Engine answers ABOUT THE REQUESTED ID (live_query.lua equipment verb), the only
+    # non-OK replies that are findings rather than non-answers.
+    ID_ANSWERS = ("equipment id was not issued by this UI session",
+                  "equipment requires a verified live ship class")
+
+    def is_finding(self) -> bool:
+        if self.page != 1:
+            return False
+        if self.status == "ABSENT":
+            return True
+        return self.status == "ERR" and self.payload.startswith(self.ID_ANSWERS)
 
 
 def fetch(pipe, ship: str, nonce: str) -> dict:
@@ -72,7 +87,8 @@ def fetch(pipe, ship: str, nonce: str) -> dict:
             "equipment-page", header["token"], str(next_page))
         if response.status != "OK":
             raise EquipmentRefused(response.status,
-                                   f"equipment capture refused ({response.status}): {response.payload}")
+                                   f"equipment capture refused ({response.status}): {response.payload}",
+                                   payload=str(response.payload), page=next_page)
         payload = response.payload
         encoded = len(payload.encode("utf-8"))
         total_bytes += encoded

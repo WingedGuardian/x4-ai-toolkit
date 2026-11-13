@@ -1410,9 +1410,11 @@ def cmd_equipment(ship: str, pipe: str | None, timeout: float, out=None) -> int:
     from . import _liveequipment
 
     out = sys.stdout if out is None else out
-    # Exit codes follow `x4live query`: a bad argument is a non-answer decided before
-    # the pipe opens (2); the engine answering ABSENT or ERR is a finding (1); a
-    # malformed or incomplete capture is 3.
+    # Exit codes: a bad argument is a non-answer decided before the pipe opens (2); the
+    # engine answering the first request ABSENT, or ERR about the id itself (not issued,
+    # not a live ship), is a finding (1); every other refusal (an expired or superseded
+    # capture while paging, missing FFI, no clock), a malformed or an incomplete capture
+    # is 3.
     if not _liveequipment.HANDLE.fullmatch(ship) or ship == "0ULL":
         return _fmt_rc("equipment requires a nonzero issued ship ID such as 1046331ULL "
                        "(from `x4live query player`)", 2)
@@ -1420,7 +1422,7 @@ def cmd_equipment(ship: str, pipe: str | None, timeout: float, out=None) -> int:
         with _live_open(pipe, timeout) as lp:
             result = _liveequipment.fetch(lp, ship, uuid.uuid4().hex)
     except _liveequipment.EquipmentRefused as exc:
-        return _fmt_rc(str(exc), 1 if exc.status in ("ABSENT", "ERR") else 3)
+        return _fmt_rc(str(exc), 1 if exc.is_finding() else 3)
     except ValueError as exc:
         return _fmt_rc(str(exc), 3)
     print(json.dumps(result, ensure_ascii=True, indent=2), file=out)

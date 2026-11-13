@@ -564,19 +564,45 @@ def test_reader_enforces_row_bytes_independently_of_page_and_cache_bounds():
 # before any pipe opens (2); the engine answering ABSENT or ERR is a finding (1); a
 # malformed or incomplete capture stays 3.
 class _Answer:
-    def __init__(self, status):
-        self.status = status
+    def __init__(self, status, payload="synthetic engine answer"):
+        self.status, self.payload = status, payload
     def ask(self, *args):
-        return SimpleNamespace(status=self.status, payload="synthetic engine answer")
+        return SimpleNamespace(status=self.status, payload=self.payload)
 
 
-@pytest.mark.parametrize("status", ["ABSENT", "ERR"])
-def test_cli_engine_absent_or_err_is_a_finding(monkeypatch, status):
+def _cli(monkeypatch, pipe):
     class Context:
-        def __enter__(self): return _Answer(status)
+        def __enter__(self): return pipe
         def __exit__(self, *args): pass
     monkeypatch.setattr(_livecli, "_live_open", lambda *a: Context())
-    assert _livecli.cmd_equipment(SHIP, None, 10, io.StringIO()) == 1
+    return _livecli.cmd_equipment(SHIP, None, 10, io.StringIO())
+
+
+# Delta review I2: only an answer ABOUT THE ID on the first request is a finding (rc 1);
+# every other non-OK reply (expired or superseded capture, missing FFI, no clock) is a
+# non-answer and stays 3. Messages from live_query.lua's equipment verbs.
+@pytest.mark.parametrize("status,payload,expected", [
+    ("ABSENT", "equipment ship no longer exists", 1),
+    ("ERR", "equipment id was not issued by this UI session; obtain a fresh ship id", 1),
+    ("ERR", "equipment requires a verified live ship class", 1),
+    ("ERR", "equipment FFI declarations unavailable", 3),
+    ("ERR", "equipment UI elapsed clock unavailable", 3),
+    ("ERR", "equipment ship validity unreadable", 3),
+    ("TORN", "anything", 3),
+])
+def test_cli_first_reply_finding_or_non_answer(monkeypatch, status, payload, expected):
+    assert _cli(monkeypatch, _Answer(status, payload)) == expected
+
+
+@pytest.mark.parametrize("status", ["ERR", "ABSENT"])
+def test_cli_non_ok_page_after_the_first_is_a_non_answer(monkeypatch, status):
+    rt = setup('_G.eq_counts={engine=300,shield=0,turret=0,weapon=0}')
+    def mutate(r, n):
+        if n == 2:
+            return SimpleNamespace(status=status,
+                                   payload="equipment capture absent, reloaded or superseded; start a fresh capture")
+        return r
+    assert _cli(monkeypatch, Pipe(rt, mutate)) == 3
 
 
 @pytest.mark.parametrize("ship", ["0ULL", "abc", "12"])
@@ -585,12 +611,3 @@ def test_cli_bad_ship_argument_is_rc2_before_the_pipe(monkeypatch, ship):
     monkeypatch.setattr(_livecli, "_live_open", lambda *a: opened.append(a))
     assert _livecli.cmd_equipment(ship, None, 10, io.StringIO()) == 2
     assert opened == []
-
-
-def test_cli_other_engine_status_or_malformed_reply_stays_rc3(monkeypatch):
-    # Twin: a status that is neither OK, ABSENT nor ERR is not a finding.
-    class Context:
-        def __enter__(self): return _Answer("TORN")
-        def __exit__(self, *args): pass
-    monkeypatch.setattr(_livecli, "_live_open", lambda *a: Context())
-    assert _livecli.cmd_equipment(SHIP, None, 10, io.StringIO()) == 3
