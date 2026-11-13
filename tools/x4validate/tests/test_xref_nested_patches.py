@@ -332,24 +332,69 @@ def test_mixed_case_nested_patch_is_indexed(tmp_path, hermetic):
         _index(tmp_path, ext))
 
 
-# --- a mod folder that cannot be LISTED is a non-answer, not an empty mod (review M-4) --
+# --- a folder that cannot be LISTED is a non-answer, not an empty mod (review M-4, delta 5 M-3) --
+#
+# Reported as an unscanned FOLDER naming the mod, never as a file that would not parse.
+# Only the LOOSE listing failed, so the catalogs are still read. A subfolder that cannot be
+# listed is reported the same way instead of reading as empty.
 
-def test_an_unlistable_mod_folder_is_recorded_unreadable(tmp_path, monkeypatch):
+def _deny_top_listing(monkeypatch, mod):
+    real = _scan._list_dir
+
+    def deny(path):
+        if path == mod:
+            raise PermissionError(13, "Access is denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(_scan, "_list_dir", deny)
+
+
+def _packed_mod(tmp_path):
     mod = tmp_path / "moda"
     (mod / "md").mkdir(parents=True)
-    (mod / "md" / "x.xml").write_text(_md("X", "C"), encoding="utf-8")
-    real = Path.iterdir
+    (mod / "md" / "x.xml").write_text(_md("X", "LooseCue"), encoding="utf-8")
+    _write_cat(mod, "ext_01.cat", [("md/k.xml", _md("K", "PackedCue").encode())])
+    return mod
 
-    def deny(self):
-        if self == mod:
-            raise PermissionError(13, "Access is denied", str(self))
-        return real(self)
 
-    monkeypatch.setattr(Path, "iterdir", deny)
+def test_an_unlistable_mod_folder_is_an_unscanned_folder_naming_the_mod(tmp_path, monkeypatch):
+    mod = _packed_mod(tmp_path)
+    _deny_top_listing(monkeypatch, mod)
     unreadable: list = []
-    got = list(_scan.iter_mod_xml(mod, _scan.under_nested("md/", "aiscripts/"), unreadable))
-    assert got == []
-    assert len(unreadable) == 1 and "could not list" in unreadable[0].why
+    got = [v for v, _ in _scan.iter_mod_xml(mod, _scan.under_nested("md/", "aiscripts/"),
+                                            unreadable)]
+    assert got == ["md/k.xml"]                       # the catalogs are still read
+    assert len(unreadable) == 1
+    u = unreadable[0]
+    assert u.folder and "moda" in str(u) and "NOT SCANNED" in str(u)
+    assert "(loose)" not in str(u)
+
+
+def test_an_unlistable_mod_folder_without_a_channel_still_reads_its_catalogs(tmp_path, monkeypatch):
+    mod = _packed_mod(tmp_path)
+    _deny_top_listing(monkeypatch, mod)
+    assert [v for v, _ in _scan.iter_mod_xml(mod, _scan.under("md/", "aiscripts/"))] == ["md/k.xml"]
+
+
+def test_an_unlistable_subfolder_is_reported_not_read_as_empty(tmp_path, monkeypatch):
+    mod = tmp_path / "moda"
+    (mod / "md" / "sub").mkdir(parents=True)
+    (mod / "md" / "sub" / "x.xml").write_text(_md("X", "C"), encoding="utf-8")
+    (mod / "md" / "ok.xml").write_text(_md("O", "D"), encoding="utf-8")
+    import os
+    real = os.scandir
+    blocked = str(mod / "md" / "sub")
+
+    def deny(path="."):
+        if os.fspath(path) == blocked:
+            raise PermissionError(13, "Access is denied", blocked)
+        return real(path)
+
+    monkeypatch.setattr(os, "scandir", deny)
+    unreadable: list = []
+    got = [v for v, _ in _scan.iter_mod_xml(mod, _scan.under("md/"), unreadable)]
+    assert got == ["md/ok.xml"]
+    assert [(u.vpath, u.folder) for u in unreadable] == [("md/sub/", True)]
 
 
 def test_twin_an_absent_mod_folder_records_nothing(tmp_path):
@@ -358,19 +403,37 @@ def test_twin_an_absent_mod_folder_records_nothing(tmp_path):
     assert unreadable == []
 
 
-def test_an_unlistable_mod_reaches_the_xref_exclusions(tmp_path, hermetic, monkeypatch):
-    """...so `x4xref` writes it to the .notindexed sidecar every negative renders."""
+def test_an_unlistable_mod_reaches_the_xref_negative_as_a_folder(tmp_path, hermetic, monkeypatch, capsys):
+    """...and the negative says a FOLDER was not scanned, not that a file would not parse."""
+    ref = _ref(tmp_path)
     ext = tmp_path / "ext"
     mod = _mod(ext, "moda", {"md/x.xml": _md("X", "C")})
-    real = Path.iterdir
+    _mod(ext, "modb", {"md/y.xml": _md("Y", "D")})
+    monkeypatch.setattr(_registry, "GAME_EXTENSIONS", ext)
+    monkeypatch.setattr(_merge, "REFERENCE", ref)
+    monkeypatch.setattr(_merge.Config, "dlc_dirs", lambda self: [])
+    _deny_top_listing(monkeypatch, mod)
+    tsv = tmp_path / "xref.tsv"
+    assert _xref.main(["build", "--reference", str(ref), "--ext-dir", str(ext),
+                       "--out", str(tsv)]) == 0
+    capsys.readouterr()
+    _xref.main(["cue", "NoSuchCueAnywhere", "--tsv", str(tsv)])
+    out = capsys.readouterr().out
+    assert "1 folder(s) that could not be listed" in out
+    assert "would not parse" not in out
 
-    def deny(self):
-        if self == mod:
-            raise PermissionError(13, "Access is denied", str(self))
-        return real(self)
 
-    monkeypatch.setattr(Path, "iterdir", deny)
-    unreadable: list = []
-    rows = _index(tmp_path, ext, unreadable)
-    assert not [r for r in rows if r.source == "moda"]
-    assert [u.vpath for u in unreadable] == ["."]
+def test_twin_a_parse_failure_is_still_a_file(tmp_path, hermetic, monkeypatch, capsys):
+    ref = _ref(tmp_path)
+    ext = tmp_path / "ext"
+    _mod(ext, "moda", {"md/x.xml": "<mdscript"})
+    monkeypatch.setattr(_registry, "GAME_EXTENSIONS", ext)
+    monkeypatch.setattr(_merge, "REFERENCE", ref)
+    monkeypatch.setattr(_merge.Config, "dlc_dirs", lambda self: [])
+    tsv = tmp_path / "xref.tsv"
+    assert _xref.main(["build", "--reference", str(ref), "--ext-dir", str(ext),
+                       "--out", str(tsv)]) == 0
+    capsys.readouterr()
+    _xref.main(["cue", "NoSuchCueAnywhere", "--tsv", str(tsv)])
+    out = capsys.readouterr().out
+    assert "1 file(s) that would not parse" in out and "folder" not in out
