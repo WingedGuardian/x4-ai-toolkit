@@ -21,7 +21,7 @@ import time
 from ._liveactions import ActionJournal, _write_new, _read_json, request_digest
 from ._liveautomation import AutomationClient
 from ._livebound import _decode
-from ._liveclip import window_for_peer, run_bounded
+from ._liveclip import window_for_peer, run_bounded, MAX_BYTES, MAX_FRAMES
 from ._liveclipport import ClipPort
 from ._livecapture import decode_image
 from ._liveevidence import ReadEvidence
@@ -284,14 +284,14 @@ class DialogInput:
              self._now()-interval[1] <= 30, 'clip not after native context or stale')
         binary = self.clips.recorder.binary; binary_row = self.clips.recorder.binary_row
         need(_file(binary, 256*1024**2) == binary_row, 'decoder changed')
-        path = Path(clip['path']); need(_file(path, 256*1024**2) == clip['file'], 'clip changed')
-        n = clip['evidence']['decoded_frames']; need(type(n) is int and 2 <= n <= 1800, 'decoded frame bound')
+        path = Path(clip['path']); need(_file(path, MAX_BYTES) == clip['file'], 'clip changed')
+        n = clip['evidence']['decoded_frames']; need(type(n) is int and 2 <= n <= MAX_FRAMES, 'decoded frame bound')
         raw = self.clips.recorder.runner([str(binary), '-nostdin', '-hide_banner', '-loglevel', 'error', '-xerror',
              '-i', str(path), '-vf', 'select=eq(n\\,'+str(n-1)+')', '-frames:v', '1', '-f', 'image2pipe',
              '-c:v', 'png', 'pipe:1'], cap=32*1024**2, timeout=15, check=self._current)
         info = decode_image(raw)
         need((info['width'], info['height']) == (clip['window']['width'], clip['window']['height']), 'frame dimensions')
-        need(_file(path, 256*1024**2) == clip['file'] and _file(binary, 256*1024**2) == binary_row, 'clip/decoder changed')
+        need(_file(path, MAX_BYTES) == clip['file'] and _file(binary, 256*1024**2) == binary_row, 'clip/decoder changed')
         self.clips.receipt(clip_handle); self._current()
         handle = object(); self.frames[handle] = {'raw': raw, 'sha256': hashlib.sha256(raw).hexdigest(),
             'info': info, 'window': clip['window'], 'end': interval[1], 'context': context_handle,

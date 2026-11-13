@@ -358,3 +358,26 @@ def test_actual_windows_preflight_uses_only_fake_symbols_and_refuses_unknowns(mo
     else:
         with pytest.raises(m.InputUnavailable):observe()
     assert 'SendInput' not in calls
+
+
+# Review r1-8: the frame decoder used its own bounds (256 MiB clip, 1,800 decoded frames)
+# while the recorder caps a clip at _liveclip.MAX_BYTES (512 MiB) and MAX_FRAMES (900).
+@pytest.mark.parametrize('frames,ok',[(901,False),(900,True),(2,True),(1,False)])
+def test_decoded_frame_bound_is_the_recorders(tmp_path,monkeypatch,frames,ok):
+    p,c,clips,b=setup(tmp_path,monkeypatch);ct=context(p)
+    h=clips.capture(tmp_path,start=c.t,end=c.t);clips.frames[h]['clip']['evidence']['decoded_frames']=frames
+    if ok:p.frame(h,ct)
+    else:
+        with pytest.raises(m.InputUnavailable,match='decoded frame bound'):p.frame(h,ct)
+
+
+def test_clip_file_cap_is_the_recorders(tmp_path,monkeypatch):
+    from x4validate import _liveclip
+    p,c,clips,b=setup(tmp_path,monkeypatch);ct=context(p)
+    h=clips.capture(tmp_path,start=c.t,end=c.t);clip_path=clips.frames[h]['clip']['path']
+    caps=[];real=m._file
+    def spy(path,cap):
+        if str(path)==clip_path:caps.append(cap)
+        return real(path,cap)
+    monkeypatch.setattr(m,'_file',spy);p.frame(h,ct)
+    assert caps and set(caps)=={_liveclip.MAX_BYTES}
