@@ -12,6 +12,58 @@ set -uo pipefail
 
 XRCATTOOL="${XRCATTOOL:-XRCatTool.exe}"
 
+# --- Preflight: refuse a pack whose input holds a file XRCatTool would skip -------
+# MEASURED (XRCatTool 1.11): an input file whose ABSOLUTE Windows path is 260
+# characters or longer (MAX_PATH) is left out of the catalog with only an
+# "Illegal file <relative path>" line on stderr, and the tool still exits 0;
+# 259 characters pack. So before running the tool, walk every `-in` FOLDER (a
+# pack; an `-in` naming a file is an unpack and is not walked) and refuse,
+# naming each such path. Off Windows the tool runs under Wine, where a unix path
+# is spelt Z:\...; that spelling is what is checked there (not measured under Wine).
+# Every file is checked, including any an -include/-exclude filter would drop.
+_xrcat_is_windows() {
+  case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*|Windows*) return 0;; esac
+  return 1
+}
+_xrcat_winroot() {
+  if _xrcat_is_windows; then cygpath -w -a "$1"; return; fi
+  local a; a=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  printf 'Z:%s' "${a//\//\\}"
+}
+_xrcat_preflight() {
+  local prev="" a root list rc rel w n shown=0
+  local -a long=()
+  for a in "$@"; do
+    if [ "$prev" = "-in" ] && [ -d "$a" ]; then
+      root=$(_xrcat_winroot "$a") || { echo "xrcat: REFUSED: cannot resolve the input folder: $a" >&2; return 2; }
+      root="${root%\\}"
+      list=$(mktemp) || { echo "xrcat: REFUSED: no temp file for the input path check" >&2; return 2; }
+      (cd "$a" && find . -type f -print0) > "$list"; rc=$?
+      if [ "$rc" -ne 0 ]; then
+        rm -f "$list"
+        echo "xrcat: REFUSED: could not list every file under $a (find exit $rc); the path-length check would be incomplete" >&2
+        return 2
+      fi
+      while IFS= read -r -d '' rel; do
+        rel="${rel#./}"; w="$root\\${rel//\//\\}"
+        if [ "${#w}" -ge 260 ]; then long+=("${#w}  $w"); fi
+      done < "$list"
+      rm -f "$list"
+    fi
+    prev="$a"
+  done
+  n=${#long[@]}
+  [ "$n" -eq 0 ] && return 0
+  echo "xrcat: REFUSED: $n input file(s) have an absolute path of 260 or more characters (Windows MAX_PATH)." >&2
+  echo "xrcat: XRCatTool 1.11 leaves such a file out of the catalog and still exits 0. Stage the mod under a shorter folder and pack again." >&2
+  for w in "${long[@]}"; do
+    if [ "$shown" -ge 50 ]; then echo "xrcat:   ... and $((n - shown)) more" >&2; break; fi
+    echo "xrcat:   $w" >&2; shown=$((shown + 1))
+  done
+  return 3
+}
+_xrcat_preflight "$@" || exit $?
+
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*|Windows*)            # Windows shells: run the exe as-is
     if [ ! -f "$XRCATTOOL" ] && ! command -v "$XRCATTOOL" >/dev/null 2>&1; then

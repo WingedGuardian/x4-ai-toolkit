@@ -1,0 +1,107 @@
+"""bin/xrcat refuses a pack whose input holds a file XRCatTool 1.11 would skip.
+
+MEASURED 2026-11-13 (XRCatTool 1.11, 18 files of absolute length 250..267 under one
+input folder): every file of 259 characters or fewer was packed; every file of 260 or
+more was left out of the catalog with only an "Illegal file <relative path>" line on
+stderr, and the tool exited 0. A pack that silently drops files ships a broken mod,
+so the wrapper refuses BEFORE running the tool and names each such path.
+
+A fake XRCatTool stands in for the real one: the test is about the wrapper's
+preflight, and "the tool never ran" is the property that matters.
+"""
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[3]
+WRAPPER = ROOT / "bin" / "xrcat"
+WINDOWS = sys.platform == "win32"
+
+
+def _bash():
+    found = shutil.which("bash")
+    if not found:
+        pytest.skip("bash not available")
+    return found
+
+
+def _windows_spelling(path: Path) -> str:
+    if WINDOWS:
+        return str(path.resolve())
+    return "Z:" + str(path.resolve()).replace("/", "\\")
+
+
+def _make_file(folder: Path, total: int) -> str:
+    """Create folder/d/<name>.xml whose absolute Windows spelling is exactly `total` characters."""
+    prefix = _windows_spelling(folder) + "\\d\\"
+    pad = total - len(prefix) - len(".xml")
+    assert pad >= 1, "test folder too deep for this length"
+    full_win = prefix + "y" * pad + ".xml"
+    assert len(full_win) == total
+    target = folder / "d" / ("y" * pad + ".xml")
+    if WINDOWS:
+        os.makedirs("\\\\?\\" + str((folder / "d").resolve()), exist_ok=True)
+        with open("\\\\?\\" + str(target.resolve()), "wb") as fh:
+            fh.write(b"<x/>")
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"<x/>")
+    return full_win
+
+
+def _fake_tool(tmp: Path) -> Path:
+    marker = tmp / "ran.txt"
+    fake = tmp / "fakexrcat.sh"
+    fake.write_bytes(("#!/usr/bin/env bash\necho ran > '" + marker.as_posix() + "'\nexit 0\n").encode())
+    fake.chmod(0o755)
+    return fake
+
+
+def _run(tmp: Path, args):
+    fake = _fake_tool(tmp)
+    env = {**os.environ, "XRCATTOOL": fake.as_posix()}
+    return subprocess.run([_bash(), WRAPPER.as_posix(), *args], capture_output=True, text=True, env=env, timeout=60)
+
+
+def _src(tmp_path: Path) -> Path:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "content.xml").write_bytes(b"<content/>")
+    return src
+
+
+@pytest.mark.parametrize("length", [260, 300])
+def test_pack_with_an_input_path_of_260_or_more_is_refused_before_the_tool_runs(tmp_path, length):
+    src = _src(tmp_path)
+    long_path = _make_file(src, length)
+    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert not (tmp_path / "ran.txt").exists(), "XRCatTool ran despite the over-long input"
+    assert long_path in result.stderr
+    assert "260" in result.stderr
+
+
+def test_pack_with_input_paths_of_259_runs_the_tool(tmp_path):
+    # Twin: one character shorter is packed by the real tool, so the wrapper must not refuse it.
+    if not WINDOWS:
+        pytest.skip("the tool-runs branch needs Wine off Windows")
+    src = _src(tmp_path)
+    _make_file(src, 259)
+    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "ran.txt").exists()
+
+
+def test_unpack_of_a_catalog_is_not_preflighted(tmp_path):
+    # Twin: -in naming a .cat file (an unpack) is not walked.
+    if not WINDOWS:
+        pytest.skip("the tool-runs branch needs Wine off Windows")
+    cat = tmp_path / "ext_01.cat"
+    cat.write_bytes(b"")
+    result = _run(tmp_path, ["-in", str(cat), "-out", str(tmp_path / "out")])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "ran.txt").exists()
