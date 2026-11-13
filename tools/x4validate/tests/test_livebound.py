@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from lupa import LuaRuntime
+from lupa.luajit21 import LuaRuntime
 from x4validate._livebound import BoundPipe, session_exchange
 from x4validate._livepipe import Reply
 from x4validate._livesession import SessionUnavailable

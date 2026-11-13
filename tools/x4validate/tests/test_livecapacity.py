@@ -2,7 +2,7 @@
 from pathlib import Path
 import json
 import pytest
-from lupa import LuaRuntime
+from lupa.luajit21 import LuaRuntime
 from x4validate import _livecapacity as C
 
 UI=Path(__file__).resolve().parents[3]/"mods/x4_toolkit_helper/ui"

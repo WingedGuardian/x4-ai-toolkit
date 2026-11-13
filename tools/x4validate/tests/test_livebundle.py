@@ -2,7 +2,7 @@
 import importlib.util
 from pathlib import Path
 import pytest
-from lupa import LuaRuntime
+from lupa.luajit21 import LuaRuntime
 
 ROOT=Path(__file__).resolve().parents[3]
 spec=importlib.util.spec_from_file_location("automation_bundle",ROOT/"scripts/live_automation_bundle.py")

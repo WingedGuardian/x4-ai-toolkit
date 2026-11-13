@@ -1,7 +1,7 @@
 """Actual local channel state and generated bound read; no game calls."""
 import json
 import pytest
-from lupa import LuaRuntime
+from lupa.luajit21 import LuaRuntime
 from test_livemdchannel import runtime as channel_runtime,refused
 from test_livebundle_capacity import B,ROOT,synthetic
 from test_livebound import Pipe,Link

@@ -47,7 +47,7 @@ def test_the_write_verb_contract_tests_are_where_this_claims_they_are():
     target = os.path.join(here, "test_modlua_rearm.py")
     assert os.path.isfile(target), "test_modlua_rearm.py is gone; this guard is now inert"
     text = open(target, encoding="utf-8").read()
-    assert 'importorskip("lupa"' in text, (
+    assert 'importorskip("lupa.luajit21"' in text, (
         "test_modlua_rearm.py no longer skips on lupa; if the dependency became hard, "
         "delete this guard rather than leaving it to pass for the wrong reason")
     for verb in ("pause", "unpause"):

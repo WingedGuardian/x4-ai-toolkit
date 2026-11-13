@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-lupa = pytest.importorskip("lupa", reason="actual Lua behavioral tests require dev dependency")
+lupa = pytest.importorskip("lupa.luajit21", reason="actual Lua behavioral tests require dev dependency")
 SOURCE = Path(__file__).resolve().parents[3] / "mods/x4_toolkit_helper/ui/live_camera.lua"
 
 

@@ -26,7 +26,7 @@ import re
 
 import pytest
 
-lupa = pytest.importorskip("lupa", reason="lua runtime; dev-only check of the game-side mod")
+lupa = pytest.importorskip("lupa.luajit21", reason="lua runtime; dev-only check of the game-side mod")
 
 #: Located by GLOB, not by a spelled-out folder name. The game-side mod is a personal
 #: artifact and its folder carries a personal prefix; this file ships, so naming it here
@@ -146,7 +146,10 @@ local fake_ffi = {
     -- `wire` casts a lua number back to the canonical UniverseID rendering. Returning
     -- the finished string is exactly what tostring() of the real cdata would give.
     cast = function(ctype, v)
-        local n = tonumber(tostring(v))
+        -- A number is used as is: under LuaJIT tostring() keeps only 14 significant
+        -- digits ("9.007199254741e+15"), which would fake a precision loss real ffi.cast
+        -- does not have.
+        local n = type(v) == "number" and v or tonumber(tostring(v))
         if n == nil then return tostring(v) end
         return string.format("%.0f", n) .. "ULL"
     end,

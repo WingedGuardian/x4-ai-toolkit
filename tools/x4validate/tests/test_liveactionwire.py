@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from lupa import LuaRuntime
+from lupa.luajit21 import LuaRuntime
 
 from x4validate._liveactions import ActionRefused, ActionUncertain, request_digest
 from x4validate._liveactionwire import encode_request, decode_receipt, PipeActionTransport

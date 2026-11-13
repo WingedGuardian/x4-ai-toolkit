@@ -3,7 +3,7 @@ import hashlib
 import importlib.util
 from pathlib import Path
 import pytest
-from lupa import LuaRuntime
+from lupa.luajit21 import LuaRuntime
 
 ROOT=Path(__file__).resolve().parents[3]
 def load(name):

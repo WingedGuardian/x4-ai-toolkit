@@ -2,7 +2,7 @@
 from pathlib import Path
 
 import pytest
-from lupa import LuaRuntime
+from lupa.luajit21 import LuaRuntime
 
 SOURCE = Path(__file__).resolve().parents[3] / "mods/x4_toolkit_helper/ui/live_actions.lua"
 
