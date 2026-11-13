@@ -6,7 +6,7 @@ allowed-tools: Bash, Read, Grep
 
 Ask the running engine, then read the answer for what it is NOT.
 
-The commands and their arguments are in the toolkit's own README and `--help`; this skill
+The commands, exit codes and limits are in the toolkit's `docs/x4live.md` and `--help`; this skill
 carries only the traps, because they are what cost a session and they are not discoverable
 from the output.
 

@@ -10,14 +10,8 @@ UI qualification first asks a read-only volatile bootstrap for a challenge-bound
 
 A preparation spec contains exactly id (32 lowercase hex), provider, action, arguments (object), binding. The client supplies the measured load session. The immutable request is reserved in requests before its first preparation dispatch. If preparation is asynchronous or its reply is lost, status reconciles it without resending prepare. Only a real prepared receipt creates the action journal. Execution uses its existing durable dispatch reservation; repeated execution refuses. Preserve journal directories across clients.
 
-Exit codes: 0 means the requested read/identity operation completed, or an action receipt is prepared/completed; 4 means preparing/running; 2 means refused/unavailable; 3 means uncertain/degraded/failed. These are command outcomes, never campaign acceptance verdicts. The JSON includes the bound envelope and identity where qualified. After dispatch, even a reporting-time identity failure returns UNKNOWN with the returned receipt, request ID and journal location. No lost reply authorizes replay.
+Exit codes: 0 means the requested read/identity operation completed, or an action receipt is prepared/completed; 4 means preparing/running; 2 means refused/unavailable; 3 means uncertain/degraded/failed. These are command outcomes, not verdicts about what happened in the game. The JSON includes the bound envelope and identity where qualified. After dispatch, even a reporting-time identity failure returns UNKNOWN with the returned receipt, request ID and journal location. No lost reply authorizes replay.
 
 Legacy query blocks all automation transport verbs before opening a pipe. The automation query path also blocks action/session/pause routes. Only the router's closed read whitelist is callable. Large observations require scoped pages rather than silent truncation.
 
-Offline evidence:
-- UI/profile/router/client/CLI initial combined suite:101 passes, zero skips.
-- Post-dispatch reporting correction:25 CLI/client controls pass, zero skips.
-- The Windows argv parser was exercised through the real OS API. Process/CIM, X4 pipe peer identity, MD lifecycle and helper loading remain native-test gates.
-- Independent source reviews closed for UI/profile qualification, dispatch binding and durable CLI orchestration.
-- The UI/world ticket protocol, native bootstrap, provider registration, loaded-module attestation and native actions require integrated controls before deployment. This document does not claim those are complete.
-
+The helper as shipped does not load the automation bundle, so these commands are refused until a composed helper is installed; see [the x4live guide](x4live.md).

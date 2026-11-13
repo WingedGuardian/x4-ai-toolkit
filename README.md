@@ -241,7 +241,8 @@ and the generated staging trees through `scripts/x4basex_artifacts.py`, with no 
 
 Every other tool here reads files. `x4live` reads the **live engine**: what objects exist right
 now, what a macro's real values resolved to, whether an extension actually loaded — without a
-quit-and-relaunch cycle for each question.
+quit-and-relaunch cycle for each question. **Start with [the x4live guide](docs/x4live.md)**:
+what it needs, the commands and their exit codes, what it writes, and the automation limits.
 
 It needs one thing inside the game, and **this toolkit ships it**: `mods/x4_toolkit_helper/`.
 Copy that folder into `{game}/extensions/`, or from `tools/x4validate` run

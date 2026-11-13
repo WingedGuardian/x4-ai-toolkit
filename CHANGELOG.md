@@ -21,6 +21,8 @@
 - The helper's extensions now read MD reply flags as the 1 and 0 that MD sends. They expected Lua `true`/`false`, so real replies would have been refused or misread (found by reading the code; not yet seen in game).
 - A reply deadline left over from the previous connection no longer breaks the helper's MD channel for good when it fires while the next connection is still connecting ("canonical public session missing").
 - The helper (now version 102) requires Mod Support APIs: its manifest no longer marks it optional, and its UI declares it too. Without the UI declaration, another addon could reorder the UI load so the pipe never started.
+- New user guide `docs/x4live.md`: what x4live needs, how to install the helper, the commands and exit codes, what it writes and refuses to, and the limits of the optional automation bundle.
+- The x4live development and qualification records moved to `docs/live-dev/`; they stay in the repository but are no longer in the release download.
 - `bin/xrcat` refuses to pack a folder holding a file that XRCatTool 1.11 would silently leave out of the catalog (it still exits 0): a full path of 260 or more UTF-16 characters, or a path (the input folder included) that cannot be written in this machine's ANSI code page, which the tool uses for names. It lists each such file.
 - `x4live equipment` exit codes: a malformed ship ID exits 2 before anything is sent; the game answering that the ship no longer exists, was not issued in this session or is not a ship exits 1; any other refusal (an unreadable ship class, an expired or superseded capture, missing support in the helper) and any incomplete or malformed capture still exit 3.
 - `x4live --file X automation` now refuses with exit 2 instead of crashing.
