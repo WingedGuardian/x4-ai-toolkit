@@ -6,6 +6,7 @@ Production uses local ClipPort/ReadEvidence/AutomationClient handles, not export
 caller receipts. Review transcripts remain AGENT_REVIEWED judgment, not pixel truth.
 """
 from __future__ import annotations
+from ._livetrees import journal_refusal
 import copy
 import ctypes
 import hashlib
@@ -180,7 +181,8 @@ class DialogInput:
         self.revision, self.clock = observer_revision, clock
         self.backend = backend if backend is not None else WindowsDigits()
         self.root = _route(journal, directory=True); self.root_id = self.root.stat().st_dev, self.root.stat().st_ino
-        need(not self.root.is_relative_to(clips.profile.parent), 'input journal cannot be in personal game tree')
+        why = journal_refusal(self.root, profile=clips.profile)
+        need(why is None, 'input journal cannot be in personal game tree: ' + str(why))
         self.synthetic = synthetic; self.busy = threading.Lock(); self.last = None; self.input_fault = None
         self.actors, self.contexts, self.frames, self.reviews, self.tickets = {}, {}, {}, {}, {}
         self.releases = {}

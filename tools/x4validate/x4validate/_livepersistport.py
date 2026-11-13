@@ -4,7 +4,7 @@ Only opaque in-process capabilities reach the reserved provider. This prevents
 JSON/CLI adoption, not arbitrary code running as the same operating-system user.
 """
 from __future__ import annotations
-from ._livetrees import overlaps, personal_tree
+from ._livetrees import journal_refusal
 import copy
 import secrets
 from pathlib import Path
@@ -25,8 +25,8 @@ class PersistencePort:
         need(isinstance(client,AutomationClient) and isinstance(verifier,SlotVerifier) and
              isinstance(authority,PersistenceAuthority) and _hex(revision,64),"qualified persistence port dependencies")
         self.client=client;self.root=_directory(journal).resolve(strict=True);self.revision=revision
-        need(not overlaps(self.root, personal_tree(verifier.profile)),
-             "port journal/personal tree overlap")
+        why=journal_refusal(self.root,profile=verifier.profile)
+        need(why is None,"port journal overlap: "+str(why))
         self.v=verifier;self.authority=authority;self.claimed=set();self.last=None
         self.access=object();_ACCESS.add(self.access)
 
@@ -139,7 +139,8 @@ def connect_persistence(client,profile,journals,revision,authority):
     profile=_route(profile,directory=True);save=_route(profile/"save",directory=True)
     for root in [*roots.values(),authority.journal]:
         root=root.resolve(strict=True)
-        need(not overlaps(root, personal_tree(profile)),"task journal/personal tree overlap")
+        why=journal_refusal(root,profile=profile)
+        need(why is None,"task journal overlap: "+str(why))
     identity=client.identity();reply=client.query("native_save_path")
     need(reply.status=="OK","native save path transport unavailable")
     observed=_decode(reply.payload)

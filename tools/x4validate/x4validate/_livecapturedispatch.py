@@ -5,6 +5,7 @@ reservation bookkeeping. Ambiguous effects quarantine this owner; no retries or
 automatic journal reopening are provided.
 """
 from __future__ import annotations
+from ._livetrees import journal_refusal
 import copy
 import hashlib
 import json
@@ -43,9 +44,8 @@ class CaptureDispatcher:
         self.identity=copy.deepcopy(client.identity())
         self.observer=CaptureObserver(observer_root,identity=client.identity,
             native_paths=self._paths,capture_receipt=self._native_status,capacity_profile=self.capacity['name'])
-        personal=self.observer.native_savedir.parent.parent
-        need(not self.root.is_relative_to(personal) and not personal.is_relative_to(self.root),
-             "dispatcher journal/personal-tree overlap")
+        why=journal_refusal(self.root,profile=self.observer.native_savedir.parent)
+        need(why is None,"dispatcher journal/personal-tree overlap: "+str(why))
         self.root_identity=self._root_identity()
         self.owner={"version":1,"identity":self.identity,"revision":revision,"native_revision":native_revision,
                     "capacity_profile":self.capacity,

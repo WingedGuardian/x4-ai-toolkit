@@ -4,7 +4,7 @@ No CLI authorization flags, process launches, native calls on import, or save wr
 The native port and policy/guard callbacks are trusted integration dependencies.
 """
 from __future__ import annotations
-from ._livetrees import overlaps, personal_tree
+from ._livetrees import journal_refusal
 import copy
 import hashlib
 from pathlib import Path
@@ -70,8 +70,8 @@ class PersistenceAuthority:
              context["native_operation"]==("SaveGame" if context["operation"]=="SAVE" else "LoadGame"),
              "complete named-profile native operation context required")
         profile=Path(context["profile"])
-        need(not overlaps(self.journal, personal_tree(profile)),
-             "authority journal/personal tree overlap")
+        why=journal_refusal(self.journal,profile=profile)
+        need(why is None,"authority journal overlap: "+str(why))
         need(len(self.records)<128,"authority capacity")
         decision=_json(self.decide(copy.deepcopy(context)))
         need(isinstance(decision,dict) and set(decision)=={"source","reference","context_sha256","operation","mode"} and
@@ -129,8 +129,8 @@ class PersistenceDispatcher:
         need(isinstance(verifier,SlotVerifier) and isinstance(authority,PersistenceAuthority) and
              callable(port) and callable(clock),"qualified dependencies required")
         self.v=verifier;self.root=_directory(journal).resolve(strict=True);self.authority=authority;self.port=port;self.clock=clock
-        need(not overlaps(self.root, personal_tree(verifier.profile)),
-             "dispatch journal/personal tree overlap")
+        why=journal_refusal(self.root,profile=verifier.profile)
+        need(why is None,"dispatch journal overlap: "+str(why))
         self.records={};self.last=None
 
     def now(self):

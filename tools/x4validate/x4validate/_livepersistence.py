@@ -4,7 +4,7 @@ No save/load dispatch or approval issuance. Opaque handles are local capabilitie
 for observations only; serialization cannot recreate them or authorize a write.
 """
 from __future__ import annotations
-from ._livetrees import overlaps, personal_tree
+from ._livetrees import journal_refusal
 import copy
 import gzip
 import hashlib
@@ -90,7 +90,8 @@ class SlotVerifier:
         self.profile=_route(profile,directory=True)
         self.save=_route(self.profile/"save",directory=True)
         self.journal=_route(journal,directory=True)
-        _require(not overlaps(self.journal, personal_tree(self.profile)),"journal/personal tree overlap")
+        why=journal_refusal(self.journal,profile=self.profile)
+        _require(why is None,"journal overlap: "+str(why))
         _require(callable(identity) and callable(catalogue) and callable(profile_peer) and callable(clock),"trusted observers required")
         _require(_finite(settle_seconds) and 1<=settle_seconds<=60,"invalid settlement interval")
         for value in (max_members,max_file_bytes,max_total_bytes,max_expanded_bytes):

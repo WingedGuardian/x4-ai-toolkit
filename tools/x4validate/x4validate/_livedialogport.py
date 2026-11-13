@@ -4,6 +4,7 @@ No launch/focus/automatic replay. Capture and input are explicit separate method
 Use an existing production AutomationClient; this is not a raw command/eval port.
 """
 from __future__ import annotations
+from ._livetrees import journal_refusal
 import copy
 import hashlib
 import os
@@ -34,7 +35,8 @@ class DialogPort:
              'actual bound input engine and matching evidence tier required')
         need(synthetic or (clock is time.monotonic and sleep is time.sleep),'production host clocks cannot be injected')
         self.engine,self.root=engine,_route(journal,directory=True)
-        need(not self.root.is_relative_to(engine.clips.profile.parent),'port journal cannot be in personal tree')
+        why=journal_refusal(self.root,profile=engine.clips.profile)
+        need(why is None,'port journal cannot be in personal tree: '+str(why))
         for other in (engine.root,engine.clips.root,engine.clips.recorder.journal):
             need(self.root!=other and not self.root.is_relative_to(other) and not other.is_relative_to(self.root),
                  'port and evidence journals must be separate nonnested directories')

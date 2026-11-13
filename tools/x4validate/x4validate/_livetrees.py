@@ -29,10 +29,14 @@ def personal_tree(profile) -> Path:
 
 
 def protected_roots(*, image=None, profile=None) -> dict[str, Path]:
-    """The trees a journal must not overlap, from arguments and the toolkit's configuration."""
+    """The trees a journal must not overlap, from arguments and the toolkit's configuration.
+
+    A relative `image` is resolved against the current folder. A tree that cannot be
+    determined is left out here and named by unchecked_roots(), never silently.
+    """
     roots: dict[str, Path] = {}
-    if image is not None and Path(image).is_absolute():
-        roots["game install (the X4 executable's folder)"] = Path(image).parent
+    if image is not None:
+        roots["game install (the X4 executable's folder)"] = Path(image).resolve().parent
     for name, value in (("configured game root", _paths.game_root()),
                         ("reference folder", _paths.reference())):
         if value is not None:
@@ -41,6 +45,25 @@ def protected_roots(*, image=None, profile=None) -> dict[str, Path]:
     if prof is not None:
         roots["personal tree (every profile and its saves)"] = personal_tree(prof)
     return roots
+
+
+def unchecked_roots(*, image=None, profile=None) -> list[str]:
+    """Names of the protected trees protected_roots() could not determine."""
+    out = []
+    if image is None:
+        out.append("game install")
+    if _paths.game_root() is None:
+        out.append("configured game root")
+    if _paths.reference() is None:
+        out.append("reference folder")
+    if profile is None and _paths.profile() is None:
+        out.append("personal tree")
+    return out
+
+
+def journal_refusal(root, *, image=None, profile=None) -> str | None:
+    """The one journal rule: why `root` may not be used, or None when it may."""
+    return overlap_reason(root, protected_roots(image=image, profile=profile))
 
 
 def overlap_reason(root, roots: dict[str, Path]) -> str | None:

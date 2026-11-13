@@ -4,6 +4,7 @@ No session creation, launch, input, pause or implicit capture/retry. Exported
 receipts remain correlation records, not cryptographic visual attestations.
 """
 from __future__ import annotations
+from ._livetrees import journal_refusal
 import copy
 import hashlib
 import json
@@ -45,8 +46,8 @@ class ClipPort:
         need(self.root!=recordroot and not self.root.is_relative_to(recordroot) and not recordroot.is_relative_to(self.root),
              "distinct nonnested clip journals required")
         for path in (self.root,recordroot):
-            need(not path.is_relative_to(self.profile.parent) and not self.profile.parent.is_relative_to(path),
-                 "clip journal/personal tree overlap")
+            why=journal_refusal(path,profile=self.profile)
+            need(why is None,"clip journal/personal tree overlap: "+str(why))
         self.pins=source_pins()
         self.initial=copy.deepcopy(client.identity());self.build=client.bound.build
         need(self.profile.name==self.peer.profile_id and self.peer()==self.initial["peer"],

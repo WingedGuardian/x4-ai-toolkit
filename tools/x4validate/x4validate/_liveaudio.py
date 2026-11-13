@@ -1,5 +1,6 @@
 """Bounded Windows process-tree PCM evidence. Never plays or launches anything."""
 from __future__ import annotations
+from ._livetrees import journal_refusal
 import array
 import copy
 import hashlib
@@ -138,8 +139,8 @@ class ProcessAudioRecorder:
         self.client=client;self.peer=client.bound.link.peer;self.synthetic=synthetic;self.runner=runner
         self.profile=_route(profile,directory=True);save=_route(self.profile/"save",directory=True)
         self.root=_route(journal,directory=True);self.binary=_route(helper)
-        need(not self.root.is_relative_to(self.profile.parent) and not self.profile.parent.is_relative_to(self.root),
-             "audio journal/personal tree overlap")
+        why=journal_refusal(self.root,profile=self.profile)
+        need(why is None,"audio journal/personal tree overlap: "+str(why))
         self.binary_row=_file(self.binary,64*1024**2)
         need(type(helper_sha256)is str and re.fullmatch(r"[0-9a-f]{64}",helper_sha256)
              and self.binary_row["sha256"]==helper_sha256,"qualified helper hash differs")

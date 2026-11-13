@@ -5,6 +5,7 @@ Only an actual new, stable, decoded image qualifies an observed output location.
 This does not prove the image's contents, pose or causal origin.
 """
 from __future__ import annotations
+from ._livetrees import journal_refusal
 import hashlib
 import io
 import json
@@ -167,8 +168,8 @@ class CaptureObserver:
         savedir=_route(v["save_folder"],directory=True)
         need(savedir.name.casefold()=="save","native save-folder shape unqualified")
         profile=savedir.parent
-        need(not self.journal.is_relative_to(profile.parent) and
-             not profile.parent.is_relative_to(self.journal),"journal/personal-tree overlap")
+        why=journal_refusal(self.journal,profile=profile)
+        need(why is None,"journal/personal-tree overlap: "+str(why))
         roots=tuple(_candidate(base/"screenshots"/DIRECTORY) for base in (profile,profile.parent))
         self._current()
         if hasattr(self,"native_savedir"):

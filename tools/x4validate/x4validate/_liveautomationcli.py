@@ -46,6 +46,12 @@ def main(argv=None, *, open_pipe=None, connect=None):
     connect=connect or AutomationClient.connect
     print("EXPERIMENTAL x4live automation: use a disposable save. Session metadata/journals may be written.",
           file=sys.stderr)
+    from ._livetrees import protected_roots, unchecked_roots
+    checked=sorted(protected_roots(image=args.image))
+    missing=unchecked_roots(image=args.image)
+    print("journal check: the journal may not overlap "+(", ".join(checked) or "nothing determinable")
+          +("; not determined, so not checked: "+", ".join(missing)+" (configure them in x4-paths.env)" if missing else ""),
+          file=sys.stderr)
     if args.operation=="execute":
         print("WRITE: one previously prepared action; no automatic retry on lost reply.",file=sys.stderr)
     receipt=None
