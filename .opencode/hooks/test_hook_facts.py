@@ -1585,6 +1585,13 @@ class TestCwdRelativeOperands(unittest.TestCase):
     def test_cd_then_relative_delete_of_extensions_is_the_game_delete(self):
         f = F('cd "%s" && %s -rf extensions' % (GAME, D))
         self.assertTrue(f["rm_hits_game"])
+        # Off Windows the Windows-spelled fixture roots are relative names, and the link reading finds the game folder
+        # through the hook's own cwd whether or not the operand was joined (BLIND-SPOTS F375 row 17), so the mutant
+        # "a relative operand is joined to the cwd" went uncaught on ubuntu (CI run 43416210316, shard 1/8). POSIX roots
+        # there make the join the only way to the game folder.
+        if os.name != "nt":
+            roots = {k: "/x4fixture" + v.split(":", 1)[1] for k, v in ROOTS.items()}
+            self.assertTrue(F('cd "%s" && %s -rf extensions' % (roots["game"], D), roots=roots)["rm_hits_game"])
 
     def test_cd_then_delete_dot_is_the_game_root(self):
         f = F('cd "%s" && %s -rf .' % (GAME, D))

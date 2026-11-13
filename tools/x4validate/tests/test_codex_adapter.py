@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from test_shared_save_policy import _skip_if_translator_out_of_time
 from codex_testlib import ENGINE_FAILURES, UNKNOWN_EXECUTION_CWD, ADAPTER, FAKE_FINDING, FIX, HAS_PWSH, REPO, fake_validator, make_sandbox, native, process_alive, run_adapter as run
 
 
@@ -34,6 +35,9 @@ def test_bash_labelled_powershell_is_routed(sandbox):
     # while the other leg of the same commit passed; the reason was not kept. It is now, and an engine failure
     # is not accepted as the policy's deny.
     d, reason = run(env, native("bash_powershell", tmp, command=cmd), shell="powershell")
+    # MEASURED on the third occurrence (CI run 43416210316, cold-clone leg): "PowerShell translation timed out". The
+    # real translator ran out of time on the runner; the guard refused (right), and nothing was measured: skipped, named.
+    _skip_if_translator_out_of_time(reason)
     assert d == "deny", (d, reason)
     assert not any(f in (reason or "") for f in ENGINE_FAILURES), reason
     assert run(env, native("bash_powershell", tmp, command=cmd), shell="bash")[0] != "deny"  # twin: routing decides
