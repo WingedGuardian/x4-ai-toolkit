@@ -2580,9 +2580,18 @@ def check_exprlint(mod_dir: Path, config: _merge.Config, report: Report) -> None
 def _script_name_map(mod_dir: Path) -> dict[str, str]:
     """name -> vpath for the mod's own mdscript/aiscript files (their root
     `name=` attribute). Resolves debug.txt runtime errors (which name a SCRIPT,
-    not a file) back to a file."""
+    not a file) back to a file.
+
+    DIRECT md/ and aiscripts/ only, never `extensions/<owner>/`-nested files, which
+    `_xref._iter_mod_files` also yields. A match here GATES this mod on the engine's
+    error, and what the engine does with a full script at a nested path is UNMEASURED
+    (full files override cross-mod for macros; a duplicate full mdscript at a vanilla
+    path never takes effect, gotcha #21), so mapping one could blame this mod for a
+    script its owner defines. Direct-only also keeps a nested file from displacing a
+    direct script of the same name. MEASURED 2026-11-13: 72 of 72 nested script files
+    on a real install are `<diff>` roots, which never carried a name here anyway."""
     out: dict[str, str] = {}
-    for vpath, root in _xref._iter_mod_files(mod_dir):
+    for vpath, root in _scan.iter_mod_xml(mod_dir, _scan.under(*_xref._SCRIPT_DIRS)):
         if isinstance(root.tag, str) and root.tag in ("mdscript", "aiscript"):
             name = root.get("name")
             if name:
