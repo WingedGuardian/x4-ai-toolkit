@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib,importlib.util,json,os,subprocess,sys
 from unittest.mock import patch
 import pytest
+from lupa.luajit21 import LuaError
 from lxml import etree as E
 from lupa.luajit21 import LuaRuntime
 ROOT=Path(__file__).resolve().parents[3]
@@ -260,7 +261,7 @@ def check_prepared_argument_mutation_and_revoked_target_refuse():
     r,_=make();r.execute('prep();revoked=true')
     assert r.eval('execute().status')=='unknown' and r.eval('sends')==1
     r,_=make();r.execute('prep();req.arguments.x_m=99')
-    with pytest.raises(Exception):r.eval('registry.prepare(req)')
+    with pytest.raises(LuaError,match='request id reused with changed content'):r.eval('registry.prepare(req)')
     assert r.eval('sends')==1
 
 def check_native_unavailable_target_is_not_pose_or_success():

@@ -136,7 +136,7 @@ def check_actual_sdk_prepare_execute_status_and_observed_control():
     if r.eval("sentphase")=="status":r.execute("deliver(row('prepared'))")
     r.execute("run()");assert r.eval("sentphase")=="execute"
     r.execute("deliver(row('dispatched'));v=status()")
-    assert r.eval("v.status") in ("running","unknown")
+    assert r.eval("v.status")=="running"
     r.execute("local x=row('dispatched');x.occupied=true;x.controlled=true;deliver(x);v=status()")
     if r.eval("sentphase")=="status":r.execute("local x=row('dispatched');x.occupied=true;x.controlled=true;deliver(x)")
     assert r.eval("registry.status(req.id,req.session,req.digest).observations.snapshot.controlled")
@@ -252,7 +252,7 @@ def check_md_numeric_booleans_prepare_execute_status():
     if r.eval("sentphase")=="status":r.execute("deliver(row('prepared'))")
     r.execute("run()");assert r.eval("sentphase")=="execute"
     r.execute("deliver(row('dispatched'));v=status()")
-    assert r.eval("v.status") in ("running","unknown")
+    assert r.eval("v.status")=="running"
     r.execute("local x=row('dispatched');x.occupied=true;x.controlled=true;deliver(x);v=status()")
     if r.eval("sentphase")=="status":r.execute("local x=row('dispatched');x.occupied=true;x.controlled=true;deliver(x)")
     snap=r.eval("registry.status(req.id,req.session,req.digest).observations.snapshot")

@@ -97,7 +97,7 @@ def check_offscreen_zero_distance_retained():
 ])
 def check_wrong_abi(declaration):
     prefix="" if declaration=="typedef int64_t UniverseID;" else "typedef uint64_t UniverseID;"
-    with pytest.raises(Exception):
+    with pytest.raises(luajit.LuaError,match='native unsigned identity|projection ABI'):
         build("ffi.cdef("+json.dumps(prefix+declaration)+");")
 
 def check_native_first():

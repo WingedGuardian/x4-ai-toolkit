@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import pytest
+from lupa.luajit21 import LuaError
 from x4validate._livepersistdispatch import PersistenceAuthority,PersistenceDispatcher,PersistenceUnavailable,sha,guard_reply
 from x4validate._livesession import SessionLink,SessionJournal,SessionUnavailable
 ROOT=Path(__file__).resolve().parents[3]
@@ -108,7 +109,7 @@ def check_full_actual_chain_scoped_not_global_lineage(tmp):
 @pytest.mark.parametrize("bad",[True,{"approved":True},"continue"])
 def check_untrusted_or_generic_decision_never_dispatches(tmp,bad):
     c=setup(tmp);t=c["d"].reserve_save(SID,"save_001");c["a"].decide=lambda _:bad
-    with pytest.raises((PersistenceUnavailable,TypeError)):c["d"].execute(t)
+    with pytest.raises(PersistenceUnavailable,match="applicable recorded approval required"):c["d"].execute(t)
     assert c["rt"].globals().nc("save")==0 and "execute_save" not in c["port"].calls
 
 @pytest.mark.parametrize("mode",["CANONICAL_GUARD","CONTINUE","DEVELOPMENT","EXPLICIT_NATIVE_EXCEPTION"])
@@ -219,11 +220,11 @@ def check_port_false_claims_refused(tmp,mutation):
 def check_gate_rejects_replay_and_wrong_authority_mode(tmp):
     c=setup(tmp);t=c["d"].reserve_save(SID,"save_001")
     args={"ticket":SID,"capability":"f"*32,"context_sha256":"e"*64,"mode":"CANONICAL_GUARD","guard_qualified":False}
-    with pytest.raises(Exception):c["api"].invoke("execute_save",c["to_lua"](args))
+    with pytest.raises(LuaError,match="authority mode mismatch"):c["api"].invoke("execute_save",c["to_lua"](args))
     assert c["rt"].globals().nc("save")==0
     assert c["d"].execute(t)["status"]=="SAVE_REQUESTED"
     args["mode"]="EXPLICIT_NAMED_PROFILE_NATIVE_EFFECT_EXCEPTION"
-    with pytest.raises(Exception):c["api"].invoke("execute_save",c["to_lua"](args))
+    with pytest.raises(LuaError,match="invalid/replayed grant"):c["api"].invoke("execute_save",c["to_lua"](args))
     assert c["rt"].globals().nc("save")==1
 
 @pytest.mark.parametrize("mutation",["missing_profile","wrong_path","wrong_operation","bad_slot","bad_label","missing_inventory"])

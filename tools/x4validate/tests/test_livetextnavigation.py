@@ -1,6 +1,7 @@
 """Actual Lua navigation with synthetic native menu descriptors; no native calls."""
 from pathlib import Path
 import pytest
+from lupa.luajit21 import LuaError
 from lupa.luajit21 import LuaRuntime
 SOURCE=Path(__file__).resolve().parents[3]/"mods/x4_toolkit_helper/ui/live_textnavigation.lua"
 
@@ -172,7 +173,7 @@ def test_capacity_no_eviction():
 
 @pytest.mark.parametrize("extra",["d.capacity_profile=false","d.capacity_profile='campaign_v1'"])
 def test_untrusted_capacity_refuses_before_native(extra):
-    with pytest.raises(Exception):make(extra=extra)
+    with pytest.raises(LuaError,match='unknown capacity profile|campaign resolver required'):make(extra=extra)
 
 def test_exact_native_close_handler_once():
     r=make(extra="m.onCloseElement=function(reason)assert(reason=='close');wrapped()end")
