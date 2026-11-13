@@ -108,7 +108,7 @@ def test_capacity_read_namespace_cannot_be_spoofed_by_legacy_reader():
     assert lua.eval("pcall(X4ToolkitAutomationBundle.new,d)")[0] is False
     assert lua.globals().constructed is None
 
-def test_complete_nine_extension_campaign_composition_shares_fixed_revision():
+def test_complete_ten_extension_campaign_composition_shares_fixed_revision():
     mod=ROOT/"mods/x4_toolkit_helper"
     files,receipt=P.build((mod/"content.xml").read_bytes(),(mod/"ui.xml").read_bytes(),
                          sources(),extensions=tuple(P.EXTENSIONS),capacity_profile="campaign_v1")

@@ -32,7 +32,7 @@ def sha(b):return hashlib.sha256(b).hexdigest()
 @pytest.fixture(scope='module',params=['interactive','campaign_v1'])
 def packet(request):
     path=ROOT/'scripts/prepare_live_helper.py'
-    spec=importlib.util.spec_from_file_location('all_nine_helper',path)
+    spec=importlib.util.spec_from_file_location('all_ten_helper',path)
     p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
     assert set(p.EXTENSIONS)==NAMES,'exact public extension registry required'
     sources={k:(ROOT/v).read_bytes()for k,v in p.BUNDLE.SOURCES.items()}
@@ -143,7 +143,7 @@ def registered(r,provider,action,revision,index):
     assert r.globals().native_calls==0
 
 
-def test_actual_nine_loaders_constructor_and_exact_provider_revisions(packet):
+def test_actual_ten_loaders_constructor_and_exact_provider_revisions(packet):
     r=runtime(packet);r.execute('instance=X4ToolkitAutomationBundle.new(deps)')
     assert r.globals().native_calls==0 and r.globals().clock_calls==0
     assert [e['name']for e in r.globals().events.values()]==list(dict.fromkeys(e['name']for e in r.globals().events.values()))
@@ -152,11 +152,11 @@ def test_actual_nine_loaders_constructor_and_exact_provider_revisions(packet):
     registered(r,'x4-native-v1','camera.view',packet['receipt']['bundle']['build'],len(packet['expected'])+1)
     assert r.globals().X4ToolkitAutomationBundle.dispose() is True
     r.globals().late_callbacks();assert r.globals().native_calls==0
-    print('ALL_NINE_SOURCE_IDENTITY='+json.dumps(dict(bundle=packet['receipt']['bundle']['build'],
+    print('ALL_TEN_SOURCE_IDENTITY='+json.dumps(dict(bundle=packet['receipt']['bundle']['build'],
         generators=packet['receipt']['generators'],providers=packet['expected']),sort_keys=True))
 
 
-def test_actual_nine_plus_tenth_descriptor_and_retired_callbacks(packet):
+def test_actual_ten_plus_a_synthetic_descriptor_and_retired_callbacks(packet):
     r=runtime(packet,ninth='normal');r.execute('instance=X4ToolkitAutomationBundle.new(deps)')
     assert r.globals().native_calls==0 and r.globals().clock_calls==0
     for i,(provider,rev)in enumerate(packet['expected'].items(),1):registered(r,provider,FIRST_ACTION[provider],rev,i)

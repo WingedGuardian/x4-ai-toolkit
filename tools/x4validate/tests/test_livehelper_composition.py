@@ -142,7 +142,7 @@ def test_placement_six_extension_order_and_scope():
     assert b'bypassing teleport research' in files['content.xml']
 
 
-def test_all_nine_extensions_preserve_exact_outputs_and_canonical_order():
+def test_all_ten_extensions_preserve_exact_outputs_and_canonical_order():
     a,b,sources=inputs();names=tuple(P.EXTENSIONS)
     assert len(names)==10
     first=P.build(a,b,sources,extensions=names)
