@@ -40,7 +40,11 @@ def test_exact_transport_boundary_no_replay(name):
     r,receipt=R.runtime(capacity_profile=name);r.globals().limit=receipt['provider_limits']['calls']
     r.execute("""
 assert(registry.prepare(req).status=='preparing');deliver(row('prepared'))
-for i=sends+1,limit do status();deliver(row('prepared'))end
+-- Since aba2ed7b, status() of a prepared request reports the arrived ack and sends nothing,
+-- so the transport calls are spent by status reads of a RUNNING (dispatched) request.
+local before=sends;local v=status();assert(sends==before and v.status=='prepared')
+run();deliver(row('dispatched'))
+for i=sends+1,limit do v=status();assert(v.status=='running');deliver(row('dispatched'))end
 assert(sends==limit);v=status();assert(v.status=='unknown' and sends==limit)
 v=status();assert(v.status=='unknown' and sends==limit)
 assert(v.observations.capacity.calls_used==limit)

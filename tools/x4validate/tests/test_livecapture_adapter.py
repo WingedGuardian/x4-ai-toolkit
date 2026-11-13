@@ -230,10 +230,14 @@ queue={r,r};before=#sent;callback()
         l.execute("reply();result=status()")
         self.assertEqual(l.eval("result.status"),"prepared")
     def test_delayed_status_does_not_manufacture_execute_deadlock(self):
-        l=runtime();l.execute("prep();auto=false;status();readwire=sent[#sent];result=exec()")
+        # Since aba2ed7b (ROR run-12), status() of a prepared request reports the arrived ack and
+        # sends nothing, so no status read can be in flight to block execute. The old form took
+        # sent[#sent] as that read; it was the PREPARE wire, and replaying it is a duplicate reply.
+        l=runtime();l.execute("prep();auto=false;before=#sent;status();after=#sent;result=exec()")
+        self.assertEqual(l.eval("after"),l.eval("before"))
         self.assertEqual(l.eval("result.status"),"running")
         self.assertEqual(l.eval("sent[#sent].phase"),"execute")
-        l.execute("executewire=sent[#sent];reply(nil,executewire);reply(function(x)x.status='prepared';x.observations.age=1 end,readwire)")
+        l.execute("executewire=sent[#sent];reply(nil,executewire)")
         self.assertEqual(l.eval("status().status"),"running")
     def test_status_coalesces_while_read_inflight(self):
         l=runtime();l.execute("prep();exec();auto=false;status();before=#sent;status();status();status()")
