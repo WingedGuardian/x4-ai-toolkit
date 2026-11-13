@@ -254,9 +254,11 @@ and argument-free `pause`/`unpause`, reporting the engine's pause readback. The 
 adds a closed action registry and fixed installed-code MD channels, with source-bound
 sessions and durable action journals. Native acknowledgement is not proof of delivery,
 construction, arrival or visual correctness. Its third-party dependency
-(**Mod Support APIs**, `ws_2042901274`, from Steam Workshop or Nexus) is declared **optional**: the
-addon still loads without it and the snapshot half keeps working, while only the named-pipe verbs
-report the api unavailable. The two halves fail independently, deliberately.
+(**Mod Support APIs**, `ws_2042901274`, from Steam Workshop or Nexus) is required for the pipe
+verbs, and the helper's UI addon declares a load-order dependency on it (without that, another
+addon reordered the load in game and the pipe never started). The extension dependency is still
+marked optional, but whether the helper, or its snapshot half, loads without Mod Support APIs is
+not yet measured: install it.
 
 ⚠ **Enumeration is not a census, and the tool says so rather than rounding it away.** Ownerless
 objects belong to no faction and are invisible to any owner query, hidden factions are opt-in, and

@@ -94,3 +94,15 @@ def test_eventless_rule_control(snippet, expected):
                                            ("speed le 1m", []), ("$speed_mps", []), ("max_speed_mps=1", [])])
 def test_mps_rule_control(text, expected):
     assert MPS.findall(text) == expected
+
+
+def test_ui_addon_declares_its_mod_support_apis_load_order_dependency():
+    # MEASURED in game (KB 2026-11-10 item 7): without a declared UI dependency, another addon
+    # reordered the UI load and the pipe half's `require` of Mod Support APIs failed
+    # ("module ... not found", "Register_OnLoad_Init absent"). The deployed helper carried the
+    # dependency only as a hand edit (b13308ee); the source and the composition must carry it.
+    source = E.fromstring((ROOT / "mods/x4_toolkit_helper/ui.xml").read_bytes())
+    composed = E.fromstring(_compose("interactive")["ui.xml"])
+    for root in (source, composed):
+        names = [node.get("name") for node in root.findall("environment/dependency")]
+        assert names == ["sn_mod_support_apis", "ego_detailmonitorHelper"], names
