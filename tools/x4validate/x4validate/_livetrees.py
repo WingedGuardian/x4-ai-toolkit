@@ -17,6 +17,7 @@ and each of its existing ancestors is compared by (st_dev, st_ino) with the othe
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from . import _paths
@@ -67,9 +68,14 @@ def protected_roots(*, image=None, profile=None) -> dict[str, Path]:
                         ("reference folder", _paths.reference())):
         if value is not None:
             roots[name] = Path(value)
-    prof = profile if profile is not None else _paths.profile()
-    if prof is not None:
-        roots["personal tree (every profile and its saves)"] = personal_tree(prof)
+    # An explicit profile ADDS its personal tree; the configured one is always kept.
+    if profile is not None:
+        roots["personal tree (every profile and its saves)"] = personal_tree(profile)
+    configured = _paths.profile()
+    if configured is not None:
+        tree = personal_tree(configured)
+        if tree not in roots.values():
+            roots["configured personal tree (X4_PROFILE)"] = tree
     return roots
 
 
@@ -87,9 +93,23 @@ def unchecked_roots(*, image=None, profile=None) -> list[str]:
     return out
 
 
+_ANNOUNCED: set = set()
+
+
 def journal_refusal(root, *, image=None, profile=None) -> str | None:
-    """The one journal rule: why `root` may not be used, or None when it may."""
-    return overlap_reason(root, protected_roots(image=image, profile=profile))
+    """The one journal rule: why `root` may not be used, or None when it may.
+
+    Protected trees that cannot be determined (an unconfigured game root, reference
+    folder or profile) are named once per process on stderr, never skipped silently.
+    """
+    why = overlap_reason(root, protected_roots(image=image, profile=profile))
+    gaps = [g for g in unchecked_roots(image=image, profile=profile) if g != "game install" or image is not None]
+    key = tuple(gaps)
+    if gaps and key not in _ANNOUNCED:
+        _ANNOUNCED.add(key)
+        print("x4live: journal check could not determine, so did not check: " + ", ".join(gaps)
+              + " (configure them in x4-paths.env)", file=sys.stderr)
+    return why
 
 
 def overlap_reason(root, roots: dict[str, Path]) -> str | None:

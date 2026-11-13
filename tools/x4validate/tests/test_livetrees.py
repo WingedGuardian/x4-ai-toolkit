@@ -223,3 +223,29 @@ def test_persistence_route_refuses_a_verbatim_or_device_spelling(tmp_path):
     for prefix in ("?", "."):
         with pytest.raises(PersistenceUnavailable, match="verbatim|device|noncanonical"):
             _route(_B + _B + prefix + _B + str(tmp_path / "j"), directory=True)
+
+
+# Delta review 2, M3.
+def test_explicit_profile_adds_to_the_configured_personal_tree(tmp_path, monkeypatch):
+    configured = tmp_path / "Egosoft" / "X4" / "12345678"
+    configured.mkdir(parents=True)
+    monkeypatch.setattr(_paths, "profile", lambda: configured)
+    monkeypatch.setattr(_paths, "game_root", lambda: None)
+    monkeypatch.setattr(_paths, "reference", lambda: None)
+    other = tmp_path / "Other" / "X4" / "87654321"
+    other.mkdir(parents=True)
+    # A journal in the CONFIGURED personal tree is refused even when another profile is passed.
+    assert T.journal_refusal(configured.parent / "j", profile=other)
+    assert T.journal_refusal(other.parent / "j", profile=other)
+
+
+def test_unavailable_roots_are_announced_on_stderr(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(_paths, "game_root", lambda: None)
+    monkeypatch.setattr(_paths, "reference", lambda: None)
+    T._ANNOUNCED.clear()
+    assert T.journal_refusal(tmp_path / "j", profile=tmp_path / "X4" / "1") is None
+    err = capsys.readouterr().err
+    assert "configured game root" in err and "reference folder" in err
+    # Twin: once announced, the same gap is not repeated on every call.
+    T.journal_refusal(tmp_path / "j", profile=tmp_path / "X4" / "1")
+    assert capsys.readouterr().err == ""
