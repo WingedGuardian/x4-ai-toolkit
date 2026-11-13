@@ -151,7 +151,7 @@ prove originating-entry availability, ordinary UI navigation or runtime success.
 ## Read-only view, owned close and repair successor
 
 Source confidence is 95% for each transferred native route; runtime availability
-and outcomes are unverified. MapMenu13233/13266 checks isplayerowned and opens
+and outcomes are unverified. MapMenu 13233/13266 checks isplayerowned and opens
 ShipConfigurationMenu with `{0,0,nil,"upgrade",{tostring(ship)}}`. Configuration
 2708 makes that native mode read-only. The public action `menu.view {ship}` maps
 to this shape; "view" is an adapter action, not an invented native menu mode.
@@ -162,9 +162,9 @@ the returned model read_only. Commercial widgets remain non-actionable there.
 
 `menu.close {opening}` requires the same provider's successful, outer-qualified
 menu.open or menu.view request. It binds the actual menu, subject, info frame,
-model, main frame and native close handlers. Configuration3272 offers the standard
-close button; Helper1072's closeElement(frame,"close") reaches the native
-onCloseElement10390 route. Preparation requires that exact offered main-frame
+model, main frame and native close handlers. Configuration 3272 offers the standard
+close button; Helper 1072's closeElement(frame,"close") reaches the native
+onCloseElement 10390 route. Preparation requires that exact offered main-frame
 close and no modal context. Dispatch returns DISPATCHED_UNVERIFIED. Only a later
 same-session read of that same registered menu's shown=nil or false flag can report
 completed, scoped OWNED_MENU_CLOSED_READBACK. It proves neither pixels nor any
@@ -178,9 +178,9 @@ Other native values refuse. This corrects the earlier false-only readback;
 the historical synthetic fixture used false and did not cover native clearing.
 
 `menu.repair_tab {station,ship}` uses the actual repair sidebar wrapper
-(configuration3635, displayed in infoFrame9363).
+(configuration 3635, displayed in infoFrame 9363).
 `menu.repair_select {station,ship}` uses the built shipconfig_repair button
-(5789–5795), whose closure invokes buttonSelectRepair1209. Both require the exact
+(5789–5795), whose closure invokes buttonSelectRepair 1209. Both require the exact
 issued station/ship, upgrade mode, nonempty observed damagedcomponents and no
 group. Selection additionally requires the single matching repair slot and an
 empty repair plan, since the native button toggles existing selections. Prepared
@@ -190,8 +190,8 @@ No callback is fabricated and no native repair signal/order is called directly.
 
 The sequence is native upgrade opening, repair tab, repair selection, then the
 existing menu.add/menu.confirm path. Each step needs fresh preparation after the
-native menu rebuild. Add8518 captures the actual hasupgrades/hasrepairs flags;
-repairandupgrade11386 may signal repairs_initiate when docked or create a Repair
+native menu rebuild. Add 8518 captures the actual hasupgrades/hasrepairs flags;
+repairandupgrade 11386 may signal repairs_initiate when docked or create a Repair
 order otherwise. This source evidence explains the route, not an observed repair.
 Current fitted loadout, money, tasks/orders and actual repaired components need
 independent before/after readbacks. Damaged-component membership alone does not
@@ -224,7 +224,7 @@ qualifies these synthetic boundaries only; independent source review and live
 qualification remain separate.
 
 The additive view/close/repair successor passed 200 combined menu/provider
-controls, zero skips, rb6873fb7789ed, exit0 (43.09s pytest, 67 MB peak). Tests run
+controls, zero skips, rb 6873fb7789ed, exit 0 (43.09s pytest, 67 MB peak). Tests run
 the actual current Lua modules and SDK with synthetic native dependencies,
 including unchanged menu paging, failed outer opening-readback adoption,
 ownership, native parameter shape, offered close, disabled/changed repair UI,

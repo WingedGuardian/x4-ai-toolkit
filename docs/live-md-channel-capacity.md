@@ -1,6 +1,6 @@
 # Local MD-channel deadline capacity
 
-The MD channel retains at most64 scheduled deadline callbacks. Each accepted
+The MD channel retains at most 64 scheduled deadline callbacks. Each accepted
 send schedules one callback at getElapsedTime()+10.25. Reading or clearing a
 reply does not retire that callback. The scheduler retires it once; disposal
 does not pretend it has already fired. The limit and interval are shared
@@ -21,7 +21,7 @@ extension census or proof their MD scripts loaded. A known extension can own
 zero MD channels; the explicit denominator distinguishes this from unknown.
 
 Channels are recorded immediately after their disposer is registered. Fixed
-construction/cleanup bounds permit at most16 channels per descriptor; at most16
+construction/cleanup bounds permit at most 16 channels per descriptor; at most 16
 descriptors are accepted. Selected responses are encoded through the actual
 bound capture/paging path with a32000-byte cap. An unavailable getter refuses;
 it does not report zero. The legacy read namespace cannot replace this verb.
@@ -33,8 +33,8 @@ player age, or assume elapsed time retired callbacks. Sample actual state again.
 A stage's declared burst/rate policy must respect remaining slots. This read
 does not reserve them or authorize sends, retries, channel resets or UI reloads.
 
-Source confidence98% rests on reading the existing lexical counter and preserving
-the same64/10.25 send/scheduler behavior. Offline tests use actual channel LuaJIT
+Source confidence 98% rests on reading the existing lexical counter and preserving
+the same 64/10.25 send/scheduler behavior. Offline tests use actual channel LuaJIT
 state plus the generated bundle/router/codec/host capture path with synthetic
 native boundaries. They are not runtime qualification.
 

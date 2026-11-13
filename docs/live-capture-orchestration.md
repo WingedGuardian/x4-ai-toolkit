@@ -1,6 +1,6 @@
 # Native still capture orchestration
 
-**Offline qualification, not release/runtime acceptance.** The dispatcher has39 passing offline integration controls. After explicit user approval, the previously held dedicated test file was created through a complete file guard check and the standard edit tool. Its35 controls pass, zero skips (resource run170eef56dd1e). No guard rules changed. Actual native runtime remains unqualified.
+**Offline qualification, not release/runtime acceptance.** The dispatcher has 39 passing offline integration controls. After explicit user approval, the previously held dedicated test file was created through a complete file guard check and the standard edit tool. Its 35 controls pass, zero skips (resource run 170eef56dd1e). No guard rules changed. Actual native runtime remains unqualified.
 
 Image decoding is optional: the project's `capture` extra pins the Pillow 13 series in the lockfile. Default toolkit dependencies are unchanged. The observer imports Pillow only when constructing its default decoder or decoding an image; missing Pillow raises CaptureUnavailable rather than accepting signature-only evidence. Dedicated tests now cover the missing decoder, PNG/JPEG/BMP/TGA in both candidate roots, file stability and decode races, hard links, identity/receipt mismatches, chronology, timeout, quarantine and enumeration bounds. Narrow independent source review found no blocker; these controls use synthetic receipts and temporary files.
 
@@ -27,12 +27,12 @@ Camera context uses the same actual client's `ReadEvidence` collector, not submi
 
 Valid native UNAVAILABLE remains missing context and does not prevent independent settled-file release. Malformed observations, source or identity drift quarantine the owner without replay. Each ticket has two samples, each at most 128 KiB serialized including its raw transcript; total retained encoded camera evidence is capped at 16 MiB. Capacity for both samples is checked before dispatch. Camera journals are rechecked on ticket access; raw evidence exports are replayable but not cryptographic attestations. Native camera runtime and the successor integration controls must be qualified separately.
 
-Qualification is currently bounded integration evidence: actual SDK/codec/ActionJournal and file observer, with synthetic MD replies, synthetic native path responses and temporary image files. The dedicated observer suite is complete for its35 controls; actual native runtime and visual-content qualification remain separate requirements.
+Qualification is currently bounded integration evidence: actual SDK/codec/ActionJournal and file observer, with synthetic MD replies, synthetic native path responses and temporary image files. The dedicated observer suite is complete for its 35 controls; actual native runtime and visual-content qualification remain separate requirements.
 
 Optional-install collection is now checked separately. With the capture extra,
-the35 observer controls plus4 geometry/CI policy controls passed39/39, zero skips
+the 35 observer controls plus 4 geometry/CI policy controls passed 39/39, zero skips
 (c8c3377ffe4f). With Pillow imports deliberately unavailable, the independent
-missing-decoder control passed and34 image-dependent controls explicitly skipped
+missing-decoder control passed and 34 image-dependent controls explicitly skipped
 (ea9afbf21899); those skips are not passes. The isolated full-qualification
 workflow requests both geometry and capture extras so image controls execute.
 No shared workflow branch, remote CI run or release was changed by this fix.

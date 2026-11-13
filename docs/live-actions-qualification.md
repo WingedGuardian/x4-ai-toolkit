@@ -14,7 +14,7 @@ are retained and block qualification. Unknown outcomes use read-only reconciliat
 second execution. The journal is not an authorization mechanism, cryptographic attestation,
 proof of native effects, or portable power-loss guarantee.
 
-Request version1 fields: id (32 lowercase hex), session, provider, action, arguments (JSON
+Request version 1 fields: id (32 lowercase hex), session, provider, action, arguments (JSON
 object), binding (opaque preparation token). Digest is SHA256 of canonical sorted compact ASCII
 JSON. Arguments and request are bounded; nonfinite values are rejected. Receipts bind version,
 id, session and digest, with status, observations and reason. An adapter must obtain actual
@@ -45,7 +45,7 @@ code, not a sandbox; source/hash review and explicit command entrypoints remain 
 
 ## Offline evidence and review
 
-Initial journal25 controls passed. Independent review found mutable transport request binding,
+Initial journal 25 controls passed. Independent review found mutable transport request binding,
 incomplete history/marker validation, and discarded contradiction evidence. Those were corrected;
 a follow-up caught receipt-before-dispatch acceptance, also corrected. Regression controls cover
 these paths, duplicate clients, interrupted dispatch, lost replies, malformed/stale receipts and

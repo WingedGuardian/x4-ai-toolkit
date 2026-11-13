@@ -1,6 +1,6 @@
 # Native logbook window
 
-The fixed `logbook_window` read accepts a one-based start index and count1–16.
+The fixed `logbook_window` read accepts a one-based start index and count 1–16.
 It calls the same native `GetNumLogbook("all")` / `GetLogbook(start,count,"all")`
 functions as `menu_playerinfo.lua`2830/2856/2909 and `menu_map.lua`16802–16816.
 These are READ source analogues, not runtime qualification of this instrument.
@@ -19,16 +19,16 @@ native functions produce UNAVAILABLE without invented rows or totals. Out-of-ran
 requests and disposed observers do not call native functions. Returned data does
 not alias the native tables.
 
-The wire contains at most30,000 encoded bytes. Oversize windows explicitly refuse
+The wire contains at most 30,000 encoded bytes. Oversize windows explicitly refuse
 and recommend fewer rows; no text is silently truncated. Reports include the
 requested/returned counts, native total, next index and whether this window covers
 the total at observation. Multiple windows are not an atomic whole-log census.
 
-Offline evidence:27 native controls passed (resource9ad09d8cd81a);154 assembly,
+Offline evidence:27 native controls passed (resource 9ad09d8cd81a);154 assembly,
 bundle and composition controls passed (4592fd269db1), including actual observer
 zero/unavailable handling through the fixed read route. Independent review found
 no blocking issue and requested the precise projected-read stability wording.
-The final projected-wording successor passed all181 combined controls, zero skips
+The final projected-wording successor passed all 181 combined controls, zero skips
 (5b9e9c9394c3); independent wiring review is clear. Synthetic fixtures
 are not measurements from X4. No deployment or game action occurred.
 

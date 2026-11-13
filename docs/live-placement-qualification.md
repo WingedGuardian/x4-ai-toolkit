@@ -34,7 +34,7 @@ topology, conversation, persistence. The manifest discloses instant diagnostic
 teleportation and research bypass, and separately describes native SETA control.
 These descriptions do not claim successful ordinary boarding or piloting.
 
-Combined composition and actual placement-provider controls passed93/93, zero
+Combined composition and actual placement-provider controls passed 93/93, zero
 skips (e1bab7047eaf). Independent narrow review found no blocker. This is offline
 generation/SDK qualification; the typed-ID engine transport, actual occupation
 and control still require runtime observations. No files were installed.

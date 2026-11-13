@@ -12,13 +12,13 @@ READ native 9.0 evidence, from the user's reference (not redistributed):
 - ui/core/lua/dialogmenu.lua:188–224 forward-declares clickDialogButton,
   onDialog*MouseClick and leaveDialogMenu as locals. Their later function bodies
   are not evidence that a menus-addon global can access them.
-- Lines290–303 register engine contract events to those local callbacks.
-- Lines626–634 require private.dialogMenuShown and selectable before proceeding.
-- Lines746–752 select the option and hide the dialogue together.
-- Lines850–858 read five GetDialogOption values for each of the six configured
-  positions (configuration line65); line1124 uses IsDialogActive after UI reload.
+- Lines 290–303 register engine contract events to those local callbacks.
+- Lines 626–634 require private.dialogMenuShown and selectable before proceeding.
+- Lines 746–752 select the option and hide the dialogue together.
+- Lines 850–858 read five GetDialogOption values for each of the six configured
+  positions (configuration line 65); line 1124 uses IsDialogActive after UI reload.
 - ui/addons/ego_detailmonitorhelper/helper.lua:400–401 declares the two native
-  conversation booleans; line1402 distinguishes active/cancelling conversation.
+  conversation booleans; line 1402 distinguishes active/cancelling conversation.
 - ui/core/addon.xsd exposes the menus environment, not arbitrary core-presentation
   injection. This schema fact is not proof that no other supported route exists.
 
@@ -29,7 +29,7 @@ false, and atomic false. UNBOUND_MODEL_OBSERVED means six typed bounded model ro
 were read under one public stamp; it does not mean the menu was rendered, the NPC
 was identified, or a conversation case passed. Same-activation option transitions
 cannot be ruled out by this read alone. Public stamp, clock, activation or symbol
-drift makes the result UNQUALIFIED. Text over1024 bytes, shortcut over128 bytes or
+drift makes the result UNQUALIFIED. Text over 1024 bytes, shortcut over 128 bytes or
 wrong types produce UNKNOWN fields, never silent truncation.
 
 Full C-UI-3 remains blocked pending a source-proven real presentation route and
@@ -44,8 +44,8 @@ arguments through the existing public bound read interface. The bundled module
 is part of BUILD, not an untracked side loader. Native assembly retires it with
 the other adapters. This adds no conversation action or actor identity shortcut.
 
-MEASURED final integrated140/140 controls passed (31 probe,42 assembly,67 bundle),
-zero skips, childexit0, pytest0.47s, resourcefed6415df34f. The actual16-module
+MEASURED final integrated 140/140 controls passed (31 probe,42 assembly,67 bundle),
+zero skips, childexit 0, pytest 0.47s, resource fed6415df34f. The actual 16-module
 bundle constructs without native data/action calls. Read controls cover missing
 globals, unreadable/oversized fields, inactive dialogue, per-row retirement and
 activation, session/clock/symbol drift, and no mutation callbacks. Independent
@@ -65,7 +65,7 @@ Reference source hashes at review:
 The Egosoft-hosted [UI/MD communication guide](https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding%20Support/UI%20Modding%20support/Talking%20with%20MD%20and%20AI%20scripts/?language=en)
 describes menus-environment RegisterEvent/blackboard channels; it does not give
 this candidate access to the core presentation's local click handler. Local
-helper1818–1829 and map5586–5608 provide a real menu-to-conversation opening route,
+helper 1818–1829 and map 5586–5608 provide a real menu-to-conversation opening route,
 but they do not provide independent readback of the current actor/section or
 prove cross-presentation selection equivalence. These are bounded source findings,
 not a universal claim that no route exists.
@@ -80,7 +80,7 @@ should be relabelled rendered dialogue readiness.
 
 Native `md/conversations.xml:6–31` handles start/return events and distinguishes
 an actor component from a two-item context/template list. Its section handler
-at307–318 reads the actual section from `event.param` and likewise distinguishes
+at 307–318 reads the actual section from `event.param` and likewise distinguishes
 actor representations. `libraries/common.xsd:12602–12720` documents the matching
 finished/next-section/returned-section/started event fields. A template actor
 must retain its typed context/template pair; coercing every actor to one issued
@@ -133,12 +133,12 @@ receipt above qualifies the unchanged probe/integration source at caff9c55.
 ## Bounded native-input research follow-up
 
 READ: libraries/inputmap.xml157-162 and
-inputmap_defaults_keyboard_mouse_wasd.xml121-126 map dialogue actions1-6 to
-keyboard1-6. Core dialogmenu626 explicitly mentions shortcut keys and checks
+inputmap_defaults_keyboard_mouse_wasd.xml121-126 map dialogue actions 1-6 to
+keyboard 1-6. Core dialogmenu 626 explicitly mentions shortcut keys and checks
 private.dialogMenuShown/selectable before leaveDialogMenu performs selection and
 hide. This supports investigating a genuine native-input route; default maps
-do not prove the user's current bindings. gameoptions4844 reads current
-GetInputActionMap() using numeric action keys;4953 identifies source1 as keyboard.
+do not prove the user's current bindings. gameoptions 4844 reads current
+GetInputActionMap() using numeric action keys;4953 identifies source 1 as keyboard.
 The scoped source reads did not establish the numeric dialogue action mapping
 or a supported cross-presentation sender. A localized GetMappedInputName result
 does not establish a machine keycode.
@@ -235,18 +235,18 @@ focus-race limitation remain explicit runtime gates.
 
 The numeric-action unknown above is now RESOLVED by additional READ evidence,
 not by guessing from the default map. `gameoptions.lua:4684` uses the numeric
-action as the text ID on page1005; the menus controls list includes actions97–102.
-Native `t/0001-L044.xml:4501–4506` labels those IDs as dialog choices1–6. The
+action as the text ID on page 1005; the menus controls list includes actions 97–102.
+Native `t/0001-L044.xml:4501–4506` labels those IDs as dialog choices 1–6. The
 current-map call is GetInputActionMap() with no default-map argument.
-`gameoptions.lua:5705` constructs source/code/signum/toggle tuples, and5713–5730
+`gameoptions.lua:5705` constructs source/code/signum/toggle tuples, and 5713–5730
 documents the optional toggle flag. The text source SHA256 is
 7e5fb67e683d3e17b49000d79c518d7679618fe2bb2292e6ead2d864870a8393.
 
 The existing fixed `dialog_probe` read now adds `current_bindings`. It selects
-only actions97–102, with at most four bindings per action. Larger, sparse,
+only actions 97–102, with at most four bindings per action. Larger, sparse,
 metatable-bearing or malformed selected arrays are UNAVAILABLE with a reason;
 none is silently truncated. An absent action stays UNAVAILABLE; an actual empty
-table is OBSERVED with count0. Each input is a compact tuple whose field order
+table is OBSERVED with count 0. Each input is a compact tuple whose field order
 is declared in `input_fields`: source, code, signum, toggle. An absent toggle is
 NOT_PRESENT, distinct from false. Raw engine codes are not Windows scan codes.
 `host_key_translation` remains UNKNOWN.
@@ -258,14 +258,14 @@ conversation result. Missing/changed second read is UNQUALIFIED; retirement or
 session/symbol drift invalidates the binding claim as well as the parent result.
 The original six option observations retain their separate scope.
 
-MEASURED: the full changed module passed56/56 controls with zero skips,
-resource jobbd90f92f5402, pytest0.18s, child0.7s, exit0. Existing direct-Lua tests
+MEASURED: the full changed module passed 56/56 controls with zero skips,
+resource job bd90f92f5402, pytest 0.18s, child 0.7s, exit 0. Existing direct-Lua tests
 emitted caught SEH diagnostics. The actual wire encoder accepts the maximum
 four-bindings-per-action example together with maximum-length ASCII option
-strings below the assembly32000-byte payload limit. Unusual escaped text or a
+strings below the assembly 32000-byte payload limit. Unusual escaped text or a
 large world token can still hit the existing encoder/outer limits and refuse;
 there is no truncation or claim every valid native model must fit. Initial tests
-found a missing post-second-read retirement check and an oversized16-binding
+found a missing post-second-read retirement check and an oversized 16-binding
 representation; both were corrected before this qualification. No native game
 query, input, focus, deployment or profile/save operation was performed.
 
@@ -279,7 +279,7 @@ Neither inspected path establishes dispatch into the core dialog1 event.
 SNAPI hotkey source SHA256:
 ec8c3005effede0598e3e820d6879a7875af6bd5c95a63edffd34043f6d25368.
 
-The core shortcut registration remains source-proven: dialogmenu298–303 binds
+The core shortcut registration remains source-proven: dialogmenu 298–303 binds
 dialog1–6 to local callbacks;376–406 ignores delayed events then invokes the
 guarded click handler. A menus-addon sender into that specific presentation,
 rendered actor/choice identity and host-key translation remain unqualified.
@@ -287,14 +287,14 @@ Do not confuse RegisterEvent/CallEventScripts menus callbacks with the separate
 registerForEvent presentation contract merely because event names look alike.
 
 Independent READ review of the binding successor found no concrete blocker;
-no reviewer duplicated the56-control run. Source frozen at46fafe91.
+no reviewer duplicated the 56-control run. Source frozen at 46fafe91.
 
 Further READ evidence narrows, but does not close, host-input feasibility.
 SNAPI's loose `python_send_keys.txt` is a keyboard-capture-to-MD bridge despite
-its filename; it does not inject native dialogue keys. Lines372–377 convert a
-Windows low-level hook scanCode into the author's X4 code by adding0x80 for an
-extended key. Lines723–749 describe keyboard source1/sign0 and shift0x100/
-ctrl0x200 modifiers. The same file warns about key aliases, English mappings and
+its filename; it does not inject native dialogue keys. Lines 372–377 convert a
+Windows low-level hook scanCode into the author's X4 code by adding 0x80 for an
+extended key. Lines 723–749 describe keyboard source 1/sign0 and shift 0x100/
+ctrl 0x200 modifiers. The same file warns about key aliases, English mappings and
 NumLock/Pause differences. Its SHA256 is
 89dcc8aa36e911551b68bfa527e6f463a32055c2c5a818f24ddd1a9ecd541284.
 This is READ evidence from that author's implementation, not a measurement of
@@ -308,7 +308,7 @@ NotifyOnStartDialog(contract), which supplies a source analogue for observing
 notifications in another presentation. It supplies no dialog1 sender.
 `dialogmenu.lua:1124` schedules display after IsDialogActive on reload, reinforcing
 the distinction between model activation and displayed readiness. A scoped read
-of41 core Lua files for named dialogue/event symbols did not establish a public
+of 41 core Lua files for named dialogue/event symbols did not establish a public
 sender into the guarded local handler. Compiled presentation assets and native
 engine implementations were not interpreted. No universal absence is claimed.
 

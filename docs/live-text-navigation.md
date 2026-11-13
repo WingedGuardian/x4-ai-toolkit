@@ -10,14 +10,14 @@ READ against the installed X4 UI sources:
 
 | Link | Native analogue | Source confidence and limit |
 |---|---|---|
-| Root encyclopedia | Helper.topLevelMenus, helper.lua:9782, checks at9829 | 98%: exact name and two zero parameters; runtime opening unmeasured |
+| Root encyclopedia | Helper.topLevelMenus, helper.lua:9782, checks at 9829 | 98%: exact name and two zero parameters; runtime opening unmeasured |
 | Exact issued ship/module entry | InteractMenu.buttonEncyclopedia:2390–2416 | 95%: component-derived macro/infolibrary, fixed Ships/Stations; excludes sector and arbitrary caller macro |
 | Encyclopedia entry selection | menu_encyclopedia.lua:1965–2014; Helper rowChanged:959–973 | 95%: captured actual rowChanged wrapper and retained native rowDataMap; marks known items read and may schedule menu refresh |
 | Index expansion | menu_encyclopedia.lua:1478–1526 | 95%: exact registered button wrapper; no assignment to expanded state |
-| Property sidebar | menu_map.lua:19797–19856 and27064–27073 | 95%: fixed propertyowned row; panel mode uses native row-change wrapper, otherwise button wrapper |
+| Property sidebar | menu_map.lua:19797–19856 and 27064–27073 | 95%: fixed propertyowned row; panel mode uses native row-change wrapper, otherwise button wrapper |
 | Property descriptors | menu_map.lua:8162–8190,8987 onward | 95%: actual ten-column built table, property component rows and static descriptor strings; no ownership census or viewport claim |
 
-Confidence applies to source transfer, not runtime qualification. The independent native opening/refresh/pixel checks remain required. The generated loader uses existing OpenMenu and Helper.convertComponentIDs; exact uint64/Lua ID roundtrip precedes component reads. Native IsComponentClass and IsStoryFeatureUnlocked declarations come from Helper398/411. No constructor calls those APIs.
+Confidence applies to source transfer, not runtime qualification. The independent native opening/refresh/pixel checks remain required. The generated loader uses existing OpenMenu and Helper.convertComponentIDs; exact uint64/Lua ID roundtrip precedes component reads. Native IsComponentClass and IsStoryFeatureUnlocked declarations come from Helper 398/411. No constructor calls those APIs.
 
 ## Fixed actions
 
@@ -44,7 +44,7 @@ Names and icon strings are built descriptor values, including native text markup
 
 Preparation captures public session/world/generation, menu/frame/table IDs, native rowdata and handler references. Execute consumes its ticket before rechecking; expired, rebuilt, disabled and rebound routes refuse. Native exceptions after an attempted call remain UNCERTAIN. Native callback return remains DISPATCHED_UNVERIFIED; status does not redispatch or claim successful selection.
 
-The trusted generation's canonical profile controls the navigation history/window ceiling via native_history (interactive128, campaign512), and the provider history via sdk_history (interactive256, campaign8192). No wire argument selects a quota. Legacy nil-resolver interactive construction retains its fixed defaults. Records are never evicted to make room. These local ceilings are not a whole-campaign fit claim.
+The trusted generation's canonical profile controls the navigation history/window ceiling via native_history (interactive 128, campaign 512), and the provider history via sdk_history (interactive 256, campaign 8192). No wire argument selects a quota. Legacy nil-resolver interactive construction retains its fixed defaults. Records are never evicted to make room. These local ceilings are not a whole-campaign fit claim.
 
 Every accepted new SDK preparation consumes one SDK history entry and one provider entry, including page and capacity reads and preparations subsequently refused by the native adapter. Successful navigation preparation additionally consumes one navigation ticket. A successful text.entries/property.observe execute consumes one window; fetching its pages does not. text.observe uses the existing descriptor observer without a navigation window. Each page is a separate SDK/provider request. capacity_observe executes no game query and returns counters at that execute only; subsequent SDK status retains the original sample, with current_counts_verified=false. Failed argument/identity checks before provider allocation are not charged to its history, although SDK accounting remains independently authoritative.
 
@@ -52,9 +52,9 @@ The candidate adds one own-code Lua source to the existing generated extension. 
 
 ## Offline evidence
 
-Final combined run rb41553c88b53a completed152 passes and one test-fixture failure, zero skips,20.01s/67MB. The property test had retained EncyclopediaMenu.mode='Ships' when converting its synthetic menu into MapMenu, and was correctly refused. The only correction sets that fixture's mode=nil; the exact failed case then passed in rb7ca69603c3ab (1pass,45deselected,0skip,0.57s/65MB). Production sources were unchanged. The union qualifies153 distinct controls, including both canonical capacity profiles and retained terminal counter status after later requests. Historical initial32/32 (8cddc7326d26) and41/41 (ab5cfd6ff9a7) precede this final hardening and are not added to that denominator.
+Final combined run rb 41553c88b53a completed 152 passes and one test-fixture failure, zero skips,20.01s/67MB. The property test had retained EncyclopediaMenu.mode='Ships' when converting its synthetic menu into MapMenu, and was correctly refused. The only correction sets that fixture's mode=nil; the exact failed case then passed in rb 7ca69603c3ab (1pass,45deselected,0skip,0.57s/65MB). Production sources were unchanged. The union qualifies 153 distinct controls, including both canonical capacity profiles and retained terminal counter status after later requests. Historical initial 32/32 (8cddc7326d26) and 41/41 (ab5cfd6ff9a7) precede this final hardening and are not added to that denominator.
 
-Independent READ covered the native analogues, exact component conversion, row/frame/handler rebinding, final observation checks and scope labels. Two earlier expanded test admissions were NOT_LAUNCHED under the game reserve, including27.43GiB used against a25.47GiB ceiling. The final run began only after admission recovered. No native calls or full-helper constructor run were substituted for those holds.
+Independent READ covered the native analogues, exact component conversion, row/frame/handler rebinding, final observation checks and scope labels. Two earlier expanded test admissions were NOT_LAUNCHED under the game reserve, including 27.43GiB used against a25.47GiB ceiling. The final run began only after admission recovered. No native calls or full-helper constructor run were substituted for those holds.
 
 Tested raw SHA256 pins:
 

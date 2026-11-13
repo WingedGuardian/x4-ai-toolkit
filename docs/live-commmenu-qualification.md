@@ -2,7 +2,7 @@
 
 Current V4 adds fixed map information navigation and explicit left/right actor
 pane selection. The V3 results and limitations below remain historical. See
-live-mapnavigation-qualification.md for current scope and the121 passing
+live-mapnavigation-qualification.md for current scope and the 121 passing
 V4 provider/loader controls. The comm widget itself and MD XML are unchanged; radial
 selection and runtime qualification remain outstanding.
 
@@ -15,8 +15,8 @@ and obtains an instantiated person when applicable;26232–26237 selects a concr
 entity or native context/person tuple to avoid remote-entity despawn;26242–26244
 creates rowdata info_actor_comm and its onClick closure. Row presence/active state
 incorporates arrival, transfer and information-unlocked conditions. Native
-helper4894–4901 preserves rowdata, and map6894/6938–6940 builds the context frame
-on layer2 in info_context mode. Source hashes match live-dialogprobe-qualification.md.
+helper 4894–4901 preserves rowdata, and map 6894/6938–6940 builds the context frame
+on layer 2 in info_context mode. Source hashes match live-dialogprobe-qualification.md.
 
 The adapter observes the built frame/row/widget and native enabled state. Prepare
 requires an issued context object plus the exact observed typed ENTITY or PERSON
@@ -47,9 +47,9 @@ Opening stays running/unverified; it cannot complete a conversation or purchase
 case. Missing attempt evidence remains UNKNOWN, including exceptions after
 adapter dispatch. Cleanup is immediate, idempotent and failure-sticky.
 
-MEASURED:127/127 combined controls passed, zero skips, pytest0.58s, resource job
-2185524bf045 child0:43 conversation observer,9 MD structure,15 snapshot provider,
-4 generated loader,45 comm adapter and11 comm provider controls. The actual
+MEASURED:127/127 combined controls passed, zero skips, pytest 0.58s, resource job
+2185524bf045 child 0:43 conversation observer,9 MD structure,15 snapshot provider,
+4 generated loader,45 comm adapter and 11 comm provider controls. The actual
 generated loader uses the actual SDK/providers and a synthetic native menu model;
 it inspects the bound widget and invokes its exact wrapper once. These are offline
 behavioral controls, not engine/UI qualification. Caught LuaJIT SEH diagnostics
@@ -58,16 +58,16 @@ schema proof is reused by exact bytes; no schema rerun is claimed for Lua change
 Independent READ review found no concrete source blocker. Final source receipt
 separately records the subsequent metadata-only qualification-label correction.
 That final four-control loader check was NOT_LAUNCHED by the resource wrapper
-(exit3: RAM/commit admission limits). No retry is queued. The127-control result
+(exit 3: RAM/commit admission limits). No retry is queued. The 127-control result
 describes the preceding generator metadata; the current exact source and newly
 derived loader revision still await those four controls. No current full-pass
 or deployment readiness is claimed.
 
 The subsequent V3 source integrates actor-context navigation through two fixed
 additional actions, documented in live-actorcontext-qualification.md. Its controls
-were initially resource-held; current V3 now passes175/175 controls, zero skips,
-resource81446daefd70 child0, pytest0.75s. The current extension no longer
+were initially resource-held; current V3 now passes 175/175 controls, zero skips,
+resource 81446daefd70 child 0, pytest 0.75s. The current extension no longer
 claims actor-context navigation is wholly unimplemented: it supports only the
 built right information-row route, with closed-map navigation still absent.
-The earlier held attempt and127-control receipt remain history. V3 source and
+The earlier held attempt and 127-control receipt remain history. V3 source and
 generated hashes are bound by the separate navigation qualification receipt.

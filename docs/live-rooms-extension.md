@@ -24,7 +24,7 @@ Read actions send no native transport. No automatic native order, docking, walki
 
 ## Bounds and qualification
 
-The unchanged room core bounds native targets at128 and its own captures/tickets at128. Its injected bounded encoder can refuse a smaller population because of node or byte limits; such a refusal remains unavailable, never an empty list. The provider retains at most256 SDK records and one current target capture. Pages shrink against actual encoded payload size with reserved SDK/envelope overhead. One row that cannot fit is refused, not silently dropped.
+The unchanged room core bounds native targets at 128 and its own captures/tickets at 128. Its injected bounded encoder can refuse a smaller population because of node or byte limits; such a refusal remains unavailable, never an empty list. The provider retains at most 256 SDK records and one current target capture. Pages shrink against actual encoded payload size with reserved SDK/envelope overhead. One row that cannot fit is refused, not silently dropped.
 
 Payloads are JSON strings in observations.payload_json to preserve SDK nesting limits. Raw counts and identity strings remain exact. A caller must not treat component IDs as newly issued general-query capabilities.
 
@@ -40,6 +40,6 @@ pre/post source and duplicate-loader checks. Canonical order places rooms before
 topology, conversation and persistence; none is included without request.
 Independent composition source review is clear. Final combined composition/core/
 SDK tests completed after resource admission recovered:63 passed, zero skipped,
-resource run8dc05ecb4b66, process handle55466 exit0. The earlier1dc0b3a7 checkpoint
+resource run 8dc05ecb4b66, process handle 55466 exit 0. The earlier 1dc0b3a7 checkpoint
 correctly recorded the then-pending run; this closes that offline composition
 gate. Installation, automatic menu opening and runtime arrival remain unqualified.

@@ -140,7 +140,7 @@ not game runtime results. No deployment or live order was performed.
 READ source: menu_map.lua5507-5511 checks ownership and
 RemoveOrder(ship,index,false,true) before calling the same function with
 checkonly=false. The interact menu's explicit cancel button follows the same
-eligibility/dispatch separation at6963 and2767-2772. Source confidence97%;
+eligibility/dispatch separation at 6963 and 2767-2772. Source confidence 97%;
 actual engine cancellation and immediate readback remain runtime-unqualified.
 
 - prepare_cancel(submission_ticket, expected_order_id) requires the exact decimal
@@ -173,18 +173,18 @@ The capability does not certify arrival before cancellation: the campaign must
 first qualify its move/dock observation, then explicitly request this cleanup.
 There is no RemoveAllOrders fallback.
 
-The successor passed92/92 targeted LuaJIT controls, zero skips: the original56
-plus36 cancellation controls. Coverage includes exact/foreign/missing/duplicate
+The successor passed 92/92 targeted LuaJIT controls, zero skips: the original 56
+plus 36 cancellation controls. Coverage includes exact/foreign/missing/duplicate
 IDs, other orders before/after the target, stale pilot/ownership/occupancy/epoch,
 new queued work after preparation, native check refusal, uncertain/false removal,
 foreign-order loss, reentrant/second-ticket attempts and bound partial creations.
-Owner execution took18.38s,52MB under resource admission; no game call occurred.
+Owner execution took 18.38s,52MB under resource admission; no game call occurred.
 
 ## Exact subject docking observation
 
 The additive read-only `observe(ship_token).docking` samples the exact resolved
 ship's native `isdocked` property twice. When true, it reads and repeats
-`GetContextByClass(ship, "container", false)`, retaining the exact unsigned64-bit
+`GetContextByClass(ship, "container", false)`, retaining the exact unsigned 64-bit
 container identity. The native analogue is MapMenu:9611–9619. The production
 GetComponentData wrapper must retain its established ID conversion/roundtrip;
 no component is selected by macro, name, recorder-group membership or order type.
@@ -205,8 +205,8 @@ native absence census. World/issued-subject drift still refuses the entire
 observation. Queue evidence can remain OBSERVED while docking is UNKNOWN.
 Every read is sampled/non-atomic and performs no game mutation.
 
-The final successor passed106/106 LuaJIT controls with zero skips
-(resource job f2c7e635b632,40.06s,61MB,child exit0). The14 additional controls
-include exact IDs above2^53, a different same-macro ship docking, unknown/native
+The final successor passed 106/106 LuaJIT controls with zero skips
+(resource job f2c7e635b632,40.06s,61MB,child exit 0). The 14 additional controls
+include exact IDs above 2^53, a different same-macro ship docking, unknown/native
 failure/changed-container cases and whole-observation identity refusal. Existing
 92 order/cancellation controls also passed. Native runtime remains unqualified.

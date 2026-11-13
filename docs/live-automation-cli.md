@@ -16,7 +16,7 @@ Legacy query blocks all automation transport verbs before opening a pipe. The au
 
 Offline evidence:
 - UI/profile/router/client/CLI initial combined suite:101 passes, zero skips, resource ec4b12d3cf81.
-- Post-dispatch reporting correction:25 CLI/client controls pass, zero skips, resource0f487502fde0.
+- Post-dispatch reporting correction:25 CLI/client controls pass, zero skips, resource 0f487502fde0.
 - The Windows argv parser was exercised through the real OS API. Process/CIM, X4 pipe peer identity, MD lifecycle and helper loading remain native-test gates.
 - Independent source reviews closed for UI/profile qualification, dispatch binding and durable CLI orchestration.
 - The UI/world ticket protocol, native bootstrap, provider registration, loaded-module attestation and native actions require integrated controls before deployment. This document does not claim those are complete.

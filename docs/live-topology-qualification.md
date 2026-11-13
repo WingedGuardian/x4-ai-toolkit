@@ -62,8 +62,8 @@ conversation, persistence regardless of caller tuple order. Unrequested loaders
 remain absent; an already-composed loader refuses rather than being duplicated.
 The manifest disclosure identifies the bounded non-atomic observational scope.
 
-Composition, actual extension and provider controls passed56/56, zero skips,
-resource run107951109cbc. Independent narrow review found no blocker. This is
+Composition, actual extension and provider controls passed 56/56, zero skips,
+resource run 107951109cbc. Independent narrow review found no blocker. This is
 offline generation/transport qualification, separate from actual installed load
 order, native scope measurements and engine runtime qualification. The original
-one-tree MD schema receipt and89 standalone/glue controls are retained separately.
+one-tree MD schema receipt and 89 standalone/glue controls are retained separately.

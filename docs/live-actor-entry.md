@@ -16,11 +16,11 @@ root action 1 only when CORE GetActionInfo and PerformAction are available and
 the current message offers it. Missing CORE functions refuse. There is no fallback,
 arbitrary action ID, conversation section, actor name matching, or economic API.
 
-READ native analogues: TransporterMenu813–844 list and room-membership handling;
-MapMenu5560–5567 SetSofttarget; InteractMenu116–127 ABI,6656–6788 action enumeration
-and2646–2649 exact slot/action dispatch; targetsystem1441/3660/4357–4377 instant
+READ native analogues: TransporterMenu 813–844 list and room-membership handling;
+MapMenu 5560–5567 SetSofttarget; InteractMenu 116–127 ABI,6656–6788 action enumeration
+and 2646–2649 exact slot/action dispatch; targetsystem 1441/3660/4357–4377 instant
 action eligibility and dispatch. The asynchronous EnterInteractMenu path is not
-used: targetsystem1141 explicitly describes its target-change race.
+used: targetsystem 1141 explicitly describes its target-change race.
 
 Copied mechanism confidence: 95%, assuming the pinned native ABI and truthful
 current public identity. Runtime API availability, actor inclusion, rendering,
@@ -30,7 +30,7 @@ must match the intended actor and root, then actual offered choices and built
 trader/recruitment controls must be observed before any case outcome is assessed.
 
 Both ticket and observation counts retain canonical native_history limits
-(interactive128/campaign512). Failed preparations consume capacity, records are
+(interactive 128/campaign512). Failed preparations consume capacity, records are
 never evicted, and stale/replayed tickets cannot dispatch. Post-binding identity or
 clock loss is sticky; uncertain native execution retires the adapter. Constructor
 performs no native reads or effects. The existing trader/text descriptor adds

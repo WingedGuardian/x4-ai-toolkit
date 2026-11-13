@@ -2,18 +2,18 @@
 
 ## Callback-button and close successor (2026-11-10)
 
-Source-contract confidence95%; game wiring, pixels and authored effects remain
+Source-contract confidence 95%; game wiring, pixels and authored effects remain
 unverified. The adapter now observes and dispatches built callback buttons and
 closes the current in-world OptionsMenu. Neither operation accepts a user-supplied
 function, MD cue or arbitrary menu name.
 
 Native displayOption buttons use table rowdata with a callback. A private campaign uses
 SN API Make_Button: interface.lua259–278 passes boolean selectable rowdata,
-459–466 attaches its widget callback, and606 onward signals the MD row/column
+459–466 attaches its widget callback, and 606 onward signals the MD row/column
 closure. Those are separately tested shapes. The latter exposes a built-only
 identity `widget:<native-id>` and `identity_kind=BUILT_WIDGET_ONLY`, never an
 invented authored ID. Static text comes from the built text descriptor retained
-by Helper.button:setText5753. Dynamic text is not evaluated; unsupported button
+by Helper.button:setText 5753. Dynamic text is not evaluated; unsupported button
 cells are counted, with callback_button_scope_complete=false.
 
 options.button requires exact page, row, col, widget, observed id and static text.
@@ -28,35 +28,35 @@ options.close requires the exact current page and its bound in-world frame.
 gameoptions.lua13671–13736 onCloseElement('close') uses closeMenu/cleanup rather
 than history/back/quit navigation. Modal questions, remapping/direct input and
 cutscene state are excluded; all three handler identities are retained. Native
-cleanup3556–3561 may resume simulation, so native_pause_possible=true is disclosed.
+cleanup 3556–3561 may resume simulation, so native_pause_possible=true is disclosed.
 Later completion means only that this same registered menu has shown=false after
 our successful dispatch, at a later clock reading. Cleanup may clear page/table
 fields; no unchanged-page, pixel or unpaused-simulation claim is made. Helper
-cleanup1623 sets native shown=nil; the normalized shown=false predicate is
+cleanup 1623 sets native shown=nil; the normalized shown=false predicate is
 explicitly marked shown_normalized, with native_shown_state=UNSET or FALSE.
 
-Every prepared Options action now checks its30-UI-second lifetime again after
+Every prepared Options action now checks its 30-UI-second lifetime again after
 native model validation, immediately before dispatch. A slow read that passes
 the deadline consumes the ticket without invoking the handler.
 
-MEASURED synthetic controls:224 passed, zero skips, rb a73067678f37, child exit0,
+MEASURED synthetic controls:224 passed, zero skips, rb a73067678f37, child exit 0,
 18.83s pytest/19.4s wrapper,62MB peak, selecting test_liveoptions.py,
 test_liveoptions_button.py, test_liveoptions_button_sdk.py,
 test_liveoptions_close.py and test_livenativeproviders.py. This includes MSA
 boolean rows, built-ID versus invented-ID refusal, disabled/dynamic/drifting
 models, one-shot close, native special-state exclusion, final lifetime expiry,
 SDK closed schemas and later-only visibility completion. It is not a game test.
-The preceding184-pass native-row-only run is historical, not campaign button proof.
-The final normalized-visibility supplement passed23/23 close controls, zero
-skips, rb0aef2b124ffb, explicitly covering both native false and nil. It overlaps
-the224-control group; the results are not an additive unique denominator.
+The preceding 184-pass native-row-only run is historical, not campaign button proof.
+The final normalized-visibility supplement passed 23/23 close controls, zero
+skips, rb 0aef2b124ffb, explicitly covering both native false and nil. It overlaps
+the 224-control group; the results are not an additive unique denominator.
 
 Offline source preparation. No game call, deployment or setting change executed.
 
-Native gameoptions.lua3615 retains optionsFrame on layer4;4713 builds selectable
+Native gameoptions.lua3615 retains optionsFrame on layer 4;4713 builds selectable
 row data;13493–13580 dispatches actual row selection. The adapter uses this
 handler only from main/Extension Options index, never save/load/extensions/new
-game special branches. Native OpenMenu caller437 and onShow13056 support the
+game special branches. Native OpenMenu caller 437 and onShow 13056 support the
 fixed main route; opening in-world OptionsMenu may pause simulation (12951–12955).
 Return from a handler is not proof the next view opened.
 
@@ -68,8 +68,8 @@ custom-menu creation is delayed by one frame. Widget IDs supplied by MD are not
 exposed as native UI IDs; a private caller must independently bind its authored
 setting to the observed row/column and validate the actual setting afterward.
 
-SN interface542–571 replaces option.id with its one-based index, preserving
-option.value. Helper6168–6172 retains the options table. The adapter compares
+SN interface 542–571 replaces option.id with its one-based index, preserving
+option.value. Helper 6168–6172 retains the options table. The adapter compares
 native dropdown IDs/text/availability to the descriptor and exposes a typed
 authored-value mapping. Selection requires the exact observed page, row, column,
 widget, native option ID, text, value type and value. Missing/unknown value mapping

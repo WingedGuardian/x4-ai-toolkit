@@ -12,7 +12,7 @@ READ X4 9.0 sources:
   5361-5362 calls ToggleAutoPilot(false).
 - menu_docked.lua:1230-1238 selects the QuickDock container from the soft target,
   otherwise the environment object, and uses RequestDockAt(target,true) as a
-  check. Lines1503-1512 call the autopilot and QuickDock natives.
+  check. Lines 1503-1512 call the autopilot and QuickDock natives.
 - menu_interactmenu.lua:2133-2141 issues RequestDockAt(container,false);
   5430-5459 supplies IsDockingPossible and check-only RequestDockAt.
 - menu_docked.lua:286-295 reads occupied ship, isdocked and native parent container.
@@ -70,13 +70,13 @@ clock failure is UNCERTAIN with action_attempted preserved.
 ## Qualification
 
 MEASURED offline:46 standalone controls passed (2cd418030af0).
-The final combined module/provider/assembly/bundle/composition group passed306
+The final combined module/provider/assembly/bundle/composition group passed 306
 with zero skips (0dc841115722). This includes each real primitive through the
 actual SDK registry, unchanged once-only semantics, native-ID wrapper reads,
 current-ship mismatch, wrong docking target, partial/unknown state, expired
 preparations and post-write uncertainty.
 
-The preceding combined run had304 passes and two failures because two older
+The preceding combined run had 304 passes and two failures because two older
 synthetic fixtures omitted newly required dependencies. Those fixtures were
 updated and the same group rerun; the failed run is not accepted evidence.
 

@@ -15,7 +15,7 @@ FFI checks verify uint64 aliases and native struct alignment, field offsets, poi
 Offline integration successor: the source-bound bundle includes this module and
 the native assembly supplies its checked component conversion, exact issued IDs,
 canonical session and shared disposal lifetime.172 assembly/bundle/composition
-controls passed, zero skips (resource1701918c08c8), including actual empty-census
+controls passed, zero skips (resource 1701918c08c8), including actual empty-census
 capture/page and failed-getter refusal through the real native wrapper. Independent
 wiring review is clear. This supersedes the older lack of offline integration;
 native runtime, hired-subject joins and final campaign acceptance remain open.

@@ -9,17 +9,17 @@ The fixed begin(request32hex) operation sends only observational snapshot
 bookkeeping to the installed MD observer; poll(request) never repeats it. This
 is not a gameplay action or a general MD execution interface. The installed SDK
 provider exposes one fixed snapshot action; execute calls begin once, and status
-only polls. Receipt paging must not reissue execute. One request is outstanding, at most256 request IDs
-per adapter lifetime, native reply queue64, deadline10 UI seconds. Public session
+only polls. Receipt paging must not reissue execute. One request is outstanding, at most 256 request IDs
+per adapter lifetime, native reply queue64, deadline 10 UI seconds. Public session
 or UI-generation change retires the adapter. Late timed-out/superseded responses
 cannot acquire authority; duplicate completed responses fault it.
 
-READ analogue: native md/conversations.xml6–31 and307–318 uses instantiated,
+READ analogue: native md/conversations.xml6–31 and 307–318 uses instantiated,
 namespaced conversation events with component versus context/template actor
 branches;1125–1132 handles conversation finish. Event fields are documented in
-common.xsd12602–12720. scriptproperties2440–2442 exposes current conversation ID,
+common.xsd12602–12720. scriptproperties 2440–2442 exposes current conversation ID,
 active flag and actor; the active flag can include non-interactive conversation.
-npctemplateentry.seed at2046 is a persistent identifying largeint; it is formatted
+npctemplateentry.seed at 2046 is a persistent identifying largeint; it is formatted
 in MD, never rounded through a Lua/Python float. Native source hashes are in
 live-dialogprobe-qualification.md. Queue wiring follows the source-reviewed
 public live_session_md.py and fixed live_mdchannel.lua, not a new host verb.
@@ -48,11 +48,11 @@ unqualified. Engine qualification must first prove LOAD and snapshot TRIGGER,
 then bind a real active actor and event history. No dialogue option, purchase,
 menu transition, spawn, save, profile or game launch is authorized by this unit.
 
-MEASURED: 51/51 controls passed (42 actual-Lua controls and9 structural controls),
-zero skips, pytest0.21s, resource job f9e7fb9ebc8c child0. Caught LuaJIT SEH
-diagnostics remained visible. The canonical validator compiled md.xsd in174.9s
+MEASURED: 51/51 controls passed (42 actual-Lua controls and 9 structural controls),
+zero skips, pytest 0.21s, resource job f9e7fb9ebc8c child 0. Caught LuaJIT SEH
+diagnostics remained visible. The canonical validator compiled md.xsd in 174.9s
 and checked the one emitted tree: zero findings, zero skips, resource job
-fb33537753d4 child0. Candidate SHA256:
+fb33537753d4 child 0. Candidate SHA256:
 2256d7c25a921f511c5dbb7ae6063daadb117558170ce3b3889d60e9d7e61ccc.
 Independent READ review found no concrete source blocker. Schema/runtime are
 separate: no event timing, actual blackboard representation or UI route is
@@ -88,10 +88,10 @@ idempotent and failure-sticky, so layered ownership cannot turn a failed cleanup
 into successful replacement.
 
 MEASURED successor:70/70 controls passed (43 observer,9 MD structure,15 real-SDK
-provider,3 loader/source-binding controls), zero skips, pytest0.37s, resource
-94f6a66c6cb0 child0. The actual generated loader registers the actual provider and
+provider,3 loader/source-binding controls), zero skips, pytest 0.37s, resource
+94f6a66c6cb0 child 0. The actual generated loader registers the actual provider and
 observer against the actual SDK, sends zero snapshots during construction or
-prepare, and one on execute. First run69 passed/1 failed because a test expected
+prepare, and one on execute. First run 69 passed/1 failed because a test expected
 a returned refusal for an unknown action; the SDK correctly rejected that action
 before provider dispatch. The test now asserts that exact exception and zero
 sends. No implementation behavior was relaxed. Caught LuaJIT diagnostics remain
@@ -114,10 +114,10 @@ selection and rendered runtime remained unqualified. No generic gameplay
 execution interface or direct purchase call was introduced.
 
 V3 source now includes the fixed built-right-information-row context route
-described in live-actorcontext-qualification.md. Current V3 passes175/175
-resource-admitted controls (zero skips,81446daefd70 child0). Closed-map navigation and radial
+described in live-actorcontext-qualification.md. Current V3 passes 175/175
+resource-admitted controls (zero skips,81446daefd70 child 0). Closed-map navigation and radial
 selection are still absent; dispatch and independently observed outcomes remain
-separate. The old51/70/127-control evidence is historical. V3's separate receipt
-binds15 source inputs and rechecks52 unchanged schema/source pins, retaining the
-two previously documented nonschema cleanup changes. The MD bytes remain2256d7c2:
+separate. The old 51/70/127-control evidence is historical. V3's separate receipt
+binds 15 source inputs and rechecks 52 unchanged schema/source pins, retaining the
+two previously documented nonschema cleanup changes. The MD bytes remain 2256d7c2:
 one prior compile reused, zero new compiles. No native runtime acceptance follows.

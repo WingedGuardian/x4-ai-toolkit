@@ -133,7 +133,7 @@ Initial direct run: 37 passed, no skips; protected SEH banners were noisy but ex
 was zero. Final child-process qualification: 37 passed, zero skips in 10.37 s;
 resource-budget admission GO, child exit 0, peak job memory 49 MB. The wrapper's
 implausible CPU peak is not treated as reliable compliance evidence. Command:
-\`python -B -m pytest -q -p no:cacheprovider tools/x4validate/tests/test_livetransactions.py\`
+`python -B -m pytest -q -p no:cacheprovider tools/x4validate/tests/test_livetransactions.py`
 (through the resource wrapper, with bytecode writes disabled).
 These checks are synthetic; runtime confirmation still needs the installed
 module, issued station resolution, an empty queue and a known populated queue,

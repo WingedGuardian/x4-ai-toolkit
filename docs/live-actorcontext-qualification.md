@@ -3,18 +3,18 @@
 Current V4 source supersedes the right-only limitation described in the historical
 V3 record below. Explicit left/right panes and visible panel mode are supported;
 the default remains right for existing callers. See live-mapnavigation-qualification.md
-for the92 passing module controls and the later121 passing V4 provider/loader
+for the 92 passing module controls and the later 121 passing V4 provider/loader
 qualification. No runtime capability is inferred from this source update.
 
 Offline source and behavioral qualification; native runtime remains unqualified.
 No native game action, UI input, deployment or profile/save change performed.
 
 READ: native MapMenu actor rows carry exact role/entity-or-person/context values
-(menu_map.lua15300/15373). The actual right-click handler28477–28643 obtains the
-same rowDataMap entry and calls prepareInfoContext28648–28691. That native method
+(menu_map.lua15300/15373). The actual right-click handler 28477–28643 obtains the
+same rowDataMap entry and calls prepareInfoContext 28648–28691. That native method
 checks actual assigned crew/pilot/manager/shiptrader identity, controllable class
 and communication eligibility before creating the context. Right info frame is
-layer5 (1053,7052,19624–19679). Source hash is recorded in the dialogue probe doc.
+layer 5 (1053,7052,19624–19679). Source hash is recorded in the dialogue probe doc.
 
 The adapter accepts only an already-visible, stable right object-information
 frame, with no modal, panel, multiverse or special map mode. It binds the actual
@@ -43,9 +43,9 @@ This unit does not yet navigate from a closed map to the information frame, nor
 select radial dialogue options. No completed runtime capability is claimed. The generator's pure
 source/output binding changes with this successor; older receipts stay historical.
 
-MEASURED V3:175/175 combined controls passed, zero skips, pytest0.75s, resource
-81446daefd70 child0. This includes44 actor-context cases,14 combined navigation
-SDK cases and5 actual-generated-loader cases, plus112 unchanged observer/comm
+MEASURED V3:175/175 combined controls passed, zero skips, pytest 0.75s, resource
+81446daefd70 child 0. This includes 44 actor-context cases,14 combined navigation
+SDK cases and 5 actual-generated-loader cases, plus 112 unchanged observer/comm
 controls. Independent READ review found no remaining source blocker. In-place
 frame/table ID changes are explicitly refused even when their object references
 are unchanged. Caught LuaJIT SEH diagnostics remained visible. These controls use

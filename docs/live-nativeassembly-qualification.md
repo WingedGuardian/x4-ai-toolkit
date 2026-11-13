@@ -4,9 +4,9 @@ Current successor includes the native_save_path zero-argument bound read, using
 the actual paths observer and preserving its canonical stamp or UNAVAILABLE
 payload. Its disposer is owned by the assembly; construction queries nothing.
 The actual observer-through-assembly controls cover both a successful exact path
-and an unavailable getter. Final affected135 controls passed, zero skips,
-resourcea6631cd43e7f; unchanged31 native-path controls passed in the prior combined
-run81fba399d320. Independent READ review is clear. No screenshot root is inferred
+and an unavailable getter. Final affected 135 controls passed, zero skips,
+resource a6631cd43e7f; unchanged 31 native-path controls passed in the prior combined
+run 81fba399d320. Independent READ review is clear. No screenshot root is inferred
 and no actual game path was queried.
 
 Offline-qualified; runtime remains unverified. No native game call, deployment,
@@ -62,40 +62,40 @@ real registration/global availability and engine behavior remain unverified.
 The prepared tests cover metadata isolation, all nine read routes, malformed
 arguments, missing native bindings, disposal, overflow, refusal preservation,
 and construction using all eight actual adapter modules with throwing native
-stubs. The admitted combined run passed81/81 controls (33 assembly plus48 native
-provider), zero skips, child exit0, rb5ef7c79db23b, pytest0.55s. Current source:
+stubs. The admitted combined run passed 81/81 controls (33 assembly plus 48 native
+provider), zero skips, child exit 0, rb 5ef7c79db23b, pytest 0.55s. Current source:
 83f07c02259b7330f26c0bef28dbc3ea052ce0c71bfc750e5dbded83e4f8df29;
 test:f2d039bf20e6b2d5391fe46c367ffe2368b6206d358830a53876404adea11d1b.
 The root independently READ reviewed the constructor and integration contract.
 Caught LuaJIT SEH0xe24c4a02 diagnostics remain visible during refusal controls;
-the completed process exited0, not a diagnostic-free execution claim.
+the completed process exited 0, not a diagnostic-free execution claim.
 
 The command selected tests/test_livenativeproviders.py and
 tests/test_livenativeassembly.py in tools/x4validate via the resource wrapper,
 uv run --frozen python -B -m pytest -q -ra --tb=short -p no:cacheprovider.
-Source confidence is96%; live integration remains limited by the untested native
+Source confidence is 96%; live integration remains limited by the untested native
 boundary. No E2E claim.
 
 ## Native ID conversion successor
 
-The earlier81-control result remains historical for the pre-conversion source.
+The earlier 81-control result remains historical for the pre-conversion source.
 Root review identified that raw UniverseID cdata does not belong in bare
 GetComponentData: the existing helper/test records an in-game1539/1539 unclassified
 failure from that path. This is READ historical evidence, not a new measurement.
-Native map5168/5564/7522 converts via ConvertStringToLuaID(tostring(id)); map26779,
-3521 and21260/21309→22317 show the corresponding order-parameter/docking boundaries.
+Native map 5168/5564/7522 converts via ConvertStringToLuaID(tostring(id)); map 26779,
+3521 and 21260/21309→22317 show the corresponding order-parameter/docking boundaries.
 Native ship_configuration9987 converts through ConvertStringTo64Bit for validity.
 
 Assembly now supplies those native conversions around bare globals, preserving
 variadic nil-bearing returns and leaving C.* calls on exact native cdata. Native
 conversion must round-trip to the exact original ID. Bare ConvertIDTo64Bit output
 is normalized to uint64 only when already uint64 or a finite nonnegative integer
-strictly below2^53, matching the existing helper's precision safeguard. No tonumber
+strictly below 2^53, matching the existing helper's precision safeguard. No tonumber
 ID conversion or inferred approximate handle is allowed. Seven new controls cover
-the conversion successor. All40 assembly controls passed, zero skips, childexit0,
-rb5c7a08e66db5, pytest0.23s. Current source161b69a15316b8e88b139c052e8eceda1b3f11fd2fe9d1c7900a9d0f20de2899;
-test6d35e9a2916f27955fbb890ad485ab322ec71444824b0687e76c0e9033f58a68.
-Root independent READ review found no remaining conversion blocker. Existing48
+the conversion successor. All 40 assembly controls passed, zero skips, childexit 0,
+rb 5c7a08e66db5, pytest 0.23s. Current source 161b69a15316b8e88b139c052e8eceda1b3f11fd2fe9d1c7900a9d0f20de2899;
+test 6d35e9a2916f27955fbb890ad485ab322ec71444824b0687e76c0e9033f58a68.
+Root independent READ review found no remaining conversion blocker. Existing 48
 provider controls were unchanged and not rerun. Native runtime remains unverified.
 
 ## Dialogue model observation successor
@@ -103,6 +103,6 @@ provider controls were unchanged and not rerun. Native runtime remains unverifie
 The assembly also constructs and retires the bundled read-only dialogue probe.
 `dialog_probe` accepts exactly zero arguments and uses the same bound public
 session before/after the read. It reports UNKNOWN actor, section and rendered
-visibility, never conversation-route acceptance. Integrated140 controls passed
-(31 probe,42 assembly,67 bundle), zero skips, resourcefed6415df34f. The original
+visibility, never conversation-route acceptance. Integrated 140 controls passed
+(31 probe,42 assembly,67 bundle), zero skips, resource fed6415df34f. The original
 40-control receipt above remains historical. No conversation selection was added.

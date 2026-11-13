@@ -66,9 +66,9 @@ require ordered dispatch/status timestamps before any scoped completion. The ini
 The revised run was NOT launched: rb returned WAIT/exit3 with 27.90/31.84GiB RAM
 used under the active-game floor and 52.87/53.91GiB commit used. No retry is queued.
 The subsequent admitted combined run passed 81/81 controls (48 provider plus
-33 assembly), zero skips, child exit0, rb5ef7c79db23b; pytest completed in0.55s.
-It consumed current provider source7db5426a4756ef19139ebac47827c73e19e72c846fada578c923fe965ee537c9
-and test9a2bd98d9aab26c5e8a2ec94ba250f16208c25f8159035ac8801c6d3853e7f1f.
+33 assembly), zero skips, child exit 0, rb 5ef7c79db23b; pytest completed in 0.55s.
+It consumed current provider source 7db5426a4756ef19139ebac47827c73e19e72c846fada578c923fe965ee537c9
+and test 9a2bd98d9aab26c5e8a2ec94ba250f16208c25f8159035ac8801c6d3853e7f1f.
 Independent READ review cleared
 the provider and the added clock checks at source SHA256
 adc83db5a46fdad24da1a642f604bf6dd882a6cda843a21c42a2c073bd639a20.
@@ -95,7 +95,7 @@ Close completion never promotes money, repairs, delivery or rendered pixels.
 Native ownership forwarding belongs to the assembly integration; no helper
 composition, loader or staged game file is changed in this unit.
 
-Final targeted menu/provider run: 200 passed, zero skips, rb6873fb7789ed, exit0,
+Final targeted menu/provider run: 200 passed, zero skips, rb 6873fb7789ed, exit 0,
 43.09 seconds pytest / 43.8 seconds wrapper, 67 MB peak. It includes the actual
 menu→SDK close/repair controls and unchanged menu pager roundtrip. The earlier
 198-pass run predates those two integration corrections and is historical.
@@ -106,7 +106,7 @@ launched or queried. See live-menu-qualification.md for the native source pins,
 limits and required runtime readbacks.
 
 The Options callback-button/close successor and its final pre-dispatch expiry
-check passed224 synthetic controls with zero skips (rb a73067678f37). See
+check passed 224 synthetic controls with zero skips (rb a73067678f37). See
 live-options-qualification.md for native/MSA row distinctions, special-state
 refusals and the exact five-file denominator. Optional missing button/close
 adapters return REFUSED without dispatch; they never manufacture completion.

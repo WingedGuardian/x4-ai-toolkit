@@ -13,7 +13,7 @@ Offline synthetic LuaJIT controls qualify protocol and ABI defenses only. Native
 The fixed public `camera_state` read takes zero arguments. Its source is included
 in the bundle identity, its lifetime follows native assembly disposal, and an
 UNAVAILABLE payload is preserved under a successful transport response. This
-integration passed158 assembly/bundle/composition controls, zero skips,
-resourceff2ef5820bcc; the unchanged standalone observer has37 controls from
+integration passed 158 assembly/bundle/composition controls, zero skips,
+resource ff2ef5820bcc; the unchanged standalone observer has 37 controls from
 6d699f6d. Independent source and wiring reviews are clear. No runtime case closes
 from these checks, and the nested external reference is not issued for actions.

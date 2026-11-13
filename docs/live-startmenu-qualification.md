@@ -234,8 +234,8 @@ Actual pre-world module loading, Windows pipe connection to X4, native widget
 shapes and new-world transition remain runtime qualification gates. No test here
 establishes that a game was launched or a world started.
 
-The main-helper integration subsequently passed329 focused bundle/main/legacy/
-composition controls, zero skips, resource13e48a125db8, with independent source
+The main-helper integration subsequently passed 329 focused bundle/main/legacy/
+composition controls, zero skips, resource 13e48a125db8, with independent source
 review. It declares its own IsStartmenu signature before native lookup, uses
 the direct per-pipe module before world Init, and retires its UI owner before
 creating the world owner. This adds no process launch and no automatic retry.

@@ -7,8 +7,8 @@ The one ASCII argument uses eight pipe-delimited fields: version, request ID, se
 provider, action, preparation binding, host request digest, and comma-delimited scalar arguments.
 Keys are identifiers; values are typed printable-ASCII strings encoded as lowercase hex, booleans,
 or finite numbers within the exact Lua integer range. Null, nested and non-ASCII arguments refuse.
-Use machine IDs rather than localized labels. The entire encoded argument is capped at1400bytes;
-LivePipe.ask still independently enforces1900bytes for the complete frame.
+Use machine IDs rather than localized labels. The entire encoded argument is capped at 1400bytes;
+LivePipe.ask still independently enforces 1900bytes for the complete frame.
 
 The host digest correlates the immutable Python request; it is not authentication of another
 process or a cryptographic server-side verification. Providers independently check their fixed
@@ -18,7 +18,7 @@ trusted code and must be source-qualified.
 Replies are bounded JSON with exact request identity and separate preparing/prepared/running/
 terminal/unknown states. Preparing never creates a durable prepared journal. Tables with sparse
 or mixed keys, unsafe numbers, cycles or metatables refuse encoding; empty tables encode as
-objects. Native64-bit object/task/money identities must use exact strings, never Lua doubles.
+objects. Native 64-bit object/task/money identities must use exact strings, never Lua doubles.
 The encoder bounds depth/nodes/string lengths and uses a conservative cumulative byte budget.
 
 PipeActionTransport makes exactly one pipe ask per invocation. It has no retries. Callers use

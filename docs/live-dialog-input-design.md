@@ -10,7 +10,7 @@ shortcut, not a direct `SelectDialogOption` or MD purchase operation.
 One explicitly prepared choice may insert exactly one unmodified top-row digit
 keydown/keyup pair. Its evidence must bind the actual connected executable,
 profile, process incarnation, HWND, public load/UI session, current typed actor,
-conversation instance, six native option rows and current action97–102 binding.
+conversation instance, six native option rows and current action 97–102 binding.
 An agent reviews an actual decoded captured frame, supplies literal visible
 labels and bounded regions, and receives an opaque local review handle. A bare
 `ready=true`, caller JSON receipt, option text alone or active model is insufficient.
@@ -33,8 +33,8 @@ Confidence describes the evidence for each link, not runtime acceptance.
 | --- | --- | --- | --- |
 | Connected process/profile/session | 98%, READ existing `ProfilePeer`, `SessionLink`, bound envelopes and `window_for_peer` | process replacement, wrong profile, load/UI change refuse | no input; re-establish explicit connection |
 | Current actor/instance | 95%, READ source-backed conversation observer's typed component/template and historical-instance joins | changed actor/instance, unknown context, stale snapshot refuse | obtain new fixed observer snapshot; never infer from text |
-| Offered choice and binding | 97%, READ `live_dialogprobe` six rows/current actions97–102, two projected input-map reads | missing/changed/selectable-false choice and ambiguous bindings refuse | reread; unsupported binding stays unavailable |
-| Top-row digit translation | 90%, READ SNAPI's native scan-code bridge plus Microsoft scan-code APIs; not measured against X4 | only source1, sign0, no toggle/modifier, scan2–7 and OS roundtrip to digit VK allowed | refuse other codes; no general key conversion guess |
+| Offered choice and binding | 97%, READ `live_dialogprobe` six rows/current actions 97–102, two projected input-map reads | missing/changed/selectable-false choice and ambiguous bindings refuse | reread; unsupported binding stays unavailable |
+| Top-row digit translation | 90%, READ SNAPI's native scan-code bridge plus Microsoft scan-code APIs; not measured against X4 | only source 1, sign 0, no toggle/modifier, scan 2–7 and OS roundtrip to digit VK allowed | refuse other codes; no general key conversion guess |
 | Rendered readiness | 85%, explicitly AGENT_REVIEWED decoded frame, not machine semantics | broken choice/actor/modal control must refuse; animated background with same reviewed labels may pass | fresh bounded frame and review; uncertainty means no input |
 | Pixel origin | 90%, existing ClipPort's HWND/process and sampled host interval | foreign/modified clip, wrong HWND, decoder hash/source drift refuse | no input; new approved capture, not native still re-labelled as HWND proof |
 | Native insertion | 95% API contract, runtime delivery UNKNOWN | fake SendInput records exactly two events; zero/partial/exception remain non-success | preserve consumed receipt; never resend or send compensating keys automatically |
@@ -64,13 +64,13 @@ a complete proof that no physical key is down.
 
 ## Source basis
 
-READ: `reference/ui/core/lua/dialogmenu.lua`298–303 and376–406 register dialog1–6
+READ: `reference/ui/core/lua/dialogmenu.lua`298–303 and 376–406 register dialog1–6
 and pass non-delayed events into the local guarded click handler;626–634 gates on
-shown/selectable. The native binding observer's documented source IDs97–102 name
-choices1–6. Inspected SNAPI `python_send_keys.txt`372–377 maps Windows hook scanCode
-to X4 code, adding0x80 for extended keys;723–749 describes source1/sign0 and
+shown/selectable. The native binding observer's documented source IDs 97–102 name
+choices 1–6. Inspected SNAPI `python_send_keys.txt`372–377 maps Windows hook scanCode
+to X4 code, adding 0x80 for extended keys;723–749 describes source 1/sign0 and
 modifier bits. This author example is a translation lead, not engine-wide proof.
-Its SHA256 is89dcc8aa36e911551b68bfa527e6f463a32055c2c5a818f24ddd1a9ecd541284.
+Its SHA256 is 89dcc8aa36e911551b68bfa527e6f463a32055c2c5a818f24ddd1a9ecd541284.
 
 Microsoft's [SendInput contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)
 inserts into a global input stream, returns an inserted-event count, preserves
@@ -128,13 +128,13 @@ separate typed native actor identity is machine-bound.
 Each visible choice includes the agent's literal rendered shortcut transcription.
 The selected visible digit must match the current source-backed scan-code binding.
 Raw `GetDialogOption` shortcut text is retained for drift but is not assumed to be
-literal digit text: native dialogmenu850–865 assigns it to a text widget, and its
+literal digit text: native dialogmenu 850–865 assigns it to a text widget, and its
 encoding is not independently established here. No markup parser guesses what
 the player sees. All six input-binding rows must be accounted before selection.
 
 The caller obtains a fresh actor/context after review, calls `prepare`, then a
 different fresh snapshot/context for `execute`. Native evidence must be at most
-three host seconds old, the captured frame at most30 seconds, and review at most15
+three host seconds old, the captured frame at most 30 seconds, and review at most 15
 seconds. The local journal consumes dispatch before the sole SendInput call.
 `outcome` retains independent later snapshot/dialog observations without inferring
 selection, causality or economic effects. `prepare_release`/`execute_release` are
@@ -144,7 +144,7 @@ capture, focus or gameplay action is implicitly invoked by the module.
 ## Offline qualification, 2026-11-09
 
 MEASURED: `tests/test_livedialoginput.py` passed **61/61 controls, zero skips**,
-resource job `1b7810510ac6`, pytest1.66 seconds, child exit0. Windows function
+resource job `1b7810510ac6`, pytest 1.66 seconds, child exit 0. Windows function
 objects were fake; the ctypes INPUT structures and code paths were actual.
 No real Windows input, focus, window enumeration, game query, capture, launch or
 deployment was performed. Native conversation/clip evidence uses synthetic
@@ -172,7 +172,7 @@ Qualified source SHA256:
 
 Pillow remains optional. Image-dependent fixtures import/skip at the helper,
 not collection time; native ABI/preflight tests and the explicit missing-decoder
-refusal control run independently. The final61-control run had Pillow available.
+refusal control run independently. The final 61-control run had Pillow available.
 It is not a claim of a separate full no-Pillow run.
 
 Still required: an actual host calling/orchestration route with approved journals

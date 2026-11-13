@@ -48,7 +48,7 @@ connect cannot silently adopt an old host generation.
 
 Native evidence (READ): installed sn_mod_support_apis/ui/simple_menu/interface.lua
 SHA256 db52b195fea7dd7915c803f960c21000094324ea092171f4bd8a1702c3530d86,
-lines20–34 use extension-qualified require; 41–42 declare uint64_t UniverseID and
+lines 20–34 use extension-qualified require; 41–42 declare uint64_t UniverseID and
 GetPlayerID; 103 registers the event; 109 converts the native ID through
 ConvertStringTo64Bit; 143 reads the player blackboard; 151 clears it with nil.
 The packed provider was read through the toolkit's verified member reader without
@@ -97,7 +97,7 @@ written by this unit. Native event order and blackboard behavior remain runtime
 gates for the approved disposable campaign.
 # Player conversion successor (2026-11-09)
 
-The native player ID must round-trip exactly before any blackboard read or clear. A bare native number must be a positive finite integer below2^53; a uint64 must equal GetPlayerID exactly. Other types, different IDs and unsafe conversions refuse. This extends the earlier null-only check, which did not establish identity preservation.
+The native player ID must round-trip exactly before any blackboard read or clear. A bare native number must be a positive finite integer below 2^53; a uint64 must equal GetPlayerID exactly. Other types, different IDs and unsafe conversions refuse. This extends the earlier null-only check, which did not establish identity preservation.
 
-MEASURED:41 actual-LuaJIT controls pass with zero skips (resource73b889777b11), using synthetic native callbacks. Independent source review is clear. No X4 call or deployed helper was tested. The faulthandler plugin was disabled to avoid misleading diagnostics from intentionally caught LuaJIT exceptions; assertion and process-exit checks stayed active.
+MEASURED:41 actual-LuaJIT controls pass with zero skips (resource 73b889777b11), using synthetic native callbacks. Independent source review is clear. No X4 call or deployed helper was tested. The faulthandler plugin was disabled to avoid misleading diagnostics from intentionally caught LuaJIT exceptions; assertion and process-exit checks stayed active.
 

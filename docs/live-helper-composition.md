@@ -31,14 +31,14 @@ The sections below are historical checkpoints; their counts describe their time.
 The fixed optional name `roomentry` adds diagnostic automatic entry/observed-room
 preview, separately from ordinary `rooms` transport. Canonical order is bundle,
 orbit, capture, placement, roomentry, tradertext, rooms, topology, conversation,
-persistence, then query. Selecting all nine returns19 in-memory files.
+persistence, then query. Selecting all nine returns 19 in-memory files.
 The manifest explicitly discloses diagnostic teleport/positioning and private-room
 access; it establishes neither ordinary walking/access nor rendered geometry.
 
 MEASURED offline:61 composition plus actual nine-loader constructor controls
-passed, zero skips, resource8b0749297a08. The new provider constructs with an
+passed, zero skips, resource 8b0749297a08. The new provider constructs with an
 unready public session, owns its channel and retires callbacks without native
-calls. Its separate62 controls/canonical MD compile are recorded by the room-entry
+calls. Its separate 62 controls/canonical MD compile are recorded by the room-entry
 unit. Combined constructor success is not runtime entry or twelve-hull coverage.
 The following eight-extension checkpoint is historical.
 
@@ -60,8 +60,8 @@ camera parameters never become measured pose or distance. These permissions do
 not grant host save access, deployment or game launch.
 
 MEASURED offline: the composition and actual eight-loader constructor group passed
-58 controls, zero skips, resource `e539389ac40e`, exit0. The earlier same-source
-resource record also has exit0, but its missing assertion output is not used for
+58 controls, zero skips, resource `e539389ac40e`, exit 0. The earlier same-source
+resource record also has exit 0, but its missing assertion output is not used for
 the test count. Constructor coverage and limitations are documented in
 [live-all-extensions-qualification.md](live-all-extensions-qualification.md).
 Capture and persistence now tolerate the initially unready canonical session;
@@ -84,8 +84,8 @@ The receipt pins this composition script, imported generators, native extension
 sources and every output. Optional factories cannot contaminate a later base-only
 receipt. Save/load inclusion does not authorize host save access or a game action.
 
-MEASURED offline:24 composition controls passed, zero skips, resource9d918d23becc,
-against conversation checkpointf38126d0 and persistencefdbd90cc. These include
+MEASURED offline:24 composition controls passed, zero skips, resource 9d918d23becc,
+against conversation checkpoint f38126d0 and persistence fdbd90cc. These include
 in-memory drift injections for this script and a consumed native source. The
 conversation checkpoint's own pending controls are not satisfied by composition
 tests. Final combined Lua/runtime qualification and XML validation remain open.
@@ -99,10 +99,10 @@ This is a partial composition mechanism, not a complete deployment packet. The b
 
 Inputs include the exact passed manifest/UI bytes, all fixed module sources and pre/post-checked generator hashes. The source-bound bundle includes its MD revision. Unexpected addon identities, missing/duplicate/already-composed loaders and missing modules refuse. Manifest versioning remains with release preparation.
 
-MEASURED:10 pure-composition controls passed, zero skips, resource5f6f1f1537a7. They check preservation, load order, source/build identities, incorrect inputs and module drift. Independent source review is clear. These controls neither compile the complete helper through x4validate nor run its MD/native behavior; final XML validation and approved runtime qualification remain required.
+MEASURED:10 pure-composition controls passed, zero skips, resource 5f6f1f1537a7. They check preservation, load order, source/build identities, incorrect inputs and module drift. Independent source review is clear. These controls neither compile the complete helper through x4validate nor run its MD/native behavior; final XML validation and approved runtime qualification remain required.
 
 Confidence estimate:98% for the tested composition/preservation mechanics; native load/event behavior remains unqualified. No mod XML, profile or installed file was written by this work.
 
-The UI-start successor passed the combined329-control bundle/main/legacy/composition
-run, zero skips, resource13e48a125db8. This supersedes the earlier exclusion of
+The UI-start successor passed the combined 329-control bundle/main/legacy/composition
+run, zero skips, resource 13e48a125db8. This supersedes the earlier exclusion of
 UI-only startup, without changing the four-output scope or claiming deployment.

@@ -10,8 +10,8 @@ native game read, action, callback execution for a live owner or SDK execute.
 Retired callbacks are invoked solely to prove inertness. No native readiness,
 room entry, asynchronous continuation or case acceptance follows from this test.
 
-MEASURED: the six actual-nine constructor/lifecycle controls plus55 composition
-controls passed61/61, zero skips, resource8b0749297a08. The previous actual-private
+MEASURED: the six actual-nine constructor/lifecycle controls plus 55 composition
+controls passed 61/61, zero skips, resource 8b0749297a08. The previous actual-private
 fixture supplement below is historical; it must be regenerated for the final
 private successor, whose two providers would make thirteen in this composition.
 
