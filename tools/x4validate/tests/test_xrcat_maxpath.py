@@ -189,19 +189,67 @@ def test_input_root_with_an_unencodable_name_is_refused(tmp_path):
     assert "code page" in result.stderr
 
 
-# Delta review 2, M4: say precisely why names cannot be checked.
-@pytest.mark.parametrize("env,expected", [
-    ({"X4_XRCAT_ICONV": "no-such-iconv-binary"}, "iconv is not available"),
-    ({"X4_XRCAT_ACP": "65001"}, "65001 (UTF-8)"),
-    ({"X4_XRCAT_ACP": "99999"}, "this iconv cannot convert to code page 99999"),
-    ({"X4_XRCAT_ACP": ""}, "could not be read"),
-])
-def test_unverifiable_code_page_is_named_precisely(tmp_path, env, expected):
-    if not WINDOWS and "X4_XRCAT_ACP" not in env:
-        pytest.skip("off Windows the code page is never read")
-    if "X4_XRCAT_ACP" not in env:
-        env = {**env, "X4_XRCAT_ACP": "1252"}
+# Delta review 2, M4 / delta review 3, item 2: say precisely why names cannot be
+# checked, with no environment seam: fake `reg` and `iconv` executables go first on PATH,
+# and the iconv-absent branch is exercised by sourcing the wrapper (sourcing runs nothing).
+def _fake_bin(tmp: Path, name: str, body: str) -> Path:
+    d = tmp / "fakebin"
+    d.mkdir(exist_ok=True)
+    f = d / name
+    f.write_bytes(("#!/usr/bin/env bash" + chr(10) + body + chr(10)).encode())
+    f.chmod(0o755)
+    return d
+
+
+def _path_first(d: Path) -> dict:
+    return {"PATH": d.as_posix() + os.pathsep + os.environ.get("PATH", "")}
+
+
+def _cyr_src(tmp_path):
     src = _src(tmp_path)
     (src / "aé.xml").write_bytes(b"<x/>")
-    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")], **env)
+    return src
+
+
+@pytest.mark.parametrize("reg_output,expected", [
+    ("echo '    ACP    REG_SZ    65001'", "65001 (UTF-8)"),
+    ("echo '    ACP    REG_SZ    99999'", "this iconv cannot convert to code page 99999"),
+    ("exit 1", "could not be read"),
+])
+def test_unverifiable_code_page_is_named_precisely(tmp_path, reg_output, expected):
+    if not WINDOWS:
+        pytest.skip("the code page is read from the Windows registry")
+    d = _fake_bin(tmp_path, "reg", reg_output)
+    result = _run(tmp_path, ["-in", str(_cyr_src(tmp_path)), "-out", str(tmp_path / "ext_01.cat")], **_path_first(d))
     assert result.returncode != 0 and expected in result.stderr, result.stderr
+
+
+def test_iconv_that_cannot_convert_is_named(tmp_path):
+    if not WINDOWS:
+        pytest.skip("the code page is read from the Windows registry")
+    d = _fake_bin(tmp_path, "iconv", "exit 1")
+    result = _run(tmp_path, ["-in", str(_cyr_src(tmp_path)), "-out", str(tmp_path / "ext_01.cat")], **_path_first(d))
+    assert result.returncode != 0 and "this iconv cannot convert" in result.stderr, result.stderr
+
+
+def test_missing_iconv_is_named():
+    script = WRAPPER.as_posix()
+    out = subprocess.run([_bash(), "-c", f"source '{script}'; PATH=/nonexistent; _xrcat_encoding_problem 1252"],
+                         capture_output=True, text=True, timeout=60)
+    assert out.stdout.strip() == "iconv is not available to check names against code page 1252", out
+
+
+@pytest.mark.parametrize("env", [{"X4_XRCAT_ACP": "65001"}, {"X4_XRCAT_ICONV": "true"}, {"X4_XRCAT_ACP": ""}])
+def test_no_environment_variable_weakens_the_refusal(tmp_path, env):
+    # The old seams let a production environment pass a Cyrillic name (MEASURED by the review).
+    src = _src(tmp_path)
+    (src / "kж.xml").write_bytes(b"<x/>")
+    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")], **env)
+    assert result.returncode != 0 and not (tmp_path / "ran.txt").exists()
+
+
+def test_sourcing_the_wrapper_runs_nothing(tmp_path):
+    script = WRAPPER.as_posix()
+    out = subprocess.run([_bash(), "-c", f"source '{script}' -in /nonexistent -out x; echo sourced-ok"],
+                         capture_output=True, text=True, timeout=60)
+    assert out.stdout.strip() == "sourced-ok" and out.stderr == "", out

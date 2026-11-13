@@ -53,9 +53,6 @@ _xrcat_acp() {
   MSYS2_ARG_CONV_EXCL='*' reg query 'HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage' /v ACP 2>/dev/null \
     | sed -n 's/.*ACP[[:space:]]*REG_SZ[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1
 }
-# TEST SEAMS (like X4_XRCAT in unpack-reference.sh): X4_XRCAT_ACP replaces the code page
-# read from the registry, X4_XRCAT_ICONV the iconv binary.
-_XRCAT_ICONV="${X4_XRCAT_ICONV:-iconv}"
 # Why non-ASCII names cannot be checked at all, or nothing when they can.
 _xrcat_encoding_problem() {
   local acp="$1"
@@ -65,10 +62,10 @@ _xrcat_encoding_problem() {
   if [ "$acp" = "65001" ]; then
     echo "the ANSI code page is 65001 (UTF-8), where XRCatTool's handling of non-ASCII names was not measured"; return
   fi
-  if ! command -v "$_XRCAT_ICONV" >/dev/null 2>&1; then
+  if ! command -v iconv >/dev/null 2>&1; then
     echo "iconv is not available to check names against code page $acp"; return
   fi
-  if ! printf 'a' | "$_XRCAT_ICONV" -f UTF-8 -t "CP$acp" >/dev/null 2>&1; then
+  if ! printf 'a' | iconv -f UTF-8 -t "CP$acp" >/dev/null 2>&1; then
     echo "this iconv cannot convert to code page $acp"; return
   fi
 }
@@ -78,13 +75,13 @@ _xrcat_unencodable() {
   local LC_ALL=C
   case "$1" in *[$'\x80'-$'\xff']*) ;; *) return 1;; esac
   [ -z "$3" ] || return 0
-  if printf '%s' "$1" | "$_XRCAT_ICONV" -f UTF-8 -t "CP$2" >/dev/null 2>&1; then return 1; fi
+  if printf '%s' "$1" | iconv -f UTF-8 -t "CP$2" >/dev/null 2>&1; then return 1; fi
   return 0
 }
 _xrcat_preflight() {
   local prev="" a root list rc rel w n u shown=0 acp problem
   local -a long=() odd=()
-  acp="${X4_XRCAT_ACP-$(_xrcat_acp)}"
+  acp=$(_xrcat_acp)
   problem=$(_xrcat_encoding_problem "$acp")
   for a in "$@"; do
     if [ "$prev" = "-in" ] && [ -d "$a" ]; then
@@ -128,6 +125,9 @@ _xrcat_preflight() {
   done
   return 3
 }
+# Sourced (by the tests, to call the functions above), stop here: nothing below runs and
+# no environment variable can change what an executed xrcat checks.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
 _xrcat_preflight "$@" || exit $?
 
 case "$(uname -s 2>/dev/null)" in
