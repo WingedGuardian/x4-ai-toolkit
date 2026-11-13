@@ -2,17 +2,15 @@
 
 `live_session.lua` returns a factory `new(env)`. It is wired into the isolated
 bootstrap/bundle candidate, not a deployed provider or native save/load qualification. It depends on
-the public `X4ToolkitSession` MD proposal and has no private campaign dependency.
+the public `X4ToolkitSession` MD proposal and has no campaign dependency.
 
 Initial unit, MEASURED 2026-11-09: 50 actual-Lua behavioral controls passed, zero skips,
-`pytest -q -ra -p no:cacheprovider tests/test_livesession_lua.py`, resource ledger
-`fadb8b200118`, exit 0. They execute this Lua source through Lupa with deterministic
+`pytest -q -ra -p no:cacheprovider tests/test_livesession_lua.py`, exit 0. They execute this Lua source through Lupa with deterministic
 native-wrapper stubs. They qualify correlation and refusal behavior, not engine
 event delivery, blackboard semantics, UI reload or real save-load completion.
 Independent review then found and corrected acceptance of matching empty world
 tokens in READY/current state. The final combined host/actual-Lua run passed
-102 controls with one host-only Windows symlink privilege skip, resource ledger
-`d02ddf48ec01`, exit 0 (51 host passes, 51 Lua passes). No game calls were made.
+102 controls with one host-only Windows symlink privilege skip, exit 0 (51 host passes, 51 Lua passes). No game calls were made.
 
 The caller supplies the exact reviewed revision and six fixed native wrappers:
 `send(request)` sends only the fixed `X4ToolkitSession` / `handshake` event;

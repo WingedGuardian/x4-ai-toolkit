@@ -41,6 +41,6 @@ absence. Manifest disclosure names possible licence/blueprint purchase effects
 and the separate menu-opening, pixel and economic-outcome limitations.
 
 Combined helper composition and actual extension controls passed 75/75, zero
-skipped (resource run 75feabbf1547). Independent narrow composition review found no
+skipped. Independent narrow composition review found no
 blocker. This qualifies candidate generation and synthetic routing only; no
 loader was deployed and no real purchase or encyclopedia rendering was tested.

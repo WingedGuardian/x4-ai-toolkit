@@ -136,6 +136,6 @@ Final additional controls cover approval nonreuse, gate-induced stamp drift,
 duplicate deferred callbacks, ambiguous scheduling and missing refresh.
 
 Final run: **43 passed, zero skipped**, 22.60 seconds, 50 MB peak under the
-resource wrapper (job ebf56ce8d9ee). The duplicate callback also preserves the
+resource wrapper. The duplicate callback also preserves the
 original possible-dispatch status. These are synthetic control-flow checks,
 not engine, filesystem settlement or authenticated host-transport qualification.

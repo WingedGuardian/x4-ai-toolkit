@@ -43,8 +43,7 @@ This unit does not yet navigate from a closed map to the information frame, nor
 select radial dialogue options. No completed runtime capability is claimed. The generator's pure
 source/output binding changes with this successor; older receipts stay historical.
 
-MEASURED V3:175/175 combined controls passed, zero skips, pytest 0.75s, resource
-81446daefd70 child 0. This includes 44 actor-context cases,14 combined navigation
+MEASURED V3:175/175 combined controls passed, zero skips, pytest 0.75s child 0. This includes 44 actor-context cases,14 combined navigation
 SDK cases and 5 actual-generated-loader cases, plus 112 unchanged observer/comm
 controls. Independent READ review found no remaining source blocker. In-place
 frame/table ID changes are explicitly refused even when their object references

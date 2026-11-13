@@ -22,12 +22,10 @@ the original UI identity table before native reads and checks it before publishi
 current validity remains checked again on later component queries. This is page
 publication, not verified host delivery or proof the component still has that fit.
 
-This producer change passed 94 offline equipment controls with zero skips
-(resource 98abb3bd0ea6), including multi-page issuance, late native failure,
+This producer change passed 94 offline equipment controls with zero skips, including multi-page issuance, late native failure,
 bounded omissions, UI reset and invalidation. Independent source review is clear.
 
-Offline integration passed 172 assembly/bundle/composition controls, zero skips
-(resource 1701918c08c8), including the actual module's absent-mod versus failed
+Offline integration passed 172 assembly/bundle/composition controls, zero skips, including the actual module's absent-mod versus failed
 getter through native ID conversion. Independent wiring review is clear. The
 bundle hashes this source and shared disposal retires it. These tests do not
 qualify native nesting, fitting coverage or a real modification roll.

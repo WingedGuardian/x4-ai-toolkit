@@ -99,7 +99,7 @@ establish that a remote engine SaveGame call has only those effects, reserve the
 slot, issue user consent, or authorize LoadGame. An unknown MCP surface is explicitly
 unguarded, not an alternate route. Do not misclassify native execution as an editor
 operation to avoid an opaque-scope refusal. Existing permanent save preservation,
-strict guard reply validation and actual explicit user approval must remain in
+strict guard reply validation and the authority's recorded decision must remain in
 the dispatcher; no guard code change is proposed.
 
 Proposed integration, still unimplemented:

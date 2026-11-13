@@ -8,4 +8,4 @@ Historical canonical MD schema qualification: one generated script checked, zero
 
 Native cue ordering, blackboard transfer and invalidation still require runtime controls. The MD world token is not proof of save lineage. Every new load must acquire a new host session nonce; an explicit same-world UI reconnect may resume only the existing session. No game launch, XML application or deployment is performed by this generator.
 
-MEASURED:12 structural, source-change, line-ending and historical schema-equivalence controls pass, zero skips (resource f4ce06192a2e). The initial byte-for-byte promotion also passed 11 controls before source-hash normalization was added. Only the final 12-control result qualifies the current public generator.
+MEASURED:12 structural, source-change, line-ending and historical schema-equivalence controls pass, zero skips. The initial byte-for-byte promotion also passed 11 controls before source-hash normalization was added. Only the final 12-control result qualifies the current public generator.

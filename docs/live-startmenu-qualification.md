@@ -5,7 +5,7 @@ capability. No game was launched, no native menu was opened, and no world was
 started during qualification. The host dispatcher and native UI bootstrap are
 implemented below; installation, actual pre-world loading and native runtime
 remain unqualified. A synthetic policy callback is only a test dependency, never
-evidence of user approval.
+evidence of an authorization.
 
 ## Native source route (READ)
 
@@ -235,7 +235,7 @@ shapes and new-world transition remain runtime qualification gates. No test here
 establishes that a game was launched or a world started.
 
 The main-helper integration subsequently passed 329 focused bundle/main/legacy/
-composition controls, zero skips, resource 13e48a125db8, with independent source
+composition controls, zero skips, with independent source
 review. It declares its own IsStartmenu signature before native lookup, uses
 the direct per-pipe module before world Init, and retires its UI owner before
 creating the world owner. This adds no process launch and no automatic retry.

@@ -49,10 +49,9 @@ then bind a real active actor and event history. No dialogue option, purchase,
 menu transition, spawn, save, profile or game launch is authorized by this unit.
 
 MEASURED: 51/51 controls passed (42 actual-Lua controls and 9 structural controls),
-zero skips, pytest 0.21s, resource job f9e7fb9ebc8c child 0. Caught LuaJIT SEH
+zero skips, pytest 0.21s child 0. Caught LuaJIT SEH
 diagnostics remained visible. The canonical validator compiled md.xsd in 174.9s
-and checked the one emitted tree: zero findings, zero skips, resource job
-fb33537753d4 child 0. Candidate SHA256:
+and checked the one emitted tree: zero findings, zero skips child 0. Candidate SHA256:
 2256d7c25a921f511c5dbb7ae6063daadb117558170ce3b3889d60e9d7e61ccc.
 Independent READ review found no concrete source blocker. Schema/runtime are
 separate: no event timing, actual blackboard representation or UI route is
@@ -88,8 +87,7 @@ idempotent and failure-sticky, so layered ownership cannot turn a failed cleanup
 into successful replacement.
 
 MEASURED successor:70/70 controls passed (43 observer,9 MD structure,15 real-SDK
-provider,3 loader/source-binding controls), zero skips, pytest 0.37s, resource
-94f6a66c6cb0 child 0. The actual generated loader registers the actual provider and
+provider,3 loader/source-binding controls), zero skips, pytest 0.37s child 0. The actual generated loader registers the actual provider and
 observer against the actual SDK, sends zero snapshots during construction or
 prepare, and one on execute. First run 69 passed/1 failed because a test expected
 a returned refusal for an unknown action; the SDK correctly rejected that action

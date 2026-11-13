@@ -143,8 +143,7 @@ capture, focus or gameplay action is implicitly invoked by the module.
 
 ## Offline qualification, 2026-11-09
 
-MEASURED: `tests/test_livedialoginput.py` passed **61/61 controls, zero skips**,
-resource job `1b7810510ac6`, pytest 1.66 seconds, child exit 0. Windows function
+MEASURED: `tests/test_livedialoginput.py` passed **61/61 controls, zero skips**, pytest 1.66 seconds, child exit 0. Windows function
 objects were fake; the ctypes INPUT structures and code paths were actual.
 No real Windows input, focus, window enumeration, game query, capture, launch or
 deployment was performed. Native conversation/clip evidence uses synthetic

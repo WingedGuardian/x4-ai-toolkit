@@ -4,7 +4,7 @@ scripts/live_automation_bundle.py is a pure candidate builder. It embeds exactly
 
 The generated chunk declares one shared X4ToolkitAutomationBundle. Re-evaluation retires the previous bundle before replacing it. A failed disposal stays failed. Instance construction forces the attested module set/build/revision rather than accepting caller replacements. The bootstrap remains responsible for provider retirement and exact native dependencies.
 
-Measured offline:18 controls pass, zero skips, resource 7dd87234cea7. They load the actual combined module definitions without calling the native bootstrap, demonstrate that each module and the MD revision change the build, reject tampering, and check disposal/replacement using a synthetic bootstrap. Independent source review is clear.
+Measured offline:18 controls pass, zero skips. They load the actual combined module definitions without calling the native bootstrap, demonstrate that each module and the MD revision change the build, reject tampering, and check disposal/replacement using a synthetic bootstrap. Independent source review is clear.
 
 This does not prove native loading, rendering or gameplay. It addresses the narrower problem that the old live_query fingerprint alone could not identify changes to auxiliary Lua modules. The build constant is source-generated attestation, not a hostile-code security boundary. Qualify the actual consumed MD source, candidate/deployment hashes, helper envelope build and runtime controls together.
 
@@ -56,7 +56,7 @@ module fingerprints, mandatory provider registration, mixed namespace rejection,
 constructor/registration/cleanup failures, caller-mutation isolation and actual
 14-module bootstrap/assembly construction with throwing native-data/action stubs.
 The latter permits synthetic event registration only; it does not call X4.
-Successor 33/33 controls passed, zero skips, childexit 0, rb 88aa35bbab7d,
+Successor 33/33 controls passed, zero skips, childexit 0,
 pytest 0.14s. Generator 7e766aa5082df15b9f9666b68f1cfc33baa91b8431374df97b8e2b39180e9dce;
 test 7768b28f91f3af9d61c0215bf905db2692b7745eeebf939f9fe420414a3a6856.
 Independent READ review found no remaining integration blocker. Caught LuaJIT
@@ -121,7 +121,7 @@ immediately registers its disposer before returning. It consumes one of the
 sixteen cleanup slots. Channel configuration is supplied by reviewed installed
 code, never a host packet. No native query, subscription or send occurs during
 construction. Successor 66/66 controls passed, zero skips, childexit 0,
-pytest 0.19s, rb 0f9fbe54683d. These include actual 15-module construction and channel
+pytest 0.19s. These include actual 15-module construction and channel
 creation with native data/action functions forbidden, scoped dependency binding,
 immediate disposal after later attach failure and post-attach refusal. Independent
 READ review found no blocker. Native engine/event behavior remains unqualified.
@@ -130,7 +130,7 @@ The dialogue-probe successor adds `dialogprobe` to the fixed inventory (16
 modules) and one zero-argument bound `dialog_probe` read. It reports native option
 model evidence with actor/section/rendered visibility UNKNOWN; it adds no
 conversation selection action. Integrated 140 controls passed (31 probe,42
-assembly,67 bundle), zero skips, resource fed6415df34f. See
+assembly,67 bundle), zero skips. See
 live-dialogprobe-qualification.md for exact source and runtime limitations.
 
 The UI-start successor includes startmenu, startpipe and startbootstrap (19
@@ -142,8 +142,7 @@ retirement failure is sticky and a cleanup callback cannot reenter construction.
 The extension catalog stays open until world construction, so reviewed private
 loaders can still register after the helper's initial UI startup.
 
-MEASURED:329 focused bundle/main/legacy/composition controls passed, zero skips,
-resource 13e48a125db8. Independent READ review is clear after correcting the native
+MEASURED:329 focused bundle/main/legacy/composition controls passed, zero skips. Independent READ review is clear after correcting the native
 declaration and retirement reentrancy. Main helper BUILD cd90954e. These tests
 use synthetic native APIs and do not establish actual pre-world loading, pipe
 connection, widget operation or successful world entry. No deployment occurred.

@@ -1,6 +1,6 @@
 # Native still capture orchestration
 
-**Offline qualification, not release/runtime acceptance.** The dispatcher has 39 passing offline integration controls. After explicit user approval, the previously held dedicated test file was created through a complete file guard check and the standard edit tool. Its 35 controls pass, zero skips (resource run 170eef56dd1e). No guard rules changed. Actual native runtime remains unqualified.
+**Offline qualification, not release/runtime acceptance.** The dispatcher has 39 passing offline integration controls. Its dedicated test file has 35 controls, zero skips. No guard rules changed. Actual native runtime remains unqualified.
 
 Image decoding is optional: the project's `capture` extra pins the Pillow 13 series in the lockfile. Default toolkit dependencies are unchanged. The observer imports Pillow only when constructing its default decoder or decoding an image; missing Pillow raises CaptureUnavailable rather than accepting signature-only evidence. Dedicated tests now cover the missing decoder, PNG/JPEG/BMP/TGA in both candidate roots, file stability and decode races, hard links, identity/receipt mismatches, chronology, timeout, quarantine and enumeration bounds. Narrow independent source review found no blocker; these controls use synthetic receipts and temporary files.
 

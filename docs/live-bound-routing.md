@@ -2,7 +2,7 @@
 
 The new host BoundPipe and Lua live_automation factory wrap each query/action in an exact public session envelope. The CLI exposes them as `x4live automation`. The helper in `mods/x4_toolkit_helper` does not load the bundle (its ui.xml lists only live_query.lua and engine_probe.lua); only a helper composed with `scripts/prepare_live_helper.py` does.
 
-Measured offline: 42 actual-Lua/Python controls pass, zero skips (resource receipt 8e5de28bb89c). They exercise the actual action core, scalar codec, routing code and durable journal together; native state is synthetic. Independent source review by the services lane found no remaining blocker after the corrections below. No engine behavior is established.
+Measured offline: 42 actual-Lua/Python controls pass, zero skips. They exercise the actual action core, scalar codec, routing code and durable journal together; native state is synthetic. Independent source review by the services lane found no remaining blocker after the corrections below. No engine behavior is established.
 
 Before dispatch, the helper compares the caller's session, UI generation, provider revision, world token and helper build with its current authority. It rejects missing, nonfinite or backwards game age. Execution/status require the exact previously prepared packet, not merely an id and caller-supplied digest. It repeats identity/clock checks after the operation. A lost reply can mean an action occurred; the action journal prohibits resending and permits status-only reconciliation.
 

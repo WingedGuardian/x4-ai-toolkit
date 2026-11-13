@@ -47,7 +47,7 @@ inside-hull classifier, a camera-pose measurement or a successful collision test
 Actual engine frames, null controls, native versus disabled-collision controls,
 trajectory sampling and visual review remain separate runtime qualifications.
 
-MEASURED synthetic controls:49 passed, zero skips, rb 18089271178a. Actual generated
+MEASURED synthetic controls:49 passed, zero skips. Actual generated
 loader, SDK, native-channel boundary, router and codec preserve max-uint64 target
 identity and dense numeric samples, both 128/512 history limits, null-ray distinction,
 world/target drift, malformed replies and cross-request fault settlement. A first
@@ -55,7 +55,7 @@ admitted run passed two controls then exposed a test expecting a Lua table from
 the router; the actual router returns encoded JSON. The corrected test decodes
 both envelopes. Production source did not change for that correction.
 
-Composed controls:143 passed, zero skips, rb a163c0334dde. Ten real optional
+Composed controls:143 passed, zero skips. Ten real optional
 descriptors register 12 extension providers plus the native core provider, with
 no constructor game calls, both trusted profiles and retired callbacks. Source
 identity and factory-byte equality are checked. Historical test function names
@@ -64,7 +64,7 @@ The preceding 78-pass/one-failure run caught the stale 9-descriptor assertion.
 These groups overlap and must not be added as a unique test denominator.
 
 Canonical MD qualification at source checkpoint 8e2b7e2 compiled both profiles,
-six queries each, with zero findings/skips (rb 498502a2ba66; local receipt SHA256
+six queries each, with zero findings/skips (; local receipt SHA256
 d41022986ad80858af7e47e497fb23c5337fc053dfe96489bbdc9e65d3224562).
 All source/compiler pins and regenerated MD bytes matched. Independent READ
 review cleared the source and five boundary/dense test additions. Admission had

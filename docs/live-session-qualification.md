@@ -6,8 +6,7 @@ scripts/live_session_md.py. None of it qualifies save/load behavior in X4.
 Tests exercise synthetic transport responses and temporary host journals only.
 
 Historical first unit, MEASURED 2026-11-09: `pytest -q -ra -p no:cacheprovider tests/test_livesession.py`
-under the resource wrapper passed 50 controls with one skip, exit 0 (ledger
-`0cd478b89024`). The skipped real directory-symlink control encountered Windows
+under the resource wrapper passed 50 controls with one skip, exit 0. The skipped real directory-symlink control encountered Windows
 privilege error 1314; no alternate creation route was attempted. Nine Windows
 API controls use ctypes-shaped stubs, not a connected game process. The suite
 covers fresh/resume separation, repeated old-save invalidation, stale challenges,
@@ -17,7 +16,7 @@ qualify host logic only; they do not establish native event ordering.
 
 The source-reviewed successor additionally refuses a present-session READY with
 an empty world observation. Final combined host/actual-Lua run passed 102 controls
-with the same one privilege skip, resource ledger `d02ddf48ec01`, exit 0:
+with the same one privilege skip, exit 0:
 `pytest -q -ra -p no:cacheprovider tests/test_livesession.py tests/test_livesession_lua.py`.
 This is 51 host passes plus one skip and 51 Lua passes, not a native runtime test.
 
@@ -30,7 +29,7 @@ probe and explicit resume of the exact latest recorded session. UI reload uses a
 new UI generation and the same load nonce. Authoritative MD invalidation after a
 save load requires a new host allocation even when loading the same old save.
 
-The public provider ID is `x4-live-session-v1`. Private campaign adapters consume its
+The public provider ID is `x4-live-session-v1`. Campaign adapters may consume its
 nonce as a secondary binding; they cannot act as the public world authority.
 Every public query reply must carry exactly the five native identity stamp fields
 `provider`, `revision`, `session`, `generation`, `world_token` and pass

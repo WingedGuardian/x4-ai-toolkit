@@ -205,8 +205,7 @@ native absence census. World/issued-subject drift still refuses the entire
 observation. Queue evidence can remain OBSERVED while docking is UNKNOWN.
 Every read is sampled/non-atomic and performs no game mutation.
 
-The final successor passed 106/106 LuaJIT controls with zero skips
-(resource job f2c7e635b632,40.06s,61MB,child exit 0). The 14 additional controls
+The final successor passed 106/106 LuaJIT controls with zero skips. The 14 additional controls
 include exact IDs above 2^53, a different same-macro ship docking, unknown/native
 failure/changed-container cases and whole-observation identity refusal. Existing
 92 order/cancellation controls also passed. Native runtime remains unqualified.

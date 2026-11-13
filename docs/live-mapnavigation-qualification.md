@@ -19,7 +19,7 @@ side retains its right-pane meaning; it does not automatically select a pane.
 Panel mode requires the selected pane's actual visible-state flag.
 
 MEASURED: 92/92 map-navigation and left/right actor-context controls passed with
-zero skips, resource job 84005554b651, pytest 15.30s, child exit 0. Caught LuaJIT SEH
+zero skips, pytest 15.30s, child exit 0. Caught LuaJIT SEH
 diagnostics appeared in the existing actor-context tests. Independent READ review
 found no source blocker in those modules or their subsequent V4 integration.
 

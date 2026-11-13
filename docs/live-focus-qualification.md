@@ -46,14 +46,14 @@ Official sources (READ):
 
 MEASURED offline qualification, with distinct scopes:
 
-- Resource run `3226e407f863`: 124 passed, one skipped, child exit 0. This comprised
+- 124 passed, one skipped, child exit 0. This comprised
   31 focus controls and 93 unchanged clip/clip-port controls. The only skip was
   the existing generated-pixel FFmpeg test lacking an explicit executable path.
-- Resource run `8f576f35f1e2`: 37 focus controls plus that one generated-pixel
+- 37 focus controls plus that one generated-pixel
   encoder control passed (38/38, zero skips, pytest 2.02s, child exit 0). The six
   additions cover actual BoundPipe envelope acceptance/rejection and production
   backend/clock injection refusal. No unchanged 93 controls were rerun.
-- Resource run `fd54567cb11d`: final 38 focus controls passed, zero skips,
+- final 38 focus controls passed, zero skips,
   pytest 0.97s/child exit 0. An added counterexample makes a successful window
   observation itself exceed two seconds; the final source rejects it before
   foreground dispatch. This closes a self-review deadline gap without changing

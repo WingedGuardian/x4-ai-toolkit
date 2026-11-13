@@ -46,7 +46,7 @@ A stage manifest must account for present/absent captures, control images, camer
 
 ## Offline qualification
 
-Combined actual Lua SDK/router/codec, existing action-core, read-page and wire controls: **153 passed, zero skipped**,9.46 seconds,68 MiB peak job memory, resource run `e38eaa9c9603`. This includes:
+Combined actual Lua SDK/router/codec, existing action-core, read-page and wire controls: **153 passed, zero skipped**,9.46 seconds,68 MiB peak job memory. This includes:
 
 - all 8192 small terminal requests through the actual SDK/router, then exact boundary refusal and no replay of the first retained ID;
 - all 65536 read IDs, with next-ID and old-ID refusal;
@@ -56,7 +56,7 @@ Combined actual Lua SDK/router/codec, existing action-core, read-page and wire c
 
 An initial combined run had 146 passes and one synthetic fixture failure: Lua rejected a128-character formatting-width specifier before reaching the SDK. The fixture now builds the same bounded keys with repetition and a supported format. No runtime defect was inferred from that failure.
 
-Final successor: the same four-file suite passed 155 controls, zero skips, in 8.46s (resource job f3a0bafb0797,68 MiB peak job memory). Two new controls reject explicit false profile names while preserving nil defaults. Their first run had 154 passes and one fixture failure because the router fixture omitted mandatory dependencies; the corrected fixture supplies inert dependencies and reaches the intended profile refusal. Independent source review closed on the final nil-only constructors and reservation/refund logic; no duplicate reviewer test run was counted.
+Final successor: the same four-file suite passed 155 controls, zero skips, in 8.46s. Two new controls reject explicit false profile names while preserving nil defaults. Their first run had 154 passes and one fixture failure because the router fixture omitted mandatory dependencies; the corrected fixture supplies inert dependencies and reaches the intended profile refusal. Independent source review closed on the final nil-only constructors and reservation/refund logic; no duplicate reviewer test run was counted.
 
 Confidence by link: fixed profile arithmetic and constructor selection 99% offline; logical reservation/refund invariants 95% based on actual Lua controls and independent source review; compatibility of every generated provider result with the campaign bound remains dependent on the composed-provider controls; game/native capacity behavior is **not runtime verified**. No game, helper deployment, profile/save, capture or action execution occurred. Reported synthetic test adapter invocations are not engine calls.
 

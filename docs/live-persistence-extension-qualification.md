@@ -106,8 +106,7 @@ observed identity loss, drift or invalid clock permanently refuses further dispa
 even if the original values subsequently return. Disposal remains independently
 available and idempotent.
 
-The successor passed all 41 port controls with zero skips (22.32 seconds, 60 MB,
-resource job `4ea5151e694a`, child exit 0), including six actual-SDK lifecycle
+The successor passed all 41 port controls with zero skips (22.32 seconds, 60 MB, child exit 0), including six actual-SDK lifecycle
 controls. This is offline synthetic-native evidence; the combined real-loader
 constructor check is a separate integration qualification. The factory itself is
 unchanged and derives a new provider revision from these consumed source bytes.

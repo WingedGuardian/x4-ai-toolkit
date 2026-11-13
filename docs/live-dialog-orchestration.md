@@ -55,8 +55,7 @@ frame/15s review bounds and requires a new explicit capture/review. Native polls
 are bounded to 48 attempts and 2.25 host seconds; they never resend preparation
 or execution. Journals and clips remain preserved on failure.
 
-MEASURED offline qualification: 27/27 dedicated controls passed, zero skips,
-resource receipt `33d96a63e53d`, pytest 1.36s/child exit 0. They exercise the
+MEASURED offline qualification: 27/27 dedicated controls passed, zero skips, pytest 1.36s/child exit 0. They exercise the
 actual `DialogInput`, action journals and decoder path with fake client/clip/
 Win32 dependencies. No native capture, input, focus or game calls occurred.
 Optional Pillow is required only by image-based fixtures; this run had it.

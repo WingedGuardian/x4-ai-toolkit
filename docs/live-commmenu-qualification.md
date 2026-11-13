@@ -47,8 +47,7 @@ Opening stays running/unverified; it cannot complete a conversation or purchase
 case. Missing attempt evidence remains UNKNOWN, including exceptions after
 adapter dispatch. Cleanup is immediate, idempotent and failure-sticky.
 
-MEASURED:127/127 combined controls passed, zero skips, pytest 0.58s, resource job
-2185524bf045 child 0:43 conversation observer,9 MD structure,15 snapshot provider,
+MEASURED:127/127 combined controls passed, zero skips, pytest 0.58s child 0:43 conversation observer,9 MD structure,15 snapshot provider,
 4 generated loader,45 comm adapter and 11 comm provider controls. The actual
 generated loader uses the actual SDK/providers and a synthetic native menu model;
 it inspects the bound widget and invokes its exact wrapper once. These are offline
@@ -65,8 +64,7 @@ or deployment readiness is claimed.
 
 The subsequent V3 source integrates actor-context navigation through two fixed
 additional actions, documented in live-actorcontext-qualification.md. Its controls
-were initially resource-held; current V3 now passes 175/175 controls, zero skips,
-resource 81446daefd70 child 0, pytest 0.75s. The current extension no longer
+were initially resource-held; current V3 now passes 175/175 controls, zero skips child 0, pytest 0.75s. The current extension no longer
 claims actor-context navigation is wholly unimplemented: it supports only the
 built right information-row route, with closed-map navigation still absent.
 The earlier held attempt and 127-control receipt remain history. V3 source and

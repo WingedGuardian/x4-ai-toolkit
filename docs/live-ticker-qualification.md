@@ -13,7 +13,7 @@ Bounds are 1,048,576 observed cache entries, at most 16 rows per call, native ca
 FFI verification checks unsigned identity width/type, struct size/alignment/field offsets, pointer types and the double timestamp representation before any native call. Private comparison buffers are not passed to the native getter. These checks and synthetic LuaJIT callbacks qualify defensive behavior, not the game binary's parameter ABI. Native runtime and rendered-notification attribution remain unqualified.
 
 The bundle hashes this module and shared disposal retires it. Standalone controls
-passed 47 with zero skips (resource ff3953f4f29f); combined assembly/bundle/
+passed 47 with zero skips; combined assembly/bundle/
 composition/main controls passed 399 with zero skips (bbfa60e25634), including
 actual zero-window and getter-failure distinctions through assembly.
 Independent source and wiring reviews are clear.

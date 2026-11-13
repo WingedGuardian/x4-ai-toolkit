@@ -45,8 +45,7 @@ No planner readiness promotion is included. A future stage compiler must declare
 demands for these individual budgets and account for pending/concurrent work;
 it must not infer every inner cost from a blanket `native_requests` count.
 
-MEASURED qualification: 673 affected controls passed, zero skipped, resource run
-`c5d240007de3` (child exit 0; 165.70 seconds in pytest). The 12 selected files cover
+MEASURED qualification: 673 affected controls passed, zero skipped (child exit 0; 165.70 seconds in pytest). The 12 selected files cover
 the ten adapter suites, assembly and 42 new capacity controls. The new controls
 include actual ten-adapter construction/read, copied counters and cached stamps,
 failed-attempt charging, separate order histories, retirement UNKNOWN, malformed

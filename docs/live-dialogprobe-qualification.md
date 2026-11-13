@@ -45,7 +45,7 @@ is part of BUILD, not an untracked side loader. Native assembly retires it with
 the other adapters. This adds no conversation action or actor identity shortcut.
 
 MEASURED final integrated 140/140 controls passed (31 probe,42 assembly,67 bundle),
-zero skips, childexit 0, pytest 0.47s, resource fed6415df34f. The actual 16-module
+zero skips, childexit 0, pytest 0.47s. The actual 16-module
 bundle constructs without native data/action calls. Read controls cover missing
 globals, unreadable/oversized fields, inactive dialogue, per-row retirement and
 activation, session/clock/symbol drift, and no mutation callbacks. Independent
@@ -258,8 +258,7 @@ conversation result. Missing/changed second read is UNQUALIFIED; retirement or
 session/symbol drift invalidates the binding claim as well as the parent result.
 The original six option observations retain their separate scope.
 
-MEASURED: the full changed module passed 56/56 controls with zero skips,
-resource job bd90f92f5402, pytest 0.18s, child 0.7s, exit 0. Existing direct-Lua tests
+MEASURED: the full changed module passed 56/56 controls with zero skips, pytest 0.18s, child 0.7s, exit 0. Existing direct-Lua tests
 emitted caught SEH diagnostics. The actual wire encoder accepts the maximum
 four-bindings-per-action example together with maximum-length ASCII option
 strings below the assembly 32000-byte payload limit. Unusual escaped text or a

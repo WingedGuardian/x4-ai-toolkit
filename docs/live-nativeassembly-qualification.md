@@ -4,8 +4,7 @@ Current successor includes the native_save_path zero-argument bound read, using
 the actual paths observer and preserving its canonical stamp or UNAVAILABLE
 payload. Its disposer is owned by the assembly; construction queries nothing.
 The actual observer-through-assembly controls cover both a successful exact path
-and an unavailable getter. Final affected 135 controls passed, zero skips,
-resource a6631cd43e7f; unchanged 31 native-path controls passed in the prior combined
+and an unavailable getter. Final affected 135 controls passed, zero skips; unchanged 31 native-path controls passed in the prior combined
 run 81fba399d320. Independent READ review is clear. No screenshot root is inferred
 and no actual game path was queried.
 
@@ -63,7 +62,7 @@ The prepared tests cover metadata isolation, all nine read routes, malformed
 arguments, missing native bindings, disposal, overflow, refusal preservation,
 and construction using all eight actual adapter modules with throwing native
 stubs. The admitted combined run passed 81/81 controls (33 assembly plus 48 native
-provider), zero skips, child exit 0, rb 5ef7c79db23b, pytest 0.55s. Current source:
+provider), zero skips, child exit 0, pytest 0.55s. Current source:
 83f07c02259b7330f26c0bef28dbc3ea052ce0c71bfc750e5dbded83e4f8df29;
 test:f2d039bf20e6b2d5391fe46c367ffe2368b6206d358830a53876404adea11d1b.
 The root independently READ reviewed the constructor and integration contract.
@@ -92,8 +91,7 @@ conversion must round-trip to the exact original ID. Bare ConvertIDTo64Bit outpu
 is normalized to uint64 only when already uint64 or a finite nonnegative integer
 strictly below 2^53, matching the existing helper's precision safeguard. No tonumber
 ID conversion or inferred approximate handle is allowed. Seven new controls cover
-the conversion successor. All 40 assembly controls passed, zero skips, childexit 0,
-rb 5c7a08e66db5, pytest 0.23s. Current source 161b69a15316b8e88b139c052e8eceda1b3f11fd2fe9d1c7900a9d0f20de2899;
+the conversion successor. All 40 assembly controls passed, zero skips, childexit 0, pytest 0.23s. Current source 161b69a15316b8e88b139c052e8eceda1b3f11fd2fe9d1c7900a9d0f20de2899;
 test 6d35e9a2916f27955fbb890ad485ab322ec71444824b0687e76c0e9033f58a68.
 Root independent READ review found no remaining conversion blocker. Existing 48
 provider controls were unchanged and not rerun. Native runtime remains unverified.
@@ -104,5 +102,5 @@ The assembly also constructs and retires the bundled read-only dialogue probe.
 `dialog_probe` accepts exactly zero arguments and uses the same bound public
 session before/after the read. It reports UNKNOWN actor, section and rendered
 visibility, never conversation-route acceptance. Integrated 140 controls passed
-(31 probe,42 assembly,67 bundle), zero skips, resource fed6415df34f. The original
+(31 probe,42 assembly,67 bundle), zero skips. The original
 40-control receipt above remains historical. No conversation selection was added.

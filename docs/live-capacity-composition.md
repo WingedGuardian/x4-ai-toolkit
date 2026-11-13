@@ -30,8 +30,7 @@ needs a source-bound stage inventory, actual remaining usage and declared bounde
 costs; missing usage or future byte bounds stay UNKNOWN. Do not evict IDs, replay
 uncertain actions, reload the UI or clear bookkeeping to manufacture headroom.
 
-Offline qualification: 284 tests passed, zero skips, resource run
-`cefc1e35f836`. These cover bundle/bootstrap/composition, all nine fixed
+Offline qualification: 284 tests passed, zero skips. These cover bundle/bootstrap/composition, all nine fixed
 extensions, profile identity/substitution, fixed-read routing and actual SDK/router
 constructor forwarding, plus actual generated-bundle/router/codec through BoundPipe
 and host ReadCapture. Review caught a table-versus-encoded-string return defect:

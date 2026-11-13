@@ -38,8 +38,7 @@ the same 64/10.25 send/scheduler behavior. Offline tests use actual channel LuaJ
 state plus the generated bundle/router/codec/host capture path with synthetic
 native boundaries. They are not runtime qualification.
 
-Qualification:214 affected controls passed with zero skips, resource run
-42e730f698c0. This covers the actual channel, generated bundle/router/codec/host
+Qualification:214 affected controls passed with zero skips. This covers the actual channel, generated bundle/router/codec/host
 capture path, both-profile nine-loader lifecycle controls and existing bundle/
 composition controls. Independent source review found no blocker. An initial
 run's ten failures came from a missing globals table in the synthetic extension

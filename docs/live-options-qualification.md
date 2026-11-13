@@ -7,8 +7,8 @@ unverified. The adapter now observes and dispatches built callback buttons and
 closes the current in-world OptionsMenu. Neither operation accepts a user-supplied
 function, MD cue or arbitrary menu name.
 
-Native displayOption buttons use table rowdata with a callback. A private campaign uses
-SN API Make_Button: interface.lua259–278 passes boolean selectable rowdata,
+Native displayOption buttons use table rowdata with a callback. Mod Support APIs'
+Make_Button: interface.lua259–278 passes boolean selectable rowdata,
 459–466 attaches its widget callback, and 606 onward signals the MD row/column
 closure. Those are separately tested shapes. The latter exposes a built-only
 identity `widget:<native-id>` and `identity_kind=BUILT_WIDGET_ONLY`, never an
@@ -39,7 +39,7 @@ Every prepared Options action now checks its 30-UI-second lifetime again after
 native model validation, immediately before dispatch. A slow read that passes
 the deadline consumes the ticket without invoking the handler.
 
-MEASURED synthetic controls:224 passed, zero skips, rb a73067678f37, child exit 0,
+MEASURED synthetic controls:224 passed, zero skips, child exit 0,
 18.83s pytest/19.4s wrapper,62MB peak, selecting test_liveoptions.py,
 test_liveoptions_button.py, test_liveoptions_button_sdk.py,
 test_liveoptions_close.py and test_livenativeproviders.py. This includes MSA
@@ -48,7 +48,7 @@ models, one-shot close, native special-state exclusion, final lifetime expiry,
 SDK closed schemas and later-only visibility completion. It is not a game test.
 The preceding 184-pass native-row-only run is historical, not campaign button proof.
 The final normalized-visibility supplement passed 23/23 close controls, zero
-skips, rb 0aef2b124ffb, explicitly covering both native false and nil. It overlaps
+skips, explicitly covering both native false and nil. It overlaps
 the 224-control group; the results are not an additive unique denominator.
 
 Offline source preparation. No game call, deployment or setting change executed.
@@ -84,15 +84,14 @@ Historical resource admission held the 50 planned actual-Lua
 controls before launching pytest. The bounded request returned rb exit 3 with
 28.75/31.84 GiB RAM used and the running-game 20% free-memory floor. No retry is
 queued. After memory recovery, all 50 controls passed with zero skips under
-resource job e637d286100d (17.51 s pytest, child exit 0). Synthetic controls cover native-index versus authored-value selection,
+(17.51 s pytest, child exit 0). Synthetic controls cover native-index versus authored-value selection,
 view/model/handler changes, special-page refusal, consumed tickets and uncertain
 post-write failures; they do not establish game-runtime behavior. Independent
 READ review checked the native gameoptions/Helper and installed packed Simple Menu
 API sources and found no concrete source blocker. Production SDK integration uses
 closed options.open (empty arguments), options.submenu (page/id/submenu), and
 options.select (page/row/col/widget/option/text/value_type/value). Combined adapter
-and provider controls passed 113/113 with zero skips under resource job
-f66829c76c26 (17.97 s pytest, child exit 0). Existing provider controls emitted
+and provider controls passed 113/113 with zero skips under (17.97 s pytest, child exit 0). Existing provider controls emitted
 caught LuaJIT Windows SEH diagnostics; this is a passing test result, not a claim
 of diagnostic-free execution. Independent READ review found no new integration
 blocker. Assembly now constructs this adapter using the shared native widget
@@ -114,7 +113,7 @@ verify the authored setting effect. This offline candidate is not the installed
 toolkit and has not changed any setting.
 
 Combined assembly/bundle/composition/main-helper controls passed 399 with zero
-skips (resource bbfa60e25634). These include actual options observation through
+skips. These include actual options observation through
 the assembly and wrong-page refusal. Independent wiring review is clear.
 An earlier invocation named a nonexistent test file and ran no tests; it is not
 verification evidence. Native menu behavior and setting effects remain untested.

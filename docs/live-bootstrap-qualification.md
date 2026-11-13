@@ -7,7 +7,7 @@ through extension-qualified require is a working ModSupportAPI analogue, but the
 selected bundle avoids depending on its runtime module-resolution behavior.
 
 MEASURED 2026-11-09: `pytest -q -ra --tb=short -p no:cacheprovider tests/test_livebootstrap.py`
-passed 25 controls with zero skips, resource ledger `f1612f4bfdbe`, child exit 0.
+passed 25 controls with zero skips, child exit 0.
 Tests execute the actual bootstrap/session/core/wire in LuaJIT with native callback
 stubs and a router-construction stub. They do not qualify the final combined router
 or game engine. The run emitted Windows exception diagnostics 0xe24c4a02 during
@@ -15,8 +15,7 @@ the intentionally caught Lua refusal controls, then completed all controls; this
 is not a claim of a diagnostic-free stream. Earlier failed runs exposed the
 function-type inspection limits below; those claims were narrowed explicitly.
 Independent review then added refusal of explicit-false disposers and known-null
-converted player IDs. The final same-command run passed 34 controls, zero skips,
-resource ledger `b1af8d0e987e`, child exit 0, with the same disclosed LuaJIT
+converted player IDs. The final same-command run passed 34 controls, zero skips, child exit 0, with the same disclosed LuaJIT
 exception diagnostics. No source behavior changed after that run.
 
 Confidence: 97% in the source-copied getter declarations, 95% in the bounded
@@ -99,5 +98,5 @@ gates for the approved disposable campaign.
 
 The native player ID must round-trip exactly before any blackboard read or clear. A bare native number must be a positive finite integer below 2^53; a uint64 must equal GetPlayerID exactly. Other types, different IDs and unsafe conversions refuse. This extends the earlier null-only check, which did not establish identity preservation.
 
-MEASURED:41 actual-LuaJIT controls pass with zero skips (resource 73b889777b11), using synthetic native callbacks. Independent source review is clear. No X4 call or deployed helper was tested. The faulthandler plugin was disabled to avoid misleading diagnostics from intentionally caught LuaJIT exceptions; assertion and process-exit checks stayed active.
+MEASURED:41 actual-LuaJIT controls pass with zero skips, using synthetic native callbacks. Independent source review is clear. No X4 call or deployed helper was tested. The faulthandler plugin was disabled to avoid misleading diagnostics from intentionally caught LuaJIT exceptions; assertion and process-exit checks stayed active.
 

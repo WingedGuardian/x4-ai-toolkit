@@ -22,8 +22,7 @@ save/load permission or game action is added. Actual engine observation remains
 unqualified.
 
 MEASURED:the integrated module/assembly/bundle/composition group passed 164 controls,
-zero skips (resource 81fba399d320). Two more actual-observer-through-assembly controls
-were then added; the affected 135-control group passed, zero skips
-(resource a6631cd43e7f), while the unchanged 31 native-path controls retain their
+zero skips. Two more actual-observer-through-assembly controls
+were then added; the affected 135-control group passed, zero skips, while the unchanged 31 native-path controls retain their
 previous result. Independent READ review is clear. No game or filesystem action
 was performed by the observer.

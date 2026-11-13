@@ -224,7 +224,7 @@ qualifies these synthetic boundaries only; independent source review and live
 qualification remain separate.
 
 The additive view/close/repair successor passed 200 combined menu/provider
-controls, zero skips, rb 6873fb7789ed, exit 0 (43.09s pytest, 67 MB peak). Tests run
+controls, zero skips, exit 0 (43.09s pytest, 67 MB peak). Tests run
 the actual current Lua modules and SDK with synthetic native dependencies,
 including unchanged menu paging, failed outer opening-readback adoption,
 ownership, native parameter shape, offered close, disabled/changed repair UI,
@@ -240,7 +240,7 @@ These tests do not establish native assembly ownership forwarding or a composed
 helper installation. Those integration steps remain separate from this unit.
 
 The native-cleared visibility successor passed 205/205 menu/provider controls,
-zero skips, job a35c97999f9d (40.23 seconds, 66 MB, exit 0). It covers nil and
+zero skips (40.23 seconds, 66 MB, exit 0). It covers nil and
 false close readbacks plus true/zero/string/table refusals without replay. The
 provider source includes the separate Options successor. Caught LuaJIT runtime
 error diagnostics appeared; stdout transport truncated their middle, so this
@@ -250,6 +250,6 @@ CPU peak is excluded. No engine call or whole-helper result is claimed.
 Final independent review added a visibility preservation check after the last
 lifecycle callback. A callback that reopens the menu while retaining the epoch
 now refuses; metadata comes from the retained native observation. The final
-menu/provider suite passed 206/206, zero skips, job 0e7ddef756a7 (41.93 seconds,
+menu/provider suite passed 206/206, zero skips (41.93 seconds,
 66 MB, exit 0), including that regression. This supersedes the 205-control
 source snapshot above; the same stdout-truncation and CPU-peak caveats apply.

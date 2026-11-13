@@ -24,7 +24,7 @@ and recommend fewer rows; no text is silently truncated. Reports include the
 requested/returned counts, native total, next index and whether this window covers
 the total at observation. Multiple windows are not an atomic whole-log census.
 
-Offline evidence:27 native controls passed (resource 9ad09d8cd81a);154 assembly,
+Offline evidence:27 native controls passed;154 assembly,
 bundle and composition controls passed (4592fd269db1), including actual observer
 zero/unavailable handling through the fixed read route. Independent review found
 no blocking issue and requested the precise projected-read stability wording.

@@ -39,7 +39,6 @@ ui/live_rooms_extension.lua from the pinned factory. It shares the existing
 pre/post source and duplicate-loader checks. Canonical order places rooms before
 topology, conversation and persistence; none is included without request.
 Independent composition source review is clear. Final combined composition/core/
-SDK tests completed after resource admission recovered:63 passed, zero skipped,
-resource run 8dc05ecb4b66, process handle 55466 exit 0. The earlier 1dc0b3a7 checkpoint
+SDK tests completed after resource admission recovered:63 passed, zero skipped, process handle 55466 exit 0. The earlier 1dc0b3a7 checkpoint
 correctly recorded the then-pending run; this closes that offline composition
 gate. Installation, automatic menu opening and runtime arrival remain unqualified.

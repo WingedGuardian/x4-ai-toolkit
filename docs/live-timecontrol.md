@@ -37,7 +37,7 @@ corrected before integration acceptance. Regression controls use UI=50/game=123
 and prove the ticket expires at UI=56 even when game time remains123.
 
 Final combined module/provider/assembly/bundle/helper-composition verification:
-302 passed, zero skipped, resource run 81bc5df39973. Independent wiring review
+302 passed, zero skipped. Independent wiring review
 found no remaining blocker. This is synthetic/native-source qualification only;
 actual runtime activation, ABI, factor and outcome controls remain outstanding.
 
@@ -52,6 +52,6 @@ are not silently redefined as wall time. This audit excludes the menu module and
 optional extensions and is not a whole-toolkit clock audit.
 
 Combined affected-module and helper integration verification passed 433 controls,
-zero skipped (resource run f766d5f690c9). Independent narrow source review is clear.
+zero skipped. Independent narrow source review is clear.
 The wiring regression proves all four UI consumers receive 50 while the common
 clock and options adapter receive 10. No runtime factor or timing claim follows.

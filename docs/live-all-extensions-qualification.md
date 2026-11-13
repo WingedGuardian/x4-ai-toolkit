@@ -11,7 +11,7 @@ Retired callbacks are invoked solely to prove inertness. No native readiness,
 room entry, asynchronous continuation or case acceptance follows from this test.
 
 MEASURED: the six actual-nine constructor/lifecycle controls plus 55 composition
-controls passed 61/61, zero skips, resource 8b0749297a08. The previous actual-private
+controls passed 61/61, zero skips. The previous actual-private
 fixture supplement below is historical; it must be regenerated for the final
 private successor, whose two providers would make thirteen in this composition.
 
@@ -27,7 +27,7 @@ forbidden and counted. The loaders and MD candidates remain in memory.
 Conversation registers two providers, so the eight public extensions declare
 nine providers. The native bundle adds one. A ninth synthetic fixture descriptor
 adds one more to test the required catalogue occupancy without distributing or
-importing private campaign code. This does not qualify the actual private fixture.
+importing any campaign code. It does not qualify a real campaign fixture.
 
 The tests verify exact provider revisions through the actual SDK registry with
 the public session deliberately unready. Requests remain unknown; no prepared
@@ -46,8 +46,7 @@ own-code input is hashed before generation and rechecked after the test module.
 This evidence does not qualify MD wiring, Windows/native ABI, actual gameplay,
 renderer visibility, action results, save safety or runtime campaign acceptance.
 
-MEASURED: all six public controls passed with zero skips in resource run
-`f77087630844`. The source test SHA-256 is
+MEASURED: all six public controls passed with zero skips. The source test SHA-256 is
 `87cb274d2d4a1c5484ef18bdfd29ff43ac2043d91197879c65a1adf8b90fa6c3`;
 the tested bundle fingerprint is
 `c35d25271b5fe1da6267dc52f868796d4ca25d26ab7703b7bc5cd85e05f478b1`.
