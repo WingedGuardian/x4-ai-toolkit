@@ -115,6 +115,8 @@ game.
   profiles folder. The check also compares the folders by identity, so another spelling
   of the same folder is caught. A protected folder that is not configured cannot be
   checked; the tools say which ones on stderr. Configure them in `x4-paths.env`.
+  If a configured protected folder exists but its identity cannot be read (for example,
+  access is denied), every journal is refused, naming that folder, until it is reachable.
 - **Nothing writes a save** except the save/load dispatcher, a Python interface (no
   command). It saves only to the standard slots `save_001` to `save_010` of a named
   profile, only after its authority records an explicit decision for that exact

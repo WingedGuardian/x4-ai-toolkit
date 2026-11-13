@@ -352,8 +352,10 @@ def test_unreadable_identity_refuses_instead_of_passing(tmp_path, monkeypatch):
     monkeypatch.setattr(T.os, "stat", stat)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    with pytest.raises(ValueError, match="cannot read the identity"):
-        T.journal_refusal(elsewhere, profile=tmp_path / "X4" / "1")
+    # Still a refusal (never a pass); since delta review 5 it is a refusal SENTENCE, which
+    # every caller converts into its own refusal type, not a raised ValueError.
+    why = T.journal_refusal(elsewhere, profile=tmp_path / "X4" / "1")
+    assert why is not None and "cannot read the identity" in why
 
 
 def test_absent_protected_folder_is_simply_not_matched(tmp_path, monkeypatch):

@@ -123,8 +123,24 @@ def journal_refusal(root, *, image=None, profile=None) -> str | None:
 
 
 def overlap_reason(root, roots: dict[str, Path]) -> str | None:
-    """The first protected tree `root` overlaps, as a sentence; None when it overlaps none."""
+    """The first protected tree `root` overlaps, as a sentence; None when it overlaps none.
+
+    An identity that cannot be read (`_identity` raises ValueError) is a REFUSAL sentence
+    too, never a raised ValueError: every caller turns a sentence into its own refusal
+    type, while a ValueError escaped callers that catch only those types (delta review 5).
+    """
     for name, tree in roots.items():
-        if overlaps(root, tree):
-            return f"journal {Path(root)} overlaps the {name} {tree}"
+        try:
+            _chain(Path(tree).resolve())
+        except ValueError as exc:
+            return (f"the {name} {tree} is a configured protected root whose identity "
+                    f"could not be read ({exc}), so journals are refused until it is "
+                    f"reachable")
+        try:
+            if overlaps(root, tree):
+                return f"journal {Path(root)} overlaps the {name} {tree}"
+        except ValueError as exc:
+            return (f"the identity of the journal folder {Path(root)} (or a folder above it) "
+                    f"could not be read ({exc}), so it cannot be checked against the {name} "
+                    f"and is refused")
     return None
