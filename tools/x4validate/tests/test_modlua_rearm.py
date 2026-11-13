@@ -419,12 +419,17 @@ def test_the_load_marker_is_emitted_BEFORE_any_pipe_work(lua):
     ("function GetUISafeModeOption() return 'false' end", "unknown"),
 ])
 def test_first_load_marker_reads_mode_without_changing_it(lua_factory, setup, expected):
-    rt = lua_factory(pre=setup + "\nfunction SetUISafeModeOption() error('must not write') end")
+    # Review r5-M1: a raising stub alone cannot go red -- a pcall around a write would
+    # swallow it. Count the calls instead, and require zero.
+    rt = lua_factory(pre=setup + "\n_G.safe_mode_writes = 0\n"
+                     "function SetUISafeModeOption(...) _G.safe_mode_writes = _G.safe_mode_writes + 1; "
+                     "error('must not write') end")
     init(rt)
     logs = list(g(rt, "log").values())
     assert "_LIVE loaded" in logs[0]
     assert "ui_safe_mode=" + expected in logs[0]
     assert len(g(rt, "sched_reads")) == 1
+    assert g(rt, "safe_mode_writes") == 0
 
 
 # --------------------------------------------------------------------------- #
