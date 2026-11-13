@@ -174,7 +174,7 @@ def check_source_drift_refuses(target):
             count += 1
             if count > 1: return value + b"\n"
         return value
-    with patch.object(Path, "read_bytes", changed), pytest.raises(AssertionError): g.prepare()
+    with patch.object(Path, "read_bytes", changed), pytest.raises(ValueError): g.prepare()
 
 
 def check_uint64_prepare_and_raw_camera_no_pose_claim():

@@ -20,7 +20,7 @@ def capacity(name=None):
  raw=CAPACITY.read_bytes();scope={"__file__":str(CAPACITY)}
  exec(compile(raw,str(CAPACITY),"exec"),scope)
  profile=scope["resolve"](name)
- assert CAPACITY.read_bytes()==raw,"capacity source drift"
+ if not (CAPACITY.read_bytes()==raw): raise ValueError("capacity source drift")
  return profile,raw,scope["lua_source"]()
 def prepare(capacity_profile=None):
  profile,raw,_=capacity(capacity_profile)
@@ -97,6 +97,6 @@ def prepare(capacity_profile=None):
   n(q,"append_to_list",name="player.entity."+QUEUE,exact=table(fields))
   n(q,"raise_lua_event",name="'X4ToolkitSurface.Replies'")
  data=E.tostring(doc,encoding="utf-8",xml_declaration=True,pretty_print=True)
- assert CAPACITY.read_bytes()==raw,"capacity source drift"
+ if not (CAPACITY.read_bytes()==raw): raise ValueError("capacity source drift")
  return {"md/X4ToolkitSurface.xml":data},dict(revision=rev,source_sha256=SOURCE_SHA256,capacity_profile=profile,
   output_sha256=hashlib.sha256(data).hexdigest(),runtime_verified=False,scope="NATIVE_READ_ONLY_OBJECT_LOCAL_SURFACE_SAMPLE")

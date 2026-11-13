@@ -337,7 +337,7 @@ def check_factory_rechecks_consumed_sources(target):
             reads+=1
             if reads>1:return raw+b'\n'
         return raw
-    with patch.object(Path,'read_bytes',changed),pytest.raises(AssertionError):g.prepare()
+    with patch.object(Path,'read_bytes',changed),pytest.raises(ValueError):g.prepare()
 
 # MD has no boolean datatype: an MD true/false reaches Lua as the number 1/0
 # (KB 2026-11-10; ROR handover defect (b)). MDNUM re-encodes every boolean of a

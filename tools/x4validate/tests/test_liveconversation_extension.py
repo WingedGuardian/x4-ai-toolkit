@@ -31,7 +31,7 @@ def test_source_drift_during_pure_generation_refused():
             count+=1
             if count>1:return data+b'\n-- changed\n'
         return data
-    with patch.object(Path,'read_bytes',changed),pytest.raises(AssertionError,match='input drift'):g.prepare()
+    with patch.object(Path,'read_bytes',changed),pytest.raises(ValueError,match='input drift'):g.prepare()
 
 
 def test_generated_loader_constructs_then_registers_actual_provider_without_snapshot():

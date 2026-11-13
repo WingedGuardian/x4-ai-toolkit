@@ -16,11 +16,11 @@ def prepare(capacity_profile=None):
     exec(compile(raw['ship_md'],ship_scope['__file__'],'exec'),ship_scope)
     ship_files,ship_md=ship_scope['prepare'](capacity_profile)
     profile,budget_source,resolver=ship_scope['capacity'](capacity_profile)
-    assert budget_source==raw['capacity'] and ship_md['capacity_profile']==profile,'capacity generation drift'
+    if not (budget_source==raw['capacity'] and ship_md['capacity_profile']==profile): raise ValueError('capacity generation drift')
     files.update(ship_files)
     pins={k:sha(v.replace(b"\r\n",b"\n")) for k,v in raw.items()}
-    assert md["source_sha256"]==pins["md"],"MD source changed"
-    assert ship_md['source_sha256']==pins['ship_md'],'ship MD source changed'
+    if not (md["source_sha256"]==pins["md"]): raise ValueError("MD source changed")
+    if not (ship_md['source_sha256']==pins['ship_md']): raise ValueError('ship MD source changed')
     revision=sha(json.dumps(dict(sources=pins,generator=sha(own.replace(b"\r\n",b"\n")),
         contract="DIAGNOSTIC_PLAYER_AND_SECTOR_SHIP_PLACEMENT_V2",capacity=profile),sort_keys=True,separators=(",",":")).encode())
     lua="local capacity_resolver=(function()\n"+resolver+"\nend)()\n"
@@ -58,8 +58,8 @@ bundle.register_extension({id='x4-diagnostic-placement',revision='REVISION',
     end})
 """.replace('CAPACITY_NAME',json.dumps(profile['name'])).replace('CAPACITY_REVISION',json.dumps(profile['revision'])).replace('SHIPMDREVISION',ship_md['revision']).replace("MDREVISION",md["revision"]).replace("REVISION",revision)
     files["ui/live_placement_extension.lua"]=lua.encode()
-    assert Path(__file__).read_bytes()==own,"generator changed"
-    assert all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items()),"source drift"
+    if not (Path(__file__).read_bytes()==own): raise ValueError("generator changed")
+    if not (all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items())): raise ValueError("source drift")
     return files,dict(status="OFFLINE_PROPOSAL_NOT_APPLIED",runtime_verified=False,revision=revision,
         md_revision=md["revision"],source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},
         generator_sha256=sha(own),output_sha256={k:sha(v) for k,v in files.items()},

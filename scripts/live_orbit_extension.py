@@ -21,7 +21,7 @@ def prepare(capacity_profile=None):
     profile,budget_source,resolver=scope['capacity'](capacity_profile)
     if budget_source!=raw['capacity'] or md['capacity_profile']!=profile:raise ValueError('capacity generation drift')
     pins = {k: sha(v.replace(b"\r\n", b"\n")) for k, v in raw.items()}
-    assert md["source_sha256"] == pins["md"], "MD source changed"
+    if not (md["source_sha256"] == pins["md"]): raise ValueError("MD source changed")
     revision = sha(json.dumps(dict(sources=pins, generator=sha(own.replace(b"\r\n", b"\n")),
         contract="BOUNDED_ORBIT_CAMERA_V1",capacity=profile), sort_keys=True, separators=(",", ":")).encode())
     lua = "local capacity_resolver=(function()\n"+resolver+"\nend)()\n"
@@ -46,8 +46,8 @@ bundle.register_extension({id='x4-orbit-camera',revision='REVISION',
     end})
 """.replace("CAPACITY_NAME",json.dumps(profile['name'])).replace("CAPACITY_REVISION",json.dumps(profile['revision'])).replace("MDREVISION", md["revision"]).replace("REVISION", revision)
     files["ui/live_orbit_extension.lua"] = lua.encode()
-    assert Path(__file__).read_bytes() == own, "generator drift"
-    assert all((ROOT / PATHS[k]).read_bytes() == v for k, v in raw.items()), "source drift"
+    if not (Path(__file__).read_bytes() == own): raise ValueError("generator drift")
+    if not (all((ROOT / PATHS[k]).read_bytes() == v for k, v in raw.items())): raise ValueError("source drift")
     return files, dict(status="OFFLINE_PROPOSAL_NOT_APPLIED", runtime_verified=False,
         capacity_profile=profile,capacity_source_sha256=sha(budget_source),
         provider_limits=dict(records=profile['orbit_history'],calls=profile['orbit_calls']),

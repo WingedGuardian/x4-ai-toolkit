@@ -52,8 +52,8 @@ bundle.register_extension({id='x4-rooms-extension',revision='REVISION',
     end})
 """.replace("REVISION",revision)
     out={"ui/live_rooms_extension.lua":text.encode()}
-    assert Path(__file__).read_bytes()==own,"room factory changed"
-    assert all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items()),"room source changed"
+    if not (Path(__file__).read_bytes()==own): raise ValueError("room factory changed")
+    if not (all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items())): raise ValueError("room source changed")
     return out,dict(status="OFFLINE_EXTENSION_PROPOSAL_NOT_APPLIED",revision=revision,
         provider="x4-rooms-v1",runtime_verified=False,menu_opening_supported=False,
         transport="NATIVE_MECHANISM_NOT_RENDERED_BUTTON",arrival_verified=False,

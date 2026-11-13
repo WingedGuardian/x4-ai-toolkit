@@ -22,7 +22,7 @@ def prepare():
     scope={"__file__":str(ROOT/PATHS["md"]),"__name__":"conversation_md_embedded"}
     exec(compile(raw["md"],scope["__file__"],"exec"),scope)
     candidates,md=scope["prepare"]()
-    assert scope["SOURCE_SHA256"]==sha(raw["md"].replace(b"\r\n",b"\n")),"MD source import drift"
+    if not (scope["SOURCE_SHA256"]==sha(raw["md"].replace(b"\r\n",b"\n"))): raise ValueError("MD source import drift")
     pins={name:sha(data.replace(b"\r\n",b"\n")) for name,data in raw.items()}
     revision=sha(json.dumps(dict(source=pins,generator=sha(own.replace(b"\r\n",b"\n")),
         md_revision=md["revision"],contract="CONVERSATION_SNAPSHOT_AND_NATIVE_COMM_NAVIGATION_V4"),sort_keys=True,separators=(",",":")).encode())
@@ -92,8 +92,8 @@ bundle.register_extension({id='x4-conversation-observer',revision='REVISION',
     end})
 """.replace("MDREVISION",md["revision"]).replace("REVISION",revision)
     candidates["ui/live_conversation_extension.lua"]=source.encode()
-    assert all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items()),"input drift during extension generation"
-    assert Path(__file__).read_bytes()==own,"generator changed during extension generation"
+    if not (all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items())): raise ValueError("input drift during extension generation")
+    if not (Path(__file__).read_bytes()==own): raise ValueError("generator changed during extension generation")
     return candidates,dict(status="OFFLINE_EXTENSION_PROPOSAL_NOT_APPLIED",runtime_verified=False,
         provider="x4-conversation-observer-v1",revision=revision,md_revision=md["revision"],
         source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},generator_sha256=sha(own),

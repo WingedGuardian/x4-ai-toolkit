@@ -11,9 +11,9 @@ def prepare(capacity_profile=None):
  exec(compile(raw["md"],scope["__file__"],"exec"),scope)
  files,md=scope["prepare"](capacity_profile)
  profile,budget,resolver=scope["capacity"](capacity_profile)
- assert budget==raw["capacity"] and md["capacity_profile"]==profile,"capacity drift"
+ if not (budget==raw["capacity"] and md["capacity_profile"]==profile): raise ValueError("capacity drift")
  pins={k:sha(v.replace(b"\r\n",b"\n")) for k,v in raw.items()}
- assert md["source_sha256"]==pins["md"],"MD source drift"
+ if not (md["source_sha256"]==pins["md"]): raise ValueError("MD source drift")
  revision=sha(json.dumps(dict(sources=pins,generator=sha(own.replace(b"\r\n",b"\n")),
   contract="ONE_NATIVE_READ_ONLY_SURFACE_V1",capacity=profile),sort_keys=True,separators=(",",":")).encode())
  lua="local capacity_resolver=(function()\n"+resolver+"\nend)()\n"
@@ -36,7 +36,7 @@ bundle.register_extension({id='x4-native-surface',revision='REVISION',
  end})
 """.replace("CAPACITY_NAME",json.dumps(profile["name"])).replace("CAPACITY_REVISION",json.dumps(profile["revision"])).replace("MDREVISION",md["revision"]).replace("REVISION",revision)
  files["ui/live_surface_extension.lua"]=lua.encode()
- assert Path(__file__).read_bytes()==own and all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items()),"source drift"
+ if not (Path(__file__).read_bytes()==own and all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items())): raise ValueError("source drift")
  return files,dict(status="OFFLINE_PROPOSAL_NOT_APPLIED",revision=revision,md_revision=md["revision"],
   source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},generator_sha256=sha(own),
   output_sha256={k:sha(v) for k,v in files.items()},capacity_profile=profile,

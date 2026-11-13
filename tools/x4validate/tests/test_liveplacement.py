@@ -116,7 +116,7 @@ def check_factory_source_drift_refuses(target):
             n+=1
             if n>1:return b+b"\n"
         return b
-    with patch.object(Path,"read_bytes",changed),pytest.raises(AssertionError):g.prepare()
+    with patch.object(Path,"read_bytes",changed),pytest.raises(ValueError):g.prepare()
 
 def check_constructor_does_not_dispatch_and_prepare_keeps_native_uint64():
     r,_=runtime();assert r.eval("sends+reads+clears")==0

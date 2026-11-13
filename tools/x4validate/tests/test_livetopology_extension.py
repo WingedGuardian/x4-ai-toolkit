@@ -27,7 +27,7 @@ def check_mid_generation_source_drift_refused(target):
             count+=1
             if count>1:return data+b"\n"
         return data
-    with patch.object(Path,"read_bytes",changed),pytest.raises(AssertionError):g.prepare()
+    with patch.object(Path,"read_bytes",changed),pytest.raises(ValueError):g.prepare()
 
 def check_generated_loader_actual_observer_provider_sdk_and_delayed_reply():
     files,receipt=g.prepare();r=runtime()

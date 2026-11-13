@@ -23,7 +23,7 @@ def capacity(name=None):
     raw=CAPACITY.read_bytes();scope={'__file__':str(CAPACITY),'__name__':'shipplacement_capacity'}
     exec(compile(raw,str(CAPACITY),'exec'),scope)
     profile=scope['resolve'](name);lua=scope['lua_source']()
-    assert CAPACITY.read_bytes()==raw,'capacity source drift'
+    if not (CAPACITY.read_bytes()==raw): raise ValueError('capacity source drift')
     return profile,raw,lua
 
 def pose(p,r):
@@ -137,7 +137,7 @@ def prepare(capacity_profile=None):
         n(q,'append_to_list',name='player.entity.'+QUEUE,exact=table(fields))
         n(q,'raise_lua_event',name="'X4ToolkitShipPlacement.Replies'")
     data=E.tostring(doc,encoding='utf-8',xml_declaration=True,pretty_print=True)
-    assert CAPACITY.read_bytes()==raw,'capacity source drift'
+    if not (CAPACITY.read_bytes()==raw): raise ValueError('capacity source drift')
     return {'md/X4ToolkitShipPlacement.xml':data},dict(status='OFFLINE_PROPOSAL_NOT_APPLIED',runtime_verified=False,
         revision=rev,source_sha256=SOURCE_SHA256,capacity_profile=profile,capacity_source_sha256=hashlib.sha256(raw).hexdigest(),
         limits=dict(records=limit,calls=calls,replies=64,prepare_sim_seconds=10,max_displacement_m=100000,

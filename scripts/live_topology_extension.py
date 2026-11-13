@@ -17,7 +17,7 @@ def prepare():
     scope={"__file__":str(ROOT/PATHS["md"]),"__name__":"topology_md_embedded"}
     exec(compile(raw["md"],scope["__file__"],"exec"),scope)
     candidates,md=scope["prepare"]()
-    assert scope["SOURCE_SHA256"]==sha(raw["md"].replace(b"\r\n",b"\n")),"MD source drift"
+    if not (scope["SOURCE_SHA256"]==sha(raw["md"].replace(b"\r\n",b"\n"))): raise ValueError("MD source drift")
     pins={k:sha(v.replace(b"\r\n",b"\n")) for k,v in raw.items()}
     revision=sha(json.dumps(dict(source=pins,generator=sha(own.replace(b"\r\n",b"\n")),
         md_revision=md["revision"],contract="TOPOLOGY_CAPTURE_AND_RETAINED_PAGES_V1"),
@@ -42,8 +42,8 @@ bundle.register_extension({id='x4-topology-observer',revision='REVISION',
     end})
 """.replace("MDREVISION",md["revision"]).replace("REVISION",revision)
     candidates["ui/live_topology_extension.lua"]=source.encode()
-    assert Path(__file__).read_bytes()==own,"generator changed"
-    assert all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items()),"extension source drift"
+    if not (Path(__file__).read_bytes()==own): raise ValueError("generator changed")
+    if not (all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items())): raise ValueError("extension source drift")
     return candidates,dict(status="OFFLINE_EXTENSION_PROPOSAL_NOT_APPLIED",runtime_verified=False,
         revision=revision,md_revision=md["revision"],provider="x4-topology-observer-v1",
         source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},generator_sha256=sha(own),

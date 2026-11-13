@@ -76,7 +76,7 @@ def check_source_drift_is_refused(target):
             n+=1
             if n>1:return b+b"\n"
         return b
-    with patch.object(Path,"read_bytes",changed),pytest.raises(AssertionError):g.prepare()
+    with patch.object(Path,"read_bytes",changed),pytest.raises(ValueError):g.prepare()
 
 def check_constructor_does_not_query_or_transport():
     r,_=runtime()

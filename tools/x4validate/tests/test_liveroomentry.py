@@ -220,7 +220,7 @@ def check_factory_source_drift_refuses(target):
             count+=1
             if count>1:return value+b"\n"
         return value
-    with patch.object(Path,"read_bytes",changed),pytest.raises(AssertionError):g.prepare()
+    with patch.object(Path,"read_bytes",changed),pytest.raises(ValueError):g.prepare()
 
 def check_observed_choice_cannot_change_selector():
     r,_=runtime();r.execute("registry.prepare(req);deliver(row('refused'));v=registry.status(req.id,req.session,req.digest)")

@@ -125,7 +125,7 @@ def check_source_drift_refuses(target):
             n+=1
             if n>1:return b+b'\n'
         return b
-    with patch.object(Path,'read_bytes',changed),pytest.raises(AssertionError):g.prepare()
+    with patch.object(Path,'read_bytes',changed),pytest.raises(ValueError):g.prepare()
 
 
 def check_attach_is_lazy_and_owns_all_cleanup():

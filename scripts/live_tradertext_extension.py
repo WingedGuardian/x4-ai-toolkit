@@ -107,8 +107,8 @@ bundle.register_extension({id='x4-trader-text-extension',revision='REVISION',
     end})
 """.replace("REVISION",revision)
     out={"ui/live_tradertext_extension.lua":source.encode()}
-    assert Path(__file__).read_bytes()==own,"trader/text factory changed"
-    assert all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items()),"trader/text source changed"
+    if not (Path(__file__).read_bytes()==own): raise ValueError("trader/text factory changed")
+    if not (all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items())): raise ValueError("trader/text source changed")
     return out,dict(status="OFFLINE_EXTENSION_PROPOSAL_NOT_APPLIED",revision=revision,
         provider="x4-trader-text-v1",runtime_verified=False,menu_opening_supported=True,
         menu_opening_scope="FIXED_NATIVE_ROUTES_NOT_RUNTIME_QUALIFIED",

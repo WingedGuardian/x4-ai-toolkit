@@ -129,3 +129,13 @@ def test_receipts_name_sources_by_repo_relative_path():
     for k in keys:
         if "/" in k:  # a path (persistence keys its pins by module name instead)
             assert (ROOT / k).is_file(), k
+
+
+def test_generators_refuse_with_exceptions_not_asserts():
+    # Review r5-out: drift and pin checks written as `assert` vanish under `python -O`.
+    import ast
+    found = []
+    for path in sorted((ROOT / "scripts").glob("live_*.py")) + [ROOT / "scripts/prepare_live_helper.py"]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        found += [f"{path.name}:{node.lineno}" for node in ast.walk(tree) if isinstance(node, ast.Assert)]
+    assert found == []
