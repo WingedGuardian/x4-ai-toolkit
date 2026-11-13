@@ -193,15 +193,25 @@ class NoBaseline(Exception):
     """
 
 
-def hash_engine(engine_dir: Path | None = None) -> str:
-    """Hash the merge-relevant sources, in fixed order.
+#: The modules whose BYTES decide which rows an x4xref index holds -- DERIVED by tracing
+#: a real index build (`tests/test_xref_index_code.py` pins it in both directions), not
+#: by reading imports. Stamped by `x4xref build` as `index_code`; a mismatch reads STALE.
+#: The index is compared with `engine_dependent=False`, so ENGINE_SOURCES never covered
+#: it: before this, an edit to `_walk`, `_SKIP_TAGS` or the scan walk left every index
+#: FRESH. Must carry no CLI (F69), which is why the build lives in `_xrefindex.py`.
+XREF_SOURCES = ("_xrefindex.py", "_scan.py", "_cat.py", "_merge.py", "_registry.py",
+                "_loadorder.py")
+
+
+def hash_engine(engine_dir: Path | None = None, sources: tuple[str, ...] | None = None) -> str:
+    """Hash the merge-relevant sources (*sources*, default ENGINE_SOURCES), in fixed order.
 
     A missing file is hashed as ``<ABSENT>`` rather than skipped: silently
     hashing fewer inputs than intended is how a fingerprint stops noticing.
     """
     engine_dir = engine_dir or _PKG
     h = hashlib.sha256()
-    for name in ENGINE_SOURCES:
+    for name in (ENGINE_SOURCES if sources is None else sources):
         p = engine_dir / name
         h.update(name.encode())
         h.update(p.read_bytes() if p.is_file() else b"<ABSENT>")

@@ -151,7 +151,10 @@ def test_a_mod_present_in_two_roots_is_indexed_once(tmp_path, monkeypatch):
         (r / "m" / "md" / "x.xml").write_text('<mdscript name="x"><cues><cue name="C"/>'
                                                '</cues></mdscript>', encoding="utf-8")
     (tmp_path / "ref").mkdir()
-    monkeypatch.setattr(_xref, "index_roots", lambda ext: list(roots))
+    # `build_index` lives in `_xrefindex` (re-exported by `_xref`) and resolves
+    # `index_roots` there.
+    from x4validate import _xrefindex
+    monkeypatch.setattr(_xrefindex, "index_roots", lambda ext: list(roots))
     rows = _xref.build_index(tmp_path / "ref", roots[0], [], dlc_dirs=[])
     assert [(r.source, r.name) for r in rows if r.kind == "cuedef"] == [("m", "C")]
 

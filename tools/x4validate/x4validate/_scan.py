@@ -72,6 +72,34 @@ class under:
         return vpath.lower().startswith(self.prefixes)
 
 
+class under_nested:
+    """Match files beneath *prefixes* directly OR behind repeated ``extensions/<owner>/``.
+
+    A mod patches another mod's file at ``extensions/<owner>/<path>`` (CLAUDE.md gotcha #6),
+    and the prefix repeats for a patch of a patch. `under` matches path STARTS only, so
+    x4xref built on it never read one nested md/aiscripts patch: MEASURED on a real
+    install, 20 of 24 named overlay script documents were omitted with 0 unreadable.
+
+    For MOD and DLC roots only. Never point it at the reference ROOT: its own
+    ``extensions/`` subtree is the DLC, which callers enumerate separately, so the
+    nested match would count every DLC file a second time.
+
+    `.prefixes` adds ``extensions/`` so `_scan_roots` narrows the rglob to the script
+    dirs plus the extensions subtree, never the whole mod.
+    """
+
+    def __init__(self, *prefixes: str):
+        import re
+        dirs = tuple(p.lower().strip("/") for p in prefixes)
+        self.prefixes = tuple(d + "/" for d in dirs) + ("extensions/",)
+        self._rx = re.compile(r"(?:extensions/[^/]+/)*(?:"
+                              + "|".join(re.escape(d) for d in dirs) + r")/",
+                              re.IGNORECASE)
+
+    def __call__(self, vpath: str) -> bool:
+        return self._rx.match(vpath) is not None
+
+
 def ending(*suffixes: str) -> Predicate:
     lowered = tuple(s.lower() for s in suffixes)
     return lambda vpath: vpath.lower().endswith(lowered)
@@ -100,8 +128,23 @@ def _scan_roots(mod_dir: Path, predicate: Predicate | None) -> list[Path]:
     # real directory simply contributes nothing — there can be no loose file
     # under it. Deduped so overlapping prefixes ("assets", "assets/units") do
     # not yield the same file twice.
-    heads = dict.fromkeys(p.strip("/").split("/")[0] for p in prefixes)
-    return [mod_dir / h for h in heads if (mod_dir / h).is_dir()]
+    #
+    # Matched against the folders ON DISK, case-folded, never joined literally: the
+    # predicate is case-insensitive (the engine reads virtual paths that way), and a
+    # literal `mod_dir / "extensions"` misses a loose `Extensions/` on a case-sensitive
+    # filesystem and, on Windows, spells the vpath's first segment from the literal
+    # instead of the disk. Only the top level is listed, so the walk stays narrowed
+    # (`_merge._folded_loose`, the existing case-fold index, rglobs the whole overlay,
+    # which is exactly the cost this narrowing exists to avoid). Two spellings of one
+    # head on a case-sensitive disk are both walked and both yielded -- the ambiguity
+    # `_merge.overlay_root` refuses; this enumeration does not model which one loads.
+    heads = {p.strip("/").split("/")[0].lower() for p in prefixes}
+    try:
+        children = sorted(mod_dir.iterdir())
+    except OSError:
+        return []  # silent-ok: an absent or unreadable mod dir has no loose files to walk,
+        # the same answer the literal `is_dir()` test gave; packed members are read separately.
+    return [c for c in children if c.name.lower() in heads and c.is_dir()]
 
 
 def iter_mod_xml(
