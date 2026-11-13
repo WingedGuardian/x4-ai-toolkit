@@ -50,7 +50,12 @@ DESCRIPTION=(
     "Legacy queries read engine observations; explicit pause/unpause commands change pause state. "
     "The engine snapshot probe writes profile UI userdata. Bound automation adds MD session variables "
     "and blackboard queues, native menu interaction, order submission/cancellation, camera and SETA control. "
-    "Menu actions can purchase or modify equipment and ships. Reviewed installed diagnostic providers "
+    "Menu actions can purchase or modify equipment and ships. An attack order may target any object the "
+    "player does not own and can make its owner hostile, which persists in the save. Options actions can "
+    "change the game's settings. The pipe does not authenticate its client: any program running as the same "
+    "Windows user can connect and request any action the installed extensions offer. "
+    "Action providers bind to the first session of a UI load; a later fresh session leaves them unusable "
+    "until the UI reloads (a save load does this). Reviewed installed diagnostic providers "
     "may declare additional actions; inspect their scope before enabling them. Actions require explicit "
     "preparation and execution through a session-bound journal. Acknowledgement is not proof of gameplay "
     "completion. An uncertain action must be reconciled, never automatically replayed. save=false does "
@@ -136,7 +141,10 @@ def build(manifest:bytes,ui:bytes,sources:dict[str,bytes],*,extensions=(),capaci
         if "conversation" in extension_receipts:
             disclosure+=" The conversation extension records dialogue state and can invoke native comm menu actions."
         if "persistence" in extension_receipts:
-            disclosure+=" The persistence extension can save/load only through separately authorized host dispatch; inclusion does not grant save access."
+            disclosure+=(" The persistence extension saves or loads the game when a pipe client sends a prepared request with a"
+                         " one-time grant. The game side only checks that the grant is well formed and unused; whether a save"
+                         " or load is allowed is decided by the toolkit's host side, so any program running as this Windows"
+                         " user that can open the pipe can request one.")
         if "topology" in extension_receipts:
             disclosure+=" The topology extension observes bounded native normal-cluster queries; returned IDs are observations only and captures are not atomic."
         if "rooms" in extension_receipts:

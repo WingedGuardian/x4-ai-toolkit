@@ -77,7 +77,7 @@ def test_fixed_extensions_load_before_query_with_exact_candidate_pins(extensions
     assert receipt["runtime_verified"] is False
     assert "save access authorization" in receipt["excluded"]
     candidate=E.fromstring(files["content.xml"]);original=E.fromstring(a)
-    assert "can save/load" in candidate.get("description") if "persistence" in extensions else True
+    assert "saves or loads the game" in candidate.get("description") and "any program running as this Windows user" in candidate.get("description") if "persistence" in extensions else True
     candidate.set("description",original.get("description"))
     assert E.tostring(candidate)==E.tostring(original)
 
@@ -277,3 +277,12 @@ def test_surface_composition_uses_exact_factory_profile_and_read_only_disclosure
     assert b'one bounded object-relative ray' in files['content.xml']
     assert b'neither inside-hull membership nor complete collision coverage' in files['content.xml']
     assert receipt['runtime_verified'] is False
+
+
+def test_base_disclosure_names_attack_options_unauthenticated_pipe_and_session_binding():
+    # Review r2-4, r2-5, r2-6: what the bundle can do that the manifest did not say.
+    a,b,sources=inputs();files,_=P.build(a,b,sources)
+    text=E.fromstring(files["content.xml"]).get("description")
+    for phrase in ("attack order may target any object","change the game's settings",
+                   "does not authenticate its client","bind to the first session"):
+        assert phrase in text, phrase
