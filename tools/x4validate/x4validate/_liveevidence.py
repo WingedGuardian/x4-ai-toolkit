@@ -17,7 +17,8 @@ from ._livereadpages import query_capture
 from ._livesession import SessionLink, SessionUnavailable, _peer, _token, _REV
 
 LIMIT=4*1024*1024
-SOURCES=("_liveevidence.py","_livebound.py","_liveautomation.py","_livereadpages.py","_livesession.py")
+SOURCES=("_liveevidence.py","_livebound.py","_liveautomation.py","_livereadpages.py","_livesession.py",
+         "_livetrees.py")
 
 def need(ok,reason):
     if not ok:raise SessionUnavailable(reason)

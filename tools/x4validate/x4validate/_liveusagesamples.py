@@ -21,7 +21,7 @@ FIXED={
     'roomentry':('x4-diagnostic-roomentry-v1','capacity_observe','roomentry_records','roomentry_calls','roomentry_records'),
 }
 SOURCES=('_liveusagesamples.py','_livecaptureplan.py','_liveactions.py','_liveautomation.py',
-         '_livecapacity.py','_liveactionwire.py','_livebound.py','_liveevidence.py','_livesession.py')
+         '_livecapacity.py','_liveactionwire.py','_livebound.py','_liveevidence.py','_livesession.py','_livetrees.py')
 
 
 def need(ok,message):

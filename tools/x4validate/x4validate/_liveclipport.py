@@ -22,7 +22,7 @@ from ._livepersistence import _route, _file, _json
 from ._livesession import SessionLink
 
 SOURCES=("_liveclipport.py","_liveclip.py","_liveautomation.py","_livebound.py","_livepeerprofile.py",
-         "_livesession.py","_liveevidence.py","_livereadpages.py","_liveactions.py","_livepersistence.py")
+         "_livesession.py","_liveevidence.py","_livereadpages.py","_liveactions.py","_livepersistence.py","_livetrees.py")
 MAX_SAMPLES=2048
 MAX_SAMPLE_BYTES=2*1024**2
 

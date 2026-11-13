@@ -21,7 +21,8 @@ from ._livepersistence import _route, _file
 
 SOURCES=('_livedialogport.py','_livedialoginput.py','_liveclipport.py','_liveclip.py',
          '_livecapture.py','_liveactions.py','_liveevidence.py','_liveautomation.py',
-         '_livebound.py','_livepeerprofile.py','_livesession.py','_livereadpages.py','_livepersistence.py')
+         '_livebound.py','_livepeerprofile.py','_livesession.py','_livereadpages.py','_livepersistence.py',
+         '_livetrees.py')
 
 
 def pins():

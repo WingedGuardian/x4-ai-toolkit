@@ -35,7 +35,7 @@ def need(ok,why):
 
 SOURCES=('_livefocus.py','_liveclip.py','_liveactions.py','_liveautomation.py',
          '_livebound.py','_liveevidence.py','_livepeerprofile.py','_livesession.py',
-         '_livepersistence.py','_livedialoginput.py')
+         '_livepersistence.py','_livedialoginput.py','_livetrees.py')
 
 
 def pins():
