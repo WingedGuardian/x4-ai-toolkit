@@ -72,6 +72,34 @@ class under:
         return vpath.lower().startswith(self.prefixes)
 
 
+class under_nested:
+    """Match files beneath *prefixes* directly OR behind repeated ``extensions/<owner>/``.
+
+    A mod patches another mod's file at ``extensions/<owner>/<path>`` (CLAUDE.md gotcha #6),
+    and the prefix repeats for a patch of a patch. `under` matches path STARTS only, so
+    x4xref built on it never read one nested md/aiscripts patch: MEASURED on a real
+    install, 20 of 24 named overlay script documents were omitted with 0 unreadable.
+
+    For MOD and DLC roots only. Never point it at the reference ROOT: its own
+    ``extensions/`` subtree is the DLC, which callers enumerate separately, so the
+    nested match would count every DLC file a second time.
+
+    `.prefixes` adds ``extensions/`` so `_scan_roots` narrows the rglob to the script
+    dirs plus the extensions subtree, never the whole mod.
+    """
+
+    def __init__(self, *prefixes: str):
+        import re
+        dirs = tuple(p.lower().strip("/") for p in prefixes)
+        self.prefixes = tuple(d + "/" for d in dirs) + ("extensions/",)
+        self._rx = re.compile(r"(?:extensions/[^/]+/)*(?:"
+                              + "|".join(re.escape(d) for d in dirs) + r")/",
+                              re.IGNORECASE)
+
+    def __call__(self, vpath: str) -> bool:
+        return self._rx.match(vpath) is not None
+
+
 def ending(*suffixes: str) -> Predicate:
     lowered = tuple(s.lower() for s in suffixes)
     return lambda vpath: vpath.lower().endswith(lowered)

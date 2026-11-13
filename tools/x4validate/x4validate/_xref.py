@@ -52,6 +52,15 @@ _CUE_EDGE_TAGS = frozenset({
     "enable_cue", "disable_cue", "complete_cue",
 })
 _SCRIPT_DIRS = ("md/", "aiscripts/")
+#: WHICH script files an index covers, recorded in its freshness sidecar. An index built
+#: before nested patches were enumerated reads FRESH on the content axis (no mod changed)
+#: and `_xref.py` is not a `_freshness.ENGINE_SOURCES` module, so without this marker it
+#: would keep certifying negatives over the narrower population. Change the value
+#: whenever the enumerated set changes; `check_index` reads a mismatch as STALE.
+SCRIPT_SCOPE = "md+aiscripts; mods and DLC also behind extensions/<owner>/ (v2)"
+#: The same scope in words, printed with every negative.
+_SCOPE_WORDS = ("md/ and aiscripts/ scripts, plus every mod's and DLC's "
+                "extensions/<owner>/-nested patches of them")
 
 
 @dataclass(frozen=True)
@@ -92,17 +101,22 @@ def _walk(root: etree._Element, source: str, vpath: str, out: list[XrefRow]) -> 
 
 
 def _iter_source_files(base: Path, source: str, unreadable: list | None = None):
-    """Yield (vpath, parse_root) for md/ + aiscripts/ under a loose directory.
+    """Yield (vpath, parse_root) for md/ + aiscripts/ DIRECTLY under the reference root.
 
     `under()` narrows the walk to those two subtrees, so pointing this at the
-    reference root does not rglob the whole ~13k-file base game.
+    reference root does not rglob the whole ~13k-file base game. Direct-only BY DESIGN:
+    the reference root's own `extensions/` subtree is the DLC, indexed separately under
+    `dlc:<name>` by `_iter_mod_files`, so a nested match here would count it twice.
     """
     yield from _scan.iter_mod_xml(base, _scan.under(*_SCRIPT_DIRS), unreadable)
 
 
 def _iter_mod_files(mod_dir: Path, unreadable: list | None = None):
-    """Yield (vpath, root) for a mod's md/aiscripts — packed (via _cat) and loose."""
-    yield from _scan.iter_mod_xml(mod_dir, _scan.under(*_SCRIPT_DIRS), unreadable)
+    """Yield (vpath, root) for a mod's (or DLC's) md/aiscripts — packed and loose, direct
+    AND behind repeated `extensions/<owner>/` prefixes (a patch of another extension's
+    script, CLAUDE.md gotcha #6). The vpath keeps the full nested path, so the patched
+    file's OWNER is visible in every row. See `SCRIPT_SCOPE`."""
+    yield from _scan.iter_mod_xml(mod_dir, _scan.under_nested(*_SCRIPT_DIRS), unreadable)
 
 
 def index_roots(ext_dir: Path) -> list[Path]:
@@ -154,7 +168,9 @@ def build_index(reference: Path, ext_dir: Path,
     if dlc_dirs is None:
         dlc_dirs = _merge.Config(reference=reference).dlc_dirs()
     for dlc in sorted(dlc_dirs, key=lambda p: p.name):
-        for vpath, root in _iter_source_files(dlc, f"dlc:{dlc.name}", unreadable):
+        # Mod-style enumeration: a DLC patching another DLC's script sits at
+        # <dlc>/extensions/<other>/md, which the direct-only walk would miss.
+        for vpath, root in _iter_mod_files(dlc, unreadable):
             _walk(root, f"dlc:{dlc.name}", vpath, rows)
     # Installed mods.
     #
@@ -268,6 +284,15 @@ def check_index(tsv: Path):
     _stale = _freshness.compare(
         _stored, _freshness.fingerprint(_merge.Config(reference=_ref_then), _roots),
         engine_dependent=False)
+    # The SCRIPT SCOPE the index was built with. A narrower enumeration (an index built
+    # before nested `extensions/<owner>/` patches were read) is not a content change and
+    # `_xref.py` is not an engine source, so nothing above would notice -- and every
+    # negative from it would be certified over a population that silently lacks them.
+    if _stored and _stored.get('script_scope') != SCRIPT_SCOPE:
+        _stale = _freshness.Verdict(False, [*_stale.reasons,
+            'script scope changed: this index was built by an x4xref that enumerated a '
+            f'different set of script files (recorded {_stored.get("script_scope")!r}, '
+            f'now {SCRIPT_SCOPE!r}), so it may lack extension-nested md/aiscripts patches'])
     return rows, signed, exclusions_signed, _stale
 
 
@@ -459,6 +484,7 @@ def _hint_other_kinds(rows: list[XrefRow], name: str, asked_kind: "str | tuple[s
         print(f"  and '{name}' does not appear under ANY kind — "
               + (f"a real negative over {len(rows)} indexed rows" if certified else
                  f"an unverified absence over {len(rows)} indexed rows")
+              + f" of {_SCOPE_WORDS}"
               +
               f"{coverage_note(rows)}{_exclusions(tsv)}.")
         return
@@ -573,6 +599,7 @@ def main(argv: list[str] | None = None) -> int:
         # against the CONFIGURED reference and read stale forever when they differ.
         # (`reference` is taken -- it is the fingerprint's digest -- hence the name.)
         _fp["reference_path"] = str(ref)
+        _fp["script_scope"] = SCRIPT_SCOPE
         _fp['artifact_sha256'] = hashlib.sha256(out.read_bytes()).hexdigest()
         _fp['exclusions_sha256'] = hashlib.sha256(_sidecar(out).read_bytes()).hexdigest()
         _freshness.stamp_sidecar(out, _fp)
