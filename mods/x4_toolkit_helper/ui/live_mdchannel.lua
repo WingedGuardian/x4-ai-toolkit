@@ -24,7 +24,7 @@ return function(d)
     assert(type(schedule)=="function","native deadline scheduler required")
     local public=d.public_current
     local disposed,fault,stamp,last_age,read_owner,listener,tick=false,nil,nil,nil,nil,nil,nil
-    local timers=0
+    local timers,stale=0,0
     local timer_limit,timer_interval=64,10.25
     local api={}
     function api.capacity()
@@ -34,7 +34,7 @@ return function(d)
             scheduled_callbacks_used=timers,scheduled_callbacks_limit=timer_limit,
             deadline_interval_ui_clock_units=timer_interval,
             disposed=disposed,faulted=fault~=nil,stamp_bound=stamp~=nil,
-            lifecycle_open=not disposed and fault==nil,tick_armed=tick~=nil,
+            lifecycle_open=not disposed and fault==nil,tick_armed=tick~=nil,stale_rows_dropped=stale,
             future_reservation=false}
     end
     local function live() assert(not disposed and not fault,"MD channel retired or faulted") end
@@ -128,6 +128,20 @@ return function(d)
             local value=native.GetNPCBlackboard(id,queue)
             local _,after=player();assert(before==after,"player changed during queue read")
             read_owner={id=id,raw=before}
+            -- The queue lives on the player blackboard and is saved with the game, so after
+            -- a load it can hold rows of an earlier session. A row that NAMES another session
+            -- is not a reply to this one: drop and count it (clear() still empties the queue),
+            -- as live_session.lua ignores an unmatched challenge. Rows without a session pass.
+            if type(value)=="table" and getmetatable(value)==nil and stamp then
+                local kept,dropped={},0
+                for i=1,#value do
+                    local row=value[i]
+                    if type(row)=="table" and type(row.session)=="string" and row.session~=stamp.session then
+                        dropped=dropped+1
+                    else kept[#kept+1]=row end
+                end
+                if dropped>0 then stale=stale+dropped;return kept end
+            end
             return value
         end)
     end

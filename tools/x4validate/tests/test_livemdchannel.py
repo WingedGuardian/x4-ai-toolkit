@@ -165,3 +165,20 @@ def test_deadline_of_current_connection_still_ticks_after_gap():
     # Twin: the same connection's deadline, fired with the session present, still runs.
     r=runtime();r.execute("api.arm_tick(function() ticks=ticks+1 end);api.send('request',{});timers[1]()")
     assert r.eval("ticks")==1
+
+
+# Review r2-8 (INFERRED from code): reply rows on the player blackboard are saved with the
+# game, so after a load the queue can hold rows of an earlier session; every provider
+# refuses an unsolicited row and faults. The channel drops rows that name another session
+# (as live_session.lua ignores an unmatched challenge) and counts them.
+def test_rows_of_another_session_are_dropped_and_counted():
+    r=runtime("queue={{session=string.rep('9',32),item='saved'},{session=string.rep('b',32),item='mine'}}")
+    rows=r.eval("api.read()")
+    assert len(rows)==1 and rows[1]["item"]=="mine"
+    assert r.eval("api.capacity().stale_rows_dropped")==1
+
+
+def test_rows_without_a_session_field_pass_unchanged():
+    # Twin: the filter touches only rows that NAME a different session.
+    r=runtime()
+    assert r.eval("api.read()[1].item")=="one" and r.eval("api.capacity().stale_rows_dropped")==0
