@@ -44,6 +44,11 @@ def _finite(v):
 def _route(path, *, directory=False):
     path=Path(path)
     _require(path.is_absolute(),"absolute path required")
+    # A verbatim (//?/) or device (//./) spelling, with either slash, survives resolve()
+    # unchanged, so the noncanonical check below cannot see it; it is never the plain
+    # path, so refuse it.
+    _require(not str(path).replace(chr(92),"/").startswith(("//?/","//./")),
+             "verbatim or device path refused; use the plain drive path")
     for p in (path,*path.parents):
         try:
             st=p.lstat()

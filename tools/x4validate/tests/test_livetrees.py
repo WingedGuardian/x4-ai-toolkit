@@ -168,3 +168,58 @@ def test_automation_cli_names_the_journal_trees_it_could_not_check(tmp_path, mon
                  "--build", "f" * 64, "--revision", "a" * 64, "--mode", "fresh", "identity"], open_pipe=opener)
     err = capsys.readouterr().err
     assert "journal check" in err and "configured game root" in err and "personal tree" in err
+
+
+# Third review batch, I-1 (MEASURED by the reviewer): two spellings of the same folder that
+# Path.resolve() keeps as written, so a lexical comparison never matched.
+import os as _os
+import sys as _sys
+
+_B = chr(92)
+
+
+def _game_journal(tmp_path, monkeypatch):
+    game = tmp_path / "Game"
+    (game / "j").mkdir(parents=True)
+    monkeypatch.setattr(_paths, "game_root", lambda: game)
+    monkeypatch.setattr(_paths, "reference", lambda: None)
+    return game
+
+
+@pytest.mark.parametrize("form", ["extended", "admin_share"])
+def test_other_spellings_of_a_protected_folder_are_refused(tmp_path, monkeypatch, form):
+    if _sys.platform != "win32":
+        pytest.skip("Windows path spellings")
+    game = _game_journal(tmp_path, monkeypatch)
+    plain = str(game / "j")
+    if form == "extended":
+        spelled = _B + _B + "?" + _B + plain
+    else:
+        spelled = _B + _B + "localhost" + _B + plain[0] + "$" + plain[2:]
+        if not _os.path.isdir(spelled):
+            pytest.skip("the administrative share is not reachable on this machine")
+    assert T.journal_refusal(spelled, profile=tmp_path / "X4" / "1")
+    # Reverse direction: a journal folder that CONTAINS the game root, spelled differently.
+    above = _B + _B + "?" + _B + str(tmp_path) if form == "extended" else \
+        _B + _B + "localhost" + _B + str(tmp_path)[0] + "$" + str(tmp_path)[2:]
+    assert T.journal_refusal(above, profile=tmp_path / "X4" / "1")
+
+
+def test_a_sibling_spelled_verbatim_is_still_accepted(tmp_path, monkeypatch):
+    # Twin: identity matching must not refuse an unrelated folder.
+    if _sys.platform != "win32":
+        pytest.skip("Windows path spellings")
+    _game_journal(tmp_path, monkeypatch)
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    assert T.journal_refusal(_B + _B + "?" + _B + str(other), profile=tmp_path / "X4" / "1") is None
+
+
+def test_persistence_route_refuses_a_verbatim_or_device_spelling(tmp_path):
+    if _sys.platform != "win32":
+        pytest.skip("Windows path spellings")
+    from x4validate._livepersistence import _route
+    (tmp_path / "j").mkdir()
+    for prefix in ("?", "."):
+        with pytest.raises(PersistenceUnavailable, match="verbatim|device|noncanonical"):
+            _route(_B + _B + prefix + _B + str(tmp_path / "j"), directory=True)

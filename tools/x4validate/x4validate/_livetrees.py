@@ -7,20 +7,46 @@ A journal, capture or task root must not overlap (contain, or sit inside):
 - the game install: the folder of the X4 executable, and the configured game root;
 - the configured reference folder.
 
-Comparison is on resolved paths; WindowsPath comparison is case-insensitive.
+Comparison is first lexical on resolved paths (WindowsPath comparison is
+case-insensitive), then by FILE IDENTITY: Path.resolve() keeps spellings such as
+`//?/C:/...` (extended length) and `//localhost/C$/...` (administrative share), shown here
+with forward slashes, as
+written, so the lexical check alone was bypassed (MEASURED, delta review 2). Each folder
+and each of its existing ancestors is compared by (st_dev, st_ino) with the other folder.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from . import _paths
 
 
+def _identity(path):
+    """(st_dev, st_ino) of an existing path; None when absent or not identifiable
+    (an inode number of 0 does not identify anything)."""
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return (st.st_dev, st.st_ino) if st.st_ino else None
+
+
+def _chain(path):
+    """Identities of `path` and each of its existing ancestors (the journal itself may
+    not exist yet)."""
+    p = Path(path)
+    return {i for i in (_identity(q) for q in (p, *p.parents)) if i is not None}
+
+
 def overlaps(a, b) -> bool:
     """True when one of the two folders is, or is inside, the other."""
-    a = Path(a).resolve()
-    b = Path(b).resolve()
-    return a.is_relative_to(b) or b.is_relative_to(a)
+    ra = Path(a).resolve()
+    rb = Path(b).resolve()
+    if ra.is_relative_to(rb) or rb.is_relative_to(ra):
+        return True
+    ia, ib = _identity(ra), _identity(rb)
+    return (ib is not None and ib in _chain(ra)) or (ia is not None and ia in _chain(rb))
 
 
 def personal_tree(profile) -> Path:
