@@ -16,6 +16,7 @@ import threading
 import time
 from ._liveactions import ActionJournal, _write_new, _read_json, request_digest
 from ._liveautomation import AutomationClient
+from ._livetrees import journal_refusal
 from ._livebound import BoundPipe
 from ._liveclip import window_for_peer
 from ._liveevidence import _identity
@@ -90,6 +91,7 @@ class FocusPort:
              'production backend/clocks cannot be injected')
         self.client,self.peer,self.synthetic=client,client.bound.link.peer,synthetic
         self.root=_route(journal,directory=True);self.directory=(self.root.stat().st_dev,self.root.stat().st_ino)
+        why=journal_refusal(self.root);need(why is None,'focus journal overlap: '+str(why))
         self.clock,self.sleep,self.last=clock,sleep,None
         self.initial=_identity(client.identity());self.profile=self.peer.profile_id;self.build=client.bound.build
         need(self.peer()==self.initial['peer'],'connected process differs')

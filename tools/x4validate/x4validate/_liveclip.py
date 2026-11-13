@@ -16,6 +16,7 @@ import time
 from ._liveactions import _write_new
 from ._livepersistence import _route, _file, _json, _hex, _finite
 from ._livesession import _peer
+from ._livetrees import journal_refusal
 
 MAX_BYTES = 512 * 1024**2
 MAX_FRAMES = 900
@@ -188,6 +189,7 @@ class WindowClipRecorder:
         need(type(synthetic)is bool and (synthetic or (window is window_for_peer and runner is run_bounded)),
              "custom backend requires synthetic evidence tier")
         self.journal=_route(journal,directory=True); self.binary=_route(ffmpeg)
+        why=journal_refusal(self.journal);need(why is None,"clip journal overlap: "+str(why))
         need(_hex(ffmpeg_sha256,64),"qualified FFmpeg binary hash required")
         self.binary_row=_file(self.binary,256*1024**2)
         need(self.binary_row["sha256"]==ffmpeg_sha256,"FFmpeg binary drift")

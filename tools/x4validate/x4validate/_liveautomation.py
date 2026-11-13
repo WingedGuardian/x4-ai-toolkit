@@ -14,7 +14,7 @@ from ._liveuiidentity import UILink
 from ._livepeerprofile import ProfilePeer
 from ._livereadpages import query_capture
 from ._livepipe import Reply
-from ._livetrees import overlap_reason, protected_roots
+from ._livetrees import journal_refusal
 
 
 def _directory(path, *, create=False):
@@ -40,6 +40,8 @@ class AutomationClient:
     def __init__(self,bound,root):
         self.bound=bound
         self.root=_directory(root)
+        why=journal_refusal(self.root)
+        if why:raise ActionRefused(why)
         self.pending=_directory(self.root/"requests",create=True)
         self.actions=_directory(self.root/"actions",create=True)
         self.transport=PipeActionTransport(bound)
@@ -53,7 +55,7 @@ class AutomationClient:
         root=_directory(root)
         # A journal never overlaps the game install, the reference folder or the
         # personal tree (every profile and its saves); checked before the pipe is used.
-        overlap=overlap_reason(root,protected_roots(image=image))
+        overlap=journal_refusal(root,image=image)
         if overlap:
             raise ActionRefused(overlap)
         peer=ProfilePeer(pipe._h,image,profile_id)

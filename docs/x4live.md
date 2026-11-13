@@ -83,9 +83,13 @@ sent), 1 only when the game answers the first request that the ship no longer ex
 not issued in this session or is not a ship, and 3 for every other refusal and for a
 partial or malformed capture.
 
-`automation` has its own codes: 0 prepared or completed, 4 still preparing or running,
-2 refused or unavailable, 3 uncertain or failed. They are command outcomes only, not a
-verdict that anything happened in the game.
+`automation` has its own codes. `identity` exits 0 once the session is qualified, and
+`query` exits 0 for an OK reply and 2 for any other reply. `prepare`, `execute` and
+`status` exit 0 when the action is prepared or completed, 4 while it is still preparing or
+running, 2 when it is refused, and 3 when it is uncertain or failed. Any command exits 2
+when the game or session is unavailable, and 3 when a reply is degraded or an outcome is
+uncertain (for example a failure after an action was dispatched). These are command outcomes only, not a verdict that anything happened in the
+game.
 
 ## Ids and what a reply can prove
 

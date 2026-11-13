@@ -131,3 +131,20 @@ def test_no_shipped_source_names_a_dropped_path():
         if "docs/live-dev/" in text:
             hits.append(f"{p} names docs/live-dev/")
     assert hits == [], hits
+
+
+def test_no_shipped_file_names_a_moved_record_by_its_old_path():
+    # Delta review 4: the 73 records moved from docs/live-<name>.md to docs/live-dev/. A shipped
+    # mention of an OLD flat path is a dead reference. The list is derived from the folder.
+    moved = [Path(p).name for p in _tracked("docs/live-dev/")]
+    assert len(moved) >= 70, "population check: the moved records are not where expected"
+    old = ["docs/" + name for name in moved]
+    candidates = [p for p in _tracked() if p.endswith(_SOURCE_SUFFIXES + (".md",))]
+    ignored = export_ignored(candidates)
+    hits = []
+    for p in candidates:
+        if ignored[p]:
+            continue
+        text = (REPO / p).read_text(encoding="utf-8", errors="replace")
+        hits += [f"{p} names {o}" for o in old if o in text]
+    assert hits == [], hits

@@ -258,11 +258,35 @@ def test_unavailable_roots_are_announced_on_stderr(tmp_path, monkeypatch, capsys
 _TEXT_OF_PATH = {"str", "fspath", "as_posix", "normcase", "normpath", "abspath", "realpath", "relpath"}
 
 
+import re as _re
+
+# A module that opens a journal or task root its CALLER names: _route(journal|root, ...) or
+# _directory(journal|root). Found by what the code does, not by a typed list. Modules that
+# only write UNDER an AutomationClient's root (actions, sessions, usage samples) are out of
+# scope: that root was already checked when the client connected.
+_OPENS_A_JOURNAL = _re.compile(r"\b(?:_route|_directory)\(\s*(?:journal|root)\b")
+
+
 def _journal_modules():
-    """Every x4validate module that imports _livetrees (they all open journals)."""
+    """Every x4validate module that imports _livetrees or opens a caller-named journal root."""
     root = Path(T.__file__).resolve().parent
-    return sorted(f for f in root.glob("*.py")
-                  if f.name != "_livetrees.py" and "from ._livetrees import" in f.read_text(encoding="utf-8"))
+    out = []
+    for f in sorted(root.glob("*.py")):
+        if f.name == "_livetrees.py":
+            continue
+        text = f.read_text(encoding="utf-8")
+        if "from ._livetrees import" in text or _OPENS_A_JOURNAL.search(text):
+            out.append(f)
+    return out
+
+
+def test_every_module_that_opens_a_journal_applies_the_rule():
+    # Delta review 4, item 4: _liveclip, _livefocus and _livestartmenu opened caller-named
+    # journal roots without the shared rule.
+    missing = [f.name for f in _journal_modules()
+               if _OPENS_A_JOURNAL.search(f.read_text(encoding="utf-8"))
+               and "journal_refusal(" not in f.read_text(encoding="utf-8")]
+    assert missing == []
 
 
 def _path_comparisons(source: str) -> list[int]:

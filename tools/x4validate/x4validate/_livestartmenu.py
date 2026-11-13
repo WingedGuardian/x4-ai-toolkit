@@ -19,6 +19,7 @@ from ._livebound import _decode
 from ._livepeerprofile import ProfilePeer
 from ._livepipe import LivePipe, _win32
 from ._livesession import SessionJournal, SessionUnavailable, _peer
+from ._livetrees import journal_refusal
 
 PROVIDER="x4-ui-startmenu-v1"
 SCOPE="UI_ONLY_NO_WORLD"
@@ -93,6 +94,7 @@ class ConversationAuthority:
     """
     def __init__(self,root,decide,*,clock=time.monotonic):
         self.root=_directory(root);require(callable(decide) and callable(clock),"trusted decision source required")
+        why=journal_refusal(self.root);require(why is None,"authority journal overlap: "+str(why))
         self.decide,self.clock=decide,clock
         self.records={};self.last=None
 
@@ -132,7 +134,9 @@ class ConversationAuthority:
 class StartClient:
     """Constructor requires trusted connected pipe/peer; connect() supplies ProfilePeer."""
     def __init__(self,pipe,root,peer,profile_id,build,authority,*,desktop,focus):
-        self.root=_directory(root);self.requests=_directory(self.root/"requests",create=True)
+        self.root=_directory(root)
+        why=journal_refusal(self.root);require(why is None,"start journal overlap: "+str(why))
+        self.requests=_directory(self.root/"requests",create=True)
         self.allocations=SessionJournal(self.root/"ui-generations")
         require(callable(peer) and isinstance(profile_id,str) and re.fullmatch("[0-9]{1,20}",profile_id),
                 "qualified connected profile required")
