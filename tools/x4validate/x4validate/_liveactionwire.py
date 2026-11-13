@@ -3,8 +3,9 @@
 Requests use a closed scalar argument grammar: printable ASCII strings, booleans
 and finite numbers within the exact integer range of Lua doubles. Nested/null
 arguments refuse. No Lua source, eval or automatic retries. The existing pipe
-still applies its full-frame 1900-byte ceiling. This module is not wired to CLI
-or installed helper yet.
+still applies its full-frame 1900-byte ceiling. Used by the `x4live automation`
+client (_liveautomation) and the start-menu path; the helper's Lua side is
+ui/live_actionwire.lua.
 """
 from __future__ import annotations
 
