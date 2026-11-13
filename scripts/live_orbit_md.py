@@ -105,11 +105,11 @@ def prepare(capacity_profile=None):
             new = n(q, "do_if", value="$Matches == 0 and " + ROOT + ".$Records.count lt " + str(profile['orbit_history']))
             start = n(new, "do_if", value="($R.$op == 'start' or $R.$op == 'follow') and not " + ROOT + ".$Busy and "
                 "not player.isinfullscreencutscene and not player.isinconversation and not player.isinfullscreenmenu and "
-                "(typeof @$R.$distance == datatype.integer or typeof @$R.$distance == datatype.float) and $R.$distance ge 10 and $R.$distance le 100000 and "
-                "(typeof @$R.$elevation == datatype.integer or typeof @$R.$elevation == datatype.float) and $R.$elevation ge -100000 and $R.$elevation le 100000 and "
-                "(typeof @$R.$yaw == datatype.integer or typeof @$R.$yaw == datatype.float) and $R.$yaw ge -360 and $R.$yaw le 360 and "
-                "(typeof @$R.$pitch == datatype.integer or typeof @$R.$pitch == datatype.float) and $R.$pitch ge -90 and $R.$pitch le 90 and "
-                "(typeof @$R.$duration == datatype.integer or typeof @$R.$duration == datatype.float) and $R.$duration ge 1 and $R.$duration le 30")
+                "(typeof @$R.$distance == datatype.integer or typeof @$R.$distance == datatype.float or typeof @$R.$distance == datatype.largeint or typeof @$R.$distance == datatype.largefloat) and $R.$distance ge 10 and $R.$distance le 100000 and "
+                "(typeof @$R.$elevation == datatype.integer or typeof @$R.$elevation == datatype.float or typeof @$R.$elevation == datatype.largeint or typeof @$R.$elevation == datatype.largefloat) and $R.$elevation ge -100000 and $R.$elevation le 100000 and "
+                "(typeof @$R.$yaw == datatype.integer or typeof @$R.$yaw == datatype.float or typeof @$R.$yaw == datatype.largeint or typeof @$R.$yaw == datatype.largefloat) and $R.$yaw ge -360 and $R.$yaw le 360 and "
+                "(typeof @$R.$pitch == datatype.integer or typeof @$R.$pitch == datatype.float or typeof @$R.$pitch == datatype.largeint or typeof @$R.$pitch == datatype.largefloat) and $R.$pitch ge -90 and $R.$pitch le 90 and "
+                "(typeof @$R.$duration == datatype.integer or typeof @$R.$duration == datatype.float or typeof @$R.$duration == datatype.largeint or typeof @$R.$duration == datatype.largefloat) and $R.$duration ge 1 and $R.$duration le 30")
             put(start, "$Target", "component.{@$R.$target}")
             eligible = n(start, "do_if", value="$Target.exists and $Target.isclass.ship and $Target.sector == player.sector")
             put(eligible, "$Record", table(dict(id="$R.$id", digest="$R.$digest", op="$R.$op",
@@ -195,4 +195,5 @@ def prepare(capacity_profile=None):
         angular_serialization_units="UNKNOWN", target_distance_verified=False,
         limits=dict(records=profile['orbit_history'], replies=64, duration_sim_seconds=30, prepare_lifetime_sim_seconds=10,
                     start_minimum_delay_sim_seconds=1.2),
-        runtime_gates=["nested uint64 target transport", "cutscene native lifecycle", "raw camera property frame/units"])
+        runtime_gates=["nested uint64 target transport", "cutscene native lifecycle", "raw camera property frame/units",
+                       "MD datatype of Lua numbers (integer, float, largeint or largefloat all accepted; which arrives is unmeasured)"])

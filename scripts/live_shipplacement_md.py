@@ -78,7 +78,8 @@ def prepare(capacity_profile=None):
             put(q,'$Result',"'refused'");put(q,'$Reason',"'unavailable, drifted or ineligible'")
             put(q,'$Pose','[]');put(q,'$Desired','[]');put(q,'$Sector','null');put(q,'$Speed','0');put(q,'$Eligible','false')
             put(q,'$PositionMatch','false');put(q,'$OrientationMatch','false');put(q,'$Observed','false')
-            numbers=' and '.join('(typeof @$R.$'+k+' == datatype.integer or typeof @$R.$'+k+' == datatype.float) and '
+            numbers=' and '.join('(typeof @$R.$'+k+' == datatype.integer or typeof @$R.$'+k+' == datatype.float or '
+                'typeof @$R.$'+k+' == datatype.largeint or typeof @$R.$'+k+' == datatype.largefloat) and '
                 '$R.$'+k+' ge -'+str(10000000 if k.endswith('_m') else 360)+' and $R.$'+k+' le '+
                 str(10000000 if k.endswith('_m') else 360) for k in PARAMS)
             sane=n(q,'do_if',value=numbers)
@@ -143,4 +144,9 @@ def prepare(capacity_profile=None):
         limits=dict(records=limit,calls=calls,replies=64,prepare_sim_seconds=10,max_displacement_m=100000,
             max_coordinate_m=10000000,max_speed_mps=1,position_tolerance_m=1,basis_vector_tolerance_m=0.001),
         pose_layout=['x_m','y_m','z_m','forward_x','forward_y','forward_z','right_x','right_y','right_z','up_x','up_y','up_z'],
-        output_sha256=hashlib.sha256(data).hexdigest(),scope='DIAGNOSTIC_SECTOR_POSE_NOT_FLIGHT_OR_COLLISION_SAFETY')
+        output_sha256=hashlib.sha256(data).hexdigest(),scope='DIAGNOSTIC_SECTOR_POSE_NOT_FLIGHT_OR_COLLISION_SAFETY',
+        # Review r3-4: $Busy is cleared only when a status read sees the requested pose, or by a game
+        # start/load (Invalidate cue). A warp that never reaches it keeps the provider locked until then.
+        failed_dispatch_locks_provider_until_load=True,
+        runtime_gates=['nested uint64 target transport','warp outcome and later pose readback',
+                       'MD datatype of Lua numbers (integer, float, largeint or largefloat all accepted; which arrives is unmeasured)'])
