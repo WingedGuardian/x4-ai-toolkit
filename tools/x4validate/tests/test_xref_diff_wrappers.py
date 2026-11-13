@@ -160,6 +160,14 @@ import pytest  # noqa: E402
     ("add", "//cue[@name='p']//actions", None, ""),
     ("add", "//cue[@name='p']/cues/cue[@name='a']/..", None, ""),
     ("add", "//cue[@name='p']/cues/cue[@name='a']/../cue[@name='b']", "after", ""),
+    # the REPLACED or flanked node reached through `//` may sit in a nested cue, so its
+    # parent is not known (MEASURED on real data: the first fix named the outer cue here)
+    ("replace", "//cue[@name='a']//do_if[@value='x']", None, ""),
+    ("add", "//cue[@name='a']//do_if[@value='x']", "after", ""),
+    ("replace", "//cue[@name='p']//cue[@name='a']", None, ""),
+    # twin: a `/`-reached replaced node keeps the named cue
+    ("replace", "//cue[@name='a']/actions/do_if[@value='x']", None, "a"),
+    ("add", "//cue[@name='a']/actions/do_if[@value='x']", "before", "a"),
     ("add", "//cue[@name='a/b']/actions", None, "a/b"),          # a slash inside quotes
     ("add", "//cue[@name='x]y']/actions", None, "x]y"),          # a bracket inside quotes
 ])
