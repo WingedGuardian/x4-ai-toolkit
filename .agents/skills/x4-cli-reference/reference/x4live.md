@@ -4,12 +4,13 @@
 
 ```text
 usage: x4live [-h] [--version] [--file FILE]
-              {dump,extensions,errors,oracle,archive,mappings,query,equipment,pausestate,pause,unpause,harvest,ffi-census,groundtruth,ramp} ...
+              {automation,dump,extensions,errors,oracle,archive,mappings,query,equipment,pausestate,pause,unpause,harvest,ffi-census,groundtruth,ramp} ...
 
 Read what the running engine saw, out of the profile's uidata.xml, and diff it against our model.
 
 positional arguments:
-  {dump,extensions,errors,oracle,archive,mappings,query,equipment,pausestate,pause,unpause,harvest,ffi-census,groundtruth,ramp}
+  {automation,dump,extensions,errors,oracle,archive,mappings,query,equipment,pausestate,pause,unpause,harvest,ffi-census,groundtruth,ramp}
+    automation          experimental session-bound agent commands; see automation --help
     dump                what the probe captured, with its denominators
     extensions          the engine's extension list, diffed PER ITEM
     errors              the engine's own error log, as captured
@@ -44,6 +45,38 @@ options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
   --file FILE           read this uidata.xml instead of the profile's
+```
+
+## `x4live automation`
+
+```text
+usage: x4live automation [-h] --journal JOURNAL --image IMAGE --profile-id PROFILE_ID
+                         --build BUILD --revision REVISION --mode {fresh,resume} [--pipe PIPE]
+                         [--timeout TIMEOUT]
+                         {identity,query,prepare,execute,status} ...
+
+Experimental agent automation; use a disposable save. No launch or implicit retries.
+
+positional arguments:
+  {identity,query,prepare,execute,status}
+    identity            qualify UI and world identity only
+    query               session-bound read, never an action
+    prepare             reserve exact request durably, then prepare once
+    execute             execute once
+    status              reconcile without resending
+
+options:
+  -h, --help            show this help message and exit
+  --journal JOURNAL     existing dedicated local journal root
+  --image IMAGE         expected exact X4 executable
+  --profile-id PROFILE_ID
+                        expected explicit process personalfolderid
+  --build BUILD         expected loaded automation bundle SHA256
+  --revision REVISION   expected public MD session revision
+  --mode {fresh,resume}
+                        explicit load handshake mode
+  --pipe PIPE
+  --timeout TIMEOUT
 ```
 
 ## `x4live dump`

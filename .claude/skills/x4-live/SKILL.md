@@ -23,7 +23,8 @@ from the output.
 1. **The game must be running, AND have a game loaded.** Windowed-unfocused is fine;
    **minimised stops the update loop in EITHER display mode** (MEASURED 2026-09-20, both
    windowed and exclusive fullscreen) and therefore the channel. A stall is not a failure —
-   retry. At the MAIN MENU the mod has not initialised: it arms on **game load**, so a
+   a read may be retried after the observed cause is resolved. Never replay an uncertain
+   action. At the MAIN MENU the legacy mod has not initialised: it arms on **game load**, so a
    refusal there is expected and is not a deployment problem.
 2. **The game-side helper extension must be deployed** to the game-root `extensions\`, with
    the named-pipe support mod it depends on. Do not assume: `probe` answers it.
@@ -47,9 +48,21 @@ from the output.
 recommend a throwaway save.** Do not wait to be asked: most people have not read the README
 section, and by the time it matters the addon is already loaded into whatever save was open.
 
-Be accurate about the risk or the warning gets ignored. Exactly two verbs write — `pause` and
-`unpause` — and neither runs unless the user asked. Every other verb reads, and
-`content.xml` declares `save="false"`. What is true:
+Be accurate about the deployed version and command family. Legacy `query` reads,
+while its separate `pause`/`unpause` commands require the user's requested scope.
+This isolated source branch also contains an offline `automation` candidate with
+prepared native actions and installed-provider actions. It can affect menus,
+orders and camera state; providers must disclose their additional effects. It is
+not deployed or runtime-qualified merely because synthetic tests pass.
+`save="false"` is not evidence that actions cannot affect saved world state.
+Read the current automation guide and exact deployed source before using it.
+
+Automation requires a source-bound public session, measured process/profile and
+UI identity, declared provider revision and durable action journal. Preparation
+does not dispatch execution; accepted execution does not prove gameplay completion.
+Reconcile an uncertain outcome with status, never resend it. No automation
+development or test approval authorizes a game launch. The helper also has these
+established behaviors:
 
 * the addon loads into a RUNNING game, and `engine_probe` runs automatically at load;
 * `engine_probe.lua` calls `C.SaveUIUserData()`, writing the profile's UI userdata;

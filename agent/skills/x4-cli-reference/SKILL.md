@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-12 CLIs, 56 subcommands.
+12 CLIs, 57 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -38,6 +38,7 @@ Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `-
 | | `rebuild` | rebuild what is not FRESH, one at a time, under a lock; exit 0 every requested artifact is FRESH, 1 a builder failed, 5 still not FRESH (deferred, lock held, gate started, world moved); --auto: 0 unless a builder failed |
 | | `accept` | record each artifact's CURRENT losses (dropped/unparsed input) as known; the session note then stays quiet until that set changes |
 | **`x4live`** | | Read what the running engine saw, out of the profile's uidata.xml, and diff it against our model. |
+| | `automation` | experimental session-bound agent commands; see automation --help |
 | | `dump` | what the probe captured, with its denominators |
 | | `extensions` | the engine's extension list, diffed PER ITEM |
 | | `errors` | the engine's own error log, as captured |

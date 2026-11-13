@@ -286,9 +286,9 @@ knowledgebase/notes file alone (explicit path); never push.
 ## x4live is EXPERIMENTAL — say so before you use it
 
 **Before running any `x4live` command against the user's game, tell them it is experimental and
-recommend a throwaway save** — unprompted. Only `pause`/`unpause` write, and only when asked;
-its answers are EVIDENCE, not truth (they have been wrong). → the **`x4-live`** skill has the
-detail and the traps.
+recommend a throwaway save** — unprompted. `pause`, `unpause` and automation actions
+change game state; never replay an uncertain one. Answers are EVIDENCE, not truth (they have
+been wrong). → the **`x4-live`** skill has the detail and the traps.
 
 ## Nexus Mod Research (Standing Rule)
 
