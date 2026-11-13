@@ -24,6 +24,9 @@ def _count(v,name,maximum=2**53-1):
     return v
 
 
+# The toolkit checkout: x4validate/<this file> -> tools/x4validate -> tools -> repo root.
+# In an installed wheel there is no checkout above, so a relative receipt key resolves to
+# a missing file and the receipt is refused ('receipt source changed or missing'): fails closed.
 _TOOLKIT_ROOT=Path(__file__).resolve().parents[3]
 
 
@@ -37,7 +40,9 @@ def _receipts(values,profile):
         if not p.is_absolute() or p.is_symlink():raise ValueError('absolute nonlink receipt required')
         with p.open('rb') as f:raw=f.read(4*1024**2+1)
         if len(raw)>4*1024**2 or hashlib.sha256(raw).hexdigest()!=binding['sha256']:raise ValueError('receipt hash mismatch')
-        r=json.loads(raw)
+        try:r=json.loads(raw)
+        except ValueError:raise ValueError('receipt is not valid JSON') from None
+        if type(r) is not dict:raise ValueError('receipt JSON must be an object')
         if r.get('capacity_profile')!=profile:raise ValueError('receipt capacity profile mismatch')
         if not isinstance(r.get('source_sha256'),dict) or not r['source_sha256']:raise ValueError('receipt source pins missing')
         for path,digest in r['source_sha256'].items():

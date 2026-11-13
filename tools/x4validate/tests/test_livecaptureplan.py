@@ -203,3 +203,31 @@ def test_actual_generated_capacity_route_to_read_evidence_to_planner(tmp_path):
     assert items(value)['native_requests']['used']==7
     assert items(value)['sdk_requests']['used']==0 and items(value)['router_reads']['used']==1
     assert value['native_evidence']['evidence_tier']=='SYNTHETIC' and value['status']=='NOT_READY'
+
+
+# Delta review 2, M7: a receipt file whose JSON is not an object raised AttributeError.
+import hashlib as _hashlib
+import json as _json
+
+from x4validate import _livecaptureplan as _plan
+
+
+def _bind(tmp_path, payload):
+    p = tmp_path / "receipt.json"
+    p.write_bytes(payload)
+    return {"capture": {"path": str(p), "sha256": _hashlib.sha256(payload).hexdigest()}}
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("payload", [b"[1,2]", b"\"text\"", b"42", b"null", b"not json"])
+def test_non_object_receipt_is_refused_plainly(tmp_path, payload):
+    with _pytest.raises(ValueError, match="receipt"):
+        _plan._receipts(_bind(tmp_path, payload), {"capture_history": 1})
+
+
+def test_object_receipt_still_reaches_the_profile_check(tmp_path):
+    # Twin: an object receipt passes the new check and fails later on its own merits.
+    with _pytest.raises(ValueError, match="capacity profile mismatch"):
+        _plan._receipts(_bind(tmp_path, _json.dumps({"capacity_profile": "other"}).encode()), {"x": 1})
