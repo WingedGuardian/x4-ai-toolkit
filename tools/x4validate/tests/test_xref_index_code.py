@@ -16,6 +16,7 @@ CLI module `_xref.py`.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import shutil
@@ -54,6 +55,12 @@ def _world(tmp_path: Path) -> tuple[Path, Path]:
     _w(ext / "moda" / "content.xml", '<content id="moda" version="1"/>')
     _w(ext / "moda" / "extensions" / "ownerb" / "md" / "p.xml",
        '<diff><add sel="//cues"><cue name="NestedCue"/></add></diff>')
+    # A PACKED member too, so the catalog reader (`_cat.read_member`) is on the traced
+    # path (review M-2): without it a catalog-only module could go unhashed unnoticed.
+    data = b'<mdscript name="K"><cues><cue name="PackedCue"/></cues></mdscript>'
+    (ext / "moda" / "ext_01.cat").write_text(
+        f"md/k.xml {len(data)} 1700000000 {hashlib.md5(data).hexdigest()}\n", encoding="utf-8")
+    (ext / "moda" / "ext_01.dat").write_bytes(data)
     return ref, ext
 
 
@@ -71,7 +78,8 @@ def test_every_module_that_shapes_the_index_is_hashed_and_vice_versa(tmp_path, h
         rows = _xref.build_index(ref, ext, [])   # dlc_dirs=None: Config decides the DLC set
     finally:
         sys.setprofile(None)
-    assert {r.name for r in rows if r.kind == "cuedef"} >= {"BaseCue", "NestedCue"}  # trace works
+    assert {r.name for r in rows if r.kind == "cuedef"} >= {
+        "BaseCue", "NestedCue", "PackedCue"}  # the trace saw loose AND packed reads
     ran -= _NOT_BYTES
     assert ran == set(_freshness.XREF_SOURCES), (
         f"traced but not hashed: {sorted(ran - set(_freshness.XREF_SOURCES))}; "
@@ -164,3 +172,48 @@ def test_index_code_mismatch_is_reported_by_check_index(built):
     _rows, _signed, _excl, verdict = _xref.check_index(built)
     assert not verdict.fresh
     assert any("index code changed" in r for r in verdict.reasons)
+
+
+#: Imported (at module level, transitively) by `_xrefindex` but deciding no row, so NOT
+#: hashed. Each needs its reason; an entry that is no longer imported fails below.
+_IMPORTED_NOT_HASHED = {
+    "_paths.py": "path configuration; WHICH roots are read is the content axis's job",
+    "_mutation.py": "the mutation-gate refusal (imported by _paths); decides no row",
+    "_provenance.py": "merge provenance Recorder (imported by _merge); never runs on an "
+                      "index build, which the trace test above proves",
+}
+
+
+def _top_level_deps(name: str) -> set[str]:
+    out: set[str] = set()
+    for n in ast.parse((PKG / name).read_text(encoding="utf-8")).body:
+        if isinstance(n, ast.ImportFrom):
+            mod = n.module or ""
+            if (n.level == 1 and not mod) or mod == "x4validate":
+                out |= {a.name + ".py" for a in n.names}
+            elif mod.startswith("x4validate.") or (n.level == 1 and mod):
+                out.add(mod.split(".")[-1] + ".py")
+        elif isinstance(n, ast.Import):
+            out |= {a.name.split(".")[-1] + ".py" for a in n.names
+                    if a.name.startswith("x4validate.")}
+    return {d for d in out if (PKG / d).is_file()}
+
+
+def test_every_module_the_index_build_imports_is_hashed_or_excluded_with_a_reason():
+    """Review M-2: the trace sees only what the fixture exercises. Every x4validate
+    module `_xrefindex` imports at module level, transitively, is either hashed or named
+    in `_IMPORTED_NOT_HASHED` with its reason. (Function-level imports load only when
+    called, which is what the trace covers.)"""
+    seen: set[str] = set()
+    todo = ["_xrefindex.py"]
+    while todo:
+        m = todo.pop()
+        if m not in seen:
+            seen.add(m)
+            todo.extend(sorted(_top_level_deps(m) - seen))
+    assert "_merge.py" in seen and "_cat.py" in seen, seen      # the walk works
+    unaccounted = seen - set(_freshness.XREF_SOURCES) - set(_IMPORTED_NOT_HASHED)
+    assert not unaccounted, f"imported by the index build but neither hashed nor excluded: {sorted(unaccounted)}"
+    stale = set(_IMPORTED_NOT_HASHED) - seen
+    assert not stale, f"excluded but no longer imported: {sorted(stale)}"
+    assert not set(_IMPORTED_NOT_HASHED) & set(_freshness.XREF_SOURCES)
