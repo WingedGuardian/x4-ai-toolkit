@@ -286,3 +286,14 @@ def test_base_disclosure_names_attack_options_unauthenticated_pipe_and_session_b
     for phrase in ("attack order may target any object","change the game's settings",
                    "does not authenticate its client","bind to the first session"):
         assert phrase in text, phrase
+
+
+def test_composition_script_is_pinned_at_import_and_refuses_later_drift(monkeypatch):
+    # Review r3-6: build() hashed its own source at build time, so an edit between import
+    # and build was pinned as if it were the running code.
+    a,b,sources=inputs()
+    files,receipt=P.build(a,b,sources)
+    assert receipt["generators"]["prepare_live_helper.py"]==P.SELF_SHA256
+    monkeypatch.setattr(P,"SELF_SHA256","0"*64)
+    with pytest.raises(ValueError,match="changed since import"):
+        P.build(a,b,sources)

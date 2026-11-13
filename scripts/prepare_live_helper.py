@@ -7,6 +7,9 @@ from lxml import etree as E
 
 HERE=Path(__file__).resolve().parent
 PINS={}
+# This script's own bytes AS IMPORTED: build() pins these and refuses if the file has
+# changed since, so a receipt never names code that is not the code running.
+SELF_SHA256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 def sha(data):return hashlib.sha256(data).hexdigest()
@@ -73,7 +76,9 @@ def build(manifest:bytes,ui:bytes,sources:dict[str,bytes],*,extensions=(),capaci
         len(set(extensions))!=len(extensions)):
         raise ValueError("unique fixed extension names as a tuple required")
     _,capacity=BUNDLE.capacity_contract(capacity_profile)
-    build_pins={**PINS,Path(__file__):sha(Path(__file__).read_bytes()),
+    if sha(Path(__file__).read_bytes())!=SELF_SHA256:
+        raise ValueError("composition script changed since import")
+    build_pins={**PINS,Path(__file__):SELF_SHA256,
                 BUNDLE.CAPACITY_SOURCE:capacity['source_raw_sha256']}
     for path,digest in PINS.items():
         if sha(path.read_bytes())!=digest:raise ValueError("consumed generator source changed")
