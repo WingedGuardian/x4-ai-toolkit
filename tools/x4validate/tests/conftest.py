@@ -497,3 +497,29 @@ def drop_tmp_if_passed(failed_before, failed_after, base, tmp):
 #: conftest loads through x4pytest.configure (4.1.1 review B1); re-exported here for the tests that name it.
 KEPT_FAILURE = x4pytest.KEPT_FAILURE
 mark_kept_failure = x4pytest.mark_kept_failure
+
+
+# --- LuaJIT error unwinding vs faulthandler (review r4-3, r5-M5) -----------------------
+# LuaJIT on Windows raises Lua errors as an SEH exception (code 0xE24C4A02) that lupa
+# catches. pytest's faulthandler still prints "Windows fatal exception" plus a full stack
+# for every one of them: MEASURED 2026-11-13, four Lua test files wrote 1,217 such dumps
+# (5.66 MB) for zero real crashes. Scope: only modules that run game Lua (test_live*.py
+# and test_modlua_rearm.py) run with faulthandler off; it is re-enabled after each
+# module, so every other test keeps crash dumps.
+import faulthandler as _faulthandler
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _quiet_luajit_seh_dumps(request):
+    name = Path(str(request.node.path)).name
+    if not (name.startswith("test_live") or name == "test_modlua_rearm.py"):
+        yield
+        return
+    was = _faulthandler.is_enabled()
+    if was:
+        _faulthandler.disable()
+    try:
+        yield
+    finally:
+        if was:
+            _faulthandler.enable(file=sys.__stderr__, all_threads=True)
