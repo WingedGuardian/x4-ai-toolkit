@@ -125,7 +125,7 @@
     "reason": "READ: isolated child pytest bootstraps with a synthetic foreign temp root; no real prior-run cleanup or OS bin"
   },
   "test_xref_nested_patches.py": {
-    "sha256": "521351fec10c98eb52e8bb4f40fe0aec87e2c18fd2412ab634f671e87f5394e7",
+    "sha256": "cf59a5fb8431348a847e2c79344a9bdc03fa99897d5f4129a4025d52f1415704",
     "mode": "parallel",
     "reviewed": true,
     "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions; Path.iterdir and registry globals monkeypatched in-process only"
@@ -137,7 +137,7 @@
     "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions; sys.setprofile trace and source copies are process-local / tmp_path"
   },
   "test_xref_diff_wrappers.py": {
-    "sha256": "95fd794017e3b3481f56a130aaa7ac412613d24375a0445ab3d5571de0684758",
+    "sha256": "0117b520b9d51a90d5af01815caa4becea94954153230aa259804486e2c8e661",
     "mode": "parallel",
     "reviewed": true,
     "reason": "READ: in-memory checks, read-only source/reference, or tmp_path outputs; no shared writes or timing assertions"
