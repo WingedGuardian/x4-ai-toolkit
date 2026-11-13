@@ -59,6 +59,10 @@ class XrefRow:
 #: people selections and a string replacement), so they are skipped only in the op
 #: position (direct children of a `<diff>` root), never through `_SKIP_TAGS`.
 _DIFF_OPS = frozenset({"add", "replace", "remove"})
+#: A literal element name test (an XML NCName: no `*`, no `()`, no `::` axis, not `.`).
+_ELEMENT = re.compile(r"[A-Za-z_][\w.-]*")
+#: A literal attribute step, `@name`.
+_ATTRIBUTE = re.compile(r"@[A-Za-z_][\w.-]*")
 #: The ONE predicate shape that names a cue: `[@name='literal']`, either quote style.
 _NAME_PRED = re.compile(r"""\s*@name\s*=\s*(?:'([^']*)'|"([^"]*)")\s*""")
 
@@ -158,34 +162,45 @@ def _op_context(op: etree._Element) -> str:
     """The cue that ENCLOSES what a diff op inserts, read from its `sel`, or "".
 
     A WRONG name is worse than none (`cue X` would list the row under a cue it is not
-    in), so a name is returned only when the selector states it unambiguously:
+    in), so a name is returned only when the selector states it unambiguously. The
+    rule is a WHITELIST -- every shape it does not list gives "":
 
     * The content's container is the selected node -- or, for a `replace` or a
       `pos="before"/"after"` insert, the selected node's PARENT, so the final step is
-      dropped (whatever its predicates: it is the node being replaced or flanked) --
-      unless that node is reached through `//`, which leaves its parent unknown: "".
-    * Of the container path, the LAST `cue` step must be exactly `cue[@name='literal']`
-      (either quote style); an `or`, a position, `not(@name)`, a function or a second
-      predicate gives "".
-    * No step after it may be `..`, `//`-descendant, or another `cue`/axis step
-      (`cue[2]`, `cue[not(@name)]`): the content could then sit in a different cue.
+      dropped. That dropped step must itself be a child step (no `//`, no axis, not
+      `.`/`..`) naming a literal element, `*` or an attribute; its predicates do not
+      matter.
+    * Of the container path, the LAST step whose name test is `cue` must be exactly
+      `cue[@name='literal']` (either quote style, one predicate).
+    * EVERY step after it must be a plain child step whose name test is a literal
+      element name other than `cue` (any case), optionally an attribute (`@name`) as
+      the very last step. Predicates on those steps are allowed. Anything else -- `*`,
+      `node()`, an axis (`self::`, `child::`, ...), `.`, `..`, a `//` step -- could
+      lead into another cue, and gives "".
     A selector with no cue step (`/mdscript/cues`, `//attention/actions`,
-    `//library[...]`) gives "", as before.
+    `//library[...]`), a union or a parenthesised expression gives "".
     """
     steps = _sel_steps(op.get("sel", ""))
     if not steps:
         return ""
     if op.tag == "replace" or op.get("pos") in ("before", "after"):
-        # The content lands in the PARENT of the final node. Reached through `//`,
-        # that parent may sit in any nested (possibly unnamed) cue: not known.
-        if steps[-1].descendant:
+        # The content lands in the PARENT of the final node, which is the previous
+        # step's node only for a plain child step.
+        last = steps[-1]
+        if last.descendant or not (last.test == "*" or _ELEMENT.fullmatch(last.test)
+                                   or _ATTRIBUTE.fullmatch(last.test)):
             return ""
         steps = steps[:-1]
     cue_at = max((i for i, s in enumerate(steps) if s.test == "cue"), default=None)
     if cue_at is None:
         return ""
-    for s in steps[cue_at + 1:]:
-        if s.descendant or s.test == ".." or "::" in s.test or s.test == ".":
+    after = steps[cue_at + 1:]
+    for i, s in enumerate(after):
+        plain = (not s.descendant and _ELEMENT.fullmatch(s.test) is not None
+                 and s.test.lower() != "cue")
+        attr_last = (i == len(after) - 1 and not s.descendant
+                     and _ATTRIBUTE.fullmatch(s.test) is not None)
+        if not (plain or attr_last):
             return ""
     return _cue_name(steps[cue_at]) or ""
 

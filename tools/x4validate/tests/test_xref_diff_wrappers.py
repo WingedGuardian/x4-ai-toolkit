@@ -212,6 +212,12 @@ def test_op_context_names_a_cue_only_when_unambiguous(tag, sel, pos, want):
     ("add", "//cue[@name='a']/cues/cue[@name='b']/", None, "b"),
     ("add", "//cue[@name='a']/.", None, ""),
     ("add", "//cue[@name='a']/cues/cue[@name='b']/conditions[.//x]/../..", None, ""),
+    # an attribute step only as the LAST step; the dropped (replaced/flanked) step
+    # must itself be a plain child step
+    ("add", "//cue[@name='a']/@checkinterval/actions", None, ""),
+    ("replace", "//cue[@name='a']/cues/cue[@name='b']/..", None, ""),
+    ("replace", "//cue[@name='a']/cues/self::cue", None, ""),
+    ("add", "//cue[@name='a']/cues/node()", "before", ""),
 ])
 def test_op_context_whitelist_after_the_named_cue(tag, sel, pos, want):
     assert _ctx(tag, sel, pos) == want
