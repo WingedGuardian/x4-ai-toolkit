@@ -11,6 +11,7 @@ negatives the current code would not produce. Every name here is re-exported by
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,8 +54,36 @@ class XrefRow:
     target: str = ""  # signal -> cue=; event -> object=/by= if present
 
 
+#: A `<diff>` document's operation elements. Patch STRUCTURE, not behaviour -- but
+#: `add`, `replace` and `remove` are ALSO real md/aiscripts elements (md.xsd/aiscripts.xsd:
+#: people selections and a string replacement), so they are skipped only in the op
+#: position (direct children of a `<diff>` root), never through `_SKIP_TAGS`.
+_DIFF_OPS = frozenset({"add", "replace", "remove"})
+_SEL_CUE = re.compile(r"""cue\s*\[\s*@name\s*=\s*(['"])(.*?)\1\s*\]""")
+_SEL_ENDS_AT_CUE = re.compile(r"""cue\s*\[\s*@name\s*=\s*(['"]).*?\1\s*\]\s*$""")
+
+
+def _op_context(op: etree._Element) -> str:
+    """The cue that ENCLOSES what a diff op inserts, read from its `sel`, or "".
+
+    The last `cue[@name=...]` step of the selector -- unless the selector ENDS at that
+    cue and the op puts its content in that cue's place (a `replace`) or beside it
+    (`pos="before"/"after"`), where the enclosing cue is the one before it. A selector
+    naming no cue (`/mdscript/cues`, `//attention/actions`) gives "", as before.
+    """
+    sel = op.get("sel", "")
+    names = [m.group(2) for m in _SEL_CUE.finditer(sel)]
+    if names and _SEL_ENDS_AT_CUE.search(sel) and (
+            op.tag == "replace" or op.get("pos") in ("before", "after")):
+        names = names[:-1]
+    return names[-1] if names else ""
+
+
 def _walk(root: etree._Element, source: str, vpath: str, out: list[XrefRow]) -> None:
-    """DFS the tree, emitting rows, carrying the nearest enclosing cue/script name."""
+    """DFS the tree, emitting rows, carrying the nearest enclosing cue/script name.
+
+    A `<diff>` root and its op children (`_DIFF_OPS`) emit nothing; each op's CHILDREN
+    are walked with the cue its selector names (`_op_context`)."""
     script_name = root.get("name", "") if root.tag in ("mdscript", "aiscript") else ""
 
     def rec(el: etree._Element, cue: str) -> None:
@@ -76,6 +105,15 @@ def _walk(root: etree._Element, source: str, vpath: str, out: list[XrefRow]) -> 
         for child in el:
             rec(child, here_cue)
 
+    if root.tag == "diff":
+        for op in root:
+            if isinstance(op.tag, str) and op.tag in _DIFF_OPS:
+                ctx = _op_context(op)
+                for child in op:
+                    rec(child, ctx)
+            else:
+                rec(op, "")  # not an op: indexed as before, never silently dropped
+        return
     rec(root, script_name)
 
 

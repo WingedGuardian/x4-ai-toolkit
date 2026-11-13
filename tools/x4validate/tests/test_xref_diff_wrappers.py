@@ -97,3 +97,9 @@ def test_twin_an_aiscript_diff_is_handled_the_same():
     rows = _rows("""<diff><add sel="//attention/actions"><move_to object="$t"/></add></diff>""",
                  vpath="aiscripts/p.xml")
     assert [(r.kind, r.name) for r in rows] == [("action", "move_to")]
+
+
+def test_twin_a_non_op_child_of_a_diff_is_still_indexed():
+    """Not an op, so not patch structure we understand: indexed as before, never dropped."""
+    rows = _rows("""<diff><find_ship name="$s"/></diff>""")
+    assert [(r.kind, r.name) for r in rows] == [("action", "find_ship")]
