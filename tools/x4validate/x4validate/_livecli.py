@@ -2831,7 +2831,16 @@ def main(argv: list[str] | None = None) -> int:
                                   batch_bytes=args.batch_bytes)
         if args.cmd == "ramp":
             return cmd_ramp(args.pipe, args.timeout)
-        return cmd_mappings(args.file, groundtruth=args.from_groundtruth)
+        if args.cmd == "automation":
+            # Reached only when a global option (e.g. --file) came first, so the argv[0]
+            # hand-off above did not fire. Automation takes no --file.
+            print("x4live: `automation` is its own command line and takes no --file; "
+                  "run `x4live automation --help`", file=sys.stderr)
+            return 2
+        if args.cmd == "mappings":
+            return cmd_mappings(args.file, groundtruth=args.from_groundtruth)
+        print(f"x4live: no handler for command {args.cmd!r}", file=sys.stderr)
+        return 2
     except _livedump.LiveDumpFatal as exc:
         # rc 3, and its OWN message. The probe ran and died and recorded why; without
         # this clause that frame fell to the truncation branch and the user was told

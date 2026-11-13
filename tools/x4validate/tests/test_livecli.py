@@ -1663,3 +1663,15 @@ def test_the_store_connection_is_CLOSED_on_every_path(tmp_path, monkeypatch, cap
     if want_rc is not None:
         assert rc == want_rc, (rc, capsys.readouterr().err)
     assert con.closed == 1, f"{cmd}: connection closed {con.closed} time(s) on this path"
+
+
+def test_automation_after_global_file_option_refuses_cleanly(tmp_path, capsys):
+    # Review r1-2: `x4live --file X automation` skipped the argv[0] hand-off and fell
+    # through to cmd_mappings, which raised AttributeError (no from_groundtruth).
+    assert C.main(["--file", str(tmp_path / "absent.xml"), "automation"]) == 2
+    assert "x4live automation" in capsys.readouterr().err
+
+
+def test_mappings_still_reaches_cmd_mappings(tmp_path):
+    # Twin: the explicit mappings branch still runs (absent file -> its own rc 2).
+    assert C.main(["--file", str(tmp_path / "absent.xml"), "mappings"]) == 2
