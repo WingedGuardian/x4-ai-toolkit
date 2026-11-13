@@ -10,6 +10,31 @@ This does not prove native loading, rendering or gameplay. It addresses the narr
 
 The builder writes nothing. Composition/application to a helper mod, ui.xml ordering and main pipe dispatch remain separate integration steps.
 
+## Known limits in 4.2.0
+
+READ in the code; none of these is measured in game.
+
+- **One session per UI load.** Each action provider and MD channel binds to the
+  first public session it sees. A later `fresh` session in the same UI load (the MD
+  accepts `fresh` only when the world has no session) leaves them refusing until the
+  UI reloads; a save load reloads the UI.
+- **The pipe does not authenticate its client.** Any program running as the same
+  Windows user that can open the named pipe can request any action the installed
+  extensions offer. The save/load gate in the game (`live_persistencegate.lua`)
+  checks only that a grant is well formed and unused; whether a save or load is
+  allowed is decided by the toolkit's host side.
+- **State cues have no version or patch path.** Each MD script's `State` cue sets
+  `$Binding` once and its request cues refuse any other value. MD keeps that state in
+  the save, so a later helper that changes a `$Binding` value (or the State layout)
+  cannot reach a save made with the earlier one until it adds a cue `version` with a
+  `<patch>`. Treat this as a constraint on the next helper change.
+- **A stalled ship placement locks that provider.** `$Busy` clears only when a status
+  read observes the requested pose, or on a game start or load; the receipt says
+  `failed_dispatch_locks_provider_until_load`.
+- **FFI type declarations** follow vanilla's: the helper declares 24 struct names
+  vanilla also declares, and each matches vanilla's field list
+  (`tests/test_livehelper_ffi_vanilla.py`, which needs the unpacked reference).
+
 ## Mandatory native assembly successor
 
 The fixed module inventory now includes nativeproviders, nativeassembly, playerstate
