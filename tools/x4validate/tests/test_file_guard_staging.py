@@ -135,6 +135,16 @@ def test_folder_overlapping_a_configured_root_is_rejected(guard, monkeypatch):
     assert v["decision"] == "deny" and "X4_STAGING_DIRS" in v["reason"], v
 
 
+def test_folder_inside_a_configured_root_is_rejected(guard, monkeypatch):
+    """The other overlap direction: the entry IS (or is inside) a configured root that lives in
+    the game folder -- here the backups store, which no name rule covers."""
+    g, r = guard
+    monkeypatch.setenv("X4_BACKUPS", str(r["X4_GAME"] / "Agent backups"))
+    monkeypatch.setenv("X4_STAGING_DIRS", "Agent backups")
+    v = _both(g, r["X4_GAME"] / "Agent backups" / "note.txt")
+    assert v["decision"] == "deny" and "X4_STAGING_DIRS" in v["reason"], v
+
+
 def test_nested_reference_and_profile_still_protected(guard, monkeypatch):
     """Even were they accepted, the earlier rules decide first."""
     g, r = guard
