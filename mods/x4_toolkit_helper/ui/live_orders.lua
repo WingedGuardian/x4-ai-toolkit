@@ -313,11 +313,19 @@ return function(d)
             r.index=index
             r.order_id=id(C.GetOrderID(r.ship,index))
             local created=queue(r.ship)
+            -- The id read back from OUR CreateOrder3 index, present exactly once with our
+            -- definition, is our creation: bind it for cancellation BEFORE the stricter
+            -- checks below, so a failure there cannot leave it in the queue uncancellable.
+            local own=0
+            for _,v in ipairs(created.rows) do
+                if v.id==r.order_id and v.orderdef==r.order then own=own+1 end
+            end
+            if own==1 then r.created_bound=true end
             assert(created.count==1 and created.rows[1].queueidx==index and
                 created.rows[1].id==r.order_id and created.rows[1].orderdef==r.order and
                 created.rows[1].enabled==false and equal(created.default,r.before.default),
                 "created queue is not the sole disabled requested order")
-            r.created_bound=true -- exact own-creation proof for later cancellation
+            -- (created_bound set above; this stricter proof gates further dispatch only)
             local dest=g.ConvertStringToLuaID(tostring(r.target))
             if r.point then dest={dest,{r.point[1],r.point[2],r.point[3]}} end
             g.SetOrderParam(r.ship,index,1,nil,dest)

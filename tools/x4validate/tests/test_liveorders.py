@@ -408,10 +408,21 @@ def check_cancel_requires_own_bound_creation_and_exact_id():
     assert r.globals().api.prepare_cancel("foreign","18446744073709551615")["status"]=="REFUSED"
     r,p,out=submitted()
     assert r.globals().api.prepare_cancel(p["ticket"],"88")["status"]=="REFUSED"
+    # A creation that never returned an index binds nothing.
+    r=build("createzero=true")
+    p=prepare(r);result=r.globals().api.execute(p["ticket"])
+    assert result["status"]=="NOT_CREATED"
+    assert r.globals().api.prepare_cancel(p["ticket"],"18446744073709551615")["status"]=="REFUSED"
+
+
+def check_failed_execute_after_creation_leaves_its_own_order_cancellable():
+    # Review r2-7: a check failing AFTER CreateOrder3 left the created order in the queue
+    # with no way to cancel it. The id read back from our own creation index, present
+    # exactly once with our definition, is bound for cancellation before the strict checks.
     r=build("createdenabled=true")
     p=prepare(r);result=r.globals().api.execute(p["ticket"])
-    assert result["status"]=="UNCERTAIN"
-    assert r.globals().api.prepare_cancel(p["ticket"],result["order_id"])["status"]=="REFUSED"
+    assert result["status"]=="UNCERTAIN" and result["order_id"]
+    assert r.globals().api.prepare_cancel(p["ticket"],result["order_id"])["status"]=="PREPARED"
 
 
 @pytest.mark.parametrize("code",[
