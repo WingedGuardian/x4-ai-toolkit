@@ -61,6 +61,10 @@ SCRIPT_SCOPE = "md+aiscripts; mods and DLC also behind extensions/<owner>/ (v2)"
 #: The same scope in words, printed with every negative.
 _SCOPE_WORDS = ("md/ and aiscripts/ scripts, plus every mod's and DLC's "
                 "extensions/<owner>/-nested patches of them")
+#: ...and for an index whose recorded scope is not this tool's: the words must describe
+#: the INDEX, never the tool reading it.
+_SCOPE_UNKNOWN = ("an index with its script scope unrecorded or different from this "
+                  "x4xref's (it may lack extension-nested md/aiscripts patches)")
 
 
 @dataclass(frozen=True)
@@ -452,7 +456,8 @@ def coverage_note(rows: list[XrefRow]) -> str:
 
 
 def _hint_other_kinds(rows: list[XrefRow], name: str, asked_kind: "str | tuple[str, ...]",
-                      tsv: Path | None = None, ran: str = "", *, certified: bool = False) -> None:
+                      tsv: Path | None = None, ran: str = "", *, certified: bool = False,
+                      scope: str = "") -> None:
     """When a name isn't found in the asked-for kind, say whether it exists at all.
 
     `who-calls event_player_ejected` used to print exactly the same line as
@@ -484,7 +489,7 @@ def _hint_other_kinds(rows: list[XrefRow], name: str, asked_kind: "str | tuple[s
         print(f"  and '{name}' does not appear under ANY kind — "
               + (f"a real negative over {len(rows)} indexed rows" if certified else
                  f"an unverified absence over {len(rows)} indexed rows")
-              + f" of {_SCOPE_WORDS}"
+              + (f" of {scope}" if scope else "")
               +
               f"{coverage_note(rows)}{_exclusions(tsv)}.")
         return
@@ -645,6 +650,9 @@ def main(argv: list[str] | None = None) -> int:
         print("!! Rebuild:  uv run x4xref build", file=sys.stderr)
 
     intact = signed and exclusions_signed and _stale.fresh
+    _side = _freshness.read_sidecar(tsv)
+    scope = (_SCOPE_WORDS if _side and _side.get("script_scope") == SCRIPT_SCOPE
+             else _SCOPE_UNKNOWN)
     # v4.0.0 review R5-11: an index that misses installed DLC said "INCOMPLETE ... a lead,
     # not a finding" in its note and then certified the absence with exit 0 anyway.
     incomplete = intact and coverage_incomplete(rows)
@@ -666,7 +674,8 @@ def main(argv: list[str] | None = None) -> int:
         edges = cue_edges(rows, args.name)
         if not edges:
             print(f"no references to cue '{args.name}'")
-            _hint_other_kinds(rows, args.name, "cue", tsv, ran="cue", certified=certified)
+            _hint_other_kinds(rows, args.name, "cue", tsv, ran="cue", certified=certified,
+                              scope=scope)
             return absence()
         for group in ("defined", *sorted(k for k in edges if k != "defined")):
             if group in edges:
@@ -679,7 +688,8 @@ def main(argv: list[str] | None = None) -> int:
     hits = [h for k in kinds for h in query(rows, k, args.name)]
     if not hits:
         print(f"no {args._kind} '{args.name}' found in the index.")
-        _hint_other_kinds(rows, args.name, kinds, tsv, ran=args.cmd, certified=certified)
+        _hint_other_kinds(rows, args.name, kinds, tsv, ran=args.cmd, certified=certified,
+                          scope=scope)
         return absence()
     by_source: dict[str, list[XrefRow]] = defaultdict(list)
     for h in hits:

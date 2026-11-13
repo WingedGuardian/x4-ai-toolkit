@@ -283,3 +283,18 @@ def test_twin_an_index_with_the_scope_still_certifies(nested_index, capsys):
     assert "a real negative" in cap.out
     # the negative states WHICH scripts it covers
     assert "extensions/<owner>/" in cap.out
+
+
+def test_an_old_scope_index_does_not_claim_nested_coverage(nested_index, capsys):
+    """The negative's scope words describe the INDEX, not the tool reading it: an index
+    built by the narrower enumeration must not be described as covering nested patches."""
+    import json
+    side = _freshness._sidecar(nested_index)
+    data = json.loads(side.read_text(encoding="utf-8"))
+    del data["script_scope"]
+    side.write_text(json.dumps(data), encoding="utf-8")
+    capsys.readouterr()
+    _xref.main(["cue", "NoSuchCueAnywhere", "--tsv", str(nested_index)])
+    out = capsys.readouterr().out
+    assert "extensions/<owner>/" not in out
+    assert "script scope unrecorded or different" in out
