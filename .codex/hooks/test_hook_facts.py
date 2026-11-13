@@ -4887,7 +4887,6 @@ class TestLinkResolutionOfLiteralSpellings(unittest.TestCase):
             self.assertTrue(self.f("ssh otherhost ls")["ssh_host_unplaced"])
 
 
-@unittest.skipUnless(os.name == "nt", "Git Bash's on-disk spelling of a name exists only on Windows")
 class TestLinksDisagreeIsSilentWithoutALink(unittest.TestCase):
     """`links_disagree` is set only when two spellings of one operand land through links in different places. The
     tests that make it fire need junctions (Windows), so on POSIX nothing named it as a must-NOT-fire rule and the
@@ -4899,6 +4898,7 @@ class TestLinksDisagreeIsSilentWithoutALink(unittest.TestCase):
             self.assertFalse(FC(cmd, GAME)["links_disagree"], cmd)
 
 
+@unittest.skipUnless(os.name == "nt", "Git Bash's on-disk spelling of a name exists only on Windows")
 class TestLinkNamesGitBashSpellsDifferently(unittest.TestCase):
     """4.1.2. Git Bash does not open a name the way Win32 does. MEASURED 2026-11-11 with Git Bash's own `touch`:
     each of `|*?<>:` and a control character is written as U+F000 plus its code (`p|q` lands as p, U+F07C, q),
