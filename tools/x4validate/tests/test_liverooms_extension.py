@@ -63,7 +63,7 @@ def check_factory_exact_sources_and_candidate_scope():
     files,receipt=g.prepare()
     assert set(files)=={"ui/live_rooms_extension.lua"} and not receipt["runtime_verified"]
     assert not receipt["menu_opening_supported"] and not receipt["arrival_verified"]
-    for p,h in receipt["source_sha256"].items():assert hashlib.sha256(Path(p).read_bytes()).hexdigest()==h
+    for p,h in receipt["source_sha256"].items():assert hashlib.sha256((ROOT/p).read_bytes()).hexdigest()==h
     assert hashlib.sha256(files["ui/live_rooms_extension.lua"]).hexdigest()==receipt["output_sha256"]["ui/live_rooms_extension.lua"]
 
 @pytest.mark.parametrize("target",["adapter","provider","self"])

@@ -51,7 +51,7 @@ def _produce(reference=None,capacity_profile=None):
         capacity_profile=profile,capacity_source_sha256=sha(budget_source),
         provider_limits=dict(records=profile["capture_history"],calls=profile["capture_calls"]),
         provider="x4-screen-capture-v1",actions=["capture","release","capacity_observe"],native_revision=native["revision"],
-        source_sha256={str(ROOT/PATHS[k]):sha(v) for k,v in raw.items()},generator_sha256=sha(own),
+        source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},generator_sha256=sha(own),
         output_sha256={p:sha(b) for p,b in candidates.items()},parts_sha256={p:sha(b) for p,b in parts.items()},
         md_sha256=sha(candidates["md/X4ToolkitCapture.xml"]),native=native,runtime_verified=False,
         release="BOOKKEEPING_ONLY_NOT_FILE_ATTESTATION",

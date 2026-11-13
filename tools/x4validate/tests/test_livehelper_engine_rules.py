@@ -113,3 +113,19 @@ def test_manifest_requires_mod_support_apis_like_the_ui_addon():
     manifest = E.fromstring((ROOT / "mods/x4_toolkit_helper/content.xml").read_bytes())
     deps = {node.get("id"): node.get("optional") for node in manifest.findall("dependency") if node.get("id")}
     assert "ws_2042901274" in deps and deps["ws_2042901274"] in (None, "false", "0"), deps
+
+
+def test_receipts_name_sources_by_repo_relative_path():
+    # Review r3-5: extension receipts keyed source hashes by ABSOLUTE local path, which
+    # puts a user's folder layout into any receipt that is shared.
+    mod = ROOT / "mods/x4_toolkit_helper"
+    sources = {key: (ROOT / path).read_bytes() for key, path in P.BUNDLE.SOURCES.items()}
+    _, receipt = P.build(mod.joinpath("content.xml").read_bytes(), mod.joinpath("ui.xml").read_bytes(),
+                         sources, extensions=tuple(P.EXTENSIONS))
+    keys = [k for r in receipt["extensions"].values() for k in r.get("source_sha256", {}) if isinstance(k, str)]
+    assert keys, "no extension receipt carried source hashes"
+    bad = [k for k in keys if Path(k).is_absolute() or str(ROOT) in k]
+    assert bad == []
+    for k in keys:
+        if "/" in k:  # a path (persistence keys its pins by module name instead)
+            assert (ROOT / k).is_file(), k

@@ -79,7 +79,7 @@ def check_factory_deterministic_and_pins():
     assert not receipt["achieved_pose_verified"] and not receipt["target_distance_verified"]
     assert receipt["angle_serialization_units"] == "UNKNOWN"
     for path, sha in receipt["source_sha256"].items():
-        assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == sha
+        assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == sha
 
 
 def check_md_native_owned_handle_timer_and_foreign_guard():

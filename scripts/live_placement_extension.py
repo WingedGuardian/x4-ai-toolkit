@@ -61,7 +61,7 @@ bundle.register_extension({id='x4-diagnostic-placement',revision='REVISION',
     assert Path(__file__).read_bytes()==own,"generator changed"
     assert all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items()),"source drift"
     return files,dict(status="OFFLINE_PROPOSAL_NOT_APPLIED",runtime_verified=False,revision=revision,
-        md_revision=md["revision"],source_sha256={str(ROOT/PATHS[k]):sha(v) for k,v in raw.items()},
+        md_revision=md["revision"],source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},
         generator_sha256=sha(own),output_sha256={k:sha(v) for k,v in files.items()},
         provider="x4-diagnostic-placement-v1",actions=["diagnostic_place_player"],
         ship_provider='x4-diagnostic-shipplacement-v1',ship_actions=['diagnostic_place_ship','capacity_observe'],

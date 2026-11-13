@@ -86,7 +86,7 @@ def check_factory_scope_pins_and_reproducibility():
     files,receipt=g.prepare();again,other=g.prepare()
     assert files==again and receipt==other
     assert set(files)=={"md/X4ToolkitPlacement.xml","md/X4ToolkitShipPlacement.xml","ui/live_placement_extension.lua"}
-    for p,h in receipt["source_sha256"].items():assert hashlib.sha256(Path(p).read_bytes()).hexdigest()==h
+    for p,h in receipt["source_sha256"].items():assert hashlib.sha256((ROOT/p).read_bytes()).hexdigest()==h
     assert receipt["runtime_verified"] is False
     assert receipt["native_target_transport"]=="UINT64_CDATA_IN_TABLE_RUNTIME_UNQUALIFIED"
 

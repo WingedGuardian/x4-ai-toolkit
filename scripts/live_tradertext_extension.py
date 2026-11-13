@@ -113,5 +113,5 @@ bundle.register_extension({id='x4-trader-text-extension',revision='REVISION',
         provider="x4-trader-text-v1",runtime_verified=False,menu_opening_supported=True,
         menu_opening_scope="FIXED_NATIVE_ROUTES_NOT_RUNTIME_QUALIFIED",
         purchase_verified=False,rendered_pixels_verified=False,
-        source_sha256={str(ROOT/PATHS[k]):sha(v) for k,v in raw.items()},generator_sha256=sha(own),
+        source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},generator_sha256=sha(own),
         output_sha256={p:sha(v) for p,v in out.items()},clock="getElapsedTime_UI_SECONDS")

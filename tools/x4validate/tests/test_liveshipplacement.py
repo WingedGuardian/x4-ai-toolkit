@@ -118,7 +118,7 @@ def check_generated_profiles_and_legacy_source_preservation():
         assert files['md/X4ToolkitPlacement.xml']==old['md/X4ToolkitPlacement.xml']
         assert r['ship_md']['limits']['records']==limit and r['ship_md']['limits']['calls']==8*limit
         assert r['runtime_verified'] is False
-        assert all(hashlib.sha256(Path(p).read_bytes()).hexdigest()==h for p,h in r['source_sha256'].items())
+        assert all(hashlib.sha256((ROOT/p).read_bytes()).hexdigest()==h for p,h in r['source_sha256'].items())
 
 def check_native_shape_consume_then_warp_and_status_only_release():
     files,_=g.prepare();root=E.fromstring(files['md/X4ToolkitShipPlacement.xml'])

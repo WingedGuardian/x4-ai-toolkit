@@ -12,7 +12,7 @@ def check_pure_factory_exact_outputs_and_all_source_pins():
     files,receipt=g.prepare()
     assert set(files)=={"md/X4ToolkitTopology.xml","ui/live_topology_extension.lua"}
     assert receipt["runtime_verified"] is False and receipt["atomic"] is False
-    for p,h in receipt["source_sha256"].items():assert hashlib.sha256(Path(p).read_bytes()).hexdigest()==h
+    for p,h in receipt["source_sha256"].items():assert hashlib.sha256((ROOT/p).read_bytes()).hexdigest()==h
     for p,h in receipt["output_sha256"].items():assert hashlib.sha256(files[p]).hexdigest()==h
     assert hashlib.sha256(Path(g.__file__).read_bytes()).hexdigest()==receipt["generator_sha256"]
 

@@ -57,5 +57,5 @@ bundle.register_extension({id='x4-rooms-extension',revision='REVISION',
     return out,dict(status="OFFLINE_EXTENSION_PROPOSAL_NOT_APPLIED",revision=revision,
         provider="x4-rooms-v1",runtime_verified=False,menu_opening_supported=False,
         transport="NATIVE_MECHANISM_NOT_RENDERED_BUTTON",arrival_verified=False,
-        source_sha256={str(ROOT/PATHS[k]):sha(v) for k,v in raw.items()},generator_sha256=sha(own),
+        source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},generator_sha256=sha(own),
         output_sha256={p:sha(v) for p,v in out.items()},clock="getElapsedTime_UI_SECONDS")

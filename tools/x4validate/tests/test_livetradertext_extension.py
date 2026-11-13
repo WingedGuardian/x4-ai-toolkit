@@ -111,7 +111,7 @@ def retrieve(r,header):
 def check_factory_exact_scope_and_pins():
     files,receipt=g.prepare();assert set(files)=={'ui/live_tradertext_extension.lua'}
     assert not receipt['runtime_verified'] and receipt['menu_opening_supported']
-    for p,h in receipt['source_sha256'].items():assert hashlib.sha256(Path(p).read_bytes()).hexdigest()==h
+    for p,h in receipt['source_sha256'].items():assert hashlib.sha256((ROOT/p).read_bytes()).hexdigest()==h
     assert hashlib.sha256(files['ui/live_tradertext_extension.lua']).hexdigest()==receipt['output_sha256']['ui/live_tradertext_extension.lua']
 
 

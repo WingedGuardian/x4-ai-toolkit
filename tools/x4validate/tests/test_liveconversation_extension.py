@@ -19,7 +19,7 @@ def test_pure_factory_binds_exact_sources_and_unchanged_compiled_md():
     assert receipt['comm_widget_route']=='SOURCE_SUPPORTED_OFFLINE_ONLY' and receipt['rendered_runtime']=='UNQUALIFIED'
     assert receipt['actor_context_navigation']=='BUILT_LEFT_OR_RIGHT_INFO_ROWS_ONLY_OFFLINE'
     assert receipt['map_navigation']=='FIXED_OPEN_AND_BUILT_PANEL_OBJECTINFO_WRAPPERS_OFFLINE'
-    for path,digest in receipt['source_sha256'].items():assert hashlib.sha256(Path(path).read_bytes()).hexdigest()==digest
+    for path,digest in receipt['source_sha256'].items():assert hashlib.sha256((ROOT/path).read_bytes()).hexdigest()==digest
 
 
 def test_source_drift_during_pure_generation_refused():

@@ -11,7 +11,7 @@ def test_exact_two_outputs_and_current_dependencies():
     outputs,receipt=G.prepare()
     assert set(outputs)=={'md/X4ToolkitCapture.xml','ui/live_capture_extension.lua'}
     assert receipt['output_sha256']=={p:G.sha(b) for p,b in outputs.items()}
-    assert receipt['source_sha256']=={str(ROOT/p):G.sha((ROOT/p).read_bytes()) for p in G.PATHS.values()}
+    assert receipt['source_sha256']=={p:G.sha((ROOT/p).read_bytes()) for p in G.PATHS.values()}
     assert receipt['runtime_verified'] is False
     assert receipt['release']=='BOOKKEEPING_ONLY_NOT_FILE_ATTESTATION'
     assert '@REVISION@' not in outputs['ui/live_capture_extension.lua'].decode()

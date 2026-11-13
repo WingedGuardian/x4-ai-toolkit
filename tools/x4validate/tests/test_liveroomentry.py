@@ -89,7 +89,7 @@ def check_factory_is_pure_reproducible_source_bound():
     assert files==again and receipt==other
     assert set(files)=={"md/X4ToolkitRoomEntry.xml","ui/live_roomentry_extension.lua"}
     assert receipt["runtime_verified"] is False
-    for p,h in receipt["source_sha256"].items():assert hashlib.sha256(Path(p).read_bytes()).hexdigest()==h
+    for p,h in receipt["source_sha256"].items():assert hashlib.sha256((ROOT/p).read_bytes()).hexdigest()==h
 
 def check_native_actions_and_preexisting_listeners():
     files,_=g.prepare();root=E.fromstring(files["md/X4ToolkitRoomEntry.xml"])

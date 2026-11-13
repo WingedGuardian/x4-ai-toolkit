@@ -96,7 +96,7 @@ bundle.register_extension({id='x4-conversation-observer',revision='REVISION',
     assert Path(__file__).read_bytes()==own,"generator changed during extension generation"
     return candidates,dict(status="OFFLINE_EXTENSION_PROPOSAL_NOT_APPLIED",runtime_verified=False,
         provider="x4-conversation-observer-v1",revision=revision,md_revision=md["revision"],
-        source_sha256={str(ROOT/PATHS[k]):sha(v) for k,v in raw.items()},generator_sha256=sha(own),
+        source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},generator_sha256=sha(own),
         output_sha256={p:sha(v) for p,v in candidates.items()},scope="SNAPSHOT_AND_BUILT_COMM_WIDGET_ONLY",
         providers={"x4-conversation-observer-v1":revision,"x4-comm-menu-v1":revision},
         integration="load after bundle, before first world bootstrap; no main or public session edits",

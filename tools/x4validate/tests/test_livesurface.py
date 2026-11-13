@@ -242,7 +242,7 @@ def test_generated_md_has_real_query_and_no_gameplay_effects():
     for cue in tree.xpath("//cue[conditions/event_ui_triggered]"):
         assert cue.find("actions")[0].tag=="debug_text"
     assert receipt["runtime_verified"] is False
-    assert all(hashlib.sha256(Path(path).read_bytes()).hexdigest()==digest for path,digest in receipt["source_sha256"].items())
+    assert all(hashlib.sha256((ROOT/path).read_bytes()).hexdigest()==digest for path,digest in receipt["source_sha256"].items())
 
 
 @pytest.mark.parametrize('profile',['interactive','campaign_v1'])

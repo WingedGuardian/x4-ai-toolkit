@@ -38,7 +38,7 @@ bundle.register_extension({id='x4-native-surface',revision='REVISION',
  files["ui/live_surface_extension.lua"]=lua.encode()
  assert Path(__file__).read_bytes()==own and all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items()),"source drift"
  return files,dict(status="OFFLINE_PROPOSAL_NOT_APPLIED",revision=revision,md_revision=md["revision"],
-  source_sha256={str(ROOT/PATHS[k]):sha(v) for k,v in raw.items()},generator_sha256=sha(own),
+  source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},generator_sha256=sha(own),
   output_sha256={k:sha(v) for k,v in files.items()},capacity_profile=profile,
   provider="x4-native-surface-v1",actions=["surface_sample","capacity_observe"],
   runtime_verified=False,scope="READ_ONLY_OBJECT_LOCAL_SURFACE_SAMPLE_NOT_CONTAINMENT")

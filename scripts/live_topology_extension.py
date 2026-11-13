@@ -46,7 +46,7 @@ bundle.register_extension({id='x4-topology-observer',revision='REVISION',
     assert all((ROOT/PATHS[k]).read_bytes()==v for k,v in raw.items()),"extension source drift"
     return candidates,dict(status="OFFLINE_EXTENSION_PROPOSAL_NOT_APPLIED",runtime_verified=False,
         revision=revision,md_revision=md["revision"],provider="x4-topology-observer-v1",
-        source_sha256={str(ROOT/PATHS[k]):sha(v) for k,v in raw.items()},generator_sha256=sha(own),
+        source_sha256={PATHS[k]:sha(v) for k,v in raw.items()},generator_sha256=sha(own),
         output_sha256={p:sha(v) for p,v in candidates.items()},
         scope="NORMAL_CLUSTER_NATIVE_FIND_DEFAULTS_WITH_EXPLICIT_SECTOR_MACRO_SCOPE",
         integration="optional loader after public bundle, before world bootstrap",
