@@ -1,7 +1,8 @@
 # Public load-session foundation
 
-This module is offline infrastructure. It is not wired into the helper, does not
-implement a public MD provider, and does not qualify save/load behavior in X4.
+This is the host side of the load session (`x4validate/_livesession.py`). `x4live automation`
+uses it; its game side is ui/live_session.lua in the automation bundle with the MD provider from
+scripts/live_session_md.py. None of it qualifies save/load behavior in X4.
 Tests exercise synthetic transport responses and temporary host journals only.
 
 Historical first unit, MEASURED 2026-11-09: `pytest -q -ra -p no:cacheprovider tests/test_livesession.py`

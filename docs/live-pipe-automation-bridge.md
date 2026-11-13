@@ -1,6 +1,6 @@
 # Main helper automation bridge
 
-Offline candidate in the isolated toolkit branch. It is not deployed. ui.xml does not yet load the generated bundle/MD candidate. Native dependencies are now supplied to the bundle; mandatory provider composition is tracked separately.
+Offline-tested, not qualified in game. The helper in `mods/x4_toolkit_helper` does not load the bundle (its ui.xml lists only live_query.lua and engine_probe.lua); only a helper composed with `scripts/prepare_live_helper.py` does. Native dependencies are now supplied to the bundle; mandatory provider composition is tracked separately.
 
 The main pipe has three dedicated structured routes: ui_state, session_connect and bound. They do not enter the legacy pause advisory formatter. The host CLI blocks these raw transport names from query. Bound read capture invokes only the fixed legacy read whitelist, requires exactly one synchronous reply and restores its interception slot on failure; malformed reads cannot leak an extra frame into the next request.
 

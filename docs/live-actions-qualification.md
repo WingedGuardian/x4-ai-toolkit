@@ -1,7 +1,7 @@
 # Explicit live action lifecycle — implementation status
 
 This is an offline-tested infrastructure library, not a deployed game-control capability.
-The current live CLI/helper has NOT been wired to these modules. No native transaction,
+`x4live automation` uses these modules on the host side. The helper in `mods/x4_toolkit_helper` does not load the bundle (its ui.xml lists only live_query.lua and engine_probe.lua); only a helper composed with `scripts/prepare_live_helper.py` does. No native transaction,
 fixture action, camera movement, save or game launch was performed by this work.
 
 ## Interfaces

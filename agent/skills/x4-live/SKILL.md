@@ -48,7 +48,7 @@ section, and by the time it matters the addon is already loaded into whatever sa
 
 Be accurate about the deployed version and command family. Legacy `query` reads,
 while its separate `pause`/`unpause` commands require the user's requested scope.
-This isolated source branch also contains an offline `automation` candidate with
+The toolkit also ships an experimental, offline-tested `x4live automation` with
 prepared native actions and installed-provider actions. It can affect menus,
 orders and camera state; providers must disclose their additional effects. It is
 not deployed or runtime-qualified merely because synthetic tests pass.

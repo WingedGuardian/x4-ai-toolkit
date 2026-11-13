@@ -1,7 +1,8 @@
 # Optional compiled macro geometry observation
 
 ARCHIVED prototype: user decision2026-11-09 disregards Extra Data API. This unit
-is excluded from active helper, test, dependency and public-delivery candidates.
+is not loaded by any helper (it is not in ui.xml or the automation bundle), though
+its file still sits in mods/x4_toolkit_helper/ui and its tests still run.
 The70-control source revision is preserved at bb4fb0d1; the documentation below
 describes that historical standalone unit, not planned integration. No dependency
 installation or calibration is scheduled. Keep source history; do not consume
