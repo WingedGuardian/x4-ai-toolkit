@@ -73,7 +73,8 @@ class _Step:
 def _sel_steps(sel: str) -> list[_Step] | None:
     """Split an XPath selector into location steps, respecting quotes and brackets.
 
-    None for a selector this cannot split cleanly (unbalanced brackets or quotes): the
+    None for a selector this cannot split cleanly (unbalanced brackets or quotes, a union
+    `|` or a parenthesised expression outside a predicate): the
     caller then names no cue, rather than guessing."""
     raw: list[str] = []
     cur: list[str] = []
@@ -97,6 +98,8 @@ def _sel_steps(sel: str) -> list[_Step] | None:
         elif ch == "/" and depth == 0:
             raw.append("".join(cur))
             cur = []
+        elif ch in "|()" and depth == 0:
+            return None  # a union or a parenthesised expression: not ONE location path
         else:
             cur.append(ch)
     if quote or depth:
