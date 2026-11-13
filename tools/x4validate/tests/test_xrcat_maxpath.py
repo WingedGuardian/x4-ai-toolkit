@@ -66,9 +66,9 @@ def _fake_tool(tmp: Path) -> Path:
     return fake
 
 
-def _run(tmp: Path, args):
+def _run(tmp: Path, args, **extra_env):
     fake = _fake_tool(tmp)
-    env = {**os.environ, "XRCATTOOL": fake.as_posix()}
+    env = {**os.environ, "XRCATTOOL": fake.as_posix(), **extra_env}
     return subprocess.run([_bash(), WRAPPER.as_posix(), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
 
 
@@ -148,9 +148,11 @@ def test_short_name_beyond_latin1_is_refused(tmp_path, name):
 
 @pytest.mark.parametrize("name", ["a\u00e9.xml", "c\u00ff.xml"])
 def test_short_latin1_name_runs_the_tool(tmp_path, name):
-    # Twin of the U+00FF clause: Latin-1 names pack.
+    # Twin of the code-page clause: Latin-1 names pack where the code page is 1252.
     if not WINDOWS:
         pytest.skip("the tool-runs branch needs Wine off Windows")
+    if _acp() != 1252:
+        pytest.skip("measured for code page 1252 only")
     src = _src(tmp_path)
     (src / name).write_bytes(b"<x/>")
     result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
@@ -185,3 +187,21 @@ def test_input_root_with_an_unencodable_name_is_refused(tmp_path):
     result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")])
     assert result.returncode != 0 and not (tmp_path / "ran.txt").exists()
     assert "code page" in result.stderr
+
+
+# Delta review 2, M4: say precisely why names cannot be checked.
+@pytest.mark.parametrize("env,expected", [
+    ({"X4_XRCAT_ICONV": "no-such-iconv-binary"}, "iconv is not available"),
+    ({"X4_XRCAT_ACP": "65001"}, "65001 (UTF-8)"),
+    ({"X4_XRCAT_ACP": "99999"}, "this iconv cannot convert to code page 99999"),
+    ({"X4_XRCAT_ACP": ""}, "could not be read"),
+])
+def test_unverifiable_code_page_is_named_precisely(tmp_path, env, expected):
+    if not WINDOWS and "X4_XRCAT_ACP" not in env:
+        pytest.skip("off Windows the code page is never read")
+    if "X4_XRCAT_ACP" not in env:
+        env = {**env, "X4_XRCAT_ACP": "1252"}
+    src = _src(tmp_path)
+    (src / "aé.xml").write_bytes(b"<x/>")
+    result = _run(tmp_path, ["-in", str(src), "-out", str(tmp_path / "ext_01.cat")], **env)
+    assert result.returncode != 0 and expected in result.stderr, result.stderr

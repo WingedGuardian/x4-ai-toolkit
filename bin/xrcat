@@ -53,19 +53,39 @@ _xrcat_acp() {
   MSYS2_ARG_CONV_EXCL='*' reg query 'HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage' /v ACP 2>/dev/null \
     | sed -n 's/.*ACP[[:space:]]*REG_SZ[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1
 }
-# True when the UTF-8 string cannot be written in code page $2 (ASCII always can;
-# with no code page, any non-ASCII byte counts as unwritable).
+# TEST SEAMS (like X4_XRCAT in unpack-reference.sh): X4_XRCAT_ACP replaces the code page
+# read from the registry, X4_XRCAT_ICONV the iconv binary.
+_XRCAT_ICONV="${X4_XRCAT_ICONV:-iconv}"
+# Why non-ASCII names cannot be checked at all, or nothing when they can.
+_xrcat_encoding_problem() {
+  local acp="$1"
+  if [ -z "$acp" ]; then
+    echo "the ANSI code page could not be read (or this is Wine, where it was not measured)"; return
+  fi
+  if [ "$acp" = "65001" ]; then
+    echo "the ANSI code page is 65001 (UTF-8), where XRCatTool's handling of non-ASCII names was not measured"; return
+  fi
+  if ! command -v "$_XRCAT_ICONV" >/dev/null 2>&1; then
+    echo "iconv is not available to check names against code page $acp"; return
+  fi
+  if ! printf 'a' | "$_XRCAT_ICONV" -f UTF-8 -t "CP$acp" >/dev/null 2>&1; then
+    echo "this iconv cannot convert to code page $acp"; return
+  fi
+}
+# True when the UTF-8 string cannot be written in code page $2 (ASCII always can).
+# $3 non-empty: names cannot be checked, so any non-ASCII byte counts as unwritable.
 _xrcat_unencodable() {
   local LC_ALL=C
   case "$1" in *[$'\x80'-$'\xff']*) ;; *) return 1;; esac
-  [ -n "$2" ] || return 0
-  if printf '%s' "$1" | iconv -f UTF-8 -t "CP$2" >/dev/null 2>&1; then return 1; fi
+  [ -z "$3" ] || return 0
+  if printf '%s' "$1" | "$_XRCAT_ICONV" -f UTF-8 -t "CP$2" >/dev/null 2>&1; then return 1; fi
   return 0
 }
 _xrcat_preflight() {
-  local prev="" a root list rc rel w n u shown=0 acp
+  local prev="" a root list rc rel w n u shown=0 acp problem
   local -a long=() odd=()
-  acp=$(_xrcat_acp)
+  acp="${X4_XRCAT_ACP-$(_xrcat_acp)}"
+  problem=$(_xrcat_encoding_problem "$acp")
   for a in "$@"; do
     if [ "$prev" = "-in" ] && [ -d "$a" ]; then
       root=$(_xrcat_winroot "$a") || { echo "xrcat: REFUSED: cannot resolve the input folder: $a" >&2; return 2; }
@@ -81,17 +101,17 @@ _xrcat_preflight() {
         rel="${rel#./}"; w="$root\\${rel//\//\\}"
         u=$(_xrcat_u16len "$w")
         if [ "$u" -ge 260 ]; then long+=("$u  $w"); fi
-        if _xrcat_unencodable "$w" "$acp"; then odd+=("$w"); fi
+        if _xrcat_unencodable "$w" "$acp" "$problem"; then odd+=("$w"); fi
       done < "$list"
       rm -f "$list"
     fi
     prev="$a"
   done
   if [ "${#odd[@]}" -gt 0 ]; then
-    if [ -n "$acp" ]; then
+    if [ -z "$problem" ]; then
       echo "xrcat: REFUSED: ${#odd[@]} input path(s) cannot be written in this machine's ANSI code page ($acp)." >&2
     else
-      echo "xrcat: REFUSED: ${#odd[@]} input path(s) hold non-ASCII characters and the ANSI code page could not be read (or this is Wine, where it was not measured)." >&2
+      echo "xrcat: REFUSED: ${#odd[@]} input path(s) hold non-ASCII characters, and $problem." >&2
     fi
     echo "xrcat: XRCatTool 1.11 writes names in the ANSI code page and leaves a name it cannot write out of the catalog, still exiting 0. Rename them (or the input folder)." >&2
     for w in "${odd[@]:0:50}"; do echo "xrcat:   $w" >&2; done
