@@ -1,6 +1,32 @@
 # Pure helper composition proposal
 
-## Nine-extension room-entry successor
+## Current: ten extensions (2026-11-13)
+
+`scripts/prepare_live_helper.py` accepts any unique subset of ten fixed names:
+`orbit`, `capture`, `placement`, `roomentry`, `tradertext`, `rooms`, `topology`,
+`conversation`, `persistence`, `surface`. Canonical loader order is the bundle,
+the selected extensions in that order, then `ui/live_query.lua` and
+`ui/engine_probe.lua`; the requested order cannot change it. MEASURED offline
+(2026-11-13, one build per case): no extensions returns 4 in-memory files; all ten
+return 22 files and register 12 providers (`placement` registers the player and
+ship placement providers). `surface` adds native surface sampling on an issued,
+owned, stationary ship and discloses that a sample is neither containment nor
+collision coverage. The builder writes, installs and launches nothing.
+
+The source `ui.xml`, and so every composition, declares a UI dependency on
+`sn_mod_support_apis` before `ego_detailmonitorHelper`. MEASURED in game: without
+it another addon reordered the UI load and the pipe half's `require` failed. What X4
+does with the addon when Mod Support APIs is absent is not measured.
+
+`tests/test_livehelper_engine_rules.py` scans every generated MD file of the
+all-ten composition, under both capacity profiles, for two constructs the engine
+rejects and the static checkers pass (BLIND-SPOTS F370). It also checks the
+Mod Support APIs dependency. `tests/test_liveall_extensions.py` constructs all ten
+real loaders with only native boundaries faked.
+
+The sections below are historical checkpoints; their counts describe their time.
+
+## Historical nine-extension room-entry successor
 
 The fixed optional name `roomentry` adds diagnostic automatic entry/observed-room
 preview, separately from ordinary `rooms` transport. Canonical order is bundle,
