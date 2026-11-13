@@ -56,6 +56,7 @@ C.GetDefaultOrder=function(buf)
  fill(buf,{order=defaultdef,enabled=true},0);return true
 end
 C.GetOrderID=function(_,index)
+ if idfail_after_create and created_once then idfail_after_create=false;error("order id readback failed") end
  return wrongid and u("6") or (orders[index] and orders[index].id or zero)
 end
 C.GetOrderQueueCurrentIdx=function() return current or (#orders>0 and 1 or 0) end
@@ -66,6 +67,7 @@ C.CreateOrder3=function(s,name,def,override,temp)
  if createerror then error("unknown create outcome") end
  if createzero then return 0 end
  orders[#orders+1]={order=name,enabled=createdenabled or false,id=orderid}
+ created_once=true
  return #orders
 end
 C.EnableOrder=function(s,index)
@@ -413,6 +415,17 @@ def check_cancel_requires_own_bound_creation_and_exact_id():
     p=prepare(r);result=r.globals().api.execute(p["ticket"])
     assert result["status"]=="NOT_CREATED"
     assert r.globals().api.prepare_cancel(p["ticket"],"18446744073709551615")["status"]=="REFUSED"
+
+
+def check_readback_failure_right_after_creation_still_leaves_the_order_cancellable():
+    # Delta review minor 5: the id readback right after CreateOrder3 throwing left the
+    # order uncancellable. The binding is set as soon as the order exists; cancellation
+    # then reads the id at the creation index (definition must match).
+    r=build("idfail_after_create=true")
+    p=prepare(r);result=r.globals().api.execute(p["ticket"])
+    assert result["status"]=="UNCERTAIN" and result["order_id"] is None
+    c=r.globals().api.prepare_cancel(p["ticket"],None)
+    assert c["status"]=="PREPARED" and c["order_id"]
 
 
 def check_failed_execute_after_creation_leaves_its_own_order_cancellable():
