@@ -437,3 +437,56 @@ def test_twin_a_parse_failure_is_still_a_file(tmp_path, hermetic, monkeypatch, c
     _xref.main(["cue", "NoSuchCueAnywhere", "--tsv", str(tsv)])
     out = capsys.readouterr().out
     assert "1 file(s) that would not parse" in out and "folder" not in out
+
+
+# --- delta review 6: absence at the walk root is silent; the mod folder is named ----
+
+def test_a_missing_mod_folder_with_no_predicate_records_nothing(tmp_path):
+    """No prefix predicate walks the mod folder itself. A folder that does not exist is
+    an absence (as on the prefix path), not 'folder ./ NOT SCANNED'."""
+    for missing in (tmp_path / "missing", tmp_path / "afile.xml"):
+        if missing.suffix:
+            missing.write_text("<x/>", encoding="utf-8")   # NotADirectoryError twin
+        unreadable: list = []
+        assert list(_scan.iter_mod_xml(missing, None, unreadable)) == []
+        assert list(_scan.iter_mod_xml_bytes(missing, None, unreadable)) == []
+        assert unreadable == [], [str(u) for u in unreadable]
+
+
+def test_an_unlistable_mod_folder_with_no_predicate_is_named_as_the_mod_folder(tmp_path, monkeypatch):
+    import os
+    mod = tmp_path / "moda"
+    (mod / "md").mkdir(parents=True)
+    real = os.scandir
+
+    def deny(path="."):
+        if os.fspath(path) == os.fspath(mod):
+            raise PermissionError(13, "Access is denied", os.fspath(mod))
+        return real(path)
+
+    monkeypatch.setattr(os, "scandir", deny)
+    unreadable: list = []
+    list(_scan.iter_mod_xml(mod, None, unreadable))
+    assert [str(u).split(" (")[0] for u in unreadable] == ["mod folder 'moda'"]
+
+
+def test_check_readability_words_a_folder_as_a_folder(tmp_path, monkeypatch):
+    from x4validate import _check
+    mod = tmp_path / "moda"
+    (mod / "md" / "sub").mkdir(parents=True)
+    (mod / "content.xml").write_text('<content id="moda"/>', encoding="utf-8")
+    import os
+    real = os.scandir
+    blocked = os.fspath(mod / "md" / "sub")
+
+    def deny(path="."):
+        if os.fspath(path) == blocked:
+            raise PermissionError(13, "Access is denied", blocked)
+        return real(path)
+
+    monkeypatch.setattr(os, "scandir", deny)
+    report = _check.Report()
+    _check.check_readability(mod, _merge.Config(reference=tmp_path / "ref"), report)
+    texts = [f.message for f in report.findings] + [s.why for s in report.skipped]
+    assert any("could not be listed" in t and "not checked" in t for t in texts), texts
+    assert not any("will not parse" in t for t in texts), texts
