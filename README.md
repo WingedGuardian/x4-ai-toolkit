@@ -217,7 +217,7 @@ and the generated staging trees through `scripts/x4basex_artifacts.py`, with no 
 >
 > **Check which helper and command family you are using.** The legacy query interface
 > reads engine observations; its separate `pause` and `unpause` commands change pause
-> state only when requested. This isolated branch also contains an **offline automation
+> state only when requested. This release also contains an **offline automation
 > candidate**, described in [the automation guide](docs/live-automation-cli.md). Its
 > explicitly prepared actions can affect native menus, orders and camera state, and
 > reviewed installed providers may add other declared actions. It is not deployed or
