@@ -312,8 +312,13 @@ return function(d)
             local def,n=definition_at(r.ship,index)
             assert(def==r.order,"the order at the creation index is not the requested definition")
             assert(C.RemoveOrder(r.ship,index,false,true)==true,"native removal unavailable")
-            assert(C.RemoveOrder(r.ship,index,false,false)==true,"native removal refused")
+            -- From the removal call on, the outcome is unknown unless it returns: a call that
+            -- RAISES may have removed the order, so it only "may be" left. A false return is
+            -- a refusal, so the order certainly "is" left.
             r.removal_reported=true
+            local removed=C.RemoveOrder(r.ship,index,false,false)
+            if removed~=true then r.removal_reported=false end
+            assert(removed==true,"native removal refused")
             local ok_after,_,after=pcall(definition_at,r.ship,index)
             assert(ok_after,"the removal could not be confirmed: the queue could not be re-read")
             assert(after==n-1,"the queue did not shrink by one")
@@ -378,8 +383,9 @@ return function(d)
         if r.status=="ROLLED_BACK" then
             reason="a creation check failed, so the created order was rolled back: "..r.rollback_reason
         elseif r.status=="ROLLBACK_FAILED" then
-            -- Before the removal call nothing was removed, so the order is certainly left; after
-            -- a reported removal whose result could not be confirmed, it only may be.
+            -- Before the removal call, or when it returned false, nothing was removed, so the
+            -- order certainly is left; once the call raised, or returned true but could not
+            -- be confirmed, it only may be.
             reason="a creation check failed and the rollback failed; the order "
                 ..(r.removal_reported and "may be" or "is").." left in the queue at index "
                 ..tostring(r.index)..": "..r.rollback_reason.."; rollback: "..r.rollback_error
