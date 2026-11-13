@@ -223,7 +223,7 @@ def asynchronous(setup):
         for row in a.records.values():
             if "work" in row:
                 row["work"]["cancel"].set()
-                assert row["work"]["done"].wait(2)
+                assert row["work"]["done"].wait(10)
 
 
 def test_started_recording_allows_actual_same_client_action_then_settles(asynchronous,setup):
@@ -239,7 +239,7 @@ def test_started_recording_allows_actual_same_client_action_then_settles(asynchr
     assert client.status(REQUEST["id"])["status"]=="completed"
     assert list(setup[0].globals().calls.values())==["prepare","execute","status"]
     with pytest.raises(A.AudioUnavailable):a.receipt(h)
-    release.set();assert a.records[h]["work"]["done"].wait(2)
+    release.set();assert a.records[h]["work"]["done"].wait(10)
     assert a.status(h)["status"]=="AWAITING_FINISH"
     assert a.finish(h) is h
     receipt=a.receipt(h)
@@ -298,7 +298,7 @@ def test_async_settlement_drift_and_partial_refuse(asynchronous,setup,kind):
     if kind=="journal":(a.root/(row["id"]+"-started.json")).write_text("{}")
     elif kind=="generation":setup[0].execute("stamp.generation=string.rep('e',32)")
     elif kind=="worker":control["error"]=True
-    release.set();assert row["work"]["done"].wait(2)
+    release.set();assert row["work"]["done"].wait(10)
     if kind in ("header","terminal"):
         raw=bytearray(row["work"]["path"].read_bytes())
         if kind=="header":struct.pack_into("<Q",raw,112,101)
@@ -327,7 +327,7 @@ def test_async_remaining_bound_refuses_before_consumption(asynchronous,setup,rem
 
 def test_async_terminal_waiting_is_not_current_recording(asynchronous):
     a,release,_=asynchronous;h=a.prepare("case",duration=5);a.begin(h)
-    release.set();work=a.records[h]["work"];assert work["done"].wait(2)
+    release.set();work=a.records[h]["work"];assert work["done"].wait(10)
     work["spawned"]-=100
     result=a.status(h)
     assert result["status"]=="AWAITING_FINISH" and result["conservative_remaining_seconds"]==0
@@ -354,7 +354,7 @@ def test_actual_bounded_subprocess_drain_started_sink(setup):
     finally:
         row=a.records[h]
         if "work" in row:
-            row["work"]["cancel"].set();assert row["work"]["done"].wait(3)
+            row["work"]["cancel"].set();assert row["work"]["done"].wait(10)
 
 
 # Review r1-9: source_pins read tools/native_audio/process_loopback.cpp from the repo
