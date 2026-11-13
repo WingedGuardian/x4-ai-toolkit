@@ -440,11 +440,18 @@ def check_failure_before_enable_rolls_the_order_back(code, calls):
     assert r.globals().api.execute(p["ticket"])["status"]=="ROLLED_BACK"
 
 
-@pytest.mark.parametrize("failure", ["remove_false=true", "remove_error=true", "cancel_disabled=true"])
-def check_failed_rollback_is_reported_with_the_index(failure):
+# Delta review 5 M-2: "is" only when the order was certainly not removed (the check-only
+# call refused, or the removal returned false); "may be" when RemoveOrder itself raised,
+# because its outcome is then unknown.
+@pytest.mark.parametrize("failure,left", [
+    ("remove_false=true", "is left"),
+    ("remove_error=true", "may be left"),
+    ("cancel_disabled=true", "is left"),
+])
+def check_failed_rollback_is_reported_with_the_index(failure, left):
     r=build("createdenabled=true;"+failure)
     p=prepare(r);out=r.globals().api.execute(p["ticket"])
-    assert out["status"]=="ROLLBACK_FAILED" and "left in the queue at index 1" in out["reason"], out["reason"]
+    assert out["status"]=="ROLLBACK_FAILED" and left+" in the queue at index 1" in out["reason"], out["reason"]
     assert r.eval("#orders")==1
 
 
