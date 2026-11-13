@@ -168,6 +168,10 @@ import pytest  # noqa: E402
     # twin: a `/`-reached replaced node keeps the named cue
     ("replace", "//cue[@name='a']/actions/do_if[@value='x']", None, "a"),
     ("add", "//cue[@name='a']/actions/do_if[@value='x']", "before", "a"),
+    # a union or a parenthesised expression is not one location path: refuse
+    ("add", "//cue[@name='a']/actions | //cue[@name='b']/actions", None, ""),
+    ("add", "(//cue[@name='a']/actions)[1]", None, ""),
+    ("add", "//cue[@name='a|b']/actions", None, "a|b"),          # a pipe inside quotes
     ("add", "//cue[@name='a/b']/actions", None, "a/b"),          # a slash inside quotes
     ("add", "//cue[@name='x]y']/actions", None, "x]y"),          # a bracket inside quotes
 ])
