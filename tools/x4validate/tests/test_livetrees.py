@@ -429,3 +429,19 @@ def test_startmenu_callers_raise_their_own_refusal_type(tmp_path, monkeypatch):
         ConversationAuthority(journal, lambda *a: None)
     with pytest.raises(SessionUnavailable, match="refused until it is reachable"):
         StartClient(None, journal, None, "1", 1, None, desktop=None, focus=None)
+
+
+@pytest.mark.parametrize("module", ["_livefocus", "_liveclipport", "_livedialogport",
+                                    "_liveevidence", "_liveusagesamples"])
+def test_a_provenance_list_that_covers_a_journal_module_pins_livetrees(module):
+    """Delta review 5 M-4: these SOURCES lists hash the modules whose behaviour their
+    evidence depends on. The journal rule now lives in _livetrees.py, so a list naming any
+    module that imports it must name _livetrees.py too, or a change to the rule leaves the
+    recorded provenance unchanged."""
+    import importlib
+    m = importlib.import_module("x4validate." + module)
+    pkg = Path(m.__file__).parent
+    users = [s for s in m.SOURCES if "_livetrees" in (pkg / s).read_text(encoding="utf-8")]
+    assert users, f"{module}: the population is empty, so this check proves nothing"
+    assert "_livetrees.py" in m.SOURCES, f"{module} lists {users} but not _livetrees.py"
+    assert "_livetrees.py" in m.pins() if hasattr(m, "pins") else True
