@@ -1554,6 +1554,11 @@ case "$_sc" in
     ok "session-canary names the settings file that sets X4_GUARD" ;;
   *) no "session-canary did not report X4_GUARD in the settings env: ${_sc:0:200}" ;;
 esac
+# Restore the seed the rows above were judged against: tests/test_codex_conformance.py replays
+# them through the Codex adapter AFTER this suite ends, against the file as left here, and the
+# 4.2.0 env no-change rule makes the twin's verdict depend on the env it finds (MEASURED: left
+# with X4_GUARD=off, the twin replayed as a deny -- a drift of the replay, not of the guards).
+printf '%s' '{"env":{"OTHER":"1"}}' > "$_st/.claude/settings.json"
 
 # =============================================================================
 # FX-G4 (v4.0.0 delta review, reviewers G and H): each was ALLOWED (or wrongly ASKED) before
