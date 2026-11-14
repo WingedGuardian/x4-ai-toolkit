@@ -235,8 +235,154 @@ def _judge_edit(path: str, edit) -> str:
     return ""
 
 
+# --- the protected-ROOT keys (4.2) --------------------------------------------------------------
+# The guards take their roots from these, and the ENVIRONMENT outranks x4-paths.env (_x4-env.sh,
+# _paths._layers), so an `env` block written by an agent could move reference/ or the game root,
+# point X4_CONFIG at nothing, or name a game folder in X4_STAGING_DIRS -- at the next launch. A
+# DELTA rule, unlike X4_GUARD's: the global install mode itself writes X4_TOOLKIT, X4_GAME,
+# X4_REFERENCE, X4_PROFILE, X4_MODS and X4_EXTENSIONS into settings.json, so a write that leaves
+# every such setting exactly as it is stays allowed; one that adds, removes or changes one -- in an
+# `env` block at any depth, or as a literal `KEY=` assignment in any string outside the top-level
+# `permissions` -- is denied. Reading a key (`$X4_TOOLKIT/...`) sets nothing. Tightening only: it
+# runs after the X4_GUARD rule and can only turn an allow into a deny.
+ROOT_KEYS = ("X4_STAGING_DIRS", "X4_GAME", "X4_REFERENCE", "X4_PROFILE", "X4_SAVES", "X4_MODS",
+             "X4_CONFIG", "X4_TOOLKIT", "X4_EXTENSIONS", "X4_DOCUMENTS")
+_ROOT_NAME = re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(ROOT_KEYS) + r")(?![A-Za-z0-9_])", re.IGNORECASE)
+_ROOT_ASSIGN = re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(ROOT_KEYS) + r")\+?=", re.IGNORECASE)
+ROOT_REASON = ("BLOCKED: this write would change {key} in {path}, a Claude Code settings file whose "
+               "`env` block and hook commands reach every hook -- {key} decides which folders the X4 "
+               "guards protect (the environment outranks x4-paths.env), so an agent may not add, remove "
+               "or change it there. The user sets these with the installer or in x4-paths.env. Make the "
+               "settings edit without touching that key.")
+ROOT_UNKNOWN = ("BLOCKED: the guard cannot tell whether this write changes a protected-root key "
+                "(X4_GAME, X4_REFERENCE, X4_STAGING_DIRS, ...) in {path}, a Claude Code settings file "
+                "whose `env` reaches every hook. {why} Write the whole file with your file-edit tool, "
+                "or leave those keys as they are.")
+
+
+def root_settings(text: str):
+    """(sorted facts, decidable?) -- every protected-root SETTING in settings-file TEXT: each `env`
+    entry (any depth) whose key is a root key, with its value, and each string outside the top-level
+    `permissions` that assigns one (`KEY=`), whole. Unparseable text is decidable only when it
+    cannot name a key at all."""
+    try:
+        doc = json.loads(text) if text.strip() else {}
+    except ValueError:
+        if _ROOT_NAME.search(text) or _ESCAPE.search(text):
+            return [], False
+        return [], True
+    found = []
+    stack = [doc]
+    while stack:
+        o = stack.pop()
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k == "env" and isinstance(v, dict):
+                    found += [("env", str(x).upper(), json.dumps(val, sort_keys=True))
+                              for x, val in v.items() if str(x).upper() in ROOT_KEYS]
+                if k == "permissions" and o is doc:
+                    continue
+                stack.append(v)
+        elif isinstance(o, list):
+            stack.extend(o)
+        elif isinstance(o, str) and _ROOT_ASSIGN.search(o):
+            found.append(("assign", _ROOT_ASSIGN.search(o).group(1).upper(), o))
+    return sorted(found), True
+
+
+def _root_delta(before: str, after: str, path: str) -> str:
+    """'' when AFTER sets every root key exactly as BEFORE does, else the refusal."""
+    b, bok = root_settings(before)
+    a, aok = root_settings(after)
+    if not aok:
+        return ROOT_UNKNOWN.format(path=path, why="The result is not valid JSON and may name one.")
+    if not bok:
+        return ROOT_UNKNOWN.format(path=path, why="The file as it is now is not valid JSON and may "
+                                   "name one.") if a else ""
+    if a != b:
+        changed = sorted({f[1] for f in set(a) ^ set(b)})
+        return ROOT_REASON.format(key=", ".join(changed), path=path)
+    return ""
+
+
+def _root_text(text: str, path: str) -> str:
+    """A fragment whose landing place is unknown (an edit that does not apply here, a patch line):
+    refused when it names a root key or holds a JSON escape that could spell one."""
+    m = _ROOT_NAME.search(text)
+    if m:
+        return ROOT_REASON.format(key=m.group(1).upper(), path=path)
+    if _ESCAPE.search(text):
+        return ROOT_UNKNOWN.format(path=path, why="The text holds a JSON backslash-u escape.")
+    return ""
+
+
+def _patch_lines(text: str, sign: str):
+    return [ln[1:] for ln in text.splitlines() if ln.startswith(sign) and not ln.startswith("***")]
+
+
+def judge_roots(tool_input: dict) -> str:
+    """'' to allow, else the refusal: the protected-root DELTA rule above, for every channel judge()
+    reads (content, Edit/MultiEdit, an OpenCode x4_edit, an apply_patch or opaque x4_written)."""
+    path = tool_input.get("file_path") or tool_input.get("filePath") or ""
+    if not is_settings(path):
+        return ""
+    cur = _read(path)
+    if cur is None:
+        return UNKNOWN.format(path=path, why="The file cannot be read.")
+    if "x4_edit" in tool_input:
+        edit = tool_input.get("x4_edit")
+        old = edit.get("old") if isinstance(edit, dict) else None
+        new = edit.get("new") if isinstance(edit, dict) else None
+        if not isinstance(old, str) or not isinstance(new, str):
+            return UNKNOWN.format(path=path, why="The edit carries no old/new text.")
+        if old == "":
+            results = [new, new + cur]
+        elif old in cur:
+            results = [cur.replace(old, new) if edit.get("replace_all") else cur.replace(old, new, 1)]
+        else:
+            return _root_text(new, path)
+        for result in results:
+            why = _root_delta(cur, result, path)
+            if why:
+                return why
+        return ""
+    if "x4_written" in tool_input:
+        written = tool_input.get("x4_written")
+        if not isinstance(written, str):
+            return UNKNOWN.format(path=path, why="The caller passed no written text.")
+        if tool_input.get("x4_patch") is True:
+            if _add_only(written):           # the added lines ARE the new file
+                return _root_delta(cur, "\n".join(_patch_lines(written, "+")), path)
+            # An update: only what it adds or removes can change a setting; context lines cannot.
+            return _root_text("\n".join(_patch_lines(written, "+") + _patch_lines(written, "-")), path)
+        return _root_text(written, path)
+    if "content" in tool_input:
+        result = tool_input.get("content")
+        if not isinstance(result, str):
+            return UNKNOWN.format(path=path, why="The content is not text.")
+        return _root_delta(cur, result, path)
+    edits = tool_input.get("edits")
+    if not isinstance(edits, list):
+        edits = [tool_input]
+    result = _apply(cur, edits)
+    if result is None:
+        for e in edits:
+            new = e.get("new_string") if isinstance(e, dict) else None
+            if isinstance(new, str):
+                why = _root_text(new, path)
+                if why:
+                    return why
+        return ""
+    return _root_delta(cur, result, path)
+
+
 def judge(tool_input: dict) -> str:
-    """'' to allow, else the refusal."""
+    """'' to allow, else the refusal: the X4_GUARD rule, then the protected-root rule."""
+    return _judge_guard(tool_input) or judge_roots(tool_input)
+
+
+def _judge_guard(tool_input: dict) -> str:
+    """'' to allow, else the refusal (the X4_GUARD rule)."""
     path = tool_input.get("file_path") or tool_input.get("filePath") or ""
     if not is_settings(path):
         return ""
