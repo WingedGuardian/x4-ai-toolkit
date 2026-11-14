@@ -54,6 +54,7 @@ def runtime(mode='licence',lua_subject=False,profile=None):
         C.IsComponentClass=function(v,k)return k=='ship' end
         C.IsStoryFeatureUnlocked=function()return true end
         C.GetFactionRepresentative=function(f)assert(f=='argon');return representative or 42ULL end
+        C.IsConversationActive=function()return conversation==true end;C.IsConversationCancelling=function()return false end
         etable={type='table',id=120,numcolumns=1,rows={{type='row',index=1}}}
         eframe={id=110,properties={layer=1},content={etable}}
         emenu={name='EncyclopediaMenu',shown=false,minimized=false,encyclopediaMode='encyclopedia',
@@ -194,7 +195,7 @@ def check_licence_trader_open_through_sdk_is_once_only_and_read_back_confirms():
 
 @pytest.mark.parametrize('change',[
     "req.arguments.mode='blueprint'","req.arguments.item='lic'","req.arguments.trader={}",
-    'representative=43ULL','representative=0ULL','m.shown=true',
+    'representative=43ULL','representative=0ULL','m.shown=true','conversation=true',
 ])
 def check_licence_trader_open_refusals_never_open(change):
     r,_=runtime();r.execute("m.shown=false;opens=0;request('trader.open',{trader='trader',mode='licence'})")
