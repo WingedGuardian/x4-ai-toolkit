@@ -100,6 +100,11 @@ IS is not, so treat IS as the variable.
   measurement, not a change.
 - A destructive change — removing content, stripping attributes — needs explicit approval and
   a higher evidence bar, whatever the confidence.
+- **A role label is a READ, never a stat-shape inference.** Calling an item point defence, flak,
+  artillery, anti-capital, plasma or anything else cites its own name/description text and its
+  weapon system (its own, or its bullet's): `x4effective card <macro>` prints both with their
+  sources. A label carried over from an earlier record of ours is a LEAD; re-check it the same
+  way. (A turret once called point defence from its bullet stats was artillery, `turret_longrange`.)
 
 ## Output shape
 
