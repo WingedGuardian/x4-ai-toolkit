@@ -120,6 +120,24 @@ def _winner_not_origin_note(vpath: str, chain_json: str | None, cfg=None,
             f"WON, not which introduced the value)")
 
 
+#: The TSV cell escaping, PostgreSQL COPY text format: lossless, and reversible by one regex.
+TSV_ESCAPING = ("cells are TAB-separated, one row per line; inside a cell a backslash prints as \\\\, "
+                "a TAB as \\t, a newline as \\n, a carriage return as \\r, and SQL NULL as \\N "
+                "(an empty string stays empty)")
+_TSV_ESC = str.maketrans({"\\": "\\\\", "\t": "\\t", "\n": "\\n", "\r": "\\r"})
+
+
+def tsv_cell(value) -> str:
+    """One TSV cell that cannot split its row: see `TSV_ESCAPING`.
+
+    MEASURED 2026-11-14: 4 of 80,533 `texts` rows hold a TAB and 52 a NEWLINE (52 rows in all), and `sql`
+    printed those 52 rows as 173 lines. A lossy scrub (replace with a space) would make the cell unrecoverable, and
+    leaving backslashes alone would make a literal `\\t` and a real TAB print the same."""
+    if value is None:
+        return "\\N"
+    return str(value).translate(_TSV_ESC)
+
+
 def _fmt_chain(chain_json: str | None) -> str:
     if not chain_json:
         return "base"
@@ -206,8 +224,13 @@ def main(argv: list[str] | None = None) -> int:
                          "is annotated and the header names the replacing mod; no attribute history "
                          "is kept inside a replaced subtree (F338)")
 
-    sq = sub.add_parser("sql", help="read-only SELECT against the store")
+    sq = sub.add_parser("sql", help="read-only SELECT against the store",
+                        description=f"Run one read-only query. Default output is TSV: {TSV_ESCAPING}. "
+                                    "--json prints the exact values instead.")
     sq.add_argument("query", help="one read-only SELECT or WITH statement (anything else is refused)")
+    sq.add_argument("--json", action="store_true",
+                    help="print {schema, columns, rows} as one JSON object, values exact and NULL as null "
+                         "(default: escaped TSV, no header row)")
 
     sub.add_parser("coverage", help="what this store DOES and does not index "
                                     "(so a negative can carry its denominator)")
@@ -364,8 +387,12 @@ def _cmd_find(con, args) -> int:
             hits.append((e, e["names"][best][0]))
     for e, shown in hits[:args.limit if args.limit > 0 else None]:
         flag = "" if e["status"] == "ok" else f"  [{e['status']} reference]"
-        dup = f"\t[shares this id with {copies[e['name']] - 1} more: {e['vpath']}]" if copies[e["name"]] > 1 else ""
-        print(f"{e['name']}\t{e['klass'] or ''}\t{e['origin']}\t{shown}{flag}{dup}")
+        others = copies[e["name"]] - 1
+        dup = "\t" + tsv_cell(f"[shares this id with {others} more: {e['vpath']}]") if others else ""
+        # Every cell escaped (`tsv_cell`): the shown name is free text from a t-file, and a TAB in it
+        # shifted the row.
+        print(f"{tsv_cell(e['name'])}\t{tsv_cell(e['klass'] or '')}\t{tsv_cell(e['origin'])}\t"
+              f"{tsv_cell(shown + flag)}{dup}")
     unresolved = sum(n for s, n in statuses.items() if s != "ok")
     shared = sum(1 for n in copies.values() if n > 1)
     print(f"\n{len(hits)} match(es) for {args.text!r} among {len(named)} named {scope} entit(ies); "
@@ -911,7 +938,8 @@ def _cmd_sql(con, args) -> int:
         print("only SELECT/WITH queries allowed", file=sys.stderr)
         return 2
     try:
-        rows = con.execute(q).fetchall()
+        cur = con.execute(q)
+        rows = cur.fetchall()
     except sqlite3.Error as exc:
         if getattr(exc, 'sqlite_errorcode', 0) & 255 in (
                 sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB,
@@ -919,8 +947,13 @@ def _cmd_sql(con, args) -> int:
             raise
         print(f"sql error: {exc}", file=sys.stderr)
         return 1
+    if args.json:
+        cols = [] if cur.description is None else [d[0] for d in cur.description]
+        print(json.dumps({"schema": "x4effective.sql/1", "columns": cols,
+                          "rows": [list(r) for r in rows]}, ensure_ascii=False))
+        return 0
     for r in rows:
-        print("\t".join("" if v is None else str(v) for v in r))
+        print("\t".join(tsv_cell(v) for v in r))
     return 0
 
 

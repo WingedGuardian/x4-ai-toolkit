@@ -145,13 +145,19 @@ options:
 ## `x4effective sql`
 
 ```text
-usage: x4effective sql [-h] query
+usage: x4effective sql [-h] [--json] query
+
+Run one read-only query. Default output is TSV: cells are TAB-separated, one row per line; inside
+a cell a backslash prints as \\, a TAB as \t, a newline as \n, a carriage return as \r, and SQL
+NULL as \N (an empty string stays empty). --json prints the exact values instead.
 
 positional arguments:
   query       one read-only SELECT or WITH statement (anything else is refused)
 
 options:
   -h, --help  show this help message and exit
+  --json      print {schema, columns, rows} as one JSON object, values exact and NULL as null
+              (default: escaped TSV, no header row)
 ```
 
 ## `x4effective coverage`
