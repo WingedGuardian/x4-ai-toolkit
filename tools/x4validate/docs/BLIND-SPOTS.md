@@ -13605,8 +13605,9 @@ adapter's `X4OK` line. MEASURED before the fix, against the unchanged hook tree:
 `tests/test_hook_python_isolated.py` failed (every json.py-in-cwd and PYTHONPATH case except the PowerShell wrapper's
 json.py-in-cwd, which has no `-c`); the 8 skipped cases are sitecustomize/usercustomize in the cwd, which CPython does
 not import from there (the control proves it, so they skip rather than pass).
-Fix: every interpreter in every hook script runs as `"$PY" "$X4_PYI" ...` (`-I`, or `-IB` when PYTHONDONTWRITEBYTECODE
-is set, since `-I` drops that variable and it is the gates' stale-bytecode boundary, #27); the Codex wrappers do the
+Fix: every interpreter in every hook script runs as `"$PY" "${X4_PYI[@]}" ...` (`-I`, or `-IB` when
+PYTHONDONTWRITEBYTECODE is set, since `-I` drops that variable and it is the gates' stale-bytecode boundary, #27;
+plus `-X utf8` for PYTHONUTF8, see the review below); the Codex wrappers do the
 same (`PYI` in codex-entry.sh, `$script:PyIsolation` in codex-entry.ps1). 33 sites in 11 scripts. `-I` is CPython 3.4+;
 `-P` was not used (3.11+, and 3.10 is supported). `preferences.py`, `charter.py` and `save_policy.py` imported a
 sibling through the script directory, which `-I` removes, so each now inserts its OWN directory (never the cwd).
@@ -13614,7 +13615,22 @@ Residuals, OPEN: (a) the OpenCode plugin starts its adapter without `-I` (`tools
 but that file is the PINNED shared core (hash-locked in `tools/modding-harness.lock.json`), so the fix belongs upstream;
 the adapter is started by path, so the cwd does not reach it, but PYTHONPATH does (READ, not run). (b)
 x4validate-on-edit.sh runs the validator through `uv run`, which is not a bare interpreter and is not covered.
-(c) `-I` also ignores PYTHONUTF8 and PYTHONIOENCODING: a hook that `print()`s non-ASCII to a pipe no longer picks up a
-user's setting of either (UNMEASURED; the verdict writers encode UTF-8 to `stdout.buffer` themselves).
-Re-derived by `tests/test_hook_python_isolated.py` (runtime with plants and a no-plant twin, plus a source scan that
-fails on any non-isolated interpreter in `agent/guards/**/*.sh` and its own falsification twins).
+(c) `-I` also ignores PYTHONIOENCODING, which has no command-line form; a user who relies on it (and not PYTHONUTF8)
+for a script's text output no longer gets it (UNMEASURED).
+Review of the fix, 2026-11-14 (three findings, all fixed): F1, MEASURED regression: `-I` also dropped PYTHONUTF8, and
+the jq-less PATH READERS wrote with text-mode `sys.stdout` (cp1252), so with PYTHONUTF8=1 a path like `é漢字.xml` that
+the old hooks judged (deny in `reference/`, allow plus a backup in `dev/`) became an ask, "NO rule below was evaluated"
+and "NO BACKUP was taken". Without PYTHONUTF8 the old hooks asked too (pre-existing). Fixed both ways: every reader in
+the hook scripts writes `sys.stdout.buffer.write(x.encode("utf-8"))` (`x4_field`, protect-files.sh, backup-before-edit.sh,
+the validator message readers), hook_facts.py and settings_guard.py read stdin as UTF-8 bytes (the old locale read
+stays for bytes that are not UTF-8), the Codex wrapper's re-check reads UTF-8, and PYTHONUTF8 is carried as `-X utf8`
+/ `-X utf8=0` (`X4_PYI` is now an array). MEASURED against the previous commit: the CJK case asked with and without
+PYTHONUTF8; now deny, allow and a backup in both. F2: the source scan missed `if`/`then`/`!`/`exec`/`timeout N`
+starts, other variable names, `python3.12` and `uv run python`, and flagged `py -3 -I` and `-X utf8 -I`; it now walks
+the interpreter's options, skips prose inside multi-line strings (tracking `$( )` inside them), and asserts an EXACT
+census (32): with a too-greedy assignment value it had silently read 30, missing two session-canary sites. F3
+(INFERRED, not run): hook_facts.py, run isolated, did not put its own directory on sys.path, and its save_policy bridge
+can reach `import x4guard`; it now does, and a census test requires it of every hook-tree script that reaches a sibling.
+Re-derived by `tests/test_hook_python_isolated.py` (runtime with plants and a no-plant twin, the CJK path with and
+without PYTHONUTF8, plus a source scan that fails on any non-isolated interpreter in `agent/guards/**/*.sh` and its
+own falsification twins).
