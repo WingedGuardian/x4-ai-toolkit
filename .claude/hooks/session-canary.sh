@@ -102,7 +102,7 @@ if ! _x4_switch_off "${X4_DEPLOY_DRIFT:-}"; then
   elif [ -z "$_x4_ddpy" ]; then
     echo "[x4 deploy] could not check whether the deployed agent files match the toolkit: no usable python."
   else
-    "$_x4_ddpy" -IB "$_x4_dd" "$HOOK_DIR/../.." --state "$HOOK_DIR/.." </dev/null 2>/dev/null \
+    "$_x4_ddpy" "${X4_PYI[@]}" -B "$_x4_dd" "$HOOK_DIR/../.." --state "$HOOK_DIR/.." </dev/null 2>/dev/null \
       || echo "[x4 deploy] could not check whether the deployed agent files match the toolkit: the check exited $?."
   fi
 fi
@@ -113,7 +113,7 @@ fi
 if [ -f "$HOOK_DIR/../../KNOWLEDGEBASE.local.md" ]; then
   x4_resolve_python
   if [ -n "$X4_PY" ]; then
-    "$X4_PY" "$X4_PYI" "$HOOK_DIR/preferences.py" 2>/dev/null || echo "PREFERENCES: NOT INJECTED -- read KNOWLEDGEBASE.local.md yourself."
+    "$X4_PY" "${X4_PYI[@]}" "$HOOK_DIR/preferences.py" 2>/dev/null || echo "PREFERENCES: NOT INJECTED -- read KNOWLEDGEBASE.local.md yourself."
   else
     echo "PREFERENCES: NOT INJECTED -- Python is unavailable; read KNOWLEDGEBASE.local.md yourself."
   fi
@@ -136,7 +136,7 @@ for _f in "${CLAUDE_PROJECT_DIR:-}/.claude/settings.json" "${CLAUDE_PROJECT_DIR:
 done
 _x4_sgpy="$(x4_python)"
 if [ "${#_x4_sg_files[@]}" -gt 0 ] && [ -n "$_x4_sgpy" ]; then
-  _x4_sghit="$("$_x4_sgpy" "$X4_PYI" "$HOOK_DIR/settings_guard.py" --scan "${_x4_sg_files[@]}" 2>/dev/null)"
+  _x4_sghit="$("$_x4_sgpy" "${X4_PYI[@]}" "$HOOK_DIR/settings_guard.py" --scan "${_x4_sg_files[@]}" 2>/dev/null)"
   if [ -n "$_x4_sghit" ]; then
     echo "[x4 guards] X4_GUARD is set in a Claude Code settings env block -- it reaches every hook. Tell the user; do not edit it yourself (the guards refuse). File(s):"
     printf '%s
@@ -159,7 +159,7 @@ HK=""
 _x4_hkpy="$(x4_python)"
 if [ -n "$HK" ] && [ -n "$_x4_hkpy" ] && ! _x4_switch_off "${X4_HOUSEKEEP_SWEEP:-}" \
    && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
-  ( "$_x4_hkpy" -IB "$HK" session "$HK_NOTE" </dev/null >/dev/null 2>&1 & )
+  ( "$_x4_hkpy" "${X4_PYI[@]}" -B "$HK" session "$HK_NOTE" </dev/null >/dev/null 2>&1 & )
 fi
 
 # Derived stores (x4fresh). Same shape and the same guards as the sweep above, plus X4_FRESH_AUTO=off: show the
@@ -179,7 +179,7 @@ XF=""
 [ -f "${X4_TOOLKIT:-}/scripts/x4fresh_session.py" ] && XF="$X4_TOOLKIT/scripts/x4fresh_session.py"
 if [ -n "$XF" ] && [ -n "$_x4_hkpy" ] && ! _x4_switch_off "${X4_HOUSEKEEP_SWEEP:-}" && ! _x4_switch_off "${X4_FRESH_AUTO:-}" \
    && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
-  ( "$_x4_hkpy" -IB "$XF" "$XF_NOTE" </dev/null >/dev/null 2>&1 & )
+  ( "$_x4_hkpy" "${X4_PYI[@]}" -B "$XF" "$XF_NOTE" </dev/null >/dev/null 2>&1 & )
 fi
 )"
 
@@ -208,7 +208,7 @@ if [ -z "$PY" ]; then
   exit 0
 fi
 
-OUT=$("$PY" "$X4_PYI" "$CANARY" 2>&1)
+OUT=$("$PY" "${X4_PYI[@]}" "$CANARY" 2>&1)
 RC=$?
 
 # BOUNDED, AND DIRECTIVE FIRST. This hook writes BARE STDOUT, so it does not get

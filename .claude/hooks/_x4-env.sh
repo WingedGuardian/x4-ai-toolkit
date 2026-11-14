@@ -894,15 +894,18 @@ x4_resolve_python() {
   return 0
 }
 x4_python() { x4_resolve_python; printf '%s' "$X4_PY"; }
-# EVERY interpreter a hook starts runs as `"$PY" "$X4_PYI" ...` (4.2.0 final guard review,
+# EVERY interpreter a hook starts runs as `"$PY" "${X4_PYI[@]}" ...` (4.2.0 final guard review,
 # MEASURED): `python -c` puts the CWD -- the project folder, agent-writable -- first on sys.path,
 # so a planted json.py swallowed a deny (0 bytes, rc 0 = allow) whenever jq was missing, and a
 # sitecustomize.py on PYTHONPATH reached every interpreter. -I (3.4+) drops the cwd/script dir and
 # ignores PYTHON* and the user site; a script importing a sibling inserts its OWN directory. -I
-# also drops PYTHONDONTWRITEBYTECODE, the gates' stale-.pyc boundary (#27), so it is carried as -B.
+# also drops two variables that change no import, so each is carried as its option: the gates'
+# stale-.pyc boundary PYTHONDONTWRITEBYTECODE (#27) as -B, and PYTHONUTF8 as -X utf8 / -X utf8=0
+# (without it a non-ASCII path written by a text-mode reader failed: MEASURED, F380).
 # Not -P: that is 3.11+, and 3.10 is supported. tests/test_hook_python_isolated.py bans any other form.
-X4_PYI=-I
-[ -n "${PYTHONDONTWRITEBYTECODE:-}" ] && X4_PYI=-IB
+X4_PYI=(-I)
+[ -n "${PYTHONDONTWRITEBYTECODE:-}" ] && X4_PYI=(-IB)
+case "${PYTHONUTF8:-}" in 1) X4_PYI+=(-X utf8) ;; 0) X4_PYI+=(-X utf8=0) ;; esac
 
 # x4_field <payload> <dotted path, e.g. tool_input.path>
 # Read one field from a hook payload without depending on jq alone.
@@ -930,14 +933,14 @@ x4_field() {
   x4_resolve_python
   local _py="$X4_PY"
   [ -n "$_py" ] || return 0
-  X4_IN="$1" X4_PATH="$2" "$_py" "$X4_PYI" -c 'import json, os, sys
+  X4_IN="$1" X4_PATH="$2" "$_py" "${X4_PYI[@]}" -c 'import json, os, sys
 cur = json.loads(os.environ["X4_IN"])
 for k in os.environ["X4_PATH"].split("."):
     if not isinstance(cur, dict):
         cur = None
         break
     cur = cur.get(k)
-sys.stdout.write("" if cur is None else str(cur))' 2>/dev/null
+sys.stdout.buffer.write(("" if cur is None else str(cur)).encode("utf-8"))' 2>/dev/null
 }
 
 # x4_advise <reason> [event]
@@ -996,7 +999,7 @@ _X4_BOUND_RESERVE=300
 x4_len(){
   x4_resolve_python; _py="$X4_PY"
   if [ -n "$_py" ]; then
-    _n="$(X4_BND="$1" "$_py" "$X4_PYI" -c 'import os,sys; sys.stdout.buffer.write(str(len(os.environ["X4_BND"])).encode())' 2>/dev/null)"
+    _n="$(X4_BND="$1" "$_py" "${X4_PYI[@]}" -c 'import os,sys; sys.stdout.buffer.write(str(len(os.environ["X4_BND"])).encode())' 2>/dev/null)"
     case "$_n" in ''|*[!0-9]*) : ;; *) printf '%s' "$_n"; return 0 ;; esac
   fi
   if printf '%s' '{}' | "${JQ:-jq}" -e . >/dev/null 2>&1; then
@@ -1018,7 +1021,7 @@ x4_len(){
 x4_head(){
   x4_resolve_python; _py="$X4_PY"
   if [ -n "$_py" ]; then
-    if _o="$(X4_BND="$1" X4_BNDN="$2" "$_py" "$X4_PYI" -c 'import os,sys; sys.stdout.buffer.write(os.environ["X4_BND"][:int(os.environ["X4_BNDN"])].encode("utf-8"))' 2>/dev/null)"; then
+    if _o="$(X4_BND="$1" X4_BNDN="$2" "$_py" "${X4_PYI[@]}" -c 'import os,sys; sys.stdout.buffer.write(os.environ["X4_BND"][:int(os.environ["X4_BNDN"])].encode("utf-8"))' 2>/dev/null)"; then
       printf '%s' "$_o"; return 0
     fi
   fi
@@ -1075,7 +1078,7 @@ x4_advise() {
   fi
   x4_resolve_python; local _py="$X4_PY"
   if [ -n "$_py" ]; then
-    X4_REASON="$1" X4_EVENT="${2:-PreToolUse}" "$_py" "$X4_PYI" -c 'import json, os, sys
+    X4_REASON="$1" X4_EVENT="${2:-PreToolUse}" "$_py" "${X4_PYI[@]}" -c 'import json, os, sys
 sys.stdout.buffer.write(json.dumps({"hookSpecificOutput": {
   "hookEventName": os.environ.get("X4_EVENT") or "PreToolUse",
   "additionalContext": os.environ["X4_REASON"]}}).encode("utf-8"))'
@@ -1162,7 +1165,7 @@ x4_emit_guard_roots() {
 
 x4_save_dispatch() {
   local answer rc
-  answer=$( { x4_emit_guard_roots; printf '%s' "$INPUT"; } | "$PY" "$X4_PYI" "$HOOK_DIR/save_policy.py" "$1" "$0")
+  answer=$( { x4_emit_guard_roots; printf '%s' "$INPUT"; } | "$PY" "${X4_PYI[@]}" "$HOOK_DIR/save_policy.py" "$1" "$0")
   rc=$?
   case "$rc:$answer" in
     '0:X4SAVE '*) printf '%s' "${answer#X4SAVE }" ;;

@@ -110,7 +110,7 @@ if [ -n "$_ign" ]; then
     if "${JQ:-jq}" -n --arg r "$_why" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}' 2>/dev/null; then exit 0; fi
     x4_resolve_python
     if [ -n "$X4_PY" ]; then
-      X4_REASON="$_why" "$X4_PY" "$X4_PYI" -c 'import json, os, sys
+      X4_REASON="$_why" "$X4_PY" "${X4_PYI[@]}" -c 'import json, os, sys
 sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": os.environ["X4_REASON"]}}))'
       exit 0
     fi

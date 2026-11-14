@@ -659,10 +659,17 @@ def main(argv: list) -> int:
                 continue
             keys, ok = guard_keys(text)
             if keys or not ok:
-                print(p)
+                sys.stdout.buffer.write((p + "\n").encode("utf-8", "replace"))
         return 0
+    # UTF-8 explicitly (F380): started isolated (-I), PYTHONUTF8 is ignored and a text read would
+    # use the ANSI code page. Bytes that are not UTF-8 keep the old locale read.
+    data = sys.stdin.buffer.read()
     try:
-        payload = json.loads(sys.stdin.read())
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = data.decode(sys.stdin.encoding or "utf-8")
+        payload = json.loads(text)
     except ValueError:
         return 3
     ti = payload.get("tool_input") if isinstance(payload, dict) else None

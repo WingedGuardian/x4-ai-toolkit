@@ -10329,7 +10329,14 @@ def main() -> int:
     # path rule silently stopped firing. The README tells users they may write roots in
     # either "C:\..." or "/c/..." form, so this is a real installation, not a test
     # artefact. A byte stream is not translated.
-    raw = sys.stdin.read()
+    # UTF-8 explicitly (F380): the hook starts this isolated (-I), which ignores PYTHONUTF8, so a
+    # text read would use the ANSI code page and garble a non-ASCII path. Bytes that are not UTF-8
+    # keep the old locale read, unchanged.
+    data = sys.stdin.buffer.read()
+    try:
+        raw = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raw = data.decode(sys.stdin.encoding or "utf-8")
     if not raw.strip():
         return 2                      # no payload: the caller must ASK, never allow
     roots = {}
@@ -10347,4 +10354,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # protect-bash.sh starts this isolated (-I), so its own directory is not on sys.path; the
+    # save_policy bridge above can reach `import x4guard` (an MSYS path), which needs it (F380).
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     raise SystemExit(main())

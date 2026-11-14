@@ -43,7 +43,7 @@ emit() {   # emit <deny|ask|advise> <reason>
       "$JQ" -n --arg k "$1" --arg r "$2" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$k,permissionDecisionReason:$r}}'
     fi
   elif [ -n "$PY" ]; then
-    X4_KIND="$1" X4_REASON="$2" "$PY" "$X4_PYI" -c 'import json, os, sys
+    X4_KIND="$1" X4_REASON="$2" "$PY" "${X4_PYI[@]}" -c 'import json, os, sys
 k = os.environ["X4_KIND"]; r = os.environ["X4_REASON"]
 h = {"hookEventName": "PreToolUse"}
 if k == "advise":
@@ -105,7 +105,7 @@ x4_typed_delete() {
   if [ "${JQ_OK:-0}" = 1 ]; then
     printf '%s' "$INPUT" | "$JQ" -e '.tool_name == "DeleteFile"' >/dev/null 2>&1
   elif [ -n "$PY" ]; then
-    X4_IN="$INPUT" "$PY" "$X4_PYI" -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["X4_IN"]).get("tool_name") == "DeleteFile" else 1)' >/dev/null 2>&1
+    X4_IN="$INPUT" "$PY" "${X4_PYI[@]}" -c 'import json, os, sys; sys.exit(0 if json.loads(os.environ["X4_IN"]).get("tool_name") == "DeleteFile" else 1)' >/dev/null 2>&1
   else
     return 1
   fi
@@ -119,7 +119,7 @@ x4_typed_removal() {
   if [ "${JQ_OK:-0}" = 1 ]; then
     printf '%s' "$INPUT" | "$JQ" -e '.tool_name == "DeleteFile" or (.tool_input | type == "object" and .x4_move_source == true)' >/dev/null 2>&1
   elif [ -n "$PY" ]; then
-    X4_IN="$INPUT" "$PY" "$X4_PYI" -c 'import json, os, sys
+    X4_IN="$INPUT" "$PY" "${X4_PYI[@]}" -c 'import json, os, sys
 d = json.loads(os.environ["X4_IN"]); t = d.get("tool_input")
 sys.exit(0 if d.get("tool_name") == "DeleteFile" or (isinstance(t, dict) and t.get("x4_move_source") is True) else 1)' >/dev/null 2>&1
   else
@@ -162,7 +162,7 @@ fi
 case "$FILE_PATH" in
   *[Ss][Ee][Tt][Tt][Ii][Nn][Gg][Ss]*.[Jj][Ss][Oo][Nn])
     if [ -n "$PY" ]; then
-      _x4_sg="$(printf '%s' "$INPUT" | "$PY" "$X4_PYI" "$HOOK_DIR/settings_guard.py" --path "$FILE_PATH" 2>/dev/null)"
+      _x4_sg="$(printf '%s' "$INPUT" | "$PY" "${X4_PYI[@]}" "$HOOK_DIR/settings_guard.py" --path "$FILE_PATH" 2>/dev/null)"
       _x4_sgrc=$?
       [ "$_x4_sgrc" = 0 ] || _x4_sg="BLOCKED: the settings-file check could not run (exit $_x4_sgrc), so this write to $FILE_PATH was not judged. Retry; if it persists, the user should edit the file."
       [ -n "$_x4_sg" ] && { deny "$_x4_sg"; return 0; }
@@ -243,7 +243,7 @@ if [ -f "$FILE_PATH" ] && [ ! -w "$FILE_PATH" ] && [ -n "$PY" ]; then
     [ -f "$_c" ] && { _lk="$_c"; break; }
   done
   if [ -n "$_lk" ]; then
-    "$PY" "$X4_PYI" "$_lk" protected "$FILE_PATH" >/dev/null 2>&1; _lkrc=$?
+    "$PY" "${X4_PYI[@]}" "$_lk" protected "$FILE_PATH" >/dev/null 2>&1; _lkrc=$?
     if [ "$_lkrc" -ne 1 ]; then
       _lkcmd="python \"$_lk\" unlock \"$FILE_PATH\""
       _lkmsg="LOCKED BY x4lock: $FILE_PATH is read-only, so this write will FAIL until it is unlocked. Run: $_lkcmd -- then make the edit -- then relock: python \"$_lk\" lock"
@@ -727,9 +727,9 @@ JQ_OK=0
 if FILE_PATH=$(printf '%s' "$INPUT" | "$JQ" -r '.tool_input.file_path // .tool_input.notebook_path // empty' 2>/dev/null); then
   JQ_OK=1; FP_OK=1
 elif [ -n "$PY" ]; then
-  FILE_PATH=$(X4_IN="$INPUT" "$PY" "$X4_PYI" -c 'import json, os, sys
+  FILE_PATH=$(X4_IN="$INPUT" "$PY" "${X4_PYI[@]}" -c 'import json, os, sys
 try:
-    sys.stdout.write((json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("file_path") or (json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("notebook_path") or "")
+    sys.stdout.buffer.write(((json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("file_path") or (json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("notebook_path") or "").encode("utf-8"))
 except Exception:
     sys.exit(9)')
   FP_OK=$?

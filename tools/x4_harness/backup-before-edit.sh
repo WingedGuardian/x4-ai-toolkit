@@ -23,7 +23,7 @@ x4_require_input "$INPUT" "X4 BACKUP INERT: this hook received NO INPUT, so NO B
 x4_resolve_python; PY="$X4_PY"   # shared: refuses a misconfigured X4_PYTHON
 _ask() {   # a backup that cannot be taken is the user's call, not ours to wave through
   if [ -n "$PY" ]; then
-    X4_REASON="$1" "$PY" "$X4_PYI" -c 'import json, os, sys
+    X4_REASON="$1" "$PY" "${X4_PYI[@]}" -c 'import json, os, sys
 sys.stdout.buffer.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
   "permissionDecision": "ask", "permissionDecisionReason": os.environ["X4_REASON"]}}).encode("utf-8"))'
   else
@@ -45,10 +45,10 @@ if _x4_jq=$(printf '%s' "$INPUT" | "$JQ" -r '(.tool_name // "unknown"), (.tool_i
 }"
   [ "$FILE_PATH" = "$_x4_jq" ] && FILE_PATH=""
 elif [ -n "$PY" ]; then
-  TOOL_NAME=$(X4_IN="$INPUT" "$PY" "$X4_PYI" -c 'import json, os, sys
-sys.stdout.write(json.loads(os.environ["X4_IN"]).get("tool_name") or "unknown")' 2>/dev/null) || TOOL_NAME=""
-  FILE_PATH=$(X4_IN="$INPUT" "$PY" "$X4_PYI" -c 'import json, os, sys
-sys.stdout.write((json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("file_path") or (json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("notebook_path") or "")' 2>/dev/null) \
+  TOOL_NAME=$(X4_IN="$INPUT" "$PY" "${X4_PYI[@]}" -c 'import json, os, sys
+sys.stdout.buffer.write((json.loads(os.environ["X4_IN"]).get("tool_name") or "unknown").encode("utf-8"))' 2>/dev/null) || TOOL_NAME=""
+  FILE_PATH=$(X4_IN="$INPUT" "$PY" "${X4_PYI[@]}" -c 'import json, os, sys
+sys.stdout.buffer.write(((json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("file_path") or (json.loads(os.environ["X4_IN"]).get("tool_input") or {}).get("notebook_path") or "").encode("utf-8"))' 2>/dev/null) \
     || _ask "X4 BACKUP: could not read this payload, so NO BACKUP was taken. Confirm only if you accept this edit being unrecoverable."
 else
   _ask "X4 BACKUP: neither jq nor python is available, so the file path could not be read and NO BACKUP was taken. Confirm only if you accept this edit being unrecoverable."

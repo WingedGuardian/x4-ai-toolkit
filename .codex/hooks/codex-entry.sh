@@ -51,8 +51,10 @@ elif [ "${X4_NO_PYTHON_FALLBACK:-}" != 1 ]; then
   fi
 fi
 # Isolated (-I): no module from the cwd (the agent-writable project) or PYTHON* env reaches either
-# interpreter below; -B carries PYTHONDONTWRITEBYTECODE, which -I ignores (see _x4-env.sh X4_PYI).
+# interpreter below; -B and -X utf8 carry PYTHONDONTWRITEBYTECODE and PYTHONUTF8, which -I ignores
+# (see _x4-env.sh X4_PYI).
 PYI=(-I); [ -n "${PYTHONDONTWRITEBYTECODE:-}" ] && PYI=(-IB)
+case "${PYTHONUTF8:-}" in 1) PYI+=(-X utf8) ;; 0) PYI+=(-X utf8=0) ;; esac
 [ "${#PY[@]}" -gt 0 ] || { fail "no Python found -- ask the user to set X4_PYTHON in the environment they launch the agent from, or to put python on PATH (an agent may not set it in a settings file)"; exit 0; }
 
 LIMIT=50; [ "$EV" = session_start ] && LIMIT=25
@@ -96,7 +98,7 @@ def unique(pairs):
         out[key] = value
     return out
 try:
-    o = json.loads(sys.stdin.read(), object_pairs_hook=unique)
+    o = json.loads(sys.stdin.buffer.read().decode("utf-8"), object_pairs_hook=unique)
 except Exception:
     print("adapter output is not JSON"); sys.exit()
 if not isinstance(o, dict) or list(o) != ["hookSpecificOutput"] or not isinstance(o["hookSpecificOutput"], dict):

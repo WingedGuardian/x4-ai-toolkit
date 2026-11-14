@@ -97,7 +97,7 @@ if printf '%s' '{}' | "$JQ" -e . >/dev/null 2>&1; then
 else
   PY="$(x4_python)"      # ONE implementation, shared with every other hook
   if [ -n "$PY" ]; then
-    ERRS=$(X4_OUT="$OUT" "$PY" "$X4_PYI" -c 'import json, os, sys
+    ERRS=$(X4_OUT="$OUT" "$PY" "${X4_PYI[@]}" -c 'import json, os, sys
 try:
     d = json.loads(os.environ["X4_OUT"])
     assert isinstance(d, dict)
@@ -111,15 +111,15 @@ try:
                isinstance(x.get("vpath"), str) and type(x.get("line")) is int for x in f)
     sys.stdout.write(str(n))
 except Exception: sys.exit(9)' 2>/dev/null) || not_completed "validator returned unreadable or incomplete JSON"
-    DEGRADED=$(X4_OUT="$OUT" "$PY" "$X4_PYI" -c 'import json, os
+    DEGRADED=$(X4_OUT="$OUT" "$PY" "${X4_PYI[@]}" -c 'import json, os
 print("true" if json.loads(os.environ["X4_OUT"]).get("degraded", False) else "false")' 2>/dev/null)
-    SKIP_MSG=$(X4_OUT="$OUT" "$PY" "$X4_PYI" -c 'import json, os
-print("\n".join("  [not checked] %s: %s" % (x["what"], x["why"]) for x in
-                json.loads(os.environ["X4_OUT"]).get("skipped", [])))' 2>/dev/null)
-    MSG=$(X4_OUT="$OUT" "$PY" "$X4_PYI" -c 'import json, os, sys
+    SKIP_MSG=$(X4_OUT="$OUT" "$PY" "${X4_PYI[@]}" -c 'import json, os, sys
+sys.stdout.buffer.write(("\n".join("  [not checked] %s: %s" % (x["what"], x["why"]) for x in
+                json.loads(os.environ["X4_OUT"]).get("skipped", [])) + "\n").encode("utf-8"))' 2>/dev/null)
+    MSG=$(X4_OUT="$OUT" "$PY" "${X4_PYI[@]}" -c 'import json, os, sys
 try: f = json.loads(os.environ["X4_OUT"]).get("findings") or []
 except Exception: f = []
-sys.stdout.write("\n".join("  [%s] %s (%s:%s)" % (x.get("severity"), x.get("message"), x.get("vpath"), x.get("line")) for x in f))' 2>/dev/null)
+sys.stdout.buffer.write("\n".join("  [%s] %s (%s:%s)" % (x.get("severity"), x.get("message"), x.get("vpath"), x.get("line")) for x in f).encode("utf-8"))' 2>/dev/null)
   else
     not_completed "neither jq nor Python could read the validator result"
   fi
