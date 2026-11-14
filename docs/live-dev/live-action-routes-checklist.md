@@ -19,7 +19,8 @@ approves that launch for exactly those rows. Never a save the user is playing.
 | 5 | Shipyard resolve, then one purchase | Resolve a shipyard read-only with `stations <faction>` and `component <id>`. Then buy one ship through the ShipConfigurationMenu route (`menu.open`, `menu.select`/`menu.add`, `menu.confirm`). | Player money drops by the quoted price, and the build-task capture shows one new task at that shipyard with the expected macro and price. | `live_query.lua:2116` (`stations`), `:1233` (`component`), `live_nativeproviders.lua:48`, `:152` (menu actions), `live_buildtasks.lua:113` (capture), `:176` (task), `live_playerstate.lua:145` (money) |
 | 6a | One save | One save through `PersistenceDispatcher` to a throwaway slot. Approve this launch separately from 6b. | The slot verifier sees a new save in that slot with a fresh timestamp. No other slot changed. | `tools/x4validate/x4validate/_livepersistdispatch.py:125` (class), `:159` (`reserve_save`) |
 | 6b | One load | Load the save from 6a through `PersistenceDispatcher`. Approve this launch separately from 6a. | After the reload, the session identity changes and the world matches the 6a save. Issued ids from before the load are refused, as expected after a UI reload. | `_livepersistdispatch.py:174` (`prepare_load`) |
-| 7 | Licence trader: open, then buy | Get the trader with `representative <faction>`. Then `trader.open {trader, mode='licence'}`, then `trader.observe`. Then the existing `trader.select` and `trader.confirm` for one licence the player can afford and lacks. | `trader.observe` returns `OBSERVED` for that trader in licence mode. After confirm, money has dropped by the quoted price and `HasLicence` reports the licence held. | `live_query.lua:2096` (`representative`), `live_tradermenu.lua:204` (opener preconditions), `:219` (`prepare_open`), `:229` (observe), `:266-267` (select/confirm), `:268` (execute), `live_playerstate.lua:145`, `:156` (money, licence read-back) |
+| 7 | Licence trader: open, then buy | Get the trader with `representative <faction>`. Then `trader.open {trader, mode='licence'}`, then `trader.observe`. Then the existing `trader.select` and `trader.confirm` for one licence the player can afford and lacks. | `trader.observe` returns `OBSERVED` for that trader in licence mode. After confirm, money has dropped by the quoted price and `HasLicence` reports the licence held. | `live_query.lua:2096` (`representative`), `live_tradermenu.lua:208` (opener preconditions), `:231` (`prepare_open`), `:241` (observe), `:278-279` (select/confirm), `:280` (execute), `live_playerstate.lua:145`, `:156` (money, licence read-back) |
+| 8 | Licence trader: open, then close without buying | With no conversation running and the player not talking to the representative, `trader.open` as in row 7, then `trader.observe`, then close the menu with its own close or back control. Buy nothing. | The menu closes. There is no stuck UI, flight or on-foot controls come back, no conversation window appears, and `debug.txt` shows no new error from the close. Money and licences are unchanged. | `menu_trader_blueprintsorlicences.lua:623`, `:637`, `:749` (every close path calls `Helper.closeMenuAndReturn`), `helper.lua:1794` (`ReturnFromMenu`); opener `live_tradermenu.lua:208` (refuses during a conversation) |
 
 ## Notes per row
 
@@ -38,6 +39,16 @@ approves that launch for exactly those rows. Never a save the user is playing.
   opened at `:295`). It does not mirror the `nolicencesale` faction tag or the diplomat
   route. For this row, pick a faction that sells licences. The game-side unknowns are listed
   in `live-trader-menu-qualification.md` ("Licence trader opener").
+  The opener has no player-presence check. Record where the player was (same room as the
+  representative, or elsewhere). A purchase made remotely is a finding to report, not a pass.
+  The opener tolerates only Helper's own docked or top-level menu, which vanilla's open path
+  closes itself (`helper.lua:1383-1391`). If either was up, record whether it closed.
+- **Row 8.** Run this before row 7's purchase. The trader menu always closes through
+  `ReturnFromMenu`, which vanilla uses only for menus opened from a conversation.
+  `menu_station_overview.lua:5205-5209` shows vanilla taking `Helper.closeMenu` instead when
+  it opens a menu from Lua. The engine's behaviour for a return with no conversation is
+  UNMEASURED. If the game is left in a bad state, the opener must not be used until the close
+  is handled.
 
 ## Recording a result
 
