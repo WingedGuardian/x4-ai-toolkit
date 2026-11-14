@@ -13592,3 +13592,29 @@ marked `issellable`, the same filter the menu applies to its rows (`menu_trader_
 Still open: a no-sale faction whose list does contain a sellable licence passes the opener; whether that list is empty
 for such factions is UNMEASURED and needs an in-game check.
 **NO RE-DERIVATION: an open scope limit, not a fix; it is closed by an in-game measurement or a tag reader.**
+
+## F380 - a module planted in the project folder could swallow a hook's deny · **DEFECT (measured)** · PRE-ARC · severity HIGH · confidence 95% · FIXED 2026-11-14 (residuals OPEN)
+
+With jq unavailable the shell hooks print their verdict through `"$PY" -c 'import json ...'`. `python -c` puts the
+CURRENT DIRECTORY first on `sys.path`, and a hook's cwd is the project folder, which an agent can write. MEASURED
+(4.2.0 final guard review): with `JQ` pointing at no binary and a `json.py` that exits 0 in the cwd, protect-files.sh's
+deny for a write into `reference/` became 0 bytes, rc 0, which the host reads as ALLOW. A `sitecustomize.py` or
+`usercustomize.py` on `PYTHONPATH` did the same to every interpreter a hook starts, including those started by a
+script path (`hook_facts.py`, the Codex adapter) and the Codex wrapper's JSON re-check, where it can also forge the
+adapter's `X4OK` line. MEASURED before the fix, against the unchanged hook tree: 12 of 17 runnable cases of
+`tests/test_hook_python_isolated.py` failed (every json.py-in-cwd and PYTHONPATH case except the PowerShell wrapper's
+json.py-in-cwd, which has no `-c`); the 8 skipped cases are sitecustomize/usercustomize in the cwd, which CPython does
+not import from there (the control proves it, so they skip rather than pass).
+Fix: every interpreter in every hook script runs as `"$PY" "$X4_PYI" ...` (`-I`, or `-IB` when PYTHONDONTWRITEBYTECODE
+is set, since `-I` drops that variable and it is the gates' stale-bytecode boundary, #27); the Codex wrappers do the
+same (`PYI` in codex-entry.sh, `$script:PyIsolation` in codex-entry.ps1). 33 sites in 11 scripts. `-I` is CPython 3.4+;
+`-P` was not used (3.11+, and 3.10 is supported). `preferences.py`, `charter.py` and `save_policy.py` imported a
+sibling through the script directory, which `-I` removes, so each now inserts its OWN directory (never the cwd).
+Residuals, OPEN: (a) the OpenCode plugin starts its adapter without `-I` (`tools/modding_harness/opencode_plugin.mjs`),
+but that file is the PINNED shared core (hash-locked in `tools/modding-harness.lock.json`), so the fix belongs upstream;
+the adapter is started by path, so the cwd does not reach it, but PYTHONPATH does (READ, not run). (b)
+x4validate-on-edit.sh runs the validator through `uv run`, which is not a bare interpreter and is not covered.
+(c) `-I` also ignores PYTHONUTF8 and PYTHONIOENCODING: a hook that `print()`s non-ASCII to a pipe no longer picks up a
+user's setting of either (UNMEASURED; the verdict writers encode UTF-8 to `stdout.buffer` themselves).
+Re-derived by `tests/test_hook_python_isolated.py` (runtime with plants and a no-plant twin, plus a source scan that
+fails on any non-isolated interpreter in `agent/guards/**/*.sh` and its own falsification twins).
