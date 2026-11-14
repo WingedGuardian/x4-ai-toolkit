@@ -109,9 +109,17 @@ def test_X4_GUARD_ANYWHERE_in_the_file_is_denied_not_only_in_env(sandbox):
     d, _ = _hook(env, "protect-files.sh", {"tool_name": "Edit", "tool_input": {
         "file_path": str(s), "old_string": '"bash .claude', "new_string": '"X4_GUARD=off bash .claude'}})
     assert d == "deny"
+    # TWIN on a hook the toolkit does not own. (4.2.0: changing one of the toolkit's own guard
+    # commands -- even prefixing FOO=1 -- is refused by settings_guard's protected-hooks rule.)
+    own = json.loads(json.dumps(_HOOKCMD))
+    own["hooks"]["PreToolUse"][0]["hooks"].append({"type": "command", "command": "bash my-own.sh"})
+    s.write_text(json.dumps(own, indent=2), encoding="utf-8")
+    d, _ = _hook(env, "protect-files.sh", {"tool_name": "Edit", "tool_input": {
+        "file_path": str(s), "old_string": '"bash my-own', "new_string": '"FOO=1 bash my-own'}})
+    assert d == "allow"
     d, _ = _hook(env, "protect-files.sh", {"tool_name": "Edit", "tool_input": {
         "file_path": str(s), "old_string": '"bash .claude', "new_string": '"FOO=1 bash .claude'}})
-    assert d == "allow"
+    assert d == "deny"
 
 
 @needs_bash

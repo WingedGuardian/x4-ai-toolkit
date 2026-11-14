@@ -235,94 +235,238 @@ def _judge_edit(path: str, edit) -> str:
     return ""
 
 
-# --- the protected-ROOT keys (4.2) --------------------------------------------------------------
-# The guards take their roots from these, and the ENVIRONMENT outranks x4-paths.env (_x4-env.sh,
-# _paths._layers), so an `env` block written by an agent could move reference/ or the game root,
-# point X4_CONFIG at nothing, or name a game folder in X4_STAGING_DIRS -- at the next launch. A
-# DELTA rule, unlike X4_GUARD's: the global install mode itself writes X4_TOOLKIT, X4_GAME,
+# --- the protected-ROOT and STARTUP keys, and the hooks block (4.2) ---------------------------
+# The guards take their roots from the X4_* keys below, and the ENVIRONMENT outranks x4-paths.env
+# (_x4-env.sh, _paths._layers); every hook runs under bash and python, which read their own startup
+# variables. A settings `env` block reaches every hook process, so an agent that writes one could
+# move reference/ or the game root, name a game folder in X4_STAGING_DIRS, or make bash source a
+# file that ends the hook before it speaks (BASH_ENV with `exit 0` turned a deny into an allow,
+# MEASURED by the 4.2.0 review) -- at the next launch.
+#
+# A DELTA rule, unlike X4_GUARD's: the global install mode itself writes X4_TOOLKIT, X4_GAME,
 # X4_REFERENCE, X4_PROFILE, X4_MODS and X4_EXTENSIONS into settings.json, so a write that leaves
-# every such setting exactly as it is stays allowed; one that adds, removes or changes one -- in an
-# `env` block at any depth, or as a literal `KEY=` assignment in any string outside the top-level
-# `permissions` -- is denied. Reading a key (`$X4_TOOLKIT/...`) sets nothing. Tightening only: it
-# runs after the X4_GUARD rule and can only turn an allow into a deny.
+# every such setting exactly where and as it is stays allowed. Refused: adding, removing, moving or
+# changing
+#   * a dict key outside the top-level `permissions` that holds `=` or starts with a root key's
+#     name, at ANY depth (a key `X4_REFERENCE=C:/x` reaches a child process as X4_REFERENCE,
+#     MEASURED in Node by the 4.2.0 review; a parent renamed `stash` -> `env` later makes a nested
+#     one live, so the path of keys above it is part of the setting), or a startup variable's name
+#     directly in an `env` block;
+#   * a string (outside `permissions`) that SETS one in a spelling recognised below: `KEY=`, `KEY+=`,
+#     `export|declare|typeset|local|readonly [-opts] KEY`, PowerShell `$env:KEY =`,
+#     `Set-Item env:KEY`, `[Environment]::SetEnvironmentVariable('KEY'`, fish `set -x KEY`,
+#     `printf -v KEY`, `read ... KEY`. NOT recognised (an accepted residual): a wrapper script that
+#     sets it, `eval`/encoded text, `source` of another file, any other program's own way;
+#   * `disableAllHooks` set to a true value where it was not;
+#   * a hook `command` running one of the toolkit's guard scripts (`.claude/hooks/...`) that was
+#     there before and is not after, byte for byte (removing or emptying `hooks`, or changing such a
+#     command: a suffix like `> /dev/null` silences its verdict). A user's own hooks stay editable.
+# Reading a key (`$X4_TOOLKIT/...`, `$env:X4_TOOLKIT`) sets nothing. Tightening only: it runs after
+# the X4_GUARD rule and can only turn an allow into a deny.
 ROOT_KEYS = ("X4_STAGING_DIRS", "X4_GAME", "X4_REFERENCE", "X4_PROFILE", "X4_SAVES", "X4_MODS",
              "X4_CONFIG", "X4_TOOLKIT", "X4_EXTENSIONS", "X4_DOCUMENTS")
-_ROOT_NAME = re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(ROOT_KEYS) + r")(?![A-Za-z0-9_])", re.IGNORECASE)
-_ROOT_ASSIGN = re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(ROOT_KEYS) + r")\+?=", re.IGNORECASE)
+#: Startup variables of the shells and the python every hook runs under.
+STARTUP_KEYS = ("BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PATH", "PYTHONSTARTUP", "PYTHONPATH",
+                "PYTHONHOME")
+_ROOTS_RX = "(?i:" + "|".join(ROOT_KEYS) + ")[A-Za-z0-9_]*"
+_STARTUP_RX = "|".join(sorted(STARTUP_KEYS, key=len, reverse=True))
+#: A protected NAME in free text: a root key (any case, any suffix -- Windows names are
+#: case-insensitive), a startup variable in its own upper case (`path` and `env` are ordinary
+#: words, and `env` is the settings block itself), or disableAllHooks.
+_TEXT_NAME = re.compile("(?<![A-Za-z0-9_])(" + _ROOTS_RX + "|(?:" + _STARTUP_RX
+                        + ")(?![A-Za-z0-9_])|(?i:disableallhooks))")
+#: The name a SETTER sets. Shell spellings: roots any case, startup names upper case. PowerShell
+#: and .NET spellings: every name in any case (`$env:Path = ...` is how PowerShell sets PATH).
+_N_SH = "(" + _ROOTS_RX + "|(?:" + _STARTUP_RX + "))"
+_N_PS = "(" + _ROOTS_RX + "|(?i:" + _STARTUP_RX + "))"
+_END = "(?![A-Za-z0-9_])"
+_SETTERS = [re.compile(p) for p in (
+    "(?<![A-Za-z0-9_$:-])" + _N_SH + r"\+?=",
+    r"\b(?:export|declare|typeset|local|readonly)\s+(?:-[A-Za-z]+\s+)*" + _N_SH + _END,
+    r"(?i:\$env:)" + _N_PS + r"\s*\+?=",
+    r"(?i:\b(?:Set-Item|New-Item|si|ni)\s+(?:-Path\s+)?['" + '"' + r"]?env:)" + _N_PS,
+    r"(?i:SetEnvironmentVariable\s*\(\s*['" + '"' + r"])" + _N_PS,
+    r"\bset\s+(?:-[A-Za-z]+\s+)+" + _N_SH + _END,
+    r"\bprintf\s+-v\s+" + _N_SH + _END,
+    r"\bread\b[^;&|\n]*?(?<![A-Za-z0-9_$:])" + _N_SH + _END,
+)]
 ROOT_REASON = ("BLOCKED: this write would change {key} in {path}, a Claude Code settings file whose "
-               "`env` block and hook commands reach every hook -- {key} decides which folders the X4 "
-               "guards protect (the environment outranks x4-paths.env), so an agent may not add, remove "
-               "or change it there. The user sets these with the installer or in x4-paths.env. Make the "
-               "settings edit without touching that key.")
-ROOT_UNKNOWN = ("BLOCKED: the guard cannot tell whether this write changes a protected-root key "
-                "(X4_GAME, X4_REFERENCE, X4_STAGING_DIRS, ...) in {path}, a Claude Code settings file "
-                "whose `env` reaches every hook. {why} Write the whole file with your file-edit tool, "
-                "or leave those keys as they are.")
+               "`env` block, hooks and hook commands reach every hook -- they decide which folders the "
+               "X4 guards protect, which shell and python run them, and whether they run at all, so an "
+               "agent may not add, remove or change them there. The user sets these with the installer, "
+               "in x4-paths.env or by hand. Make the settings edit without touching them.")
+ROOT_UNKNOWN = ("BLOCKED: the guard cannot tell whether this write changes a protected setting "
+                "(X4_GAME, X4_REFERENCE, X4_STAGING_DIRS, PATH, BASH_ENV, a hook, ...) in {path}, a "
+                "Claude Code settings file whose `env` and hooks reach every hook. {why} Write the whole "
+                "file with your file-edit tool (Write), or leave those settings as they are.")
+
+
+#: A hook command that runs one of the toolkit's own guard scripts (every rendered tree, and the
+#: neutral harness). Only these are protected: a user's own hooks stay theirs to edit.
+_OWN_HOOK = re.compile(r"(?i)(?:^|[/\\\s\"'])(?:\.claude|\.codex|\.opencode)[/\\]hooks[/\\]|x4_harness|x4guard")
+
+
+def _key_protected(k: str, where: tuple) -> bool:
+    """A dict key that sets a protected variable: `=` in it or a root-key name (anywhere -- a
+    parent renamed to `env` later makes it live), or a startup name directly in an `env` block."""
+    name = k.strip().upper()
+    if "=" in k or any(name.startswith(r) for r in ROOT_KEYS):
+        return True
+    return name in STARTUP_KEYS and bool(where) and where[-1].lower() == "env"
+
+
+def _setter(s: str):
+    for rx in _SETTERS:
+        m = rx.search(s)
+        if m:
+            return next(g for g in m.groups() if g).upper()
+    return None
+
+
+def _truthy(v) -> bool:
+    return v is True or v == 1 or (isinstance(v, str) and v.strip().lower() in ("true", "1", "yes"))
 
 
 def root_settings(text: str):
-    """(sorted facts, decidable?) -- every protected-root SETTING in settings-file TEXT: each `env`
-    entry (any depth) whose key is a root key, with its value, and each string outside the top-level
-    `permissions` that assigns one (`KEY=`), whole. Unparseable text is decidable only when it
-    cannot name a key at all."""
+    """(facts, hook commands, disableAllHooks paths set true, decidable?) for settings-file TEXT.
+    Unparseable text is decidable only when it cannot name a protected setting or a hook at all."""
     try:
         doc = json.loads(text) if text.strip() else {}
     except ValueError:
-        if _ROOT_NAME.search(text) or _ESCAPE.search(text):
-            return [], False
-        return [], True
-    found = []
-    stack = [doc]
+        if _TEXT_NAME.search(text) or _ESCAPE.search(text) or re.search(r"(?i)\bhooks\b", text):
+            return [], set(), set(), False
+        return [], set(), set(), True
+    facts, commands, disabled = [], set(), set()
+    stack = [((), doc)]
     while stack:
-        o = stack.pop()
+        where, o = stack.pop()
         if isinstance(o, dict):
             for k, v in o.items():
-                if k == "env" and isinstance(v, dict):
-                    found += [("env", str(x).upper(), json.dumps(val, sort_keys=True))
-                              for x, val in v.items() if str(x).upper() in ROOT_KEYS]
-                if k == "permissions" and o is doc:
-                    continue
-                stack.append(v)
+                if not where and k == "permissions":
+                    continue    # rule STRINGS set nothing (USER, 2026-10-06)
+                ks = str(k)
+                if _key_protected(ks, where):
+                    facts.append(("key", where + (ks,), ks.split("=")[0].strip().upper() or ks,
+                                  json.dumps(v, sort_keys=True)))
+                if ks.lower() == "disableallhooks" and _truthy(v):
+                    disabled.add(where + (ks,))
+                if ks == "command" and isinstance(v, str) and where[:1] == ("hooks",) \
+                        and _OWN_HOOK.search(v):
+                    commands.add(v)
+                stack.append((where + (ks,), v))
         elif isinstance(o, list):
-            stack.extend(o)
-        elif isinstance(o, str) and _ROOT_ASSIGN.search(o):
-            found.append(("assign", _ROOT_ASSIGN.search(o).group(1).upper(), o))
-    return sorted(found), True
+            stack.extend((where + (str(i),), x) for i, x in enumerate(o))
+        elif isinstance(o, str):
+            name = _setter(o)
+            if name:
+                facts.append(("set", where, name, o))
+    return sorted(facts), commands, disabled, True
 
 
 def _root_delta(before: str, after: str, path: str) -> str:
-    """'' when AFTER sets every root key exactly as BEFORE does, else the refusal."""
-    b, bok = root_settings(before)
-    a, aok = root_settings(after)
+    """'' when AFTER sets every protected setting exactly where and as BEFORE does, else the refusal."""
+    bf, bc, bd, bok = root_settings(before)
+    af, ac, ad, aok = root_settings(after)
     if not aok:
         return ROOT_UNKNOWN.format(path=path, why="The result is not valid JSON and may name one.")
     if not bok:
-        return ROOT_UNKNOWN.format(path=path, why="The file as it is now is not valid JSON and may "
-                                   "name one.") if a else ""
-    if a != b:
-        changed = sorted({f[1] for f in set(a) ^ set(b)})
+        # The file as it is now cannot be read as JSON (a comment, a trailing comma) and names a
+        # protected setting: what the write keeps of it cannot be compared (4.2.0 review M4).
+        return ROOT_UNKNOWN.format(path=path, why="The file as it is now is not valid JSON and names "
+                                   "a protected setting, so what this write keeps of it is unknown.")
+    if af != bf:
+        changed = sorted({f[2] for f in set(af) ^ set(bf)})
         return ROOT_REASON.format(key=", ".join(changed), path=path)
+    if ad - bd:
+        return ROOT_REASON.format(key="disableAllHooks (true switches every hook off)", path=path)
+    if bc - ac:
+        return ROOT_REASON.format(key="the hooks (a hook command would be removed: "
+                                  + sorted(bc - ac)[0][:120] + ")", path=path)
     return ""
 
 
 def _root_text(text: str, path: str) -> str:
-    """A fragment whose landing place is unknown (an edit that does not apply here, a patch line):
-    refused when it names a root key or holds a JSON escape that could spell one."""
-    m = _ROOT_NAME.search(text)
+    """A fragment whose landing place is unknown (an edit that does not apply here): refused when
+    it names a protected setting or holds a JSON escape that could spell one."""
+    m = _TEXT_NAME.search(text)
     if m:
-        return ROOT_REASON.format(key=m.group(1).upper(), path=path)
+        return ROOT_REASON.format(key=m.group(1), path=path)
     if _ESCAPE.search(text):
         return ROOT_UNKNOWN.format(path=path, why="The text holds a JSON backslash-u escape.")
     return ""
 
 
-def _patch_lines(text: str, sign: str):
-    return [ln[1:] for ln in text.splitlines() if ln.startswith(sign) and not ln.startswith("***")]
+def _same(header_path: str, target: str) -> bool:
+    """Does a patch header's path (relative to the agent's cwd, unknown here) name TARGET?"""
+    q = norm(header_path.strip())
+    while q.startswith("./"):
+        q = q[2:]
+    return bool(q) and (q == target or target.endswith("/" + q))
+
+
+def _patch_update_result(cur: str, written: str, path: str):
+    """The file after an apply_patch's Update hunks for PATH, applied in memory, or None when it
+    cannot be reconstructed EXACTLY (an Add, Delete or Move of this file, a context header or an
+    end-of-file anchor, a chunk with no old lines, old lines found nowhere in order, no hunk for
+    it at all). Exact matching only: Codex tries an exact match first, so where this finds one,
+    Codex lands there too; where it does not, Codex might match fuzzily where this cannot predict."""
+    target = norm(path)
+    blocks, cur_block = [], None
+    for ln in written.splitlines():
+        if ln.startswith("*** Update File: "):
+            cur_block = {"path": ln[len("*** Update File: "):], "body": []}
+            blocks.append(cur_block)
+        elif ln.startswith("*** Add File: ") or ln.startswith("*** Delete File: "):
+            if _same(ln.split(": ", 1)[1], target):
+                return None
+            cur_block = None
+        elif ln.startswith("*** Move to: "):
+            if cur_block is not None:
+                cur_block["move"] = True
+        elif ln.startswith("*** Begin Patch") or ln.startswith("*** End Patch"):
+            cur_block = None
+        elif cur_block is not None:
+            cur_block["body"].append(ln)
+    mine = [b for b in blocks if _same(b["path"], target)]
+    if not mine or any(b.get("move") for b in mine):
+        return None
+    out = cur.splitlines()
+    trailing_nl = cur.endswith("\n")
+    for b in mine:
+        chunks, ch = [], None
+        for ln in b["body"]:
+            if ln.startswith("@@"):
+                if ln.strip() != "@@":
+                    return None          # a context header steers Codex's search: not modelled
+                ch = []
+                chunks.append(ch)
+            elif ln.strip() == "*** End of File":
+                return None              # anchors the chunk at the end: not modelled
+            elif ch is None:
+                return None
+            elif ln[:1] in (" ", "-", "+"):
+                ch.append(ln)
+            elif ln == "":
+                ch.append(" ")
+            else:
+                return None
+        pos = 0
+        for ch in chunks:
+            old = [x[1:] for x in ch if x[0] in " -"]
+            new = [x[1:] for x in ch if x[0] in " +"]
+            if not old:
+                return None
+            at = next((i for i in range(pos, len(out) - len(old) + 1) if out[i:i + len(old)] == old), None)
+            if at is None:
+                return None
+            out[at:at + len(old)] = new
+            pos = at + len(new)
+    return "\n".join(out) + ("\n" if trailing_nl else "")
 
 
 def judge_roots(tool_input: dict) -> str:
-    """'' to allow, else the refusal: the protected-root DELTA rule above, for every channel judge()
-    reads (content, Edit/MultiEdit, an OpenCode x4_edit, an apply_patch or opaque x4_written)."""
+    """'' to allow, else the refusal: the protected-setting DELTA rule above, for every channel
+    judge() reads (content, Edit/MultiEdit, an OpenCode x4_edit, an apply_patch or opaque x4_written)."""
     path = tool_input.get("file_path") or tool_input.get("filePath") or ""
     if not is_settings(path):
         return ""
@@ -352,9 +496,18 @@ def judge_roots(tool_input: dict) -> str:
             return UNKNOWN.format(path=path, why="The caller passed no written text.")
         if tool_input.get("x4_patch") is True:
             if _add_only(written):           # the added lines ARE the new file
-                return _root_delta(cur, "\n".join(_patch_lines(written, "+")), path)
-            # An update: only what it adds or removes can change a setting; context lines cannot.
-            return _root_text("\n".join(_patch_lines(written, "+") + _patch_lines(written, "-")), path)
+                added = [ln[1:] for ln in written.splitlines()
+                         if ln.startswith("+") and not ln.startswith("***")]
+                return _root_delta(cur, "\n".join(added), path)
+            result = _patch_update_result(cur, written, path)
+            if result is not None:
+                return _root_delta(cur, result, path)
+        # Not reconstructible, or not a patch: refused when the file holds a protected setting or
+        # a hook now -- what survives cannot be proven (4.2.0 review I1) -- or the text names one.
+        bf, bc, bd, bok = root_settings(cur)
+        if not bok or bf or bc or bd:
+            return ROOT_UNKNOWN.format(path=path, why="This change cannot be applied here exactly as "
+                                       "written, and the file holds protected settings it might change.")
         return _root_text(written, path)
     if "content" in tool_input:
         result = tool_input.get("content")
