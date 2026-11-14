@@ -23,9 +23,9 @@ positional arguments:
     find                entities whose in-game NAME contains TEXT (resolves {page,id} to English);
                         exit 0 a match, 1 none among the names searched, 3 nothing to search
     card                one macro's identity: in-game name and description, weapon system, what it
-                        fires, fitting tags and size, ware and price, and which loadouts / ship
-                        macros carry it, each value with the source that set it; exit 0 card
-                        printed, 1 no such macro
+                        fires, fitting tags and size, ware and price, and which loadouts.xml
+                        entries and ship macros name it (loadoutrules are not indexed), each value
+                        with the source that set it; exit 0 card printed, 1 no such macro
 
 options:
   -h, --help            show this help message and exit
@@ -197,8 +197,12 @@ Print the facts that classify one macro (a weapon, turret, missile, shield, engi
 each value with the source that WON it: a mod, or 'no override, still vanilla' (base or a DLC). A
 field is resolved, ABSENT (the store holds the entity and it has no such value) or NOT RESOLVED (a
 reference the store cannot follow), never blank. Text prints as one quoted JSON string literal per
-line. Exit 0 the card was printed (a field may still be NOT RESOLVED), 1 no macro of that name is
-in the store, 2 the store is unreadable.
+line; a t-file that writes a literal backslash-n shows it as \\n, not as a line break. Carriers
+are literal mentions in libraries/loadouts.xml and ship macros only: loadoutrules, which fit most
+NPC ships, are not indexed, so none found is NOT RESOLVED. For a missile launcher or missile
+turret, 'fires' is only the default bullet; the ammunition tags decide what it loads. --json
+carries the store's freshness verdict. Exit 0 the card was printed (a field may still be NOT
+RESOLVED), 1 no macro of that name is in the store, 2 the store is unreadable.
 
 positional arguments:
   macro          the macro's name (its id), e.g. turret_arg_m_flak_01_mk1_macro; a ware id is

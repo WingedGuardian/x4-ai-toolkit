@@ -246,13 +246,19 @@ def main(argv: list[str] | None = None) -> int:
 
     cd = sub.add_parser(
         "card", help="one macro's identity: in-game name and description, weapon system, what it fires, "
-                     "fitting tags and size, ware and price, and which loadouts / ship macros carry it, "
-                     "each value with the source that set it; exit 0 card printed, 1 no such macro",
+                     "fitting tags and size, ware and price, and which loadouts.xml entries and ship "
+                     "macros name it (loadoutrules are not indexed), each value with the source that "
+                     "set it; exit 0 card printed, 1 no such macro",
         description="Print the facts that classify one macro (a weapon, turret, missile, shield, engine, "
                     "or any other), each value with the source that WON it: a mod, or 'no override, "
                     "still vanilla' (base or a DLC). A field is resolved, ABSENT (the store holds the "
                     "entity and it has no such value) or NOT RESOLVED (a reference the store cannot "
-                    "follow), never blank. Text prints as one quoted JSON string literal per line. "
+                    "follow), never blank. Text prints as one quoted JSON string literal per line; a "
+                    "t-file that writes a literal backslash-n shows it as \\\\n, not as a line break. "
+                    "Carriers are literal mentions in libraries/loadouts.xml and ship macros only: "
+                    "loadoutrules, which fit most NPC ships, are not indexed, so none found is NOT RESOLVED. "
+                    "For a missile launcher or missile turret, 'fires' is only the default bullet; the "
+                    "ammunition tags decide what it loads. --json carries the store's freshness verdict. "
                     "Exit 0 the card was printed (a field may still be NOT RESOLVED), 1 no macro of "
                     "that name is in the store, 2 the store is unreadable.")
     cd.add_argument("macro", help="the macro's name (its id), e.g. turret_arg_m_flak_01_mk1_macro; a ware "
@@ -329,6 +335,7 @@ def _read_store(con, args) -> int:
         # Convert only this metadata boundary; SQL/user-command errors keep their
         # existing contracts in the dispatcher below.
         raise StoreMetadataError(f'invalid freshness metadata: {exc}') from exc
+    args.freshness = _stale
     if not _stale.fresh:
         print(_stale.banner("the effective store"), file=sys.stderr)
         print("!! Rebuild:  uv run x4effective build", file=sys.stderr)
@@ -354,6 +361,16 @@ def _read_store(con, args) -> int:
     return 2
 
 
+def freshness_json(args) -> dict:
+    """The store's freshness for a --json reader, who never sees the stderr banner: the banner's verdict
+    (FRESH, or STALE for both a stale and an UNKNOWN store) and its reasons verbatim, which say UNKNOWN
+    where it is unknown."""
+    v = getattr(args, "freshness", None)
+    if v is None:
+        return {"fresh": False, "verdict": "STALE", "reasons": ["freshness was not checked"]}
+    return {"fresh": bool(v.fresh), "verdict": "FRESH" if v.fresh else "STALE", "reasons": list(v.reasons)}
+
+
 def _cmd_card(con, args) -> int:
     """`card`: see `x4validate._effectivecard`. Exit 0 printed, 1 no such macro."""
     from x4validate import _effectivecard
@@ -371,6 +388,7 @@ def _cmd_card(con, args) -> int:
         return 1
     doc = _effectivecard.card(con, ent)
     if args.json:
+        doc = {"schema": doc["schema"], "freshness": freshness_json(args), **doc}
         print(json.dumps(doc, ensure_ascii=False, indent=1))
         return 0
     for line in _effectivecard.render(doc, args.limit):
@@ -996,8 +1014,8 @@ def _cmd_sql(con, args) -> int:
         return 1
     if args.json:
         cols = [] if cur.description is None else [d[0] for d in cur.description]
-        print(json.dumps({"schema": "x4effective.sql/1", "columns": cols,
-                          "rows": [list(r) for r in rows]}, ensure_ascii=False))
+        print(json.dumps({"schema": "x4effective.sql/1", "freshness": freshness_json(args),
+                          "columns": cols, "rows": [list(r) for r in rows]}, ensure_ascii=False))
         return 0
     for r in rows:
         print("\t".join(tsv_cell(v) for v in r))

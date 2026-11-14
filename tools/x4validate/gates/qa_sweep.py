@@ -294,10 +294,12 @@ _ALL_CELLS: list[Cell] = [
          expect=(1, 2), findings_ok=True),
     Cell("x4effective", "show unknown entity", ["show", "macro", "__no_such_entity__"],
          expect=(0, 1), findings_ok=True),
+    # `size=` prints only when the fitting field RESOLVED (a plug connection with a size tag);
+    # "fitting" alone would also match its ABSENT / NOT RESOLVED line.
     Cell("x4effective", "card", ["card", "shield_arg_l_standard_01_mk1_macro"], expect=(0,),
-         wants="fitting"),
+         wants="size=", wants_on="stdout"),
     Cell("x4effective", "card --json", ["card", "shield_arg_l_standard_01_mk1_macro", "--json"],
-         expect=(0,), wants="x4effective.card/1"),
+         expect=(0,), wants='"size": "', wants_on="stdout"),
     Cell("x4effective", "card unknown macro", ["card", "__no_such_entity__"], expect=(1,),
          findings_ok=True),
 

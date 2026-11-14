@@ -34,6 +34,13 @@ FIELDS = ("name", "description", "system", "fires", "fitting", "ware", "price", 
 #: Size tokens a connection's tags use, smallest first.
 SIZES = ("extrasmall", "small", "medium", "large", "extralarge")
 _CONN_TAGS = re.compile(r"^connection\[(.+)\]\.tags$")
+#: Classes whose `bullet.class` is only a default: the ammunition tags decide what they load.
+LAUNCHER_CLASSES = ("missilelauncher", "missileturret")
+LAUNCHER_CAVEAT = ("for a launcher, 'fires' is only its default bullet: the ammunition tags decide what "
+                   "it loads")
+#: What `carried_by` searched -- the population every carrier count is over.
+CARRIER_POPULATION = ("literal mentions in libraries/loadouts.xml and in ship macros (their own "
+                      "connections and loadouts); loadoutrules, which fit most NPC ships, are not indexed")
 _LABEL = {"name": "name", "description": "description", "system": "system", "fires": "fires",
           "fitting": "fitting", "ware": "ware", "price": "price", "carried_by": "carried by"}
 
@@ -78,8 +85,16 @@ class _Card:
         return {"status": status, "value": None, "why": why, **extra}
 
     def _entity(self, kind: str, name: str):
-        return self.con.execute("SELECT * FROM entities WHERE kind=? AND name=? ORDER BY id LIMIT 1",
-                                (kind, name)).fetchone()
+        """(row, copies): the lowest-id entity, through `_one_entity`, which prints the same NOTE a
+        duplicated carded macro gets -- a value silently chosen from several is a narrowing."""
+        from x4validate._effectivecli import _one_entity
+        row = _one_entity(self.con, kind, name)
+        n = self.con.execute("SELECT count(*) FROM entities WHERE kind=? AND name=?", (kind, name)).fetchone()[0]
+        return row, n
+
+    @staticmethod
+    def _dups(n: int) -> dict:
+        return {"duplicates": n} if n > 1 else {}
 
     def _resolver(self):
         if self._texts is None:
@@ -109,6 +124,8 @@ class _Card:
         if "ammunition.tags" in self.attrs:
             v, o = self.attrs["ammunition.tags"]
             extra["ammunition_tags"] = {"value": v, **self._src(o)}
+        if "ammunition.tags" in self.attrs or self.ent["klass"] in LAUNCHER_CLASSES:
+            extra["caveat"] = LAUNCHER_CAVEAT
         if "bullet.class" not in self.attrs:
             return self._no("absent", f"class {self.ent['klass']} macro carries no bullet.class", **extra)
         v, o = self.attrs["bullet.class"]
@@ -122,21 +139,22 @@ class _Card:
             return self._no("absent", f"class {self.ent['klass']} carries no weapon.system and no "
                             "bullet.class, so the store holds no role field for it")
         bullet = fires["value"]
-        b = self._entity("macro", bullet)
+        b, n = self._entity("macro", bullet)
         if b is None:
             return self._no("unresolved", f"its bullet macro {bullet} is not in the store, so its "
                             "weapon.system cannot be read", via=bullet)
         battrs = self._attrs(b["id"])
         if "weapon.system" not in battrs:
-            return self._no("absent", f"its bullet macro {bullet} carries no weapon.system", via=bullet)
+            return self._no("absent", f"its bullet macro {bullet} carries no weapon.system", via=bullet,
+                            **self._dups(n))
         v, o = battrs["weapon.system"]
-        return self._ok(v, o, prop="weapon.system", via=bullet)
+        return self._ok(v, o, prop="weapon.system", via=bullet, **self._dups(n))
 
     def fitting(self) -> dict:
         if "component.ref" not in self.attrs:
             return self._no("absent", "the macro carries no component.ref")
         cref = self.attrs["component.ref"][0]
-        comp = self._entity("component", cref)
+        comp, ncomp = self._entity("component", cref)
         if comp is None:
             why = (f"component {cref} is not in the store" if "component" in self.kinds
                    else "this store did not index kind 'component'")
@@ -150,8 +168,8 @@ class _Card:
             plugs.append({"connection": m.group(1), "tags": tags, "size": size, **self._src(origin)})
         if not plugs:
             return self._no("absent", f"no connection of component {cref} is tagged 'component' (the "
-                            "connection that plugs the item into a slot)", component=cref)
-        return {"status": "ok", "value": plugs, "component": cref}
+                            "connection that plugs the item into a slot)", component=cref, **self._dups(ncomp))
+        return {"status": "ok", "value": plugs, "component": cref, **self._dups(ncomp)}
 
     def wares(self) -> list:
         return self.con.execute(
@@ -176,12 +194,10 @@ class _Card:
         got = {k: {"value": attrs[f"price.{k}"][0], **self._src(attrs[f"price.{k}"][1])}
                for k in ("min", "average", "max") if f"price.{k}" in attrs}
         if not got:
-            return self._no("absent", f"ware {ware['value']} carries no price")
-        return {"status": "ok", "value": got}
+            return self._no("absent", f"ware {ware['value']} carries no price", ware=ware["value"])
+        return {"status": "ok", "value": got, "ware": ware["value"]}
 
     def carried_by(self) -> dict:
-        if "loadout" not in self.kinds and "macro" not in self.kinds:
-            return self._no("unresolved", "this store indexed neither loadouts nor macros")
         rows = self.con.execute(
             "SELECT e.id, e.kind, e.name, e.klass, a.prop, a.origin FROM attrs a "
             "JOIN entities e ON e.id=a.entity_id WHERE a.value=? AND e.id != ? ORDER BY e.kind, e.name, e.id",
@@ -211,10 +227,21 @@ class _Card:
             entry["origin"] = ",".join(o or "?" for o in origins)
             entry["set_by"] = "mod" if any(o in self.mods for o in origins) else "vanilla"
             out.append(entry)
+        common = {"value": out, "others": others, "population": CARRIER_POPULATION}
+        # A loadout the build never indexed cannot be counted: review 2026-11-14 MEASURED a store built
+        # with --kinds macro,component,ware reporting carriers ABSENT about loadouts.xml it never read.
+        if "loadout" not in self.kinds:
+            return {"status": "unresolved", **common,
+                    "why": "this store did not index kind 'loadout', so libraries/loadouts.xml was not "
+                           "searched (rebuild with every kind); ship macros below are a partial list"}
         if not out:
-            return {"status": "absent", "value": [], "others": others,
-                    "why": "no loadout (libraries/loadouts.xml) and no ship macro names this macro"}
-        return {"status": "ok", "value": out, "others": others}
+            # Zero LITERAL mentions is not zero carriers: loadoutrules, which fit most NPC ships, are not
+            # indexed. So this is a non-answer about carriers, never a measured absence of them.
+            return {"status": "unresolved", **common,
+                    "why": "named by 0 loadouts in libraries/loadouts.xml and 0 ship macros; "
+                           "loadoutrules (most NPC fitting) are not indexed, so this is NOT evidence "
+                           "that nothing carries it"}
+        return {"status": "ok", **common}
 
     def build(self) -> dict:
         fires = self.fires()
@@ -264,6 +291,8 @@ def render(doc: dict, limit: int) -> list[str]:
             ammo = f.get("ammunition_tags")
             tail = f"  ammunition tags {_quote(ammo['value'])} {_tag(ammo)}" if ammo else ""
             lines.append(f"{label}{_esc(f['value'])}  (bullet.class)  {_tag(f)}{tail}")
+            if f.get("caveat"):
+                lines.append(f"{' ' * len(label)}NOTE: {f['caveat']}")
         elif key == "fitting":
             for i, p in enumerate(f["value"]):
                 size = f"size={_esc(p['size'])}" if p["size"] else "size NOT STATED in its tags"
@@ -274,7 +303,8 @@ def render(doc: dict, limit: int) -> list[str]:
             lines.append(f"{label}{_esc(f['value'])}{also}  {_tag(f)}")
         elif key == "price":
             parts = [f"{k} {_esc(v['value'])} {_tag(v)}" for k, v in f["value"].items()]
-            lines.append(label + " / ".join(parts))
+            which = (f"  (for ware {_esc(f['ware'])})" if doc["fields"]["ware"].get("also") else "")
+            lines.append(label + " / ".join(parts) + which)
         elif key == "carried_by":
             lines.extend(_render_carriers(label, f, limit))
     nr = doc["not_resolved"]
@@ -293,11 +323,11 @@ def _render_carriers(label: str, f: dict, limit: int) -> list[str]:
     ships = {c["ship"] for c in loadouts if c.get("ship")}
     direct = [c for c in cars if c["kind"] != "loadout"]
     others = ", ".join(f"{_esc(k)} {n}" for k, n in sorted(f.get("others", {}).items())) or "none"
-    head = (f"{label}{len(loadouts)} loadout(s) on {len(ships)} ship macro(s); {len(direct)} ship macro(s) "
-            f"name it directly; other references: {others}")
-    if f["status"] != "ok":
-        return [f"{label}ABSENT -- {_esc(f['why'])}; other references: {others}"]
+    head = (f"{label}named by {len(loadouts)} loadout(s) in loadouts.xml (on {len(ships)} ship macro(s)) and "
+            f"{len(direct)} ship macro(s) directly; loadoutrules not indexed; other references: {others}")
     out = [head]
+    if f["status"] != "ok":
+        out.append(f"{' ' * len(label)}NOT RESOLVED -- {_esc(f['why'])}")
     shown = cars if limit <= 0 else cars[:limit]
     for c in shown:
         ship = f"  ship={_esc(c['ship'])}" if c["kind"] == "loadout" else ""

@@ -55,6 +55,9 @@ def _world(tmp_path):
         "turret_test_m_orphan_macro": ("turret", '<identification name="{20105,99}"/>'
                                                  '<bullet class="bullet_not_in_store_macro"/>'),
         "missile_test_macro": ("missile", '<identification name="{20105,21}"/><weapon system="missile_guided"/>'),
+        "weapon_test_m_launcher_macro": ("missilelauncher", '<identification name="{20105,1}"/>'
+                                                            '<ammunition tags="missile medium"/>'
+                                                            '<bullet class="missile_test_macro"/>'),
         "shield_test_m_macro": ("shieldgenerator", '<identification name="{20105,31}"/>'
                                                    '<recharge max="100" rate="10" delay="1"/>'),
     }
@@ -72,6 +75,8 @@ def _world(tmp_path):
         b'<price min="100" average="200" max="300"/><component ref="turret_test_m_art_macro"/></ware>'
         b'<ware id="weapon_test_m_laser" name="{20105,1}" group="weapons" tags="equipment weapon">'
         b'<price min="10" average="20" max="30"/><component ref="weapon_test_m_laser_macro"/></ware>'
+        b'<ware id="weapon_test_m_laser_variant" name="{20105,1}" group="weapons" tags="equipment weapon">'
+        b'<price min="11" average="21" max="31"/><component ref="weapon_test_m_laser_macro"/></ware>'
         b'</wares>')
     (ref / "libraries" / "loadouts.xml").write_bytes(
         b'<loadouts><loadout id="test_loadout_a" macro="ship_test_m_macro"><macros>'
@@ -203,10 +208,126 @@ def test_a_ship_macro_that_fits_it_directly_is_a_carrier(db, capsys):
     assert ("macro", "ship_test_m_macro") in names
 
 
-def test_nothing_carrying_it_is_an_absence_with_its_denominator(db, capsys):
+def test_nothing_naming_it_is_NOT_a_measured_absence_of_carriers(db, capsys):
+    """Review 2026-11-14: loadoutrules (most NPC fitting) are not indexed, so zero literal mentions in
+    loadouts.xml and ship macros does not show that nothing carries the item."""
     rc, doc = _json(db, capsys, "missile_test_macro")
     car = doc["fields"]["carried_by"]
-    assert car["status"] == "absent" and car["value"] == [] and "loadout" in car["why"]
+    assert car["status"] == "unresolved" and car["value"] == []
+    assert "0 loadouts" in car["why"] and "loadoutrules" in car["why"] and "NOT evidence" in car["why"]
+
+
+def test_the_carrier_population_is_stated_in_json_and_text(db, capsys):
+    rc, doc = _json(db, capsys, "turret_test_m_art_macro")
+    assert "loadoutrules" in doc["fields"]["carried_by"]["population"]
+    rc, out, _ = _card(db, capsys, "turret_test_m_art_macro")
+    line = next(ln for ln in out.splitlines() if ln.lstrip().startswith("carried by"))
+    assert "1 loadout(s) in loadouts.xml" in line and "loadoutrules not indexed" in line
+
+
+@pytest.fixture(scope="module")
+def db_no_loadouts(tmp_path_factory):
+    """The same world built WITHOUT kind 'loadout', as `x4effective build --kinds macro,component,ware`."""
+    tmp_path = tmp_path_factory.mktemp("card_noload")
+    ref, exts = _world(tmp_path)
+    mp = pytest.MonkeyPatch()
+    mp.setattr(_effective._registry, "ingest_content_xml", lambda *a, **k: [])
+    path = tmp_path / "eff.sqlite"
+    try:
+        _effective.build(_merge.Config(reference=ref), path, dirs=[exts], kinds=("macro", "component", "ware"))
+    finally:
+        mp.undo()
+    return path
+
+
+def test_a_store_that_never_indexed_loadouts_is_NOT_RESOLVED(db_no_loadouts, capsys):
+    """MEASURED by the reviewer: the guard `loadout not in kinds and macro not in kinds` could never fire,
+    so a store built without loadouts reported carriers ABSENT about loadouts it never read."""
+    rc, doc = _json(db_no_loadouts, capsys, "turret_test_m_art_macro")
+    car = doc["fields"]["carried_by"]
+    assert car["status"] == "unresolved" and "kind 'loadout'" in car["why"]
+
+
+def test_the_same_store_still_finds_a_ship_macro_carrier(db_no_loadouts, capsys):
+    """Twin: without loadouts the field is a non-answer, but a direct ship-macro mention is still shown."""
+    rc, doc = _json(db_no_loadouts, capsys, "shield_test_m_macro")
+    car = doc["fields"]["carried_by"]
+    assert car["status"] == "unresolved"
+    assert [(c["kind"], c["name"]) for c in car["value"]] == [("macro", "ship_test_m_macro")]
+
+
+# --------------------------------------------------------------------------- review 2026-11-14
+
+def _dup_bullet(db, tmp_path):
+    import shutil
+    import sqlite3
+    copy = tmp_path / "dup.sqlite"
+    shutil.copyfile(db, copy)
+    con = sqlite3.connect(copy)
+    eid, klass, origin = con.execute("SELECT id, klass, origin FROM entities WHERE name='bullet_test_art_macro'"
+                                     ).fetchone()
+    con.execute("INSERT INTO entities VALUES(?,?,?,?,?,?,?)",
+                (9100, "macro", "bullet_test_art_macro", klass, "assets/other/bullet_test_art_macro.xml", origin, None))
+    con.commit()
+    con.close()
+    return copy
+
+
+def test_a_duplicated_bullet_gets_the_same_NOTE_as_a_duplicated_macro(db, capsys, tmp_path):
+    rc, out, err = _card(_dup_bullet(db, tmp_path), capsys, "turret_test_m_art_macro", "--json")
+    assert rc == 0
+    assert "NOTE: 2 entities share (macro, 'bullet_test_art_macro')" in err
+    assert json.loads(out)["fields"]["system"]["duplicates"] == 2
+
+
+def test_a_unique_bullet_carries_no_duplicate_note(db, capsys):
+    rc, out, err = _card(db, capsys, "turret_test_m_art_macro", "--json")
+    assert "NOTE:" not in err and "duplicates" not in json.loads(out)["fields"]["system"]
+
+
+def test_a_launcher_says_fires_is_only_the_default_and_ammunition_decides(db, capsys):
+    rc, doc = _json(db, capsys, "weapon_test_m_launcher_macro")
+    fires = doc["fields"]["fires"]
+    assert "ammunition tags" in fires["caveat"] and fires["ammunition_tags"]["value"] == "missile medium"
+    rc, out, _ = _card(db, capsys, "weapon_test_m_launcher_macro")
+    assert any("ammunition tags decide" in ln for ln in out.splitlines())
+
+
+def test_a_turret_carries_no_launcher_caveat(db, capsys):
+    rc, doc = _json(db, capsys, "turret_test_m_art_macro")
+    assert "caveat" not in doc["fields"]["fires"]
+
+
+def test_card_and_sql_json_carry_the_freshness_verdict(db, capsys, monkeypatch):
+    from x4validate import _freshness
+    monkeypatch.setattr(_effectivecli, "store_freshness",
+                        lambda con: _freshness.Verdict(False, ["content axis UNKNOWN: test"]))
+    rc, doc = _json(db, capsys, "turret_test_m_art_macro")
+    assert doc["freshness"] == {"fresh": False, "verdict": "STALE", "reasons": ["content axis UNKNOWN: test"]}
+    rc = _effectivecli.main(["--db", str(db), "sql", "SELECT 1", "--json"])
+    assert json.loads(capsys.readouterr().out)["freshness"]["verdict"] == "STALE"
+
+
+def test_a_fresh_store_says_FRESH_in_json(db, capsys, monkeypatch):
+    from x4validate import _freshness
+    monkeypatch.setattr(_effectivecli, "store_freshness", lambda con: _freshness.Verdict(True, []))
+    rc, doc = _json(db, capsys, "turret_test_m_art_macro")
+    assert doc["freshness"] == {"fresh": True, "verdict": "FRESH", "reasons": []}
+
+
+def test_the_price_names_its_ware_when_several_wares_point_at_the_macro(db, capsys):
+    rc, doc = _json(db, capsys, "weapon_test_m_laser_macro")
+    assert doc["fields"]["ware"]["also"] == ["weapon_test_m_laser_variant"]
+    assert doc["fields"]["price"]["ware"] == "weapon_test_m_laser"
+    rc, out, _ = _card(db, capsys, "weapon_test_m_laser_macro")
+    price = next(ln for ln in out.splitlines() if ln.lstrip().startswith("price"))
+    assert "for ware weapon_test_m_laser" in price
+
+
+def test_a_single_ware_price_line_is_not_cluttered(db, capsys):
+    rc, out, _ = _card(db, capsys, "turret_test_m_art_macro")
+    price = next(ln for ln in out.splitlines() if ln.lstrip().startswith("price"))
+    assert "for ware" not in price
 
 
 # --------------------------------------------------------------------------- text safety
@@ -261,3 +382,4 @@ def test_the_help_states_defaults_and_exit_codes(capsys):
         _effectivecli.main(["card", "--help"])
     out = capsys.readouterr().out
     assert "--json" in out and "--limit" in out and "default" in out and "exit" in out.lower()
+    assert "loadoutrules" in out and "literal" in out
