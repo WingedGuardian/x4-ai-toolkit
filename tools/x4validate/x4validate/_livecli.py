@@ -2728,7 +2728,7 @@ def main(argv: list[str] | None = None) -> int:
                         "experimental, bounded capture with explicit incomplete coverage")
     pe.add_argument("ship", help="opaque ship ID issued by this UI session, e.g. from query player")
     pe.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
-    pe.add_argument("--timeout", type=float, default=10.0, help="seconds per pipe reply")
+    pe.add_argument("--timeout", type=float, default=10.0, help="seconds per pipe reply (default: %(default)s)")
 
     # ---- the WRITE half: the entire write vocabulary, one subcommand per verb. Each
     # prints a banner on stderr before sending, takes no verb arguments, and exits 0

@@ -199,7 +199,7 @@ positional arguments:
 options:
   -h, --help         show this help message and exit
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
-  --timeout TIMEOUT  seconds per pipe reply
+  --timeout TIMEOUT  seconds per pipe reply (default: 10.0)
 ```
 
 ## `x4live pausestate`
