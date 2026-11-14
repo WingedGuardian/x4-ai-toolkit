@@ -686,13 +686,15 @@ x4_under() {
 #   * X4_GAME is set, and the entry's CANONICAL path equals the canonical game folder plus the
 #     entry's own last name -- a DIRECT child, and not itself a link or junction (a link resolves
 #     elsewhere and fails the equality, so it cannot carry the exemption to what it points at);
-#   * the name is not extensions/, an ego_dlc_* folder, a folder the game reads loose files from
+#   * the name is not extensions/, an ego_dlc_* folder, a folder a Steam install ships at its top
+#     level (mousecursors, support, videos, t, ui), a folder the game reads loose files from
 #     (a top-level catalog folder: libraries, md, aiscripts, ... and any top-level folder of
 #     reference/), an agent/git folder (.claude, .codex, .agents, .opencode, .git, .agent-sessions)
 #     or reference, nor -- when the toolkit IS the game folder -- one of the toolkit's own folders;
 #   * it is not, does not contain and is not inside reference/, extensions/, the profile, the
 #     saves, the mods root, the backups, the path config or the toolkit root;
-#   * it is a folder or absent, and holds no .cat/.dat archive at its top level.
+#   * it is a folder or absent, holds no .cat/.dat archive at its top level, and no .sig file
+#     (Egosoft-signed content) within 4 path components below it.
 # Computed ONCE per process (a batch shares it); a root that cannot be resolved rejects the entry
 # and never poisons the verdict's own fail-closed canonicalisation flag.
 # Out: _X4_STAGE_ROOTS (accepted canonical roots, newline-separated), _X4_STAGE_WARN.
@@ -701,7 +703,7 @@ x4_staging_roots() {
   [ -n "$_X4_STAGE_DONE" ] && return 0
   _X4_STAGE_DONE=1; _X4_STAGE_ROOTS=""; _X4_STAGE_WARN=""
   [ -n "${X4_STAGING_DIRS:-}" ] || return 0
-  local saved_err="$_X4_CANON_ERROR" rest="${X4_STAGING_DIRS};" e p n name c g why r rc d tk nm=0 ng=0 nc=0
+  local saved_err="$_X4_CANON_ERROR" rest="${X4_STAGING_DIRS};" e p n name c g why r rc d tk nm=0 ng=0 nc=0 dg=0
   local -a hits
   while [ -n "$rest" ]; do
     e="${rest%%;*}"; rest="${rest#*;}"
@@ -727,8 +729,8 @@ x4_staging_roots() {
       x4_canon_memo "$X4_TOOLKIT"; tk="${_X4_CANON_RESULT%/}"
       case "$name" in
         extensions|ego_dlc_*|aiscripts|assets|cutscenes|index|libraries|maps|md|music|particles|\
-        sfx|shadergl|t|textures|ui|vf|voice|voice-*)
-          why="the game reads '$name' itself (extensions, DLC or a catalog folder)" ;;
+        sfx|shadergl|t|textures|ui|vf|voice|voice-*|mousecursors|support|videos)
+          why="the game ships or reads '$name' itself (extensions, DLC, a catalog folder, or a folder a Steam install ships)" ;;
         .claude|.codex|.agents|.opencode|.git|.agent-sessions|reference)
           why="'$name' is an agent, git or toolkit folder (in a separate install the game folder's .claude/ is the deployed agent tree)" ;;
       esac
@@ -771,9 +773,22 @@ x4_staging_roots() {
         else
           shopt -q nullglob && ng=1; shopt -q nocaseglob && nc=1
           shopt -s nullglob nocaseglob
+          shopt -q dotglob && dg=1; shopt -s dotglob
           hits=("$_X4_WP"/*.cat "$_X4_WP"/*.dat)
-          [ "$ng" = 1 ] || shopt -u nullglob; [ "$nc" = 1 ] || shopt -u nocaseglob
           [ "${#hits[@]}" -gt 0 ] && why="it holds .cat/.dat game archives at its top level"
+          # Egosoft SIGNS what it ships: videos/*.mkv.sig, mousecursors/*.cur.sig, t/*.xml.sig,
+          # ui/core/lualibs/*.dll.sig. A .sig up to 4 path components below the entry rejects it,
+          # whatever its name. The bound: the deepest .sig a Steam install ships outside extensions/
+          # is 4 components below its top folder (ui/core/lualibs/x.sig), while unpacked mods in a
+          # staging collection carry their own .sig files 6 or more components down (MEASURED on
+          # the reference machine: 0 game folders missed, 0 of 6,649 staged .sig files within 4).
+          # Builtin globs: no find on PATH (Windows has another FIND), no subprocess.
+          if [ -z "$why" ]; then
+            hits=("$_X4_WP"/*.sig "$_X4_WP"/*/*.sig "$_X4_WP"/*/*/*.sig "$_X4_WP"/*/*/*/*.sig)
+            [ "${#hits[@]}" -gt 0 ] && why="it holds game-signed (.sig) content within 4 levels, e.g. ${hits[0]##*/}, so the game ships or reads files there"
+          fi
+          [ "$dg" = 1 ] || shopt -u dotglob
+          [ "$ng" = 1 ] || shopt -u nullglob; [ "$nc" = 1 ] || shopt -u nocaseglob
         fi
       fi
     fi

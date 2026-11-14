@@ -330,8 +330,11 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
   save preservation or bulk approval.
   File writes into the game installation are refused, except inside a staging folder you name
   in `X4_STAGING_DIRS` (a folder of downloaded, not-installed mods directly inside the game
-  folder, outside `extensions/`): there the file-edit tools may write files, and nothing else
-  is relaxed. The placement rules and an example are in `x4-paths.env.example`.
+  folder, outside `extensions/`): there the file-edit tools may create or overwrite plain
+  files (never `.cat`/`.dat`, a directory or a hard-linked file), while deleting or moving files
+  out keeps its refusal. Name only a folder you created: the guard recognises the game's own
+  folders by name, location and Egosoft `.sig` files, not by asking the game. The placement
+  rules and an example are in `x4-paths.env.example`.
   They cover every tool that can change a file: Bash, **PowerShell** (parsed by PowerShell's
   own parser and judged by the same rules as Bash — it needs `pwsh` or Windows PowerShell,
   and asks rather than guesses without one), Edit, Write and NotebookEdit.

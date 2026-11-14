@@ -94,6 +94,7 @@ def test_several_entries_and_a_rejected_one(guard, monkeypatch):
 @pytest.mark.parametrize("entry", [
     "extensions", "Extensions", "EXTENSIONS.", "extensions/", "extensions/mod",
     "ego_dlc_test", "libraries", "md", "aiscripts", "t", "voice-l044", ".claude", "reference",
+    "videos", "MouseCursors", "support",
     "Other/Nested", "..", ".", "", ])
 def test_rejected_entries_grant_nothing_and_say_so(guard, monkeypatch, entry):
     g, r = guard
@@ -125,6 +126,28 @@ def test_folder_holding_archives_is_rejected(guard, monkeypatch):
     monkeypatch.setenv("X4_STAGING_DIRS", STAGE)
     v = _both(g, stage / "note.txt")
     assert v["decision"] == "deny" and "X4_STAGING_DIRS" in v["reason"], v
+
+
+@pytest.mark.parametrize("rel, rejected", [
+    ("intro.mkv.sig", True),                          # game-signed content at the top level
+    ("a/b/c/utf8_64.dll.sig", True),                  # 4 components down: the deepest the game ships
+    ("Deferred/Mod/ext/x/y/content.sig", False),      # 6 components: a staged mod's own signature
+    ("Deferred/notes.SIG.txt", False),                # not a .sig file
+])
+def test_folder_holding_signed_game_content_is_rejected(guard, monkeypatch, rel, rejected):
+    """Folders the game ships (videos/, mousecursors/, ui/...) hold Egosoft .sig files. A bounded
+    scan (4 path components below the entry) rejects them structurally, whatever their name."""
+    g, r = guard
+    stage = r["X4_GAME"] / "Signed"
+    f = stage / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(b"")
+    monkeypatch.setenv("X4_STAGING_DIRS", "Signed")
+    v = _both(g, stage / "probe.txt")
+    if rejected:
+        assert v["decision"] == "deny" and "X4_STAGING_DIRS" in v["reason"] and ".sig" in v["reason"], v
+    else:
+        assert v["decision"] == "allow", v
 
 
 def test_folder_overlapping_a_configured_root_is_rejected(guard, monkeypatch):
