@@ -19,7 +19,7 @@ case "$0" in */*|*\\*) HOOK_DIR="${0%[/\\]*}" ;; *) HOOK_DIR=. ;; esac
 _X4_FILE_BATCH=0
 _X4_BATCH_NP=""
 _X4_BATCH_LINKED=""
-_X4_WORK_SUBS=(.claude/hooks .claude/skills .claude/agents .claude/commands .claude/plans .claude/backups .claude/memory .claude/projects tools bin scripts dev dist)
+_X4_WORK_SUBS=(.claude/skills .claude/agents .claude/commands .claude/plans .claude/backups .claude/memory .claude/projects tools bin scripts dev dist)
 [ "${1:-}" = --harness-policy-backend ] && [ "${2:-}" = --batch ] && _X4_FILE_BATCH=1
 x4_resolve_python; PY="$X4_PY"
 _harness_save_qualified=0
@@ -280,6 +280,18 @@ case "$_NP" in
       esac
     done ;;
 esac
+# 4.2.0 review 4 (MEASURED): the DEPLOYED guard scripts and their support files, in ANY tree. The
+# `*.claude/hooks/*` write whitelist dated from v1.0 (9dc393c6), when the game root's .claude/ was
+# where the toolkit itself was developed; since the guards moved under agent/ (d2f76b2f, 2026-09-30)
+# every deployed copy is produced by gen-agent-trees.py, deploy-claude-dir.py or an installer through
+# the shell -- never an agent file edit -- and the whitelist only let an agent Write over
+# protect-files.sh itself. Ahead of every whitelist below (the mods root and toolkit subtrees
+# included). The source, agent/guards/, stays editable. Pure shell on the normalised path.
+case "$_NP" in
+  */.claude/hooks/*|*/.codex/hooks/*|*/.opencode/hooks/*|*/.opencode/plugins/x4guard.js|\
+  .claude/hooks/*|.codex/hooks/*|.opencode/hooks/*|.opencode/plugins/x4guard.js)
+    deny "BLOCKED: $FILE_PATH is a DEPLOYED X4 guard file (the hooks that judge every agent action, or their support files). An agent may not write, edit or delete it: overwriting it would switch the guards off. To change a guard, edit its source under agent/guards/ in the toolkit and regenerate (tools/x4validate/scripts/gen-agent-trees.py; deploy-claude-dir.py --apply for a game-root copy); otherwise ask the user."; return 0 ;;
+esac
 # The project's instruction and notes files, at the PROJECT ROOT ONLY: CLAUDE.md (and
 # Claude's .claude/CLAUDE.md), AGENTS.md (Codex's CLAUDE.md, 2026-09-30), KNOWLEDGEBASE.md,
 # and the agent's own notes -- X4-NOTES.md and the 4.0 migration's X4-NOTES.pre-4.0.md (lane
@@ -387,7 +399,7 @@ for sub in "${_X4_WORK_SUBS[@]}"; do
   case "$_fpc" in "$_tkc/$sub"|"$_tkc/$sub"/*) return 0 ;; esac
 done
 case "$_NP" in
-  *.claude/hooks/*|*.claude/skills/*|*.claude/agents/*|*.claude/commands/*|\
+  *.claude/skills/*|*.claude/agents/*|*.claude/commands/*|\
   *.claude/plans/*|*.claude/backups/*|*.claude/memory/*|*.claude/projects/*) return 0 ;;
 esac
 

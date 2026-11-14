@@ -126,7 +126,10 @@ run_layout(){ # run_layout <name> <toolkit> <game>
   echo; echo "=== protect-files.sh — $name layout ==="
   decide allow protect-files.sh "$(fj "$TK/dev/mymod/libraries/wares.xml")" "mod source in dev/"
   decide allow protect-files.sh "$(fj "$SBX_TMP/mods/other/wares.xml")"         "mod source in \$X4_MODS"
-  decide allow protect-files.sh "$(fj "$TK/.claude/hooks/x.sh")"            "toolkit .claude/"
+  # 4.2.0 review 4: the deployed guard tree is no longer whitelisted (an agent could Write over
+  # protect-files.sh); the rest of .claude/ keeps its whitelist.
+  decide deny  protect-files.sh "$(fj "$TK/.claude/hooks/protect-files.sh")" "a DEPLOYED guard script is not agent-writable"
+  decide allow protect-files.sh "$(fj "$TK/.claude/skills/x/SKILL.md")"    "toolkit .claude/"
   decide allow protect-files.sh "$(fj "$TK/CLAUDE.md")"                     "CLAUDE.md"
   # AGENTS.md is Codex's CLAUDE.md, and sits beside it in the game root. It was denied as
   # a game-install file (2026-09-30) while CLAUDE.md was allowed. The twin keeps the
@@ -190,7 +193,7 @@ run_layout(){ # run_layout <name> <toolkit> <game>
   if [ "$name" = "separate" ]; then
     decide advise protect-files.sh "$(fj "$GAME/.claude/skills/x4-debug/SKILL.md")" "a DEPLOYED skill edit advises toward the source"
     decide advise protect-files.sh "$(fj "$GAME/.claude/agents/mod-research.md")"   "a DEPLOYED agent edit advises"
-    decide advise protect-files.sh "$(fj "$GAME/.claude/hooks/protect-bash.sh")"    "a DEPLOYED hook edit advises"
+    decide deny   protect-files.sh "$(fj "$GAME/.claude/hooks/protect-bash.sh")"    "a DEPLOYED hook edit is denied (4.2.0 review 4)"
     decide allow  protect-files.sh "$(fj "$TK/.claude/skills/x4-debug/SKILL.md")"   "the SOURCE skill does not advise"
   else
     decide allow  protect-files.sh "$(fj "$GAME/.claude/skills/x4-debug/SKILL.md")" "in-game layout: .claude/ IS the source, no advisory"
@@ -779,7 +782,7 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # Round 8 adds 5 denies + 1 twin: 450 + 6.
 # The literal-dollar port adds 4 denies + 2 twins (advised, not denied): 456 + 6.
 # 4.2.0 settings class rules add 1 deny (an env key changed): 469 + 1.
-EXPECT=470
+EXPECT=472
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
