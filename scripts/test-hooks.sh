@@ -778,7 +778,8 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # Round 7 adds 6 denies + 2 twins: 442 + 8.
 # Round 8 adds 5 denies + 1 twin: 450 + 6.
 # The literal-dollar port adds 4 denies + 2 twins (advised, not denied): 456 + 6.
-EXPECT=469
+# 4.2.0 settings class rules add 1 deny (an env key changed): 469 + 1.
+EXPECT=470
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
@@ -1540,7 +1541,10 @@ _st="$SBX_TMP/settk"; mkdir -p "$_st/.claude"; printf '%s' '{"env":{"OTHER":"1"}
 _sj(){ printf '{"tool_name":"Write","tool_input":{"file_path":%s,"content":%s}}' \
          "$(printf '%s' "$_st/.claude/settings.json" | jq -Rs .)" "$(printf '%s' "$1" | jq -Rs .)"; }
 decide deny  protect-files.sh "$(_sj '{"env":{"X4_GUARD":"off"}}')"   "Write settings.json with X4_GUARD in env: denied"
-decide allow protect-files.sh "$(_sj '{"env":{"OTHER":"2"}}')"         "TWIN: Write settings.json without X4_GUARD: allowed"
+# 4.2.0: ANY change to env is refused too (the user edits env by hand), so the twin keeps env as
+# it is and changes something else; the env change itself is pinned as a refusal.
+decide allow protect-files.sh "$(_sj '{"env":{"OTHER":"1"},"model":"x"}')" "TWIN: Write settings.json without X4_GUARD, env unchanged: allowed"
+decide deny  protect-files.sh "$(_sj '{"env":{"OTHER":"2"}}')"         "Write settings.json changing another env key: denied (4.2.0 env rule)"
 decide deny  protect-bash.sh  "$(cj "echo '{}' > '$_st/.claude/settings.local.json'")" "Bash: a redirect into settings.local.json: denied"
 decide allow protect-bash.sh  "$(cj "cat '$_st/.claude/settings.json'")" "TWIN: Bash: reading settings.json: allowed"
 printf '%s' '{"env":{"X4_GUARD":"off"}}' > "$_st/.claude/settings.json"
