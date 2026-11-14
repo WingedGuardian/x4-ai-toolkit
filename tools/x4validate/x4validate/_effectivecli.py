@@ -120,6 +120,24 @@ def _winner_not_origin_note(vpath: str, chain_json: str | None, cfg=None,
             f"WON, not which introduced the value)")
 
 
+#: The TSV cell escaping, PostgreSQL COPY text format: lossless, and reversible by one regex.
+TSV_ESCAPING = ("cells are TAB-separated, one row per line; inside a cell a backslash prints as \\\\, "
+                "a TAB as \\t, a newline as \\n, a carriage return as \\r, and SQL NULL as \\N "
+                "(an empty string stays empty)")
+_TSV_ESC = str.maketrans({"\\": "\\\\", "\t": "\\t", "\n": "\\n", "\r": "\\r"})
+
+
+def tsv_cell(value) -> str:
+    """One TSV cell that cannot split its row: see `TSV_ESCAPING`.
+
+    MEASURED 2026-11-14: 4 of 80,533 `texts` rows hold a TAB and 52 a NEWLINE (52 rows in all), and `sql`
+    printed those 52 rows as 173 lines. A lossy scrub (replace with a space) would make the cell unrecoverable, and
+    leaving backslashes alone would make a literal `\\t` and a real TAB print the same."""
+    if value is None:
+        return "\\N"
+    return str(value).translate(_TSV_ESC)
+
+
 def _fmt_chain(chain_json: str | None) -> str:
     if not chain_json:
         return "base"
@@ -206,8 +224,13 @@ def main(argv: list[str] | None = None) -> int:
                          "is annotated and the header names the replacing mod; no attribute history "
                          "is kept inside a replaced subtree (F338)")
 
-    sq = sub.add_parser("sql", help="read-only SELECT against the store")
+    sq = sub.add_parser("sql", help="read-only SELECT against the store",
+                        description=f"Run one read-only query. Default output is TSV: {TSV_ESCAPING}. "
+                                    "--json prints the exact values instead.")
     sq.add_argument("query", help="one read-only SELECT or WITH statement (anything else is refused)")
+    sq.add_argument("--json", action="store_true",
+                    help="print {schema, columns, rows} as one JSON object, values exact and NULL as null "
+                         "(default: escaped TSV, no header row)")
 
     sub.add_parser("coverage", help="what this store DOES and does not index "
                                     "(so a negative can carry its denominator)")
@@ -220,6 +243,32 @@ def main(argv: list[str] | None = None) -> int:
                     help="only entities of this class, e.g. ship_xl (the store's class column)")
     fd.add_argument("--limit", type=int, default=50,
                     help="rows to print; the total is still counted (default: %(default)s)")
+
+    cd = sub.add_parser(
+        "card", help="one macro's identity: in-game name and description, weapon system, what it fires, "
+                     "fitting tags and size, ware and price, and which loadouts.xml entries and ship "
+                     "macros name it (loadoutrules are not indexed), each value with the source that "
+                     "set it; exit 0 card printed, 1 no such macro",
+        description="Print the facts that classify one macro (a weapon, turret, missile, shield, engine, "
+                    "or any other), each value with the source that WON it: a mod, or 'no override, "
+                    "still vanilla' (base or a DLC). A field is resolved, ABSENT (the store holds the "
+                    "entity and it has no such value) or NOT RESOLVED (a reference the store cannot "
+                    "follow), never blank. Text prints as one quoted JSON string literal per line; a "
+                    "t-file that writes a literal backslash-n shows it as \\\\n, not as a line break. "
+                    "Carriers are literal mentions in libraries/loadouts.xml and ship macros only: "
+                    "loadoutrules, which fit most NPC ships, are not indexed, so none found is NOT RESOLVED. "
+                    "For a missile launcher or missile turret, 'fires' is only the default bullet; the "
+                    "ammunition tags decide what it loads. --json carries the store's freshness verdict. "
+                    "Exit 0 the card was printed (a field may still be NOT RESOLVED), 1 no macro of "
+                    "that name is in the store, 2 the store is unreadable.")
+    cd.add_argument("macro", help="the macro's name (its id), e.g. turret_arg_m_flak_01_mk1_macro; a ware "
+                                  "id is pointed at its macro")
+    cd.add_argument("--json", action="store_true",
+                    help="print the card as one JSON object, schema x4effective.card/1, every carrier "
+                         "included (default: text)")
+    cd.add_argument("--limit", type=int, default=20,
+                    help="carriers to print in the text form; the total is still counted, 0 for all "
+                         "(default: %(default)s)")
 
     args = p.parse_args(argv)
     db = Path(args.db) if args.db else _registry.require(
@@ -286,6 +335,7 @@ def _read_store(con, args) -> int:
         # Convert only this metadata boundary; SQL/user-command errors keep their
         # existing contracts in the dispatcher below.
         raise StoreMetadataError(f'invalid freshness metadata: {exc}') from exc
+    args.freshness = _stale
     if not _stale.fresh:
         print(_stale.banner("the effective store"), file=sys.stderr)
         print("!! Rebuild:  uv run x4effective build", file=sys.stderr)
@@ -306,7 +356,45 @@ def _read_store(con, args) -> int:
         return _cmd_coverage(con, args)
     if args.cmd == "find":
         return _cmd_find(con, args)
+    if args.cmd == "card":
+        return _cmd_card(con, args)
     return 2
+
+
+def freshness_json(args) -> dict:
+    """The store's freshness for a --json reader, who never sees the stderr banner: the banner's verdict
+    (FRESH, or STALE for both a stale and an UNKNOWN store) and its reasons verbatim, which say UNKNOWN
+    where it is unknown."""
+    v = getattr(args, "freshness", None)
+    if v is None:
+        return {"fresh": False, "verdict": "STALE", "reasons": ["freshness was not checked"]}
+    return {"fresh": bool(v.fresh), "verdict": "FRESH" if v.fresh else "STALE", "reasons": list(v.reasons)}
+
+
+def _cmd_card(con, args) -> int:
+    """`card`: see `x4validate._effectivecard`. Exit 0 printed, 1 no such macro."""
+    from x4validate import _effectivecard
+    ent = _one_entity(con, "macro", args.macro)
+    if ent is None:
+        print(f"no macro named {args.macro!r} in the store -- this is NOT proof that nothing defines it.",
+              file=sys.stderr)
+        ware = con.execute("SELECT a.value FROM attrs a JOIN entities e ON e.id=a.entity_id WHERE "
+                           "e.kind='ware' AND e.name=? AND a.prop='component.ref' ORDER BY e.id LIMIT 1",
+                           (args.macro,)).fetchone()
+        if ware:
+            print(f"  {args.macro!r} is a WARE; its macro is {ware[0]!r}: "
+                  f"`x4effective card {ware[0]}`", file=sys.stderr)
+        print(f"  {scope_note()}", file=sys.stderr)
+        return 1
+    doc = _effectivecard.card(con, ent)
+    if args.json:
+        doc = {"schema": doc["schema"], "freshness": freshness_json(args), **doc}
+        print(json.dumps(doc, ensure_ascii=False, indent=1))
+        return 0
+    for line in _effectivecard.render(doc, args.limit):
+        print(line)
+    print(_ADVISORY)
+    return 0
 
 
 #: Name-bearing properties searched by `find`, in display priority order.
@@ -364,8 +452,12 @@ def _cmd_find(con, args) -> int:
             hits.append((e, e["names"][best][0]))
     for e, shown in hits[:args.limit if args.limit > 0 else None]:
         flag = "" if e["status"] == "ok" else f"  [{e['status']} reference]"
-        dup = f"\t[shares this id with {copies[e['name']] - 1} more: {e['vpath']}]" if copies[e["name"]] > 1 else ""
-        print(f"{e['name']}\t{e['klass'] or ''}\t{e['origin']}\t{shown}{flag}{dup}")
+        others = copies[e["name"]] - 1
+        dup = "\t" + tsv_cell(f"[shares this id with {others} more: {e['vpath']}]") if others else ""
+        # Every cell escaped (`tsv_cell`): the shown name is free text from a t-file, and a TAB in it
+        # shifted the row.
+        print(f"{tsv_cell(e['name'])}\t{tsv_cell(e['klass'] or '')}\t{tsv_cell(e['origin'])}\t"
+              f"{tsv_cell(shown + flag)}{dup}")
     unresolved = sum(n for s, n in statuses.items() if s != "ok")
     shared = sum(1 for n in copies.values() if n > 1)
     print(f"\n{len(hits)} match(es) for {args.text!r} among {len(named)} named {scope} entit(ies); "
@@ -911,7 +1003,8 @@ def _cmd_sql(con, args) -> int:
         print("only SELECT/WITH queries allowed", file=sys.stderr)
         return 2
     try:
-        rows = con.execute(q).fetchall()
+        cur = con.execute(q)
+        rows = cur.fetchall()
     except sqlite3.Error as exc:
         if getattr(exc, 'sqlite_errorcode', 0) & 255 in (
                 sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB,
@@ -919,8 +1012,13 @@ def _cmd_sql(con, args) -> int:
             raise
         print(f"sql error: {exc}", file=sys.stderr)
         return 1
+    if args.json:
+        cols = [] if cur.description is None else [d[0] for d in cur.description]
+        print(json.dumps({"schema": "x4effective.sql/1", "freshness": freshness_json(args),
+                          "columns": cols, "rows": [list(r) for r in rows]}, ensure_ascii=False))
+        return 0
     for r in rows:
-        print("\t".join("" if v is None else str(v) for v in r))
+        print("\t".join(tsv_cell(v) for v in r))
     return 0
 
 

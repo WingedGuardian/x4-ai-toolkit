@@ -232,26 +232,48 @@ def invocation_re(cli: str, sub: str | None) -> re.Pattern[str]:
 
 
 # ---------------------------------------------------------------------------
-def _subcommand_in(argv: list[str], subs: list[str]) -> str | None:
-    """The first argv element that is a subcommand and is NOT a flag's value.
+_USAGE_FLAG = re.compile(r"\[(-{1,2}[A-Za-z0-9][\w-]*)( [A-Z][A-Z0-9_]*| \{[^}]*\})?\]")
 
-    Skipping the element after a flag matters: `["--registry", "build", "dump"]`
-    would otherwise resolve to `build` -- a flag VALUE beating the real
-    subcommand. The heuristic errs toward UNDECIDABLE (a valueless flag before
-    the subcommand makes it skip one too many), and that is the safe direction:
-    a loud "I could not tell" beats a quiet mis-attribution, which is the whole
-    reason this function exists.
+
+def usage_flags(help_text: str) -> dict[str, bool] | None:
+    """{flag: takes a value} for the GLOBAL flags in a CLI's own `usage:` paragraph, or None when there
+    is no usage line (unknown, never "no flags"). argparse prints a value flag as `[--file FILE]` and a
+    valueless one as `[--version]`, so the arity is read from the parser, not guessed."""
+    m = re.search(r"^usage:.*?(?:\n\s*\n|\Z)", help_text or "", re.S | re.M)
+    if not m:
+        return None
+    return {f: bool(v) for f, v in _USAGE_FLAG.findall(m.group(0))}
+
+
+def _subcommand_in(argv: list[str], subs: list[str],
+                   flags: dict[str, bool] | None = None) -> str | None:
+    """The subcommand in *argv*'s subcommand position, or None when that cannot be told (UNDECIDABLE).
+
+    The first word that is not a flag or a flag's value decides: a subcommand, or None. `--flag=value` is
+    one word. *flags* is `usage_flags` for the CLI ({flag: takes a value}); a flag it declares consumes
+    exactly its value. A flag of UNKNOWN arity consumes the next word only when that word is not a
+    subcommand; when it IS one, the word may be the flag's value or the subcommand, so the answer is None.
+    Until 2026-11-14 every flag was assumed to take a value, and the review MEASURED
+    `["--quiet", "query", "pause"]` -> `pause` and `["--db=x", "query", "pause"]` -> `pause`: confident and
+    wrong. A loud "cannot tell" beats a quiet mis-attribution, which is why this function exists.
     """
-    skip = False
-    for a in argv:
-        if skip:
-            skip = False
-            continue
+    known = flags or {}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
         if a.startswith("-"):
-            skip = True
+            if "=" in a:
+                i += 1
+                continue
+            if a in known:
+                i += 2 if known[a] else 1
+                continue
+            nxt = argv[i + 1] if i + 1 < len(argv) else None
+            if nxt is not None and nxt in subs:
+                return None
+            i += 2
             continue
-        if a in subs:
-            return a
+        return a if a in subs else None
     return None
 
 
@@ -277,7 +299,8 @@ class Coverage:
     finding instead of quietly shrinking coverage.
     """
 
-    def __init__(self, cells, subs_by_cli: dict[str, list[str]]) -> None:
+    def __init__(self, cells, subs_by_cli: dict[str, list[str]],
+                 flags_by_cli: dict[str, dict[str, bool]] | None = None) -> None:
         self.pairs: set[tuple[str, str]] = set()
         self.tools: set[str] = set()
         #: cells on a subcommand-bearing CLI where no subcommand could be found.
@@ -289,7 +312,7 @@ class Coverage:
             if not subs:                       # single-command CLI, or unknown
                 self.pairs.add((c.tool, ""))
                 continue
-            found = _subcommand_in(c.argv or [], subs)
+            found = _subcommand_in(c.argv or [], subs, (flags_by_cli or {}).get(c.tool))
             if found is None:
                 self.undecidable.append((c.tool, getattr(c, "label", "")))
             else:

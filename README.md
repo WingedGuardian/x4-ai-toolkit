@@ -120,6 +120,11 @@ the `{page,id}` text references; a zero comes with its denominator, and a filter
 exits 3 instead of saying "0 matches". `dump <vpath> --annotate` marks every node an overlay changed with a comment
 naming the mod, op and patch line, so "which mod rewrote this node?" is one command; it reports who WON each
 node, not who introduced it.
+`card <macro>` gathers what classifies one weapon, turret, missile, shield or engine: its in-game name and
+description, the weapon system (its own, or its bullet's), the fitting tags and size, the ware and price, and the
+loadouts and ship macros that carry it. Each value names the mod that set it or says it is still vanilla, and a
+value that cannot be resolved says so. `sql` prints TSV with tabs, newlines and backslashes escaped
+(`sql --help`), or exact values with `--json`.
 
 ### `x4fresh` — are the derived stores current, and rebuild the ones that are not
 The effective store, the xref index and the two BaseX databases (`x4raw`, `x4eff`) each describe the modlist

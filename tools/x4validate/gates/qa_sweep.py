@@ -44,6 +44,10 @@ class Cell:
     #: substring that must appear in the cell's output -- stdout AND stderr, combined, as
     #: `run()` matches it -- for the cell to count as doing work; absent, the cell is YELLOW
     wants: str | None = None
+    #: Which stream `wants` must appear on: "both" (combined, the default), "stdout" or
+    #: "stderr". A refusal cell names its stream, so a message printed on the wrong one --
+    #: where a pipeline reading stdout would take it as data -- does not count.
+    wants_on: str = "both"
     #: True when a non-zero exit is a legitimate finding, not a tool failure
     findings_ok: bool = False
     #: Minutes, not seconds. Excluded unless --all, so the default sweep stays a
@@ -290,6 +294,14 @@ _ALL_CELLS: list[Cell] = [
          expect=(1, 2), findings_ok=True),
     Cell("x4effective", "show unknown entity", ["show", "macro", "__no_such_entity__"],
          expect=(0, 1), findings_ok=True),
+    # `size=` prints only when the fitting field RESOLVED (a plug connection with a size tag);
+    # "fitting" alone would also match its ABSENT / NOT RESOLVED line.
+    Cell("x4effective", "card", ["card", "shield_arg_l_standard_01_mk1_macro"], expect=(0,),
+         wants="size=", wants_on="stdout"),
+    Cell("x4effective", "card --json", ["card", "shield_arg_l_standard_01_mk1_macro", "--json"],
+         expect=(0,), wants='"size": "', wants_on="stdout"),
+    Cell("x4effective", "card unknown macro", ["card", "__no_such_entity__"], expect=(1,),
+         findings_ok=True),
 
     # ---- x4compat -------------------------------------------------------
     Cell("x4compat", "check", ["check"], expect=(0, 1, 3), findings_ok=True),
@@ -373,6 +385,10 @@ _ALL_CELLS: list[Cell] = [
     # A name no save holds: exit 1, and the absence must state what it searched (a match on a real name prints 10,000+ rows).
     Cell("x4save", "vars (no match states its denominator)", ["vars", "^__qa_no_such_var__$"], expect=(1,),
          wants="NO MATCH over"),
+    # `census` refuses a bad --by key BEFORE resolving any save, so this cell never opens one.
+    Cell("x4save", "census refuses an unknown --by key", ["census", "--by", "__qa_bad_key__"],
+         expect=(2,), findings_ok=True, wants="error: --by: unknown key(s) __qa_bad_key__",
+         wants_on="stderr"),
     # ---- x4live ---------------------------------------------------------
     # These read a dump written by an in-game probe, so "no dump present" (rc 2)
     # is a legitimate state on a machine that has never run one -- what is NOT
@@ -504,6 +520,22 @@ _ALL_CELLS: list[Cell] = [
     Cell("x4live", "query rejects an unknown verb",
          ["query", "__no_such_verb__", "--timeout", "1"], expect=(1, 2),
          findings_ok=True),
+    # OFFLINE REFUSALS for the two 4.2.0 subcommands: each is refused before the pipe opens,
+    # so no game is needed and none is touched. `equipment` checks the ship id's shape first.
+    Cell("x4live", "equipment refuses a malformed ship id", ["equipment", "__qa_not_an_id__"],
+         expect=(2,), findings_ok=True,
+         wants="error: equipment requires a nonzero issued ship ID", wants_on="stderr"),
+    # `automation query action_execute` is a hidden write route (a reserved session verb),
+    # refused after argument parsing and before the pipe, the journal or any metadata. Every
+    # path argument is a dummy that the refusal never reads. (Its first form, `query pause`,
+    # is what showed `check_coverage` counting every argv token as coverage of `x4live
+    # pause`; it now counts the subcommand position only -- see `covered_subcommands`.)
+    Cell("x4live", "automation refuses a write verb through query",
+         ["automation", "--journal", str(_sandbox_dir() / "__qa_no_journal__"),
+          "--image", "__qa_no_such_x4__.exe", "--profile-id", "0", "--build", "0",
+          "--revision", "0", "--mode", "fresh", "query", "action_execute"],
+         expect=(2,), findings_ok=True,
+         wants="error: dedicated action/session operation required", wants_on="stderr"),
 ]
 
 #: CLIs named by a cell that this checkout does not ship. NAMED, never silently
@@ -535,8 +567,10 @@ def run(cell: Cell) -> Cell:
     elif proc.returncode not in cell.expect:
         cell.status = "RED"
         cell.detail = f"exit {proc.returncode}, expected {cell.expect}"
-    elif cell.wants and cell.wants not in out:
-        cell.status, cell.detail = "YELLOW", f"no {cell.wants!r} in output ({len(out)}B)"
+    elif cell.wants and cell.wants not in {"both": out, "stdout": proc.stdout or "",
+                                           "stderr": proc.stderr or ""}[cell.wants_on]:
+        where = "output" if cell.wants_on == "both" else cell.wants_on
+        cell.status, cell.detail = "YELLOW", f"no {cell.wants!r} in {where} ({len(out)}B)"
     elif len(out.strip()) == 0:
         cell.status, cell.detail = "YELLOW", "no output at all"
     else:
@@ -604,6 +638,11 @@ UNSWEPT: dict[tuple[str, str], str] = {
 }
 
 
+#: Each CLI's `--help` text as `_subcommands` read it, so `covered_subcommands` can take the global
+#: flags' arity from the same answer instead of asking again.
+_HELP: dict[str, str] = {}
+
+
 def _subcommands(cli: str) -> list[str] | None:
     """The subcommands argparse lists for *cli*, or None if we could not ask.
 
@@ -627,8 +666,41 @@ def _subcommands(cli: str) -> list[str] | None:
         return None
     if r.returncode != 0:
         return None
+    _HELP[cli] = r.stdout or ""
     m = re.search(r"^\s*\{([a-z0-9_,-]+)\}\s*$", r.stdout or "", re.M)
     return m.group(1).split(",") if m else []
+
+
+def covered_subcommands(subs_by: dict | None = None) -> tuple[dict[str, set[str]], list[tuple[str, str]]]:
+    """({cli: subcommands a cell RUNS}, [(cli, label) of cells whose subcommand cannot be found]).
+
+    A cell covers the subcommand in its SUBCOMMAND POSITION: the first argv element that is one of the
+    CLI's subcommands and is not a flag's value -- `toolkit_usage._subcommand_in`, the one implementation
+    of that rule, given each global flag's arity from the CLI's own usage line (`usage_flags`). Several
+    cells pass a global flag first (`--registry <sandbox> dashboard`), which is why argv[0] is not the
+    rule. Counting EVERY token was the rule until 2026-11-14 and it over-counted:
+    `x4live query pause` covers `query`, but it marked the unswept `pause` covered too. MEASURED when the
+    rule changed: 54 (cli, subcommand) pairs under both rules, 0 lost, 0 undecidable cells.
+    A nested line (`x4live automation ... query identity`) counts its top-level subcommand only.
+    *subs_by* receives each CLI's `_subcommands` answer (None = could not ask), asked once per CLI.
+    """
+    subs_by = {} if subs_by is None else subs_by
+    from toolkit_usage import _subcommand_in, usage_flags  # noqa: PLC0415 -- a sibling gate
+    covered: dict[str, set[str]] = {}
+    undecidable: list[tuple[str, str]] = []
+    for c in CELLS:
+        if c.tool not in subs_by:
+            subs_by[c.tool] = _subcommands(c.tool)
+        subs = subs_by[c.tool]
+        mine = covered.setdefault(c.tool, set())
+        if not subs:
+            continue                      # single-command CLI, or --help unreadable: no position
+        found = _subcommand_in(c.argv or [], subs, usage_flags(_HELP.get(c.tool, "")))
+        if found is None:
+            undecidable.append((c.tool, c.label))
+        else:
+            mine.add(found)
+    return covered, undecidable
 
 
 def check_coverage() -> tuple[list[str], list[str]]:
@@ -639,16 +711,15 @@ def check_coverage() -> tuple[list[str], list[str]]:
     """
     findings: list[str] = []
     notes: list[str] = []
-    covered: dict[str, set[str]] = {}
-    for c in CELLS:
-        # ANY token in the argv counts, wherever it sits. Several cells pass a flag
-        # first (`--registry <sandbox> dashboard`), so assuming argv[0] is the
-        # subcommand under-counts -- it reported x4modlist as 0/12 when it is 4/12.
-        covered.setdefault(c.tool, set()).update(c.argv)
+    subs_by: dict[str, list[str] | None] = {}
+    covered, undecidable = covered_subcommands(subs_by)
+    for tool, label in undecidable:
+        findings.append(f"{tool} cell {label!r}: no subcommand found in its argv, so what it "
+                        "covers is UNKNOWABLE")
 
     total = swept = 0
     for cli in sorted(covered):
-        subs = _subcommands(cli)
+        subs = subs_by.get(cli)
         if subs is None:
             notes.append(f"{cli}: could not read --help, so coverage is UNKNOWN "
                          f"(not assumed complete)")

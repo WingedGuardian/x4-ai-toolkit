@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-12 CLIs, 57 subcommands.
+12 CLIs, 58 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -33,6 +33,7 @@ Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `-
 | | `sql` | read-only SELECT against the store |
 | | `coverage` | what this store DOES and does not index (so a negative can carry its denominator) |
 | | `find` | entities whose in-game NAME contains TEXT (resolves {page,id} to English); exit 0 a match, 1 none among the names searched, 3 nothing to search |
+| | `card` | one macro's identity: in-game name and description, weapon system, what it fires, fitting tags and size, ware and price, and which loadouts.xml entries and ship macros name it (loadoutrules are not indexed), each value with the source that set it; exit 0 card printed, 1 no such macro |
 | **`x4fresh`** | | x4fresh -- is every derived artifact current, and rebuild the ones that are not. |
 | | `status` | one verdict per artifact; exit 0 all FRESH and complete, 3 all FRESH but some known INCOMPLETE (dropped/unparsed input), 5 otherwise |
 | | `rebuild` | rebuild what is not FRESH, one at a time, under a lock; exit 0 every requested artifact is FRESH, 1 a builder failed, 5 still not FRESH (deferred, lock held, gate started, world moved); --auto: 0 unless a builder failed |
