@@ -812,4 +812,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # The hooks start this isolated (-I), so the script's own directory is not on sys.path, and
+    # the lazy `import x4guard` / `hook_facts` / `patch_paths` above need it: put it there.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     raise SystemExit(main())

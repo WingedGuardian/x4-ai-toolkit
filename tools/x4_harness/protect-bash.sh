@@ -76,7 +76,7 @@ emit() {
       "$JQ" -n --arg k "$1" --arg r "$2" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:$k,permissionDecisionReason:$r}}'
     fi
   else
-    X4_KIND="$1" X4_REASON="$2" "$PY" -c 'import json, os, sys
+    X4_KIND="$1" X4_REASON="$2" "$PY" "$X4_PYI" -c 'import json, os, sys
 k = os.environ["X4_KIND"]; r = os.environ["X4_REASON"]
 h = {"hookEventName": "PreToolUse"}
 if k == "advise":
@@ -239,7 +239,7 @@ if [ "$_harness_facts_stdin" = 1 ]; then
   esac
   case "$PARSE_RC" in ''|*[!0-9]*) PARSE_RC=99 ;; esac   # malformed: the generic refusal below
 else
-  FACTS_RAW=$( { emit_roots; printf '%s' "$INPUT"; } | "$PY" "$HOOK_DIR/hook_facts.py" 2>/dev/null)
+  FACTS_RAW=$( { emit_roots; printf '%s' "$INPUT"; } | "$PY" "$X4_PYI" "$HOOK_DIR/hook_facts.py" 2>/dev/null)
   PARSE_RC=$?
 fi
 # rc 5: the PowerShell TOOL command does not PARSE as PowerShell. That is a syntax error in
@@ -523,7 +523,7 @@ if [ "$_x4_cfgm" = 1 ]; then
   while IFS= read -r _cf; do
     [ -n "$_cf" ] || continue
     _cfacts=$( { emit_roots "$_cf"; printf '%s' "$INPUT"; } \
-               | "$PY" "$HOOK_DIR/hook_facts.py" 2>/dev/null)
+               | "$PY" "$X4_PYI" "$HOOK_DIR/hook_facts.py" 2>/dev/null)
     _cfacts="${_cfacts%%$SENT*}"
     case $'\n'"${_cfacts//$'\r'/}"$'\n' in
       *$'\nwrites_reference\t1\n'*|*$'\nrm_targets_reference\t1\n'*)

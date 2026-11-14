@@ -17,7 +17,7 @@ if [ -z "$PY" ]; then
 fi
 # Python's own status decides, since a module that will not import dies before main()'s try can speak,
 # and the exit 0 below would have turned that into silence. The answer is held until the status is known.
-ANSWER=$( { x4_emit_guard_roots; printf '%s' "$INPUT"; } | "$PY" "$HOOK_DIR/save_sentinel.py")
+ANSWER=$( { x4_emit_guard_roots; printf '%s' "$INPUT"; } | "$PY" "$X4_PYI" "$HOOK_DIR/save_sentinel.py")
 RC=$?
 if [ "$RC" -ne 0 ]; then
   printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"SAVE SENTINEL DID NOT RUN (Python exit '"$RC"'; run save_sentinel.py by hand to see why): saves were not checked after this call."}}'

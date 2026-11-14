@@ -228,7 +228,10 @@ try {
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $py[0]
-    $argList = @($py | Select-Object -Skip 1) + @($adapter, $script:hookEvent)
+    # Isolated (-I): no module from the cwd (the agent-writable project) or PYTHON* env reaches the
+    # adapter; -B carries PYTHONDONTWRITEBYTECODE, which -I ignores (see _x4-env.sh X4_PYI).
+    $script:PyIsolation = if ($env:PYTHONDONTWRITEBYTECODE) { '-IB' } else { '-I' }
+    $argList = @($py | Select-Object -Skip 1) + @($script:PyIsolation, $adapter, $script:hookEvent)
     # Quote only what needs it: py.exe reads its RAW command line, and a quoted "-3" is not its
     # version switch (it went on to Python as an unknown option, exit 2 -- MEASURED).
     $psi.Arguments = ($argList | ForEach-Object {

@@ -12,7 +12,7 @@ if [ -z "$X4_PY" ]; then
   [ "$MODE" = prompt ] || echo "SESSION CHARTER: NOT INJECTED -- Python is unavailable."
   exit 0
 fi
-"$X4_PY" -B "$HOOK_DIR/charter.py" "$MODE" 2>/dev/null || {
+"$X4_PY" -IB "$HOOK_DIR/charter.py" "$MODE" 2>/dev/null || {
   [ "$MODE" = prompt ] || echo "SESSION CHARTER: NOT INJECTED -- the charter hook failed."
 }
 exit 0

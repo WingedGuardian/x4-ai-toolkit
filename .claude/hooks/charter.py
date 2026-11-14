@@ -53,4 +53,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # charter.sh starts this isolated (-I): the lazy `import save_policy` needs its own directory.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     raise SystemExit(main())

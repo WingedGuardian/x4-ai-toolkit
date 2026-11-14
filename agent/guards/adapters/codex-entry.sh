@@ -50,6 +50,9 @@ elif [ "${X4_NO_PYTHON_FALLBACK:-}" != 1 ]; then
   elif command -v python >/dev/null 2>&1; then PY=(python)
   fi
 fi
+# Isolated (-I): no module from the cwd (the agent-writable project) or PYTHON* env reaches either
+# interpreter below; -B carries PYTHONDONTWRITEBYTECODE, which -I ignores (see _x4-env.sh X4_PYI).
+PYI=(-I); [ -n "${PYTHONDONTWRITEBYTECODE:-}" ] && PYI=(-IB)
 [ "${#PY[@]}" -gt 0 ] || { fail "no Python found -- ask the user to set X4_PYTHON in the environment they launch the agent from, or to put python on PATH (an agent may not set it in a settings file)"; exit 0; }
 
 LIMIT=50; [ "$EV" = session_start ] && LIMIT=25
@@ -59,7 +62,7 @@ case "$LIMIT" in ''|*[!0-9]*) fail "X4_WRAPPER_TIMEOUT_S is not a whole number";
 TMPD="$(mktemp -d 2>/dev/null)" || { fail "cannot create a temp directory"; exit 0; }
 cat > "$TMPD/in" || { fail "cannot read the payload"; exit 0; }
 
-"${PY[@]}" "$ADAPTER" "$EV" < "$TMPD/in" > "$TMPD/out" 2>/dev/null &
+"${PY[@]}" "${PYI[@]}" "$ADAPTER" "$EV" < "$TMPD/in" > "$TMPD/out" 2>/dev/null &
 PID=$!
 ticks=$((LIMIT * 10)); n=0
 while kill -0 "$PID" 2>/dev/null; do
@@ -83,7 +86,7 @@ BODY="${OUT#X4OK}"; BODY="${BODY#"${BODY%%[![:space:]]*}"}"
 [ -n "$BODY" ] || { emit ""; exit 0; }
 
 # The shape check needs a JSON parser; the adapter just ran on this Python, so use it.
-BAD="$(printf '%s' "$BODY" | "${PY[@]}" -c '
+BAD="$(printf '%s' "$BODY" | "${PY[@]}" "${PYI[@]}" -c '
 import json, sys
 def unique(pairs):
     out = {}

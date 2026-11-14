@@ -3,7 +3,9 @@ from pathlib import Path
 import sys
 
 sys.dont_write_bytecode = True
-import save_policy
+# The hooks start this isolated (-I), so the script's own directory is not on sys.path: put it there.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import save_policy  # noqa: E402
 
 
 def main():
