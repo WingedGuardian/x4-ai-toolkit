@@ -184,9 +184,7 @@ def test_UNSWEPT_never_names_a_subcommand_THAT_A_CELL_ALREADY_COVERS():
     UNSWEPT -- the only choice that could still go red.
     """
     qa = _qa()
-    covered: dict[str, set[str]] = {}
-    for c in qa.CELLS:                      # the gate's OWN rule, not a re-derivation
-        covered.setdefault(c.tool, set()).update(c.argv)
+    covered, _undecidable = qa.covered_subcommands()    # the gate's OWN rule, not a re-derivation
     dead = sorted((cli, sub) for (cli, sub) in qa.UNSWEPT
                   if sub in covered.get(cli, set()))
     assert not dead, (
@@ -194,6 +192,56 @@ def test_UNSWEPT_never_names_a_subcommand_THAT_A_CELL_ALREADY_COVERS():
         "second gate that would absorb the loss of that cell:\n  "
         + "\n  ".join("%s %s" % p for p in dead)
         + "\n\nDelete the entry: a real check always beats a justified skip.")
+
+
+def _without_pause_exclusion(monkeypatch, qa, extra_cells):
+    monkeypatch.setattr(qa, "CELLS", [c for c in qa.CELLS if not (c.tool == "x4live" and c.argv[:1] == ["pause"])]
+                        + extra_cells)
+    monkeypatch.setattr(qa, "UNSWEPT", {k: v for k, v in qa.UNSWEPT.items() if k != ("x4live", "pause")})
+
+
+def test_a_subcommand_NAME_passed_as_an_ARGUMENT_is_not_coverage(monkeypatch):
+    """`x4live query pause` runs `query`; `pause` is its verb. Counting every argv token marked the
+    deliberately unswept `x4live pause` subcommand as covered (found 2026-11-14, when a new cell used
+    exactly that argv and the dead-UNSWEPT test fired)."""
+    qa = _qa()
+    _without_pause_exclusion(monkeypatch, qa, [qa.Cell("x4live", "t", ["query", "pause"])])
+    findings, _ = qa.check_coverage()
+    assert "x4live pause: no cell and no UNSWEPT reason" in findings, findings
+
+
+def test_the_subcommand_in_FIRST_position_still_counts(monkeypatch):
+    """Twin: the same token where it IS the subcommand."""
+    qa = _qa()
+    _without_pause_exclusion(monkeypatch, qa, [qa.Cell("x4live", "t", ["pause"])])
+    findings, _ = qa.check_coverage()
+    assert not any(f.startswith("x4live pause") for f in findings), findings
+
+
+def test_a_nested_subcommand_line_counts_its_TOP_LEVEL_subcommand(monkeypatch):
+    """`x4live automation --journal j ... query identity` covers `automation`, never `query`."""
+    qa = _qa()
+    kept = [c for c in qa.CELLS if not (c.tool == "x4live" and c.argv[:1] in (["automation"], ["query"]))]
+    monkeypatch.setattr(qa, "CELLS", kept + [qa.Cell("x4live", "t", ["automation", "--journal", "j",
+                                                                     "query", "identity"])])
+    findings, _ = qa.check_coverage()
+    assert not any(f.startswith("x4live automation") for f in findings), findings
+    assert "x4live query: no cell and no UNSWEPT reason" in findings, findings
+
+
+def test_a_global_flag_before_the_subcommand_is_skipped_with_its_value(monkeypatch):
+    """`--registry <path> dashboard`: the path is the flag's value, `dashboard` the subcommand."""
+    qa = _qa()
+    covered, undecidable = qa.covered_subcommands()
+    assert "dashboard" in covered["x4modlist"] and not undecidable, undecidable
+
+
+def test_a_cell_whose_subcommand_cannot_be_found_is_a_FINDING(monkeypatch):
+    """A cell on a subcommand CLI that names none is unknowable coverage, never silently nothing."""
+    qa = _qa()
+    monkeypatch.setattr(qa, "CELLS", qa.CELLS + [qa.Cell("x4live", "no-sub", ["--file", "x.xml"])])
+    findings, _ = qa.check_coverage()
+    assert any("no-sub" in f and "no subcommand" in f for f in findings), findings
 
 
 def test_x4modlist_search_is_swept_only_through_its_offline_refusal():

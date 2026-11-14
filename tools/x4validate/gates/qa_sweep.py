@@ -525,9 +525,9 @@ _ALL_CELLS: list[Cell] = [
          wants="error: equipment requires a nonzero issued ship ID", wants_on="stderr"),
     # `automation query action_execute` is a hidden write route (a reserved session verb),
     # refused after argument parsing and before the pipe, the journal or any metadata. Every
-    # path argument is a dummy that the refusal never reads. NOT `query pause`, the other
-    # refused form: `check_coverage` counts every argv token, so a `pause` here would mark
-    # the unswept `x4live pause` subcommand as covered.
+    # path argument is a dummy that the refusal never reads. (Its first form, `query pause`,
+    # is what showed `check_coverage` counting every argv token as coverage of `x4live
+    # pause`; it now counts the subcommand position only -- see `covered_subcommands`.)
     Cell("x4live", "automation refuses a write verb through query",
          ["automation", "--journal", str(_sandbox_dir() / "__qa_no_journal__"),
           "--image", "__qa_no_such_x4__.exe", "--profile-id", "0", "--build", "0",
@@ -663,6 +663,37 @@ def _subcommands(cli: str) -> list[str] | None:
     return m.group(1).split(",") if m else []
 
 
+def covered_subcommands(subs_by: dict | None = None) -> tuple[dict[str, set[str]], list[tuple[str, str]]]:
+    """({cli: subcommands a cell RUNS}, [(cli, label) of cells whose subcommand cannot be found]).
+
+    A cell covers the subcommand in its SUBCOMMAND POSITION: the first argv element that is one of the
+    CLI's subcommands and is not a flag's value -- `toolkit_usage._subcommand_in`, the one implementation
+    of that rule. Several cells pass a global flag first (`--registry <sandbox> dashboard`), which is why
+    argv[0] is not the rule. Counting EVERY token was the rule until 2026-11-14 and it over-counted:
+    `x4live query pause` covers `query`, but it marked the unswept `pause` covered too. MEASURED when the
+    rule changed: 54 (cli, subcommand) pairs under both rules, 0 lost, 0 undecidable cells.
+    A nested line (`x4live automation ... query identity`) counts its top-level subcommand only.
+    *subs_by* receives each CLI's `_subcommands` answer (None = could not ask), asked once per CLI.
+    """
+    subs_by = {} if subs_by is None else subs_by
+    from toolkit_usage import _subcommand_in  # noqa: PLC0415 -- a sibling gate, imported when asked
+    covered: dict[str, set[str]] = {}
+    undecidable: list[tuple[str, str]] = []
+    for c in CELLS:
+        if c.tool not in subs_by:
+            subs_by[c.tool] = _subcommands(c.tool)
+        subs = subs_by[c.tool]
+        mine = covered.setdefault(c.tool, set())
+        if not subs:
+            continue                      # single-command CLI, or --help unreadable: no position
+        found = _subcommand_in(c.argv or [], subs)
+        if found is None:
+            undecidable.append((c.tool, c.label))
+        else:
+            mine.add(found)
+    return covered, undecidable
+
+
 def check_coverage() -> tuple[list[str], list[str]]:
     """Compare the subcommands each CLI advertises against the cells that run them.
 
@@ -671,16 +702,15 @@ def check_coverage() -> tuple[list[str], list[str]]:
     """
     findings: list[str] = []
     notes: list[str] = []
-    covered: dict[str, set[str]] = {}
-    for c in CELLS:
-        # ANY token in the argv counts, wherever it sits. Several cells pass a flag
-        # first (`--registry <sandbox> dashboard`), so assuming argv[0] is the
-        # subcommand under-counts -- it reported x4modlist as 0/12 when it is 4/12.
-        covered.setdefault(c.tool, set()).update(c.argv)
+    subs_by: dict[str, list[str] | None] = {}
+    covered, undecidable = covered_subcommands(subs_by)
+    for tool, label in undecidable:
+        findings.append(f"{tool} cell {label!r}: no subcommand found in its argv, so what it "
+                        "covers is UNKNOWABLE")
 
     total = swept = 0
     for cli in sorted(covered):
-        subs = _subcommands(cli)
+        subs = subs_by.get(cli)
         if subs is None:
             notes.append(f"{cli}: could not read --help, so coverage is UNKNOWN "
                          f"(not assumed complete)")
