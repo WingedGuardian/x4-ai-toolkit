@@ -220,7 +220,7 @@ try {
     $adapter = Join-Path $here 'codex_adapter.py'
     if (-not (Test-Path -LiteralPath $adapter -PathType Leaf)) { Write-Fail 'codex_adapter.py is missing'; exit 0 }
     $py = Find-Python
-    if (-not $py) { Write-Fail 'no Python found (set X4_PYTHON)'; exit 0 }
+    if (-not $py) { Write-Fail 'no Python found -- ask the user to set X4_PYTHON in the environment they launch the agent from, or to put python on PATH (an agent may not set it in a settings file)'; exit 0 }
 
     $limit = 50
     if ($script:hookEvent -eq 'session_start') { $limit = 25 }

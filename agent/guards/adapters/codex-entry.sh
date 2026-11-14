@@ -50,7 +50,7 @@ elif [ "${X4_NO_PYTHON_FALLBACK:-}" != 1 ]; then
   elif command -v python >/dev/null 2>&1; then PY=(python)
   fi
 fi
-[ "${#PY[@]}" -gt 0 ] || { fail "no Python found (set X4_PYTHON)"; exit 0; }
+[ "${#PY[@]}" -gt 0 ] || { fail "no Python found -- ask the user to set X4_PYTHON in the environment they launch the agent from, or to put python on PATH (an agent may not set it in a settings file)"; exit 0; }
 
 LIMIT=50; [ "$EV" = session_start ] && LIMIT=25
 [ -n "${X4_WRAPPER_TIMEOUT_S:-}" ] && LIMIT="$X4_WRAPPER_TIMEOUT_S"
