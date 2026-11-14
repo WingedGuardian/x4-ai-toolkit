@@ -286,12 +286,49 @@ esac
 # every deployed copy is produced by gen-agent-trees.py, deploy-claude-dir.py or an installer through
 # the shell -- never an agent file edit -- and the whitelist only let an agent Write over
 # protect-files.sh itself. Ahead of every whitelist below (the mods root and toolkit subtrees
-# included). The source, agent/guards/, stays editable. Pure shell on the normalised path.
-case "$_NP" in
-  */.claude/hooks/*|*/.codex/hooks/*|*/.opencode/hooks/*|*/.opencode/plugins/x4guard.js|\
-  .claude/hooks/*|.codex/hooks/*|.opencode/hooks/*|.opencode/plugins/x4guard.js)
-    deny "BLOCKED: $FILE_PATH is a DEPLOYED X4 guard file (the hooks that judge every agent action, or their support files). An agent may not write, edit or delete it: overwriting it would switch the guards off. To change a guard, edit its source under agent/guards/ in the toolkit and regenerate (tools/x4validate/scripts/gen-agent-trees.py; deploy-claude-dir.py --apply for a game-root copy); otherwise ask the user."; return 0 ;;
-esac
+# included). The source, agent/guards/, stays editable.
+# Final guard review (2026-11-14), both MEASURED: (1) only the path AS WRITTEN was tested, so a
+# junction or symlink (`proj/jl -> .claude/hooks`, `proj/dotc -> .claude`) walked past it -- the
+# RESOLVED path is tested too; (2) every `.claude/hooks/` was refused, a user's own
+# `~/.claude/hooks/my-hook.sh` included. A write in a hook tree is refused when (a) its NAME is one
+# the toolkit ships into a hook tree, or (b) its hook folder already holds such a file (a helper
+# planted next to the guards). The names are the generator's own output (render_hooks plus the
+# Codex and OpenCode adapters), pinned both ways by tests/test_file_guard_deployed_hooks.py.
+_X4_SHIPPED_HOOK_NAMES="_x4-env.sh backup-before-edit.sh charter.py charter.sh check-reference-version.sh codex-entry.ps1 codex-entry.sh codex_adapter.py codex_trust.py hook_facts.py opencode_adapter.py opencode_config.py patch_paths.py preferences.py profile_approval.py protect-bash.sh protect-files.sh ps_translate.ps1 save-sentinel.sh save_policy.py save_sentinel.py search-scope.sh session-canary.sh settings_guard.py test-protect-bash.sh test_audit0924_hooks.py test_hook_facts.py test_python_durable_scope.py x4_upgrade_render.py x4guard.py x4validate-on-edit.sh"
+# x4_hook_root_holds_toolkit PATH: true when a hook folder PATH lies in (its first and its last
+# `.claude/hooks`, `.codex/hooks` or `.opencode/hooks` segment) holds a file of that list. Builtins
+# only; paid only by a path inside a hook tree.
+x4_hook_root_holds_toolkit() {
+  local q="/$1" seg r n
+  for seg in .claude/hooks .codex/hooks .opencode/hooks; do
+    case "$q" in */"$seg"/*) ;; *) continue ;; esac
+    for r in "${q%%/"$seg"/*}/$seg" "${q%/"$seg"/*}/$seg"; do
+      r="${r#/}"
+      for n in $_X4_SHIPPED_HOOK_NAMES; do [ -e "$r/$n" ] && return 0; done
+    done
+  done
+  return 1
+}
+x4_canon_memo "$FILE_PATH"; _hk_c="$_X4_CANON_RESULT"; _hk_hit=""; _hk_real=""
+for _hk_p in "$_NP" "$_hk_c"; do
+  case "$_hk_p" in
+    */.opencode/plugins/x4guard.js|.opencode/plugins/x4guard.js) _hk_hit=1; break ;;
+    */.claude/hooks/*|*/.codex/hooks/*|*/.opencode/hooks/*|.claude/hooks/*|.codex/hooks/*|.opencode/hooks/*) ;;
+    *) continue ;;
+  esac
+  case " $_X4_SHIPPED_HOOK_NAMES " in *" ${_hk_p##*/} "*) _hk_hit=1; break ;; esac
+  x4_hook_root_holds_toolkit "$_hk_p" && { _hk_hit=1; break; }
+  # Both forms above are LOWERCASED: on a case-sensitive filesystem the folder test also needs the
+  # resolved path with its case kept. Windows (msys/cygwin) is case-insensitive, so it is skipped.
+  case "${OSTYPE:-}" in
+    msys*|cygwin*) ;;
+    *) [ -n "$_hk_real" ] || { _hk_real="$(realpath -m -- "$FILE_PATH" 2>/dev/null)" && [ -n "$_hk_real" ] || _hk_real="$FILE_PATH"; }
+       x4_hook_root_holds_toolkit "$_hk_real" && { _hk_hit=1; break; } ;;
+  esac
+done
+if [ -n "$_hk_hit" ]; then
+  deny "BLOCKED: $FILE_PATH is a DEPLOYED X4 guard file (the hooks that judge every agent action, or their support files), or sits in a folder that holds them. An agent may not write, edit or delete it: overwriting it would switch the guards off. To change a guard, edit its source under agent/guards/ in the toolkit and regenerate (tools/x4validate/scripts/gen-agent-trees.py; deploy-claude-dir.py --apply for a game-root copy); otherwise ask the user."; return 0
+fi
 # The project's instruction and notes files, at the PROJECT ROOT ONLY: CLAUDE.md (and
 # Claude's .claude/CLAUDE.md), AGENTS.md (Codex's CLAUDE.md, 2026-09-30), KNOWLEDGEBASE.md,
 # and the agent's own notes -- X4-NOTES.md and the 4.0 migration's X4-NOTES.pre-4.0.md (lane

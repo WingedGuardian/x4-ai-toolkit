@@ -129,6 +129,8 @@ run_layout(){ # run_layout <name> <toolkit> <game>
   # 4.2.0 review 4: the deployed guard tree is no longer whitelisted (an agent could Write over
   # protect-files.sh); the rest of .claude/ keeps its whitelist.
   decide deny  protect-files.sh "$(fj "$TK/.claude/hooks/protect-files.sh")" "a DEPLOYED guard script is not agent-writable"
+  # Final guard review: a user's OWN hook, in a hooks folder holding no toolkit file, is theirs.
+  decide allow protect-files.sh "$(fj "$SBX_TMP/home/.claude/hooks/my-own-hook.sh")" "a user's own hook outside a toolkit hook tree"
   decide allow protect-files.sh "$(fj "$TK/.claude/skills/x/SKILL.md")"    "toolkit .claude/"
   decide allow protect-files.sh "$(fj "$TK/CLAUDE.md")"                     "CLAUDE.md"
   # AGENTS.md is Codex's CLAUDE.md, and sits beside it in the game root. It was denied as
@@ -782,7 +784,9 @@ decide allow protect-bash.sh "$(cj 'cd $(git rev-parse --show-toplevel) && ls')"
 # Round 8 adds 5 denies + 1 twin: 450 + 6.
 # The literal-dollar port adds 4 denies + 2 twins (advised, not denied): 456 + 6.
 # 4.2.0 settings class rules add 1 deny (an env key changed): 469 + 1.
-EXPECT=472
+# Review 4: deployed guard tree deny + skills twin: 470 + 2. Final guard review: a user's own hook,
+# one allow per layout: 472 + 2.
+EXPECT=474
 
 # =============================================================================
 # PATH DIALECT -- a verdict must not depend on HOW the path was written
