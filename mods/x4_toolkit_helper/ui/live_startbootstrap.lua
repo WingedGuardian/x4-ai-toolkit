@@ -5,7 +5,7 @@ local function new(d)
     assert(type(d)=="table" and type(d.modules)=="table","UI modules required")
     local function hex(s,n) return type(s)=="string" and #s==n and not s:find("[^0-9a-f]") end
     assert(hex(d.build,64),"source-bound bundle build required")
-    local BUILD=d.build
+    local bundle_build=d.build
     local g,C,H,pipes=d.globals,d.C,d.Helper,d.pipes
     assert(type(g)=="table" and C and type(H)=="table" and type(pipes)=="table","native UI dependencies required")
     local api,tickets,pending,used={},{},{},{}
@@ -29,7 +29,7 @@ local function new(d)
     end
     function api.identity()
         live()
-        return {build=BUILD,generation=generation or "",process_binding=process_binding or "",
+        return {build=bundle_build,generation=generation or "",process_binding=process_binding or "",
             profile_id=profile or "",scope="UI_ONLY_NO_WORLD"}
     end
     function api.binding() live();return generation or "unbound" end
@@ -40,7 +40,7 @@ local function new(d)
             fields(a,{challenge=true});assert(hex(a.challenge,32) and not tickets[a.challenge] and count<256,"fresh UI challenge required")
             count=count+1;latest=a.challenge
             tickets[latest]={generation=generation,age=age,used=false}
-            return {kind="UI_STATE",challenge=latest,generation=generation or "",build=BUILD}
+            return {kind="UI_STATE",challenge=latest,generation=generation or "",build=bundle_build}
         elseif action=="ui_bind" then
             fields(a,{proof=true,generation=true,process_binding=true,profile_id=true})
             local ticket=tickets[a.proof]
@@ -56,7 +56,7 @@ local function new(d)
                 assert(ticket.generation==nil,"stale unbound proof")
                 generation=a.generation;process_binding=a.process_binding;profile=a.profile_id
             end
-            return {kind="UI_BOUND",challenge=a.proof,generation=generation,build=BUILD,
+            return {kind="UI_BOUND",challenge=a.proof,generation=generation,build=bundle_build,
                 process_binding=process_binding,profile_id=profile}
         elseif action=="authorize" then
             fields(a,{request_id=true,gamestart=true,capability=true,context_sha256=true})

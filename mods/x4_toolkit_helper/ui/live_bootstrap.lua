@@ -12,7 +12,7 @@ return function(deps)
         assert(type(deps.modules[name])=="function","missing module factory: "..name)
     end
     assert(type(deps.read)=="function" and type(deps.read_verbs)=="table","closed read interface required")
-    local BUILD, read = deps.build, deps.read
+    local bundle_build, read = deps.build, deps.read
     local ffi=deps.ffi or require("ffi")
     local C=deps.C or ffi.C
     local native=deps.native or {
@@ -102,7 +102,7 @@ return function(deps)
         ticket_count=ticket_count+1
         tickets[challenge]={observed=bound_generation or ""}
         active_proof=challenge
-        return {kind="UI_STATE",challenge=challenge,generation=bound_generation or "",build=BUILD}
+        return {kind="UI_STATE",challenge=challenge,generation=bound_generation or "",build=bundle_build}
     end
     function api.ui_authorize(proof,generation)
         live();assert(hex(proof,32) and hex(generation,32),"UI proof required")
@@ -209,7 +209,7 @@ return function(deps)
         router=deps.modules.automation{session=session,registry=api.registry,wire=wire,
             capacity_profile=deps.capacity_profile,capacity_resolver=deps.capacity_resolver,
             read=function(...) live();return read(...) end,read_verbs=reads,
-            age=function() live();return get_age() end,build=BUILD,
+            age=function() live();return get_age() end,build=bundle_build,
             ui_authorize=api.ui_authorize,ui_state=api.ui_state}
         api.router=router
     end)
