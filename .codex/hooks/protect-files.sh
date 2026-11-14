@@ -111,6 +111,22 @@ x4_typed_delete() {
   fi
 }
 
+# A typed delete, or the SOURCE of a move (x4guard marks it x4_move_source): a removal from where
+# the file is. Used ONLY to withhold the X4_STAGING_DIRS write exemption -- the marker can make a
+# verdict stricter, never looser, so it may come from tool_input. Never the write-only batch.
+x4_typed_removal() {
+  [ "$_X4_FILE_BATCH" = 0 ] || return 1
+  if [ "${JQ_OK:-0}" = 1 ]; then
+    printf '%s' "$INPUT" | "$JQ" -e '.tool_name == "DeleteFile" or (.tool_input | type == "object" and .x4_move_source == true)' >/dev/null 2>&1
+  elif [ -n "$PY" ]; then
+    X4_IN="$INPUT" "$PY" -c 'import json, os, sys
+d = json.loads(os.environ["X4_IN"]); t = d.get("tool_input")
+sys.exit(0 if d.get("tool_name") == "DeleteFile" or (isinstance(t, dict) and t.get("x4_move_source") is True) else 1)' >/dev/null 2>&1
+  else
+    return 0     # cannot tell: no exemption
+  fi
+}
+
 x4_file_policy() {
 # === HARD BLOCK — read-only reference data (unpacked base game, never edit) ===
 # X4_REFERENCE defaults to $X4_TOOLKIT/reference, so this covers the default layout too.
@@ -480,6 +496,43 @@ if x4_under "$FILE_PATH" "$X4_EXTENSIONS"; then
   ask "EDITING DEPLOYED MOD: $FILE_PATH -- the live extensions/ folder is overwritten on each deploy; edit the source instead. Confirm?"; return 0
 fi
 
+# === WHITELIST — FILE WRITES into a configured inert staging folder (X4_STAGING_DIRS, 4.2) ===
+# A folder of downloaded, not-installed mods kept directly inside the game folder: the game
+# loads nothing from it. Which entries are accepted is decided once, in x4_staging_roots
+# (_x4-env.sh). Kept AFTER every reference/config/archive/profile/DLC/deployed rule above, so
+# none of them can be bypassed by naming a folder. FILE WRITES ONLY: a typed delete gets no
+# exemption, nor does a move's SOURCE (x4_typed_removal); both also ask protect-bash, unchanged. The
+# target's CANONICAL path must be strictly beneath an accepted root (a directory boundary, so
+# a lookalike sibling or `..` out of it never matches, and a link inside it is judged where it
+# lands). An EXISTING target must be a regular file with ONE link: a directory, or a hard link
+# that may share its bytes with protected game content, keeps the refusal. Default (unset):
+# one variable test, nothing else runs.
+_stage_note=""
+if [ -n "${X4_STAGING_DIRS:-}" ] && [ -n "${X4_GAME:-}" ] && x4_under "$FILE_PATH" "$X4_GAME" \
+   && ! x4_typed_removal; then
+  x4_staging_roots
+  x4_canon_memo "$FILE_PATH"; _stage_file="$_X4_CANON_RESULT"
+  while IFS= read -r _stage_root; do
+    [ -n "$_stage_root" ] || continue
+    case "$_stage_file" in "$_stage_root"/?*) ;; *) continue ;; esac
+    if x4_winpath "$FILE_PATH"; then
+      _stage_physical="$_X4_WP"
+      if [ ! -e "$_stage_physical" ] && [ ! -L "$_stage_physical" ]; then
+        return 0
+      elif [ -f "$_stage_physical" ] && [ ! -L "$_stage_physical" ]; then
+        _stage_links="$(stat -L -c '%h' -- "$_stage_physical" 2>/dev/null)" \
+          || _stage_links="$(stat -L -f '%l' "$_stage_physical" 2>/dev/null)" \
+          || _stage_links=""
+        [ "$_stage_links" = 1 ] && return 0
+      fi
+    fi
+    _stage_note=" It is inside the configured staging folder, but an existing target there must be a plain file with a single link (this one is a directory, a link, or shares its data with another file through a hard link)."
+    break
+  done <<EOF
+$_X4_STAGE_ROOTS
+EOF
+fi
+
 # === HARD BLOCK — game installation files (base-game content that isn't the toolkit) ===
 # The reason ROUTES the agent (lane N, user decision N3): "work in your mod folder" alone
 # left a live Codex run with nowhere to put its notes (2026-10-03).
@@ -488,6 +541,12 @@ _GR="${X4_GAME:-$X4_TOOLKIT}"; _GR="${_GR%[/\\]}"
 # TOOLKIT root (session-canary.sh, preferences.py, the OpenCode plugin, upgrade.py), so routing
 # it to X4_GAME sent an agent in the separate layout to write a file nothing reads.
 _GAME_DENY="BLOCKED: $FILE_PATH is in the game installation. Notes and personal preferences -> ${X4_TOOLKIT%[/\\]}/KNOWLEDGEBASE.local.md. Game/engine facts -> $_GR/KNOWLEDGEBASE.md (x4lock keeps it read-only: python \"$X4_TOOLKIT/scripts/x4lock.py\" unlock \"$_GR/KNOWLEDGEBASE.md\", edit, then relock with x4lock.py lock). Mod files -> your mod folder (dev/ or X4_MODS), then deploy. (Legacy notes file, still writable: $_GR/X4-NOTES.md.)"
+# A configured staging entry that was IGNORED says so here, where its absence is felt (never
+# silently); _stage_note says why a target inside an accepted one was still refused.
+if [ -n "${X4_STAGING_DIRS:-}" ]; then
+  x4_staging_roots
+  _GAME_DENY="$_GAME_DENY$_stage_note${_X4_STAGE_WARN:+ $_X4_STAGE_WARN}"
+fi
 if [ -n "${X4_GAME:-}" ] && x4_under "$FILE_PATH" "$X4_GAME"; then
   deny "$_GAME_DENY"; return 0
 fi

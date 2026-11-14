@@ -716,7 +716,8 @@ legacy `x4guard.py` is the transport. For the neutral entry, also copy
 `tools/agent-harness.py` and `tools/x4_harness/`. No named agent directory is
 needed for the neutral entry. Set `X4_SAVES`, `X4_DOCUMENTS`, `X4_BACKUPS`,
 `X4_EXTENSIONS` and `X4_MODS` to owned scratch locations as well, and use an
-empty owned `X4_CONFIG` file. Keep the game root separate from `dev/` and
+empty owned `X4_CONFIG` file. Leave `X4_STAGING_DIRS` unset unless the control is about it:
+a named staging folder inside `X4_GAME` turns file writes beneath it from deny into allow. Keep the game root separate from `dev/` and
 `reference/`. A missing runtime is an inert refusal, not a successful block
 control. Both the evaluated reference deny and the evaluated dev allow must
 work before attempting the real host test.

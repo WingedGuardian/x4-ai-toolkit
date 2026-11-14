@@ -328,6 +328,10 @@ in `.agents/skills/` and for OpenCode in `.opencode/skills/`; ask for one by nam
   directory or to read the save with `x4save` by save name. Unresolved save scope is
   refused too. A separate profile confirmation never skips
   save preservation or bulk approval.
+  File writes into the game installation are refused, except inside a staging folder you name
+  in `X4_STAGING_DIRS` (a folder of downloaded, not-installed mods directly inside the game
+  folder, outside `extensions/`): there the file-edit tools may write files, and nothing else
+  is relaxed. The placement rules and an example are in `x4-paths.env.example`.
   They cover every tool that can change a file: Bash, **PowerShell** (parsed by PowerShell's
   own parser and judged by the same rules as Bash — it needs `pwsh` or Windows PowerShell,
   and asks rather than guesses without one), Edit, Write and NotebookEdit.
