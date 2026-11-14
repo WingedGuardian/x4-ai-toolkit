@@ -1074,7 +1074,7 @@ sys.stdout.buffer.write(json.dumps({"hookSpecificOutput": {
   fi
   # Neither renderer. An advisory is a note, not a decision, so a static literal that
   # says the note was lost beats emitting nothing and pretending there was none.
-  printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"X4 ADVISORY LOST: this hook had something to tell you but neither jq nor python is available to render it. Install jq, or set X4_PYTHON."}}'
+  printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"X4 ADVISORY LOST: this hook had something to tell you but neither jq nor python is available to render it. Ask the user to install jq, or to set X4_PYTHON in the environment they launch the agent from."}}'
 }
 
 x4_guard_check_inert() {

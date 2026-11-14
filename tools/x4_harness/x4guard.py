@@ -267,8 +267,15 @@ def is_agent_settings(path: str | None) -> bool:
 
 def guard_payload(kind: str, shell: str | None, command: str | None, path: str | None,
                   content: str | None = None, edit: dict | None = None, patch: bool = False,
-                  execution_host: str = "") -> dict:
+                  execution_host: str = "", patch_targets: list | None = None,
+                  patch_grammar: str | None = None) -> dict:
     payload = _guard_payload(kind, shell, command, path, content, edit, patch, execution_host)
+    if patch and patch_targets is not None and kind != "shell":
+        # Which headers of this patch the ADAPTER resolved to this file ([[op, header], ...]) and
+        # whose patch grammar it read them with: settings_guard.py rebuilds the file from the ONE
+        # such header and refuses more than one (4.2.0 review F2). It never resolves a path itself.
+        payload["tool_input"]["x4_patch_targets"] = [list(t) for t in patch_targets]
+        payload["tool_input"]["x4_patch_grammar"] = patch_grammar or "codex"
     if kind == "move":
         # The SOURCE of a move is judged as a write (below) plus an `rm -rf` of it. The marker
         # lets protect-files.sh refuse the X4_STAGING_DIRS write exemption to it: a move takes
@@ -423,12 +430,14 @@ GUARDS_OFF_NOTE = ("X4 GUARDS OFF (X4_GUARD=off at launch): every guard verdict 
 def verdict_for(kind: str, shell: str | None, command: str | None, path: str | None,
                 deadline: float | None = None, content: str | None = None,
                 edit: dict | None = None, patch: bool = False, save_qualified=None,
-                execution_host: str = "") -> dict:
+                execution_host: str = "", patch_targets: list | None = None,
+                patch_grammar: str | None = None) -> dict:
     """The verdict, plus spec 5.7's escape hatch: with X4_GUARD exactly "off" the guards turn a
     deny/ask into an advisory naming what it would have been (they read the variable
     themselves), and this says GUARDS OFF on every verdict -- a would-be allow included. An inert
     verdict stays an inert deny: a guard that could not run judged nothing to relax."""
-    v = _verdict(kind, shell, command, path, deadline, content, edit, patch, save_qualified, execution_host)
+    v = _verdict(kind, shell, command, path, deadline, content, edit, patch, save_qualified, execution_host,
+                 patch_targets, patch_grammar)
     return _annotate_guards_off(v)
 
 
@@ -525,7 +534,8 @@ def write_verdicts(paths: list[str], *, deadline: float, save_qualified: bool) -
 def _verdict(kind: str, shell: str | None, command: str | None, path: str | None,
              deadline: float | None = None, content: str | None = None,
              edit: dict | None = None, patch: bool = False, save_qualified=None,
-             execution_host: str = "") -> dict:
+             execution_host: str = "", patch_targets: list | None = None,
+             patch_grammar: str | None = None) -> dict:
     """A relative path is resolved from the CALLER's working directory (Codex apply_patch paths
     are relative). A delete is judged by removal-aware file policy and an `rm -rf --` of that path:
     recursive, because the path may be a directory. No protect-bash rule distinguishes it from
@@ -543,7 +553,8 @@ def _verdict(kind: str, shell: str | None, command: str | None, path: str | None
         return check("protect-bash.sh", guard_payload(kind, shell, command, None,
                      execution_host=execution_host), deadline, budget)
     path = os.path.abspath(path)
-    parts = [check("protect-files.sh", guard_payload(kind, None, command, path, content, edit, patch),
+    parts = [check("protect-files.sh", guard_payload(kind, None, command, path, content, edit, patch,
+                                                 patch_targets=patch_targets, patch_grammar=patch_grammar),
                        deadline, budget)]
     if kind in ("delete", "move"):
         quoted = path.replace("\\", "/").replace("'", "'\"'\"'")    # close, "'", reopen

@@ -100,6 +100,14 @@ def _abspath(p: str, base: str) -> str:
     return os.path.abspath(os.path.join(base, p)) if not os.path.isabs(p) else os.path.abspath(p)
 
 
+def _file_key(ap: str) -> str:
+    """One spelling per file: realpath (links and `..` resolved as the OS opens it), case-folded."""
+    try:
+        return os.path.normcase(os.path.realpath(ap))
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.abspath(ap))
+
+
 def _patch_calls(text: str, base: str, parse=patch_paths.parse_patch) -> list[tuple]:
     """GuardCalls for one patch, read with `parse` -- the grammar of the agent that will apply it
     (Codex's by default; the OpenCode adapter passes parse_patch_opencode). A PatchParseError
@@ -112,9 +120,16 @@ def _patch_calls(text: str, base: str, parse=patch_paths.parse_patch) -> list[tu
             continue
         ap = _abspath(p, base)
         # A Claude Code settings file: the guard judges the patch TEXT (settings_guard.py), told
-        # that it IS a patch (FX-G6 / reviewer K M1) -- never left to guess from the text.
+        # that it IS a patch (FX-G6 / reviewer K M1) -- never left to guess from the text -- and
+        # which of its headers THIS resolver maps to the same file (4.2.0 review F2: `./.claude/./
+        # settings.json`, `.claude//settings.json` and `.claude/../.claude/settings.json` escaped a
+        # rebuild that matched header text). Same file = same realpath, case-folded where the OS is.
         if x4guard.is_agent_settings(ap):
-            calls.append((kind, None, text, ap, f"{op} {p}", {"patch": True}))
+            key = _file_key(ap)
+            targets = [[o, q] for o, q in ops if _file_key(_abspath(q, base)) == key]
+            grammar = "opencode" if parse is patch_paths.parse_patch_opencode else "codex"
+            calls.append((kind, None, text, ap, f"{op} {p}",
+                          {"patch": True, "patch_targets": targets, "patch_grammar": grammar}))
         else:
             calls.append((kind, None, None, ap, f"{op} {p}"))
     return calls

@@ -168,7 +168,7 @@ case "$FILE_PATH" in
       [ -n "$_x4_sg" ] && { deny "$_x4_sg"; return 0; }
     else
       case "$(printf '%s' "$FILE_PATH" | tr 'A-Z\\' 'a-z/')" in
-        */.claude/settings*.json) deny "BLOCKED: no Python was found, so the guard cannot check what this write leaves in $FILE_PATH, a Claude Code settings file whose env reaches every hook. Set X4_PYTHON (or put python on PATH) and retry."; return 0 ;;
+        */.claude/settings*.json) deny "BLOCKED: no Python was found, so the guard cannot check what this write leaves in $FILE_PATH, a Claude Code settings file whose env reaches every hook. To fix it, ask the user to set X4_PYTHON in the environment they launch the agent from, or to put python on PATH (an agent may not set it in a settings file), then retry."; return 0 ;;
       esac
     fi ;;
 esac

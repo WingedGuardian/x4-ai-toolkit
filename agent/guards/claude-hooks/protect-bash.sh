@@ -167,7 +167,7 @@ jq_works() {
 }
 
 if [ -z "$PY" ]; then
-  printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"X4 GUARD INERT: no Python interpreter was found, so protect-bash.sh could not analyse this command and checked NOTHING. Set X4_PYTHON, or put python on PATH. Confirm only if you know why it is missing."}}'
+  printf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"X4 GUARD INERT: no Python interpreter was found, so protect-bash.sh could not analyse this command and checked NOTHING. To fix it, ask the user to set X4_PYTHON in the environment they launch the agent from, or to put python on PATH (an agent may not set it in a settings file). Confirm only if you know why it is missing."}}'
   x4_guard_check_inert
   exit 0
 fi

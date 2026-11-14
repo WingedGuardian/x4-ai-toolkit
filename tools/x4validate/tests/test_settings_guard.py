@@ -74,9 +74,11 @@ def test_edit_is_judged_on_the_RESULTING_file(sandbox):
     d, _ = _hook(env, "protect-files.sh", {"tool_name": "Edit", "tool_input": {
         "file_path": str(s), "old_string": '"OTHER": "1"', "new_string": '"X4_GUARD": "off"'}})
     assert d == "deny"
-    # TWIN: an edit of another key in the same env block
+    # 4.2.0: settings_guard also refuses ANY change to an `env` block (the user edits env by hand),
+    # so the twins below keep the seed's env as it is and change something else.
+    # TWIN: an edit elsewhere in the same file
     d, _ = _hook(env, "protect-files.sh", {"tool_name": "Edit", "tool_input": {
-        "file_path": str(s), "old_string": '"OTHER": "1"', "new_string": '"OTHER": "2"'}})
+        "file_path": str(s), "old_string": '"allow": []', "new_string": '"allow": ["Bash(ls)"]'}})
     assert d == "allow"
     # MultiEdit: the key arrives in the SECOND edit
     d, _ = _hook(env, "protect-files.sh", {"tool_name": "MultiEdit", "tool_input": {
@@ -85,8 +87,13 @@ def test_edit_is_judged_on_the_RESULTING_file(sandbox):
     assert d == "deny"
 
 
-_HOOKCMD = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+_HOOKCMD = {"env": dict(OFF["env"]), "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
     {"type": "command", "command": "bash .claude/hooks/protect-bash.sh"}]}]}}
+
+
+def _keep_env(doc: dict) -> dict:
+    """DOC with the sandbox seed's env block, unless it names its own (4.2.0 env no-change rule)."""
+    return doc if "env" in doc else dict(doc, env=dict(OFF["env"]))
 
 
 @needs_bash
@@ -133,7 +140,7 @@ def test_a_PERMISSIONS_rule_mentioning_X4_GUARD_is_allowed_the_same_text_elsewhe
                       ({"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": text}]}]}}, "deny"),
                       ({"permissions": {"deny": [text]}, "env": {"X4_GUARD": "off"}}, "deny")):
         d, _ = _hook(env, "protect-files.sh", {"tool_name": "Write", "tool_input": {
-            "file_path": str(s), "content": json.dumps(doc)}})
+            "file_path": str(s), "content": json.dumps(_keep_env(doc))}})
         assert d == want, (doc, d)
 
 
@@ -147,7 +154,7 @@ def test_only_the_TOP_LEVEL_permissions_block_is_exempt(sandbox):
                       ({"x": [{"permissions": text}]}, "deny"),
                       ({"permissions": {"deny": [text]}}, "allow")):
         d, _ = _hook(env, "protect-files.sh", {"tool_name": "Write", "tool_input": {
-            "file_path": str(s), "content": json.dumps(doc)}})
+            "file_path": str(s), "content": json.dumps(_keep_env(doc))}})
         assert d == want, (doc, d)
 
 
@@ -239,8 +246,8 @@ def test_codex_patch_adding_X4_GUARD_is_denied_and_twin_allowed(sandbox):
            '+    "X4_GUARD": "off"\n*** End Patch')
     d, why = run_adapter(env, native("apply_patch_update", tk, command=bad))
     assert d == "deny" and "X4_GUARD" in (why or "")
-    ok = ('*** Begin Patch\n*** Update File: .claude/settings.json\n@@\n-    "OTHER": "1"\n'
-          '+    "OTHER": "2"\n*** End Patch')
+    ok = ('*** Begin Patch\n*** Update File: .claude/settings.json\n@@\n-    "allow": []\n'
+          '+    "allow": ["Bash(ls)"]\n*** End Patch')
     assert run_adapter(env, native("apply_patch_update", tk, command=ok))[0] == "allow"
 
 
@@ -261,8 +268,14 @@ def test_codex_ADD_FILE_over_a_file_that_sets_it_is_judged_on_what_it_writes(san
     _tmp, tk, env, s = sandbox
     s.write_text(json.dumps(ON, indent=2), encoding="utf-8")
     add = lambda body: "*** Begin Patch\n*** Add File: .claude/settings.json\n+" + body + "\n*** End Patch"
-    assert run_adapter(env, native("apply_patch_add", tk, command=add(json.dumps(OFF))))[0] == "allow"
+    # 4.2.0: replacing ON by OFF changes `env`, which an agent may not do (the user edits env by
+    # hand), so it is refused now; the add-only reading is shown by the twin from an OFF file.
+    assert run_adapter(env, native("apply_patch_add", tk, command=add(json.dumps(OFF))))[0] == "deny"
     assert run_adapter(env, native("apply_patch_add", tk, command=add(json.dumps(ON))))[0] == "deny"
+    s.write_text(json.dumps(OFF, indent=2), encoding="utf-8")
+    off2 = dict(OFF, permissions={"allow": ["Bash(ls)"]})
+    assert run_adapter(env, native("apply_patch_add", tk, command=add(json.dumps(off2))))[0] == "allow"
+    s.write_text(json.dumps(ON, indent=2), encoding="utf-8")
     both = ("*** Begin Patch\n*** Add File: .claude/settings.json\n+" + json.dumps(OFF)
             + "\n*** Update File: .claude/settings.json\n@@\n-x\n+y\n*** End Patch")
     assert run_adapter(env, native("apply_patch_add", tk, command=both))[0] == "deny"
@@ -279,7 +292,11 @@ def test_x4guard_check_needs_the_written_text_for_a_settings_file(sandbox):
     _tmp, _tk, env, s = sandbox
     assert _check(env, "--kind", "write", "--path", str(s)) == "deny"            # text not given
     assert _check(env, "--kind", "write", "--path", str(s), "--command", json.dumps(ON)) == "deny"
-    assert _check(env, "--kind", "write", "--path", str(s), "--command", json.dumps(OFF)) == "allow"
+    # 4.2.0: an opaque text over a file that holds `env` cannot be proven to leave it alone.
+    assert _check(env, "--kind", "write", "--path", str(s), "--command", json.dumps(OFF)) == "deny"
+    s.write_text(json.dumps({"permissions": {"allow": []}}), encoding="utf-8")
+    assert _check(env, "--kind", "write", "--path", str(s), "--command",
+                  json.dumps({"permissions": {"allow": ["Bash(ls)"]}})) == "allow"
 
 
 def test_x4guard_check_content_is_judged_as_the_whole_resulting_file(sandbox):
@@ -289,8 +306,13 @@ def test_x4guard_check_content_is_judged_as_the_whole_resulting_file(sandbox):
     keeps the conservative reading. Both at once is a usage error, never a guess."""
     _tmp, _tk, env, s = sandbox
     s.write_text(json.dumps(ON), encoding="utf-8")
-    assert _check(env, "--kind", "write", "--path", str(s), "--content", json.dumps(OFF)) == "allow"
+    # 4.2.0: replacing ON by OFF changes `env` (refused); the whole-file reading is shown from OFF.
+    assert _check(env, "--kind", "write", "--path", str(s), "--content", json.dumps(OFF)) == "deny"
     assert _check(env, "--kind", "write", "--path", str(s), "--content", json.dumps(ON)) == "deny"
+    s.write_text(json.dumps(OFF), encoding="utf-8")
+    assert _check(env, "--kind", "write", "--path", str(s), "--content",
+                  json.dumps(dict(OFF, permissions={"allow": ["Bash(ls)"]}))) == "allow"
+    s.write_text(json.dumps(ON), encoding="utf-8")
     assert _check(env, "--kind", "write", "--path", str(s), "--command", json.dumps(OFF)) == "deny"
     r = subprocess.run([sys.executable, str(HOOKS / "x4guard.py"), "check", "--kind", "write", "--path",
                         str(s), "--content", "{}", "--command", "{}"], capture_output=True, env=env, timeout=120)
@@ -309,8 +331,10 @@ def test_patch_semantics_only_when_the_caller_SAYS_it_is_a_patch(sandbox):
     s.write_text(json.dumps(ON), encoding="utf-8")
     add = NL.join(["*** Begin Patch", "*** Add File: .claude/settings.json", "+" + json.dumps(OFF), "*** End Patch"])
     assert _check(env, "--kind", "write", "--path", str(s), "--command", add) == "deny"
-    # twin: the same text, declared a patch, keeps its add-only reading
-    assert _check(env, "--kind", "write", "--path", str(s), "--command", add, "--patch") == "allow"
+    # 4.2.0: `x4guard check --patch` carries no adapter-resolved headers, so the file cannot be
+    # rebuilt, and this one holds `env`: refused either way. The add-only reading through the
+    # adapters is covered by test_codex_ADD_FILE_over_a_file_that_sets_it_is_judged_on_what_it_writes.
+    assert _check(env, "--kind", "write", "--path", str(s), "--command", add, "--patch") == "deny"
     r = subprocess.run([sys.executable, str(HOOKS / "x4guard.py"), "check", "--kind", "write", "--path",
                         str(s), "--patch"], capture_output=True, env=env, timeout=120)
     assert r.returncode == 2                                     # --patch needs the text
