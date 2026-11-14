@@ -44,6 +44,8 @@ bundle.register_extension({id='x4-trader-text-extension',revision='REVISION',
         ffi.cdef('bool IsComponentClass(UniverseID componentid,const char* classname); bool IsStoryFeatureUnlocked(const char* featureid);')
         -- Signature copied from vanilla menu_encyclopedia.lua:101; called as at menu_diplomacy.lua:1657.
         ffi.cdef('UniverseID GetFactionRepresentative(const char* factionid);')
+        -- Verbatim from vanilla helper.lua:400-401 (also live_actorentry.lua:42).
+        ffi.cdef('bool IsConversationActive(void); bool IsConversationCancelling(void);')
         local context=C.GetContextByClass
         local isclass,unlocked,representative=C.IsComponentClass,C.IsStoryFeatureUnlocked,C.GetFactionRepresentative
         assert(type(context)=='function' or type(context)=='cdata','context native symbol unavailable')
@@ -75,6 +77,8 @@ bundle.register_extension({id='x4-trader-text-extension',revision='REVISION',
             valid_widget=raw.IsValidWidgetElement,cell_id=raw.GetCellContent,
             representative=function(faction)return representative(faction)end,
             convert_parameters=convert_parameters,open_menu=raw.OpenMenu,
+            conversation_state=function()return C.IsConversationActive(),C.IsConversationCancelling()end,
+            helper_menus=function()return {docked=ctx.Helper.dockedMenu,toplevel=ctx.Helper.topLevelMenu}end,
             widget_state=function(id)
                 assert(raw.IsValidWidgetElement(id)==true,'invalid trader widget')
                 local active=raw.IsButtonActive(id);assert(type(active)=='boolean','native button state unavailable');return {active=active}

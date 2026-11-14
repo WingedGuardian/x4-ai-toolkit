@@ -21,7 +21,7 @@ def make(mode='licence'):
             GetUIRelation=function()native();return relation end,
             GetComponentData=function(o,k)native();assert(o==42ULL and k=='owner');return faction or 'argon' end,
             GetContextByClass=function(o,k,v)native();assert(o==42ULL and k=='container' and v==false);return 44ULL end,
-            GetOwnLicences=function(f)native();assert(f=='argon');return {licence} end,
+            GetOwnLicences=function(f)native();assert(f=='argon');return ownlicences or {licence} end,
             HasLicence=function(p,k,f)native();assert(p=='player' and f=='argon');if k=='lic_type' then return owned end;return precursor end,
             GetWareData=function(k,a,b)native();assert(k=='ware' and a=='tradelicence' and b=='ishiddenwithoutlicence');if missingware then return nil,false end;return 'precursor',false end}
         function cell(n) return {type='button',id=n,colspan=1,properties={active=true},handlers={onClick=function()end}} end
@@ -62,7 +62,10 @@ def make(mode='licence'):
             cell_id=function(t,ri,ci)local tt=t==20 and top or bottom;return tt.rows[ri][ci].id end,
             widget_state=function(w)if nativeactive~=nil then return {active=nativeactive}end;return {active=true}end,
             representative=function(f)native();assert(f=='argon');return rep or 42ULL end,
-            convert_parameters=function(p)conversions=(conversions or 0)+1;if convertbad then return nil end;return p end,
+            convert_parameters=function(p)conversions=(conversions or 0)+1;if convertbad then return nil end
+                if convdrop then p[3]=nil elseif convthird~=nil then p[3]=convthird end;return p end,
+            conversation_state=function()if convraw~=nil then return convraw,false end;return convactive==true,convcancel==true end,
+            helper_menus=function()return {docked=hdocked,toplevel=htop} end,
             open_menu=function(n,p)opens=(opens or 0)+1;opened=n;openparams=p
                 if openerror then error(openerror)end;if openshows then m.shown=true end end}
         function prepare()p=api.prepare_select('trader',m.mode,row.rowdata[2],100);return p end
@@ -244,6 +247,13 @@ def test_open_attempt_with_closed_or_unknown_menu_state_is_not_reported_open(aft
     "menus[2]={name='BlueprintOrLicenceTraderMenu'}","menus[2]='row'",
     "resolve_error='token not issued in this session'","resolve_error='stale token: issued before reload'",
     'issued=nil','rep=43ULL','rep=0ULL',"faction=''",'stamp=nil','age=0/0','api.dispose()',
+    # helper.lua:1402 marks any menu opened during a conversation as a conversation menu
+    'convactive=true','convcancel=true',"convraw='yes'",
+    # only Helper's own docked/top-level menus are closed by vanilla's open path (helper.lua:1383-1391)
+    "menus[2]={name='TopLevelMenu',shown=true}","menus[2]={name='Other',shown=true};htop=menus[2]",
+    "menus[2]={name='DockedMenu',shown=true};htop=menus[2]",
+    # the menu lists only issellable licences (menu_trader_blueprintsorlicences.lua:304-305)
+    'ownlicences={}','licence.issellable=false',"ownlicences={{id='x'}}",
 ])
 def test_open_refuses_before_any_native_open(change):
     r=closed();r.execute(change)
@@ -276,13 +286,23 @@ def test_open_refuses_unissued_or_malformed_token_without_lua_error(token):
     'm.shown=true',"menus[2]={name='Other',shown=true}",'age=16','age=9',
     "stamp.generation=string.rep('d',32)",'rep=43ULL','issued=43ULL',
     "resolve_error='stale token'",'convertbad=true','api.dispose()',
-    "menus={{name='BlueprintOrLicenceTraderMenu'}}",
+    "menus={{name='BlueprintOrLicenceTraderMenu'}}",'convactive=true','convdrop=true','convthird=43ULL',
 ])
 def test_open_execute_revalidates_and_consumes_refused_ticket(change):
     r=closed();r.execute("o=api.prepare_open('trader','licence');"+change)
     out=r.eval('api.execute(o.ticket)')
     assert out.status=='REFUSED' and out.action_attempted is False and r.eval('opens')==0
     r.execute("age=10;rep=nil;resolve_error=nil;api.execute(o.ticket)");assert r.eval('opens')==0
+
+
+@pytest.mark.parametrize('menu',['DockedMenu','TopLevelMenu'])
+def test_open_tolerates_only_helpers_own_always_on_menu(menu):
+    # helper.lua:1383-1391: opening any other menu closes Helper.dockedMenu / Helper.topLevelMenu itself.
+    r=closed();r.globals().name=menu
+    r.execute("menus[2]={name=name,shown=true};if name=='DockedMenu' then hdocked=menus[2] else htop=menus[2] end")
+    r.execute("o=api.prepare_open('trader','licence')")
+    assert r.eval('o.status')=='PREPARED'
+    out=r.eval('api.execute(o.ticket)');assert out.status=='DISPATCHED_UNVERIFIED' and r.eval('opens')==1
 
 
 def test_open_native_failure_after_dispatch_is_uncertain():

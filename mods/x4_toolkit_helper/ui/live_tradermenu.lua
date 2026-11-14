@@ -6,7 +6,7 @@
 return function(deps)
     local d={}
     for _,k in ipairs({'menus','current','now','resolve_issued','component_id','valid_widget','cell_id','widget_state',
-        'representative','convert_parameters','open_menu'}) do
+        'representative','convert_parameters','open_menu','conversation_state','helper_menus'}) do
         assert(type(deps[k])=='function','missing trader dependency: '..k);d[k]=deps[k]
     end
     local g={}
@@ -199,21 +199,33 @@ return function(deps)
     local OPEN='BlueprintOrLicenceTraderMenu'
     -- Vanilla opens this menu only from the representative conversation (npc_factionrepresentative.xml:272,
     -- choice param {0,0,$FactionRepresentative,'licence'}; opened at :295). Mirrored here: licence mode,
-    -- the trader is its owner faction's representative, the trader menu is registered and closed, and no
-    -- other menu is shown. Not mirrorable from UI Lua: the faction's nolicencesale tag and the diplomat route.
+    -- the trader is its owner faction's representative, the trader menu is registered and closed.
+    -- No conversation may be active or cancelling: helper.lua:1402 would mark the menu a conversation
+    -- menu, and its close paths (lua623/637/749) return through ReturnFromMenu. Other shown menus refuse,
+    -- except Helper's own docked/top-level menu, which vanilla's open path closes itself (helper.lua:1383-1391).
+    -- The menu lists only issellable licences (lua304-305); none sellable refuses.
+    -- Not mirrorable from UI Lua: the nolicencesale tag, the diplomat route, player presence.
     local function opening(token,mode)
         assert(mode=='licence','closed opener mode: licence only');text(token)
+        local hm=d.helper_menus();assert(type(hm)=='table','helper menu state unavailable')
         local m
         for _,v in ipairs(seq(d.menus(),256)) do
             assert(type(v)=='table','menu registry malformed')
             if v.name==OPEN then assert(not m,'duplicate trader menu');m=v
-            else assert(not v.shown,'another menu is open') end
+            elseif v.shown then
+                assert(v==hm.docked and v.name=='DockedMenu' or v==hm.toplevel and v.name=='TopLevelMenu','another menu is open')
+            end
         end
         assert(m,'trader menu not registered');assert(not m.shown,'trader menu already open')
+        local active,cancelling=d.conversation_state()
+        assert(active==false and cancelling==false,'conversation active/cancelling or state unknown')
         local raw=d.resolve_issued(token,'object');local trader=id(d.component_id(raw))
         local faction=text(g.GetComponentData(d.component_id(raw),'owner'))
         assert(id(d.component_id(d.representative(faction)))==trader,'trader is not its faction representative')
-        return {menu=m,raw=raw,trader=trader,faction=faction}
+        local sellable=0
+        for _,l in ipairs(seq(g.GetOwnLicences(faction),512)) do if licence(l).issellable then sellable=sellable+1 end end
+        assert(sellable>0,'faction offers no sellable licence')
+        return {menu=m,raw=raw,trader=trader,faction=faction,sellable=sellable}
     end
     local function fail(reason,attempted) return {status=attempted and 'UNCERTAIN' or 'REFUSED',reason=tostring(reason):sub(1,2048),action_attempted=attempted==true,purchase_verified=false} end
     function api.prepare_open(token,mode)
@@ -276,6 +288,8 @@ return function(deps)
                 assert(o.menu==r.open.menu and o.trader==r.open.trader and o.faction==r.open.faction,'trader opener rebound')
                 local p=d.convert_parameters({0,0,d.component_id(o.raw),'licence'})
                 assert(type(p)=='table' and p[1]==0 and p[2]==0 and p[4]=='licence','native parameter conversion unavailable')
+                -- A nil/unconverted param[3] would make the menu fall back to the player computer (lua127-129).
+                assert(p[3]~=nil and id(d.component_id(p[3]))==o.trader,'trader parameter conversion changed identity')
                 local final,ended=stamp()
                 assert(same(s,final) and ended>=age and ended-r.age<=5,'lifecycle changed or ticket expired before dispatch')
                 r.attempted=true;d.open_menu(OPEN,p)
