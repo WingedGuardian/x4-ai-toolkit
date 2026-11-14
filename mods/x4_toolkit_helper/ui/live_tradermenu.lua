@@ -1,9 +1,12 @@
--- Built BlueprintOrLicenceTraderMenu only; no direct grant, payment or opener.
+-- BlueprintOrLicenceTraderMenu: built-widget routes plus one licence opener; no direct grant or payment.
 -- Native menu_trader_blueprintsorlicences.lua126-145/275-281/325-340/
 -- 348-460/560-577/595-678; Helper buttonScriptMap wrappers as live_menu.lua.
+-- Opener mirrors md/npc_factionrepresentative.xml:272/295: the faction representative,
+-- param {0,0,trader,'licence'}; the menu reads param[3]/[4] at lua126-139.
 return function(deps)
     local d={}
-    for _,k in ipairs({'menus','current','now','resolve_issued','component_id','valid_widget','cell_id','widget_state'}) do
+    for _,k in ipairs({'menus','current','now','resolve_issued','component_id','valid_widget','cell_id','widget_state',
+        'representative','convert_parameters','open_menu'}) do
         assert(type(deps[k])=='function','missing trader dependency: '..k);d[k]=deps[k]
     end
     local g={}
@@ -193,7 +196,36 @@ return function(deps)
         assert(topfound and refs.confirm,'trader table or confirm missing');out.confirm_active=refs.confirm.active
         return out,{menu=m,frame=f,frameid=f.id,refs=refs}
     end
+    local OPEN='BlueprintOrLicenceTraderMenu'
+    -- Vanilla opens this menu only from the representative conversation (npc_factionrepresentative.xml:272,
+    -- choice param {0,0,$FactionRepresentative,'licence'}; opened at :295). Mirrored here: licence mode,
+    -- the trader is its owner faction's representative, the trader menu is registered and closed, and no
+    -- other menu is shown. Not mirrorable from UI Lua: the faction's nolicencesale tag and the diplomat route.
+    local function opening(token,mode)
+        assert(mode=='licence','closed opener mode: licence only');text(token)
+        local m
+        for _,v in ipairs(seq(d.menus(),256)) do
+            assert(type(v)=='table','menu registry malformed')
+            if v.name==OPEN then assert(not m,'duplicate trader menu');m=v
+            else assert(not v.shown,'another menu is open') end
+        end
+        assert(m,'trader menu not registered');assert(not m.shown,'trader menu already open')
+        local raw=d.resolve_issued(token,'object');local trader=id(d.component_id(raw))
+        local faction=text(g.GetComponentData(d.component_id(raw),'owner'))
+        assert(id(d.component_id(d.representative(faction)))==trader,'trader is not its faction representative')
+        return {menu=m,raw=raw,trader=trader,faction=faction}
+    end
     local function fail(reason,attempted) return {status=attempted and 'UNCERTAIN' or 'REFUSED',reason=tostring(reason):sub(1,2048),action_attempted=attempted==true,purchase_verified=false} end
+    function api.prepare_open(token,mode)
+        local ok,out=pcall(function()
+            assert(serial<128,'trader preparation capacity');local s,age=stamp();local o=opening(token,mode)
+            local after,ended=stamp();assert(same(s,after) and ended>=age,'prepare lifecycle changed')
+            serial=serial+1;local ticket=tostring(serial)
+            records[ticket]={token=token,mode=mode,kind='open',key=OPEN,value=mode,open=o,stamp=s,age=ended,used=false,attempted=false}
+            return {status='PREPARED',ticket=ticket,trader=o.trader,faction=o.faction,mode=mode,
+                action_attempted=false,purchase_verified=false,menu_open_verified=false}
+        end);return ok and out or fail(out,false)
+    end
     function api.observe(token,mode,start)
         local ok,out=pcall(function()
             assert(integer(start,1,513),'bounded one-based row offset required');local s,age=stamp();local model=frame(token,mode)
@@ -239,6 +271,17 @@ return function(deps)
         r.used=true
         local ok,why=pcall(function()
             local s,age=stamp();assert(same(s,r.stamp) and age>=r.age and age-r.age<=5,'stale trader lifetime')
+            if r.kind=='open' then
+                local o=opening(r.token,r.mode)
+                assert(o.menu==r.open.menu and o.trader==r.open.trader and o.faction==r.open.faction,'trader opener rebound')
+                local p=d.convert_parameters({0,0,d.component_id(o.raw),'licence'})
+                assert(type(p)=='table' and p[1]==0 and p[2]==0 and p[4]=='licence','native parameter conversion unavailable')
+                local final,ended=stamp()
+                assert(same(s,final) and ended>=age and ended-r.age<=5,'lifecycle changed or ticket expired before dispatch')
+                r.attempted=true;d.open_menu(OPEN,p)
+                local after,finished=stamp();assert(same(final,after) and finished>=ended,'post-dispatch lifecycle unavailable')
+                return
+            end
             local model,refs=frame(r.token,r.mode);assert(same(model,r.model),'trader quote, basket or eligibility changed')
             assert(refs.menu==r.refs.menu and refs.frame==r.refs.frame and refs.frameid==r.refs.frameid,'trader frame rebound')
             local w=refs.refs[r.kind=='confirm' and 'confirm' or (r.kind=='expand' and 'category:' or 'entry:')..r.key]
@@ -249,8 +292,13 @@ return function(deps)
             local after,finished=stamp();assert(same(final,after) and finished>=ended,'post-dispatch lifecycle unavailable')
         end)
         r.status=ok and 'DISPATCHED_UNVERIFIED' or r.attempted and 'UNCERTAIN' or 'REFUSED'
-        return {status=r.status,action_attempted=r.attempted,kind=r.kind,item=r.key,price_or_expanded=r.value,
+        local out={status=r.status,action_attempted=r.attempted,kind=r.kind,item=r.key,price_or_expanded=r.value,
             reason=ok and 'native built wrapper returned; resulting basket/charge/ownership require independent readback' or tostring(why):sub(1,2048),purchase_verified=false}
+        if r.kind=='open' then
+            out.menu_open_verified=false
+            if ok then out.reason='native OpenMenu returned; a later observe must find the trader menu shown' end
+        end
+        return out
     end
     function api.dispose() retired=true;return true end
     return api

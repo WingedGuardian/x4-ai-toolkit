@@ -5,7 +5,7 @@ return function(d)
     assert(type(d)=='table' and hex(d.revision,64) and type(d.current)=='function'
         and type(d.encode)=='function' and type(d.now)=='function','trader/text provider dependencies')
     local trader,text,nav,actor=d.trader,d.text,d.navigation,d.actor
-    for _,k in ipairs({'observe','prepare_expand','prepare_select','prepare_confirm','execute','dispose'})do assert(type(trader[k])=='function','trader adapter method')end
+    for _,k in ipairs({'observe','prepare_open','prepare_expand','prepare_select','prepare_confirm','execute','dispose'})do assert(type(trader[k])=='function','trader adapter method')end
     for _,k in ipairs({'read','dispose'})do assert(type(text[k])=='function','text adapter method')end
     for _,k in ipairs({'observe','prepare','execute','dispose','capacity'})do assert(type(nav[k])=='function','navigation adapter method')end
     for _,k in ipairs({'observe','prepare','execute','dispose','capacity'})do assert(type(actor[k])=='function','actor adapter method')end
@@ -25,8 +25,8 @@ return function(d)
     local current,encode,now,revision=d.current,d.encode,d.now,d.revision
     local api,records,count,stamp,capture,retired,failed={}, {},0,nil,nil,false,false
     local actions={['trader.observe']=true,['text.observe']=true,page=true,
-        ['trader.expand']=true,['trader.select']=true,['trader.confirm']=true}
-    local writes={['trader.expand']=true,['trader.select']=true,['trader.confirm']=true}
+        ['trader.open']=true,['trader.expand']=true,['trader.select']=true,['trader.confirm']=true}
+    local writes={['trader.open']=true,['trader.expand']=true,['trader.select']=true,['trader.confirm']=true}
     local nav_actions={['text.open']='root_open',['text.open_component']='component_open',
         ['text.select']='select',['text.expand']='expand',['property.open_map']='map_open',
         ['property.open']='property_open',['view.close']='close'}
@@ -62,6 +62,7 @@ return function(d)
                 or (req.action=='text.select' or req.action=='text.expand') and {row=true} or {}
         elseif req.action=='text.observe'then fields={section=true,start=true}
         elseif req.action=='trader.observe'then fields={trader=true,mode=true,start=true}
+        elseif req.action=='trader.open'then fields={trader=true,mode=true}
         elseif req.action=='trader.expand'then fields={trader=true,mode=true,item=true,expanded=true}
         else fields={trader=true,mode=true,item=true,price=true}end
         for k in pairs(a)do assert(fields[k],'extra argument')end
@@ -79,6 +80,7 @@ return function(d)
         else
             assert(token(a.trader) and (a.mode=='licence' or a.mode=='blueprint'),'issued trader/mode')
             if req.action=='trader.observe'then assert(integer(a.start,1,513),'trader window')
+            elseif req.action=='trader.open'then assert(a.mode=='licence','licence opener only')
             else assert(token(a.item),'exact item/category');if req.action=='trader.expand'then assert(type(a.expanded)=='boolean','desired expanded state')
                 else assert(finite(a.price) and a.price>0 and a.price<90071992547409,'exact positive quote')end end
         end
@@ -115,6 +117,7 @@ return function(d)
                     local v
                     if actor_actions[req.action]then v=actor.prepare(actor_actions[req.action],args.actor)
                     elseif nav_actions[req.action]then v=nav.prepare(nav_actions[req.action],args.subject or args.row or args.domain)
+                    elseif req.action=='trader.open'then v=trader.prepare_open(args.trader,args.mode)
                     elseif req.action=='trader.expand'then v=trader.prepare_expand(args.trader,args.mode,args.item,args.expanded)
                     elseif req.action=='trader.select'then v=trader.prepare_select(args.trader,args.mode,args.item,args.price)
                     else v=trader.prepare_confirm(args.trader,args.mode,args.item,args.price)end
@@ -138,9 +141,11 @@ return function(d)
                     or v.status=='REFUSED' and v.action_attempted==false),'native result scope unavailable')
                 local state=v.status=='DISPATCHED_UNVERIFIED' and 'running' or v.status=='REFUSED' and v.action_attempted==false and 'refused' or 'unknown'
                 -- Do not transport unbounded native reason text after a possible economic dispatch.
-                r.result=reply(state,'native wrapper outcome only; purchase/setting effect unverified',
-                    {native_status=v.status,item=r.args.item,mode=r.args.mode,action=r.action,
-                        actor=v.actor,native_result=v.native_result,conversation_verified=false},v.action_attempted)
+                local value={native_status=v.status,item=r.args.item,mode=r.args.mode,action=r.action,
+                    actor=v.actor,native_result=v.native_result,conversation_verified=false}
+                -- An open is confirmed only by a later trader.observe that finds the menu shown.
+                if r.action=='trader.open'then value.menu_open_verified=false end
+                r.result=reply(state,'native wrapper outcome only; purchase/setting effect unverified',value,v.action_attempted)
             elseif r.action=='capacity_observe'then
                 local v={scope='LOCAL_COUNTERS_AT_EXECUTE_RETAINED_BY_SDK',profile=profile,
                     revision=capacity_revision,source_sha256=capacity_source,

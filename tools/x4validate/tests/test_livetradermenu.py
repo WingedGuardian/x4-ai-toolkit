@@ -57,10 +57,14 @@ def make(mode='licence'):
         end
         menus={m};issued=42ULL
         d={ffi=ffi,C=C,globals=g,menus=function()native();return menus end,current=function()return stamp end,
-            now=function()return age end,resolve_issued=function(t,k)native();assert(t=='trader' and k=='object');return issued end,
+            now=function()return age end,resolve_issued=function(t,k)native();if resolve_error then error(resolve_error)end;assert(t=='trader' and k=='object');return issued end,
             component_id=function(v)return v end,valid_widget=function(v)if advance_during_read then age=16 end;return invalidwidget~=v end,
             cell_id=function(t,ri,ci)local tt=t==20 and top or bottom;return tt.rows[ri][ci].id end,
-            widget_state=function(w)if nativeactive~=nil then return {active=nativeactive}end;return {active=true}end}
+            widget_state=function(w)if nativeactive~=nil then return {active=nativeactive}end;return {active=true}end,
+            representative=function(f)native();assert(f=='argon');return rep or 42ULL end,
+            convert_parameters=function(p)conversions=(conversions or 0)+1;if convertbad then return nil end;return p end,
+            open_menu=function(n,p)opens=(opens or 0)+1;opened=n;openparams=p
+                if openerror then error(openerror)end;if openshows then m.shown=true end end}
         function prepare()p=api.prepare_select('trader',m.mode,row.rowdata[2],100);return p end
         function confirm()
             if m.mode=='licence' then m.licencestopurchase.lic={type='lic_type',price=100}
@@ -194,3 +198,101 @@ def test_revalidation_time_can_expire_ticket_before_native_dispatch():
     out=r.eval('api.execute(p.ticket)')
     assert out.status=='REFUSED' and out.action_attempted is False
     assert 'expired before dispatch' in out.reason and r.eval('writes')==0
+
+
+# --- licence trader opener -------------------------------------------------------------
+# Vanilla opens the menu from the representative conversation with
+# choiceparam [0, 0, $FactionRepresentative, 'licence'] (md/npc_factionrepresentative.xml:272,
+# opened at :295); the menu reads param[3] as the trader and param[4] as the mode
+# (menu_trader_blueprintsorlicences.lua:126-139).
+
+def closed(mode='licence'):
+    r=make(mode);r.execute('m.shown=false;opens=0;conversions=0');return r
+
+
+def test_open_happy_path_dispatches_once_and_read_back_confirms():
+    r=closed();r.execute("openshows=true;o=api.prepare_open('trader','licence')")
+    assert r.eval('o.status')=='PREPARED' and r.eval('o.action_attempted') is False
+    assert r.eval('o.trader')=='42' and r.eval('o.faction')=='argon' and r.eval('o.mode')=='licence'
+    assert r.eval('opens')==0
+    out=r.eval('api.execute(o.ticket)')
+    assert out.status=='DISPATCHED_UNVERIFIED' and out.action_attempted is True
+    assert out.menu_open_verified is False and out.purchase_verified is False and out.kind=='open'
+    assert r.eval('opened')=='BlueprintOrLicenceTraderMenu' and r.eval('conversions')==1
+    assert r.eval('#openparams')==4 and r.eval('openparams[1]')==0 and r.eval('openparams[2]')==0
+    assert r.eval('openparams[3]==42ULL') is True and r.eval('openparams[4]')=='licence'
+    r.execute('api.execute(o.ticket)');assert r.eval('opens')==1
+    seen=r.eval("api.observe('trader','licence',1)")
+    assert seen.status=='OBSERVED' and seen.trader=='42' and seen.mode=='licence'
+    # Opening never buys: no button wrapper ran and the basket is still empty.
+    assert r.eval('writes')==0 and r.eval('next(m.licencestopurchase)') is None
+
+
+@pytest.mark.parametrize('after',['','m.shown=false',"m.shown='yes'",'m.minimized=nil',"m.mode='blueprint'"])
+def test_open_attempt_with_closed_or_unknown_menu_state_is_not_reported_open(after):
+    r=closed();r.execute("openshows=true;o=api.prepare_open('trader','licence')")
+    if not after:r.execute('openshows=false')
+    out=r.eval('api.execute(o.ticket)')
+    assert out.status=='DISPATCHED_UNVERIFIED' and out.menu_open_verified is False
+    r.execute(after)
+    seen=r.eval("api.observe('trader','licence',1)")
+    assert seen.status=='REFUSED' and seen.action_attempted is False
+
+
+@pytest.mark.parametrize('change',[
+    'm.shown=true',"menus[2]={name='Other',shown=true}",'menus={}',
+    "menus[2]={name='BlueprintOrLicenceTraderMenu'}","menus[2]='row'",
+    "resolve_error='token not issued in this session'","resolve_error='stale token: issued before reload'",
+    'issued=nil','rep=43ULL','rep=0ULL',"faction=''",'stamp=nil','age=0/0','api.dispose()',
+])
+def test_open_refuses_before_any_native_open(change):
+    r=closed();r.execute(change)
+    out=r.eval("api.prepare_open('trader','licence')")
+    assert out.status=='REFUSED' and out.action_attempted is False and len(out.reason)>0
+    assert r.eval('opens')==0 and r.eval('writes')==0
+
+
+def test_open_unregistered_trader_menu_names_the_refusal():
+    r=closed();r.execute('menus={}')
+    out=r.eval("api.prepare_open('trader','licence')")
+    assert out.status=='REFUSED' and 'trader menu not registered' in out.reason and r.eval('opens')==0
+
+
+@pytest.mark.parametrize('mode',['blueprint','purchase',None])
+def test_open_mode_is_closed_to_licence(mode):
+    r=closed();r.globals().mode=mode
+    out=r.eval("api.prepare_open('trader',mode)")
+    assert out.status=='REFUSED' and r.eval('opens')==0
+
+
+@pytest.mark.parametrize('token',['other',None,'',{}])
+def test_open_refuses_unissued_or_malformed_token_without_lua_error(token):
+    r=closed();r.globals().tok=token
+    r.execute("resolve_error=nil;ok,out=pcall(api.prepare_open,tok,'licence')")
+    assert r.eval('ok') is True and r.eval('out.status')=='REFUSED' and r.eval('opens')==0
+
+
+@pytest.mark.parametrize('change',[
+    'm.shown=true',"menus[2]={name='Other',shown=true}",'age=16','age=9',
+    "stamp.generation=string.rep('d',32)",'rep=43ULL','issued=43ULL',
+    "resolve_error='stale token'",'convertbad=true','api.dispose()',
+    "menus={{name='BlueprintOrLicenceTraderMenu'}}",
+])
+def test_open_execute_revalidates_and_consumes_refused_ticket(change):
+    r=closed();r.execute("o=api.prepare_open('trader','licence');"+change)
+    out=r.eval('api.execute(o.ticket)')
+    assert out.status=='REFUSED' and out.action_attempted is False and r.eval('opens')==0
+    r.execute("age=10;rep=nil;resolve_error=nil;api.execute(o.ticket)");assert r.eval('opens')==0
+
+
+def test_open_native_failure_after_dispatch_is_uncertain():
+    r=closed();r.execute("openerror='native open failed';o=api.prepare_open('trader','licence')")
+    out=r.eval('api.execute(o.ticket)')
+    assert out.status=='UNCERTAIN' and out.action_attempted is True and r.eval('opens')==1
+
+
+def test_open_ticket_cannot_drive_a_purchase_button():
+    r=closed();r.execute("o=api.prepare_open('trader','licence');openshows=true;api.execute(o.ticket)")
+    # The open ticket is consumed; buying still needs its own prepare_select/confirm tickets.
+    again=r.eval('api.execute(o.ticket)')
+    assert again.action_attempted is True and r.eval('opens')==1 and r.eval('writes')==0
