@@ -209,7 +209,8 @@ def test_F1_removing_one_of_two_IDENTICAL_guard_hooks_is_refused(settings):
 
 
 def test_F1_TWIN_adding_a_hook_even_one_running_a_guard_script_is_allowed(settings):
-    """The most restrictive PreToolUse decision wins, so an added hook can only add a check."""
+    """The most restrictive PreToolUse decision wins, so an added hook cannot lift a guard's deny.
+    What it RUNS is not judged (one returning `updatedInput` rewrites the call): F221, OPEN."""
     doc = _copy(INSTALLED)
     doc["hooks"]["PreToolUse"][0]["hooks"].append(
         {"type": "command", "command": GUARD.format("protect-bash.sh"), "async": True})
@@ -231,11 +232,93 @@ def test_claude_edit_is_judged_on_the_result(settings):
     assert SG.judge(ok) == ""
 
 
-def test_edit_that_does_not_apply_is_judged_on_its_new_text(settings):
+def test_edit_that_does_not_apply_is_judged_on_its_new_text_when_nothing_is_protected(settings):
+    """A file holding no protected setting: the new text alone can add one, so it is judged."""
+    _seed(settings, {"permissions": {"allow": []}, "model": "opus"})
     bad = {"file_path": str(settings), "old_string": "nowhere", "new_string": '"X4_CONFIG": "/x"'}
     ok = {"file_path": str(settings), "old_string": "nowhere", "new_string": '"allow": ["Bash(ls)"]'}
     assert SG.judge(bad)
     assert SG.judge(ok) == ""
+
+
+# --- an edit that does not apply EXACTLY, to a file holding protected settings (review 4) -------
+# MEASURED (review 4): Claude Code's Edit matches curly quotes to straight ones and OpenCode's edit
+# has whitespace-fuzzy replacers, so an old text that is not in the file can still land -- and was
+# judged by its new text alone: `"matcher": "NoSuchTool"` or `"async": true` name nothing protected.
+# Same rule as the patch channel: refused, and the agent is told to Write the whole file instead.
+NONAPPLYING = {
+    "Claude Edit, curly-quoted old_string -> matcher NoSuchTool": {
+        "old_string": "“matcher”: “Bash”", "new_string": '"matcher": "NoSuchTool"'},
+    "OpenCode edit, whitespace-fuzzy old -> matcher NoSuchTool": {
+        "x4_edit": {"old": '"matcher":"Bash"', "new": '"matcher":"NoSuchTool"'}},
+    "OpenCode edit, whitespace-fuzzy old -> async true": {
+        "x4_edit": {"old": '"type":"command",', "new": '"type":"command","async":true,'}},
+    "MultiEdit, one edit not applying": {"edits": [
+        {"old_string": '"allow": []', "new_string": '"allow": ["Bash(ls)"]'},
+        {"old_string": "“matcher”: “Bash”", "new_string": '"matcher": "NoSuchTool"'}]},
+}
+
+
+@pytest.mark.parametrize("case", list(NONAPPLYING))
+def test_R4_a_nonapplying_edit_of_a_file_holding_guard_hooks_is_refused(settings, case):
+    why = SG.judge(dict(NONAPPLYING[case], file_path=str(settings)))
+    assert why and "Write" in why and "exactly" in why, (case, why)
+
+
+@pytest.mark.parametrize("case", list(NONAPPLYING))
+def test_R4_TWIN_the_same_edit_of_a_file_holding_nothing_protected_is_allowed(settings, case):
+    _seed(settings, {"permissions": {"allow": []}, "model": "opus"})
+    assert SG.judge(dict(NONAPPLYING[case], file_path=str(settings))) == "", case
+
+
+def test_R4_TWIN_the_exact_form_of_an_innocent_edit_is_still_allowed(settings):
+    ok = {"file_path": str(settings), "x4_edit": {"old": '"allow": []', "new": '"allow": ["Bash(ls)"]'}}
+    assert SG.judge(ok) == ""
+    ok = {"file_path": str(settings), "old_string": '"allow": []', "new_string": '"allow": ["Bash(ls)"]'}
+    assert SG.judge(ok) == ""
+
+
+def test_R4_TWIN_a_whole_file_Write_making_the_same_innocent_change_is_allowed(settings):
+    doc = _copy(INSTALLED)
+    doc["permissions"]["allow"] = ["Bash(ls)"]
+    assert _write(settings, doc) == ""
+
+
+# --- strict parsing: what Claude Code's JSON.parse rejects, and shapes it does not read (review 4)
+@pytest.mark.parametrize("const", ["NaN", "Infinity", "-Infinity"])
+def test_R4_a_NaN_or_Infinity_value_is_refused(settings, const):
+    """Python's json accepts them; JSON.parse does not, so the whole file -- guard hooks too -- stops
+    loading. MEASURED (review 4): appended to a guard-hooked file, both were allowed."""
+    good = json.dumps(INSTALLED, indent=2)
+    why = SG.judge({"file_path": str(settings), "content": good[:-1] + f', "x": {const}}}'})
+    assert why and "plain JSON" in why, (const, why)
+    assert SG.judge({"file_path": str(settings), "content": good[:-1] + ', "x": 1}'}) == ""   # TWIN
+
+
+def test_R4_TWIN_NaN_in_a_file_holding_nothing_protected_is_not_this_rules_business(settings):
+    _seed(settings, {"model": "opus"})
+    assert SG.judge({"file_path": str(settings), "content": '{"model": "opus", "x": NaN}'}) == ""
+
+
+def test_R4_an_events_list_replaced_by_one_object_is_a_change_to_its_guard_hooks(settings):
+    doc = _copy(INSTALLED)
+    doc["hooks"]["SessionStart"] = doc["hooks"]["SessionStart"][0]
+    assert "hook" in _write(settings, doc).lower()
+
+
+def test_R4_a_groups_hooks_list_replaced_by_one_object_is_a_change_to_its_guard_hook(settings):
+    doc = _copy(INSTALLED)
+    doc["hooks"]["PreToolUse"][0]["hooks"] = doc["hooks"]["PreToolUse"][0]["hooks"][0]
+    assert "hook" in _write(settings, doc).lower()
+
+
+def test_R4_TWIN_a_file_already_in_that_shape_may_be_edited_elsewhere(settings):
+    seeded = _copy(INSTALLED)
+    seeded["hooks"]["SessionStart"] = seeded["hooks"]["SessionStart"][0]
+    _seed(settings, seeded)
+    doc = _copy(seeded)
+    doc["permissions"]["allow"] = ["Bash(ls)"]
+    assert _write(settings, doc) == ""
 
 
 def test_opencode_edit_is_judged_on_the_result(settings):
@@ -323,6 +406,24 @@ def test_hook_write_changing_env_is_refused_and_twin_allowed(sandbox):
     ok = _copy(cur); ok["permissions"]["allow"] = ["Bash(ls)"]
     d, _ = _hook(env, "protect-files.sh", {"tool_name": "Write", "tool_input": {
         "file_path": str(s), "content": json.dumps(ok)}})
+    assert d == "allow"
+
+
+@needs_bash
+def test_R4_hook_curly_quote_edit_and_NaN_write_of_a_guard_hooked_file_are_refused(sandbox):
+    """End to end through the rendered protect-files.sh (review 4 MEASURED both allowed there)."""
+    _tmp, _tk, env, s = sandbox
+    _seed(s, INSTALLED)
+    d, why = _hook(env, "protect-files.sh", {"tool_name": "Edit", "tool_input": {
+        "file_path": str(s), "old_string": "“matcher”: “Bash”",
+        "new_string": '"matcher": "NoSuchTool"'}})
+    assert d == "deny" and "Write" in why, why
+    text = s.read_text(encoding="utf-8")
+    d, why = _hook(env, "protect-files.sh", {"tool_name": "Write", "tool_input": {
+        "file_path": str(s), "content": text.rstrip()[:-1] + ', "x": NaN}'}})
+    assert d == "deny" and "plain JSON" in why, why
+    d, _ = _hook(env, "protect-files.sh", {"tool_name": "Write", "tool_input": {   # TWIN
+        "file_path": str(s), "content": text.rstrip()[:-1] + ', "x": 1}'}})
     assert d == "allow"
 
 

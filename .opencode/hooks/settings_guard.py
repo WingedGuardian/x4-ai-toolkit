@@ -123,7 +123,7 @@ def guard_keys(text: str):
     """(keys set in an `env` block, decidable?) for settings-file TEXT. Unparseable JSON is
     decidable only when the text cannot spell a key at all."""
     try:
-        doc = json.loads(text) if text.strip() else {}
+        doc = loads(text) if text.strip() else {}
     except ValueError:
         if any(k in text.upper() for k in KEYS) or _ESCAPE.search(text) or dynamic_assignment(text):
             return [], False
@@ -254,7 +254,9 @@ def _judge_edit(path: str, edit) -> str:
 #     there, as many times as now, so a matcher that matches nothing, a move to another event,
 #     async, a tiny timeout, another type, or deleting one of two groups that share a command are
 #     all refused. ADDING a hook (a guard script included) is allowed: the most restrictive
-#     PreToolUse decision wins, so it can only add a check;
+#     PreToolUse DECISION wins, so an added hook cannot turn a guard's deny into an allow -- but it
+#     is not only a check: a PreToolUse hook returning `updatedInput` rewrites the tool call
+#     (F221, OPEN, with every other command an agent adds);
 #   * `disableAllHooks` set to a true value where it was not.
 # A user's own hooks stay theirs: adding, changing or removing a hook that runs no guard script is
 # allowed (an env prefix in one only affects that hook's own process). NOT judged here (F221, OPEN):
@@ -304,11 +306,22 @@ def _j(v) -> str:
     return json.dumps(v, sort_keys=True, ensure_ascii=False)
 
 
+def _no_constant(name):
+    raise ValueError(f"{name} is not JSON")
+
+
+def loads(text: str):
+    """JSON as Claude Code's JSON.parse reads it: NaN, Infinity and -Infinity -- which Python's json
+    accepts -- are refused (4.2.0 review 4, MEASURED: appended to a guard-hooked file they were
+    allowed, while the host would stop loading the whole file, its guard hooks included)."""
+    return json.loads(text, parse_constant=_no_constant)
+
+
 def root_settings(text: str):
     """(sorted protected facts, disableAllHooks paths set true, decidable?) for settings TEXT.
     Text that is not JSON is decidable only when it cannot hold such a setting at all."""
     try:
-        doc = json.loads(text) if text.strip() else {}
+        doc = loads(text) if text.strip() else {}
     except ValueError:
         if _TEXT_NAME.search(text) or _ESCAPE.search(text):
             return [], set(), False
@@ -316,14 +329,19 @@ def root_settings(text: str):
     facts, disabled = [], set()
     if isinstance(doc, dict) and isinstance(doc.get("hooks"), dict):
         for event, groups in doc["hooks"].items():
+            # An event's value or a group's `hooks` that is not a LIST is a shape Claude Code does
+            # not read as hooks (review 4, MEASURED: wrapped here, the hook read as "unchanged").
+            # The shape is part of each guard hook's fact, so the list -> object edit is a change.
+            shape = "" if isinstance(groups, list) else "event-not-a-list"
             for group in (groups if isinstance(groups, list) else [groups]):
                 if not isinstance(group, dict):
                     continue
                 rest = {k: v for k, v in group.items() if k != "hooks"}
                 hooks = group.get("hooks")
+                gshape = shape or ("" if isinstance(hooks, list) else "hooks-not-a-list")
                 for h in (hooks if isinstance(hooks, list) else [hooks]):
                     if _OWN_HOOK.search(_j(h)):
-                        facts.append(("hook", str(event), _j(rest), _j(h)))
+                        facts.append(("hook", str(event), _j(rest), _j(h), gshape))
     stack = [((), doc)]
     while stack:
         where, o = stack.pop()
@@ -355,9 +373,10 @@ def _root_delta(before: str, after: str, path: str) -> str:
                                    "JSON, leaving those settings as they are.")
     if ad - bd:
         return DISABLE_REASON.format(path=path)
-    # Guard hooks: every one the file has now must still be there, whole. An ADDED hook running a
-    # guard script is allowed: the most restrictive PreToolUse decision wins, so another hook can
-    # only add a check, never lift one (a REPLACED one is a removal, and refused).
+    # Guard hooks: every one the file has now must still be there, whole. An ADDED hook is allowed:
+    # the most restrictive PreToolUse decision wins, so it cannot lift a guard's deny (a REPLACED
+    # guard hook is a removal, and refused). What an added hook RUNS -- one returning `updatedInput`
+    # rewrites the tool call -- is not judged here (F221, OPEN).
     lost = Counter(f for f in bf if f[0] == "hook") - Counter(f for f in af if f[0] == "hook")
     if lost:
         hook = sorted(lost.elements())[0]
@@ -372,6 +391,27 @@ def _root_delta(before: str, after: str, path: str) -> str:
             return ENV_REASON.format(path=path)
         return KEY_REASON.format(key=", ".join(sorted({str(f[1][-1]) for f in diff})), path=path)
     return ""
+
+
+INEXACT = ("This change cannot be applied here exactly as written (or it reaches the file through a "
+           "path spelling the adapter did not resolve), and the file holds such settings, so its "
+           "result cannot be judged. Read the file again and edit its exact text, or Write the whole "
+           "file -- a Write is judged on the file it leaves.")
+
+
+def _inexact(cur: str, text: str, path: str) -> str:
+    """A change that cannot be applied to CUR exactly -- an edit's old text that is not there (Claude
+    Code's Edit matches curly quotes to straight ones, OpenCode's edit has whitespace-fuzzy
+    replacers), a patch not rebuilt -- may still land somewhere. Refused when the file holds a
+    protected setting now: what survives cannot be proven (4.2.0 review I1 for patches; review 4,
+    MEASURED, for edits: `"matcher": "NoSuchTool"` and `"async": true` name nothing protected).
+    Else judged on its TEXT."""
+    bf, bd, bok = root_settings(cur)
+    if not bok:
+        return ROOT_UNKNOWN.format(path=path, why=JSONC)
+    if bf or bd:
+        return ROOT_UNKNOWN.format(path=path, why=INEXACT)
+    return _root_text(text, path)
 
 
 def _root_text(text: str, path: str) -> str:
@@ -509,7 +549,7 @@ def judge_roots(tool_input: dict) -> str:
         elif old in cur:
             results = [cur.replace(old, new) if edit.get("replace_all") else cur.replace(old, new, 1)]
         else:
-            return _root_text(new, path)
+            return _inexact(cur, new, path)
         for result in results:
             why = _root_delta(cur, result, path)
             if why:
@@ -528,15 +568,7 @@ def judge_roots(tool_input: dict) -> str:
                 return _root_delta(cur, result, path)
         # Not rebuilt (or not a patch): refused when the file holds a protected setting now --
         # what survives cannot be proven (4.2.0 review I1) -- or the text names one.
-        bf, bd, bok = root_settings(cur)
-        if not bok:
-            return ROOT_UNKNOWN.format(path=path, why=JSONC)
-        if bf or bd:
-            return ROOT_UNKNOWN.format(path=path, why="This change cannot be applied here exactly as "
-                                       "written (or it reaches the file through a path spelling the "
-                                       "adapter did not resolve), and the file holds such settings. "
-                                       "Use a plain Edit or Write of the file instead.")
-        return _root_text(written, path)
+        return _inexact(cur, written, path)
     if "content" in tool_input:
         result = tool_input.get("content")
         if not isinstance(result, str):
@@ -549,10 +581,9 @@ def judge_roots(tool_input: dict) -> str:
     if result is None:
         for e in edits:
             new = e.get("new_string") if isinstance(e, dict) else None
-            if isinstance(new, str):
-                why = _root_text(new, path)
-                if why:
-                    return why
+            why = _inexact(cur, new if isinstance(new, str) else "", path)
+            if why:
+                return why
         return ""
     return _root_delta(cur, result, path)
 

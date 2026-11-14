@@ -202,6 +202,9 @@ def test_an_edit_whose_old_string_does_not_apply_is_judged_on_its_new_text(sandb
     d, _ = _hook(env, "protect-files.sh", {"tool_name": "Edit", "tool_input": {
         "file_path": str(s), "old_string": "NOT-IN-FILE", "new_string": '"X4_GUARD": "off"'}})
     assert d == "deny"
+    # The twin needs a file holding no `env` block: since 4.2.0 review 4 a non-applying edit of a
+    # file that holds protected settings is refused whatever it writes (test_settings_guard_roots).
+    s.write_text(json.dumps({"permissions": {"allow": []}}, indent=2), encoding="utf-8")
     d, _ = _hook(env, "protect-files.sh", {"tool_name": "Edit", "tool_input": {
         "file_path": str(s), "old_string": "NOT-IN-FILE", "new_string": '"OTHER": "3"'}})
     assert d == "allow"
