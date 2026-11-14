@@ -293,21 +293,18 @@ fetches; Steam pages are scrapeable, Nexus is not). Each user supplies their OWN
 
 **A change that produces no output has THREE indistinguishable causes, eliminated in this
 order:** it did not load · it loaded but never triggered · it triggered and the logic
-failed. Debugging the third while the first or second is true is unbounded, because every
-observation is consistent with every theory. One such harness cost **three play sessions**,
-none of them spent on the experiment.
+failed. Debugging the third while the first or second is true is unbounded: every
+observation fits every theory.
 
 1. **Did it LOAD?** A signature line in `debug.txt` naming the file. Absent = not installed
-   or not enabled, and nothing else matters.
+   or not enabled; stop there.
 2. **Did it TRIGGER?** An unconditional marker as the FIRST action, before any logic. X4
    specifically: a top-level cue with **no `<conditions>`** fires on new game AND save load,
-   while `event_game_loaded` fires on a SAVE LOAD only — which silently wasted one of
-   those three sessions.
+   while `event_game_loaded` fires on a SAVE LOAD only.
 3. **Only then** debug what it did.
 
-⚠ **Static validation cannot see runtime wiring.** `x4validate --update` returned `OK: no
-issues found` on a script the engine rejected three times: cue-trigger semantics and order
-signatures (`Attack` takes `primarytarget`, not `target`) are not expressible in a schema.
+⚠ **Static validation cannot see runtime wiring.** `x4validate --update` can report `OK` on a
+script the engine rejects: cue-trigger semantics and order signatures (`Attack` takes `primarytarget`, not `target`) are not expressible in a schema.
 **For a new script the engine log is the FIRST real check, not the last.** And instrument
 where the USER is looking — `debug.txt` is invisible during play, so an in-game harness
 reports through `<show_notification>` AND `<write_to_logbook>`, and states elapsed time from
@@ -361,8 +358,8 @@ flag it as open — what is never fine is an unverified claim wearing the gramma
 
 **Route BEFORE you search:** ask *"which tool answers THIS question?"* before a search command,
 not after a confusing result. Reaching for `grep`/`find` by reflex when a purpose-built tool
-exists is a recurring, expensive failure; this governs which tool you REACH FOR, not only what you
-may claim. Flags and subcommands: the generated `x4-cli-reference` skill.
+exists is a recurring, expensive failure. Flags and subcommands: the generated `x4-cli-reference`
+skill.
 
 | Question shape | Tool | Not this |
 |---|---|---|
@@ -446,9 +443,9 @@ say which regime a formula belongs to, and the packed-inclusive scoping rule.
 
 **A CLI banner saying UNKNOWN or STALE means the artifact may not describe your files: rebuild** (`uv run x4effective build` · `uv run x4xref build` · `cd tools/basex; bash build-corpus.sh; bash build-effective.sh`) before you trust a number from it. An absent fingerprint is UNKNOWN, never fresh.
 
-**BaseX staleness is a maintenance task, never a reason to skip BaseX.** When freshness is stale or unknown, refresh the required database, verify its freshness and coverage, then use it. If refresh is blocked, resolve or explicitly report the blocker; never silently substitute an old result or a narrower search as current corpus evidence.
+**BaseX staleness is a maintenance task, never a reason to skip BaseX.** When freshness is stale or unknown, refresh the required database, verify its freshness and coverage, then use it. If refresh is blocked, resolve or report the blocker; never pass off an old result or a narrower search as current corpus evidence.
 
-**Learned facts and preferences go in `KNOWLEDGEBASE.local.md`** as above. Also read an existing `X4-NOTES.md`; it remains preserved legacy evidence. Never edit `CLAUDE.md`, `AGENTS.md`, `.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, `.claude/hooks/`, `.agents/skills/`, `.codex/hooks/`, `.codex/rules/`, `tools/x4_harness/`, `tools/agent-harness.py`, `.opencode/hooks/`, `.opencode/plugins/x4guard.js`, `.opencode/skills/`, `.opencode/X4-OPENCODE.md`: they are regenerated and your edit is lost.
+**Learned facts and preferences go in `KNOWLEDGEBASE.local.md`** as above. Also read an existing `X4-NOTES.md` (preserved legacy evidence). Never edit `CLAUDE.md`, `AGENTS.md`, `.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, `.claude/hooks/`, `.agents/skills/`, `.codex/hooks/`, `.codex/rules/`, `tools/x4_harness/`, `tools/agent-harness.py`, `.opencode/hooks/`, `.opencode/plugins/x4guard.js`, `.opencode/skills/`, `.opencode/X4-OPENCODE.md`: they are regenerated and your edit is lost.
 
 **`KNOWLEDGEBASE.md` and the other protected files are kept read-only by x4lock**, so a write to one fails until you unlock it: `python <toolkit>/scripts/x4lock.py unlock <file>`, edit, `python <toolkit>/scripts/x4lock.py lock`, then commit it. The guard prints the exact commands.
 
