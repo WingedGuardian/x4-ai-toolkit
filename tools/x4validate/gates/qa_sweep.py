@@ -638,6 +638,11 @@ UNSWEPT: dict[tuple[str, str], str] = {
 }
 
 
+#: Each CLI's `--help` text as `_subcommands` read it, so `covered_subcommands` can take the global
+#: flags' arity from the same answer instead of asking again.
+_HELP: dict[str, str] = {}
+
+
 def _subcommands(cli: str) -> list[str] | None:
     """The subcommands argparse lists for *cli*, or None if we could not ask.
 
@@ -661,6 +666,7 @@ def _subcommands(cli: str) -> list[str] | None:
         return None
     if r.returncode != 0:
         return None
+    _HELP[cli] = r.stdout or ""
     m = re.search(r"^\s*\{([a-z0-9_,-]+)\}\s*$", r.stdout or "", re.M)
     return m.group(1).split(",") if m else []
 
@@ -670,15 +676,16 @@ def covered_subcommands(subs_by: dict | None = None) -> tuple[dict[str, set[str]
 
     A cell covers the subcommand in its SUBCOMMAND POSITION: the first argv element that is one of the
     CLI's subcommands and is not a flag's value -- `toolkit_usage._subcommand_in`, the one implementation
-    of that rule. Several cells pass a global flag first (`--registry <sandbox> dashboard`), which is why
-    argv[0] is not the rule. Counting EVERY token was the rule until 2026-11-14 and it over-counted:
+    of that rule, given each global flag's arity from the CLI's own usage line (`usage_flags`). Several
+    cells pass a global flag first (`--registry <sandbox> dashboard`), which is why argv[0] is not the
+    rule. Counting EVERY token was the rule until 2026-11-14 and it over-counted:
     `x4live query pause` covers `query`, but it marked the unswept `pause` covered too. MEASURED when the
     rule changed: 54 (cli, subcommand) pairs under both rules, 0 lost, 0 undecidable cells.
     A nested line (`x4live automation ... query identity`) counts its top-level subcommand only.
     *subs_by* receives each CLI's `_subcommands` answer (None = could not ask), asked once per CLI.
     """
     subs_by = {} if subs_by is None else subs_by
-    from toolkit_usage import _subcommand_in  # noqa: PLC0415 -- a sibling gate, imported when asked
+    from toolkit_usage import _subcommand_in, usage_flags  # noqa: PLC0415 -- a sibling gate
     covered: dict[str, set[str]] = {}
     undecidable: list[tuple[str, str]] = []
     for c in CELLS:
@@ -688,7 +695,7 @@ def covered_subcommands(subs_by: dict | None = None) -> tuple[dict[str, set[str]
         mine = covered.setdefault(c.tool, set())
         if not subs:
             continue                      # single-command CLI, or --help unreadable: no position
-        found = _subcommand_in(c.argv or [], subs)
+        found = _subcommand_in(c.argv or [], subs, usage_flags(_HELP.get(c.tool, "")))
         if found is None:
             undecidable.append((c.tool, c.label))
         else:

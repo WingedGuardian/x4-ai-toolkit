@@ -58,6 +58,10 @@ def _world(tmp_path):
         "weapon_test_m_launcher_macro": ("missilelauncher", '<identification name="{20105,1}"/>'
                                                             '<ammunition tags="missile medium"/>'
                                                             '<bullet class="missile_test_macro"/>'),
+        "turret_test_m_missile_noammo_macro": ("missileturret", '<identification name="{20105,21}"/>'
+                                                                '<bullet class="missile_test_macro"/>'),
+        "weapon_test_m_ammo_macro": ("weapon", '<identification name="{20105,1}"/><ammunition tags="missile"/>'
+                                               '<bullet class="missile_test_macro"/>'),
         "shield_test_m_macro": ("shieldgenerator", '<identification name="{20105,31}"/>'
                                                    '<recharge max="100" rate="10" delay="1"/>'),
     }
@@ -291,6 +295,20 @@ def test_a_launcher_says_fires_is_only_the_default_and_ammunition_decides(db, ca
     assert "ammunition tags" in fires["caveat"] and fires["ammunition_tags"]["value"] == "missile medium"
     rc, out, _ = _card(db, capsys, "weapon_test_m_launcher_macro")
     assert any("ammunition tags decide" in ln for ln in out.splitlines())
+
+
+def test_a_missile_turret_WITHOUT_ammunition_tags_still_gets_the_caveat_by_its_class(db, capsys):
+    """The class clause on its own (review 2026-11-14): with no ammunition tags, only LAUNCHER_CLASSES
+    can raise the caveat, so emptying that list must turn this red."""
+    rc, doc = _json(db, capsys, "turret_test_m_missile_noammo_macro")
+    fires = doc["fields"]["fires"]
+    assert rc == 0 and "ammunition_tags" not in fires and "ammunition tags" in fires["caveat"]
+
+
+def test_any_class_WITH_ammunition_tags_gets_the_caveat(db, capsys):
+    """Twin, the other clause: a class outside LAUNCHER_CLASSES that still declares ammunition tags."""
+    rc, doc = _json(db, capsys, "weapon_test_m_ammo_macro")
+    assert rc == 0 and "ammunition tags" in doc["fields"]["fires"]["caveat"]
 
 
 def test_a_turret_carries_no_launcher_caveat(db, capsys):

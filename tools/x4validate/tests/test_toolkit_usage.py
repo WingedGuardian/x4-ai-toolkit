@@ -260,10 +260,60 @@ def test_undecidable_is_empty_when_every_cell_resolves():
 
 
 def test_a_flag_VALUE_cannot_beat_the_real_subcommand():
-    """`["--registry", "build", "dump"]` must resolve to `dump`, not `build`."""
-    cov = tu.Coverage([_Cell("x4effective", ["--registry", "build", "dump"])], SUBS)
+    """`["--registry", "build", "dump"]` must resolve to `dump`, not `build` -- when the CLI's own usage says
+    `--registry` takes a value. (Until 2026-11-14 this resolved to `dump` by ASSUMING every flag takes one,
+    which is the same guess that turned `["--quiet", "query", "pause"]` into `pause`.)"""
+    flags = {"x4effective": {"--registry": True}}
+    cov = tu.Coverage([_Cell("x4effective", ["--registry", "build", "dump"])], SUBS, flags)
     assert cov.covers("x4effective", "dump")
     assert not cov.covers("x4effective", "build")
+
+
+def test_without_the_flags_arity_a_sub_NAMED_value_is_UNDECIDABLE():
+    """Twin: with no usage to read, `build` may be the value or the subcommand. Say so."""
+    cov = tu.Coverage([_Cell("x4effective", ["--registry", "build", "dump"], label="amb")], SUBS)
+    assert cov.undecidable == [("x4effective", "amb")]
+
+
+QP = ["query", "pause"]
+
+
+def test_a_flag_EQUALS_value_is_one_word():
+    """MEASURED by the reviewer 2026-11-14: `["--db=x", "query", "pause"]` returned `pause`."""
+    assert tu._subcommand_in(["--db=x", "query", "pause"], QP) == "query"
+
+
+def test_a_VALUELESS_flag_of_unknown_arity_before_a_subcommand_is_UNDECIDABLE():
+    """MEASURED by the reviewer: `["--quiet", "query", "pause"]` returned `pause`, a confident wrong answer."""
+    assert tu._subcommand_in(["--quiet", "query", "pause"], QP) is None
+
+
+def test_a_VALUELESS_flag_the_usage_declares_is_not_given_a_value():
+    assert tu._subcommand_in(["--quiet", "query", "pause"], QP, {"--quiet": False}) == "query"
+
+
+def test_a_VALUE_flag_the_usage_declares_consumes_exactly_one_word():
+    assert tu._subcommand_in(["--db", "pause", "query"], QP, {"--db": True}) == "query"
+
+
+def test_the_first_non_flag_word_decides_and_a_non_subcommand_is_UNDECIDABLE():
+    """With the arity known, a stray positional before any subcommand is not skipped past."""
+    assert tu._subcommand_in(["stray", "query"], QP, {}) is None
+
+
+def test_usage_flags_are_read_from_the_clis_own_help():
+    text = ("usage: x4live [-h] [--version] [--file FILE]\n"
+            "              {automation,dump,query} ...\n\nRead what ...\n")
+    assert tu.usage_flags(text) == {"-h": False, "--version": False, "--file": True}
+
+
+def test_usage_with_no_global_flags_still_answers():
+    assert tu.usage_flags("usage: x4save [-h] [--version] {info,check} ...\n") == {"-h": False,
+                                                                                  "--version": False}
+
+
+def test_no_usage_line_is_unknown_not_empty():
+    assert tu.usage_flags("") is None
 
 
 def test_the_heuristic_errs_toward_UNDECIDABLE_not_misattribution():
