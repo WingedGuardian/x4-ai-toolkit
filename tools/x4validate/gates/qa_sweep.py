@@ -44,6 +44,10 @@ class Cell:
     #: substring that must appear in the cell's output -- stdout AND stderr, combined, as
     #: `run()` matches it -- for the cell to count as doing work; absent, the cell is YELLOW
     wants: str | None = None
+    #: Which stream `wants` must appear on: "both" (combined, the default), "stdout" or
+    #: "stderr". A refusal cell names its stream, so a message printed on the wrong one --
+    #: where a pipeline reading stdout would take it as data -- does not count.
+    wants_on: str = "both"
     #: True when a non-zero exit is a legitimate finding, not a tool failure
     findings_ok: bool = False
     #: Minutes, not seconds. Excluded unless --all, so the default sweep stays a
@@ -379,6 +383,10 @@ _ALL_CELLS: list[Cell] = [
     # A name no save holds: exit 1, and the absence must state what it searched (a match on a real name prints 10,000+ rows).
     Cell("x4save", "vars (no match states its denominator)", ["vars", "^__qa_no_such_var__$"], expect=(1,),
          wants="NO MATCH over"),
+    # `census` refuses a bad --by key BEFORE resolving any save, so this cell never opens one.
+    Cell("x4save", "census refuses an unknown --by key", ["census", "--by", "__qa_bad_key__"],
+         expect=(2,), findings_ok=True, wants="error: --by: unknown key(s) __qa_bad_key__",
+         wants_on="stderr"),
     # ---- x4live ---------------------------------------------------------
     # These read a dump written by an in-game probe, so "no dump present" (rc 2)
     # is a legitimate state on a machine that has never run one -- what is NOT
@@ -510,6 +518,22 @@ _ALL_CELLS: list[Cell] = [
     Cell("x4live", "query rejects an unknown verb",
          ["query", "__no_such_verb__", "--timeout", "1"], expect=(1, 2),
          findings_ok=True),
+    # OFFLINE REFUSALS for the two 4.2.0 subcommands: each is refused before the pipe opens,
+    # so no game is needed and none is touched. `equipment` checks the ship id's shape first.
+    Cell("x4live", "equipment refuses a malformed ship id", ["equipment", "__qa_not_an_id__"],
+         expect=(2,), findings_ok=True,
+         wants="error: equipment requires a nonzero issued ship ID", wants_on="stderr"),
+    # `automation query action_execute` is a hidden write route (a reserved session verb),
+    # refused after argument parsing and before the pipe, the journal or any metadata. Every
+    # path argument is a dummy that the refusal never reads. NOT `query pause`, the other
+    # refused form: `check_coverage` counts every argv token, so a `pause` here would mark
+    # the unswept `x4live pause` subcommand as covered.
+    Cell("x4live", "automation refuses a write verb through query",
+         ["automation", "--journal", str(_sandbox_dir() / "__qa_no_journal__"),
+          "--image", "__qa_no_such_x4__.exe", "--profile-id", "0", "--build", "0",
+          "--revision", "0", "--mode", "fresh", "query", "action_execute"],
+         expect=(2,), findings_ok=True,
+         wants="error: dedicated action/session operation required", wants_on="stderr"),
 ]
 
 #: CLIs named by a cell that this checkout does not ship. NAMED, never silently
@@ -541,8 +565,10 @@ def run(cell: Cell) -> Cell:
     elif proc.returncode not in cell.expect:
         cell.status = "RED"
         cell.detail = f"exit {proc.returncode}, expected {cell.expect}"
-    elif cell.wants and cell.wants not in out:
-        cell.status, cell.detail = "YELLOW", f"no {cell.wants!r} in output ({len(out)}B)"
+    elif cell.wants and cell.wants not in {"both": out, "stdout": proc.stdout or "",
+                                           "stderr": proc.stderr or ""}[cell.wants_on]:
+        where = "output" if cell.wants_on == "both" else cell.wants_on
+        cell.status, cell.detail = "YELLOW", f"no {cell.wants!r} in {where} ({len(out)}B)"
     elif len(out.strip()) == 0:
         cell.status, cell.detail = "YELLOW", "no output at all"
     else:
