@@ -42,8 +42,10 @@ bundle.register_extension({id='x4-trader-text-extension',revision='REVISION',
         assert(ffi.sizeof('UniverseID')==8 and ffi.istype('uint64_t',ffi.new('UniverseID')),'native ID ABI')
         ffi.cdef('UniverseID GetContextByClass(UniverseID componentid,const char* classname,bool includeself);')
         ffi.cdef('bool IsComponentClass(UniverseID componentid,const char* classname); bool IsStoryFeatureUnlocked(const char* featureid);')
+        -- Signature copied from vanilla menu_encyclopedia.lua:101; called as at menu_diplomacy.lua:1657.
+        ffi.cdef('UniverseID GetFactionRepresentative(const char* factionid);')
         local context=C.GetContextByClass
-        local isclass,unlocked=C.IsComponentClass,C.IsStoryFeatureUnlocked
+        local isclass,unlocked,representative=C.IsComponentClass,C.IsStoryFeatureUnlocked,C.GetFactionRepresentative
         assert(type(context)=='function' or type(context)=='cdata','context native symbol unavailable')
         local function exact(v)
             if type(v)=='cdata' and ffi.istype('uint64_t',v)then assert(v~=0,'null component');return v end
@@ -71,6 +73,8 @@ bundle.register_extension({id='x4-trader-text-extension',revision='REVISION',
         local native=trader({ffi=ffi,C=C,globals=globals,current=ctx.public_current,now=raw.getElapsedTime,
             menus=function()return g.Menus end,resolve_issued=ctx.resolve_issued,component_id=component,
             valid_widget=raw.IsValidWidgetElement,cell_id=raw.GetCellContent,
+            representative=function(faction)return representative(faction)end,
+            convert_parameters=convert_parameters,open_menu=raw.OpenMenu,
             widget_state=function(id)
                 assert(raw.IsValidWidgetElement(id)==true,'invalid trader widget')
                 local active=raw.IsButtonActive(id);assert(type(active)=='boolean','native button state unavailable');return {active=active}

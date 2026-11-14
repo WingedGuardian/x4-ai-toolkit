@@ -50,9 +50,10 @@ def runtime(mode='licence',lua_subject=False,profile=None):
         g.GetCellContent=function(t,ri,ci)if t==120 then return etable.rows[ri][ci].id end;return d.cell_id(t,ri,ci)end
         g.IsButtonActive=function(id)return d.widget_state(id).active end
         g.GetMacroData=function(m,k)assert(m=='ship_macro' and k=='infolibrary');return 'shiptypes_l' end
-        g.OpenMenu=function(n,p)opened=n;openparams=p;opens=(opens or 0)+1 end
+        g.OpenMenu=function(n,p)opened=n;openparams=p;opens=(opens or 0)+1;if onopen then onopen()end end
         C.IsComponentClass=function(v,k)return k=='ship' end
         C.IsStoryFeatureUnlocked=function()return true end
+        C.GetFactionRepresentative=function(f)assert(f=='argon');return representative or 42ULL end
         etable={type='table',id=120,numcolumns=1,rows={{type='row',index=1}}}
         eframe={id=110,properties={layer=1},content={etable}}
         emenu={name='EncyclopediaMenu',shown=false,minimized=false,encyclopediaMode='encyclopedia',
@@ -173,6 +174,33 @@ def check_real_trader_action_through_sdk_is_once_only_not_purchase(mode,action):
     out=r.eval('run()');assert out.status=='running' and out.observations.purchase_verified is False
     assert r.eval('writes')==1
     r.execute('run();status();status()');assert r.eval('writes')==1 and r.eval('status().status')=='running'
+
+
+def check_licence_trader_open_through_sdk_is_once_only_and_read_back_confirms():
+    r,_=runtime();r.execute("""
+        m.shown=false;opens=0
+        onopen=function()m.shown=true end
+        request('trader.open',{trader='trader',mode='licence'});prepared=prep();result=run()
+    """)
+    assert r.eval('prepared.status')=='prepared' and r.eval('result.status')=='running'
+    assert body(r)['native_status']=='DISPATCHED_UNVERIFIED' and body(r)['action']=='trader.open'
+    assert body(r)['menu_open_verified'] is False and r.eval('result.observations.purchase_verified') is False
+    assert r.eval('opened')=='BlueprintOrLicenceTraderMenu' and r.eval('#openparams')==4
+    assert r.eval('openparams[3]==42ULL') is True and r.eval("openparams[4]=='licence'") is True
+    r.execute('run();status()');assert r.eval('opens')==1 and r.eval('writes')==0
+    r.execute('observe_trader()');assert r.eval('result.status')=='completed'
+    seen=retrieve(r,body(r));assert seen['status']=='OBSERVED' and seen['trader']=='42'
+
+
+@pytest.mark.parametrize('change',[
+    "req.arguments.mode='blueprint'","req.arguments.item='lic'","req.arguments.trader={}",
+    'representative=43ULL','representative=0ULL','m.shown=true',
+])
+def check_licence_trader_open_refusals_never_open(change):
+    r,_=runtime();r.execute("m.shown=false;opens=0;request('trader.open',{trader='trader',mode='licence'})")
+    assert r.eval('prep().status')=='prepared'  # twin: the unchanged request is accepted
+    r.execute("request('trader.open',{trader='trader',mode='licence'});"+change)
+    assert r.eval('prep().status')=='refused' and r.eval('opens')==0
 
 
 def check_private_ticket_lifetime_refuses_before_dispatch():

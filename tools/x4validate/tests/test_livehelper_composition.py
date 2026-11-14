@@ -182,7 +182,8 @@ def test_placement_trusted_profile_reaches_both_providers_and_exact_three_output
 def test_trader_navigation_disclosure_keeps_trader_opener_and_observation_limits():
     files,unused=P.build(*inputs(),extensions=('tradertext',))
     description=E.fromstring(files['content.xml']).get('description')
-    assert 'cannot open the trader menu or verify purchase completion' in description
+    assert 'open the licence trader menu for a helper-issued faction representative' in description
+    assert 'cannot verify that the menu opened or that a purchase completed' in description
     assert 'open and navigate native encyclopedia and owned-property views' in description
     assert 'do not verify rendered pixels or a complete owned-property census' in description
 
