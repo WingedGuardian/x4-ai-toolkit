@@ -244,6 +244,26 @@ def main(argv: list[str] | None = None) -> int:
     fd.add_argument("--limit", type=int, default=50,
                     help="rows to print; the total is still counted (default: %(default)s)")
 
+    cd = sub.add_parser(
+        "card", help="one macro's identity: in-game name and description, weapon system, what it fires, "
+                     "fitting tags and size, ware and price, and which loadouts / ship macros carry it, "
+                     "each value with the source that set it; exit 0 card printed, 1 no such macro",
+        description="Print the facts that classify one macro (a weapon, turret, missile, shield, engine, "
+                    "or any other), each value with the source that WON it: a mod, or 'no override, "
+                    "still vanilla' (base or a DLC). A field is resolved, ABSENT (the store holds the "
+                    "entity and it has no such value) or NOT RESOLVED (a reference the store cannot "
+                    "follow), never blank. Text prints as one quoted JSON string literal per line. "
+                    "Exit 0 the card was printed (a field may still be NOT RESOLVED), 1 no macro of "
+                    "that name is in the store, 2 the store is unreadable.")
+    cd.add_argument("macro", help="the macro's name (its id), e.g. turret_arg_m_flak_01_mk1_macro; a ware "
+                                  "id is pointed at its macro")
+    cd.add_argument("--json", action="store_true",
+                    help="print the card as one JSON object, schema x4effective.card/1, every carrier "
+                         "included (default: text)")
+    cd.add_argument("--limit", type=int, default=20,
+                    help="carriers to print in the text form; the total is still counted, 0 for all "
+                         "(default: %(default)s)")
+
     args = p.parse_args(argv)
     db = Path(args.db) if args.db else _registry.require(
         effective_db(), "the effective-store location",
@@ -329,7 +349,34 @@ def _read_store(con, args) -> int:
         return _cmd_coverage(con, args)
     if args.cmd == "find":
         return _cmd_find(con, args)
+    if args.cmd == "card":
+        return _cmd_card(con, args)
     return 2
+
+
+def _cmd_card(con, args) -> int:
+    """`card`: see `x4validate._effectivecard`. Exit 0 printed, 1 no such macro."""
+    from x4validate import _effectivecard
+    ent = _one_entity(con, "macro", args.macro)
+    if ent is None:
+        print(f"no macro named {args.macro!r} in the store -- this is NOT proof that nothing defines it.",
+              file=sys.stderr)
+        ware = con.execute("SELECT a.value FROM attrs a JOIN entities e ON e.id=a.entity_id WHERE "
+                           "e.kind='ware' AND e.name=? AND a.prop='component.ref' ORDER BY e.id LIMIT 1",
+                           (args.macro,)).fetchone()
+        if ware:
+            print(f"  {args.macro!r} is a WARE; its macro is {ware[0]!r}: "
+                  f"`x4effective card {ware[0]}`", file=sys.stderr)
+        print(f"  {scope_note()}", file=sys.stderr)
+        return 1
+    doc = _effectivecard.card(con, ent)
+    if args.json:
+        print(json.dumps(doc, ensure_ascii=False, indent=1))
+        return 0
+    for line in _effectivecard.render(doc, args.limit):
+        print(line)
+    print(_ADVISORY)
+    return 0
 
 
 #: Name-bearing properties searched by `find`, in display priority order.

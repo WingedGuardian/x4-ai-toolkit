@@ -290,6 +290,12 @@ _ALL_CELLS: list[Cell] = [
          expect=(1, 2), findings_ok=True),
     Cell("x4effective", "show unknown entity", ["show", "macro", "__no_such_entity__"],
          expect=(0, 1), findings_ok=True),
+    Cell("x4effective", "card", ["card", "shield_arg_l_standard_01_mk1_macro"], expect=(0,),
+         wants="fitting"),
+    Cell("x4effective", "card --json", ["card", "shield_arg_l_standard_01_mk1_macro", "--json"],
+         expect=(0,), wants="x4effective.card/1"),
+    Cell("x4effective", "card unknown macro", ["card", "__no_such_entity__"], expect=(1,),
+         findings_ok=True),
 
     # ---- x4compat -------------------------------------------------------
     Cell("x4compat", "check", ["check"], expect=(0, 1, 3), findings_ok=True),
