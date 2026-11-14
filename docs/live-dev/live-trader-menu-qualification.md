@@ -1,6 +1,35 @@
 # Built licence and blueprint trader adapter
 
-Offline candidate: current 81 controls pass; runtime and integrated provider qualification pending. This module does not open a trader or choose a conversation option. It operates only an already built `BlueprintOrLicenceTraderMenu`. No direct licence grant, blueprint learning, money transfer, or copied game implementation is included.
+Offline candidate: current 122 controls pass (81 built-menu + 41 opener); runtime qualification pending. The module operates an already built `BlueprintOrLicenceTraderMenu` and, since 4.2.0, can ask the game to open it in licence mode for a helper-issued faction representative (see "Licence trader opener" below). It never chooses a conversation option. No direct licence grant, blueprint learning, money transfer, or copied game implementation is included.
+
+> The sections after this one are the historical record of the built-menu adapter and keep their original numbers and hashes.
+
+## Licence trader opener (4.2.0)
+
+API: `prepare_open(trader, 'licence')` then the shared `execute(ticket)`; provider action `trader.open {trader, mode}` with `mode` closed to `licence`. The trader token is the one the `representative <faction>` verb issues (`live_query.lua:2096`).
+
+READ vanilla source (reference copy, read only):
+
+- `md/npc_factionrepresentative.xml:272` offers "Show me your licences" with `choiceparam="[0, 0, $FactionRepresentative, 'licence']"`, gated on `not $FactionRepresentative.owner.hastag.nolicencesale`; `:295` opens it with `<open_conversation_menu menu="BlueprintOrLicenceTraderMenu" param="event.param2" .../>`. File SHA-256 `9d18f770939cf16d9f15dbdf14a4e29ffabe7f1b7ab4adbe11df942fab98fba2`.
+- `md/diplomacy.xml:944`/`:972` is the same route for a faction diplomat. Not supported by this opener.
+- `menu_trader_blueprintsorlicences.lua:1` documents `param == { 0, 0, traderentity, mode }`; `:126-139` takes the trader from `param[3]` (`ConvertIDTo64Bit`) and the mode from `param[4]`. SHA-256 `8715f253…e8f3b`, unchanged from the built-menu read.
+- The representative identity comes from `C.GetFactionRepresentative`, declared verbatim from `menu_encyclopedia.lua:101` and called as at `menu_diplomacy.lua:1657`.
+
+Call made: `OpenMenu('BlueprintOrLicenceTraderMenu', Helper.convertComponentIDs({0, 0, trader, 'licence'}))`, the same open shape as `live_textnavigation.lua:259`. Vanilla never opens this menu from Lua; the Lua open replaces the MD `open_conversation_menu`, so the conversation itself is not part of the route.
+
+Preconditions mirrored, each checked at prepare and again at execute: mode is `licence`; the token resolves as an issued `object`; the trader's owner faction's `GetFactionRepresentative` is that same trader (a ship, station or other NPC token refuses); the trader menu is registered exactly once and not shown; no other menu is shown; the session, generation and UI clock are unchanged, and execute runs within 5 UI seconds of prepare. Every refusal returns `REFUSED` with `action_attempted=false`; a malformed or unissued token is a refusal, not a Lua error.
+
+Not mirrored, stated rather than guessed: the faction `nolicencesale` tag (a census of `GetFactionData` keys in `ui/addons` found no tag reader), the diplomat route, and the conversation state: vanilla opens from inside the representative conversation. The opener instead requires that no menu is shown, which is stricter.
+
+Reporting: execute returns `DISPATCHED_UNVERIFIED`, `menu_open_verified=false`, `purchase_verified=false`; a native error after the call is `UNCERTAIN`. The open is confirmed only by a later `trader.observe` (`observe(trader,'licence',start)`), which returns `OBSERVED` only when the trader menu is shown, not minimized, in licence mode, for the same trader. A closed, unknown (`shown` not `true`, `minimized` not `false`) or blueprint-mode menu is refused. The opener presses no trader button; buying stays with `prepare_select` / `prepare_confirm`.
+
+MEASURED offline, 2026-11-13: `tests/test_livetradermenu.py` 122/122 passed, zero skipped; `tests/test_livetradertext_extension.py` (actual generated loader, SDK and wire) 59/59 passed, 7 of them new opener controls. All 48 new opener tests failed against the previous sources (adapter, provider and loader taken from the parent commit). Clause mutations (representative check, already-shown check, mode check, registered check, parameter-conversion check, execute rebind check) were each killed by at least one test. Synthetic natives only. No game was launched and no native function was called.
+
+Lua SHA-256 `f6ca681ac942b6fb0d0b8a705b50aa6e2ce4ca6cf70b4c4f3ce75cafa8eecee4`; tests `d6b1eb5266fbb9ee8645b557e83ef698da2869289c14ddb9abf91c033ff2f914`.
+
+Remains for the game, each launch separately approved, on a throwaway save (x4live is experimental): that `GetFactionRepresentative` returns the issued trader; that `OpenMenu` from the helper's UI context actually shows the menu outside a conversation; that `trader.observe` then reads `OBSERVED` with the expected trader and faction; that a Lua-opened menu closes cleanly; and the purchase route afterwards with money and licence read back. See `live-action-routes-checklist.md` row 7.
+
+## Built-menu adapter (history)
 
 READ source basis: native `menu_trader_blueprintsorlicences.lua` 126–145 binds trader/mode/faction/container; 275–281 creates confirm/cancel; 325–340 creates licence rows; 348–460 creates category and equipment rows; 560–577 creates blueprint rows; 595–678 implements native confirmation and basket mutations. The adapter invokes the actual registered `buttonScriptMap` wrapper after checking cell/row/table/frame and callback identity, following the existing menu adapter mechanism. This is source-backed model binding, not proof of visible pixels or a completed purchase.
 
