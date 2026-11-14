@@ -131,6 +131,7 @@ def test_folder_holding_archives_is_rejected(guard, monkeypatch):
 @pytest.mark.parametrize("rel, rejected", [
     ("intro.mkv.sig", True),                          # game-signed content at the top level
     ("a/b/c/utf8_64.dll.sig", True),                  # 4 components down: the deepest the game ships
+    ("a/b/c/d/utf8_64.dll.sig", False),               # 5 down: past the bound (a deeper glob goes red)
     ("Deferred/Mod/ext/x/y/content.sig", False),      # 6 components: a staged mod's own signature
     ("Deferred/notes.SIG.txt", False),                # not a .sig file
 ])
@@ -148,6 +149,33 @@ def test_folder_holding_signed_game_content_is_rejected(guard, monkeypatch, rel,
         assert v["decision"] == "deny" and "X4_STAGING_DIRS" in v["reason"] and ".sig" in v["reason"], v
     else:
         assert v["decision"] == "allow", v
+
+
+@pytest.mark.parametrize("unlistable", ["", "Deferred/Mod"])
+def test_a_folder_the_scan_cannot_list_rejects_the_entry(guard, monkeypatch, unlistable):
+    """Fail closed: a folder within the scanned levels that cannot be listed could hide a .sig, and a
+    glob over it returns nothing -- which read as "no game content" (4.2.0 review M6)."""
+    if os.name == "nt":
+        pytest.skip("an unlistable folder on Windows needs an ACL deny, which this suite never applies; "
+                    "the rule is a builtin -r/-x test, covered on POSIX CI")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("running as root: every folder is listable, so no fixture can express the case")
+    g, r = guard
+    stage = r["X4_GAME"] / "Locked"
+    target = stage / unlistable if unlistable else stage
+    (stage / "Deferred/Mod/inner").mkdir(parents=True)
+    (stage / "readme.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setenv("X4_STAGING_DIRS", "Locked")
+    probe = r["X4_GAME"] / "libraries/wares.xml"
+    target.chmod(0)
+    try:
+        assert not os.access(target, os.R_OK | os.X_OK), "fixture is still listable"
+        v = _both(g, probe)
+        assert v["decision"] == "deny" and "cannot list" in v["reason"], v
+    finally:
+        target.chmod(0o755)
+    v = _both(g, stage / "note.txt")                     # TWIN: listable again -> accepted
+    assert v["decision"] == "allow", v
 
 
 def test_folder_overlapping_a_configured_root_is_rejected(guard, monkeypatch):

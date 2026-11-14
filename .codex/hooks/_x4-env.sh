@@ -694,7 +694,11 @@ x4_under() {
 #   * it is not, does not contain and is not inside reference/, extensions/, the profile, the
 #     saves, the mods root, the backups, the path config or the toolkit root;
 #   * it is a folder or absent, holds no .cat/.dat archive at its top level, and no .sig file
-#     (Egosoft-signed content) within 4 path components below it.
+#     (Egosoft-signed content) within 4 path components below it -- and every folder that scan
+#     reads (the entry and 1-3 levels below) can be listed, or the entry is rejected (fail closed).
+#     COST, MEASURED on the reference machine's staging collection (~19,500 entries within 4
+#     levels): ~0.55 s once per hook process, paid only by a write under the game folder while the
+#     setting is set; the empty default pays one variable test.
 # Computed ONCE per process (a batch shares it); a root that cannot be resolved rejects the entry
 # and never poisons the verdict's own fail-closed canonicalisation flag.
 # Out: _X4_STAGE_ROOTS (accepted canonical roots, newline-separated), _X4_STAGE_WARN.
@@ -786,6 +790,19 @@ x4_staging_roots() {
           if [ -z "$why" ]; then
             hits=("$_X4_WP"/*.sig "$_X4_WP"/*/*.sig "$_X4_WP"/*/*/*.sig "$_X4_WP"/*/*/*/*.sig)
             [ "${#hits[@]}" -gt 0 ] && why="it holds game-signed (.sig) content within 4 levels, e.g. ${hits[0]##*/}, so the game ships or reads files there"
+          fi
+          # FAIL CLOSED (4.2.0 review M6): a glob over a folder it cannot list returns NOTHING, which
+          # read as "no .sig here". Every folder whose contents the scan above reads -- the entry and
+          # the folders 1-3 levels below it -- must be listable (-r and -x, builtins), or the entry
+          # is rejected.
+          if [ -z "$why" ]; then
+            for d in "$_X4_WP" "$_X4_WP"/*/ "$_X4_WP"/*/*/ "$_X4_WP"/*/*/*/; do
+              d="${d%/}"
+              if [ ! -r "$d" ] || [ ! -x "$d" ]; then
+                why="the guard cannot list the folder '${d##*/}' (it or a folder inside it), so it cannot tell whether game content is there"
+                break
+              fi
+            done
           fi
           [ "$dg" = 1 ] || shopt -u dotglob
           [ "$ng" = 1 ] || shopt -u nullglob; [ "$nc" = 1 ] || shopt -u nocaseglob
