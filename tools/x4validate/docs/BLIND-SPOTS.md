@@ -478,7 +478,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F376 | A command carried inside another shell (`bash -c`, `sh -c`, `eval`, `cmd /c`) does not see the `cd`/`pushd`/`Set-Location` before it, so a relative delete there reaches no rule | **DEFECT (measured)** · PRE-ARC · HIGH | through the whole hook, identical at 1b1a48aa and v4.1.1: 11 carried forms ALLOWED, 9 controls DENIED | FIXED 2026-11-11: a carried text is judged where its carrier segment runs; substitutions, a heredoc fed to a shell and a trap OPEN |
 | F377 | x4xref enumerated only `md/` and `aiscripts/` at the root of each mod, so a mod's `extensions/<owner>/` script patches were never indexed and a cue defined only there was certified a real negative | **DEFECT (measured)** · PRE-ARC | one install, old vs new index: 72 script files in 35 mods (690 rows) missing; 0 unreadable, so the exclusions channel was silent; a known cue answered "no references under ANY kind" | FIXED 2026-11-13: mods and DLC walked with `_scan.under_nested`; base stays direct-only; script scope stamped in the sidecar |
 | F378 | An x4xref index never went stale when the code that builds it changed: `check_index` did not compare engine sources and no index-building module was hashed | **DEFECT (read)** · PRE-ARC | READ: `check_index` passed `engine_dependent=False` and no index-building module was in `ENGINE_SOURCES` (4.2.0 release review); MEASURED after the fix: an index built at the commit before the digest reads STALE, exit 2 | FIXED 2026-11-13: `x4xref build` stamps a digest of `_freshness.XREF_SOURCES`; a missing or different digest reads STALE. Edits to the shared hashed modules (`_merge`, `_registry`, `_cat`, `_loadorder`, `_scan`) also stale the index |
-| F379 | `trader.open` cannot see a faction's `nolicencesale` tag, so a representative of a faction that sells no licences passes the opener and the menu shows nothing for sale | **SCOPE LIMIT (read)** · IN-ARC (new in 4.2.0) | READ: no `GetFactionData` key in the game's `ui/addons` reads faction tags | OPEN 2026-11-13: only the read-back of the menu rows shows it |
+| F379 | `trader.open` cannot read a faction's `nolicencesale` tag; a no-sale faction whose sellable-licence list is not empty passes the opener | **SCOPE LIMIT (read)** · IN-ARC (new in 4.2.0) | READ: census of all 40 UI Lua files in the reference (39 in `ui/addons`, 1 in the only DLC UI folder): no `GetFactionData` key names a tag; the only `HasTag` reads connection tags | OPEN 2026-11-13, partly covered: the opener refuses when `GetOwnLicences` lists no sellable licence (the menu's own row filter); whether that list is empty for no-sale factions is UNMEASURED |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -13576,11 +13576,13 @@ when no row would change. The population carries no CLI (F69); modules the build
 listed with reasons in the test (`_paths`, `_mutation`, `_provenance`).
 Re-derived by `tests/test_xref_index_code.py`.
 
-## F379 - `trader.open` cannot see a faction's `nolicencesale` tag · **SCOPE LIMIT (read)** · IN-ARC · confidence 85% · OPEN
+## F379 - `trader.open` cannot read a faction's `nolicencesale` tag · **SCOPE LIMIT (read)** · IN-ARC · confidence 85% · OPEN (partly covered)
 
-The licence trader opener (`mods/x4_toolkit_helper/ui/live_tradermenu.lua`) checks that the trader is its faction's
-representative, but vanilla also refuses to offer licences for a faction tagged `nolicencesale`, and that check lives in the
-representative's conversation script (`md/npc_factionrepresentative.xml`), not in Lua. READ: no `GetFactionData` key in the
-game's `ui/addons` returns faction tags, so the Lua UI cannot read it. Effect: the opener opens the menu for such a faction and
-the menu lists nothing for sale; a caller learns it only from the rows read back with `trader.observe`. Not measured in game.
+Vanilla offers licences only through the representative's conversation (`md/npc_factionrepresentative.xml:272`), gated on
+the faction's `nolicencesale` tag. The Lua UI cannot read faction tags: a census of all 40 UI Lua files in the reference
+(39 in `ui/addons` plus 1 in `extensions/ego_dlc_ventures/ui`) found no `GetFactionData` key naming a tag, and the only
+`HasTag` reads connection tags (READ). Partly covered: the opener refuses when `GetOwnLicences(faction)` lists no licence
+marked `issellable`, the same filter the menu applies to its rows (`menu_trader_blueprintsorlicences.lua:304-305`).
+Still open: a no-sale faction whose list does contain a sellable licence passes the opener; whether that list is empty
+for such factions is UNMEASURED and needs an in-game check.
 **NO RE-DERIVATION: an open scope limit, not a fix; it is closed by an in-game measurement or a tag reader.**
