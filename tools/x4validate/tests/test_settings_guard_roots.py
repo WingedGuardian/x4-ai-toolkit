@@ -30,7 +30,7 @@ from test_settings_guard import _hook, needs_bash, sandbox  # noqa: F401  (share
 
 
 def _sg():
-    path = claude_hooks_source(why="the settings guard") / "settings_guard.py"
+    path = claude_hooks_source(why="the settings guard", module_level=True) / "settings_guard.py"
     spec = importlib.util.spec_from_file_location("settings_guard_roots", path)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)

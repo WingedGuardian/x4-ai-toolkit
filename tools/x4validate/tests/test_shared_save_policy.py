@@ -785,10 +785,12 @@ def _count_analyser_runs(hooks, marker):
     """Make the copied hook_facts.py record every run as a SCRIPT (an import does not count)."""
     source = hooks / "hook_facts.py"
     text = source.read_text(encoding="utf-8")
-    tail = 'if __name__ == "__main__":\n    raise SystemExit(main())'
-    assert text.rstrip().endswith(tail)
-    text = text.rstrip()[:-len(tail)] + ('if __name__ == "__main__":\n    open(' + repr(str(marker)) +
-                                         ', "a").write("run ")\n    raise SystemExit(main())\n')
+    # The script entry is the LAST `if __name__ == "__main__":` block and ends in this line (F380
+    # put a sys.path line between the two), so the marker goes right before the final call.
+    tail = '\n    raise SystemExit(main())'
+    body = text.rstrip()
+    assert body.endswith(tail) and body.rfind('if __name__ == "__main__":') > body.rfind('\ndef '), body[-300:]
+    text = body[:-len(tail)] + ('\n    open(' + repr(str(marker)) + ', "a").write("run ")' + tail + '\n')
     source.write_bytes(text.encode("utf-8"))
 
 

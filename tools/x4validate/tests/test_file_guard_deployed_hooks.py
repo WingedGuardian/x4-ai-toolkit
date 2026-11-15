@@ -22,15 +22,26 @@ import time
 
 import pytest
 
-from _layout import claude_hooks_source
+from _layout import claude_hooks_source, require_repo
 from codex_testlib import REPO
 from test_file_guard_batch import guard  # noqa: F401  (the shared real-backend fixture)
 
 HOOK_TREES = (".claude/hooks/", ".codex/hooks/", ".opencode/hooks/")
 
 
+_SHIPPED = []
+
+
 def _shipped_names():
-    """Every file NAME the generator writes into a deployed hook tree (its own output, not a list)."""
+    """Every file NAME the generator writes into a deployed hook tree (its own output, not a list).
+
+    Called by the tests that need it, never at import: an installed toolkit ships no `agent/`
+    source tree, and a module-level call failed its whole COLLECTION (4.2.0 pre-push gate, R2B1),
+    taking every other test here with it. There the two tests that need the census skip, counted."""
+    require_repo("agent", "tools/x4validate/scripts/gen-agent-trees.py",
+                 why="the hook-name census is the generator's own output")
+    if _SHIPPED:
+        return _SHIPPED
     src = REPO / "tools/x4validate/scripts/gen-agent-trees.py"
     spec = importlib.util.spec_from_file_location("gen_agent_trees_hook_names", src)
     mod = importlib.util.module_from_spec(spec)
@@ -38,10 +49,8 @@ def _shipped_names():
     out = mod.generate(REPO)
     names = {rel.rsplit("/", 1)[1] for rel in out if rel.startswith(HOOK_TREES)}
     assert len(names) > 20, names        # a census, not an empty set that passes everything
-    return sorted(names)
-
-
-SHIPPED = _shipped_names()
+    _SHIPPED.extend(sorted(names))
+    return _SHIPPED
 
 DENIED = [   # by NAME: no file exists anywhere
     "proj/.claude/hooks/protect-files.sh",
@@ -112,7 +121,7 @@ def test_inside_the_mods_root_and_the_toolkit_too(guard):
 def test_every_shipped_name_is_denied_in_an_empty_user_hook_folder(guard, tmp_path):
     g, _r = guard
     for tree in HOOK_TREES:
-        paths = [str(tmp_path / "home" / tree / n) for n in SHIPPED]
+        paths = [str(tmp_path / "home" / tree / n) for n in _shipped_names()]
         bad = [(p, v) for p, v in zip(paths, _verdicts(g, paths)) if not _denied(v)]
         assert not bad, bad
 
@@ -122,7 +131,7 @@ def test_the_guard_name_list_is_exactly_the_generator_output():
     text = (claude_hooks_source(why="the guard under test") / "protect-files.sh").read_text(encoding="utf-8")
     m = re.search(r'^_X4_SHIPPED_HOOK_NAMES="([^"]*)"', text, re.M)
     assert m, "protect-files.sh lost its _X4_SHIPPED_HOOK_NAMES line"
-    assert sorted(m.group(1).split()) == SHIPPED
+    assert sorted(m.group(1).split()) == _shipped_names()
 
 
 # --- (2) the FOLDER rule: anything next to toolkit guard files -------------------------------------

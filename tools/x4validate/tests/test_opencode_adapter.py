@@ -334,16 +334,21 @@ def test_a_two_step_edit_that_BUILDS_X4_GUARD_is_denied(sandbox):
 
 # --- one falsification twin per clause ---
 def test_TWIN_an_edit_whose_result_has_no_key_is_allowed(sandbox):
+    # 4.2.0: an agent may change NO key of an `env` block (settings_guard class rule), and an edit
+    # that does not apply exactly is refused in a file holding one -- so the twin edits a key
+    # OUTSIDE env, exactly, in the same file the deny test builds the key in.
     tmp, tk, env = sandbox
-    s = _settings(tk, '{"env": {"X4_GUA": "x"}}')
-    v = run(env, call(tk, "edit", {"filePath": str(s), "oldString": '"x"', "newString": '"y"'}))
+    s = _settings(tk, '{"env": {"X4_GUA": "x"}, "model": "a"}')
+    v = run(env, call(tk, "edit", {"filePath": str(s), "oldString": '"model": "a"', "newString": '"model": "b"'}))
     assert v["decision"] in ("allow", "advise") and not v["inert"], v
-    # an edit that does not apply here, with a text that cannot form the key wherever it lands
-    v = run(env, call(tk, "edit", {"filePath": str(s), "oldString": "nowhere", "newString": '"y"'}))
-    assert v["decision"] in ("allow", "advise"), v
-    # unchanged: a write is judged on its text, and a file that already names the key refuses
-    v = run(env, call(tk, "write", {"filePath": str(s), "content": '{"env": {"A": "1"}}'}))
-    assert v["decision"] in ("allow", "advise"), v
+    # the same edit text applied INSIDE env is refused (the class rule, not the X4_GUARD key)
+    v = run(env, call(tk, "edit", {"filePath": str(s), "oldString": '"x"', "newString": '"y"'}))
+    assert v["decision"] == "deny", v
+    # An OpenCode write reaches the rule as opaque TEXT (x4guard `x4_written`), not as the file's
+    # result, so in a file holding env it is refused even when env would be unchanged: fails
+    # closed (MEASURED 2026-11-14, pre-push gate). The exact edit above is the way through.
+    v = run(env, call(tk, "write", {"filePath": str(s), "content": '{"env": {"X4_GUA": "x"}, "model": "c"}'}))
+    assert v["decision"] == "deny" and "cannot tell" in v["reason"], v
     # ...even an edit that would REMOVE it (refused before FX-G6 too: never a deny turned allow)
     _settings(tk, '{"env": {"X4_GUARD": "off"}}')
     v = run(env, call(tk, "edit", {"filePath": str(s), "oldString": '"X4_GUARD": "off"', "newString": '"A": "1"'}))

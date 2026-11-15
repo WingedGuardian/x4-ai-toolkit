@@ -190,7 +190,7 @@ def require_repo(*rel: str, why: str = "", module_level: bool = False, root: Pat
     pytest.skip(reason, allow_module_level=module_level)
 
 
-def claude_hooks_source(root: Path = ROOT, why: str = "") -> Path:
+def claude_hooks_source(root: Path = ROOT, why: str = "", module_level: bool = False) -> Path:
     """The directory of Claude guard hooks this layout can test.
 
     D-C2 (4.1 release review): a test that loaded the guard from `agent/guards/claude-hooks`
@@ -201,12 +201,13 @@ def claude_hooks_source(root: Path = ROOT, why: str = "") -> Path:
         -> that, exactly as before;
       * a checkout that LOST it -> that path anyway, so the test fails, as it should;
       * an installed layout without it -> `.claude/hooks`, or a counted REPO-ONLY skip when this
-        install did not select the Claude target either."""
+        install did not select the Claude target either. `module_level=True` for a call at import
+        time (as `require_repo`), else that skip is a collection ERROR."""
     src = Path(root) / "agent" / "guards" / "claude-hooks"
     if src.is_dir() or not installed_layout(root):
         return src
     require_repo(".claude/hooks", why=why or "the Claude hooks (this install did not select the Claude target)",
-                 root=root)
+                 root=root, module_level=module_level)
     return Path(root) / ".claude" / "hooks"
 
 
