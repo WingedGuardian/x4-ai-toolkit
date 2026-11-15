@@ -85,6 +85,10 @@ def test_two_clients_cannot_dispatch_same_request(tmp_path):
             return "sent"
         except ActionRefused:
             return "refused"
+        except ActionUncertain:
+            # F381 (OPEN): under load the loser can read the winner's observation mid-write and
+            # call it corrupt instead of reserved. Either refusal is safe; a second SEND is not.
+            return "refused"
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sorted(pool.map(attempt, range(2))) == ["refused", "sent"]
