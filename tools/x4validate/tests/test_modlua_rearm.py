@@ -510,7 +510,7 @@ def test_repeated_disconnects_do_not_flood_the_debug_log(lua):
         deliver(lua, "ERROR")
         d = g(lua, "deferred")
         d[len(d)]["cb"]()
-    sentinel_lines = [s for s in g(lua, "log").values() if "pipe sentinel" in s]
+    sentinel_lines = _pipe_lines(lua)
     assert len(sentinel_lines) <= 5, f"{len(sentinel_lines)} sentinel lines from 50 disconnects"
 
 
@@ -521,11 +521,191 @@ def test_the_throttle_reopens_after_a_long_quiet_period(lua):
     init(lua)
     for _ in range(10):
         deliver(lua, "ERROR")
-    quiet = len([s for s in g(lua, "log").values() if "pipe sentinel" in s])
+    quiet = len(_pipe_lines(lua))
     lua.globals()["now"] = g(lua, "now") + 600.0
     deliver(lua, "ERROR")
-    after = len([s for s in g(lua, "log").values() if "pipe sentinel" in s])
+    after = len(_pipe_lines(lua))
     assert after > quiet, "the throttle silenced disconnect reporting permanently"
+
+
+# --------------------------------------------------------------------------- #
+# idle vs fault, and the idle back-off (2026-11-14 crash follow-up, BLIND-SPOTS F124)
+# --------------------------------------------------------------------------- #
+
+def _pipe_lines(rt):
+    """Every pipe-state line the sentinel branch writes: idle, closed, or fault."""
+    return [s for s in g(rt, "log").values() if "X4TOOLKIT_LIVE pipe " in s]
+
+
+def _last_delay(rt):
+    """The delay the most recent deferred re-arm was scheduled with (t is absolute)."""
+    d = g(rt, "deferred")
+    return d[len(d)]["t"] - g(rt, "now")
+
+
+def _cycle_idle(rt):
+    """One idle cycle: the arm is destroyed with no client, then the re-arm fires."""
+    deliver(rt, "ERROR")
+    d = g(rt, "deferred")
+    d[len(d)]["cb"]()
+
+
+#: A verb during which the pipe is torn down: Schedule_Write's synchronous poll fails,
+#: Close_Pipe drains the read FIFO, and our callback gets "ERROR" while the request is
+#: still being handled. pipes.lua does exactly this; the stub calls the callback itself.
+TEARDOWN_MID_REQUEST = """
+verbs.__t_teardown_mid_request = function(seq)
+    local r = _G.sched_reads[#_G.sched_reads]
+    r.cb("ERROR")
+    reply(seq, "OK", "after")
+end
+verbs.__t_quiet_request = function(seq)
+    reply(seq, "OK", "fine")
+end
+"""
+
+
+def test_an_IDLE_teardown_is_logged_as_idle_not_as_an_ERROR(lua):
+    """No client ever spoke on this arm, so the pipe simply was not there: expected."""
+    init(lua)
+    deliver(lua, "ERROR")
+    lines = _pipe_lines(lua)
+    assert lines and "pipe idle: no client" in lines[-1], lines
+    assert "ERROR" not in lines[-1], lines[-1]
+
+
+def test_a_teardown_AFTER_a_served_request_is_a_client_disconnect(lua_factory):
+    """Twin of the idle test: one request was served on this arm, so the ERROR is the
+    client hanging up -- every x4live call ends this way. Not idle, and not a fault."""
+    rt = lua_factory(TEARDOWN_MID_REQUEST)
+    init(rt)
+    deliver(rt, "MQ\t1\t1\t__t_quiet_request")
+    deliver(rt, "ERROR")
+    last = _pipe_lines(rt)[-1]
+    assert "client disconnected after 1 request" in last, last
+    assert "idle" not in last and "ERROR" not in last, last
+
+
+def test_a_teardown_MID_REQUEST_keeps_a_real_ERROR(lua_factory):
+    """The genuine fault: the arm was destroyed while a request was being handled."""
+    rt = lua_factory(TEARDOWN_MID_REQUEST)
+    init(rt)
+    deliver(rt, "MQ\t1\t1\t__t_teardown_mid_request")
+    hits = [s for s in _pipe_lines(rt) if "MID-REQUEST" in s]
+    assert len(hits) == 1, _pipe_lines(rt)
+    assert "ERROR" in hits[0], hits[0]
+
+
+def test_a_MID_REQUEST_fault_is_not_hidden_by_the_idle_throttle(lua_factory):
+    """Faults are bounded by client requests, so they bypass the idle throttle: a burst
+    of idle lines must not be able to swallow the one line that matters."""
+    rt = lua_factory(TEARDOWN_MID_REQUEST)
+    init(rt)
+    for _ in range(10):
+        _cycle_idle(rt)
+    deliver(rt, "MQ\t1\t2\t__t_teardown_mid_request")
+    assert any("MID-REQUEST" in s for s in _pipe_lines(rt)), _pipe_lines(rt)
+
+
+def test_IDLE_re_arms_BACK_OFF_to_a_cap(lua):
+    """2 s, then doubling, capped -- the churn of re-arm/Close_Pipe falls by ~5x."""
+    init(lua)
+    delays = []
+    for _ in range(7):
+        deliver(lua, "ERROR")
+        delays.append(round(_last_delay(lua), 3))
+        d = g(lua, "deferred")
+        d[len(d)]["cb"]()
+    # The first ERROR is the one Init's own arm meets (no client yet).
+    assert delays == [2.0, 4.0, 8.0, 10.0, 10.0, 10.0, 10.0], delays
+
+
+def test_a_REQUEST_resets_the_back_off_to_fast(lua_factory):
+    rt = lua_factory(TEARDOWN_MID_REQUEST)
+    init(rt)
+    for _ in range(5):
+        _cycle_idle(rt)
+    assert _last_delay(rt) == 10.0
+    deliver(rt, "MQ\t1\t1\t__t_quiet_request")
+    deliver(rt, "ERROR")
+    assert _last_delay(rt) == 2.0, "a client spoke, so the next re-arm must be fast"
+    # ...and idleness after it backs off again FROM fast, counted per arm: 2 s, then 4 s.
+    after = []
+    for _ in range(2):
+        d = g(rt, "deferred")
+        d[len(d)]["cb"]()
+        deliver(rt, "ERROR")
+        after.append(_last_delay(rt))
+    assert after == [2.0, 4.0], after
+
+
+def test_WITHOUT_a_request_the_back_off_stays_slow(lua):
+    """Twin of the reset test: the reset must come from the request, not from time."""
+    init(lua)
+    for _ in range(5):
+        _cycle_idle(lua)
+    lua.globals()["now"] = g(lua, "now") + 600.0
+    deliver(lua, "ERROR")
+    assert _last_delay(lua) == 10.0
+
+
+def test_a_FAILED_arm_retries_at_the_FAST_delay(lua_factory):
+    """A Schedule_Read failure is a fault, not idleness: it must not inherit a back-off."""
+    rt = lua_factory()
+    init(rt)
+    for _ in range(5):
+        _cycle_idle(rt)
+    rt.execute("_G.fail_reads = true")
+    d = g(rt, "deferred")
+    d[len(d)]["cb"]()
+    assert any("Schedule_Read failed" in s for s in g(rt, "log").values())
+    assert _last_delay(rt) == 2.0
+    # ...and once an arm succeeds again, idleness backs off from FAST, not from 10 s.
+    rt.execute("_G.fail_reads = false")
+    d = g(rt, "deferred")
+    d[len(d)]["cb"]()
+    deliver(rt, "ERROR")
+    assert _last_delay(rt) == 2.0
+
+
+def test_two_idle_lines_need_60s_of_REAL_time_between_them(lua):
+    """The 2026-11-14 'two lines in one frame': debug.txt stamps GAME time, which stands
+    still while the game is paused, and this throttle runs on getElapsedTime (real time,
+    MEASURED to advance through a pause). Two ERRORs at the same real instant after the
+    free lines are spent yield at most ONE line."""
+    init(lua)
+    for _ in range(4):
+        lua.globals()["now"] = g(lua, "now") + 100.0
+        _cycle_idle(lua)
+    before = len(_pipe_lines(lua))
+    lua.globals()["now"] = g(lua, "now") + 100.0
+    deliver(lua, "ERROR")
+    deliver(lua, "ERROR")
+    assert len(_pipe_lines(lua)) - before == 1
+
+
+def test_two_idle_lines_60s_of_real_time_apart_are_BOTH_logged(lua):
+    """Twin: the same two ERRORs, 61 s of real time apart, both log -- which is all the
+    11-14 log showed (one stamp, because the game clock was frozen)."""
+    init(lua)
+    for _ in range(4):
+        lua.globals()["now"] = g(lua, "now") + 100.0
+        _cycle_idle(lua)
+    before = len(_pipe_lines(lua))
+    lua.globals()["now"] = g(lua, "now") + 100.0
+    deliver(lua, "ERROR")
+    lua.globals()["now"] = g(lua, "now") + 61.0
+    deliver(lua, "ERROR")
+    assert len(_pipe_lines(lua)) - before == 2
+
+
+def test_every_pipe_line_carries_the_REAL_clock(lua):
+    """So a future log can tell 'two lines in one frame' from 'two lines in one paused
+    game second': the line states getElapsedTime, not just the log's game-time stamp."""
+    init(lua)
+    lua.globals()["now"] = 1234.5
+    deliver(lua, "ERROR")
+    assert "t=1234.50" in _pipe_lines(lua)[-1], _pipe_lines(lua)[-1]
 
 
 # --------------------------------------------------------------------------- #

@@ -58,7 +58,7 @@ local PROTO = 1
 --:
 --: Kept honest by `test_the_BUILD_constant_matches_the_file`, so editing the lua and
 --: forgetting to re-stamp this fails the suite rather than silently lying in game.
-local BUILD = "f1a62152"
+local BUILD = "e9d060b3"
 local TAG_CMD, TAG_REPLY = "MQ", "MR"
 
 -- Cap on echo, the ramp instrument. Generous: the point of the ramp is to FIND the
@@ -199,7 +199,19 @@ local function write_advisory(t)
 end
 
 -- Re-arm state. See schedule_rearm() for why the delay is not optional.
-local REARM_DELAY   = 2.0   -- seconds; also the throttle, see below
+local REARM_DELAY   = 2.0   -- seconds: the FAST delay, after a client or a fault
+--: IDLE BACK-OFF (2026-11-14). With no x4live process serving the pipe, every arm meets
+--: a missing pipe, Close_Pipe and our sentinel -- forever, every REARM_DELAY. That churn
+--: is expected, but it is also the only helper activity while nobody is using the
+--: channel, so it is cut: each consecutive IDLE teardown doubles the delay up to
+--: REARM_IDLE_MAX, and the first request on an arm (or any non-idle teardown) resets it.
+--: The cost is connection latency for the NEXT client, up to REARM_IDLE_MAX; the Python
+--: side waits at least `_livepipe.CONNECT_WINDOW_MIN_S` for that reason, and the two are
+--: pinned together by tests/test_livepipe.py.
+local REARM_IDLE_MAX = 10.0
+local rearm_delay   = REARM_DELAY -- the delay the NEXT idle re-arm will use
+local requests_on_arm = 0   -- MQ frames handled since the current arm began
+local in_request    = false -- true while a verb runs; a teardown then is a FAULT
 local rearm_logs    = 0     -- how many re-arm lines we have written
 local last_rearm_log = -1e9 -- getElapsedTime() of the last one
 
@@ -3067,6 +3079,9 @@ local function arm_read()
     else
         armed = false
         DebugError("X4TOOLKIT_LIVE Schedule_Read failed: " .. tostring(err))
+        -- A FAULT, not idleness: the retry below is fast, and once an arm succeeds the
+        -- idle back-off starts again from fast rather than from where it had grown to.
+        rearm_delay = REARM_DELAY
         -- Until 2026-08-29 this branch was TERMINAL: a single failed arm killed the
         -- channel until the next reload, with only one log line to say so. Route it
         -- back through the deferred re-arm instead -- the same path a disconnect
@@ -3095,7 +3110,8 @@ end
 -- re-arm -> Close_Pipe -> ERROR -> re-arm, which at frame rate would add ~60 lines a
 -- second to debug.txt -- and debug.txt is x4debug's input, so that would corrupt an
 -- unrelated instrument.
-schedule_rearm = function()
+schedule_rearm = function(delay)
+    delay = delay or REARM_DELAY
     if type(Helper) ~= "table"
        or type(Helper.addDelayedOneTimeCallbackOnUpdate) ~= "function" then
         -- Refuse rather than re-arm synchronously. A hung game is far worse than a
@@ -3123,7 +3139,7 @@ schedule_rearm = function()
         return
     end
     Helper.addDelayedOneTimeCallbackOnUpdate(function() arm_read() end, false,
-                                             now + REARM_DELAY)
+                                             now + delay)
 end
 
 -- --------------------------------------------------------------------------- --
@@ -3429,15 +3445,48 @@ on_message = function(msg)
             local ok, t = pcall(getElapsedTime)
             if ok then now = t end
         end
-        if rearm_logs < 3 or (now - last_rearm_log) > 60 then
-            rearm_logs = rearm_logs + 1
-            last_rearm_log = now
-            DebugError("X4TOOLKIT_LIVE pipe sentinel: " .. msg .. " -- arm destroyed, "
-                       .. "re-arming in " .. REARM_DELAY .. "s")
+        -- THREE causes, told apart by what this arm saw (2026-11-14):
+        --   IDLE    no request arrived: no x4live process holds the pipe. Expected,
+        --           and the overwhelmingly common case -- backed off, see REARM_IDLE_MAX.
+        --   CLOSED  requests were served and then the client hung up: how every x4live
+        --           call ends. Expected; re-arm fast, since a client was just here.
+        --   FAULT   the arm was destroyed WHILE a verb ran (a reply's write failed and
+        --           Close_Pipe drained the reads under us). A real ERROR, unthrottled --
+        --           its rate is bounded by client requests, not by the idle cycle.
+        -- `t=` is getElapsedTime (REAL time). debug.txt stamps GAME time, which stands
+        -- still while the game is paused, so two throttled lines 60 s apart can carry one
+        -- stamp -- exactly the 2026-11-14 "two lines in one frame". The field lets a
+        -- reader tell those apart without reasoning about the throttle.
+        local served, delay = requests_on_arm, REARM_DELAY
+        requests_on_arm = 0
+        local line
+        if in_request then
+            rearm_delay = REARM_DELAY
+            DebugError("X4TOOLKIT_LIVE pipe sentinel: " .. msg .. " -- arm destroyed "
+                       .. "MID-REQUEST, re-arming in " .. delay .. "s t=" .. string.format("%.2f", now))
+        else
+            if served > 0 then
+                rearm_delay = REARM_DELAY
+                line = "X4TOOLKIT_LIVE pipe client disconnected after " .. served
+                       .. " request(s), re-arming in " .. delay .. "s"
+            else
+                delay = rearm_delay
+                rearm_delay = math.min(rearm_delay * 2, REARM_IDLE_MAX)
+                line = "X4TOOLKIT_LIVE pipe idle: no client, re-arming in " .. delay .. "s"
+            end
+            if rearm_logs < 3 or (now - last_rearm_log) > 60 then
+                rearm_logs = rearm_logs + 1
+                last_rearm_log = now
+                DebugError(line .. " t=" .. string.format("%.2f", now))
+            end
         end
-        schedule_rearm()
+        schedule_rearm(delay)
         return
     end
+    -- A real frame (well-formed or not) reached us on this arm: a client is here. This
+    -- count alone is what makes the arm's eventual teardown CLOSED rather than IDLE, and
+    -- CLOSED resets the back-off to fast when this arm ends.
+    requests_on_arm = requests_on_arm + 1
 
     local f = split_tabs(msg)
     if f[1] ~= TAG_CMD then return end
@@ -3474,7 +3523,11 @@ on_message = function(msg)
     -- All remaining fields, not a fixed three. `component` takes a caller-supplied
     -- field LIST, which is the whole point of it being a general inspector; the
     -- older verbs simply ignore the extra arguments.
+    -- `in_request` only LABELS a teardown that lands while the verb runs (see the
+    -- sentinel branch); it changes nothing about how the request is handled.
+    in_request = true
     local ok, err = pcall(fn, seq, table_unpack(f, 5))
+    in_request = false
     if not ok then
         -- A verb that throws must still produce a frame: silence here is
         -- indistinguishable from a hung game.
