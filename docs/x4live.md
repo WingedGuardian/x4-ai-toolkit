@@ -35,6 +35,12 @@ Support APIs in the game's extension list and start (or load) a game.
 The pipe name defaults to `x4live`; set `X4_LIVE_PIPE` to use another. Every pipe command
 also takes `--pipe` and `--timeout`.
 
+While no `x4live` command is running, the helper retries the pipe at growing intervals (2 s,
+up to 10 s) and logs `pipe idle: no client` to `debug.txt`; that is expected, not an error. A
+command waits at least 15 s for the game to connect, so the first one after a quiet spell can
+take up to about 10 s to start, and it prints a WARNING on stderr when the helper the game
+loaded is a different build from the toolkit's copy.
+
 ## The commands
 
 Run `x4live <command> --help` for the full arguments; the

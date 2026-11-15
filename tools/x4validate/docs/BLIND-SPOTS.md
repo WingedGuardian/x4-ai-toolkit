@@ -226,7 +226,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F121 | `x4effective who-sets` with no property answered with the ENTITY's origin while its properties had been changed, and could not see removals at all | **DEFECT (measured)** · ✅ FIXED 2026-09-14 | asked who set `energycells` it said `base`; 33 of its 49 properties were last set by something else | origins and file-level removals now reported; `show` still lists no removals (OPEN) |
 | F122 | `ask.py xq` certified a negative over a query Git Bash had rewritten before Python saw it | **DEFECT (measured)** · ✅ FIXED 2026-09-14 | `collection("x4raw")//ware` arrived as `.../ware`: `NEGATIVE CONFIRMED` rc 0, where PowerShell counted 14,068 | `--file`; under Git Bash an argument-query zero refuses (rc 4) and every result shows the query as received |
 | F123 | `bin/unpack-reference.sh` took the LAST `"buildid"` in the Steam manifest, which is a beta branch's, not the installed build | **DEFECT (measured)** · ✅ FIXED 2026-09-14 | this machine's manifest: AppState 23660954, `public_beta` 23524486 -- the script's grep returned 23524486 | one depth-1 reader, `x4_acf_buildid`, for the script and the hook; a test bans a third hand-rolled grep |
-| F124 | a client request had NO size cap; a request over ~1997 bytes tears the game-side pipe read down, and the teardown was followed the same session by a game CRASH | **DEFECT (measured)** · ✅ FIXED 2026-09-14 | P6 ramp: 1997 bytes round-tripped, 3998 tore the pipe down (`The pipe has been ended`); the game crashed on the next Esc | `ask()` refuses any request over `MAX_REQUEST_BYTES` (1900) before writing; `ffi-census` and `query ffisyms` gated off by default (`X4_LIVE_ALLOW_FFI`) |
+| F124 | a client request had NO size cap; a request over ~1997 bytes tears the game-side pipe read down, and the teardown was followed the same session by a game CRASH | **DEFECT (measured)** · ✅ FIXED 2026-09-14 (the cap) · crash half OPEN: second sighting 2026-11-14 with no oversized request, n=2, INFERRED | P6 ramp: 1997 bytes round-tripped, 3998 tore the pipe down (`The pipe has been ended`); the game crashed on the next Esc | `ask()` refuses any request over `MAX_REQUEST_BYTES` (1900) before writing; `ffi-census` and `query ffisyms` gated off by default (`X4_LIVE_ALLOW_FFI`) |
 | F125 | a live refusal read the helper's ABSENT load marker as "most likely not installed" -- but the mod arms on GAME LOAD, so at the MAIN MENU the marker is legitimately absent and the install is fine | **DEFECT (measured)** · ✅ FIXED 2026-09-20 | in game 2026-09-20 at the main menu with no save loaded: marker absent, extension present and enabled, refusal said "not installed or not enabled" | the install is MEASURED directly (`helper_is_deployed()` over `mods("active")`) instead of inferred from the log; with deployment unknown the message names BOTH causes |
 | F127 | the guard's scope rules matched a search rooted AT a big tree and at the toolkit/game roots, never ABOVE one — so when the dev repo was retired and `X4_TOOLKIT` moved, the parent of the 60 GB `reference\` tree stopped being named by any root and a recursive search there became ALLOW. The ancestor was covered only BY COINCIDENCE | **DEFECT (measured)** · ✅ FIXED 2026-09-21 | 2026-09-21 through the DEPLOYED hook: `cd <parent-of-reference> && grep -rl x .` → ALLOW, while the same shape at the toolkit root, at `reference/` itself and at the game root all → deny. 3 controls denying is what made it a hole, not a rule change. Found by `hook_false_positives` going red (146 of 17,133 shared commands moved). **6 commands affected, not the 3 the first text-based classification found** — the other 3 never contain the string `reference` | `contains_root()` makes a PROPER-ANCESTOR search fire the same rule; 11 tests incl. a split-root fixture, 3 of 3 clause mutants killed, 8-case end-to-end probe on the deployed hook |
 | F126 | `build-effective.sh` rebuilt the x4eff DATABASE correctly but skipped the COVERAGE STAMP and still exited 0, so a freshly built index reported STALE indefinitely and refused to back any negative claim | **DEFECT (measured)** · ✅ FIXED 2026-09-20 | 2026-09-20: DB timestamp 02:15:41 with 10,970 documents, while `coverage-x4eff.json` kept mtime 00:22:03 and the PREVIOUS content fingerprint (`1f071ac8` vs the `39c7120a` stamped on `coverage-x4raw.json` minutes earlier); exit code 0 | not fixed. Cause identified -- a staging `rm` hit `_eff/tree/libraries/controlschemes_for_movie_capturing.xml` while BaseX still held it (`Device or resource busy`) and the stamp step never ran. A retry with the lock released stamped correctly, so it is NOT reproduced |
@@ -7164,6 +7164,72 @@ game without the toolkit, and no other installed activity touches this path.
 **Scope note.** The reply-path ramp (`x4live ramp`, `groundtruth --with-ramp`) sends `echo <n>`
 where the request is the *number* as text (tiny) and the game echoes back `n` bytes, so it measures
 OUR read buffer (`_BUF`), never the request cap — it is unaffected, and unrelated to this teardown.
+
+### 2026-11-14 — a second crash of the same shape, with no oversized request (n=2, still INFERRED)
+
+**What happened (MEASURED from the log copy and the dump; both read only).** X4 crashed at
+18:59 (`X4_900_2026_11_14_18_59_36.dmp`, helper build `6af2fbed`). `debug.txt` holds only the
+idle cycle: 19 `pipe sentinel: ERROR -- arm destroyed` lines, no request lines and no x4live
+reply, so no client was connected and nothing oversized was sent. The last lines before the
+crash are a map close/open sound, `SaveList::TriggerUpdate() ... already processing`,
+`[FactionHUD/crosshair] crosshair inactive`, menu hover sounds, and then two sentinel lines
+with one stamp (813.91). The same pattern appeared once earlier at 471.22 without a crash.
+
+**Two lines under one stamp are not a throttle failure.** `debug.txt` stamps GAME time, which
+stops while the game is paused: the hover-sound lines share the stamp as well. The throttle runs on
+`getElapsedTime()`, real time, which MEASURED 2026-09-13 keeps advancing through a pause. So
+the two lines were at least 60 s of real time apart, and the game sat in a paused menu for a
+minute or more before it crashed. This is INFERRED from the log, consistent with all 16
+intervals after the three free lines (two are 0; the three others under 60 game-seconds,
+42.8, 56.5 and 44.2, all fit a pause), and it
+explains both pairs without a code defect. The helper's lines now carry `t=` (real time), so
+the next log answers this directly.
+
+**The crash, from the dump (MEASURED where; nothing proves why).**
+
+- `EXCEPTION_ACCESS_VIOLATION`, read of address `0x0`, at `X4.exe+0x13a2912`
+  (`mov rdx, [rdi]`, `rdi = 0`). The X4.exe on disk is the dump's build (PE timestamp
+  1780395501, image size 0x6fa9000), so its code was read from disk.
+- **The faulting function is the C implementation of the Lua global `getElapsedTime`.** It is
+  registered at `X4.exe+0x13a2e9a` (`lua_pushcclosure` then `lua_setfield(L, GLOBALSINDEX,
+  "getElapsedTime")`, between `getScreenInfo` and `getMousePosition`). Its body is
+  `lua_rawgeti(L, LUA_REGISTRYINDEX, 1)`, then `lua_touserdata(L, -1)`, then `lua_settop(L, -2)`,
+  then a virtual call on that pointer. The pointer was NULL: registry slot 1, the UI host
+  object, was unset when a Lua function called `getElapsedTime`. `pcall` cannot catch this,
+  because it is a native access violation, not a Lua error.
+- The caller is Lua run by X4's script dispatcher: the return address `X4.exe+0x13a36f3` is in
+  a function (`0x13a35f4`-`0x13a3723`) that calls `lua_pcall` and references `"self"`. That
+  matches the 09-14 description ("X4's UI event dispatch, reached through lua_pcall").
+
+**What matches 09-14:** a native NULL dereference in X4's UI script machinery, reached through
+`lua_pcall`, at a menu open with the helper's pipe re-arming. **What differs:** no oversized
+request and no client at all; the 09-14 fault was in the dispatcher itself (read of `0x30`), and this
+one is one level down, inside `getElapsedTime`. The 09-14 dump no longer exists and its
+faulting RVA was not recorded, so whether it is the same dispatcher function is UNKNOWN.
+
+**What the dump cannot say.** It holds 197 memory ranges, 189 KB in all, stacks only. The
+`lua_State` (`0x1add2470380`) is not in it, so the Lua function that called `getElapsedTime`
+cannot be recovered. Candidates that call it: the helper's sentinel branch and
+`schedule_rearm` (both run inside `Close_Pipe`); `Helper.addDelayedOneTimeCallbackOnUpdate`'s
+wrapper, every frame while a re-arm is pending; and any vanilla or mod Lua. One mechanism makes the
+helper's case plausible: Mod Support APIs runs `Poll_For_Reads` from `New_Frame_Detector`,
+which is driven both by `onUpdate` and by the MD-raised Lua event `Time.MD_New_Frame`
+(`ui/time/interface.lua`, extracted read-only from `ext_01.cat`), so our callback can run from an
+event dispatch. Whether registry slot 1 is NULL in that context during a menu transition is
+UNMEASURED.
+
+**What would settle it.** (1) A full-memory dump of the next crash (WER `LocalDumps` with
+`DumpType=2`, or `procdump -ma`), which holds the `lua_State` and its call frames and so names the
+Lua caller. (2) The in-game row 9 of `docs/live-dev/live-action-routes-checklist.md` with the
+4.2.0 helper (idle back-off, `t=` lines), and the same menu cycling with the helper disabled as
+the control. (3) A count of vanilla `getElapsedTime` calls reachable from MD-raised Lua
+events, to see whether vanilla ever calls it from the context the helper's callback runs in.
+
+**What changed in 4.2.0, and what it is not.** The idle re-arm backs off (2, 4, 8, then 10 s)
+and is logged as idle, not as ERROR, so the helper tears the pipe down about a fifth as often
+while idle. This is not a fix: the cause is unknown, and fewer teardowns only make the candidate
+path run less often. A third dump, `X4_900_2026_11_13_12_24_56.dmp`, is a different fault (an ntdll write at `0xd8`
+on X4's "Asset Enabling Process" thread, with the named-pipe DLL not loaded) and is not counted here.
 
 
 ## F127 — a guard rule that covered the case above it only BY COINCIDENCE, until a path moved · **DEFECT (measured)** · confidence 96% · FIXED 2026-09-21

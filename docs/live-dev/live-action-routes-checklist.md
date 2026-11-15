@@ -21,6 +21,7 @@ approves that launch for exactly those rows. Never a save the user is playing.
 | 6b | One load | Load the save from 6a through `PersistenceDispatcher`. Approve this launch separately from 6a. | After the reload, the session identity changes and the world matches the 6a save. Issued ids from before the load are refused, as expected after a UI reload. | `_livepersistdispatch.py:174` (`prepare_load`) |
 | 7 | Licence trader: open, then buy | Get the trader with `representative <faction>`. Then `trader.open {trader, mode='licence'}`, then `trader.observe`. Then the existing `trader.select` and `trader.confirm` for one licence the player can afford and lacks. | `trader.observe` returns `OBSERVED` for that trader in licence mode. After confirm, money has dropped by the quoted price and `HasLicence` reports the licence held. | `live_query.lua:2096` (`representative`), `live_tradermenu.lua:208` (opener preconditions), `:231` (`prepare_open`), `:241` (observe), `:278-279` (select/confirm), `:280` (execute), `live_playerstate.lua:145`, `:156` (money, licence read-back) |
 | 8 | Licence trader: open, then close without buying | With no conversation running and the player not talking to the representative, `trader.open` as in row 7, then `trader.observe`, then close the menu with its own close or back control. Buy nothing. | The menu closes. There is no stuck UI, flight or on-foot controls come back, no conversation window appears, and `debug.txt` shows no new error from the close. Money and licences are unchanged. | `menu_trader_blueprintsorlicences.lua:623`, `:637`, `:749` (every close path calls `Helper.closeMenuAndReturn`), `helper.lua:1794` (`ReturnFromMenu`); opener `live_tradermenu.lua:208` (refuses during a conversation) |
+| 9 | Helper pipe idle back-off (not a ROR route; 4.2.0 helper) | With the 4.2.0 helper deployed and **no client connected**, open and close the map repeatedly with Esc. Then run `x4live query ping` in a loop so a client is connected, and do the same. Note the wall-clock time of each menu open. | No crash. `debug.txt` shows `pipe idle: no client, re-arming in 2s`, then 4s, 8s and 10s with no client, and `client disconnected after N request(s), re-arming in 2s` after each call. Match the menu-open times against the `t=` values on the pipe lines. No `MID-REQUEST` line appears. | `live_query.lua` sentinel branch (IDLE / CLOSED / FAULT), `REARM_IDLE_MAX`, `schedule_rearm`; `_livepipe.CONNECT_WINDOW_MIN_S` |
 
 ## Notes per row
 
@@ -49,6 +50,11 @@ approves that launch for exactly those rows. Never a save the user is playing.
   it opens a menu from Lua. The engine's behaviour for a return with no conversation is
   UNMEASURED. If the game is left in a bad state, the opener must not be used until the close
   is handled.
+- **Row 9.** This follows up the 2026-11-14 crash (BLIND-SPOTS F124). `debug.txt` stamps
+  game time, which stops while the game is paused, so use the `t=` field (real time) on the
+  pipe lines to time them. Two lines under one stamp are expected when the game sat paused
+  for 60 s or more. Record the back-off steps you saw, any crash with its dump name, and
+  whether a call made during a 10 s back-off still connected.
 
 ## Recording a result
 
