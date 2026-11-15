@@ -86,6 +86,9 @@ _G.now = 100.0
 
 function DebugError(s) _G.log[#_G.log+1] = tostring(s) end
 function getElapsedTime() return _G.now end
+-- A SEPARATE clock, so a test can tell which one the code read. nil real_now follows
+-- `now`, which keeps every older test's single-clock model intact.
+function GetCurRealTime() if _G.real_now ~= nil then return _G.real_now end return _G.now end
 
 Helper = {
     addDelayedOneTimeCallbackOnUpdate = function(cb, blockinput, delaytime)
@@ -706,6 +709,85 @@ def test_every_pipe_line_carries_the_REAL_clock(lua):
     lua.globals()["now"] = 1234.5
     deliver(lua, "ERROR")
     assert "t=1234.50" in _pipe_lines(lua)[-1], _pipe_lines(lua)[-1]
+
+
+def test_the_t_field_is_GetCurRealTime_not_getElapsedTime(lua):
+    """getElapsedTime's C body dereferences the UI host in registry slot 1 with no NULL
+    check -- the 11-14 crash site. GetCurRealTime reads a process-global clock. The
+    sentinel's own timing uses the latter."""
+    init(lua)
+    lua.globals()["now"] = 100.0
+    lua.globals()["real_now"] = 7777.0
+    deliver(lua, "ERROR")
+    last = _pipe_lines(lua)[-1]
+    assert "t=7777.00" in last and "t=100.00" not in last, last
+
+
+def test_the_THROTTLE_runs_on_GetCurRealTime(lua):
+    """Twin, for the throttle: the real clock advancing 61 s reopens it while
+    getElapsedTime stands still."""
+    init(lua)
+    lua.globals()["real_now"] = 0.0
+    for i in range(4):
+        lua.globals()["real_now"] = 100.0 * (i + 1)
+        _cycle_idle(lua)
+    before = len(_pipe_lines(lua))
+    deliver(lua, "ERROR")                     # same real instant: suppressed
+    lua.globals()["real_now"] = g(lua, "real_now") + 61.0
+    deliver(lua, "ERROR")                     # 61 real s later: logged
+    assert len(_pipe_lines(lua)) - before == 1
+
+
+def test_WITHOUT_GetCurRealTime_it_falls_back_to_getElapsedTime(lua):
+    init(lua)
+    lua.execute("GetCurRealTime = nil")
+    lua.globals()["now"] = 4321.0
+    deliver(lua, "ERROR")
+    assert "t=4321.00" in _pipe_lines(lua)[-1]
+
+
+def _served_call(rt, seq):
+    deliver(rt, "MQ\t1\t%d\t__t_quiet_request" % seq)
+    deliver(rt, "ERROR")
+    d = g(rt, "deferred")
+    d[len(d)]["cb"]()
+
+
+def test_EVERY_call_end_is_logged_even_after_the_idle_lines_spent_the_budget(lua_factory):
+    """Disconnect lines have their own budget, so a tester sees each call end. Init's
+    idle 2/4/8 s lines spend the idle budget's free lines first."""
+    rt = lua_factory(TEARDOWN_MID_REQUEST)
+    init(rt)
+    for _ in range(5):
+        _cycle_idle(rt)
+    for seq in range(1, 4):
+        rt.globals()["now"] = g(rt, "now") + 3.0
+        _served_call(rt, seq)
+    ends = [s for s in _pipe_lines(rt) if "client disconnected" in s]
+    assert len(ends) == 3, _pipe_lines(rt)
+
+
+def test_disconnect_lines_are_still_RATE_limited(lua_factory):
+    """Twin: a pathological burst of call ends at one real instant logs once."""
+    rt = lua_factory(TEARDOWN_MID_REQUEST)
+    init(rt)
+    for seq in range(1, 6):
+        _served_call(rt, seq)
+    ends = [s for s in _pipe_lines(rt) if "client disconnected" in s]
+    assert len(ends) == 1, ends
+
+
+def test_disconnect_lines_do_not_spend_the_IDLE_budget(lua_factory):
+    """The separation runs both ways: after call ends, the idle budget is untouched."""
+    rt = lua_factory(TEARDOWN_MID_REQUEST)
+    init(rt)
+    for seq in range(1, 4):
+        rt.globals()["now"] = g(rt, "now") + 3.0
+        _served_call(rt, seq)
+    for _ in range(3):
+        _cycle_idle(rt)
+    idle = [s for s in _pipe_lines(rt) if "pipe idle" in s]
+    assert len(idle) == 3, _pipe_lines(rt)   # all three of the idle budget's free lines
 
 
 # --------------------------------------------------------------------------- #

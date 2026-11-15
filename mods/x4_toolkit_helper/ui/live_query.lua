@@ -58,7 +58,7 @@ local PROTO = 1
 --:
 --: Kept honest by `test_the_BUILD_constant_matches_the_file`, so editing the lua and
 --: forgetting to re-stamp this fails the suite rather than silently lying in game.
-local BUILD = "e9d060b3"
+local BUILD = "a7f99807"
 local TAG_CMD, TAG_REPLY = "MQ", "MR"
 
 -- Cap on echo, the ramp instrument. Generous: the point of the ramp is to FIND the
@@ -212,8 +212,35 @@ local REARM_IDLE_MAX = 10.0
 local rearm_delay   = REARM_DELAY -- the delay the NEXT idle re-arm will use
 local requests_on_arm = 0   -- MQ frames handled since the current arm began
 local in_request    = false -- true while a verb runs; a teardown then is a FAULT
-local rearm_logs    = 0     -- how many re-arm lines we have written
-local last_rearm_log = -1e9 -- getElapsedTime() of the last one
+local rearm_logs    = 0     -- how many IDLE lines we have written
+local last_rearm_log = -1e9 -- sentinel_clock() of the last one
+--: CLOSED lines have their OWN budget, so each x4live call's end stays visible after the
+--: idle lines have spent theirs: at most one per DISCONNECT_LOG_GAP real seconds. A call
+--: cannot end faster than one fast re-arm (2 s), so this suppresses only a burst.
+local DISCONNECT_LOG_GAP = 1.0
+local last_disconnect_log = -1e9
+
+--: The sentinel's own clock: the throttles and the `t=` field. GetCurRealTime, not
+--: getElapsedTime. READ by static disassembly of X4.exe (2026-11-14, BLIND-SPOTS F124):
+--: getElapsedTime's C body fetches the UI host from registry slot 1 and calls through it
+--: with no NULL check -- the 11-14 crash site -- while GetCurRealTime reads one
+--: process-global double under a lock and touches no host. It is the clock vanilla menus
+--: and Mod Support APIs' frame detector use in this same `menus` environment. It keeps
+--: advancing while the game is PAUSED (INFERRED: the frame detector skips any frame whose
+--: GetCurRealTime is unchanged, and a paused game was MEASURED 2026-09-13 to keep
+--: answering on the pipe that detector polls). Being process-global, it is NOT expected
+--: to reset on a save load or UI reload (UNMEASURED); the throttle STATE does reset then,
+--: because the chunk is rebuilt, so each load gets three fresh idle lines.
+--: Falls back to getElapsedTime only if GetCurRealTime is absent; 0 if neither answers.
+local function read_clock(f)
+    if type(f) ~= "function" then return nil end
+    local ok, t = pcall(f)
+    if ok and type(t) == "number" then return t end
+    return nil
+end
+local function sentinel_clock()
+    return read_clock(GetCurRealTime) or read_clock(getElapsedTime) or 0
+end
 
 -- --------------------------------------------------------------------------- --
 -- framing
@@ -3440,11 +3467,7 @@ on_message = function(msg)
         -- Logging and returning (what this did until 2026-08-29) disarms the channel
         -- permanently after the first disconnect, which is exactly what happened.
         armed = false
-        local now = 0
-        if type(getElapsedTime) == "function" then
-            local ok, t = pcall(getElapsedTime)
-            if ok then now = t end
-        end
+        local now = sentinel_clock()
         -- THREE causes, told apart by what this arm saw (2026-11-14):
         --   IDLE    no request arrived: no x4live process holds the pipe. Expected,
         --           and the overwhelmingly common case -- backed off, see REARM_IDLE_MAX.
@@ -3453,10 +3476,14 @@ on_message = function(msg)
         --   FAULT   the arm was destroyed WHILE a verb ran (a reply's write failed and
         --           Close_Pipe drained the reads under us). A real ERROR, unthrottled --
         --           its rate is bounded by client requests, not by the idle cycle.
-        -- `t=` is getElapsedTime (REAL time). debug.txt stamps GAME time, which stands
-        -- still while the game is paused, so two throttled lines 60 s apart can carry one
-        -- stamp -- exactly the 2026-11-14 "two lines in one frame". The field lets a
-        -- reader tell those apart without reasoning about the throttle.
+        -- `t=` is sentinel_clock() (GetCurRealTime: real time, see its comment). debug.txt
+        -- stamps GAME time, which stands still while the game is paused, so two throttled
+        -- lines 60 s apart can carry one stamp -- exactly the 2026-11-14 "two lines in one
+        -- frame". The field lets a reader tell those apart without reasoning about the
+        -- throttle. Its origin is UNMEASURED and need not match the debug.txt stamp's;
+        -- compare `t=` values with each other, not with the stamp.
+        -- schedule_rearm below still reads getElapsedTime: Helper's deadline is compared
+        -- against that clock, so it must stay on it.
         local served, delay = requests_on_arm, REARM_DELAY
         requests_on_arm = 0
         local line
@@ -3467,18 +3494,21 @@ on_message = function(msg)
         else
             if served > 0 then
                 rearm_delay = REARM_DELAY
-                line = "X4TOOLKIT_LIVE pipe client disconnected after " .. served
-                       .. " request(s), re-arming in " .. delay .. "s"
+                if (now - last_disconnect_log) >= DISCONNECT_LOG_GAP then
+                    last_disconnect_log = now
+                    line = "X4TOOLKIT_LIVE pipe client disconnected after " .. served
+                           .. " request(s), re-arming in " .. delay .. "s"
+                end
             else
                 delay = rearm_delay
                 rearm_delay = math.min(rearm_delay * 2, REARM_IDLE_MAX)
-                line = "X4TOOLKIT_LIVE pipe idle: no client, re-arming in " .. delay .. "s"
+                if rearm_logs < 3 or (now - last_rearm_log) > 60 then
+                    rearm_logs = rearm_logs + 1
+                    last_rearm_log = now
+                    line = "X4TOOLKIT_LIVE pipe idle: no client, re-arming in " .. delay .. "s"
+                end
             end
-            if rearm_logs < 3 or (now - last_rearm_log) > 60 then
-                rearm_logs = rearm_logs + 1
-                last_rearm_log = now
-                DebugError(line .. " t=" .. string.format("%.2f", now))
-            end
+            if line then DebugError(line .. " t=" .. string.format("%.2f", now)) end
         end
         schedule_rearm(delay)
         return
