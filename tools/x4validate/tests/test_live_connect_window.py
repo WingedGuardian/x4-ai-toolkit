@@ -237,3 +237,79 @@ def test_a_probe_reply_with_the_SAME_build_is_silent(monkeypatch):
     monkeypatch.setattr(_livecli.sys, "stderr", err)
     assert _livecli.cmd_query("probe", [], None, 3.0, out=io.StringIO()) == 0
     assert err.getvalue() == ""
+
+
+def test_a_probe_command_WARNS_ONCE_when_marker_and_reply_both_differ(tmp_path, monkeypatch):
+    """Review M3: the load-marker check and the probe-reply check must not both print."""
+    class _ProbePipe(_RecordingPipe):
+        def ask(self, verb, *args):
+            return SimpleNamespace(status="OK", fields=["build=deadbeef"], payload="x")
+
+    monkeypatch.setattr(lp, "LivePipe", _ProbePipe)
+    log = _marker_log(tmp_path, "deadbeef")
+    monkeypatch.setattr(lp._paths, "debug_log", lambda: log)
+    err = io.StringIO()
+    monkeypatch.setattr(_livecli.sys, "stderr", err)
+    assert _livecli.cmd_query("probe", [], None, 3.0, out=io.StringIO()) == 0
+    assert err.getvalue().count("WARNING") == 1, err.getvalue()
+
+
+def test_the_timeout_help_states_the_connect_floor():
+    assert lp.CONNECT_WINDOW_MIN_S == 15.0
+    assert "15 s" in _livecli._TIMEOUT_HELP and "each reply" in _livecli._TIMEOUT_HELP
+
+
+# --------------------------------------------------------------------------- #
+# the bounded backwards read of the load marker (review M4)
+# --------------------------------------------------------------------------- #
+
+def _big_log(tmp_path, head: str, filler_lines: int, tail: str = ""):
+    p = tmp_path / "debug.txt"
+    filler = "[General] 1.00 ======================================\n" * filler_lines
+    p.write_text(head + filler + tail, encoding="utf-8")
+    return p
+
+
+def test_a_marker_FAR_from_the_end_is_still_found(tmp_path, monkeypatch):
+    """The real shape: written once at load, then MBs of log after it."""
+    p = _big_log(tmp_path, "X4TOOLKIT_LIVE loaded: proto=1 build=11112222\n", 20000)
+    assert p.stat().st_size > 2 * lp._TAIL_CHUNK
+    monkeypatch.setattr(lp._paths, "debug_log", lambda: p)
+    assert lp.helper_loaded_build() == "11112222"
+
+
+def test_a_marker_SPLIT_across_a_chunk_boundary_is_found(tmp_path, monkeypatch):
+    p = _big_log(tmp_path, "X4TOOLKIT_LIVE loaded: proto=1 build=33334444\n", 3)
+    monkeypatch.setattr(lp._paths, "debug_log", lambda: p)
+    for chunk in (5, 7, 13, 64):
+        monkeypatch.setattr(lp, "_TAIL_CHUNK", chunk)
+        assert lp.helper_loaded_build() == "33334444", chunk
+
+
+def test_the_LATEST_marker_wins_across_chunks(tmp_path, monkeypatch):
+    p = _big_log(tmp_path, "X4TOOLKIT_LIVE loaded: build=11111111\n", 50,
+                 "X4TOOLKIT_LIVE loaded: build=22222222\n" + "x\n" * 50)
+    monkeypatch.setattr(lp._paths, "debug_log", lambda: p)
+    assert p.stat().st_size < lp._TAIL_CHUNK        # both markers inside ONE chunk
+    assert lp.helper_loaded_build() == "22222222"
+    monkeypatch.setattr(lp, "_TAIL_CHUNK", 64)       # and in different chunks
+    assert lp.helper_loaded_build() == "22222222"
+
+
+def test_the_read_is_BOUNDED_and_past_the_cap_answers_unknown(tmp_path, monkeypatch):
+    """The marker exists, but beyond the cap: None (unknown), never a guess."""
+    p = _big_log(tmp_path, "X4TOOLKIT_LIVE loaded: build=55556666\n", 2000)
+    monkeypatch.setattr(lp._paths, "debug_log", lambda: p)
+    monkeypatch.setattr(lp, "_TAIL_MAX", 4096)
+    assert lp.helper_loaded_build() is None
+    monkeypatch.setattr(lp, "_TAIL_MAX", p.stat().st_size)   # twin: cap covers the file
+    assert lp.helper_loaded_build() == "55556666"
+
+
+def test_a_STALE_log_answers_unknown(tmp_path, monkeypatch):
+    p = _marker_log(tmp_path, "deadbeef")
+    old = time.time() - lp.LOG_LIVE_WINDOW_S - 60
+    import os
+    os.utime(p, (old, old))
+    monkeypatch.setattr(lp._paths, "debug_log", lambda: p)
+    assert lp.helper_loaded_build() is None

@@ -76,7 +76,8 @@ options:
   --mode {fresh,resume}
                         explicit load handshake mode
   --pipe PIPE
-  --timeout TIMEOUT
+  --timeout TIMEOUT     seconds to wait for each reply (0-120, default: 15); the wait for the game
+                        to connect is the larger of this and 15 s
 ```
 
 ## `x4live dump`
@@ -185,7 +186,8 @@ positional arguments:
 options:
   -h, --help         show this help message and exit
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
-  --timeout TIMEOUT  seconds to wait for the game, and for each reply (default: 10.0)
+  --timeout TIMEOUT  seconds to wait for each reply (default: 10.0); the wait for the game to
+                     connect is the larger of this and 15 s
 ```
 
 ## `x4live equipment`
@@ -199,7 +201,8 @@ positional arguments:
 options:
   -h, --help         show this help message and exit
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
-  --timeout TIMEOUT  seconds per pipe reply (default: 10.0)
+  --timeout TIMEOUT  seconds to wait for each reply (default: 10.0); the wait for the game to
+                     connect is the larger of this and 15 s
 ```
 
 ## `x4live pausestate`
@@ -210,7 +213,8 @@ usage: x4live pausestate [-h] [--pipe PIPE] [--timeout TIMEOUT]
 options:
   -h, --help         show this help message and exit
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
-  --timeout TIMEOUT  seconds to wait for the game, and for the reply (default: 10.0)
+  --timeout TIMEOUT  seconds to wait for each reply (default: 10.0); the wait for the game to
+                     connect is the larger of this and 15 s
 ```
 
 ## `x4live pause`
@@ -221,7 +225,8 @@ usage: x4live pause [-h] [--pipe PIPE] [--timeout TIMEOUT]
 options:
   -h, --help         show this help message and exit
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
-  --timeout TIMEOUT  seconds to wait for the game, and for the reply (default: 10.0)
+  --timeout TIMEOUT  seconds to wait for each reply (default: 10.0); the wait for the game to
+                     connect is the larger of this and 15 s
 ```
 
 ## `x4live unpause`
@@ -232,7 +237,8 @@ usage: x4live unpause [-h] [--pipe PIPE] [--timeout TIMEOUT]
 options:
   -h, --help         show this help message and exit
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
-  --timeout TIMEOUT  seconds to wait for the game, and for the reply (default: 10.0)
+  --timeout TIMEOUT  seconds to wait for each reply (default: 10.0); the wait for the game to
+                     connect is the larger of this and 15 s
 ```
 
 ## `x4live harvest`
@@ -243,7 +249,8 @@ usage: x4live harvest [-h] [--pipe PIPE] [--timeout TIMEOUT] [--out OUT] [--fact
 options:
   -h, --help         show this help message and exit
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
-  --timeout TIMEOUT  seconds to wait for the game, and for each reply (default: 10.0)
+  --timeout TIMEOUT  seconds to wait for each reply (default: 10.0); the wait for the game to
+                     connect is the larger of this and 15 s
   --out OUT          output .tsv (default: $X4_MODS/_reports/harvest-*.tsv)
   --faction FACTION  faction for the station census, which also supplies a STATION id for the
                      field sweep (default: argon)
@@ -258,7 +265,8 @@ usage: x4live ffi-census [-h] [--pipe PIPE] [--timeout TIMEOUT] [--out OUT]
 options:
   -h, --help            show this help message and exit
   --pipe PIPE           pipe name (default: $X4_LIVE_PIPE or built-in)
-  --timeout TIMEOUT     seconds to wait for the game, and for each reply (default: 10.0)
+  --timeout TIMEOUT     seconds to wait for each reply (default: 10.0); the wait for the game to
+                        connect is the larger of this and 15 s
   --out OUT             output .tsv (default: $X4_MODS/_reports/ffi-census-*.tsv)
   --batch-bytes BATCH_BYTES
                         largest request, in bytes of names, per ffisyms call (default: 1000). The
@@ -275,7 +283,8 @@ usage: x4live groundtruth [-h] [--pipe PIPE] [--timeout TIMEOUT] [--out OUT] [--
 options:
   -h, --help         show this help message and exit
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
-  --timeout TIMEOUT  seconds to wait for the game, and for each reply (default: 10.0)
+  --timeout TIMEOUT  seconds to wait for each reply (default: 10.0); the wait for the game to
+                     connect is the larger of this and 15 s
   --out OUT          output .tsv (default: $X4_MODS/_reports/groundtruth-*.tsv)
   --macros FILE      harvest THESE macros instead of the built-in list: one `<librarytype>
                      <macro>` per line, `#` comments allowed. Every macro must exist in the
@@ -298,5 +307,6 @@ usage: x4live ramp [-h] [--pipe PIPE] [--timeout TIMEOUT]
 options:
   -h, --help         show this help message and exit
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
-  --timeout TIMEOUT  seconds to wait for the game, and for each reply (default: 10.0)
+  --timeout TIMEOUT  seconds to wait for each reply (default: 10.0); the wait for the game to
+                     connect is the larger of this and 15 s
 ```

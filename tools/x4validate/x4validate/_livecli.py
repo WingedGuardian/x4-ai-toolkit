@@ -1235,6 +1235,12 @@ def _mappings_over(con, entries, out, store_freshness) -> int:
 
 # --------------------------------------------------------------------------- main
 
+#: Every pipe command's --timeout help. The 15 is `_livepipe.CONNECT_WINDOW_MIN_S`, pinned by
+#: tests/test_live_connect_window.py (spelled here so building the parser imports nothing).
+_TIMEOUT_HELP = ("seconds to wait for each reply (default: %(default)s); the wait for the game "
+                 "to connect is the larger of this and 15 s")
+
+
 @contextlib.contextmanager
 def _live_open(pipe: str | None, timeout: float):
     """Open the channel, wait for the game, and always close it again.
@@ -1265,6 +1271,8 @@ def _live_open(pipe: str | None, timeout: float):
             "its latest load marker in debug.txt")
         if warning:
             print(warning, file=sys.stderr)
+        # Once per command: a later probe-based check reads this and stays quiet.
+        lp.helper_build_warned = bool(warning)
         yield lp
     finally:
         lp.close()
@@ -1466,7 +1474,7 @@ def cmd_query(verb: str, args: list[str], pipe: str | None, timeout: float,
         path = lp.path
         r = lp.ask(verb, *args)
 
-    if verb == "probe" and r.status == "OK":
+    if verb == "probe" and r.status == "OK" and not getattr(lp, "helper_build_warned", False):
         reported = [f.split("=", 1)[1] for f in r.fields if f.startswith("build=")]
         warning = _livepipe.helper_build_warning(
             _livepipe.expected_helper_build(), reported[0] if len(reported) == 1 else None,
@@ -2740,13 +2748,13 @@ def main(argv: list[str] | None = None) -> int:
                          "--timeout BEFORE the verb")
     pq.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
     pq.add_argument("--timeout", type=float, default=10.0,
-                    help="seconds to wait for the game, and for each reply (default: %(default)s)")
+                    help=_TIMEOUT_HELP)
 
     pe = sub.add_parser("equipment", help="read fitted equipment for one issued live ship ID; "
                         "experimental, bounded capture with explicit incomplete coverage")
     pe.add_argument("ship", help="opaque ship ID issued by this UI session, e.g. from query player")
     pe.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
-    pe.add_argument("--timeout", type=float, default=10.0, help="seconds per pipe reply (default: %(default)s)")
+    pe.add_argument("--timeout", type=float, default=10.0, help=_TIMEOUT_HELP)
 
     # ---- the WRITE half: the entire write vocabulary, one subcommand per verb. Each
     # prints a banner on stderr before sending, takes no verb arguments, and exits 0
@@ -2757,7 +2765,7 @@ def main(argv: list[str] | None = None) -> int:
              "the pause. Changes nothing; the safe check after a lost write reply")
     pps.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
     pps.add_argument("--timeout", type=float, default=10.0,
-                     help="seconds to wait for the game, and for the reply (default: %(default)s)")
+                     help=_TIMEOUT_HELP)
     for wverb, whelp in (
             ("pause", "WRITE: pause the running game. Refuses if it is already paused; "
                       "exit 0 only when the engine reads back paused"),
@@ -2766,14 +2774,14 @@ def main(argv: list[str] | None = None) -> int:
         pw = sub.add_parser(wverb, help=whelp)
         pw.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
         pw.add_argument("--timeout", type=float, default=10.0,
-                        help="seconds to wait for the game, and for the reply (default: %(default)s)")
+                        help=_TIMEOUT_HELP)
 
     ph = sub.add_parser(
         "harvest",
         help="ask the RUNNING engine EVERYTHING we can think to ask, in ONE "
              "connection, and write it down")
     ph.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
-    ph.add_argument("--timeout", type=float, default=10.0, help="seconds to wait for the game, and for each reply (default: %(default)s)")
+    ph.add_argument("--timeout", type=float, default=10.0, help=_TIMEOUT_HELP)
     ph.add_argument("--out",
                     help="output .tsv (default: $X4_MODS/_reports/harvest-*.tsv)")
     ph.add_argument("--faction", default="argon",
@@ -2788,7 +2796,7 @@ def main(argv: list[str] | None = None) -> int:
                              "ffi.C only: nothing is called or declared")
     pf.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
     pf.add_argument("--timeout", type=float, default=10.0,
-                    help="seconds to wait for the game, and for each reply (default: %(default)s)")
+                    help=_TIMEOUT_HELP)
     pf.add_argument("--out", help="output .tsv (default: $X4_MODS/_reports/ffi-census-*.tsv)")
     pf.add_argument("--batch-bytes", type=int, default=FFI_CENSUS_BATCH_BYTES,
                     help="largest request, in bytes of names, per ffisyms call (default: "
@@ -2799,7 +2807,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="harvest the engine's DERIVED values live and WRITE THEM "
                              "DOWN (the fixture any future traversal must reproduce)")
     pg.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
-    pg.add_argument("--timeout", type=float, default=10.0, help="seconds to wait for the game, and for each reply (default: %(default)s)")
+    pg.add_argument("--timeout", type=float, default=10.0, help=_TIMEOUT_HELP)
     pg.add_argument("--out", help="output .tsv (default: $X4_MODS/_reports/groundtruth-*.tsv)")
     pg.add_argument("--macros", metavar="FILE",
                     help="harvest THESE macros instead of the built-in list: one "
@@ -2824,7 +2832,7 @@ def main(argv: list[str] | None = None) -> int:
                              "connection (F74, corrected 2026-08-29). Bounded below at "
                              "64,000 bytes; the ceiling above that is unmeasured")
     pm.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
-    pm.add_argument("--timeout", type=float, default=10.0, help="seconds to wait for the game, and for each reply (default: %(default)s)")
+    pm.add_argument("--timeout", type=float, default=10.0, help=_TIMEOUT_HELP)
 
     args = p.parse_args(argv)
     try:

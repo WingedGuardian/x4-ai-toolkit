@@ -7218,6 +7218,33 @@ which is driven both by `onUpdate` and by the MD-raised Lua event `Time.MD_New_F
 event dispatch. Whether registry slot 1 is NULL in that context during a menu transition is
 UNMEASURED.
 
+**M5 — the idle case weakens the MD-context theory for 11-14 (READ).** With no client, and no
+other pipe being polled (`read_polling_active` false), every arm fails inside `Schedule_Read`'s
+own synchronous `Poll_For_Reads` call (`pipes.lua:127-157`). If another pipe were being polled,
+the failing poll would come on the next frame from `New_Frame_Detector` instead. And
+`Schedule_Read` is called from the helper's re-arm, which runs inside
+`Helper.addDelayedOneTimeCallbackOnUpdate`'s wrapper, which runs from `onUpdate`. So in the 11-14
+session the sentinel's `Close_Pipe` ran in an `onUpdate` callback, the context vanilla's own
+`getElapsedTime` calls run in, not from an MD-raised event. The MD-context mechanism above is a
+candidate only once a client keeps an arm alive across frames.
+
+**A concrete lead for the client/automation case (READ; UNMEASURED in game).** With a client or the
+automation bundle active, the bundle's session clock is `native.getElapsedTime()`
+(`mods/x4_toolkit_helper/ui/live_bootstrap.lua:146`). Its replies arrive on
+`RegisterEvent("X4ToolkitSession.Replies", ...)` (`:152`), an MD-raised event, and the drain
+calls that clock (`live_session.lua:37`, reached from `:96`). So getElapsedTime is called directly
+from an MD-raised Lua event. A reviewer's count found 8 direct vanilla call sites of `getElapsedTime`, none
+in a handler registered on an MD-raised event name (that count is the reviewer's, not re-derived
+here). This is a candidate for in-game testing, not a finding. The Helper deadline code and the
+bundle's session clock were deliberately left unchanged.
+
+**Defensive change (4.2.0).** The sentinel's throttles and its `t=` field now read
+`GetCurRealTime`, not `getElapsedTime`. MEASURED by static disassembly: `GetCurRealTime`
+(`X4.exe+0x2773f0`) reads one global double under a critical section, and `GetCurTime`
+(`+0x277370`) reads a thread-local block; neither touches the Lua registry. `schedule_rearm`
+still calls `getElapsedTime`, because Helper's deadline is compared against that clock. So
+this removes one `getElapsedTime` call per teardown from the pipe-callback path, not all of them.
+
 **What would settle it.** (1) A full-memory dump of the next crash (WER `LocalDumps` with
 `DumpType=2`, or `procdump -ma`), which holds the `lua_State` and its call frames and so names the
 Lua caller. (2) The in-game row 9 of `docs/live-dev/live-action-routes-checklist.md` with the

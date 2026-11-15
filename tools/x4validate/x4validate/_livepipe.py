@@ -600,15 +600,50 @@ def helper_loaded_build() -> str | None:
 
     Same recency bound and the same caveat as `helper_loaded_this_session`: a recent log is
     not proof of the current process. It only feeds a WARNING.
+
+    Runs on EVERY pipe command, so it does not read the whole log: it reads BACKWARDS in
+    `_TAIL_CHUNK` pieces and stops at the first marker. The marker is written once per load
+    and debug.txt grows by MBs per session (the 2026-11-14 copy: 4.1 MB, marker ~2.9 MB in),
+    so a fixed small tail would miss it -- hence a bounded walk, not a tail. Past
+    `_TAIL_MAX` bytes it answers None (unknown), never "no marker".
     """
-    text = _recent_debug_text()
-    if text is None:
+    line = _latest_marker_line()
+    if line is None:
         return None
-    for line in reversed(text.splitlines()):
-        if _LOAD_MARKER not in line:
-            continue
-        values = [tok.partition("=")[2] for tok in line.split() if tok.startswith("build=")]
-        return values[0] if len(values) == 1 and values[0] else None
+    values = [tok.partition("=")[2] for tok in line.split() if tok.startswith("build=")]
+    return values[0] if len(values) == 1 and values[0] else None
+
+
+_TAIL_CHUNK = 256 * 1024
+_TAIL_MAX = 64 * 1024 * 1024
+
+
+def _latest_marker_line() -> str | None:
+    """The last line of a RECENT log holding the load marker, read backwards and bounded."""
+    marker = _LOAD_MARKER.encode("ascii")
+    try:
+        p = _paths.debug_log()
+        if p is None or (time.time() - p.stat().st_mtime) > LOG_LIVE_WINDOW_S:
+            return None
+        with open(p, "rb") as fh:
+            pos = fh.seek(0, 2)
+            carry, read = b"", 0
+            while pos > 0 and read < _TAIL_MAX:
+                n = min(_TAIL_CHUNK, pos, _TAIL_MAX - read)
+                pos -= n
+                fh.seek(pos)
+                lines = (fh.read(n) + carry).split(b"\n")
+                read += n
+                # The first piece may be the tail of a line that started earlier: keep it
+                # for the next (earlier) chunk unless this chunk began at the file start.
+                carry = lines.pop(0) if pos > 0 else b""
+                for raw in reversed(lines):
+                    if marker in raw:
+                        return raw.decode("utf-8", errors="replace")
+    except OSError:
+        # silent-ok: None is explicit unknown evidence, as for the other marker reads.
+        return None
+    return None
     return None
 
 

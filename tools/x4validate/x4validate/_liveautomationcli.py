@@ -23,7 +23,9 @@ def main(argv=None, *, open_pipe=None, connect=None):
     parser.add_argument("--revision",required=True,help="expected public MD session revision")
     parser.add_argument("--mode",required=True,choices=("fresh","resume"),help="explicit load handshake mode")
     parser.add_argument("--pipe")
-    parser.add_argument("--timeout",type=float,default=15)
+    parser.add_argument("--timeout",type=float,default=15,
+        help="seconds to wait for each reply (0-120, default: %(default)s); the wait for the "
+             "game to connect is the larger of this and 15 s")
     sub=parser.add_subparsers(dest="operation",required=True)
     sub.add_parser("identity",help="qualify UI and world identity only")
     p=sub.add_parser("query",help="session-bound read, never an action")
