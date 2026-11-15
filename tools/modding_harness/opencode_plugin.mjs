@@ -134,6 +134,18 @@ function shellName(configShell) {
   return grammar
 }
 
+// Every Python the plugin starts runs ISOLATED (-I): a sitecustomize.py on PYTHONPATH runs inside a
+// non-isolated interpreter before the adapter, so it could print a forged allow verdict and exit 0
+// (MEASURED in the X4 toolkit, F380). -I also drops two variables that change no import, so each is
+// carried as its option: PYTHONDONTWRITEBYTECODE as -B, PYTHONUTF8 as -X utf8 / -X utf8=0. An
+// adapter that imports a sibling module puts its own directory on sys.path, as -I removes it.
+function isolation() {
+  const flags = [process.env.PYTHONDONTWRITEBYTECODE ? "-IB" : "-I"]
+  if (process.env.PYTHONUTF8 === "1") flags.push("-X", "utf8")
+  else if (process.env.PYTHONUTF8 === "0") flags.push("-X", "utf8=0")
+  return flags
+}
+
 let pythonCache = null
 function findPython(deadline) {
   if (pythonCache) return pythonCache
@@ -146,7 +158,7 @@ function findPython(deadline) {
   for (const c of cands) {
     const remaining = deadline - performance.now()
     if (remaining <= 0) throw inertError("the guard transport budget expired while finding Python")
-    const r = spawnSync(c[0], [...c.slice(1), "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"], {
+    const r = spawnSync(c[0], [...c.slice(1), ...isolation(), "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"], {
       stdio: "ignore",
       timeout: Math.max(1, Math.min(15000, Math.floor(remaining))),
       windowsHide: true,
@@ -213,7 +225,7 @@ function runAdapter(adapter, event, payload, startedAt) {
     }
     let child
     try {
-      child = spawn(py[0], [...py.slice(1), adapter, event], {
+      child = spawn(py[0], [...py.slice(1), ...isolation(), adapter, event], {
         stdio: ["pipe", "pipe", "ignore"],
         windowsHide: true,
         detached: !WIN, // its own process group, so a timeout can kill the whole tree
