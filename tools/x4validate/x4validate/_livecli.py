@@ -1251,10 +1251,20 @@ def _live_open(pipe: str | None, timeout: float):
     """
     from . import _livepipe
 
-    lp = _livepipe.LivePipe(name=pipe, timeout=timeout)
+    # The CONNECT wait is floored above the helper's idle re-arm cap: with no client the
+    # helper backs its re-arm off to HELPER_IDLE_REARM_MAX_S, and a window no longer than
+    # that would time out by bad luck. Each REPLY keeps `timeout`.
+    lp = _livepipe.LivePipe(name=pipe, timeout=timeout,
+                            connect_timeout=max(timeout, _livepipe.CONNECT_WINDOW_MIN_S))
     lp.open()
     try:
         lp.wait_for_game()
+        # Warn, never refuse: the load marker is the helper's own report of what it LOADED.
+        warning = _livepipe.helper_build_warning(
+            _livepipe.expected_helper_build(), _livepipe.helper_loaded_build(),
+            "its latest load marker in debug.txt")
+        if warning:
+            print(warning, file=sys.stderr)
         yield lp
     finally:
         lp.close()
@@ -1455,6 +1465,14 @@ def cmd_query(verb: str, args: list[str], pipe: str | None, timeout: float,
     with _live_open(pipe, timeout) as lp:
         path = lp.path
         r = lp.ask(verb, *args)
+
+    if verb == "probe" and r.status == "OK":
+        reported = [f.split("=", 1)[1] for f in r.fields if f.startswith("build=")]
+        warning = _livepipe.helper_build_warning(
+            _livepipe.expected_helper_build(), reported[0] if len(reported) == 1 else None,
+            "its probe reply")
+        if warning:
+            print(warning, file=sys.stderr)
 
     print(f"pipe    : {path}", file=out)
     print(f"verb    : {verb} {' '.join(args)}".rstrip(), file=out)

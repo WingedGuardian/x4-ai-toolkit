@@ -80,6 +80,8 @@ it existed to detect.
 """
 from __future__ import annotations
 
+import pathlib
+import re
 import time
 from dataclasses import dataclass
 
@@ -175,7 +177,7 @@ MINIMIZED_HINT = (
     "UNFOCUSED does NOT (2026-08-30, a ratio of 1.00); a PAUSED game does NOT (MEASURED "
     "2026-09-13, it kept answering). So restore the window if it is minimized and run it "
     "again -- this is RETRYABLE, not a failure, and retrying costs nothing because the mod "
-    "re-arms itself every ~2s."
+    "re-arms itself at least every 10s (every 2s right after a client)."
 )
 
 #: Said instead of the hint above once `game_is_minimized` has ANSWERED. One line each,
@@ -184,14 +186,14 @@ MINIMIZED_DIAGNOSIS = (
     " MEASURED: X4's window is MINIMIZED, and the frame loop stops when it is -- in "
     "windowed and exclusive fullscreen alike (2026-09-20). The channel is polled from that "
     "loop, so nothing could answer. Restore the window and run it again: this is RETRYABLE, "
-    "not a failure, and the mod re-arms itself every ~2s."
+    "not a failure, and the mod re-arms itself at least every 10s."
 )
 
 NOT_MINIMIZED_DIAGNOSIS = (
     " MEASURED: X4's window is NOT minimized, so the frame loop should be running and this "
     "is NOT the usual cause -- do not go and un-minimize anything. Merely UNFOCUSED is fine "
     "(2026-08-30) and a PAUSED game still answers (2026-09-13). This is RETRYABLE, not a "
-    "failure: retry once, since the mod re-arms every ~2s. If it keeps failing, inspect "
+    "failure: retry once, since the mod re-arms at least every 10s. If it keeps failing, inspect "
     "the helper and Mod Support APIs load errors and the configured pipe name; this "
     "observation does not establish that the game is hung."
 )
@@ -562,6 +564,70 @@ def helper_loaded_this_session() -> bool | None:
     return _LOAD_MARKER in text
 
 
+#: The helper's idle re-arm cap: `REARM_IDLE_MAX` in the shipped
+#: `mods/x4_toolkit_helper/ui/live_query.lua`, pinned equal by
+#: tests/test_live_connect_window.py. While no x4live process is serving the pipe the helper
+#: backs its re-arm off 2 -> 4 -> 8 -> 10 s, so a fresh call may wait up to this long for the
+#: game's next connection attempt.
+HELPER_IDLE_REARM_MAX_S = 10.0
+
+#: The shortest connect window `_livecli._live_open` uses: the cap plus margin for frame jitter
+#: and one fast cycle. Only the CONNECT wait is floored; each reply keeps `--timeout`.
+CONNECT_WINDOW_MIN_S = HELPER_IDLE_REARM_MAX_S + 5.0
+
+_BUILD_LINE = re.compile(r'^local BUILD = "([0-9a-f]{8})"$', re.M)
+_HELPER_LUA = ("x4_toolkit_helper", "ui", "live_query.lua")
+
+
+def expected_helper_build() -> str | None:
+    """The BUILD this toolkit ships for the helper's live_query.lua, or None.
+
+    Read from the repo's own `mods/` copy (the same file `scripts/stamp-mod-build.py`
+    stamps). None when this install carries no helper source -- then there is nothing to
+    compare against, and the mismatch warning stays silent rather than guessing.
+    """
+    p = pathlib.Path(__file__).resolve().parents[3].joinpath("mods", *_HELPER_LUA)
+    try:
+        m = _BUILD_LINE.search(p.read_text(encoding="utf-8"))
+    except OSError:
+        # silent-ok: None is the documented "no shipped copy to compare" answer.
+        return None
+    return m.group(1) if m else None
+
+
+def helper_loaded_build() -> str | None:
+    """`build=` on the LATEST helper load marker in a recent log, or None.
+
+    Same recency bound and the same caveat as `helper_loaded_this_session`: a recent log is
+    not proof of the current process. It only feeds a WARNING.
+    """
+    text = _recent_debug_text()
+    if text is None:
+        return None
+    for line in reversed(text.splitlines()):
+        if _LOAD_MARKER not in line:
+            continue
+        values = [tok.partition("=")[2] for tok in line.split() if tok.startswith("build=")]
+        return values[0] if len(values) == 1 and values[0] else None
+    return None
+
+
+def helper_build_warning(expected: str | None, reported: str | None,
+                         source: str) -> str | None:
+    """The stderr warning for a helper whose loaded BUILD differs from the shipped one.
+
+    None when they agree, and None when either is unknown: nothing was compared, so nothing
+    is claimed. Never a refusal -- a mismatched helper often still answers, and the user
+    decides whether that is acceptable.
+    """
+    if not expected or not reported or expected == reported:
+        return None
+    return (f"WARNING: the X4 helper the game reports ({source}) is build={reported}, but this "
+            f"toolkit ships build={expected}. The game is running a different helper than "
+            f"this toolkit's -- redeploy mods/x4_toolkit_helper and reload the game (a save "
+            f"load reloads the UI) before trusting behaviour that changed between them.")
+
+
 #: The helper extension's own manifest id, as shipped in this repo at
 #: `mods/x4_toolkit_helper/content.xml`. Not a deployment-specific detail and therefore not an
 #: F73 problem: we author the mod, so the id is ours and is identical in every install.
@@ -753,10 +819,15 @@ class LivePipe:
     failure this channel exists to diagnose.
     """
 
-    def __init__(self, name: str | None = None, timeout: float = 10.0) -> None:
+    def __init__(self, name: str | None = None, timeout: float = 10.0,
+                 connect_timeout: float | None = None) -> None:
         self.name = name or pipe_name()
         self.path = r"\\.\pipe" + "\\" + self.name
         self.timeout = timeout
+        #: How long `wait_for_game` waits for the game to CONNECT; `timeout` bounds each
+        #: reply. Separate because the helper's idle back-off can put its next connection
+        #: attempt up to HELPER_IDLE_REARM_MAX_S away (`_live_open` floors it).
+        self.connect_timeout = timeout if connect_timeout is None else connect_timeout
         self._h = None
         self._seq = 0
         self._connected = False
@@ -831,7 +902,8 @@ class LivePipe:
         reports, and the two must never be merged.
         """
         win32pipe, _win32file, winerror = _win32()
-        deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
+        window = self.connect_timeout if timeout is None else timeout
+        deadline = time.monotonic() + window
         while True:
             try:
                 win32pipe.ConnectNamedPipe(self._h, None)
@@ -873,7 +945,7 @@ class LivePipe:
                 safe_mode = (helper_ui_safe_mode_at_load()
                              if running is True and loaded is True else None)
                 raise LiveQueryUnavailable(
-                    _no_connection_reason(self.path, self.timeout, running, loaded, deployed,
+                    _no_connection_reason(self.path, window, running, loaded, deployed,
                                           minimized, not_loaded=not_loaded,
                                           ui_safe_mode_at_load=safe_mode))
             time.sleep(0.05)
