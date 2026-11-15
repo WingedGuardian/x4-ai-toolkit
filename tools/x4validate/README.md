@@ -314,7 +314,8 @@ advice ("X4 stops executing when it is not in the foreground") wrong:
 - **a paused game is not a cause** — measured 2026-09-13: it kept answering on an open
   connection and accepted a new one.
 
-Either way it is retryable, not a failure: the channel re-arms itself every ~2 s.
+Either way it is retryable, not a failure: the channel re-arms itself at least every 10 s
+(every 2 s right after a command), and each command waits at least 15 s for it to connect.
 
 **Not measured: a HUNG game.** `IsHungAppWindow` is not exported by this `pywin32`, and a
 hang cannot be induced on demand, so that state is left unreported rather than guessed at.
