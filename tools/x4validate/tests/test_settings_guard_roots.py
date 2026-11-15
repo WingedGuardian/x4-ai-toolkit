@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 
 import pytest
 
@@ -80,6 +81,13 @@ def _write(path, doc):
 
 
 def _patch_judge(path, patch, targets):
+    # The guard rebuilds a patch with the adapter's own reader (patch_paths.py beside it, or the
+    # source tree's adapters/). An install's .claude/hooks ships no reader -- Claude Code sends no
+    # apply_patch -- so there every patch is refused unread (fails closed); skip, counted.
+    here = os.path.dirname(SG.__file__)
+    if not any(os.path.isfile(os.path.join(here, *r)) for r in (("patch_paths.py",),
+                                                                ("..", "adapters", "patch_paths.py"))):
+        pytest.skip("this hook tree ships no patch reader (an install's .claude/hooks): patches are refused unread")
     return SG.judge({"file_path": str(path), "x4_written": patch, "x4_patch": True,
                      "x4_patch_targets": targets})
 

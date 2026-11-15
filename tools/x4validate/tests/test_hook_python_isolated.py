@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from _layout import require_repo
 from codex_testlib import HOOKS, REPO, make_sandbox
 from test_codex_wrapper import wrappers
 
@@ -275,6 +276,8 @@ def _code_lines(path):
 
 
 def _shell_scripts():
+    require_repo("agent/guards/claude-hooks", "agent/guards/adapters/codex-entry.ps1",
+                 why="the source scan reads the guard SOURCE tree, which an install does not ship")
     found = sorted(p for p in GUARDS.rglob("*.sh") if not p.name.startswith("test-"))
     assert len(found) >= 10, found
     return found
@@ -426,6 +429,8 @@ def test_only_a_line_that_STARTS_inside_a_quoted_string_is_skipped(tmp_path):
 
 
 def test_the_powershell_entry_starts_python_isolated():
+    require_repo("agent/guards/claude-hooks", "agent/guards/adapters/codex-entry.ps1",
+                 why="the source scan reads the guard SOURCE tree, which an install does not ship")
     """The .ps1 wrapper builds one argument list; the runtime test above covers it where pwsh exists.
     NOT covered: the OpenCode plugin's spawn lives in the PINNED tools/modding_harness (hash-locked,
     upstream-owned), so it is a BLIND-SPOTS row, not an edit here."""
@@ -444,6 +449,8 @@ _OWN_DIR = re.compile(r"sys\.path\.insert\(0, (?:str\(Path\(__file__\)\.resolve\
 def _hook_scripts():
     """Every hook-tree .py run as a SCRIPT, with whether it reaches a sibling module: an import of
     one (AST, lazy imports included), or the save_policy bridge loaded by path, which imports more."""
+    require_repo("agent/guards/claude-hooks", "agent/guards/adapters/codex-entry.ps1",
+                 why="the source scan reads the guard SOURCE tree, which an install does not ship")
     import ast
     dirs = (GUARDS / "claude-hooks", GUARDS / "adapters")
     siblings = {p.stem for d in dirs for p in d.glob("*.py")} | {"codex_adapter", "opencode_adapter"}

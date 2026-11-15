@@ -644,7 +644,6 @@ def _latest_marker_line() -> str | None:
         # silent-ok: None is explicit unknown evidence, as for the other marker reads.
         return None
     return None
-    return None
 
 
 def helper_build_warning(expected: str | None, reported: str | None,

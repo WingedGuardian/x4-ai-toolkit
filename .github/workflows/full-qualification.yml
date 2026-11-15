@@ -772,7 +772,16 @@ jobs:
           # is tests/test_freshcli.py, the game-time idle priority's other-OS cases: windows 64 -> 67 (+3 POSIX-only nice
           # cases), ubuntu 418 -> 422 (+4 Windows job/error-code cases); 90f6ca41 adds one more POSIX-only case
           # (windows 68 expected). Each ceiling rises by exactly those: 66 + 4 = 70, 418 + 4 = 422.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '422' || '70' }}
+          # 2026-11-15 (4.2.0): READ per file and reason on 43697132792 (7f3da77e) against 4.1.2's green run
+          # 43470078773 (e0751851); every delta is a 4.2.0 test with a named platform or install reason.
+          # ubuntu 422 -> 495 (+73): test_liveclip +15 (Win32 callback ABI 14, no offline FFmpeg 1), qa_sweep
+          #   install-bound cells +12 (conftest), test_livedialoginput +11 and test_livesession +9 (Windows ctypes ABI),
+          #   test_xrcat_maxpath +11 (code page / Wine-only cases), test_hook_python_isolated +4 (cwd-plant controls
+          #   CPython ignores), test_livetrees +4 (Windows spellings), test_file_guard_deployed_hooks +3 (junction,
+          #   /c/ spelling), test_livefocus/livepeerprofile/liveaudio/livehelper_ffi_vanilla +1 each.
+          # windows 68 -> 93 (+25): qa_sweep cells +12, test_hook_python_isolated +8, test_file_guard_staging +2 (ACL
+          #   deny needed), test_liveaudio/livehelper_ffi_vanilla/liveclip +1 each. Ceilings: 495 + 3, 93 + 3.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '498' || '96' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar
@@ -915,6 +924,12 @@ jobs:
     # workflows) against 4.1.0's run, and no record attributes the other 2. It replaces a
     # derived upper bound of 934 from before this job had run. A later change itemises itself here, as the `tests`
     # job does.
+    # 2026-11-15 (4.2.0): 1149 READ on 43697132792 (7f3da77e), +249 over 900 on 43470078773, per file: 171
+    # optional capture decoder (test_livedialoginput 82, livecapture_dispatch 39, livecapture 34, retention 16:
+    # the install has no capture extra), the 73 Windows-only/install-bound skips the `tests` ubuntu leg itemises,
+    # test_release_bundle_docs +3 (no git checkout), REPO-ONLY +2 (deployed-hooks census). b5d34ca6+ adds 8 more
+    # REPO-ONLY: test_hook_python_isolated's 3 source scans and test_settings_guard_roots' 5 patch cases (an
+    # install's .claude/hooks ships no patch reader) -- these 7 FAILED there before. 1149 + 8 + 3 = 1160.
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -992,7 +1007,7 @@ jobs:
           python3 .github/scripts/installed_suite_verdict.py \
             --junit "$RUNNER_TEMP/installed-suite.xml" \
             --root "$RUNNER_TEMP/installed-toolkit" \
-            --min-tests 6000 --min-passed 5300 --max-skips 903
+            --min-tests 6000 --min-passed 5300 --max-skips 1160
 
   hook-mutation:
     name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/8)

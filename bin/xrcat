@@ -113,10 +113,11 @@ _xrcat_preflight() {
     echo "xrcat: XRCatTool 1.11 writes names in the ANSI code page and leaves a name it cannot write out of the catalog, still exiting 0. Rename them (or the input folder)." >&2
     for w in "${odd[@]:0:50}"; do echo "xrcat:   $w" >&2; done
     [ "${#odd[@]}" -gt 50 ] && echo "xrcat:   ... and $(( ${#odd[@]} - 50 )) more" >&2
-    return 3
   fi
+  # Both groups are reported before the refusal: a name refused for its characters may be too
+  # long as well, and renaming it alone would only reach the next refusal.
   n=${#long[@]}
-  [ "$n" -eq 0 ] && return 0
+  if [ "$n" -eq 0 ]; then [ "${#odd[@]}" -gt 0 ] && return 3; return 0; fi
   echo "xrcat: REFUSED: $n input file(s) have an absolute path of 260 or more UTF-16 units (Windows MAX_PATH)." >&2
   echo "xrcat: XRCatTool 1.11 leaves such a file out of the catalog and still exits 0. Stage the mod under a shorter folder and pack again." >&2
   for w in "${long[@]}"; do

@@ -66,10 +66,24 @@ def _fake_tool(tmp: Path) -> Path:
     return fake
 
 
-def _run(tmp: Path, args, **extra_env):
+def _msys(p: str) -> str:
+    """A Windows path in the spelling Git Bash puts on its PATH (/d/a/...)."""
+    if WINDOWS and len(p) > 1 and p[1] == ":":
+        return "/" + p[0].lower() + p[2:].replace(chr(92), "/")
+    return p
+
+
+def _run(tmp: Path, args, fake_first: Path | None = None, **extra_env):
     fake = _fake_tool(tmp)
     env = {**os.environ, "XRCATTOOL": fake.as_posix(), **extra_env}
-    return subprocess.run([_bash(), WRAPPER.as_posix(), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+    cmd = [_bash(), WRAPPER.as_posix(), *args]
+    if fake_first is not None:
+        # MEASURED (CI 43697132792, windows-latest): Git for Windows' bin/bash.exe puts its own
+        # /usr/bin AHEAD of the inherited PATH, so a fake `iconv` there was never reached and the
+        # case passed the real tool's answer. The fake directory goes first INSIDE bash instead.
+        cmd = [_bash(), "-c", 'PATH="$1:$PATH"; shift; exec bash "$@"', "xrcat-test",
+               _msys(fake_first.as_posix()), WRAPPER.as_posix(), *args]
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
 
 
 def _src(tmp_path: Path) -> Path:
@@ -201,10 +215,6 @@ def _fake_bin(tmp: Path, name: str, body: str) -> Path:
     return d
 
 
-def _path_first(d: Path) -> dict:
-    return {"PATH": d.as_posix() + os.pathsep + os.environ.get("PATH", "")}
-
-
 def _cyr_src(tmp_path):
     src = _src(tmp_path)
     (src / "aé.xml").write_bytes(b"<x/>")
@@ -220,7 +230,7 @@ def test_unverifiable_code_page_is_named_precisely(tmp_path, reg_output, expecte
     if not WINDOWS:
         pytest.skip("the code page is read from the Windows registry")
     d = _fake_bin(tmp_path, "reg", reg_output)
-    result = _run(tmp_path, ["-in", str(_cyr_src(tmp_path)), "-out", str(tmp_path / "ext_01.cat")], **_path_first(d))
+    result = _run(tmp_path, ["-in", str(_cyr_src(tmp_path)), "-out", str(tmp_path / "ext_01.cat")], fake_first=d)
     assert result.returncode != 0 and expected in result.stderr, result.stderr
 
 
@@ -228,7 +238,7 @@ def test_iconv_that_cannot_convert_is_named(tmp_path):
     if not WINDOWS:
         pytest.skip("the code page is read from the Windows registry")
     d = _fake_bin(tmp_path, "iconv", "exit 1")
-    result = _run(tmp_path, ["-in", str(_cyr_src(tmp_path)), "-out", str(tmp_path / "ext_01.cat")], **_path_first(d))
+    result = _run(tmp_path, ["-in", str(_cyr_src(tmp_path)), "-out", str(tmp_path / "ext_01.cat")], fake_first=d)
     assert result.returncode != 0 and "this iconv cannot convert" in result.stderr, result.stderr
 
 
