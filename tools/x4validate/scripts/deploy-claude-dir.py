@@ -60,10 +60,10 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import json
 import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -371,9 +371,13 @@ def _agents_md_note(repo_root: Path, root: Path) -> str:
 CODEX_DOC_BUDGET = 32768
 
 
-#: Guard code reaches a game root only once CI has passed on the exact commit (user rule 2026-10-31:
-#: an unreviewed guard change was deployed 13 minutes after its commit and let wrapped-shell deletes
-#: of reference/ through). Review is still a human/agent step; CI is the part a script can prove.
+#: Guard code reaches a game root only as a reviewed COMMIT whose local hook tests pass (user rule 2026-11-16: "CI gates
+#: releases, not local work"; nothing local waits for CI, guard deploys included). The rollback is re-deploying the
+#: previous commit: this script takes NO backup of its own, but it replaces a file only when it matches a committed
+#: version, so the bytes it replaced are in git history. History (2026-10-30/31): an unreviewed guard change was
+#: deployed 13 minutes after its commit and let `bash -c`/`eval` deletes of reference/ through, which is why uncommitted
+#: guard sources still refuse. The independent review is a human/agent step no script can prove; the hook tests on
+#: that commit are the part this script checks.
 GUARD_SOURCES = (".claude/hooks", ".claude/settings.json", ".codex", "agent/guards", "tools/x4_harness")
 
 
@@ -383,21 +387,70 @@ def is_guard(name: str) -> bool:
     return "hooks" in parts or "rules" in parts or name in ("settings.json", ".codex/hooks.json")
 
 
-#: Why no commit can be checked at all: an install from a release zip, or no git on PATH. Telling that copy to open a
-#: pull request would be advice it cannot follow.
+#: Why no commit can be checked at all: an install from a release zip, or no git on PATH. Telling that copy to
+#: commit and review its guard change would be advice it cannot follow.
 NO_COMMIT = "this toolkit copy is not a git checkout (a release zip, or git cannot run here), so it has no commit to check"
-#: A conclusion that says CI ran on this commit and did not pass. Anything else without a success is no answer.
-CI_RED = {"failure", "timed_out", "startup_failure"}
+#: The local hook suite: it exercises the generated `.claude/hooks` tree, which is what this script deploys.
+HOOK_TESTS = "scripts/test-hooks.sh"
+#: MEASURED 2026-11-16 on the development machine: one full run of test-hooks.sh took about HOOK_TESTS_MEASURED_S
+#: seconds (5.3 min). The bound is about 5.7 times that, so a slow machine passes and a hung suite still ends in a
+#: refusal.
+HOOK_TESTS_MEASURED_S = 317     # 474 passed, rc 0, while other sessions were working
+HOOK_TESTS_TIMEOUT_S = 1800
+#: How much of a failing run's output the refusal shows.
+HOOK_TESTS_TAIL_LINES = 25
+
+
+def _find_bash() -> tuple[str | None, str]:
+    """Git Bash (never the WSL stub a bare `bash` finds on Windows), through the toolkit's one resolver."""
+    try:
+        gitbash = _load("gitbash_for_deploy", REPO_ROOT / "scripts" / "gitbash.py")
+        found = gitbash.find_bash()
+        return found, ("" if found else gitbash.why_not())
+    except (OSError, ImportError, AttributeError, SyntaxError) as exc:
+        return None, f"the bash resolver could not load ({type(exc).__name__}: {exc})"
+
+
+def run_hook_tests(repo_root: Path) -> str | None:
+    """Run `bash scripts/test-hooks.sh` in repo_root. None when it exits 0, else why not.
+
+    No bash, no suite, a timeout and any nonzero exit are each a refusal with its reason, never a pass."""
+    script = Path(repo_root) / HOOK_TESTS
+    if not script.is_file():
+        return f"it has no {HOOK_TESTS} to run the hook tests with"
+    bash, why = _find_bash()
+    if not bash:
+        return f"the hook tests could not run: no usable bash ({why})"
+    print(f"Running the hook tests ({HOOK_TESTS}) on the commit to deploy; this takes about "
+          f"{HOOK_TESTS_MEASURED_S // 60 + 1} minutes here, bounded at {HOOK_TESTS_TIMEOUT_S // 60} minutes ...",
+          file=sys.stderr, flush=True)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+    # The output goes to a file, not a pipe: on Windows a killed bash's children keep a pipe open, and reading it to
+    # its end would outlast the timeout the bash was killed for.
+    with tempfile.TemporaryFile() as out:
+        try:
+            r = subprocess.run([bash, HOOK_TESTS], cwd=repo_root, stdin=subprocess.DEVNULL, stdout=out,
+                               stderr=subprocess.STDOUT, timeout=HOOK_TESTS_TIMEOUT_S, creationflags=flags)
+        except subprocess.TimeoutExpired:
+            return f"the hook tests did not finish within {HOOK_TESTS_TIMEOUT_S} s (timed out; treated as a failure)"
+        except OSError as exc:
+            return f"the hook tests could not start ({type(exc).__name__}: {exc})"
+        if r.returncode == 0:
+            return None
+        out.seek(0)
+        text = out.read().decode("utf-8", errors="replace")
+    tail = "\n".join(text.rstrip("\n").splitlines()[-HOOK_TESTS_TAIL_LINES:])
+    print(f"--- last {HOOK_TESTS_TAIL_LINES} lines of {HOOK_TESTS} (exit {r.returncode}) ---\n{tail}\n---",
+          file=sys.stderr)
+    return f"the hook tests failed ({HOOK_TESTS} exited {r.returncode})"
 
 
 def guard_evidence(repo_root: Path) -> str | None:
-    """None when the guard code at HEAD is CI-proven, else why not.
+    """None when the guard code to deploy is a commit whose local hook tests pass, else why not.
 
-    GitHub is asked first, about HEAD itself: a successful run is the proof, and a red one is a refusal even on
-    origin/master, which can hold a red commit. With no answer (gh missing or logged out, or no run for this commit,
-    which is every master commit but a push's last), being an ancestor of origin/master is accepted as the fallback,
-    because master is pushed only after a green CI round. That is an inference about the round, not this commit, so
-    using it prints a NOTE. No answer and not published is a refusal, never a pass."""
+    The guard sources must equal HEAD (the reviewed thing is a commit, so uncommitted or untracked guard edits refuse
+    before any test runs); then `scripts/test-hooks.sh` must exit 0. GitHub is not asked: CI gates releases, not
+    deploys (user rule 2026-11-16). The independent review of the commit is a human/agent step this cannot prove."""
     def git(*a):
         return subprocess.run(["git", "-C", str(repo_root), *a], capture_output=True, text=True)
     try:
@@ -419,29 +472,8 @@ def guard_evidence(repo_root: Path) -> str | None:
     dirty = git("status", "--porcelain", "--untracked-files=all", "--", *GUARD_SOURCES)
     if dirty.returncode or dirty.stdout.strip():
         return "guard sources differ from HEAD (uncommitted or untracked changes)"
-    try:
-        r = subprocess.run(["gh", "run", "list", "--commit", sha, "--workflow", "CI", "--json", "conclusion",
-                            "--limit", "50"], cwd=repo_root, capture_output=True, text=True, timeout=60)
-        runs = json.loads(r.stdout) if r.returncode == 0 else None
-        no_answer = f"could not ask GitHub for CI on {sha[:8]} ({(r.stderr or '').strip()[:200]})"
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        runs, no_answer = None, f"could not ask GitHub for CI on {sha[:8]} ({type(exc).__name__}: {exc})"
-    if isinstance(runs, list):
-        conclusions = {run.get("conclusion") for run in runs if isinstance(run, dict)}
-        if "success" in conclusions:
-            red = sorted(conclusions & CI_RED)
-            if red:          # a re-run or a flaky leg: the success is the proof, and the red run is still worth a look
-                print(f"NOTE: CI on {sha[:8]} has both a success and {', '.join(red)}; accepted on the success.",
-                      file=sys.stderr)
-            return None
-        if conclusions & CI_RED:
-            return f"CI failed on {sha[:8]} and has no successful run on it, whether or not it is on origin/master"
-        no_answer = f"no successful CI run for {sha[:8]}"
-    if git("merge-base", "--is-ancestor", sha, "origin/master").returncode == 0:
-        print(f"NOTE: {no_answer}. Accepted because {sha[:8]} is an ancestor of origin/master, and master is pushed only "
-              "after a green CI round; CI on this exact commit was not seen.", file=sys.stderr)
-        return None
-    return f"{no_answer} (and it is not on origin/master)"
+    failed = run_hook_tests(repo_root)
+    return f"{failed} on {sha[:8]}" if failed else None
 
 
 def _deploy_one(repo_root: Path, dest: Path, spec, args) -> tuple[int, list[str]]:
@@ -523,10 +555,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--root", help="the root to deploy into (default: the configured game "
                                    "root); the claude tree goes to <root>/.claude")
     ap.add_argument("--unverified-guards", metavar="REASON",
-                    help="deploy changed guard code when neither a successful CI run on HEAD nor HEAD being an "
-                         "ancestor of origin/master (the fallback, printed when used) proves it: e.g. an emergency "
-                         "revert to an earlier CI-green version, or a release zip, which has no commit to check. "
-                         "The reason is printed")
+                    help="deploy changed guard code that is not a committed change whose local hook tests "
+                         "(scripts/test-hooks.sh) pass: e.g. an emergency revert to an already-reviewed version, or "
+                         "a release zip, which has no commit to check. The reason is printed")
     ap.add_argument("--repo", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
@@ -584,10 +615,11 @@ def main(argv: list[str] | None = None) -> int:
                 remedy = ("If this copy came from a release you trust, re-run with --unverified-guards REASON, "
                           "naming the release." if why == NO_COMMIT else
                           "Fix what git says first, or pass --unverified-guards REASON." if "git could not read" in why
-                          else "Open a pull request for it and mark it ready for review, so the full "
-                          "qualification runs CI on this commit, or pass --unverified-guards REASON.")
+                          else "Commit the guard change and have it reviewed first." if "differ from HEAD" in why
+                          else "Fix the failing hook tests (bash scripts/test-hooks.sh), commit, and have the "
+                          "change reviewed, or pass --unverified-guards REASON.")
                 print(f"REFUSING: this deploy changes guard code ({', '.join(guards)}) and {why}. Guard "
-                      f"changes go live only after review and a green CI run on the exact commit. Nothing "
+                      f"changes go live only as a reviewed commit whose local hook tests pass. Nothing "
                       f"was written. {remedy}", file=sys.stderr)
                 return 2
             if why:

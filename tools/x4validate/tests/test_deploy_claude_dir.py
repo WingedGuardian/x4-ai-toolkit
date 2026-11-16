@@ -457,20 +457,20 @@ def test_a_named_dest_that_does_not_exist_is_REFUSED(repo, tmp_path, capsys):
     assert not d.exists() and "--dest" in capsys.readouterr().err
 
 
-# --- guard code goes live only once CI-proven (user rule 2026-10-31) ---------------------------
+# --- guard code goes live only as a commit whose local hook tests pass (user rule 2026-11-16) -----
 
 _REAL_EVIDENCE = dep.guard_evidence  # captured before the autouse stub below
 
 
 @pytest.fixture(autouse=True)
 def _guards_proven(monkeypatch):
-    """Scratch repos have no CI: every other test deploys as if the guard code were proven."""
+    """Scratch repos have no hook suite: every other test deploys as if the guard code were proven."""
     monkeypatch.setattr(dep, "guard_evidence", lambda repo_root: None)
 
 
 def test_unproven_guard_code_is_refused_and_nothing_is_written(repo, dest, monkeypatch, capsys):
     _commit(repo, "hooks/h.sh", b"echo hi\n")
-    monkeypatch.setattr(dep, "guard_evidence", lambda repo_root: "no successful CI run for abc")
+    monkeypatch.setattr(dep, "guard_evidence", lambda repo_root: "the hook tests failed (exit 1) on abc")
     assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
     assert not (dest / "hooks" / "h.sh").exists()
     assert "hooks/h.sh" in capsys.readouterr().err
@@ -478,9 +478,9 @@ def test_unproven_guard_code_is_refused_and_nothing_is_written(repo, dest, monke
 
 def test_the_override_deploys_unproven_guard_code_and_says_so(repo, dest, monkeypatch, capsys):
     _commit(repo, "hooks/h.sh", b"echo hi\n")
-    monkeypatch.setattr(dep, "guard_evidence", lambda repo_root: "no successful CI run for abc")
+    monkeypatch.setattr(dep, "guard_evidence", lambda repo_root: "the hook tests failed (exit 1) on abc")
     assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply",
-                     "--unverified-guards", "revert to CI-green"]) == 0
+                     "--unverified-guards", "revert to the reviewed 4.1.1 hooks"]) == 0
     assert (dest / "hooks" / "h.sh").read_bytes() == b"echo hi\n"
     assert "DEPLOYING UNVERIFIED GUARD CODE" in capsys.readouterr().err
 
@@ -508,34 +508,50 @@ def test_which_paths_count_as_guard_code(name, guard):
     assert dep.is_guard(name) is guard
 
 
-def _gh(monkeypatch, stdout="[]", rc=0, raises=None):
+def _hooks(monkeypatch, rc=0, raises=None):
+    """Stub the hook-test run (the real one takes minutes): a fake bash, subprocess.run answering for it. GitHub must
+    never be asked any more."""
+    fake_bash = "fake-bash-for-the-hook-tests"
+    monkeypatch.setattr(dep, "_find_bash", lambda: (fake_bash, ""))
     real = subprocess.run
+    calls = []
+
     def fake(cmd, *a, **k):
-        if cmd[0] != "gh":
+        if cmd[0] == "gh":
+            pytest.fail(f"GitHub was asked: {cmd}")
+        if cmd[0] != fake_bash:
             return real(cmd, *a, **k)
+        calls.append(cmd)
         if raises:
             raise raises
-        return subprocess.CompletedProcess(cmd, rc, stdout=stdout, stderr="gh: not logged in")
+        return subprocess.CompletedProcess(cmd, rc)
     monkeypatch.setattr(dep.subprocess, "run", fake)
+    return calls
 
 
-def test_evidence_a_green_ci_run_on_head_is_proof(repo, monkeypatch):
+def _with_hook_suite(repo):
+    _commit_at(repo, "scripts/test-hooks.sh", b"exit 0\n")
     _commit(repo, "hooks/h.sh", b"echo hi\n")
-    _gh(monkeypatch, stdout='[{"conclusion": "failure"}, {"conclusion": "success"}]')
+
+
+def test_evidence_passing_hook_tests_on_head_is_proof(repo, monkeypatch):
+    _with_hook_suite(repo)
+    calls = _hooks(monkeypatch, rc=0)
     assert _REAL_EVIDENCE(repo) is None
+    assert len(calls) == 1
 
 
-@pytest.mark.parametrize("gh", [dict(stdout='[{"conclusion": "failure"}]'), dict(stdout="[]"),
-                                dict(rc=1), dict(raises=FileNotFoundError("gh")),
-                                dict(stdout="not json")])
-def test_evidence_no_green_run_or_no_answer_is_a_refusal(repo, monkeypatch, gh):
-    _commit(repo, "hooks/h.sh", b"echo hi\n")
-    _gh(monkeypatch, **gh)
+@pytest.mark.parametrize("hooks", [dict(rc=1), dict(rc=2), dict(raises=FileNotFoundError("bash")),
+                                   dict(raises=subprocess.TimeoutExpired(["bash"], 1))])
+def test_evidence_failing_or_unrunnable_hook_tests_are_a_refusal(repo, monkeypatch, hooks):
+    _with_hook_suite(repo)
+    _hooks(monkeypatch, **hooks)
     assert _REAL_EVIDENCE(repo)
 
 
 def test_evidence_uncommitted_guard_edits_are_a_refusal(repo, monkeypatch):
-    _commit(repo, "hooks/h.sh", b"echo hi\n")
-    _git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _with_hook_suite(repo)
+    calls = _hooks(monkeypatch, rc=0)
     (repo / ".claude" / "hooks" / "h.sh").write_bytes(b"echo edited\n")
     assert "differ from HEAD" in _REAL_EVIDENCE(repo)
+    assert not calls

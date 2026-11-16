@@ -1,12 +1,12 @@
 """deploy-claude-dir.py: what proves guard code before it goes live, and what a copy without git is told.
 
-GitHub is asked first. "It is on origin/master" is only the fallback, and it says so when it is used: master can hold a
-red commit, and a push's CI runs for the pushed head only, so older master commits have no run of their own.
+User rule 2026-11-16: CI gates releases, not local work. Guard code reaches a game root as a COMMIT (uncommitted guard
+sources refuse before anything runs) whose local hook tests (`bash scripts/test-hooks.sh`) exit 0. GitHub is not asked.
+The runner is stubbed here: the real suite takes minutes, so only a one-line fake test-hooks.sh ever runs for real.
 """
 from __future__ import annotations
 
 import importlib.util
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +19,8 @@ dep = importlib.util.module_from_spec(_spec)
 sys.modules["deploy_claude_dir_evidence"] = dep
 _spec.loader.exec_module(dep)
 
+FAKE_BASH = "fake-bash-for-the-hook-tests"
+
 
 def _git(repo, *a):
     subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
@@ -29,88 +31,143 @@ def repo(tmp_path):
     r = tmp_path / "repo"
     (r / ".claude" / "hooks").mkdir(parents=True)
     (r / "agent" / "guards").mkdir(parents=True)
+    (r / "scripts").mkdir()
     _git(tmp_path, "init", "-q", str(r))
     _git(r, "config", "user.email", "t@example.invalid")
     _git(r, "config", "user.name", "t")
     (r / ".claude" / "hooks" / "h.sh").write_bytes(b"echo hi\n")
-    _git(r, "add", ".claude/hooks/h.sh")
+    (r / "scripts" / "test-hooks.sh").write_bytes(b"exit 0\n")
+    _git(r, "add", ".claude/hooks/h.sh", "scripts/test-hooks.sh")
     _git(r, "commit", "-q", "-m", "c")
     return r
 
 
-def _publish(repo):
-    _git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
-
-
-def _gh(monkeypatch, stdout="[]", rc=0, raises=None):
+@pytest.fixture(autouse=True)
+def _github_is_never_asked(monkeypatch):
+    """Every test here: a `gh` call fails the test. The CI proof is gone, not merely unused."""
     real = subprocess.run
-    asked = []
 
     def fake(cmd, *a, **k):
-        if cmd[0] != "gh":
+        if cmd and cmd[0] == "gh":
+            pytest.fail(f"GitHub was asked: {cmd}")
+        return real(cmd, *a, **k)
+    monkeypatch.setattr(dep.subprocess, "run", fake)
+
+
+def _hooks(monkeypatch, rc=0, raises=None, output=b""):
+    """Stub the hook-test run: a fake bash, and subprocess.run answering for it. Returns the recorded calls."""
+    monkeypatch.setattr(dep, "_find_bash", lambda: (FAKE_BASH, ""))
+    real = dep.subprocess.run       # the autouse gh tripwire
+    calls = []
+
+    def fake(cmd, *a, **k):
+        if cmd[0] != FAKE_BASH:
             return real(cmd, *a, **k)
-        asked.append(cmd)
+        calls.append((cmd, k))
         if raises:
             raise raises
-        return subprocess.CompletedProcess(cmd, rc, stdout=stdout, stderr="gh: not logged in")
+        k["stdout"].write(output)
+        return subprocess.CompletedProcess(cmd, rc)
     monkeypatch.setattr(dep.subprocess, "run", fake)
-    return asked
+    return calls
 
 
-def test_github_is_asked_first_even_for_a_published_commit(repo, monkeypatch, capsys):
-    _publish(repo)
-    asked = _gh(monkeypatch, stdout='[{"conclusion": "success"}]')
+# ---------------------------------------------------------------- the hook-test gate, one twin per clause
+
+def test_passing_hook_tests_are_proof(repo, monkeypatch, capsys):
+    calls = _hooks(monkeypatch, rc=0)
     assert dep.guard_evidence(repo) is None
-    assert asked and "--commit" in asked[0]
-    err = capsys.readouterr().err
-    assert "origin/master" not in err and "NOTE" not in err     # no fallback, no note
+    assert len(calls) == 1
+    cmd, k = calls[0]
+    assert cmd == [FAKE_BASH, "scripts/test-hooks.sh"]
+    assert Path(k["cwd"]) == repo and k["timeout"] == dep.HOOK_TESTS_TIMEOUT_S
+    assert "Running the hook tests" in capsys.readouterr().err     # the one progress line before a slow run
 
 
-def test_a_red_commit_on_master_is_not_proof(repo, monkeypatch):
-    _publish(repo)
-    _gh(monkeypatch, stdout='[{"conclusion": "failure"}]')
+def test_failing_hook_tests_are_a_refusal_naming_the_exit_and_showing_the_tail(repo, monkeypatch, capsys):
+    lines = [f"line {i}" for i in range(60)] + ["RESULT: 473 passed, 1 failed"]
+    _hooks(monkeypatch, rc=3, output=("\n".join(lines) + "\n").encode())
     why = dep.guard_evidence(repo)
-    assert why and "failed" in why
-
-
-def test_failure_then_success_on_the_commit_is_proof_and_says_so(repo, monkeypatch, capsys):
-    """A success beats a red run on the same commit (a re-run, or a flaky leg), and the deploy says it saw both."""
-    _gh(monkeypatch, stdout='[{"conclusion": "failure"}, {"conclusion": "success"}]')
-    assert dep.guard_evidence(repo) is None
+    assert why and "exited 3" in why and "failed" in why
     err = capsys.readouterr().err
-    assert "NOTE" in err and "failure" in err and "success" in err
+    assert "RESULT: 473 passed, 1 failed" in err and "(exit 3)" in err
+    assert "line 0\n" not in err                                   # the tail, not the whole log
 
 
-@pytest.mark.parametrize("gh", [dict(stdout="[]"), dict(rc=1), dict(raises=FileNotFoundError("gh")),
-                                dict(stdout="not json"), dict(stdout='[{"conclusion": ""}]')])
-def test_no_answer_on_a_published_commit_falls_back_and_prints_a_note(repo, monkeypatch, capsys, gh):
-    _publish(repo)
-    _gh(monkeypatch, **gh)
-    assert dep.guard_evidence(repo) is None
-    err = capsys.readouterr().err
-    assert "NOTE" in err and "origin/master" in err
+@pytest.mark.parametrize("rc", [1, 2, 124, -9])
+def test_any_nonzero_exit_is_a_refusal(repo, monkeypatch, rc):
+    _hooks(monkeypatch, rc=rc)
+    assert f"exited {rc}" in dep.guard_evidence(repo)
 
 
-@pytest.mark.parametrize("gh", [dict(stdout="[]"), dict(rc=1), dict(raises=FileNotFoundError("gh")),
-                                dict(stdout="not json"), dict(stdout='[{"conclusion": "failure"}]')])
-def test_no_answer_on_an_unpublished_commit_is_a_refusal(repo, monkeypatch, capsys, gh):
-    _gh(monkeypatch, **gh)
-    assert dep.guard_evidence(repo)
-    assert "NOTE" not in capsys.readouterr().err
+def test_a_timeout_is_a_refusal(repo, monkeypatch):
+    _hooks(monkeypatch, raises=subprocess.TimeoutExpired([FAKE_BASH], dep.HOOK_TESTS_TIMEOUT_S))
+    why = dep.guard_evidence(repo)
+    assert why and "timed out" in why
 
 
-def test_uncommitted_guard_edits_are_refused_before_anything_is_asked(repo, monkeypatch):
-    _publish(repo)
-    asked = _gh(monkeypatch, stdout='[{"conclusion": "success"}]')
-    (repo / ".claude" / "hooks" / "h.sh").write_bytes(b"echo edited\n")
+def test_bash_that_will_not_start_is_a_refusal(repo, monkeypatch):
+    _hooks(monkeypatch, raises=FileNotFoundError(FAKE_BASH))
+    why = dep.guard_evidence(repo)
+    assert why and "could not start" in why
+
+
+def test_no_usable_bash_is_a_refusal_and_nothing_runs(repo, monkeypatch):
+    calls = _hooks(monkeypatch)
+    monkeypatch.setattr(dep, "_find_bash", lambda: (None, "setx X4_BASH ..."))
+    why = dep.guard_evidence(repo)
+    assert why and "no usable bash" in why and "setx X4_BASH" in why
+    assert not calls
+
+
+def test_a_checkout_without_the_hook_suite_is_a_refusal(repo, monkeypatch):
+    calls = _hooks(monkeypatch)
+    _git(repo, "rm", "-q", "scripts/test-hooks.sh")
+    _git(repo, "commit", "-q", "-m", "no suite")
+    why = dep.guard_evidence(repo)
+    assert why and "test-hooks.sh" in why
+    assert not calls
+
+
+@pytest.mark.parametrize("edit", ["modified", "untracked"])
+def test_uncommitted_guard_edits_are_refused_before_the_hook_tests_run(repo, monkeypatch, edit):
+    calls = _hooks(monkeypatch, rc=0)
+    if edit == "modified":
+        (repo / ".claude" / "hooks" / "h.sh").write_bytes(b"echo edited\n")
+    else:
+        (repo / "agent" / "guards" / "new.py").write_bytes(b"x = 1\n")
     assert "differ from HEAD" in dep.guard_evidence(repo)
-    assert not asked
+    assert not calls
 
 
 def test_the_override_help_matches_the_rule():
     src = (PKG / "scripts" / "deploy-claude-dir.py").read_text(encoding="utf-8")
     block = src[src.index('"--unverified-guards"'):src.index('"--repo"')]
-    assert "successful CI run" in block and "origin/master" in block
+    assert "hook tests" in block and "test-hooks.sh" in block and "already-reviewed" in block
+    assert "CI" not in block and "origin/master" not in block
+
+
+# ---------------------------------------------------------------- the real runner, on a one-line suite
+
+def _real_bash():
+    bash, _ = dep._find_bash()
+    if not bash:
+        pytest.skip("no usable bash on this machine")
+    return bash
+
+
+@pytest.mark.parametrize("body, expect_pass", [(b"echo all good\nexit 0\n", True),
+                                               (b"echo first\necho LAST-LINE\nexit 7\n", False)])
+def test_the_real_runner_reads_the_exit_of_a_real_bash(repo, capsys, body, expect_pass):
+    """No stub: the real subprocess call, output file and exit code, against a fake test-hooks.sh."""
+    _real_bash()
+    (repo / "scripts" / "test-hooks.sh").write_bytes(body)
+    why = dep.run_hook_tests(repo)
+    if expect_pass:
+        assert why is None
+    else:
+        assert why and "exited 7" in why
+        assert "LAST-LINE" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------- M7: no git, or not a checkout
@@ -133,11 +190,13 @@ def _no_git(monkeypatch):
 
 def test_no_git_on_path_is_a_refusal_not_a_traceback(repo, tmp_path, monkeypatch, capsys):
     dest = _deployable(tmp_path, repo)
+    calls = _hooks(monkeypatch)
     _no_git(monkeypatch)
     assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
     err = capsys.readouterr().err
-    assert "git" in err and "--unverified-guards" in err and "pull request" not in err
+    assert "git" in err and "--unverified-guards" in err and "hook tests" not in err.split("Nothing was written")[1]
     assert not (dest / "hooks" / "h.sh").exists()
+    assert not calls
 
 
 def test_committed_versions_survive_git_vanishing_or_hanging(repo, monkeypatch):
@@ -163,7 +222,7 @@ def test_a_real_checkout_git_cannot_read_is_not_a_release_zip(repo, tmp_path, ca
     dest = _deployable(tmp_path, repo)
     assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
     err = capsys.readouterr().err
-    assert "Fix what git says" in err and "pull request" not in err and "naming the release" not in err
+    assert "Fix what git says" in err and "failing hook tests" not in err and "naming the release" not in err
 
 
 def test_dubious_ownership_is_said_as_itself(repo, monkeypatch):
@@ -178,19 +237,21 @@ def test_dubious_ownership_is_said_as_itself(repo, monkeypatch):
     assert "dubious ownership" in dep.guard_evidence(repo)
 
 
-def test_a_zip_install_is_told_what_to_do_not_to_push(tmp_path, capsys):
+def test_a_zip_install_is_told_what_to_do_not_to_commit(tmp_path, monkeypatch, capsys):
     unzipped = tmp_path / "toolkit"
     (unzipped / ".claude" / "hooks").mkdir(parents=True)
     (unzipped / ".claude" / "hooks" / "h.sh").write_bytes(b"echo hi\n")
+    calls = _hooks(monkeypatch)
     dest = _deployable(tmp_path, unzipped)
     assert dep.main(["--repo", str(unzipped), "--dest", str(dest), "--apply"]) == 2
     err = capsys.readouterr().err
-    assert "not a git checkout" in err and "--unverified-guards" in err
-    assert "pull request" not in err
+    assert "not a git checkout" in err and "--unverified-guards" in err and "naming the release" in err
+    assert "failing hook tests" not in err and "Commit the guard change" not in err
     assert not (dest / "hooks" / "h.sh").exists()
+    assert not calls
 
 
-def test_a_zip_unpacked_inside_another_repo_does_not_borrow_its_head(tmp_path, monkeypatch, capsys):
+def test_a_zip_unpacked_inside_another_repo_does_not_borrow_its_head(tmp_path, monkeypatch):
     # The game root is a git repository of its own. Its HEAD says nothing about this copy's guard code.
     outer = tmp_path / "outer"
     outer.mkdir()
@@ -202,17 +263,36 @@ def test_a_zip_unpacked_inside_another_repo_does_not_borrow_its_head(tmp_path, m
     _git(outer, "commit", "-q", "-m", "c")
     inner = outer / "toolkit"
     (inner / ".claude" / "hooks").mkdir(parents=True)
-    asked = _gh(monkeypatch, stdout='[{"conclusion": "success"}]')
+    calls = _hooks(monkeypatch, rc=0)
     assert "not a git checkout" in dep.guard_evidence(inner)
-    assert not asked
+    assert not calls
 
 
-def test_a_git_checkout_is_still_told_to_open_a_pull_request(repo, tmp_path, monkeypatch, capsys):
-    # The twin of the zip message: a real checkout keeps the instruction that works for it.
+def test_a_checkout_with_failing_hook_tests_is_told_to_fix_them(repo, tmp_path, monkeypatch, capsys):
+    # The twin of the zip message: a real checkout gets the instruction that works for it.
     dest = _deployable(tmp_path, repo)
-    _gh(monkeypatch, stdout="[]")
+    _hooks(monkeypatch, rc=1)
     assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
-    assert "pull request" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "Fix the failing hook tests" in err and "pull request" not in err and "naming the release" not in err
+    assert not (dest / "hooks" / "h.sh").exists()
+
+
+def test_a_checkout_with_uncommitted_guard_edits_is_told_to_commit_them(repo, tmp_path, monkeypatch, capsys):
+    dest = _deployable(tmp_path, repo)
+    calls = _hooks(monkeypatch, rc=0)
+    (repo / ".claude" / "hooks" / "h.sh").write_bytes(b"echo edited\n")
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
+    assert "Commit the guard change" in capsys.readouterr().err
+    assert not calls and not (dest / "hooks" / "h.sh").exists()
+
+
+def test_a_checkout_with_passing_hook_tests_deploys(repo, tmp_path, monkeypatch, capsys):
+    dest = _deployable(tmp_path, repo)
+    calls = _hooks(monkeypatch, rc=0)
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 0
+    assert (dest / "hooks" / "h.sh").read_bytes() == b"echo hi\n"
+    assert len(calls) == 1 and "UNVERIFIED" not in capsys.readouterr().err
 
 
 def test_the_override_still_works_for_a_zip_install(tmp_path, capsys):

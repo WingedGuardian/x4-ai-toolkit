@@ -163,9 +163,11 @@ def tests_for(changed):
     return out
 
 
-# Tests that read what is DEPLOYED on this machine, not only the tree being pushed. Guard code may only be deployed
-# after green CI, so running them here made any branch that changes agent/ unpushable: the gate wanted the deploy, the
-# deploy wanted CI, CI wanted the push. Excluded, and said so on every run. What still covers them:
+# Tests that read what is DEPLOYED on this machine, not only the tree being pushed. Until 2026-11-16 guard code could
+# only be deployed after green CI, so running them here made any branch that changes agent/ unpushable: the gate wanted
+# the deploy, the deploy wanted CI, CI wanted the push. The deploy now needs only a commit and its local hook tests (user
+# rule 2026-11-16), but a push still should not wait on what this machine has deployed. Excluded, and said so on every
+# run. What still covers them:
 #   deploy parity: CI SKIPS it (no game root). deploy-claude-dir.py re-checks its own files after --apply; x4doctor and
 #     the release gates check on demand. NOTHING checks routinely between deploys.
 #   routing: CI RUNS it against the shipped CLAUDE.md/AGENTS.md. Only the game root's own CLAUDE.md goes unchecked here,
