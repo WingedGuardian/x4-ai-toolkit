@@ -226,7 +226,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F121 | `x4effective who-sets` with no property answered with the ENTITY's origin while its properties had been changed, and could not see removals at all | **DEFECT (measured)** · ✅ FIXED 2026-09-14 | asked who set `energycells` it said `base`; 33 of its 49 properties were last set by something else | origins and file-level removals now reported; `show` still lists no removals (OPEN) |
 | F122 | `ask.py xq` certified a negative over a query Git Bash had rewritten before Python saw it | **DEFECT (measured)** · ✅ FIXED 2026-09-14 | `collection("x4raw")//ware` arrived as `.../ware`: `NEGATIVE CONFIRMED` rc 0, where PowerShell counted 14,068 | `--file`; under Git Bash an argument-query zero refuses (rc 4) and every result shows the query as received |
 | F123 | `bin/unpack-reference.sh` took the LAST `"buildid"` in the Steam manifest, which is a beta branch's, not the installed build | **DEFECT (measured)** · ✅ FIXED 2026-09-14 | this machine's manifest: AppState 23660954, `public_beta` 23524486 -- the script's grep returned 23524486 | one depth-1 reader, `x4_acf_buildid`, for the script and the hook; a test bans a third hand-rolled grep |
-| F124 | a client request had NO size cap; a request over ~1997 bytes tears the game-side pipe read down, and the teardown was followed the same session by a game CRASH | **DEFECT (measured)** · ✅ FIXED 2026-09-14 (the cap) · crash half OPEN: second sighting 2026-11-14 with no oversized request, n=2, INFERRED | P6 ramp: 1997 bytes round-tripped, 3998 tore the pipe down (`The pipe has been ended`); the game crashed on the next Esc | `ask()` refuses any request over `MAX_REQUEST_BYTES` (1900) before writing; `ffi-census` and `query ffisyms` gated off by default (`X4_LIVE_ALLOW_FFI`) |
+| F124 | a client request had NO size cap; a request over ~1997 bytes tears the game-side pipe read down, and the teardown was followed the same session by a game CRASH | **DEFECT (measured)** · ✅ FIXED 2026-09-14 (the cap) · crash half OPEN: second sighting 2026-11-14 with no oversized request; third 2026-11-16 during row 9 with a client pinging every ~4 s; n=3, INFERRED | P6 ramp: 1997 bytes round-tripped, 3998 tore the pipe down (`The pipe has been ended`); the game crashed on the next Esc | `ask()` refuses any request over `MAX_REQUEST_BYTES` (1900) before writing; `ffi-census` and `query ffisyms` gated off by default (`X4_LIVE_ALLOW_FFI`) |
 | F125 | a live refusal read the helper's ABSENT load marker as "most likely not installed" -- but the mod arms on GAME LOAD, so at the MAIN MENU the marker is legitimately absent and the install is fine | **DEFECT (measured)** · ✅ FIXED 2026-09-20 | in game 2026-09-20 at the main menu with no save loaded: marker absent, extension present and enabled, refusal said "not installed or not enabled" | the install is MEASURED directly (`helper_is_deployed()` over `mods("active")`) instead of inferred from the log; with deployment unknown the message names BOTH causes |
 | F127 | the guard's scope rules matched a search rooted AT a big tree and at the toolkit/game roots, never ABOVE one — so when the dev repo was retired and `X4_TOOLKIT` moved, the parent of the 60 GB `reference\` tree stopped being named by any root and a recursive search there became ALLOW. The ancestor was covered only BY COINCIDENCE | **DEFECT (measured)** · ✅ FIXED 2026-09-21 | 2026-09-21 through the DEPLOYED hook: `cd <parent-of-reference> && grep -rl x .` → ALLOW, while the same shape at the toolkit root, at `reference/` itself and at the game root all → deny. 3 controls denying is what made it a hole, not a rule change. Found by `hook_false_positives` going red (146 of 17,133 shared commands moved). **6 commands affected, not the 3 the first text-based classification found** — the other 3 never contain the string `reference` | `contains_root()` makes a PROPER-ANCESTOR search fire the same rule; 11 tests incl. a split-root fixture, 3 of 3 clause mutants killed, 8-case end-to-end probe on the deployed hook |
 | F126 | `build-effective.sh` rebuilt the x4eff DATABASE correctly but skipped the COVERAGE STAMP and still exited 0, so a freshly built index reported STALE indefinitely and refused to back any negative claim | **DEFECT (measured)** · ✅ FIXED 2026-09-20 | 2026-09-20: DB timestamp 02:15:41 with 10,970 documents, while `coverage-x4eff.json` kept mtime 00:22:03 and the PREVIOUS content fingerprint (`1f071ac8` vs the `39c7120a` stamped on `coverage-x4raw.json` minutes earlier); exit code 0 | not fixed. Cause identified -- a staging `rm` hit `_eff/tree/libraries/controlschemes_for_movie_capturing.xml` while BaseX still held it (`Device or resource busy`) and the stamp step never ran. A retry with the lock released stamped correctly, so it is NOT reproduced |
@@ -7259,6 +7259,41 @@ and is logged as idle, not as ERROR, so the helper tears the pipe down about a f
 while idle. This is not a fix: the cause is unknown, and fewer teardowns only make the candidate
 path run less often. A third dump, `X4_900_2026_11_13_12_24_56.dmp`, is a different fault (an ntdll write at `0xd8`
 on X4's "Asset Enabling Process" thread, with the named-pipe DLL not loaded) and is not counted here.
+
+### 2026-11-16 — a third crash, during checklist row 9 with a client connected (n=3, cause still INFERRED)
+
+**What happened (MEASURED from the log and the dump; both read only).** 4.2.0 helper (query
+build `a7f99807`, bundle `b38e63a0`), launched from Steam. The no-client half of row 9 passed
+first: idle lines `2s` (`t=31.90`), `4s` (`t=33.86`), `8s` (`t=37.87`), then `10s` lines at
+`t=105.94`, `166.04` and `226.07`. Then an agent loop ran `x4live query ping` once every ~4 s
+(40 pings, 17:13:26 to 17:16:11, every one rc 0) while the user was asked to open and close
+the map. The log holds exactly 40 `client disconnected after 1 request(s), re-arming in 2s`
+lines, the last at `t=635.91`, and nothing from the helper after it. X4 wrote
+`X4_900_2026_11_16_17_16_11.dmp` in the same second as the 40th ping's reply (17:16:11.603;
+`debug.txt` last written 17:16:11.706). No `MID-REQUEST` line. Whether the map was being
+opened or closed at that moment is UNKNOWN.
+
+**The crash, from the dump (MEASURED where; nothing proves why).**
+`EXCEPTION_ACCESS_VIOLATION`, read of `0x45a91e000030`, inside `lua51_64.dll+0x4a6b1`
+(`rcx = 0x45a91e000000`: a non-canonical-looking pointer with a zero low half, i.e. a
+corrupt or freed object, not a NULL). The X4.exe image is the same build as 11-14 (PE
+timestamp 1780395501). Return addresses on the faulting stack include `X4.exe+0x13a38f0` and
+`X4.exe+0x13a3673`; the second lies in the function `0x13a35f4`-`0x13a3723` that the 11-14
+entry above identifies as the dispatcher that calls `lua_pcall`. So it is again a native fault
+in Lua reached through X4's UI script dispatch, but a different site from 11-14 (inside the
+Lua VM, not `getElapsedTime`), and a garbage pointer rather than NULL.
+
+**What this adds (INFERRED).** All three sightings had the helper's pipe tearing down and
+re-arming; this one is the first with a client connecting repeatedly, and it is the busiest
+(40 teardowns in under 3 minutes). A corrupt pointer inside the Lua VM is the shape a
+use-after-free or an object freed by one Lua state and touched from another would leave. This
+is a candidate, not a finding: the dump is stacks only (about 400 KB) and cannot name the Lua
+caller. The no-helper control (the same map cycling with the helper disabled) has still not
+been run, so the helper is a SUSPECT, not the established cause.
+
+**Consequence for the checklist.** Row 9's client-connected half is a FAIL (crash). No further
+pinging loops until a full-memory dump is configured (see "What would settle it" above) and
+the no-helper control is run.
 
 
 ## F127 — a guard rule that covered the case above it only BY COINCIDENCE, until a path moved · **DEFECT (measured)** · confidence 96% · FIXED 2026-09-21
