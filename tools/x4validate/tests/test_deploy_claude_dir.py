@@ -512,7 +512,7 @@ def _hooks(monkeypatch, rc=0, raises=None):
     """Stub the hook-test run (the real one takes minutes): a fake bash, subprocess.run answering for it. GitHub must
     never be asked any more."""
     fake_bash = "fake-bash-for-the-hook-tests"
-    monkeypatch.setattr(dep, "_find_bash", lambda: (fake_bash, ""))
+    monkeypatch.setattr(dep, "_find_bash", lambda repo_root: (fake_bash, ""))
     real = subprocess.run
     calls = []
 

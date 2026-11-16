@@ -54,9 +54,9 @@ def _github_is_never_asked(monkeypatch):
     monkeypatch.setattr(dep.subprocess, "run", fake)
 
 
-def _hooks(monkeypatch, rc=0, raises=None, output=b""):
+def _hooks(monkeypatch, rc=0, raises=None, output=b"", during=None):
     """Stub the hook-test run: a fake bash, and subprocess.run answering for it. Returns the recorded calls."""
-    monkeypatch.setattr(dep, "_find_bash", lambda: (FAKE_BASH, ""))
+    monkeypatch.setattr(dep, "_find_bash", lambda repo_root: (FAKE_BASH, ""))
     real = dep.subprocess.run       # the autouse gh tripwire
     calls = []
 
@@ -64,6 +64,8 @@ def _hooks(monkeypatch, rc=0, raises=None, output=b""):
         if cmd[0] != FAKE_BASH:
             return real(cmd, *a, **k)
         calls.append((cmd, k))
+        if during:
+            during()
         if raises:
             raise raises
         k["stdout"].write(output)
@@ -114,7 +116,7 @@ def test_bash_that_will_not_start_is_a_refusal(repo, monkeypatch):
 
 def test_no_usable_bash_is_a_refusal_and_nothing_runs(repo, monkeypatch):
     calls = _hooks(monkeypatch)
-    monkeypatch.setattr(dep, "_find_bash", lambda: (None, "setx X4_BASH ..."))
+    monkeypatch.setattr(dep, "_find_bash", lambda repo_root: (None, "setx X4_BASH ..."))
     why = dep.guard_evidence(repo)
     assert why and "no usable bash" in why and "setx X4_BASH" in why
     assert not calls
@@ -140,6 +142,142 @@ def test_uncommitted_guard_edits_are_refused_before_the_hook_tests_run(repo, mon
     assert not calls
 
 
+@pytest.mark.parametrize("rel", ["scripts/test-hooks.sh", "scripts/gitbash.py", "tools/modding_harness/x.py",
+                                 "tools/x4validate/scripts/deploy-claude-dir.py", "tools/x4_harness/x.py",
+                                 ".codex/hooks/x.py", ".claude/settings.json"])
+def test_the_verifier_and_its_inputs_are_guard_sources(repo, monkeypatch, rel):
+    """Review I3: an uncommitted edit of the suite (EXPECT lowered, an early `exit 0`) or of what it runs under passed."""
+    calls = _hooks(monkeypatch, rc=0)
+    p = repo / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"# edited, uncommitted\nexit 0\n")
+    assert "differ from HEAD" in dep.guard_evidence(repo)
+    assert not calls
+
+
+def test_a_non_guard_edit_is_not_refused(repo, monkeypatch):
+    # The twin: the clean check is scoped to the guard sources, not the whole tree.
+    calls = _hooks(monkeypatch, rc=0)
+    (repo / "README.md").write_bytes(b"docs\n")
+    assert dep.guard_evidence(repo) is None and len(calls) == 1
+
+
+def test_a_pass_prints_the_suites_result_line(repo, monkeypatch, capsys):
+    _hooks(monkeypatch, rc=0, output=b"  OK   a\nRESULT: 474 passed, 0 failed, 0 skipped\n")
+    assert dep.guard_evidence(repo) is None
+    assert "Hook tests passed: RESULT: 474 passed, 0 failed, 0 skipped" in capsys.readouterr().err
+
+
+def test_a_pass_without_a_result_line_says_so(repo, monkeypatch, capsys):
+    _hooks(monkeypatch, rc=0, output=b"nothing useful\n")
+    assert dep.guard_evidence(repo) is None
+    assert "no RESULT line" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- review I1: the tested state must still be there
+
+def test_a_guard_edit_made_while_the_hook_tests_run_is_refused_and_not_deployed(repo, tmp_path, monkeypatch, capsys):
+    """Adapted from the review's probe: the suite passed on the commit, then the deploy read the edited working tree
+    and wrote b'echo UNTESTED' with rc 0."""
+    dest = tmp_path / "game" / ".claude"
+    dest.mkdir(parents=True)
+    _hooks(monkeypatch, rc=0, during=lambda: (repo / ".claude" / "hooks" / "h.sh").write_bytes(b"echo UNTESTED\n"))
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
+    err = capsys.readouterr().err
+    assert "after the hook tests ran" in err and "Re-run the deploy" in err
+    assert not (dest / "hooks" / "h.sh").exists()
+
+
+def test_head_moving_while_the_hook_tests_run_is_refused(repo, tmp_path, monkeypatch, capsys):
+    def commit_another():
+        (repo / ".claude" / "hooks" / "h.sh").write_bytes(b"echo UNTESTED\n")
+        _git(repo, "commit", "-q", "-am", "landed during the run")
+    dest = tmp_path / "game" / ".claude"
+    dest.mkdir(parents=True)
+    _hooks(monkeypatch, rc=0, during=commit_another)
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 2
+    err = capsys.readouterr().err
+    assert "HEAD moved" in err and "untested" in err
+    assert not (dest / "hooks" / "h.sh").exists()
+
+
+def test_nothing_changing_during_the_run_still_deploys_the_committed_bytes(repo, tmp_path, monkeypatch):
+    # The control for the two above: the same flow with no edit.
+    dest = tmp_path / "game" / ".claude"
+    dest.mkdir(parents=True)
+    _hooks(monkeypatch, rc=0, during=lambda: None)
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 0
+    assert (dest / "hooks" / "h.sh").read_bytes() == b"echo hi\n"
+
+
+# ---------------------------------------------------------------- review M3: the resolver of the repo being deployed
+
+def test_the_bash_resolver_comes_from_the_repo_being_deployed(repo):
+    bash, why = dep._find_bash(repo)              # the scratch repo has no scripts/gitbash.py
+    assert bash is None and "gitbash.py" in why and str(repo) in why
+
+
+def test_a_broken_resolver_is_a_reason_not_a_traceback(repo):
+    (repo / "scripts" / "gitbash.py").write_bytes(b"raise RuntimeError('broken resolver')\n")
+    bash, why = dep._find_bash(repo)
+    assert bash is None and "RuntimeError" in why and "broken resolver" in why
+
+
+# ---------------------------------------------------------------- review I2: what the hook tests do not cover
+
+def _act(name, kind="update"):
+    return dep.Action(name, kind)
+
+
+def test_codex_only_guard_files_are_named_and_identical_copies_are_not(repo):
+    (repo / ".codex" / "hooks").mkdir(parents=True)
+    (repo / ".codex" / "rules").mkdir(parents=True)
+    (repo / ".codex" / "hooks" / "h.sh").write_bytes(b"echo hi\n")              # byte-identical to .claude/hooks/h.sh
+    (repo / ".codex" / "hooks" / "codex_adapter.py").write_bytes(b"x = 1\n")    # Codex-only
+    (repo / ".codex" / "rules" / "x4.rules").write_bytes(b"rule\n")
+    codex = [_act(".codex/hooks/h.sh"), _act(".codex/hooks/codex_adapter.py"), _act(".codex/rules/x4.rules"),
+             _act(".codex/hooks.json"), _act(".agents/skills/a/SKILL.md"), _act(".codex/hooks/x.py", "identical")]
+    claude = [_act("hooks/h.sh"), _act("skills/a/SKILL.md")]
+    got = dep.untested_guards(repo, [(dep.parity.CODEX, codex), (dep.parity.CLAUDE, claude)])
+    assert got == [".codex/hooks/codex_adapter.py", ".codex/rules/x4.rules", ".codex/hooks.json"]
+
+
+def test_a_changed_settings_json_is_named(repo):
+    got = dep.untested_guards(repo, [(dep.parity.CLAUDE, [_act("settings.json"), _act("hooks/h.sh")])])
+    assert got == [".claude/settings.json (its hook wiring)"]
+
+
+def test_the_note_names_codex_files_and_their_tests_and_does_not_refuse(repo, tmp_path, monkeypatch, capsys):
+    dest = tmp_path / "game" / ".claude"
+    dest.mkdir(parents=True)
+    _hooks(monkeypatch, rc=0)
+    monkeypatch.setattr(dep, "untested_guards", lambda r, ja: [".codex/hooks/codex_adapter.py"])
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 0
+    err = capsys.readouterr().err
+    assert "NOTE: the hook tests do not exercise 1 changed Codex guard file(s): .codex/hooks/codex_adapter.py" in err
+    assert "test_codex_adapter.py" in err and "settings.json" not in err
+
+
+def test_the_settings_note_appears_for_a_settings_change(repo, tmp_path, monkeypatch, capsys):
+    (repo / ".claude" / "settings.json").write_bytes(b"{}\n")
+    _git(repo, "add", ".claude/settings.json")
+    _git(repo, "commit", "-q", "-m", "settings")
+    dest = tmp_path / "game" / ".claude"
+    dest.mkdir(parents=True)
+    _hooks(monkeypatch, rc=0)
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 0
+    err = capsys.readouterr().err
+    assert "changes .claude/settings.json" in err and "Codex guard file" not in err
+
+
+def test_no_note_when_only_tested_hooks_change(repo, tmp_path, monkeypatch, capsys):
+    dest = tmp_path / "game" / ".claude"
+    dest.mkdir(parents=True)
+    _hooks(monkeypatch, rc=0)
+    assert dep.main(["--repo", str(repo), "--dest", str(dest), "--apply"]) == 0
+    assert "NOTE:" not in capsys.readouterr().err
+
+
 def test_the_override_help_matches_the_rule():
     src = (PKG / "scripts" / "deploy-claude-dir.py").read_text(encoding="utf-8")
     block = src[src.index('"--unverified-guards"'):src.index('"--repo"')]
@@ -149,18 +287,20 @@ def test_the_override_help_matches_the_rule():
 
 # ---------------------------------------------------------------- the real runner, on a one-line suite
 
-def _real_bash():
-    bash, _ = dep._find_bash()
+def _real_bash(monkeypatch):
+    """The bash this toolkit resolves; a scratch repo has no scripts/gitbash.py of its own."""
+    bash, _ = dep._find_bash(dep.REPO_ROOT)
     if not bash:
         pytest.skip("no usable bash on this machine")
+    monkeypatch.setattr(dep, "_find_bash", lambda repo_root: (bash, ""))
     return bash
 
 
 @pytest.mark.parametrize("body, expect_pass", [(b"echo all good\nexit 0\n", True),
                                                (b"echo first\necho LAST-LINE\nexit 7\n", False)])
-def test_the_real_runner_reads_the_exit_of_a_real_bash(repo, capsys, body, expect_pass):
+def test_the_real_runner_reads_the_exit_of_a_real_bash(repo, monkeypatch, capsys, body, expect_pass):
     """No stub: the real subprocess call, output file and exit code, against a fake test-hooks.sh."""
-    _real_bash()
+    _real_bash(monkeypatch)
     (repo / "scripts" / "test-hooks.sh").write_bytes(body)
     why = dep.run_hook_tests(repo)
     if expect_pass:

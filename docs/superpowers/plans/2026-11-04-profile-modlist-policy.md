@@ -11,6 +11,7 @@ The user requested ordinary mod-file treatment for creating and editing root pro
 - Canonical targets, directories, symlinked copy sources and multiply-linked files cannot gain a mod-list exemption.
 - Regenerate all adapters from `agent/`; update instructions, README and changelog.
 - Independent review and a post-review scratch transaction precede integration. Game-root deployment additionally requires green CI on the exact commit. No game launch is part of this task.
+  (Superseded 2026-11-16: guard deploys need review + local hook tests; CI gates releases.)
 
 ## Implementation
 

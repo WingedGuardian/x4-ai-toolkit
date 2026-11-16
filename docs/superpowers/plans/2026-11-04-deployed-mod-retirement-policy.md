@@ -28,6 +28,7 @@ Only canonical guard sources are edited; generated trees are rebuilt with the ge
 - 95% confidence in operation-specific repair before tests: normalized kind is already available; the file policy can recognize it without trusting arbitrary metadata.
 - 95% confidence in protection preservation before tests: earlier branches and shell check are unchanged; negative controls must confirm it. Any control regression stops integration.
 - Host interception and live retirement remain unverified until reviewed source has exact-commit green CI, is deployed normally and the original complete request is re-evaluated. Do not route around an earlier refusal.
+  (Superseded 2026-11-16: guard deploys need review + local hook tests; CI gates releases.)
 
 ## Verification and delivery
 
@@ -54,7 +55,11 @@ MEASURED original-target transaction: candidate neutral Action v1 returned evalu
 
 Integrate verified explicit paths on current master, preserving unrelated work. Do not push, tag or release without user direction. The existing toolkit release lane owns publication; inspect its current intent and jobs before any source-bound CI request. Changed game-root guards require independent review and green CI on the exact commit before deployment. Until then the original retirement remains held.
 
+Superseded 2026-11-16: guard deploys need review + local hook tests; CI gates releases.
+
 
 Release-owner handoff: integrate the canonical source delta into the current release lane, regenerate against that lane's sources, and requalify the actual resulting head. Do not overwrite a newer generated tree with this checkout's old baseline. Changed guard bytes require renewed review. The current release batch was inspected read-only through paginated actual jobs and its remote branch head; it is a different source head and cannot qualify this fix. No run was dispatched, retried or cancelled here. No push, tag, release or game launch was performed.
 
 After exact-head green CI and normal reviewed guard deployment, re-evaluate the complete original retirement request through the active guards. Honor any confirmation/refusal. Only then retire the authorized temporary probe recoverably with X4 closed, verify production jobs/scripts and file hashes, and preserve the passed runtime evidence. Do not repeat the already-passing game test merely to clear this policy blocker.
+
+Superseded 2026-11-16: guard deploys need review + local hook tests; CI gates releases.

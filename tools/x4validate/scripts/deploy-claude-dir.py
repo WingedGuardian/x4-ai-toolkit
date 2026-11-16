@@ -378,7 +378,12 @@ CODEX_DOC_BUDGET = 32768
 #: deployed 13 minutes after its commit and let `bash -c`/`eval` deletes of reference/ through, which is why uncommitted
 #: guard sources still refuse. The independent review is a human/agent step no script can prove; the hook tests on
 #: that commit are the part this script checks.
-GUARD_SOURCES = (".claude/hooks", ".claude/settings.json", ".codex", "agent/guards", "tools/x4_harness")
+#: The VERIFIER is a guard source too (review I3, 2026-11-16): an uncommitted edit lowering test-hooks.sh's expected
+#: count, or adding an early `exit 0`, would otherwise pass; gitbash.py picks the bash it runs under, modding_harness
+#: is used by the hooks at runtime and copied by the suite, and this script makes the decision.
+GUARD_SOURCES = (".claude/hooks", ".claude/settings.json", ".codex", "agent/guards", "tools/x4_harness",
+                 "tools/modding_harness", "scripts/test-hooks.sh", "scripts/gitbash.py",
+                 "tools/x4validate/scripts/deploy-claude-dir.py")
 
 
 def is_guard(name: str) -> bool:
@@ -390,8 +395,17 @@ def is_guard(name: str) -> bool:
 #: Why no commit can be checked at all: an install from a release zip, or no git on PATH. Telling that copy to
 #: commit and review its guard change would be advice it cannot follow.
 NO_COMMIT = "this toolkit copy is not a git checkout (a release zip, or git cannot run here), so it has no commit to check"
-#: The local hook suite: it exercises the generated `.claude/hooks` tree, which is what this script deploys.
+#: The local hook suite. WHAT IT COVERS (review I2, 2026-11-16): the hooks in the generated `.claude/hooks` tree, fed
+#: synthetic tool calls directly. WHAT IT DOES NOT: the real `.claude/settings.json` wiring (which hook runs on which
+#: event), and the Codex-only guard files -- `.codex/hooks/` files with no byte-identical copy in `.claude/hooks`
+#: (codex_adapter.py, codex-entry.sh/.ps1, codex_trust.py, patch_paths.py, ...), `.codex/rules/x4.rules` and the
+#: rendered `.codex/hooks.json`. A deploy that changes one of those prints a NOTE naming it (with CODEX_TESTS for
+#: Codex files); it does not refuse, and the 38-minute conformance replay is deliberately not run here.
 HOOK_TESTS = "scripts/test-hooks.sh"
+#: The targeted local tests for the files the hook suite does not exercise (run from tools/x4validate).
+CODEX_TESTS = ("uv run --frozen python -m pytest tests/test_codex_adapter.py tests/test_codex_wrapper.py "
+               "tests/test_codex_trust.py tests/test_patch_paths.py tests/test_codex_rules.py "
+               "tests/test_gen_codex_tree.py")
 #: MEASURED 2026-11-16 on the development machine: one full run of test-hooks.sh took about HOOK_TESTS_MEASURED_S
 #: seconds (5.3 min). The bound is about 5.7 times that, so a slow machine passes and a hung suite still ends in a
 #: refusal.
@@ -401,14 +415,45 @@ HOOK_TESTS_TIMEOUT_S = 1800
 HOOK_TESTS_TAIL_LINES = 25
 
 
-def _find_bash() -> tuple[str | None, str]:
-    """Git Bash (never the WSL stub a bare `bash` finds on Windows), through the toolkit's one resolver."""
+def _find_bash(repo_root: Path) -> tuple[str | None, str]:
+    """Git Bash (never the WSL stub a bare `bash` finds on Windows), through the resolver of the toolkit being DEPLOYED
+    (its scripts/gitbash.py is a guard source, so it is the committed one). Any failure is a reason, never a bash."""
+    resolver = Path(repo_root) / "scripts" / "gitbash.py"
+    if not resolver.is_file():
+        return None, f"no scripts/gitbash.py in {repo_root} to find bash with"
     try:
-        gitbash = _load("gitbash_for_deploy", REPO_ROOT / "scripts" / "gitbash.py")
+        gitbash = _load("gitbash_for_deploy", resolver)
         found = gitbash.find_bash()
         return found, ("" if found else gitbash.why_not())
-    except (OSError, ImportError, AttributeError, SyntaxError) as exc:
-        return None, f"the bash resolver could not load ({type(exc).__name__}: {exc})"
+    except Exception as exc:  # any resolver failure becomes the refusal's reason, printed by the caller
+        return None, f"the bash resolver {resolver} failed ({type(exc).__name__}: {exc})"
+
+
+def _result_line(text: str) -> str:
+    """The suite's own summary (`RESULT: N passed, N failed, N skipped`), or a sentence saying there was none."""
+    found = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("RESULT:")]
+    return found[-1] if found else "no RESULT line in its output"
+
+
+def untested_guards(repo_root: Path, jobs_actions) -> list[str]:
+    """Changed guard files the hook suite does not exercise (review I2): settings.json, whose wiring it does not
+    test, and Codex-target guard files with no byte-identical copy in `.claude/hooks` (rules, the rendered hooks.json,
+    the Codex-only hook scripts). `jobs_actions` is [(spec, [Action])]."""
+    hooks_dir = Path(repo_root) / ".claude" / "hooks"
+    tested = {_norm(p.read_bytes()) for p in hooks_dir.rglob("*") if p.is_file()} if hooks_dir.is_dir() else set()
+    out = []
+    for spec, actions in jobs_actions:
+        for a in actions:
+            if a.kind not in (CREATE, UPDATE) or not is_guard(a.name):
+                continue
+            if spec.name == "claude":
+                if a.name == "settings.json":
+                    out.append(".claude/settings.json (its hook wiring)")
+                continue
+            src = Path(repo_root) / spec.root_rel / a.name
+            if a.name in dict(spec.rendered) or not src.is_file() or _norm(src.read_bytes()) not in tested:
+                out.append(a.name)
+    return out
 
 
 def run_hook_tests(repo_root: Path) -> str | None:
@@ -418,7 +463,7 @@ def run_hook_tests(repo_root: Path) -> str | None:
     script = Path(repo_root) / HOOK_TESTS
     if not script.is_file():
         return f"it has no {HOOK_TESTS} to run the hook tests with"
-    bash, why = _find_bash()
+    bash, why = _find_bash(repo_root)
     if not bash:
         return f"the hook tests could not run: no usable bash ({why})"
     print(f"Running the hook tests ({HOOK_TESTS}) on the commit to deploy; this takes about "
@@ -435,10 +480,11 @@ def run_hook_tests(repo_root: Path) -> str | None:
             return f"the hook tests did not finish within {HOOK_TESTS_TIMEOUT_S} s (timed out; treated as a failure)"
         except OSError as exc:
             return f"the hook tests could not start ({type(exc).__name__}: {exc})"
-        if r.returncode == 0:
-            return None
         out.seek(0)
         text = out.read().decode("utf-8", errors="replace")
+    if r.returncode == 0:
+        print(f"Hook tests passed: {_result_line(text)}", file=sys.stderr)
+        return None
     tail = "\n".join(text.rstrip("\n").splitlines()[-HOOK_TESTS_TAIL_LINES:])
     print(f"--- last {HOOK_TESTS_TAIL_LINES} lines of {HOOK_TESTS} (exit {r.returncode}) ---\n{tail}\n---",
           file=sys.stderr)
@@ -465,15 +511,28 @@ def guard_evidence(repo_root: Path) -> str | None:
     if top.returncode or (os.path.normcase(os.path.realpath(top.stdout.strip()))
                           != os.path.normcase(os.path.realpath(repo_root))):
         return NO_COMMIT
-    head = git("rev-parse", "HEAD")
-    if head.returncode:
-        return "no git HEAD to check"
-    sha = head.stdout.strip()
-    dirty = git("status", "--porcelain", "--untracked-files=all", "--", *GUARD_SOURCES)
-    if dirty.returncode or dirty.stdout.strip():
-        return "guard sources differ from HEAD (uncommitted or untracked changes)"
+    def clean_head():
+        head = git("rev-parse", "HEAD")
+        if head.returncode:
+            return None, "no git HEAD to check"
+        dirty = git("status", "--porcelain", "--untracked-files=all", "--", *GUARD_SOURCES)
+        if dirty.returncode or dirty.stdout.strip():
+            return None, "guard sources differ from HEAD (uncommitted or untracked changes)"
+        return head.stdout.strip(), None
+    sha, why = clean_head()
+    if why:
+        return why
     failed = run_hook_tests(repo_root)
-    return f"{failed} on {sha[:8]}" if failed else None
+    if failed:
+        return f"{failed} on {sha[:8]}"
+    # The deploy reads the WORKING TREE after this returns (review I1): an edit or a commit made while the suite ran
+    # would go live untested. The same check again, and the same commit, or a refusal.
+    after, why = clean_head()
+    if why:
+        return f"{why} after the hook tests ran on {sha[:8]}: the tested state is gone"
+    if after != sha:
+        return f"HEAD moved from {sha[:8]} to {after[:8]} while the hook tests ran, so {after[:8]} is untested"
+    return None
 
 
 def _deploy_one(repo_root: Path, dest: Path, spec, args) -> tuple[int, list[str]]:
@@ -607,7 +666,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.apply:
-        guards = sorted({a.name for spec, dest in jobs for a in plan(repo_root, dest, set(args.force), spec=spec)
+        planned_actions = [(spec, plan(repo_root, dest, set(args.force), spec=spec)) for spec, dest in jobs]
+        guards = sorted({a.name for spec, actions in planned_actions for a in actions
                          if a.kind in (CREATE, UPDATE) and is_guard(a.name)})
         if guards:
             why = guard_evidence(repo_root)
@@ -615,6 +675,8 @@ def main(argv: list[str] | None = None) -> int:
                 remedy = ("If this copy came from a release you trust, re-run with --unverified-guards REASON, "
                           "naming the release." if why == NO_COMMIT else
                           "Fix what git says first, or pass --unverified-guards REASON." if "git could not read" in why
+                          else "Re-run the deploy once nothing is changing the guard sources or HEAD."
+                          if "while the hook tests ran" in why or "tested state is gone" in why
                           else "Commit the guard change and have it reviewed first." if "differ from HEAD" in why
                           else "Fix the failing hook tests (bash scripts/test-hooks.sh), commit, and have the "
                           "change reviewed, or pass --unverified-guards REASON.")
@@ -624,6 +686,15 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             if why:
                 print(f"DEPLOYING UNVERIFIED GUARD CODE ({why}): {args.unverified_guards}", file=sys.stderr)
+            untested = untested_guards(repo_root, planned_actions)
+            codex = [n for n in untested if not n.startswith(".claude/")]
+            if codex:
+                print(f"NOTE: the hook tests do not exercise {len(codex)} changed Codex guard file(s): "
+                      f"{', '.join(codex)}. Test them locally before relying on them (from tools/x4validate): "
+                      f"{CODEX_TESTS}", file=sys.stderr)
+            if len(codex) < len(untested):
+                print("NOTE: this deploy changes .claude/settings.json; the hook tests feed the hooks directly and do "
+                      "not test which hook its wiring runs on which event. Review its hooks block.", file=sys.stderr)
 
     rc = 0
     for spec, dest in jobs:
