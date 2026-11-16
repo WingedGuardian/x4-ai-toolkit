@@ -460,7 +460,7 @@ does** — verify against the OOS scripts; an assumed formula is an ASSUMED-tier
 say which regime a formula belongs to, and the packed-inclusive scoping rule.
 ## Working ON the Toolkit
 
-**Working ON the toolkit** — its code, gates, hooks, generator or `agent/` source — **load the `x4-toolkit-dev` skill first**: it holds the rules for derived-artifact freshness, narrowing steps, the bug funnel, concurrent sessions, and trusting tools before a modlist lock.
+**Working ON the toolkit** — its code, gates, hooks, generator or `agent/` source — **load the `x4-toolkit-dev` skill first**: it holds the rules for derived-artifact freshness, narrowing steps, the bug funnel, concurrent sessions, trusting tools before a modlist lock, and CI (it gates releases; nothing local waits for it).
 
 **A CLI banner saying UNKNOWN or STALE means the artifact may not describe your files: rebuild** (`uv run x4effective build` · `uv run x4xref build` · `cd tools/basex; bash build-corpus.sh; bash build-effective.sh`) before you trust a number from it. An absent fingerprint is UNKNOWN, never fresh.
 

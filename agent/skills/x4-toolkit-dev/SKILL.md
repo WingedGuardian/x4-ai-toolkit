@@ -225,6 +225,24 @@ A direct edit to a generated file is overwritten by the next regeneration, and
 
 Bare `python` on the author's machine is 3.10; the toolkit needs 3.13 through `uv`.
 
+## CI gates releases, not local work
+
+CI on GitHub is the check on what goes out to other people, not a gate between a change and your own install.
+
+- **CI gates releases only:** a tag, a GitHub release, a version bump, a merge to `master`. Every change handed to the
+  public repo gets a full CI run before it is released; nothing is released on a red or missing run, read per job on
+  the exact commit.
+- **Nothing local waits for CI:** deploying tools, scripts, skills, docs, mods and guard/hook code into your own install,
+  continuing work, running an approved test, or reporting work done (say "CI pending" once).
+- **Guard and hook code reaches a game root after two local checks, not CI:** an independent review of the change, and
+  the local hook tests passing on that commit (`deploy-claude-dir.py --apply` runs `scripts/test-hooks.sh` itself and
+  refuses on a failure); rollback is re-deploying the previous reviewed commit. Never deploy unreviewed guard code: one deployed 13 minutes after
+  its commit once let wrapped-shell deletes of `reference/` through.
+- **Push a session branch once per batch,** never just to see CI, and never wait for its result before the next step.
+  A CI failure is fixed (and redeployed, if deployed) in the next batch.
+- **The local pre-push gate is a quick sanity check:** collection, drift, lint, the tests for changed files. Full
+  suites, mutation runs and slow or load-sensitive suites run on CI.
+
 ## Where the design lives
 
 - [Universal agent design](https://github.com/WingedGuardian/x4-ai-toolkit/blob/master/docs/superpowers/specs/2026-09-30-universal-agent-support-design.md)
