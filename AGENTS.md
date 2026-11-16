@@ -468,5 +468,5 @@ say which regime a formula belongs to, and the packed-inclusive scoping rule.
 
 **Learned facts and preferences go in `KNOWLEDGEBASE.local.md`** as above. Also read an existing `X4-NOTES.md` (preserved legacy evidence). Never edit `CLAUDE.md`, `AGENTS.md`, `.claude/agents/`, `.claude/skills/`, `.claude/settings.json`, `.claude/hooks/`, `.agents/skills/`, `.codex/hooks/`, `.codex/rules/`, `tools/x4_harness/`, `tools/agent-harness.py`, `.opencode/hooks/`, `.opencode/plugins/x4guard.js`, `.opencode/skills/`, `.opencode/X4-OPENCODE.md`: they are regenerated and your edit is lost.
 
-**`KNOWLEDGEBASE.md` and the other protected files are kept read-only by x4lock**, so a write to one fails until you unlock it: `python <toolkit>/scripts/x4lock.py unlock <file>`, edit, `python <toolkit>/scripts/x4lock.py lock`, then commit it. The guard prints the exact commands.
+**`KNOWLEDGEBASE.md` and the other protected files are kept read-only by x4lock** to catch accidental or runaway writes, not intended ones. To edit one deliberately: `python <toolkit>/scripts/x4lock.py unlock <file>`, edit, `python <toolkit>/scripts/x4lock.py lock`, then commit it.
 
