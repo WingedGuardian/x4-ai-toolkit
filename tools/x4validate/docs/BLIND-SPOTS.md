@@ -460,7 +460,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F355 | `x4diff --overlay` and a repeated `--base` compare `content.xml` against the first baseline folder only | **SCOPE LIMIT (measured)** · IN-ARC | Fixtures only, no real mods; every stacked run is affected, and the output says so | OPEN, disclosed |
 | F356 | Shell writes, moves and deletes of base-game and official DLC archives were only advised, where the file tools deny | **DEFECT (measured)** · PRE-ARC | 213 archive forms: 24 denied before, 181 now; 75 mod, read and other forms: 0 moved. 14 write shapes stay unmodelled. Round 2: 78 of 705 review rows moved, all to deny. Round 3: 30 of 889 moved, 27 to deny, 3 deny to ask (`-maxdepth 1`). Round 4: 31 of 988 moved, 29 to deny or advise, 2 deny to ask (a PowerShell mod folder). Round 5: 91 of 1526 moved, 86 to deny, 5 a depth-0 `-type f` (to v4.1.0's verdict). Round 6 (F357): 321 of 2177 moved, all to deny, ask or advise; `find -exec` writes to what it finds now reach this rule. Round 7: 473 of 2469 moved vs 28f260ee, all stronger. Round 8: 556 of 2623, all stronger | FIXED 2026-11-05 |
 | F357 | A `find -exec` command, and the command a wrapper runs (`sshpass`, `torsocks`, `start`, `gdb --args` and others), reached no rule of its own; a find that moves or writes what it finds never reached the archive rule; round 7: an analysis with no deadline failed open; round 8: a positional fill grew as uses x arguments | **DEFECT (measured)** · PRE-ARC | GitHub issue #18. See the entry for the per-item comparison | FIXED 2026-11-06 |
-| F358 | A complete copy of a mod-owned macro file at a nested path was modelled as REPLACING the owner's document; the engine MERGES it (two same-named macros), so later un-indexed selectors passed x4validate and the engine skipped them | **DEFECT (measured)** · PRE-ARC | GitHub issue #17: engine skipped 3 ops (debug.txt 2026-11-05, 2026-11-06), x4validate predicted 0; live census 213 active mods: 2 nested full copies over a mod-supplied file, both this case | FIXED 2026-11-06 for `.../macros/*_macro.xml` only; copy order and the engine's choice of copy UNMEASURED and disclosed by every reader; every other class (118 live at a DLC's nested path, INFERRED the largest exposure) and a plain-path full copy still a replacement and DISCLOSED as unmeasured |
+| F358 | A complete copy of a mod-owned macro file at a nested path was modelled as REPLACING the owner's document; the engine MERGES it (two same-named macros), so later un-indexed selectors passed x4validate and the engine skipped them | **DEFECT (measured)** · PRE-ARC | GitHub issue #17: engine skipped 3 ops (debug.txt 2026-11-05, 2026-11-06), x4validate predicted 0; live census 213 active mods: 2 nested full copies over a mod-supplied file, both this case | FIXED 2026-11-06 for `.../macros/*_macro.xml` only; copy order and the engine's choice of copy UNMEASURED and disclosed by every reader; every other class (118 live at a DLC's nested path, INFERRED the largest exposure) and a plain-path full copy still a replacement and DISCLOSED as unmeasured (the plain-path clause SUPERSEDED 2026-11-17 by F382 for `assets/units/` ship macro/component files) |
 | F359 | With `X4_MODS` set to the extensions folder, the file guard alone allowed a typed delete of the whole folder, a DLC and a mod | **DEFECT (measured)** · PRE-ARC | 5 of 5 targets allowed by protect-files.sh alone; x4guard and the neutral delete already denied/asked. A DLC file EDIT in that layout was only advised; owner ruling 2026-11-07: denied in every layout | FIXED 2026-11-06 (deletes), 2026-11-07 (edits) |
 | F360 | A shell write whose target comes from xargs's stdin, or passes through an existing junction, reaches no write rule | **DEFECT (measured)** · PRE-ARC | `echo <config> \| xargs touch` and `echo <reference file> \| xargs touch` allowed; 3 of 3 shell writes through a junction into reference/ allowed where the file tool denies | FIXED 2026-11-07 |
 | F361 | A failed, killed or refused BaseX build left x4raw/x4eff MISSING (the builders dropped first); and BaseX `ALTER DB` onto an existing name REPLACES it, or with a reader on it fails and DAMAGES it | **DEFECT (measured)** · PRE-ARC | 2026-11-05: 8 killed builds in a row left both databases missing for hours. BaseX 12.4, private DBPATH, n=2: ALTER onto an unopened existing name rc 0 and the target holds the source's data; onto a reader-held name rc 1 "could not be renamed" and the target lost `inf.basex` (unreadable), source kept | FIXED 2026-11-07 (4.1.1): build-then-swap, `tools/basex/dbswap.py`; see entry |
@@ -481,6 +481,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F379 | `trader.open` cannot read a faction's `nolicencesale` tag; a no-sale faction whose sellable-licence list is not empty passes the opener | **SCOPE LIMIT (read)** · IN-ARC (new in 4.2.0) | READ: census of all 40 UI Lua files in the reference (39 in `ui/addons`, 1 in the only DLC UI folder): no `GetFactionData` key names a tag; the only `HasTag` reads connection tags | OPEN 2026-11-13, partly covered: the opener refuses when `GetOwnLicences` lists no sellable licence (the menu's own row filter); whether that list is empty for no-sale factions is UNMEASURED |
 | F380 | A module planted in the project folder (`json.py` with jq missing) or a `sitecustomize.py` on `PYTHONPATH` ran inside the hooks' Python and could turn a deny into an empty allow | **DEFECT (measured)** · PRE-ARC · HIGH | 12 of 17 runnable cases of `test_hook_python_isolated.py` failed against the unchanged hook tree; a `reference/` write deny became 0 bytes, rc 0 | FIXED 2026-11-14: every hook interpreter runs isolated (`X4_PYI`: `-I`, plus `-X utf8` carried from PYTHONUTF8); OpenCode plugin fixed upstream 2026-11-15; `uv run` and PYTHONIOENCODING residuals OPEN |
 | F381 | Two clients executing the SAME prepared x4live action journal at once: the loser can read the winner's observation file while it is still being written and report "journal evidence is corrupt; preserve it" (ActionUncertain) instead of "dispatch already reserved" (ActionRefused) | **DEFECT (measured)** · IN-ARC (new in 4.2.0) · LOW | 1 of 1 occurrence in a 2 h 13 min loaded pre-push gate run; 0 of 300 idle trials; the action was sent exactly once in every trial | OPEN 2026-11-15: fails safe (no second send); reachable only through the automation bundle, which 4.2.0 ships no install route for |
+| F382 | A MOD's complete ship macro/component file at a PLAIN base-game path was modelled as a replacement; the engine MERGES it (the base node and the mod's same-named one), so later selectors on that name passed Tier B and the engine skipped them | **DEFECT (measured)** · PRE-ARC | GitHub issue #23: debug.txt 2026-11-17 (game 9.00), 5 xspvro files under `assets/units/`, 23 distinct ops of 2 patching mods skipped, Tier B predicted 0; after the fix 23 of 23 predicted. Same shape outside `assets/units/` (3 weapon macro files): REFUSED by the engine ("Skipping file") in 5 of 6 load passes, never merged | FIXED 2026-11-17 for `assets/units/` macro (`macros/*_macro.xml`, root `macros`) and component (root `components`) files only, mod layer over a game-supplied document with the same root; what decides merge versus refusal, copy order and which copy the engine uses UNMEASURED and disclosed; every other class keeps the replacement model, disclosed |
+| F383 | For 5 xspvro files at plain base-game paths the engine loaded the copier's file plus OTHER mods' `extensions/xspvro/<rel>` patches and never opened any mod's plain-path `<diff>` on that path; x4validate evaluated those plain diffs | **DEFECT (measured)** · PRE-ARC | same log, FileIO census: the plain-path diffs on those 5 files never opened, the nested patch opened, both passes. Rule MEASURED 10 of 10 over the `assets/units/` copies: the LAST effective index entry for the file's name (all mods, the patching mod's own index included) points at `extensions\xspvro\...` for exactly these 5 and at the base path for the 5 that merged; the first entry would mispredict 3 | FIXED 2026-11-17 in x4validate: such a plain-path diff is an ERROR `load-path` ("the engine never opens this plain-path patch"), its ops not evaluated, and the copier gets an INFO; last-entry-wins INFERRED from those 3; x4compat, x4effective and the merge model itself do not consult the index (OPEN) |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -12888,7 +12890,8 @@ round 2 makes every reader say so instead of choosing silently:
 
 Other UNMEASURED cases, disclosed instead of changed: any other class at a nested path (libraries, index, md,
 aiscripts, t, components, other assets; see also F303); a nested copy over a DLC (above); a mod's complete file at a
-plain base-game path. These keep the old model. `MergeResult.unmeasured` carries one line per such step,
+plain base-game path (SUPERSEDED 2026-11-17 by F382: measured, and MERGED, for `assets/units/` ship macro and component
+files; every other plain-path class still here). These keep the old model. `MergeResult.unmeasured` carries one line per such step,
 `x4effective dump` prints it, and x4validate gives one aggregated INFO per kind for the mod's own files (the DLC's
 nested path is its own kind, not "a plain path").
 
@@ -13864,3 +13867,150 @@ own falsification twins).
 ## F381 - a concurrent reader of an x4live action journal can call a half-written receipt corrupt · **DEFECT (measured)** · IN-ARC · severity LOW · confidence 90% · OPEN 2026-11-15
 
 `_liveactions._write_new` creates each journal member with exclusive create (`open("xb")`) and then writes it, so the file is visible, empty or partial, for the length of the write. `ActionJournal.execute` reads the history (`_history`) before it reserves `dispatch.json`. When two clients execute the same journal at once, the second can read the first's `observation-000001.json` mid-write; the JSON parse fails and it raises ActionUncertain ("journal evidence is corrupt or inconsistent; preserve it") where the contract of `tests/test_liveactions.py::test_two_clients_cannot_dispatch_same_request` was ActionRefused. MEASURED: one occurrence in the 4.2.0 pre-push gate (b5d34ca6, 11,137 tests, 2 h 13 min, machine loaded); 0 of 300 trials of the same race on an idle machine; the transport was called exactly once in all of them. The invariant that matters (never two sends) held; the loser's reason is wrong, and a later `status` read sees the finished file. Not fixed in 4.2.0 because the fix (publish each member by writing a temporary sibling and hard-linking it into place) changes the membership that `_liveusagesamples` hashes and that `_livecapture` enumerates, and would need its own review; the path is reachable only through the automation bundle, which this release ships no install route for (CHANGELOG). The test now asserts the single send and accepts either refusal for the loser, citing this entry.
+
+## F382 - A mod's complete ship macro/component file at a plain base-game path was modelled as a replacement; the engine merges it · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-17 for `assets/units/` only
+
+GitHub issue #23, the plain-path sibling of F358. `xspvro` (Workshop 3691358137) ships complete files at base-game paths;
+`vro` loads before it and ships a `<diff>` on each. MEASURED, one launch (debug.txt 2026-11-17 00:50, game 9.00, every
+file loaded in two passes): for 5 files under `assets/units/` (`size_xl/macros/ship_xen_xl_{destroyer,carrier}_01_a_macro`,
+`size_s/macros/ship_xen_s_fighter_02_a_macro`, `size_m/macros/ship_xen_m_corvette_01_a_macro`, component
+`size_s/ship_xen_s_fighter_02`) the engine opened vro's diff, then xspvro's file, then the later patchers' plain-path diffs,
+and logged "Multiple matching nodes ... Skipping node" for every op naming the macro or component: 23 distinct ops (9 of
+X4CapturableXenonXL, 14 of the patching overlay; 54 lines, plus 2+2 for xup_xenon_overhaul and a second overlay on
+fighter_02_a), and "LoadoutDB::AddLoadout: Loadout with ID '<macro>.default' already exists" for the two XL macros. So the
+document holds both copies. `apply_overlay` sent the file to "full" (`tree = oroot`), so Tier B predicted 0 of the 23.
+
+A SECOND outcome for the same shape, MEASURED in the same log: xspvro's complete weapon macro files at
+`assets/fx/weaponfx/macros/bullet_xen_turret_l_{plasma,laser}_01_mk1_macro.xml` and
+`assets/props/weaponsystems/heavy/macros/turret_xen_l_plasma_01_mk1_macro.xml` (base file + vro's diff, exactly like the
+ship files) were refused: "Root node name 'macros' ... is not 'diff' for patch file or '<x>' for merge file ... Skipping
+file", 5 of their 6 load events, with <x> varying between passes (`class`, `rate`, `text`, `xxi`, which look like
+attribute names from the parse, INFERRED a stale buffer); the laser bullet was refused in pass 2 only, and in pass 1 neither
+refused nor merged (its later patch matched one node). 0 "Multiple matching nodes" lines for any op on these three. What
+decides merge versus refusal is UNMEASURED: the pass-to-pass variation says it is not the path alone, so `assets/units/` is
+the MEASURED boundary of this fix, not a mechanism.
+
+Fixed: `_merge.merges_plain_copy(vpath, root_tag)` names the class (`assets/units/**/macros/*_macro.xml` with root `macros`,
+or an `assets/units/` file outside `macros/` with root `components`), and `apply_overlay(..., plain_on_game=True)` appends
+with F358's step (mode `merge`). The plain door passes the flag for a MOD layer when the GAME supplies the document
+(`from_game`), and the roots must be equal. A merging mod is not an owner for nested patches: MEASURED in the same log, the
+engine never opened `<the overlay>/extensions/xspvro/<carrier macro>` (a FileIO census of the log: no nested
+patch opened for any of the 5 merged files, against one per file in F383's group; x4validate reports such a nested patch
+since the review round, F383). The same flag goes through `_compat._walk_positions`,
+`_compat_state.trace(plain_on_game=)` and `_compat._analyze_vpath` (no FULL-OVERRIDE; a HARD row when two MODS copy the same
+name, the game's copy counted, not listed), and x4validate gives the copying mod a MERGES INFO. `MergeResult.unmeasured`
+carries `plain_merge_note`: the merge MEASURED, the copy order, which copy the engine uses and the refusal UNMEASURED. The
+replacement note for every other plain-path file now names the refusal too. md, libraries, index, t and every other class
+are unchanged.
+
+Which copy the engine uses: INFERRED from fitted loadouts in two saves (the issue's, and the patching mod's owner's
+save_016): node [1], the base+VRO copy. Not read from the engine.
+
+Real install, read-only, before -> after, per item against the log's distinct skips (the patching mods taken at the dev
+parents of 6b01888d and ff69eae8, byte-compared with the installed copies except the fix files): X4CapturableXenonXL 0 -> 9
+agreed of 9, 0 predicted-only; the patching overlay 0 -> 14 agreed of 14, 3 predicted-only (all three in
+`assets/units/size_s/ship_xen_s_fighter_01.xml`, a file the engine never evaluated for this mod; F383's index rule
+now reports that file as never opened instead). X4CapturableXenonXL's
+old "sel matched nothing: //connections/connection[@ref='connection_cockpit']" error (the replacement had dropped the base
+node) is gone. The CURRENT installed patchers (`<remove sel="X[2]" if="X[2]"/>` first, `[1]`-anchored selectors): the 5
+`if=` guards Tier B read FALSE before now read TRUE, X4CapturableXenonXL 0 errors, the patching overlay only the same 3
+F383 errors. `_walk_positions` and `trace` agree with `build_effective` on all 5 merged vpaths and the refused plasma bullet.
+
+The same log's other "Multiple matching nodes" lines are different cases, each `x4debug crosscheck`ed on this log with 0
+OBSERVED ONLY: cpsdo_faction `libraries/wares` (116 distinct, `//wares/ware[@id=X]/production/@name` over wares with two
+`<production>` children, as F358 recorded; crosscheck 190 agreed of 190 distinct skips of every kind, 3 predicted only), stars `material_library`,
+ebi_pirate_chaos_conflict `factions`.
+
+**RE-DERIVED BY:** `tests/test_plain_full_copy_merges.py`: 23 of its first 30 tests RED on ae3617a0 (10 behavioural, the
+rest the new API); one twin per clause of `merges_plain_copy`, `apply_overlay` and the plain door; 17 of 17 hand mutants
+killed (scratch harness `mut.py`, every file restored byte-identical).
+
+## F383 - The engine loads a copier-owned document when the effective index sends the name there, and never opens the plain-path diffs · **DEFECT (measured)** · PRE-ARC · confidence 85% · FIXED 2026-11-17 in x4validate only
+
+Same log as F382. For `assets/units/size_s/ship_xen_s_fighter_01.xml`, `.../size_s/macros/ship_xen_s_fighter_01_a_macro.xml`,
+`.../size_s/macros/ship_xen_s_scout_01_a_macro.xml`, `.../size_m/macros/ship_xen_m_corvette_02_a_macro.xml` and
+`.../size_m/macros/ship_xen_m_miner_solid_01_a_macro.xml`, where xspvro ships a complete file over a base file exactly as in
+F382, the engine's FileIO lines show xspvro's file and then the patching overlay's NESTED patch
+`extensions/xspvro/<rel>`, in both passes, and neither vro's plain-path diff nor (for fighter_01) the patching overlay's
+plain-path diff: the nested door loading `extensions/xspvro/<rel>`, not the plain path. The toolkit evaluated the
+plain-path diffs: after F382's first commit that was 3 "matched 2 nodes" errors in the patching overlay's fighter_01
+component diff that the engine never evaluated; before it, the same diff read clean.
+
+The rule, MEASURED 2026-11-17 over all 13 files of F382/F383 (`scratchpad .../index_chain.py`): the chain of
+`index/macros.xml` / `index/components.xml` entries for each file's name across base, every DLC and every active mod in
+load order, with the two patching mods at their pre-fix (00:50) copies. The prediction was computed by the script from the
+chain alone (the groups were already known to me from the FileIO census, so this is a rule fitted to known outcomes, not a
+blind forecast):
+
+| file (name) | effective entries, in order | last entry -> predicted | engine (FileIO) |
+|---|---|---|---|
+| destroyer_01_a, carrier_01_a, fighter_02_a, corvette_01_a macros; fighter_02 component | base path (xspvro re-points or adds `extensions\xspvro\...`; the patching overlay's index re-points back) | base -> plain path | plain path, MERGED (F382) |
+| fighter_01_a, scout_01_a macros; fighter_01 component | base path, then xspvro's added `extensions\xspvro\...` | xspvro -> own | own document |
+| corvette_02_a, miner_solid_01_a macros | xspvro's `extensions\xspvro\...` only | xspvro -> own | own document |
+| bullet plasma_01, turret plasma_01 | base path (re-pointed back by the patching overlay) | base -> plain path | plain path, file REFUSED |
+| bullet laser_01 | base path (never changed) | base -> plain path | plain path, REFUSED 1 of 2 passes |
+
+Which document is loaded: 13 of 13. Merge versus refusal at the plain path is NOT decided by the index (all 8 plain-path
+files predict the same) and stays F382's measured `assets/units/` boundary. For the 3 names with two entries the FIRST entry
+(the base path) would have predicted the plain path, wrong 3 of 3: last-entry-wins is INFERRED from those 3 alone.
+
+Fixed in x4validate: `_merge.plain_copy_index` names the index and entry for a file in the class, `_merge.index_loaded_path`
+reads the last entry, and `_check.index_loads_copy` builds the RUNTIME index (every active mod, the mod under test put back
+at its load position, since its own index edits count) once per run. When the entry is `extensions/<owner>/<vpath>` and
+<owner> ships a complete file there, a plain-path `<diff>` on <vpath> is an ERROR `load-path` ("the engine never opens this
+plain-path patch", pointing at `extensions/<owner>/<vpath>`) and its ops are not evaluated, like an inert bare path; the
+copier gets an INFO that the engine loads its copy as its own document. Only for a vpath the GAME supplies: a NEW file
+indexed at the mod's own path is the ordinary way to add content (a first cut flagged two such X4CapturableXenonXL storage
+macros; the clause has its own twin). A partial index (an unreadable layer) gives no verdict. Real install, read-only: the patching overlay's 3 fighter_01 "matched 2 nodes" errors become 1 `load-path` error
+(pre-fix and current copies alike); X4CapturableXenonXL and the other 14 skips unchanged (see the commit).
+
+Review round (2026-11-17), the converse and the non-answers:
+
+- **The nested door on a MERGING copier.** For the 5 merged files the engine opened no `extensions/xspvro/<rel>` patch
+  (MEASURED, one such patch existed: the patching overlay's nested carrier diff), while x4validate evaluated it through
+  `_build_owned` against xspvro's file and reported it clean. Now: a nested `<diff>` on a mod's complete copy of a game file
+  whose last index entry is the BASE path is an ERROR `load-path` ("the engine never opens this nested patch; the copy
+  merges at the plain path"), ops not evaluated. The plain door already agreed with the engine (a merging copier is no
+  owner, F382); `_build_owned` and x4compat's nested-vpath analysis still apply such a patch (OPEN, below). Real install,
+  read-only, after this round: the patching overlay (pre-fix and current copies alike) has exactly 2 errors, both
+  `load-path`, the fighter_01 plain diff and the nested carrier diff, and the log's FileIO census shows neither file opened
+  (2 of 2); its 14 and X4CapturableXenonXL's 9 skips are still predicted 14 of 14 and 9 of 9, 0 predicted-only; the
+  current X4CapturableXenonXL has 0 errors.
+- **A partial index.** An index layer that cannot be parsed used to make the rule return "no verdict", after which the ops
+  were evaluated as usual, so in `--sel-only`, `--file` and the per-edit hook a non-answer became a confident "matched 2
+  nodes". Now it is a degraded skip naming the index file, and that file's ops are not evaluated; asked only where a
+  complete copy exists at the path. An ABSENT index is no redirect, not a partial one.
+- **Name case.** Index names are matched ignoring case, as the engine resolves macro/component names (V9).
+- **A bare value.** `_merge.normal_index_path` reads a value without `extensions/` as the PLAIN vpath, whoever wrote it.
+  MEASURED: for 7 of the 13 names the last entry was a bare value written by a MOD (the patching overlay re-pointing the
+  name), and the engine loaded the plain path in 7 of 7, opening other mods' plain-path diffs on it. `_check.Definitions`
+  (PRE-ARC) reads a mod-written bare value as `extensions/<that mod>/<value>` to find the FILE on disk. For a file the mod
+  itself ships at that plain path both readings name the same file; for a mod that only re-points (this case) the
+  plain-path reading is the measured one. Not changed in `Definitions` (it answers "where is the file", not "which
+  document loads"); a LEAD if a mod's bare value ever names a file only that mod ships and another mod also patches.
+- **Per run.** The runtime index is cached per run and cleared at the start of each.
+- **Re-review: a copier loading AFTER the mod under test.** The review-round gate looked for a copier in the PATCH-TIME
+  merge, so the measured shape itself (vro's diff loads before xspvro's copy) went clean again, and so did the
+  partial-index skip. Copiers are now taken from the RUNTIME roots; the second-copier INFO looks at every other copier,
+  earlier or later. Real install, read-only, vro as the mod under test: exactly 5 `load-path` errors, on the 5 files the
+  log shows loaded from xspvro's own path (vro's diff never opened, 5 of 5), and none on the 5 merged files (vro's diff
+  opened, 5 of 5).
+- **Re-review: unmeasured nested shapes.** A nested door tree built from a THIRD mod's nested copy (the owner ships
+  nothing), or an owner copy whose root differs from the game file's (the plain door then REPLACES), is not the measured
+  shape: a WARN `load-path` saying UNMEASURED, ops still evaluated, never a "MERGES" error. The review-round claim that the
+  first of these could not occur was wrong (a third mod's nested copy gives `_build_owned` a tree).
+
+OPEN: the merge model (`build_effective`'s plain door), x4compat and x4effective do not consult the index, so for these files
+x4effective still shows the plain-path document (with the copy merged in) and x4compat still pairs the plain-path diffs with
+it; vro's never-opened edits to these 5 files are in the toolkit's effective values. The nested door (`_build_owned`, and
+x4compat's analysis of an `extensions/<copier>/<rel>` vpath) still applies a nested patch onto a MERGING copier, which the
+engine never opens. Outside `assets/units/` the rule is unmeasured and not applied.
+
+**RE-DERIVED BY:** `tests/test_plain_full_copy_merges.py` (the index-rule section): 4 of its first 9 tests RED before the
+rule (the rest twins already green); one twin per clause of `index_loaded_path`, `plain_copy_index` and
+`index_loads_copy`; 9 of 9 hand mutants killed (scratch harness `mut2.py`, every file restored byte-identical). Review
+round: 5 new tests RED first (the nested converse, the partial-index skip in both modes, name case, the second copier);
+twins for every new clause, a packed (.cat) copier and upper-case paths; 8 of 8 new mutants (`mut3.py`) and the re-anchored
+8 of 8 (`mut2.py`) killed. ⚠ A harness near-miss: one twin failed on the UNMUTATED code (its skip filter matched another
+check's skip), so its mutant read as "killed"; a harness that does not first prove the suite green on the unmutated file
+counts a broken test as a kill. Caught by the targeted suite, fixed, and every mutant set re-run after a green baseline.

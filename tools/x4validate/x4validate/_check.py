@@ -7,6 +7,7 @@ import os
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import NamedTuple
 
 from lxml import etree
 
@@ -562,23 +563,25 @@ def tier_b_trees(mod_dir: Path, report: Report | None = None) -> TierB:
     **The two trees ARE now split (2026-07-28).** The limitation this docstring used
     to describe as theoretical was confirmed against the engine, so reference /
     file-existence / connection checks run on `TierB.final` while `sel=` resolution
-    keeps this patch-time tree. `X4CapturableXenonXL` (load position 79) proves both
+    keeps this patch-time tree. The case that proved it (2026-07-28, the modlist of
+    THAT day: `X4CapturableXenonXL` at load position 79, `xspvro` at 92) needed both
     directions at once, which is why one tree cannot serve both:
 
-      - patch-time is RIGHT for `sel=`: its three `<remove sel="…connection_cockpit">`
-        ops match the vanilla node at position 79. Against the final tree they read as
-        'sel matched nothing' — 3 false alarms — because `xspvro` (position 92)
-        replaces that macro file wholesale.
-      - final is RIGHT for references: `xspvro` re-points `ship_xen_xl_carrier_01_a_macro`
+      - patch-time was RIGHT for `sel=`: its three `<remove sel="…connection_cockpit">`
+        ops matched the vanilla node at position 79. Against the final tree they read
+        as 'sel matched nothing' — 3 false alarms — because the model then had `xspvro`
+        replace that macro file wholesale.
+      - final was RIGHT for references: `xspvro` re-points `ship_xen_xl_carrier_01_a_macro`
         at component `ship_pla_xl_battleship`, which has 243 connections and lacks
         `connection_shieldgen_external03` (vanilla `ship_xen_xl_carrier_01` HAS it).
-        The mod's `libraries/loadouts.xml:44` still asks for it, so at runtime the
-        loadout is broken — a REAL defect the patch-time tree cannot see, and which
-        the deployed copy therefore reported as 0 errors.
+        The mod's `libraries/loadouts.xml:44` still asked for it, so at runtime the
+        loadout was broken — a REAL defect the patch-time tree cannot see.
 
-    Not engine-logged: a loadout mismatch only surfaces when the ship is instantiated,
-    and the reference log is a load-time capture. The chain is verified statically
-    instead (load order 79 < 92; both mods ship the macro file, so the later wins).
+    ⚠ HISTORICAL positions. MEASURED 2026-11-17 the order is the other way round
+    (`xspvro` 95, `X4CapturableXenonXL` 188 of 229 in the final tree; the engine log
+    of that day opens xspvro's file first), and issue #23 (BLIND-SPOTS F382) showed
+    `xspvro`'s complete file MERGES rather than replaces. The two-tree argument stands;
+    the example's numbers and its "later wins" no longer describe this modlist.
 
     The mod under test is excluded by BOTH folder name and content.xml id, since
     a dev folder is usually also deployed under extensions\\ and would otherwise
@@ -1282,8 +1285,189 @@ def _warn_if_pathologically_large(diff_root, vpath: str, report: Report) -> None
                    vpath)
 
 
+#: (index vpath, reference, runtime roots) -> (effective index tree, skipped messages).
+#: Cleared at the start of every check_sel_resolution / check_sel_resolution_one run, so a
+#: long-lived process (the per-edit hook's server, a test session) never reads a stale index.
+_INDEX_TREES: dict[tuple, tuple[etree._Element | None, list[str]]] = {}
+
+
+class IndexPartial(NamedTuple):
+    """The runtime index could not be built completely: which document the engine loads for
+    the name is UNKNOWN. Never a verdict either way (F383, review I2)."""
+    index_vpath: str
+    skipped: list[str]
+
+
+def _runtime_roots(config: _merge.Config, mod_dir: Path | None) -> list[Path]:
+    """Every active root at RUNTIME, in load order, with *mod_dir* (the mod under test, which
+    Tier B leaves out of both trees) put back right after the patch-time roots. The question
+    "which document does the engine load" is a runtime one: a copier loading AFTER the mod
+    under test decides it as much as one loading before (re-review N1)."""
+    runtime = list(config.for_runtime().overlays)
+    if mod_dir is not None and all(r.name.lower() != mod_dir.name.lower() for r in runtime):
+        runtime.insert(min(len(config.overlays), len(runtime)), mod_dir)
+    return runtime
+
+
+def _complete_at(root: Path, vpath: str) -> etree._Element | None:
+    """*root*'s COMPLETE (non-diff) file at *vpath*, or None."""
+    try:
+        found = _merge.overlay_root(root, vpath, [])
+    except (etree.LxmlError, OSError, ValueError):
+        return None   # silent-ok: readability is check_readability's channel; no verdict here
+    return found if found is not None and found.tag != "diff" else None
+
+
+def index_entry(rel: str, mod_dir: Path | None, config: _merge.Config):
+    """`(loaded path, last raw value, entries for the name, runtime roots)` for a plain-path
+    file *rel* in the `_merge.plain_copy_index` class whose document the GAME supplies, an
+    `IndexPartial` when the runtime index is incomplete, or None (out of scope, or no entry).
+
+    The index is the RUNTIME one (every active mod), and *mod_dir* -- the mod under test, which
+    Tier B leaves out of both trees -- is put back at its load position, right after the
+    patch-time roots: its own index edits count (MEASURED: the patching overlay's index
+    re-pointed 7 of the 13 names back at the base path)."""
+    spec = _merge.plain_copy_index(rel)
+    if spec is None or _merge._nested_target(rel, config.packed_dlc_names()) is not None:
+        return None
+    idx_vpath, name = spec
+    if not _merge.game_supplies(rel, config):
+        # A NEW file (no game document) that a mod indexes at its own path is the ordinary
+        # way to add content; only a copy over a GAME document is the measured shape.
+        return None
+    runtime = _runtime_roots(config, mod_dir)
+    key = (idx_vpath, str(config.reference), tuple(str(r) for r in runtime))
+    if key not in _INDEX_TREES:
+        built = _merge.build_effective(
+            idx_vpath, _merge.replace(config, overlays=tuple(runtime), final_overlays=()))
+        _INDEX_TREES[key] = (built.tree, list(built.skipped))
+    tree, skipped = _INDEX_TREES[key]
+    if skipped:
+        return IndexPartial(idx_vpath, skipped)
+    if tree is None:
+        return None   # no index at all: nothing redirects the name
+    values = _merge.index_entries(tree, name)
+    if not values:
+        return None
+    return _merge.normal_index_path(values[-1]), values[-1], len(values), runtime
+
+
+def index_loads_copy(vpath: str, mod_dir: Path | None, config: _merge.Config):
+    """`(owner folder, entry value, entries for the name)` when the EFFECTIVE index sends the
+    name of plain-path file *vpath* to `extensions/<owner>/<vpath>` and <owner> ships a
+    COMPLETE file at *vpath*: the engine then loads <owner>'s file as its own document, plus
+    the nested `extensions/<owner>/` patches, and opens no plain-path `<diff>` on *vpath*
+    (BLIND-SPOTS F383; `_merge.index_loaded_path` has the measurement). An `IndexPartial`
+    when that cannot be decided; None otherwise."""
+    entry = index_entry(vpath, mod_dir, config)
+    if entry is None or isinstance(entry, IndexPartial):
+        return entry
+    loaded, value, count, runtime = entry
+    plain = vpath.replace("\\", "/").lower()[:-4]
+    owner_dir = next((r for r in runtime if loaded == f"extensions/{r.name.lower()}/{plain}"), None)
+    if owner_dir is None:
+        return None
+    if _complete_at(owner_dir, vpath) is None:
+        return None
+    return owner_dir.name, value, count
+
+
+def _index_partial_skip(vpath: str, part: IndexPartial, report: Report) -> None:
+    report.skip(f"sel-resolution ({vpath})",
+                f"the runtime {part.index_vpath} could not be built completely "
+                f"({part.skipped[0]}), so which document the engine loads for this file's "
+                f"name is unknown (BLIND-SPOTS F383) and its ops were NOT evaluated: a "
+                f"'matched N nodes' or a clean verdict here would be a guess", degraded=True)
+
+
+def _index_load_verdict(vpath: str, merged: _merge.MergeResult, mod_dir: Path | None,
+                        config: _merge.Config, report: Report) -> bool:
+    """True when the index rule (F383) decides this diff's ops must NOT be evaluated; the
+    finding or the skip is already reported. Both directions:
+
+    * a PLAIN-path diff, and the last index entry for the name is a copier's own path:
+      the engine loads the copier's document and never opens this file (MEASURED 5 files);
+    * a NESTED `extensions/<owner>/<rel>` diff on a mod's complete copy of a game file, and
+      the last entry is the BASE path: the engine loads the plain path, where that copy
+      merges, and never opens the nested patch (MEASURED once, the overlay's nested carrier
+      patch; review I1)."""
+    mod = mod_dir.name.lower() if mod_dir is not None else ""
+    nested = _merge._nested_target(vpath, config.packed_dlc_names())
+    if nested is None:
+        if _merge.plain_copy_index(vpath) is None:
+            return False
+        # A copier anywhere in the RUNTIME set, not only in `merged` (patch-time): the
+        # measured case has the base-mod diff loading BEFORE the copier (re-review N1).
+        if not any(r.name.lower() != mod and not _merge.is_dlc_folder(r.name)
+                   and _complete_at(r, vpath) is not None
+                   for r in _runtime_roots(config, mod_dir)):
+            return False
+        res = index_loads_copy(vpath, mod_dir, config)
+        if isinstance(res, IndexPartial):
+            _index_partial_skip(vpath, res, report)
+            return True
+        if res is None or res[0].lower() == mod:
+            return False
+        owner, value, count = res
+        # No _check_ops, as for an inert bare path: a verdict on ops the engine never
+        # evaluates is noise (it was 3 false "matched 2 nodes" on the live list).
+        report.add("error", "load-path",
+                   f"the engine never opens this plain-path patch: the effective index entry "
+                   f"for this file's name points at '{value}'"
+                   + (f" (the last of {count} entries)" if count > 1 else "")
+                   + f", so the engine loads '{owner}''s own complete copy and its nested "
+                   f"patches instead (MEASURED for 5 of 5 such files in one log, BLIND-SPOTS "
+                   f"F383; that the LAST entry decides is INFERRED). To change that document, "
+                   f"ship the patch at extensions/{owner}/{vpath}", vpath)
+        return True
+    owner, rel = nested
+    if _merge.is_dlc_folder(owner):
+        return False
+    entry = index_entry(rel, mod_dir, config)
+    if entry is None:
+        return False
+    if isinstance(entry, IndexPartial):
+        _index_partial_skip(vpath, entry, report)
+        return True
+    loaded, value, count, runtime = entry
+    if loaded != rel.replace("\\", "/").lower()[:-4]:
+        return False   # the owner's own path (the engine opens this patch), or elsewhere
+    # The MEASURED shape is the owner's own complete copy, with the game file's root, merging
+    # at the plain path. Anything else reaching here is unmeasured (re-review N3, N4): the
+    # nested door's tree may come from a THIRD mod's nested copy, or the plain door may
+    # REPLACE (a different root) rather than merge.
+    owner_dir = next((r for r in runtime if r.name.lower() == owner.lower()), None)
+    owner_root = _complete_at(owner_dir, rel) if owner_dir is not None else None
+    game = _merge.build_effective(rel, _merge.replace(config, overlays=(), final_overlays=()))
+    why = None
+    if owner_root is None:
+        why = f"'{owner}' ships no complete file at {rel}"
+    elif game.skipped or game.tree is None:
+        why = f"the game's own {rel} could not be read completely"
+    elif owner_root.tag != game.tree.tag:
+        why = (f"'{owner}''s copy has root <{owner_root.tag}> where the game's file has "
+               f"<{game.tree.tag}>, so it replaces rather than merges")
+    if why is not None:
+        report.add("warn", "load-path",
+                   f"the effective index entry for this file's name points at the base path "
+                   f"'{value}', so the engine may never open this nested patch (measured once "
+                   f"where the owner's complete copy MERGED at the plain path, BLIND-SPOTS "
+                   f"F383); here {why}, which is UNMEASURED. Its ops were evaluated against the "
+                   f"nested door's document", vpath)
+        return False
+    report.add("error", "load-path",
+               f"the engine never opens this nested patch: the effective index entry for this "
+               f"file's name points at the base path '{value}'"
+               + (f" (the last of {count} entries)" if count > 1 else "")
+               + f", so the engine loads the plain path, where '{owner}''s complete copy MERGES "
+               f"into the game's document (BLIND-SPOTS F382/F383; MEASURED once, for one such "
+               f"nested patch). To change it, patch the plain path {rel}, with an index such as "
+               f"[1] or [2], since the name then exists twice", vpath)
+    return True
+
+
 def _sel_check_file(vpath: str, diff_root, config: _merge.Config, report: Report,
-                    seen_skips: set[str]) -> bool:
+                    seen_skips: set[str], mod_dir: Path | None = None) -> bool:
     """Sel-resolution for ONE diff file. Returns True iff its ops were EVALUATED.
 
     The ONE implementation behind both the full run and `--file`. They used to be
@@ -1340,6 +1524,8 @@ def _sel_check_file(vpath: str, diff_root, config: _merge.Config, report: Report
         # exactly the false reassurance this finding exists to kill.
         report.add(*_inert_bare_path_finding(vpath, merged), vpath)
         return False
+    if _index_load_verdict(vpath, merged, mod_dir, config, report):
+        return False
     _check_ops(diff_root, merged.tree, vpath, report)
     return True
 
@@ -1352,8 +1538,8 @@ def _sel_note(checked: int, found: int, payload: int | str) -> str:
             f"across {payload} payload XML file(s)")
     if found != checked:
         note += (f"; {found - checked} more diff file(s) found whose ops were NOT "
-                 "evaluated (no base / inactive target / inert path -- see "
-                 "the findings)")
+                 "evaluated (no base / inactive target / inert path / index sends the "
+                 "name elsewhere -- see the findings)")
     return note
 
 
@@ -1396,7 +1582,8 @@ def _child_names(root: etree._Element) -> set[str]:
 
 
 def check_complete_file_merge(complete: list[tuple[str, etree._Element | None]],
-                              config: _merge.Config, report: Report) -> None:
+                              config: _merge.Config, report: Report,
+                              mod_dir: Path | None = None) -> None:
     """Say how the merge model treats each COMPLETE (non-diff) file of this mod that
     meets an existing document, and whether the engine was measured doing that (#17).
 
@@ -1410,7 +1597,11 @@ def check_complete_file_merge(complete: list[tuple[str, etree._Element | None]],
 
     The owner of a nested path is looked up among the merged roots only (Tier B); Tier A
     merges no other mod, so it says nothing about nested copies there. A root is read only
-    for a nested path, so a caller may pass None for any other (check_sel_resolution does)."""
+    for a nested path and for a plain path in `_merge.merges_plain_copy`'s class, so a caller
+    may pass None for any other (check_sel_resolution does).
+
+    * Plain-path full copy in that class over a document the GAME supplies, same root:
+      MERGED, MEASURED (issue #23). One INFO per file, as for the nested merge."""
     owned = config.packed_dlc_names()
     roots = {p.name.lower(): p for p in (*config.overlays, *config.final_overlays)}
     nested_unmeasured: list[str] = []
@@ -1447,6 +1638,49 @@ def check_complete_file_merge(complete: list[tuple[str, etree._Element | None]],
         if (low.startswith(_merge._ADDITIVE_DIRS) or low.startswith(_merge._SCRIPT_REGISTRY_DIRS)
                 or _merge._is_text_vpath(vpath)):
             continue
+        if root is not None and _merge.merges_plain_copy(vpath, root.tag):
+            redirect = (index_loads_copy(vpath, mod_dir, config)
+                        if mod_dir is not None else None)
+            if isinstance(redirect, IndexPartial):
+                plain_unmeasured.append(vpath)   # which document loads is unknown
+                continue
+            if redirect is not None and redirect[0].lower() == mod_dir.name.lower():
+                report.add("info", "merge",
+                           f"the effective index sends this file's name to this mod's own copy "
+                           f"('{redirect[1]}'), so the engine loads it as its OWN document, "
+                           f"with no merge, and opens no other mod's plain-path diff on it -- "
+                           f"they must patch extensions/{mod_dir.name}/{vpath} (MEASURED for 5 "
+                           f"files, BLIND-SPOTS F383; that the LAST index entry decides is "
+                           f"INFERRED)", vpath)
+                continue
+            # Issue #23: the plain-path class. The GAME's document (base + DLC) decides.
+            game = _merge.build_effective(
+                vpath, _merge.replace(config, overlays=(), final_overlays=()))
+            # An unreadable game layer leaves the answer open: the file then falls through
+            # to the aggregated UNMEASURED disclosure below, never to "MERGES".
+            if (not game.skipped and game.tree is not None and game.base_from_game
+                    and game.tree.tag == root.tag):
+                dup = sorted(_child_names(root) & _child_names(game.tree))
+                # A SECOND complete copy (an earlier mod already ships one) merging too is
+                # the model's extrapolation: issue #23 measured one copy over the game's file.
+                me = mod_dir.name.lower() if mod_dir is not None else ""
+                other = next((d.name for d in _runtime_roots(config, mod_dir)
+                              if d.name.lower() != me and _complete_at(d, vpath) is not None),
+                             None)
+                how = ("MERGES it into the game's document (MEASURED, issue #23)"
+                       if other is None else
+                       f"is modelled as MERGING it, while '{other}' also ships a complete copy "
+                       f"(UNMEASURED: issue #23 measured one copy over the game's document)")
+                report.add("info", "merge",
+                           "complete copy of a base-game macro/component file at a plain "
+                           f"path: the engine {how}, so both copies exist"
+                           + (f" -- {len(dup)} name(s) now defined twice "
+                              f"({', '.join(dup[:_MERGE_NOTE_SAMPLE])}); any selector on "
+                              f"them without an index matches 2 nodes and the engine "
+                              f"skips it" if dup else "")
+                           + f"; {_merge.COPY_ORDER_UNMEASURED}; "
+                           f"{_merge.PLAIN_SKIP_UNMEASURED}", vpath)
+                continue
         if (config.reference / vpath).is_file() or any(
                 _merge.overlay_root(d, vpath, []) is not None for d in dlc):
             parts = vpath.split("/")
@@ -1485,6 +1719,7 @@ def check_sel_resolution(mod_dir: Path, config: _merge.Config, report: Report) -
     every mode that runs them (full, `--sel-only`, `--file`)."""
     checked = found = 0
     seen_skips: set[str] = set()
+    _INDEX_TREES.clear()   # one run, one index: never a previous run's (review minor 7)
     payload = []  # one parse pass serves both the nested-diff check and the denominator
     # 4.1.1 review B4: a parsed root is kept only where check_complete_file_merge reads one (a nested path); a
     # plain path needs its vpath alone. MEASURED on the largest installed mod by complete XML (309 files, 7.0 MB):
@@ -1496,11 +1731,14 @@ def check_sel_resolution(mod_dir: Path, config: _merge.Config, report: Report) -
         if vpath.lower() != MANIFEST:
             payload.append(vpath)
             if root.tag != "diff":
-                complete.append((vpath, root if _merge._nested_target(vpath, owned) is not None else None))
-    check_complete_file_merge(complete, config, report)
+                # Kept for a nested path, and for a plain path in the issue #23 merge class.
+                keep = (_merge._nested_target(vpath, owned) is not None
+                        or _merge.merges_plain_copy(vpath, root.tag))
+                complete.append((vpath, root if keep else None))
+    check_complete_file_merge(complete, config, report, mod_dir)
     for vpath, diff_root in iter_diff_files(mod_dir):
         found += 1
-        checked += _sel_check_file(vpath, diff_root, config, report, seen_skips)
+        checked += _sel_check_file(vpath, diff_root, config, report, seen_skips, mod_dir)
 
     # Always state the denominator. "OK: no issues found" over 14 files and over 1
     # file printed identically until 2026-08-01, for the tool's PRIMARY check.
@@ -1601,7 +1839,8 @@ def check_sel_resolution_one(file_path: Path, mod_dir: Path,
                     f"selectors to resolve -- and --file runs no other check")
         report.notes.append(_sel_note(0, 0, f"1 (--file: {vpath})"))
         return
-    checked = _sel_check_file(vpath, root, config, report, set())
+    _INDEX_TREES.clear()
+    checked = _sel_check_file(vpath, root, config, report, set(), mod_dir)
     report.notes.append(_sel_note(int(checked), 1, f"1 (--file: {vpath})"))
 
 

@@ -545,6 +545,17 @@ def _analyze_vpath(
     merge_copy = (_merge._nested_on_mod(vpath)
                   and _merge.merges_nested_copy(_merge._registry_rel(vpath)))
     merged_copies: list[tuple[str, etree._Element]] = []
+    # Issue #23: at a PLAIN path the game supplies, a mod's complete macro/component
+    # copy merges too. Asked lazily -- most vpaths never reach the question.
+    plain_game: dict[str, bool] = {}
+
+    def plain_on_game() -> bool:
+        if "v" not in plain_game:
+            plain_game["v"] = (
+                _merge._nested_target(vpath, config.packed_dlc_names()) is None
+                and _merge.game_supplies(vpath, config))
+        return plain_game["v"]
+
     no_base_reported: set[str] = set()  # one skip per mod, not one per op
     unmatched: dict[str, list[etree._Element]] = defaultdict(list)  # AN-10 candidates
     ops_at: dict[str, dict[str, list[etree._Element]]] = defaultdict(
@@ -618,9 +629,11 @@ def _analyze_vpath(
                    is not None else
                    lambda f, owner: _merge.overlay_root(
                        folder_to_path[f], f"extensions/{owner}/{vpath}", []))
+    traced_roots = [(f, r) for f, r in read if folder_to_path[f] not in base_owners]
     traced, final_paths, qualified = _compat_state.trace(vpath, base_tree,
-        [(f, r) for f, r in read if folder_to_path[f] not in base_owners], full_tree(),
-        nested=nested_door)
+        traced_roots, full_tree(), nested=nested_door,
+        plain_on_game=any(r.tag != "diff" and _merge.merges_plain_copy(vpath, r.tag)
+                          for _f, r in traced_roots) and plain_on_game())
     if base_tree is not None and not qualified:
         if report is not None:
             report.skip(vpath, "sequential selector instrument disagreed with the normal merge, "
@@ -757,6 +770,10 @@ def _analyze_vpath(
         elif merge_copy and base_tree is not None and root.tag == base_tree.tag:
             # Issue #17: the engine MERGES a nested full copy of a mod-owned macro
             # file -- both same-named macros exist -- so this is no clobber.
+            merged_copies.append((folder, root))
+        elif (base_tree is not None and root.tag == base_tree.tag
+              and _merge.merges_plain_copy(vpath, root.tag) and plain_on_game()):
+            # Issue #23: the plain-path sibling -- the game's node stays, the copy joins it.
             merged_copies.append((folder, root))
         elif vpath.lower() not in _PER_EXTENSION_FILES:
             overriders.append(folder)
@@ -989,12 +1006,22 @@ def _analyze_vpath(
         have: dict[str, list[str]] = defaultdict(list)
         for k in (_child_keys(base_tree) if owner is not None else ()):
             have[k].append(owner)
+        # Issue #23, a plain path: the GAME's document is the first copy. It is no mod,
+        # so it is counted, never listed; a row still needs two MODS (one mod alone is
+        # x4validate's merge INFO for that mod, not a collision between mods).
+        in_game = (set(_child_keys(base_tree)) if owner is None and not merge_copy
+                   else set())
         for folder, root in merged_copies:
             for k in sorted(_child_keys(root)):
                 have[k].append(folder)
         for k, providers in have.items():
             if len(providers) < 2:
                 continue
+            copies = len(providers) + (k in in_game)
+            shape = ("a complete copy of a base-game macro/component file at a plain path "
+                     "is MERGED by the engine, not replaced (issue #23)" if not merge_copy
+                     else "a complete copy of a mod-owned macro file at a nested path is "
+                     "MERGED by the engine, not replaced (issue #17)")
             tag, _, ident = k.partition("#")
             hit = next((c for c in base_tree if isinstance(c.tag, str) and c.tag == tag
                         and (c.get("id") or c.get("name")) == ident), None)
@@ -1002,10 +1029,9 @@ def _analyze_vpath(
             last = winner(providers)
             collisions.append(Collision(
                 vpath, "HARD", cid, providers, last,
-                f"{len(providers)} copies of {k} in one merged document: a complete copy "
-                f"of a mod-owned macro file at a nested path is MERGED by the engine, not "
-                f"replaced (issue #17) -- an un-indexed selector on {k} matches "
-                f"{len(providers)} nodes and the engine skips it; '{last}' loads last -- "
+                f"{copies} copies of {k} in one merged document: {shape} -- an "
+                f"un-indexed selector on {k} matches "
+                f"{copies} nodes and the engine skips it; '{last}' loads last -- "
                 f"which copy the engine uses is not engine-measured; "
                 f"{_merge.COPY_ORDER_UNMEASURED}",
                 # No live-value owner: both copies are live, and which one the engine
@@ -1408,7 +1434,9 @@ def _walk_positions(vpath: str, ordered: list[str], folder_to_path: dict[str, Pa
             if on_applied is not None and oroot.tag == "diff":
                 on_applied(pos, oroot, _merge.apply_diff(tree, oroot, source=odir.name))
             else:
-                tree, mode = _merge.apply_overlay(tree, oroot, vpath, odir.name)
+                # Issue #23: every folder here is a MOD, so `from_game` is the whole test.
+                tree, mode = _merge.apply_overlay(tree, oroot, vpath, odir.name,
+                                                  plain_on_game=from_game)
                 if mode in ("union", "full"):
                     owners.append(odir.name)
                     # Mirrors build_effective: an EARLIER mod's nested patch of this

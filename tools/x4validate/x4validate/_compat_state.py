@@ -121,7 +121,7 @@ class Nodes(Recorder):
         return result
 
 
-def trace(vpath, base, roots, expected=None, nested=None):
+def trace(vpath, base, roots, expected=None, nested=None, plain_on_game=False):
     """({(source, op index): OpTargets}, final identity->XPath, qualified).
 
     The final byte comparison is against the normal merge entry, rather than
@@ -135,6 +135,10 @@ def trace(vpath, base, roots, expected=None, nested=None):
     applied (so later selectors see their effect and the byte check can pass) but not
     recorded per op: they belong to the nested vpath's own analysis. Without it, the
     final comparison disagreed and the whole file lost collision analysis.
+
+    *plain_on_game*: *vpath* is a plain path whose document the GAME supplies and every
+    root in *roots* is a MOD's, so a complete macro/component copy MERGES (issue #23),
+    as in the plain door. Explicit, like `apply_overlay`'s flag.
     """
     if base is None:
         return {}, {}, False
@@ -174,7 +178,8 @@ def trace(vpath, base, roots, expected=None, nested=None):
         if root.tag != "diff":
             # At a nested vpath every root is a patch on the owner's file (issue #17).
             tree, mode = _merge.apply_overlay(tree, root, vpath, source, recorder=nodes,
-                                              nested_on_mod=on_mod)
+                                              nested_on_mod=on_mod,
+                                              plain_on_game=plain_on_game and not on_mod)
             if tree is None:
                 return {}, {}, False
             nodes.tree = tree

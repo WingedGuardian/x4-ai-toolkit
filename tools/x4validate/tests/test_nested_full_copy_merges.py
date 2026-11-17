@@ -418,7 +418,8 @@ def test_check_sel_resolution_keeps_a_parsed_root_only_where_the_merge_check_rea
     seen = {}
     real = _check.check_complete_file_merge
     monkeypatch.setattr(_check, "check_complete_file_merge",
-                        lambda complete, config, report: (seen.update(complete), real(complete, config, report)))
+                        lambda complete, config, report, *rest: (seen.update(complete),
+                                                           real(complete, config, report, *rest)))
     _check.check_sel_resolution(dirs["b_copy"], _cfg(ref, dirs, ["a_owner", "b_copy"]), _check.Report())
     assert seen["libraries/plain_full.xml"] is None, seen
     assert seen[NESTED] is not None and seen[NESTED].tag == "macros", seen

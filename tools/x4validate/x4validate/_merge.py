@@ -998,6 +998,124 @@ def merges_nested_copy(rel: str) -> bool:
             and parts[-2] == "macros" and parts[-1].endswith("_macro.xml"))
 
 
+def merges_plain_copy(vpath: str, root_tag: str) -> bool:
+    """Is *vpath* (a PLAIN path, as the mod ships it) with root *root_tag* in the class
+    whose complete MOD copy over a document the GAME supplies the engine is MEASURED to
+    merge rather than replace (issue #23)?
+
+    * a macro file `assets/units/.../macros/<name>_macro.xml` with root `macros` (the
+      class `merges_nested_copy` names for the nested shape, under `assets/units/`), or
+    * a component file under `assets/units/` (not in a `macros/` folder), root `components`.
+
+    MEASURED (debug.txt 2026-11-17, game 9.00, one launch, two load passes): `xspvro`
+    ships complete files at four base-game ship macro paths and one ship component path,
+    each over the base file plus VRO's `<diff>`; every later `/macros/macro[@name=X]/...`,
+    `//properties` and `/components/component[@name=X]` op on them was skipped with
+    "Multiple matching nodes", and the engine logged "LoadoutDB::AddLoadout: Loadout with
+    ID '<macro>.default' already exists" -- both copies are in the document.
+
+    Deliberately this class ONLY, and the caller adds the other clauses (a MOD layer, the
+    game supplies the document, the roots are equal). Libraries/index/t keep their keyed
+    union, md its filename registration (#21), everything else the replacement model with
+    an `unmeasured_note`. An `extensions/...` vpath is the nested door's (F358), never this.
+
+    Why `assets/units/` only: the same log has a SECOND outcome for the same shape
+    OUTSIDE it. xspvro's three complete weapon macro files at plain paths
+    (`assets/fx/weaponfx/macros/bullet_xen_turret_l_{plasma,laser}_01_mk1_macro.xml`,
+    `assets/props/weaponsystems/heavy/macros/turret_xen_l_plasma_01_mk1_macro.xml`), each
+    over a base file plus VRO's `<diff>` exactly like the ship files, were refused with
+    "Root node name 'macros' ... is not 'diff' for patch file or '<x>' for merge file ...
+    Skipping file" in 5 of their 6 load events, where <x> varies between passes (class,
+    rate, text, xxi), and never merged (0 "Multiple matching nodes" lines for the later
+    patcher's ops on them). The 5 `assets/units/` files merged in 10 of 10. The rule that
+    separates the two is NOT derivable from one log -- the pass-to-pass variation says it
+    is not the path alone -- so this class is the MEASURED boundary, not a mechanism, and
+    everything outside it keeps the replacement model with `unmeasured_note` naming the
+    refusal."""
+    # `assets/units/` first: so an `extensions/...` vpath (the nested door's) never matches.
+    parts = vpath.replace("\\", "/").lower().split("/")
+    if parts[:2] != ["assets", "units"]:
+        return False
+    if root_tag == "macros":
+        return merges_nested_copy(vpath)
+    if root_tag == "components":
+        return parts[-2] != "macros" and parts[-1].endswith(".xml")
+    return False
+
+
+def plain_copy_index(vpath: str) -> tuple[str, str] | None:
+    """(index vpath, entry name) the engine resolves to decide which document it loads for
+    a file in the `merges_plain_copy` PATH class, or None outside it.
+
+    A macro file `.../macros/<name>.xml` is `index/macros.xml` entry <name>; any other file
+    in the class is a component file, `index/components.xml` entry <stem> (READ: every
+    entry this lane looked at names its file's stem, value = the path without `.xml`)."""
+    low = vpath.replace("\\", "/").lower()
+    parts = low.split("/")
+    if parts[:2] != ["assets", "units"] or not parts[-1].endswith(".xml"):
+        return None
+    stem = vpath.replace("\\", "/").split("/")[-1][:-4]
+    if merges_nested_copy(low):
+        return "index/macros.xml", stem
+    if parts[-2] != "macros":
+        return "index/components.xml", stem
+    return None
+
+
+def index_loaded_path(index_tree: etree._Element, name: str) -> str | None:
+    """The path the effective index makes the engine load for *name*: the LAST `<entry>` of
+    that name (lowercased, `/`-separated), or None when there is none.
+
+    Issue #23 / F383, MEASURED in one log: for 10 of 10 complete ship macro/component copies
+    the last effective entry said where the engine loaded the document from -- the base path
+    (the copy MERGED there, 5) or `extensions/<copier>/<rel>` (the copier's own document
+    and its nested patches, no plain-path diff opened, 5). That the LAST of several entries
+    decides is INFERRED from the 3 of those 10 with two entries (the first was the base path
+    every time and would have predicted the wrong outcome for all 3)."""
+    values = index_entries(index_tree, name)
+    return normal_index_path(values[-1]) if values else None
+
+
+def index_entries(index_tree: etree._Element, name: str) -> list[str]:
+    """Every `<entry>` value for *name*, in document order. The name is matched IGNORING
+    CASE: the engine resolves macro/component names that way (V9, `_check.Definitions`)."""
+    want = name.lower()
+    return [e.get("value") for e in index_tree.iter("entry")
+            if (e.get("name") or "").lower() == want and e.get("value") is not None]
+
+
+def normal_index_path(value: str) -> str:
+    """An index value as a comparable path: `/`-separated, lowercased, no `.xml`.
+
+    A BARE value (no `extensions/` prefix) is the PLAIN vpath, whoever wrote it. MEASURED
+    (BLIND-SPOTS F383): for 7 of the 13 names the last entry was such a bare value written by
+    a MOD (the patching overlay re-pointing the name back), and the engine loaded the plain
+    path in all 7, opening other mods' plain-path diffs on it. `_check.Definitions` reads a
+    mod-written bare value as `extensions/<that mod>/<value>` to find the FILE on disk; for a
+    file the mod itself ships at that plain path the two readings name the same file, and
+    for a mod that only re-points (this case) the plain-path reading is the measured one."""
+    v = value.replace("\\", "/").strip().lstrip("/").lower()
+    return v[:-4] if v.endswith(".xml") else v
+
+
+def game_supplies(vpath: str, config: "Config") -> bool:
+    """Does the GAME (reference/ or a DLC layer, as a complete file) supply *vpath*?
+
+    The value `build_effective`'s plain door holds in `from_game` once the DLC layers
+    have loaded, for a caller that walks the mods itself (`_compat`). The t-file
+    synthesis is left out: no t-file is in the `merges_plain_copy` class."""
+    if (config.reference / vpath).is_file():
+        return True
+    for d in config.dlc_dirs():
+        try:
+            root = overlay_root(d, vpath, [])
+        except (etree.LxmlError, OSError, ValueError):
+            continue   # silent-ok: an unreadable DLC file is build_effective's skip channel
+        if root is not None and root.tag != "diff":
+            return True
+    return False
+
+
 def _nested_on_mod(vpath: str) -> bool:
     """*vpath* is `extensions/<mod>/<rel>` with <mod> not a DLC: a patch path on a
     MOD-owned file. (A packed-only DLC owner is `ego_dlc_*` and so is excluded.)"""
@@ -1031,10 +1149,13 @@ def unmeasured_note(source: str, vpath: str, mode: str, nested: bool) -> str:
     else:
         where = "a plain path"
     model = "a keyed union (same id/name replaced)" if mode == "union" else "a replacement"
+    tail = ("" if nested or where != "a plain path" else
+            f"; issue #23 measured a plain-path MERGE only for assets/units/ ship macro and "
+            f"component files, and {PLAIN_SKIP_UNMEASURED}")
     return (f"{source}: a complete (non-diff) file at {where} met an existing "
             f"document at {vpath} and is modelled as {model}; the engine's behaviour "
             f"for this case is UNMEASURED (issue #17 measured only a nested full copy "
-            f"of a mod-owned macro file, which MERGES)")
+            f"of a mod-owned macro file, which MERGES){tail}")
 
 
 #: What a "merge" leaves unmeasured. ONE wording, shared by every reader (issue #17).
@@ -1051,6 +1172,21 @@ def merge_note(source: str, vpath: str) -> str:
             f"twice; {COPY_ORDER_UNMEASURED}")
 
 
+#: The second outcome issue #23's log shows for the same shape. ONE wording.
+PLAIN_SKIP_UNMEASURED = (
+    "outside assets/units/ the engine was seen to REFUSE the same shape instead (Root node "
+    "name ... is not 'diff' for patch file or '<x>' for merge file ... Skipping file: 3 "
+    "weapon macro files, 5 of 6 load passes, <x> varying between passes); what decides "
+    "merge versus refusal is UNMEASURED")
+
+
+def plain_merge_note(source: str, vpath: str) -> str:
+    """The `MergeResult.unmeasured` line for a plain-path "merge" (issue #23)."""
+    return (f"{source}: a complete copy of a base-game macro/component file at a plain "
+            f"path was MERGED into {vpath} (MEASURED, issue #23), so a name in it may now "
+            f"exist twice; {COPY_ORDER_UNMEASURED}; {PLAIN_SKIP_UNMEASURED}")
+
+
 def apply_overlay(
     tree: etree._Element | None,
     oroot: etree._Element,
@@ -1058,6 +1194,7 @@ def apply_overlay(
     source: str,
     recorder: Recorder | None = None,
     nested_on_mod: bool = False,
+    plain_on_game: bool = False,
 ) -> tuple[etree._Element | None, str]:
     """Apply one overlay root onto *tree*; returns (new tree, mode).
 
@@ -1071,7 +1208,11 @@ def apply_overlay(
     the owner's plain vpath, the nested door the nested one). EXPLICIT, never inferred
     from *vpath*: x4diff stacks layers at one vpath that are not engine patches of
     each other. "merge" is a complete copy of a macro file at such a path: its
-    children are APPENDED, not deduped (`merges_nested_copy`, issue #17)."""
+    children are APPENDED, not deduped (`merges_nested_copy`, issue #17).
+
+    *plain_on_game*: *oroot* is a MOD's file at a PLAIN vpath whose document the GAME
+    supplies (`from_game` in build_effective's plain door). Also EXPLICIT. A complete
+    copy in the `merges_plain_copy` class is then a "merge" too (issue #23)."""
     if oroot.tag == "diff":
         if tree is None:
             return None, "diff(no-base!)"  # diff with no base — cannot apply
@@ -1081,6 +1222,10 @@ def apply_overlay(
     _kind = _registry_rel(vpath).lower()
     if (tree is not None and oroot.tag == tree.tag
             and nested_on_mod and merges_nested_copy(_kind)):
+        _append_children(tree, oroot, recorder, source)
+        return tree, "merge"
+    if (tree is not None and oroot.tag == tree.tag
+            and plain_on_game and merges_plain_copy(vpath, oroot.tag)):
         _append_children(tree, oroot, recorder, source)
         return tree, "merge"
     if (tree is not None and oroot.tag == tree.tag
@@ -1304,14 +1449,21 @@ def build_effective(
                 sources.append(f"{odir.name}:diff(inert)")
             else:
                 had_tree = tree is not None
+                is_mod = odir.resolve() not in game_dirs
+                # Issue #23: a MOD's complete macro/component file over a document the
+                # GAME supplies merges. `from_game` is final for mod layers (above).
                 tree, mode = apply_overlay(tree, oroot, vpath, odir.name,
-                                           recorder=recorder)
-                if (had_tree and mode == "full"
-                        and odir.resolve() not in game_dirs):
+                                           recorder=recorder,
+                                           plain_on_game=from_game and is_mod)
+                if had_tree and mode == "full" and is_mod:
                     # A MOD's complete file replacing an existing document at a plain
                     # path. Kept as a replacement, but never silently (issue #17).
                     unmeasured.append(unmeasured_note(odir.name, vpath, mode,
                                                       nested=False))
+                elif mode == "merge":
+                    # A merging mod is NOT an owner below: the base document is the
+                    # game's, and the engine never opened a nested patch of it (#23).
+                    unmeasured.append(plain_merge_note(odir.name, vpath))
                 if mode != "diff(no-base!)":
                     base_found = base_found or mode in {"union", "full"}
                     if mode in {"union", "full"} and odir.resolve() in game_dirs:
