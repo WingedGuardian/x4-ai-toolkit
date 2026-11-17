@@ -305,6 +305,11 @@ if pre ~= nil and pre ~= "" then
     if pchunk == nil then error("pre-chunk did not compile: " .. tostring(perr)) end
     pchunk()
 end
+-- A pre-chunk may extend the fake pipes module (e.g. pipes.lua's Connect_Pipe and its
+-- `pipes` state table, which the F124 unref guard wraps at load time).
+if type(_G.fake_pipe_module) == "table" then
+    for k, v in pairs(_G.fake_pipe_module) do fake_pipes[k] = v end
+end
 
 -- A full UI RELOAD, as the engine performs it: every registered ui lua file is
 -- RE-EXECUTED in the same environment. MEASURED in game 2026-08-29 with controls both
@@ -1501,6 +1506,75 @@ def test_the_dead_load_hook_is_INSTRUMENTED_so_its_deadness_stays_visible():
     fired = g(rt, "__fire_game_load")()
     assert fired >= 1, "the hook is not registered at all; the probe field would be a lie"
     assert probe_fields(rt, 2)["load_hook_fired"] == "true"
+
+
+# --------------------------------------------------------------------------- #
+# F124 pipe unref guard: wiring into the real chunk (the guard's own logic is
+# tested in test_pipe_unref_guard.py against the extracted block and the real DLL)
+# --------------------------------------------------------------------------- #
+
+#: pipes.lua's shape: `pipes[name].file`, opened by Connect_Pipe when nil. The file is a
+#: real (zero-size) userdata, so the guard reaches its version gate; GetExtensionList is
+#: absent in this harness, so the gate refuses BEFORE any ffi access.
+_FAKE_CONNECT = """
+_G.fake_pipe_module = {pipes = {}}
+_G.fake_pipe_module.Connect_Pipe = function(name)
+    local p = _G.fake_pipe_module.pipes
+    p[name] = p[name] or {}
+    if p[name].file == nil then p[name].file = newproxy(false) end
+    return "orig"
+end
+"""
+
+
+def _pipes_module(rt):
+    """The table the chunk required (and the guard wrapped), not the pre-chunk's source."""
+    return rt.eval("require('extensions.sn_mod_support_apis.ui.named_pipes.Pipes')")
+
+
+def _guard_logs(rt):
+    return [s for s in g(rt, "log").values() if "pipe unref guard INACTIVE" in s]
+
+
+def test_probe_reports_the_pipe_unref_guard_INACTIVE_when_Connect_Pipe_is_absent():
+    """The default fake module has no Connect_Pipe: an install refusal. It must be
+    reported by probe and logged once, AFTER the load marker (never before it)."""
+    rt = live()
+    assert probe_fields(rt, 1)["pipe_unref_guard"] == "inactive:Connect_Pipe absent"
+    logs = list(g(rt, "log").values())
+    assert "_LIVE loaded" in logs[0]
+    assert len(_guard_logs(rt)) == 1
+
+
+def test_probe_reports_ARMED_once_the_wrapper_is_installed():
+    rt = live(_build(pre=_FAKE_CONNECT))
+    f = probe_fields(rt, 1)
+    assert (f["pipe_unref_guard"], f["pipe_unref_stamped"]) == ("armed", "0")
+    assert _guard_logs(rt) == []
+
+
+@pytest.mark.parametrize("name", ["x4live", "x4live_startmenu"])
+def test_the_helpers_OWN_pipes_reach_the_gate(name):
+    """Both helper pipe names are guarded. With no GetExtensionList the gate refuses."""
+    rt = live(_build(pre=_FAKE_CONNECT))
+    assert _pipes_module(rt).Connect_Pipe(name) == "orig"
+    assert probe_fields(rt, 1)["pipe_unref_guard"] == (
+        "inactive:extension list unavailable: GetExtensionList absent")
+    assert len(_guard_logs(rt)) == 1
+
+
+def test_a_FOREIGN_pipe_does_not_reach_the_gate():
+    rt = live(_build(pre=_FAKE_CONNECT))
+    _pipes_module(rt).Connect_Pipe("someone_elses_pipe")
+    assert probe_fields(rt, 1)["pipe_unref_guard"] == "armed"
+
+
+def test_a_UI_reload_does_not_stack_a_second_wrapper():
+    rt = live(_build(pre=_FAKE_CONNECT))
+    rt.execute("_G.__w1 = require('x').Connect_Pipe")
+    reload_ui(rt)
+    assert rt.eval("require('x').Connect_Pipe == _G.__w1 and _G.__w1 ~= _G.fake_pipe_module.Connect_Pipe")
+    assert probe_fields(rt, 2)["pipe_unref_guard"] == "armed"
 
 
 def test_the_container_probe_makes_a_LIVE_CALL_and_can_DISCRIMINATE():

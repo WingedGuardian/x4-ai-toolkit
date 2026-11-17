@@ -58,7 +58,7 @@ local PROTO = 1
 --:
 --: Kept honest by `test_the_BUILD_constant_matches_the_file`, so editing the lua and
 --: forgetting to re-stamp this fails the suite rather than silently lying in game.
-local BUILD = "a7f99807"
+local BUILD = "23158ade"
 local TAG_CMD, TAG_REPLY = "MQ", "MR"
 
 -- Cap on echo, the ramp instrument. Generous: the point of the ramp is to FIND the
@@ -67,6 +67,10 @@ local TAG_CMD, TAG_REPLY = "MQ", "MR"
 local ECHO_MAX = 1024 * 1024
 
 local armed = false
+
+--: The F124 pipe unref guard for THIS helper's own pipes (built near the end of the
+--: file, reported by `probe`). nil until the named pipes api has been required.
+local pipe_guard = nil
 
 --: RELOAD BOOKKEEPING -- how a caller tells that the game RE-EXECUTED this chunk.
 --:
@@ -771,6 +775,16 @@ verbs.probe = function(seq)
     --: same build and still empties the allowlist.
     out[#out + 1] = "loaded_at=" .. string.format("%.2f", LOADED_AT)
     out[#out + 1] = "load_hook_fired=" .. tostring(load_hook_fired)
+    --: F124: is THIS helper's pipe protected from the Mod Support APIs unref defect?
+    --: `active` = gate passed and our open file(s) stamped; `armed` = wrapper installed
+    --: but no own file seen yet; `inactive:<reason>` = nothing written, churn unsafe.
+    if pipe_guard then
+        out[#out + 1] = "pipe_unref_guard=" .. pipe_guard.status()
+        out[#out + 1] = "pipe_unref_stamped=" .. tostring(pipe_guard.stamped())
+    else
+        out[#out + 1] = "pipe_unref_guard=inactive:the named pipes api did not load"
+        out[#out + 1] = "pipe_unref_stamped=0"
+    end
     out[#out + 1] = "our_ffi=" .. tostring(ffi_ok) .. ",cdef=" .. tostring(cdef_ok)
     if cdef_ok then
         for _, name in ipairs({ "GetPlayerOccupiedShipID", "GetNumAllFactionStations",
@@ -3599,6 +3613,8 @@ Init = function()
     -- FIRST action, before any pipe logic. See the contracts note at the top.
     DebugError("X4TOOLKIT_LIVE loaded: proto=" .. PROTO .. " pipe=" .. PIPE
                .. " build=" .. BUILD .. " ui_safe_mode=" .. ui_safe_mode_at_load())
+    -- An install-time refusal is logged here, AFTER the load marker, never before it.
+    if pipe_guard then pipe_guard.report() end
     if type(RegisterEvent)=="function" then
         local hooked,hook_error=pcall(RegisterEvent,"X4ToolkitSession.Invalidated",function()
             issued_ids={}
@@ -3701,6 +3717,173 @@ Init = function()
     end
 end
 
+--: F124 PIPE UNREF GUARD -- protects THIS helper's own pipe connections only.
+--:
+--: MEASURED 2026-11-16 (BLIND-SPOTS F124, root cause): the Mod Support APIs pipe DLL
+--: (ui_c_library_winpipe_64, upstream winpipe.c) allocates each File userdata as
+--: {HANDLE handle; lua_State *L; int callback; char *buf; int bufsz; HANDLE hWrite}
+--: and never writes `callback` (+0x10). File:close() hands that garbage to
+--: luaL_unref(L, LUA_REGISTRYINDEX, ref), which overwrites a registry slot and poisons
+--: the free list. pipes.lua closes the file on every client hang-up, so every x4live
+--: call that disconnects was one garbage unref; X4 later read a clobbered slot and
+--: crashed. Offline, with the game's own lua51_64.dll and this DLL, stamping the field
+--: after open took registry changes from 200/200 closes to 0/200.
+--:
+--: THE FIX: wrap the module's Connect_Pipe (pipes.lua calls it through the same table,
+--: `L.Connect_Pipe`, before every read and write) and, after it returns, write
+--: LUA_NOREF (-2) into +0x10 of a NEWLY opened file on one of OUR pipe names.
+--: luaL_unref ignores a negative ref, so the close becomes harmless. Other mods' pipes
+--: pass through untouched (user decision: the helper protects its own connections).
+--:
+--: GATED, refusing with no write on any mismatch: the Mod Support APIs version must be
+--: the one measured, and the payload must look like that struct (+0x00 handle, +0x08
+--: lua_State and +0x18 buffer non-NULL, +0x20 bufsz == 2048). A refusal logs ONE
+--: `pipe unref guard INACTIVE: <reason>` line and `probe` reports it.
+--:
+--: Self-contained between the markers: the offline DLL test loads exactly this block.
+--@@ PIPE_UNREF_GUARD_BEGIN
+local PIPE_UNREF_MARK = "__x4toolkit_pipe_unref_guard"
+local function new_pipe_unref_guard(d)
+    --: GetExtensionList renders content.xml version="195" as "1.95" (READ from the
+    --: helper's own uidata EXT dump, 2026-11-16). Exact match, never a range.
+    local MSA_ID, MSA_VERSION = "ws_2042901274", "1.95"
+    local BUFSZ, NOREF = 2048, -2
+    local g = {}
+    local state, reason, logged, stamped = "armed", "", false, 0
+    local gate = nil            -- nil = not evaluated yet; true / false once decided
+    local seen = setmetatable({}, {__mode = "k"})
+    local target, wrapper = nil, nil
+
+    local function refuse(why, deferred)
+        state, reason = "inactive", tostring(why)
+        if not deferred and not logged then
+            logged = true
+            pcall(d.log, "X4TOOLKIT_LIVE pipe unref guard INACTIVE: " .. reason)
+        end
+        return false
+    end
+
+    local function version_gate()
+        if gate ~= nil then return gate end
+        gate = false
+        local ok, list = pcall(d.extensions)
+        if not ok then return refuse("extension list unavailable: " .. tostring(list)) end
+        if type(list) ~= "table" then return refuse("extension list is " .. type(list)) end
+        local hits = {}
+        for _, e in ipairs(list) do
+            if type(e) == "table" and tostring(e.id) == MSA_ID then hits[#hits + 1] = e end
+        end
+        if #hits ~= 1 then
+            return refuse("Mod Support APIs (" .. MSA_ID .. ") listed " .. #hits .. " times")
+        end
+        local v = tostring(hits[1].version)
+        if v ~= MSA_VERSION then
+            return refuse("Mod Support APIs version " .. v .. " is not the measured " .. MSA_VERSION)
+        end
+        gate = true
+        return true
+    end
+
+    --: Checks, then writes. Returns nil on success or the refusal reason.
+    local function check_and_stamp(file)
+        local ffi = d.ffi
+        local p = ffi.cast("uint8_t*", ffi.cast("void*", file))
+        if p == nil then return "payload pointer is NULL" end
+        local ptr = ffi.cast("void**", p)
+        if ptr[0] == nil then return "handle at +0x00 is NULL" end
+        if ptr[1] == nil then return "lua_State at +0x08 is NULL" end
+        if ptr[3] == nil then return "buffer at +0x18 is NULL" end
+        local sz = ffi.cast("int32_t*", p + 0x20)[0]
+        if sz ~= BUFSZ then return "bufsz at +0x20 is " .. tostring(sz) .. ", not " .. BUFSZ end
+        local ref = ffi.cast("int32_t*", p + 0x10)
+        ref[0] = NOREF
+        if ref[0] ~= NOREF then return "ref at +0x10 did not read back" end
+        return nil
+    end
+
+    local function stamp(file)
+        if state == "inactive" then return false end
+        if type(file) ~= "userdata" then return refuse("pipe file is a " .. type(file)) end
+        if seen[file] then return true end
+        if not version_gate() then return false end
+        if type(d.ffi) ~= "table" or type(d.ffi.cast) ~= "function" then
+            return refuse("ffi unavailable")
+        end
+        local ok, why = pcall(check_and_stamp, file)
+        if not ok then return refuse("structural check raised: " .. tostring(why)) end
+        if why ~= nil then return refuse(why) end
+        seen[file] = true
+        stamped = stamped + 1
+        state = "active"
+        return true
+    end
+
+    function g.install(tbl)
+        if type(tbl) ~= "table" then return refuse("pipes module is a " .. type(tbl), true) end
+        local orig = tbl.Connect_Pipe
+        if type(orig) ~= "function" then return refuse("Connect_Pipe absent", true) end
+        if type(tbl.pipes) ~= "table" then return refuse("pipes state table absent", true) end
+        local function after(name, ...)
+            if type(name) == "string" and d.own[name] then
+                local ok, file = pcall(function()
+                    local entry = tbl.pipes[name]
+                    return type(entry) == "table" and entry.file or nil
+                end)
+                if ok and file ~= nil then pcall(stamp, file) end
+            end
+            return ...
+        end
+        -- Errors from the original propagate unchanged: nothing opened, nothing stamped.
+        wrapper = function(name, ...) return after(name, orig(name, ...)) end
+        target = tbl
+        tbl.Connect_Pipe = wrapper
+        rawset(tbl, PIPE_UNREF_MARK, g)
+        return true
+    end
+
+    function g.status()
+        if state ~= "inactive" and target ~= nil and target.Connect_Pipe ~= wrapper then
+            refuse("Connect_Pipe was replaced after install")
+        end
+        if state == "inactive" then return "inactive:" .. reason end
+        return state
+    end
+    function g.stamped() return stamped end
+    function g.report()
+        if state == "inactive" and not logged then
+            logged = true
+            pcall(d.log, "X4TOOLKIT_LIVE pipe unref guard INACTIVE: " .. reason)
+        end
+    end
+    g.stamp = stamp
+    return g
+end
+
+--: Idempotent: a table already wrapped returns the guard that wrapped it, so two
+--: install points (start menu and world) never stack two wrappers.
+local function install_pipe_unref_guard(tbl, d)
+    if type(tbl) == "table" then
+        local existing = rawget(tbl, PIPE_UNREF_MARK)
+        if type(existing) == "table" then return existing end
+    end
+    local g = new_pipe_unref_guard(d)
+    g.install(tbl)
+    return g
+end
+--@@ PIPE_UNREF_GUARD_END
+
+local function guard_pipes(tbl)
+    return install_pipe_unref_guard(tbl, {
+        ffi = ffi,
+        own = {[PIPE] = true, ["x4live_startmenu"] = true},
+        log = DebugError,
+        extensions = function()
+            if type(GetExtensionList) ~= "function" then error("GetExtensionList absent", 0) end
+            return GetExtensionList()
+        end,
+    })
+end
+
 -- UI-only startup uses the supported per-pipe module before the world MD loader.
 -- It does not initialize shared MSA polling or create a world session.
 local ui_bundle=rawget(_G,"X4ToolkitAutomationBundle")
@@ -3712,6 +3895,7 @@ if type(ui_bundle)=="table" and type(ui_bundle.start_ui)=="function" then
         ffi.cdef([[ bool IsStartmenu(void); ]])
         if C.IsStartmenu()~=true then return "NOT_START_MENU" end
         local direct=require("extensions.sn_mod_support_apis.ui.named_pipes.Pipes")
+        pipe_guard=guard_pipes(direct)
         local result=ui_bundle.start_ui({globals=_G,C=C,Helper=Helper,pipes=direct})
         assert(type(result)=="table" and type(result.status)=="string","malformed UI startup result")
         return result.status
@@ -3726,6 +3910,8 @@ end
 local req_ok, req = pcall(require, "extensions.sn_mod_support_apis.ui.named_pipes.Interface")
 if req_ok then
     pipes = req
+    -- Before Init arms the first read, so the very first own connection is stamped.
+    pipe_guard = guard_pipes(req)
 else
     DebugError("X4TOOLKIT_LIVE ABORT: could not require the named pipes api: " .. tostring(req))
 end
