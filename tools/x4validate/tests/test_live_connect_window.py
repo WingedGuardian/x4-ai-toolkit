@@ -267,6 +267,7 @@ def test_pipe_unref_guard_ACTIVE_is_silent():
 @pytest.mark.parametrize("fields, state", [
     (["pipe_unref_guard=inactive:bufsz at +0x20 is 1, not 2048"], "inactive:bufsz at +0x20 is 1"),
     (["pipe_unref_guard=armed"], "armed"),
+    (["pipe_unref_guard=active;wrapper-replaced"], "active;wrapper-replaced"),
     (["build=x"], "absent (this helper predates the guard)"),
     (["pipe_unref_guard=active", "pipe_unref_guard=active"], "reported 2 times"),
 ])

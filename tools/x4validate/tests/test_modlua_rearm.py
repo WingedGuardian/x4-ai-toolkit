@@ -1577,6 +1577,45 @@ def test_a_UI_reload_does_not_stack_a_second_wrapper():
     assert probe_fields(rt, 2)["pipe_unref_guard"] == "armed"
 
 
+#: The start-menu install point: the UI bundle is present and C.IsStartmenu() is true, so
+#: the chunk wraps the directly required Pipes module before the world install point runs.
+_START_MENU = """
+_G.fake_C = {IsStartmenu = function() return true end}
+_G.X4ToolkitAutomationBundle = {build = "t", start_ui = function() return {status = "STARTED"} end}
+"""
+
+
+def _start_marker_then_guard(rt):
+    logs = list(g(rt, "log").values())
+    start = [i for i, s in enumerate(logs) if s.startswith("X4TOOLKIT_UI_START ")]
+    guard = [i for i, s in enumerate(logs) if "pipe unref guard INACTIVE" in s]
+    return logs, start, guard
+
+
+def test_a_START_MENU_install_refusal_is_logged_once_after_that_paths_marker():
+    """Review M3: Init's report() may never run in the start menu, so the start-menu
+    install point logs its own refusal, after its X4TOOLKIT_UI_START marker. The world
+    install point then reuses the same guard, so Init does not log it a second time."""
+    rt = _build(pre=_START_MENU)
+    logs, start, guard = _start_marker_then_guard(rt)
+    assert len(start) == 1 and "OBSERVED STARTED" in logs[start[0]], logs
+    assert len(guard) == 1 and guard[0] > start[0], logs
+    assert "Connect_Pipe absent" in logs[guard[0]]
+    live(rt)                                  # Init runs: no second INACTIVE line
+    assert len(_guard_logs(rt)) == 1
+    assert probe_fields(rt, 1)["pipe_unref_guard"] == "inactive:Connect_Pipe absent"
+
+
+def test_outside_the_start_menu_nothing_is_logged_before_Init():
+    """The twin: IsStartmenu() false returns before the start-menu install, so the only
+    install point is the world one and its refusal waits for Init's load marker."""
+    rt = _build(pre=_START_MENU + "_G.fake_C.IsStartmenu = function() return false end\n")
+    logs, start, guard = _start_marker_then_guard(rt)
+    assert len(start) == 1 and "NOT_START_MENU" in logs[start[0]] and guard == [], logs
+    live(rt)
+    assert len(_guard_logs(rt)) == 1
+
+
 def test_the_container_probe_makes_a_LIVE_CALL_and_can_DISCRIMINATE():
     """Probe before building. A symbol's TYPE says nothing about whether a given
     ARGUMENT SHAPE works, and that is the open question for a cross-faction `objects`:

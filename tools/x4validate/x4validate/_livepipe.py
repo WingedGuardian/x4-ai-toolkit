@@ -667,8 +667,9 @@ def pipe_unref_guard_warning(fields) -> str | None:
 
     The helper reports `pipe_unref_guard=` in its probe reply: `active` (its own pipe files
     are stamped, so their close cannot touch X4's Lua registry), `armed` (installed but no
-    own file seen yet) or `inactive:<reason>` (refused, nothing written). Anything but
-    `active` warns, and so does a reply with NO such field: that helper predates the guard,
+    own file seen yet) or `inactive:<reason>` (refused, nothing written); a `;wrapper-replaced`
+    suffix means another mod replaced Connect_Pipe after the helper wrapped it, which may or may
+    not still call the helper's wrapper (`pipe_unref_stamped` tells). Anything but `active` warns, and so does a reply with NO such field: that helper predates the guard,
     so its connections are unprotected too. Never a refusal -- the reply itself is fine.
     """
     values = [f.split("=", 1)[1] for f in fields if f.startswith("pipe_unref_guard=")]

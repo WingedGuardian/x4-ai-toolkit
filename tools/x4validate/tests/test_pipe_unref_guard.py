@@ -69,9 +69,19 @@ fake_ffi = setmetatable({cast = function(ct, v)
     return real.cast(ct, v)
 end}, {__index = real})
 
+function nop() end
 function make_file(o)
     o = o or {}
-    local u = newproxy(false)
+    -- winpipe's File metatable shape: __index = itself, read/write/close/__gc. `o.mt`
+    -- replaces it wholesale (a refusal twin); `o.nomt` gives a bare userdata.
+    local u = newproxy(not o.nomt)
+    if not o.nomt then
+        local mt = getmetatable(u)
+        local spec = o.mt or {read = nop, write = nop, close = nop}
+        for k, v in pairs(spec) do mt[k] = v end
+        if spec.__index == nil then mt.__index = mt end
+        if spec.__index == false then mt.__index = nil end
+    end
     local b = real.new("uint8_t[48]")
     local ptr = real.cast("void**", b)
     ptr[0] = real.cast("void*", o.handle or 0x100)
@@ -276,12 +286,88 @@ def test_an_install_refusal_is_logged_only_by_report_and_only_once(lua, module, 
     assert (before, after, again, status) == (0, 1, 1, reason)
 
 
-def test_a_REPLACED_Connect_Pipe_is_reported_inactive(lua):
+def test_a_REPLACED_Connect_Pipe_is_reported_without_disabling_the_guard(lua):
+    """Review M1: status() used to refuse() here, so one probe switched stamping off for
+    the session even when another mod had only WRAPPED ours. Now it reports and moves on:
+    a wrapper on top of ours still reaches ours, and that file is still stamped."""
+    s_armed, s_active, n, ref, again = run(lua, """
+        local m = make_module(); local g = install(m, deps())
+        local ours = m.Connect_Pipe
+        m.Connect_Pipe = function(name, ...) return ours(name, ...) end   -- another mod wraps ours
+        local s1 = g.status()
+        m.Connect_Pipe('x4live')
+        return s1, g.status(), g.stamped(), ref_of(m.pipes.x4live.file), inactive_logs()""")
+    assert (s_armed, s_active, n, ref, again) == (
+        "armed;wrapper-replaced", "active;wrapper-replaced", 1, -2, 0)
+
+
+def test_status_is_plain_while_our_wrapper_is_still_installed(lua):
+    """The twin for the replaced suffix: no replacement, no suffix."""
+    assert run(lua, "local m = make_module(); local g = install(m, deps()); return g.status()") == "armed"
+
+
+# --------------------------------------------------------------------------- #
+# the File type check (review M2): runs before any structural read
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("opts, reason", [
+    ("{nomt = true}", "inactive:pipe file metatable is a nil"),
+    ("{mt = {read = nop, write = nop, close = nop, __index = false}}", "inactive:pipe file __index is a nil"),
+    ("{mt = {write = nop, close = nop}}", "inactive:pipe file has no read"),
+    ("{mt = {read = nop, close = nop}}", "inactive:pipe file has no write"),
+    ("{mt = {read = nop, write = nop}}", "inactive:pipe file has no close"),
+    ("{mt = {read = nop, write = nop, close = nop, seek = nop}}", "inactive:pipe file has a foreign method seek"),
+])
+def test_each_file_type_clause_REFUSES_with_no_write(lua, opts, reason):
+    ref, status, n, nlog = run(lua, f"""
+        local m = make_module({opts}); local g = install(m, deps())
+        m.Connect_Pipe('x4live')
+        return ref_of(m.pipes.x4live.file), g.status(), g.stamped(), inactive_logs()""")
+    assert (ref, status, n, nlog) == (12345, reason, 0, 1)
+
+
+def test_a_FOREIGN_userdata_with_read_write_close_is_REFUSED(lua):
+    """A real io file has read, write and close too; its extra methods give it away,
+    before any structural read of its payload."""
+    status, n = run(lua, """
+        local m = make_module(); local g = install(m, deps())
+        m.pipes.x4live = {file = io.tmpfile()}
+        m.Connect_Pipe('x4live')
+        return g.status(), g.stamped()""")
+    assert status.startswith("inactive:pipe file has a foreign method ") and n == 0, status
+
+
+def test_without_getmetatable_it_REFUSES(lua):
     status = run(lua, """
         local m = make_module(); local g = install(m, deps())
-        m.Connect_Pipe = function() end
+        m.pipes.x4live = {file = make_file()}       -- made while getmetatable still exists
+        local saved = getmetatable; getmetatable = nil
+        local ok, err = pcall(m.Connect_Pipe, 'x4live')
+        getmetatable = saved
         return g.status()""")
-    assert status == "inactive:Connect_Pipe was replaced after install"
+    assert status == "inactive:getmetatable unavailable"
+
+
+def test_a_file_type_check_that_RAISES_is_a_named_refusal(lua):
+    status = run(lua, """
+        local m = make_module(); local g = install(m, deps())
+        m.pipes.x4live = {file = make_file()}
+        local saved = getmetatable; getmetatable = function() error("boom", 0) end
+        pcall(m.Connect_Pipe, 'x4live')
+        getmetatable = saved
+        return g.status()""")
+    assert status == "inactive:file type check raised: boom"
+
+
+def test_a_refused_install_marks_the_table_so_a_second_install_point_reuses_it(lua):
+    """Review M3: the start-menu and world install points both report(); without the
+    mark the second guard would refuse and log a second INACTIVE line."""
+    same, nlog = run(lua, """
+        local t = {pipes = {}}
+        local g1 = install(t, deps()); g1.report()
+        local g2 = install(t, deps()); g2.report()
+        return g1 == g2, inactive_logs()""")
+    assert (same, nlog) == (True, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -327,7 +413,8 @@ local m = {pipes = {}}
 function m.Connect_Pipe(name)
     m.pipes[name] = m.pipes[name] or {}
     if m.pipes[name].file == nil then
-        m.pipes[name].file = wp.open_pipe("\\\\.\\pipe\\" .. NAME)
+        if MODE == "iofile" then m.pipes[name].file = io.tmpfile()   -- a FOREIGN userdata
+        else m.pipes[name].file = wp.open_pipe("\\\\.\\pipe\\" .. NAME) end
         if m.pipes[name].file == nil then error("open_pipe returned nil for " .. name) end
     end
 end
@@ -356,7 +443,7 @@ for i = 1, N do
     if i % 10 == 0 then collectgarbage() end
 end
 return string.format("RESULT changed=%d slots=%d stamped=%s status=%s logs=%d",
-    changed, slots, g and g.stamped() or "none", g and g.status() or "none", #logs)
+    changed, slots, g and g.stamped() or "none", (g and g.status() or "none"):gsub(" ", "_"), #logs)
 """
 if lua.luaL_loadstring(L, script.encode()) != 0:
     print("LOAD_ERROR", lua.lua_tolstring(L, -1, None)); sys.exit(3)
@@ -417,6 +504,15 @@ def test_offline_WITH_the_guard_200_cycles_leave_the_registry_unchanged(tmp_path
     r = _offline("guard", tmp_path)
     assert (r["changed"], r["slots"], r["stamped"], r["status"], r["logs"]) == (
         "0", "0", "200", "active", "0"), r
+
+
+def test_offline_a_FOREIGN_userdata_on_our_pipe_name_is_refused_before_any_read(tmp_path):
+    """Review M2, in the game's own Lua: an io file (read/write/close, but not winpipe's
+    File) on our pipe name refuses at the File type check, nothing stamped, one log line.
+    The `guard` run above is the twin: real winpipe Files pass the same check."""
+    r = _offline("iofile", tmp_path, n=20)
+    assert r["status"].startswith("inactive:pipe_file_has_a_foreign_method_"), r
+    assert (r["stamped"], r["logs"]) == ("0", "1"), r
 
 
 def test_offline_a_FOREIGN_pipe_is_left_untouched_by_the_guard(tmp_path):

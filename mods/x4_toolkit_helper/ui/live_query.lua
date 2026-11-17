@@ -58,7 +58,7 @@ local PROTO = 1
 --:
 --: Kept honest by `test_the_BUILD_constant_matches_the_file`, so editing the lua and
 --: forgetting to re-stamp this fails the suite rather than silently lying in game.
-local BUILD = "23158ade"
+local BUILD = "3dbdc1ef"
 local TAG_CMD, TAG_REPLY = "MQ", "MR"
 
 -- Cap on echo, the ramp instrument. Generous: the point of the ramp is to FIND the
@@ -778,6 +778,8 @@ verbs.probe = function(seq)
     --: F124: is THIS helper's pipe protected from the Mod Support APIs unref defect?
     --: `active` = gate passed and our open file(s) stamped; `armed` = wrapper installed
     --: but no own file seen yet; `inactive:<reason>` = nothing written, churn unsafe.
+    --: A `;wrapper-replaced` suffix: Connect_Pipe is no longer our wrapper. Stamping goes
+    --: on whenever our wrapper is still called (another mod wrapped it); watch the count.
     if pipe_guard then
         out[#out + 1] = "pipe_unref_guard=" .. pipe_guard.status()
         out[#out + 1] = "pipe_unref_stamped=" .. tostring(pipe_guard.stamped())
@@ -3736,9 +3738,10 @@ end
 --: pass through untouched (user decision: the helper protects its own connections).
 --:
 --: GATED, refusing with no write on any mismatch: the Mod Support APIs version must be
---: the one measured, and the payload must look like that struct (+0x00 handle, +0x08
---: lua_State and +0x18 buffer non-NULL, +0x20 bufsz == 2048). A refusal logs ONE
---: `pipe unref guard INACTIVE: <reason>` line and `probe` reports it.
+--: the one measured, the userdata must carry winpipe's File metatable (read, write,
+--: close and nothing an io file adds), and the payload must look like that struct
+--: (+0x00 handle, +0x08 lua_State and +0x18 buffer non-NULL, +0x20 bufsz == 2048). A
+--: refusal logs ONE `pipe unref guard INACTIVE: <reason>` line and `probe` reports it.
 --:
 --: Self-contained between the markers: the offline DLL test loads exactly this block.
 --@@ PIPE_UNREF_GUARD_BEGIN
@@ -3784,6 +3787,26 @@ local function new_pipe_unref_guard(d)
         return true
     end
 
+    --: Is this a winpipe File? winpipe.c File_register: luaL_newmetatable with __index =
+    --: itself, holding read, write, close and __gc. An io file has read/write/close too,
+    --: so any other method (seek, lines, ...) refuses. No debug library needed.
+    local FILE_KEYS = {read = true, write = true, close = true, __gc = true,
+                       __index = true, __name = true}
+    local function not_a_pipe_file(file)
+        if type(getmetatable) ~= "function" then return "getmetatable unavailable" end
+        local mt = getmetatable(file)
+        if type(mt) ~= "table" then return "pipe file metatable is a " .. type(mt) end
+        local methods = rawget(mt, "__index")
+        if type(methods) ~= "table" then return "pipe file __index is a " .. type(methods) end
+        for _, k in ipairs({"read", "write", "close"}) do
+            if type(rawget(methods, k)) ~= "function" then return "pipe file has no " .. k end
+        end
+        for k in pairs(methods) do
+            if not FILE_KEYS[k] then return "pipe file has a foreign method " .. tostring(k) end
+        end
+        return nil
+    end
+
     --: Checks, then writes. Returns nil on success or the refusal reason.
     local function check_and_stamp(file)
         local ffi = d.ffi
@@ -3806,6 +3829,9 @@ local function new_pipe_unref_guard(d)
         if type(file) ~= "userdata" then return refuse("pipe file is a " .. type(file)) end
         if seen[file] then return true end
         if not version_gate() then return false end
+        local ok_kind, foreign = pcall(not_a_pipe_file, file)
+        if not ok_kind then return refuse("file type check raised: " .. tostring(foreign)) end
+        if foreign ~= nil then return refuse(foreign) end
         if type(d.ffi) ~= "table" or type(d.ffi.cast) ~= "function" then
             return refuse("ffi unavailable")
         end
@@ -3841,11 +3867,13 @@ local function new_pipe_unref_guard(d)
         return true
     end
 
+    --: Read-only: a replaced Connect_Pipe is REPORTED, never a refusal. Another mod
+    --: wrapping ours still calls our wrapper, so stamping must go on.
     function g.status()
-        if state ~= "inactive" and target ~= nil and target.Connect_Pipe ~= wrapper then
-            refuse("Connect_Pipe was replaced after install")
-        end
         if state == "inactive" then return "inactive:" .. reason end
+        if target ~= nil and target.Connect_Pipe ~= wrapper then
+            return state .. ";wrapper-replaced"
+        end
         return state
     end
     function g.stamped() return stamped end
@@ -3868,6 +3896,11 @@ local function install_pipe_unref_guard(tbl, d)
     end
     local g = new_pipe_unref_guard(d)
     g.install(tbl)
+    -- A refused install marks the table too: the second install point then reuses this
+    -- guard (one INACTIVE line per table) instead of refusing and logging again.
+    if type(tbl) == "table" and rawget(tbl, PIPE_UNREF_MARK) == nil then
+        rawset(tbl, PIPE_UNREF_MARK, g)
+    end
     return g
 end
 --@@ PIPE_UNREF_GUARD_END
@@ -3902,6 +3935,9 @@ if type(ui_bundle)=="table" and type(ui_bundle.start_ui)=="function" then
     end)
     DebugError("X4TOOLKIT_UI_START "..(ui_ok and "OBSERVED " or "UNAVAILABLE ")..tostring(ui_result)
         .." build="..tostring(ui_bundle.build))
+    -- Init (and its report) may never run in the start menu: log an install-time
+    -- refusal here, AFTER this path's marker. report() logs at most once per guard.
+    if pipe_guard then pipe_guard.report() end
 end
 
 -- The pipes api and Register_OnLoad_Init are both provided by sn_mod_support_apis.
