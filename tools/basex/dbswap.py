@@ -601,7 +601,10 @@ def _preflight():
 
 
 class BaseXRunner:
-    """BaseX in its home directory, one JVM per command, the database path read the way the builders read it."""
+    """BaseX in its home directory, one JVM per command, the database path read the way the builders read it. Every
+    JVM it starts carries the build heap flag (basex_run.heap_flag). That covers the build's own steps and also the
+    reads x4fresh status and its blocker checks make through this class (INFO, counts): they start java too, and now run at
+    the heap, never a user's query."""
 
     def __init__(self, home: Path = BASEX_DIR):
         self.home = Path(home)
@@ -638,20 +641,20 @@ class BaseXRunner:
         return mod
 
     def info(self) -> str:
-        return self._run().run_command("INFO", self.home)[1]
+        return self._run().run_command("INFO", self.home, heap=True)[1]
 
     def alter(self, src: str, dst: str) -> tuple[bool, str]:
         if self.exists(dst):   # MEASURED: BaseX REPLACES an existing unopened target instead of refusing
             return False, f"Database '{dst}' already exists (refused here: BaseX would replace it)."
-        rc, out = self._run().run_command(f"ALTER DB {src} {dst}", self.home)
+        rc, out = self._run().run_command(f"ALTER DB {src} {dst}", self.home, heap=True)
         return rc == 0, out
 
     def drop(self, name: str) -> tuple[bool, str]:
-        rc, out = self._run().run_command(f"DROP DB {name}", self.home)
+        rc, out = self._run().run_command(f"DROP DB {name}", self.home, heap=True)
         return rc == 0, out
 
     def _query(self, xquery: str) -> str:
-        rc, out, err = self._run().run_query(xquery, self.home)
+        rc, out, err = self._run().run_query(xquery, self.home, heap=True)
         if rc != 0:
             text = (err or out).strip()
             raise RuntimeError(text.splitlines()[-1] if text else f"BaseX rc {rc}")

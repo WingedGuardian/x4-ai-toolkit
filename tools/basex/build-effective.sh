@@ -50,6 +50,13 @@ fi
 echo "== preflight =="
 (cd "$X4VALIDATE" && uv run python "$HERE/preflight.py" --need java jar disk)
 
+# THE JAVA HEAP, from the one place that decides it (basex_run.py: X4_BASEX_HEAP, default 4g). Without -Xmx the JVM may
+# grow to a quarter of physical RAM and does not collect early; a build reached 6219 MB and was killed by the job
+# wrapper's 6 GB cap (MEASURED 2026-11-17). With -Xmx4g x4eff peaked at 3985 MB and x4raw at 4409 MB. A bad X4_BASEX_HEAP stops
+# the build HERE (set -e), before any long work.
+JAVA_HEAP_FLAG="$(cd "$X4VALIDATE" && uv run python "$HERE/basex_run.py" heap-flag)"
+echo "java heap: $JAVA_HEAP_FLAG"
+
 # BUILD-THEN-SWAP (4.1.1). This build writes ${DB}__next and dbswap.py swaps it in only once it is verified,
 # so a build that fails or is killed leaves the previous $DB and its coverage in place: STALE, never MISSING.
 # MEASURED 2026-11-05: eight killed builds in a row left x4raw and x4eff missing for hours under drop-first.
@@ -121,7 +128,7 @@ cd "$BASEX_DIR"
 (cd "$X4VALIDATE" && uv run python "$HERE/../../scripts/x4basex_artifacts.py" --artifact-root "$HERE" --declare-db "$NEXT")
 
 BUILD_LOG="$(mktemp)"
-java -cp BaseX.jar org.basex.BaseX -c "
+java "$JAVA_HEAP_FLAG" -cp BaseX.jar org.basex.BaseX -c "
 SET SKIPCORRUPT true
 CREATE DB $NEXT
 SET CREATEFILTER *.xml

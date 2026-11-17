@@ -89,6 +89,16 @@ answering from the previous database (STALE if the world moved), never "not foun
   its process id) from before `prepare` until after the swap; a second build of the
   same database, or a `dbswap.py` call, exits `7` while it runs. A lock left by a
   killed build (its process is no longer running) is taken over and reported.
+- **Memory: a build's Java heap is capped at 4 GB.** Both scripts and `dbswap.py` start
+  java with `-Xmx` from one setting, `X4_BASEX_HEAP` (default `4g`, a whole number of `m`
+  or `g`, at least 256m and at most the machine's physical RAM; a bad value stops the build before any work, `uv run python ../basex/basex_run.py
+  heap-flag` prints the flag). Without it the JVM may grow to a quarter of physical RAM
+  before collecting, which took a build past a job wrapper's 6 GB cap (MEASURED
+  2026-11-17: killed at 6219 MB; with a 4 GB heap x4eff built peaking at 3985 MB in 277 s and x4raw at 4409 MB in 371 s, in the
+  same time). A resource governor should reserve heap plus 1.5 GiB (`basex_run.py job-gb`
+  prints it, 5.5 by default); `x4fresh` fills that in for `{mem_gb}` in `X4_JOB_WRAPPER`.
+  An `-Xmx` in `JAVA_TOOL_OPTIONS` does not override the flag, one in `_JAVA_OPTIONS` does.
+  A query run by `ask.py` is not a build and keeps the JVM default.
 - BaseX `ALTER DB` onto an existing name **replaces** it (MEASURED, BaseX 12.4 and 13.0), so
   `dbswap.py` checks every rename target is absent and never renames by hand.
 

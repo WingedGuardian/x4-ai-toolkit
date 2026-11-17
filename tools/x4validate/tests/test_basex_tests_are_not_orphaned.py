@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 BASEX = Path(__file__).resolve().parent.parent.parent / "basex"
-TEST_FILES = ("test_ask.py", "test_ask_e2e.py", "test_build_scripts_refuse_empty_reference.py",
+TEST_FILES = ("test_ask.py", "test_ask_e2e.py", "test_basex_heap.py", "test_build_scripts_refuse_empty_reference.py",
               "test_coverage.py", "test_dbswap.py", "test_kept_failure_marker.py", "test_preflight.py",
               "test_staleness.py",
     "test_unknown_is_not_stale.py", "test_x4v_tree.py")

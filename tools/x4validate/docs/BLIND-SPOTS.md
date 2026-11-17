@@ -484,6 +484,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F382 | A MOD's complete ship macro/component file at a PLAIN base-game path was modelled as a replacement; the engine MERGES it (the base node and the mod's same-named one), so later selectors on that name passed Tier B and the engine skipped them | **DEFECT (measured)** · PRE-ARC | GitHub issue #23: debug.txt 2026-11-17 (game 9.00), 5 xspvro files under `assets/units/`, 23 distinct ops of 2 patching mods skipped, Tier B predicted 0; after the fix 23 of 23 predicted. Same shape outside `assets/units/` (3 weapon macro files): REFUSED by the engine ("Skipping file") in 5 of 6 load passes, never merged | FIXED 2026-11-17 for `assets/units/` macro (`macros/*_macro.xml`, root `macros`) and component (root `components`) files only, mod layer over a game-supplied document with the same root; what decides merge versus refusal, copy order and which copy the engine uses UNMEASURED and disclosed; every other class keeps the replacement model, disclosed |
 | F383 | For 5 xspvro files at plain base-game paths the engine loaded the copier's file plus OTHER mods' `extensions/xspvro/<rel>` patches and never opened any mod's plain-path `<diff>` on that path; x4validate evaluated those plain diffs | **DEFECT (measured)** · PRE-ARC | same log, FileIO census: the plain-path diffs on those 5 files never opened, the nested patch opened, both passes. Rule MEASURED 10 of 10 over the `assets/units/` copies: the LAST effective index entry for the file's name (all mods, the patching mod's own index included) points at `extensions\xspvro\...` for exactly these 5 and at the base path for the 5 that merged; the first entry would mispredict 3 | FIXED 2026-11-17 in x4validate: such a plain-path diff is an ERROR `load-path` ("the engine never opens this plain-path patch"), its ops not evaluated, and the copier gets an INFO; last-entry-wins INFERRED from those 3; x4compat, x4effective and the merge model itself do not consult the index (OPEN) |
 | F384 | `_resolve.build_index`, the index every file/connection/fitting reader resolves names through, registered every `<entry>` of every index file, a `<diff>`'s payload included, and ignored `<remove>` and `@value` `<replace>` ops | **DEFECT (measured)** · PRE-ARC | 230 active roots: 14 removes + 5 replaces in `index/macros.xml`, 3 + 2 in `index/components.xml`; 12 names disagreed with the effective index (4 removed names still registered, a re-pointed name read the copier's file, one an unparseable file) | FIXED 2026-11-17: built from the effective index document; 12 of 12 (18 of 18 op-touched names) agree |
+| F386 | The BaseX builds started java with no `-Xmx`, so the JVM could grow its heap to a quarter of physical RAM; one reached the job wrapper's memory cap and was killed, and the cap was a number unrelated to the heap | **DEFECT (measured)** · PRE-ARC | x4eff killed at 6219 MB under a 6 GB cap (2026-11-17), x4raw the same way (2026-11-16), after weeks of ~3.3 GB peaks; control with a 4 GiB heap: x4eff built in 277 s, peak job memory 3985 MB; x4raw (4 GiB heap, 2026-11-17): 4409 MB, 371 s | FIXED 2026-11-17: every build-time java carries `-Xmx` from one setting (`X4_BASEX_HEAP`, default 4g) and x4fresh's `{mem_gb}` wrapper token hands the wrapper heap + 1.5 GiB; the 1.5 GiB allowance is INFERRED, not measured; the effective-store and xref builds are not bounded this way (OPEN); a wrapper that does not use `{mem_gb}` keeps its own cap |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -14099,3 +14100,41 @@ residual run of the first mod shows its 3 changed rows (1 connection error, 2 fi
 **RE-DERIVED BY:** `tests/test_engine_document_readers.py` (`test_build_index_applies_a_REMOVE`,
 `..._value_REPLACE_outside_the_class`, the bare-value and complete-index twins, the unreadable-layer skip); 18 of 18 hand
 mutants killed after a green baseline (`mutb2.py`).
+
+## F386 - The BaseX builds ran java with no heap bound, and the job wrapper's memory cap was unrelated to the heap · **DEFECT (measured)** · PRE-ARC · confidence 90% · FIXED 2026-11-17 (allowance INFERRED)
+
+MEASURED 2026-11-17 (Java 24, 32 GB host): `build-corpus.sh` and `build-effective.sh` ran `java -cp BaseX.jar ...` with no
+`-Xmx`, so the JVM's maximum heap was a quarter of physical RAM (`-XX:+PrintFlagsFinal` MaxHeapSize 8547991552) and it
+did not collect before it had to. x4fresh runs each build through the job wrapper (`X4_JOB_WRAPPER`, here rb), whose
+memory cap was a fixed 6 GB (READ from the machine's X4_JOB_WRAPPER: `--ram 6`, and rb's cap defaults to the estimate;
+a cost-table cap, "max of the last 5 runs + 25%", would also have been 6 GB after weeks of ~3.3 GB peaks).
+x4eff was killed at 6219 MB on 2026-11-17 and x4raw the same way on 2026-11-16. Control, `JAVA_TOOL_OPTIONS=-Xmx4g`: x4eff
+built fine in 277 s, peak job memory 3985 MB, so the bound cost no time. x4raw at -Xmx4g, MEASURED later the same
+day on the main clone through rb: peak job memory 4409 MB (whole job, staging python + JVM), 371 s, built and swapped in
+(exit 3, the known unreadable-file warnings).
+
+**Fix.** `tools/basex/basex_run.py` owns the setting: `X4_BASEX_HEAP` (default `4g`, whole m or g, at least 256m and at most
+the machine's physical RAM, read through GlobalMemoryStatusEx on Windows and sysconf on POSIX, with a fixed 64g bound when
+it cannot be read; a bad value is refused before any work). Both build scripts take `-Xmx` from `basex_run.py
+heap-flag`; dbswap's `BaseXRunner` and `coverage.py` (called only by the two build scripts) pass `heap=True`; an `ask.py` query is not a build and keeps the JVM default. x4fresh substitutes `{mem_gb}` in `X4_JOB_WRAPPER` with the
+heap plus `JVM_NON_HEAP_MB` (1536) for x4raw and x4eff (5.5 by default), so the wrapper's estimate and cap are bounded by
+the heap and not by earlier runs; `{mem_gb|N}` gives the other artifacts N. **Precedence, MEASURED 2026-11-17:** an
+`-Xmx` on the command line beats `JAVA_TOOL_OPTIONS` but NOT `_JAVA_OPTIONS`, which beats the command line.
+
+**Not covered, said plainly.** (1) The 1.5 GiB allowance is INFERRED from what a G1 heap adds beyond `-Xmx` (bookkeeping,
+code cache, stacks, direct buffers) and from two runs whose whole jobs peaked at 3985 MB (x4eff) and 4409 MB (x4raw) under a 5632 MB cap; the JVM's
+non-heap memory alone was never measured, and x4raw's peak includes the staging python, so it exceeds the heap by 313 MB. (2) A wrapper that does not use `{mem_gb}` keeps whatever cap it has, now under a bounded JVM
+(a 6 GB cap holds a 4 GiB heap); nothing in the toolkit rewrites a user's wrapper. (3) The effective-store and xref
+builds are Python in one process, so this bound does not apply to them. (4) `_JAVA_OPTIONS` with its own `-Xmx` defeats
+the flag. (5) `audit/install_verify.py` starts a BaseX query without the flag: it is a query, not a build. (6) `x4fresh status` and its
+blocker checks start java through dbswap's runner and now run at the heap too. (7) The 1.5 GiB allowance keeps about 1.2 GB of headroom on the larger build (x4raw, 4409 MB of 5632 MB); it is
+labelled a margin, not a derivation. First review
+round found `coverage.py` starting a default-heap JVM from both build scripts; fixed, and now held by a caller-side check.
+
+**RE-DERIVED BY:** `tools/basex/test_basex_heap.py` (a shell-position scanner and an AST scan over every java launch in
+the folder (command position through exec / nohup / env / timeout / time / nice wrappers, a variable holding java, backslash
+continuations and trailing comments), with a planted bare-launch twin per form; a caller-side AST check that every
+`run_query` / `run_command` call in a build module passes `heap=True`; the denominators 1+1 script launches, 2 Python
+argv lists and 5 build-module calls (coverage 1, dbswap 4; `ask.py` is the named query-time exemption) are asserted; the
+heap range edges; the real JVM's PrintFlagsFinal) and `tests/test_freshcli_job_memory.py` (the argv a real
+wrapper process receives through `_run`, and every malformed `{mem_gb` spelling refused). The structural tests were RED on the unfixed scripts before the fix.

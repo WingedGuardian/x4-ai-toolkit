@@ -54,7 +54,8 @@ def _basex_run():
 
 def basex_query(db: str, xquery: str) -> str:
     # UTF-8 both ways, the query passed as a file: see basex_run (issue #7).
-    rc, stdout, stderr = _basex_run().run_query(xquery, BASEX_DIR)
+    # heap=True: this runs only inside a build (build-corpus.sh / build-effective.sh), under the job wrapper's cap.
+    rc, stdout, stderr = _basex_run().run_query(xquery, BASEX_DIR, heap=True)
     if rc != 0:
         raise RuntimeError(f"BaseX query failed: {stderr.strip()[:400]}")
     return stdout

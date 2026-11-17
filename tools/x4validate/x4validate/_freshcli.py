@@ -59,6 +59,15 @@ Optional environment:
     X4_JOB_WRAPPER        JSON list prefixed to every builder command; "{name}" becomes x4fresh-<artifact>
                           (e.g. a resource governor). Unset: builders run directly. Its own lines are told apart
                           by "<program>: " at the start of a line, for its first word and any script it names.
+                          "{mem_gb}" becomes the GB a BaseX builder (x4raw, x4eff) is bounded to: its Java heap
+                          (X4_BASEX_HEAP, below) plus 1.5 GiB for the JVM's non-heap memory, 5.5 by default; for
+                          the other artifacts write "{mem_gb|N}" to give them N, a bare "{mem_gb}" there is
+                          refused. Use it for the wrapper's estimate and cap so the cap never depends on how
+                          earlier runs went, e.g. rb: "--ram", "{mem_gb|6}", "--mem-cap", "{mem_gb|6}".
+    X4_BASEX_HEAP         the Java heap of every BaseX build (`4g` by default; a whole number of m or g). Without
+                          a bound the JVM may grow to a quarter of physical RAM before collecting, which took a
+                          build past its wrapper's memory cap. An -Xmx in JAVA_TOOL_OPTIONS does not override it;
+                          one in _JAVA_OPTIONS does, so do not set that for BaseX.
     X4_FRESH_DEFER_WHILE  ';'-separated process names that defer --auto (default: X4.exe)
     X4_FRESH_AUTO=off     --auto does nothing
     X4_FRESH_BASEX_AUTO=off   --auto starts no new background BaseX builder, and a builder re-reads it once, when it
@@ -536,8 +545,51 @@ def _wrapper_argv() -> list[str]:
     return argv
 
 
+_MEM_TOKEN = re.compile(r"\{mem_gb(?:\|([0-9]+(?:\.[0-9]+)?))?\}")
+
+
+def _job_memory_gb(name: str) -> str | None:
+    """The memory a job wrapper should reserve and cap for artifact `name`, in GB, or None when x4fresh has no
+    figure of its own for it. Only the BaseX builders have one: their JVM heap is fixed (tools/basex/basex_run.py,
+    X4_BASEX_HEAP) and the figure is that heap plus a named allowance for the JVM's non-heap memory, so it never
+    depends on how earlier runs went. The effective store and the xref index run in this process family with no
+    such bound."""
+    if name not in BASEX:
+        return None
+    spec = importlib.util.spec_from_file_location("x4fresh_basex_run", BASEX_ROOT / "basex_run.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.job_memory_gb()
+
+
+_MEM_ANY = re.compile(r"\{\s*mem_gb", re.IGNORECASE)
+
+
 def _wrapper(name: str) -> list[str]:
-    return [a.replace("{name}", f"x4fresh-{name}") for a in _wrapper_argv()]
+    """The job wrapper's argv for artifact `name`. `{name}` becomes x4fresh-<name>. `{mem_gb}` becomes the memory the
+    builder is bounded to (see _job_memory_gb) for x4raw and x4eff; `{mem_gb|N}` is the same with N (a positive number)
+    as the answer for an artifact that has no figure, and a bare `{mem_gb}` there is refused (ValueError, reported as
+    "could not start the builder") rather than guessed. Anything still spelled like the token after substitution
+    (`{mem_gb|abc}`, `{mem_gb|.5}`, `{mem_gb |6}`, an unclosed one, `{MEM_GB}`) is refused too: a typo must never reach
+    the wrapper as a literal argument it may read as a cap of its own."""
+    argv0 = _wrapper_argv()
+    mem = _job_memory_gb(name) if any(_MEM_ANY.search(a) for a in argv0) else None
+
+    def fill(match: re.Match) -> str:
+        if match.group(1) is not None and float(match.group(1)) <= 0:      # refused on every artifact, used or not
+            raise ValueError(f"X4_JOB_WRAPPER: {match.group(0)} is not a positive number of GB")
+        if mem is not None:
+            return mem
+        if match.group(1) is not None:
+            return match.group(1)
+        raise ValueError(f"X4_JOB_WRAPPER uses {{mem_gb}}, which x4fresh has no figure for on {name}; "
+                         f"write {{mem_gb|N}} to give {name} N GB")
+    out = [_MEM_TOKEN.sub(fill, a.replace("{name}", f"x4fresh-{name}")) for a in argv0]
+    for arg in out:
+        if _MEM_ANY.search(arg):
+            raise ValueError(f"X4_JOB_WRAPPER: {arg!r} looks like a {{mem_gb}} token but is not one; write {{mem_gb}} "
+                             f"or {{mem_gb|N}} with N a positive number such as 6 or 5.5")
+    return out
 
 
 def builder(name: str) -> list[str]:

@@ -172,7 +172,8 @@ switches (set in the environment you launch the agent from; `x4-paths.env.exampl
 | `X4_FRESH_BASEX_AUTO=off` | start no new background BaseX rebuild; a builder checks it once when it takes its own lock, so one already waiting out the quiet period is stopped by the pid `x4fresh status` shows |
 | `X4_FRESH_BASEX_QUIET_MIN` | minutes the mods must be unchanged before it starts (default 30) |
 | `X4_FRESH_DEFER_WHILE` | `;`-separated process names that defer `--auto` (default `X4.exe;X4`) |
-| `X4_JOB_WRAPPER` | JSON list put in front of every builder command; `{name}` becomes `x4fresh-<artifact>` |
+| `X4_JOB_WRAPPER` | JSON list put in front of every builder command; `{name}` becomes `x4fresh-<artifact>`, and `{mem_gb}` becomes the memory a BaseX builder is bounded to (its Java heap plus 1.5 GiB, 5.5 by default; `{mem_gb\|N}` gives the other artifacts N) |
+| `X4_BASEX_HEAP` | the Java heap of every BaseX build (default `4g`; a whole number of `m` or `g`, at least 256m and at most the machine's RAM); an `-Xmx` in `_JAVA_OPTIONS` overrides it |
 | `X4_BASH` | the bash used for the BaseX builders (default: bash on `PATH`) |
 
 ### `x4save` — what a savegame bakes in, and what it would silently lose

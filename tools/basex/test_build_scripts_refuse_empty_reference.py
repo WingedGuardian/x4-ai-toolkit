@@ -32,7 +32,7 @@ _spec.loader.exec_module(_mod)
 BASH = _mod.find_bash()
 
 COPIED = ("build-corpus.sh", "build-effective.sh", "_x4v-tree.sh", "preflight.py",
-          "reference_check.py")
+          "reference_check.py", "basex_run.py")
 
 pytestmark = pytest.mark.skipif(
     BASH is None or shutil.which("uv") is None,
