@@ -190,6 +190,14 @@ def test_exit_0_with_a_result_line_reporting_failures_is_a_refusal(repo, monkeyp
     assert "Hook tests passed" not in capsys.readouterr().err
 
 
+def test_exit_0_with_a_result_line_where_nothing_passed_is_a_refusal(repo, monkeypatch, capsys):
+    """Twin for the passed-count clause: a suite that ran no test (0 passed, 0 failed) proves nothing."""
+    _hooks(monkeypatch, rc=0, output=b"RESULT: 0 passed, 0 failed, 0 skipped\n")
+    why = dep.guard_evidence(repo)
+    assert why and "nothing passed" in why
+    assert "Hook tests passed" not in capsys.readouterr().err
+
+
 def test_the_last_result_line_is_the_one_judged(repo, monkeypatch):
     """A probe echoing a passing RESULT earlier does not mask the suite's own failing summary."""
     _hooks(monkeypatch, rc=0, output=b"RESULT: 1 passed, 0 failed, 0 skipped\nRESULT: 473 passed, 1 failed, 0 skipped\n")

@@ -450,6 +450,8 @@ def _result_refusal(text: str) -> str | None:
                 f"an exit code without the suite's own count is not a pass")
     if int(m.group(2)):
         return f"the hook tests exited 0 but report failures ({line})"
+    if not int(m.group(1)):
+        return f"the hook tests exited 0 but report nothing passed ({line}); a suite that ran no test proves nothing"
     return None
 
 
