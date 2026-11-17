@@ -200,7 +200,11 @@ def _assert_wrapper_cancellation(tree, powershell):
     (tree / "codex_adapter.py").write_text(
         "import json,os,subprocess,sys,time\n"
         "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)'])\n"
-        f"open({str(ready)!r},'w').write(json.dumps([os.getpid(),child.pid]))\n"
+        # Written under a temporary name, then renamed: the poll below treats "the file
+        # exists" as ready, and a plain open(...,'w') makes it exist EMPTY before the
+        # JSON lands (MEASURED: CI 44074090891, windows-latest, JSONDecodeError on '').
+        f"with open({str(ready) + '.tmp'!r},'w') as f: f.write(json.dumps([os.getpid(),child.pid]))\n"
+        f"os.replace({str(ready) + '.tmp'!r},{str(ready)!r})\n"
         "time.sleep(20)\n", encoding="utf-8")
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
