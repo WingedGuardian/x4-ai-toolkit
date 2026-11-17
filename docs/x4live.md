@@ -41,6 +41,13 @@ command waits at least 15 s for the game to connect, so the first one after a qu
 take up to about 10 s to start, and it prints a WARNING on stderr when the helper the game
 loaded is a different build from the toolkit's copy.
 
+Mod Support APIs 1.95 has a defect in its pipe library: closing a pipe can corrupt the game's
+Lua state, which later crashes X4. The helper protects its own pipe connections from it (other
+mods' pipes are not changed). `x4live query probe` reports `pipe_unref_guard=active` when that
+protection is on. If it reports anything else (for example `inactive:` with a reason, after a
+Mod Support APIs update), it prints a WARNING: finish what you are doing with few commands and
+restart X4 afterwards.
+
 ## The commands
 
 Run `x4live <command> --help` for the full arguments; the
