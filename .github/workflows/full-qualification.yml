@@ -781,7 +781,11 @@ jobs:
           #   /c/ spelling), test_livefocus/livepeerprofile/liveaudio/livehelper_ffi_vanilla +1 each.
           # windows 68 -> 93 (+25): qa_sweep cells +12, test_hook_python_isolated +8, test_file_guard_staging +2 (ACL
           #   deny needed), test_liveaudio/livehelper_ffi_vanilla/liveclip +1 each. Ceilings: 495 + 3, 93 + 3.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '498' || '96' }}
+          # 2026-11-17 (4.2.0, F124 guard): READ per file on 44002746283 (ae3617a0) against the green 43793898950
+          #   (cd893037): the ONLY delta on both legs is tests/test_pipe_unref_guard.py +4 (the offline checks that
+          #   load the real game's lua51_64.dll and winpipe DLL: Windows-only on ubuntu, no X4_GAME on windows).
+          #   ubuntu 495 -> 499, windows 93 -> 97. Ceilings: 499 + 3, 97 + 3.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '502' || '100' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar
@@ -930,6 +934,9 @@ jobs:
     # test_release_bundle_docs +3 (no git checkout), REPO-ONLY +2 (deployed-hooks census). b5d34ca6+ adds 8 more
     # REPO-ONLY: test_hook_python_isolated's 3 source scans and test_settings_guard_roots' 5 patch cases (an
     # install's .claude/hooks ships no patch reader) -- these 7 FAILED there before. 1149 + 8 + 3 = 1160.
+    # 2026-11-17 (4.2.0, F124 guard): 1161 READ on 44002746283 (ae3617a0) against 1157 on the green 43793898950
+    # (cd893037), per file: the ONLY delta is tests/test_pipe_unref_guard.py +4 (real game DLLs; no install on
+    # the runner), the same +4 both `tests` legs itemise. 1161 + 3 = 1164.
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -1007,7 +1014,7 @@ jobs:
           python3 .github/scripts/installed_suite_verdict.py \
             --junit "$RUNNER_TEMP/installed-suite.xml" \
             --root "$RUNNER_TEMP/installed-toolkit" \
-            --min-tests 6000 --min-passed 5300 --max-skips 1160
+            --min-tests 6000 --min-passed 5300 --max-skips 1164
 
   hook-mutation:
     name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/8)
