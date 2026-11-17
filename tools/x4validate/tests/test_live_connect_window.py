@@ -223,7 +223,8 @@ def test_a_probe_reply_with_the_SAME_build_is_silent(monkeypatch):
 
         def ask(self, verb, *args):
             return SimpleNamespace(status="OK",
-                                   fields=["build=" + lp.expected_helper_build()],
+                                   fields=["build=" + lp.expected_helper_build(),
+                                           "pipe_unref_guard=active"],
                                    payload="x")
 
     import contextlib
@@ -243,7 +244,8 @@ def test_a_probe_command_WARNS_ONCE_when_marker_and_reply_both_differ(tmp_path, 
     """Review M3: the load-marker check and the probe-reply check must not both print."""
     class _ProbePipe(_RecordingPipe):
         def ask(self, verb, *args):
-            return SimpleNamespace(status="OK", fields=["build=deadbeef"], payload="x")
+            return SimpleNamespace(status="OK", fields=["build=deadbeef", "pipe_unref_guard=active"],
+                                   payload="x")
 
     monkeypatch.setattr(lp, "LivePipe", _ProbePipe)
     log = _marker_log(tmp_path, "deadbeef")
@@ -252,6 +254,49 @@ def test_a_probe_command_WARNS_ONCE_when_marker_and_reply_both_differ(tmp_path, 
     monkeypatch.setattr(_livecli.sys, "stderr", err)
     assert _livecli.cmd_query("probe", [], None, 3.0, out=io.StringIO()) == 0
     assert err.getvalue().count("WARNING") == 1, err.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# F124: the helper's pipe unref guard state, reported by probe
+# --------------------------------------------------------------------------- #
+
+def test_pipe_unref_guard_ACTIVE_is_silent():
+    assert lp.pipe_unref_guard_warning(["build=x", "pipe_unref_guard=active"]) is None
+
+
+@pytest.mark.parametrize("fields, state", [
+    (["pipe_unref_guard=inactive:bufsz at +0x20 is 1, not 2048"], "inactive:bufsz at +0x20 is 1"),
+    (["pipe_unref_guard=armed"], "armed"),
+    (["build=x"], "absent (this helper predates the guard)"),
+    (["pipe_unref_guard=active", "pipe_unref_guard=active"], "reported 2 times"),
+])
+def test_pipe_unref_guard_anything_but_ACTIVE_warns(fields, state):
+    w = lp.pipe_unref_guard_warning(fields)
+    assert w is not None and state in w
+    assert "connection churn can corrupt X4's Lua registry (F124); restart X4 after this session" in w
+
+
+def test_a_probe_reply_with_an_INACTIVE_guard_WARNS_on_stderr(monkeypatch):
+    class _Ctx:
+        path = r"\\.\pipe\test"
+
+        def ask(self, verb, *args):
+            return SimpleNamespace(status="OK", payload="x", fields=[
+                "build=" + lp.expected_helper_build(),
+                "pipe_unref_guard=inactive:Mod Support APIs version 1.96 is not the measured 1.95"])
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def fake_open(pipe, timeout):
+        yield _Ctx()
+
+    monkeypatch.setattr(_livecli, "_live_open", fake_open)
+    err = io.StringIO()
+    monkeypatch.setattr(_livecli.sys, "stderr", err)
+    assert _livecli.cmd_query("probe", [], None, 3.0, out=io.StringIO()) == 0, "warns, never refuses"
+    assert err.getvalue().count("WARNING") == 1, err.getvalue()
+    assert "version 1.96" in err.getvalue() and "restart X4" in err.getvalue()
 
 
 def test_the_timeout_help_states_the_connect_floor():

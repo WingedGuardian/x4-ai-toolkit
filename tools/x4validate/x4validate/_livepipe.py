@@ -662,6 +662,28 @@ def helper_build_warning(expected: str | None, reported: str | None,
             f"load reloads the UI) before trusting behaviour that changed between them.")
 
 
+def pipe_unref_guard_warning(fields) -> str | None:
+    """The stderr warning when the helper's F124 pipe unref guard is not active, or None.
+
+    The helper reports `pipe_unref_guard=` in its probe reply: `active` (its own pipe files
+    are stamped, so their close cannot touch X4's Lua registry), `armed` (installed but no
+    own file seen yet) or `inactive:<reason>` (refused, nothing written). Anything but
+    `active` warns, and so does a reply with NO such field: that helper predates the guard,
+    so its connections are unprotected too. Never a refusal -- the reply itself is fine.
+    """
+    values = [f.split("=", 1)[1] for f in fields if f.startswith("pipe_unref_guard=")]
+    if len(values) == 1 and values[0] == "active":
+        return None
+    if not values:
+        state = "absent (this helper predates the guard)"
+    elif len(values) > 1:
+        state = f"reported {len(values)} times"
+    else:
+        state = values[0]
+    return (f"WARNING: the X4 helper's pipe unref guard is {state}: connection churn can "
+            f"corrupt X4's Lua registry (F124); restart X4 after this session.")
+
+
 #: The helper extension's own manifest id, as shipped in this repo at
 #: `mods/x4_toolkit_helper/content.xml`. Not a deployment-specific detail and therefore not an
 #: F73 problem: we author the mod, so the id is ours and is identical in every install.

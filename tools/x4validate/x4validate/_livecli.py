@@ -1481,6 +1481,10 @@ def cmd_query(verb: str, args: list[str], pipe: str | None, timeout: float,
             "its probe reply")
         if warning:
             print(warning, file=sys.stderr)
+    if verb == "probe" and r.status == "OK":
+        guard_warning = _livepipe.pipe_unref_guard_warning(r.fields)
+        if guard_warning:
+            print(guard_warning, file=sys.stderr)
 
     print(f"pipe    : {path}", file=out)
     print(f"verb    : {verb} {' '.join(args)}".rstrip(), file=out)
