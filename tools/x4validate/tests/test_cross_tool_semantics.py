@@ -613,3 +613,46 @@ def test_TWIN_an_unqualified_dependent_row_claims_no_owner(tmp_path, monkeypatch
     ct = _dependent_run(monkeypatch, tmp_path, "modA", qualified=False)
     assert not ct.failures
     assert any(c.startswith("HARD (dependent_overwrites):") for c in ct.cannot), ct.cannot
+
+
+def _readded_run(monkeypatch, tmp_path, winner):
+    """As `_dependent_run`, with the row arriving as a `ReaddedAfterRemoval` (user
+    decision 2026-11-17): advisory, but its winner is still a live-owner claim."""
+    import types
+    from lxml import etree
+    from test_audit0924_gates import _store_k
+    from conftest import import_gate as _ig
+    from x4validate import _compat
+    vp = "libraries/wares.xml"
+    tree = etree.fromstring(b'<wares><ware id="ore"><price max="1"/></ware>'
+                            b'<ware id="silicon"><price max="2"/></ware></wares>')
+    run_dir = tmp_path / f"readd-{winner}"
+    run_dir.mkdir()
+    db = _store_k(run_dir / "e.sqlite", [("ware", "ore", vp, "price.max", "1", "modA"),
+                                         ("ware", "silicon", vp, "price.max", "9", "modB")])
+    row = _compat.ReaddedAfterRemoval(vp, winner, "modX", "modX", "required", "/wares/ware[2]",
+                                      target_path="/wares/ware[2]", target_tree="base",
+                                      winner=winner)
+    ct = _ig("cross_tool", module_level=False)
+    monkeypatch.setattr(ct, "failures", [])
+    monkeypatch.setattr(ct, "cannot", [])
+    monkeypatch.setattr(ct._env, "effective_db", lambda: db)
+    monkeypatch.setattr(ct._env, "extensions", lambda: tmp_path)
+    monkeypatch.setattr(ct._env, "stale_store_refusal", lambda db, who: None)
+    monkeypatch.setattr(ct._merge, "Config", lambda *a, **k: None)
+    monkeypatch.setattr(ct._registry, "mods", lambda *a, **k: [])
+    monkeypatch.setattr(ct._compat, "base_tree_for", lambda vp, f2p, cfg: tree)
+    monkeypatch.setattr(ct._compat, "analyze", lambda *a, **k: types.SimpleNamespace(
+        collisions=[], dependent_overwrites=[], readded_after_removal=[row]))
+    ct.check_cross_tool_agreement()
+    return ct
+
+
+def test_a_READDED_AFTER_REMOVAL_row_is_cross_checked_and_can_go_red(tmp_path, monkeypatch,
+                                                                     capsys):
+    ct = _readded_run(monkeypatch, tmp_path, "modB")
+    out = capsys.readouterr().out
+    assert not ct.failures and not ct.cannot, (ct.failures, ct.cannot, out)
+    assert "HARD (readded_after_removal) coverage: checked 1 of 1" in out, out
+    ct = _readded_run(monkeypatch, tmp_path, "modA")
+    assert any(f.startswith("HARD (readded_after_removal):") for f in ct.failures), ct.failures

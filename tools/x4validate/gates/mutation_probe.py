@@ -83,7 +83,7 @@ TARGETS: dict[str, list[str]] = {
                      "tests/test_profile_is_a_decision_log.py",
                      "tests/test_active_scope_engine_rules.py"],
     "_compat.py": ["tests/test_compat.py", "tests/test_compat_dropped.py",
-                   "tests/test_compat_dependency_patch.py"],
+                   "tests/test_compat_dependency_patch.py", "tests/test_compat_readd.py"],
     "_check.py": ["tests/test_check.py", "tests/test_tierb.py",
                   "tests/test_reference_scope.py",
                   "tests/test_tierb_nested_later_target.py",
@@ -189,6 +189,17 @@ MUTANTS = [
            "not any(a in declared for a in adders)",
            "an overwriter declaring only ONE of a node's adders is reported advisory "
            "against the adder it never declared"),
+    # --- _compat.py: re-adds of a declared dependency's removal (2026-11-17) ------
+    Mutant("_compat.py", "re-add split disabled",
+           "collisions = _split_readded(vpath, collisions, row_readds, depends, report, cand_folder,",
+           "collisions = (lambda *_a: collisions)(  # mutant: no re-add is listed",
+           "a re-add the user ruled advisory stays a failing HARD row and is never listed "
+           "for the user to confirm"),
+    Mutant("_compat.py", "one declared mod of several excuses a re-add (all -> any)",
+           "or not all(o in declared for o in others)):",
+           "or not any(o in declared for o in others)):",
+           "a re-adder declaring only the remover excuses the loss of a third mod's change "
+           "it never declared"),
     Mutant("_compat.py", "an id claimed by two folders binds to one of them",
            "folder = next(iter(holders)) if len(holders) == 1 else None",
            "folder = next(iter(holders)) if holders else None",

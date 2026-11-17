@@ -65,10 +65,13 @@ def test_an_op_dead_BEFORE_the_winner_is_not_called_a_later_op(tmp_path):
     nothing' must not name it."""
     rep = _world(tmp_path, [("a_rm", _RM_ORE), ("b_rep", _REP_ORE),
                             ("c_readd", _READD_ORE), ("d_rep", _REP_ORE)])
-    hard = _hard_on(rep, ["a_rm", "b_rep", "d_rep"])
+    # The re-adder takes part in the row: its add is what made the node exist again.
+    hard = _hard_on(rep, ["a_rm", "b_rep", "c_readd", "d_rep"])
     assert len(hard) == 1, hard
     assert hard[0].winner == "d_rep" and not hard[0].removed_by
-    assert "match nothing" not in hard[0].detail, hard[0].detail
+    assert "later op(s)" not in hard[0].detail, hard[0].detail
+    # It IS named as matching nothing -- before the winner (review 2026-11-17).
+    assert "op(s) from 'b_rep' match nothing (the node is removed when they load)"         in hard[0].detail, hard[0].detail
 
 
 def test_an_edit_BEFORE_the_remover_is_never_attributed_to_it(tmp_path):

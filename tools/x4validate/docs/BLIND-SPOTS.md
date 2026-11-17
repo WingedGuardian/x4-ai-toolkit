@@ -485,6 +485,8 @@ memory or from another session -- a remembered id was stale within a day here.
 | F383 | For 5 xspvro files at plain base-game paths the engine loaded the copier's file plus OTHER mods' `extensions/xspvro/<rel>` patches and never opened any mod's plain-path `<diff>` on that path; x4validate evaluated those plain diffs | **DEFECT (measured)** · PRE-ARC | same log, FileIO census: the plain-path diffs on those 5 files never opened, the nested patch opened, both passes. Rule MEASURED 10 of 10 over the `assets/units/` copies: the LAST effective index entry for the file's name (all mods, the patching mod's own index included) points at `extensions\xspvro\...` for exactly these 5 and at the base path for the 5 that merged; the first entry would mispredict 3 | FIXED 2026-11-17 in x4validate: such a plain-path diff is an ERROR `load-path` ("the engine never opens this plain-path patch"), its ops not evaluated, and the copier gets an INFO; last-entry-wins INFERRED from those 3; x4compat, x4effective and the merge model itself do not consult the index (OPEN) |
 | F384 | `_resolve.build_index`, the index every file/connection/fitting reader resolves names through, registered every `<entry>` of every index file, a `<diff>`'s payload included, and ignored `<remove>` and `@value` `<replace>` ops | **DEFECT (measured)** · PRE-ARC | 230 active roots: 14 removes + 5 replaces in `index/macros.xml`, 3 + 2 in `index/components.xml`; 12 names disagreed with the effective index (4 removed names still registered, a re-pointed name read the copier's file, one an unparseable file) | FIXED 2026-11-17: built from the effective index document; 12 of 12 (18 of 18 op-touched names) agree |
 | F386 | The BaseX builds started java with no `-Xmx`, so the JVM could grow its heap to a quarter of physical RAM; one reached the job wrapper's memory cap and was killed, and the cap was a number unrelated to the heap | **DEFECT (measured)** · PRE-ARC | x4eff killed at 6219 MB under a 6 GB cap (2026-11-17), x4raw the same way (2026-11-16), after weeks of ~3.3 GB peaks; control with a 4 GiB heap: x4eff built in 277 s, peak job memory 3985 MB; x4raw (4 GiB heap, 2026-11-17): 4409 MB, 371 s | FIXED 2026-11-17: every build-time java carries `-Xmx` from one setting (`X4_BASEX_HEAP`, default 4g) and x4fresh's `{mem_gb}` wrapper token hands the wrapper heap + 1.5 GiB; the 1.5 GiB allowance is INFERRED, not measured; the effective-store and xref builds are not bounded this way (OPEN); a wrapper that does not use `{mem_gb}` keeps its own cap |
+| F385 | x4compat named an EARLIER remover the live owner of a node a later mod ADDS again under the same parent; the engine has the node with the re-adder's definition, and x4effective said so | **DEFECT (measured)** · PRE-ARC | gates/cross_tool.py 2026-11-17 on the fresh store: 1 of 130 compared HARD rows (`libraries/wares.xml`). Per-item diff of every x4compat record on the live install, baseline 67b00553 vs final head ff39bcfc: 1 row left the HARD list, 5 re-adds listed for confirmation (the left row among them), 2 HARD rows changed in detail only | FIXED 2026-11-17 for top-level entries of `libraries/`, `index/`, `t/` (the other shapes: F387). A two-mod remove-then-re-add is a NEW row: HARD (exit 1 where it was 0) unless the re-adder declares every other mod on the node, then advisory `readded_after_removal` (user decision 2026-11-17) |
+| F387 | Re-adds x4compat still does not see: a removed NESTED node added back, a re-add in a non-library file (macros, md, aiscripts), and a complete (non-`<diff>`) library file redefining an entry a mod removed | **BLIND SPOT (measured)** · PRE-ARC | independent review 2026-11-17, one fixture each (ware/price; macro m1; a full union file): 0 rows, while the store names the re-adder's value | OPEN: node identity revives only by top-level key in a union file (`_compat_state.Nodes`); extending it needs a key per parent path and a per-op record for complete files |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -14138,3 +14140,82 @@ continuations and trailing comments), with a planted bare-launch twin per form; 
 argv lists and 5 build-module calls (coverage 1, dbswap 4; `ask.py` is the named query-time exemption) are asserted; the
 heap range edges; the real JVM's PrintFlagsFinal) and `tests/test_freshcli_job_memory.py` (the argv a real
 wrapper process receives through `_run`, and every malformed `{mem_gb` spelling refused). The structural tests were RED on the unfixed scripts before the fix.
+
+## F385 - x4compat named an earlier remover the live owner of a node a later mod adds again · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-17 (top-level library entries; F387 for the rest)
+
+`_compat_state.Nodes` keeps node identities across a document's overlays. In a union file (`libraries/`, `index/`, `t/`)
+a removed top-level node's key is remembered, and a later insertion of a node with that key CONTINUES the removed
+identity ("revived"). `Nodes.register` then left the revived identity out of the inserting op's `created` set, so the
+re-adder, whose `<add sel="/wares">` targets the PARENT, never took part in the node's row. MEASURED on the live install
+(gates/cross_tool.py, 2026-11-17, store fresh): xenon_backup adds into `turret_xen_m_beam_02_mk1`, xspvro removes the
+ware, and a later overlay adds the ware again under `/wares`; x4compat's row named xspvro (`'xspvro' loads last and wins`),
+while the store's origin for the ware is the overlay, which is what the engine applies in load order.
+
+Fix (3fad0448, 24faa6cf): every node an op registers is that op's contribution, revived ones included. The re-adder joins
+the row as a supplier and wins it. What the row says (e21d5c16): every remover by name, a re-adder that also has another
+op on the node, the earlier changes that went with the removal, and ops that matched nothing because the node was gone
+when they loaded (PRE-ARC: they were silent). Two adds of one key with a removal between them fill one slot in turn and
+are no longer a HARD duplicate (ff39bcfc, PRE-ARC). Not changed: a revived node is still not counted in the op's
+`inserted` list (the partial-overwrite clause).
+
+Classification (user decision 2026-11-17, amended the same day; 94aff355): a remove-then-re-add is NOT folded into the
+issue #11 `dependent_overwrites`. When the re-adder declares a direct dependency (required or optional, by manifest id,
+read exactly as the issue #11 rule reads it) on EVERY other mod on the node -- the remover and any mod whose change went
+with the removal -- the row is advisory and listed in `readded_after_removal`, rendered as "RE-ADDED AFTER A DECLARED
+DEPENDENCY REMOVED IT -- CONFIRM INTENT": a dependency proves a patch, not that re-adding is meant (a patcher written
+against an older version of its dependency re-adds what that dependency has since removed). Otherwise the row is HARD.
+So a two-mod remove-then-re-add, which had NO row before, now fails x4compat (exit 1 where it exited 0) unless declared.
+This corrects this entry's first version, which said exit codes were unchanged (independent review 2026-11-17, MEASURED).
+
+Side effects (independent review 2026-11-17, MEASURED in fixtures): a SUBTREE row is no longer reported when a mod
+replaces or removes a node that was re-added -- the re-adder now owns the node, and the SUBTREE pass skips a victim that
+only supplied the wiped node; and a node one mod removes and re-adds in one file, then overwritten by a mod declaring a
+dependency on it, moves from HARD to `dependent_overwrites`.
+
+Pre-arc: the exclusion came in with the sequential trace (e5a07942, 2026-10-15) and ships in v4.0.0 through v4.1.1.
+Live delta, per item, MEASURED on the final head ff39bcfc against the baseline 67b00553 (every row, dependent-overwrite,
+removed-first, added-into and re-add record of the install, keyed by file, kind and target): 1 row left the HARD list (the
+measured one, winner xspvro); 5 re-adds listed in `readded_after_removal`, each a later overlay adding back a node xspvro
+removed (`libraries/wares.xml` 1, the measured node, where the overlay declares both xspvro and xenon_backup;
+`libraries/jobs.xml` 3; `index/macros.xml` 1), all declared required, so 0 new HARD rows; 2 HARD rows changed in detail
+only (xspvro removes and re-adds the node in its own file, now named as its re-supplier); 3292 dependent-overwrite
+records unchanged; 0 other records changed. One mod was added to the install between the two runs; it takes part in 0
+records of either. Re-add signals (a scratchpad measurement, not a check): 0 of 5 state a dependency version; 1 of 5
+re-adds an element identical (canonical XML) to the node before the removal, 4 do not; 0 of 5 are guarded.
+
+cross_tool: on 24faa6cf against the fresh store, 0 violations (HARD 133 of 133 compared rows agree, 204 rows; dependent
+overwrites 3126 of 3126). On the final head the agreement section could NOT run: the store went stale (a mod was added
+after its build), and it was not rebuilt here; the `readded_after_removal` population's comparison is covered by
+`tests/test_cross_tool_semantics.py` only until then.
+
+Signals (user decision 2026-11-17, 23af355c): every confirm-intent row SHOWS, per remover, the declared dependency
+version vs the installed remover version and both content.xml versions and dates, and per row whether the re-added
+element is identical to the node before the removal and the add's guard. It is WARNed as a likely carry-forward ONLY when
+the re-adder's content.xml date is older than the remover's. SUPERSEDED the same day (user decision 14:4x): the first
+rule also warned on a declared dependency version older than the installed remover's; that version is now SHOWN and never
+warns, because X4 treats a dependency version as a minimum and MEASURED 66 of 108 stated dependency versions on this
+install are older than the installed mod, so it would have warned on most versioned re-adders. Identical content and a
+missing guard are shown, never warned; a missing or unparseable value reads "unknown (...)", never a warning and never
+"intended". Versions compare as dotted integers, dates only as ISO YYYY-MM-DD.
+MEASURED on the live install at 23af355c (read-only): 5 of 5 rows, 0 warned -- every one declares no dependency
+version (unknown) and the re-adder's date 2026-11-17 is after xspvro's 2026-03-24; identical 1 of 5 (the ware), guard
+none in 5 of 5, matching the scratchpad measurement row for row.
+
+Review round 2 (2026-11-17; 0fa7be1c, 385ca04e): a supplier whose every remove loads AFTER it is no re-adder (the row
+read "— remove this node" with no remover); a HARD re-add whose re-adder declares the remover but not a third mod on the
+node names that mod (declaring it would make the row advisory); `x4compat check --help` and the x4-mod-interaction skill
+describe the section.
+
+Tests: `tests/test_compat_readd.py` (the first fix: 3 of 8 RED on the old code); per-clause twins for every later
+clause, each mutant run by hand (the later rounds on a scratch copy of the tree) and killed except one proven
+equivalent.
+
+## F387 - re-adds x4compat still does not see · **BLIND SPOT (measured)** · PRE-ARC · confidence 90% · OPEN 2026-11-17
+
+F385's fix rests on `_compat_state.Nodes` reviving a removed node's identity when a later insertion re-creates its key,
+and that revival exists only for a TOP-LEVEL child of a union file's root (`libraries/`, `index/`, `t/`). The independent
+review of F385 (2026-11-17, one fixture each) MEASURED 0 rows, with the store naming the re-adder's value, for: a removed
+nested node added back (`ware/price`); a remove-then-re-add of a macro in a non-library file; and a complete
+(non-`<diff>`) union file redefining an entry a mod removed. Those shapes stay as they were before F385 -- silent, not a
+wrong winner -- and are OPEN. Extending detection needs a key per parent path (a nested `price` has no id or name to key
+on) and a per-op record for complete files, which the trace does not keep; not costed.

@@ -80,9 +80,14 @@ class Nodes(Recorder):
     def register(self, node):
         for el in node.iter():
             if isinstance(el.tag, str):
+                # Every node an op registers is its contribution ("supply") -- a REVIVED
+                # one too: an insertion re-supplying a removed key continues the removed
+                # identity, and this op is what made it exist again. Leaving revived
+                # identities out dropped the re-adder from the node's row, so an EARLIER
+                # remover was named the live owner of a node the engine has with the
+                # re-adder's definition (MEASURED 2026-11-17, gates/cross_tool.py).
                 identity = self.element_id(el)
-                if identity not in self.revived:
-                    self.created.add(identity)
+                self.created.add(identity)
                 self.created.update(identity + "/@" + attr for attr in el.attrib)
 
     def elem_created(self, el, origin, prior_chain=None):

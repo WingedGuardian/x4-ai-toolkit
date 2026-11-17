@@ -48,8 +48,16 @@ removal verdict is qualified. Candidate overlays are explicitly hypothetical.
    optional, by the adder's manifest `id`, not its folder name) on that adder: then it is an
    intended patch, advisory, one line per mod pair under OVERWRITES OF A DECLARED
    DEPENDENCY'S ADDED CONTENT (`dependent_overwrites` in `--json`). A transitive dependency
-   does not count, and two mods overwriting the same added node still fail; an `<add>` into another mod's added content is the compatibility-patch
-   pattern -- advisory, listed under ADDS INTO CONTENT ANOTHER MOD ADDED (`added_into` in
+   does not count, and two mods overwriting the same added node still fail. A mod that ADDS
+   BACK a node another mod removed (same id, same parent; top-level entries of `libraries/`,
+   `index/`, `t/` files) wins it: when it declares a dependency on every other mod on that node
+   the row is advisory, listed under RE-ADDED AFTER A DECLARED DEPENDENCY REMOVED IT -- CONFIRM
+   INTENT (`readded_after_removal` in `--json`) with its signals and a carry-forward WARN only
+   when the re-adder's content.xml date is older than the remover's (the declared dependency
+   version is shown, never warned on: X4 reads it as a minimum) -- a dependency shows a patch,
+   not that the re-add is meant, so ask the user to
+   confirm each one; undeclared, it is HARD. An `<add>` into another mod's added content is the
+   compatibility-patch pattern -- advisory, listed under ADDS INTO CONTENT ANOTHER MOD ADDED (`added_into` in
    `--json`), never failing. **Zero hard
    collisions is common and means "no structural clash" — NOT "no interaction" (see step 2).**
 

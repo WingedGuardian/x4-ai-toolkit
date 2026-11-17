@@ -29,7 +29,13 @@ A replace/remove landing on content ANOTHER mod added fails (HARD) unless the ov
 declares a DIRECT dependency (required or optional, matched by the adder's manifest id, not its
 folder name) on that mod: then it is an intended patch, reported as an advisory grouped per mod
 pair (every row in --json dependent_overwrites). A dependency of a dependency does not count, and
-two mods overwriting the same added node still fail.
+two mods overwriting the same added node still fail. A mod that ADDS BACK a node another mod
+removed (same id, same parent) wins it; when it declares a dependency on every other mod on that
+node, the row is an advisory listed under RE-ADDED AFTER A DECLARED DEPENDENCY REMOVED IT --
+CONFIRM INTENT (--json readded_after_removal), each row with its signals (dependency version,
+content.xml dates, identical to the removed node, guard) and a carry-forward WARN only when the
+re-adder's content.xml date is older than the remover's (the dependency version is shown, never
+warned on: X4 reads it as a minimum); otherwise it fails (HARD).
 
 positional arguments:
   candidate             the mod to focus on ('before I add this'): an existing folder PATH is the

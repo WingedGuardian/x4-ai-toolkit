@@ -1003,8 +1003,10 @@ def test_a_node_RE_ADDED_after_its_removal_is_won_by_the_later_writer(tmp_path):
         cfg, overlays=(ext / "a_rm", ext / "b_readd", ext / "c_replace"))).tree
     assert live.find("ware[@id='ore']/price").get("average") == "7"   # control
     hard = [c for c in _compat.analyze(ext, config=cfg).by_kind("HARD")
-            if set(c.mods) == {"a_rm", "c_replace"}]
+            if "a_rm" in c.mods]
     assert len(hard) == 1, hard
+    # The re-adder takes part: its add is what made the node exist again.
+    assert hard[0].mods == ["a_rm", "b_readd", "c_replace"], hard[0]
     assert hard[0].live_value_owner() == "c_replace" and not hard[0].removed_by, hard[0]
 
 

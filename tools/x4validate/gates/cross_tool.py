@@ -492,6 +492,16 @@ def _dependent_as_hard(d) -> "_compat.Collision":
         winner_qualified=getattr(d, "winner_qualified", True))
 
 
+def _readded_as_hard(r) -> "_compat.Collision":
+    """The HARD row a `ReaddedAfterRemoval` was before `_compat._split_readded` moved it
+    out: mods = the others on the row, then the re-adder, which is its winner."""
+    others = [o for o in r.others.split(", ") if o]
+    return _compat.Collision(
+        vpath=r.vpath, kind="HARD", target=r.target, mods=[*others, r.mod],
+        winner=r.winner, detail=r.detail, target_path=r.target_path,
+        target_tree=r.target_tree, winner_qualified=getattr(r, "winner_qualified", True))
+
+
 def check_cross_tool_agreement() -> None:
     print("\n2. CROSS-TOOL AGREEMENT - x4compat's winner vs x4effective's origin")
     try:
@@ -511,7 +521,10 @@ def check_cross_tool_agreement() -> None:
     # are cross-checked as their own population -- release review F7: 2,544 live rows had
     # left the denominator with nothing saying so.
     dependent = [_dependent_as_hard(d) for d in getattr(report, "dependent_overwrites", ())]
-    if not report.collisions and not dependent:
+    # The same for a re-add of a declared dependency's removal (user decision 2026-11-17):
+    # advisory, but its winner -- the re-adder -- is a live-owner claim like any HARD row.
+    readded = [_readded_as_hard(r) for r in getattr(report, "readded_after_removal", ())]
+    if not report.collisions and not dependent and not readded:
         note(False, "found collisions to cross-check", "none on this install")
         return
     by_kind: dict[str, list] = {}
@@ -557,7 +570,8 @@ def check_cross_tool_agreement() -> None:
             ("FULL-OVERRIDE", "FULL-OVERRIDE", "entities", by_kind.get("FULL-OVERRIDE", [])),
             ("UNION-KEY", "UNION-KEY", "entities", by_kind.get("UNION-KEY", [])),
             ("HARD", "HARD", "attrs", by_kind.get("HARD", [])),
-            ("HARD (dependent_overwrites)", "HARD", "attrs", dependent)):
+            ("HARD (dependent_overwrites)", "HARD", "attrs", dependent),
+            ("HARD (readded_after_removal)", "HARD", "attrs", readded)):
         if not rows:
             print(f"          {label}: none on this install")
             continue

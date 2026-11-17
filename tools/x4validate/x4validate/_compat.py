@@ -221,6 +221,48 @@ class DependentOverwrite:
 
 
 @dataclass
+class ReaddedAfterRemoval:
+    """A node a mod ADDS BACK (same key, same parent) after a mod it declares a DIRECT
+    dependency on removed it (user decision 2026-11-17; design not final).
+
+    Advisory, never failing -- but NOT an intended patch by declaration alone, so it is
+    not a `DependentOverwrite`: the dependency proves the re-adder patches the remover,
+    not that re-adding what the remover took out is meant. A patcher written against an
+    OLDER version of its dependency (which has since removed the content) carries the
+    re-add forward by accident. So it is listed for the user to CONFIRM. Without the
+    declaration the row stays a failing HARD row.
+
+    `others` = every other mod on the row (the removers, and any mod whose change went
+    with the removal), each declared by `mod`; `dependency` is the weakest of those."""
+    vpath: str
+    mod: str              # the re-adder (the row's winner)
+    removed_by: str       # the remover(s), ", "-joined
+    others: str           # every other mod on the row, ", "-joined, in load order
+    dependency: str       # "required" | "optional"
+    target: str           # internal node identity (JSON only)
+    target_path: str = ""
+    target_tree: str = "final"
+    winner: str = ""
+    detail: str = ""
+    winner_qualified: bool = True
+    line: int = 0         # the re-adding op's source line in `mod`'s file
+    sel: str = ""
+    guard: str = ""       # as `OrderMiss.guard`
+    #: The four signals (user decision 2026-11-17), every one SHOWN, see `_readd_signals`:
+    #: per remover the declared dependency version vs its installed version and the two
+    #: content.xml dates; the re-added element vs the node before the removal; the guard.
+    #: A missing or unparseable value reads "unknown" -- never a warning, never "intended".
+    signals: dict = field(default_factory=dict)
+    #: Why this re-add looks like a CARRY-FORWARD (a patch written against an older
+    #: version of its dependency): ONLY a re-adder content.xml date older than the
+    #: remover's (user decision 2026-11-17, 14:4x). The declared dependency version is
+    #: SHOWN in `signals` but never warns: X4 reads it as a minimum, and 66 of 108 stated
+    #: dependency versions on the measured install are older than the installed mod.
+    #: Empty = no warning (which is not a claim the re-add is intended).
+    carry_forward_warning: list[str] = field(default_factory=list)
+
+
+@dataclass
 class GuardedOff:
     """A `<diff>` op whose `if=` guard is FALSE when its mod loads (issue #8).
 
@@ -282,6 +324,9 @@ class CompatReport:
     #: Overwrites of a DECLARED dependency's added content -- see `DependentOverwrite`.
     #: Advisory, never failing; one record per row it would have been.
     dependent_overwrites: list[DependentOverwrite] = field(default_factory=list)
+    #: Re-adds of a node a DECLARED dependency removed -- see `ReaddedAfterRemoval`.
+    #: Advisory, never failing; listed so the user confirms the intent.
+    readded_after_removal: list[ReaddedAfterRemoval] = field(default_factory=list)
     #: WHICH roots were scanned, in words -- "" means every configured extensions root
     #: (the set the engine loads). An --ext-dir run scans that folder ONLY and says so
     #: here, because a mod in another root is then absent with nothing else to show it.
@@ -510,6 +555,7 @@ def _analyze_vpath(
     report: CompatReport | None = None,
     cand_folder: str | None = None,
     depends: dict[str, dict[str, str]] | None = None,
+    facts: dict[str, dict] | None = None,
 ) -> list[Collision]:
     """Classify collisions among mods touching a single virtual path.
 
@@ -783,11 +829,64 @@ def _analyze_vpath(
     # id(row) -> the mods that ADDED its node (issue #11): decides, at the end, whether
     # the row is an intended patch of a declared dependency (advisory) or stays HARD.
     row_adders: dict[int, list[str]] = {}
+    # id(row) -> (removers, the re-adding op) for a row whose winner RE-ADDS a removed
+    # node and nothing writes it after (user decision 2026-11-17).
+    # id(row) -> (removers, the re-adding op, identical-to-pre-removal, the mods whose op
+    # on the node matched nothing).
+    row_readds: dict[int, tuple[list[str], etree._Element | None, str, list[str]]] = {}
+    pre_trees: dict[str, etree._Element | None] = {}
+
+    def identical_to_pre_removal(remover: str, op: etree._Element | None, cid: str) -> str:
+        """"yes"/"no": the re-added element vs the node as it stood just before *remover*
+        loaded (canonical XML); "unknown (...)" when either side cannot be found."""
+        if remover not in pre_trees:
+            pre_trees[remover] = _prefix_tree(
+                vpath, [f for f in ordered if rank[f] < rank[remover]], folder_to_path, config)
+        pre, path = pre_trees[remover], final_paths.get(cid, "")
+        tree = full_tree()
+        live = tree.getroottree().xpath(path) if tree is not None and path else []
+        if not live or not isinstance(live[0].tag, str):
+            return "unknown (the re-added node is not in the finished tree)"
+        key = (live[0].tag, live[0].get("id"), live[0].get("name"))
+        before = [c for c in (pre if pre is not None else ()) if isinstance(c.tag, str)
+                  and (c.tag, c.get("id"), c.get("name")) == key]
+        added = [ch for ch in (op if op is not None and op.tag == "add" else ())
+                 if isinstance(ch.tag, str) and (ch.tag, ch.get("id"), ch.get("name")) == key]
+        if len(before) != 1:
+            return "unknown (no single node with this key before the removal)"
+        if len(added) != 1:
+            return "unknown (the re-adding <add> holds no single element with this key)"
+        return "yes" if _canonical_xml(before[0]) == _canonical_xml(added[0]) else "no"
     # Keys pass 1 already reported as HARD duplicates, with the mods of that
     # row: a union-key row is folded only when it names NO mod the hard row
     # missed (icons: the full-file shippers of icon#upgrade_* are different
     # mods from the same-anchor adders — folding them would lose information).
     hard_dup_keys: dict[str, set[str]] = {}
+    # Keys whose same-parent adds by several mods filled ONE slot in turn (review
+    # 2026-11-17, PRE-ARC): each add re-created a node a mod removed in between, so the
+    # copies never coexisted. key -> those providers; no duplicate row of either kind.
+    one_slot_keys: dict[str, set[str]] = {}
+
+    def slot_ids(f: str, parent: str, key: str) -> set[str]:
+        """The identities of the *key* children of *parent* that *f*'s ops supplied."""
+        tree = full_tree()
+        out: set[str] = set()
+        if tree is None:
+            return out
+        for (ff, _index), rec in traced.items():
+            if ff != f:
+                continue
+            for ident in rec.created:
+                path = final_paths.get(ident)
+                # Children of *parent* only: a filter for COST (one XPath per identity),
+                # and it can only shrink the set -- an empty set keeps the row (below).
+                if "/@" in ident or ident.rpartition("/")[0] != parent or not path:
+                    continue
+                hit = tree.getroottree().xpath(path)
+                if (hit and isinstance(hit[0].tag, str)
+                        and f"{hit[0].tag}#{hit[0].get('id') or hit[0].get('name')}" == key):
+                    out.add(ident)
+        return out
 
     def winner(fs: list[str]) -> str:
         return max(fs, key=lambda f: rank[f])
@@ -870,6 +969,14 @@ def _analyze_vpath(
                                 f"its texture set could not be enumerated ({why}), so "
                                 f"whether its expansion duplicates another mod's {dup} "
                                 "expansion is NOT CHECKED")
+                continue
+            slots = [slot_ids(f, cid, dup) for f in providers]
+            # Every provider's node must be FOUND (an empty set is UNKNOWN: its node is
+            # gone at the end), and all must be one identity, before the row is dropped.
+            if all(slots) and len(set().union(*slots)) == 1:
+                # One continued identity: a node with this key was removed and the next
+                # provider re-created it, every time -- sequential, never a duplicate.
+                one_slot_keys.setdefault(dup, set()).update(providers)
                 continue
             hard_dup_keys.setdefault(dup, set()).update(providers)
             last = winner(providers)
@@ -966,7 +1073,8 @@ def _analyze_vpath(
                 if folder not in key_to_mods[k]:
                     key_to_mods[k].append(folder)
     for k, fs_ in sorted(key_to_mods.items()):
-        if len(fs_) < 2 or set(fs_) <= hard_dup_keys.get(k, set()):
+        if (len(fs_) < 2 or set(fs_) <= hard_dup_keys.get(k, set())
+                or set(fs_) <= one_slot_keys.get(k, set())):
             continue
         fs = sorted(fs_, key=lambda f: rank[f])
         if _is_wildcard_icon(k):
@@ -1104,7 +1212,12 @@ def _analyze_vpath(
             alive = [f for f in fs if any(at_pos[(f, id(op))] for op in ops_at[f][cid])]
             w = alive[-1] if alive else next(f for f in fs if "remove" in tags[f])
             dead = [f for f in fs if f not in alive and rank[f] > rank[w]]
-            if "remove" in tags[w]:
+            removers = [f for f in fs if rank[f] <= rank[w] and "remove" in tags[f]]
+            # The winner RE-ADDS the node when it supplied it and the node is there at
+            # the end (a mod may remove and re-add in one file: then it is both). With no
+            # remover before it, it is no re-add: `if not removers` below says so.
+            readds = "supply" in tags[w] and cid in final_paths
+            if "remove" in tags[w] and not readds:
                 collisions.append(Collision(
                     vpath, "HARD", cid, fs, w,
                     f"{ops_desc} — '{w}' REMOVES this node, and the later op(s) from "
@@ -1114,16 +1227,62 @@ def _analyze_vpath(
                     removed_by=w))
                 if added_note:
                     row_adders[id(collisions[-1])] = others_
-            else:
-                gone = [f for f in fs if rank[f] < rank[w] and "remove" in tags[f]]
+                continue
+            if not removers:
+                # Every remove on the node loads AFTER the winner and matched nothing (an
+                # unevaluable guard, say): nothing removed the node before it applied.
                 collisions.append(Collision(
                     vpath, "HARD", cid, fs, w,
-                    f"{ops_desc} — {', '.join(repr(f) for f in gone)} removes this node, "
-                    f"but it exists again when '{w}' loads (another mod re-supplies it), "
-                    + (f"so '{w}' applies (its <add> only inserts children)"
-                       if all(t == "add" for t in tags[w]) else f"so '{w}' applies and wins")
+                    f"{ops_desc} — '{w}' is the last mod whose op on this node applies; "
+                    f"the later op(s) from {', '.join(repr(f) for f in dead) or 'no mod'} "
+                    "match nothing" + added_note + gnote((f, cid) for f in fs)))
+                if added_note:
+                    row_adders[id(collisions[-1])] = others_
+                continue
+            names = ", ".join(repr(f) for f in removers)
+            verb = "removes" if len(removers) == 1 else "remove"
+            # Ops on the node that matched nothing BEFORE the winner: the node was gone
+            # when their mod loaded (review 2026-11-17, PRE-ARC: these were not named).
+            missed = [f for f in fs if f not in alive and rank[f] < rank[w]]
+            miss_note = (f"; op(s) from {', '.join(repr(f) for f in missed)} match nothing "
+                         "(the node is removed when they load)" if missed else "")
+            if readds:
+                # Every other mod before the winner changed a node that is gone now: it
+                # went with a removal. A remover is not "lost", and neither is an op that
+                # matched nothing (it changed nothing). (A mod between the last removal
+                # and the winner can only be such a miss: the node is absent there.)
+                lost = [f for f in fs if rank[f] < rank[w]
+                        and f not in removers and f not in missed]
+                collisions.append(Collision(
+                    vpath, "HARD", cid, fs, w,
+                    f"{ops_desc} — {names} {verb} this node, and '{w}' adds it again "
+                    f"under the same parent, so the node is live with '{w}''s definition "
+                    f"and '{w}' wins"
+                    + (f"; the earlier change(s) of {', '.join(repr(f) for f in lost)} "
+                       "went with the removal" if lost else "")
+                    + miss_note
                     + (f"; later op(s) from {', '.join(repr(f) for f in dead)} match "
-                       "nothing" if dead else "") + added_note + gnote((f, cid) for f in fs)))
+                       "nothing" if dead else "") + gnote((f, cid) for f in fs)))
+                # Its own list when the re-adder declares every other mod on the row
+                # (user decision 2026-11-17, `_split_readded`). No `row_adders` entry: the
+                # node the earlier adders supplied is gone, the winner's is live.
+                readd_op = next((op for op in ops_at[w][cid] if op.tag == "add"),
+                                next(iter(ops_at[w][cid]), None))
+                row_readds[id(collisions[-1])] = (
+                    removers, readd_op, identical_to_pre_removal(removers[-1], readd_op, cid),
+                    [f for f in fs if f not in alive])
+                continue
+            collisions.append(Collision(
+                vpath, "HARD", cid, fs, w,
+                f"{ops_desc} — {names} {verb} this node, "
+                f"but it exists again when '{w}' loads ("
+                + (f"re-supplied by {', '.join(repr(f) for f in others_)}" if others_
+                   else "another mod re-supplies it") + "), "
+                + (f"so '{w}' applies (its <add> only inserts children)"
+                   if all(t == "add" for t in tags[w]) else f"so '{w}' applies and wins")
+                + miss_note
+                + (f"; later op(s) from {', '.join(repr(f) for f in dead)} match "
+                   "nothing" if dead else "") + added_note + gnote((f, cid) for f in fs)))
             if added_note:
                 row_adders[id(collisions[-1])] = others_
         if report is not None:
@@ -1186,7 +1345,183 @@ def _analyze_vpath(
         if not collision.winner_qualified:
             collision.detail = collision.detail.replace("loads last and wins", "loads last among potential contenders")
             collision.detail += "; no qualified live winner is claimed"
+    collisions = _split_readded(vpath, collisions, row_readds, depends, report, cand_folder,
+                                facts)
     return _split_dependent(vpath, collisions, row_adders, depends, report, cand_folder)
+
+
+_VERSION = re.compile(r"\d+(?:\.\d+)*")
+_ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+
+
+def _version_state(declared: str, installed: str) -> str:
+    """"older" | "same or newer" | "unknown (why)" for a declared dependency version vs the
+    installed one. A dotted version against an undotted one (1.0.2 vs 102) is not
+    comparable (review round 3), and neither is anything not dotted integers."""
+    if not declared:
+        return "unknown (no dependency version stated)"
+    dk, ik = _version_key(declared), _version_key(installed)
+    if dk is None or ik is None or ("." in declared) != ("." in installed):
+        return (f"unknown (cannot compare {declared!r} with "
+                f"{installed or 'no installed version'!r})")
+    return "older" if dk < ik else "same or newer"
+
+
+def _version_key(text: str) -> tuple[int, ...] | None:
+    """A dotted-integer version as a comparable tuple; None = not that shape."""
+    text = (text or "").strip()
+    if not _VERSION.fullmatch(text):
+        return None
+    parts = [int(x) for x in text.split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
+def _date_key(text: str):
+    """A content.xml `date` as a date when it is ISO `YYYY-MM-DD`; None otherwise."""
+    import datetime
+    m = _ISO_DATE.fullmatch((text or "").strip())
+    if not m:
+        return None
+    try:
+        return datetime.date(int(m[1]), int(m[2]), int(m[3]))
+    except ValueError:
+        return None
+
+
+def _manifest_facts(mods: list[dict]) -> dict[str, dict]:
+    """folder -> {"version", "date", "dep_versions": {dependency folder: version attr}}.
+
+    Read for the re-add signals only (user decision 2026-11-17). A dependency id binds to a
+    folder by `_dep_holder`, the rule `_declared_dependencies` uses; "" = no version given.
+    A manifest that does not parse gives empty values, which every signal reads as unknown."""
+    claims, claims_lower = _id_claims(mods)
+    out: dict[str, dict] = {}
+    for m in mods:
+        facts = {"version": "", "date": "", "dep_versions": {}}
+        out[m["folder"]] = facts
+        try:
+            root = etree.parse(str(Path(m["path"]) / "content.xml")).getroot()
+        except (OSError, etree.LxmlError):
+            continue
+        facts["version"] = root.get("version", "")
+        facts["date"] = root.get("date", "")
+        for d in root.iter("dependency"):
+            folder = _dep_holder(d.get("id") or "", claims, claims_lower)
+            if folder and folder != m["folder"]:
+                facts["dep_versions"].setdefault(folder, d.get("version", ""))
+    return out
+
+
+def _readd_signals(mod: str, removers: list[str], facts: dict[str, dict] | None,
+                   identical: str, guard: str) -> tuple[dict, list[str]]:
+    """The four signals of one re-add (user decision 2026-11-17), and the carry-forward
+    warnings they raise. ONE clause warns: a re-adder content.xml date older than the
+    remover's. The declared-vs-installed dependency version is shown and never warns (user
+    decision 2026-11-17, 14:4x: X4 treats it as a minimum; 66 of 108 stated versions are
+    older than installed). A missing or unparseable value is "unknown" and said."""
+    facts = facts or {}
+    mine = facts.get(mod, {})
+    per: list[dict] = []
+    warn: list[str] = []
+    for rm in removers:
+        theirs = facts.get(rm, {})
+        declared = mine.get("dep_versions", {}).get(rm, "")
+        installed = theirs.get("version", "")
+        vstate = _version_state(declared, installed)
+        # THE version clause: shown above, NEVER a warning (user decision 2026-11-17, 14:4x).
+        mdate, rdate = mine.get("date", ""), theirs.get("date", "")
+        mk, rk = _date_key(mdate), _date_key(rdate)
+        if mk is None or rk is None:
+            missing = [f"'{who}' {('has no date' if not d else f'date {d!r} is not YYYY-MM-DD')}"
+                       for who, d, k in ((mod, mdate, mk), (rm, rdate, rk)) if k is None]
+            dstate = "unknown (" + "; ".join(missing) + ")"
+        elif mk < rk:
+            dstate = "older"
+            warn.append(f"'{mod}' content.xml date {mdate} is older than '{rm}''s {rdate}")
+        else:
+            dstate = "same or newer"
+        per.append({"remover": rm, "declared_version": declared, "installed_version": installed,
+                    "version": vstate, "readder_version": mine.get("version", ""),
+                    "readder_date": mdate, "remover_date": rdate, "date": dstate})
+    return ({"removers": per, "identical_to_pre_removal": identical,
+             "guard": guard or "none"}, warn)
+
+
+def _canonical_xml(el: etree._Element) -> bytes:
+    """*el* as canonical XML (C14N) with whitespace-only text dropped."""
+    el = etree.fromstring(etree.tostring(el))
+    for n in el.iter():
+        if isinstance(n.tag, str):
+            if n.text is not None and not n.text.strip():
+                n.text = None
+            if n.tail is not None and not n.tail.strip():
+                n.tail = None
+    return etree.tostring(el, method="c14n")
+
+
+def _split_readded(vpath: str, collisions: list[Collision],
+                   row_readds: dict[int, tuple[list[str], etree._Element | None, str,
+                                               list[str]]],
+                   depends: dict[str, dict[str, str]] | None,
+                   report: CompatReport | None,
+                   cand_folder: str | None,
+                   facts: dict[str, dict] | None = None) -> list[Collision]:
+    """Move each re-add row (*row_readds*) whose re-adder -- the row's winner -- declares
+    a direct dependency on EVERY other mod on the row out of the failing rows, into
+    `report.readded_after_removal` (user decision 2026-11-17). The declaration is read by
+    the issue #11 rule (`_declared_dependencies`: required or optional, by manifest id,
+    direct only). Everything else is returned unchanged, so it stays HARD."""
+    if not depends or not row_readds:
+        return collisions
+    kept: list[Collision] = []
+    for c in collisions:
+        entry = row_readds.get(id(c))
+        others = [f for f in c.mods if f != c.winner]
+        declared = depends.get(c.winner, {})
+        if (entry is None or c.kind != "HARD" or not others
+                or not all(o in declared for o in others)):
+            missing = [o for o in others if o not in declared]
+            if (entry is not None and c.kind == "HARD" and missing
+                    and all(r in declared for r in entry[0])):
+                # Review rounds 2-3: the re-adder declares every remover but not some other
+                # mod on the node. Name the ones whose op APPLIED as what to declare; a mod
+                # whose op matched nothing changed nothing, so it is not asked for -- but the
+                # rule counts every mod on the node, so say it still keeps the row HARD.
+                applied = [o for o in missing if o not in entry[3]]
+                idle = [o for o in missing if o in entry[3]]
+                c.detail += (f"; '{c.winner}' declares a dependency on "
+                             f"{', '.join(repr(r) for r in entry[0])} but not on "
+                             f"{', '.join(repr(o) for o in missing)}")
+                if applied and not idle:
+                    c.detail += (f": declaring {'it' if len(applied) == 1 else 'them'} would "
+                                 "make this an advisory re-add (confirm intent)")
+                else:
+                    c.detail += (
+                        (f": declaring {', '.join(repr(o) for o in applied)} is needed, and "
+                         if applied else ": ")
+                        + f"{', '.join(repr(o) for o in idle)} matched nothing here, yet the "
+                        "rule counts every mod on the node, so the row stays HARD unless that "
+                        "is declared too")
+            kept.append(c)
+            continue
+        removers, op, identical, _missed = entry
+        signals, warn = _readd_signals(c.winner, removers, facts, identical,
+                                       _guard(op) if op is not None else "")
+        if report is not None and cand_folder in (None, *c.mods):
+            report.readded_after_removal.append(ReaddedAfterRemoval(
+                vpath, c.winner, ", ".join(removers), ", ".join(others),
+                "optional" if any(declared[o] == "optional" for o in others) else "required",
+                c.target, c.target_path, c.target_tree, c.winner,
+                f"removed by {', '.join(repr(f) for f in removers)}, added back by "
+                f"'{c.winner}' ('{c.winner}' declares a dependency on "
+                f"{', '.join(repr(o) for o in others)}); " + c.detail,
+                c.winner_qualified,
+                (op.sourceline or 0) if op is not None else 0,
+                op.get("sel", "") if op is not None else "",
+                _guard(op) if op is not None else "", signals, warn))
+    return kept
 
 
 def _split_dependent(vpath: str, collisions: list[Collision],
@@ -1957,6 +2292,27 @@ def _name_clashes(mods: list[dict], rank: dict[str, int],
     return out
 
 
+def _id_claims(mods: list[dict]) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Manifest id -> the folders claiming it, exactly and ignoring case."""
+    claims: dict[str, set[str]] = defaultdict(set)
+    claims_lower: dict[str, set[str]] = defaultdict(set)
+    for m in mods:
+        mod_id = m.get("id") or _loadorder.mod_dependencies(Path(m["path"]))[0]
+        if mod_id:
+            claims[mod_id].add(m["folder"])
+            claims_lower[mod_id.lower()].add(m["folder"])
+    return claims, claims_lower
+
+
+def _dep_holder(dep_id: str, claims: dict[str, set[str]],
+                claims_lower: dict[str, set[str]]) -> str | None:
+    """The ONE folder a dependency id binds to (exact id first, then ignoring case);
+    None when no folder or more than one claims it (see `_declared_dependencies`)."""
+    holders = claims.get(dep_id) or claims_lower.get(dep_id.lower()) or set()
+    folder = next(iter(holders)) if len(holders) == 1 else None
+    return folder
+
+
 def _declared_dependencies(mods: list[dict]) -> dict[str, dict[str, str]]:
     """folder -> {folder it DIRECTLY declares a dependency on: "required" | "optional"}.
 
@@ -1976,20 +2332,13 @@ def _declared_dependencies(mods: list[dict]) -> dict[str, dict[str, str]]:
       * a dependency crossing the game <-> profile extensions roots does not resolve in
         the engine (BLIND-SPOTS F141, `_loadorder.crosses_isolated_roots`), so it is
         not a declaration the engine honours."""
-    claims: dict[str, set[str]] = defaultdict(set)
-    claims_lower: dict[str, set[str]] = defaultdict(set)
+    claims, claims_lower = _id_claims(mods)
     kind_of = {m["folder"]: _loadorder.root_kind(m) for m in mods}
-    for m in mods:
-        mod_id = m.get("id") or _loadorder.mod_dependencies(Path(m["path"]))[0]
-        if mod_id:
-            claims[mod_id].add(m["folder"])
-            claims_lower[mod_id.lower()].add(m["folder"])
     out: dict[str, dict[str, str]] = {}
     for m in mods:
         _mid, deps = _loadorder.mod_dependencies(Path(m["path"]))
         for dep_id, optional in deps:
-            holders = claims.get(dep_id) or claims_lower.get(dep_id.lower()) or set()
-            folder = next(iter(holders)) if len(holders) == 1 else None
+            folder = _dep_holder(dep_id, claims, claims_lower)
             if (folder and folder != m["folder"]
                     and not _loadorder.crosses_isolated_roots(kind_of[folder],
                                                               kind_of[m["folder"]])):
@@ -2049,6 +2398,7 @@ def analyze(
     order = compute_load_order(mods, order_dropped)
     rank = {f: i for i, f in enumerate(order)}
     depends = _declared_dependencies(mods)
+    facts = _manifest_facts(mods)
 
     # Invert: lowercased vpath -> {folder: that mod's OWN real vpath}
     #
@@ -2100,7 +2450,8 @@ def analyze(
                           next(iter(per_mod.values())))
         found = _analyze_vpath(real_vpath, list(per_mod), folder_to_path, rank, config,
                                report.unresolvable, per_mod_vpath=per_mod,
-                               report=report, cand_folder=cand_folder, depends=depends)
+                               report=report, cand_folder=cand_folder, depends=depends,
+                               facts=facts)
         if cand_folder is not None:
             found = [c for c in found if cand_folder in c.mods]
         report.collisions.extend(found)
@@ -2242,6 +2593,9 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
     if report.dependent_overwrites:
         shown_any = True
         lines.extend(_render_dependent(report.dependent_overwrites))
+    if report.readded_after_removal:
+        shown_any = True
+        lines.extend(_render_readded(report.readded_after_removal))
     if report.guarded_off:
         met = [g for g in report.guarded_off if g.shared_with is None or g.shared_with]
         lines.append(f"=== GUARDED OFF: if= FALSE AT ITS LOAD POSITION  "
@@ -2296,6 +2650,8 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
                  f"{len(report.dependent_overwrites)} overwrite(s) of a declared "
                  f"dependency's added content in {len(_dependent_pairs(report))} mod "
                  "pair(s) (advisory), "
+                 f"{len(report.readded_after_removal)} node(s) re-added after a declared "
+                 "dependency removed them (advisory, confirm intent), "
                  f"{len(report.guarded_off)} op(s) guarded off (if= false"
                  + (f"; {k} of them also an order miss"
                     if (k := sum(g.also_order_miss for g in report.guarded_off)) else "")
@@ -2340,6 +2696,55 @@ def _render_dependent(rows: list[DependentOverwrite]) -> list[str]:
                      f"{'' if len(files) == 1 else 's'}")
         for d in sorted(group, key=lambda x: (x.vpath, x.target_path))[:_DEP_EXAMPLES]:
             lines.append(f"     e.g. {d.vpath}  {_shown_path(d.target_path, d.removal_path)}")
+    lines.append("")
+    return lines
+
+
+def _render_readded(rows: list[ReaddedAfterRemoval]) -> list[str]:
+    """ONE line per (re-adder, other mods) pair, then up to _DEP_EXAMPLES nodes each."""
+    pairs: dict[tuple[str, str], list[ReaddedAfterRemoval]] = defaultdict(list)
+    for r in rows:
+        pairs[(r.mod, r.others)].append(r)
+    lines = [f"=== RE-ADDED AFTER A DECLARED DEPENDENCY REMOVED IT -- CONFIRM INTENT  "
+             f"({len(rows)} node(s), {len(pairs)} mod pair(s), advisory) ===",
+             "  Not a failing collision: a mod adds back a node that a mod it declares a "
+             "dependency on",
+             "  removed, so the node is live with the re-adder's definition. The dependency "
+             "shows the",
+             "  re-adder patches that mod, NOT that re-adding is intended: a patch written "
+             "against an",
+             "  older version of its dependency re-adds what that dependency has since "
+             "removed. Confirm",
+             "  each pair is meant. Every row in full: --json (readded_after_removal)."]
+    for (mod, others), group in sorted(pairs.items(), key=lambda kv: (kv[0][0].lower(),
+                                                                      kv[0][1].lower())):
+        dep = "optional" if any(r.dependency == "optional" for r in group) else "required"
+        removers = sorted({x for r in group for x in r.removed_by.split(", ") if x})
+        files = {r.vpath for r in group}
+        n = len(group)
+        lines.append(f"  {mod} re-adds what {', '.join(removers)} removed ({dep} dependency"
+                     f"{'' if others == ', '.join(removers) else ' on ' + others}): {n} "
+                     f"node{'' if n == 1 else 's'} in {len(files)} file"
+                     f"{'' if len(files) == 1 else 's'}")
+        # EVERY row, with all four signals (user decision 2026-11-17).
+        for r in sorted(group, key=lambda x: (x.vpath, x.target_path)):
+            lines.append(f"     {r.vpath}  {_shown_path(r.target_path, '')}")
+            if r.carry_forward_warning:
+                lines.append("       WARN likely carry-forward: "
+                             + "; ".join(r.carry_forward_warning))
+            sig = r.signals or {}
+            for one in sig.get("removers", ()):
+                lines.append(
+                    f"       vs {one['remover']}: dependency version declared "
+                    f"{one['declared_version'] or 'none'} / installed "
+                    f"{one['installed_version'] or 'none'} ({one['version']}); "
+                    f"content.xml {r.mod} {one['readder_version'] or '?'} "
+                    f"{one['readder_date'] or 'no date'} / {one['remover']} "
+                    f"{one['installed_version'] or '?'} {one['remover_date'] or 'no date'} "
+                    f"({one['date']})")
+            lines.append(f"       identical to the node before the removal: "
+                         f"{sig.get('identical_to_pre_removal', 'unknown')}; guard: "
+                         f"{sig.get('guard', 'none')}")
     lines.append("")
     return lines
 
@@ -2428,7 +2833,16 @@ def main(argv: list[str] | None = None) -> int:
                     "that mod: then it is an intended patch, reported as an advisory "
                     "grouped per mod pair (every row in --json dependent_overwrites). A "
                     "dependency of a dependency does not count, and two mods overwriting "
-                    "the same added node still fail.")
+                    "the same added node still fail. A mod that ADDS BACK a node another "
+                    "mod removed (same id, same parent) wins it; when it declares a "
+                    "dependency on every other mod on that node, the row is an advisory "
+                    "listed under RE-ADDED AFTER A DECLARED DEPENDENCY REMOVED IT -- "
+                    "CONFIRM INTENT (--json readded_after_removal), each row with its "
+                    "signals (dependency version, content.xml dates, identical to the "
+                    "removed node, guard) and a carry-forward WARN only when the "
+                    "re-adder's content.xml date is older than the remover's (the "
+                    "dependency version is shown, never warned on: X4 reads it as a "
+                    "minimum); otherwise it fails (HARD).")
     pc.add_argument("candidate", nargs="?",
                     help="the mod to focus on ('before I add this'): an existing folder "
                          "PATH is the copy analysed (a same-named copy in the extensions "
@@ -2486,6 +2900,13 @@ def main(argv: list[str] | None = None) -> int:
             # removal_path, winner, removed_by, detail.
             "dependent_overwrites": [dataclasses.asdict(d)
                                      for d in report.dependent_overwrites],
+            # User decision 2026-11-17: a node a mod adds back after a mod it DECLARES a
+            # dependency on removed it -- advisory, never failing, listed for the user to
+            # confirm intent. Each row: vpath, mod (re-adder, = winner), removed_by, others,
+            # dependency, target, target_path, target_tree, winner, detail,
+            # winner_qualified, line, sel, guard.
+            "readded_after_removal": [dataclasses.asdict(r)
+                                      for r in report.readded_after_removal],
             # NOT CHECKED (the text render's own section, above): an op whose sel=
             # could not be evaluated contributed no target and cannot participate in
             # collision detection -- omitting it here made a JSON consumer read
