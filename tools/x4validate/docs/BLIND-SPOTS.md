@@ -226,7 +226,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F121 | `x4effective who-sets` with no property answered with the ENTITY's origin while its properties had been changed, and could not see removals at all | **DEFECT (measured)** · ✅ FIXED 2026-09-14 | asked who set `energycells` it said `base`; 33 of its 49 properties were last set by something else | origins and file-level removals now reported; `show` still lists no removals (OPEN) |
 | F122 | `ask.py xq` certified a negative over a query Git Bash had rewritten before Python saw it | **DEFECT (measured)** · ✅ FIXED 2026-09-14 | `collection("x4raw")//ware` arrived as `.../ware`: `NEGATIVE CONFIRMED` rc 0, where PowerShell counted 14,068 | `--file`; under Git Bash an argument-query zero refuses (rc 4) and every result shows the query as received |
 | F123 | `bin/unpack-reference.sh` took the LAST `"buildid"` in the Steam manifest, which is a beta branch's, not the installed build | **DEFECT (measured)** · ✅ FIXED 2026-09-14 | this machine's manifest: AppState 23660954, `public_beta` 23524486 -- the script's grep returned 23524486 | one depth-1 reader, `x4_acf_buildid`, for the script and the hook; a test bans a third hand-rolled grep |
-| F124 | a client request had NO size cap; a request over ~1997 bytes tears the game-side pipe read down, and the teardown was followed the same session by a game CRASH | **DEFECT (measured)** · ✅ FIXED 2026-09-14 (the cap) · crash half OPEN: second sighting 2026-11-14 with no oversized request; third and fourth 2026-11-16 with a client pinging; ROOT CAUSE MEASURED 2026-11-16: Mod Support APIs winpipe `close` unrefs an uninitialised registry ref · ✅ FIXED in the helper 2026-11-16 (mitigation: the helper stamps its own pipe files; the upstream defect remains for other mods' pipes; not yet confirmed in game) | P6 ramp: 1997 bytes round-tripped, 3998 tore the pipe down (`The pipe has been ended`); the game crashed on the next Esc | `ask()` refuses any request over `MAX_REQUEST_BYTES` (1900) before writing; `ffi-census` and `query ffisyms` gated off by default (`X4_LIVE_ALLOW_FFI`) |
+| F124 | a client request had NO size cap; a request over ~1997 bytes tears the game-side pipe read down, and the teardown was followed the same session by a game CRASH | **DEFECT (measured)** · ✅ FIXED 2026-09-14 (the cap) · crash half OPEN: second sighting 2026-11-14 with no oversized request; third and fourth 2026-11-16 with a client pinging; ROOT CAUSE MEASURED 2026-11-16: Mod Support APIs winpipe `close` unrefs an uninitialised registry ref · ✅ FIXED in the helper 2026-11-16 (mitigation: the helper stamps its own pipe files; the upstream defect remains for other mods' pipes; confirmed in game 2026-11-16: 189 pings with menu churn, no crash, where unfixed runs crashed after 31 and 40) | P6 ramp: 1997 bytes round-tripped, 3998 tore the pipe down (`The pipe has been ended`); the game crashed on the next Esc | `ask()` refuses any request over `MAX_REQUEST_BYTES` (1900) before writing; `ffi-census` and `query ffisyms` gated off by default (`X4_LIVE_ALLOW_FFI`) |
 | F125 | a live refusal read the helper's ABSENT load marker as "most likely not installed" -- but the mod arms on GAME LOAD, so at the MAIN MENU the marker is legitimately absent and the install is fine | **DEFECT (measured)** · ✅ FIXED 2026-09-20 | in game 2026-09-20 at the main menu with no save loaded: marker absent, extension present and enabled, refusal said "not installed or not enabled" | the install is MEASURED directly (`helper_is_deployed()` over `mods("active")`) instead of inferred from the log; with deployment unknown the message names BOTH causes |
 | F127 | the guard's scope rules matched a search rooted AT a big tree and at the toolkit/game roots, never ABOVE one — so when the dev repo was retired and `X4_TOOLKIT` moved, the parent of the 60 GB `reference\` tree stopped being named by any root and a recursive search there became ALLOW. The ancestor was covered only BY COINCIDENCE | **DEFECT (measured)** · ✅ FIXED 2026-09-21 | 2026-09-21 through the DEPLOYED hook: `cd <parent-of-reference> && grep -rl x .` → ALLOW, while the same shape at the toolkit root, at `reference/` itself and at the game root all → deny. 3 controls denying is what made it a hole, not a rule change. Found by `hook_false_positives` going red (146 of 17,133 shared commands moved). **6 commands affected, not the 3 the first text-based classification found** — the other 3 never contain the string `reference` | `contains_root()` makes a PROPER-ANCESTOR search fire the same rule; 11 tests incl. a split-root fixture, 3 of 3 clause mutants killed, 8-case end-to-end probe on the deployed hook |
 | F126 | `build-effective.sh` rebuilt the x4eff DATABASE correctly but skipped the COVERAGE STAMP and still exited 0, so a freshly built index reported STALE indefinitely and refused to back any negative claim | **DEFECT (measured)** · ✅ FIXED 2026-09-20 | 2026-09-20: DB timestamp 02:15:41 with 10,970 documents, while `coverage-x4eff.json` kept mtime 00:22:03 and the PREVIOUS content fingerprint (`1f071ac8` vs the `39c7120a` stamped on `coverage-x4raw.json` minutes earlier); exit code 0 | not fixed. Cause identified -- a staging `rm` hit `_eff/tree/libraries/controlschemes_for_movie_capturing.xml` while BaseX still held it (`Device or resource busy`) and the stamp step never ran. A retry with the lock released stamped correctly, so it is NOT reproduced |
@@ -7323,8 +7323,10 @@ client hang-up, so every x4live call that disconnects is one garbage unref.
 **Offline reproduction (MEASURED twice, game's own `lua51_64.dll` + the pipe DLL loaded in a
 Python process, no game).** Without a fix: the ref field was garbage on every cycle (182 of 200
 non-negative in the re-run) and `reg[0]` changed on 200 of 200 closes; the first run (400 cycles)
-also overwrote slots 1 and 2 three times. With the field stamped to `-1` right after open: 0 of
-200 cycles changed `reg[0]` or slots 1-4.
+also overwrote slots 1 and 2 three times. With the field stamped to `-1` right after open (this
+probe's value): 0 of 200 cycles changed `reg[0]` or slots 1-4. The shipped helper writes `-2`
+(`LUA_NOREF`) instead; `luaL_unref` ignores any negative ref, so both values make the close a
+no-op for the registry.
 
 **How every sighting fits (READ/INFERRED).** 17:16: X4's dispatcher read slot 2 as a table and
 got a number's bit pattern (`0x45a91e000000`). 11-14 and a fourth dump from 11-10 (same address):
@@ -7338,7 +7340,8 @@ candidate, unverified). 09-14 may be a second DLL defect: `read` writes `buf[n] 
 read buffer is C heap. The helper's connection churn is what calls `close` often enough to hit
 a live slot. Once corrupted, a registry stays corrupt until the UI reloads (INFERRED).
 
-**Status.** Root cause MEASURED; fix not yet applied. Candidate fix: stamp `-1` into
+**Status (as of this entry; superseded by the next one, which ships `-2`).** Root cause MEASURED;
+fix not yet applied. Candidate fix: stamp `-1` into
 `ud+0x10` via ffi right after each open, gated on the DLL's exact size and PE timestamp, refusing
 on any other build. Upstream defect belongs to Mod Support APIs; nothing posted.
 
@@ -7353,10 +7356,15 @@ protects its own connections). UI Lua cannot read the DLL's size or PE timestamp
 differs from the candidate above: Mod Support APIs (`ws_2042901274`) must be listed exactly once
 by `GetExtensionList` at version `1.95` (READ: that is how the engine reports content.xml
 `version="195"` in the helper's own uidata EXT dump), and the payload must have the measured shape
-(`+0x00` handle, `+0x08` lua_State, `+0x18` buffer non-NULL, `+0x20` bufsz 2048). Any mismatch
-writes nothing, logs one `X4TOOLKIT_LIVE pipe unref guard INACTIVE: <reason>` line, and
+(`+0x00` handle, `+0x08` lua_State, `+0x18` buffer non-NULL, `+0x20` bufsz 2048). Since the
+release review (build `3dbdc1ef`), before those reads the userdata must also carry winpipe's File
+metatable: `__index` a table with `read`, `write` and `close` functions and no other method (an io
+file also has read/write/close, plus `seek`, `lines` and others). Any mismatch writes nothing, logs one `X4TOOLKIT_LIVE pipe unref guard INACTIVE: <reason>` line, and
 `x4live query probe` reports `pipe_unref_guard=inactive:<reason>` with a WARNING to restart X4
-after the session.
+after the session. If `Connect_Pipe` is no longer the helper's wrapper (another mod replaced or
+wrapped it), `probe` reports `<state>;wrapper-replaced` and the guard keeps stamping whenever its
+wrapper is still called; `pipe_unref_stamped` shows whether it is. An install-time refusal at the
+start-menu install point is logged once after that path's `X4TOOLKIT_UI_START` line.
 
 **Evidence (MEASURED offline, the game's `lua51_64.dll` + the installed pipe DLL, no game).**
 `tests/test_pipe_unref_guard.py::test_offline_*` run the guard block extracted verbatim from
@@ -7365,13 +7373,21 @@ closes; with it 0 of 200, slots 1-4 unchanged, 200 files stamped; a foreign pipe
 same wrapper was stamped 0 times and changed `reg[0]` 200 times (scope, not safety). The unit tests
 in the same file give each gate and structural clause its own twin; 18 of 18 hand-run mutants
 (each clause, the write, the own-pipe filter, idempotence, the probe field, both install points)
-turned the suite red.
+turned the suite red. The release-review fixes (File type check, read-only replaced status, the
+start-menu report) added 10 more hand-run mutants, 10 of 10 red; the offline guarded run passes
+real winpipe Files through the File type check (200 stamped), and an io file on the helper's pipe
+name is refused before any payload read.
 
-**Not yet verified.** In game: that `ffi.cast("void*", file)` reaches the payload under X4's UI
-LuaJIT the way it does in the offline loader (INFERRED from LuaJIT's documented conversion and the
-offline run), and that the crash stops (checklist row 9 is the repro). Other mods using the pipes
-API still unref garbage on each close, and the 09-14 one-byte `read` overrun (above) is not
-addressed beyond the existing 1900-byte request cap.
+**Verified in game (MEASURED 2026-11-16 20:01-20:15, helper build `23158ade`, Mod Support APIs
+1.95, one run of checklist row 9).** `x4live query probe` reported `pipe_unref_guard=active` and
+`pipe_unref_stamped=128`, so the ffi cast reached the payload in X4's UI LuaJIT and every
+structural check passed. 189 pings at about 4 s intervals while the user alternated M and Esc for
+about 13.7 minutes: no crash, no unhandled exception under procdump, and X4 exited normally (exit
+code 0). The two runs without the fix crashed after 31 and 40 pings. This is one run, not a
+measured crash rate. Build `3dbdc1ef` (the review fixes above) is verified offline only.
+
+**Not addressed.** Other mods using the pipes API still unref garbage on each close, and the 09-14
+one-byte `read` overrun (above) is not addressed beyond the existing 1900-byte request cap.
 
 
 ## F127 — a guard rule that covered the case above it only BY COINCIDENCE, until a path moved · **DEFECT (measured)** · confidence 96% · FIXED 2026-09-21

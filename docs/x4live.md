@@ -45,7 +45,8 @@ Mod Support APIs 1.95 has a defect in its pipe library: closing a pipe can corru
 Lua state, which later crashes X4. The helper protects its own pipe connections from it (other
 mods' pipes are not changed). `x4live query probe` reports `pipe_unref_guard=active` when that
 protection is on. If it reports anything else (for example `inactive:` with a reason, after a
-Mod Support APIs update), it prints a WARNING: finish what you are doing with few commands and
+Mod Support APIs update, or `active;wrapper-replaced` when another mod replaced the pipe
+function after the helper), it prints a WARNING: finish what you are doing with few commands and
 restart X4 afterwards.
 
 ## The commands
