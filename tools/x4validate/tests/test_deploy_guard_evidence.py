@@ -54,8 +54,12 @@ def _github_is_never_asked(monkeypatch):
     monkeypatch.setattr(dep.subprocess, "run", fake)
 
 
-def _hooks(monkeypatch, rc=0, raises=None, output=b"", during=None):
-    """Stub the hook-test run: a fake bash, and subprocess.run answering for it. Returns the recorded calls."""
+PASS_OUTPUT = b"  OK   a\nRESULT: 474 passed, 0 failed, 0 skipped\n"
+
+
+def _hooks(monkeypatch, rc=0, raises=None, output=PASS_OUTPUT, during=None):
+    """Stub the hook-test run: a fake bash, and subprocess.run answering for it. Returns the recorded calls.
+    The default output is a real passing suite's summary: an exit 0 without one is a refusal."""
     monkeypatch.setattr(dep, "_find_bash", lambda repo_root: (FAKE_BASH, ""))
     real = dep.subprocess.run       # the autouse gh tripwire
     calls = []
@@ -168,10 +172,28 @@ def test_a_pass_prints_the_suites_result_line(repo, monkeypatch, capsys):
     assert "Hook tests passed: RESULT: 474 passed, 0 failed, 0 skipped" in capsys.readouterr().err
 
 
-def test_a_pass_without_a_result_line_says_so(repo, monkeypatch, capsys):
-    _hooks(monkeypatch, rc=0, output=b"nothing useful\n")
-    assert dep.guard_evidence(repo) is None
-    assert "no RESULT line" in capsys.readouterr().err
+@pytest.mark.parametrize("output", [b"nothing useful\n", b"", b"RESULT: garbled\n",
+                                    b"RESULT: 474 passed, 0 failed\n"])
+def test_exit_0_without_the_suites_result_line_is_a_refusal(repo, monkeypatch, capsys, output):
+    """Review I1: an exit 0 with no parseable RESULT summary used to pass. Red without _result_refusal's parse."""
+    _hooks(monkeypatch, rc=0, output=output)
+    why = dep.guard_evidence(repo)
+    assert why and "no RESULT summary" in why
+    assert "Hook tests passed" not in capsys.readouterr().err
+
+
+def test_exit_0_with_a_result_line_reporting_failures_is_a_refusal(repo, monkeypatch, capsys):
+    """Twin for the failed-count clause: a parseable RESULT with failed > 0 refuses even on exit 0."""
+    _hooks(monkeypatch, rc=0, output=b"RESULT: 473 passed, 1 failed, 0 skipped\n")
+    why = dep.guard_evidence(repo)
+    assert why and "report failures" in why and "1 failed" in why
+    assert "Hook tests passed" not in capsys.readouterr().err
+
+
+def test_the_last_result_line_is_the_one_judged(repo, monkeypatch):
+    """A probe echoing a passing RESULT earlier does not mask the suite's own failing summary."""
+    _hooks(monkeypatch, rc=0, output=b"RESULT: 1 passed, 0 failed, 0 skipped\nRESULT: 473 passed, 1 failed, 0 skipped\n")
+    assert "report failures" in dep.guard_evidence(repo)
 
 
 # ---------------------------------------------------------------- review I1: the tested state must still be there
@@ -296,7 +318,8 @@ def _real_bash(monkeypatch):
     return bash
 
 
-@pytest.mark.parametrize("body, expect_pass", [(b"echo all good\nexit 0\n", True),
+@pytest.mark.parametrize("body, expect_pass", [(b"echo 'RESULT: 3 passed, 0 failed, 0 skipped'\nexit 0\n", True),
+                                               (b"echo all good\nexit 0\n", False),
                                                (b"echo first\necho LAST-LINE\nexit 7\n", False)])
 def test_the_real_runner_reads_the_exit_of_a_real_bash(repo, monkeypatch, capsys, body, expect_pass):
     """No stub: the real subprocess call, output file and exit code, against a fake test-hooks.sh."""
@@ -305,9 +328,11 @@ def test_the_real_runner_reads_the_exit_of_a_real_bash(repo, monkeypatch, capsys
     why = dep.run_hook_tests(repo)
     if expect_pass:
         assert why is None
-    else:
+    elif b"exit 7" in body:
         assert why and "exited 7" in why
         assert "LAST-LINE" in capsys.readouterr().err
+    else:
+        assert why and "no RESULT summary" in why       # a real exit 0 with no summary refuses
 
 
 # ---------------------------------------------------------------- M7: no git, or not a checkout

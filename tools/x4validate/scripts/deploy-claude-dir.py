@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -435,6 +436,23 @@ def _result_line(text: str) -> str:
     return found[-1] if found else "no RESULT line in its output"
 
 
+#: The suite's last line before its exit checks (`echo "RESULT: $pass passed, $fail failed, $skipped skipped"`).
+_RESULT_RE = re.compile(r"RESULT: (\d+) passed, (\d+) failed, (\d+) skipped")
+
+
+def _result_refusal(text: str) -> str | None:
+    """None when the suite's LAST RESULT line parses and reports 0 failed, else why not. An exit 0 alone is not a
+    pass: a suite that never reached its summary (or a test-hooks.sh that is not the suite) proves nothing."""
+    line = _result_line(text)
+    m = _RESULT_RE.fullmatch(line)
+    if not m:
+        return (f"the hook tests exited 0 but printed no RESULT summary ({line!r}); "
+                f"an exit code without the suite's own count is not a pass")
+    if int(m.group(2)):
+        return f"the hook tests exited 0 but report failures ({line})"
+    return None
+
+
 def untested_guards(repo_root: Path, jobs_actions) -> list[str]:
     """Changed guard files the hook suite does not exercise (review I2): settings.json, whose wiring it does not
     test, and Codex-target guard files with no byte-identical copy in `.claude/hooks` (rules, the rendered hooks.json,
@@ -457,7 +475,8 @@ def untested_guards(repo_root: Path, jobs_actions) -> list[str]:
 
 
 def run_hook_tests(repo_root: Path) -> str | None:
-    """Run `bash scripts/test-hooks.sh` in repo_root. None when it exits 0, else why not.
+    """Run `bash scripts/test-hooks.sh` in repo_root. None when it exits 0 AND its RESULT line says 0 failed, else
+    why not.
 
     No bash, no suite, a timeout and any nonzero exit are each a refusal with its reason, never a pass."""
     script = Path(repo_root) / HOOK_TESTS
@@ -483,6 +502,9 @@ def run_hook_tests(repo_root: Path) -> str | None:
         out.seek(0)
         text = out.read().decode("utf-8", errors="replace")
     if r.returncode == 0:
+        refused = _result_refusal(text)
+        if refused:
+            return refused
         print(f"Hook tests passed: {_result_line(text)}", file=sys.stderr)
         return None
     tail = "\n".join(text.rstrip("\n").splitlines()[-HOOK_TESTS_TAIL_LINES:])
@@ -495,8 +517,8 @@ def guard_evidence(repo_root: Path) -> str | None:
     """None when the guard code to deploy is a commit whose local hook tests pass, else why not.
 
     The guard sources must equal HEAD (the reviewed thing is a commit, so uncommitted or untracked guard edits refuse
-    before any test runs); then `scripts/test-hooks.sh` must exit 0. GitHub is not asked: CI gates releases, not
-    deploys (user rule 2026-11-16). The independent review of the commit is a human/agent step this cannot prove."""
+    before any test runs); then `scripts/test-hooks.sh` must exit 0 with a RESULT line of 0 failed. GitHub is not
+    asked: CI gates releases, not deploys (user rule 2026-11-16). The independent review of the commit is a human/agent step this cannot prove."""
     def git(*a):
         return subprocess.run(["git", "-C", str(repo_root), *a], capture_output=True, text=True)
     try:

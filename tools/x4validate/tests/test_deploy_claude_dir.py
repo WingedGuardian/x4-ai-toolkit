@@ -524,6 +524,9 @@ def _hooks(monkeypatch, rc=0, raises=None):
         calls.append(cmd)
         if raises:
             raise raises
+        # The suite's own summary: an exit 0 without a RESULT line of 0 failed is a refusal.
+        k["stdout"].write(b"RESULT: 474 passed, 0 failed, 0 skipped\n" if rc == 0
+                          else b"RESULT: 473 passed, 1 failed, 0 skipped\n")
         return subprocess.CompletedProcess(cmd, rc)
     monkeypatch.setattr(dep.subprocess, "run", fake)
     return calls
