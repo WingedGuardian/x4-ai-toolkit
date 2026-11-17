@@ -1387,7 +1387,7 @@ def _date_key(text: str):
     try:
         return datetime.date(int(m[1]), int(m[2]), int(m[3]))
     except ValueError:
-        return None
+        return None   # silent-ok: None is the "unknown" channel; the row prints "unknown"
 
 
 def _manifest_facts(mods: list[dict]) -> dict[str, dict]:
@@ -1404,7 +1404,7 @@ def _manifest_facts(mods: list[dict]) -> dict[str, dict]:
         try:
             root = etree.parse(str(Path(m["path"]) / "content.xml")).getroot()
         except (OSError, etree.LxmlError):
-            continue
+            continue   # silent-ok: empty facts are the "unknown" channel; rows print "unknown"
         facts["version"] = root.get("version", "")
         facts["date"] = root.get("date", "")
         for d in root.iter("dependency"):
