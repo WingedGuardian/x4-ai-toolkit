@@ -1303,10 +1303,9 @@ def _runtime_roots(config: _merge.Config, mod_dir: Path | None) -> list[Path]:
     Tier B leaves out of both trees) put back right after the patch-time roots. The question
     "which document does the engine load" is a runtime one: a copier loading AFTER the mod
     under test decides it as much as one loading before (re-review N1)."""
-    runtime = list(config.for_runtime().overlays)
-    if mod_dir is not None and all(r.name.lower() != mod_dir.name.lower() for r in runtime):
-        runtime.insert(min(len(config.overlays), len(runtime)), mod_dir)
-    return runtime
+    roots, _known = _resolve.ordered_roots(config.for_runtime(),
+                                           [mod_dir] if mod_dir is not None else [])
+    return roots   # (an unknown position is disclosed by `_resolve.build_index`)
 
 
 def _complete_at(root: Path, vpath: str) -> etree._Element | None:
@@ -1464,6 +1463,116 @@ def _index_load_verdict(vpath: str, merged: _merge.MergeResult, mod_dir: Path | 
                f"nested patch). To change it, patch the plain path {rel}, with an index such as "
                f"[1] or [2], since the name then exists twice", vpath)
     return True
+
+
+class EngineDocs:
+    """The FIRST `<macro>`/`<component>` node of a name in the MERGED plain-path document, where
+    that document -- not the one file `_resolve.read_indexed` returns -- is what the engine uses.
+
+    `_resolve.build_index` resolves a name through the EFFECTIVE index (issue #23 review I-3), so
+    `read_indexed` already finds the right FILE, a copier's own document included (F383). What
+    one file cannot give is a MERGE: for a name in the `_merge.plain_copy_index` class whose file
+    the GAME supplies, a last index entry at the plain path, and a copier's complete copy merged
+    there (F382), the engine's document holds both copies, the game's first. `node()` returns
+    that first node; None everywhere else, so the caller keeps its `read_indexed` answer; and
+    `EngineDocs.UNKNOWN` when the answer cannot be had -- a partial index, or a merged document
+    that cannot be built -- after recording ONE degraded skip, so the caller judges nothing
+    rather than judging the wrong file (review I-1). Which copy the engine uses is INFERRED
+    ([1], from saves); every use of a merged copy is recorded once in `report.notes`."""
+
+    _INDEX = {"macro": "index/macros.xml", "component": "index/components.xml"}
+    UNKNOWN = object()
+
+    def __init__(self, config: _merge.Config, mod_dir: Path | None, report: Report,
+                 indexes: dict | None = None):
+        self.config, self.mod_dir, self.report = config, mod_dir, report
+        #: {"macro": build_index(...), "component": ...} -- only to scope a partial index's
+        #: UNKNOWN to the names it can affect.
+        self.indexes = indexes or {}
+        self.runtime = _runtime_roots(config, mod_dir)
+        self._index: dict[str, etree._Element | object | None] = {}
+        self._nodes: dict[tuple[str, str], object] = {}
+        self._noted: set[str] = set()
+
+    def _skip(self, what: str, why: str) -> None:
+        if not any(k.what == what and k.why == why for k in self.report.skipped):
+            self.report.skip(what, why, degraded=True)
+
+    def _index_tree(self, kind: str):
+        idx = self._INDEX[kind]
+        if idx not in self._index:
+            built = _merge.build_effective(
+                idx, _merge.replace(self.config, overlays=tuple(self.runtime), final_overlays=()))
+            if built.skipped:
+                self._skip(f"engine document ({idx})",
+                           f"the runtime {idx} could not be built completely ({built.skipped[0]}), "
+                           "so which document the engine loads for a ship macro/component copied by "
+                           "a mod is unknown; those names were not judged (BLIND-SPOTS F383)")
+                self._index[idx] = self.UNKNOWN
+            else:
+                self._index[idx] = built.tree
+        return self._index[idx]
+
+    def node(self, kind: str, name: str):
+        key = (kind, name.lower())
+        if key not in self._nodes:
+            self._nodes[key] = self._resolve(kind, name)
+        return self._nodes[key]
+
+    def _resolve(self, kind: str, name: str):
+        tree = self._index_tree(kind)
+        if tree is None:
+            return None
+        values = _merge.index_entries(tree, name) if tree is not self.UNKNOWN else []
+        if tree is self.UNKNOWN:
+            # Only a name a copier could have redirected is unknown; the rest keep read_indexed.
+            return self.UNKNOWN if self._copied(kind, name) else None
+        if not values:
+            return None
+        raw = values[-1].replace("\\", "/").strip().lstrip("/")
+        if raw.lower().startswith("extensions/"):
+            return None   # F383 own document: build_index's file is the engine's
+        rel = raw if raw.lower().endswith(".xml") else raw + ".xml"
+        spec = _merge.plain_copy_index(rel)
+        if spec is None or spec[0] != self._INDEX[kind] or not _merge.game_supplies(rel, self.config):
+            return None
+        built = _merge.build_effective(
+            rel, _merge.replace(self.config, overlays=tuple(self.runtime), final_overlays=()))
+        if built.skipped:
+            self._skip(f"engine document ({rel})",
+                       f"{kind} '{name}': the merged document {rel} could not be built completely "
+                       f"({built.skipped[0]}), so the {kind} the engine uses is unknown and what "
+                       "hangs off it was not judged (BLIND-SPOTS F383)")
+            return self.UNKNOWN
+        if not any(src.endswith(":merge") for src in built.sources):
+            return None   # no copy merged: read_indexed's file is the document
+        want = name.lower()
+        hits = [n for n in built.tree.iter(kind) if (n.get("name") or "").lower() == want]
+        if not hits:
+            return None
+        if len(hits) > 1 and name.lower() not in self._noted:
+            self._noted.add(name.lower())
+            note = (f"{kind} '{name}': read from copy [1] of the merged plain-path document "
+                    f"({rel}, {len(hits)} copies), the copy the engine uses per saves (INFERRED, "
+                    f"BLIND-SPOTS F382); {_merge.COPY_ORDER_UNMEASURED}")
+            if note not in self.report.notes:   # several checks build their own EngineDocs
+                self.report.notes.append(note)
+        return hits[0]
+
+    def _copied(self, kind: str, name: str) -> bool:
+        """Is *name* one a copier could have redirected: build_index resolves it to a file in
+        the `plain_copy_index` class whose document the game supplies?"""
+        entry = self.indexes.get(kind, {}).get(name)
+        if entry is None:
+            return False
+        rel = entry[1].replace("\\", "/").lstrip("/")
+        split = rel.split("/")
+        if len(split) > 2 and split[0].lower() == "extensions":
+            rel = "/".join(split[2:])
+        rel = rel if rel.lower().endswith(".xml") else rel + ".xml"
+        spec = _merge.plain_copy_index(rel)
+        return (spec is not None and spec[0] == self._INDEX[kind]
+                and _merge.game_supplies(rel, self.config))
 
 
 def _sel_check_file(vpath: str, diff_root, config: _merge.Config, report: Report,
@@ -2027,6 +2136,8 @@ def check_file_existence(mod_dir: Path, config: _merge.Config, report: Report) -
     macro_index = _resolve.build_index(config, mod_overlay, _resolve.MACRO_INDEX, report)
     component_index = _resolve.build_index(config, mod_overlay, _resolve.COMPONENT_INDEX, report)
     seen: set[str] = set()
+    docs = EngineDocs(config, mod_dir, report,
+                      {"macro": macro_index, "component": component_index})
     for vpath, diff_root in iter_diff_files(mod_dir):
         for holder in _added_subtrees(diff_root):
             for comp in holder.xpath("//component[@ref]"):
@@ -2034,6 +2145,11 @@ def check_file_existence(mod_dir: Path, config: _merge.Config, report: Report) -
                 if macro in seen:
                     continue
                 seen.add(macro)
+                # The effective index (build_index) already names the engine's FILE, and a
+                # merged document's first node is the game's -- the same file. Only an
+                # unbuildable merged document changes the answer: then nothing is judged.
+                if docs.node("macro", macro) is EngineDocs.UNKNOWN:
+                    continue   # the skip is recorded; no link verdict from a guess
                 for msg in _resolve.macro_component_links(macro, macro_index, component_index):
                     report.add("error", "file", msg, vpath, comp.sourceline or 0)
 
@@ -2220,10 +2336,15 @@ def check_connections(mod_dir: Path, config: _merge.Config, report: Report) -> N
     macro_index = _resolve.build_index(config, mod_overlay, _resolve.MACRO_INDEX, report)
     component_index = _resolve.build_index(config, mod_overlay, _resolve.COMPONENT_INDEX, report)
     conn_cache: dict[str, set[str] | None] = {}
+    docs = EngineDocs(config, mod_dir, report,
+                      {"macro": macro_index, "component": component_index})
 
     def conns_for_component(comp_ref: str | None) -> set[str] | None:
         if not comp_ref:
             return None
+        if comp_ref not in conn_cache and (cnode := docs.node("component", comp_ref)) is not None:
+            conn_cache[comp_ref] = (None if cnode is EngineDocs.UNKNOWN
+                                    else set(cnode.xpath(".//connection/@name")))
         if comp_ref not in conn_cache:
             cf = _resolve.read_indexed(component_index, comp_ref)
             conns = _resolve.connections_of(cf.data) if cf else None
@@ -2235,6 +2356,11 @@ def check_connections(mod_dir: Path, config: _merge.Config, report: Report) -> N
         return conn_cache[comp_ref]
 
     def component_of_macro(macro_name: str) -> str | None:
+        if (mnode := docs.node("macro", macro_name)) is not None:
+            if mnode is EngineDocs.UNKNOWN:
+                return None   # the skip is recorded; nothing is judged
+            refs = mnode.xpath("./component/@ref")
+            return refs[0] if refs else None
         mf = _resolve.read_indexed(macro_index, macro_name)
         if mf is None:
             return None
@@ -2324,10 +2450,16 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
     comp_cache: dict[str, dict | None] = {}
     attach_cache: dict[str, frozenset[str] | None] = {}
     skipped_macros: set[str] = set()
+    docs = EngineDocs(config, mod_dir, report,
+                      {"macro": macro_index, "component": component_index})
 
     def ports_of(comp_ref: str | None) -> dict | None:
         if not comp_ref:
             return None
+        if comp_ref not in comp_cache and (cnode := docs.node("component", comp_ref)) is not None:
+            comp_cache[comp_ref] = (None if cnode is EngineDocs.UNKNOWN else {
+                c.get("name"): (frozenset((c.get("tags") or "").split()), (c.get("group") or "").strip())
+                for c in cnode.xpath(".//connection[@name]")})
         if comp_ref not in comp_cache:
             cf = _resolve.read_indexed(component_index, comp_ref)
             ports = _resolve.connection_tags_of(cf.data) if cf else None
@@ -2339,6 +2471,11 @@ def check_fitting_compatibility(mod_dir: Path, config: _merge.Config, report: Re
 
     def component_of_macro(macro_name: str):
         """(component ref or None, macro class, why-not) for a REGISTERED macro; why-not is '' on success."""
+        if (mnode := docs.node("macro", macro_name)) is not None:
+            if mnode is EngineDocs.UNKNOWN:
+                return None, "", "its merged document could not be built (see NOT CHECKED)"
+            refs = mnode.xpath("./component/@ref")
+            return (refs[0] if refs else None), mnode.get("class") or "", "" if refs else "has no <component ref>"
         mf = _resolve.read_indexed(macro_index, macro_name)
         if mf is None:
             why = ("is not registered in index/macros.xml" if macro_name not in macro_index

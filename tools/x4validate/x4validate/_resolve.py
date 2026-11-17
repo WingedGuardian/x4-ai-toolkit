@@ -146,25 +146,177 @@ def _skip_once(report, what: str, why: str, degraded: bool = False) -> None:
         report.skip(what, why, degraded=degraded)
 
 
+def ordered_roots(config: _merge.Config, extra_overlays) -> tuple[list[Path], bool]:
+    """(every root in RUNTIME load order, whether the mod-under-test position is known).
+
+    *extra_overlays* (the mod under test) go at `config.runtime_position` -- set by
+    `Config.for_runtime()` from the Tier B trees -- so its own index edits apply before the
+    mods that load after it (issue #23 review I-2: the copier was placed LAST, after the mod
+    that re-points its entry, and read its own file where the engine uses the game's). With
+    identical patch-time and runtime trees the mod loads after all of them. Otherwise the
+    position is unknown: the extras go LAST and the caller discloses it."""
+    base = list(config.overlays)
+    have = {b.name.lower() for b in base}
+    extra = [e for e in (extra_overlays or []) if e.name.lower() not in have]
+    pos = config.runtime_position
+    if pos is None and config.final_overlays and tuple(config.final_overlays) == tuple(base):
+        pos = len(base)
+    if pos is None:
+        return base + extra, not (base and extra)
+    pos = min(pos, len(base))
+    return base[:pos] + extra + base[pos:], True
+
+
+def _bare_value_root(value: str, writer: Path, ordered: list[Path],
+                     config: _merge.Config) -> Path:
+    """Where a MOD-written value without `extensions/<X>/` lands, in four steps:
+
+    1. the writer's own COMPLETE file (INFERRED: the ordinary case, a mod registering a macro it
+       ships; the pre-F384 reader's only rule);
+    2. else a DLC's complete file at that path (INFERRED: the VFS puts a DLC over the base);
+    3. else the reference tree's file (MEASURED, BLIND-SPOTS F383: 7 of 7 names a mod re-pointed
+       at a bare base path were loaded from the plain path, the game's node first -- another
+       mod's ship-macro copy merges behind it, F382, read by `_check.EngineDocs`, and the 3
+       weapon copies of that shape were refused outright, "Skipping file");
+    4. else the last mod in load order that ships a complete file there (INFERRED).
+
+    A writer that ships only a `<diff>` there owns nothing at step 1. When the file chosen does
+    not define the name -- the writer's diff ADDS it into the game's file -- `build_index`
+    serves the MERGED document instead (`_with_merged`, round-5 review)."""
+    rel = value.replace("\\", "/").lstrip("/") + ".xml"
+
+    def complete(root: Path) -> bool:
+        try:
+            found = _merge.overlay_root(root, rel, [])
+        except (etree.LxmlError, OSError, ValueError):
+            return False   # silent-ok: an unreadable candidate is simply not chosen
+        return found is not None and found.tag != "diff"
+
+    if complete(writer):
+        # The writer's own DOCUMENT. A writer that only ships a <diff> there (the measured
+        # re-pointing overlay patches the same file) owns nothing: its diff is no document.
+        return writer
+    for d in reversed(config.dlc_dirs()):
+        if complete(d):
+            return d
+    if (config.reference / rel).is_file():
+        return config.reference
+    for root in reversed(ordered):
+        if root != writer and complete(root):
+            return root
+    return config.reference
+
+
+class _Entry(tuple):
+    """An index entry `(root, value)` that may also carry the MERGED document's bytes, for a name
+    a mod's diff adds into another layer's file (`read_indexed` serves them). Still a 2-tuple
+    for every `root, value = entry` / `resolve_path(*entry)` caller."""
+    merged: bytes | None = None
+
+
+def _names_in(data: bytes | None) -> set[str] | None:
+    """Every element @name in the document *data*, lowercased (the engine resolves
+    macro/component names ignoring case); None when there is no document or it will not parse."""
+    if data is None:
+        return None
+    try:
+        root = _merge.parse_bytes(data)
+    except etree.XMLSyntaxError:
+        return None   # silent-ok: an unparseable file defines nothing here; the readers report it
+    return {(el.get("name") or "").lower() for el in root.iter() if isinstance(el.tag, str)} - {""}
+
+
+def _with_merged(name: str, root: Path, value: str, ordered: list[Path],
+                 config: _merge.Config, report, index_rel: str, cache: dict):
+    """*(root, value)* as an `_Entry`, carrying the MERGED document at that path when the file
+    *root* holds does not define *name* but the merged document does (a mod's `<diff>` adds the
+    macro into the game's file: the engine loads the merged document; round-5 review, ror's
+    clusters). Reading the raw file instead narrowed the data to nothing and reported success.
+
+    *cache* lives for ONE `build_index` call: each path is read, parsed and merged at most once,
+    however many names it serves (a map mod adding hundreds of macros by diff would otherwise
+    rebuild its file once per name). Never silent: an unreadable file, an unbuildable merged
+    document, and a name that NEITHER document defines are each a degraded skip naming the name."""
+    rel = value.replace("\\", "/").lstrip("/") + ".xml"
+    entry = _Entry((root, value))
+    want = name.lower()
+
+    def skip(why: str) -> None:
+        if report is not None:
+            _skip_once(report, f"{index_rel} resolution",
+                       f"'{name}' is registered at {rel}: {why} -- what hangs off it was not resolved",
+                       degraded=True)
+
+    rkey = ("raw", str(root).lower(), rel.lower())
+    if rkey not in cache:
+        p = resolve_path(root, value)
+        try:
+            raw = p.read_bytes() if p.is_file() else _cat.read_path(root, rel)
+        except (OSError, ValueError) as exc:
+            cache[rkey] = exc
+        else:
+            cache[rkey] = (raw is not None, _names_in(raw))
+    got = cache[rkey]
+    if isinstance(got, Exception):
+        skip(f"its file could not be read ({got})")
+        return entry
+    present, raw_names = got
+    if raw_names is not None and want in raw_names:
+        return entry
+    mkey = ("merged", rel.lower())
+    if mkey not in cache:
+        built = _merge.build_effective(
+            rel, _merge.replace(config, overlays=tuple(ordered), final_overlays=()))
+        if built.skipped:
+            cache[mkey] = ("skipped", built.skipped[0], None)
+        elif built.tree is None:
+            cache[mkey] = ("none", None, None)
+        else:
+            data = etree.tostring(built.tree)
+            cache[mkey] = ("ok", data, _names_in(data))
+    state, data, merged_names = cache[mkey]
+    if state == "skipped":
+        skip(f"its file does not define it and its merged document could not be built completely ({data})")
+        return entry
+    if state == "ok" and merged_names is not None and want in merged_names:
+        entry.merged = data
+        return entry
+    if present:
+        # A file is there and defines nothing of that name, merged or not: never a plain entry
+        # whose readers then find nothing and report success. (No file at all is left to the
+        # readers, which already report "registered but file missing".)
+        skip("neither its file nor the merged document at that path defines it")
+    return entry
+
+
 def build_index(config: _merge.Config, extra_overlays, index_rel: str,
                 report=None) -> dict[str, tuple[Path, str]]:
-    """name -> (resolution_root, value). Later sources win (mod over base).
+    """name -> (resolution_root, value), from the EFFECTIVE index document.
 
-    `config.overlays` (the Tier B installed set) is merged in BEFORE
-    *extra_overlays* (the mod under test), matching load order — until
-    2026-07-28 it was ignored entirely, so `--tier b` ran the file-existence and
-    connection checks against a base+DLC-only index while every other check saw
-    the merged tree. Both index and payload reads are packed-aware; making only
-    the index packed-aware registers a macro whose file then cannot be found,
-    turning a missed check into a FALSE 'registered but file missing' error.
-    """
+    The index is built the way the engine builds it: base + DLC + every mod in RUNTIME load
+    order through `_merge.build_effective`, so a `<remove>` unregisters a name and a
+    `<replace>` of an entry's `@value` re-points it (issue #23 review I-3). This used to
+    collect every `<entry>` of every file, a `<diff>`'s payload included, and ignore the ops:
+    MEASURED on 230 active roots, 9 of 14 op-touched names in `index/macros.xml` and 3 of 4 in
+    `index/components.xml` disagreed with the effective index. For two entries of one name the
+    LAST in document order wins, as `_merge.index_loaded_path` reads it.
+
+    Each value resolves against the root of the layer that WROTE it (`Recorder.winner` on
+    `@value`): base/DLC against the reference tree, a mod's against that mod
+    (`_bare_value_root`), and an `extensions/<X>/` value inside X (`_Roots`).
+
+    Unreadable layers keep their degraded skips: a base/DLC index that is missing or will not
+    parse, and a mod index that will not parse, are recorded per source (and left out of the
+    effective document by `build_effective`, as before)."""
     index: dict[str, tuple[Path, str]] = {}
     roots = _Roots(config, extra_overlays, report, index_rel)
-    # base + DLC. Read PACKED-AWARE (AUDIT-2026-09-24 MG-3): a DLC that exists only
-    # as `ext_*.cat` in the live install (Config.dlc_dirs() includes those) has no
-    # loose index, and a `.is_file()`-only read registered nothing from it. Its
-    # values carry `extensions\\<dlc>\\`, so they resolve inside that DLC's OWN root
-    # — pinning them to `config.reference` pointed at a tree that does not hold them.
+    ordered, position_known = ordered_roots(config, extra_overlays)
+    if not position_known and report is not None:
+        note = ("runtime index: the mod under test's load position among the other roots is "
+                "not known (no Tier B tree), so its index edits were applied LAST")
+        if note not in report.notes:
+            report.notes.append(note)
+    # Per-source diagnostics, the same skips as before (BLIND-SPOTS F364, AUDIT VA-12).
     for src in [config.reference] + config.dlc_dirs():
         try:
             root = _read_source(src, index_rel)
@@ -174,53 +326,53 @@ def build_index(config: _merge.Config, extra_overlays, index_rel: str,
                             f"base/DLC index {src / index_rel} is unreadable ({exc}) — the "
                             "entries it defines were not registered", degraded=True)
             continue
-        if root is None:
-            # A missing index is NOT "nothing registered here" (BLIND-SPOTS F364). The reference
-            # tree always ships index/macros.xml and index/components.xml, so None there means
-            # the reference is wrong or unpacked incompletely -- and every vanilla macro then
-            # reads as unregistered while the run looks clean. MEASURED 2026-11-08: a worktree
-            # without x4-paths.env resolved `reference` to a folder that did not exist, the base
-            # index registered 0 of 4,545 vanilla macros, no skip was recorded, and a fitting
-            # check reported 39 hits where the same code with a real reference reports 63.
-            if report is not None:
-                if src == config.reference and not (src / "index").is_dir():
-                    # Degraded only when the reference has no index folder at all (missing or wrong
-                    # folder). A reference that has index/ but lacks one file is a partial or minimal
-                    # tree (test fixtures build these); it is reported, but it does not degrade the run.
-                    _skip_once(report, f"{index_rel} resolution",
-                                f"base index {src / index_rel} is missing and {src} has no index folder -- no vanilla "
-                                "entry was registered; every base-game macro/component now reads as unregistered. "
-                                "Check the reference tree (x4-paths.env / --reference)", degraded=True)
-                elif src == config.reference:
-                    _skip_once(report, f"{index_rel} resolution",
-                                f"base index {src / index_rel} is missing (the index folder exists) -- its entries "
-                                "were not registered")
-                else:
-                    _skip_once(report, f"{index_rel} resolution",
-                                f"DLC {src.name} has no {index_rel} (loose or packed) -- its entries were not registered")
-            continue
-        for name, value in _index_entries(root):
-            index[name] = roots.target(value, src, config.reference)
-    # mod overlays: values are resolved relative to the mod root.
-    for ov in list(config.overlays) + list(extra_overlays or []):
+        if root is None and report is not None:
+            if src == config.reference and not (src / "index").is_dir():
+                _skip_once(report, f"{index_rel} resolution",
+                            f"base index {src / index_rel} is missing and {src} has no index folder -- no vanilla "
+                            "entry was registered; every base-game macro/component now reads as unregistered. "
+                            "Check the reference tree (x4-paths.env / --reference)", degraded=True)
+            elif src == config.reference:
+                _skip_once(report, f"{index_rel} resolution",
+                            f"base index {src / index_rel} is missing (the index folder exists) -- its entries "
+                            "were not registered")
+            else:
+                _skip_once(report, f"{index_rel} resolution",
+                            f"DLC {src.name} has no {index_rel} (loose or packed) -- its entries were not registered")
+    for ov in ordered:
         try:
-            root = _read_source(ov, index_rel)
+            _read_source(ov, index_rel)
         except (etree.XMLSyntaxError, OSError) as exc:
-            # DEGRADED, like the base/DLC branch above (AUDIT-2026-09-24 VA-12): the
-            # index is incomplete, so every "registered but missing" / connection
-            # verdict below is computed against a partial registry. Deduplicated
-            # because each check builds this index, and one cause reads as one line.
             if report is not None:
-                what = f"{index_rel} resolution"
-                why = (f"{ov.name}: index unreadable ({exc}) — macros it registers will "
-                       "read as unregistered")
-                if not any(s.what == what and s.why == why for s in report.skipped):
-                    report.skip(what, why, degraded=True)
+                _skip_once(report, f"{index_rel} resolution",
+                           f"{ov.name}: index unreadable ({exc}) — macros it registers will "
+                           "read as unregistered", degraded=True)
+    recorder = _merge.Recorder()
+    merged = _merge.build_effective(
+        index_rel, _merge.replace(config, overlays=tuple(ordered), final_overlays=()),
+        recorder=recorder)
+    if merged.tree is None:
+        return index
+    by_name = {r.name.lower(): r for r in ordered}
+    merged_cache: dict = {}   # one build_index call: each path read and merged once
+    dlc = {d.name.lower(): d for d in config.dlc_dirs()}
+    for entry in merged.tree.xpath("//entry[@name]"):
+        name, value = entry.get("name"), entry.get("value")
+        if not value or "*" in name:   # skip wildcard patterns
             continue
-        if root is None:
-            continue
-        for name, value in _index_entries(root):
-            index[name] = roots.target(value, ov, ov)
+        source = recorder.winner(entry, "value").source.lower()
+        if source in by_name:
+            writer = by_name[source]
+            if _extension_prefix(value) is None:
+                root = _bare_value_root(value, writer, ordered, config)
+                index[name] = (_with_merged(name, root, value, ordered, config, report, index_rel,
+                                            merged_cache)
+                               if root != writer else (root, value))
+            else:
+                index[name] = roots.target(value, writer, writer)
+        else:
+            own = dlc.get(source, config.reference)
+            index[name] = roots.target(value, own, config.reference)
     return index
 
 
@@ -254,8 +406,12 @@ def read_indexed(index: dict[str, tuple[Path, str]], name: str) -> Located | Non
     """
     if name not in index:
         return None
+    merged = getattr(index[name], "merged", None)
     root, value = index[name]
     p = resolve_path(root, value)
+    if merged is not None:
+        # The MERGED document at the path (`_with_merged`): the file there lacks the name.
+        return Located(p, merged)
     if p.is_file():
         try:
             return Located(p, p.read_bytes())
@@ -306,14 +462,18 @@ def macro_component_links(
     comps = mroot.xpath(f"//macro[@name={_xq(macro_name)}]/component/@ref")
     if not comps:
         return out  # some macros legitimately have no component
-    comp_ref = comps[0]
+    return out + _component_link(macro_name, comps[0], component_index)
+
+
+def _component_link(macro_name: str, comp_ref: str,
+                    component_index: dict[str, tuple[Path, str]]) -> list[str]:
+    """The component half of `macro_component_links`."""
     if comp_ref not in component_index:
-        out.append(f"macro '{macro_name}' -> component '{comp_ref}' not registered in index/components.xml")
-        return out
+        return [f"macro '{macro_name}' -> component '{comp_ref}' not registered in index/components.xml"]
     if read_indexed(component_index, comp_ref) is None:
-        out.append(f"component '{comp_ref}' registered but file missing: "
-                   f"{resolve_path(*component_index[comp_ref])}")
-    return out
+        return [f"component '{comp_ref}' registered but file missing: "
+                f"{resolve_path(*component_index[comp_ref])}"]
+    return []
 
 
 def connections_of(data: bytes) -> set[str] | None:

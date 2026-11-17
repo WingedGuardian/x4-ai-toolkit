@@ -134,6 +134,11 @@ class Config:
     #: Also treat DLC that exist only PACKED in the live game install as part of
     #: the Tier A reference tree. Set False for a hermetic, reference-only run.
     include_packed_dlc: bool = True
+    #: Where the mod under test sits among `overlays` at RUNTIME: set by `for_runtime()` to
+    #: the patch-time count (the Tier B trees are built so that `final_overlays` starts with
+    #: exactly the patch-time roots). None = not known (no Tier B tree), and a reader that
+    #: needs the position says so (`_resolve.ordered_roots`; issue #23 review I-2).
+    runtime_position: int | None = None
 
     def __post_init__(self) -> None:
         """Resolve the reference tree, or REFUSE — never guess.
@@ -161,8 +166,8 @@ class Config:
         Tier A run and any caller predating the split behave exactly as before.
         """
         if not self.final_overlays or self.final_overlays == self.overlays:
-            return self
-        return replace(self, overlays=self.final_overlays)
+            return self   # (`_resolve.ordered_roots` reads the identical-trees case as "last")
+        return replace(self, overlays=self.final_overlays, runtime_position=len(self.overlays))
 
     def dlc_dirs(self) -> list[Path]:
         """Every DLC root, unpacked-in-reference first, then packed-in-game.

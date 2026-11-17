@@ -483,6 +483,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F381 | Two clients executing the SAME prepared x4live action journal at once: the loser can read the winner's observation file while it is still being written and report "journal evidence is corrupt; preserve it" (ActionUncertain) instead of "dispatch already reserved" (ActionRefused) | **DEFECT (measured)** · IN-ARC (new in 4.2.0) · LOW | 1 of 1 occurrence in a 2 h 13 min loaded pre-push gate run; 0 of 300 idle trials; the action was sent exactly once in every trial | OPEN 2026-11-15: fails safe (no second send); reachable only through the automation bundle, which 4.2.0 ships no install route for |
 | F382 | A MOD's complete ship macro/component file at a PLAIN base-game path was modelled as a replacement; the engine MERGES it (the base node and the mod's same-named one), so later selectors on that name passed Tier B and the engine skipped them | **DEFECT (measured)** · PRE-ARC | GitHub issue #23: debug.txt 2026-11-17 (game 9.00), 5 xspvro files under `assets/units/`, 23 distinct ops of 2 patching mods skipped, Tier B predicted 0; after the fix 23 of 23 predicted. Same shape outside `assets/units/` (3 weapon macro files): REFUSED by the engine ("Skipping file") in 5 of 6 load passes, never merged | FIXED 2026-11-17 for `assets/units/` macro (`macros/*_macro.xml`, root `macros`) and component (root `components`) files only, mod layer over a game-supplied document with the same root; what decides merge versus refusal, copy order and which copy the engine uses UNMEASURED and disclosed; every other class keeps the replacement model, disclosed |
 | F383 | For 5 xspvro files at plain base-game paths the engine loaded the copier's file plus OTHER mods' `extensions/xspvro/<rel>` patches and never opened any mod's plain-path `<diff>` on that path; x4validate evaluated those plain diffs | **DEFECT (measured)** · PRE-ARC | same log, FileIO census: the plain-path diffs on those 5 files never opened, the nested patch opened, both passes. Rule MEASURED 10 of 10 over the `assets/units/` copies: the LAST effective index entry for the file's name (all mods, the patching mod's own index included) points at `extensions\xspvro\...` for exactly these 5 and at the base path for the 5 that merged; the first entry would mispredict 3 | FIXED 2026-11-17 in x4validate: such a plain-path diff is an ERROR `load-path` ("the engine never opens this plain-path patch"), its ops not evaluated, and the copier gets an INFO; last-entry-wins INFERRED from those 3; x4compat, x4effective and the merge model itself do not consult the index (OPEN) |
+| F384 | `_resolve.build_index`, the index every file/connection/fitting reader resolves names through, registered every `<entry>` of every index file, a `<diff>`'s payload included, and ignored `<remove>` and `@value` `<replace>` ops | **DEFECT (measured)** · PRE-ARC | 230 active roots: 14 removes + 5 replaces in `index/macros.xml`, 3 + 2 in `index/components.xml`; 12 names disagreed with the effective index (4 removed names still registered, a re-pointed name read the copier's file, one an unparseable file) | FIXED 2026-11-17: built from the effective index document; 12 of 12 (18 of 18 op-touched names) agree |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
 | F367 | a nested cross-mod patch is judged only against the ACTIVE profile; aimed at a mod that profile disables, its ops are never evaluated | **SCOPE LIMIT (measured)** · PRE-ARC | 6 of 6 nested patches in one diagnostic mod read `inactive` under the default profile and were all evaluated with `X4_PROFILE` set to the test profile | OPEN: run with `X4_PROFILE=<the profile the mod is for>`; the `inactive` line does not name the profile |
@@ -14000,6 +14001,47 @@ Review round (2026-11-17), the converse and the non-answers:
   shape: a WARN `load-path` saying UNMEASURED, ops still evaluated, never a "MERGES" error. The review-round claim that the
   first of these could not occur was wrong (a third mod's nested copy gives `_build_owned` a tree).
 
+Residual, the index-file readers (2026-11-17). `_resolve.build_index` collects `<entry>` elements and ignores
+`<replace>`/`<remove>` ops; `_resolve.read_indexed` then returns ONE physical file. For the carrier macro the measured
+copier ADDS an entry at its own path and a later overlay's index `<replace>` points it back at the base path, so
+`read_indexed` read the copier's complete file (component `ship_pla_xl_battleship`) while the engine uses the merged
+plain-path document, the game's macro first (component `ship_xen_xl_carrier_01`). MEASURED symptom, read-only: Tier B of
+X4CapturableXenonXL reported 1 connection error (`libraries/loadouts.xml:44`, `connection_shieldgen_external03`) where the
+new-game log has 0 errors for that mod. Fixed with `_check.EngineDocs`: for a name in the class whose file the game
+supplies, the RUNTIME effective index decides -- base path with a copy merged gives the merged document's FIRST node (copy
+choice INFERRED, noted once per name), `extensions/<copier>/<rel>` gives that copier's own file; everything else, and a
+partial index, keeps `read_indexed`. Re-run, read-only, the mod's dev copy at the measured commit: 1 -> 0 errors, and the
+fitting check's 2 INFO hits on the same file (both judged against the copier's components) are gone with its denominator
+unchanged (2 macros judged before and after), consistent with saves where both ships fit those loadouts exactly.
+
+Review round (same day): the general cause was `build_index` itself (F384, now fixed), so the FILE every reader
+gets is now the effective index's. `EngineDocs` keeps only what one file cannot give -- the merged document's first node
+-- and returns UNKNOWN, with a degraded skip, for a partial runtime index or an unbuildable merged document, so no
+reader draws a verdict from a guess (it used to fall back silently). The mod under test now sits at its LOAD POSITION
+in every runtime index (`Config.runtime_position`, `_resolve.ordered_roots`); validating the copier while a later mod
+re-pointed its entry gave a false connection error when it was placed last. An unknown position (no Tier B tree) is
+placed last and noted.
+
+Census of the readers (READ, every caller of `read_indexed` / `file_present` / `macro_component_links` /
+`build_index`, plus the other first-macro readers):
+
+| reader | reads | Tier B path | status |
+|---|---|---|---|
+| `check_connections` | macro -> component, component -> connections | yes | FIXED (the measured false error) |
+| `check_fitting_compatibility` | the same, for tags and ports (INFO) | yes | FIXED, same `EngineDocs`; tested both ways since the review round |
+| `check_file_existence` / `macro_component_links` | macro -> component registration | yes | FIXED by F384 (the effective index's file); `EngineDocs` only for its UNKNOWN skip |
+| `_check.Definitions` | names only (existence), and a bare value as `extensions/<mod>/...` | yes | unchanged: it already read the effective index; the bare-value reading still differs from `build_index`'s (lead above) |
+| `gates/oracle_index` | `build_index` + `read_indexed` existence | gate only | follows F384 (a removed name now reads as "unregistered") |
+| `_effective` store (x4effective) | the merged plain-path document; both copies stored | no | OPEN: the own-document names still show the plain-path document (above) |
+| `_similarity.extract_ship_vector` (x4similar) | the first `<macro>` of a file | no | OPEN, F358's latent lead, now with ship macros in scope |
+| `_stats` (x4stats) | every `<macro>` of a tree | no | lists both copies of a merged name |
+| `_geometry_assets` | one index file -> one file | no | listed, not examined |
+
+Exposure, MEASURED on the active modlist (230 roots, 0 unreadable catalogs): 10 complete copies in the class over a file
+the game supplies, all from the one copier; the runtime index sends 5 to the plain path (merged) and 5 to the copier's own
+path, the same 5/5 split as the log. RE-DERIVED BY: `tests/test_engine_document_readers.py` (5 RED first; a twin per
+clause; 11 of 11 mutants killed after a green baseline).
+
 OPEN: the merge model (`build_effective`'s plain door), x4compat and x4effective do not consult the index, so for these files
 x4effective still shows the plain-path document (with the copy merged in) and x4compat still pairs the plain-path diffs with
 it; vro's never-opened edits to these 5 files are in the toolkit's effective values. The nested door (`_build_owned`, and
@@ -14014,3 +14056,46 @@ twins for every new clause, a packed (.cat) copier and upper-case paths; 8 of 8 
 8 of 8 (`mut2.py`) killed. ⚠ A harness near-miss: one twin failed on the UNMUTATED code (its skip filter matched another
 check's skip), so its mutant read as "killed"; a harness that does not first prove the suite green on the unmutated file
 counts a broken test as a kill. Caught by the targeted suite, fixed, and every mutant set re-run after a green baseline.
+
+## F384 - `_resolve.build_index` ignored index diff ops, so every file reader resolved some names through the wrong entry · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-17
+
+Found by the issue #23 review. `build_index` (the index behind `check_file_existence`, `check_connections`,
+`check_fitting_compatibility` and the `oracle_index` gate) read each index file of base, DLC and every mod and
+registered every `//entry[@name]` it met -- a `<diff>`'s `<add>` payload included -- with later sources winning. A
+`<remove sel="//index/entry[@name=X]"/>` unregistered nothing and a `<replace sel=".../entry[@name=X]/@value">` re-pointed
+nothing. MEASURED on the 230 active roots, read-only: `index/macros.xml` has 14 remove and 5 `@value` replace ops,
+`index/components.xml` 3 and 2; of the 18 names they touch, 12 disagreed with the effective index's last entry -- 4
+removed names still registered (`bullet_xen_turret_m_beam_01_mk1_macro`, `turret_xen_cruise_macro`, `xen_cruise_macro`,
+`xen_cruise`), 7 names whose last entry an op moved back to the base path (5 ship macros/components and 2 weapon
+macros; one by removing the copier's added duplicate) read the copier's file, and `xen_shell`
+read the copier's unparseable packed file instead of the re-pointed one.
+
+Fixed: the index is built from the EFFECTIVE index document (`_merge.build_effective` over base + DLC + every mod in
+runtime order, the mod under test at its load position), and each value resolves against the layer that WROTE it
+(`Recorder.winner` on `@value`): base/DLC against the reference tree, an `extensions/<X>/` value inside X, and a mod's
+bare value in four steps: (1) its own COMPLETE file (INFERRED: the ordinary case, and the old reader's only rule); (2) else
+a DLC's complete file (INFERRED: the VFS puts a DLC over the base); (3) else the reference file (MEASURED for this shape: a
+copy at that path merges behind the game's node, F382, or is refused, "Skipping file"); (4) else the last mod shipping one
+(INFERRED). A mod that only ships a `<diff>` at the path owns nothing at step 1 (the measured re-pointing overlay also
+patches the files it re-points; its diff is not a document). When the file chosen does not define the name -- the
+writer's `<diff>` ADDS it into the game's file, as a cluster mod's `clusters.xml` does (round-5 review: the raw game file
+has 0 of its 4 cluster macros, so reading it returned "no component" for each, silently) -- the entry carries the MERGED
+document at that path and `read_indexed` serves it; an unbuildable merged document is a degraded skip naming the name,
+and so are an unreadable file and a name that NEITHER the file nor the merged document defines. Each path is read,
+parsed and merged at most once per `build_index` call, however many names it serves (live: 4 names in one clusters file
+had rebuilt it 4 times; a map mod adding hundreds of macros by diff would have cost one full build per macro).
+MEASURED on the active modlist, read-only: the 4 cluster macros now resolve to the merged document, which defines each (4
+of 4), and their macro -> component chain is judged (it resolves, 0 messages) instead of stopping at "no component".
+That mod's own full Tier B is unchanged row for row (107 = 107): no check its validation runs reaches those names'
+component chain, so the fix shows in the reader probe, not in its report.
+The per-source degraded skips are kept. Re-measured: 12 of 12 agree, and all 18 op-touched names.
+
+Full Tier B, read-only, before (ec7e399e) and after, every finding and skip compared per row: X4CapturableXenonXL's dev
+copy at the measured commit 6 = 6 rows, the patching overlay as installed 12 = 12, vro 92 = 92; 0 rows removed and 0 added
+on all three. Expected: the names these mods' checks reach were already right after `EngineDocs` (ec7e399e), and none of
+the three references the 4 removed names or the 2 re-pointed weapon macros. Control: the same row diff on the pre-#23
+residual run of the first mod shows its 3 changed rows (1 connection error, 2 fit INFOs), so the comparison can go red.
+
+**RE-DERIVED BY:** `tests/test_engine_document_readers.py` (`test_build_index_applies_a_REMOVE`,
+`..._value_REPLACE_outside_the_class`, the bare-value and complete-index twins, the unreadable-layer skip); 18 of 18 hand
+mutants killed after a green baseline (`mutb2.py`).
