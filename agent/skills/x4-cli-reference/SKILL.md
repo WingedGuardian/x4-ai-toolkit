@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-12 CLIs, 58 subcommands.
+12 CLIs, 59 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -51,6 +51,7 @@ Run a CLI from `{{TOOLKIT}}/tools/x4validate` as `uv run <cli> ...`. The full `-
 | | `pausestate` | READ whether the running game is paused, and whether THIS channel made the pause. Changes nothing; the safe check after a lost write reply |
 | | `pause` | WRITE: pause the running game. Refuses if it is already paused; exit 0 only when the engine reads back paused |
 | | `unpause` | WRITE: undo a pause THIS channel made. Refuses anyone else's pause; exit 0 only when the engine reads back running |
+| | `save` | WRITE: ask the running game to save into ONE EMPTY standard slot, then verify the save folder. Never overwrites: an occupied slot is refused before anything is sent. Exit 0 only when the new save is complete, carries this request's label, and every other file in the save folder is unchanged. The pipe is not authenticated: any program running as this Windows user can request a save the same way (empty slots only) |
 | | `harvest` | ask the RUNNING engine EVERYTHING we can think to ask, in ONE connection, and write it down |
 | | `ffi-census` | DISABLED BY DEFAULT (crash containment, F124): set X4_LIVE_ALLOW_FFI=1 to enable. Asks the RUNNING engine, name by name, whether it exports each C function vanilla's ui lua declares in ffi.cdef -- the surface `query globals` cannot see. Indexes ffi.C only: nothing is called or declared |
 | | `groundtruth` | harvest the engine's DERIVED values live and WRITE THEM DOWN (the fixture any future traversal must reproduce) |
