@@ -98,7 +98,10 @@ overwrites one:
   save folder. After the reply it waits (`--settle-timeout`, default 180 s) until the slot
   holds a complete save (the whole gzip is read, so a save still being written is waited
   for) whose header name is this request's label, `x4live-<request id>`, which is also
-  the name the game's save menu shows. It then checks every other file again.
+  the name the game's save menu shows. It then checks every other file again. One
+  exception (user decision 2026-11-18): Steam rewrites `steam_autocloud.vdf`, so a change
+  to that one file (exact name, any letter case, directly in the save folder) is reported
+  in the output and does not fail the check. Its removal, or any other file, still exits 3.
 - A lost reply is resolved by reading the slot, never by sending again. If no save appears
   in time, it exits 3 and says so. Look at the slot before trying again: once the save has
   landed, a later `save` of the same slot refuses it as occupied, while another slot would
@@ -128,7 +131,8 @@ Most `x4live` commands use one contract:
 label, and every other file in the save folder is unchanged; 1 when the game refused and
 nothing in the save folder changed; 2 for a bad or occupied slot, an unconfigured or
 unreadable save folder, or a game that never connected (nothing was sent); 3 for any
-changed, removed or extra file (each one named), a save with another label, a reply that
+changed, removed or extra file (each one named; a changed `steam_autocloud.vdf` is only
+reported), a save with another label, a reply that
 cannot be trusted, or no complete save within `--settle-timeout`.
 
 `equipment` uses the same contract: 2 for a malformed ship ID (checked before anything is

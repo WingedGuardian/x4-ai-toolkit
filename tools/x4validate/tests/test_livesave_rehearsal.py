@@ -223,11 +223,22 @@ def test_rehearsal_lost_reply_and_no_save_is_unverified(folder, monkeypatch, cap
 
 
 def test_rehearsal_bystander_change_exits_3_and_is_named(folder, monkeypatch, capsys):
-    """steam_autocloud.vdf is a real member of a real save folder that Steam rewrites."""
+    def autosave(save):
+        (save / "autosave_02.xml.gz").write_bytes(save_bytes("#a2-new"))
+    game = Game(folder, bystander=autosave)
+    _connect(monkeypatch, game)
+    rc, out, err = _x4live(capsys, "save", "save_006")
+    assert rc == 3, out + err
+    assert "changed: autosave_02.xml.gz" in out
+
+
+def test_rehearsal_steam_autocloud_change_is_reported_not_failed(folder, monkeypatch, capsys):
+    """steam_autocloud.vdf is a real member of a real save folder that Steam rewrites;
+    user decision 2026-11-18: reported, not a failure."""
     def steam(save):
         (save / "steam_autocloud.vdf").write_bytes(b'"steam_autocloud.vdf"\n{\n "x" "1"\n}\n')
     game = Game(folder, bystander=steam)
     _connect(monkeypatch, game)
     rc, out, err = _x4live(capsys, "save", "save_006")
-    assert rc == 3, out + err
-    assert "changed: steam_autocloud.vdf" in out
+    assert rc == 0, out + err
+    assert "steam_autocloud.vdf changed (reported" in out

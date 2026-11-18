@@ -299,6 +299,45 @@ def test_a_changed_bystander_is_named_and_exits_3(world, monkeypatch, capsys):
     assert "changed: save_001.xml.gz" in out
 
 
+def test_a_changed_steam_autocloud_vdf_is_reported_but_passes(world, monkeypatch, capsys):
+    """User decision 2026-11-18: Steam rewrites this ONE top-level file; report, don't fail."""
+    _happy(world, monkeypatch,
+           side=lambda save: (save / "steam_autocloud.vdf").write_bytes(b"y" * 60))
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 0, out + err
+    assert "steam_autocloud.vdf changed (reported, not a failure" in out
+
+
+def test_the_autocloud_exception_matches_case_insensitively(world, monkeypatch, capsys):
+    save, _ = world
+    (save / "steam_autocloud.vdf").rename(save / "Steam_AutoCloud.VDF")
+    _happy(world, monkeypatch,
+           side=lambda save: (save / "Steam_AutoCloud.VDF").write_bytes(b"y"))
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 0, out + err
+
+
+def test_autocloud_plus_another_change_still_exits_3(world, monkeypatch, capsys):
+    def both(save):
+        (save / "steam_autocloud.vdf").write_bytes(b"y")
+        (save / "quicksave.xml.gz").write_bytes(b"changed")
+    _happy(world, monkeypatch, side=both)
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 3 and "changed: quicksave.xml.gz" in out, out + err
+
+
+@pytest.mark.parametrize("rel", ["sub/steam_autocloud.vdf", "steam_autocloud.vdf.bak",
+                                 "steam_autocloud.vdf2"])
+def test_a_file_merely_named_like_autocloud_is_not_excepted(rel, world, monkeypatch, capsys):
+    save, _ = world
+    target = save / rel
+    target.parent.mkdir(exist_ok=True)
+    target.write_bytes(b"x")
+    _happy(world, monkeypatch, side=lambda s: (s / rel).write_bytes(b"changed"))
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 3 and f"changed: {rel}" in out, out + err
+
+
 def test_a_removed_bystander_is_named_and_exits_3(world, monkeypatch, capsys):
     _happy(world, monkeypatch, side=lambda save: (save / "quicksave.xml.gz").unlink())
     rc, out, err = _run(capsys, "save_004")

@@ -127,14 +127,30 @@ def occupants(rows: dict[str, dict], slot: str) -> list[str]:
     return [name for name in rows if SlotVerifier._related(name, slot)]
 
 
-def compare(before: dict[str, dict], after: dict[str, dict], new: str | None) -> list[str]:
-    """Every difference except the one new save, each one named."""
+#: USER DECISION 2026-11-18: Steam rewrites this one file in the save folder, so a CHANGE
+#: to it (exact name, any letter case, top level only) is reported, never a failure. Its
+#: removal, a copy, a longer name or one in a subfolder is not excepted.
+AUTOCLOUD = "steam_autocloud.vdf"
+
+
+def is_autocloud(rel: str) -> bool:
+    return "/" not in rel and rel.casefold() == AUTOCLOUD
+
+
+def compare(before: dict[str, dict], after: dict[str, dict], new: str | None,
+            notes: list[str] | None = None) -> list[str]:
+    """Every difference except the one new save, each one named. A changed
+    steam_autocloud.vdf goes to `notes` instead (user decision 2026-11-18)."""
     problems = []
     for name, row in before.items():
         if name not in after:
             problems.append(f"removed: {name}")
         elif after[name] != row:
-            problems.append(f"changed: {name}")
+            if is_autocloud(name) and notes is not None:
+                notes.append(f"note: {name} changed (reported, not a failure: Steam "
+                             "rewrites it; user decision 2026-11-18)")
+            else:
+                problems.append(f"changed: {name}")
     for name in after:
         if name not in before and name != new:
             problems.append(f"added: {name}")
@@ -315,8 +331,9 @@ def run(slot: str, open_pipe, save_dir: Path | None, *, settle_timeout: float,
                        and adv.get("label") == label)
             acted = adv.get("acted")
             if matches and reply.status == "ERR" and acted == "no":
+                notes: list[str] = []
                 try:
-                    problems = compare(before, snapshot(Path(save_dir)), None)
+                    problems = compare(before, snapshot(Path(save_dir)), None, notes)
                 except (PersistenceUnavailable, OSError) as exc:
                     problems = [f"the save folder could not be re-read ({exc})"]
                 if problems:
@@ -325,6 +342,8 @@ def run(slot: str, open_pipe, save_dir: Path | None, *, settle_timeout: float,
                     print("\nUNTRUSTED: the game refused, but the save folder changed "
                           "anyway (see above).", file=out)
                     return 3
+                for n in notes:
+                    print(f"  {n}", file=out)
                 print(f"\nrefused, and nothing in the save folder changed "
                       f"(reason={adv.get('reason', '?')}).", file=out)
                 return 1
@@ -340,8 +359,9 @@ def run(slot: str, open_pipe, save_dir: Path | None, *, settle_timeout: float,
     except (PersistenceUnavailable, OSError) as exc:
         print(f"\nUNVERIFIED: the save folder could not be re-read ({exc}).", file=out)
         return 3
-    problems = compare(before, after, name)
-    for p in problems:
+    notes: list[str] = []
+    problems = compare(before, after, name, notes)
+    for p in problems + notes:
         print(f"  {p}", file=out)
     if name is None:
         print(f"\nUNVERIFIED: no complete save appeared in {slot} within {settle_timeout:g} s "
@@ -362,15 +382,16 @@ def run(slot: str, open_pipe, save_dir: Path | None, *, settle_timeout: float,
         print("\nUNTRUSTED: the save landed, but other files in the save folder changed "
               "(listed above).", file=out)
         return 3
-    print(f"others  : {len(before)} other file(s) unchanged (size, mtime and sha256)",
-          file=out)
+    reported = f"; {len(notes)} reported change(s) listed above" if notes else ""
+    print(f"others  : {len(before) - len(notes)} other file(s) unchanged (size, mtime and "
+          f"sha256){reported}", file=out)
     if trusted_ok is False:
         print("\nUNTRUSTED: the save landed and verifies, but the game's reply was not a "
               "trusted acknowledgement (see above).", file=out)
         return 3
     note = " The reply was lost; this was established by reading the slot." if lost else ""
     print(f"\nverified: {slot} holds this request's complete save and nothing else in the "
-          f"save folder changed.{note}", file=out)
+          f"save folder changed{' except the reported file above' if notes else ''}.{note}", file=out)
     return 0
 
 
