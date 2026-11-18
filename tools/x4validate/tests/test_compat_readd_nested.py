@@ -1,0 +1,161 @@
+"""F387: a remove-then-re-add x4compat did not see -- a NESTED keyed node, and a node in a
+non-library file (macro files, md) -- now continues the removed identity, so the re-adder joins
+the node's row exactly as F385 made it for a top-level library entry.
+
+The user's binding rules are F385's and are unchanged here: the row is ADVISORY
+(`readded_after_removal`, "CONFIRM INTENT", exit 0) iff the re-adder declares a dependency on
+the remover and on every other applied mod on the node, HARD otherwise.
+
+Identity keys (the 4.3 plan's defaults): id/name at any depth in libraries/index/t;
+`connection@name` and `macro@name` in macro/component files; `cue`/`library`/`label` names in
+md/aiscripts. A node with no key has no identity to revive (twin below).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from x4validate import _compat, _compat_state, _merge
+
+
+def _w(p: Path, text: str) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+
+
+def _mod(ext, folder, files, deps=()):
+    dep_xml = "".join(f'<dependency id="{d}"/>' for d in deps)
+    _w(ext / folder / "content.xml",
+       f'<content id="{folder}" name="{folder}" version="1">{dep_xml}</content>')
+    for vpath, text in files.items():
+        _w(ext / folder / vpath, text)
+
+
+def _world(tmp_path, vpath, base, rm, readd, deps=("a_rm",)):
+    ref = tmp_path / "reference"
+    _w(ref / "libraries" / "wares.xml", "<wares/>")
+    _w(ref / vpath, base)
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_rm", {vpath: f"<diff>{rm}</diff>"})
+    _mod(ext, "b_readd", {vpath: f"<diff>{readd}</diff>"}, deps=deps)
+    rep = _compat.analyze(ext, config=_merge.Config(reference=ref, include_packed_dlc=False))
+    assert not [s for s in rep.skipped if "disagreed" in s.why], rep.skipped
+    return rep
+
+
+def _readds(rep):
+    return [(r.mod, r.removed_by) for r in rep.readded_after_removal]
+
+
+def _hard_readds(rep):
+    return [c for c in rep.by_kind("HARD") if "adds it again" in c.detail]
+
+
+WARES = "libraries/wares.xml"
+NESTED_BASE = ('<wares><ware id="ore"><price average="100"/>'
+               '<production method="default" name="p1" time="10"/></ware></wares>')
+NESTED_RM = "<remove sel=\"//ware[@id='ore']/production[@name='p1']\"/>"
+NESTED_ADD = ("<add sel=\"//ware[@id='ore']\">"
+              '<production method="default" name="p1" time="20"/></add>')
+
+
+def test_a_NESTED_keyed_node_removed_and_re_added_is_a_confirm_intent_row(tmp_path):
+    rep = _world(tmp_path, WARES, NESTED_BASE, NESTED_RM, NESTED_ADD)
+    assert _readds(rep) == [("b_readd", "a_rm")], rep.collisions
+
+
+def test_the_identical_signal_finds_a_NESTED_node_by_its_removal_path(tmp_path):
+    same = NESTED_ADD.replace('time="20"', 'time="10"')
+    rep = _world(tmp_path, WARES, NESTED_BASE, NESTED_RM, same)
+    assert [r.signals["identical_to_pre_removal"] for r in rep.readded_after_removal] == ["yes"]
+    rep = _world(tmp_path / "differs", WARES, NESTED_BASE, NESTED_RM, NESTED_ADD)
+    assert [r.signals["identical_to_pre_removal"] for r in rep.readded_after_removal] == ["no"]
+
+
+def test_a_keyed_DESCENDANT_of_a_removed_node_continues_its_identity(tmp_path):
+    """x_edit changes the production, a_rm removes the whole ware, b_readd adds the ware back
+    WITH the production: the production is the same node again, so x_edit's change is one
+    that went with the removal (named on the production's row)."""
+    ref = tmp_path / "reference"
+    _w(ref / WARES, NESTED_BASE)
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_rm", {WARES: "<diff><remove sel=\"//ware[@id='ore']\"/></diff>"},
+         deps=("a_edit",))
+    _mod(ext, "a_edit", {WARES: "<diff><replace sel=\"//ware[@id='ore']/production[@name='p1']"
+                                "/@time\">99</replace></diff>"})
+    _mod(ext, "b_readd", {WARES: '<diff><add sel="/wares"><ware id="ore"><price average="1"/>'
+                                 '<production method="default" name="p1" time="5"/></ware>'
+                                 '</add></diff>'})
+    rep = _compat.analyze(ext, config=_merge.Config(reference=ref, include_packed_dlc=False))
+    rows = [c for c in rep.collisions if "production" in (c.target_path or c.target)
+            and "a_edit" in c.mods and "b_readd" in c.mods]
+    assert len(rows) == 1 and rows[0].winner == "b_readd", rep.collisions
+
+
+def test_TWIN_nested_without_the_dependency_is_HARD(tmp_path):
+    rep = _world(tmp_path, WARES, NESTED_BASE, NESTED_RM, NESTED_ADD, deps=())
+    assert _readds(rep) == [] and len(_hard_readds(rep)) == 1, rep.collisions
+    assert _hard_readds(rep)[0].winner == "b_readd"
+
+
+def test_TWIN_nested_a_DIFFERENT_key_is_no_re_add(tmp_path):
+    other = NESTED_ADD.replace('name="p1"', 'name="p2"')
+    rep = _world(tmp_path, WARES, NESTED_BASE, NESTED_RM, other)
+    assert _readds(rep) == [] and _hard_readds(rep) == [], rep.collisions
+
+
+def test_TWIN_nested_an_UNKEYED_node_has_no_identity_to_revive(tmp_path):
+    rm = "<remove sel=\"//ware[@id='ore']/price\"/>"
+    add = "<add sel=\"//ware[@id='ore']\"><price average=\"5\"/></add>"
+    rep = _world(tmp_path, WARES, NESTED_BASE, rm, add)
+    assert _readds(rep) == [] and _hard_readds(rep) == [], rep.collisions
+
+
+MACRO = "assets/units/size_s/macros/ship_y_macro.xml"
+MACRO_BASE = ('<macros><macro name="m1" class="ship_s"><connections>'
+              '<connection name="c1" ref="a"/></connections></macro></macros>')
+
+
+def test_a_MACRO_removed_and_re_added_in_a_macro_file(tmp_path):
+    rm = "<remove sel=\"/macros/macro[@name='m1']\"/>"
+    add = '<add sel="/macros"><macro name="m1" class="ship_s"/></add>'
+    rep = _world(tmp_path, MACRO, MACRO_BASE, rm, add)
+    assert _readds(rep) == [("b_readd", "a_rm")], rep.collisions
+
+
+def test_a_CONNECTION_removed_and_re_added_in_a_macro_file(tmp_path):
+    rm = "<remove sel=\"//connection[@name='c1']\"/>"
+    add = '<add sel="//connections"><connection name="c1" ref="b"/></add>'
+    rep = _world(tmp_path, MACRO, MACRO_BASE, rm, add, deps=())
+    assert len(_hard_readds(rep)) == 1, rep.collisions
+
+
+def test_TWIN_macro_file_an_UNKEYED_tag_is_no_re_add(tmp_path):
+    base = MACRO_BASE.replace("<connections>", '<properties><hull max="1"/></properties><connections>')
+    rm = "<remove sel=\"//macro[@name='m1']/properties\"/>"
+    add = "<add sel=\"//macro[@name='m1']\"><properties/></add>"
+    rep = _world(tmp_path, MACRO, base, rm, add)
+    assert _readds(rep) == [] and _hard_readds(rep) == [], rep.collisions
+
+
+MD = "md/thing.xml"
+MD_BASE = '<mdscript name="Thing"><cues><cue name="c1"/><cue name="c2"/></cues></mdscript>'
+
+
+def test_a_CUE_removed_and_re_added_in_md(tmp_path):
+    rm = "<remove sel=\"//cue[@name='c1']\"/>"
+    add = '<add sel="//cues"><cue name="c1"/></add>'
+    rep = _world(tmp_path, MD, MD_BASE, rm, add)
+    assert _readds(rep) == [("b_readd", "a_rm")], rep.collisions
+
+
+def test_identity_key_per_file_class():
+    el = _merge.parse_bytes(b'<x id="1" name="n"/>')
+    assert _compat_state.identity_key("libraries/wares.xml", el) == ("x", "id=1")
+    conn = _merge.parse_bytes(b'<connection name="c"/>')
+    assert _compat_state.identity_key(MACRO, conn) == ("connection", "name=c")
+    assert _compat_state.identity_key(MACRO, el) is None, "only connection/macro in assets"
+    cue = _merge.parse_bytes(b'<cue name="c"/>')
+    assert _compat_state.identity_key("aiscripts/a.xml", cue) == ("cue", "name=c")
+    assert _compat_state.identity_key("md/a.xml", conn) is None
+    assert _compat_state.identity_key("readme/a.xml", cue) is None

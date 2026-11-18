@@ -30,8 +30,33 @@ class OpTargets:
     inserted: tuple[str, ...] = ()
 
 
+#: The identity key of a node, per file class (F387; the 4.3 plan's defaults, user-approved):
+#: `id`/`name` at ANY depth in libraries/, index/, t/; `connection@name` and `macro@name` in
+#: macro/component files; `cue`/`library`/`label` names in md/ and aiscripts/. A node with
+#: no key (a nested `<price>`) has no identity to revive, by design.
+_SCRIPT_KEYED = frozenset({"cue", "library", "label"})
+_ASSET_KEYED = frozenset({"connection", "macro"})
+
+
+def identity_key(vpath: str, el) -> tuple[str, str] | None:
+    """`(tag, "attr=value")` naming *el* among its siblings in *vpath*'s class, or None."""
+    if not isinstance(el.tag, str):
+        return None
+    low = _merge._registry_rel(vpath).lower()
+    if low.startswith(("libraries/", "index/", "t/")):
+        return _merge._child_key(el)
+    if low.startswith(("md/", "aiscripts/")):
+        keyed = _SCRIPT_KEYED
+    elif low.startswith("assets/") or "/macros/" in low:
+        keyed = _ASSET_KEYED
+    else:
+        return None
+    name = el.get("name")
+    return (el.tag, f"name={name}") if el.tag in keyed and name is not None else None
+
+
 class Nodes(Recorder):
-    def __init__(self, tree, union=False):
+    def __init__(self, tree, union=False, vpath=""):
         super().__init__()
         self.ids = {el: tree.getroottree().getpath(el) for el in tree.iter() if isinstance(el.tag, str)}
         self.created = set()
@@ -42,25 +67,38 @@ class Nodes(Recorder):
         self.pending_root = False
         self.tree = tree
         self.union = union
+        self.vpath = vpath
+        #: (parent identity, tag, key) -> the removed node's identity (F387: any depth).
         self.removed_keys = {}
         self.revived = set()
         self.inserted = []
 
+    def _key(self, el):
+        if self.vpath:
+            return identity_key(self.vpath, el)
+        # No vpath (a direct caller): the F385 rule, a union file's top-level children.
+        return _merge._child_key(el) if self.union and el.getparent() is self.tree else None
+
     def node_removed(self, path, origin):
         super().node_removed(path, origin)
-        if self.union:
-            for el in self.tree.xpath(path):
-                if isinstance(el, etree._Element) and el.getparent() is self.tree:
-                    key = _merge._child_key(el)
-                    if key is not None:
-                        self.removed_keys[key] = self.element_id(el)
+        for el in self.tree.xpath(path):
+            if not isinstance(el, etree._Element):
+                continue
+            # The removed node AND its keyed descendants: re-adding the whole subtree
+            # later continues every one of their identities (F387).
+            for node in el.iter():
+                parent = node.getparent()
+                key = self._key(node) if parent is not None else None
+                if key is not None:
+                    self.removed_keys[(self.element_id(parent), *key)] = self.element_id(node)
 
     def element_id(self, node):
         if node not in self.ids:
             parent = node.getparent()
-            key = _merge._child_key(node) if self.union and parent is self.tree else None
-            if key is not None and key in self.removed_keys:
-                identity = self.removed_keys.pop(key)
+            key = self._key(node) if parent is not None else None
+            slot = (self.element_id(parent), *key) if key is not None else None
+            if slot is not None and slot in self.removed_keys:
+                identity = self.removed_keys.pop(slot)
                 self.ids[node] = identity
                 self.revived.add(identity)
                 return identity
@@ -148,7 +186,7 @@ def trace(vpath, base, roots, expected=None, nested=None, plain_on_game=False):
     if base is None:
         return {}, {}, False
     tree = copy.deepcopy(base)
-    nodes = Nodes(tree, vpath.lower().startswith(("libraries/", "index/", "t/")))
+    nodes = Nodes(tree, vpath.lower().startswith(("libraries/", "index/", "t/")), vpath)
     records = {}
     owners: list[str] = []
     seen: list[str] = []

@@ -873,6 +873,18 @@ def _analyze_vpath(
         key = (live[0].tag, live[0].get("id"), live[0].get("name"))
         before = [c for c in (pre if pre is not None else ()) if isinstance(c.tag, str)
                   and (c.tag, c.get("id"), c.get("name")) == key]
+        if not before:
+            # F387: a NESTED node, at its REMOVAL path as the remover's op found it (a
+            # top-level key keeps F385's lookup above, where two such nodes read unknown).
+            at = next((p for (f, _i), rec in traced.items() if f == remover
+                       for ident, p in rec.removed_paths if ident == cid), "")
+            try:
+                found = pre.getroottree().xpath(at) if pre is not None and at else []
+            except etree.XPathEvalError:
+                found = []   # silent-ok: no node found reads "unknown (...)" below
+            before = [c for c in (found if isinstance(found, list) else ())
+                      if isinstance(c, etree._Element)
+                      and (c.tag, c.get("id"), c.get("name")) == key]
         added = [ch for ch in (op if op is not None and op.tag == "add" else ())
                  if isinstance(ch.tag, str) and (ch.tag, ch.get("id"), ch.get("name")) == key]
         if len(before) != 1:
