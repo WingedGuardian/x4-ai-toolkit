@@ -93,7 +93,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from x4validate import __version__, _effective, _freshness, _merge, _mutation, _paths, _registry, _xref
+from x4validate import __version__, _effective, _freshness, _inputs, _merge, _mutation, _paths, _registry, _xref
 
 PKG_ROOT = Path(__file__).resolve().parent.parent          # tools/x4validate
 TOOLKIT_ROOT = PKG_ROOT.parent.parent                       # repo root
@@ -128,6 +128,8 @@ LOSS_SUMMARY_RE = re.compile(r"\bWARNING: \d+ overlay\(s\) could not be read\b"
                              r"|\bWARNING: \d+ property subtree\(s\) hit\b"
                              r"|\bNOT INDEXED\b.*\d+ file\(s\) would not parse\b")
 MOVED_STAMP = "moved-during-build"   # never equals a digest, so a reader compares it and reads STALE
+#: Shown after a STALE effective store whose input snapshot still backs gates/cross_tool.py.
+SNAPSHOT_BACKED = "(snapshot-backed: cross_tool runs)"
 
 
 @dataclass
@@ -144,6 +146,8 @@ class Status:
     # rebuild). Shown like any reason, but never part of the failure memo's key: a failed build LEAVES some of them,
     # and they made the next key differ, so the same failure ran once more (4.1.1 review).
     volatile: list[str] = field(default_factory=list)
+    # Shown after the state, never part of it: `state` stays one of STATES for every exit-code rule.
+    label: str = ""
 
 
 # --------------------------------------------------------------------------- where things live
@@ -258,8 +262,23 @@ def _status_effective() -> Status:
         keys = json.loads(meta["loss_keys"]) if "loss_keys" in meta else None
     except ValueError:
         keys = None
-    return Status("effective", _classify(verdict), verdict.reasons, notes, orphans, incomplete=lost,
-                  loss_keys=keys if lost else [])
+    state = _classify(verdict)
+    label = ""
+    if state == "STALE":
+        # Toolkit 4.3 item 6: a store stale only because MODS moved still backs cross_tool,
+        # which runs over the store's own input snapshot. Said here so a STALE line is not
+        # read as "cross_tool cannot run until a rebuild" (or as a reason to hold the modlist).
+        try:
+            con = sqlite3.connect(_effective._sqlite_ro_uri(db.resolve()), uri=True)
+            try:
+                stored = _freshness.read_sqlite(con)
+            finally:
+                con.close()
+            label = "" if _inputs.quick_problems(db, meta, stored) else SNAPSHOT_BACKED
+        except Exception:                 # silent-ok: no label is the conservative status
+            label = ""
+    return Status("effective", state, verdict.reasons, notes, orphans, incomplete=lost,
+                  loss_keys=keys if lost else [], label=label)
 
 
 def _status_xref() -> Status:
@@ -479,6 +498,10 @@ def status(only=ORDER, holding_lock: bool = False) -> list[Status]:
     return out
 
 
+def _shown(s: Status) -> str:
+    return f"{s.state} {s.label}" if s.label else s.state
+
+
 def render(results: list[Status]) -> str:
     """Directive first (a long report is truncated from the tail), inventory after."""
     bad = [s for s in results if s.state not in ("FRESH", NOT_BUILT)]
@@ -487,7 +510,7 @@ def render(results: list[Status]) -> str:
     also = f"; not built on this machine: {', '.join(unbuilt)}" if unbuilt else ""
     lines = []
     if bad:
-        lines.append("x4fresh: NOT CURRENT: " + ", ".join(f"{s.name} {s.state}" for s in bad)
+        lines.append("x4fresh: NOT CURRENT: " + ", ".join(f"{s.name} {_shown(s)}" for s in bad)
                      + " -- run `x4fresh rebuild`" if any(s.state != "REBUILDING" for s in bad)
                      else "x4fresh: rebuild in progress: " + ", ".join(s.name for s in bad))
     elif _unaccepted(results):
@@ -504,7 +527,7 @@ def render(results: list[Status]) -> str:
         lines.append(f"x4fresh: all {built} artifact(s) FRESH"
                      + (f" ({known} known loss(es), accepted)" if known else "") + also)
     for s in results:
-        lines.append(f"  {s.name:<10} {s.state}"
+        lines.append(f"  {s.name:<10} {_shown(s)}"
                      + (f"  ({s.incomplete} known loss(es) accepted {s.accepted}; listed below)" if s.accepted else ""))
         lines.extend(f"      {r}" for r in s.reasons)
         lines.extend(f"      {n}" for n in s.notes)
