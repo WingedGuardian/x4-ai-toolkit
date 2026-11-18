@@ -71,6 +71,9 @@ tools/x4validate/scripts/mutate-mod-lua.py export-ignore
 # The maintainers' git pre-push hook runs it; nothing an install runs or documents names it.
 scripts/prepush-gate.py export-ignore
 tools/x4validate/tests/test_prepush_gate.py export-ignore
+# The gate's first step (the push preflight), same rule.
+scripts/preflight.py export-ignore
+tools/x4validate/tests/test_preflight.py export-ignore
 
 # Maintainer working papers (v4.0.0 release review R6-12, lane FX-D). The implementation
 # plans and session handoffs are PUBLIC in the repo but are not product documentation: they
