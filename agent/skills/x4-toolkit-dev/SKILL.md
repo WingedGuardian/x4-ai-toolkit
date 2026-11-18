@@ -65,13 +65,30 @@ implementation; BaseX delegates to it):
 
 | axis | covers | why |
 |---|---|---|
-| `content` | installed extension set + each manifest mtime/size + a reference marker | mods added, removed or updated |
+| `content` | installed extension set + `(relpath, mtime, size)` of every engine-relevant file each mod ships + each mod's enabled bit from the profile + a reference marker | a mod added, removed, updated, toggled or one of its files edited |
 | `engine` | hash of the **BYTES** of every file named in `_freshness.ENGINE_SOURCES` — **derive that list from the module, never retype it** (**7** as of 2026-09-24: `_cat`, `_effective`, `_loadorder`, `_merge`, `_modfiles`, `_provenance`, `_registry`); x4eff adds `build-effective.py`. ⚠ This cell has been wrong TWICE, the same way, in the sentence telling you not to retype the list, so `tests/test_reference_fingerprint.py` now asserts it lists exactly what the module derives | a merge fix changes the answer for identical inputs; a commit hash does not move for a dirty tree |
 
 **Absent fingerprint = UNKNOWN, never fresh.** Each CLI banners every run until rebuilt; `ask.py`
 and `gates/claims_audit.py` REFUSE a claim outright. `engine_dependent` is per-artifact — a raw file
 index is not a merge product, and flagging it anyway trains you to ignore the banner. Rebuild:
 `uv run x4effective build` · `uv run x4xref build` · `cd tools/basex; bash build-corpus.sh; bash build-effective.sh`
+
+**STALE is a normal state, never a fault — and never a reason to freeze the user's modlist**
+(user ruling 2026-11-17). Changing mods is the work; a stale artifact only means *rebuild before
+trusting it*, and the refusals above already stop a stale answer reaching a claim.
+- **What stales it** is exactly the two axes above. **A game launch, play or a save does not**
+  (the game writes no mod file); only a mod toggled in the game's menu or a Workshop update on
+  launch does, and that is a mod change.
+- **A change DURING a build costs the same as one AFTER it**: the builder detects it ("the
+  installed world MOVED during this build"), marks the result stale, and you rebuild. Never ask
+  for a freeze so a build can run.
+- **Ask for a hold only for a check that compares two readers at the same moment** — today
+  `gates/cross_tool.py` (live files vs the effective store), for that check's duration (~10 min:
+  one store build + the check). Say which check, how long and why, in one line; if something
+  moves anyway, re-run it.
+- **A heavy build while a game runs is a RESOURCE question, not a correctness one** — the
+  machine's resource policy handles it (idle priority, or wait). Never phrase it as "would
+  invalidate the results". Every hold you ask for names its real reason, or you do not ask.
 
 **Corollary — a design doc's numbers rot silently.** Prose cannot be tested, so numeric claims live
 in `dev\_registry\CLAIMS.tsv`, re-checked by `gates/claims_audit.py` against the store. UNRESOLVED is
