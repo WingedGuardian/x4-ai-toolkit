@@ -29,10 +29,15 @@ itself found three more issues. So: what has NOTHING checked yet?
      That is one verb. ATTACH, PRAGMA, and multi-statement payloads are the ways
      a "read-only" SQL surface actually gets subverted.
 
-Run:  uv run python gates/cross_tool.py
-Exit: 0 all checks hold, 1 any violation, 2 a section could not run (no/stale
-      store, or a collision kind whose every row was uncheckable -- 0 of N is a
-      non-answer, not agreement).
+  Section 2 runs x4compat over the store's own INPUT SNAPSHOT (`<db>.inputs`, written
+  by every `x4effective build`), so it needs no modlist hold and a store gone STALE
+  only because mods changed still runs. It refuses (exit 2) when the snapshot cannot
+  be proven to be the store's, intact, with the engine code, reference and DLC unchanged.
+
+Run:  uv run python gates/cross_tool.py [--db <store.sqlite>]
+Exit: 0 all checks hold, 1 any violation, 2 a section could not run (no store, an
+      unprovable input snapshot, or a collision kind whose every row was uncheckable
+      -- 0 of N is a non-answer, not agreement).
 """
 from __future__ import annotations
 
@@ -502,20 +507,58 @@ def _readded_as_hard(r) -> "_compat.Collision":
         target_tree=r.target_tree, winner_qualified=getattr(r, "winner_qualified", True))
 
 
+#: `--db`: the store to check instead of the configured one (its snapshot is `<db>.inputs`).
+DB_OVERRIDE: Path | None = None
+
+
+def _store() -> Path:
+    """The store every section reads: `--db`, else the configured one (SKIP if none)."""
+    return DB_OVERRIDE if DB_OVERRIDE is not None else _env.effective_db()
+
+
+def _proven_world(db: Path):
+    """(context, None) to run x4compat over the store's own INPUT SNAPSHOT, or (None, why).
+
+    Toolkit 4.3 item 6 (user decision 2026-11-18: cross_tool must never need a modlist
+    hold). This used to refuse any STALE store (AUDIT-2026-09-24 GT-6), because x4compat
+    read the live mods while the store described the mods of its build. Now x4compat
+    reads the very bytes the store was built from, inside `_inputs.world`, once
+    `_inputs.prove` shows the snapshot is the store's, intact, and that what it does NOT
+    copy (engine code, reference, DLC) has not moved. A mod changed since the build is
+    therefore no reason to refuse; anything that breaks the proof is, and a store with no
+    snapshot keeps refusing -- there is no fallback to the live tree."""
+    from x4validate import _inputs
+    try:
+        snap, why = _inputs.prove(db, config=_merge.Config())
+    except Exception as exc:                  # an unprovable snapshot is a refusal, never a pass
+        return None, [f"the proof itself failed: {type(exc).__name__}: {exc}"]
+    if why:
+        return None, why
+    return _inputs.world(snap), None
+
+
 def check_cross_tool_agreement() -> None:
     print("\n2. CROSS-TOOL AGREEMENT - x4compat's winner vs x4effective's origin")
     try:
-        db = _env.effective_db()
+        db = _store()
     except SystemExit:
         not_run("cross-tool agreement", "no effective store (run `x4effective build`)")
         return
-    # A STALE store answers for an older engine or modlist, so agreement with it proves
-    # nothing about today's x4compat, and disagreement is not a defect (AUDIT-2026-09-24
-    # GT-6). The refusal text goes to stderr; this line is what the summary counts.
-    if _env.stale_store_refusal(db, "cross_tool") is not None:
-        not_run("cross-tool agreement", "the effective store is stale -- rebuild and re-run")
+    ctx, why = _proven_world(db)
+    if ctx is None:
+        for line in why[:10]:
+            print(f"REFUSING (cross_tool): {line}", file=sys.stderr)
+        not_run("cross-tool agreement",
+                f"the store's input snapshot could not be proven ({len(why)} reason(s), first: "
+                f"{why[0]}) -- rebuild the store (`x4effective build`) and re-run")
         return
-    report = _compat.analyze(_env.extensions(), config=_merge.Config())
+    with ctx:
+        _agreement(db)
+
+
+def _agreement(db: Path) -> None:
+    # Every root the store was built over (the snapshot's), not the game root alone.
+    report = _compat.analyze(None, config=_merge.Config())
     # The ADVISORY rows (issue #11: an overwrite of a declared dependency's added content)
     # were HARD rows before the split and keep every field the HARD check reads, so they
     # are cross-checked as their own population -- release review F7: 2,544 live rows had
@@ -535,7 +578,7 @@ def check_cross_tool_agreement() -> None:
     config = _merge.Config()
     # The mod set `_compat.analyze` reads, built by the same call: a nested
     # `extensions/<owner>/<rel>` has its base in the OWNER mod, found by folder here.
-    active = _registry.mods("active", _compat._scan_dirs(_env.extensions()), dlc_config=config)
+    active = _registry.mods("active", _compat._scan_dirs(None), dlc_config=config)
     left_out = _registry.dropped_note(active)
     if left_out:
         # Disclosed (F139): a mod the engine leaves out is in no tree built here.
@@ -823,7 +866,7 @@ def check_sql_hardening() -> None:
     # every CLI-level check above would still pass.
     from x4validate import _effective
     try:
-        con = _effective._connect(_env.effective_db())
+        con = _effective._connect(_store())
     except (SystemExit, ValueError, sqlite3.Error) as exc:
         # v4.0.0 review R5-4: `_connect` reports a missing or incompatible store with
         # ValueError now, not SystemExit -- uncaught, it aborted the gate with a traceback.
@@ -870,7 +913,17 @@ def check_path_edges(tmp: Path) -> None:
         note(ok, label, f"exit {rc}, path len {len(str(mod))}")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    global DB_OVERRIDE
+    ap = argparse.ArgumentParser(description="Cross-tool / sensitivity / idempotence / hardening gate.")
+    ap.add_argument("--db", type=Path, default=None,
+                    help="the effective store to check (default: the configured one). Its "
+                         "input snapshot must sit beside it as `<db>.inputs`, written by the "
+                         "`x4effective --db <db> build` that made the store")
+    # None = no arguments (a caller importing the gate), never this process's sys.argv.
+    args = ap.parse_args([] if argv is None else argv)
+    DB_OVERRIDE = args.db
     tmp = Path(tempfile.mkdtemp(prefix="x4gate_cross_"))
     try:
         print("=" * 88)
@@ -902,4 +955,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

@@ -10,6 +10,7 @@ rule produced 6 false HARD disagreements + 6 false SUBTREE alarms — both of th
 the CHECKER's bug, not x4compat's.
 """
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -456,7 +457,12 @@ def _owned_world(tmp_path, monkeypatch, store_origin, owner="owner_mod"):
     monkeypatch.setattr(ct, "cannot", [])
     monkeypatch.setattr(ct._env, "effective_db", lambda: db)
     monkeypatch.setattr(ct._env, "extensions", lambda: ext)
-    monkeypatch.setattr(ct._env, "stale_store_refusal", lambda db, who: None)
+    for name, value in (("GAME_EXTENSIONS", ext), ("PROFILE_EXTENSIONS", None),
+                        ("WORKSHOP_CONTENT", None)):
+        monkeypatch.setattr(ct._registry, name, value)
+    # The store fixture has no input snapshot; the proof is stubbed (tests/test_inputs_snapshot.py
+    # covers it) and x4compat reads the configured roots, as inside `_inputs.world`.
+    monkeypatch.setattr(ct, "_proven_world", lambda db: (contextlib.nullcontext(), None))
     monkeypatch.setattr(ct._merge, "Config", lambda *a, **k: cfg)
     return ct
 
@@ -470,7 +476,7 @@ def _run_with(ct, monkeypatch, collisions):
 
 
 def _real_hard(ct):
-    rows = [c for c in ct._compat.analyze(ct._env.extensions(), config=ct._merge.Config())
+    rows = [c for c in ct._compat.analyze(None, config=ct._merge.Config())
             .collisions if c.kind == "HARD"]
     assert len(rows) == 1 and rows[0].winner == "z_patch", rows
     assert rows[0].vpath.lower().startswith("extensions/owner_mod/"), rows[0].vpath
@@ -585,7 +591,9 @@ def _dependent_run(monkeypatch, tmp_path, winner, qualified=True):
     monkeypatch.setattr(ct, "cannot", [])
     monkeypatch.setattr(ct._env, "effective_db", lambda: db)
     monkeypatch.setattr(ct._env, "extensions", lambda: tmp_path)
-    monkeypatch.setattr(ct._env, "stale_store_refusal", lambda db, who: None)
+    # The store fixture has no input snapshot; the proof is stubbed (tests/test_inputs_snapshot.py
+    # covers it) and x4compat reads the configured roots, as inside `_inputs.world`.
+    monkeypatch.setattr(ct, "_proven_world", lambda db: (contextlib.nullcontext(), None))
     monkeypatch.setattr(ct._merge, "Config", lambda *a, **k: None)
     monkeypatch.setattr(ct._registry, "mods", lambda *a, **k: [])
     monkeypatch.setattr(ct._compat, "base_tree_for", lambda vp, f2p, cfg: tree)
@@ -638,7 +646,9 @@ def _readded_run(monkeypatch, tmp_path, winner):
     monkeypatch.setattr(ct, "cannot", [])
     monkeypatch.setattr(ct._env, "effective_db", lambda: db)
     monkeypatch.setattr(ct._env, "extensions", lambda: tmp_path)
-    monkeypatch.setattr(ct._env, "stale_store_refusal", lambda db, who: None)
+    # The store fixture has no input snapshot; the proof is stubbed (tests/test_inputs_snapshot.py
+    # covers it) and x4compat reads the configured roots, as inside `_inputs.world`.
+    monkeypatch.setattr(ct, "_proven_world", lambda db: (contextlib.nullcontext(), None))
     monkeypatch.setattr(ct._merge, "Config", lambda *a, **k: None)
     monkeypatch.setattr(ct._registry, "mods", lambda *a, **k: [])
     monkeypatch.setattr(ct._compat, "base_tree_for", lambda vp, f2p, cfg: tree)
