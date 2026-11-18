@@ -525,6 +525,13 @@ _ALL_CELLS: list[Cell] = [
     Cell("x4live", "equipment refuses a malformed ship id", ["equipment", "__qa_not_an_id__"],
          expect=(2,), findings_ok=True,
          wants="error: equipment requires a nonzero issued ship ID", wants_on="stderr"),
+    # `save` (4.3, a WRITE: it asks the game for a save) checks its slot first, before it
+    # resolves the save folder or opens the pipe, so a wildcard is refused with no game, no
+    # profile and no save folder touched. Its other refusals and its whole live chain are
+    # covered offline by tests/test_livesave*.py.
+    Cell("x4live", "save refuses a wildcard slot", ["save", "save_*"],
+         expect=(2,), findings_ok=True,
+         wants="error: save takes exactly one standard slot", wants_on="stderr"),
     # `automation query action_execute` is a hidden write route (a reserved session verb),
     # refused after argument parsing and before the pipe, the journal or any metadata. Every
     # path argument is a dummy that the refusal never reads. (Its first form, `query pause`,

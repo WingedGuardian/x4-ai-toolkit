@@ -172,6 +172,24 @@ def test_the_edges_of_the_slot_range_are_accepted(slot, world, monkeypatch, caps
     assert rc == 0, out + err
 
 
+@pytest.mark.parametrize("argv", [("--settle-timeout", "0"), ("--settle-timeout", "-1"),
+                                  ("--settle-timeout", "nan"), ("--settle-timeout", "3601"),
+                                  ("--settle", "0.1"), ("--settle", "61"), ("--settle", "inf")])
+def test_timing_arguments_out_of_bounds_are_refused_before_sending(argv, world, monkeypatch,
+                                                                   capsys):
+    _never_open(monkeypatch)
+    rc, out, err = _run(capsys, "save_004", *argv)
+    assert rc == 2 and argv[0] in err, out + err
+
+
+@pytest.mark.parametrize("argv", [("--settle-timeout", "3600"), ("--settle", "0.5"),
+                                  ("--settle", "60")])
+def test_timing_arguments_at_their_bounds_are_accepted(argv, world, monkeypatch, capsys):
+    _happy(world, monkeypatch)
+    rc, out, err = _run(capsys, "save_004", *argv)
+    assert rc == 0, out + err
+
+
 # --------------------------------------------------------------------------- occupancy
 
 def test_an_occupied_slot_is_refused_before_sending(world, monkeypatch, capsys):

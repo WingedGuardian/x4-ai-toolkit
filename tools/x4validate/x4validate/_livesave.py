@@ -32,6 +32,7 @@ folder unknown, game unreachable before sending); 3 anything untrusted or unveri
 from __future__ import annotations
 
 import gzip
+import math
 import stat
 import sys
 import time
@@ -262,6 +263,10 @@ def run(slot: str, open_pipe, save_dir: Path | None, *, settle_timeout: float,
     why = slot_refusal(slot)
     if why:
         return refuse(why, 2)
+    if not (math.isfinite(settle_timeout) and 0 < settle_timeout <= 3600):
+        return refuse("--settle-timeout must be more than 0 and at most 3600 seconds", 2)
+    if not (math.isfinite(settle) and 0.5 <= settle <= 60):
+        return refuse("--settle must be between 0.5 and 60 seconds", 2)
     if save_dir is None:
         return refuse("the save folder is not configured: set X4_SAVES, or X4_PROFILE (its "
                       "save/ folder is used). Nothing was sent.", 2)

@@ -18,6 +18,8 @@ LABELS = {
     ("x4save", "census refuses an unknown --by key"),
     ("x4live", "equipment refuses a malformed ship id"),
     ("x4live", "automation refuses a write verb through query"),
+    # 4.3: `x4live save` refuses a wildcard slot before the save folder or the pipe.
+    ("x4live", "save refuses a wildcard slot"),
 }
 
 
@@ -30,7 +32,7 @@ def _cells(qa):
     return [c for c in qa.CELLS if (c.tool, c.label) in LABELS]
 
 
-def test_the_three_cells_exist_and_each_names_stderr():
+def test_the_offline_refusal_cells_exist_and_each_names_stderr():
     cells = _cells(_qa())
     assert {(c.tool, c.label) for c in cells} == LABELS
     for c in cells:
