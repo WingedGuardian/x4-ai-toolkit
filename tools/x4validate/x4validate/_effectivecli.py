@@ -1109,8 +1109,14 @@ def _cmd_dump(args) -> int:
     folder_to_path = {m["folder"]: p for m, p in ordered}
     touch = build_touch_map(ordered)
     ov = touchers_for(args.vpath, touch, folder_to_path)
+    # F383: the effective index of every active root decides which document the engine loads
+    # for a ship macro/component file a mod copies.
+    roots = [p for _m, p in ordered]
     rec = Recorder()
-    res = _merge.build_effective(args.vpath, cfg, extra_overlays=ov, recorder=rec)
+    res = _merge.build_effective(args.vpath, cfg, extra_overlays=ov, recorder=rec,
+                                 index_roots=roots)
+    # Said whatever path form answers below: a nested patch the engine never opens.
+    first_never, first_unmeasured = list(getattr(res, "never_opened", ())), list(res.unmeasured)
 
     # A miss may be the wrong FORM rather than an absence. Retry the logical vpath
     # -- but only AFTER the literal one has genuinely failed, so every path that
@@ -1123,7 +1129,7 @@ def _cmd_dump(args) -> int:
             alt_rec = Recorder()
             alt_res = _merge.build_effective(
                 alt, cfg, extra_overlays=touchers_for(alt, touch, folder_to_path),
-                recorder=alt_rec)
+                recorder=alt_rec, index_roots=roots)
             if alt_res.tree is not None:
                 note_folder = [p for p in args.vpath.replace("\\", "/").split("/") if p][1]
                 note_alt = alt
@@ -1131,6 +1137,10 @@ def _cmd_dump(args) -> int:
 
     if res.tree is None:
         print(f"no effective content for {args.vpath}", file=sys.stderr)
+        for line in first_unmeasured:
+            print(f"  {line}", file=sys.stderr)
+        for item in first_never:
+            print(f"  NEVER OPENED by the engine: {item}", file=sys.stderr)
         # An absence must not hide a document one path form away: a mod can ship a file
         # into a DLC's tree, and it then exists ONLY at extensions/<dlc>/<vpath>.
         rel = args.vpath.replace("\\", "/").lstrip("/").lower()
@@ -1152,7 +1162,7 @@ def _cmd_dump(args) -> int:
             door_rec = Recorder()
             door_res = _merge.build_effective(
                 door, cfg, extra_overlays=touchers_for(door, touch, folder_to_path),
-                recorder=door_rec)
+                recorder=door_rec, index_roots=roots)
             if door_res.tree is not None and len(door_res.sources) > 1:
                 known = {d.lower() for d in dlc_folders}
                 if all(s.split(":", 1)[0].lower() in known for s in res.sources):
@@ -1202,6 +1212,13 @@ def _cmd_dump(args) -> int:
     # like the skip channel above: the tree below looks exactly as certain either way.
     for line in res.unmeasured:
         print(f"<!-- UNMEASURED: {comment_safe(line)} -->")
+    # F383: layers at this path the engine never opens, so none of their ops is in the tree.
+    # Unconditional, like the two channels above.
+    for item in dict.fromkeys(first_never + list(getattr(res, "never_opened", ()))):
+        print(f"<!-- NEVER OPENED by the engine (not in this tree): {comment_safe(item)} -->")
+    if first_never and not getattr(res, "never_opened", ()):
+        for line in first_unmeasured:
+            print(f"<!-- UNMEASURED: {comment_safe(line)} -->")
     if getattr(args, "annotate", False):
         header, n_nodes = annotate_tree(res.tree, rec)
         print(f"<!-- node provenance: {n_nodes} node(s) changed by an overlay; removals: "

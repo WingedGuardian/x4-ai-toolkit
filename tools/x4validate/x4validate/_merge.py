@@ -1507,6 +1507,36 @@ def _never_opened(overlay_dirs: list[Path], vpath: str, skip_name: str,
     return out
 
 
+def nested_copy_merges(vpath: str, config: Config, roots):
+    """For a NESTED `extensions/<owner>/<rel>` patch path: `(entry value, entry count)` when
+    the last effective index entry for <rel>'s name is the BASE path and <owner>'s complete
+    copy of the game's file (in the `merges_plain_copy` class, the game file's root) MERGES
+    there -- the engine then never opens a nested patch of it (MEASURED once, F382/F383).
+    `IndexPartial` when the index is incomplete; None otherwise (the nested door stands)."""
+    nested = _nested_target(vpath, config.packed_dlc_names())
+    if nested is None:
+        return None
+    owner, rel = nested
+    if is_dlc_folder(owner) or plain_copy_index(rel) is None:
+        return None
+    got = EffectiveIndex.lookup_for(rel, config, roots)
+    if got is None or isinstance(got, IndexPartial):
+        return got
+    loaded, value, count = got
+    if loaded != rel.replace("\\", "/").lower()[:-4]:
+        return None   # the owner's own path (the engine opens the nested patches), or elsewhere
+    # The MEASURED shape only: the owner's own complete copy, in the class, with the game
+    # file's root, merging at the plain path. Anything else keeps the nested door's model.
+    owner_dir = next((r for r in roots if r.name.lower() == owner.lower()), None)
+    oroot = complete_at(owner_dir, rel) if owner_dir is not None else None
+    if oroot is None or not merges_plain_copy(rel, oroot.tag):
+        return None
+    game = build_effective(rel, replace(config, overlays=(), final_overlays=()))
+    if game.skipped or game.tree is None or game.tree.tag != oroot.tag:
+        return None
+    return value, count
+
+
 def _index_redirect(vpath: str, config: Config, overlay_dirs: list[Path], roots: tuple,
                     recorder: Recorder | None, index_skip: list[str]) -> MergeResult | None:
     """`build_effective`'s index step (F383): a MergeResult when the effective index of
@@ -1548,26 +1578,13 @@ def _index_redirect(vpath: str, config: Config, overlay_dirs: list[Path], roots:
         res.unmeasured.append(index_note(owner_dir.name, got.value, got.count, vpath))
         return res
     owner, rel = nested
-    if is_dlc_folder(owner) or plain_copy_index(rel) is None:
-        return None
-    got = EffectiveIndex.lookup_for(rel, config, roots)
+    got = nested_copy_merges(vpath, config, roots)
     if got is None:
         return None
     if isinstance(got, IndexPartial):
         partial(got, rel)
         return None
-    loaded, value, count = got
-    if loaded != rel.replace("\\", "/").lower()[:-4]:
-        return None   # the owner's own path (the engine opens the nested patches), or elsewhere
-    # The MEASURED shape only: the owner's own complete copy, in the class, with the game
-    # file's root, merging at the plain path. Anything else keeps the nested door's model.
-    owner_dir = next((r for r in roots if r.name.lower() == owner.lower()), None)
-    oroot = complete_at(owner_dir, rel) if owner_dir is not None else None
-    if oroot is None or not merges_plain_copy(rel, oroot.tag):
-        return None
-    game = build_effective(rel, replace(config, overlays=(), final_overlays=()))
-    if game.skipped or game.tree is None or game.tree.tag != oroot.tag:
-        return None
+    value, count = got
     skipped: list[str] = []
     never = _never_opened(overlay_dirs, vpath, owner, skipped)
     note = (f"{vpath}: the effective index entry for this file's name points at the base path "

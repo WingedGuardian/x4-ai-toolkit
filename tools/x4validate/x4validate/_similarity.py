@@ -344,12 +344,15 @@ def _collect_all(reference: Path, ext_dir: Path | None,
     for low, g in sorted(groups.items()):
         label = max(g["definers"])[1]
         vpath = g["vpath"]
+        roots = None                                  # F383: the index of the ACTIVE set
         if g["inactive"]:
             overlays = g["inactive"]                  # disabled: merged on its own
         else:
             overlays = _effective.touchers_for(low, touch, folder_to_path)
+            roots = [p for _m, p in ordered]
         try:
-            res = _merge.build_effective(vpath, config, extra_overlays=overlays)
+            res = _merge.build_effective(vpath, config, extra_overlays=overlays,
+                                         index_roots=roots)
         except (etree.XMLSyntaxError, OSError) as exc:
             if unreadable is not None:
                 unreadable.append(_scan.Unreadable(vpath, f"merge failed: {exc}"))

@@ -159,7 +159,9 @@ def effective_wares(ext_dir: Path | None, config: _merge.Config,
         notes.append(f"load-order model of the {scope} set: {model}")
     by_folder = {m["folder"]: Path(m["path"]) for m in mods}
     overlays = [by_folder[f] for f in order if f in by_folder]
-    tree = _merge.build_effective("libraries/wares.xml", config, extra_overlays=overlays).tree
+    # index_roots: the one resolver's rule (F383) for every reader; inert for a library file.
+    tree = _merge.build_effective("libraries/wares.xml", config, extra_overlays=overlays,
+                                  index_roots=overlays).tree
     out: dict[str, Ware] = {}
     if tree is not None:
         for el in tree.findall("ware"):

@@ -231,3 +231,170 @@ def test_TWIN_nested_no_entry_for_the_name_keeps_the_nested_model(tmp_path):
     ref, a, b, c = _world(tmp_path, copier_index=None, base_entries=())
     res = _merge.build_effective(NESTED, _cfg(ref, a, b, c), index_roots=[a, b, c])
     assert _hulls(res.tree) == ["9"] and res.never_opened == []
+
+
+# --- the callers: the store, x4effective dump, x4similar ------------------------------------
+
+def _no_profile(monkeypatch):
+    from x4validate import _registry
+    monkeypatch.setattr(_registry, "ingest_content_xml", lambda *a, **k: [])
+    monkeypatch.setattr(_registry, "PROFILE_CONTENT", None)
+
+
+def test_the_store_holds_the_copiers_document_and_no_never_opened_origin(tmp_path, monkeypatch):
+    import sqlite3
+
+    from x4validate import _effective
+    ref, a, b, c = _world(tmp_path)
+    _no_profile(monkeypatch)
+    db = tmp_path / "eff.sqlite"
+    _effective.build(_cfg(ref), db, dirs=[tmp_path / "extensions"], kinds=("macro",))
+    con = sqlite3.connect(db)
+    rows = con.execute("SELECT a.value, a.origin FROM attrs a JOIN entities e ON a.entity_id = e.id "
+                       "WHERE e.name = 'ship_x_macro' AND a.prop = 'hull.max'").fetchall()
+    origins = {r[0] for r in con.execute("SELECT origin FROM attrs")}
+    con.close()
+    assert [r[0] for r in rows] == ["9"], rows
+    assert not any(o.startswith("b_patch") for o in origins), origins
+
+
+def test_dump_names_the_never_opened_layer(tmp_path, monkeypatch, capsys):
+    from x4validate import _effectivecli
+    ref, a, b, c = _world(tmp_path)
+    mods = [{"folder": d.name, "path": str(d), "id": d.name, "enabled": True} for d in (a, b, c)]
+    monkeypatch.setattr(_effectivecli, "active_mods", lambda: mods)
+    monkeypatch.setattr(_effectivecli, "ordered_overlays", lambda m: [(x, Path(x["path"])) for x in m])
+    monkeypatch.setattr(_effectivecli, "touchers_for", lambda *x, **k: [a, b, c])
+    rc = _effectivecli.main(["--db", str(tmp_path / "x.sqlite"), "dump", REL,
+                             "--reference", str(ref)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "NEVER OPENED by the engine (not in this tree): b_patch:diff(unopened:index)" in out, out
+    assert 'max="9"' in out and 'ref="ship_copy"' in out and 'max="1"' not in out, out
+
+
+def test_x4similar_scores_the_copiers_document(tmp_path, monkeypatch):
+    from x4validate import _similarity
+    ref, a, b, c = _world(tmp_path)
+    _no_profile(monkeypatch)
+    vecs = [v for v in _similarity._collect_all(ref, tmp_path / "extensions", [], dlc_dirs=[])
+            if v.macro_name == "ship_x_macro"]
+    assert [v.stats.get("hull.max") for v in vecs] == [9.0], vecs
+
+
+# --- x4compat: NEVER OPENED (user decision 2026-11-18: advisory, exit 0) ---------------------
+
+def _compat_run(ext, ref, *extra):
+    import contextlib
+    import io
+
+    from x4validate import _compat
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _compat.main(["check", *extra, "--ext-dir", str(ext), "--reference", str(ref)])
+    return rc, buf.getvalue()
+
+
+def _no_disagreement(rep):
+    assert not [s for s in rep.skipped if "disagreed" in s.why], rep.skipped
+
+
+def test_x4compat_lists_the_plain_diff_as_NEVER_OPENED_and_in_no_other_list(tmp_path):
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path)
+    rep = _compat.analyze(tmp_path / "extensions", config=_merge.Config(reference=ref,
+                                                                       include_packed_dlc=False))
+    assert [(n.vpath, n.mod, n.owner, n.line > 0, n.sel) for n in rep.never_opened] == [
+        (REL, "b_patch", "a_copy", True, f"{SEL}/hull/@max")], rep.never_opened
+    assert not [u for u in rep.unapplied if "b_patch" in u], rep.unapplied
+    assert not [x for x in rep.collisions if "b_patch" in x.mods], rep.collisions
+    _no_disagreement(rep)
+
+
+def test_TWIN_x4compat_with_the_base_entry_last_opens_the_plain_diff(tmp_path):
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path, copier_index=None)
+    rep = _compat.analyze(tmp_path / "extensions", config=_merge.Config(reference=ref,
+                                                                       include_packed_dlc=False))
+    assert [n.mod for n in rep.never_opened] == ["c_nest"], "only the nested patch (converse)"
+    assert [u for u in rep.unapplied if "b_patch" in u], "the plain diff is evaluated (2 nodes)"
+    _no_disagreement(rep)
+
+
+def test_x4compat_lists_a_nested_patch_on_a_MERGING_copy_as_NEVER_OPENED(tmp_path):
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path, copier_index=None)
+    rep = _compat.analyze(tmp_path / "extensions", config=_merge.Config(reference=ref,
+                                                                       include_packed_dlc=False))
+    rows = [n for n in rep.never_opened if n.mod == "c_nest"]
+    assert [(n.vpath.lower(), n.owner) for n in rows] == [(NESTED.lower(), "a_copy")], rows
+    assert "MERGES" in rows[0].reason
+
+
+def test_TWIN_x4compat_with_the_own_entry_last_opens_the_nested_patch(tmp_path):
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path)
+    rep = _compat.analyze(tmp_path / "extensions", config=_merge.Config(reference=ref,
+                                                                       include_packed_dlc=False))
+    assert "c_nest" not in [n.mod for n in rep.never_opened], rep.never_opened
+
+
+def test_x4compat_NEVER_OPENED_is_advisory_exit_0_and_in_the_json(tmp_path):
+    import json
+    ref, a, b, c = _world(tmp_path)
+    rc, out = _compat_run(tmp_path / "extensions", ref, "--json")
+    rows = json.loads(out)["never_opened"]
+    assert rc == 0 and [(r["mod"], r["owner"]) for r in rows] == [("b_patch", "a_copy")], out
+    rc, text = _compat_run(tmp_path / "extensions", ref)
+    assert rc == 0 and "NEVER OPENED BY THE ENGINE" in text and "b_patch" in text, text
+
+
+# --- the gates: cross_tool (no store origin) and tool_properties (never a winner) -----------
+
+def _gate(name):
+    from conftest import hermetic_gate
+    return hermetic_gate(name)
+
+
+def _store_con(tmp_path, monkeypatch, index_roots: bool):
+    import sqlite3
+
+    from x4validate import _effective
+    ref, a, b, c = _world(tmp_path)
+    # `[1]`: one node in either model, so only the index decides whether b's value lands.
+    _w(b / REL, "<diff><replace sel=\"/macros/macro[@name='ship_x_macro'][1]/properties"
+                "/hull/@max\">7</replace></diff>")
+    _no_profile(monkeypatch)
+    if not index_roots:   # the store as built before 4.3: no index consulted
+        real = _effective._merge_one
+        monkeypatch.setattr(_effective, "_merge_one",
+                            lambda v, cfg, ov, roots=None: real(v, cfg, ov, None))
+    db = tmp_path / "eff.sqlite"
+    _effective.build(_cfg(ref), db, dirs=[tmp_path / "extensions"], kinds=("macro",))
+    from x4validate import _compat
+    rep = _compat.analyze(tmp_path / "extensions", config=_merge.Config(reference=ref,
+                                                                       include_packed_dlc=False))
+    return sqlite3.connect(db), rep
+
+
+def test_cross_tool_a_never_opened_mod_is_no_store_origin(tmp_path, monkeypatch):
+    con, rep = _store_con(tmp_path, monkeypatch, index_roots=True)
+    assert _gate("cross_tool").never_opened_origins(con, rep) == (1, [])
+
+
+def test_TWIN_cross_tool_goes_red_on_a_store_built_without_the_index(tmp_path, monkeypatch):
+    con, rep = _store_con(tmp_path, monkeypatch, index_roots=False)
+    n, bad = _gate("cross_tool").never_opened_origins(con, rep)
+    assert n == 1 and len(bad) == 1 and "b_patch" in bad[0], bad
+
+
+def test_tool_properties_a_never_opened_mod_is_never_a_winner(tmp_path):
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path)
+    rep = _compat.analyze(tmp_path / "extensions", config=_merge.Config(reference=ref,
+                                                                       include_packed_dlc=False))
+    gate = _gate("tool_properties")
+    assert gate.never_opened_winners(rep) == []
+    rep.collisions.append(_compat.Collision(REL, "HARD", f"{SEL}/hull/@max",
+                                            ["a_copy", "b_patch"], "b_patch", "planted"))
+    assert gate.never_opened_winners(rep) == [f"HARD {REL}: b_patch"], "TWIN: a planted row"
