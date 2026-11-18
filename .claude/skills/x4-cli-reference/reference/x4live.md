@@ -266,10 +266,10 @@ options:
                         connect is the larger of this and 15 s
   --settle-timeout SETTLE_TIMEOUT
                         seconds to wait, after the reply (or after a lost reply), for a complete
-                        save to appear in the slot (default: 180.0). Only the save folder is read
-                        while waiting; nothing is resent
+                        save to appear in the slot (default: 180.0; more than 0, at most 3600).
+                        Only the save folder is read while waiting; nothing is resent
   --settle SETTLE       seconds the slot file must stay unchanged before it is read and checked as
-                        a complete save (default: 3.0)
+                        a complete save (default: 3.0; 0.5 to 60)
 ```
 
 ## `x4live harvest`

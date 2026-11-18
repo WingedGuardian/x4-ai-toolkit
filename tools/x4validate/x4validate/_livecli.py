@@ -2814,11 +2814,12 @@ def main(argv: list[str] | None = None) -> int:
     psv.add_argument("--timeout", type=float, default=10.0, help=_TIMEOUT_HELP)
     psv.add_argument("--settle-timeout", dest="settle_timeout", type=float, default=180.0,
                      help="seconds to wait, after the reply (or after a lost reply), for a "
-                          "complete save to appear in the slot (default: %(default)s). Only "
-                          "the save folder is read while waiting; nothing is resent")
+                          "complete save to appear in the slot (default: %(default)s; more than "
+                          "0, at most 3600). Only the save folder is read while waiting; "
+                          "nothing is resent")
     psv.add_argument("--settle", type=float, default=3.0,
                      help="seconds the slot file must stay unchanged before it is read and "
-                          "checked as a complete save (default: %(default)s)")
+                          "checked as a complete save (default: %(default)s; 0.5 to 60)")
 
     ph = sub.add_parser(
         "harvest",
