@@ -79,8 +79,9 @@ trusting it*, and the refusals above already stop a stale answer reaching a clai
 - **What stales it** is exactly the two axes above. **A game launch, play or a save does not**
   (the game writes no mod file); only a mod toggled in the game's menu or a Workshop update on
   launch does, and that is a mod change.
-- **A change DURING a build costs the same as one AFTER it**: the builder detects it ("the
-  installed world MOVED during this build"), marks the result stale, and you rebuild. Never ask
+- **A change DURING a build costs the same as one AFTER it**: the result reads STALE (`x4fresh
+  rebuild` says "the installed world MOVED during this build"; a builder run directly just
+  stamps its start fingerprint), and you rebuild. Never ask
   for a freeze so a build can run.
 - **Ask for a hold only for a check that compares two readers at the same moment** — today
   `gates/cross_tool.py` (live files vs the effective store), for that check's duration (~10 min:
