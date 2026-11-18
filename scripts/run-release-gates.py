@@ -52,6 +52,8 @@ def stages(out,workers):
     bash="C:/Program Files/Git/bin/bash.exe" if os.name=="nt" else "bash"
     rows=[(n,PKG,py+["scripts/"+f,"--check"]) for n,f in
           (("gen","gen-agent-trees.py"),("clir","gen-cli-reference.py"),("hashes","gen-shipped-hashes.py"))]
+    # Issue #21: the shipped CLAUDE.md against its committed floor (no game root needed).
+    rows += [("mdfloor",PKG,py+["gates/claude_md_budget.py","--shipped"])]
     rows += [("scan",ROOT,py+["scripts/scan-identifiers.py"]),
              ("pb",ROOT,[bash,".claude/hooks/test-protect-bash.sh"]),
              ("hookfacts",ROOT,py+[".claude/hooks/test_hook_facts.py"]),

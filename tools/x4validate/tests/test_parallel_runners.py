@@ -222,3 +222,11 @@ def test_external_output_requires_the_resolved_roots(tmp_path):
     """No caller may fall back to environment-only checking by omitting the roots."""
     from gate_support import external_output
     with pytest.raises(TypeError):external_output(tmp_path/"r",tmp_path/"src")
+
+
+def test_RED_the_release_gates_run_the_shipped_claude_md_floor(tmp_path):
+    """Issue #21: nothing automated ran the CLAUDE.md budget. A release stage runs it on the shipped file."""
+    rows=[r for r in rrg.stages(tmp_path,1) if "gates/claude_md_budget.py" in r[2]]
+    assert len(rows)==1,rows
+    name,cwd,cmd=rows[0]
+    assert cwd==rrg.PKG and cmd[-2:]==["gates/claude_md_budget.py","--shipped"],rows[0]
