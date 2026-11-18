@@ -149,6 +149,94 @@ def test_a_CUE_removed_and_re_added_in_md(tmp_path):
     assert _readds(rep) == [("b_readd", "a_rm")], rep.collisions
 
 
+# --- user decisions 2026-11-18 ---------------------------------------------------------------
+
+COMP = "assets/units/size_xl/ship_z.xml"
+COMP_BASE = ('<components><component name="ship_z" class="ship_xl"><connections>'
+             '<connection name="c1" tags="a"/><connection name="c2" tags="a"/>'
+             '</connections></component></components>')
+
+
+def test_DECISION1_a_REPLACE_of_connections_stays_one_SUBTREE_row(tmp_path):
+    """A <replace> of a parent does NOT continue its children's identities: the earlier
+    edits inside it are wiped (one SUBTREE row), never one HARD row per connection."""
+    edit = ("<replace sel=\"//connection[@name='c1']/@tags\">x</replace>"
+            "<replace sel=\"//connection[@name='c2']/@tags\">x</replace>")
+    wipe = ('<replace sel="//connections"><connections><connection name="c1" tags="b"/>'
+            '<connection name="c2" tags="b"/></connections></replace>')
+    rep = _world(tmp_path, COMP, COMP_BASE, edit, wipe, deps=())
+    assert len(rep.by_kind("SUBTREE")) == 1, rep.collisions
+    assert [c for c in rep.by_kind("HARD") if "connection" in (c.target_path or "")] == []
+    assert rep.readded_after_removal == []
+
+
+def test_TWIN_DECISION1_a_REMOVE_then_another_mods_re_add_is_confirm_intent(tmp_path):
+    rm = "<remove sel=\"//connection[@name='c1']\"/>"
+    add = '<add sel="//connections"><connection name="c1" tags="b"/></add>'
+    rep = _world(tmp_path, COMP, COMP_BASE, rm, add)
+    assert _readds(rep) == [("b_readd", "a_rm")], rep.collisions
+
+
+TEXTREF_BASE = ('<wares><ware id="ore"><price average="100"/>'
+                '<production method="default" name="{20206,101}" time="10"/></ware></wares>')
+
+
+def test_DECISION2_a_nested_TEXT_REFERENCE_name_is_no_identity(tmp_path):
+    rm = "<remove sel=\"//ware[@id='ore']/production[@name='{20206,101}']\"/>"
+    add = ("<add sel=\"//ware[@id='ore']\">"
+           '<production method="default" name="{20206,101}" time="20"/></add>')
+    rep = _world(tmp_path, WARES, TEXTREF_BASE, rm, add)
+    assert _readds(rep) == [] and _hard_readds(rep) == [], rep.collisions
+
+
+def test_TWIN_DECISION2_a_plain_nested_name_still_is(tmp_path):
+    rep = _world(tmp_path, WARES, NESTED_BASE, NESTED_RM, NESTED_ADD)
+    assert _readds(rep) == [("b_readd", "a_rm")]
+    el = _merge.parse_bytes(b'<wares><ware id="w" name="{1,2}"/></wares>')[0]
+    assert _compat_state.identity_key(WARES, el) == ("ware", "id=w"), "top level: F385 key"
+    top = _merge.parse_bytes(b'<wares><thing name="{1,2}"/></wares>')[0]
+    assert _compat_state.identity_key(WARES, top) == ("thing", "name={1,2}"), \
+        "a TOP-LEVEL name-only entry keeps F385's key, text reference or not"
+
+
+ORE_BASE = '<wares><ware id="ore"><price average="100"/></ware></wares>'
+RM_ORE = "<remove sel=\"//ware[@id='ore']\"/>"
+
+
+def _file_world(tmp_path, b_text, deps=("a_rm",)):
+    ref = tmp_path / "reference"
+    _w(ref / WARES, ORE_BASE)
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_rm", {WARES: f"<diff>{RM_ORE}</diff>"})
+    _mod(ext, "b_readd", {WARES: b_text}, deps=deps)
+    rep = _compat.analyze(ext, config=_merge.Config(reference=ref, include_packed_dlc=False))
+    assert not [s for s in rep.skipped if "disagreed" in s.why], rep.skipped
+    return rep
+
+
+def test_DECISION3_a_COMPLETE_file_re_defining_a_removed_entry_is_confirm_intent(tmp_path):
+    rep = _file_world(tmp_path, '<wares><ware id="ore"><price average="7"/></ware></wares>')
+    got = [(r.mod, r.removed_by, r.sel, r.signals["guard"], r.signals["identical_to_pre_removal"])
+           for r in rep.readded_after_removal]
+    assert got == [("b_readd", "a_rm", "(complete file)", "none", "no")], rep.collisions
+
+
+def test_TWIN_DECISION3_complete_file_without_the_dependency_is_HARD(tmp_path):
+    rep = _file_world(tmp_path, '<wares><ware id="ore"><price average="7"/></ware></wares>',
+                      deps=())
+    assert rep.readded_after_removal == [] and len(_hard_readds(rep)) == 1, rep.collisions
+
+
+def test_TWIN_DECISION3_complete_file_identical_entry_reads_yes(tmp_path):
+    rep = _file_world(tmp_path, f"{ORE_BASE}")
+    assert [r.signals["identical_to_pre_removal"] for r in rep.readded_after_removal] == ["yes"]
+
+
+def test_TWIN_DECISION3_complete_file_with_OTHER_entries_only_is_no_re_add(tmp_path):
+    rep = _file_world(tmp_path, '<wares><ware id="ice"><price average="7"/></ware></wares>')
+    assert rep.readded_after_removal == [] and _hard_readds(rep) == [], rep.collisions
+
+
 def test_identity_key_per_file_class():
     el = _merge.parse_bytes(b'<x id="1" name="n"/>')
     assert _compat_state.identity_key("libraries/wares.xml", el) == ("x", "id=1")

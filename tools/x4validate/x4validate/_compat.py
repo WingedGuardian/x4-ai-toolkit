@@ -836,6 +836,20 @@ def _analyze_vpath(
         elif is_union and base_tree is not None and root.tag == base_tree.tag:
             union_keys[folder] = _child_keys(root)
             union_roots[folder] = root
+            # F387: an entry a mod REMOVED that this complete file defines again continues
+            # the removed identity (`_compat_state.trace` records it per file), so it joins
+            # the node's row as a supplier, exactly like a re-adding <add>. Row sel
+            # "(complete file)", guard none; the element itself rides on the pseudo-op so
+            # `identical_to_pre_removal` can compare it.
+            again = traced.get((folder, "file"))
+            if again is not None and again.created:
+                file_op = etree.Element("file", sel="(complete file)")
+                file_op.extend(copy.deepcopy(c) for c in root if isinstance(c.tag, str))
+                actual_ops[(folder, id(file_op))] = True   # a complete file always applies
+                nmap = diff_targets.setdefault(folder, {})
+                for cid in again.created:
+                    nmap.setdefault(cid, []).append("supply")
+                    ops_at[folder][cid].append(file_op)
         elif merge_copy and base_tree is not None and root.tag == base_tree.tag:
             # Issue #17: the engine MERGES a nested full copy of a mod-owned macro
             # file -- both same-named macros exist -- so this is no clobber.
@@ -885,7 +899,7 @@ def _analyze_vpath(
             before = [c for c in (found if isinstance(found, list) else ())
                       if isinstance(c, etree._Element)
                       and (c.tag, c.get("id"), c.get("name")) == key]
-        added = [ch for ch in (op if op is not None and op.tag == "add" else ())
+        added = [ch for ch in (op if op is not None and op.tag in ("add", "file") else ())
                  if isinstance(ch.tag, str) and (ch.tag, ch.get("id"), ch.get("name")) == key]
         if len(before) != 1:
             return "unknown (no single node with this key before the removal)"
