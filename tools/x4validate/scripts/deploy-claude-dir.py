@@ -22,7 +22,13 @@ equal as canonical JSON is left byte-identical, because Codex SKIPS a changed ho
 the user re-approves it in /hooks; when this deploy writes it, the output says so. NOT
 deployed: `.codex/config.toml` (per-machine) and AGENTS.md (owned by the game-root repository,
 which may append its own section) -- the output reports whether AGENTS.md still holds the
-toolkit's current text and its size against Codex's 32,768-byte default budget.
+toolkit's current text and its size against the effective Codex budget.
+
+BUDGETS (issue #21, 4.3). Every run ends with a warn-only BUDGETS block for the root it deployed
+into: the root's CLAUDE.md against its floor in the local `gates/claude_md_budget.py` baseline
+(GREW / within / NOT CHECKED with the reason), and AGENTS.md's size and headroom against the
+EFFECTIVE budget: `project_doc_max_bytes` from that root's `.codex/config.toml` when it sets a
+positive integer, else Codex's default 32,768. The exit code never depends on these lines.
 
 WHAT IT WILL NOT DO:
 
@@ -359,8 +365,9 @@ def _agents_md_note(repo_root: Path, root: Path) -> str:
     have = p.read_bytes()
     current = src.is_file() and _norm(src.read_bytes()).rstrip(b"\n") in _norm(have)
     size = len(have)
-    over = (f"; OVER Codex's default {CODEX_DOC_BUDGET}-byte budget: the end is cut off unless "
-            ".codex/config.toml raises project_doc_max_bytes") if size > CODEX_DOC_BUDGET else ""
+    budget, source = effective_doc_budget(root)
+    over = (f"; OVER the {budget}-byte budget ({source}): the end is cut off unless "
+            ".codex/config.toml raises project_doc_max_bytes") if size > budget else ""
     state = ("contains the toolkit's current AGENTS.md" if current else
              "does NOT contain the toolkit's current AGENTS.md -- update it by hand (keep any "
              "section of your own)")
@@ -370,6 +377,84 @@ def _agents_md_note(repo_root: Path, root: Path) -> str:
 #: Codex reads the root AGENTS.md and every nested one into ONE budget of this many bytes by
 #: default (install.sh --codex-doc-max-bytes help text).
 CODEX_DOC_BUDGET = 32768
+
+
+def effective_doc_budget(root: Path) -> tuple[int, str]:
+    """(bytes, where the number came from): `project_doc_max_bytes` from `<root>/.codex/config.toml`
+    when that file sets a positive integer, else Codex's default. A config that exists but does not
+    yield a usable value is NAMED in the source, never passed over as if absent."""
+    cfg = root / ".codex" / "config.toml"
+    if not cfg.is_file():
+        return CODEX_DOC_BUDGET, f"Codex's default; no {cfg.parent.name}/{cfg.name}"
+    try:
+        import tomllib
+        value = tomllib.loads(cfg.read_bytes().decode("utf-8")).get("project_doc_max_bytes")
+    except (OSError, UnicodeDecodeError, ValueError) as exc:      # tomllib.TOMLDecodeError is a ValueError
+        return CODEX_DOC_BUDGET, (f"Codex's default; .codex/config.toml could not be read "
+                                  f"({type(exc).__name__})")
+    if value is None:
+        return CODEX_DOC_BUDGET, "Codex's default; .codex/config.toml does not set project_doc_max_bytes"
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return CODEX_DOC_BUDGET, (f"Codex's default; .codex/config.toml sets project_doc_max_bytes to "
+                                  f"{value!r}, not a positive integer")
+    return value, ".codex/config.toml project_doc_max_bytes"
+
+
+_BUDGET_GATE = None
+
+
+def budget_gate():
+    """The CLAUDE.md budget gate beside this script (loaded once): its counting and its local baseline."""
+    global _BUDGET_GATE
+    if _BUDGET_GATE is None:
+        _BUDGET_GATE = _load("claude_md_budget_for_deploy", PKG / "gates" / "claude_md_budget.py")
+    return _BUDGET_GATE
+
+
+def budget_report(root: Path) -> list[str]:
+    """The game root's CLAUDE.md against its recorded floor, and AGENTS.md against the effective Codex
+    budget (issue #21). WARN ONLY: the deploy's exit code never depends on these lines. A check that
+    could not be made says NOT CHECKED and why, never "within"."""
+    lines = []
+    md = root / "CLAUDE.md"
+    if not md.is_file():
+        lines.append("CLAUDE.md: none in this root -- NOT CHECKED")
+    else:
+        try:
+            g = budget_gate()
+            chars = g.char_count(md)
+            configured = g._paths.game_root()
+            if configured is None or Path(configured).resolve() != root.resolve():
+                lines.append(f"CLAUDE.md: {chars} chars -- NOT CHECKED: the budget baseline records the "
+                             "configured game root, and this is not it")
+            else:
+                baseline = g._load()
+                floor = (baseline or {}).get(g.GAME_LABEL)
+                if floor is None:
+                    lines.append(f"CLAUDE.md: {chars} chars -- NOT CHECKED: no {g.GAME_LABEL!r} entry in "
+                                 f"{g.BASELINE.name} (gates/claude_md_budget.py --record \"{g.GAME_LABEL}\")")
+                elif chars > floor:
+                    lines.append(f"WARNING CLAUDE.md GREW: {g.GAME_LABEL} {floor} -> {chars} (+{chars - floor} "
+                                 "chars). Name what it displaces, or trim it; re-record only when the growth "
+                                 "is a decision")
+                else:
+                    lines.append(f"CLAUDE.md: {chars} chars, within its recorded floor {floor}")
+            if chars > g.HARD_CEILING:
+                lines.append(f"NOTE CLAUDE.md is over the {g.HARD_CEILING}-char backstop ({chars})")
+        except Exception as exc:    # warn-only report: an instrument failure is said, never a pass
+            lines.append(f"CLAUDE.md: NOT CHECKED -- the budget check failed ({type(exc).__name__}: {exc})")
+    agents = root / "AGENTS.md"
+    budget, source = effective_doc_budget(root)
+    if not agents.is_file():
+        lines.append(f"AGENTS.md: none in this root (budget {budget} bytes, {source})")
+    else:
+        size = agents.stat().st_size
+        if size > budget:
+            lines.append(f"WARNING AGENTS.md: {size} of {budget} bytes ({source}), {size - budget} over: "
+                         "Codex cuts the end off")
+        else:
+            lines.append(f"AGENTS.md: {size} of {budget} bytes ({source}), headroom +{budget - size}")
+    return lines
 
 
 #: Guard code reaches a game root only as a reviewed COMMIT whose local hook tests pass (user rule 2026-11-16: "CI gates
@@ -724,6 +809,11 @@ def main(argv: list[str] | None = None) -> int:
     for spec, dest in jobs:
         one, _ = _deploy_one(repo_root, dest, spec, args)
         rc = max(rc, one)
+    budget_root = root if root is not None else (jobs[0][1].parent if jobs else None)
+    if budget_root is not None:
+        print("BUDGETS (warn only; the exit code does not depend on them)")
+        for line in budget_report(Path(budget_root)):
+            print("  " + line)
     return rc
 
 
