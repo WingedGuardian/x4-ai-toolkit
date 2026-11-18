@@ -32,6 +32,7 @@ from pathlib import Path, PurePosixPath
 from lxml import etree
 
 from x4validate import _cat, _compat, _merge, _mutation, _paths, _registry, _freshness, _resolve, _scan, _modfiles
+from x4validate import _inputs
 from x4validate._provenance import BASE, Origin, Recorder
 from x4validate import __version__
 
@@ -865,9 +866,30 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
     # Taken here, the same edit reads STALE, which is the safe direction. The engine axis is hashed here
     # too, so a mutation gate must be refused here as well as at the write.
     _mutation.refuse_if_mutating("build the effective store")
-    stamp = _freshness.fingerprint(config, _ext_root(config))
+    # THE INPUT SNAPSHOT (toolkit 4.3, item 6; user decision 2026-11-18: on EVERY build). The
+    # build reads its mods from a copy taken now, and the stamp is the live fingerprint taken
+    # before the copy and PROVEN unchanged after it (`_inputs.take` retakes, then refuses). So
+    # a mod edited mid-build can no longer reach the store, and cross_tool can run x4compat
+    # over the same bytes later without a modlist hold. Same roots `scan_installed` walks.
+    roots = list(dirs or _registry.default_installed_dirs())
+    snap = _inputs.take(db_path, roots, lambda: _freshness.fingerprint(config, _ext_root(config)),
+                        progress)
+    try:
+        with _inputs.world(snap):
+            _build_from(config, db_path, snap, kinds, progress)
+        installed = _inputs.install(snap, db_path, progress)
+    except BaseException:
+        _inputs.discard(snap)
+        raise
+    progress(f"input snapshot installed at {installed.path}")
+    return db_path
+
+
+def _build_from(config, db_path, snap, kinds, progress) -> None:
+    """The build proper, inside `_inputs.world(snap)`: every mod file it reads is the copy."""
+    stamp = snap.stamp
     not_loaded: list[str] = []
-    mods = active_mods(dirs, not_loaded, config)
+    mods = active_mods(snap.dirs(), not_loaded, config)
     for msg in not_loaded:
         progress(f"NOT in the store (the engine does not load it): {msg}")
     ordered = ordered_overlays(mods)
@@ -1016,9 +1038,8 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
               dropped_overlays=skipped.dropped,
               dropped_samples=skipped.dropped_samples, texts=texts,
               skipped_files=skipped.n, skipped_samples=skipped.samples, loss_keys=skipped.keys,
-              stamp=stamp, truncated=truncated_props)
+              stamp=stamp, truncated=truncated_props, input_snapshot=snap.manifest_sha)
     progress(f"wrote {len(entities)} entities to {db_path}")
-    return db_path
 
 
 def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
@@ -1026,7 +1047,7 @@ def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
               texts: dict[tuple[str, str], str] | None = None,
               skipped_files: int = 0, skipped_samples: list[str] | None = None,
               loss_keys: set[str] | None = None, stamp: dict | None = None,
-              truncated: list[str] | None = None):
+              truncated: list[str] | None = None, input_snapshot: str | None = None):
     # PID-qualified: two concurrent builds used to pick the SAME `<db>.tmp`, so
     # they raced on os.replace and BOTH died with a raw PermissionError
     # (WinError 32). Build-then-atomically-replace already keeps the store safe
@@ -1088,7 +1109,10 @@ def _write_db(db_path, config, mods, ordered, order_rank, entities, removed,
                 ("truncated_props", str(len(truncated or []))),
                 ("truncated_prop_samples", json.dumps((truncated or [])[:10])),
                 ("loss_keys", json.dumps(sorted(loss_keys or []))),
-            ])
+            ] + ([] if input_snapshot is None else [
+                # sha256 of the `<db>.inputs/MANIFEST.json` this store was built from
+                # (`_inputs.prove` matches it; absent = no snapshot, and cross_tool refuses).
+                ("input_snapshot", input_snapshot)]))
             # WHEN this store was true, not just how much it holds. Without it the
             # store cannot tell a current answer from one about a superseded world —
             # the exact failure that let BaseX's x4eff serve pre-merge-fix values for

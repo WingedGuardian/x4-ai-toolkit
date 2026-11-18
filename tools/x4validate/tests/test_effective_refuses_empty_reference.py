@@ -34,6 +34,10 @@ def hermetic(tmp_path, monkeypatch):
     # No installed mods, no profile: the build sees base+DLC only.
     monkeypatch.setattr(_effective, "active_mods", lambda *a, **k: [])
     monkeypatch.setattr(_effective._registry, "ingest_content_xml", lambda *a, **k: [])
+    # ...and no install ROOTS either: `_registry` captured the real ones at import, and since
+    # toolkit 4.3 every build snapshots its roots, so this copied the real install (~22 s).
+    for name in ("GAME_EXTENSIONS", "PROFILE_EXTENSIONS", "WORKSHOP_CONTENT", "PROFILE_CONTENT"):
+        monkeypatch.setattr(_effective._registry, name, None)
     _effective.base_vpaths.cache_clear()
     yield tmp_path
     _effective.base_vpaths.cache_clear()

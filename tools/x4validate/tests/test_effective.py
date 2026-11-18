@@ -46,6 +46,15 @@ def _world(tmp_path):
     return ref, exts
 
 
+def _no_mods(tmp_path):
+    """An EMPTY extensions root. `dirs=[]` means "the configured roots" (scan_installed's
+    `dirs or default_installed_dirs()`), so on a machine with X4 these tests used to merge,
+    and since toolkit 4.3 also snapshot, the whole real install (~44 s each, MEASURED)."""
+    d = tmp_path / "no-mods"
+    d.mkdir(exist_ok=True)
+    return d
+
+
 def _build(tmp_path, monkeypatch):
     ref, exts = _world(tmp_path)
     # active_mods() reads a profile content.xml; force "no profile" -> all enabled.
@@ -143,7 +152,7 @@ def test_build_accepts_every_advertised_kind(tmp_path, monkeypatch):
     (ref / "libraries" / "jobs.xml").write_bytes(b"<jobs/>")
     monkeypatch.setattr(_effective._registry, "ingest_content_xml", lambda *a, **k: [])
     db = _effective.build(_merge.Config(reference=ref), tmp_path / "all.sqlite",
-                          dirs=[], kinds=_effective.BUILDABLE_KINDS)
+                          dirs=[_no_mods(tmp_path)], kinds=_effective.BUILDABLE_KINDS)
     assert db.is_file()
 
 
@@ -165,7 +174,7 @@ def test_build_temp_file_is_unique_per_process(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_effective.os, "replace", spy)
     db = tmp_path / "eff.sqlite"
-    _effective.build(_merge.Config(reference=ref), db, dirs=[], kinds=("job",))
+    _effective.build(_merge.Config(reference=ref), db, dirs=[_no_mods(tmp_path)], kinds=("job",))
     assert seen, "build never installed a temp file"
     assert str(os.getpid()) in seen[0], f"temp path not process-unique: {seen[0]}"
     assert not list(tmp_path.glob("*.tmp")), "temp file left behind"
@@ -203,7 +212,7 @@ def test_a_build_that_FAILS_leaves_no_temp_file_behind(tmp_path, monkeypatch):
     monkeypatch.setattr(_effective._freshness, "stamp_sqlite", _boom)
     db = tmp_path / "eff.sqlite"
     with pytest.raises(RuntimeError, match="injected mid-build failure"):
-        _effective.build(_merge.Config(reference=ref), db, dirs=[], kinds=("job",))
+        _effective.build(_merge.Config(reference=ref), db, dirs=[_no_mods(tmp_path)], kinds=("job",))
 
     leaked = list(tmp_path.glob("*.tmp"))
     assert not leaked, (
@@ -230,7 +239,7 @@ def test_the_ORIGINAL_failure_is_what_propagates(tmp_path, monkeypatch):
     monkeypatch.setattr(_effective._freshness, "stamp_sqlite", _boom)
     db = tmp_path / "eff.sqlite"
     with pytest.raises(_mutation.TreeMutating, match="mutating gate"):
-        _effective.build(_merge.Config(reference=ref), db, dirs=[], kinds=("job",))
+        _effective.build(_merge.Config(reference=ref), db, dirs=[_no_mods(tmp_path)], kinds=("job",))
     assert not list(tmp_path.glob("*.tmp"))
 
 
