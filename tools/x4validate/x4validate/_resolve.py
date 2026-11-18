@@ -347,20 +347,19 @@ def build_index(config: _merge.Config, extra_overlays, index_rel: str,
                 _skip_once(report, f"{index_rel} resolution",
                            f"{ov.name}: index unreadable ({exc}) — macros it registers will "
                            "read as unregistered", degraded=True)
-    recorder = _merge.Recorder()
-    merged = _merge.build_effective(
-        index_rel, _merge.replace(config, overlays=tuple(ordered), final_overlays=()),
-        recorder=recorder)
-    if merged.tree is None:
+    # THE resolver (F383/F384): one effective index per tuple of roots, shared with x4validate's
+    # load-path rule, EngineDocs, EntityDefs and build_effective(index_roots=...).
+    effective = _merge.EffectiveIndex.of(index_rel, config, ordered)
+    if effective.tree is None:
         return index
     by_name = {r.name.lower(): r for r in ordered}
     merged_cache: dict = {}   # one build_index call: each path read and merged once
     dlc = {d.name.lower(): d for d in config.dlc_dirs()}
-    for entry in merged.tree.xpath("//entry[@name]"):
+    for entry in effective.tree.xpath("//entry[@name]"):
         name, value = entry.get("name"), entry.get("value")
         if not value or "*" in name:   # skip wildcard patterns
             continue
-        source = recorder.winner(entry, "value").source.lower()
+        source = effective.writer(entry).lower()
         if source in by_name:
             writer = by_name[source]
             if _extension_prefix(value) is None:
