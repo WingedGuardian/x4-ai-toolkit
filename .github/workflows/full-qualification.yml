@@ -868,7 +868,7 @@ jobs:
   cold-archive:
     name: cold-archive verification (ubuntu-latest)
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180   # 84-98 min on 3 green runs, then cancelled at 120 (93% done) on run 44205209817
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
