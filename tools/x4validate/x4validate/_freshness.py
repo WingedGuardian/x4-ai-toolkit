@@ -140,7 +140,11 @@ from pathlib import Path
 #: the tree contains, so widening the CONTENT axis here does not pretend the
 #: merge code changed -- that distinction is the whole of F53's complaint.
 ENGINE_SOURCES = ("_merge.py", "_cat.py", "_effective.py", "_registry.py",
-                  "_loadorder.py", "_provenance.py", "_modfiles.py")
+                  "_loadorder.py", "_provenance.py", "_modfiles.py", "_inputs.py")
+#: `_inputs.py` was ADDED 2026-11-18 (toolkit 4.3 item 6): every store build now reads its
+#: mods from the input snapshot that module writes, and its `world()` and catalog rewrite
+#: decide which bytes the merge sees -- an edit there changes the store for identical live
+#: inputs. FR-2's trace (`tests/test_audit0924_analysis.py`) finds it on the build path.
 #: ⚠ RE-DERIVED 2026-09-24 BY TRACING A STORE BUILD (AUDIT-2026-09-24 FR-2), not by
 #: reading imports -- `tests/test_audit0924_analysis.py::test_FR2_*` pin it both ways:
 #:   * ADDED `_provenance.py` -- its `Recorder` decides the per-attribute chains the store

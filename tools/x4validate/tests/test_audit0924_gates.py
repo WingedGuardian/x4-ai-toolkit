@@ -12,6 +12,8 @@ corpus, or writes outside `tmp_path`.
 """
 from __future__ import annotations
 
+import contextlib
+
 import importlib
 import importlib.util
 import io
@@ -626,7 +628,9 @@ def test_gt5_cross_tool_hard_winner_is_checked_on_the_collided_attr(tmp_path, mo
     monkeypatch.setattr(ct._compat, "analyze", lambda *a, **k: types.SimpleNamespace(collisions=[c]))
     # The synthetic store carries no fingerprint; since GT-6 that is a stale-store
     # refusal, which would make this test pass or fail for a reason it is not about.
-    monkeypatch.setattr(ct._env, "stale_store_refusal", lambda db, who: None)
+    # The store fixture has no input snapshot; the proof is stubbed (tests/test_inputs_snapshot.py
+    # covers it) and x4compat reads the configured roots, as inside `_inputs.world`.
+    monkeypatch.setattr(ct, "_proven_world", lambda db: (contextlib.nullcontext(), None))
     # Every target is resolved in the effective base tree (review of fe8065b), so the
     # setup supplies one; the assertion is unchanged.
     from lxml import etree
@@ -668,7 +672,9 @@ def _cross_tool_with(monkeypatch, tmp_path, db, collisions, tree=None):
     monkeypatch.setattr(ct, "cannot", [])
     monkeypatch.setattr(ct._env, "effective_db", lambda: db)
     monkeypatch.setattr(ct._env, "extensions", lambda: tmp_path)
-    monkeypatch.setattr(ct._env, "stale_store_refusal", lambda db, who: None)
+    # The store fixture has no input snapshot; the proof is stubbed (tests/test_inputs_snapshot.py
+    # covers it) and x4compat reads the configured roots, as inside `_inputs.world`.
+    monkeypatch.setattr(ct, "_proven_world", lambda db: (contextlib.nullcontext(), None))
     monkeypatch.setattr(ct._merge, "Config", lambda *a, **k: None)
     monkeypatch.setattr(ct._merge, "build_effective",
                         lambda vp, cfg: types.SimpleNamespace(tree=tree))
@@ -862,24 +868,29 @@ def test_gt6_provenance_audit_refuses_a_stale_store(gate_install, tmp_path, monk
     assert rc == 2, f"a STALE store was audited as current, rc {rc}:\n{capsys.readouterr().out}"
 
 
-def test_gt6_cross_tool_refuses_a_stale_store(tmp_path, monkeypatch, capsys):
+def test_gt6_cross_tool_refuses_a_store_without_a_proven_input_snapshot(tmp_path, monkeypatch, capsys):
+    """GT-6 refused a STALE store. Since toolkit 4.3 (item 6) cross_tool reads the store's
+    own input snapshot instead, so staleness alone no longer refuses -- but a store whose
+    snapshot cannot be proven (here: it has none) still does, and never falls back to the
+    live tree. The positive side is tests/test_inputs_snapshot.py::test_cross_tool_*."""
     ct = import_gate("cross_tool", module_level=False)
-    from x4validate import _compat, _effective
+    from x4validate import _compat
     vp = "assets/x_macro.xml"
     db = _store(tmp_path / "e.sqlite", [("m", vp, "hull.max", "200", "modA")])
     c = _compat.Collision(vpath=vp, kind="HARD", target="/macros/macro[@name='m']/properties/hull/@max",
                           mods=["modB", "modA"], winner="modA")
+    analyzed = []
     monkeypatch.setattr(ct, "failures", [])
+    monkeypatch.setattr(ct, "cannot", [])
     monkeypatch.setattr(ct._env, "effective_db", lambda: db)
     monkeypatch.setattr(ct._env, "extensions", lambda: tmp_path)
-    monkeypatch.setattr(ct._merge, "Config", lambda *a, **k: None)
-    monkeypatch.setattr(ct._compat, "analyze", lambda *a, **k: types.SimpleNamespace(collisions=[c]))
-    monkeypatch.setattr(_effective, "store_freshness", lambda con, config=None: types.SimpleNamespace(
-        fresh=False, determinable=True, reasons=["content axis moved"],
-        banner=lambda *a, **k: "STALE"))
+    monkeypatch.setattr(ct._compat, "analyze",
+                        lambda *a, **k: analyzed.append(1) or types.SimpleNamespace(collisions=[c]))
     ct.check_cross_tool_agreement()
-    out = capsys.readouterr().out
-    assert ct.failures or "stale" in out.lower(), f"scored against a STALE store as if current:\n{out}"
+    out = capsys.readouterr()
+    assert not analyzed, "x4compat ran against a store whose inputs were never proven"
+    assert any("input snapshot could not be proven" in x for x in ct.cannot), (ct.cannot, out.out)
+    assert "REFUSING (cross_tool)" in out.err
 
 
 @pytest.mark.parametrize("tol", ["inf", "-1"])

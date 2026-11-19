@@ -68,7 +68,7 @@ implementation; BaseX delegates to it):
 | axis | covers | why |
 |---|---|---|
 | `content` | installed extension set + `(relpath, mtime, size)` of every engine-relevant file each mod ships + each mod's enabled bit from the profile + a reference marker | a mod added, removed, updated, toggled or one of its files edited |
-| `engine` | hash of the **BYTES** of every file named in `_freshness.ENGINE_SOURCES` — **derive that list from the module, never retype it** (**7** as of 2026-09-24: `_cat`, `_effective`, `_loadorder`, `_merge`, `_modfiles`, `_provenance`, `_registry`); x4eff adds `build-effective.py`. ⚠ This cell has been wrong TWICE, the same way, in the sentence telling you not to retype the list, so `tests/test_reference_fingerprint.py` now asserts it lists exactly what the module derives | a merge fix changes the answer for identical inputs; a commit hash does not move for a dirty tree |
+| `engine` | hash of the **BYTES** of every file named in `_freshness.ENGINE_SOURCES` — **derive that list from the module, never retype it** (**8** as of 2026-11-18: `_cat`, `_effective`, `_inputs`, `_loadorder`, `_merge`, `_modfiles`, `_provenance`, `_registry`); x4eff adds `build-effective.py`. ⚠ This cell has been wrong TWICE, the same way, in the sentence telling you not to retype the list, so `tests/test_reference_fingerprint.py` now asserts it lists exactly what the module derives | a merge fix changes the answer for identical inputs; a commit hash does not move for a dirty tree |
 
 **Absent fingerprint = UNKNOWN, never fresh.** Each CLI banners every run until rebuilt; `ask.py`
 and `gates/claims_audit.py` REFUSE a claim outright. `engine_dependent` is per-artifact — a raw file
@@ -85,10 +85,11 @@ trusting it*, and the refusals above already stop a stale answer reaching a clai
   rebuild` says "the installed world MOVED during this build"; a builder run directly just
   stamps its start fingerprint), and you rebuild. Never ask
   for a freeze so a build can run.
-- **Ask for a hold only for a check that compares two readers at the same moment** — today
-  `gates/cross_tool.py` (live files vs the effective store), for that check's duration (~10 min:
-  one store build + the check). Say which check, how long and why, in one line; if something
-  moves anyway, re-run it.
+- **No check needs a hold.** `gates/cross_tool.py`, the one that compares two readers, runs
+  x4compat over the effective store's own input snapshot (`<db>.inputs`, taken by every store
+  build; toolkit 4.3), so a store stale only because mods changed still runs it (`x4fresh`:
+  "STALE (snapshot-backed: cross_tool runs)"). It refuses, exit 2, only when the snapshot cannot
+  be proven: missing, edited, or the engine code, reference or DLC moved -- then rebuild.
 - **A heavy build while a game runs is a RESOURCE question, not a correctness one** — the
   machine's resource policy handles it (idle priority, or wait). Never phrase it as "would
   invalidate the results". Every hold you ask for names its real reason, or you do not ask.
