@@ -115,6 +115,25 @@ def test_the_index_is_built_once_per_tuple_of_roots(tmp_path):
     assert _merge.EffectiveIndex.of("index/macros.xml", _cfg(ref), (a, b)) is not one
 
 
+def test_collect_macro_defs_asks_the_one_resolver_with_an_unchanged_name_set(tmp_path):
+    """`_check.collect_macro_defs` reads index/macros.xml through `EffectiveIndex` (one
+    build per run, shared with every other index reader), and its name set is exactly the
+    one the direct merge gave: a remover's <remove> and an adder's entry both count."""
+    from x4validate import _refs
+    ref, a, b, c = _world(tmp_path)
+    _w(b / "index" / "macros.xml",
+       "<diff><remove sel=\"/index/entry[@name='ship_x_macro'][1]\"/>"
+       '<add sel="/index"><entry name="b_new_macro" value="x"/></add></diff>')
+    cfg = _cfg(ref, a)
+    direct = _refs.macro_names(
+        _merge.build_effective(_check.MACRO_INDEX, cfg, extra_overlays=[b, c]).tree)
+    assert _merge._EFFECTIVE_INDEXES == {}
+    got = _check.collect_macro_defs(cfg, [b, c])
+    assert got == direct and {"ship_x_macro", "b_new_macro"} <= got, (got, direct)
+    key = (_check.MACRO_INDEX, str(ref), False, tuple(str(r) for r in (a, b, c)))
+    assert list(_merge._EFFECTIVE_INDEXES) == [key], "built through EffectiveIndex.of"
+
+
 def test_every_reader_agrees_on_the_loaded_document(tmp_path):
     """build_index, index_loads_copy, EngineDocs, EntityDefs and the opt-in merge all name the
     copier's own document. The hand mutant (last -> first entry) turns this red."""

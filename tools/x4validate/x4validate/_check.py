@@ -142,7 +142,10 @@ def collect_macro_defs(config: _merge.Config, extra_overlays=None,
             report.skip("macro-reference checks", f"{MACRO_INDEX}: {why}", degraded=True)
 
     try:
-        merged = _merge.build_effective(MACRO_INDEX, config, extra_overlays=extra_overlays)
+        # THE index resolver (F383/F384): the same merge (base + DLC + overlays + extras, in
+        # that order), built once per run and shared with every other index reader.
+        merged = _merge.EffectiveIndex.of(
+            MACRO_INDEX, config, (*config.overlays, *(extra_overlays or []))).result
     except (etree.LxmlError, OSError) as exc:
         _fail(f"could not build the effective macro index ({exc})")
         return None
