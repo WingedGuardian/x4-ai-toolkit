@@ -49,3 +49,36 @@ def test_TWIN_cross_tool_refuses_when_the_snapshot_was_edited(tmp_path, monkeypa
     ct.check_cross_tool_agreement()
     assert seen == [] and any("input snapshot could not be proven" in c for c in ct.cannot)
     assert "aaa/libraries/wares.xml" in capsys.readouterr().err
+
+
+def _set_snapshot_meta(db, value):
+    con = sqlite3.connect(db)
+    con.execute("UPDATE meta SET value = ? WHERE key = 'input_snapshot'", (value,))
+    con.commit()
+    con.close()
+
+
+def test_a_store_REBUILT_while_x4compat_ran_is_not_run_never_compared(tmp_path, monkeypatch):
+    """C2: `_proven_world` proves the (store, snapshot) pair, then x4compat runs for minutes.
+    A rebuild in that window replaces the store: the agreement would compare x4compat over
+    the OLD snapshot with the NEW store. After opening the store the gate re-reads its
+    `input_snapshot` and does not run when it is no longer the proven manifest."""
+    db, ref, exts = _build(tmp_path, monkeypatch)
+    ct, seen = _gate(monkeypatch, db, ref)
+    real = ct._compat.analyze
+
+    def analyze_then_rebuild(ext_dir, config=None, **k):
+        out = real(ext_dir, config, **k)
+        _set_snapshot_meta(db, "f" * 64)          # what a concurrent rebuild leaves behind
+        return out
+    monkeypatch.setattr(ct._compat, "analyze", analyze_then_rebuild)
+    ct.check_cross_tool_agreement()
+    assert seen and ct.failures == [], ct.failures
+    assert any("rebuilt while" in c for c in ct.cannot), ct.cannot
+
+
+def test_TWIN_an_unchanged_store_is_compared(tmp_path, monkeypatch):
+    db, ref, exts = _build(tmp_path, monkeypatch)
+    ct, seen = _gate(monkeypatch, db, ref)
+    ct.check_cross_tool_agreement()
+    assert seen and not any("rebuilt while" in c for c in ct.cannot), ct.cannot

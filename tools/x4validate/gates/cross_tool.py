@@ -534,7 +534,11 @@ def _proven_world(db: Path):
         return None, [f"the proof itself failed: {type(exc).__name__}: {exc}"]
     if why:
         return None, why
-    return _inputs.world(snap), None
+    ctx = _inputs.world(snap)
+    # Carried with the context: `_agreement` re-reads the store's `input_snapshot` once
+    # x4compat has run, because a rebuild in those minutes replaces the store (C2).
+    ctx.manifest_sha = snap.manifest_sha
+    return ctx, None
 
 
 def check_cross_tool_agreement() -> None:
@@ -553,12 +557,33 @@ def check_cross_tool_agreement() -> None:
                 f"{why[0]}) -- rebuild the store (`x4effective build`) and re-run")
         return
     with ctx:
-        _agreement(db)
+        _agreement(db, getattr(ctx, "manifest_sha", None))
 
 
-def _agreement(db: Path) -> None:
+def _store_snapshot_sha(con) -> str | None:
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key = 'input_snapshot'").fetchone()
+    except sqlite3.Error:
+        return None   # silent-ok: an unreadable meta row is "not the proven manifest" -> not_run
+    return None if row is None else row[0]
+
+
+def _agreement(db: Path, proven_sha: str | None = None) -> None:
+    """*proven_sha*: the manifest `_proven_world` proved; None only for a caller that
+    supplies its own world (the unit tests' stub), which then skips the re-check."""
     # Every root the store was built over (the snapshot's), not the game root alone.
     report = _compat.analyze(None, config=_merge.Config())
+    # x4compat ran for minutes over the PROVEN snapshot. A store rebuilt meanwhile is a
+    # different store: re-read what it was built from before comparing anything (C2).
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    if proven_sha is not None:
+        now = _store_snapshot_sha(con)
+        if now != proven_sha:
+            con.close()
+            not_run("cross-tool agreement",
+                    f"the store was rebuilt while x4compat ran (input snapshot "
+                    f"{proven_sha[:16]} proven, {str(now)[:16]} now) -- re-run the gate")
+            return
     # The ADVISORY rows (issue #11: an overwrite of a declared dependency's added content)
     # were HARD rows before the split and keep every field the HARD check reads, so they
     # are cross-checked as their own population -- release review F7: 2,544 live rows had
@@ -568,13 +593,13 @@ def _agreement(db: Path) -> None:
     # advisory, but its winner -- the re-adder -- is a live-owner claim like any HARD row.
     readded = [_readded_as_hard(r) for r in getattr(report, "readded_after_removal", ())]
     if not report.collisions and not dependent and not readded:
+        con.close()
         note(False, "found collisions to cross-check", "none on this install")
         return
     by_kind: dict[str, list] = {}
     for c in report.collisions:
         by_kind.setdefault(c.kind, []).append(c)
 
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     config = _merge.Config()
     # The mod set `_compat.analyze` reads, built by the same call: a nested
     # `extensions/<owner>/<rel>` has its base in the OWNER mod, found by folder here.
