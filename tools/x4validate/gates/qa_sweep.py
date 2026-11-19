@@ -526,7 +526,7 @@ _ALL_CELLS: list[Cell] = [
          expect=(2,), findings_ok=True,
          wants="error: equipment requires a nonzero issued ship ID", wants_on="stderr"),
     # `save` (4.3, a WRITE: it asks the game for a save) checks its slot first, before it
-    # resolves the save folder or opens the pipe, so a wildcard is refused with no game, no
+    # resolves the save folder (`cmd_save`) or opens the pipe, so a wildcard is refused with no game, no
     # profile and no save folder touched. Its other refusals and its whole live chain are
     # covered offline by tests/test_livesave*.py.
     Cell("x4live", "save refuses a wildcard slot", ["save", "save_*"],
