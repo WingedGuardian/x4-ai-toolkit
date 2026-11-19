@@ -501,12 +501,90 @@ def test_a_record_is_written_only_after_every_step(recording, monkeypatch):
     assert _passes(repo) == []
 
 
+#: Repo paths the hook suites or the hook scripts NAME but never read or run: command strings fed to a guard as data,
+#: deny/advice message text, comments. Each says why; a path named here that the scan no longer finds fails the test,
+#: so this list cannot go stale silently. Everything else the scan finds must be covered by GUARD_PATHS.
+_NAMED_NOT_READ = {
+    "bin/unpack-reference.sh": "deny message text and comments",
+    "bin/xrcat": "deny message text",
+    "scripts/fuzz-guard.py": "comments (how a rule was found)",
+    "scripts/x4refguard.py": "command strings the guard classifies; hook_facts matches the NAME",
+    "tools/basex": "comment",
+    "tools/x4validate": "command strings for the routing / bare-python rules",
+    "tools/x4validate/gates/claims_audit.py": "command string for the bare-python rule",
+    "tools/x4validate/scripts/gen-agent-trees.py": "comment in protect-files.sh",
+    "tools/x4validate/tests": "command strings and a comment",
+    "tools/x4validate/tests/test_config_precedence_agrees.py": "comments in _x4-env.sh",
+    "tools/x4validate/x4validate": "command string",
+    "tools/x4validate/x4validate/_livecli.py": "command string for the bare-python rule",
+}
+
+_PATH_LITERAL = __import__("re").compile(
+    r"(?<![\w$.\-/])((?:\.claude|\.codex|\.opencode|agent|tools|scripts|gates|docs|dev|bin)(?:[/\\]+[\w.\-]+)+)")
+_REPO_JOIN = __import__("re").compile(r'REPO((?:\s*/\s*"[^"]+")+)')
+
+
+def _hook_suite_path_literals(texts, tracked):
+    """{repo path: [source names]} for every tracked file, or tracked folder of 2+ parts, that `texts` ({name: text})
+    names: a path literal, or a `REPO / "a" / "b"` join. Untracked names (fixture paths, other machines) drop out."""
+    import re
+    dirs = {"/".join(f.split("/")[:i]) for f in tracked for i in range(2, f.count("/") + 1)}
+    found = {}
+    for name, text in texts.items():
+        cands = [m.group(1) for m in _PATH_LITERAL.finditer(text)]
+        cands += ["/".join(re.findall(r'"([^"]+)"', m.group(1))) for m in _REPO_JOIN.finditer(text)]
+        for c in cands:
+            p = re.sub(r"/+", "/", c.replace("\\", "/")).rstrip("/.")
+            if p in tracked or p in dirs:
+                found.setdefault(p, []).append(name)
+    return found
+
+
+def _uncovered(gate, found):
+    def covered(p):
+        return gate.is_guard_path(p) or gate.is_guard_path(p + "/x")
+    return sorted(p for p in found if not covered(p) and p not in _NAMED_NOT_READ)
+
+
+def _hook_sources():
+    """The three hook suites and every hook script they run, as the repo tracks them (.claude/hooks/)."""
+    tracked = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split("\n")
+    tracked = {t for t in tracked if t}
+    texts = {t: (REPO / t).read_text(encoding="utf-8", errors="replace") for t in sorted(tracked)
+             if t.startswith(".claude/hooks/")}
+    return texts, tracked
+
+
 def test_the_guard_paths_cover_every_hook_suite_input():
+    """DERIVED, not retyped (4.3 release review A2): every repo path the hook suites or the hook scripts name is either
+    a GUARD_PATH or listed in _NAMED_NOT_READ with a reason. A reused pass record skips the hook suites when no guard
+    path changed, so a missed input lets a change the suites test ship untested."""
+    require_repo("scripts/prepush-gate.py", ".claude/hooks/test_hook_facts.py", why="the hook suites are not shipped")
     gate = _module()
-    for p in (".claude/", ".codex/", ".opencode/", "agent/", "scripts/verify-hook-tests.py", "scripts/test-hooks.sh",
-              "scripts/gitbash.py", "scripts/prepush-gate.py"):
-        assert gate.is_guard_path(p + ("x" if p.endswith("/") else "")), p
+    texts, tracked = _hook_sources()
+    assert ".claude/hooks/test_audit0924_hooks.py" in texts and ".claude/hooks/test-protect-bash.sh" in texts, texts
+    found = _hook_suite_path_literals(texts, tracked)
+    # The scan must SEE the inputs a suite really copies or reads, or a zero below means nothing.
+    for real in ("tools/modding_harness", "tools/modding-harness.lock.json", "tools/x4_harness", "scripts/gitbash.py",
+                 "tools/x4validate/scripts/next-blind-spot-id.py", "scripts/x4canary.py", "scripts/x4lock.py"):
+        assert real in found, real
+    assert _uncovered(gate, found) == [], {p: found[p] for p in _uncovered(gate, found)}
+    stale = sorted(set(_NAMED_NOT_READ) - set(found))
+    assert stale == [], "no longer named anywhere; drop from _NAMED_NOT_READ: {}".format(stale)
     assert not gate.is_guard_path("docs/x.md") and not gate.is_guard_path("agents/x")
+
+
+def test_RED_a_planted_uncovered_hook_suite_input_fails_the_derivation():
+    """Twin: a suite that starts copying a tracked file no GUARD_PATH covers must turn the check red."""
+    require_repo("scripts/prepush-gate.py", ".claude/hooks/test_hook_facts.py", why="the hook suites are not shipped")
+    gate = _module()
+    texts, tracked = _hook_sources()
+    planted = "tools/x4validate/x4validate/_merge.py"
+    assert planted in tracked
+    texts = dict(texts, planted_suite='shutil.copy2(REPO / "tools/x4validate" / "x4validate/_merge.py", tmp)')
+    assert _uncovered(gate, _hook_suite_path_literals(texts, tracked)) == [planted]
+    texts["planted_suite"] = "cp tools/x4validate/x4validate/_merge.py \"$tmp\""
+    assert _uncovered(gate, _hook_suite_path_literals(texts, tracked)) == [planted]
 
 
 def test_RED_the_gate_runs_the_shipped_claude_md_floor(recording):
