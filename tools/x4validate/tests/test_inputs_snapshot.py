@@ -560,3 +560,38 @@ def test_a_failed_snapshot_install_leaves_a_new_store_that_fails_CLOSED(tmp_path
     _, why = _prove(db, ref)
     assert any("not the one this store was built from" in w for w in why), why
     assert not list(tmp_path.glob("*.inputs.*.tmp")), "the unfinished temp is discarded"
+
+
+# --------------------------------------------------------------------------- the CLI (C1)
+
+def _cli_build(tmp_path, ref, capsys):
+    from x4validate import _effectivecli
+    rc = _effectivecli.main(["--db", str(tmp_path / "eff.sqlite"), "build",
+                             "--reference", str(ref), "--kinds", "ware"])
+    return rc, capsys.readouterr().err
+
+
+def test_x4effective_build_prints_a_snapshot_refusal_and_exits_2(tmp_path, monkeypatch, capsys):
+    """`_inputs.SnapshotRefused` (a RuntimeError) reached the CLI uncaught: a traceback and
+    exit 1, which cross_tool counted as a FAILED build. It is a refusal: one line, exit 2."""
+    ref, exts, _ = _world(tmp_path, monkeypatch)
+
+    def edit(attempt):
+        p = exts / "aaa" / "libraries" / "wares.xml"
+        _w(p, p.read_bytes() + b" ")
+    monkeypatch.setattr(_inputs, "_AFTER_COPY", edit)
+    rc, err = _cli_build(tmp_path, ref, capsys)
+    assert rc == 2, err
+    assert "x4effective build: REFUSED" in err and "kept moving" in err, err
+    assert "Traceback" not in err
+
+
+def test_TWIN_a_real_build_error_is_still_not_a_refusal(tmp_path, monkeypatch, capsys):
+    from x4validate import _effectivecli
+    ref, exts, _ = _world(tmp_path, monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("a genuine build defect")
+    monkeypatch.setattr(_effectivecli, "build", boom)
+    with pytest.raises(RuntimeError, match="genuine"):   # uncaught: the process exits 1
+        _cli_build(tmp_path, ref, capsys)

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from lxml import etree
 
-from x4validate import __version__, _closedpipe, _effective, _merge, _paths, _registry
+from x4validate import __version__, _closedpipe, _effective, _inputs, _merge, _paths, _registry
 from x4validate._provenance import Recorder, annotate_tree, comment_safe
 from x4validate._effective import (
     BUILDABLE_KINDS,
@@ -280,6 +280,11 @@ def main(argv: list[str] | None = None) -> int:
         kinds = tuple(k.strip() for k in args.kinds.split(",") if k.strip())
         try:
             build(cfg, db, kinds=kinds, progress=lambda s: print(f"  {s}", file=sys.stderr))
+        except _inputs.SnapshotRefused as exc:
+            # The inputs kept moving while they were copied, or could not be copied: a
+            # REFUSAL (exit 2), never a failed build -- the existing store is unchanged.
+            print(f"x4effective build: REFUSED: {exc}", file=sys.stderr)
+            return 2
         except (ValueError, OSError) as exc:
             # A bad --kinds and a lost install race are both ordinary operator
             # errors with an actionable message; a traceback would bury it.
