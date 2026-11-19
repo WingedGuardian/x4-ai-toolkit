@@ -177,6 +177,43 @@ def test_TWIN_DECISION1_a_REMOVE_then_another_mods_re_add_is_confirm_intent(tmp_
     assert _readds(rep) == [("b_readd", "a_rm")], rep.collisions
 
 
+RM_C1 = "<remove sel=\"//connection[@name='c1']\"/>"
+REPLACE_WITH_C1 = ('<replace sel="//connections"><connections><connection name="c1" tags="b"/>'
+                   '<connection name="c2" tags="a"/></connections></replace>')
+
+
+def test_DECISION1_remove_then_a_REPLACE_of_the_parent_is_no_revival(tmp_path):
+    """User ruling 2026-11-18: revival is <remove>-then-re-add ONLY. An earlier mod removing
+    c1 and a later one REPLACING the parent with a copy holding c1 is the replace's one
+    SUBTREE row -- never a CONFIRM INTENT row (declared) nor a HARD re-add (undeclared)."""
+    for sub, deps in (("declared", ("a_rm",)), ("undeclared", ())):
+        rep = _world(tmp_path / sub, COMP, COMP_BASE, RM_C1, REPLACE_WITH_C1, deps=deps)
+        assert rep.readded_after_removal == [], (sub, rep.collisions)
+        assert _hard_readds(rep) == [], (sub, rep.collisions)
+        assert len(rep.by_kind("SUBTREE")) == 1, (sub, rep.collisions)
+
+
+def test_TWIN_DECISION1_remove_then_ADD_with_no_dependency_is_still_a_HARD_re_add(tmp_path):
+    add = '<add sel="//connections"><connection name="c1" tags="b"/></add>'
+    rep = _world(tmp_path, COMP, COMP_BASE, RM_C1, add, deps=())
+    assert rep.readded_after_removal == [] and len(_hard_readds(rep)) == 1, rep.collisions
+
+
+def test_TWIN_DECISION1_a_REPLACE_then_a_later_ADD_of_the_same_key_is_no_revival(tmp_path):
+    """The replace consumed the removed slot without reviving it: a third mod adding c1 after
+    the replace adds a second c1, it does not revive the first mod's removed one."""
+    ref = tmp_path / "reference"
+    _w(ref / "libraries" / "wares.xml", "<wares/>")
+    _w(ref / COMP, COMP_BASE)
+    ext = tmp_path / "extensions"
+    _mod(ext, "a_rm", {COMP: f"<diff>{RM_C1}</diff>"})
+    _mod(ext, "b_readd", {COMP: f"<diff>{REPLACE_WITH_C1}</diff>"}, deps=("a_rm",))
+    _mod(ext, "c_add", {COMP: '<diff><add sel="//connections"><connection name="c1"/></add></diff>'},
+         deps=("a_rm", "b_readd"))
+    rep = _compat.analyze(ext, config=_merge.Config(reference=ref, include_packed_dlc=False))
+    assert rep.readded_after_removal == [] and _hard_readds(rep) == [], rep.collisions
+
+
 TEXTREF_BASE = ('<wares><ware id="ore"><price average="100"/>'
                 '<production method="default" name="{20206,101}" time="10"/></ware></wares>')
 

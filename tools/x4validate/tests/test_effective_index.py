@@ -115,6 +115,25 @@ def test_the_index_is_built_once_per_tuple_of_roots(tmp_path):
     assert _merge.EffectiveIndex.of("index/macros.xml", _cfg(ref), (a, b)) is not one
 
 
+def test_collect_macro_defs_asks_the_one_resolver_with_an_unchanged_name_set(tmp_path):
+    """`_check.collect_macro_defs` reads index/macros.xml through `EffectiveIndex` (one
+    build per run, shared with every other index reader), and its name set is exactly the
+    one the direct merge gave: a remover's <remove> and an adder's entry both count."""
+    from x4validate import _refs
+    ref, a, b, c = _world(tmp_path)
+    _w(b / "index" / "macros.xml",
+       "<diff><remove sel=\"/index/entry[@name='ship_x_macro'][1]\"/>"
+       '<add sel="/index"><entry name="b_new_macro" value="x"/></add></diff>')
+    cfg = _cfg(ref, a)
+    direct = _refs.macro_names(
+        _merge.build_effective(_check.MACRO_INDEX, cfg, extra_overlays=[b, c]).tree)
+    assert _merge._EFFECTIVE_INDEXES == {}
+    got = _check.collect_macro_defs(cfg, [b, c])
+    assert got == direct and {"ship_x_macro", "b_new_macro"} <= got, (got, direct)
+    key = (_check.MACRO_INDEX, str(ref), False, tuple(str(r) for r in (a, b, c)))
+    assert list(_merge._EFFECTIVE_INDEXES) == [key], "built through EffectiveIndex.of"
+
+
 def test_every_reader_agrees_on_the_loaded_document(tmp_path):
     """build_index, index_loads_copy, EngineDocs, EntityDefs and the opt-in merge all name the
     copier's own document. The hand mutant (last -> first entry) turns this red."""
@@ -183,12 +202,22 @@ def test_TWIN_index_roots_with_no_complete_copy_among_the_layers(tmp_path):
 
 def test_TWIN_index_roots_with_the_copier_not_merged_here(tmp_path):
     """The index names a_copy, but only b and a second copier are merged: no document to
-    build, so the plain model stands."""
+    build, so the plain model stands -- and SAYS so (a step that narrows must announce it):
+    the tree is not the document the engine loads."""
     ref, a, b, c = _world(tmp_path)
     d = tmp_path / "extensions" / "d_copy"
     _w(d / REL, _macro(4))
     res = _merge.build_effective(REL, _cfg(ref, b, d), index_roots=[a, b, c, d])
     assert res.never_opened == [] and "d_copy:merge" in res.sources, res.sources
+    notes = [u for u in res.unmeasured if "not among the layers merged here" in u]
+    assert len(notes) == 1 and "a_copy" in notes[0] and "F383" in notes[0], res.unmeasured
+    assert res.skipped == [], "the plain model is a disclosure, not a skip"
+
+
+def test_TWIN_index_roots_with_the_copier_merged_carry_no_not_merged_note(tmp_path):
+    ref, a, b, c = _world(tmp_path)
+    res = _merge.build_effective(REL, _cfg(ref, a, b, c), index_roots=[a, b, c])
+    assert not [u for u in res.unmeasured if "not among the layers merged here" in u]
 
 
 def test_TWIN_index_roots_a_partial_index_is_a_skip_on_the_plain_model(tmp_path):
@@ -311,6 +340,49 @@ def test_x4compat_lists_the_plain_diff_as_NEVER_OPENED_and_in_no_other_list(tmp_
     _no_disagreement(rep)
 
 
+def test_the_per_file_reason_states_the_RULE_not_a_per_file_measurement(tmp_path):
+    """The NEVER OPENED reason, the store/dump `unmeasured` line and x4validate's load-path
+    ERROR say what the RULE rests on (one game log, 10 of 10 copies; last entry INFERRED),
+    never "MEASURED 5 of 5", which was one mod's count and reads as a measurement of the
+    file in front of the reader."""
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path)
+    cfg = _merge.Config(reference=ref, include_packed_dlc=False)
+    rep = _compat.analyze(tmp_path / "extensions", config=cfg)
+    res = _merge.build_effective(REL, _cfg(ref, a, b, c), index_roots=[a, b, c])
+    _w(ref / "libraries" / "wares.xml", "<wares/>")   # validate's reference sanity check
+    vrep = _check.validate(b, _cfg(ref, a))
+    texts = {"never_opened": rep.never_opened[0].reason,
+             "unmeasured": next(u for u in res.unmeasured if "F383" in u),
+             "load-path": next(f.message for f in vrep.findings if f.category == "load-path")}
+    for where, text in texts.items():
+        assert "5 of 5" not in text, (where, text)
+        assert _merge.INDEX_RULE_EVIDENCE in text, (where, text)
+
+
+def test_an_UNREADABLE_never_opened_file_keeps_its_readability_skip(tmp_path):
+    """A never-opened plain diff that cannot be parsed is announced as unreadable (its ops
+    could not be listed), never reported like a COMPLETE file (line 0, empty sel)."""
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path)
+    _w(b / REL, '<diff><replace sel="//x">')
+    rep = _compat.analyze(tmp_path / "extensions", config=_merge.Config(reference=ref,
+                                                                       include_packed_dlc=False))
+    rows = [n for n in rep.never_opened if n.mod == "b_patch"]
+    assert [(n.line, n.sel) for n in rows] == [(0, _compat.UNREADABLE_SEL)], rows
+    skips = [s for s in rep.skipped if s.what == f"b_patch at {REL}"]
+    assert len(skips) == 1 and "could not be read" in skips[0].why, rep.skipped
+
+
+def test_TWIN_a_readable_never_opened_file_has_no_readability_skip(tmp_path):
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path)
+    rep = _compat.analyze(tmp_path / "extensions", config=_merge.Config(reference=ref,
+                                                                       include_packed_dlc=False))
+    assert not [s for s in rep.skipped if s.what.startswith("b_patch")], rep.skipped
+    assert all(n.sel != _compat.UNREADABLE_SEL for n in rep.never_opened)
+
+
 def test_TWIN_x4compat_with_the_base_entry_last_opens_the_plain_diff(tmp_path):
     from x4validate import _compat
     ref, a, b, c = _world(tmp_path, copier_index=None)
@@ -356,11 +428,11 @@ def _gate(name):
     return hermetic_gate(name)
 
 
-def _store_con(tmp_path, monkeypatch, index_roots: bool):
+def _store_con(tmp_path, monkeypatch, index_roots: bool, copier_index=ADD_OWN):
     import sqlite3
 
     from x4validate import _effective
-    ref, a, b, c = _world(tmp_path)
+    ref, a, b, c = _world(tmp_path, copier_index=copier_index)
     # `[1]`: one node in either model, so only the index decides whether b's value lands.
     _w(b / REL, "<diff><replace sel=\"/macros/macro[@name='ship_x_macro'][1]/properties"
                 "/hull/@max\">7</replace></diff>")
@@ -379,13 +451,43 @@ def _store_con(tmp_path, monkeypatch, index_roots: bool):
 
 def test_cross_tool_a_never_opened_mod_is_no_store_origin(tmp_path, monkeypatch):
     con, rep = _store_con(tmp_path, monkeypatch, index_roots=True)
-    assert _gate("cross_tool").never_opened_origins(con, rep) == (1, [])
+    assert _gate("cross_tool").never_opened_origins(con, rep) == (1, [], 0)
 
 
 def test_TWIN_cross_tool_goes_red_on_a_store_built_without_the_index(tmp_path, monkeypatch):
     con, rep = _store_con(tmp_path, monkeypatch, index_roots=False)
-    n, bad = _gate("cross_tool").never_opened_origins(con, rep)
-    assert n == 1 and len(bad) == 1 and "b_patch" in bad[0], bad
+    n, bad, nested = _gate("cross_tool").never_opened_origins(con, rep)
+    assert n == 1 and len(bad) == 1 and "b_patch" in bad[0] and nested == 0, bad
+
+
+def test_cross_tool_a_NESTED_never_opened_row_is_not_counted_as_agreement(tmp_path, monkeypatch,
+                                                                          capsys):
+    """A nested never-opened patch (the copy merges at the plain path) has no value in the
+    store at either spelling in EITHER model, so "it is no store origin" cannot go red: it is
+    printed as not compared [explained] and kept out of the agreement count; with nothing else
+    to compare the section could not run (0 of N is a non-answer)."""
+    gate = _gate("cross_tool")
+    for idx in (True, False):
+        con, rep = _store_con(tmp_path / str(idx), monkeypatch, index_roots=idx,
+                              copier_index=None)
+        assert [n.mod for n in rep.never_opened] == ["c_nest"], rep.never_opened
+        assert gate.never_opened_origins(con, rep) == (0, [], 1), idx
+        monkeypatch.undo()
+    gate.failures.clear()
+    gate.cannot.clear()
+    gate.check_never_opened_origins(con, rep)
+    out = capsys.readouterr().out
+    assert "not compared x1 [explained]" in out and gate.failures == [], out
+    assert len(gate.cannot) == 1 and "0/0 plain-path" in gate.cannot[0], gate.cannot
+    gate.cannot.clear()
+    # Not compared means NOT COMPARED: even a planted origin cannot turn the row into a verdict.
+    import sqlite3
+    planted = sqlite3.connect(":memory:")
+    planted.execute("CREATE TABLE entities (id INTEGER, vpath TEXT, origin TEXT)")
+    planted.execute("CREATE TABLE attrs (entity_id INTEGER, origin TEXT)")
+    planted.execute("INSERT INTO entities VALUES (1, ?, 'c_nest')", (REL.lower(),))
+    planted.execute("INSERT INTO attrs VALUES (1, 'c_nest')")
+    assert gate.never_opened_origins(planted, rep) == (0, [], 1)
 
 
 def test_tool_properties_a_never_opened_mod_is_never_a_winner(tmp_path):

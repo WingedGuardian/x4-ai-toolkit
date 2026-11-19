@@ -161,3 +161,50 @@ def test_only_is_dlc_folder_tests_the_DLC_prefix_on_an_unlowered_value():
     assert not offenders, (
         "case-sensitive DLC-prefix tests (use _merge.is_dlc_folder):\n  "
         + "\n  ".join(offenders))
+
+
+def _reimplementations(tree: ast.Module, src_name: str) -> list[int]:
+    """Lines of every function OTHER than `_merge.is_dlc_folder` whose return value is a
+    DLC-prefix test (lowered or not): a second implementation of the helper."""
+    out = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.Lambda)):
+            continue
+        if getattr(fn, "name", "") == "is_dlc_folder" and src_name == "_merge.py":
+            continue
+        returns = [fn.body] if isinstance(fn, ast.Lambda) else [
+            r.value for r in ast.walk(fn) if isinstance(r, ast.Return) and r.value is not None]
+        for value in returns:
+            if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                    and value.func.attr == "startswith" and value.args
+                    and isinstance(value.args[0], ast.Constant)
+                    and isinstance(value.args[0].value, str)
+                    and value.args[0].value.lower().startswith("ego_dlc")):
+                out.append(fn.lineno)
+    return out
+
+
+def test_no_second_implementation_of_is_dlc_folder():
+    """F284 made `_merge.is_dlc_folder` THE implementation, and the guard above bans only
+    the case-SENSITIVE shape -- so a correct-but-separate `def _is_dlc(name): return
+    name.lower().startswith("ego_dlc_")` (4.3's `_inputs._is_dlc`) passed it. A helper
+    re-implemented is the next divergence waiting to happen: ask the one helper instead."""
+    offenders = []
+    for src in _tool_sources():
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+        offenders += [f"{src.parent.name}/{src.name}:{n}" for n in _reimplementations(tree, src.name)]
+    assert not offenders, ("functions re-implementing _merge.is_dlc_folder:\n  "
+                           + "\n  ".join(offenders))
+
+
+def test_TWIN_the_reimplementation_scan_finds_each_shape():
+    shapes = ['def f(n):\n    return n.lower().startswith("ego_dlc_")\n',
+              'def f(n):\n    return n.startswith("EGO_DLC")\n',
+              'f = lambda n: n.casefold().startswith("ego_dlc_")\n']
+    for code in shapes:
+        assert _reimplementations(ast.parse(code), "x.py") == [1], code
+    ok = 'def is_dlc_folder(n):\n    return n.lower().startswith("ego_dlc_")\n'
+    assert _reimplementations(ast.parse(ok), "_merge.py") == []
+    assert _reimplementations(ast.parse(ok), "_inputs.py") == [1], "only _merge's is THE one"
+    inline = 'def g(ds):\n    return [d for d in ds if not d.lower().startswith("ego_dlc_")]\n'
+    assert _reimplementations(ast.parse(inline), "x.py") == [], "an inline use is not a def"

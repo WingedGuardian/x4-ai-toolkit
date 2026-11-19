@@ -142,7 +142,10 @@ def collect_macro_defs(config: _merge.Config, extra_overlays=None,
             report.skip("macro-reference checks", f"{MACRO_INDEX}: {why}", degraded=True)
 
     try:
-        merged = _merge.build_effective(MACRO_INDEX, config, extra_overlays=extra_overlays)
+        # THE index resolver (F383/F384): the same merge (base + DLC + overlays + extras, in
+        # that order), built once per run and shared with every other index reader.
+        merged = _merge.EffectiveIndex.of(
+            MACRO_INDEX, config, (*config.overlays, *(extra_overlays or []))).result
     except (etree.LxmlError, OSError) as exc:
         _fail(f"could not build the effective macro index ({exc})")
         return None
@@ -1390,8 +1393,7 @@ def _index_load_verdict(vpath: str, merged: _merge.MergeResult, mod_dir: Path | 
                    f"for this file's name points at '{value}'"
                    + (f" (the last of {count} entries)" if count > 1 else "")
                    + f", so the engine loads '{owner}''s own complete copy and its nested "
-                   f"patches instead (MEASURED for 5 of 5 such files in one log, BLIND-SPOTS "
-                   f"F383; that the LAST entry decides is INFERRED). To change that document, "
+                   f"patches instead ({_merge.INDEX_RULE_EVIDENCE}). To change that document, "
                    f"ship the patch at extensions/{owner}/{vpath}", vpath)
         return True
     owner, rel = nested

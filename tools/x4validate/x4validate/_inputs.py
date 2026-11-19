@@ -10,9 +10,10 @@ x4compat against the same snapshot after PROVING it is the one the store was bui
 That also closes the mid-build-edit gap: the store can no longer read a mod file that
 changed after the fingerprint was taken.
 
-WHAT IS COPIED (MEASURED 2026-11-18 on the live install, 240 mod folders: the engine-
-relevant files are 13.8 GB, almost all `.dat` textures; the XML a build reads is ~82 MB
--- 36 MB loose, 46 MB packed -- so a full copy, or hardlinks, are ruled out):
+WHAT IS COPIED (MEASURED 2026-11-18, a read-only census of the live install mirroring
+`_copy_root`: 240 mod folders in 3 roots, 22,479 files, 85.0 MB -- 36.3 MB loose
+XML/XSD/Lua, 45.6 MB kept packed members, 3.1 MB catalog text. Everything else, almost all
+`.dat` textures, becomes a stub, which is why a full copy or hardlinks are ruled out):
 
 * every loose ``.xml`` / ``.xsd`` / ``.lua`` file, byte for byte;
 * every other loose file as a 0-byte NAME STUB, so a directory listing (wildcard icon
@@ -57,6 +58,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+# The one DLC-folder test (F284); `_merge` never imports this module, so no cycle.
+from x4validate._merge import is_dlc_folder
+
 #: The `_registry` module constants that name the install roots and the profile. Every
 #: reader of a root reads one of these AT CALL TIME (tests/test_inputs_snapshot.py bans
 #: an import-time copy), which is what lets `world()` point the whole toolkit at a snapshot.
@@ -96,10 +100,6 @@ def _same_dir(a, b) -> bool:
         return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
     except (OSError, ValueError):
         return False  # silent-ok: an unspellable path is "not the same root", which maps it to None
-
-
-def _is_dlc(name: str) -> bool:
-    return name.lower().startswith("ego_dlc_")
 
 
 @dataclass
@@ -142,7 +142,7 @@ def _listing(roots: list[Path]) -> dict[tuple[int, str], tuple | None]:
         for d in sorted(root.iterdir(), key=lambda p: p.name.lower()):
             if not d.is_dir():
                 continue
-            if _is_dlc(d.name):
+            if is_dlc_folder(d.name):
                 m = d / "content.xml"
                 try:
                     st = m.stat()
@@ -259,7 +259,7 @@ def _copy_root(w: _Writer, root: Path, snap_rel: str) -> None:
     for d in sorted(root.iterdir(), key=lambda p: p.name.lower()):
         if not d.is_dir():
             continue
-        if _is_dlc(d.name):
+        if is_dlc_folder(d.name):
             m = d / "content.xml"
             if m.is_file():
                 st = m.stat()
@@ -337,8 +337,19 @@ def take(db_path: Path, roots: list[Path], stamp_fn, progress=lambda s: None) ->
     t0 = time.monotonic()
     moved: list[str] = []
     for attempt in range(1 + RETRIES):
-        if tmp.exists():
-            shutil.rmtree(tmp)                   # our own temp of this run, or a dead build's
+        if tmp.exists() and attempt:
+            shutil.rmtree(tmp)                   # this run's own temp, from the attempt before
+        elif tmp.exists():
+            # NOT this run's (a dead build with a reused pid, or anything else at the name):
+            # the same proof as a replaced snapshot -- deleted outright only when its receipt
+            # and every hash prove it rebuildable, else the Recycle Bin, never a silent
+            # fallback to a permanent delete.
+            progress(dispose(tmp, "a leftover input snapshot temp"))
+            if tmp.exists():
+                raise SnapshotRefused(
+                    f"a leftover {tmp.name} could not be disposed of safely (see the line "
+                    "above), so no snapshot was taken and the existing store is unchanged -- "
+                    "move or delete that folder yourself, then rebuild")
         stamp0, list0, prof0 = stamp_fn(), _listing(roots), _profile_state(profile)
         w = _Writer(tmp)
         tmp.mkdir(parents=True)
@@ -547,8 +558,8 @@ def prove(db_path: Path, config=None) -> tuple[Snapshot | None, list[str]]:
     prof = snap.constant("PROFILE_CONTENT")
     live = _keyed([r for r in _freshness.content_detail(config.reference, live_roots,
                                                           profile=prof)
-                   if _is_dlc(r["folder"])], snap)
-    stored_dlc = {k: v for k, v in a.items() if _is_dlc(k[1])}
+                   if is_dlc_folder(r["folder"])], snap)
+    stored_dlc = {k: v for k, v in a.items() if is_dlc_folder(k[1])}
     for key in sorted(set(live) | set(stored_dlc)):
         if live.get(key) != stored_dlc.get(key):
             problems.append(f"DLC {key[1]} changed since the build")
@@ -639,20 +650,21 @@ def _recycle(path: Path) -> str | None:
     return "still present after a reported recycle" if Path(full).exists() else None
 
 
-def dispose(old: Path) -> str:
-    """Remove a replaced snapshot. Returns one line saying what happened to it."""
+def dispose(old: Path, what: str = "the previous input snapshot") -> str:
+    """Remove a replaced snapshot (or a leftover temp: *what*). Returns one line saying
+    what happened to it."""
     why = proven_rebuildable(old)
     if not why:
         try:
             shutil.rmtree(old)
-            return f"deleted the previous input snapshot (receipt and every hash matched): {old.name}"
+            return f"deleted {what} (receipt and every hash matched): {old.name}"
         except OSError as exc:
-            return f"WARNING: could not delete the previous input snapshot {old}: {exc}"
+            return f"WARNING: could not delete {what} {old}: {exc}"
     err = _recycle(old)
     if err is None:
-        return (f"moved the previous input snapshot to the Recycle Bin (unproven: {why[0]}"
+        return (f"moved {what} to the Recycle Bin (unproven: {why[0]}"
                 f"{f'; and {len(why) - 1} more' if len(why) > 1 else ''})")
-    return f"WARNING: left the previous input snapshot in place at {old} ({why[0]}; recycle: {err})"
+    return f"WARNING: left {what} in place at {old} ({why[0]}; recycle: {err})"
 
 
 def install(snap: Snapshot, db_path: Path, progress=lambda s: None) -> Snapshot:

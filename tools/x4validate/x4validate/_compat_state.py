@@ -82,6 +82,11 @@ class Nodes(Recorder):
         self.removed_keys = {}
         self.revived = set()
         self.inserted = []
+        #: True while a diff `<replace>` op applies. User ruling 2026-11-18: revival is
+        #: <remove>-then-re-add ONLY; a <replace> stays the one SUBTREE row it was. A node
+        #: the replacement puts in a removed slot CONSUMES that slot (a later add of the
+        #: same key is a new node too) but never continues the removed identity.
+        self.no_revive = False
 
     def _key(self, el):
         if self.vpath:
@@ -107,7 +112,9 @@ class Nodes(Recorder):
             parent = node.getparent()
             key = self._key(node) if parent is not None else None
             slot = (self.element_id(parent), *key) if key is not None else None
-            if slot is not None and slot in self.removed_keys:
+            if slot is not None and slot in self.removed_keys and self.no_revive:
+                del self.removed_keys[slot]
+            elif slot is not None and slot in self.removed_keys:
                 identity = self.removed_keys.pop(slot)
                 self.ids[node] = identity
                 self.revived.add(identity)
@@ -259,6 +266,7 @@ def trace(vpath, base, roots, expected=None, nested=None, plain_on_game=False):
             nodes.created.clear()
             nodes.inserted = []
             nodes.split = len([c for c in op if isinstance(c.tag, str)]) > 1
+            nodes.no_revive = op.tag == "replace"
             try:
                 selected = tree.xpath(op.get("sel", ""))
                 candidates = tuple(nodes.target_id(item) for item in selected) if isinstance(selected, list) else (None,)
@@ -277,6 +285,7 @@ def trace(vpath, base, roots, expected=None, nested=None, plain_on_game=False):
             if nodes.pending_root:
                 nodes.register(tree)
                 nodes.pending_root = False
+            nodes.no_revive = False
             active = verdict.ok and not verdict.skipped_if
             records[(source, index)] = OpTargets(ids if active or ids is None else (),
                 tuple(sorted(nodes.created)) if active else (), active, verdict.detail, ids,

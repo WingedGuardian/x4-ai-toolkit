@@ -23,7 +23,11 @@ itself found three more issues. So: what has NOTHING checked yet?
   3. BUILDER IDEMPOTENCE. `determinism_audit` covers x4compat's output ordering.
      The BUILDERS were never checked: build the same store twice from unchanged
      inputs and the contents must be identical. A builder that varies is one
-     whose every downstream answer is unreproducible.
+     whose every downstream answer is unreproducible. COST: since toolkit 4.3 every
+     store build first takes a full input snapshot of the live install, so this
+     section takes TWO extra full snapshots per gate run (one per build, beside the
+     temp stores, removed with them). A build REFUSED because the inputs moved while
+     they were copied (exit 2, "REFUSED") is a section that could not run, never a FAIL.
 
   4. READ-ONLY HARDENING. `qa_sweep` proves `x4effective sql` rejects DELETE.
      That is one verb. ATTACH, PRAGMA, and multi-statement payloads are the ways
@@ -534,7 +538,11 @@ def _proven_world(db: Path):
         return None, [f"the proof itself failed: {type(exc).__name__}: {exc}"]
     if why:
         return None, why
-    return _inputs.world(snap), None
+    ctx = _inputs.world(snap)
+    # Carried with the context: `_agreement` re-reads the store's `input_snapshot` once
+    # x4compat has run, because a rebuild in those minutes replaces the store (C2).
+    ctx.manifest_sha = snap.manifest_sha
+    return ctx, None
 
 
 def check_cross_tool_agreement() -> None:
@@ -553,12 +561,33 @@ def check_cross_tool_agreement() -> None:
                 f"{why[0]}) -- rebuild the store (`x4effective build`) and re-run")
         return
     with ctx:
-        _agreement(db)
+        _agreement(db, getattr(ctx, "manifest_sha", None))
 
 
-def _agreement(db: Path) -> None:
+def _store_snapshot_sha(con) -> str | None:
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key = 'input_snapshot'").fetchone()
+    except sqlite3.Error:
+        return None   # silent-ok: an unreadable meta row is "not the proven manifest" -> not_run
+    return None if row is None else row[0]
+
+
+def _agreement(db: Path, proven_sha: str | None = None) -> None:
+    """*proven_sha*: the manifest `_proven_world` proved; None only for a caller that
+    supplies its own world (the unit tests' stub), which then skips the re-check."""
     # Every root the store was built over (the snapshot's), not the game root alone.
     report = _compat.analyze(None, config=_merge.Config())
+    # x4compat ran for minutes over the PROVEN snapshot. A store rebuilt meanwhile is a
+    # different store: re-read what it was built from before comparing anything (C2).
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    if proven_sha is not None:
+        now = _store_snapshot_sha(con)
+        if now != proven_sha:
+            con.close()
+            not_run("cross-tool agreement",
+                    f"the store was rebuilt while x4compat ran (input snapshot "
+                    f"{proven_sha[:16]} proven, {str(now)[:16]} now) -- re-run the gate")
+            return
     # The ADVISORY rows (issue #11: an overwrite of a declared dependency's added content)
     # were HARD rows before the split and keep every field the HARD check reads, so they
     # are cross-checked as their own population -- release review F7: 2,544 live rows had
@@ -568,13 +597,13 @@ def _agreement(db: Path) -> None:
     # advisory, but its winner -- the re-adder -- is a live-owner claim like any HARD row.
     readded = [_readded_as_hard(r) for r in getattr(report, "readded_after_removal", ())]
     if not report.collisions and not dependent and not readded:
+        con.close()
         note(False, "found collisions to cross-check", "none on this install")
         return
     by_kind: dict[str, list] = {}
     for c in report.collisions:
         by_kind.setdefault(c.kind, []).append(c)
 
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     config = _merge.Config()
     # The mod set `_compat.analyze` reads, built by the same call: a nested
     # `extensions/<owner>/<rel>` has its base in the OWNER mod, found by folder here.
@@ -772,29 +801,51 @@ def _agreement(db: Path) -> None:
     con.close()
 
 
-def never_opened_origins(con, report) -> tuple[int, list[str]]:
-    """(files checked, violations): a mod x4compat lists as NEVER OPENED on a vpath (F383)
-    must be no origin -- of an entity or of an attribute -- the store holds for that vpath.
-    The store builds the index's document (`build_effective(index_roots=...)`), so a
-    never-opened plain-path diff writes no value; a store built without the index would."""
+#: Why a NESTED NEVER OPENED row (`extensions/<owner>/<rel>`) is not compared: the store
+#: holds no value of such a patch at EITHER spelling in either model (MEASURED 2026-11-18 on
+#: the test fixture: with and without the index, the never-opened nested patcher is no store
+#: origin), so "it is no origin" could never go red -- counting it would be agreement by
+#: construction.
+NESTED_NOT_COMPARABLE = ("a nested patch on a copy that merges at the plain path: no store "
+                         "model holds its values at either spelling, so no origin can disagree")
+
+
+def never_opened_origins(con, report) -> tuple[int, list[str], int]:
+    """(files checked, violations, nested files not compared): a mod x4compat lists as NEVER
+    OPENED on a PLAIN vpath (F383) must be no origin -- of an entity or of an attribute -- the
+    store holds for that vpath. The store builds the index's document
+    (`build_effective(index_roots=...)`), so a never-opened plain-path diff writes no value; a
+    store built without the index would. A NESTED row is counted apart
+    (`NESTED_NOT_COMPARABLE`), never as agreement."""
     files = sorted({(n.vpath, n.mod) for n in getattr(report, "never_opened", ())})
+    nested = [(v, m) for v, m in files
+              if _compat._strip_nesting(v) != v.replace("\\", "/").lower().lstrip("/")]
     bad = []
     for vpath, mod in files:
+        if (vpath, mod) in nested:
+            continue
         origins = _origins(con, vpath, "attrs") | _origins(con, vpath, "entities")
         if mod in origins:
             bad.append(f"{vpath}: never-opened {mod!r} is a store origin")
-    return len(files), bad
+    return len(files) - len(nested), bad, len(nested)
 
 
 def check_never_opened_origins(con, report) -> None:
-    n, bad = never_opened_origins(con, report)
-    if not n:
+    n, bad, nested = never_opened_origins(con, report)
+    if not n and not nested:
         print("          NEVER OPENED: none on this install")
         return
+    if nested:
+        print(f"          NEVER OPENED not compared x{nested} [explained]: {NESTED_NOT_COMPARABLE}")
     for line in bad[:3]:
         print(f"          {line}")
-    note(not bad, "NEVER OPENED: a mod the engine never opens is no store origin",
-         f"{n - len(bad)}/{n} file(s) clean")
+    label = "NEVER OPENED: a mod the engine never opens is no store origin"
+    detail = f"{n - len(bad)}/{n} plain-path file(s) clean ({nested} nested not compared)"
+    if not n:
+        # 0 of N is a non-answer: every row was explained out, so nothing agreed.
+        not_run(label, detail)
+        return
+    note(not bad, label, detail)
 
 
 # ------------------------------------------------------ 3. builder idempotence
@@ -804,6 +855,12 @@ def check_builder_idempotence(tmp: Path) -> None:
     db1, db2 = tmp / "b1.sqlite", tmp / "b2.sqlite"
     for db in (db1, db2):
         rc, out = run("x4effective", "--db", str(db), "build", "--kinds", "job")
+        if rc == 2 and "x4effective build: REFUSED" in out:
+            # The modlist moved while the build snapshotted it: no store, nothing compared.
+            not_run("x4effective build succeeded",
+                    "build REFUSED (the inputs moved while they were copied): "
+                    + next((ln for ln in out.splitlines() if "REFUSED" in ln), "")[:300])
+            return
         if rc != 0:
             note(False, "x4effective build succeeded", f"exit {rc}")
             return
