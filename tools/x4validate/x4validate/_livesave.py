@@ -13,8 +13,12 @@ What stays is NEVER-OVERWRITE, which is save protection rather than proof of ask
     (`_livepersistence.STANDARD_SAVE_SLOT`); no wildcard, no other name;
   * "empty" is `SlotVerifier.reserve`'s physical rule: no member of the save folder whose
     name starts with the slot name (a copy, a temp, another case) -- refused, exit 2,
-    BEFORE anything is sent. The helper repeats the check against the engine's own save
-    list before it calls SaveGame;
+    BEFORE anything is sent, and again inside the connection right before EVERY ask
+    (connecting can wait up to 15 s for the game, and another run's save can land
+    meanwhile). The helper repeats the check against the engine's own save list, which
+    it reloads first (refusing `catalogue-loading` while it loads; this request is then
+    asked again, same id, for up to CATALOGUE_WAIT_S), and against every slot it already
+    sent SaveGame for since the UI loaded;
   * before sending, a manifest of every file in the save folder (size, mtime and sha256);
     after the reply, the new save must exist as a complete file carrying this request's
     label, and every other file must be unchanged -- any change, removal or extra file
@@ -26,8 +30,10 @@ helper for a save the same way. The helper itself refuses an occupied slot, so t
 whole of what such a program can do through this verb.
 
 Exit codes follow the other x4live commands: 0 the save landed and verifies; 1 the game
-refused and nothing in the save folder changed; 2 not asked (bad slot, occupied slot, save
-folder unknown, game unreachable before sending); 3 anything untrusted or unverified.
+refused and nothing in the save folder changed (a helper older than 103 answering
+`unknown verb: save` included: nothing ran, so there is no slot to wait for); 2 not asked
+(bad slot, occupied slot, save folder unknown, game unreachable before sending); 3
+anything untrusted or unverified.
 """
 from __future__ import annotations
 
@@ -134,7 +140,9 @@ AUTOCLOUD = "steam_autocloud.vdf"
 
 
 def is_autocloud(rel: str) -> bool:
-    return "/" not in rel and rel.casefold() == AUTOCLOUD
+    # ASCII first, then lower(): casefold() also maps look-alikes onto the name (U+017F
+    # long s -> "s", U+FB05/U+FB06 ligatures -> "st"), which would except another file.
+    return "/" not in rel and rel.isascii() and rel.lower() == AUTOCLOUD
 
 
 def compare(before: dict[str, dict], after: dict[str, dict], new: str | None,
@@ -263,6 +271,59 @@ def wait_for_slot(save_dir: Path, slot: str, *, timeout: float, settle: float):
         _sleep(POLL_S)
 
 
+#: How long a `catalogue-loading` refusal (the helper reloaded the engine's save list and
+#: it is still loading) is answered by asking again, every POLL_S. INFERRED bound: the
+#: reload's duration in game is unmeasured; past it the refusal is reported (exit 1).
+CATALOGUE_WAIT_S = 15.0
+
+#: The helper dispatcher's reply to a verb it does not have (helper 102 and older for
+#: `save`), sent before any verb function runs.
+UNKNOWN_SAVE_VERB = "unknown verb: save"
+
+
+def _ready(save_dir: Path, slot: str):
+    """(manifest, None) when the folder reads safely and the slot is empty, else (None, why)."""
+    try:
+        rows = snapshot(save_dir)
+    except (PersistenceUnavailable, OSError) as exc:
+        return None, f"the save folder cannot be read safely ({exc})."
+    taken = occupants(rows, slot)
+    if taken:
+        return None, (f"slot {slot} is occupied ({', '.join(taken)}); x4live save never "
+                      "overwrites a save. Choose an empty slot.")
+    return rows, None
+
+
+def _catalogue_loading(reply, slot: str, label: str) -> bool:
+    """THIS request's trusted refusal saying the save list is still loading (acted=no)."""
+    from ._livecli import _parse_advisory
+    if reply is None or reply.status != "ERR":
+        return False
+    adv = _parse_advisory(reply.fields)
+    return bool(adv) and adv.get("verb") == "save" and adv.get("slot") == slot and \
+        adv.get("label") == label and adv.get("acted") == "no" and \
+        adv.get("reason") == "catalogue-loading"
+
+
+def _refused(before: dict, save_dir: Path, out, why: str) -> int:
+    """A refusal that ran nothing: 1 when the save folder is unchanged, else 3."""
+    notes: list[str] = []
+    try:
+        problems = compare(before, snapshot(save_dir), None, notes)
+    except (PersistenceUnavailable, OSError) as exc:
+        problems = [f"the save folder could not be re-read ({exc})"]
+    if problems:
+        for p in problems:
+            print(f"  {p}", file=out)
+        print("\nUNTRUSTED: the game refused, but the save folder changed anyway (see above).",
+              file=out)
+        return 3
+    for n in notes:
+        print(f"  {n}", file=out)
+    print(f"\nrefused, and nothing in the save folder changed ({why}).", file=out)
+    return 1
+
+
 def run(slot: str, open_pipe, save_dir: Path | None, *, settle_timeout: float,
         settle: float, out=None, err=None) -> int:
     """The whole command. `open_pipe()` is a context manager yielding a live pipe."""
@@ -286,14 +347,9 @@ def run(slot: str, open_pipe, save_dir: Path | None, *, settle_timeout: float,
     if save_dir is None:
         return refuse("the save folder is not configured: set X4_SAVES, or X4_PROFILE (its "
                       "save/ folder is used). Nothing was sent.", 2)
-    try:
-        before = snapshot(Path(save_dir))
-    except (PersistenceUnavailable, OSError) as exc:
-        return refuse(f"the save folder cannot be read safely ({exc}). Nothing was sent.", 2)
-    taken = occupants(before, slot)
-    if taken:
-        return refuse(f"slot {slot} is occupied ({', '.join(taken)}); x4live save never "
-                      "overwrites a save. Choose an empty slot. Nothing was sent.", 2)
+    before, why = _ready(Path(save_dir), slot)
+    if why:
+        return refuse(why + " Nothing was sent.", 2)
 
     request = uuid.uuid4().hex
     label = label_for(request)
@@ -302,8 +358,33 @@ def run(slot: str, open_pipe, save_dir: Path | None, *, settle_timeout: float,
     try:
         with open_pipe() as lp:
             path = lp.path
-            sent = True
-            reply = lp.ask("save", slot, request)
+            deadline = _clock() + CATALOGUE_WAIT_S
+            while True:
+                # Re-taken right before EVERY ask: connecting can wait for the game (up to
+                # 15 s), and another run's save can land in the slot meanwhile (4.3 review
+                # D1). The manifest is re-taken with it, so a change made before the ask is
+                # not blamed on it.
+                before, why = _ready(Path(save_dir), slot)
+                if why:
+                    return refuse(why + (" Nothing more was sent: every earlier ask was "
+                                         "refused, acting on nothing." if sent else
+                                         " Nothing was sent."), 2)
+                sent = True
+                # Cleared first: if THIS ask's reply is lost, an earlier refusal must not
+                # stand in for it (the rehearsal's lost-reply case caught exactly that).
+                reply = None
+                reply = lp.ask("save", slot, request)
+                if not _catalogue_loading(reply, slot, label) or _clock() >= deadline:
+                    break
+                # This request's own trusted refusal, acted=no: the helper reloaded its save
+                # list and it is still loading. Asking again is safe once the folder shows
+                # nothing changed; otherwise the refusal path below reports it.
+                try:
+                    if compare(before, snapshot(Path(save_dir)), None, []):
+                        break
+                except (PersistenceUnavailable, OSError):
+                    break
+                _sleep(POLL_S)
     except (_livepipe.LiveQueryUnavailable, _livepipe.LiveQueryDegraded) as exc:
         if not sent:
             raise
@@ -318,6 +399,13 @@ def run(slot: str, open_pipe, save_dir: Path | None, *, settle_timeout: float,
     if reply is not None:
         print(f"status  : {reply.status}", file=out)
         adv = _parse_advisory(reply.fields)
+        if reply.status == "ERR" and reply.payload == UNKNOWN_SAVE_VERB:
+            # The dispatcher answers this BEFORE it looks up any verb function
+            # (live_query.lua, `unknown verb: `), so nothing ran: no slot to wait for.
+            print(f"reply   : {reply.payload}", file=out)
+            print("the helper running in the game does not know `save` (helper 103 or newer "
+                  "is needed; a FRESH launch loads a new one). Nothing was run.", file=out)
+            return _refused(before, Path(save_dir), out, "the helper has no save verb")
         if adv is None:
             print(f"reply   : {reply.payload}", file=out)
             print("UNTRUSTED: the reply does not lead with its `write=yes` advisory row (the "
@@ -331,22 +419,7 @@ def run(slot: str, open_pipe, save_dir: Path | None, *, settle_timeout: float,
                        and adv.get("label") == label)
             acted = adv.get("acted")
             if matches and reply.status == "ERR" and acted == "no":
-                notes: list[str] = []
-                try:
-                    problems = compare(before, snapshot(Path(save_dir)), None, notes)
-                except (PersistenceUnavailable, OSError) as exc:
-                    problems = [f"the save folder could not be re-read ({exc})"]
-                if problems:
-                    for p in problems:
-                        print(f"  {p}", file=out)
-                    print("\nUNTRUSTED: the game refused, but the save folder changed "
-                          "anyway (see above).", file=out)
-                    return 3
-                for n in notes:
-                    print(f"  {n}", file=out)
-                print(f"\nrefused, and nothing in the save folder changed "
-                      f"(reason={adv.get('reason', '?')}).", file=out)
-                return 1
+                return _refused(before, Path(save_dir), out, f"reason={adv.get('reason', '?')}")
             trusted_ok = matches and reply.status == "OK" and acted == "yes"
             if not trusted_ok:
                 print(f"UNTRUSTED reply (reason={adv.get('reason', '?')}, acted={acted}): "

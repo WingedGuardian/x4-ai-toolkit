@@ -63,6 +63,14 @@ function SaveGame(...)
     if _G.savegame_raises then error("engine refused to save") end
 end
 _G.fake_C.IsSaveListLoadingComplete = function() return _G.savelist_complete end
+-- ReloadSaveList (gameoptions.lua:278, called at :3251, :8119, :12996, :13147). This fake
+-- reloads synchronously unless `reload_leaves_loading` says the list is still loading.
+_G.reloads = 0
+_G.fake_C.ReloadSaveList = function()
+    _G.reloads = _G.reloads + 1
+    if _G.reload_raises then error("ReloadSaveList failed") end
+    if _G.reload_leaves_loading then _G.savelist_complete = false end
+end
 """
 
 
@@ -214,6 +222,101 @@ def test_a_save_call_that_raises_reports_acted_yes():
     a = _adv(r)
     assert r.status == "ERR" and a["reason"] == "raised" and a["acted"] == "yes", r.payload
     assert _calls(rt) == 1
+
+
+# ---- never-overwrite across requests (4.3 release review D1)
+
+
+def test_RED_a_slot_this_helper_already_saved_into_is_occupied_before_the_list_shows_it():
+    """SaveGame writes asynchronously, so the engine's list does not hold the slot yet: a
+    second request for it must still be refused, or its SaveGame overwrites the first."""
+    rt = _rt()
+    assert ask(rt, 1, "save", "save_004", REQ).status == "OK"
+    r = ask(rt, 2, "save", "save_004", "f" * 32)
+    assert r.status == "ERR" and _adv(r)["reason"] == "occupied", r.payload
+    assert _adv(r)["acted"] == "no" and _calls(rt) == 1
+
+
+def test_TWIN_another_slot_after_a_save_is_still_saved():
+    rt = _rt()
+    assert ask(rt, 1, "save", "save_004", REQ).status == "OK"
+    assert ask(rt, 2, "save", "save_005", "f" * 32).status == "OK"
+    assert _calls(rt) == 2
+
+
+def test_RED_a_save_that_raised_still_reserves_its_slot():
+    """acted=yes: it may have written, so the slot is never asked for again."""
+    rt = _rt(code="_G.savegame_raises = true")
+    ask(rt, 1, "save", "save_004", REQ)
+    rt.execute("_G.savegame_raises = false")
+    r = ask(rt, 2, "save", "save_004", "f" * 32)
+    assert _adv(r)["reason"] == "occupied" and _calls(rt) == 1, r.payload
+
+
+def test_TWIN_a_refused_request_reserves_nothing():
+    rt = _rt(code="_G.saving_possible = false")
+    assert _adv(ask(rt, 1, "save", "save_004", REQ))["reason"] == "not-saveable"
+    rt.execute("_G.saving_possible = true")
+    assert ask(rt, 2, "save", "save_004", REQ).status == "OK" and _calls(rt) == 1
+
+
+def test_RED_the_first_request_reloads_the_save_list():
+    rt = _rt()
+    ask(rt, 1, "save", "save_004", REQ)
+    assert g(rt, "reloads") == 1
+
+
+def test_RED_a_reload_still_loading_refuses_catalogue_loading_and_saves_nothing():
+    rt = _rt(code="_G.reload_leaves_loading = true")
+    r = ask(rt, 1, "save", "save_004", REQ)
+    assert r.status == "ERR" and _adv(r)["reason"] == "catalogue-loading", r.payload
+    assert _adv(r)["acted"] == "no" and _calls(rt) == 0
+    rt.execute("_G.savelist_complete = true")
+    assert ask(rt, 2, "save", "save_004", REQ).status == "OK"
+    assert g(rt, "reloads") == 1, "a list reloaded moments ago is not reloaded again"
+
+
+def test_RED_a_list_older_than_vanillas_60_s_interval_is_reloaded():
+    rt = _rt()   # a refusal, not a save, so only the clock can make the second one reload
+    assert _adv(ask(rt, 1, "save", "save_001", REQ))["reason"] == "occupied"
+    rt.execute("_G.now = _G.now + 61")
+    ask(rt, 2, "save", "save_004", REQ)
+    assert g(rt, "reloads") == 2
+
+
+def test_TWIN_a_clock_that_went_backwards_reloads():
+    """A UI reload resets getElapsedTime; a list dated in the future is not trusted as fresh."""
+    rt = _rt()
+    assert _adv(ask(rt, 1, "save", "save_001", REQ))["reason"] == "occupied"
+    rt.execute("_G.now = _G.now - 5")
+    ask(rt, 2, "save", "save_004", REQ)
+    assert g(rt, "reloads") == 2
+
+
+def test_TWIN_a_list_under_60_s_old_is_not_reloaded():
+    rt = _rt()
+    assert _adv(ask(rt, 1, "save", "save_001", REQ))["reason"] == "occupied"
+    rt.execute("_G.now = _G.now + 59")
+    ask(rt, 2, "save", "save_004", REQ)
+    assert g(rt, "reloads") == 1
+
+
+def test_RED_our_own_save_makes_the_next_request_reload():
+    """Vanilla reloads after its own delete (gameoptions.lua:8119); a save changes the list too."""
+    rt = _rt()
+    assert ask(rt, 1, "save", "save_004", REQ).status == "OK"
+    ask(rt, 2, "save", "save_005", "f" * 32)
+    assert g(rt, "reloads") == 2
+
+
+def test_RED_a_failed_reload_declaration_or_call_refuses():
+    rt = _rt(pre='_G.cdef_raises_on = "ReloadSaveList"')
+    r = ask(rt, 1, "save", "save_004", REQ)
+    assert _adv(r)["reason"] == "unreadable" and "ReloadSaveList" in r.payload, r.payload
+    assert _calls(rt) == 0 and ask(rt, 2, "ping").status == "OK"
+    rt = _rt(code="_G.reload_raises = true")
+    r = ask(rt, 1, "save", "save_004", REQ)
+    assert _adv(r)["reason"] == "unreadable" and _calls(rt) == 0, r.payload
 
 
 def test_save_lives_only_in_WRITE_VERBS():

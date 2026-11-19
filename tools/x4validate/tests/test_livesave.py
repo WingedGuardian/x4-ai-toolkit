@@ -438,3 +438,256 @@ def test_the_slot_rule_is_the_slot_verifiers_rule():
     assert _livesave.SLOT is P.STANDARD_SAVE_SLOT
     assert [s for s in (f"save_{i:03}" for i in range(0, 13)) if _livesave.SLOT.fullmatch(s)] == [
         f"save_{i:03}" for i in range(1, 11)]
+
+
+# --------------------------------------------------------------------------- 4.3 review D1-D3
+
+
+def _serve_opening(monkeypatch, engine, during_open):
+    """A pipe whose connect takes a while (`_live_open` can wait up to 15 s for the game),
+    during which `during_open()` happens to the save folder."""
+    @contextlib.contextmanager
+    def fake(p, timeout):
+        during_open()
+        yield engine
+
+    monkeypatch.setattr(C, "_live_open", fake)
+
+
+def test_RED_a_save_landing_in_the_slot_while_the_pipe_opens_is_refused_unsent(world, monkeypatch,
+                                                                              capsys):
+    """Two concurrent `x4live save save_004`: the other run's save lands while this one is
+    still connecting. The occupancy check must be re-taken right before asking."""
+    save, clk = world
+    engine = Engine(save, clk)
+    _serve_opening(monkeypatch, engine, lambda: _gz(save / "save_004.xml.gz", "x4live-other"))
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 2 and "occupied" in err, out + err
+    assert engine.asks == [], "an occupied slot must never be asked for"
+    assert "Nothing was sent" in err
+
+
+def test_TWIN_a_bystander_change_while_the_pipe_opens_is_not_blamed_on_the_save(world, monkeypatch,
+                                                                              capsys):
+    """The manifest is re-taken with the occupancy check, so a change BEFORE the request
+    (an autosave while connecting) is not reported as one the save made."""
+    save, clk = world
+    engine = Engine(save, clk)
+    _serve_opening(monkeypatch, engine, lambda: (save / "quicksave.xml.gz").write_bytes(b"new"))
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 0, out + err
+    assert len(engine.asks) == 1
+
+
+def test_TWIN_a_folder_unreadable_while_the_pipe_opens_is_refused_unsent(world, monkeypatch, capsys):
+    save, clk = world
+    engine = Engine(save, clk)
+    real, calls = _livesave.snapshot, []
+
+    def second_fails(d):
+        calls.append(d)
+        if len(calls) == 2:
+            raise _livesave.PersistenceUnavailable("linked route (test)")
+        return real(d)
+    monkeypatch.setattr(_livesave, "snapshot", second_fails)
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 2 and "cannot be read safely" in err and engine.asks == [], out + err
+    assert len(calls) == 2
+
+
+class LoadingEngine(Engine):
+    """Answers `catalogue-loading` (acted=no, writes nothing) to the first `loading` asks."""
+
+    def __init__(self, *a, loading=1, during_retry=None, **kw):
+        super().__init__(*a, **kw)
+        self.loading, self.during_retry = loading, during_retry
+
+    def ask(self, verb, *args):
+        if self.loading > 0:
+            self.loading -= 1
+            self.asks.append((verb, args))
+            slot, req = args
+            adv = (f"write=yes verb=save reason=catalogue-loading acted=no slot={slot} "
+                   f"label=x4live-{req} build=deadbeef")
+            if self.during_retry:
+                self.during_retry(self.save_dir)
+            return _livepipe.Reply(seq=1, status="ERR", payload=adv + "\tstill loading")
+        return super().ask(verb, *args)
+
+
+def test_RED_a_catalogue_still_loading_is_asked_again_with_the_same_request(world, monkeypatch,
+                                                                            capsys):
+    save, clk = world
+    engine = LoadingEngine(save, clk, loading=2)
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 0, out + err
+    assert len(engine.asks) == 3 and len({a[1] for a in engine.asks}) == 1, engine.asks
+
+
+def test_TWIN_a_catalogue_that_never_loads_is_a_refusal_after_a_bounded_wait(world, monkeypatch,
+                                                                             capsys):
+    save, clk = world
+    engine = LoadingEngine(save, clk, loading=10 ** 6)
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 1 and "reason=catalogue-loading" in out, out + err
+    assert 2 <= len(engine.asks) <= 1 + _livesave.CATALOGUE_WAIT_S / _livesave.POLL_S + 1
+    assert clk.t <= _livesave.CATALOGUE_WAIT_S + 1
+
+
+def test_RED_the_slot_is_rechecked_before_every_retry(world, monkeypatch, capsys):
+    """Another run's save lands while this one waits to ask again: refused, not asked."""
+    save, clk = world
+    engine = LoadingEngine(save, clk, loading=1)
+    clk.hooks.append(lambda c: _gz(save / "save_004.xml.gz", "x4live-other"))
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 2 and "occupied" in err and "Nothing more was sent" in err, out + err
+    assert len(engine.asks) == 1
+
+
+def test_TWIN_a_folder_change_during_a_loading_refusal_is_not_retried_but_reported(world,
+                                                                                 monkeypatch,
+                                                                                 capsys):
+    """A refusal that acted on nothing must leave the folder as it was; if it did not, that
+    is reported (exit 3), never papered over by asking again."""
+    save, clk = world
+    engine = LoadingEngine(save, clk, loading=1,
+                           during_retry=lambda s: (s / "quicksave.xml.gz").write_bytes(b"x"))
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 3 and "changed: quicksave.xml.gz" in out, out + err
+    assert len(engine.asks) == 1
+
+
+def test_RED_a_lost_reply_on_the_retry_is_not_answered_by_the_earlier_refusal(world, monkeypatch,
+                                                                             capsys):
+    """The retry's reply is lost after SaveGame ran: the slot is read. The first ask's
+    `catalogue-loading` refusal must not stand in for it (that read exit 1, 'refused')."""
+    save, clk = world
+    engine = LoadingEngine(save, clk, loading=1,
+                           raises=_livepipe.LiveQueryUnavailable("rehearsed loss"))
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 0 and "reply was lost" in (out + err), out + err
+    assert len(engine.asks) == 2
+
+
+@pytest.mark.parametrize("old,new", [("acted=no", "acted=yes"),
+                                     ("slot=save_004", "slot=save_005"),
+                                     ("reason=catalogue-loading", "reason=not-saveable")])
+def test_TWIN_each_clause_of_a_loading_refusal_is_needed_to_ask_again(old, new, world,
+                                                                     monkeypatch, capsys):
+    save, clk = world
+    engine = LoadingEngine(save, clk, loading=1)
+    real = engine.ask
+
+    def altered(verb, *args):
+        r = real(verb, *args)
+        return _livepipe.Reply(seq=1, status=r.status, payload=r.payload.replace(old, new, 1))
+    engine.ask = altered
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004", "--settle-timeout", "5")
+    assert len(engine.asks) == 1 and rc in (1, 3), (rc, out + err)
+
+
+def test_TWIN_a_retry_is_not_made_for_another_requests_refusal(world, monkeypatch, capsys):
+    """Only THIS request's trusted catalogue-loading refusal is asked again."""
+    save, clk = world
+    engine = LoadingEngine(save, clk, loading=1)
+    real = engine.ask
+
+    def other_label(verb, *args):
+        r = real(verb, *args)
+        return _livepipe.Reply(seq=1, status=r.status,
+                               payload=r.payload.replace(f"label=x4live-{args[1]}",
+                                                         "label=x4live-" + "f" * 32))
+    engine.ask = other_label
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004", "--settle-timeout", "5")
+    assert rc == 3 and len(engine.asks) == 1, out + err
+
+
+@pytest.mark.parametrize("name", ["ſteam_autocloud.vdf",      # LATIN SMALL LETTER LONG S
+                                  "ﬆeam_autocloud.vdf",       # LATIN SMALL LIGATURE ST
+                                  "ﬅeam_autocloud.vdf"])      # LATIN SMALL LIGATURE LONG S T
+def test_RED_an_autocloud_look_alike_is_not_excepted(name):
+    """casefold() maps each of these onto the ASCII name; only the real file is excepted."""
+    assert not _livesave.is_autocloud(name)
+    assert _livesave.compare({name: {"size": 1}}, {name: {"size": 2}}, None, []) == [
+        f"changed: {name}"]
+
+
+@pytest.mark.parametrize("name", ["steam_autocloud.vdf", "STEAM_AUTOCLOUD.VDF",
+                                  "Steam_AutoCloud.Vdf"])
+def test_TWIN_the_real_autocloud_name_in_any_ascii_case_is_excepted(name):
+    assert _livesave.is_autocloud(name)
+    notes = []
+    assert _livesave.compare({name: {"size": 1}}, {name: {"size": 2}}, None, notes) == []
+    assert len(notes) == 1
+
+
+class OldHelper(Engine):
+    """Helper 102: the dispatcher does not know `save` and runs nothing (live_query.lua's
+    `unknown verb: ` reply, sent before any verb function is looked up)."""
+
+    def ask(self, verb, *args):
+        self.asks.append((verb, args))
+        if self.side:
+            self.side(self.save_dir)
+        return _livepipe.Reply(seq=1, status="ERR", payload=f"unknown verb: {verb}")
+
+
+def test_RED_a_helper_without_save_is_a_refusal_without_waiting(world, monkeypatch, capsys):
+    save, clk = world
+    engine = OldHelper(save, clk)
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 1, out + err
+    assert clk.sleeps == 0, "nothing was acted, so there is no slot to wait for"
+    assert "103" in out and "nothing in the save folder changed" in out
+    assert len(engine.asks) == 1
+
+
+def test_TWIN_a_helper_without_save_while_the_folder_changed_is_untrusted(world, monkeypatch,
+                                                                          capsys):
+    save, clk = world
+    engine = OldHelper(save, clk, side=lambda s: (s / "quicksave.xml.gz").write_bytes(b"x"))
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 3 and "quicksave.xml.gz" in out, out + err
+
+
+@pytest.mark.parametrize("status,payload", [("ERR", "unknown verb: pause"),
+                                            ("ERR", "unknown verb: save extra"),
+                                            ("ERR", "unknown verb: saves"),
+                                            ("OK", "unknown verb: save")])
+def test_TWIN_only_the_exact_unknown_verb_save_reply_counts(status, payload, world, monkeypatch,
+                                                            capsys):
+    save, clk = world
+    engine = OldHelper(save, clk)
+    engine.ask = lambda verb, *a: (engine.asks.append((verb, a)),
+                                   _livepipe.Reply(seq=1, status=status, payload=payload))[1]
+    _serve(monkeypatch, engine)
+    rc, out, err = _run(capsys, "save_004", "--settle-timeout", "5")
+    assert rc == 3 and clk.sleeps > 0, out + err
+
+
+def test_RED_a_bad_slot_is_refused_before_the_save_folder_is_resolved(monkeypatch, capsys):
+    """qa_sweep's offline cell relies on this order: the slot first, then the folder."""
+    def unresolvable():
+        raise AssertionError("the save folder was resolved for a refused slot")
+    monkeypatch.setattr(C._paths, "savegames", unresolvable)
+    _never_open(monkeypatch)
+    rc, out, err = _run(capsys, "save_*")
+    assert rc == 2 and "exactly one standard slot" in err, out + err
+
+
+def test_TWIN_a_good_slot_does_resolve_the_save_folder(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(C._paths, "savegames", lambda: calls.append(1))
+    _never_open(monkeypatch)
+    rc, out, err = _run(capsys, "save_004")
+    assert rc == 2 and calls == [1] and "not configured" in err, out + err
