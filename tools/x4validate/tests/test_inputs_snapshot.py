@@ -236,6 +236,24 @@ def test_TWIN_a_store_with_its_snapshot_proceeds(tmp_path, monkeypatch):
     assert why == [] and snap is not None and snap.path == _inputs.snapshot_path(db)
 
 
+def test_a_snapshot_from_ANOTHER_build_refuses(tmp_path, monkeypatch):
+    """The store records which manifest it was built from; a snapshot that is intact and
+    self-consistent but belongs to another build (a swap that raced, a copied folder) must
+    not pass. Killed hand mutant M1 (manifest-sha compare removed)."""
+    db, ref, _ = _build(tmp_path, monkeypatch)
+    _set_meta(db, "input_snapshot", "f" * 64)
+    _, why = _prove(db, ref)
+    assert any("not the one this store was built from" in w for w in why), why
+
+
+def test_the_stores_content_digest_must_be_the_snapshots(tmp_path, monkeypatch):
+    """Killed hand mutant M10 (content-digest compare removed)."""
+    db, ref, _ = _build(tmp_path, monkeypatch)
+    _set_meta(db, "fingerprint_content", "0" * 16)
+    _, why = _prove(db, ref)
+    assert any("content digest is not the snapshot's" in w for w in why), why
+
+
 def test_a_missing_snapshot_folder_refuses(tmp_path, monkeypatch):
     import shutil
     db, ref, _ = _build(tmp_path, monkeypatch)
