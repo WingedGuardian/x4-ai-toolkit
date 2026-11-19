@@ -308,10 +308,17 @@ _PROBE = "x4ct_probe_attr"
 
 
 class _NoProv:
-    """A Recorder stand-in: flatten_with_prov only asks it for attribute chains."""
+    """A Recorder stand-in: flatten_with_prov asks it for attribute chains; extract_components
+    (the component key, 4.3) also for an element's chain and winner."""
 
     def attr_chain(self, el, attr):
         return []
+
+    def elem_chain(self, el):
+        return []
+
+    def winner(self, el):
+        return type("_W", (), {"source": ""})()
 
 
 def _store_key(entity_el, kind: str, node) -> str | None:
@@ -343,7 +350,15 @@ def _store_key(entity_el, kind: str, node) -> str | None:
     rec = _NoProv()
     saved = list(_effective.truncated_props)       # flatten appends to a module global
     try:
-        if kind == "macro":
+        if kind == "component":
+            # The store keys a component by `_effective.extract_components`: its own attributes
+            # (`@attr`) and its connection slots (`connection[<name>]`, `#n` for a repeat), nothing
+            # deeper. Ask that extractor, as for every other kind.
+            rows = [(p, v, n, c) for e in _effective.extract_components(clone, "", rec)
+                    for p, v, n, c in e.attrs]
+            if any(p == "@" + _PROBE for p, *_ in rows):
+                return ""
+        elif kind == "macro":
             props = clone.find("properties")
             if target is props:
                 return ""                           # <properties> itself = the entity
@@ -377,6 +392,8 @@ def _entity_of(con, form: str, node) -> tuple[str, str, object] | str:
         for kind in kinds:
             if kind == "macro":
                 tag, key = "macro", "name"
+            elif kind == "component":                  # 4.3: per-connection HARD rows (F387)
+                tag, key = "component", "name"
             elif kind in specs:
                 tag, key = specs[kind]
             else:
@@ -385,7 +402,7 @@ def _entity_of(con, form: str, node) -> tuple[str, str, object] | str:
                 if (kind, el.get(key)) in stored:
                     return kind, el.get(key), el
                 return ENTITY_REMOVED
-    if any(k not in specs and k != "macro" for k in kinds):
+    if any(k not in specs and k not in ("macro", "component") for k in kinds):
         return UNMAPPED_KIND
     return WHOLE_DOCUMENT
 
