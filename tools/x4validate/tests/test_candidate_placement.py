@@ -66,7 +66,7 @@ def _before_stats(ext: Path, cand: Path, cfg, monkeypatch) -> list[str]:
     class _R:
         tree = None
 
-    def fake(vpath, config, extra_overlays=()):
+    def fake(vpath, config, extra_overlays=(), **_kw):   # 4.3: x4stats also passes index_roots
         seen.append([Path(p).name for p in extra_overlays])
         return _R()
     monkeypatch.setattr(_stats._merge, "build_effective", fake)

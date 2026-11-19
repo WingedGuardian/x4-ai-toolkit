@@ -14241,7 +14241,8 @@ User decisions 2026-11-18: only `<remove>` followed by an add revives (a `<repla
 children), and a `{page,id}` game-text name is no identity. MEASURED on the live install, item-4 head vs this head:
 +10 advisory re-add rows (all declared); HARD+SUBTREE+FULL-OVERRIDE 230 -> 262 (+41/-5 one mod's own remove-and-re-add of
 connections over another mod's `@tags` edits, replacing 2 SUBTREE rows; -4 rows moved to advisory; +-1 a SUBTREE row
-gaining its target path). Hand mutants: 10 of 10 killed.
+gaining its target path). Hand mutants: 10 of 10 killed. Re-derived by tests/test_compat_readd_nested.py and
+tests/test_compat_readd.py (the replace twin: a `<replace>` never revives an identity an earlier mod removed).
 
 ## F388 - test_workflow_ownership accepted a trailing comment on timeout-minutes that the shared CI contract rejects · **DEFECT (measured)** · IN-ARC · confidence 95% · FIXED 2026-11-18
 

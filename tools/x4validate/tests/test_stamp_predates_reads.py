@@ -90,7 +90,11 @@ def test_effective_fingerprint_is_taken_before_the_first_mod_read(world, tmp_pat
     monkeypatch.setattr(_freshness, "fingerprint", lambda *a, **k: (order.append("fingerprint"), real_fp(*a, **k))[1])
     monkeypatch.setattr(_effective, "active_mods", lambda *a, **k: (order.append("mods"), real_mods(*a, **k))[1])
     _effective.build(_merge.Config(reference=ref), tmp_path / "s.sqlite", dirs=[exts], kinds=("ware",))
-    assert order[:2] == ["fingerprint", "mods"], order
+    # 4.3: the build takes the input snapshot first, which fingerprints the live inputs before copying them, so
+    # the order is now fingerprint, fingerprint, mods. The invariant is unchanged: no mod is read before a
+    # fingerprint, and the last fingerprint before the first mod read is still before it.
+    assert "mods" in order and "fingerprint" in order, order
+    assert order.index("fingerprint") < order.index("mods"), order
 
 
 def test_effective_build_refuses_a_mutated_tree_before_hashing_it(world, tmp_path, monkeypatch):
