@@ -871,6 +871,11 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
     # before the copy and PROVEN unchanged after it (`_inputs.take` retakes, then refuses). So
     # a mod edited mid-build can no longer reach the store, and cross_tool can run x4compat
     # over the same bytes later without a modlist hold. Same roots `scan_installed` walks.
+    # ORDER: the store is installed first (`_write_db`), the snapshot second. A failure in
+    # `_inputs.install` therefore leaves the NEW store without its snapshot (the old one is
+    # restored, or none): that fails CLOSED -- the store's `input_snapshot` names a manifest
+    # `<db>.inputs` does not hold, so `_inputs.prove` refuses and cross_tool cannot run until
+    # a rebuild. The store's own answers are unaffected.
     roots = list(dirs or _registry.default_installed_dirs())
     snap = _inputs.take(db_path, roots, lambda: _freshness.fingerprint(config, _ext_root(config)),
                         progress)
