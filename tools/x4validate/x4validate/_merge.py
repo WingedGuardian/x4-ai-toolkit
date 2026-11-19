@@ -1538,10 +1538,13 @@ def nested_copy_merges(vpath: str, config: Config, roots):
 
 
 def _index_redirect(vpath: str, config: Config, overlay_dirs: list[Path], roots: tuple,
-                    recorder: Recorder | None, index_skip: list[str]) -> MergeResult | None:
+                    recorder: Recorder | None, index_skip: list[str],
+                    index_unmeasured: list[str]) -> MergeResult | None:
     """`build_effective`'s index step (F383): a MergeResult when the effective index of
     *roots* changes which document the engine loads, else None (the ordinary doors run).
-    A partial index adds one line to *index_skip* and changes nothing else."""
+    A partial index adds one line to *index_skip* and changes nothing else; an index naming
+    a copier that is not merged here adds one line to *index_unmeasured* (the plain model
+    stands, but it is not the document the engine loads)."""
 
     def partial(p: IndexPartial, rel: str) -> None:
         index_skip.append(
@@ -1566,7 +1569,14 @@ def _index_redirect(vpath: str, config: Config, overlay_dirs: list[Path], roots:
             return None
         owner_dir = next((d for d in overlay_dirs if d.name.lower() == got.owner.lower()), None)
         if owner_dir is None:
-            return None   # the copier is not among the layers merged here: the plain model
+            # The copier is not among the layers merged here: no document to build, so the
+            # plain model stands -- and must say it is not what the engine loads.
+            index_unmeasured.append(
+                f"{vpath}: the effective index entry for this file's name points at "
+                f"'{got.value}', '{got.owner}''s own complete copy, but '{got.owner}' is not "
+                f"among the layers merged here, so this tree is the plain-path model, not the "
+                f"document the engine loads (BLIND-SPOTS F383)")
+            return None
         if recorder is not None:
             # The copier's nodes are ITS values, never the game's "base".
             recorder.full_override(Origin(owner_dir.name, "own-document(index)"), had_base=True)
@@ -1625,14 +1635,16 @@ def build_effective(
     dlc_layers = config.dlc_dirs()
     overlay_dirs = dlc_layers + list(config.overlays) + list(extra_overlays or [])
     index_skip: list[str] = []
+    index_unmeasured: list[str] = []
     if index_roots is not None:
         redirected = _index_redirect(vpath, config, overlay_dirs, tuple(index_roots),
-                                     recorder, index_skip)
+                                     recorder, index_skip, index_unmeasured)
         if redirected is not None:
             return redirected
-    if index_skip:
+    if index_skip or index_unmeasured:
         res = build_effective(vpath, config, extra_overlays, recorder)
         res.skipped.extend(index_skip)
+        res.unmeasured.extend(index_unmeasured)
         return res
 
     # Cross-mod nesting: a file at  <mymod>/extensions/<target>/<rel>  patches

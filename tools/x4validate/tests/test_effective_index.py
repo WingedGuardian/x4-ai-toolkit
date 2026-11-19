@@ -183,12 +183,22 @@ def test_TWIN_index_roots_with_no_complete_copy_among_the_layers(tmp_path):
 
 def test_TWIN_index_roots_with_the_copier_not_merged_here(tmp_path):
     """The index names a_copy, but only b and a second copier are merged: no document to
-    build, so the plain model stands."""
+    build, so the plain model stands -- and SAYS so (a step that narrows must announce it):
+    the tree is not the document the engine loads."""
     ref, a, b, c = _world(tmp_path)
     d = tmp_path / "extensions" / "d_copy"
     _w(d / REL, _macro(4))
     res = _merge.build_effective(REL, _cfg(ref, b, d), index_roots=[a, b, c, d])
     assert res.never_opened == [] and "d_copy:merge" in res.sources, res.sources
+    notes = [u for u in res.unmeasured if "not among the layers merged here" in u]
+    assert len(notes) == 1 and "a_copy" in notes[0] and "F383" in notes[0], res.unmeasured
+    assert res.skipped == [], "the plain model is a disclosure, not a skip"
+
+
+def test_TWIN_index_roots_with_the_copier_merged_carry_no_not_merged_note(tmp_path):
+    ref, a, b, c = _world(tmp_path)
+    res = _merge.build_effective(REL, _cfg(ref, a, b, c), index_roots=[a, b, c])
+    assert not [u for u in res.unmeasured if "not among the layers merged here" in u]
 
 
 def test_TWIN_index_roots_a_partial_index_is_a_skip_on_the_plain_model(tmp_path):
