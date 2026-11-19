@@ -24,6 +24,9 @@ def sd(tmp_path, monkeypatch):
     # Off unless a test turns it on: no test may start a real background BaseX build.
     monkeypatch.setenv("X4_FRESH_BASEX_AUTO", "off")
     monkeypatch.setattr(fc, "_spawn_basex", lambda note: pytest.fail("a real background BaseX build was started"))
+    # Nor a real FOREGROUND build: an unstubbed rebuild(("x4eff",)) ran build-effective.sh against the real install
+    # on a configured machine (2026-11-18, the 4.3 snapshot lane). A test that builds stubs fc.builder itself.
+    monkeypatch.setattr(fc, "builder", lambda name: pytest.fail(f"a real {name} builder was started"))
     monkeypatch.setattr(fc, "_world_digest", lambda: "world")
     # No test reads the real BaseX home for a waiting swap; the tests of that read point it at a private one.
     monkeypatch.setattr(fc, "_basex_swap_pending", lambda db: False)
@@ -644,7 +647,8 @@ def test_a_mutation_gate_skip_by_hand_is_not_a_success(sd, monkeypatch, capsys):
 
 def test_only_the_requested_artifacts_decide_the_exit_code(sd, monkeypatch):
     before = {n: (STALE(n) if n == "x4eff" else FRESH(n)) for n in fc.ORDER}
-    _world(monkeypatch, before, before)
+    built = _world(monkeypatch, before, before)
+    _fake_builder(monkeypatch, built, "import sys; sys.exit(1)")   # never the real build-effective.sh
     assert fc.rebuild(("effective",)) == 0
     assert fc.rebuild(("x4eff",)) != 0
 
