@@ -428,11 +428,11 @@ def _gate(name):
     return hermetic_gate(name)
 
 
-def _store_con(tmp_path, monkeypatch, index_roots: bool):
+def _store_con(tmp_path, monkeypatch, index_roots: bool, copier_index=ADD_OWN):
     import sqlite3
 
     from x4validate import _effective
-    ref, a, b, c = _world(tmp_path)
+    ref, a, b, c = _world(tmp_path, copier_index=copier_index)
     # `[1]`: one node in either model, so only the index decides whether b's value lands.
     _w(b / REL, "<diff><replace sel=\"/macros/macro[@name='ship_x_macro'][1]/properties"
                 "/hull/@max\">7</replace></diff>")
@@ -451,13 +451,42 @@ def _store_con(tmp_path, monkeypatch, index_roots: bool):
 
 def test_cross_tool_a_never_opened_mod_is_no_store_origin(tmp_path, monkeypatch):
     con, rep = _store_con(tmp_path, monkeypatch, index_roots=True)
-    assert _gate("cross_tool").never_opened_origins(con, rep) == (1, [])
+    assert _gate("cross_tool").never_opened_origins(con, rep) == (1, [], 0)
 
 
 def test_TWIN_cross_tool_goes_red_on_a_store_built_without_the_index(tmp_path, monkeypatch):
     con, rep = _store_con(tmp_path, monkeypatch, index_roots=False)
-    n, bad = _gate("cross_tool").never_opened_origins(con, rep)
-    assert n == 1 and len(bad) == 1 and "b_patch" in bad[0], bad
+    n, bad, nested = _gate("cross_tool").never_opened_origins(con, rep)
+    assert n == 1 and len(bad) == 1 and "b_patch" in bad[0] and nested == 0, bad
+
+
+def test_cross_tool_a_NESTED_never_opened_row_is_not_counted_as_agreement(tmp_path, monkeypatch,
+                                                                          capsys):
+    """A nested never-opened patch (the copy merges at the plain path) has no value in the
+    store at either spelling in EITHER model, so "it is no store origin" cannot go red: it is
+    printed as not compared [explained] and kept out of the agreement count; with nothing else
+    to compare the section could not run (0 of N is a non-answer)."""
+    gate = _gate("cross_tool")
+    for idx in (True, False):
+        con, rep = _store_con(tmp_path / str(idx), monkeypatch, index_roots=idx,
+                              copier_index=None)
+        assert [n.mod for n in rep.never_opened] == ["c_nest"], rep.never_opened
+        assert gate.never_opened_origins(con, rep) == (0, [], 1), idx
+        monkeypatch.undo()
+    gate.failures.clear(); gate.cannot.clear()
+    gate.check_never_opened_origins(con, rep)
+    out = capsys.readouterr().out
+    assert "not compared x1 [explained]" in out and gate.failures == [], out
+    assert len(gate.cannot) == 1 and "0/0 plain-path" in gate.cannot[0], gate.cannot
+    gate.cannot.clear()
+    # Not compared means NOT COMPARED: even a planted origin cannot turn the row into a verdict.
+    import sqlite3
+    planted = sqlite3.connect(":memory:")
+    planted.execute("CREATE TABLE entities (id INTEGER, vpath TEXT, origin TEXT)")
+    planted.execute("CREATE TABLE attrs (entity_id INTEGER, origin TEXT)")
+    planted.execute("INSERT INTO entities VALUES (1, ?, 'c_nest')", (REL.lower(),))
+    planted.execute("INSERT INTO attrs VALUES (1, 'c_nest')")
+    assert gate.never_opened_origins(planted, rep) == (0, [], 1)
 
 
 def test_tool_properties_a_never_opened_mod_is_never_a_winner(tmp_path):

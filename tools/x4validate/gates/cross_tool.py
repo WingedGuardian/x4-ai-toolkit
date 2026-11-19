@@ -772,29 +772,51 @@ def _agreement(db: Path) -> None:
     con.close()
 
 
-def never_opened_origins(con, report) -> tuple[int, list[str]]:
-    """(files checked, violations): a mod x4compat lists as NEVER OPENED on a vpath (F383)
-    must be no origin -- of an entity or of an attribute -- the store holds for that vpath.
-    The store builds the index's document (`build_effective(index_roots=...)`), so a
-    never-opened plain-path diff writes no value; a store built without the index would."""
+#: Why a NESTED NEVER OPENED row (`extensions/<owner>/<rel>`) is not compared: the store
+#: holds no value of such a patch at EITHER spelling in either model (MEASURED 2026-11-18 on
+#: the test fixture: with and without the index, the never-opened nested patcher is no store
+#: origin), so "it is no origin" could never go red -- counting it would be agreement by
+#: construction.
+NESTED_NOT_COMPARABLE = ("a nested patch on a copy that merges at the plain path: no store "
+                         "model holds its values at either spelling, so no origin can disagree")
+
+
+def never_opened_origins(con, report) -> tuple[int, list[str], int]:
+    """(files checked, violations, nested files not compared): a mod x4compat lists as NEVER
+    OPENED on a PLAIN vpath (F383) must be no origin -- of an entity or of an attribute -- the
+    store holds for that vpath. The store builds the index's document
+    (`build_effective(index_roots=...)`), so a never-opened plain-path diff writes no value; a
+    store built without the index would. A NESTED row is counted apart
+    (`NESTED_NOT_COMPARABLE`), never as agreement."""
     files = sorted({(n.vpath, n.mod) for n in getattr(report, "never_opened", ())})
+    nested = [(v, m) for v, m in files
+              if _compat._strip_nesting(v) != v.replace("\\", "/").lower().lstrip("/")]
     bad = []
     for vpath, mod in files:
+        if (vpath, mod) in nested:
+            continue
         origins = _origins(con, vpath, "attrs") | _origins(con, vpath, "entities")
         if mod in origins:
             bad.append(f"{vpath}: never-opened {mod!r} is a store origin")
-    return len(files), bad
+    return len(files) - len(nested), bad, len(nested)
 
 
 def check_never_opened_origins(con, report) -> None:
-    n, bad = never_opened_origins(con, report)
-    if not n:
+    n, bad, nested = never_opened_origins(con, report)
+    if not n and not nested:
         print("          NEVER OPENED: none on this install")
         return
+    if nested:
+        print(f"          NEVER OPENED not compared x{nested} [explained]: {NESTED_NOT_COMPARABLE}")
     for line in bad[:3]:
         print(f"          {line}")
-    note(not bad, "NEVER OPENED: a mod the engine never opens is no store origin",
-         f"{n - len(bad)}/{n} file(s) clean")
+    label = "NEVER OPENED: a mod the engine never opens is no store origin"
+    detail = f"{n - len(bad)}/{n} plain-path file(s) clean ({nested} nested not compared)"
+    if not n:
+        # 0 of N is a non-answer: every row was explained out, so nothing agreed.
+        not_run(label, detail)
+        return
+    note(not bad, label, detail)
 
 
 # ------------------------------------------------------ 3. builder idempotence
