@@ -10,9 +10,10 @@ x4compat against the same snapshot after PROVING it is the one the store was bui
 That also closes the mid-build-edit gap: the store can no longer read a mod file that
 changed after the fingerprint was taken.
 
-WHAT IS COPIED (MEASURED 2026-11-18 on the live install, 240 mod folders: the engine-
-relevant files are 13.8 GB, almost all `.dat` textures; the XML a build reads is ~82 MB
--- 36 MB loose, 46 MB packed -- so a full copy, or hardlinks, are ruled out):
+WHAT IS COPIED (MEASURED 2026-11-18, a read-only census of the live install mirroring
+`_copy_root`: 240 mod folders in 3 roots, 22,479 files, 85.0 MB -- 36.3 MB loose
+XML/XSD/Lua, 45.6 MB kept packed members, 3.1 MB catalog text. Everything else, almost all
+`.dat` textures, becomes a stub, which is why a full copy or hardlinks are ruled out):
 
 * every loose ``.xml`` / ``.xsd`` / ``.lua`` file, byte for byte;
 * every other loose file as a 0-byte NAME STUB, so a directory listing (wildcard icon
