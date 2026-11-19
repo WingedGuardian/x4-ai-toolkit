@@ -723,9 +723,35 @@ def check_cross_tool_agreement() -> None:
         note(not named, "NAME-CLASH: winner left empty (index/macros.xml decides)",
              f"{len(clashes) - len(named)}/{len(clashes)} empty")
 
+    check_never_opened_origins(con, report)
     soft = len(by_kind.get("SOFT", []))
     print(f"          (SOFT {soft} not cross-checked: benign coexistence, no winner claim)")
     con.close()
+
+
+def never_opened_origins(con, report) -> tuple[int, list[str]]:
+    """(files checked, violations): a mod x4compat lists as NEVER OPENED on a vpath (F383)
+    must be no origin -- of an entity or of an attribute -- the store holds for that vpath.
+    The store builds the index's document (`build_effective(index_roots=...)`), so a
+    never-opened plain-path diff writes no value; a store built without the index would."""
+    files = sorted({(n.vpath, n.mod) for n in getattr(report, "never_opened", ())})
+    bad = []
+    for vpath, mod in files:
+        origins = _origins(con, vpath, "attrs") | _origins(con, vpath, "entities")
+        if mod in origins:
+            bad.append(f"{vpath}: never-opened {mod!r} is a store origin")
+    return len(files), bad
+
+
+def check_never_opened_origins(con, report) -> None:
+    n, bad = never_opened_origins(con, report)
+    if not n:
+        print("          NEVER OPENED: none on this install")
+        return
+    for line in bad[:3]:
+        print(f"          {line}")
+    note(not bad, "NEVER OPENED: a mod the engine never opens is no store origin",
+         f"{n - len(bad)}/{n} file(s) clean")
 
 
 # ------------------------------------------------------ 3. builder idempotence

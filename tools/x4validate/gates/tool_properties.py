@@ -341,6 +341,33 @@ def _union_dir_excused(shared: dict[str, list[str]], ext: Path
     return excused, clashes
 
 
+def never_opened_winners(report) -> list[str]:
+    """Rows naming, on a vpath, a mod x4compat lists as NEVER OPENED there (F383) as a
+    winner, a wiper, a remover or a participant at all. A file the engine never reads
+    cannot win anything; the list must be empty."""
+    never = {(n.vpath.lower(), n.mod.lower()) for n in getattr(report, "never_opened", ())}
+    bad = []
+    for c in report.collisions:
+        names = {m.lower() for m in c.mods} | {
+            (getattr(c, k, "") or "").lower() for k in ("winner", "wiped_by", "removed_by")}
+        for v in {c.vpath.lower(), _compat._strip_nesting(c.vpath)}:
+            bad += [f"{c.kind} {c.vpath}: {m}" for (nv, m) in never if nv == v and m in names]
+    for group in ("readded_after_removal", "dependent_overwrites"):
+        for r in getattr(report, group, ()):
+            if (r.vpath.lower(), r.mod.lower()) in never:
+                bad.append(f"{group} {r.vpath}: {r.mod}")
+    return bad
+
+
+def _check_never_opened_wins_nothing(report) -> None:
+    bad = never_opened_winners(report)
+    for line in bad[:3]:
+        print(f"          never-opened mod named: {line}")
+    note(not bad, "a mod the engine never opens (F383) is never a winner or participant",
+         f"{len(getattr(report, 'never_opened', ()))} never-opened op(s) against "
+         f"{len(report.collisions)} collision(s)")
+
+
 def check_x4compat() -> None:
     print("\nx4compat")
     report = _compat.analyze(EXT, config=_merge.Config())
@@ -390,6 +417,7 @@ def check_x4compat() -> None:
          f"{len(file_level)} file-level collisions checked")
     note(winnerless == 0, "the mod a collision NAMES is always one of its mods",
          f"{len(file_level)} checked ({subtree_n} of them via wiped_by)")
+    _check_never_opened_wins_nothing(report)
 
     # NAME-CLASH invariants: every named mod must really DEFINE that macro name,
     # and no winner may be claimed (index/macros.xml decides, not load order).

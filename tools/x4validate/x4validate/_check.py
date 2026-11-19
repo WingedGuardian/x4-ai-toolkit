@@ -215,19 +215,27 @@ class EntityDefs:
         self._unreadable_touchers: set[Path] = set()
         owners = {p.name.lower() for p in list(config.overlays) + self._extra}
         for rel in (MACRO_INDEX, _resolve.COMPONENT_INDEX):
-            recorder = _merge.Recorder()
-            merged = _merge.build_effective(rel, config, extra_overlays=self._extra, recorder=recorder)
-            note_dropped_overlays(merged, f"entity definitions ({rel})", self._report)
-            if merged.tree is not None:
-                for entry in merged.tree.xpath("//entry[@name][@value]"):
+            # THE resolver (`_merge.EffectiveIndex`), and within ONE index file the LAST entry
+            # of a name wins, as the engine reads it (F383). This read every entry until 4.3:
+            # MEASURED 2026-11-18 on the live install (236 roots, 11,177 registered names), 17
+            # names had more than one entry and 0 existence verdicts changed either way. The
+            # two index files stay a union (a name in both is registered at both documents).
+            effective = _merge.EffectiveIndex.of(
+                rel, config, list(config.overlays) + self._extra)
+            note_dropped_overlays(effective.result, f"entity definitions ({rel})", self._report)
+            if effective.tree is not None:
+                last: dict[str, tuple[str, str]] = {}
+                for entry in effective.tree.xpath("//entry[@name][@value]"):
                     value = entry.get("value").replace("\\", "/").lstrip("/")
                     if not value.lower().endswith(".xml"):
                         value += ".xml"
-                    source = recorder.winner(entry, "value").source
+                    source = effective.writer(entry)
                     if not value.lower().startswith("extensions/") and (source.lower() in owners or
                             source.lower().startswith("ego_dlc_")):
                         value = "extensions/" + source + "/" + value
-                    self._registered.setdefault(entry.get("name"), []).append(value)
+                    last[entry.get("name").lower()] = (entry.get("name"), value)
+                for name, value in last.values():
+                    self._registered.setdefault(name, []).append(value)
         for rel in LIBRARY_DEFS:
             merged = _merge.build_effective(rel, config, extra_overlays=self._extra)
             note_dropped_overlays(merged, f"entity definitions ({rel})", self._report)
@@ -1285,17 +1293,9 @@ def _warn_if_pathologically_large(diff_root, vpath: str, report: Report) -> None
                    vpath)
 
 
-#: (index vpath, reference, runtime roots) -> (effective index tree, skipped messages).
-#: Cleared at the start of every check_sel_resolution / check_sel_resolution_one run, so a
-#: long-lived process (the per-edit hook's server, a test session) never reads a stale index.
-_INDEX_TREES: dict[tuple, tuple[etree._Element | None, list[str]]] = {}
-
-
-class IndexPartial(NamedTuple):
-    """The runtime index could not be built completely: which document the engine loads for
-    the name is UNKNOWN. Never a verdict either way (F383, review I2)."""
-    index_vpath: str
-    skipped: list[str]
+#: The runtime index could not be built completely: which document the engine loads for the
+#: name is UNKNOWN, never a verdict either way (F383, review I2). ONE type, `_merge`'s.
+IndexPartial = _merge.IndexPartial
 
 
 def _runtime_roots(config: _merge.Config, mod_dir: Path | None) -> list[Path]:
@@ -1309,12 +1309,8 @@ def _runtime_roots(config: _merge.Config, mod_dir: Path | None) -> list[Path]:
 
 
 def _complete_at(root: Path, vpath: str) -> etree._Element | None:
-    """*root*'s COMPLETE (non-diff) file at *vpath*, or None."""
-    try:
-        found = _merge.overlay_root(root, vpath, [])
-    except (etree.LxmlError, OSError, ValueError):
-        return None   # silent-ok: readability is check_readability's channel; no verdict here
-    return found if found is not None and found.tag != "diff" else None
+    """*root*'s COMPLETE (non-diff) file at *vpath*, or None (`_merge.complete_at`)."""
+    return _merge.complete_at(root, vpath)
 
 
 def index_entry(rel: str, mod_dir: Path | None, config: _merge.Config):
@@ -1322,33 +1318,17 @@ def index_entry(rel: str, mod_dir: Path | None, config: _merge.Config):
     file *rel* in the `_merge.plain_copy_index` class whose document the GAME supplies, an
     `IndexPartial` when the runtime index is incomplete, or None (out of scope, or no entry).
 
-    The index is the RUNTIME one (every active mod), and *mod_dir* -- the mod under test, which
-    Tier B leaves out of both trees -- is put back at its load position, right after the
-    patch-time roots: its own index edits count (MEASURED: the patching overlay's index
+    A thin user of `_merge.EffectiveIndex` over the RUNTIME roots (every active mod), with
+    *mod_dir* -- the mod under test, which Tier B leaves out of both trees -- put back at its
+    load position: its own index edits count (MEASURED: the patching overlay's index
     re-pointed 7 of the 13 names back at the base path)."""
-    spec = _merge.plain_copy_index(rel)
-    if spec is None or _merge._nested_target(rel, config.packed_dlc_names()) is not None:
-        return None
-    idx_vpath, name = spec
-    if not _merge.game_supplies(rel, config):
-        # A NEW file (no game document) that a mod indexes at its own path is the ordinary
-        # way to add content; only a copy over a GAME document is the measured shape.
+    if _merge.plain_copy_index(rel) is None:
         return None
     runtime = _runtime_roots(config, mod_dir)
-    key = (idx_vpath, str(config.reference), tuple(str(r) for r in runtime))
-    if key not in _INDEX_TREES:
-        built = _merge.build_effective(
-            idx_vpath, _merge.replace(config, overlays=tuple(runtime), final_overlays=()))
-        _INDEX_TREES[key] = (built.tree, list(built.skipped))
-    tree, skipped = _INDEX_TREES[key]
-    if skipped:
-        return IndexPartial(idx_vpath, skipped)
-    if tree is None:
-        return None   # no index at all: nothing redirects the name
-    values = _merge.index_entries(tree, name)
-    if not values:
-        return None
-    return _merge.normal_index_path(values[-1]), values[-1], len(values), runtime
+    got = _merge.EffectiveIndex.lookup_for(rel, config, runtime)
+    if got is None or isinstance(got, IndexPartial):
+        return got
+    return (*got, runtime)
 
 
 def index_loads_copy(vpath: str, mod_dir: Path | None, config: _merge.Config):
@@ -1356,19 +1336,14 @@ def index_loads_copy(vpath: str, mod_dir: Path | None, config: _merge.Config):
     name of plain-path file *vpath* to `extensions/<owner>/<vpath>` and <owner> ships a
     COMPLETE file at *vpath*: the engine then loads <owner>'s file as its own document, plus
     the nested `extensions/<owner>/` patches, and opens no plain-path `<diff>` on *vpath*
-    (BLIND-SPOTS F383; `_merge.index_loaded_path` has the measurement). An `IndexPartial`
-    when that cannot be decided; None otherwise."""
-    entry = index_entry(vpath, mod_dir, config)
-    if entry is None or isinstance(entry, IndexPartial):
-        return entry
-    loaded, value, count, runtime = entry
-    plain = vpath.replace("\\", "/").lower()[:-4]
-    owner_dir = next((r for r in runtime if loaded == f"extensions/{r.name.lower()}/{plain}"), None)
-    if owner_dir is None:
-        return None
-    if _complete_at(owner_dir, vpath) is None:
-        return None
-    return owner_dir.name, value, count
+    (BLIND-SPOTS F383; `_merge.EffectiveIndex.choice`). An `IndexPartial` when that cannot be
+    decided; None otherwise."""
+    got = _merge.EffectiveIndex.choice(vpath, config, _runtime_roots(config, mod_dir))
+    if isinstance(got, IndexPartial):
+        return got
+    if isinstance(got, _merge.OwnCopy):
+        return got.owner, got.value, got.count
+    return None
 
 
 def _index_partial_skip(vpath: str, part: IndexPartial, report: Report) -> None:
@@ -1501,16 +1476,15 @@ class EngineDocs:
     def _index_tree(self, kind: str):
         idx = self._INDEX[kind]
         if idx not in self._index:
-            built = _merge.build_effective(
-                idx, _merge.replace(self.config, overlays=tuple(self.runtime), final_overlays=()))
-            if built.skipped:
+            built = _merge.EffectiveIndex.of(idx, self.config, self.runtime)
+            if built.partial:
                 self._skip(f"engine document ({idx})",
                            f"the runtime {idx} could not be built completely ({built.skipped[0]}), "
                            "so which document the engine loads for a ship macro/component copied by "
                            "a mod is unknown; those names were not judged (BLIND-SPOTS F383)")
                 self._index[idx] = self.UNKNOWN
             else:
-                self._index[idx] = built.tree
+                self._index[idx] = built
         return self._index[idx]
 
     def node(self, kind: str, name: str):
@@ -1520,13 +1494,13 @@ class EngineDocs:
         return self._nodes[key]
 
     def _resolve(self, kind: str, name: str):
-        tree = self._index_tree(kind)
-        if tree is None:
-            return None
-        values = _merge.index_entries(tree, name) if tree is not self.UNKNOWN else []
-        if tree is self.UNKNOWN:
+        idx = self._index_tree(kind)
+        if idx is self.UNKNOWN:
             # Only a name a copier could have redirected is unknown; the rest keep read_indexed.
             return self.UNKNOWN if self._copied(kind, name) else None
+        if idx.tree is None:
+            return None
+        values = idx.entries(name)
         if not values:
             return None
         raw = values[-1].replace("\\", "/").strip().lstrip("/")
@@ -1828,7 +1802,7 @@ def check_sel_resolution(mod_dir: Path, config: _merge.Config, report: Report) -
     every mode that runs them (full, `--sel-only`, `--file`)."""
     checked = found = 0
     seen_skips: set[str] = set()
-    _INDEX_TREES.clear()   # one run, one index: never a previous run's (review minor 7)
+    _merge.EffectiveIndex.clear()   # one run, one index: never a previous run's (review minor 7)
     payload = []  # one parse pass serves both the nested-diff check and the denominator
     # 4.1.1 review B4: a parsed root is kept only where check_complete_file_merge reads one (a nested path); a
     # plain path needs its vpath alone. MEASURED on the largest installed mod by complete XML (309 files, 7.0 MB):
@@ -1948,7 +1922,7 @@ def check_sel_resolution_one(file_path: Path, mod_dir: Path,
                     f"selectors to resolve -- and --file runs no other check")
         report.notes.append(_sel_note(0, 0, f"1 (--file: {vpath})"))
         return
-    _INDEX_TREES.clear()
+    _merge.EffectiveIndex.clear()
     checked = _sel_check_file(vpath, root, config, report, set(), mod_dir)
     report.notes.append(_sel_note(int(checked), 1, f"1 (--file: {vpath})"))
 

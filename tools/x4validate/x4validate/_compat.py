@@ -263,6 +263,26 @@ class ReaddedAfterRemoval:
 
 
 @dataclass
+class NeverOpened:
+    """A file (one row per `<diff>` op, or one row for a complete file) the ENGINE NEVER
+    OPENS, so it takes part in no row and is not in `unapplied` (F383, user decision
+    2026-11-18: advisory, exit 0).
+
+    * a PLAIN-path file on a ship macro/component the effective index sends to a copier's own
+      path: the engine loads `extensions/<owner>/<vpath>` (the copier's complete file and its
+      nested patches) as the document (MEASURED 5 of 5 files in one log);
+    * a NESTED `extensions/<owner>/<rel>` patch where the index entry is the base path and
+      <owner>'s complete copy MERGES at the plain path (MEASURED once).
+    That the LAST of several index entries decides is INFERRED."""
+    vpath: str
+    mod: str
+    line: int          #: the op's line; 0 for a complete file
+    sel: str           #: the op's sel=; "" for a complete file
+    owner: str         #: the copier whose document the index names (or whose copy merges)
+    reason: str
+
+
+@dataclass
 class GuardedOff:
     """A `<diff>` op whose `if=` guard is FALSE when its mod loads (issue #8).
 
@@ -327,6 +347,9 @@ class CompatReport:
     #: Re-adds of a node a DECLARED dependency removed -- see `ReaddedAfterRemoval`.
     #: Advisory, never failing; listed so the user confirms the intent.
     readded_after_removal: list[ReaddedAfterRemoval] = field(default_factory=list)
+    #: Files the engine never opens (the effective index, F383) -- see `NeverOpened`.
+    #: Advisory, never failing; their ops are in no row and not in `unapplied`.
+    never_opened: list[NeverOpened] = field(default_factory=list)
     #: WHICH roots were scanned, in words -- "" means every configured extensions root
     #: (the set the engine loads). An --ext-dir run scans that folder ONLY and says so
     #: here, because a mod in another root is then absent with nothing else to show it.
@@ -813,6 +836,20 @@ def _analyze_vpath(
         elif is_union and base_tree is not None and root.tag == base_tree.tag:
             union_keys[folder] = _child_keys(root)
             union_roots[folder] = root
+            # F387: an entry a mod REMOVED that this complete file defines again continues
+            # the removed identity (`_compat_state.trace` records it per file), so it joins
+            # the node's row as a supplier, exactly like a re-adding <add>. Row sel
+            # "(complete file)", guard none; the element itself rides on the pseudo-op so
+            # `identical_to_pre_removal` can compare it.
+            again = traced.get((folder, "file"))
+            if again is not None and again.created:
+                file_op = etree.Element("file", sel="(complete file)")
+                file_op.extend(copy.deepcopy(c) for c in root if isinstance(c.tag, str))
+                actual_ops[(folder, id(file_op))] = True   # a complete file always applies
+                nmap = diff_targets.setdefault(folder, {})
+                for cid in again.created:
+                    nmap.setdefault(cid, []).append("supply")
+                    ops_at[folder][cid].append(file_op)
         elif merge_copy and base_tree is not None and root.tag == base_tree.tag:
             # Issue #17: the engine MERGES a nested full copy of a mod-owned macro
             # file -- both same-named macros exist -- so this is no clobber.
@@ -850,7 +887,19 @@ def _analyze_vpath(
         key = (live[0].tag, live[0].get("id"), live[0].get("name"))
         before = [c for c in (pre if pre is not None else ()) if isinstance(c.tag, str)
                   and (c.tag, c.get("id"), c.get("name")) == key]
-        added = [ch for ch in (op if op is not None and op.tag == "add" else ())
+        if not before:
+            # F387: a NESTED node, at its REMOVAL path as the remover's op found it (a
+            # top-level key keeps F385's lookup above, where two such nodes read unknown).
+            at = next((p for (f, _i), rec in traced.items() if f == remover
+                       for ident, p in rec.removed_paths if ident == cid), "")
+            try:
+                found = pre.getroottree().xpath(at) if pre is not None and at else []
+            except etree.XPathEvalError:
+                found = []   # silent-ok: no node found reads "unknown (...)" below
+            before = [c for c in (found if isinstance(found, list) else ())
+                      if isinstance(c, etree._Element)
+                      and (c.tag, c.get("id"), c.get("name")) == key]
+        added = [ch for ch in (op if op is not None and op.tag in ("add", "file") else ())
                  if isinstance(ch.tag, str) and (ch.tag, ch.get("id"), ch.get("name")) == key]
         if len(before) != 1:
             return "unknown (no single node with this key before the removal)"
@@ -2349,6 +2398,66 @@ def _declared_dependencies(mods: list[dict]) -> dict[str, dict[str, str]]:
     return out
 
 
+def _never_opened_split(vpath: str, per_mod: dict[str, str], folder_to_path: dict[str, Path],
+                        roots: list[Path], config: _merge.Config, report: CompatReport,
+                        cand_folder: str | None) -> dict[str, str]:
+    """*per_mod* without the layers the engine never opens on *vpath* (F383), each recorded
+    in `report.never_opened`; *per_mod* unchanged when the index changes nothing."""
+    nested = _merge._nested_target(vpath, config.packed_dlc_names())
+    if nested is None:
+        if _merge.plain_copy_index(vpath) is None:
+            return per_mod
+        got = _merge.EffectiveIndex.choice(vpath, config, roots)
+        if isinstance(got, _merge.IndexPartial):
+            if any(_merge.complete_at(folder_to_path[f], per_mod[f]) is not None
+                   for f in per_mod if not _merge.is_dlc_folder(f)):
+                report.skip(vpath, f"the effective {got.index_vpath} could not be built "
+                            f"completely ({got.skipped[0]}), so which document the engine "
+                            "loads for this copied file is unknown (BLIND-SPOTS F383); its rows "
+                            "use the plain-path model", degraded=True)
+            return per_mod
+        if not isinstance(got, _merge.OwnCopy):
+            return per_mod
+        owner = got.owner
+        gone = [f for f in per_mod if f.lower() != owner.lower()]
+        reason = (f"the effective index entry for this file's name points at '{got.value}'"
+                  + (f" (the last of {got.count} entries)" if got.count > 1 else "")
+                  + f", so the engine loads '{owner}'" + "'s own complete copy and its nested "
+                  "patches and never opens this plain-path file (MEASURED 5 of 5, BLIND-SPOTS "
+                  "F383; last entry INFERRED)")
+    else:
+        got = _merge.nested_copy_merges(vpath, config, roots)
+        if isinstance(got, _merge.IndexPartial):
+            report.skip(vpath, f"the effective {got.index_vpath} could not be built completely "
+                        f"({got.skipped[0]}), so whether the engine opens these nested patches "
+                        "is unknown (BLIND-SPOTS F383)", degraded=True)
+            return per_mod
+        if got is None:
+            return per_mod
+        owner = nested[0]
+        gone = [f for f in per_mod if per_mod[f].lower().startswith("extensions/")
+                and f.lower() != owner.lower()]
+        reason = (f"the effective index entry for this file's name points at the base path "
+                  f"'{got[0]}'" + (f" (the last of {got[1]} entries)" if got[1] > 1 else "")
+                  + f", so the engine loads the plain path, where '{owner}'" + "'s complete copy "
+                  "MERGES, and never opens this nested patch (MEASURED once, BLIND-SPOTS "
+                  "F382/F383)")
+    for f in gone:
+        if cand_folder is not None and cand_folder not in (f, owner):
+            continue
+        try:
+            root = _merge.overlay_root(folder_to_path[f], per_mod[f], [])
+        except (etree.LxmlError, OSError, ValueError):
+            root = None   # silent-ok: its readability is the main loop's channel; one row
+        ops = ([o for o in _op_list(root) if o.tag in _OPS]
+               if root is not None and root.tag == "diff" else [])
+        for op in ops or [None]:
+            report.never_opened.append(NeverOpened(
+                vpath, f, (op.sourceline or 0) if op is not None else 0,
+                op.get("sel", "") if op is not None else "", owner, reason))
+    return {f: v for f, v in per_mod.items() if f not in gone}
+
+
 def analyze(
     ext_dir: Path | None,
     candidate: Path | None = None,
@@ -2437,6 +2546,13 @@ def analyze(
         # Not degraded: nothing was skipped; the model's guess is NAMED.
         if msg not in order_dropped:
             report.skip("load-order model", msg)
+    # F383: ONE effective index over every scanned root in load order decides which document
+    # the engine loads for a copied ship macro/component file. Decided HERE, once per file,
+    # by leaving the never-opened layers out: every tree builder below (base_tree_for,
+    # _prefix_tree, _walk_positions) then sees the same layers, so the trace's byte check
+    # cannot drop the file.
+    index_roots = [folder_to_path[f] for f in order if f in folder_to_path]
+    _merge.EffectiveIndex.clear()
     for low, per_mod in inv.items():
         if len(per_mod) < 2:
             continue
@@ -2448,6 +2564,10 @@ def analyze(
         # file, which is the base every op here is really patching.
         real_vpath = next((v for v in per_mod.values() if v.lower().startswith("extensions/")),
                           next(iter(per_mod.values())))
+        per_mod = _never_opened_split(real_vpath, per_mod, folder_to_path, index_roots,
+                                      config, report, cand_folder)
+        if len(per_mod) < 2:
+            continue
         found = _analyze_vpath(real_vpath, list(per_mod), folder_to_path, rank, config,
                                report.unresolvable, per_mod_vpath=per_mod,
                                report=report, cand_folder=cand_folder, depends=depends,
@@ -2596,6 +2716,19 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
     if report.readded_after_removal:
         shown_any = True
         lines.extend(_render_readded(report.readded_after_removal))
+    if report.never_opened:
+        shown_any = True
+        files = sorted({(n.vpath, n.mod) for n in report.never_opened})
+        lines.append(f"=== NEVER OPENED BY THE ENGINE: the effective index loads another "
+                     f"document  ({len(report.never_opened)} op(s) in {len(files)} file(s); "
+                     "advisory, exit unchanged) ===")
+        lines.append("  These ops are in no row above and are not 'not applied': the engine "
+                     "never reads the file (BLIND-SPOTS F383).")
+        for vpath, mod in files:
+            rows = [n for n in report.never_opened if (n.vpath, n.mod) == (vpath, mod)]
+            lines.append(f"  {mod}  {vpath}  ({len(rows)} op(s))")
+            lines.append(f"     why: {rows[0].reason}")
+        lines.append("")
     if report.guarded_off:
         met = [g for g in report.guarded_off if g.shared_with is None or g.shared_with]
         lines.append(f"=== GUARDED OFF: if= FALSE AT ITS LOAD POSITION  "
@@ -2652,6 +2785,7 @@ def render(report: CompatReport, show_soft: bool = False) -> str:
                  "pair(s) (advisory), "
                  f"{len(report.readded_after_removal)} node(s) re-added after a declared "
                  "dependency removed them (advisory, confirm intent), "
+                 f"{len(report.never_opened)} op(s) the engine never opens (advisory), "
                  f"{len(report.guarded_off)} op(s) guarded off (if= false"
                  + (f"; {k} of them also an order miss"
                     if (k := sum(g.also_order_miss for g in report.guarded_off)) else "")
@@ -2907,6 +3041,10 @@ def main(argv: list[str] | None = None) -> int:
             # winner_qualified, line, sel, guard.
             "readded_after_removal": [dataclasses.asdict(r)
                                       for r in report.readded_after_removal],
+            # F383 (user decision 2026-11-18: advisory, exit 0): files the engine never
+            # opens because the effective index loads another document. Each row: vpath,
+            # mod, line, sel ("" and 0 for a complete file), owner, reason. In no other list.
+            "never_opened": [dataclasses.asdict(n) for n in report.never_opened],
             # NOT CHECKED (the text render's own section, above): an op whose sel=
             # could not be evaluated contributed no target and cannot participate in
             # collision detection -- omitting it here made a JSON consumer read

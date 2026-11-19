@@ -545,3 +545,13 @@ def _quiet_luajit_seh_dumps(request):
 def faulthandler_scope():
     """The context manager above, for test_faulthandler_scope.py."""
     return _faulthandler_off_for
+
+
+@pytest.fixture(autouse=True)
+def _fresh_effective_index():
+    """`_merge.EffectiveIndex` caches one index per tuple of roots for a process RUN; a test
+    that edits a fixture's index between two calls is a new run, so each test starts empty."""
+    from x4validate import _merge
+    _merge.EffectiveIndex.clear()
+    yield
+    _merge.EffectiveIndex.clear()

@@ -24,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from lxml import etree
 
@@ -272,6 +273,11 @@ class MergeResult:
     # replacement (or, at a nested path, as a keyed union). The tree is the model's
     # answer; these say which parts of it nobody has seen the engine confirm.
     unmeasured: list[str] = field(default_factory=list)
+    #: Layers the engine NEVER OPENS for this document, as "<mod>:diff(unopened:index)" (or
+    #: `full(...)` for a complete file): only with `build_effective(index_roots=...)`, when the
+    #: effective index sends the plain path's name to a copier's own document (F383), or a
+    #: nested patch's owner copy merges at the base path. Their ops are NOT in the tree.
+    never_opened: list[str] = field(default_factory=list)
 
 
 def parse_file(path: Path) -> etree._Element:
@@ -1121,6 +1127,157 @@ def game_supplies(vpath: str, config: "Config") -> bool:
     return False
 
 
+#: `EffectiveIndex.choice`: the engine loads the PLAIN-path document (the usual case).
+PLAIN = "plain"
+
+
+@dataclass(frozen=True)
+class OwnCopy:
+    """`EffectiveIndex.choice`: the last effective index entry for the file's name points at
+    `extensions/<owner>/<vpath>` and <owner> ships a COMPLETE file there, so the engine loads
+    <owner>'s file as its own document and opens no plain-path file on *vpath* (F383)."""
+    owner: str          #: the copier's folder name, as on disk
+    value: str          #: the raw entry value
+    count: int          #: how many entries the name has (the LAST decides)
+
+
+class IndexPartial(NamedTuple):
+    """The effective index could not be built completely (a layer was unreadable): which
+    document the engine loads for the name is UNKNOWN. Never a verdict either way."""
+    index_vpath: str
+    skipped: list[str]
+
+
+#: (index vpath, reference, packed-DLC flag, roots) -> EffectiveIndex. ONE build per tuple of
+#: roots per process run; `EffectiveIndex.clear()` at the start of every run that may follow
+#: an edit (x4validate's runs, the store build, x4compat), so a long-lived process never
+#: answers from a previous run's index.
+_EFFECTIVE_INDEXES: dict[tuple, "EffectiveIndex"] = {}
+
+
+class EffectiveIndex:
+    """THE resolver for `index/macros.xml` / `index/components.xml` (F383/F384): the index
+    document merged the way the engine merges it -- base + DLC + *roots* in load order through
+    `build_effective`, so a `<remove>` unregisters a name and an `@value` `<replace>` re-points
+    it -- built ONCE per tuple of roots. For two entries of one name the LAST in document order
+    wins (INFERRED from the 3 of F383's 10 measured copies with two entries; the first would
+    have mispredicted all 3).
+
+    Every index reader asks this class: `_resolve.build_index` (file resolution),
+    `_check.index_entry` / `index_loads_copy` / `EngineDocs` / `EntityDefs`, and
+    `build_effective(index_roots=...)` (the store, x4effective dump, x4similar, x4stats)."""
+
+    def __init__(self, index_vpath: str, config: "Config", roots) -> None:
+        self.index_vpath = index_vpath
+        self.roots = tuple(roots)
+        self.recorder = Recorder()
+        self.result = build_effective(
+            index_vpath, replace(config, overlays=self.roots, final_overlays=()),
+            recorder=self.recorder)
+        self.tree = self.result.tree
+        self.skipped = list(self.result.skipped)
+        self._by_name: dict[str, list[etree._Element]] | None = None
+
+    @classmethod
+    def of(cls, index_vpath: str, config: "Config", roots) -> "EffectiveIndex":
+        roots = tuple(roots)
+        key = (index_vpath, str(config.reference), config.include_packed_dlc,
+               tuple(str(r) for r in roots))
+        if key not in _EFFECTIVE_INDEXES:
+            _EFFECTIVE_INDEXES[key] = cls(index_vpath, config, roots)
+        return _EFFECTIVE_INDEXES[key]
+
+    @staticmethod
+    def clear() -> None:
+        _EFFECTIVE_INDEXES.clear()
+
+    @property
+    def partial(self) -> bool:
+        return bool(self.skipped)
+
+    def elements(self, name: str) -> list[etree._Element]:
+        """Every `<entry>` of *name* with a value, in document order, IGNORING CASE (V9)."""
+        if self._by_name is None:
+            self._by_name = {}
+            if self.tree is not None:
+                for e in self.tree.iter("entry"):
+                    if e.get("value") is not None:
+                        self._by_name.setdefault((e.get("name") or "").lower(), []).append(e)
+        return self._by_name.get(name.lower(), [])
+
+    def entries(self, name: str) -> list[str]:
+        return [e.get("value") for e in self.elements(name)]
+
+    def last(self, name: str) -> str | None:
+        """The path the engine loads for *name* (`normal_index_path` of the LAST entry)."""
+        values = self.entries(name)
+        return normal_index_path(values[-1]) if values else None
+
+    def writer(self, entry: etree._Element) -> str:
+        """The layer that wrote *entry*'s `@value` ("base", a DLC or a mod folder)."""
+        return self.recorder.winner(entry, "value").source
+
+    def lookup(self, rel: str, config: "Config"):
+        """`(loaded path, last raw value, entry count)` for a plain-path file *rel* in the
+        `plain_copy_index` class whose document the GAME supplies; `IndexPartial` when the
+        index is incomplete; None when out of scope or the name has no entry."""
+        spec = plain_copy_index(rel)
+        if (spec is None or spec[0] != self.index_vpath
+                or _nested_target(rel, config.packed_dlc_names()) is not None
+                or not game_supplies(rel, config)):
+            return None
+        if self.partial:
+            return IndexPartial(self.index_vpath, list(self.skipped))
+        values = self.entries(spec[1])
+        if not values:
+            return None
+        return normal_index_path(values[-1]), values[-1], len(values)
+
+    @staticmethod
+    def lookup_for(rel: str, config: "Config", roots):
+        spec = plain_copy_index(rel)
+        if spec is None:
+            return None
+        return EffectiveIndex.of(spec[0], config, roots).lookup(rel, config)
+
+    @staticmethod
+    def choice(vpath: str, config: "Config", roots):
+        """Which document the engine loads for the plain path *vpath*: `PLAIN`, `OwnCopy`
+        (the copier's own document) or `IndexPartial`. Outside the `plain_copy_index` class,
+        for a file the game does not supply, or with no entry: `PLAIN`."""
+        roots = tuple(roots)
+        got = EffectiveIndex.lookup_for(vpath, config, roots)
+        if got is None:
+            return PLAIN
+        if isinstance(got, IndexPartial):
+            return got
+        loaded, value, count = got
+        plain = vpath.replace("\\", "/").lower()[:-4]
+        owner = next((r for r in roots if loaded == f"extensions/{r.name.lower()}/{plain}"), None)
+        if owner is None or complete_at(owner, vpath) is None:
+            return PLAIN
+        return OwnCopy(owner.name, value, count)
+
+
+def complete_at(root: Path, vpath: str) -> etree._Element | None:
+    """*root*'s COMPLETE (non-diff) file at *vpath*, or None (also for an unreadable one:
+    readability is the readers' own channel, never a verdict here)."""
+    try:
+        found = overlay_root(root, vpath, [])
+    except (etree.LxmlError, OSError, ValueError):
+        return None   # silent-ok: an unreadable candidate is no copy; readers report it
+    return found if found is not None and found.tag != "diff" else None
+
+
+def index_note(owner: str, value: str, count: int, vpath: str) -> str:
+    """The `MergeResult.unmeasured` line for a document the index sends to a copier."""
+    return (f"{vpath}: the effective index entry for this file's name points at '{value}'"
+            + (f" (the last of {count} entries)" if count > 1 else "")
+            + f", so the engine loads '{owner}''s own complete copy and its nested patches as "
+            f"the document, and opens no plain-path file on this path (MEASURED for 5 of 5 such "
+            f"files in one log, BLIND-SPOTS F383; that the LAST entry decides is INFERRED)")
+
+
 def _nested_on_mod(vpath: str) -> bool:
     """*vpath* is `extensions/<mod>/<rel>` with <mod> not a DLC: a patch path on a
     MOD-owned file. (A packed-only DLC owner is `ego_dlc_*` and so is excluded.)"""
@@ -1336,16 +1493,127 @@ def _build_owned(owner_name: str, rel: str, vpath: str,
                        skipped=skipped, unmeasured=unmeasured)
 
 
+def _never_opened(overlay_dirs: list[Path], vpath: str, skip_name: str,
+                  skipped: list[str]) -> list[str]:
+    """"<layer>:diff(unopened:index)" / "full(...)" for every layer except *skip_name* that
+    ships a file at *vpath*."""
+    out = []
+    for odir in overlay_dirs:
+        if odir.name.lower() == skip_name.lower():
+            continue
+        root = overlay_root(odir, vpath, skipped)
+        if root is not None:
+            out.append(f"{odir.name}:{'diff' if root.tag == 'diff' else 'full'}(unopened:index)")
+    return out
+
+
+def nested_copy_merges(vpath: str, config: Config, roots):
+    """For a NESTED `extensions/<owner>/<rel>` patch path: `(entry value, entry count)` when
+    the last effective index entry for <rel>'s name is the BASE path and <owner>'s complete
+    copy of the game's file (in the `merges_plain_copy` class, the game file's root) MERGES
+    there -- the engine then never opens a nested patch of it (MEASURED once, F382/F383).
+    `IndexPartial` when the index is incomplete; None otherwise (the nested door stands)."""
+    nested = _nested_target(vpath, config.packed_dlc_names())
+    if nested is None:
+        return None
+    owner, rel = nested
+    if is_dlc_folder(owner) or plain_copy_index(rel) is None:
+        return None
+    got = EffectiveIndex.lookup_for(rel, config, roots)
+    if got is None or isinstance(got, IndexPartial):
+        return got
+    loaded, value, count = got
+    if loaded != rel.replace("\\", "/").lower()[:-4]:
+        return None   # the owner's own path (the engine opens the nested patches), or elsewhere
+    # The MEASURED shape only: the owner's own complete copy, in the class, with the game
+    # file's root, merging at the plain path. Anything else keeps the nested door's model.
+    owner_dir = next((r for r in roots if r.name.lower() == owner.lower()), None)
+    oroot = complete_at(owner_dir, rel) if owner_dir is not None else None
+    if oroot is None or not merges_plain_copy(rel, oroot.tag):
+        return None
+    game = build_effective(rel, replace(config, overlays=(), final_overlays=()))
+    if game.skipped or game.tree is None or game.tree.tag != oroot.tag:
+        return None
+    return value, count
+
+
+def _index_redirect(vpath: str, config: Config, overlay_dirs: list[Path], roots: tuple,
+                    recorder: Recorder | None, index_skip: list[str]) -> MergeResult | None:
+    """`build_effective`'s index step (F383): a MergeResult when the effective index of
+    *roots* changes which document the engine loads, else None (the ordinary doors run).
+    A partial index adds one line to *index_skip* and changes nothing else."""
+
+    def partial(p: IndexPartial, rel: str) -> None:
+        index_skip.append(
+            f"{p.index_vpath}: the effective index could not be built completely "
+            f"({p.skipped[0]}), so which document the engine loads for {rel} is unknown "
+            f"(BLIND-SPOTS F383); this tree is the model without the index")
+
+    nested = _nested_target(vpath, config.packed_dlc_names())
+    if nested is None:
+        if plain_copy_index(vpath) is None:
+            return None
+        # Only a MOD's complete copy at the path can be what the index redirects to, and the
+        # copier's document can only be built from a layer merged HERE (the touchers).
+        if not any(complete_at(d, vpath) is not None
+                   for d in overlay_dirs if not is_dlc_folder(d.name)):
+            return None
+        got = EffectiveIndex.choice(vpath, config, roots)
+        if isinstance(got, IndexPartial):
+            partial(got, vpath)
+            return None
+        if not isinstance(got, OwnCopy):
+            return None
+        owner_dir = next((d for d in overlay_dirs if d.name.lower() == got.owner.lower()), None)
+        if owner_dir is None:
+            return None   # the copier is not among the layers merged here: the plain model
+        if recorder is not None:
+            # The copier's nodes are ITS values, never the game's "base".
+            recorder.full_override(Origin(owner_dir.name, "own-document(index)"), had_base=True)
+        res = _build_owned(owner_dir.name, vpath, f"extensions/{owner_dir.name}/{vpath}",
+                           overlay_dirs, recorder)
+        never = _never_opened(overlay_dirs, vpath, owner_dir.name, res.skipped)
+        res.never_opened = never
+        res.sources = [f"index:{got.value}"] + res.sources + never
+        res.unmeasured.append(index_note(owner_dir.name, got.value, got.count, vpath))
+        return res
+    owner, rel = nested
+    got = nested_copy_merges(vpath, config, roots)
+    if got is None:
+        return None
+    if isinstance(got, IndexPartial):
+        partial(got, rel)
+        return None
+    value, count = got
+    skipped: list[str] = []
+    never = _never_opened(overlay_dirs, vpath, owner, skipped)
+    note = (f"{vpath}: the effective index entry for this file's name points at the base path "
+            f"'{value}'" + (f" (the last of {count} entries)" if count > 1 else "")
+            + f", so the engine loads the plain path, where '{owner}''s complete copy MERGES, "
+            f"and never opens a nested patch of it (MEASURED once, BLIND-SPOTS F382/F383)")
+    return MergeResult(tree=None, sources=[f"index:{value}"] + never, base_found=False,
+                       skipped=skipped, unmeasured=[note], never_opened=never)
+
+
 def build_effective(
     virtual_path: str,
     config: Config | None = None,
     extra_overlays: list[Path] | None = None,
     recorder: Recorder | None = None,
+    index_roots=None,
 ) -> MergeResult:
     """Build the effective tree for *virtual_path* = base + DLC + extra_overlays.
 
     *extra_overlays* are extension ROOT dirs (e.g. a mod under test, or Tier-B
     enabled mods) applied in the given order, after all DLC.
+
+    *index_roots* (explicit opt-in; F383): the RUNTIME roots, in load order, whose effective
+    `index/` decides WHICH document the engine loads for a ship macro/component file
+    (`EffectiveIndex.choice`). None = the index is not consulted (every caller before 4.3).
+    Given, a plain *vpath* whose last entry is a copier's own path builds the copier's
+    document (`_build_owned`) and lists the plain-path files in `never_opened`; a nested
+    `extensions/<owner>/<rel>` whose owner copy merges at the base path builds no tree and
+    lists its nested patchers in `never_opened`.
     """
     config = config or Config()
     vpath = virtual_path.replace("\\", "/").lstrip("/")
@@ -1356,6 +1624,16 @@ def build_effective(
     # (e.g. the mod under test) last.
     dlc_layers = config.dlc_dirs()
     overlay_dirs = dlc_layers + list(config.overlays) + list(extra_overlays or [])
+    index_skip: list[str] = []
+    if index_roots is not None:
+        redirected = _index_redirect(vpath, config, overlay_dirs, tuple(index_roots),
+                                     recorder, index_skip)
+        if redirected is not None:
+            return redirected
+    if index_skip:
+        res = build_effective(vpath, config, extra_overlays, recorder)
+        res.skipped.extend(index_skip)
+        return res
 
     # Cross-mod nesting: a file at  <mymod>/extensions/<target>/<rel>  patches
     # <target>'s OWN <rel>. The base therefore lives inside <target>, not in

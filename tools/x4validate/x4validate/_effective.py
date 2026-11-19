@@ -764,8 +764,8 @@ CREATE INDEX idx_attr_origin ON attrs(origin);
 """
 
 
-def _merge_one(vpath: str, config: _merge.Config,
-               overlays: list[Path]) -> tuple[etree._Element | None, Recorder, list[str]]:
+def _merge_one(vpath: str, config: _merge.Config, overlays: list[Path],
+               index_roots=None) -> tuple[etree._Element | None, Recorder, list[str]]:
     """Merge one vpath, and hand back the WORK NOT DONE alongside the tree.
 
     `MergeResult.skipped`'s own docstring states the contract: *"overlays that
@@ -779,9 +779,14 @@ def _merge_one(vpath: str, config: _merge.Config,
     OVERLAY file -- that handler can only fire for the base file's `parse_file`.
     So an unreadable mod file left the store recording `origin='base'` -- "no
     override, still vanilla" -- in the identical grammar it uses for a verified
-    base value. MEASURED: 11 unreadable files in the live corpus reach this."""
+    base value. MEASURED: 11 unreadable files in the live corpus reach this.
+
+    *index_roots* (F383): every active root in load order, so a ship macro/component file the
+    effective index sends to a copier's own path is stored as THAT document, and the plain-path
+    diffs the engine never opens are in no value's origin."""
     rec = Recorder()
-    res = _merge.build_effective(vpath, config, extra_overlays=overlays, recorder=rec)
+    res = _merge.build_effective(vpath, config, extra_overlays=overlays, recorder=rec,
+                                 index_roots=index_roots)
     return res.tree, rec, res.skipped
 
 
@@ -875,6 +880,8 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
     order_rank = {m["folder"]: i for i, (m, _) in enumerate(ordered)}
     touch = build_touch_map(ordered)
     progress(f"active mods: {len(mods)}; load order computed")
+    # One effective index per build, over the RUNTIME roots (F383): never a previous build's.
+    _merge.EffectiveIndex.clear()
 
     entities: list[Entity] = []
     removed: list[tuple[str, str, str, int]] = []
@@ -893,7 +900,7 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
             vpath, child, klass_attr, key_attr = LIBRARY_REGISTRIES[kind]
             ov = touchers_for(vpath, touch, folder_to_path)
             try:
-                tree, rec, dropped = _merge_one(vpath, config, ov)
+                tree, rec, dropped = _merge_one(vpath, config, ov, overlay_paths)
             except etree.LxmlError as exc:
                 skipped.add(vpath, exc)
                 continue
@@ -929,7 +936,7 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
             # merge an empty overlay list.
             ov = touchers_for(low, touch, folder_to_path)
             try:
-                tree, rec, dropped = _merge_one(vpath, config, ov)
+                tree, rec, dropped = _merge_one(vpath, config, ov, overlay_paths)
             except etree.LxmlError as exc:
                 skipped.add(vpath, exc)
                 n += 1
@@ -952,7 +959,7 @@ def build(config: _merge.Config | None = None, db_path: Path | None = None,
         for low, vpath in sorted(cvpaths.items()):
             ov = touchers_for(low, touch, folder_to_path)
             try:
-                tree, rec, dropped = _merge_one(vpath, config, ov)
+                tree, rec, dropped = _merge_one(vpath, config, ov, overlay_paths)
             except etree.LxmlError as exc:
                 skipped.add(vpath, exc)
                 n += 1

@@ -7,6 +7,7 @@ while a replacement that inserts siblings records each new contribution separate
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import dataclass
 
 from lxml import etree
@@ -30,8 +31,42 @@ class OpTargets:
     inserted: tuple[str, ...] = ()
 
 
+#: The identity key of a node, per file class (F387; the 4.3 plan's defaults, user-approved):
+#: `id`/`name` at ANY depth in libraries/, index/, t/; `connection@name` and `macro@name` in
+#: macro/component files; `cue`/`library`/`label` names in md/ and aiscripts/. A node with
+#: no key (a nested `<price>`) has no identity to revive, by design.
+_SCRIPT_KEYED = frozenset({"cue", "library", "label"})
+_TEXTREF = re.compile(r"\{\s*\d+\s*,\s*\d+\s*\}$")
+_ASSET_KEYED = frozenset({"connection", "macro"})
+
+
+def identity_key(vpath: str, el) -> tuple[str, str] | None:
+    """`(tag, "attr=value")` naming *el* among its siblings in *vpath*'s class, or None."""
+    if not isinstance(el.tag, str):
+        return None
+    low = _merge._registry_rel(vpath).lower()
+    if low.startswith(("libraries/", "index/", "t/")):
+        key = _merge._child_key(el)
+        parent = el.getparent()
+        # User decision 2026-11-18: a NESTED node named by a game-text reference
+        # (name="{page,id}", the `_compat._TEXTREF_KEY` shape) is display text, not an
+        # identity. A top-level entry keeps F385's key (id first, as before).
+        if (key is not None and key[1].startswith("name=") and _TEXTREF.match(key[1][5:])
+                and parent is not None and parent.getparent() is not None):
+            return None
+        return key
+    if low.startswith(("md/", "aiscripts/")):
+        keyed = _SCRIPT_KEYED
+    elif low.startswith("assets/") or "/macros/" in low:
+        keyed = _ASSET_KEYED
+    else:
+        return None
+    name = el.get("name")
+    return (el.tag, f"name={name}") if el.tag in keyed and name is not None else None
+
+
 class Nodes(Recorder):
-    def __init__(self, tree, union=False):
+    def __init__(self, tree, union=False, vpath=""):
         super().__init__()
         self.ids = {el: tree.getroottree().getpath(el) for el in tree.iter() if isinstance(el.tag, str)}
         self.created = set()
@@ -42,25 +77,38 @@ class Nodes(Recorder):
         self.pending_root = False
         self.tree = tree
         self.union = union
+        self.vpath = vpath
+        #: (parent identity, tag, key) -> the removed node's identity (F387: any depth).
         self.removed_keys = {}
         self.revived = set()
         self.inserted = []
 
+    def _key(self, el):
+        if self.vpath:
+            return identity_key(self.vpath, el)
+        # No vpath (a direct caller): the F385 rule, a union file's top-level children.
+        return _merge._child_key(el) if self.union and el.getparent() is self.tree else None
+
     def node_removed(self, path, origin):
         super().node_removed(path, origin)
-        if self.union:
-            for el in self.tree.xpath(path):
-                if isinstance(el, etree._Element) and el.getparent() is self.tree:
-                    key = _merge._child_key(el)
-                    if key is not None:
-                        self.removed_keys[key] = self.element_id(el)
+        for el in self.tree.xpath(path):
+            if not isinstance(el, etree._Element):
+                continue
+            # The removed node AND its keyed descendants: re-adding the whole subtree
+            # later continues every one of their identities (F387).
+            for node in el.iter():
+                parent = node.getparent()
+                key = self._key(node) if parent is not None else None
+                if key is not None:
+                    self.removed_keys[(self.element_id(parent), *key)] = self.element_id(node)
 
     def element_id(self, node):
         if node not in self.ids:
             parent = node.getparent()
-            key = _merge._child_key(node) if self.union and parent is self.tree else None
-            if key is not None and key in self.removed_keys:
-                identity = self.removed_keys.pop(key)
+            key = self._key(node) if parent is not None else None
+            slot = (self.element_id(parent), *key) if key is not None else None
+            if slot is not None and slot in self.removed_keys:
+                identity = self.removed_keys.pop(slot)
                 self.ids[node] = identity
                 self.revived.add(identity)
                 return identity
@@ -148,7 +196,7 @@ def trace(vpath, base, roots, expected=None, nested=None, plain_on_game=False):
     if base is None:
         return {}, {}, False
     tree = copy.deepcopy(base)
-    nodes = Nodes(tree, vpath.lower().startswith(("libraries/", "index/", "t/")))
+    nodes = Nodes(tree, vpath.lower().startswith(("libraries/", "index/", "t/")), vpath)
     records = {}
     owners: list[str] = []
     seen: list[str] = []
@@ -182,6 +230,8 @@ def trace(vpath, base, roots, expected=None, nested=None, plain_on_game=False):
         nodes.split = False
         if root.tag != "diff":
             # At a nested vpath every root is a patch on the owner's file (issue #17).
+            nodes.op_index = "file"
+            revived_before = set(nodes.revived)
             tree, mode = _merge.apply_overlay(tree, root, vpath, source, recorder=nodes,
                                               nested_on_mod=on_mod,
                                               plain_on_game=plain_on_game and not on_mod)
@@ -191,6 +241,11 @@ def trace(vpath, base, roots, expected=None, nested=None, plain_on_game=False):
             if nodes.pending_root:
                 nodes.register(tree)
                 nodes.pending_root = False
+            # F387: a COMPLETE file re-defining a removed entry continues its identity; the
+            # revived ids are this file's contribution (`_compat` makes them "supply").
+            again = tuple(sorted(nodes.revived - revived_before))
+            if again:
+                records[(source, "file")] = OpTargets((), again, True, mode, ())
             if nested is not None and mode in ("union", "full"):
                 owners.append(source)
                 if not all(apply_nested(prior, source) for prior in seen
