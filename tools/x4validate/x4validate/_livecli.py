@@ -34,6 +34,11 @@ half, and the only safe next step when a write's reply is lost: the command is s
 before the reply is read and is never resent, so a lost reply is not a lost write.
 `query` refuses the write verbs by name, so its free-text passthrough cannot become a
 second, bannerless door to them.
+
+`save SLOT` is the third write (user decision 2026-11-18): a plain CLI capability like
+`query`/`equipment`, with no automation journal and no recorded-conversation authority. It
+writes one save into an EMPTY standard slot only, refused before sending otherwise, and is
+judged by reading the save folder afterwards; see `_livesave`.
 """
 from __future__ import annotations
 
@@ -1278,9 +1283,13 @@ def _live_open(pipe: str | None, timeout: float):
         lp.close()
 
 
-#: The legacy pause vocabulary. Mirrors the game-side mod's WRITE_VERBS table, and
-#: tests/test_modlua_rearm.py fails if the two ever differ.
-WRITE_VERBS = ("pause", "unpause")
+#: The legacy pause writes: argument-free, judged by the engine's own read-back.
+PAUSE_VERBS = ("pause", "unpause")
+#: The ENTIRE write vocabulary. Mirrors the game-side mod's WRITE_VERBS table, and
+#: tests/test_modlua_rearm.py fails if the two ever differ. `save` is the one write that
+#: takes arguments (a slot and a request id) and is judged by reading the save folder,
+#: not by an engine read-back; it has its own subcommand, `x4live save`.
+WRITE_VERBS = PAUSE_VERBS + ("save",)
 
 
 #: FFI-surface verbs -- `ffi-census`, and `ffisyms` via `query` -- are DISABLED by
@@ -1350,9 +1359,9 @@ def cmd_write(verb: str, pipe: str | None, timeout: float, out=None) -> int:
        whose advisory row is missing or not first
     """
     out = out or sys.stdout
-    if verb not in WRITE_VERBS:
-        return _fmt_rc(f"{verb!r} is not a write verb (the write verbs are: "
-                       f"{', '.join(WRITE_VERBS)})", 2)
+    if verb not in PAUSE_VERBS:
+        return _fmt_rc(f"{verb!r} is not a pause write verb (they are: "
+                       f"{', '.join(PAUSE_VERBS)})", 2)
     from . import _livepipe
 
     print(_write_banner(verb), file=sys.stderr)
@@ -1400,6 +1409,18 @@ def cmd_write(verb: str, pipe: str | None, timeout: float, out=None) -> int:
           "be in the state that was asked for. Read it with `x4live pausestate` before "
           "relying on it.", file=out)
     return 3
+
+
+def cmd_save(slot: str, pipe: str | None, timeout: float, settle_timeout: float,
+             settle: float, out=None) -> int:
+    """WRITE one save into an EMPTY standard slot and verify it by reading the save folder.
+
+    A plain CLI capability by the user's decision of 2026-11-18: no automation journal and
+    no recorded-conversation authority. Never-overwrite protection, the exit codes and the
+    lost-reply rule live in `_livesave`."""
+    from . import _livesave
+    return _livesave.run(slot, lambda: _live_open(pipe, timeout), _paths.savegames(),
+                         settle_timeout=settle_timeout, settle=settle, out=out)
 
 
 def cmd_pausestate(pipe: str | None, timeout: float, out=None) -> int:
@@ -2714,8 +2735,8 @@ def main(argv: list[str] | None = None) -> int:
         help="ping | probe | containerprobe | censusprobe | galaxyprobe | echo | "
              "errors | ext | macro | globals | player | component | objects | "
              "stations | ships | compare | recon | pausestate | ffisyms. "
-             "`pause` and `unpause` are WRITES and are refused here: use `x4live pause` "
-             "/ `x4live unpause`. "
+             "`pause`, `unpause` and `save` are WRITES and are refused here: use "
+             "`x4live pause` / `x4live unpause` / `x4live save`. "
              "START WITH `probe`: it reports build= (is the game running the file on "
              "disk) and loaded_at= (when this chunk last ran -- a UI reload empties the "
              "id allowlist, and both alt-enter and loading a save cause one, while the "
@@ -2779,6 +2800,26 @@ def main(argv: list[str] | None = None) -> int:
         pw.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
         pw.add_argument("--timeout", type=float, default=10.0,
                         help=_TIMEOUT_HELP)
+    psv = sub.add_parser(
+        "save",
+        help="WRITE: ask the running game to save into ONE EMPTY standard slot, then verify "
+             "the save folder. Never overwrites: an occupied slot is refused before anything "
+             "is sent. Exit 0 only when the new save is complete, carries this request's "
+             "label, and every other file in the save folder is unchanged. The pipe is not "
+             "authenticated: any program running as this Windows user can request a save "
+             "the same way (empty slots only)")
+    psv.add_argument("slot", help="exactly one empty standard slot, save_001 to save_010 "
+                                  "(no wildcard; quicksave and autosaves are refused)")
+    psv.add_argument("--pipe", help="pipe name (default: $X4_LIVE_PIPE or built-in)")
+    psv.add_argument("--timeout", type=float, default=10.0, help=_TIMEOUT_HELP)
+    psv.add_argument("--settle-timeout", dest="settle_timeout", type=float, default=180.0,
+                     help="seconds to wait, after the reply (or after a lost reply), for a "
+                          "complete save to appear in the slot (default: %(default)s; more than "
+                          "0, at most 3600). Only the save folder is read while waiting; "
+                          "nothing is resent")
+    psv.add_argument("--settle", type=float, default=3.0,
+                     help="seconds the slot file must stay unchanged before it is read and "
+                          "checked as a complete save (default: %(default)s; 0.5 to 60)")
 
     ph = sub.add_parser(
         "harvest",
@@ -2857,7 +2898,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_query(args.verb, args.args, args.pipe, args.timeout)
         if args.cmd == "pausestate":
             return cmd_pausestate(args.pipe, args.timeout)
-        if args.cmd in WRITE_VERBS:
+        if args.cmd == "save":
+            return cmd_save(args.slot, args.pipe, args.timeout, args.settle_timeout,
+                            args.settle)
+        if args.cmd in PAUSE_VERBS:
             return cmd_write(args.cmd, args.pipe, args.timeout)
         if args.cmd == "harvest":
             return cmd_harvest(args.pipe, args.timeout, args.out,

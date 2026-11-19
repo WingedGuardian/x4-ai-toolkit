@@ -222,7 +222,8 @@ and the generated staging trees through `scripts/x4basex_artifacts.py`, with no 
 >
 > **Check which helper and command family you are using.** The legacy query interface
 > reads engine observations; its separate `pause` and `unpause` commands change pause
-> state only when requested. This release also contains an **offline automation
+> state only when requested, and `save SLOT` writes a save into an empty slot only when
+> requested. This release also contains an **offline automation
 > candidate**, described in [the automation guide](docs/live-automation-cli.md). Its
 > explicitly prepared actions can affect native menus, orders and camera state, and
 > reviewed installed providers may add other declared actions. It is not deployed or
@@ -232,6 +233,10 @@ and the generated staging trees through `scripts/x4basex_artifacts.py`, with no 
 > * `pause` and `unpause` change the game you have open. `unpause` only undoes a pause
 >   this channel made, and a UI reload (alt-enter, loading a save) forgets that, so such
 >   a pause is then undone in game;
+> * `x4live save` can write a save (helper version 103 and later). It writes only into
+>   an EMPTY standard slot (`save_001` to `save_010`) and never overwrites one, but the
+>   pipe is not authenticated: any program running as your Windows user can ask the
+>   helper for a save the same way (empty slots only);
 > * it loads a mod into your running game, and the snapshot probe runs automatically
 >   at load;
 > * that probe calls `SaveUIUserData()` — it writes your profile's **UI userdata**,
@@ -256,7 +261,8 @@ and re-reads what it wrote. That deployment command describes the established le
 helper. The automation candidate requires a separately reviewed complete composition
 of its bundle, public MD session provider and loader; copying this working folder is
 not a substitute for that qualification. The legacy interface has fixed read verbs
-and argument-free `pause`/`unpause`, reporting the engine's pause readback. The candidate
+and argument-free `pause`/`unpause`, reporting the engine's pause readback, plus `save SLOT`,
+which writes one save into an empty standard slot and is checked by reading the save folder. The candidate
 adds a closed action registry and fixed installed-code MD channels, with source-bound
 sessions and durable action journals. Native acknowledgement is not proof of delivery,
 construction, arrival or visual correctness. Its third-party dependency

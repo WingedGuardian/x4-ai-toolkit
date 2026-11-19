@@ -3854,8 +3854,8 @@ def test_the_lua_and_python_WRITE_VERB_lists_are_the_SAME_set():
 
     rt = _build(extra=(
         "_G.__w = {} for k in pairs(WRITE_VERBS) do _G.__w[#_G.__w + 1] = k end"))
-    assert set(g(rt, "__w").values()) == {"pause", "unpause"}
-    assert set(_livecli.WRITE_VERBS) == {"pause", "unpause"}
+    assert set(g(rt, "__w").values()) == {"pause", "unpause", "save"}
+    assert set(_livecli.WRITE_VERBS) == {"pause", "unpause", "save"}
 
 
 def test_every_write_ATTEMPT_is_logged_even_a_refused_one():

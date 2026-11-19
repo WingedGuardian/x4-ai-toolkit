@@ -232,10 +232,11 @@ uv run x4live query macro shiptypes_s ship_arg_s_scout_01_a_macro --contents   #
 uv run x4live ffi-census                   # DISABLED by default (F124); X4_LIVE_ALLOW_FFI=1 to enable
 uv run x4live groundtruth --macros list.tsv --contents   # harvest engine values for YOUR macro list
 
-# ---- the WRITE half: the only two verbs that change the running game.
+# ---- the WRITE half: the only three commands that change the running game.
 uv run x4live pausestate                   # READ: is it paused, and did THIS channel pause it?
 uv run x4live pause                        # WRITE: pause it (exit 0 only if the engine reads back paused)
 uv run x4live unpause                      # WRITE: undo a pause THIS channel made
+uv run x4live save save_004                # WRITE: save into an EMPTY slot (exit 0 only if the save folder verifies)
 ```
 
 Every other tool here reasons about **files**. This one reports what X4 itself held in
@@ -269,7 +270,7 @@ one third-party dependency you install yourself:**
 
 | what | why | where |
 |---|---|---|
-| **X4 Toolkit Helper** | ships with this toolkit under `mods/`. Copy it into `{game}/extensions/`, or run `uv run python scripts/deploy-mod.py x4_toolkit_helper --apply`, which refuses a wrong target and re-reads what it wrote. It answers a fixed, enumerated vocabulary: read verbs, plus exactly two argument-free write verbs, `pause` and `unpause`, and no eval of any kind | `mods/x4_toolkit_helper/` |
+| **X4 Toolkit Helper** | ships with this toolkit under `mods/`. Copy it into `{game}/extensions/`, or run `uv run python scripts/deploy-mod.py x4_toolkit_helper --apply`, which refuses a wrong target and re-reads what it wrote. It answers a fixed, enumerated vocabulary: read verbs, plus three write verbs, the argument-free `pause` and `unpause` and `save SLOT` (version 103 and later: one save into an EMPTY standard slot, never an overwrite; the pipe is not authenticated, so any program running as your Windows user can request one), and no eval of any kind | `mods/x4_toolkit_helper/` |
 | **Mod Support APIs** (`ws_2042901274`) | supplies the named-pipe lua the pipe half calls | Steam Workshop / Nexus |
 
 The dependency is **required** (helper version 102 and later): the manifest and the UI
@@ -335,8 +336,8 @@ engine's.
 Because `uidata.xml` is unreadable mid-session, the offline oracle above can only ever
 answer about a game that has been **closed**. `query` is the complement: a fixed
 vocabulary of questions asked of the running engine over a named pipe. Legacy `query`
-only reads and refuses pause/unpause plus the dedicated automation transport names.
-Pause/unpause have separate subcommands below. The isolated `automation` candidate
+only reads and refuses pause/unpause/save plus the dedicated automation transport names.
+Pause/unpause/save have separate subcommands below. The isolated `automation` candidate
 also supports prepared native actions through a bound session and durable journal;
 see [its scope and limitations](../../docs/live-automation-cli.md). It is not a
 general-purpose Lua/MD evaluator. Its offline checks do not establish deployment
@@ -389,9 +390,10 @@ elsewhere a stale answer is still an answer about a slightly older world, but he
 whole output is a verdict on whether our model matches the engine, so staleness does not
 degrade the result — it inverts what it means.
 
-#### The write half — `pause`, `unpause`, and `pausestate`
+#### The write half — `pause`, `unpause`, `pausestate`, and `save`
 
-Exactly two verbs change the running game. They exist because a live measurement drifts
+Three commands change the running game. `save` is described at the end of this section;
+`pause` and `unpause` exist because a live measurement drifts
 while the game runs — a faction gains tens of objects a minute — so two questions asked
 seconds apart cannot be compared unless the simulation is held still between them.
 
@@ -421,8 +423,21 @@ See KNOWLEDGEBASE.md 2026-09-15.
 - **A lost reply is not a lost write.** The command is sent before the reply is read and is
   never resent. After a write exits `2` or `3`, or is interrupted with Ctrl-C, run
   `pausestate` before anything else.
-- **`query` refuses both names**, so its free-text passthrough is not a second door, and
+- **`query` refuses every write name**, so its free-text passthrough is not a second door, and
   each write prints a banner on stderr, never on stdout.
+
+**`x4live save SLOT`** (helper version 103 and later) asks the game to write one save, by the
+user's decision of 2026-11-18 a plain command like `query`, with no automation journal. It
+never overwrites: `SLOT` must be exactly one of `save_001` to `save_010`, and a slot with any
+existing member in the save folder (a save, a copy, a temp file) is refused with exit `2`
+before anything is sent; the helper then re-checks the game's own save list. Before sending,
+it records size, modification time and SHA-256 of every file in the save folder. After the
+reply it waits (`--settle-timeout`, default 180 s) for a complete save in the slot carrying
+this request's label, `x4live-<request id>`, and exits `0` only when every other file is
+unchanged; any changed, removed or extra file exits `3` and is named. `1` means the game
+refused (for example, saving is not possible right now) and nothing changed. A lost reply is
+resolved by reading the slot, never by resending. The pipe is not authenticated: any program
+running as your Windows user can request a save the same way (empty slots only).
 
 ### `x4save` — removing a mod loses content silently
 
@@ -644,7 +659,7 @@ handled here — it is a secret, not a path, and must never be written to a file
 - `x4validate/_livepipe.py` — the live query channel: named-pipe transport plus an
   eight-clause frame contract (truncation, corruption, protocol skew, FIFO desync).
 - `x4validate/_livecli.py` — `x4live`: dump / extensions / errors / oracle / archive /
-  mappings / query / equipment / pausestate / pause / unpause / harvest / ffi-census / groundtruth /
+  mappings / query / equipment / pausestate / pause / unpause / save / harvest / ffi-census / groundtruth /
   ramp. The only
   tool that compares our model against the ENGINE rather than against more files.
 - `x4validate/_freshness.py` — the two-axis fingerprint every persisted artifact carries, and

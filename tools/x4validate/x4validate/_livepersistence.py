@@ -23,6 +23,11 @@ from ._livesession import _peer, SessionUnavailable
 class PersistenceUnavailable(ValueError):
     pass
 
+#: The only slots a toolkit save may target: the game's ten standard manual slots
+#: (ego_detailmonitorhelper/helper.lua `Helper.validSaveFilenames`, save_%03d for 1..10).
+#: Shared with `_livesave` (`x4live save`), so the two save paths cannot drift. fullmatch only.
+STANDARD_SAVE_SLOT = re.compile(r"save_00[1-9]|save_010")
+
 def _require(ok, why):
     if not ok:
         raise PersistenceUnavailable(why)
@@ -199,7 +204,7 @@ class SlotVerifier:
 
     def reserve(self, request_id, slot):
         _require(_hex(request_id,32) and isinstance(slot,str) and
-                 re.fullmatch("save_00[1-9]|save_010",slot) is not None,"fixed slot/request required")
+                 STANDARD_SAVE_SLOT.fullmatch(slot) is not None,"fixed slot/request required")
         _require(len(self._records)<64,"reservation limit")
         self._routes();started=self._now();identity=self._identity();native=self._native(identity)
         _require(native["saveable"],"native saving unavailable")

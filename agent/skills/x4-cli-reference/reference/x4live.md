@@ -4,12 +4,12 @@
 
 ```text
 usage: x4live [-h] [--version] [--file FILE]
-              {automation,dump,extensions,errors,oracle,archive,mappings,query,equipment,pausestate,pause,unpause,harvest,ffi-census,groundtruth,ramp} ...
+              {automation,dump,extensions,errors,oracle,archive,mappings,query,equipment,pausestate,pause,unpause,save,harvest,ffi-census,groundtruth,ramp} ...
 
 Read what the running engine saw, out of the profile's uidata.xml, and diff it against our model.
 
 positional arguments:
-  {automation,dump,extensions,errors,oracle,archive,mappings,query,equipment,pausestate,pause,unpause,harvest,ffi-census,groundtruth,ramp}
+  {automation,dump,extensions,errors,oracle,archive,mappings,query,equipment,pausestate,pause,unpause,save,harvest,ffi-census,groundtruth,ramp}
     automation          experimental session-bound agent commands; see automation --help
     dump                what the probe captured, with its denominators
     extensions          the engine's extension list, diffed PER ITEM
@@ -28,6 +28,12 @@ positional arguments:
                         only when the engine reads back paused
     unpause             WRITE: undo a pause THIS channel made. Refuses anyone else's pause; exit 0
                         only when the engine reads back running
+    save                WRITE: ask the running game to save into ONE EMPTY standard slot, then
+                        verify the save folder. Never overwrites: an occupied slot is refused
+                        before anything is sent. Exit 0 only when the new save is complete,
+                        carries this request's label, and every other file in the save folder is
+                        unchanged. The pipe is not authenticated: any program running as this
+                        Windows user can request a save the same way (empty slots only)
     harvest             ask the RUNNING engine EVERYTHING we can think to ask, in ONE connection,
                         and write it down
     ffi-census          DISABLED BY DEFAULT (crash containment, F124): set X4_LIVE_ALLOW_FFI=1 to
@@ -158,18 +164,19 @@ usage: x4live query [-h] [--pipe PIPE] [--timeout TIMEOUT] verb ...
 positional arguments:
   verb               ping | probe | containerprobe | censusprobe | galaxyprobe | echo | errors |
                      ext | macro | globals | player | component | objects | stations | ships |
-                     compare | recon | pausestate | ffisyms. `pause` and `unpause` are WRITES and
-                     are refused here: use `x4live pause` / `x4live unpause`. START WITH `probe`:
-                     it reports build= (is the game running the file on disk) and loaded_at= (when
-                     this chunk last ran -- a UI reload empties the id allowlist, and both alt-
-                     enter and loading a save cause one, while the build stays the same). TWO
-                     TOKEN KINDS, never interconverted: an OBJECT id looks like `33556742ULL`, a
-                     SECTOR token looks like `ID: 7479` (quote it -- it contains a space) and
-                     comes from `player`. Sector tokens are NOT stable across launches; never save
-                     one. `objects <sector|-> [ship|station|all] [faction] [--hidden] [--wide]` is
-                     the enumeration core; `stations`/`ships <faction> [sector]` are wrappers over
-                     it. Rows are id|class|name|owner|sector|x,y,z|flags where flags is k=known
-                     d=docked m=masstraffic u=unit w=wreck e=enemy and a trailing v for vanilla's
+                     compare | recon | pausestate | ffisyms. `pause`, `unpause` and `save` are
+                     WRITES and are refused here: use `x4live pause` / `x4live unpause` / `x4live
+                     save`. START WITH `probe`: it reports build= (is the game running the file on
+                     disk) and loaded_at= (when this chunk last ran -- a UI reload empties the id
+                     allowlist, and both alt-enter and loading a save cause one, while the build
+                     stays the same). TWO TOKEN KINDS, never interconverted: an OBJECT id looks
+                     like `33556742ULL`, a SECTOR token looks like `ID: 7479` (quote it -- it
+                     contains a space) and comes from `player`. Sector tokens are NOT stable
+                     across launches; never save one. `objects <sector|-> [ship|station|all]
+                     [faction] [--hidden] [--wide]` is the enumeration core; `stations`/`ships
+                     <faction> [sector]` are wrappers over it. Rows are
+                     id|class|name|owner|sector|x,y,z|flags where flags is k=known d=docked
+                     m=masstraffic u=unit w=wreck e=enemy and a trailing v for vanilla's
                      isObjectValid verdict (? = undecidable). NOT A CENSUS: ownerless objects are
                      invisible to any owner query, hidden factions need --hidden, and ~93% of rows
                      are Unknown because names are player-knowledge -- ids, positions and flags
@@ -239,6 +246,30 @@ options:
   --pipe PIPE        pipe name (default: $X4_LIVE_PIPE or built-in)
   --timeout TIMEOUT  seconds to wait for each reply (default: 10.0); the wait for the game to
                      connect is the larger of this and 15 s
+```
+
+## `x4live save`
+
+```text
+usage: x4live save [-h] [--pipe PIPE] [--timeout TIMEOUT] [--settle-timeout SETTLE_TIMEOUT]
+                   [--settle SETTLE]
+                   slot
+
+positional arguments:
+  slot                  exactly one empty standard slot, save_001 to save_010 (no wildcard;
+                        quicksave and autosaves are refused)
+
+options:
+  -h, --help            show this help message and exit
+  --pipe PIPE           pipe name (default: $X4_LIVE_PIPE or built-in)
+  --timeout TIMEOUT     seconds to wait for each reply (default: 10.0); the wait for the game to
+                        connect is the larger of this and 15 s
+  --settle-timeout SETTLE_TIMEOUT
+                        seconds to wait, after the reply (or after a lost reply), for a complete
+                        save to appear in the slot (default: 180.0; more than 0, at most 3600).
+                        Only the save folder is read while waiting; nothing is resent
+  --settle SETTLE       seconds the slot file must stay unchanged before it is read and checked as
+                        a complete save (default: 3.0; 0.5 to 60)
 ```
 
 ## `x4live harvest`

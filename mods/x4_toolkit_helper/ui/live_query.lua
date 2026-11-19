@@ -1,11 +1,13 @@
--- X4 Toolkit live query channel: legacy reads/pause plus bound automation transport.
+-- X4 Toolkit live query channel: reads, pause/unpause, save, plus bound automation transport.
 -- Automation is a separate structured route with session identity, immutable
--- preparation and durable host dispatch; it never uses the legacy pause wrapper.
+-- preparation and durable host dispatch; it never uses the legacy write wrapper.
 --
--- THE LEGACY WRITES: `pause` and `unpause`, held in WRITE_VERBS. Neither takes an
--- argument or touches a savegame. Structured automation routes are separate: their
--- fixed registered actions require bound session/preparation and host journaling.
--- No arbitrary script evaluation is exposed by either route.
+-- THE WRITES, all held in WRITE_VERBS: `pause` and `unpause` (argument-free) and
+-- `save <slot> <request>`, which writes ONE save into an EMPTY standard slot
+-- save_001..save_010 and never overwrites one (user decision 2026-11-18: a plain CLI
+-- capability, no session journal; the pipe is not authenticated). Structured automation
+-- routes are separate: their fixed registered actions require bound session/preparation
+-- and host journaling. No arbitrary script evaluation is exposed by either route.
 --
 -- Answers a fixed vocabulary of questions from an external Python server over a
 -- named pipe, so the toolkit can ask the RUNNING engine something without a
@@ -58,7 +60,7 @@ local PROTO = 1
 --:
 --: Kept honest by `test_the_BUILD_constant_matches_the_file`, so editing the lua and
 --: forgetting to re-stamp this fails the suite rather than silently lying in game.
-local BUILD = "3dbdc1ef"
+local BUILD = "f4a38b6f"
 local TAG_CMD, TAG_REPLY = "MQ", "MR"
 
 -- Cap on echo, the ramp instrument. Generous: the point of the ramp is to FIND the
@@ -406,8 +408,9 @@ local function reply(seq, status, payload, unbounded)
         status = "ERR"
         payload = write_advisory({ verb = writing_verb, reason = "unwrapped" }) .. "\t"
                   .. "this WRITE verb's reply did not lead with its advisory row, so it "
-                  .. "was wrapped here and marked untrusted. The pause state was NOT "
-                  .. "verified -- check it with `x4live pausestate`. Original reply: "
+                  .. "was wrapped here and marked untrusted. Its effect was NOT verified "
+                  .. "-- check it with `x4live pausestate`, or read the save slot. Original "
+                  .. "reply: "
                   .. (#payload > 2000
                       and (utf8_prefix(payload, 2000) .. " [+"
                            .. (#payload - #utf8_prefix(payload, 2000)) .. " bytes cut]")
@@ -459,7 +462,7 @@ end
 -- --------------------------------------------------------------------------- --
 -- verbs -- a fixed dispatcher, not a console. MD has no eval and we ship no lua one.
 -- TWO TABLES: `verbs` only reads, and WRITE_VERBS holds the entire write vocabulary --
--- `pause` and `unpause`, both argument-free. "Is this a write?" is a table lookup.
+-- `pause`, `unpause` and `save`. "Is this a write?" is a table lookup.
 -- --------------------------------------------------------------------------- --
 
 local function sorted_keys(t)
@@ -550,6 +553,18 @@ if ffi_ok then
         DebugError("X4TOOLKIT_LIVE ffi.cdef IsGamePaused failed: " .. tostring(perr)
                    .. " -- pause, unpause and pausestate will refuse; the read verbs "
                    .. "are unaffected")
+    end
+end
+
+--: The one declaration the `save` verb needs, guarded on its own like the pause one, so a
+--: failure costs `save` only. Copied verbatim from vanilla ego_gameoptions/gameoptions.lua:271.
+local save_cdef_ok = false
+if ffi_ok then
+    local sok, serr = pcall(ffi.cdef, [[ bool IsSaveListLoadingComplete(void); ]])
+    save_cdef_ok = sok and true or false
+    if not sok then
+        DebugError("X4TOOLKIT_LIVE ffi.cdef IsSaveListLoadingComplete failed: " .. tostring(serr)
+                   .. " -- save will refuse; every other verb is unaffected")
     end
 end
 
@@ -3336,6 +3351,142 @@ end
 
 WRITE_VERBS.unpause = function(seq, ...)
     return pause_write(seq, "unpause", false, "Unpause", select("#", ...))
+end
+
+-- --------------------------------------------------------------------------- --
+-- the SAVE verb -- `save <slot> <request>` writes ONE save into an EMPTY standard slot
+-- --------------------------------------------------------------------------- --
+--
+-- USER DECISION 2026-11-18: `x4live save` is a plain CLI capability like `query` and
+-- `equipment`. There is no session journal and no grant: the pipe is not authenticated,
+-- so any program running as the same Windows user can ask for a save. What this verb
+-- guarantees instead is NEVER-OVERWRITE: it saves only into one of save_001..save_010
+-- that the engine's own save list does not hold, and the toolkit checks the save folder
+-- before and after. It never loads, deletes or overwrites a save.
+--
+-- Vanilla shapes, copied rather than composed (ego_gameoptions/gameoptions.lua):
+--   the save list filter is Helper.validSaveFilenames (helper.lua:881-889), read only
+--   once C.IsSaveListLoadingComplete() is true (:11605-11608); an EMPTY manual slot is a
+--   save_%03d filename absent from that list (:11729-11735); saving is gated by
+--   IsSavingPossible(false) (:6241); the call is SaveGame(filename, name) (:9296).
+-- The name is `x4live-<request>`, so the toolkit can tie the file it finds to its request.
+local SAVE_SLOTS = {}
+for i = 1, 10 do SAVE_SLOTS[string.format("save_%03d", i)] = true end
+local function valid_save_filenames()
+    local t = { online_save = true, quicksave = true }
+    for i = 1, 3 do t[string.format("autosave_%02d", i)] = true end
+    for k in pairs(SAVE_SLOTS) do t[k] = true end
+    return t
+end
+
+local function save_advisory(t)
+    return table.concat({
+        "write=yes",
+        "verb=save",
+        "reason=" .. tostring(t.reason),
+        "acted=" .. yn(t.acted),
+        "slot=" .. tostring(t.slot or "unknown"),
+        "label=" .. tostring(t.label or "unknown"),
+        "build=" .. BUILD,
+    }, " ")
+end
+
+--: GUARD ORDER, each clause with its own test: args -> slot -> request -> engine calls ->
+--: catalogue declared and loaded -> offline -> saveable -> list readable -> slot empty ->
+--: label unused -> ACT. Nothing before ACT calls SaveGame.
+local function save_write(seq, nargs, slot, request)
+    local t = { acted = false }
+    local function finish(status, reason, prose)
+        t.reason = reason
+        DebugError("X4TOOLKIT_LIVE WRITE save result: reason=" .. reason .. " acted="
+                   .. yn(t.acted) .. " slot=" .. tostring(t.slot))
+        reply(seq, status, save_advisory(t) .. "\t" .. prose)
+    end
+    local nothing = " Nothing was saved."
+    if nargs ~= 2 then
+        return finish("ERR", "args", "save takes exactly a slot and a request id, and was "
+            .. "given " .. nargs .. " argument(s)." .. nothing)
+    end
+    if type(slot) ~= "string" or not SAVE_SLOTS[slot] then
+        return finish("ERR", "slot", "save only writes one of save_001..save_010; "
+            .. tostring(slot) .. " is not one." .. nothing)
+    end
+    t.slot = slot
+    if type(request) ~= "string" or #request ~= 32 or request:find("[^0-9a-f]") then
+        return finish("ERR", "request", "the request id must be 32 lowercase hex." .. nothing)
+    end
+    t.label = "x4live-" .. request
+    local fns = {}
+    for _, name in ipairs({ "GetSaveList", "IsSavingPossible", "SaveGame",
+                            "OnlineIsOnlineModeActive" }) do
+        fns[name] = engine_call(name)
+        if fns[name] == nil then
+            return finish("ERR", "no-engine-call", "the engine global " .. name
+                .. " is not a function in this chunk." .. nothing)
+        end
+    end
+    if not save_cdef_ok then
+        return finish("ERR", "unreadable", "the IsSaveListLoadingComplete ffi declaration "
+            .. "did not load, so the save list cannot be trusted." .. nothing)
+    end
+    local lok, loaded = pcall(function() return ffi.C.IsSaveListLoadingComplete() end)
+    if not lok or type(loaded) ~= "boolean" then
+        return finish("ERR", "unreadable", "C.IsSaveListLoadingComplete did not answer a "
+            .. "boolean (" .. tostring(loaded) .. ")." .. nothing)
+    end
+    if not loaded then
+        return finish("ERR", "catalogue-loading", "the game is still loading its save list; "
+            .. "try again in a moment." .. nothing)
+    end
+    local ook, online = pcall(fns.OnlineIsOnlineModeActive)
+    if not ook or type(online) ~= "boolean" then
+        return finish("ERR", "unreadable", "the online mode cannot be read ("
+            .. tostring(online) .. ")." .. nothing)
+    end
+    if online then
+        return finish("ERR", "online", "an online (Ventures) game is active; save only "
+            .. "writes offline saves." .. nothing)
+    end
+    local pok, possible = pcall(fns.IsSavingPossible, false)
+    if not pok or type(possible) ~= "boolean" then
+        return finish("ERR", "unreadable", "IsSavingPossible did not answer a boolean ("
+            .. tostring(possible) .. ")." .. nothing)
+    end
+    if not possible then
+        return finish("ERR", "not-saveable", "the game reports that saving is not possible "
+            .. "right now (the in-game save menu would be greyed out)." .. nothing)
+    end
+    local gok, rows = pcall(fns.GetSaveList, valid_save_filenames())
+    if not gok or type(rows) ~= "table" then
+        return finish("ERR", "unreadable", "GetSaveList did not return a list ("
+            .. tostring(rows) .. ")." .. nothing)
+    end
+    for _, row in ipairs(rows) do
+        if type(row) ~= "table" or type(row.filename) ~= "string" then
+            return finish("ERR", "unreadable", "the save list holds a row without a "
+                .. "filename." .. nothing)
+        end
+        if row.filename == slot then
+            return finish("ERR", "occupied", slot .. " already holds a save; save never "
+                .. "overwrites." .. nothing)
+        end
+        if row.name == t.label then
+            return finish("ERR", "label-exists", "a save named " .. t.label
+                .. " already exists." .. nothing)
+        end
+    end
+    t.acted = true
+    local ok, err = pcall(fns.SaveGame, slot, t.label)
+    if not ok then
+        return finish("ERR", "raised", "SaveGame raised: " .. tostring(err) .. ". It may "
+            .. "have acted anyway: the toolkit reads the slot, and never resends.")
+    end
+    return finish("OK", "requested", "the engine accepted SaveGame(" .. slot .. "). It "
+        .. "writes the file asynchronously; the toolkit verifies it by reading the save folder.")
+end
+
+WRITE_VERBS.save = function(seq, ...)
+    return save_write(seq, select("#", ...), ...)
 end
 
 --: A READ, and so in `verbs`: the pause state and who owns it, changing neither -- not

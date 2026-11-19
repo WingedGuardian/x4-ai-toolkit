@@ -76,6 +76,9 @@ before acknowledging requests; implement probe/fresh/resume as above; emit LOAD,
 TRIGGER and invalidation markers. Native `md/notifications.xml:3841` demonstrates
 the load event, but does not prove the new provider's wiring or event ordering.
 The legacy helper manifest declares save=false and describes no MD/save-state writes.
+(SUPERSEDED 2026-11-18 for save-state writes: helper version 103 adds the `x4live save`
+write verb, which writes one save into an empty standard slot, and its manifest says so.
+It still describes no MD writes.)
 That description does not cover the candidate session provider. Its composed
 manifest/loader footprint needs updated disclosure and separate application review.
 Stable persistent world UUID behavior has not been verified for this helper;

@@ -1538,8 +1538,12 @@ def test_a_write_sends_its_verb_EXACTLY_once_with_NO_arguments(verb, monkeypatch
     assert pipe.asks == [(verb, ())]
 
 
-def test_the_python_write_verb_list_is_exactly_pause_and_unpause():
-    assert set(C.WRITE_VERBS) == {"pause", "unpause"}
+def test_the_python_write_verb_list_is_exactly_pause_unpause_and_save():
+    """`save` joined on 2026-11-18 (user decision); it has its own subcommand and is not
+    an argument-free pause verb, so `cmd_write` must never accept it."""
+    assert set(C.WRITE_VERBS) == {"pause", "unpause", "save"}
+    assert set(C.PAUSE_VERBS) == {"pause", "unpause"}
+    assert C.cmd_write("save", None, 1.0) == 2
 
 
 @pytest.mark.parametrize("verb", ["pause", "unpause"])

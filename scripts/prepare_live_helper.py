@@ -51,6 +51,9 @@ EXTENSIONS={
 DESCRIPTION=(
     "EXPERIMENTAL: use a disposable test world or save. Companion for the X4 community toolkit. "
     "Legacy queries read engine observations; explicit pause/unpause commands change pause state. "
+    "An explicit x4live save command can write a save: one new save into one empty standard slot "
+    "(save_001 to save_010) that the game's save list does not hold; it never overwrites, loads or "
+    "deletes a save. "
     "The engine snapshot probe writes profile UI userdata. Bound automation adds MD session variables "
     "and blackboard queues, native menu interaction, order submission/cancellation, camera and SETA control. "
     "Menu actions can purchase or modify equipment and ships. An attack order may target any object the "
