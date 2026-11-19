@@ -270,7 +270,7 @@ class NeverOpened:
 
     * a PLAIN-path file on a ship macro/component the effective index sends to a copier's own
       path: the engine loads `extensions/<owner>/<vpath>` (the copier's complete file and its
-      nested patches) as the document (MEASURED 5 of 5 files in one log);
+      nested patches) as the document (the rule: MEASURED 10 of 10 copies in one log);
     * a NESTED `extensions/<owner>/<rel>` patch where the index entry is the base path and
       <owner>'s complete copy MERGES at the plain path (MEASURED once).
     That the LAST of several index entries decides is INFERRED."""
@@ -2423,8 +2423,7 @@ def _never_opened_split(vpath: str, per_mod: dict[str, str], folder_to_path: dic
         reason = (f"the effective index entry for this file's name points at '{got.value}'"
                   + (f" (the last of {got.count} entries)" if got.count > 1 else "")
                   + f", so the engine loads '{owner}'" + "'s own complete copy and its nested "
-                  "patches and never opens this plain-path file (MEASURED 5 of 5, BLIND-SPOTS "
-                  "F383; last entry INFERRED)")
+                  f"patches and never opens this plain-path file ({_merge.INDEX_RULE_EVIDENCE})")
     else:
         got = _merge.nested_copy_merges(vpath, config, roots)
         if isinstance(got, _merge.IndexPartial):

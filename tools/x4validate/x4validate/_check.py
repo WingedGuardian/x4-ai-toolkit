@@ -1393,8 +1393,7 @@ def _index_load_verdict(vpath: str, merged: _merge.MergeResult, mod_dir: Path | 
                    f"for this file's name points at '{value}'"
                    + (f" (the last of {count} entries)" if count > 1 else "")
                    + f", so the engine loads '{owner}''s own complete copy and its nested "
-                   f"patches instead (MEASURED for 5 of 5 such files in one log, BLIND-SPOTS "
-                   f"F383; that the LAST entry decides is INFERRED). To change that document, "
+                   f"patches instead ({_merge.INDEX_RULE_EVIDENCE}). To change that document, "
                    f"ship the patch at extensions/{owner}/{vpath}", vpath)
         return True
     owner, rel = nested

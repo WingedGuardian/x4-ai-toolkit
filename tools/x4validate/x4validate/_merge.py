@@ -1269,13 +1269,21 @@ def complete_at(root: Path, vpath: str) -> etree._Element | None:
     return found if found is not None and found.tag != "diff" else None
 
 
+#: What the index rule rests on, for every per-file line that applies it (x4compat NEVER
+#: OPENED, the store/dump `unmeasured` note, x4validate's load-path ERROR). It states the RULE's
+#: evidence, not a measurement of the file the line is about: one game log, 10 of 10
+#: `assets/units/` complete copies (BLIND-SPOTS F383); that the LAST entry decides is INFERRED.
+INDEX_RULE_EVIDENCE = ("the engine loads the document the last index entry names: MEASURED for "
+                       "10 of 10 copies in one game log, BLIND-SPOTS F383; last-entry-wins "
+                       "INFERRED")
+
+
 def index_note(owner: str, value: str, count: int, vpath: str) -> str:
     """The `MergeResult.unmeasured` line for a document the index sends to a copier."""
     return (f"{vpath}: the effective index entry for this file's name points at '{value}'"
             + (f" (the last of {count} entries)" if count > 1 else "")
             + f", so the engine loads '{owner}''s own complete copy and its nested patches as "
-            f"the document, and opens no plain-path file on this path (MEASURED for 5 of 5 such "
-            f"files in one log, BLIND-SPOTS F383; that the LAST entry decides is INFERRED)")
+            f"the document, and opens no plain-path file on this path ({INDEX_RULE_EVIDENCE})")
 
 
 def _nested_on_mod(vpath: str) -> bool:

@@ -340,6 +340,26 @@ def test_x4compat_lists_the_plain_diff_as_NEVER_OPENED_and_in_no_other_list(tmp_
     _no_disagreement(rep)
 
 
+def test_the_per_file_reason_states_the_RULE_not_a_per_file_measurement(tmp_path):
+    """The NEVER OPENED reason, the store/dump `unmeasured` line and x4validate's load-path
+    ERROR say what the RULE rests on (one game log, 10 of 10 copies; last entry INFERRED),
+    never "MEASURED 5 of 5", which was one mod's count and reads as a measurement of the
+    file in front of the reader."""
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path)
+    cfg = _merge.Config(reference=ref, include_packed_dlc=False)
+    rep = _compat.analyze(tmp_path / "extensions", config=cfg)
+    res = _merge.build_effective(REL, _cfg(ref, a, b, c), index_roots=[a, b, c])
+    _w(ref / "libraries" / "wares.xml", "<wares/>")   # validate's reference sanity check
+    vrep = _check.validate(b, _cfg(ref, a))
+    texts = {"never_opened": rep.never_opened[0].reason,
+             "unmeasured": next(u for u in res.unmeasured if "F383" in u),
+             "load-path": next(f.message for f in vrep.findings if f.category == "load-path")}
+    for where, text in texts.items():
+        assert "5 of 5" not in text, (where, text)
+        assert _merge.INDEX_RULE_EVIDENCE in text, (where, text)
+
+
 def test_TWIN_x4compat_with_the_base_entry_last_opens_the_plain_diff(tmp_path):
     from x4validate import _compat
     ref, a, b, c = _world(tmp_path, copier_index=None)
