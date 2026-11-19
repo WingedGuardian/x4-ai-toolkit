@@ -360,6 +360,29 @@ def test_the_per_file_reason_states_the_RULE_not_a_per_file_measurement(tmp_path
         assert _merge.INDEX_RULE_EVIDENCE in text, (where, text)
 
 
+def test_an_UNREADABLE_never_opened_file_keeps_its_readability_skip(tmp_path):
+    """A never-opened plain diff that cannot be parsed is announced as unreadable (its ops
+    could not be listed), never reported like a COMPLETE file (line 0, empty sel)."""
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path)
+    _w(b / REL, '<diff><replace sel="//x">')
+    rep = _compat.analyze(tmp_path / "extensions", config=_merge.Config(reference=ref,
+                                                                       include_packed_dlc=False))
+    rows = [n for n in rep.never_opened if n.mod == "b_patch"]
+    assert [(n.line, n.sel) for n in rows] == [(0, _compat.UNREADABLE_SEL)], rows
+    skips = [s for s in rep.skipped if s.what == f"b_patch at {REL}"]
+    assert len(skips) == 1 and "could not be read" in skips[0].why, rep.skipped
+
+
+def test_TWIN_a_readable_never_opened_file_has_no_readability_skip(tmp_path):
+    from x4validate import _compat
+    ref, a, b, c = _world(tmp_path)
+    rep = _compat.analyze(tmp_path / "extensions", config=_merge.Config(reference=ref,
+                                                                       include_packed_dlc=False))
+    assert not [s for s in rep.skipped if s.what.startswith("b_patch")], rep.skipped
+    assert all(n.sel != _compat.UNREADABLE_SEL for n in rep.never_opened)
+
+
 def test_TWIN_x4compat_with_the_base_entry_last_opens_the_plain_diff(tmp_path):
     from x4validate import _compat
     ref, a, b, c = _world(tmp_path, copier_index=None)

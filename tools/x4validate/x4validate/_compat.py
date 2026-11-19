@@ -2398,6 +2398,11 @@ def _declared_dependencies(mods: list[dict]) -> dict[str, dict[str, str]]:
     return out
 
 
+#: `NeverOpened.sel` of a never-opened file that could not be read: its ops could not be
+#: listed, so its one row must not read like a COMPLETE file's (line 0, empty sel).
+UNREADABLE_SEL = "(unreadable: ops not listed)"
+
+
 def _never_opened_split(vpath: str, per_mod: dict[str, str], folder_to_path: dict[str, Path],
                         roots: list[Path], config: _merge.Config, report: CompatReport,
                         cand_folder: str | None) -> dict[str, str]:
@@ -2444,12 +2449,20 @@ def _never_opened_split(vpath: str, per_mod: dict[str, str], folder_to_path: dic
     for f in gone:
         if cand_folder is not None and cand_folder not in (f, owner):
             continue
+        # It leaves *per_mod* here, so the main loop never reads it: its readability is
+        # announced HERE, in the main loop's channel and wording.
         try:
             root = _merge.overlay_root(folder_to_path[f], per_mod[f], [])
-        except (etree.LxmlError, OSError, ValueError):
-            root = None   # silent-ok: its readability is the main loop's channel; one row
-        ops = ([o for o in _op_list(root) if o.tag in _OPS]
-               if root is not None and root.tag == "diff" else [])
+            why = None if root is not None else "it could not be read or parsed"
+        except (etree.LxmlError, OSError, ValueError) as exc:
+            root, why = None, str(exc)
+        if why is not None:
+            report.skip(f"{f} at {per_mod[f]}",
+                        f"could not be read, so its ops could not be listed under NEVER "
+                        f"OPENED (the engine never opens it either way): {why}")
+            report.never_opened.append(NeverOpened(vpath, f, 0, UNREADABLE_SEL, owner, reason))
+            continue
+        ops = [o for o in _op_list(root) if o.tag in _OPS] if root.tag == "diff" else []
         for op in ops or [None]:
             report.never_opened.append(NeverOpened(
                 vpath, f, (op.sourceline or 0) if op is not None else 0,
