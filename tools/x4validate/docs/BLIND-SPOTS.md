@@ -489,6 +489,7 @@ memory or from another session -- a remembered id was stale within a day here.
 | F387 | Re-adds x4compat still does not see: a removed NESTED node added back, a re-add in a non-library file (macros, md, aiscripts), and a complete (non-`<diff>`) library file redefining an entry a mod removed | **BLIND SPOT (measured)** · PRE-ARC | independent review 2026-11-17, one fixture each (ware/price; macro m1; a full union file): 0 rows, while the store names the re-adder's value | FIXED 2026-11-18 (4.3): nested keyed nodes (parent identity + key), macro/component/md/aiscript files, and complete union files re-defining a removed entry; only `<remove>`-then-add revives (a `<replace>` never does) and a `{page,id}` name is no identity (user decisions 2026-11-18). Live: +10 advisory re-add rows (all declared); HARD 230 -> 262, of which +41/-5 one mod's own remove-and-re-add of connections over another mod's `@tags` edits, -4 rows moved to advisory |
 | F388 | `test_workflow_ownership` accepted `timeout-minutes: N # comment`, which the shared ci-policy contract (`ci/contracts.py` `field()`) reads as unbounded and rejects | **DEFECT (measured)** · IN-ARC (4.2.0 round) | Fast checks went red in 6 s on run 44275072194 after a 2 h local gate; 1 regex, 2 workflow files | FIXED 2026-11-18: the regex mirrors `field()`; RED test plus the old regex re-planted as a control; the pre-push preflight now runs the pinned contract itself |
 | F389 | The cross_tool input snapshot is name-only for non-XML files: loose non-XML files are 0-byte stubs and non-XML catalog members keep their line but not their bytes; its proof checks the reference only through the survey digest; `_resolve` falls back to `GAME_ROOT/extensions/<name>` for a folder that is not an overlay, which reads live inside the snapshot world | **SCOPE LIMIT (read)** · IN-ARC (4.3) | READ `_inputs.py`; the fallback path not measured (INFERRED rare); a zeroed member keeps its original md5, so a read of it fails loudly rather than returning nothing | OPEN, disclosed: a check that needs non-XML bytes inside the world refuses (md5) instead of answering; x4fresh's "snapshot-backed" label does not re-hash, cross_tool's proof does |
+| F391 | A reused pre-push pass record (the gate skipping the hook suites when no guard path changed) rests on: the shared ci-policy contract fetched at its pinned SHA over TLS with the `.git` cache trusted; a toolchain record of uv's and the project's Python only (not the PATH Python or Git Bash the hook suites run under); a clean-tree check that ignores gitignored inputs shared across worktrees (`x4-paths.env`, `KNOWLEDGEBASE.local.md`); guard paths derived one level deep (what hook-run scripts import, e.g. `x4validate._paths`, is not covered) | **SCOPE LIMIT (read)** · IN-ARC (4.3) | 4 named gaps from the 4.3 release review; none measured as having caused a false reuse | OPEN, disclosed: CI runs every hook suite on every release head regardless |
 | F390 | `test_freshcli.py::test_only_the_requested_artifacts_decide_the_exit_code` called `rebuild(("x4eff",))` without stubbing the builder, so on a configured machine with Java it ran the real `build-effective.sh` | **DEFECT (measured)** · PRE-ARC | 2026-11-18, the 4.3 snapshot lane: one real x4eff build started from a test run and was stopped by hand (it wrote into that worktree's BaseX home only) | FIXED 2026-11-18: the `sd` fixture fails any test that reaches the real `fc.builder`; with the guard alone exactly that test failed; its stub builder exits 1 |
 | F365 | `_merge` modelled `<add pos="append">` as an append; the engine skips the node | **FIXED (measured)** · PRE-ARC | 11 of 5,772 installed `<add>` ops (233 mods), all in one diagnostic mod; the game dropped all 11 while validation was clean | `tests/test_merge_add_pos.py`; changes `_merge`, so the engine fingerprint moves |
 | F366 | `_cat.read_path` read every packed non-XML member as absent | **FIXED (measured)** · PRE-ARC | every non-`.xml`/`.xsd` catalog member; all in-tree callers pass XML, so no current answer changes | `tests/test_cat.py::test_read_path_reads_non_xml_members` |
@@ -14068,7 +14069,9 @@ the effective index names, through one resolver (`_merge.EffectiveIndex`, `build
 lists never-opened patches in its own NEVER OPENED section (advisory, exit 0; user decision 2026-11-18). MEASURED,
 x4compat 4a7c6090 vs the item-4 head on the live install: vro on 5 of 5 own-copy files, plus 6 ops of 2 other mods,
 moved from "not applied" to NEVER OPENED; collisions and dependent overwrites unchanged. Scratch stores: -5 duplicate
-entities and -356 vro attributes on those 5 files only. Last-entry-wins remains INFERRED from 3 cases.
+entities and -356 vro attributes on those 5 files only. Last-entry-wins remains INFERRED from 3 cases. The gate's
+store-origin check for a NESTED never-opened row could never go red (MEASURED on the fixture: the store holds the
+nested patcher's values at neither spelling), so those rows are now listed as not compared, never as agreement.
 
 ## F384 - `_resolve.build_index` ignored index diff ops, so every file reader resolved some names through the wrong entry · **DEFECT (measured)** · PRE-ARC · confidence 95% · FIXED 2026-11-17
 
@@ -14265,3 +14268,14 @@ stubbing the builder, so on a configured machine with Java it ran `build-effecti
 databases were dropped). The `sd` fixture already failed a real BACKGROUND spawn but not a foreground builder. Fixed: `sd`
 fails any test that reaches the real `fc.builder`; with that guard alone exactly this test failed (MEASURED), and it now
 stubs a builder that exits 1.
+
+## F391 - a reused pre-push pass record can skip the hook suites after a change they would have caught · **SCOPE LIMIT (read)** · IN-ARC · confidence 80% · OPEN 2026-11-18, disclosed
+
+The 4.3 pre-push gate reuses a pass record (keyed by tree, base, gate hash, uv and project Python versions) and skips the
+hook suites when no guard path changed since it. Four inputs are outside that key: (1) the shared ci-policy contract is
+fetched at its pinned SHA over TLS and the cached copy under `.git` is trusted without re-checking; (2) the PATH Python
+and Git Bash the hook suites actually run under are not recorded; (3) the clean-tree check ignores gitignored files,
+which differ between worktrees sharing one record store (`x4-paths.env`, `KNOWLEDGEBASE.local.md`, read by
+`session-canary.sh`); (4) the guard paths are derived one level deep from the hook files, so a module a hook-run script
+imports (`x4validate._paths` via `x4canary`/`x4lock`) is not covered. READ from the 4.3 release review; none measured as
+having caused a false reuse. CI runs every hook suite on every release head, so this narrows only the local gate.
