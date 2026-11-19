@@ -473,7 +473,8 @@ def test_cross_tool_a_NESTED_never_opened_row_is_not_counted_as_agreement(tmp_pa
         assert [n.mod for n in rep.never_opened] == ["c_nest"], rep.never_opened
         assert gate.never_opened_origins(con, rep) == (0, [], 1), idx
         monkeypatch.undo()
-    gate.failures.clear(); gate.cannot.clear()
+    gate.failures.clear()
+    gate.cannot.clear()
     gate.check_never_opened_origins(con, rep)
     out = capsys.readouterr().out
     assert "not compared x1 [explained]" in out and gate.failures == [], out
