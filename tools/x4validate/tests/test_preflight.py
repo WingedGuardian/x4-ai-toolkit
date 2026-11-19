@@ -184,3 +184,67 @@ def test_the_preflight_is_export_ignored_like_the_gate():
         r = subprocess.run(["git", "-C", str(REPO), "check-attr", "export-ignore", "--", p],
                            capture_output=True, text=True, check=True)
         assert r.stdout.strip().endswith("set"), r.stdout
+
+
+# --------------------------------------------------------------------------- syntax under an older interpreter
+
+NEW_FSTRING = "x = ['a', 'b']\ny = f\"{'\n'.join(x)}\"\n"   # a backslash inside an f-string expression: 3.12+ only
+
+
+def _py_repo(root, body):
+    (root / "tools" / "x4validate").mkdir(parents=True)
+    (root / "tools" / "x4validate" / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.13"\n',
+                                                                  encoding="utf-8")
+    (root / "m.py").write_text(body, encoding="utf-8")
+    _git(root, "add", "m.py")
+
+
+def test_an_older_interpreter_hands_the_parse_to_the_project_python(root, monkeypatch):
+    """The pre-push hook started this under Python 3.10 (2026-11-18): 3 valid files read as syntax errors."""
+    pf = _module()
+    _py_repo(root, NEW_FSTRING)
+    seen = []
+    monkeypatch.setattr(pf, "RUNNING_PYTHON", (3, 10))
+    monkeypatch.setattr(pf, "_syntax_under_project_python", lambda r, files, need: seen.append((files, need)) or (0, "ok"))
+    assert pf.check_syntax(root) == (0, "ok")
+    assert seen == [(["m.py"], (3, 13))]
+
+
+def test_twin_a_new_enough_interpreter_parses_in_process(root, monkeypatch):
+    pf = _module()
+    _py_repo(root, "x = 1\n")
+    monkeypatch.setattr(pf, "RUNNING_PYTHON", (3, 13))
+    monkeypatch.setattr(pf, "_syntax_under_project_python", lambda *a: pytest.fail("delegated although new enough"))
+    assert pf.check_syntax(root)[0] == 0
+
+
+def test_twin_a_real_syntax_error_still_fails_in_process(root, monkeypatch):
+    pf = _module()
+    _py_repo(root, "def (:\n")
+    monkeypatch.setattr(pf, "RUNNING_PYTHON", (3, 13))
+    rc, msg = pf.check_syntax(root)
+    assert rc == 1 and "m.py:1" in msg
+
+
+def test_the_project_interpreter_that_cannot_run_is_could_not_run(root, monkeypatch):
+    pf = _module()
+    _py_repo(root, "x = 1\n")
+    monkeypatch.setattr(pf, "RUNNING_PYTHON", (3, 10))
+    real = pf.subprocess.run
+
+    def no_uv(cmd, *a, **k):
+        if cmd[0] == "uv":
+            raise OSError("no uv")
+        return real(cmd, *a, **k)
+    monkeypatch.setattr(pf.subprocess, "run", no_uv)
+    rc, msg = pf.check_syntax(root)
+    assert rc == 2 and "uv could not run" in msg
+
+
+def test_the_real_repo_parses_under_the_project_python_when_started_by_an_old_one(monkeypatch):
+    """End to end on this checkout, through real uv: what the 3.10-started gate must report."""
+    pf = _module()
+    monkeypatch.setattr(pf, "RUNNING_PYTHON", (3, 10))
+    rc, msg = pf.check_syntax(REPO)
+    assert rc == 0, msg
+    assert "project interpreter" in msg

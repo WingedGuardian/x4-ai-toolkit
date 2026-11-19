@@ -55,11 +55,57 @@ def run(cmd, cwd):
     return p.returncode, (p.stdout + p.stderr), time.monotonic() - t
 
 
+#: The interpreter this preflight runs under. The pre-push hook starts it with whatever `python` is first on PATH
+#: (3.10 on the maintainer's machine, 2026-11-18), while the toolkit and CI are 3.13: parsing 3.12+ f-strings in-process
+#: there reported 3 valid files as syntax errors. Patchable by the tests.
+RUNNING_PYTHON = tuple(sys.version_info[:2])
+
+_SYNTAX_SNIPPET = (
+    "import ast, sys\n"
+    "bad = []\n"
+    "for f in sys.stdin.read().split('\\0'):\n"
+    "    if not f: continue\n"
+    "    try: ast.parse(open(f, 'rb').read(), filename=f)\n"
+    "    except SyntaxError as e: bad.append(f'{f}:{e.lineno}: {e.msg}')\n"
+    "    except OSError as e: bad.append(f'{f}: unreadable ({e})')\n"
+    "print('\\n'.join(bad[:20]))\n"
+    "sys.exit(1 if bad else 0)\n")
+
+
+def _required_python(root: Path):
+    """(major, minor) from tools/x4validate/pyproject.toml `requires-python = ">=X.Y"`; None when unreadable."""
+    try:
+        text = (root / "tools" / "x4validate" / "pyproject.toml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r'^requires-python\s*=\s*"\s*>=\s*(\d+)\.(\d+)', text, re.M)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _syntax_under_project_python(root: Path, files: list[str], need):
+    """Parse with the project's own interpreter (`uv run`), for a preflight started by an older Python."""
+    t = time.monotonic()
+    try:
+        p = subprocess.run(["uv", "run", "--frozen", "--project", str(root / "tools" / "x4validate"), "python", "-c",
+                            _SYNTAX_SNIPPET], cwd=root, input="\0".join(files), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+    except OSError as e:
+        return 2, f"this preflight runs under Python {RUNNING_PYTHON}, the toolkit needs >= {need}, and uv could not run: {e}"
+    if p.returncode not in (0, 1):
+        return 2, (f"this preflight runs under Python {RUNNING_PYTHON}, the toolkit needs >= {need}; parsing under the "
+                   f"project interpreter could not run (rc {p.returncode}): {(p.stdout + p.stderr).strip()[-300:]}")
+    note = f"{len(files)} files parsed under the project interpreter ({time.monotonic() - t:.0f}s)"
+    return p.returncode, (note if p.returncode == 0 else p.stdout.strip())
+
+
 def check_syntax(root: Path):
     rc, out, _ = run(["git", "ls-files", "-z", "*.py"], root)
     if rc:
         return 2, "git ls-files failed: " + out[-300:]
     files = [f for f in out.split("\0") if f]
+    need = _required_python(root)
+    if files and need and RUNNING_PYTHON < need:
+        return _syntax_under_project_python(root, files, need)
     bad = []
     for f in files:
         try:
