@@ -60,7 +60,7 @@ local PROTO = 1
 --:
 --: Kept honest by `test_the_BUILD_constant_matches_the_file`, so editing the lua and
 --: forgetting to re-stamp this fails the suite rather than silently lying in game.
-local BUILD = "f4a38b6f"
+local BUILD = "5095314e"
 local TAG_CMD, TAG_REPLY = "MQ", "MR"
 
 -- Cap on echo, the ramp instrument. Generous: the point of the ramp is to FIND the
@@ -564,6 +564,16 @@ if ffi_ok then
     save_cdef_ok = sok and true or false
     if not sok then
         DebugError("X4TOOLKIT_LIVE ffi.cdef IsSaveListLoadingComplete failed: " .. tostring(serr)
+                   .. " -- save will refuse; every other verb is unaffected")
+    end
+end
+--: Its sibling, guarded on its own the same way (vanilla gameoptions.lua:278).
+local reload_cdef_ok = false
+if ffi_ok then
+    local rok, rerr = pcall(ffi.cdef, [[ void ReloadSaveList(void); ]])
+    reload_cdef_ok = rok and true or false
+    if not rok then
+        DebugError("X4TOOLKIT_LIVE ffi.cdef ReloadSaveList failed: " .. tostring(rerr)
                    .. " -- save will refuse; every other verb is unaffected")
     end
 end
@@ -3391,9 +3401,24 @@ local function save_advisory(t)
     }, " ")
 end
 
---: GUARD ORDER, each clause with its own test: args -> slot -> request -> engine calls ->
---: catalogue declared and loaded -> offline -> saveable -> list readable -> slot empty ->
---: label unused -> ACT. Nothing before ACT calls SaveGame.
+--: The engine's save list is a catalogue it refreshes only on ReloadSaveList, which loads
+--: asynchronously. Vanilla reloads on menu create (gameoptions.lua:12996), on the reload
+--: button (:3251), after its own delete (:8119) and every config.saveReloadInterval = 60 s
+--: (:487, :13142-13147), and reads the list only once IsSaveListLoadingComplete (:13156,
+--: :11605). Mirrored: the first request reloads, so do a request after 60 s and the one
+--: after our own SaveGame; while the reload loads, `catalogue-loading` is refused and the
+--: host asks again. A save landing inside the 60 s is caught by the host's folder check.
+local SAVE_RELOAD_S = 60
+--: Per chunk load (a UI reload starts empty): when the list was last reloaded, and every
+--: slot this helper already called SaveGame for. SaveGame writes asynchronously, so for a
+--: while the list does not hold a slot just saved into; `sent` refuses it as occupied
+--: until the UI reloads -- a slot deleted in game meanwhile stays refused until then.
+local save_state = { reloaded_at = nil, sent = {} }
+
+--: GUARD ORDER, each clause with its own test: args -> slot -> request -> slot not already
+--: sent -> engine calls -> catalogue declared, reloaded when due, and loaded -> offline ->
+--: saveable -> list readable -> slot empty -> label unused -> ACT. Nothing before ACT
+--: calls SaveGame.
 local function save_write(seq, nargs, slot, request)
     local t = { acted = false }
     local function finish(status, reason, prose)
@@ -3416,6 +3441,11 @@ local function save_write(seq, nargs, slot, request)
         return finish("ERR", "request", "the request id must be 32 lowercase hex." .. nothing)
     end
     t.label = "x4live-" .. request
+    if save_state.sent[slot] then
+        return finish("ERR", "occupied", "this helper already asked the engine to save into "
+            .. slot .. " since the UI loaded; save never overwrites, even before the file "
+            .. "lands." .. nothing)
+    end
     local fns = {}
     for _, name in ipairs({ "GetSaveList", "IsSavingPossible", "SaveGame",
                             "OnlineIsOnlineModeActive" }) do
@@ -3428,6 +3458,20 @@ local function save_write(seq, nargs, slot, request)
     if not save_cdef_ok then
         return finish("ERR", "unreadable", "the IsSaveListLoadingComplete ffi declaration "
             .. "did not load, so the save list cannot be trusted." .. nothing)
+    end
+    if not reload_cdef_ok then
+        return finish("ERR", "unreadable", "the ReloadSaveList ffi declaration did not load, "
+            .. "so the save list cannot be refreshed." .. nothing)
+    end
+    local now = sentinel_clock()
+    local last = save_state.reloaded_at
+    if last == nil or (now > 0 and (now - last >= SAVE_RELOAD_S or now < last)) then
+        local rok, rerr = pcall(function() ffi.C.ReloadSaveList() end)
+        if not rok then
+            return finish("ERR", "unreadable", "C.ReloadSaveList failed (" .. tostring(rerr)
+                .. ")." .. nothing)
+        end
+        save_state.reloaded_at = now
     end
     local lok, loaded = pcall(function() return ffi.C.IsSaveListLoadingComplete() end)
     if not lok or type(loaded) ~= "boolean" then
@@ -3476,6 +3520,9 @@ local function save_write(seq, nargs, slot, request)
         end
     end
     t.acted = true
+    -- Reserved BEFORE the call: a SaveGame that raises may still have written.
+    save_state.sent[slot] = true
+    save_state.reloaded_at = nil
     local ok, err = pcall(fns.SaveGame, slot, t.label)
     if not ok then
         return finish("ERR", "raised", "SaveGame raised: " .. tostring(err) .. ". It may "

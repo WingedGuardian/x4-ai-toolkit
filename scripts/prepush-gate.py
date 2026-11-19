@@ -213,8 +213,16 @@ SELECTION_VERSION = 1
 
 #: What the three hook suites (HOOK_TESTS[1:]) read: a change under one of these since a record runs them again.
 #: A trailing "/" is a folder. The gate itself is listed too, though a changed gate already fails the sha256 match.
+#: DERIVED by tests/test_prepush_gate.py from the path literals in .claude/hooks/ (suites and the hook scripts they run):
+#: the suites copy tools/modding_harness, its lock and tools/x4_harness, read next-blind-spot-id.py; the hooks run
+#: x4canary, x4deploydrift, x4lock and x4conformance from <hooks>/../../scripts. tools/agent-harness.py is only named
+#: (the save-lock probes test its exact command shape) and is listed so a rename re-runs them. ONE level deep: what
+#: those scripts import in turn (x4validate._paths) is not derived.
 GUARD_PATHS = (".claude/", ".codex/", ".opencode/", "agent/", "scripts/verify-hook-tests.py", "scripts/test-hooks.sh",
-               "scripts/gitbash.py", "scripts/prepush-gate.py")
+               "scripts/gitbash.py", "scripts/prepush-gate.py", "scripts/x4canary.py", "scripts/x4deploydrift.py",
+               "scripts/x4lock.py", "scripts/x4conformance.py", "tools/modding_harness/",
+               "tools/modding-harness.lock.json", "tools/x4_harness/", "tools/agent-harness.py",
+               "tools/x4validate/scripts/next-blind-spot-id.py")
 
 #: A change to one of these since a record means the suite runs on other packages: never reuse across it.
 DEPENDENCY_FILES = ("uv.lock", "pyproject.toml")

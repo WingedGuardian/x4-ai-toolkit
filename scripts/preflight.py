@@ -119,9 +119,19 @@ def check_syntax(root: Path):
     return (1 if bad else 0), (f"{len(files)} files parsed" if not bad else "\n".join(bad[:20]))
 
 
+#: What uv prints for a lock that really is stale (MEASURED, uv 0.11.23). An offline or failed resolution exits 1 too
+#: ("No solution found ... the network was disabled"), so only this sentence makes a non-zero exit a FAIL.
+LOCK_STALE = "needs to be updated"
+
+
 def check_lock(root: Path):
     rc, out, _ = run(["uv", "lock", "--check"], root / "tools" / "x4validate")
-    return (0 if rc == 0 else 1), out.strip()[-400:]
+    tail = out.strip()[-400:]
+    if rc == 0:
+        return 0, tail
+    if LOCK_STALE in out:
+        return 1, tail
+    return 2, f"uv could not check the lock (rc {rc}; no network or resolution failed?):\n{tail}"
 
 
 def fetch_url(url: str, timeout: float = FETCH_TIMEOUT_S) -> bytes:

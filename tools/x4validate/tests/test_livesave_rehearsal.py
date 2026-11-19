@@ -59,7 +59,8 @@ function GetSaveList(filter) return py_save_list(filter) end
 function IsSavingPossible(flag) return py_saving_possible(flag) end
 function OnlineIsOnlineModeActive() return false end
 function SaveGame(filename, name) py_save_game(filename, name) end
-_G.fake_C.IsSaveListLoadingComplete = function() return true end
+_G.fake_C.IsSaveListLoadingComplete = function() return py_list_complete() end
+_G.fake_C.ReloadSaveList = function() py_reload() end
 """
 
 
@@ -73,33 +74,52 @@ class Game:
         self.bystander, self.never_write = bystander, never_write
         self.rt = live(rt=_build())
         self.pending, self.frames, self.seq, self.polls = [], [], 100, 0
+        # The engine's save list is a CATALOGUE, not the folder: read once (at game start
+        # here) and refreshed only by ReloadSaveList, which loads asynchronously -- vanilla
+        # reloads, then waits for IsSaveListLoadingComplete before GetSaveList (gameoptions.lua
+        # :13147-13157, :11605). So a file that lands after the last reload is NOT listed:
+        # the stale-catalogue race is reproducible here. INFERRED: the load's duration in
+        # game is unmeasured; one tick models "not immediately".
+        self.catalogue, self.loading, self.reloads = self._scan(), False, 0
         lg = self.rt.globals()
         lg.py_save_list = self._save_list
         lg.py_saving_possible = lambda flag: flag is False
         lg.py_save_game = self._save_game
+        lg.py_list_complete = lambda: not self.loading
+        lg.py_reload = self._reload
         self.rt.execute(ENGINE)
 
     # ---- the engine, as gameoptions.lua sees it
+    def _reload(self):
+        self.reloads += 1
+        self.loading = True
+
     def _save_list(self, filt):
+        assert not self.loading, "GetSaveList read while the list was still loading"
+        return self.rt.table_from([self.rt.table_from(r) for r in self.catalogue
+                                   if filt[r["filename"]]])
+
+    def _scan(self):
         rows = []
         for p in sorted(self.save_dir.glob("*.xml.gz")):
             stem = p.name[: -len(".xml.gz")]
-            if not filt[stem]:
-                continue
-            rows.append(self.rt.table_from({
+            rows.append({
                 "filename": stem, "name": header_name(p), "rawtime": int(p.stat().st_mtime),
                 "isonline": False, "isonlinesavefilename": False, "error": False,
                 "invalidgameid": False, "invalidversion": False, "invalidpatches": False,
                 "modified": False, "location": "Sector", "description": "",
-                "time": "1234.5", "playername": "Rehearsal", "money": 10000, "version": "900"}))
-        return self.rt.table_from(rows)
+                "time": "1234.5", "playername": "Rehearsal", "money": 10000, "version": "900"})
+        return rows
 
     def _save_game(self, filename, name):
         self.pending.append((filename, name))
 
     def tick(self):
-        """One poll interval of game time: the asynchronous writer makes progress."""
+        """One poll interval of game time: the asynchronous writer makes progress, and a
+        save-list reload in flight completes (reading the folder as it is NOW)."""
         self.polls += 1
+        if self.loading:
+            self.catalogue, self.loading = self._scan(), False
         if self.bystander and self.polls == 2:
             self.bystander(self.save_dir)
         if self.never_write:
@@ -120,7 +140,9 @@ class Game:
         deliver(self.rt, msg)
         frame = g(self.rt, "writes")[len(g(self.rt, "writes"))]["msg"]
         self.frames.append((verb, args, frame))
-        if self.lose_reply:
+        # A LOST reply is rehearsed for the ask that reached SaveGame: a lost refusal
+        # (catalogue-loading) would leave nothing to find, which the next test covers.
+        if self.lose_reply and "reason=requested" in frame:
             raise _livepipe.LiveQueryUnavailable("no reply within 10s (rehearsed loss)")
         return _livepipe.decode_reply(frame, self.seq)
 
@@ -171,7 +193,11 @@ def test_rehearsal_empty_slot_success(folder, monkeypatch, capsys):
     _connect(monkeypatch, game)
     rc, out, err = _x4live(capsys, "save", "save_004")
     assert rc == 0, out + err
-    assert [f[0] for f in game.frames] == ["save"]
+    # The helper reloads its save list on the first request and refuses while it loads;
+    # the host asks again with the SAME request, never a new one.
+    assert [f[0] for f in game.frames] == ["save"] * len(game.frames) and game.reloads >= 1
+    assert len({f[1][1] for f in game.frames}) == 1
+    assert sum("reason=requested" in f[2] for f in game.frames) == 1
     after = _bytes(folder)
     assert set(after) - set(before) == {"save_004.xml.gz"}
     assert all(after[k] == v for k, v in before.items())
@@ -202,6 +228,9 @@ def test_rehearsal_engine_side_occupancy_is_a_second_wall(folder, monkeypatch, c
     """Bypass the host's check (another program on the pipe): the helper still refuses."""
     game = Game(folder)
     r = game.ask("save", "save_001", "0" * 32)
+    if "reason=catalogue-loading" in r.fields[0]:   # the first request reloads the list
+        game.tick()
+        r = game.ask("save", "save_001", "0" * 32)
     assert r.status == "ERR" and "reason=occupied" in r.fields[0] and game.pending == []
 
 
@@ -210,7 +239,8 @@ def test_rehearsal_lost_reply_resolved_by_reading_the_slot(folder, monkeypatch, 
     _connect(monkeypatch, game)
     rc, out, err = _x4live(capsys, "save", "save_005")
     assert rc == 0, out + err
-    assert len(game.frames) == 1, "a lost reply must never be answered by resending"
+    assert "reason=requested" in game.frames[-1][2], "a lost reply must never be answered by resending"
+    assert sum("reason=requested" in f[2] for f in game.frames) == 1
     assert "reply was lost" in (out + err)
 
 
@@ -218,7 +248,7 @@ def test_rehearsal_lost_reply_and_no_save_is_unverified(folder, monkeypatch, cap
     game = Game(folder, lose_reply=True, never_write=True)
     _connect(monkeypatch, game)
     rc, out, err = _x4live(capsys, "save", "save_005", "--settle-timeout", "10")
-    assert rc == 3 and len(game.frames) == 1
+    assert rc == 3 and "reason=requested" in game.frames[-1][2]
     assert "Do not resend" in out
 
 
@@ -242,3 +272,60 @@ def test_rehearsal_steam_autocloud_change_is_reported_not_failed(folder, monkeyp
     rc, out, err = _x4live(capsys, "save", "save_006")
     assert rc == 0, out + err
     assert "steam_autocloud.vdf changed (reported" in out
+
+
+# ---- the never-overwrite races (4.3 release review D1). The catalogue above is what makes
+# them reproducible: a list read from the folder on every call could never be stale.
+
+
+def test_RED_rehearsal_two_requests_for_one_slot_before_its_file_lands(folder, monkeypatch, capsys):
+    """Two `x4live save save_004` runs racing: both host checks see an empty slot (the
+    first save is not written yet), so the helper is the only wall left."""
+    game = Game(folder)
+    for _ in range(3):   # bounded: a helper that never finishes loading must fail, not hang
+        first = game.ask("save", "save_004", "a" * 32)
+        if "reason=catalogue-loading" not in first.fields[0]:
+            break
+        game.tick()
+    assert first.status == "OK", first.payload
+    assert not (folder / "save_004.xml.gz").exists(), "the race needs the file not yet written"
+    for _ in range(3):
+        second = game.ask("save", "save_004", "b" * 32)
+        if "reason=catalogue-loading" not in second.fields[0]:
+            break
+        game.tick()
+    assert second.status == "ERR" and "reason=occupied" in second.fields[0], second.payload
+    assert [p[0] for p in game.pending] == ["save_004"], "a second SaveGame overwrites the first"
+
+
+def test_RED_rehearsal_a_save_made_after_the_list_was_read_is_never_overwritten(folder, monkeypatch,
+                                                                              capsys):
+    """A save that lands after the engine last read its list (the player saving in game,
+    another program) is invisible to a stale catalogue; the helper must reload first."""
+    game = Game(folder)
+    (folder / "save_007.xml.gz").write_bytes(save_bytes("#007 made in game"))
+    for _ in range(3):
+        r = game.ask("save", "save_007", "c" * 32)
+        if "reason=catalogue-loading" not in r.fields[0]:
+            break
+        game.tick()
+    assert r.status == "ERR" and "reason=occupied" in r.fields[0], r.payload
+    assert game.pending == [] and game.reloads >= 1
+    assert header_name(folder / "save_007.xml.gz") == "#007 made in game"
+
+
+def test_TWIN_rehearsal_an_empty_slot_is_saved_after_the_reload_completes(folder, monkeypatch, capsys):
+    """Through the whole chain: the helper reloads, refuses `catalogue-loading` while the
+    list loads, the host asks again with the same request, and the save lands."""
+    before = _bytes(folder)
+    game = Game(folder)
+    _connect(monkeypatch, game)
+    rc, out, err = _x4live(capsys, "save", "save_008")
+    assert rc == 0, out + err
+    assert game.reloads >= 1
+    labels = {f[1][1] for f in game.frames}
+    assert len(labels) == 1 and len(game.frames) >= 2, game.frames
+    assert "reason=catalogue-loading" in game.frames[0][2]
+    after = _bytes(folder)
+    assert set(after) - set(before) == {"save_008.xml.gz"}
+    assert all(after[k] == v for k, v in before.items())

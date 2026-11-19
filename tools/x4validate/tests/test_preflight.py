@@ -248,3 +248,41 @@ def test_the_real_repo_parses_under_the_project_python_when_started_by_an_old_on
     rc, msg = pf.check_syntax(REPO)
     assert rc == 0, msg
     assert "project interpreter" in msg
+
+
+# uv lock --check (4.3 release review): both a stale lock and an offline resolution exit 1, so the exit code alone
+# cannot tell them apart. MEASURED with uv 0.11.23: a stale lock prints "The lockfile at `uv.lock` needs to be
+# updated, but `--check` was provided"; an offline resolve of an uncached package prints "No solution found ...
+# Packages were unavailable because the network was disabled". Only the first is a FAIL.
+_STALE = "The lockfile at `uv.lock` needs to be updated, but `--check` was provided. To update the lockfile, run `uv lock`."
+_OFFLINE = ("  x No solution found when resolving dependencies:\n  Because lxml was not found in the cache ...\n"
+            "hint: Packages were unavailable because the network was disabled.")
+
+
+def _lock_with(monkeypatch, pf, rc, out):
+    monkeypatch.setattr(pf, "run", lambda cmd, cwd: (rc, out, 0.0))
+    return pf.check_lock(REPO)
+
+
+def test_RED_a_lock_check_that_could_not_resolve_is_COULD_NOT_RUN_not_FAIL(monkeypatch):
+    pf = _module()
+    rc, msg = _lock_with(monkeypatch, pf, 1, _OFFLINE)
+    assert rc == 2 and "could not" in msg.lower(), (rc, msg)
+    rc, _ = _lock_with(monkeypatch, pf, 2, "error: Failed to fetch: `https://pypi.org/simple/lxml/`")
+    assert rc == 2
+
+
+def test_TWIN_a_stale_lock_is_still_a_FAIL(monkeypatch):
+    pf = _module()
+    rc, msg = _lock_with(monkeypatch, pf, 1, "Resolved 16 packages in 9ms\n" + _STALE)
+    assert rc == 1 and "needs to be updated" in msg, (rc, msg)
+
+
+def test_TWIN_a_current_lock_passes(monkeypatch):
+    pf = _module()
+    assert _lock_with(monkeypatch, pf, 0, "Resolved 16 packages in 0.50ms")[0] == 0
+
+
+def test_TWIN_the_stale_words_without_a_failing_exit_are_not_a_fail(monkeypatch):
+    pf = _module()
+    assert _lock_with(monkeypatch, pf, 0, _STALE)[0] == 0

@@ -16,7 +16,7 @@ collision coverage. The builder writes, installs and launches nothing.
 The source `ui.xml`, and so every composition, declares a UI dependency on
 `sn_mod_support_apis` before `ego_detailmonitorHelper`. MEASURED in game: without
 it another addon reordered the UI load and the pipe half's `require` failed. The
-manifest (`content.xml`, version 102) declares the same dependency as required.
+manifest (`content.xml`, version 103) declares the same dependency as required.
 
 `tests/test_livehelper_engine_rules.py` scans every generated MD file of the
 all-ten composition, under both capacity profiles, for two constructs the engine

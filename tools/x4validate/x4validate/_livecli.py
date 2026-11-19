@@ -1419,6 +1419,9 @@ def cmd_save(slot: str, pipe: str | None, timeout: float, settle_timeout: float,
     no recorded-conversation authority. Never-overwrite protection, the exit codes and the
     lost-reply rule live in `_livesave`."""
     from . import _livesave
+    why = _livesave.slot_refusal(slot)
+    if why:   # before the save folder is resolved: a bad slot touches no config or profile
+        return _fmt_rc(why, 2)
     return _livesave.run(slot, lambda: _live_open(pipe, timeout), _paths.savegames(),
                          settle_timeout=settle_timeout, settle=settle, out=out)
 
