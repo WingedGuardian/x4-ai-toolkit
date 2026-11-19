@@ -488,3 +488,75 @@ def test_TWIN_the_root_constant_scan_finds_each_copy_shape():
 
 def test_inputs_is_an_engine_source():
     assert "_inputs.py" in _freshness.ENGINE_SOURCES
+
+
+# --------------------------------------------------------------------------- a leftover temp
+
+def _take(tmp_path, monkeypatch, lines):
+    ref, exts, _ = (_world(tmp_path, monkeypatch) if not (tmp_path / "reference").is_dir()
+                    else (tmp_path / "reference", tmp_path / "extensions", None))
+    stamp = {"engine": "e", "reference": "r", "detail": []}
+    return _inputs.take(tmp_path / "eff.sqlite", [exts], lambda: dict(stamp),
+                        progress=lines.append)
+
+
+def _leftover(tmp_path) -> Path:
+    import os
+    return tmp_path / f"eff.sqlite{_inputs.SUFFIX}.{os.getpid()}.tmp"
+
+
+def test_a_leftover_temp_proven_by_its_receipt_is_deleted(tmp_path, monkeypatch):
+    """C5a: an existing `<db>.inputs.<pid>.tmp` at the start of take() is not this run's;
+    it is deleted outright only when its receipt and every hash prove it rebuildable."""
+    recycled: list[Path] = []
+    monkeypatch.setattr(_inputs, "_recycle", lambda p: recycled.append(p) or "planted")
+    lines: list[str] = []
+    first = _take(tmp_path, monkeypatch, lines)
+    assert first.path == _leftover(tmp_path) and (first.path / _inputs.RECEIPT).is_file()
+    lines.clear()
+    _take(tmp_path, monkeypatch, lines)
+    assert recycled == [] and any("deleted" in x and "receipt" in x for x in lines), lines
+
+
+def test_TWIN_an_unproven_leftover_temp_goes_to_the_recycle_bin(tmp_path, monkeypatch):
+    import shutil
+    recycled: list[Path] = []
+
+    def fake_bin(p):
+        recycled.append(p)
+        shutil.move(str(p), str(tmp_path / "bin"))
+    monkeypatch.setattr(_inputs, "_recycle", fake_bin)
+    _world(tmp_path, monkeypatch)
+    _w(_leftover(tmp_path) / "mine.txt", b"not a snapshot")
+    lines: list[str] = []
+    _take(tmp_path, monkeypatch, lines)
+    assert recycled == [_leftover(tmp_path)] and (tmp_path / "bin" / "mine.txt").is_file()
+    assert any("Recycle Bin" in x for x in lines), lines
+
+
+def test_TWIN_an_unproven_leftover_temp_that_cannot_be_recycled_refuses_never_deletes(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(_inputs, "_recycle", lambda p: "no bin here")
+    _world(tmp_path, monkeypatch)
+    _w(_leftover(tmp_path) / "mine.txt", b"not a snapshot")
+    with pytest.raises(_inputs.SnapshotRefused, match="leftover"):
+        _take(tmp_path, monkeypatch, [])
+    assert (_leftover(tmp_path) / "mine.txt").read_bytes() == b"not a snapshot"
+
+
+def test_a_failed_snapshot_install_leaves_a_new_store_that_fails_CLOSED(tmp_path, monkeypatch):
+    """C5c (the `_effective.build` ORDER comment): the store is installed before its
+    snapshot, so a failing `_inputs.install` leaves the NEW store beside the OLD snapshot;
+    `prove` must refuse that pair, never accept it."""
+    db, ref, exts = _build(tmp_path, monkeypatch)
+    (exts / "aaa" / "libraries" / "wares.xml").write_bytes(
+        b'<diff><replace sel="//ware[@id=\'ore\']/price/@average">21</replace></diff>')
+
+    def broken(*a, **k):
+        raise OSError("planted install failure")
+    monkeypatch.setattr(_inputs, "install", broken)
+    with pytest.raises(OSError, match="planted"):
+        _build(tmp_path, monkeypatch)
+    _, why = _prove(db, ref)
+    assert any("not the one this store was built from" in w for w in why), why
+    assert not list(tmp_path.glob("*.inputs.*.tmp")), "the unfinished temp is discarded"
