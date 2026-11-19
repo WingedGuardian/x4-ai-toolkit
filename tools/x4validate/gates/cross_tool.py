@@ -23,7 +23,11 @@ itself found three more issues. So: what has NOTHING checked yet?
   3. BUILDER IDEMPOTENCE. `determinism_audit` covers x4compat's output ordering.
      The BUILDERS were never checked: build the same store twice from unchanged
      inputs and the contents must be identical. A builder that varies is one
-     whose every downstream answer is unreproducible.
+     whose every downstream answer is unreproducible. COST: since toolkit 4.3 every
+     store build first takes a full input snapshot of the live install, so this
+     section takes TWO extra full snapshots per gate run (one per build, beside the
+     temp stores, removed with them). A build REFUSED because the inputs moved while
+     they were copied (exit 2, "REFUSED") is a section that could not run, never a FAIL.
 
   4. READ-ONLY HARDENING. `qa_sweep` proves `x4effective sql` rejects DELETE.
      That is one verb. ATTACH, PRAGMA, and multi-statement payloads are the ways
@@ -851,6 +855,12 @@ def check_builder_idempotence(tmp: Path) -> None:
     db1, db2 = tmp / "b1.sqlite", tmp / "b2.sqlite"
     for db in (db1, db2):
         rc, out = run("x4effective", "--db", str(db), "build", "--kinds", "job")
+        if rc == 2 and "x4effective build: REFUSED" in out:
+            # The modlist moved while the build snapshotted it: no store, nothing compared.
+            not_run("x4effective build succeeded",
+                    "build REFUSED (the inputs moved while they were copied): "
+                    + next((ln for ln in out.splitlines() if "REFUSED" in ln), "")[:300])
+            return
         if rc != 0:
             note(False, "x4effective build succeeded", f"exit {rc}")
             return

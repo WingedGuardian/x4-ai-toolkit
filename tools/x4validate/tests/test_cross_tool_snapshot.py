@@ -82,3 +82,32 @@ def test_TWIN_an_unchanged_store_is_compared(tmp_path, monkeypatch):
     ct, seen = _gate(monkeypatch, db, ref)
     ct.check_cross_tool_agreement()
     assert seen and not any("rebuilt while" in c for c in ct.cannot), ct.cannot
+
+
+def _idempotence(monkeypatch, tmp_path, rc, out):
+    from conftest import import_gate
+    ct = import_gate("cross_tool", module_level=False)
+    monkeypatch.setattr(ct, "failures", [])
+    monkeypatch.setattr(ct, "cannot", [])
+    calls = []
+    monkeypatch.setattr(ct, "run", lambda *a: calls.append(a) or (rc, out))
+    ct.check_builder_idempotence(tmp_path)
+    return ct, calls
+
+
+def test_section3_a_REFUSED_build_is_could_not_run_not_FAIL(tmp_path, monkeypatch):
+    """C1: a build refused because the modlist moved while it was snapshotted (exit 2,
+    "REFUSED") is a section that could not run, never a failed build."""
+    ct, calls = _idempotence(monkeypatch, tmp_path, 2,
+                             "x4effective build: REFUSED: the build's inputs kept moving")
+    assert ct.failures == [] and len(ct.cannot) == 1 and "REFUSED" in ct.cannot[0], ct.cannot
+    assert len(calls) == 1
+
+
+def test_TWIN_section3_a_build_that_FAILED_is_still_a_FAIL(tmp_path, monkeypatch):
+    # One twin per clause of `rc == 2 and "REFUSED" in out`: exit 2 without the refusal line,
+    # and the refusal line with any other exit (the CLI contract broken), both stay FAIL.
+    for rc, out in ((1, "Traceback (most recent call last)"), (2, "x4effective build: bad kind"),
+                    (1, "x4effective build: REFUSED: the build's inputs kept moving")):
+        ct, _ = _idempotence(monkeypatch, tmp_path, rc, out)
+        assert ct.cannot == [] and len(ct.failures) == 1, (rc, ct.failures)
