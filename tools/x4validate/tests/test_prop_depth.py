@@ -154,9 +154,16 @@ def test_every_flatten_call_site_in_effective_PASSES_where():
 def test_build_itself_clears_the_list_before_it_starts():
     """The wiring, asserted STRUCTURALLY rather than by building twice (a real second
     build needs a corpus): `build()` must call the clear, and it is the call the
-    reviewer's M7 removed."""
+    reviewer's M7 removed.
+
+    4.3: the walks moved into `_build_from` (build() now takes the input snapshot and
+    builds from it inside `_inputs.world`), so the function checked is the one that
+    WALKS -- and build() must still reach it, else this would pass on dead code."""
     import inspect
-    src = inspect.getsource(_effective.build)
+    outer = ast.parse(inspect.getsource(_effective.build).lstrip())
+    assert any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_build_from"
+               for n in ast.walk(outer)), "build() no longer calls _build_from -- re-point this test"
+    src = inspect.getsource(_effective._build_from)
     tree = ast.parse(src.lstrip())
     calls = [n for n in ast.walk(tree)
              if isinstance(n, ast.Call)
