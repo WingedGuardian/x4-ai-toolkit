@@ -46,13 +46,27 @@ other clone and would fail their first run -- `toolkit_usage.py`'s reasoning, an
 `perf_guard`'s before it. No baseline is reported as "drift is NOT being checked",
 never as a pass.
 
-Run:  uv run python gates/claude_md_budget.py [--record]
+THE SHIPPED FILE ALSO HAS A COMMITTED FLOOR (issue #21, 4.3). The local baseline meant
+nothing automated ever ran this gate: the shipped CLAUDE.md grew 29,230 -> 30,657 across
+the 4.1.0 work unflagged. The repo-root CLAUDE.md is the same bytes in every clone, so ITS
+floor is committed, in `claude-md-floor.json` beside this gate, counted the same way.
+`--shipped` checks that one file against it and needs no game root: it runs in the
+maintainers' pre-push gate, in CI's Fast checks and as a stage of the release gates.
+Still a hand-lowered ceiling: a shrink never lowers it; `--shipped --record` does, and
+the commit that does it shows the change.
+
+Run:  uv run python gates/claude_md_budget.py [--record [LABEL]]
+      uv run python gates/claude_md_budget.py --shipped [--record]
+      `--record LABEL` re-records ONE file (a bare --record re-records every file, which
+      accepts any unreviewed growth in the others).
 Exit: 0 within baseline - 1 a file grew, named with its overage - 2 nothing could
-      be measured (a budget that passes having measured nothing is the defect).
+      be measured (a budget that passes having measured nothing is the defect), or the
+      floor/baseline could not be read, or --record named no measured file.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from dataclasses import dataclass
@@ -67,6 +81,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 
 BASELINE = TOOL_ROOT / ".claude-md-budget-baseline.json"
+#: COMMITTED: the shipped file's floor (issue #21). Lowered only by `--shipped --record`.
+FLOOR = TOOL_ROOT / "claude-md-floor.json"
+SHIPPED = REPO_ROOT / "CLAUDE.md"
+SHIPPED_LABEL = "shipped (repo root)"
+GAME_LABEL = "game root"
 
 #: Written into every baseline and required on read. A baseline recorded before F120 counted
 #: raw CRs, so on a CRLF checkout it sits above the content count by the file's line count
@@ -107,14 +126,14 @@ def budget_files() -> list[tuple[str, Path]]:
     """(label, path) for every CLAUDE.md that resolves. Absent ones are omitted,
     never guessed at -- and resolving none is a refusal in main()."""
     out: list[tuple[str, Path]] = []
-    shipped = REPO_ROOT / "CLAUDE.md"
+    shipped = SHIPPED
     if shipped.is_file():
-        out.append(("shipped (repo root)", shipped))
+        out.append((SHIPPED_LABEL, shipped))
     root = _paths.game_root()
     if root is not None:
         gm = Path(root) / "CLAUDE.md"
         if gm.is_file() and gm.resolve() != shipped.resolve():
-            out.append(("game root", gm))
+            out.append((GAME_LABEL, gm))
     return out
 
 
@@ -129,26 +148,109 @@ def violations(measured: dict[str, int], baseline: dict[str, int]) -> list[Viola
             if n in baseline and c > baseline[n]]
 
 
-def _load() -> dict[str, int] | None:
-    if not BASELINE.is_file():
+def _load(path: Path | None = None) -> dict[str, int] | None:
+    path = BASELINE if path is None else path
+    if not path.is_file():
         return None
     try:
-        data = json.loads(BASELINE.read_bytes().decode("utf-8"))
+        data = json.loads(path.read_bytes().decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         # Not swallowed: an unreadable baseline must not silently mean "nothing
         # recorded", which would read as a clean first run forever.
-        raise Unmeasurable(f"baseline {BASELINE.name} is unreadable: {exc}") from exc
+        raise Unmeasurable(f"baseline {path.name} is unreadable: {exc}") from exc
     method = data.pop("_counting", None) if isinstance(data, dict) else None
     if method != COUNTING:
         raise Unmeasurable(
-            f"baseline {BASELINE.name} was recorded by a different counting method "
+            f"baseline {path.name} was recorded by a different counting method "
             f"({method or 'none recorded: raw CRs counted, before F120'}); "
             f"re-record with --record")
-    return {str(k): int(v) for k, v in data.items()}
+    try:
+        return {str(k): int(v) for k, v in data.items()}
+    except (TypeError, ValueError) as exc:
+        raise Unmeasurable(f"baseline {path.name} holds a non-integer size: {exc}") from exc
 
 
-def main(record: bool = False) -> int:
-    record = record or "--record" in sys.argv
+def _write(path: Path, sizes: dict[str, int]) -> None:
+    path.write_bytes((json.dumps({"_counting": COUNTING, **sizes}, indent=2, sort_keys=True)
+                      + "\n").encode("utf-8"))
+
+
+def _floor_change(name: str, was: int | None, now: int) -> None:
+    if was is None:
+        print(f"  {name}: new floor {now}")
+    elif was != now:
+        print(f"  {name}: floor {was} -> {now} ({now - was:+d})")
+    else:
+        print(f"  {name}: floor {now} unchanged")
+
+
+def shipped_main(record: str | None) -> int:
+    """`--shipped`: the repo-root CLAUDE.md against the COMMITTED floor. No game root, no local baseline."""
+    print(f"CLAUDE.md BUDGET (shipped file, committed floor {FLOOR.name})")
+    try:
+        chars = char_count(SHIPPED)
+    except Unmeasurable as exc:
+        print(f"REFUSING: {exc}", file=sys.stderr)
+        return 2
+    print(f"  {SHIPPED_LABEL:22s} {chars:7d} chars  headroom to the {HARD_CEILING} backstop "
+          f"{HARD_CEILING - chars:+7d}")
+    if record is not None:
+        if record not in ("", SHIPPED_LABEL):
+            print(f"REFUSING: --shipped records only {SHIPPED_LABEL!r}, not {record!r}; nothing written",
+                  file=sys.stderr)
+            return 2
+        try:
+            previous = (_load(FLOOR) or {}).get(SHIPPED_LABEL)
+        except Unmeasurable as exc:
+            previous = None
+            print(f"  the existing floor could not be read ({exc}); recording over it.")
+        _floor_change(SHIPPED_LABEL, previous, chars)
+        _write(FLOOR, {SHIPPED_LABEL: chars})
+        print(f"  recorded to {FLOOR.name}: commit it, and say in the commit why the floor moved")
+        return 0
+    try:
+        floor = _load(FLOOR)
+    except Unmeasurable as exc:
+        print(f"REFUSING: {exc}", file=sys.stderr)
+        return 2
+    if floor is None or SHIPPED_LABEL not in floor:
+        print(f"REFUSING: no committed floor for {SHIPPED_LABEL!r} in {FLOOR.name}; growth is NOT being "
+              "checked", file=sys.stderr)
+        return 2
+    limit = floor[SHIPPED_LABEL]
+    if chars > limit:
+        print(f"GREW: {SHIPPED_LABEL} {limit} -> {chars} (+{chars - limit} chars)", file=sys.stderr)
+        print(f"      Name what this displaces, or remove {chars - limit} chars elsewhere. Raise the "
+              "committed floor (--shipped --record) only when the growth is a decision.", file=sys.stderr)
+        return 1
+    under = f"; {limit - chars} under it (lower it by hand with --shipped --record)" if chars < limit else ""
+    print(f"  within its committed floor {limit}{under}.")
+    return 0
+
+
+#: `--record` with no label: every measured file.
+ALL = ""
+
+
+def main(record: bool = False, argv: list[str] | None = None) -> int:
+    if argv is None:
+        # Called as a function (the tests) with no argv: the old contract, `--record` anywhere in sys.argv.
+        label = ALL if (record or "--record" in sys.argv) else None
+        shipped = False
+    else:
+        ap = argparse.ArgumentParser(prog="claude_md_budget", description="CLAUDE.md may not grow silently.")
+        ap.add_argument("--record", nargs="?", const=ALL, default=None, metavar="LABEL",
+                        help="record the current size as the floor: of every file, or of the one named LABEL "
+                             f"(e.g. {SHIPPED_LABEL!r}, {GAME_LABEL!r})")
+        ap.add_argument("--shipped", action="store_true",
+                        help=f"check only the repo-root CLAUDE.md against the committed {FLOOR.name} "
+                             "(needs no game root); with --record, lower or raise that committed floor")
+        a = ap.parse_args(argv)
+        label = ALL if (record and a.record is None) else a.record
+        shipped = a.shipped
+    if shipped:
+        return shipped_main(label)
+    record = label is not None
     files = budget_files()
     if not files:
         print("REFUSING: no CLAUDE.md resolved, so there is nothing to measure\n"
@@ -180,21 +282,29 @@ def main(record: bool = False) -> int:
         # of characters of growth by doing exactly what the error message said, which is
         # the one outcome this budget exists to prevent (review, 2026-09-20). An
         # unreadable baseline still records: that is what keeps --record a usable remedy.
+        if label != ALL and label not in measured:
+            print(f"REFUSING: --record {label!r} names no measured file (measured: "
+                  f"{', '.join(sorted(measured))}); nothing written", file=sys.stderr)
+            return 2
         try:
             previous = _load()
         except Unmeasurable as exc:
+            if label != ALL:
+                # One label into a baseline whose other entries cannot be read would DROP them.
+                print(f"REFUSING: the existing baseline could not be read ({exc}); --record {label!r} "
+                      "would drop its other entries. A bare --record re-records every file.", file=sys.stderr)
+                return 2
             previous = None
             print(f"  the existing baseline could not be read ({exc}); recording over it.")
-        for _name, _size in sorted(measured.items()):
-            _was = (previous or {}).get(_name)
-            if _was is None:
-                print(f"  {_name}: new floor {_size}")
-            elif _was != _size:
-                print(f"  {_name}: floor {_was} -> {_size} ({_size - _was:+d})")
-        BASELINE.write_bytes(
-            (json.dumps({"_counting": COUNTING, **measured}, indent=2, sort_keys=True)
-             + "\n").encode("utf-8"))
-        print(f"  recorded {len(measured)} floor(s) to {BASELINE.name}")
+        if label == ALL:
+            new = dict(measured)
+        else:
+            new = {**(previous or {}), label: measured[label]}
+        for _name in sorted(set(new) & set(measured)):
+            if label == ALL or _name == label:
+                _floor_change(_name, (previous or {}).get(_name), new[_name])
+        _write(BASELINE, new)
+        print(f"  recorded {len(measured) if label == ALL else 1} floor(s) to {BASELINE.name}")
         return 0
 
     try:
@@ -242,4 +352,4 @@ def main(record: bool = False) -> int:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    raise SystemExit(main(argv=sys.argv[1:]))

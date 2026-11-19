@@ -159,3 +159,136 @@ def test_RECORD_replaces_an_OLD_METHOD_baseline_instead_of_refusing(monkeypatch,
     assert b_.main(record=True) == 0
     assert json.loads(bl.read_text(encoding="utf-8"))["_counting"] == b_.COUNTING
     assert b_.main() == 0
+
+
+# ------------------------------------------------------------- issue #21: a COMMITTED floor for the shipped file
+@pytest.fixture
+def shipped(monkeypatch, tmp_path):
+    """A stand-in shipped CLAUDE.md (CRLF, so the count is the content count) and a floor file path, and no game
+    root lookup at all: --shipped must never need one."""
+    md = _write(tmp_path / "CLAUDE.md", "line one" + LF + "line two" + LF, crlf=True)
+    floor = tmp_path / "claude-md-floor.json"
+    monkeypatch.setattr(b_, "SHIPPED", md)
+    monkeypatch.setattr(b_, "FLOOR", floor)
+
+    def no_game_root():
+        raise AssertionError("--shipped looked up the game root")
+    monkeypatch.setattr(b_._paths, "game_root", no_game_root)
+    return md, floor, b_.char_count(md)
+
+
+def _floor(path, n, counting=None):
+    path.write_text(json.dumps({"_counting": counting or b_.COUNTING, b_.SHIPPED_LABEL: n}), encoding="utf-8")
+    return path.read_bytes()
+
+
+def test_RED_shipped_growth_past_the_committed_floor_is_rc_1(shipped, capsys):
+    md, floor, n = shipped
+    _floor(floor, n - 1)
+    assert b_.main(argv=["--shipped"]) == 1
+    assert "GREW: " + b_.SHIPPED_LABEL + " " + str(n - 1) + " -> " + str(n) + " (+1 chars)" in capsys.readouterr().err
+
+
+def test_TWIN_shipped_at_or_under_the_floor_is_rc_0_and_never_lowers_it(shipped, capsys):
+    md, floor, n = shipped
+    before = _floor(floor, n)
+    assert b_.main(argv=["--shipped"]) == 0
+    before = _floor(floor, n + 50)
+    assert b_.main(argv=["--shipped"]) == 0
+    assert floor.read_bytes() == before, "a shrink must not lower the floor by itself (user decision 2026-09-25)"
+    assert "50 under" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("state", ["missing", "not json", "old counting", "no shipped entry"])
+def test_TWIN_a_floor_that_cannot_be_read_is_rc_2(shipped, state, capsys):
+    md, floor, n = shipped
+    if state == "not json":
+        floor.write_text("{", encoding="utf-8")
+    elif state == "old counting":
+        _floor(floor, n * 10, counting="raw")
+    elif state == "no shipped entry":
+        floor.write_text(json.dumps({"_counting": b_.COUNTING, "game root": 1}), encoding="utf-8")
+    assert b_.main(argv=["--shipped"]) == 2
+    assert "REFUSING" in capsys.readouterr().err
+
+
+def test_TWIN_a_missing_shipped_file_is_rc_2(shipped):
+    md, floor, n = shipped
+    _floor(floor, n)
+    md.unlink()
+    assert b_.main(argv=["--shipped"]) == 2
+
+
+def test_shipped_record_writes_the_committed_floor_and_names_the_change(shipped, capsys):
+    md, floor, n = shipped
+    _floor(floor, n + 7)
+    assert b_.main(argv=["--shipped", "--record"]) == 0
+    assert json.loads(floor.read_text(encoding="utf-8")) == {"_counting": b_.COUNTING, b_.SHIPPED_LABEL: n}
+    assert "floor {} -> {} (-7)".format(n + 7, n) in capsys.readouterr().out
+    assert b_.main(argv=["--shipped"]) == 0
+
+
+def test_TWIN_shipped_record_of_another_label_is_refused(shipped):
+    md, floor, n = shipped
+    before = _floor(floor, n + 7)
+    assert b_.main(argv=["--shipped", "--record", "game root"]) == 2
+    assert floor.read_bytes() == before
+
+
+def test_RED_record_LABEL_re_records_that_one_file_only(monkeypatch, tmp_path):
+    """Issue #21, secondary: a bare --record after trimming one file re-recorded EVERY file at its current size, which
+    accepts any unreviewed growth in the others."""
+    a = _write(tmp_path / "a.md", "aaaa" + LF)
+    g = _write(tmp_path / "g.md", "gggggggg" + LF)
+    monkeypatch.setattr(b_, "budget_files", lambda: [("shipped (repo root)", a), ("game root", g)])
+    bl = tmp_path / "b.json"
+    bl.write_text(json.dumps({"_counting": b_.COUNTING, "shipped (repo root)": 1, "game root": 1}), encoding="utf-8")
+    monkeypatch.setattr(b_, "BASELINE", bl)
+    assert b_.main(argv=["--record", "game root"]) == 0
+    data = json.loads(bl.read_text(encoding="utf-8"))
+    assert data["game root"] == 9 and data["shipped (repo root)"] == 1, data
+    assert b_.main(argv=[]) == 1, "the shipped file's growth is still reported"
+
+
+def test_TWIN_record_of_an_unknown_label_is_refused_and_writes_nothing(monkeypatch, tmp_path):
+    a = _write(tmp_path / "a.md", "aaaa" + LF)
+    monkeypatch.setattr(b_, "budget_files", lambda: [("shipped (repo root)", a)])
+    bl = tmp_path / "b.json"
+    bl.write_text(json.dumps({"_counting": b_.COUNTING, "shipped (repo root)": 1}), encoding="utf-8")
+    before = bl.read_bytes()
+    monkeypatch.setattr(b_, "BASELINE", bl)
+    assert b_.main(argv=["--record", "no such file"]) == 2
+    assert bl.read_bytes() == before
+
+
+def test_TWIN_record_LABEL_over_an_unreadable_baseline_is_refused(monkeypatch, tmp_path):
+    """One label cannot be recorded into a baseline whose other entries cannot be read: that would drop them."""
+    a = _write(tmp_path / "a.md", "aaaa" + LF)
+    monkeypatch.setattr(b_, "budget_files", lambda: [("shipped (repo root)", a)])
+    bl = tmp_path / "b.json"
+    bl.write_text("{", encoding="utf-8")
+    monkeypatch.setattr(b_, "BASELINE", bl)
+    assert b_.main(argv=["--record", "shipped (repo root)"]) == 2
+    assert bl.read_text(encoding="utf-8") == "{"
+
+
+def test_the_committed_floor_is_readable_and_keyed_for_the_shipped_file():
+    """The real file: committed beside this gate, counted the current way, one entry. (Its VERDICT is the gate's job:
+    `--shipped` runs in the pre-push gate, in CI's Fast checks and as a release stage.)"""
+    data = json.loads(b_.FLOOR.read_bytes().decode("utf-8"))
+    assert data == {"_counting": b_.COUNTING, b_.SHIPPED_LABEL: data[b_.SHIPPED_LABEL]}
+    assert isinstance(data[b_.SHIPPED_LABEL], int) and 1000 < data[b_.SHIPPED_LABEL] <= b_.HARD_CEILING
+
+
+def test_RED_ci_fast_checks_run_the_shipped_floor():
+    """Issue #21: CI cold-skipped the budget (it needed a game root and a local baseline). The Fast checks job runs
+    `--shipped`, which needs neither."""
+    from _layout import require_repo
+    require_repo(".github/workflows/ci.yml", why="workflow source is not copied into installed runtimes")
+    from ci_workflow import load_ci
+    steps = load_ci(b_.REPO_ROOT)["jobs"]["quick"]["steps"]
+    runs = [s for s in steps if "claude_md_budget.py" in str(s.get("run", ""))]
+    assert len(runs) == 1, runs
+    assert runs[0]["run"].split() == ["python", "-B", "gates/claude_md_budget.py", "--shipped"]
+    assert runs[0].get("working-directory") == "tools/x4validate"
+    assert "if" not in runs[0] and "continue-on-error" not in runs[0], "a step that cannot fail the job is decoration"

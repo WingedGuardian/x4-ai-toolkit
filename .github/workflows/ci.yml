@@ -51,6 +51,11 @@ jobs:
       - name: Dependency lock freshness
         working-directory: tools/x4validate
         run: uv lock --check
+      # Issue #21: the shipped CLAUDE.md against its COMMITTED floor (claude-md-floor.json). Stdlib only, no game
+      # root. GREW is exit 1; a missing or unreadable floor is exit 2, which fails this step too.
+      - name: Shipped CLAUDE.md within its committed floor
+        working-directory: tools/x4validate
+        run: python -B gates/claude_md_budget.py --shipped
       - uses: WingedGuardian/modding-agent-harness/.github/actions/ci-policy@43aa26ab84bd5eb0906ecfc6f097b29afa3a8575 # v1 policy API
         with:
           profile: x4

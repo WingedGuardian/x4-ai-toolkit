@@ -558,3 +558,84 @@ def test_evidence_uncommitted_guard_edits_are_a_refusal(repo, monkeypatch):
     (repo / ".claude" / "hooks" / "h.sh").write_bytes(b"echo edited\n")
     assert "differ from HEAD" in _REAL_EVIDENCE(repo)
     assert not calls
+
+
+# ------------------------------------------- issue #21: the game-root budget and AGENTS.md headroom, warn only
+def _budget_root(tmp_path, config=None, agents=None, claude=None):
+    root = tmp_path / "budget-root"
+    root.mkdir()
+    if config is not None:
+        (root / ".codex").mkdir()
+        (root / ".codex" / "config.toml").write_bytes(config)
+    if agents is not None:
+        (root / "AGENTS.md").write_bytes(agents)
+    if claude is not None:
+        (root / "CLAUDE.md").write_bytes(claude)
+    return root
+
+
+@pytest.mark.parametrize("config,want", [(None, 32768), (b"project_doc_max_bytes = 40960\n", 40960),
+                                         (b"model = 'x'\n", 32768), (b"project_doc_max_bytes = 'big'\n", 32768),
+                                         (b"not = [toml\n", 32768)])
+def test_RED_the_effective_AGENTS_md_budget_is_the_game_roots_codex_config_else_32768(tmp_path, config, want):
+    budget, source = dep.effective_doc_budget(_budget_root(tmp_path, config=config))
+    assert budget == want
+    if config is not None and want == 32768:
+        assert "config.toml" in source, "a config that does not set a usable value is named, not passed over"
+
+
+def test_RED_agents_md_headroom_is_against_the_effective_budget(tmp_path):
+    root = _budget_root(tmp_path, config=b"project_doc_max_bytes = 40960\n", agents=b"a" * 40000)
+    text = "\n".join(dep.budget_report(root))
+    assert "40000 of 40960 bytes" in text and "headroom +960" in text, text
+
+
+def test_TWIN_agents_md_over_the_default_budget_warns(tmp_path):
+    root = _budget_root(tmp_path, agents=b"a" * 33000)
+    text = "\n".join(dep.budget_report(root))
+    assert "WARNING" in text and "33000 of 32768 bytes" in text and "232 over" in text, text
+
+
+def _gate_for(monkeypatch, tmp_path, root, baseline):
+    g = dep.budget_gate()
+    bl = tmp_path / "bl.json"
+    if baseline is not None:
+        bl.write_text(__import__("json").dumps({"_counting": g.COUNTING, **baseline}), encoding="utf-8")
+    monkeypatch.setattr(g, "BASELINE", bl)
+    monkeypatch.setattr(g._paths, "game_root", lambda: root)
+    return g
+
+
+def test_RED_a_game_root_CLAUDE_md_past_its_floor_is_reported_GREW(tmp_path, monkeypatch):
+    root = _budget_root(tmp_path, claude=b"x" * 100)
+    _gate_for(monkeypatch, tmp_path, root, {"game root": 90})
+    text = "\n".join(dep.budget_report(root))
+    assert "WARNING" in text and "GREW" in text and "90 -> 100 (+10" in text, text
+
+
+def test_TWIN_a_game_root_CLAUDE_md_within_its_floor_says_so(tmp_path, monkeypatch):
+    root = _budget_root(tmp_path, claude=b"x" * 100)
+    _gate_for(monkeypatch, tmp_path, root, {"game root": 100})
+    text = "\n".join(dep.budget_report(root))
+    assert "within its recorded floor 100" in text and "GREW" not in text, text
+
+
+@pytest.mark.parametrize("case", ["no baseline", "no entry", "another root"])
+def test_TWIN_an_unchecked_game_root_CLAUDE_md_says_NOT_CHECKED(tmp_path, monkeypatch, case):
+    root = _budget_root(tmp_path, claude=b"x" * 100)
+    g = _gate_for(monkeypatch, tmp_path, root, None if case == "no baseline" else {"shipped (repo root)": 1})
+    if case == "another root":
+        _gate_for(monkeypatch, tmp_path, tmp_path / "elsewhere", {"game root": 1})
+    text = "\n".join(dep.budget_report(root))
+    assert "NOT CHECKED" in text and "GREW" not in text, text
+
+
+def test_the_budget_report_never_changes_the_exit_code(repo, dest, monkeypatch, capsys):
+    _commit(repo, "skills/a/SKILL.md", b"v1\n")
+    root = dest.parent
+    (root / "AGENTS.md").write_bytes(b"a" * 40000)
+    (root / "CLAUDE.md").write_bytes(b"x" * 100)
+    _gate_for(monkeypatch, root.parent, root, {"game root": 1})
+    assert dep.main(["--repo", str(repo), "--dest", str(dest)]) == 0
+    out = capsys.readouterr().out
+    assert "BUDGETS" in out and "GREW" in out and "40000 of 32768" in out, out
