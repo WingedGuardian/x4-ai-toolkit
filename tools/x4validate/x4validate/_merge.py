@@ -1273,9 +1273,9 @@ def complete_at(root: Path, vpath: str) -> etree._Element | None:
 #: OPENED, the store/dump `unmeasured` note, x4validate's load-path ERROR). It states the RULE's
 #: evidence, not a measurement of the file the line is about: one game log, 10 of 10
 #: `assets/units/` complete copies (BLIND-SPOTS F383); that the LAST entry decides is INFERRED.
-INDEX_RULE_EVIDENCE = ("the engine loads the document the last index entry names: MEASURED for "
-                       "10 of 10 copies in one game log, BLIND-SPOTS F383; last-entry-wins "
-                       "INFERRED")
+INDEX_RULE_EVIDENCE = ("the engine loads the document the last index entry names: the rule "
+                       "predicted 10 of 10 copies in one game log (BLIND-SPOTS F383); that the "
+                       "LAST entry beats the first rests on 3 of them")
 
 
 def index_note(owner: str, value: str, count: int, vpath: str) -> str:
