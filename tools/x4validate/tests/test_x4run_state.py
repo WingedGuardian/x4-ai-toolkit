@@ -191,6 +191,43 @@ def test_update_without_a_begun_run_refuses_rather_than_creating(tmp_path):
     assert not store.path.exists()
 
 
+#: States `read` would reject; each must be refused at WRITE time on both paths.
+_UNREADABLE = {
+    "unknown phase": lambda: _state(phase="stopping", process=make_proc()),
+    "unknown mode": lambda: _state(approval=_approval(mode="headless")),
+    "non-int pid": lambda: _state(process=dataclasses.replace(make_proc(), pid="123")),
+    "bool pid": lambda: _state(process=dataclasses.replace(make_proc(), pid=True)),
+    "non-str field": lambda: _state(run_id=7),
+}
+
+
+@pytest.mark.parametrize("name", list(_UNREADABLE))
+def test_update_refuses_a_record_read_would_reject_and_keeps_the_old_one(tmp_path, name):
+    store = _store(tmp_path)
+    good = _state(phase="running", process=make_proc(4242))
+    store.begin(good)
+    before = store.path.read_bytes()
+    with pytest.raises(X.InvalidState):
+        store.update(_UNREADABLE[name]())
+    assert store.path.read_bytes() == before
+    assert store.read() == good  # the live game's process is still readable
+    assert [p.name for p in store.folder.iterdir()] == [store.path.name]
+
+
+@pytest.mark.parametrize("name", list(_UNREADABLE))
+def test_begin_refuses_a_record_read_would_reject_and_creates_no_file(tmp_path, name):
+    store = _store(tmp_path)
+    with pytest.raises(X.InvalidState):
+        store.begin(_UNREADABLE[name]())
+    assert not store.path.exists()
+    assert not store.folder.exists() or list(store.folder.iterdir()) == []
+    store.begin(_state())  # nothing was left to block a valid start
+
+
+def test_invalid_state_is_a_value_error():
+    assert issubclass(X.InvalidState, ValueError)
+
+
 # -------------------------------------------------------------------------------- read
 
 

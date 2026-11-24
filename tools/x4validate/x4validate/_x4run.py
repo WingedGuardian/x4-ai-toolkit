@@ -219,6 +219,10 @@ class CorruptState(RuntimeError):
     """The state file exists but cannot be read as a run record. Never treated as 'no run'."""
 
 
+class InvalidState(ValueError):
+    """A `RunState` that `read` would reject (unknown phase or mode, mistyped field). Never written."""
+
+
 class StateFolderError(RuntimeError):
     """The state folder cannot be located (the toolkit root is unknown)."""
 
@@ -306,8 +310,19 @@ def _state_from(data: object) -> RunState:
 
 
 def _encode(state: RunState) -> bytes:
-    # Encode FIRST: a failed encode must not leave a truncated file behind.
-    return json.dumps(asdict(state), indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+    """The bytes to write, or `InvalidState`. Called BEFORE anything on disk is touched.
+
+    Encode FIRST: a failed encode must not leave a truncated file behind. And the text is
+    parsed back through the SAME validator `read` uses, so no record can be written that
+    `read` would then reject: replacing the last readable record (which may hold a live game's
+    process) with an unreadable one is the failure this file exists to prevent.
+    """
+    try:
+        text = json.dumps(asdict(state), indent=2, ensure_ascii=False)
+        _state_from(json.loads(text))
+    except (ValueError, TypeError) as exc:
+        raise InvalidState(f"refusing to write a run record that could not be read back: {exc}") from exc
+    return text.encode("utf-8") + b"\n"
 
 
 class StateStore:
