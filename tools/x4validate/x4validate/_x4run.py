@@ -615,11 +615,14 @@ KILL_WAIT_S = 30.0
 #: Seconds one close or terminate call may take.
 CLOSE_CALL_TIMEOUT_S = 30
 
-# The pid is a typed parameter passed as its OWN argv element after the script: it is never
-# interpolated into the script text, so no text can reach the script through it. (Verified
-# against the real PowerShell with a read-only script: `-Command "& {param([int]$ProcId) ...}" 123`
-# binds 123 to $ProcId.) Exit 3: no main window to ask. The close and terminate scripts are
-# separate and never both in one call.
+# The pid is passed as its OWN argv element after a constant script, but PowerShell `-Command`
+# joins the arguments that follow into one command string, so `str(pid)` IS appended to the
+# command text. The safeguard is therefore the value, not the channel: `close` accepts a pid
+# only if it is an `int` (not a bool) and >= 1, checked before any call, so only digits can
+# be appended, and `[int]$ProcId` binds them. (Verified against the real PowerShell with a
+# read-only script: `-Command "& {param([int]$ProcId) ...}" 123` binds 123 to $ProcId.)
+# Exit 3: no main window to ask. The close and terminate scripts are separate and never both
+# in one call.
 _CLOSE_SCRIPT = (
     "& { param([int]$ProcId) $ErrorActionPreference='Stop'; "
     "$p = Get-Process -Id $ProcId; if (-not $p.CloseMainWindow()) { exit 3 } }"
@@ -635,22 +638,29 @@ class CloseReport:
 
     `method`: "already-gone" (it was not running; nothing was called), "window-close" (it
     ended within the grace period), "terminate" (it ended after the terminate request) or
-    "unclosed". `steps` says in order what was done; `remaining` is every X4.exe seen by the
-    last read (unrelated ones too: they are only ever reported).
+    "unclosed". `steps` says in order what was done.
+
+    `remaining` is every X4.exe seen by the LAST read, unrelated ones too (they are only ever
+    reported). `None` means UNKNOWN: the last read failed, or no read ever succeeded. `()` means
+    a read that SUCCEEDED saw none. It is never filled from an earlier read.
     """
 
     closed: bool
     method: str
     steps: tuple[str, ...]
-    remaining: tuple[ProcessInfo, ...]
+    remaining: tuple[ProcessInfo, ...] | None
 
 
 class _Reader:
-    """Reads all X4.exe; `None` for a failed read (the third state), `last` = the last good one."""
+    """Reads all X4.exe; `None` for a failed read (the third state).
+
+    `latest` is the answer of the MOST RECENT read (`None` if it failed or none was made): it
+    is never an older read's result, so it can feed `CloseReport.remaining` honestly.
+    """
 
     def __init__(self, run, sleep) -> None:
         self._run, self._sleep = run, sleep
-        self.last: list[ProcessInfo] | None = None
+        self.latest: list[ProcessInfo] | None = None
         self.error = ""
 
     def __call__(self) -> list[ProcessInfo] | None:
@@ -658,8 +668,9 @@ class _Reader:
             procs = read_processes(self._run, name=_GAME_EXE, sleep=self._sleep)
         except ProcessReadError as exc:
             self.error = str(exc)
+            self.latest = None
             return None
-        self.last = procs
+        self.latest = procs
         return procs
 
 
@@ -729,20 +740,26 @@ def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.
     read = _Reader(run, sleep)
     rec = state.process
 
+    def rem(which: str = "last") -> tuple[ProcessInfo, ...] | None:
+        """`remaining` from the most recent read; None, with a step saying why, if it failed."""
+        if read.latest is None:
+            note(f"the {which} {_GAME_EXE} read failed or none was made, so `remaining` is "
+                 f"unknown (not empty): {read.error or 'no read was made'}")
+            return None
+        return tuple(read.latest)
+
     def report(closed: bool, method: str, remaining) -> CloseReport:
-        return CloseReport(closed, method, tuple(steps), tuple(remaining))
+        return CloseReport(closed, method, tuple(steps), remaining)
 
     if rec is None:
-        procs = read()
+        read()
         note("no process was recorded (the run was still starting): nothing was closed or "
              "terminated; the run record was KEPT")
-        if procs is None:
-            note(f"the {_GAME_EXE} read failed, so what is running is unknown: {read.error}")
-        return report(False, "unclosed", procs or ())
+        return report(False, "unclosed", rem())
     if type(rec.pid) is not int or rec.pid < 1:
         note(f"the recorded pid {rec.pid!r} is not a positive integer: nothing was closed or "
              f"terminated; the run record was KEPT")
-        return report(False, "unclosed", ())
+        return report(False, "unclosed", rem())
 
     def finish_gone(method: str, remaining) -> CloseReport:
         note(f"the recorded process (pid {rec.pid}) is gone; {_clear_note(store)}")
@@ -768,17 +785,18 @@ def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.
         if exited:
             note("the recorded process is not running (confirmed by repeated reads); no close "
                  "or terminate call was made")
-            return finish_gone("already-gone", read.last or ())
+            return finish_gone("already-gone", rem())
         if clock() >= deadline:
             return keep("could not establish whether the recorded process is running "
                         f"(last read error: {read.error or 'none'}); no close or terminate "
-                        "call was made", read.last or ())
+                        "call was made", rem())
         sleep(POLL_INTERVAL_S)
 
     # --- 2. ask the window to close, then give it the grace period (plus any hold)
     problem = _ask(run, _CLOSE_SCRIPT, rec.pid)
     note(f"window-close request for pid {rec.pid} " + (f"failed: {problem}" if problem else "sent"))
     watch = ExitWatch(rec)
+    terminate_problem = None
     if _wait_for_exit(watch, read, sleep, clock, clock() + grace_s + hold_s):
         note(f"the recorded process ended within the grace period ({grace_s + hold_s:g} s)")
         method = "window-close"
@@ -800,24 +818,28 @@ def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.
             sleep(POLL_INTERVAL_S)
         if verdict == "unreadable":
             return keep("the start-time re-check before the terminate could not be read, so "
-                        "nothing was terminated", read.last or ())
+                        "nothing was terminated", rem())
         method = "window-close"
         if verdict == "present":
-            problem = _ask(run, _TERMINATE_SCRIPT, rec.pid)
-            note(f"terminate request for pid {rec.pid} " + (f"failed: {problem}" if problem else "sent"))
+            terminate_problem = _ask(run, _TERMINATE_SCRIPT, rec.pid)
+            note(f"terminate request for pid {rec.pid} "
+                 + (f"failed: {terminate_problem}" if terminate_problem else "sent"))
             method = "terminate"
         elif verdict == "changed":
             note("the recorded process no longer matches on a re-read: nothing was terminated")
         if verdict != "exited" and not _wait_for_exit(watch, read, sleep, clock, clock() + kill_wait_s):
-            final = read()
+            read()
             return keep(f"the recorded process did not end within {kill_wait_s:g} s",
-                        final if final is not None else (read.last or ()))
+                        rem())
+
+    if terminate_problem:
+        note(f"the recorded process ended although the terminate call failed ({terminate_problem}); "
+             f"the method stays 'terminate' because a terminate request was issued")
 
     # --- 4. a last read: closed only if it agrees (a contradiction is never reported closed)
     final = read()
     if final is None:
-        note(f"the final {_GAME_EXE} read failed, so `remaining` is unknown: {read.error}")
-        return finish_gone(method, ())
+        return finish_gone(method, rem("final"))
     if rec in final:
-        return keep("the recorded process is present again on the final read", final)
-    return finish_gone(method, final)
+        return keep("the recorded process is present again on the final read", rem("final"))
+    return finish_gone(method, rem("final"))

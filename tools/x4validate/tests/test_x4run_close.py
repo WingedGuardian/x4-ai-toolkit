@@ -275,6 +275,8 @@ def test_a_failed_read_during_the_wait_is_not_gone(tmp_path):
     assert rep.closed is False and rep.method == "unclosed"
     assert store.path.exists()
     assert fake.terminate_calls == []  # never terminated on a read it could not make
+    # two earlier reads DID succeed and saw the process: that stale list is never reported
+    assert rep.remaining is None
 
 
 def test_a_failed_read_before_the_close_request_makes_no_call(tmp_path):
@@ -285,6 +287,7 @@ def test_a_failed_read_before_the_close_request_makes_no_call(tmp_path):
     assert fake.close_calls == [] and fake.terminate_calls == []
     assert store.path.exists()
     assert any("could not" in s for s in rep.steps)
+    assert rep.remaining is None  # nothing was ever read successfully
 
 
 def test_transient_read_failures_delay_the_exit_but_never_fake_it(tmp_path):
@@ -369,9 +372,11 @@ def test_a_starting_record_whose_read_fails_still_makes_no_call(tmp_path):
     fake, store, state = _world(tmp_path, REC, state=state)
     fake.fail_reads(10)
     rep = _close(fake, store, state)
-    assert rep.closed is False and rep.remaining == ()
+    assert rep.closed is False
+    assert rep.remaining is None  # a failed read is UNKNOWN, never "no X4 running"
     assert fake.close_calls == [] and fake.terminate_calls == []
     assert store.path.exists()
+    assert any("unknown" in s for s in rep.steps)
 
 
 # ------------------------------------------------------------------------ hidden, bounded
@@ -407,6 +412,7 @@ def test_a_non_positive_recorded_pid_is_never_passed_to_any_call(tmp_path, bad):
     rep = _close(fake, store, state)
     assert rep.closed is False
     assert fake.calls == []
+    assert rep.remaining is None  # no read was made: unknown, not empty
     assert store.path.exists()
 
 
@@ -432,3 +438,69 @@ def test_the_fake_refuses_a_script_that_is_both_a_close_and_a_terminate():
     with pytest.raises(AssertionError, match="exactly one kind"):
         fake.run(["powershell.exe", "-Command", "$p.CloseMainWindow(); Stop-Process -Id 1"],
                  creationflags=X.NO_WINDOW)
+
+
+# ------------------------------------------------- remaining: UNKNOWN is not NONE (ruling 11)
+
+
+def test_a_failed_final_read_after_a_confirmed_exit_leaves_remaining_unknown(tmp_path):
+    fake, store, state = _world(tmp_path, REC, OTHER)  # an unrelated X4 IS running
+    fake.close_exits_after(1)
+    fake.good_reads(5)   # initial, re-check, three confirming absent reads ...
+    fake.fail_reads(3)   # ... then the final read fails (one read = three attempts)
+    rep = _close(fake, store, state)
+    assert (rep.closed, rep.method) == (True, "window-close")  # the exit was confirmed
+    assert rep.remaining is None  # never () while OTHER is running
+    assert any("final" in s and "read failed" in s and "unknown" in s for s in rep.steps)
+    assert not store.path.exists()  # the record logic is unchanged: it depends on the watch
+
+
+def test_a_successful_empty_final_read_is_none_remaining_not_unknown(tmp_path):
+    fake, store, state = _world(tmp_path, REC)
+    fake.close_exits_after(1)
+    rep = _close(fake, store, state)
+    assert rep.closed is True and rep.remaining == ()  # a read succeeded and saw none
+
+
+def test_a_keep_path_with_an_earlier_good_read_but_a_failing_last_read_is_unknown(tmp_path):
+    fake, store, state = _world(tmp_path, REC, OTHER)
+    fake.good_reads(8)       # initial + re-check + the watch: the process is still there
+    fake.fail_reads(10_000)  # then the kill-wait and the final read cannot be read
+    rep = _close(fake, store, state, grace_s=4, kill_wait_s=6)
+    assert rep.closed is False and rep.method == "unclosed"
+    assert rep.remaining is None  # not the stale (REC, OTHER) of the last good read
+    assert store.path.exists()
+
+
+def test_a_keep_path_whose_last_read_succeeded_reports_that_read(tmp_path):
+    fake, store, state = _world(tmp_path, REC, OTHER)
+    rep = _close(fake, store, state, grace_s=4, kill_wait_s=4)
+    assert rep.closed is False
+    assert set(rep.remaining) == {REC, OTHER}
+
+
+# ------------------------------------------------------------ a terminate call that fails
+
+
+@pytest.mark.parametrize("how, expect", [("exit", "exited 1"), ("oserror", "powershell is gone"),
+                                         ("timeout", "timed out")])
+def test_a_failed_terminate_call_is_recorded_even_if_the_process_then_ends(tmp_path, how, expect):
+    import subprocess
+
+    fake, store, state = _world(tmp_path, REC)
+
+    def hook(argv):
+        if how == "exit":
+            return 1, ""
+        if how == "oserror":
+            raise OSError("powershell is gone")
+        raise subprocess.TimeoutExpired(argv, 30)
+    fake.on_terminate = hook
+    kill_t = _record_time(fake, "on_terminate")
+    fake.at(11, lambda f: setattr(f, "table", []))  # the process ends by itself, after the grace
+    rep = _close(fake, store, state, grace_s=10, kill_wait_s=10)
+    assert len(kill_t) == 1  # a terminate request WAS issued
+    assert (rep.closed, rep.method) == (True, "terminate")
+    failed = [s for s in rep.steps if "terminate request for pid 1000 failed" in s]
+    assert len(failed) == 1 and expect in failed[0]
+    assert any("although the terminate call failed" in s for s in rep.steps)
