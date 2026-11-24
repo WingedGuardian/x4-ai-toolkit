@@ -5,6 +5,7 @@ Everything goes through `FakeSystem`; nothing here starts, or could start, Steam
 from __future__ import annotations
 
 import subprocess
+import sys
 
 import pytest
 from _x4run_fake import FakeSystem, make_proc
@@ -97,15 +98,61 @@ def test_a_missing_powershell_is_a_read_failure():
 
 
 def test_every_read_is_started_hidden():
+    if sys.platform != "win32":
+        pytest.skip("CREATE_NO_WINDOW exists only on Windows (NO_WINDOW is 0 here)")
     fake = FakeSystem([make_proc()])
     fake.fail_reads(1)
     fake.timeout_reads(1)
     _read(fake)
     assert len(fake.calls) == 3
+    assert X.NO_WINDOW == 0x08000000
     for call in fake.calls:
         assert call.creationflags & X.NO_WINDOW
         assert not call.creationflags & 0x8  # DETACHED_PROCESS
-    assert X.NO_WINDOW in (0, 0x08000000)
+
+
+def test_no_read_is_ever_detached_on_any_platform():
+    fake = FakeSystem([make_proc()])
+    fake.fail_reads(1)
+    _read(fake)
+    assert fake.calls
+    for call in fake.calls:
+        assert not call.creationflags & 0x8  # DETACHED_PROCESS
+
+
+def test_missing_stdout_is_a_read_failure_never_an_empty_list():
+    # exit 0 with stdout None is what a dead reader thread leaves behind
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, None, "")
+
+    with pytest.raises(X.ProcessReadError):
+        X.read_processes(run, sleep=lambda s: None)
+    assert len(calls) == 3  # retried like any other failure
+
+
+def test_a_decode_error_from_the_runner_is_a_read_failure():
+    def run(argv, **kw):
+        raise UnicodeDecodeError("utf-8", bytes([0xFF]), 0, 1, "invalid start byte")
+
+    with pytest.raises(X.ProcessReadError):
+        X.read_processes(run, sleep=lambda s: None)
+
+
+def test_the_read_decodes_leniently():
+    fake = FakeSystem([])
+    _read(fake)
+    # the fake records only argv/flags; pin the kwarg through a direct capture
+    seen = {}
+
+    def run(argv, **kw):
+        seen.update(kw)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    X.read_processes(run, sleep=lambda s: None)
+    assert seen["errors"] == "replace"
 
 
 def test_the_read_is_a_bounded_powershell_query_filtered_by_name():

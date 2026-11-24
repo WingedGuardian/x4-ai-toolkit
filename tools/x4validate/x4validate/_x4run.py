@@ -123,18 +123,26 @@ def read_processes(run=subprocess.run, *, name: str = "X4.exe", sleep=time.sleep
             sleep(READ_RETRY_PAUSE_S)
         try:
             res = run(argv, capture_output=True, text=True, encoding="utf-8",
-                      timeout=READ_TIMEOUT_S, creationflags=NO_WINDOW)
+                      errors="replace", timeout=READ_TIMEOUT_S, creationflags=NO_WINDOW)
         except subprocess.TimeoutExpired:
             last = f"timed out after {READ_TIMEOUT_S} s"
             continue
         except OSError as exc:
             last = f"could not start PowerShell: {exc}"
             continue
+        except UnicodeError as exc:
+            last = f"process read output could not be decoded: {exc}"
+            continue
         if res.returncode != 0:
             last = f"PowerShell exited {res.returncode}: {(res.stderr or '').strip()[:200]}"
             continue
+        if res.stdout is None:
+            # A dead reader thread leaves no stdout at all. That is NOT empty output (which
+            # is the real answer "none running"): it is a failed read.
+            last = "process read produced no stdout"
+            continue
         try:
-            return _parse(res.stdout or "")
+            return _parse(res.stdout)
         except ProcessReadError as exc:
             last = str(exc)
     raise ProcessReadError(f"could not read {name} processes after {attempts} attempt(s): {last}")
