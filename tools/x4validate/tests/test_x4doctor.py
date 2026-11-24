@@ -1054,7 +1054,7 @@ def test_a_missing_no_detached_launch_registration_is_FAIL(sandbox):
     s["hooks"]["PreToolUse"] = kept
     p.write_text(json.dumps(s), encoding="utf-8")
     r = {r.id: r for r in doc.check_claude(sandbox.ctx())}["claude.wiring"]
-    assert r.status == doc.FAIL and "Monitor" in r.detail and "not registered" in r.detail, r
+    assert r.status == doc.FAIL and "Monitor" in r.detail and "not registered" in r.detail         and "the no-detached-launch guard group (matcher " in r.detail, r
 
 
 def test_a_wired_script_that_is_MISSING_is_FAIL(sandbox):

@@ -84,6 +84,11 @@ jobs:
       - name: Install Python 3.13
         run: uv python install 3.13
 
+      # The no-detached-launch tests also run with the hook under 3.10 and 3.12 (HOOK_PYTHON, below). Installing those
+      # here keeps the download out of the tests' 30 s per-hook-call timeout and makes a failed download a setup failure.
+      - name: Install the other hook Pythons (3.10, 3.12)
+        run: uv python install 3.10 3.12
+
       # The vendored BaseX jar had NEVER been executed by CI, on any OS. The 24 BaseX
       # unit tests pass without a JVM because they mock -- test_preflight.py monkeypatches
       # shutil.which and writes a jar that is literally b"not really a jar, but it is a
@@ -168,7 +173,7 @@ jobs:
       # The no-detached-launch guard: its tests and its mutation gate. pytest's `testpaths` is `tests`, which does
       # NOT reach .claude/hooks, so the file is named here (a test file left in that folder without a step runs
       # nowhere: test_python_durable_scope.py is one). `uv run --project` gives it the locked venv's pytest.
-      # The gate runs ~65 mutants on copies, each a full run of the test file (the unmutated copy must pass first).
+      # The gate runs 84 mutants on copies, each a full run of the test file (the unmutated copy must pass first).
       - name: no-detached-launch tests
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: bash

@@ -38,8 +38,15 @@ Known limits (documented, not fixed):
 - NOT caught: a flag constant renamed through data flow, or passed through a helper's keyword argument
   (`creationflags=f(x, flags=0x8)`); code generated inside Python string literals (string contents are blanked to avoid
   prose false positives).
+- NOT caught: an inline script after a variable or quoted interpreter that is not the first word of the command: an
+  environment assignment or wrapper before it (`PYTHONUTF8=1 "$PY" -c ...`, `timeout 60 "$PY" -c ...`, `nohup` or
+  `env ... "$PY" -c ...`), leading arguments before the script flag (`"$PY" "${X4_PYI[@]}" -c ...`), and PowerShell
+  `& "$env:PY" -c ...`, `& ${env:PY} -c ...` or bash `"${PY:-python}" -c ...` (the same prefixes before a bare `python`
+  ARE caught).
 - NOT refused: helpers started with `pythonw` or a `.pyw` (also console-less, so their console children pop windows the
   same way; some legitimate background helpers run that way).
+- Known false positive (rare): Node `detached: true` is refused anywhere in JS/TS code, including a test that asserts
+  the flag is absent and an option unrelated to processes.
 - Known false positive (rare): an Edit to a shell script judges its whole 400-line window, so a script that already
   holds a bad launch can refuse an unrelated edit nearby. A refusal names the statement; rewrite it or build the token
   from parts.

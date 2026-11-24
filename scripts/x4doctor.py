@@ -1068,6 +1068,8 @@ def check_codex(ctx: Ctx) -> list[Check]:
 #: present, and each wired script must exist.
 CLAUDE_MATCHERS = ("Bash", "PowerShell", "Edit|Write|NotebookEdit",
                    "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Monitor")   # the last: no-detached-launch.sh
+#: A matcher's guard, named in the FAIL detail so a reader need not work out which hook a matcher string belongs to.
+_MATCHER_GUARD = {"Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Monitor": "the no-detached-launch guard group"}
 
 
 def _read_json(p: Path):
@@ -1102,7 +1104,8 @@ def check_claude(ctx: Ctx) -> list[Check]:
         if missing:
             return FAIL, ("PreToolUse has no matcher for %s: that guard is not registered, so those tool calls run "
                           "without it (a customised settings.json keeps its own hooks: merge the shipped groups in)"
-                          % ", ".join(missing))
+                          % ", ".join("%s (matcher %s)" % (_MATCHER_GUARD[m], m) if m in _MATCHER_GUARD else m
+                                      for m in missing))
         if absent:
             return FAIL, "wired hook script(s) missing: %s -- the hook fails, and Claude runs the tool" % ", ".join(absent)
         return OK, "%d PreToolUse matcher(s), %d wired script(s) present" % (len(pre), n)
