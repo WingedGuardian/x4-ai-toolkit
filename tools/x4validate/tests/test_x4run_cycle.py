@@ -464,3 +464,92 @@ def test_forget_refuses_when_the_read_times_out(tmp_path):
         _forget(fake, store)
     assert store.path.exists()
     assert isinstance(X.ForgetRefused("x"), RuntimeError)
+
+
+# ------------------------------------------- Ruling 14: validate first; a failed close is loud
+
+
+class _UpdateFailsOnClose(X.StateStore):
+    """`update` works for `start` (the "running" record) and raises on the next call: `close`'s."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.updates = 0
+
+    def update(self, state):
+        self.updates += 1
+        if self.updates >= 2:
+            raise OSError("disk full")
+        super().update(state)
+
+
+def _failing_world(tmp_path, **command_kw):
+    fake, _ = _world(tmp_path, **command_kw)
+    store = _UpdateFailsOnClose(tmp_path / "state", sleep=fake.sleep, clock=fake.clock)
+    return fake, store
+
+
+@pytest.mark.parametrize("kw", [
+    {"grace_s": -1}, {"kill_wait_s": -0.5}, {"hold_s": float("nan")}, {"grace_s": float("inf")},
+    {"hold_s": True}, {"kill_wait_s": "10"}, {"ready_timeout_s": float("inf")},
+    {"ready_timeout_s": float("nan")}, {"ready_timeout_s": -1}, {"ready_timeout_s": True},
+    {"command_timeout_s": float("inf")}, {"command_timeout_s": float("nan")},
+    {"command_timeout_s": -5}, {"command_timeout_s": False},
+])
+def test_a_bad_duration_is_refused_before_any_call(tmp_path, kw):
+    fake, store = _world(tmp_path)
+    with pytest.raises(ValueError, match=next(iter(kw))):
+        _cycle(fake, store, **kw)
+    assert fake.calls == [] and not store.path.exists()
+
+
+@pytest.mark.parametrize("kw", [{"grace": 10}, {"graceS": 10}, {"timeout": 5}, {"grace_s": 5, "wait": 1}])
+def test_an_unknown_or_misspelled_close_keyword_is_refused_before_any_call(tmp_path, kw):
+    fake, store = _world(tmp_path)
+    with pytest.raises(TypeError):
+        _cycle(fake, store, **kw)
+    assert fake.calls == [] and not store.path.exists()
+
+
+def test_close_and_the_cycle_share_one_duration_rule(tmp_path):
+    fake, store = _world(tmp_path)
+    store.begin(X.RunState("r1", _approval(), "running", GAME, "2026-11-24T10:00:00+00:00"))
+    for bad in (float("inf"), True, -1, float("nan")):
+        with pytest.raises(ValueError, match="grace_s"):
+            X.close(X.RunState("r1", _approval(), "running", GAME, "t"), store, run=fake.run,
+                    sleep=fake.sleep, clock=fake.clock, grace_s=bad)
+    assert fake.calls == []
+
+
+def test_valid_durations_are_accepted(tmp_path):
+    fake, store = _world(tmp_path)
+    rep = _cycle(fake, store, grace_s=0, kill_wait_s=5, hold_s=0.0, ready_timeout_s=0,
+                 command_timeout_s=10)
+    assert rep.started and rep.ready and rep.command_rc == 0
+
+
+def test_a_close_that_raises_says_the_game_may_still_be_running(tmp_path):
+    fake, store = _failing_world(tmp_path)
+    with pytest.raises(OSError, match="disk full") as exc:
+        _cycle(fake, store)
+    notes = "\n".join(getattr(exc.value, "__notes__", []))
+    assert "NOT confirmed closed" in notes and str(store.path) in notes
+    assert "x4run stop" in notes and "x4run forget" in notes and "by hand" in notes
+    assert len(fake.command_calls) == 1  # the command had run
+    assert fake.close_calls == [] and fake.terminate_calls == []  # no close was ever sent
+    assert GAME in fake.table and store.path.exists()  # the game is still there, and recoverable
+
+
+def test_a_close_that_raises_during_an_interrupt_keeps_the_interrupt_visible(tmp_path):
+    fake, store = _failing_world(tmp_path)
+
+    def probe():
+        raise KeyboardInterrupt
+
+    with pytest.raises(OSError, match="disk full") as exc:
+        _cycle(fake, store, probe=probe)
+    notes = "\n".join(getattr(exc.value, "__notes__", []))
+    assert "NOT confirmed closed" in notes and str(store.path) in notes
+    assert "KeyboardInterrupt" in notes  # named in the note
+    assert isinstance(exc.value.__context__, KeyboardInterrupt)  # and chained
+    assert GAME in fake.table and fake.command_calls == []

@@ -18,7 +18,9 @@ Sections: process, exit, state, start, close, cycle (below). Later sections are 
 """
 from __future__ import annotations
 
+import inspect
 import json
+import math
 import os
 import re
 import subprocess
@@ -703,6 +705,17 @@ def _wait_for_exit(watch: ExitWatch, read, sleep, clock, deadline: float) -> boo
             return False
 
 
+def _check_seconds(label: str, value) -> None:
+    """Raise `ValueError` naming `label` unless `value` is a finite number of seconds >= 0.
+
+    The ONE rule for every duration this module accepts (`close` and `run_cycle` both call it):
+    a bool is not a number of seconds, and NaN, infinity and negatives are refused.
+    """
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 0):
+        raise ValueError(f"{label} must be a finite number of seconds >= 0, got {value!r}")
+
+
 def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.sleep,
           clock=time.monotonic, grace_s: float = CLOSE_GRACE_S, kill_wait_s: float = KILL_WAIT_S,
           hold_s: float = 0.0) -> CloseReport:
@@ -727,8 +740,7 @@ def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.
     read and the terminate itself.
     """
     for label, value in (("grace_s", grace_s), ("kill_wait_s", kill_wait_s), ("hold_s", hold_s)):
-        if not value >= 0:  # also refuses NaN
-            raise ValueError(f"{label} must be a number of seconds >= 0, got {value!r}")
+        _check_seconds(label, value)
     t0 = clock()
     steps: list[str] = []
 
@@ -919,6 +931,20 @@ def _check_command(command) -> list[str]:
     return command
 
 
+def _check_cycle_args(close_kw: dict, ready_timeout_s, command_timeout_s) -> None:
+    """Everything `run_cycle` could only discover AFTER the game started, refused up front.
+
+    `close_kw` is bound against `close`'s own signature (an unknown or misspelled keyword is a
+    `TypeError`), and every duration is checked by the rule `close` uses. A bad value found
+    only inside the final `close` would leave a launched game running.
+    """
+    inspect.signature(close).bind(None, None, **close_kw)  # TypeError on a bad keyword
+    for label, value in (("ready_timeout_s", ready_timeout_s),
+                         ("command_timeout_s", command_timeout_s), *close_kw.items()):
+        if label in ("grace_s", "kill_wait_s", "hold_s", "ready_timeout_s", "command_timeout_s"):
+            _check_seconds(label, value)
+
+
 def run_cycle(game_root: Path, approval: Approval | None, store: StateStore, command: list[str],
               *, ready_probe, run=subprocess.run, sleep=time.sleep, clock=time.monotonic,
               ready_timeout_s: float = 300.0, command_timeout_s: float = 3600.0,
@@ -938,6 +964,7 @@ def run_cycle(game_root: Path, approval: Approval | None, store: StateStore, com
     propagate unchanged: the caller must see them.
     """
     _check_command(command)  # before anything is started
+    _check_cycle_args(close_kw, ready_timeout_s, command_timeout_s)
     try:
         state = start(game_root, approval, store, run=run, sleep=sleep, clock=clock)
     except StartRefused as exc:
@@ -966,7 +993,19 @@ def run_cycle(game_root: Path, approval: Approval | None, store: StateStore, com
         pending = exc
         raise
     finally:
-        close_report = close(state, store, run=run, sleep=sleep, clock=clock, **close_kw)
+        try:
+            close_report = close(state, store, run=run, sleep=sleep, clock=clock, **close_kw)
+        except BaseException as close_exc:
+            # The game was started and nothing is known to have closed it: say so on the error
+            # the caller will see (the in-flight exception stays chained as its context).
+            close_exc.add_note(
+                f"x4run: the game was NOT confirmed closed: `close` failed "
+                f"({type(close_exc).__name__}: {close_exc}) and no close was confirmed. A game "
+                f"may still be running. The run record is at {store.path}: recover with "
+                f"`x4run stop`; if that cannot read the record, check for a running X4.exe by "
+                f"hand and then use `x4run forget`."
+                + (f" The error being handled when the close failed: {pending!r}." if pending is not None else ""))
+            raise
         if pending is not None and hasattr(pending, "add_note"):
             pending.add_note("x4run: the game was closed afterwards" if close_report.closed
                              else "x4run: " + _unclosed_note(close_report))
