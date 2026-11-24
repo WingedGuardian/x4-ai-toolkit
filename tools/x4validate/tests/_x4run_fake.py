@@ -19,7 +19,9 @@ a world the fake does not model.
 SCRIPTING. Reads: `fail_reads(n)`, `malformed_reads(n)`, `timeout_reads(n)` queue n bad
 answers, consumed one per read before the table answers again. Launch, close and terminate
 each call a settable hook (`on_launch`, `on_close`, `on_terminate`) with the argv and return
-a `(returncode, stdout)` pair; the default records the call and changes nothing. Time-driven
+a `(returncode, stdout)` pair; the default records the call and changes nothing. A hook may
+raise (`OSError`, `subprocess.TimeoutExpired`) to model a call that fails. `launch_spawns(*procs,
+after=s)` scripts a launch after which new game processes appear `s` virtual seconds later. Time-driven
 changes use `at(t, fn)`: `fn(fake)` runs once when the virtual clock reaches `t` (checked on
 every `sleep` and every `run`), e.g. a game process that appears five seconds after launch.
 
@@ -94,6 +96,17 @@ class FakeSystem:
     def timeout_reads(self, n: int = 1) -> None:
         """The next n process reads time out."""
         self._read_script += ["timeout"] * n
+
+    def launch_spawns(self, *procs: ProcessInfo, after: float = 5.0) -> None:
+        """A Steam launch call makes `procs` appear in the table `after` virtual seconds later.
+
+        Never calling this models Steam that accepts the call but never starts a game. A
+        scripted `on_launch` set afterwards replaces it (wrap the old one to combine).
+        """
+        def hook(argv):
+            self.at(self.now + after, lambda f: f.table.extend(procs))
+            return 0, ""
+        self.on_launch = hook
 
     @staticmethod
     def _default_hook(argv):

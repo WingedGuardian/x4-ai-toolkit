@@ -1,0 +1,270 @@
+r"""x4run start: preflight, one hidden Steam launch call, poll for the new process, never retry.
+
+Everything goes through `FakeSystem`; nothing here starts, or could start, Steam or X4. The
+launch is only ever a call made to the scripted fake runner.
+"""
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+from _x4run_fake import FakeSystem, make_proc
+
+from x4validate import _paths
+from x4validate import _x4run as X
+
+GAME_ROOT = Path("steamroot/steamapps/common/X4 Foundations")
+
+
+def _approval(**kw) -> X.Approval:
+    base = dict(approved_by="user", mode="menu-only", target="main menu",
+                desktop="secondary desktop", recorded_at="2026-11-24T10:00:00Z")
+    base.update(kw)
+    return X.Approval(**base)
+
+
+def _store(tmp_path, fake) -> X.StateStore:
+    return X.StateStore(tmp_path / "state", sleep=fake.sleep, clock=fake.clock)
+
+
+def _start(fake, tmp_path, approval="default", store=None, **kw):
+    store = store or _store(tmp_path, fake)
+    approval = _approval() if approval == "default" else approval
+    return X.start(GAME_ROOT, approval, store, run=fake.run, sleep=fake.sleep,
+                   clock=fake.clock, **kw)
+
+
+def _launches(fake):
+    return [c for c in fake.calls if Path(c.argv[0]).name.lower() == "steam.exe"]
+
+
+def _reads(fake):
+    return [c for c in fake.calls if "Get-CimInstance" in " ".join(c.argv)]
+
+
+# ------------------------------------------------------------------------------ preflight
+
+
+def test_missing_approval_refuses_before_any_call(tmp_path):
+    fake = FakeSystem()
+    store = _store(tmp_path, fake)
+    for bad in (None, _approval(approved_by=" "), _approval(mode="headless")):
+        with pytest.raises(X.UnapprovedLaunch):
+            _start(fake, tmp_path, approval=bad, store=store)
+    assert fake.calls == []  # not even a process read
+    assert not store.path.exists()
+
+
+def test_a_running_X4_refuses_and_starts_nothing(tmp_path):
+    fake = FakeSystem([make_proc(4242)])
+    store = _store(tmp_path, fake)
+    with pytest.raises(X.StartRefused, match="4242") as exc:
+        _start(fake, tmp_path, store=store)
+    assert "nothing was started" in str(exc.value)
+    assert _launches(fake) == []
+    assert len(fake.calls) == len(_reads(fake)) == 1  # one read, nothing else
+    assert not store.path.exists()  # and no state file claiming a run
+
+
+def test_a_failed_process_read_refuses_the_start(tmp_path):
+    # A game IS running but the read cannot say so: the failed read must not pass as "none".
+    fake = FakeSystem([make_proc()])
+    fake.fail_reads(10)
+    store = _store(tmp_path, fake)
+    with pytest.raises(X.StartRefused, match="could not be read") as exc:
+        _start(fake, tmp_path, store=store)
+    assert "nothing was started" in str(exc.value)
+    assert _launches(fake) == []
+    assert not store.path.exists()
+
+
+def test_a_pre_existing_state_file_refuses(tmp_path):
+    fake = FakeSystem()
+    store = _store(tmp_path, fake)
+    first = _start_ok(fake, tmp_path, store)
+    before = store.path.read_bytes()
+    fake.table.clear()  # even with the game gone, the record must be dealt with first
+    n_launches = len(_launches(fake))
+    with pytest.raises(X.UnfinishedRun):
+        _start(fake, tmp_path, store=store)
+    assert len(_launches(fake)) == n_launches  # no second launch
+    assert store.path.read_bytes() == before  # the earlier record is untouched
+    assert store.read().run_id == first.run_id
+
+
+def _start_ok(fake, tmp_path, store=None):
+    fake.launch_spawns(make_proc(2000))
+    return _start(fake, tmp_path, store=store)
+
+
+# ---------------------------------------------------------------------------- the launch
+
+
+def test_steam_exe_is_beside_the_steam_root():
+    assert X.steam_exe(GAME_ROOT) == Path("steamroot/steam.exe")
+    assert X.steam_exe(Path("S/steamapps/common/X4")) == Path("S/steam.exe")
+
+
+def test_the_launch_is_steam_applaunch_with_the_app_id_and_hidden(tmp_path):
+    fake = FakeSystem()
+    fake.launch_spawns(make_proc(2000))
+    _start(fake, tmp_path)
+    launches = _launches(fake)
+    assert len(launches) == 1
+    assert launches[0].argv == (str(X.steam_exe(GAME_ROOT)), "-applaunch", _paths.STEAM_APPID)
+    assert _paths.STEAM_APPID == "392160"
+    assert launches[0].timeout is not None and launches[0].timeout <= 60  # it only asks Steam
+    # every call the fake saw -- launch and reads -- is hidden, and never DETACHED_PROCESS
+    assert fake.calls
+    for c in fake.calls:
+        assert c.creationflags == X.NO_WINDOW == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        assert c.creationflags != 0x8
+
+
+def test_the_state_file_exists_before_the_launch_call(tmp_path):
+    fake = FakeSystem()
+    store = _store(tmp_path, fake)
+    seen = {}
+
+    def hook(argv):
+        seen["state"] = store.read()
+        return 0, ""
+
+    fake.on_launch = hook
+    with pytest.raises(X.StartRefused):
+        _start(fake, tmp_path, store=store, timeout_s=10)
+    st = seen["state"]
+    assert st.phase == "starting" and st.process is None
+    assert st.approval == _approval()
+
+
+def test_the_new_process_is_recorded_with_pid_path_and_start_time(tmp_path):
+    proc = make_proc(2000, path="G:/games/X4/X4.exe", started="2026-11-24T10:01:02.5000000Z")
+    fake = FakeSystem()
+    fake.launch_spawns(proc, after=7)
+    store = _store(tmp_path, fake)
+    state = _start(fake, tmp_path, store=store)
+    assert state.phase == "running"
+    assert state.process == proc  # pid, name, path AND start time
+    assert state.approval == _approval()
+    assert store.read() == state  # on disk, not only returned
+    assert len(_launches(fake)) == 1
+    assert 7 <= fake.clock() < 7 + 2 + 2  # it polled in ~2 s steps, no longer than needed
+
+
+def test_two_new_processes_refuse_naming_both_and_keep_the_record(tmp_path):
+    fake = FakeSystem()
+    fake.launch_spawns(make_proc(2000), make_proc(2001, started="2026-11-24T10:00:01.0000000Z"))
+    store = _store(tmp_path, fake)
+    with pytest.raises(X.StartRefused) as exc:
+        _start(fake, tmp_path, store=store)
+    msg = str(exc.value)
+    assert "2000" in msg and "2001" in msg
+    assert "x4run stop" in msg
+    st = store.read()  # a game IS running: the record stays, recording no process
+    assert st is not None and st.phase == "starting" and st.process is None
+    assert len(_launches(fake)) == 1
+
+
+# --------------------------------------------------------------- failure: nothing started
+
+
+def test_no_game_within_the_timeout_clears_state_and_does_not_retry(tmp_path):
+    fake = FakeSystem()
+    fake.launch_spawns(make_proc(2000), after=500)  # appears long after the deadline
+    store = _store(tmp_path, fake)
+    with pytest.raises(X.StartRefused) as exc:
+        _start(fake, tmp_path, store=store, timeout_s=30)
+    msg = str(exc.value)
+    assert "no X4.exe appeared within 30" in msg and "Steam was asked" in msg
+    assert not store.path.exists()
+    assert len(_launches(fake)) == 1  # exactly one launch attempt
+    assert 30 <= fake.clock() < 30 + 2 + 2  # it waited out the deadline, not far beyond it
+    assert fake.table == []
+
+
+@pytest.mark.parametrize("failure", ["oserror", "nonzero", "timeout"])
+def test_a_failed_launch_call_clears_state_and_is_not_retried(tmp_path, failure):
+    fake = FakeSystem()
+
+    def hook(argv):
+        if failure == "oserror":
+            raise FileNotFoundError("no steam.exe here")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, 30)
+        return 3, ""
+
+    fake.on_launch = hook
+    store = _store(tmp_path, fake)
+    with pytest.raises(X.StartRefused, match="launch call") as exc:
+        _start(fake, tmp_path, store=store)
+    assert "not retried" in str(exc.value)
+    assert not store.path.exists()
+    assert len(_launches(fake)) == 1
+
+
+def test_a_read_failure_during_the_poll_is_not_no_game(tmp_path):
+    fake = FakeSystem()
+    fake.launch_spawns(make_proc(2000), after=1)
+    inner = fake.on_launch
+
+    def hook(argv):
+        fake.fail_reads(3)  # the first poll read fails in full; the game is already there
+        return inner(argv)
+
+    fake.on_launch = hook
+    state = _start(fake, tmp_path)
+    assert state.phase == "running" and state.process.pid == 2000
+    assert len(_launches(fake)) == 1
+
+
+def test_reads_that_fail_all_the_way_say_so_when_nothing_is_seen(tmp_path):
+    fake = FakeSystem()
+
+    def hook(argv):
+        fake.fail_reads(1000)
+        return 0, ""
+
+    fake.on_launch = hook
+    store = _store(tmp_path, fake)
+    with pytest.raises(X.StartRefused) as exc:
+        _start(fake, tmp_path, store=store, timeout_s=20)
+    assert "could not be read" in str(exc.value)  # it does not claim the game is absent
+    assert not store.path.exists()
+    assert len(_launches(fake)) == 1
+
+
+# ------------------------------------------------------------- failure: a game may exist
+
+
+def test_an_interrupted_poll_leaves_the_record_in_place(tmp_path):
+    fake = FakeSystem()
+    store = _store(tmp_path, fake)
+
+    def interrupted_sleep(n):
+        if _launches(fake):
+            raise KeyboardInterrupt
+        fake.sleep(n)
+
+    with pytest.raises(KeyboardInterrupt):
+        X.start(GAME_ROOT, _approval(), store, run=fake.run, sleep=interrupted_sleep,
+                clock=fake.clock)
+    st = store.read()  # Steam was asked: a game may be starting, so the record stays
+    assert st is not None and st.phase == "starting" and st.process is None
+    assert len(_launches(fake)) == 1
+
+
+def test_a_failed_record_update_names_the_running_game(tmp_path):
+    fake = FakeSystem()
+    fake.launch_spawns(make_proc(2000), after=1)
+
+    def bad_replace(src, dst):
+        raise OSError("disk full")
+
+    store = X.StateStore(tmp_path / "state", sleep=fake.sleep, clock=fake.clock,
+                         replace=bad_replace)
+    with pytest.raises(X.StartRefused, match="2000") as exc:
+        _start(fake, tmp_path, store=store)
+    assert "could not be recorded" in str(exc.value)
+    assert store.read().process is None  # the record still exists and still says "starting"
