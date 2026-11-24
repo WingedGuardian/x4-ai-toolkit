@@ -187,3 +187,86 @@ def test_the_virtual_clock_advances_on_sleep_and_fires_events():
     assert _read(fake) == []
     fake.sleep(5)
     assert _read(fake) == [make_proc()]
+
+
+# ------------------------------------------------------------------------- exit watch
+
+def test_one_missing_read_does_not_end_the_run():
+    rec = make_proc(1001)
+    w = X.ExitWatch(rec)
+    assert w.observe([rec]) is False
+    assert w.observe([]) is False
+
+
+def test_three_consecutive_misses_end_it():
+    rec = make_proc(1001)
+    w = X.ExitWatch(rec)
+    assert [w.observe([]) for _ in range(3)] == [False, False, True]
+    # a custom threshold is honoured, not hard-coded to 3
+    w = X.ExitWatch(rec, misses=1)
+    assert w.observe([]) is True
+    w = X.ExitWatch(rec, misses=5)
+    assert [w.observe([]) for _ in range(5)] == [False] * 4 + [True]
+
+
+def test_a_reappearance_resets_the_count():
+    rec = make_proc(1001)
+    w = X.ExitWatch(rec)
+    assert w.observe([]) is False
+    assert w.observe([]) is False
+    assert w.observe([rec]) is False  # back: the two misses are forgotten
+    assert w.observe([]) is False
+    assert w.observe([]) is False     # only two since the reappearance, not four
+    assert w.observe([]) is True
+
+
+def test_a_failed_read_neither_counts_nor_resets():
+    rec = make_proc(1001)
+    # None between misses must not advance the count: miss, None, miss is still only 2
+    w = X.ExitWatch(rec)
+    assert [w.observe(x) for x in ([], None, [])] == [False, False, False]
+    assert w.observe([]) is True      # the third REAL miss ends it
+    # ... and must not reset it: two misses survive any number of failed reads
+    w = X.ExitWatch(rec)
+    w.observe([])
+    w.observe([])
+    for _ in range(5):
+        assert w.observe(None) is False  # never ends the run on its own
+    assert w.observe([]) is True
+    # a run of failed reads alone is never an exit
+    w = X.ExitWatch(rec)
+    assert not any(w.observe(None) for _ in range(20))
+
+
+def test_a_reused_pid_with_a_different_start_time_counts_as_a_miss():
+    rec = make_proc(1001, started="2026-11-24T10:00:00.0000000Z")
+    impostor = make_proc(1001, started="2026-11-24T11:30:00.0000000Z")  # same pid, new process
+    w = X.ExitWatch(rec)
+    assert [w.observe([impostor]) for _ in range(3)] == [False, False, True]
+
+
+@pytest.mark.parametrize("field, value", [
+    ("name", "Other.exe"),
+    ("path", "G:/elsewhere/X4.exe"),
+    ("started", "2026-11-24T10:00:00.0000001Z"),  # exact comparison, one tick apart
+    ("pid", 2002),
+])
+def test_every_identity_field_must_match_to_count_as_present(field, value):
+    rec = make_proc(1001)
+    other = make_proc(**{"pid": 1001, field: value}) if field != "pid" else make_proc(value)
+    w = X.ExitWatch(rec)
+    assert [w.observe([other]) for _ in range(3)] == [False, False, True]
+
+
+def test_the_recorded_process_is_found_among_others():
+    rec = make_proc(1001)
+    noise = [make_proc(1002), make_proc(1001, started="2026-11-24T09:00:00.0000000Z"), rec]
+    w = X.ExitWatch(rec)
+    for _ in range(10):
+        assert w.observe(noise) is False
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_a_miss_threshold_below_one_is_refused(bad):
+    with pytest.raises(ValueError):
+        X.ExitWatch(make_proc(), misses=bad)

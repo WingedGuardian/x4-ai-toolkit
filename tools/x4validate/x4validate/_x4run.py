@@ -14,7 +14,7 @@ an answer (non-zero exit, timeout, no PowerShell, malformed output); an EMPTY LI
 answer and only ever means "the query ran and found none". `_livedump.game_pids` returns
 None for the same split; here it is an exception, so a caller cannot forget to look.
 
-Sections: process (below). Later sections are added to this same file.
+Sections: process, exit (below). Later sections are added to this same file.
 """
 from __future__ import annotations
 
@@ -146,3 +146,38 @@ def read_processes(run=subprocess.run, *, name: str = "X4.exe", sleep=time.sleep
         except ProcessReadError as exc:
             last = str(exc)
     raise ProcessReadError(f"could not read {name} processes after {attempts} attempt(s): {last}")
+
+
+# ========================================================================= section: exit
+
+#: Consecutive absent reads that end the watch. One miss is not an exit: a single read can
+#: land between a process list refresh and the game's own relaunch, so three are required.
+EXIT_MISSES = 3
+
+
+class ExitWatch:
+    """Has the RECORDED process gone? True only after `misses` consecutive absent reads.
+
+    Feed it each `read_processes` result through `observe`. "Present" means an entry equal to
+    `recorded` on pid, name, path AND started: a reused PID with a different start time is a
+    different process, so it counts as a miss. A failed read (`None`) is the third state: it
+    neither counts as a miss nor resets the count, so it can never end the watch and never
+    erase the evidence gathered so far.
+    """
+
+    def __init__(self, recorded: ProcessInfo, misses: int = EXIT_MISSES) -> None:
+        if misses < 1:
+            raise ValueError("misses must be at least 1")
+        self.recorded = recorded
+        self.misses = misses
+        self.missed = 0
+
+    def observe(self, procs: list[ProcessInfo] | None) -> bool:
+        """Record one read; True once the recorded process has been absent `misses` reads running."""
+        if procs is None:
+            return self.missed >= self.misses
+        if any(p == self.recorded for p in procs):  # frozen dataclass: all four fields
+            self.missed = 0
+        else:
+            self.missed += 1
+        return self.missed >= self.misses
