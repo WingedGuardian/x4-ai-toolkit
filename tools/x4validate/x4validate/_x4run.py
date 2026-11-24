@@ -14,7 +14,7 @@ an answer (non-zero exit, timeout, no PowerShell, malformed output); an EMPTY LI
 answer and only ever means "the query ran and found none". `_livedump.game_pids` returns
 None for the same split; here it is an exception, so a caller cannot forget to look.
 
-Sections: process, exit, state, start, close (below). Later sections are added to this same file.
+Sections: process, exit, state, start, close, cycle (below). Later sections are added to this same file.
 """
 from __future__ import annotations
 
@@ -843,3 +843,191 @@ def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.
     if rec in final:
         return keep("the recorded process is present again on the final read", rem("final"))
     return finish_gone(method, rem("final"))
+
+
+# ====================================================================== section: cycle
+
+#: Seconds between two `ready_probe` calls while waiting for the game to become ready.
+READY_POLL_S = 5.0
+
+
+class StopCannotRead(RuntimeError):
+    """`stop` found a run record it cannot read. The message says what to do by hand."""
+
+
+class ForgetRefused(RuntimeError):
+    """`forget` was refused: a game may be running, or the record could not be removed."""
+
+
+@dataclass
+class CycleReport:
+    """What `run_cycle` did. `close` is None only when no game was ever recorded as started.
+
+    `started` False means `start` refused (the reason is in `notes`). `command_rc` is None when
+    the command was not run, timed out, or could not be started (`notes` says which). `notes`
+    carries everything a person must read, in particular a game that is NOT confirmed closed.
+    """
+
+    started: bool
+    ready: bool
+    command_rc: int | None
+    close: CloseReport | None
+    notes: tuple[str, ...]
+
+
+def _unclosed_note(rep: CloseReport) -> str:
+    if rep.remaining is None:
+        seen = "which X4.exe processes remain is UNKNOWN (the last read failed)"
+    elif rep.remaining:
+        seen = "X4.exe still running: " + ", ".join(f"pid {p.pid}" for p in rep.remaining)
+    else:
+        seen = "no X4.exe was seen on the last read"
+    return (f"the game was NOT confirmed closed ({rep.method}; {seen}). The run record was "
+            f"kept: check for a running X4.exe by hand, then recover with `x4run stop`")
+
+
+def _wait_ready(probe, sleep, clock, timeout_s: float, notes: list[str]) -> bool:
+    """Poll `probe` about every READY_POLL_S until it is true or `timeout_s` has passed.
+
+    A probe that raises counts as not ready and is recorded (first message, and how many).
+    """
+    deadline = clock() + timeout_s
+    errors: list[str] = []
+    ready = False
+    while True:
+        try:
+            ready = bool(probe())
+        except Exception as exc:  # noqa: BLE001 - any probe failure is "not ready", recorded
+            errors.append(f"{type(exc).__name__}: {exc}")
+            ready = False
+        if ready or clock() >= deadline:
+            break
+        sleep(max(0.0, min(READY_POLL_S, deadline - clock())))
+    if errors:
+        notes.append(f"the ready probe raised {len(errors)} time(s); first: {errors[0]}"
+                     + (f"; last: {errors[-1]}" if len(errors) > 1 else ""))
+    if not ready:
+        notes.append(f"the game was not ready within {timeout_s:g} s; the command was not run")
+    return ready
+
+
+def _check_command(command) -> list[str]:
+    if (not isinstance(command, list) or any(not isinstance(a, str) for a in command)):
+        raise TypeError("command must be an argv LIST of strings (it is never run through a shell)")
+    if not command or not command[0].strip():
+        raise ValueError("command is empty: it needs a program to run")
+    return command
+
+
+def run_cycle(game_root: Path, approval: Approval | None, store: StateStore, command: list[str],
+              *, ready_probe, run=subprocess.run, sleep=time.sleep, clock=time.monotonic,
+              ready_timeout_s: float = 300.0, command_timeout_s: float = 3600.0,
+              **close_kw) -> CycleReport:
+    """Start the game, wait until it is ready, run `command`, ALWAYS close the game.
+
+    `command` is an argv list, started hidden (`creationflags=NO_WINDOW`), never through a
+    shell, with `command_timeout_s`; `subprocess.run` kills a timed-out command itself. It is
+    run only if `ready_probe()` became true within `ready_timeout_s`. Once `start` has returned
+    a recorded game, `close` is called in a `finally`: whatever happened in between (the probe
+    never ready or raising, the command failing, timing out, not starting, an interrupt), the
+    game is closed or reported as not closed. On an exception the close outcome is attached to
+    it as a note (the report cannot be returned then).
+
+    A `StartRefused` returns a report with `started=False` and nothing to close. The other
+    start failures (`UnapprovedLaunch`, `UnfinishedRun`, `InvalidState`, `CorruptState`)
+    propagate unchanged: the caller must see them.
+    """
+    _check_command(command)  # before anything is started
+    try:
+        state = start(game_root, approval, store, run=run, sleep=sleep, clock=clock)
+    except StartRefused as exc:
+        notes = [str(exc)]
+        if store.path.exists():
+            notes.append(f"the refusal kept a run record at {store.path}: a game may be running; "
+                         f"check for an X4.exe by hand, then recover with `x4run stop`")
+        return CycleReport(False, False, None, None, tuple(notes))
+
+    notes: list[str] = []
+    ready = False
+    rc: int | None = None
+    close_report: CloseReport | None = None
+    pending: BaseException | None = None
+    try:
+        ready = _wait_ready(ready_probe, sleep, clock, ready_timeout_s, notes)
+        if ready:
+            try:
+                res = run(command, timeout=command_timeout_s, creationflags=NO_WINDOW, shell=False)
+                rc = res.returncode
+            except subprocess.TimeoutExpired:
+                notes.append(f"the command timed out after {command_timeout_s:g} s and was killed")
+            except OSError as exc:
+                notes.append(f"the command could not be run: {exc}")
+    except BaseException as exc:  # an interrupt or an unexpected error: re-raised after the close
+        pending = exc
+        raise
+    finally:
+        close_report = close(state, store, run=run, sleep=sleep, clock=clock, **close_kw)
+        if pending is not None and hasattr(pending, "add_note"):
+            pending.add_note("x4run: the game was closed afterwards" if close_report.closed
+                             else "x4run: " + _unclosed_note(close_report))
+    if not close_report.closed:
+        notes.append(_unclosed_note(close_report))
+    return CycleReport(True, ready, rc, close_report, tuple(notes))
+
+
+def _size_text(store: StateStore) -> str:
+    try:
+        n = store.path.stat().st_size
+    except OSError:
+        return "a file whose size could not be read"
+    return "an empty file (0 bytes)" if n == 0 else f"{n} bytes that do not form a run record"
+
+
+def stop(store: StateStore, *, run=subprocess.run, sleep=time.sleep, clock=time.monotonic,
+         **close_kw) -> CloseReport | None:
+    """Close the game named by the run record (the recovery path for a driver that died).
+
+    None when there is no record. A record in phase "starting" has no process, so `close`
+    makes no call and keeps it: the returned report is "unclosed" and says so. A record that
+    cannot be read raises `StopCannotRead`, which says what to do by hand.
+    """
+    try:
+        state = store.read()
+    except CorruptState as exc:
+        raise StopCannotRead(
+            f"the run record {store.path} cannot be read: it is {_size_text(store)}. The "
+            f"driver died between creating it and writing it, or it was damaged. Nothing was "
+            f"closed. Check for a running X4.exe by hand (Task Manager or "
+            f"`Get-Process X4`); `x4run forget` clears the record, and does so only after a "
+            f"read shows no X4.exe running.") from exc
+    if state is None:
+        return None
+    return close(state, store, run=run, sleep=sleep, clock=clock, **close_kw)
+
+
+def forget(store: StateStore, *, run=subprocess.run, sleep=time.sleep) -> str:
+    """Remove the run record, but only after ONE successful read shows no X4.exe running.
+
+    Never parses the record, so it works on an empty or corrupt one. A failed read (the third
+    state) or any running X4.exe refuses and leaves the file. Returns what was removed.
+    """
+    if not store.path.exists():
+        return f"nothing to forget: there is no run record at {store.path}"
+    try:
+        running = read_processes(run, name=_GAME_EXE, sleep=sleep)
+    except ProcessReadError as exc:
+        raise ForgetRefused(
+            f"the running processes could not be read, so whether {_GAME_EXE} is running is "
+            f"unknown: {exc}. The run record {store.path} was left in place.") from exc
+    if running:
+        pids = ", ".join(str(p.pid) for p in running)
+        raise ForgetRefused(
+            f"{_GAME_EXE} is running (pid {pids}): close it (`x4run stop` closes the recorded "
+            f"one) before forgetting. The run record {store.path} was left in place.")
+    what = _size_text(store).replace(" that do not form a run record", "")
+    try:
+        store.clear()
+    except OSError as exc:
+        raise ForgetRefused(f"the run record {store.path} could not be removed: {exc}") from exc
+    return (f"removed the run record {store.path} ({what}) after a read showed no "
+            f"{_GAME_EXE} running")

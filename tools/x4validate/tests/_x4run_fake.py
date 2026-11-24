@@ -15,7 +15,9 @@ HOW A CALL IS CLASSIFIED. By argv, independent of any order: a first element end
 window-close request, one mentioning `Stop-Process` (or a `taskkill` argv) is a terminate
 request; a script mentioning `Get-CimInstance` is a process read. A call that is two of these
 at once (a script with both `CloseMainWindow` and `Stop-Process`), or none, raises, so a test
-never silently talks to a world the fake does not model.
+never silently talks to a world the fake does not model. THE CALLER'S COMMAND is recognised
+first, by EXACT argv equality with one registered through `script_command`; it is logged like
+any other call (`fake.command_calls`) and answered as scripted.
 
 SCRIPTING. Reads: `fail_reads(n)`, `malformed_reads(n)`, `timeout_reads(n)` queue n bad
 answers (`good_reads(n)` queues n normal ones, to place a bad one later), consumed one per read before the table answers again. Launch, close and terminate
@@ -29,7 +31,9 @@ later; `terminate_removes()` makes a terminate request remove it at once. Both t
 from the request's LAST argv element, which must be a plain integer (the module under test
 passes the pid as its own argument, never inside the script text), and remove the process
 with that pid from the table. `fake.close_calls` / `fake.terminate_calls` list those calls.
-`on_read`, if set, is `fn(fake, n)` run before the n-th process read (0-based) is answered,
+`script_command(argv, rc=0, timeout=False, exc=None, action=None)` registers the caller's
+command: it answers `rc`, or raises `TimeoutExpired` (`timeout=True`) or `exc`; `action(fake)`, if
+given, runs first (e.g. to let the game exit while the command runs). `on_read`, if set, is `fn(fake, n)` run before the n-th process read (0-based) is answered,
 so a table can change between two reads. Time-driven
 changes use `at(t, fn)`: `fn(fake)` runs once when the virtual clock reaches `t` (checked on
 every `sleep` and every `run`), e.g. a game process that appears five seconds after launch.
@@ -78,6 +82,7 @@ class FakeSystem:
         self.on_terminate = self._default_hook
         self.on_read = None
         self._reads = 0
+        self._commands: dict[tuple[str, ...], dict] = {}
 
     # ---------------------------------------------------------------- virtual clock
     def clock(self) -> float:
@@ -154,6 +159,16 @@ class FakeSystem:
             return 0, ""
         self.on_terminate = hook
 
+    def script_command(self, argv, *, rc: int = 0, timeout: bool = False, exc=None,
+                       action=None) -> None:
+        """Register the caller's command (matched by exact argv) and how it ends."""
+        self._commands[tuple(str(a) for a in argv)] = dict(rc=rc, timeout=timeout, exc=exc,
+                                                          action=action)
+
+    @property
+    def command_calls(self) -> list[Call]:
+        return [c for c in self.calls if c.argv in self._commands]
+
     @property
     def close_calls(self) -> list[Call]:
         return [c for c in self.calls if self._classify(c.argv) == "close"]
@@ -168,6 +183,15 @@ class FakeSystem:
         extra = tuple(sorted((k, v) for k, v in kw.items() if k not in ("creationflags", "timeout")))
         self.calls.append(Call(argv, int(kw.get("creationflags", 0)), kw.get("timeout"), extra))
         self._fire_events()
+        if argv in self._commands:
+            spec = self._commands[argv]
+            if spec["action"] is not None:
+                spec["action"](self)
+            if spec["timeout"]:
+                raise subprocess.TimeoutExpired(argv, kw.get("timeout") or 0)
+            if spec["exc"] is not None:
+                raise spec["exc"]
+            return subprocess.CompletedProcess(argv, spec["rc"], "", "")
         kind = self._classify(argv)
         if kind == "read":
             return self._answer_read(argv, kw)
@@ -176,8 +200,9 @@ class FakeSystem:
         rc, out = hook(argv)
         return subprocess.CompletedProcess(argv, rc, out, "")
 
-    @staticmethod
-    def _classify(argv: tuple[str, ...]) -> str:
+    def _classify(self, argv: tuple[str, ...]) -> str:
+        if argv in self._commands:
+            return "command"
         exe = argv[0].replace("\\", "/").rsplit("/", 1)[-1].lower() if argv else ""
         text = " ".join(argv)
         kinds = set()
