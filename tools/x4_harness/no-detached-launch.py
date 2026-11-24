@@ -17,10 +17,15 @@ What is checked:
 - Write / Edit / MultiEdit / NotebookEdit on CODE files. An Edit is judged on the file AFTER the edit (edits applied
   in order), statement by statement around each changed span, so a small edit that appends `| 0x8` to an existing
   creationflags line is seen.
-- Bash / PowerShell / Monitor: text that runs or is written as code: -c/-e/-Command and /c bodies after an
-  interpreter or shell (nested up to 3 levels), heredoc and PowerShell here-string bodies fed to an interpreter or
-  written to a code file, quoted arguments of a command that writes a code file, and the unquoted command itself.
+- Bash / PowerShell / Monitor: text that runs or is written as code: -c/-e/-p/-Command and /c bodies after an
+  interpreter or shell, which may be a bare name, a quoted path or a variable ("$PY", & $py) (nested up to 3 levels);
+  heredoc, here-string and <<< bodies fed to an interpreter or written to a code file; quoted arguments of a command
+  segment that writes a code file or pipes into an interpreter's stdin; the unquoted command itself (names only, no
+  creationflags numbers: `rg creationflags=8 .` is a search). Code fed to Python is judged with Python's tokenizer.
   Commit messages and search patterns are quoted arguments of other commands and are not judged.
+- A name counts only when USED as a launch flag: OR-combined (`A | X`), assigned (`flags = X`, `flags |= X`), or in a
+  launch call (creationflags / Popen / CreateProcess / spawn); not its definition (`X = 0x8`), a mask test
+  (`flags & X`, `& ~X`) or a data tuple. A creationflags number inside a subscript or call argument is not a flag.
 Refused, per logical statement (bracketed and `|`-continued lines joined, at most 50 lines; comments, docstrings and
 string contents blanked to the same length):
 - DETACHED_PROCESS used as a flag (creationflags / Popen / CreateProcess / spawn / `|` / `|=` / assignment) and not
@@ -29,28 +34,27 @@ string contents blanked to the same length):
 - Node `detached: true` / `.detached = true` (libuv sets DETACHED_PROCESS on Windows).
 Unreadable input fails OPEN; the refusal is a JSON deny in Claude Code's PreToolUse shape.
 
-Known limits (measured by the 2026-11-24 port review; documented, not fixed here):
-- NOT caught: an inline script after a QUOTED or VARIABLE interpreter (`"$PY" -c ...`, `$PY -c ...`,
-  `& "C:\\...\\python.exe" -c ...`); only a bare interpreter name before -c/-e/-Command is matched.
-- NOT caught: code fed on stdin without a heredoc or here-string (`echo "..." | python -`, `python <<< "..."`,
-  `node -p`).
-- NOT caught: renamed flag constants, code built inside Python string literals, and helpers started with `pythonw`
-  or a `.pyw` (also console-less, so their console children pop windows the same way).
-- Known false positives (rare): code that names the flag as data (a constants table `NAME = 0x8`, a test asserting
-  the flag is absent, a blocklist holding it), a `creationflags=` value computed from a call holding an 8, and an
-  Edit to a shell script judges its whole 400-line window, so a script that already holds a bad launch can refuse
-  an unrelated edit nearby. A refusal names the statement; rewrite it or build the token from parts.
+Known limits (documented, not fixed):
+- NOT caught: a flag constant renamed through data flow, or passed through a helper's keyword argument
+  (`creationflags=f(x, flags=0x8)`); code generated inside Python string literals (string contents are blanked to avoid
+  prose false positives).
+- NOT refused: helpers started with `pythonw` or a `.pyw` (also console-less, so their console children pop windows the
+  same way; some legitimate background helpers run that way).
+- Known false positive (rare): an Edit to a shell script judges its whole 400-line window, so a script that already
+  holds a bad launch can refuse an unrelated edit nearby. A refusal names the statement; rewrite it or build the token
+  from parts.
 """
 import io
 import json
 import os
 import re
+import shlex
 import sys
 import tokenize
 
 NAMES = r"(?:DETACHED_PROCESS)"
 NAMED = re.compile(r"(?<![\w.])(?:[A-Za-z_]\w*\.)*" + NAMES + r"\b")
-NAMED_USE = re.compile(r"creation_?flags|Popen|CreateProcess|spawn|(?<!\\)\||\|=|(?<![=!<>])=(?!=)")
+LAUNCH_CONTEXT = re.compile(r"creation_?flags|Popen|CreateProcess|spawn", re.I)  # Go: CreationFlags:
 FLAGS = re.compile(r"creation_?flags[\"'\]]*\s*(?:[=:(]|\|=)\s*", re.I)
 QUOTED = re.compile(r"\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*'")
 QUOTED_ML = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'")  # shell quoting: may span lines; '...' has no escapes
@@ -60,7 +64,16 @@ CODE_FILES = (".py", ".pyw", ".pyi", ".ps1", ".psm1", ".psd1", ".js", ".mjs", ".
               ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".ahk", ".bat", ".cmd", ".sh", ".bash", ".zsh", ".vbs",
               ".rs", ".go", ".java", ".ipynb")
 INTERP_NAMES = r"(?:python[\d.]*w?|py|pythonw|node|deno|bun|pwsh|powershell|bash|sh|cmd)(?:\.exe)?"
-INTERP = re.compile(r"(?i)(?<![\w.$-])" + INTERP_NAMES + r"(?![\w-])")
+# an interpreter word: bare (python) or a quoted path ("C:/Program Files/Python313/python.exe"); a variable ($PY,
+# ${PY}, "$X4_PY", PowerShell & $py) counts only as the COMMAND word, never elsewhere (cat > "$NOTES" <<EOF is prose)
+INTERP_BASE = (r"(?:(?<![\w.$-])" + INTERP_NAMES + r"(?![\w-])"
+               r"|[\"'](?:[^\"'\n]*[\\/])?" + INTERP_NAMES + r"[\"'])")
+VAR = r"\"?\$\{?[A-Za-z_]\w*\}?\"?"
+CMD_POS = r"(?:^|[\n|;(&]|\b(?:do|then|else|exec)\b)\s*"
+INTERP_TOKEN = r"(?:" + INTERP_BASE + r"|" + CMD_POS + VAR + r")"
+INTERP = re.compile(r"(?im)" + INTERP_TOKEN)  # heredoc headers, here-string tails ("$PY" - <<EOF counts)
+PIPE_TO_INTERP = re.compile(r"(?i)\|\s*&?\s*(?:" + INTERP_BASE + r"|" + VAR + r")(?:\s+-{1,2}[\w.-]+)*(?:\s+-)?\s*$")
+HERE3 = re.compile(r"(?im)" + INTERP_TOKEN + r"[^|;&\n]*?<<<\s*(\"(?:[^\"\\]|\\.)*\"|'[^']*')")
 CODE_PATH = r"[\"']?[^\s\"'|;&<>]+(?:" + "|".join(re.escape(e) for e in CODE_FILES) + r")\b"
 WRITES_CODE = re.compile(r"(?i)(?:>>?\s*" + CODE_PATH + r"|\b(?:Set-Content|Add-Content|Out-File|tee)\b[^|;\n]*?" +
                          CODE_PATH + ")")
@@ -68,9 +81,9 @@ HEREDOC = re.compile(r"(?<!<)<<(?!<)-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 HERESTRING = re.compile(r"@(['\"])\r?\n(.*?)\r?\n\1@", re.S)
 # interpreter, then only its own options (-B, -3, -NoProfile, /d /s), then the script flag and a quoted script
 #   an option may take one value (-X utf8, -ExecutionPolicy Bypass); combined flags ending in c count (bash -lc)
-INLINE = re.compile(r"(?i)(?<![\w.$-])" + INTERP_NAMES +
+INLINE = re.compile(r"(?im)" + INTERP_TOKEN +
                     r"(?:\s+(?:-{1,2}[\w.-]+(?:\s+(?![-/\"'])[^\s\"';|&]+)?|/[a-z]))*?\s+"
-                    r"(?:-\w*c|-e|--eval|-Command|/c|/k)\s+(\"(?:[^\"\\]|\\.)*\"|'[^']*')")
+                    r"(?:-\w*c|-e|-p|--eval|--print|-Command|/c|/k)\s+(\"(?:[^\"\\]|\\.)*\"|'[^']*')")
 WINDOW = 200          # lines judged on each side of an edit
 MAX_FILE = 4_000_000  # bytes; a bigger file is judged on the new text only
 MAX_JOIN = 50         # physical lines one statement may span
@@ -236,16 +249,51 @@ def flag_values(bare):
     return out
 
 
-def bad_statement(code):
-    """True when one logical statement (comments/docstrings already blanked) launches detached."""
+def outer_only(expr):
+    """EXPR with subscripts and keyword-argument values blanked: in creationflags=table[8] or pick(level=8) the 8 is an
+    index or an option, not a flag. Positional call arguments stay judged (getattr(subprocess, "DETACHED_PROCESS",
+    0x8) is the usual portable spelling), and so do grouping parentheses, including after a keyword (else (A | 0x8))."""
+    out, frames = list(expr), []  # frame: [kind, in_keyword_value]; kind "index" | "call" (any parenthesis: a
+    for i, ch in enumerate(expr):  # grouping one holds no name=value, so treating it as a call changes nothing)
+        if ch in "([{":
+            frames.append(["index" if ch == "[" else "call", False])
+            continue
+        if ch in ")]}":
+            if frames:
+                frames.pop()
+            continue
+        if frames and frames[-1][0] == "call":
+            if ch == ",":
+                frames[-1][1] = False
+            elif ch == "=" and re.search(r"(?<![=!<>])[A-Za-z_]\w*\s*$", expr[:i]) and expr[i + 1:i + 2] != "=":
+                frames[-1][1] = True
+                continue
+        if any(f[0] == "index" or f[0] == "call" and f[1] for f in frames):
+            out[i] = " "
+    return "".join(out)
+
+
+def named_use(bare, m):
+    """Is this occurrence of the flag's name USED as a launch flag?"""
+    before, after = bare[:m.start()], bare[m.end():]
+    if re.search(r"[~&]\s*\(?\s*$", before):
+        return False  # flags & ~DETACHED_PROCESS removes it; flags & DETACHED_PROCESS tests it
+    if re.match(r"\s*=(?!=)", after):
+        return False  # the constant's own definition: DETACHED_PROCESS = 0x00000008
+    return bool(re.search(r"(?<!\\)\|\s*\(?\s*$|(?<![=!<>])=\s*$", before) or  # A | X ; flags = X ; flags |= X
+                re.match(r"\s*\)?\s*\|(?![|=])", after) or
+                LAUNCH_CONTEXT.search(bare))
+
+
+def bad_statement(code, literals=True):
+    """True when one logical statement (comments/docstrings already blanked) launches detached. LITERALS False skips
+    the creationflags number check (plain shell text: `rg creationflags=8 .` is a search, not code)."""
     bare = blank_strings(code)
     for m in NAMED.finditer(bare):
-        if re.search(r"~\s*\(?\s*$", bare[:m.start()]):
-            continue  # flags & ~DETACHED_PROCESS removes it
-        if NAMED_USE.search(bare):
+        if named_use(bare, m):
             return True
-    for expr in flag_values(bare):
-        for neg, lit in LITERAL.findall(expr):
+    for expr in (flag_values(bare) if literals else []):
+        for neg, lit in LITERAL.findall(outer_only(expr)):
             if neg:
                 continue
             try:
@@ -259,7 +307,7 @@ def bad_statement(code):
     return bool(NODE_DETACHED.search(bare))
 
 
-def first_bad(text, spans=None, style="hash", python=False):
+def first_bad(text, spans=None, style="hash", python=False, literals=True):
     """The first offending statement, or None. SPANS [(start, end)] limit to statements overlapping any span; the
     whole text is tokenized and comment-stripped FIRST, then cut to a window around the spans (same offsets)."""
     code = python_strings(text) if python else text
@@ -269,7 +317,7 @@ def first_bad(text, spans=None, style="hash", python=False):
     for s, e, stmt in statements(code):
         if spans and not any(s < b + 1 and e > a for a, b in spans):
             continue
-        if bad_statement(stmt):
+        if bad_statement(stmt, literals):
             return " ".join(stmt.split())
     return None
 
@@ -287,7 +335,7 @@ def shell_payloads(command, depth=0):
         end = re.compile(r"(?m)^[ \t]*" + re.escape(m.group(2)) + r"[ \t]*$").search(command, nl + 1)
         body_end = end.start() if end else len(command)
         if INTERP.search(header) or WRITES_CODE.search(header):
-            out.append(command[nl + 1:body_end])
+            out.append(as_python(header, command[nl + 1:body_end]))
         rest.append(command[pos:nl + 1])
         pos = end.end() if end else len(command)
     rest.append(command[pos:])
@@ -295,19 +343,32 @@ def shell_payloads(command, depth=0):
     for m in HERESTRING.finditer(plain):  # PowerShell @' ... '@ | python - / | Set-Content x.py
         tail = plain[m.end():m.end() + 200].split("\n")[0]
         if INTERP.search(tail) or WRITES_CODE.search(tail):
-            out.append(m.group(2))
+            out.append(as_python(tail, m.group(2)))
     plain = HERESTRING.sub(lambda m: blank(m.group(0)), plain)
-    for m in INLINE.finditer(plain):  # the script flag must belong to the interpreter right before it
+    for m in list(INLINE.finditer(plain)) + list(HERE3.finditer(plain)):  # python -c "..." / python <<< "..."
         body = m.group(1)[1:-1]
         body = body.replace('\\"', '"') if m.group(1)[0] == '"' else body
-        out.append(body)
+        out.append(as_python(plain[m.start():m.start(1)], body))
         if depth < 3:
             out.extend(shell_payloads(body, depth + 1))
-    for seg in segments(plain):  # echo "..." > x.py / printf '...' >> x.py / "..." | Set-Content x.py
-        if WRITES_CODE.search(QUOTED_ML.sub("''", seg)):
-            out.extend(m.group(0)[1:-1].replace("\\n", "\n") for m in QUOTED_ML.finditer(seg))
-    out.append(QUOTED_ML.sub("''", plain))
+    for seg in segments(plain):  # echo "..." > x.py / "..." | Set-Content x.py / echo "..." | python -
+        writes = WRITES_CODE.search(QUOTED_ML.sub("''", seg))
+        piped = PIPE_TO_INTERP.search(seg.rstrip(" \t;&"))
+        if writes or piped:
+            kind = (writes.group(0) if writes else "") + (piped.group(0) if piped else "")
+            out.extend(as_python(kind, m.group(0)[1:-1].replace("\\n", "\n")) for m in QUOTED_ML.finditer(seg))
+    out.append(PLAIN + QUOTED_ML.sub("''", plain))
     return out
+
+
+PLAIN = "\0plain\0"  # marks the plain command text: judged without the creationflags number check
+PY = "\0py\0"        # marks code fed to a Python interpreter or written to a .py file: judged with Python's tokenizer
+IS_PYTHON = re.compile(r"(?i)python[\d.]*w?(?:\.exe)?|(?<![\w.-])py(?:\.exe)?(?![\w-])|\.pyw?\b")
+
+
+def as_python(context, body):
+    """BODY marked for Python judging when CONTEXT (the interpreter or target) is Python."""
+    return PY + body if IS_PYTHON.search(context) else body
 
 
 def segments(command):
@@ -366,7 +427,9 @@ def window(text, spans):
 
 def judge_shell(command):
     for payload in shell_payloads(command):
-        hit = first_bad(payload)
+        plain, python = payload.startswith(PLAIN), payload.startswith(PY)
+        text = payload[len(PLAIN):] if plain else payload[len(PY):] if python else payload
+        hit = first_bad(text, python=python, literals=not plain)
         if hit:
             return hit
     return None
@@ -378,7 +441,7 @@ def judge(tool, inp):
     if tool in ("Bash", "PowerShell", "Monitor"):
         command = inp.get("command")
         if isinstance(command, list):
-            command = " ".join(map(str, command))
+            command = shlex.join(map(str, command))  # keeps the script argument quoted, so -c "..." is seen
         return judge_shell(command) if isinstance(command, str) else None
     if tool not in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
         return None
