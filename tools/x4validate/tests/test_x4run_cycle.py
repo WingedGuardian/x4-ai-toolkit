@@ -241,6 +241,9 @@ def test_a_refusal_that_kept_a_run_record_says_so(tmp_path):
     assert (rep.started, rep.close) == (False, None)
     assert store.path.exists()  # kept by start: a game may be starting
     assert any("run record" in n and str(store.path) in n for n in rep.notes)
+    # the record names no game: the note sends the user to forget, never to a `stop` that cannot act
+    assert any("x4run forget" in n for n in rep.notes)
+    assert not any("recover with `x4run stop`" in n for n in rep.notes)
     assert fake.close_calls == [] and fake.terminate_calls == []  # never touches an unrecorded game
     assert fake.command_calls == []
 

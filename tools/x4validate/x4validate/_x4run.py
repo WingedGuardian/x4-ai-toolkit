@@ -356,7 +356,10 @@ class StateStore:
         except FileExistsError:
             raise UnfinishedRun(
                 f"a run record already exists at {self.path}: a game may still be running "
-                f"from an earlier run. Recover with `x4run stop` (never delete the file by hand).") from None
+                f"from an earlier run. `x4run stop` closes a game the record names; a record "
+                f"that names none (a start that never recorded its game) is cleared with "
+                f"`x4run forget` after checking for a running X4.exe by hand. Never delete "
+                f"the file by hand.") from None
         try:
             try:
                 view = memoryview(data)
@@ -413,7 +416,8 @@ class StateStore:
             return _state_from(json.loads(raw.decode("utf-8")))
         except (ValueError, TypeError) as exc:  # UnicodeError and JSONDecodeError are ValueErrors
             raise CorruptState(f"run record {self.path} is unreadable ({exc}); it was left in "
-                               f"place: inspect it, then recover with `x4run stop`") from exc
+                               f"place: inspect it. No game can be read from it, so check for a "
+                               f"running X4.exe by hand, then clear it with `x4run forget`") from exc
 
     def clear(self) -> None:
         def unlink() -> None:
@@ -460,8 +464,26 @@ def _clear_note(store: "StateStore") -> str:
     try:
         store.clear()
     except OSError as exc:
-        return f"the run record at {store.path} could NOT be removed ({exc}); remove it with `x4run stop`"
+        return (f"the run record at {store.path} could NOT be removed ({exc}); check for a "
+                f"running X4.exe by hand, then clear it with `x4run forget`")
     return "the run record was removed"
+
+
+#: Recovery for a run record that names NO game (phase starting, or unreadable): `stop` has
+#: nothing to close and can only report it, so the by-hand check and `forget` are the way out.
+_NO_GAME_RECOVERY = ("check for a running X4.exe by hand, then `x4run forget` (the record names "
+                     "no game, so `x4run stop` cannot close it)")
+
+
+def _recovery_hint(store: "StateStore") -> str:
+    """What to do about the record at `store.path`: `stop` if it names a game, else `forget`."""
+    try:
+        state = store.read()
+    except (CorruptState, OSError):
+        state = None
+    if state is not None and state.process is not None:
+        return "check for a running X4.exe by hand, then recover with `x4run stop`"
+    return _NO_GAME_RECOVERY
 
 
 def start(game_root: Path, approval: Approval | None, store: StateStore, *,
@@ -591,7 +613,7 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
         raise StartRefused(
             f"{len(new)} {_GAME_EXE} processes appeared at once (pid {pids}); which one this "
             f"start launched cannot be told, so none was recorded. The run record was kept "
-            f"(phase starting, no process): recover with `x4run stop` or close them yourself.")
+            f"(phase starting, no process): {_NO_GAME_RECOVERY}")
 
     state.process, state.phase = new[0], "running"
     try:
@@ -599,8 +621,8 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
     except (OSError, InvalidState) as exc:
         raise StartRefused(
             f"{_GAME_EXE} started (pid {new[0].pid}) but could not be recorded: {exc}. The run "
-            f"record keeps phase starting with no process; close the game yourself or recover "
-            f"with `x4run stop`.") from exc
+            f"record keeps phase starting with no process; close the game yourself. "
+            f"{_NO_GAME_RECOVERY}") from exc
     return state
 
 
@@ -971,7 +993,7 @@ def run_cycle(game_root: Path, approval: Approval | None, store: StateStore, com
         notes = [str(exc)]
         if store.path.exists():
             notes.append(f"the refusal kept a run record at {store.path}: a game may be running; "
-                         f"check for an X4.exe by hand, then recover with `x4run stop`")
+                         f"{_recovery_hint(store)}")
         return CycleReport(False, False, None, None, tuple(notes))
 
     notes: list[str] = []

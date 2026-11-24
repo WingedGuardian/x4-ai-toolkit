@@ -167,7 +167,9 @@ def test_two_new_processes_refuse_naming_both_and_keep_the_record(tmp_path):
         _start(fake, tmp_path, store=store)
     msg = str(exc.value)
     assert "2000" in msg and "2001" in msg
-    assert "x4run stop" in msg
+    # the record names no game, so `stop` cannot close it: the way out is by hand, then forget
+    assert "by hand" in msg and "x4run forget" in msg
+    assert "`x4run stop` cannot close it" in msg and "recover with `x4run stop`" not in msg
     st = store.read()  # a game IS running: the record stays, recording no process
     assert st is not None and st.phase == "starting" and st.process is None
     assert len(_launches(fake)) == 1
@@ -294,6 +296,7 @@ def test_a_failed_record_update_names_the_running_game(tmp_path):
     with pytest.raises(X.StartRefused, match="2000") as exc:
         _start(fake, tmp_path, store=store)
     assert "could not be recorded" in str(exc.value)
+    assert "x4run forget" in str(exc.value) and "recover with `x4run stop`" not in str(exc.value)
     assert store.read().process is None  # the record still exists and still says "starting"
 
 

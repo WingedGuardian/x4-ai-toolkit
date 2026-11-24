@@ -20,11 +20,18 @@ x4run stop                        close the recorded game (the recovery path aft
 x4run forget                      remove the run record, only after a read shows no X4.exe running
 ```
 
-Exit codes: `0` success; `2` a refusal (nothing was done, or nothing more than the message
-says); `1` the game is NOT confirmed closed, or any other failure. A nonzero exit code of
-YOUR command is reported but is not a driver error: the exit code is `0` if the game was
-closed. A run whose game never became ready, or whose command timed out or could not be
-started, exits `1` (the game is still closed first).
+Exit codes: `0` success; `2` refused, nothing started and no run record left (safe to retry
+once the cause is fixed); `1` a game not confirmed closed, or a start that left a run record
+(a launch call was made and a game may be running or unseen: see the output), or any other
+failure. A caller branching on the code can therefore tell "safe to retry" (`2`) from "a game
+may be running" (`1`). A nonzero exit code of YOUR command is reported but is not a driver
+error: the exit code is `0` if the game was closed. `run` and `stop` also exit `0` when the
+recorded game closed even if other `X4.exe` processes are listed as still running: those are
+not the driver's and it never touches them. A run whose game never became ready, or whose
+command timed out or could not be started, exits `1` (the game is still closed first).
+
+`--no-ready-check` is printed as `ready: yes (NOT checked: --no-ready-check)`: readiness was
+assumed, not measured.
 
 ## The approval rule
 
@@ -66,7 +73,8 @@ Every child process is started with `CREATE_NO_WINDOW`: no console window may ap
 * `closed: NO` means a game may still be running. The run record is kept. Check for a running
   `X4.exe` by hand, then `x4run stop`.
 * A record in phase `starting` names no process, so `x4run stop` can only report it. Check
-  for a running `X4.exe` by hand, then `x4run forget`.
+  for a running `X4.exe` by hand, then `x4run forget`. A start refusal that leaves such a
+  record exits `1`, not `2`.
 * `x4run forget` removes the record only after one successful read shows no `X4.exe`. Never
   delete the record file by hand.
 
@@ -76,14 +84,16 @@ Taken from the design; nothing here has been run against the real game.
 
 **Read (from files and earlier measurements, not from running this driver):**
 
+* The user starts X4 through Steam with launch options the user has set in Steam; the driver
+  never changes them.
 * The toolkit has `STEAM_APPID = "392160"` and process lookup that returns "unknown" on a
   failed read.
 * `x4live` reaches a running game through the helper pipe; the helper arms only after a world
   loads; a minimised window stops the channel. There is no quit verb in the helper or the
   pipe.
-* A quit/new-game freeze was seen once (2026-11-03) with an old HUD mod; cause unproven. A
-  full crash dump takes about five minutes and must not be cut short (`x4run run`/`stop` have
-  a `--hold` option for that wait).
+* A quit freeze was seen once with a third-party mod (cause unproven). A full crash dump takes
+  about five minutes and must not be cut short (`x4run run`/`stop` have a `--hold` option for
+  that wait).
 
 **Unmeasured (every item is a guess until step 2):**
 

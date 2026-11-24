@@ -76,7 +76,8 @@ def test_begin_creates_and_a_second_begin_refuses_with_the_recovery_command(tmp_
         store.begin(_state(run_id="second"))
     msg = str(exc.value)
     assert str(store.path) in msg
-    assert "x4run stop" in msg
+    assert "x4run stop" in msg          # a record that names a game: `stop` closes it
+    assert "x4run forget" in msg and "by hand" in msg   # a record that names none: forget
     # the refusal must not have touched the existing record
     assert store.read() == first
 
@@ -246,6 +247,8 @@ def test_read_of_a_corrupt_file_raises_not_none(tmp_path, text):
     with pytest.raises(X.CorruptState) as exc:
         store.read()
     assert str(store.path) in str(exc.value)
+    # no game can be read from it: by hand, then forget (`stop` raises StopCannotRead on it)
+    assert "x4run forget" in str(exc.value) and "recover with `x4run stop`" not in str(exc.value)
     assert store.path.read_text(encoding="utf-8") == text  # never silently cleared
 
 

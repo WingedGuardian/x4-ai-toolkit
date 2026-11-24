@@ -8,12 +8,14 @@ This module is the command line ONLY: argument handling, the approval record's a
 mapping of outcomes to exit codes and the wording. The logic (preflight, start, the close
 ladder, the run record) is `x4validate._x4run`.
 
-EXIT CODES. 0 success. 2 a REFUSAL: an incomplete approval, a refused start, a run record in
-the way, an unreadable record, a refused `forget`, a bad argument, the stubbed readiness probe;
-nothing (or nothing more than the message says) was done. 1 the game is NOT confirmed closed, or
-any other failure (including a run whose game never became ready, or whose command timed out
-or could not be started: the game is still closed first). A nonzero exit code of the CALLER'S
-command is reported, never an error of the driver.
+EXIT CODES. 0 success. 2 a REFUSAL: an incomplete approval, a refused start that left no run
+record, a run record in the way, an unreadable record, a refused `forget`, a bad argument, the
+stubbed readiness probe; nothing was started, so it is safe to retry once the cause is fixed.
+1 the game is NOT confirmed closed, a start that left a run record (a launch call was made and a
+game may be running or unseen: see the output), or any other failure (including a run whose
+game never became ready, or whose command timed out or could not be started: the game is still
+closed first). A nonzero exit code of the CALLER'S command is reported, never an error of the
+driver, and other X4.exe processes the driver did not start never change the exit code.
 
 Every flag has `--help` text; the whole parser is built by `build_parser`.
 """
@@ -112,8 +114,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Start X4 through Steam, wait until it is ready, run COMMAND, then ALWAYS "
                     "close the game and verify it is gone. Every approval flag is required: "
                     "the driver records the user's approval but cannot grant it. " + BANNER,
-        epilog="exit: 0 done; 2 refused (nothing started); 1 the game is not confirmed closed, "
-               "or any other failure",
+        epilog="exit: 0 done; 2 refused, nothing started and no run record left (safe to retry); "
+               "1 a game not confirmed closed, or a start that left a run record (a game may be "
+               "running: see the output), or any other failure",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     pr.add_argument("--approved-by", required=True, metavar="WHO",
                     help="who approved this specific launch, and where (e.g. 'user, chat "
@@ -178,9 +181,14 @@ def _format_close(rep: CloseReport) -> list[str]:
     return lines
 
 
-def _format_cycle(rep: CycleReport) -> str:
-    lines = [f"started: {'yes' if rep.started else 'NO'}",
-             f"ready: {'yes' if rep.ready else 'NO'}"]
+def _format_cycle(rep: CycleReport, *, ready_checked: bool = True) -> str:
+    """`ready_checked` False: readiness was ASSUMED (--no-ready-check), never measured."""
+    ready = ("NO" if not rep.ready else
+             "yes" if ready_checked else "yes (NOT checked: --no-ready-check)")
+    lines = [f"started: {'yes' if rep.started else 'NO'}", f"ready: {ready}"]
+    if rep.started and not ready_checked:
+        lines.append("note: the readiness probe was skipped (--no-ready-check): the game was "
+                     "assumed ready once its process appeared")
     if rep.command_rc is None:
         lines.append("command exit code: none (the command did not finish; see notes)")
     else:
@@ -238,7 +246,7 @@ def _cmd_status(store: StateStore, run, sleep, io: _Io) -> int:
     rc = 0
     try:
         state = store.read()
-    except CorruptState as exc:
+    except (CorruptState, OSError) as exc:
         io.say(f"run record: unreadable: {exc}")
         rc = 2
     else:
@@ -304,11 +312,15 @@ def _cmd_run(args, command, *, run, sleep, clock, game_root, store, ready_probe,
                            command_timeout_s=args.command_timeout, hold_s=args.hold)
     except (Exception, KeyboardInterrupt) as exc:  # every outcome becomes a message and a code
         return _failure(exc, io)
-    text = _format_cycle(report)
+    text = _format_cycle(report, ready_checked=not args.no_ready_check)
     if not report.started:
         io.err(text)
-        if _starting_record(store):
-            io.err(f"x4run: {_STARTING_HINT}")
+        if store.path.exists():
+            # A launch call was made (or an earlier record is still there): a game may be
+            # running or unseen, so this is NOT the "nothing started, safe to retry" refusal.
+            if _starting_record(store) and "x4run forget" not in text:
+                io.err(f"x4run: {_STARTING_HINT}")
+            return 1
         return 2
     io.say(text)
     if report.close is None or not report.close.closed:
@@ -321,8 +333,12 @@ def _cmd_run(args, command, *, run, sleep, clock, game_root, store, ready_probe,
 def _cmd_stop(args, *, run, sleep, clock, store, io: _Io) -> int:
     try:
         rep = stop(store, run=run, sleep=sleep, clock=clock, hold_s=args.hold)
-    except Exception as exc:  # noqa: BLE001
-        return _failure(exc, io)
+    except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001
+        code = _failure(exc, io)
+        if isinstance(exc, KeyboardInterrupt):
+            io.err("x4run: the run record was kept: check for a running X4.exe by hand, then "
+                   "run `x4run stop` again (or `x4run forget` if the record names no game)")
+        return code
     if rep is None:
         io.say(f"nothing recorded: there is no run record at {store.path}")
         return 0
@@ -340,7 +356,7 @@ def _cmd_stop(args, *, run, sleep, clock, store, io: _Io) -> int:
 def _cmd_forget(*, run, sleep, store, io: _Io) -> int:
     try:
         io.say(forget(store, run=run, sleep=sleep))
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001
         return _failure(exc, io)
     return 0
 

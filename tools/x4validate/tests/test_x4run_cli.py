@@ -234,6 +234,7 @@ def test_a_refused_start_exits_2_with_the_reason_and_no_traceback(tmp_path, caps
     cap = capsys.readouterr()
     assert rc == 2
     assert "Steam is not running" in cap.out + cap.err
+    assert not store.path.exists()
     assert "Traceback" not in cap.out + cap.err
     assert [fake._classify(c.argv) for c in fake.calls].count("launch") == 0
 
@@ -244,6 +245,7 @@ def test_a_second_x4_refuses_the_run_with_exit_2(tmp_path, capsys):
     assert _main(fake, store, _run_argv("--no-ready-check")) == 2
     cap = capsys.readouterr()
     assert "already running" in cap.out + cap.err
+    assert not store.path.exists()                     # nothing started, no record: safe to retry
     assert [fake._classify(c.argv) for c in fake.calls].count("launch") == 0
 
 
@@ -426,7 +428,7 @@ def test_a_start_that_keeps_a_starting_record_says_forget_not_stop(tmp_path, cap
     rc = _main(fake, store, _run_argv("--no-ready-check"))
     out = capsys.readouterr()
     text = out.out + out.err
-    assert rc == 2
+    assert rc == 1                                    # a launch call was made: a game may be running unseen
     assert store.path.exists() and store.read().phase == "starting"
     assert "check for a running X4.exe by hand, then `x4run forget`" in text
     assert "never `x4run stop`" in text or "`x4run stop` cannot" in text
@@ -561,6 +563,140 @@ def test_forget_refused_on_a_failed_read_exits_2(tmp_path, capsys):
     fake.fail_reads(5)
     assert _main(fake, store, ["forget"]) == 2
     assert "unknown" in capsys.readouterr().err
+    assert store.path.exists()
+
+
+# ----------------------------------------------------------------------------- readiness is not a measurement
+
+
+def test_no_ready_check_does_not_print_a_plain_ready_yes(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 0
+    out = capsys.readouterr().out
+    assert "ready: yes (NOT checked: --no-ready-check)" in out
+    assert "readiness probe was skipped" in out
+    assert "ready: yes\n" not in out
+
+
+def test_a_real_probe_prints_a_plain_ready_yes(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    assert _main(fake, store, _run_argv(), probe=lambda: True) == 0
+    out = capsys.readouterr().out
+    assert "ready: yes\n" in out
+    assert "NOT checked" not in out and "skipped" not in out
+
+
+# ----------------------------------------------------------------------------- a start that left a record exits 1
+
+
+class _UnrecordableStore(X.StateStore):
+    """The game started, but the record of its process cannot be written."""
+
+    def update(self, state):
+        if state.phase == "running":
+            raise OSError("disk says no")
+        super().update(state)
+
+
+def _two_games(tmp_path):
+    fake, store = _world(tmp_path)
+    fake.launch_spawns(GAME, make_proc(2000, started="2026-11-24T10:00:01.0000000Z"), after=5)
+    return fake, store
+
+
+def _unrecordable(tmp_path):
+    fake, _ = _world(tmp_path)
+    return fake, _UnrecordableStore(tmp_path / "state", sleep=fake.sleep, clock=fake.clock)
+
+
+@pytest.mark.parametrize("make, text", [
+    (_two_games, "appeared at once"),
+    (_unrecordable, "could not be recorded"),
+])
+def test_a_start_refusal_that_kept_a_record_exits_1_and_says_forget(tmp_path, capsys, make, text):
+    fake, store = make(tmp_path)
+    rc = _main(fake, store, _run_argv("--no-ready-check"))
+    cap = capsys.readouterr()
+    out = cap.out + cap.err
+    assert rc == 1, out                               # not 2: a game may be running
+    assert text in out and "by hand" in out and "x4run forget" in out
+    assert "recover with `x4run stop`" not in out     # stop cannot close a record that names no game
+    assert store.path.exists()
+    assert fake.close_calls == [] and fake.terminate_calls == [] and fake.command_calls == []
+    assert [fake._classify(c.argv) for c in fake.calls].count("launch") == 1
+
+
+def test_a_refusal_that_left_no_record_still_exits_2(tmp_path):
+    fake, store = _world(tmp_path)
+    fake.table.append(make_proc(77))                  # an X4 at preflight: refused before any launch
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 2
+    assert not store.path.exists()
+
+
+def test_a_closed_game_with_other_x4_still_running_is_exit_0(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    fake.table.append(GAME)
+    other = make_proc(77, path="G:/other/X4.exe")
+    fake.table.append(other)
+    _record(store)
+    assert _main(fake, store, ["stop"]) == 0
+    assert "closed: yes" in capsys.readouterr().out
+    assert other in fake.table                        # never the driver's to touch
+
+
+def test_the_run_help_says_what_exit_1_and_2_mean(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["run", "--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "2 refused, nothing started and no run record left" in text
+    assert "a start that left a run record" in text
+
+
+# ----------------------------------------------------------------------------- no tracebacks
+
+
+def test_status_with_an_unreadable_record_file_is_exit_2_not_a_traceback(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    store.path.mkdir(parents=True)                    # reading a directory raises an OSError
+    assert _main(fake, store, ["status"]) == 2
+    cap = capsys.readouterr()
+    assert "unreadable" in cap.out and "Traceback" not in cap.out + cap.err
+    assert "X4.exe: none running" in cap.out
+
+
+def test_stop_with_an_unreadable_record_file_is_exit_1_with_the_error(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    store.path.mkdir(parents=True)
+    assert _main(fake, store, ["stop"]) == 1
+    cap = capsys.readouterr()
+    assert "Traceback" not in cap.out + cap.err and "x4run" in cap.err
+
+
+def test_an_interrupt_during_stop_keeps_the_record_and_says_what_to_do(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    fake.table.append(GAME)
+    _record(store)
+
+    def interrupt(argv):
+        raise KeyboardInterrupt
+    fake.on_close = interrupt
+    assert _main(fake, store, ["stop"]) == 1          # not 130
+    cap = capsys.readouterr()
+    assert "interrupted" in cap.err and "record was kept" in cap.err and "x4run stop" in cap.err
+    assert "Traceback" not in cap.out + cap.err
+    assert store.path.exists()
+
+
+def test_an_interrupt_during_forget_is_exit_1_not_a_traceback(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    _record(store)
+
+    def interrupt(f, n):
+        raise KeyboardInterrupt
+    fake.on_read = interrupt
+    assert _main(fake, store, ["forget"]) == 1
+    cap = capsys.readouterr()
+    assert "interrupted" in cap.err and "Traceback" not in cap.out + cap.err
     assert store.path.exists()
 
 

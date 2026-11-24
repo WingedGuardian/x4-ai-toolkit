@@ -67,7 +67,7 @@ options:
   --hold SECONDS        extra seconds the close waits before it may terminate the game, e.g. while
                         a crash dump is written (default 0)
 
-exit: 0 done; 2 refused (nothing started); 1 the game is not confirmed closed, or any other failure
+exit: 0 done; 2 refused, nothing started and no run record left (safe to retry); 1 a game not confirmed closed, or a start that left a run record (a game may be running: see the output), or any other failure
 ```
 
 ## `x4run stop`
