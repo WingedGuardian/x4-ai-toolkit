@@ -1,6 +1,8 @@
 # X4 game driver: start the game, run checks, close it (design, draft for approval)
 
-Status: DRAFT 2026-11-24, awaiting approval. Nothing is built. Measured and read facts are tagged; anything else is a guess and says so.
+Status: APPROVED 2026-11-24 by the user ("you can do what you need to do ... ultimately the build is to get it to the point where you can run it all headlessly"). Nothing is built. Measured and read facts are tagged; anything else is a guess and says so.
+
+End state (user, 2026-11-24): the session runs the whole cycle with no human step, including reaching a world. Until the load step is measured, the user loading the save by hand is an accepted temporary fallback, never the design target. Each launch still needs the approval described under Non-goals.
 
 ## Intent and why
 
