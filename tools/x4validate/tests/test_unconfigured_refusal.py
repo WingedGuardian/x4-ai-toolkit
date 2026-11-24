@@ -105,8 +105,8 @@ def test_every_console_script_refuses_unconfigured():
     root = Path(__file__).resolve().parent.parent
     scripts = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     entries = scripts["project"]["scripts"]
-    assert len(entries) == 12, (
-        "expected exactly the 12 shipped CLIs (x4fresh made 12 on 2026-11-01). This was `>= 9` until 2026-08-26, "
+    assert len(entries) == 13, (
+        "expected exactly the 13 shipped CLIs (x4fresh made 12 on 2026-11-01, x4run made 13 on 2026-11-24). This was `>= 9` until 2026-08-26, "
         "which caught a VANISHING entry point but silently accepted a new one — so "
         "adding a CLI passed a guard meant to notice. If you added or removed one, "
         "change this number deliberately.")

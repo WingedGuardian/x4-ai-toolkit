@@ -960,12 +960,13 @@ def refuses_unconfigured(fn):
     refuse instead, at the two stamping sites. See `_mutation`.
     """
     @functools.wraps(fn)
-    def wrapper(argv=None):
+    def wrapper(argv=None, **seams):
+        # `seams`: keyword-only injection points a CLI offers its tests (x4run); none for the rest.
         warning = _mutation.banner()
         if warning:
             print(warning, file=sys.stderr)
         try:
-            return fn(argv)
+            return fn(argv, **seams)
         except Unconfigured as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2

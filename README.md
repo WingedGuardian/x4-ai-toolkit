@@ -286,6 +286,16 @@ through immutable pages and keeps native group summaries separate from slot coun
 This equipment path is **offline-tested, runtime unqualified**; a complete capture is
 not a compatibility or functionality verdict. See [equipment coverage and limits](docs/live-equipment.md).
 
+### `x4run` — start X4, run a check, close X4 (built and tested offline; NOT yet run against the real game)
+
+`x4run` is a driver meant to start the game through Steam, let a caller's command run, and
+close the game again, verifying that no `X4.exe` is left. It was built with a scripted stand-in
+for the process runner and **has never touched the real game**: nothing launches X4 until a
+separately approved measuring launch (build step 2). Every launch needs the user's approval of
+that specific run; the driver records the approval but cannot grant it. See
+[the x4run guide](docs/x4run.md) for the commands, exit codes, recovery steps and what is
+measured versus unmeasured.
+
 ### Skills & subagents
 - `/find-session` — find the past agent session where something was discussed, down to the
   passage, and resume it; asks which one you meant when several match. Needs obra/episodic-memory

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **`x4run`: a game driver, built and tested offline, NOT yet run against the real game.** `x4run status|run|stop|forget` starts X4 through Steam, runs a caller's command, and closes the game, touching only the process it recorded (PID, name, path and start time) and starting every child hidden. It was tested only against a scripted fake process runner; nothing launches X4 until step 2 (one approved, measuring-only launch), and `x4run run` refuses without `--no-ready-check` because the real readiness probe is not wired yet (step 3). Every launch needs the user's approval of that specific run: the driver records it and cannot grant it. See `docs/x4run.md`.
+
 ## v4.3.0 — 2026-11-19
 
 - After updating, expect `x4fresh status` to report your derived stores as STALE: this release changes the merge engine and adds an engine source (`_inputs.py`). Run `x4fresh rebuild` once.

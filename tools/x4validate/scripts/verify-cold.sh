@@ -161,6 +161,7 @@ cli_case _modlist    main refresh
 cli_case _savecli    main info
 cli_case _livecli    main dump
 cli_case _freshcli   main status
+cli_case _x4runcli   main status
 
 # x4diff is DELIBERATELY not in the matrix. It compares two mod folders to each
 # other -- `_merge.overlay_root` / `apply_overlay`, no Config, no reference tree --

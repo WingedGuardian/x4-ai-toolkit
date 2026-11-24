@@ -11,7 +11,7 @@ The exact surface of every toolkit CLI, generated from its own argparse help so 
 
 Run a CLI from `$CLAUDE_PROJECT_DIR/tools/x4validate` as `uv run <cli> ...`. The full `--help` of a CLI and of each of its subcommands is in `reference/<cli>.md` -- read it before composing a command line.
 
-12 CLIs, 59 subcommands.
+13 CLIs, 63 subcommands.
 
 | CLI | subcommand | what it does |
 |---|---|---|
@@ -71,6 +71,11 @@ Run a CLI from `$CLAUDE_PROJECT_DIR/tools/x4validate` as `uv run <cli> ...`. The
 | | `changed` | localise a moved content fingerprint: WHICH mod changed, and how |
 | | `snapshot` | record the current mod vector as a cheap baseline (~0.1s), for the gap between expensive rebuilds |
 | | `downloads` | read the manifests inside downloaded archives and compare them with what is installed: newer, same, older, not installed. Read-only. Exit 3 when anything was unreadable or a manifest unusable |
+| **`x4run`** | | Start X4 through Steam, run a command, close X4 again, and verify nothing is left. A launch needs the user's approval of that specific run. |
+| | `status` | the recorded run (if any) and the live X4.exe list; read-only |
+| | `run` | start X4, wait for it, run COMMAND, close X4 (needs the approval flags) |
+| | `stop` | close the recorded game (the recovery path after a driver crash) |
+| | `forget` | remove the run record, only after a read shows no X4.exe running |
 | **`x4save`** | | Read an X4 savegame: what is baked into it, what it references that the live tree no longer defines, its MD variables, and a count of its components (ships, turrets, stations) by macro, owner or parent. |
 | | `info` | header: build, playtime, and the SAVE-BAKED extensions |
 | | `check` | macro references the live tree no longer defines |

@@ -388,6 +388,7 @@ skill.
 | who references / calls / listens to X? | **BaseX**, or **x4xref** for MD+aiscript cues | recursive grep |
 | the LIVE value, and which mod set it? | **x4effective** | `reference\` (vanilla only) |
 | are the derived stores current? | **x4fresh** (`status`, `rebuild`) | waiting for a STALE banner |
+| start X4 for a run, close it again? | **x4run** (`run`, `stop`, `forget`, `status`; each launch needs the user's approval) | improvised `Start-Process`/`taskkill` |
 | do this mod's selectors resolve? | **x4validate** (`--tier b` for cross-mod or a staged mod; Tier A sees vanilla only) | eyeballing the diff |
 | **is my new MD/aiscript SCHEMA-valid?** | **`x4validate <mod> --update`**: the schema pass is GATED behind it (~102 s `md.xsd` compile); `--xsd-fast` skips it but loses "element not expected" (element-ORDERING errors) | a default run (it says `OK: no issues found` unchecked); hand-rolled lxml |
 | **what did the ENGINE complain about?** | **x4debug triage** | `grep \| sort \| uniq -c` (cannot see what it dropped) |

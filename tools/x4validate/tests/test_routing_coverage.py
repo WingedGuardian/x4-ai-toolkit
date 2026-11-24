@@ -91,7 +91,8 @@ def test_it_goes_RED_against_the_pre_landing_file():
     before = FIXTURE.read_bytes().decode("utf-8")
     assert len(before) > 30_000, "fixture truncated"
     missing = rc_.missing(rc_.roster(), before)
-    assert sorted(missing) == ["x4diff", "x4fresh", "x4live", "x4modlist", "x4save", "x4stats"], missing
+    # x4run did not exist when the fixture was taken, so it reads as unrouted there too (2026-11-24).
+    assert sorted(missing) == ["x4diff", "x4fresh", "x4live", "x4modlist", "x4run", "x4save", "x4stats"], missing
 
 
 def test_a_CLI_name_inside_a_PATH_is_not_a_route():
