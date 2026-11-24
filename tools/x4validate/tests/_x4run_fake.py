@@ -7,7 +7,7 @@ executes anything.
   fake.run(argv, **kw)   drop-in for `subprocess.run`; logs the call, then answers
   fake.sleep(n)          advances the virtual clock by n (no real waiting)
   fake.clock()           reads the virtual clock (a drop-in for `time.monotonic`)
-  fake.calls             every call seen: `Call(argv, creationflags, timeout)`, in order
+  fake.calls             every call seen: `Call(argv, creationflags, timeout, kw)` (kw: the other keywords, sorted pairs), in order
   fake.table             the process table (a list of `ProcessInfo`); mutate it freely
 
 HOW A CALL IS CLASSIFIED. By argv, in this order: a first element ending `steam.exe` is a
@@ -17,7 +17,7 @@ mentioning `Stop-Process` (or a `taskkill` argv) is a terminate request; a scrip
 a world the fake does not model.
 
 SCRIPTING. Reads: `fail_reads(n)`, `malformed_reads(n)`, `timeout_reads(n)` queue n bad
-answers, consumed one per read before the table answers again. Launch, close and terminate
+answers (`good_reads(n)` queues n normal ones, to place a bad one later), consumed one per read before the table answers again. Launch, close and terminate
 each call a settable hook (`on_launch`, `on_close`, `on_terminate`) with the argv and return
 a `(returncode, stdout)` pair; the default records the call and changes nothing. A hook may
 raise (`OSError`, `subprocess.TimeoutExpired`) to model a call that fails. `launch_spawns(*procs,
@@ -31,6 +31,7 @@ obvious extensions); keep the classification above and the `Call` shape stable.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 
@@ -42,6 +43,8 @@ class Call:
     argv: tuple[str, ...]
     creationflags: int
     timeout: float | None = None
+    #: every other keyword the caller passed, as sorted (name, value) pairs
+    kw: tuple = ()
 
 
 def make_proc(pid: int = 1000, *, name: str = "X4.exe", path: str = "G:/games/X4/X4.exe",
@@ -89,6 +92,10 @@ class FakeSystem:
         """The next n process reads exit non-zero."""
         self._read_script += ["fail"] * n
 
+    def good_reads(self, n: int = 1) -> None:
+        """The next n process reads answer normally (use before `fail_reads` to fail a LATER read)."""
+        self._read_script += ["table"] * n
+
     def malformed_reads(self, n: int = 1) -> None:
         """The next n process reads exit 0 with output that is not valid JSON."""
         self._read_script += ["malformed"] * n
@@ -115,7 +122,8 @@ class FakeSystem:
     # ---------------------------------------------------------------- the runner
     def run(self, argv, **kw):
         argv = tuple(str(a) for a in argv)
-        self.calls.append(Call(argv, int(kw.get("creationflags", 0)), kw.get("timeout")))
+        extra = tuple(sorted((k, v) for k, v in kw.items() if k not in ("creationflags", "timeout")))
+        self.calls.append(Call(argv, int(kw.get("creationflags", 0)), kw.get("timeout"), extra))
         self._fire_events()
         kind = self._classify(argv)
         if kind == "read":
@@ -147,7 +155,10 @@ class FakeSystem:
             return subprocess.CompletedProcess(argv, 1, "", "scripted read failure")
         if step == "malformed":
             return subprocess.CompletedProcess(argv, 0, '[{"ProcessId": 12', "")
-        rows = [_row(p) for p in self.table]
+        # A read is filtered by the image name in its script, like the real query.
+        m = re.search(r"Name = '([^']+)'", " ".join(argv))
+        want = m.group(1).lower() if m else None
+        rows = [_row(p) for p in self.table if want is None or p.name.lower() == want]
         # PowerShell's real shapes: nothing -> no output, one object -> an object, many -> list.
         if not rows:
             out = ""

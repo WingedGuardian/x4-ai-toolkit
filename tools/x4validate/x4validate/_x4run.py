@@ -422,7 +422,8 @@ class StateStore:
 # ====================================================================== section: start
 
 #: Seconds the Steam launch call may take. It only ASKS the running Steam client to start the
-#: game and returns quickly; a call that hangs is a failed call, never waited on for minutes.
+#: game and is expected to return quickly when Steam is already running (unmeasured); a
+#: timeout means UNKNOWN, not failed: see the poll in `start`.
 LAUNCH_CALL_TIMEOUT_S = 30
 
 #: Seconds between two reads while waiting for the game process to appear.
@@ -432,6 +433,7 @@ POLL_INTERVAL_S = 2.0
 START_TIMEOUT_S = 180.0
 
 _GAME_EXE = "X4.exe"
+_STEAM_EXE = "steam.exe"
 
 
 class StartRefused(RuntimeError):
@@ -462,17 +464,30 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
           timeout_s: float = START_TIMEOUT_S) -> RunState:
     """Start X4 through Steam ONCE, wait for its process, record it. Never retries.
 
-    Order: approval (before any call at all) -> one process read -> run record ("starting",
+    Order: approval (before any call at all) -> the launch argv (a game root too shallow to
+    have a Steam root is refused here) -> one `X4.exe` read -> one `steam.exe` read (Steam must
+    ALREADY be running: this driver never starts the Steam client) -> run record ("starting",
     no process) -> ONE hidden `steam.exe -applaunch <appid>` call -> poll for a new `X4.exe`
     -> record it ("running"). The record exists from before the launch call until the game
     is accounted for, so a crash anywhere after the call leaves something `x4run stop` can
     recover from. It is removed only where NOTHING is known to have started: the launch call
-    definitely failed (cannot be made, non-zero exit), or no game appeared. A launch call that
+    definitely failed (cannot be made, non-zero exit), or the LAST poll read succeeded and
+    saw no game by the deadline (a last read that FAILED keeps it: a game may be running unseen). A launch call that
     TIMES OUT is unknown, not failed: it still polls and records a game that appears.
     Any other exit after `begin` (an interrupt, an unexpected error, a failed update) leaves
     it in place, because a game may be starting.
     """
     approval = require_approval(approval)  # before ANY call: an unapproved launch does nothing
+
+    # The launch argv is computed BEFORE any read or record, so a game root without a Steam
+    # root above it is a clean refusal, not an IndexError after a record was written.
+    try:
+        argv = [str(steam_exe(game_root)), "-applaunch", _paths.STEAM_APPID]
+    except IndexError:
+        raise StartRefused(
+            f"cannot find the Steam folder above the game root {str(game_root)!r} (expected "
+            f"<Steam>/steamapps/common/<game>). Refused: nothing was started and no run "
+            f"record was written.") from None
 
     # A failed read refuses the start (the third state is never "no game"). In particular a
     # game process whose path/start time the driver cannot read (an elevated X4 against a
@@ -489,6 +504,19 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
             f"{_GAME_EXE} is already running (pid {pids}). Refused: nothing was started and no "
             f"run record was written.")
 
+    # The launch call below runs `steam.exe -applaunch`: with no Steam running, that process
+    # would BE the Steam client, which a timeout would then kill. So Steam must already be up.
+    try:
+        steam = read_processes(run, name=_STEAM_EXE, sleep=sleep)
+    except ProcessReadError as exc:
+        raise StartRefused(
+            f"the running processes could not be read, so whether Steam is running is unknown: "
+            f"{exc}. Refused: nothing was started and no run record was written.") from exc
+    if not steam:
+        raise StartRefused(
+            "Steam is not running: start Steam first; the driver does not start the Steam "
+            "client. Refused: nothing was started and no run record was written.")
+
     state = RunState(run_id=uuid.uuid4().hex, approval=approval, phase="starting", process=None,
                      started_at=datetime.now(timezone.utc).isoformat())
     store.begin(state)  # UnfinishedRun (a record exists) propagates unwrapped
@@ -496,11 +524,12 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
     # Steps below deliberately have no blanket cleanup handler: every path that started
     # NOTHING clears the record explicitly, and every other exit (KeyboardInterrupt included)
     # keeps it, since a game may be starting.
-    argv = [str(steam_exe(game_root)), "-applaunch", _paths.STEAM_APPID]
     launch_timed_out = False
     try:
-        res = run(argv, capture_output=True, text=True, timeout=LAUNCH_CALL_TIMEOUT_S,
-                  creationflags=NO_WINDOW)
+        # No captured pipes: a grandchild (Steam's helpers, the game) that inherited a pipe
+        # would keep this call blocked until the timeout. Output goes nowhere.
+        res = run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                  timeout=LAUNCH_CALL_TIMEOUT_S, creationflags=NO_WINDOW)
         failure = None if res.returncode == 0 else f"Steam exited {res.returncode}"
     except subprocess.TimeoutExpired:
         # UNKNOWN, not failed: Steam may well have started the game. Fall through to the
@@ -522,14 +551,26 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
         sleep(POLL_INTERVAL_S)
         try:
             new = read_processes(run, name=_GAME_EXE, sleep=sleep)
+            last_read_ok = True
         except ProcessReadError:
             new = []  # a failed read is not "no game": keep polling until the deadline
+            last_read_ok = False
             failed_reads += 1
         if new:
             break
         if clock() >= deadline:
-            note = (f" ({failed_reads} process read(s) could not be read, so a game may exist unseen)"
-                    if failed_reads else "")
+            if not last_read_ok:
+                # The last word was a failed read: whether a game exists is UNKNOWN, so the
+                # record is KEPT (clearing it could orphan a running game).
+                raise StartRefused(
+                    f"Steam was asked to start the game, but the last {_GAME_EXE} process read "
+                    f"failed ({failed_reads} read(s) failed in all) before the {timeout_s:g} s "
+                    f"deadline: a game may be running unseen. The run record was KEPT (phase "
+                    f"starting, no process). Check for an {_GAME_EXE} by hand"
+                    + (f"; the launch call also timed out after {LAUNCH_CALL_TIMEOUT_S} s"
+                       if launch_timed_out else "")
+                    + ". The launch call was made once and is not retried.")
+            note = (f" ({failed_reads} earlier process read(s) failed)" if failed_reads else "")
             if launch_timed_out:
                 why = (f"The launch call timed out after {LAUNCH_CALL_TIMEOUT_S} s, so Steam "
                        f"may still start the game: check for an {_GAME_EXE} before starting again. ")
