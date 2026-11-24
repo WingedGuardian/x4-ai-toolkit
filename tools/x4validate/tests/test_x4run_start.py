@@ -178,21 +178,20 @@ def test_no_game_within_the_timeout_clears_state_and_does_not_retry(tmp_path):
         _start(fake, tmp_path, store=store, timeout_s=30)
     msg = str(exc.value)
     assert "no X4.exe appeared within 30" in msg and "Steam was asked" in msg
+    assert "launch call timed out" not in msg  # that warning is only for a timed-out call
     assert not store.path.exists()
     assert len(_launches(fake)) == 1  # exactly one launch attempt
     assert 30 <= fake.clock() < 30 + 2 + 2  # it waited out the deadline, not far beyond it
     assert fake.table == []
 
 
-@pytest.mark.parametrize("failure", ["oserror", "nonzero", "timeout"])
+@pytest.mark.parametrize("failure", ["oserror", "nonzero"])
 def test_a_failed_launch_call_clears_state_and_is_not_retried(tmp_path, failure):
     fake = FakeSystem()
 
     def hook(argv):
         if failure == "oserror":
             raise FileNotFoundError("no steam.exe here")
-        if failure == "timeout":
-            raise subprocess.TimeoutExpired(argv, 30)
         return 3, ""
 
     fake.on_launch = hook
@@ -268,3 +267,41 @@ def test_a_failed_record_update_names_the_running_game(tmp_path):
         _start(fake, tmp_path, store=store)
     assert "could not be recorded" in str(exc.value)
     assert store.read().process is None  # the record still exists and still says "starting"
+
+
+# ------------------------------------------------------- a launch call that times out
+
+
+def _timing_out_launch(fake, spawn=None, after=5.0):
+    """A launch call that times out; optionally the game still appears `after` s later."""
+    def hook(argv):
+        if spawn is not None:
+            fake.at(fake.now + after, lambda f: f.table.append(spawn))
+        raise subprocess.TimeoutExpired(argv, 30)
+
+    fake.on_launch = hook
+
+
+def test_a_timed_out_launch_call_still_polls_and_records_a_game_that_appears(tmp_path):
+    proc = make_proc(2000)
+    fake = FakeSystem()
+    _timing_out_launch(fake, proc)
+    store = _store(tmp_path, fake)
+    state = _start(fake, tmp_path, store=store)
+    assert state.phase == "running" and state.process == proc
+    assert store.read() == state
+    assert len(_launches(fake)) == 1  # never a second launch call
+
+
+def test_a_timed_out_launch_call_with_no_game_clears_the_record_and_warns(tmp_path):
+    fake = FakeSystem()
+    _timing_out_launch(fake)
+    store = _store(tmp_path, fake)
+    with pytest.raises(X.StartRefused) as exc:
+        _start(fake, tmp_path, store=store, timeout_s=30)
+    msg = str(exc.value)
+    assert "launch call timed out" in msg and "may still start the game" in msg
+    assert "check for an X4.exe before starting again" in msg
+    assert not store.path.exists()
+    assert len(_launches(fake)) == 1
+    assert fake.clock() >= 30  # it waited out the deadline before giving up

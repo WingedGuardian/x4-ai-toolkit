@@ -466,9 +466,11 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
     no process) -> ONE hidden `steam.exe -applaunch <appid>` call -> poll for a new `X4.exe`
     -> record it ("running"). The record exists from before the launch call until the game
     is accounted for, so a crash anywhere after the call leaves something `x4run stop` can
-    recover from. It is removed only where NOTHING was started: the launch call failed, or
-    no game appeared. Any other exit after `begin` (an interrupt, an unexpected error, a
-    failed update) leaves it in place, because a game may be starting.
+    recover from. It is removed only where NOTHING is known to have started: the launch call
+    definitely failed (cannot be made, non-zero exit), or no game appeared. A launch call that
+    TIMES OUT is unknown, not failed: it still polls and records a game that appears.
+    Any other exit after `begin` (an interrupt, an unexpected error, a failed update) leaves
+    it in place, because a game may be starting.
     """
     approval = require_approval(approval)  # before ANY call: an unapproved launch does nothing
 
@@ -495,20 +497,25 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
     # NOTHING clears the record explicitly, and every other exit (KeyboardInterrupt included)
     # keeps it, since a game may be starting.
     argv = [str(steam_exe(game_root)), "-applaunch", _paths.STEAM_APPID]
+    launch_timed_out = False
     try:
         res = run(argv, capture_output=True, text=True, timeout=LAUNCH_CALL_TIMEOUT_S,
                   creationflags=NO_WINDOW)
         failure = None if res.returncode == 0 else f"Steam exited {res.returncode}"
     except subprocess.TimeoutExpired:
-        failure = f"the call timed out after {LAUNCH_CALL_TIMEOUT_S} s"
+        # UNKNOWN, not failed: Steam may well have started the game. Fall through to the
+        # normal poll (never a second launch call) so a game that does appear is recorded.
+        failure = None
+        launch_timed_out = True
     except OSError as exc:
         failure = f"the call could not be made: {exc}"
-    if failure is not None:
+    if failure is not None:  # a DEFINITE failure: nothing was started
         raise StartRefused(
             f"the Steam launch call failed ({failure}); it was made once and is not retried. "
-            f"No game was recorded and {_clear_note(store)}. A timed-out call may still "
-            f"have reached Steam: check for an {_GAME_EXE} before starting again.")
+            f"No game was recorded and {_clear_note(store)}.")
 
+    # The poll gets its OWN full `timeout_s`, counted from when the launch call returned (or
+    # timed out), so a slow launch call does not eat into the time the game needs to appear.
     deadline = clock() + timeout_s
     failed_reads = 0
     while True:
@@ -523,9 +530,14 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
         if clock() >= deadline:
             note = (f" ({failed_reads} process read(s) could not be read, so a game may exist unseen)"
                     if failed_reads else "")
+            if launch_timed_out:
+                why = (f"The launch call timed out after {LAUNCH_CALL_TIMEOUT_S} s, so Steam "
+                       f"may still start the game: check for an {_GAME_EXE} before starting again. ")
+            else:
+                why = ""
             raise StartRefused(
                 f"Steam was asked to start the game but no {_GAME_EXE} appeared within "
-                f"{timeout_s:g} s{note}. The launch call was made once and is not retried; "
+                f"{timeout_s:g} s{note}. {why}The launch call was made once and is not retried; "
                 f"no game was recorded and {_clear_note(store)}.")
 
     if len(new) > 1:
