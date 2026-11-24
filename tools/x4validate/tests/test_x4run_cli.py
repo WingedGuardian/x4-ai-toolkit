@@ -7,22 +7,31 @@ seams are replaced in every test that gets past argument parsing.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-from _x4run_fake import FakeSystem, make_proc
+from _x4run_fake import FAKE_GAME_ROOT, FakeSystem, make_proc
 
 from x4validate import _x4run as X
 from x4validate import _x4runcli as cli
 
-GAME_ROOT = Path("steamroot/steamapps/common/X4 Foundations")
+GAME_ROOT = FAKE_GAME_ROOT
 STEAM = make_proc(900, name="steam.exe", path="S:/steam/steam.exe")
 GAME = make_proc(1000)
 CMD = ["python", "tests/e2e_driver.py", "--flag"]
 APPROVAL = ["--approved-by", "user (chat 2026-11-24)", "--mode", "menu-only",
-            "--target", "main menu", "--desktop", "secondary"]
+            "--target", "main menu", "--desktop", "main"]
+
+
+@pytest.fixture(autouse=True)
+def _machine_state_in_tmp(tmp_path, monkeypatch):
+    """No test here may reach the REAL machine-wide state folder: any `main()` that builds its
+    own store gets one under tmp_path."""
+    monkeypatch.setenv(X.STATE_DIR_ENV, str(tmp_path / "machine-state"))
 
 
 def _world(tmp_path, *, steam=True, **command_kw):
@@ -44,16 +53,22 @@ def _run_argv(*extra, approval=APPROVAL, command=CMD):
     return ["run", *approval, *extra, "--", *command]
 
 
-def _record(store, *, phase="running", process=GAME):
+def _record(store, *, phase="running", process=GAME, age_s=3600.0):
+    """A run record whose FILE is `age_s` old (forget refuses a young one)."""
     store.begin(X.RunState(
         run_id="r1",
         approval=X.Approval("user", "menu-only", "main menu", "secondary", "2026-11-24T10:00:00Z"),
         phase=phase, process=process, started_at="2026-11-24T10:00:01+00:00"))
+    old = time.time() - age_s
+    os.utime(store.path, (old, old))
 
 
 def _assert_all_hidden(fake):
+    """Compared with the module's own flag, so it holds on a host without CREATE_NO_WINDOW;
+    the literal Windows value is asserted once, in test_x4run_process.py (Windows only)."""
     assert fake.calls, "the test expected at least one call"
-    bad = [c.argv for c in fake.calls if c.creationflags != subprocess.CREATE_NO_WINDOW]
+    assert X.NO_WINDOW == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    bad = [c.argv for c in fake.calls if c.creationflags != X.NO_WINDOW]
     assert bad == [], bad
 
 
@@ -102,8 +117,9 @@ def test_status_with_no_state_and_no_game(tmp_path, capsys):
 def test_stop_with_nothing_recorded_exits_0_and_says_so(tmp_path, capsys):
     fake, store = _world(tmp_path)
     assert _main(fake, store, ["stop"]) == 0
-    assert "nothing recorded" in capsys.readouterr().out
-    assert fake.calls == []
+    out = capsys.readouterr().out
+    assert "nothing recorded" in out and "X4.exe: none running; nothing to stop" in out
+    assert [fake._classify(c.argv) for c in fake.calls] == ["read"]   # one live read, nothing else
 
 
 def test_unclosed_exits_1(tmp_path, capsys):
@@ -138,7 +154,9 @@ def test_help_names_every_flag(capsys):
     with pytest.raises(SystemExit):
         cli.main(["--help"])
     top = capsys.readouterr().out
-    assert "NOT been run against the real game" in top      # the epilog banner
+    assert "never been run against the real game" in top    # the epilog banner
+    assert "treat every result as unverified" in top
+    assert "until step 2" not in top                        # the first real run IS step 2
     for name in subs.choices:
         assert name in top
 
@@ -171,7 +189,7 @@ def test_run_says_plainly_it_has_not_been_run_against_the_real_game(tmp_path, ca
     fake, store = _world(tmp_path)
     _main(fake, store, _run_argv("--no-ready-check"))
     out = capsys.readouterr().out
-    assert "NOT been run against the real game" in out
+    assert "never been run against the real game: treat every result as unverified" in out
 
 
 def test_an_injected_probe_is_used_instead_of_the_stub(tmp_path):
@@ -195,7 +213,7 @@ def test_the_approval_record_reaches_the_state_file_with_recorded_at_filled(tmp_
     assert _main(fake, store, _run_argv(), probe=spy_probe) == 0
     ap = seen["state"].approval
     assert (ap.approved_by, ap.mode, ap.target, ap.desktop) == (
-        "user (chat 2026-11-24)", "menu-only", "main menu", "secondary")
+        "user (chat 2026-11-24)", "menu-only", "main menu", "main")
     parsed = datetime.fromisoformat(ap.recorded_at.replace("Z", "+00:00"))
     assert parsed.tzinfo is not None and parsed.utcoffset().total_seconds() == 0
     assert seen["state"].phase == "running" and seen["state"].process == GAME
@@ -268,7 +286,7 @@ def test_an_unfinished_run_exits_2_and_names_the_recovery(tmp_path, capsys):
     (X.ForgetRefused("is running"), "is running"),
     (X.StateFolderError("no toolkit root"), "no toolkit root"),
     (X.ProcessReadError("read failed"), "read failed"),
-    (X.StartRefused("start refused"), "start refused"),
+    (X.StartRefused("start refused", launch_attempted=False), "start refused"),
     (ValueError("bad duration"), "bad duration"),
     (TypeError("bad type"), "bad type"),
 ])
@@ -319,7 +337,7 @@ def test_the_command_that_timed_out_is_exit_1(tmp_path, capsys):
 def test_an_unknown_remaining_list_prints_unknown_not_none(tmp_path, capsys):
     fake, store = _world(tmp_path)
     rep = X.CloseReport(True, "window-close", ("t+3s the recorded process is gone",), None)
-    cyc = X.CycleReport(True, True, 0, rep, ())
+    cyc = X.CycleReport(True, True, 0, rep, (), launch_attempted=True)
     out = cli._format_cycle(cyc)
     assert "remaining: unknown (the last process read failed)" in out
     assert "other X4 processes could not be checked" in out
@@ -328,13 +346,13 @@ def test_an_unknown_remaining_list_prints_unknown_not_none(tmp_path, capsys):
 
 def test_a_known_empty_remaining_list_prints_none(tmp_path):
     rep = X.CloseReport(True, "window-close", ("s",), ())
-    out = cli._format_cycle(X.CycleReport(True, True, 0, rep, ()))
+    out = cli._format_cycle(X.CycleReport(True, True, 0, rep, (), launch_attempted=True))
     assert "remaining: none" in out and "unknown" not in out
 
 
 def test_a_known_remaining_list_names_each_process(tmp_path):
     rep = X.CloseReport(False, "unclosed", ("s",), (make_proc(5), make_proc(6)))
-    out = cli._format_cycle(X.CycleReport(True, True, 0, rep, ()))
+    out = cli._format_cycle(X.CycleReport(True, True, 0, rep, (), launch_attempted=True))
     assert "pid 5" in out and "pid 6" in out and "closed: NO" in out
 
 
@@ -349,11 +367,12 @@ def test_the_unclosed_note_reaches_the_output(tmp_path, capsys):
 
 
 class _FailingCloseStore(X.StateStore):
-    """`close` cannot write its first record: the close itself fails with an OSError."""
+    """`close`'s first record is REJECTED (`InvalidState`): the close itself raises, before any
+    call. (An OSError there no longer stops the close: see the Minor-4 tests below.)"""
 
     def update(self, state):
         if state.phase == "closing":
-            raise OSError("disk says no")
+            raise X.InvalidState("disk says no")
         super().update(state)
 
 
@@ -470,13 +489,32 @@ def test_status_with_a_corrupt_record_says_so_and_still_lists_the_processes(tmp_
     assert "X4.exe: none running" in cap.out
 
 
-def test_an_unconfigured_toolkit_refuses_with_exit_2_and_no_traceback(capsys, monkeypatch):
-    """The cold matrix (scripts/verify-cold.sh) runs `x4run status` with nothing configured: the
-    state folder cannot be located, which is a refusal, never a traceback."""
-    monkeypatch.setattr(cli._paths, "toolkit_root", lambda: None)
-    assert cli.main(["status"]) == 2
+def test_a_state_folder_that_cannot_be_located_refuses_with_exit_2_and_no_traceback(capsys, monkeypatch):
+    """The machine-wide folder cannot be decided (Windows with no %LOCALAPPDATA%, no override):
+    a refusal, never a traceback, and no process is read."""
+    monkeypatch.setattr(cli, "state_folder", lambda: X.state_folder(environ={}, platform="win32"))
+
+    def no_call(*a, **k):
+        raise AssertionError("no process may be read or started")
+    assert cli.main(["status"], run=no_call) == 2
     cap = capsys.readouterr()
-    assert "toolkit root" in cap.err and "Traceback" not in cap.out + cap.err
+    assert "LOCALAPPDATA" in cap.err and "Traceback" not in cap.out + cap.err
+
+
+def test_the_cold_matrix_case_reaches_the_real_unconfigured_refusal(capsys, monkeypatch):
+    """verify-cold.sh's x4run case (Minor 1): with no game root configured, `run` refuses with
+    exit 2 BECAUSE the game root cannot be resolved, before any process call. (`status` was
+    the wrong case: it needs no configuration and exits 0 on a host that can read processes,
+    see test_status_with_no_state_and_no_game.)"""
+    monkeypatch.setattr(cli._paths, "game_root", lambda: None)
+
+    def no_call(*a, **k):
+        raise AssertionError("no process may be read or started")
+    argv = ["run", "--approved-by", "cold", "--mode", "menu-only", "--target", "x",
+            "--desktop", "main", "--no-ready-check", "--", "x"]
+    assert cli.main(argv, run=no_call) == 2
+    cap = capsys.readouterr()
+    assert "game root cannot be resolved" in cap.err and "Traceback" not in cap.out + cap.err
 
 
 def test_status_changes_nothing(tmp_path):
@@ -544,7 +582,9 @@ def test_forget_removes_the_record_after_a_clean_read(tmp_path, capsys):
 def test_forget_with_no_record_says_so_and_exits_0(tmp_path, capsys):
     fake, store = _world(tmp_path)
     assert _main(fake, store, ["forget"]) == 0
-    assert "nothing to forget" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "nothing recorded" in out and "X4.exe: none running; nothing to forget" in out
+    assert [fake._classify(c.argv) for c in fake.calls] == ["read"]
 
 
 def test_forget_refused_while_x4_runs_exits_2(tmp_path, capsys):
@@ -648,8 +688,14 @@ def test_the_run_help_says_what_exit_1_and_2_mean(capsys):
     with pytest.raises(SystemExit):
         cli.main(["run", "--help"])
     text = " ".join(capsys.readouterr().out.split())
-    assert "2 refused, nothing started and no run record left" in text
-    assert "a start that left a run record" in text
+    assert "2 refused before any launch call, nothing started" in text
+    assert "1 a launch call was made and no game was recorded" in text
+    assert "an X4.exe left (or not checkable) after the game closed" in text
+    # Ruling 22/23 and I10: what the user must know is in the help itself
+    assert "Do not start X4 yourself while a run is starting" in text
+    assert "the driver cannot choose a desktop" in text
+    assert "cuts short a crash dump in progress" in text and ">= 600" in text
+    assert "last-command.out" in text
 
 
 # ----------------------------------------------------------------------------- no tracebacks
@@ -722,3 +768,209 @@ def test_the_entry_point_is_registered_and_refuses_unconfigured():
     scripts = tomllib.loads((pkg / "pyproject.toml").read_text(encoding="utf-8"))["project"]["scripts"]
     assert scripts["x4run"] == "x4validate._x4runcli:main"
     assert getattr(cli.main, "_refuses_unconfigured", False)
+
+
+# ----------------------------------------------------------------------------- fix wave: exit-code truth (Ruling 18)
+
+
+def test_a_start_refused_after_the_launch_call_is_exit_1_even_if_no_record_remains(tmp_path, capsys):
+    """No game by the deadline (a good empty last read): the record is cleared, but a launch call
+    WAS made, so this is not "nothing started, safe to retry"."""
+    fake, store = _world(tmp_path)
+    fake.on_launch = lambda argv: (0, "")            # Steam accepts; no game appears in time
+    rc = _main(fake, store, _run_argv("--no-ready-check"))
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert not store.path.exists()                   # the old heuristic would have said 2 here
+    assert "Steam may still start the game" in cap.err
+
+
+def test_a_nonzero_steam_exit_is_unknown_and_a_game_that_appears_is_run_and_closed(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    inner = fake.on_launch
+
+    def hook(argv):
+        inner(argv)                                  # the game still appears 5 s later
+        return 7, ""
+    fake.on_launch = hook
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 0
+    assert "closed: yes" in capsys.readouterr().out
+    assert len(fake.command_calls) == 1
+
+
+def test_a_steam_exe_that_cannot_be_started_is_exit_2(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+
+    def hook(argv):
+        raise FileNotFoundError("no steam.exe")
+    fake.on_launch = hook
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 2
+    assert "could not be made" in capsys.readouterr().err
+    assert not store.path.exists()
+
+
+def test_a_refusal_with_launch_attempted_is_exit_1_through_the_failure_path(tmp_path, capsys, monkeypatch):
+    fake, store = _world(tmp_path)
+
+    def boom(*a, **k):
+        raise X.StartRefused("start refused late", launch_attempted=True)
+    monkeypatch.setattr(cli, "run_cycle", boom)
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 1
+
+
+def test_a_preflight_refusal_with_an_earlier_record_present_is_still_exit_2_with_the_hint(tmp_path, capsys):
+    """Not attempted: exit 2 although a (stale, phase starting) record exists; the hint stays."""
+    fake, store = _world(tmp_path)
+    _record(store, phase="starting", process=None)
+    fake.table.append(make_proc(77))                 # an X4 at preflight: refused before any launch
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 2
+    err = capsys.readouterr().err
+    assert "already running" in err and "x4run forget" in err
+
+
+# ----------------------------------------------------------------------------- fix wave: the command's output (Ruling 17)
+
+
+def test_the_command_output_tails_and_paths_appear_in_the_cli_output(tmp_path, capsys):
+    fake, store = _world(tmp_path, out=b"MEASURED-STDOUT\n", err=b"MEASURED-STDERR\n")
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 0
+    out = capsys.readouterr().out
+    assert f"command stdout: {store.folder / 'last-command.out'}" in out
+    assert f"command stderr: {store.folder / 'last-command.err'}" in out
+    assert "MEASURED-STDOUT" in out and "MEASURED-STDERR" in out
+
+
+# ----------------------------------------------------------------------------- fix wave: forget vs a live start (Ruling 19)
+
+
+def test_forget_of_a_young_record_is_refused_with_exit_2_and_no_read(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    _record(store, age_s=5)
+    before = store.path.read_bytes()
+    assert _main(fake, store, ["forget"]) == 2
+    err = capsys.readouterr().err
+    assert "still starting" in err and "Wait" in err
+    assert store.path.read_bytes() == before and fake.calls == []
+
+
+# ----------------------------------------------------------------------------- fix wave: one machine-wide record (Ruling 20)
+
+
+def test_main_builds_its_store_in_the_machine_wide_folder(tmp_path, monkeypatch, capsys):
+    fake = FakeSystem([STEAM])
+    monkeypatch.setenv(X.STATE_DIR_ENV, str(tmp_path / "one-per-machine"))
+    assert cli.main(["status"], run=fake.run, sleep=fake.sleep, clock=fake.clock) == 0
+    assert "no run recorded" in capsys.readouterr().out
+    # a record written there is seen by `status` from any checkout: nothing is per-checkout
+    _record(X.StateStore(tmp_path / "one-per-machine"))
+    assert cli.main(["status"], run=fake.run, sleep=fake.sleep, clock=fake.clock) == 0
+    assert f"run record: {tmp_path / 'one-per-machine' / 'state.json'}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("verb", ["stop", "forget"])
+def test_stop_or_forget_with_no_record_but_a_running_x4_exits_1_and_names_it(tmp_path, capsys, verb):
+    fake, store = _world(tmp_path)
+    fake.table.append(make_proc(4321))
+    assert _main(fake, store, [verb]) == 1
+    out = capsys.readouterr().out
+    assert "nothing recorded here; X4.exe is running (pid 4321)" in out
+    assert "close it by hand, or use the checkout/host that started it" in out
+    assert fake.close_calls == [] and fake.terminate_calls == []   # never touched
+    assert [fake._classify(c.argv) for c in fake.calls] == ["read"]
+
+
+@pytest.mark.parametrize("verb", ["stop", "forget"])
+def test_stop_or_forget_with_no_record_and_a_failed_read_says_unknown(tmp_path, capsys, verb):
+    fake, store = _world(tmp_path)
+    fake.fail_reads(5)
+    assert _main(fake, store, [verb]) == 2
+    out = capsys.readouterr().out
+    assert "unknown" in out and "none running" not in out
+
+
+# ----------------------------------------------------------------------------- fix wave: leftovers after a run (Ruling 21)
+
+
+def test_a_run_whose_game_closed_but_another_x4_appeared_exits_1(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    late = make_proc(5555, path="G:/other/X4.exe", started="2026-11-24T10:05:00.0000000Z")
+    fake.script_command(CMD, action=lambda f: f.table.append(late))   # appears during the run
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 1
+    out = capsys.readouterr().out
+    assert "closed: yes" in out and "pid 5555" in out
+    assert "appeared during the run" in out
+    assert late in fake.table                        # reported, never touched
+
+
+def test_a_run_whose_final_read_failed_exits_1(tmp_path, capsys, monkeypatch):
+    fake, store = _world(tmp_path)
+    rep = X.CloseReport(True, "window-close", ("s",), None)
+    monkeypatch.setattr(cli, "run_cycle", lambda *a, **k: X.CycleReport(
+        True, True, 0, rep, (), launch_attempted=True))
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 1
+    assert "whether an X4.exe is left is unknown" in capsys.readouterr().out
+
+
+def test_a_run_with_nothing_left_still_exits_0(tmp_path, monkeypatch):
+    fake, store = _world(tmp_path)
+    rep = X.CloseReport(True, "window-close", ("s",), ())
+    monkeypatch.setattr(cli, "run_cycle", lambda *a, **k: X.CycleReport(
+        True, True, 0, rep, (), launch_attempted=True))
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 0
+
+
+# ----------------------------------------------------------------------------- fix wave: --desktop (Ruling 23)
+
+
+@pytest.mark.parametrize("desktop", ["secondary", "Main", "main ", "private"])
+def test_a_desktop_other_than_main_is_refused_before_any_call(tmp_path, capsys, desktop):
+    fake, store = _world(tmp_path)
+    approval = ["--approved-by", "u", "--mode", "menu-only", "--target", "t", "--desktop", desktop]
+    assert _main(fake, store, _run_argv("--no-ready-check", approval=approval)) == 2
+    err = capsys.readouterr().err
+    assert ("the driver cannot choose a desktop: the game appears on the current desktop and "
+            "takes focus") in err
+    assert fake.calls == [] and not store.path.exists()
+
+
+# ----------------------------------------------------------------------------- fix wave: Minors 4, 5, 9
+
+
+def test_the_run_report_prints_the_approval_record(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 0
+    out = capsys.readouterr().out
+    assert ("approval: by user (chat 2026-11-24); mode menu-only; target main menu; "
+            "desktop main; recorded_at ") in out
+
+
+def test_a_nul_in_the_command_is_refused_before_any_call(tmp_path, capsys):
+    fake, store = _world(tmp_path)
+    assert _main(fake, store, _run_argv("--no-ready-check", command=["python", "a\0b"])) == 2
+    assert "NUL" in capsys.readouterr().err
+    assert fake.calls == [] and not store.path.exists()
+
+
+def test_a_refusal_type_raised_after_the_start_is_exit_1_by_its_close_note(tmp_path, capsys):
+    """A ValueError from the command call itself (here scripted) comes AFTER the game started:
+    run_cycle closes the game and notes it, and the CLI must not call that a refusal."""
+    fake, store = _world(tmp_path, exc=ValueError("embedded null byte"))
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 1
+    err = capsys.readouterr().err
+    assert "embedded null byte" in err and "x4run: the game was closed afterwards" in err
+    assert fake.table == [STEAM]                     # the game was closed first
+
+
+def test_a_failed_closing_write_still_closes_the_game_from_the_cli(tmp_path, capsys):
+    fake, _ = _world(tmp_path)
+
+    class _Store(X.StateStore):
+        def update(self, state):
+            if state.phase == "closing":
+                raise OSError("disk says no")
+            super().update(state)
+    store = _Store(tmp_path / "state", sleep=fake.sleep, clock=fake.clock)
+    assert _main(fake, store, _run_argv("--no-ready-check")) == 0
+    out = capsys.readouterr().out
+    assert "closed: yes" in out and "could not be set to phase closing (disk says no)" in out
+    assert fake.table == [STEAM] and not store.path.exists()

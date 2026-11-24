@@ -5,15 +5,17 @@ and the caller's command are only ever calls made to the scripted fake runner.
 """
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
-from pathlib import Path
+import time
 
 import pytest
-from _x4run_fake import FakeSystem, make_proc
+from _x4run_fake import FAKE_GAME_ROOT, FakeSystem, make_proc
 
 from x4validate import _x4run as X
 
-GAME_ROOT = Path("steamroot/steamapps/common/X4 Foundations")
+GAME_ROOT = FAKE_GAME_ROOT
 STEAM = make_proc(900, name="steam.exe", path="S:/steam/steam.exe")
 GAME = make_proc(1000)
 CMD = ["python", "tests/e2e_driver.py", "--flag"]
@@ -75,8 +77,7 @@ def test_every_call_including_the_callers_command_is_hidden_and_never_a_shell(tm
     fake, store = _world(tmp_path)
     _cycle(fake, store, command_timeout_s=123.0)
     assert fake.calls and all(c.creationflags == X.NO_WINDOW for c in fake.calls)
-    if sys.platform == "win32":
-        assert X.NO_WINDOW == 0x08000000
+    assert X.NO_WINDOW == getattr(subprocess, "CREATE_NO_WINDOW", 0)  # the literal: test_x4run_process.py
     (cmd,) = fake.command_calls
     assert cmd.argv == tuple(CMD)  # the argv list, untouched
     assert cmd.creationflags == X.NO_WINDOW
@@ -227,6 +228,7 @@ def test_a_refused_start_closes_nothing(tmp_path):
     fake.table = []  # Steam is not running: start refuses
     rep = _cycle(fake, store)
     assert (rep.started, rep.ready, rep.command_rc, rep.close) == (False, False, None, None)
+    assert rep.launch_attempted is False
     assert any("Steam is not running" in n for n in rep.notes)
     assert fake.close_calls == [] and fake.terminate_calls == []
     assert fake.command_calls == [] and _launches(fake) == []
@@ -239,6 +241,7 @@ def test_a_refusal_that_kept_a_run_record_says_so(tmp_path):
     fake.launch_spawns(GAME, make_proc(2000, started="2026-11-24T10:00:01.0000000Z"), after=5)
     rep = _cycle(fake, store)
     assert (rep.started, rep.close) == (False, None)
+    assert rep.launch_attempted is True
     assert store.path.exists()  # kept by start: a game may be starting
     assert any("run record" in n and str(store.path) in n for n in rep.notes)
     # the record names no game: the note sends the user to forget, never to a `stop` that cannot act
@@ -378,10 +381,13 @@ def test_stop_when_the_recorded_game_has_already_gone_clears_the_record(tmp_path
 # ---------------------------------------------------------------------------------- forget
 
 
-def _record(tmp_path, fake, content=None):
+def _record(tmp_path, fake, content=None, age_s=3600.0):
+    """A record FILE whose mtime is `age_s` old (forget refuses a young one: Ruling 19)."""
     store = X.StateStore(tmp_path / "state", sleep=fake.sleep, clock=fake.clock)
     store.folder.mkdir(parents=True, exist_ok=True)
     store.path.write_bytes(content if content is not None else b'{"x": 1}\n')
+    old = time.time() - age_s
+    os.utime(store.path, (old, old))
     return store
 
 
@@ -473,7 +479,9 @@ def test_forget_refuses_when_the_read_times_out(tmp_path):
 
 
 class _UpdateFailsOnClose(X.StateStore):
-    """`update` works for `start` (the "running" record) and raises on the next call: `close`'s."""
+    """`update` works for `start` (the "running" record) and REJECTS the next one, `close`'s,
+    with `InvalidState`, which still stops the close before any call. (An OSError there no
+    longer does: Minor 4, see test_a_failed_closing_write_still_closes_the_game.)"""
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -482,7 +490,7 @@ class _UpdateFailsOnClose(X.StateStore):
     def update(self, state):
         self.updates += 1
         if self.updates >= 2:
-            raise OSError("disk full")
+            raise X.InvalidState("disk full")
         super().update(state)
 
 
@@ -533,7 +541,7 @@ def test_valid_durations_are_accepted(tmp_path):
 
 def test_a_close_that_raises_says_the_game_may_still_be_running(tmp_path):
     fake, store = _failing_world(tmp_path)
-    with pytest.raises(OSError, match="disk full") as exc:
+    with pytest.raises(X.InvalidState, match="disk full") as exc:
         _cycle(fake, store)
     notes = "\n".join(getattr(exc.value, "__notes__", []))
     assert "NOT confirmed closed" in notes and str(store.path) in notes
@@ -549,10 +557,196 @@ def test_a_close_that_raises_during_an_interrupt_keeps_the_interrupt_visible(tmp
     def probe():
         raise KeyboardInterrupt
 
-    with pytest.raises(OSError, match="disk full") as exc:
+    with pytest.raises(X.InvalidState, match="disk full") as exc:
         _cycle(fake, store, probe=probe)
     notes = "\n".join(getattr(exc.value, "__notes__", []))
     assert "NOT confirmed closed" in notes and str(store.path) in notes
     assert "KeyboardInterrupt" in notes  # named in the note
     assert isinstance(exc.value.__context__, KeyboardInterrupt)  # and chained
     assert GAME in fake.table and fake.command_calls == []
+
+
+# ------------------------------------------------- Ruling 17: the caller's command output is kept
+
+
+#: A harmless child: prints one line to each stream and touches nothing else.
+_ECHO = [sys.executable, "-c", "print('X'); import sys; print('Y', file=sys.stderr)"]
+
+
+def test_a_real_hidden_child_writes_its_output_to_the_two_files(tmp_path):
+    """No fake for the COMMAND: it runs through the real `subprocess.run`, hidden, exactly as
+    run_cycle starts it. Everything else (Steam, X4, the reads) is still the fake. Without the
+    redirect a CREATE_NO_WINDOW child writes to its own invisible console and nothing arrives."""
+    fake, store = _world(tmp_path)
+
+    def run(argv, **kw):
+        if list(argv) == _ECHO:
+            return subprocess.run(argv, **kw)
+        return fake.run(argv, **kw)
+
+    rep = X.run_cycle(GAME_ROOT, _approval(), store, list(_ECHO), ready_probe=lambda: True,
+                      run=run, sleep=fake.sleep, clock=fake.clock, command_timeout_s=60.0)
+    assert rep.command_rc == 0
+    assert rep.command_out_path == store.folder / "last-command.out"
+    assert rep.command_err_path == store.folder / "last-command.err"
+    assert rep.command_out_path.read_bytes().strip() == b"X"
+    assert rep.command_err_path.read_bytes().strip() == b"Y"
+    assert rep.command_out_tail.strip() == "X" and rep.command_err_tail.strip() == "Y"
+    _assert_game_closed(fake, store, rep)
+
+
+def test_the_command_gets_stdin_devnull_and_file_handles_for_its_output(tmp_path):
+    fake, store = _world(tmp_path)
+    _cycle(fake, store)
+    (cmd,) = fake.command_calls
+    kw = dict(cmd.kw)
+    assert kw["stdin"] is subprocess.DEVNULL
+    for key, name in (("stdout", "last-command.out"), ("stderr", "last-command.err")):
+        fh = kw[key]
+        assert hasattr(fh, "write") and fh.mode == "wb" and fh.name == str(store.folder / name)
+        assert fh.closed                             # closed once the command is done
+    for banned in ("capture_output", "text", "encoding", "input"):
+        assert banned not in kw
+
+
+def test_the_report_carries_the_last_4_kb_of_each_stream(tmp_path):
+    big = b"a" * 10_000 + b"END-OUT"
+    fake, store = _world(tmp_path, out=big, err="café \xff".encode("utf-8") + b"\xff")
+    rep = _cycle(fake, store)
+    assert len(rep.command_out_tail.encode("utf-8")) == X.COMMAND_TAIL_BYTES == 4096
+    assert rep.command_out_tail.endswith("END-OUT")
+    assert rep.command_err_tail.startswith("café") and rep.command_err_tail.endswith("�")
+    assert rep.command_out_path.read_bytes() == big  # the whole output is in the file
+
+
+def test_the_output_files_are_truncated_at_the_start_of_each_run(tmp_path):
+    fake, store = _world(tmp_path, out=b"FIRST RUN\n")
+    _cycle(fake, store)
+    fake2, _ = _world(tmp_path)
+    store2 = X.StateStore(store.folder, sleep=fake2.sleep, clock=fake2.clock)
+    rep = _cycle(fake2, store2, probe=lambda: False, ready_timeout_s=5.0)  # the command never runs
+    assert fake2.command_calls == []
+    assert (store.folder / "last-command.out").read_bytes() == b""     # not the first run's
+    assert rep.command_out_tail == ""
+
+
+def test_an_earlier_runs_output_survives_a_refused_second_run(tmp_path):
+    """A run refused at start (here: the record of a live run is in the way) does not own the
+    folder, so it must not truncate the live run's output files."""
+    fake, store = _world(tmp_path, out=b"LIVE\n")
+    _cycle(fake, store)
+    _record(tmp_path, fake)                          # another run's record is now in the way
+    with pytest.raises(X.UnfinishedRun):
+        _cycle(fake, store)
+    assert (store.folder / "last-command.out").read_bytes() == b"LIVE\n"
+
+
+# ------------------------------------------------- Ruling 19: forget vs a live start window
+
+
+def _young(tmp_path, fake, age_s):
+    return _record(tmp_path, fake, age_s=age_s)
+
+
+def test_forget_refuses_a_fresh_record_and_leaves_it_untouched(tmp_path):
+    fake = FakeSystem([STEAM])
+    store = _young(tmp_path, fake, age_s=10)
+    before = store.path.read_bytes()
+    with pytest.raises(X.ForgetRefused) as exc:
+        _forget(fake, store)
+    msg = str(exc.value)
+    assert "still starting" in msg and "Wait 260 s" in msg and "270 s" in msg
+    assert store.path.read_bytes() == before
+    assert fake.calls == []                          # refused before any process read
+
+
+def test_forget_clears_an_old_record(tmp_path):
+    fake = FakeSystem([STEAM])
+    store = _young(tmp_path, fake, age_s=X.FORGET_MIN_AGE_S + 5)
+    _forget(fake, store)
+    assert not store.path.exists()
+
+
+def test_forget_min_age_is_the_start_window_plus_a_margin():
+    assert X.FORGET_MIN_AGE_S == X.LAUNCH_CALL_TIMEOUT_S + X.START_TIMEOUT_S + 60 == 270
+
+
+@pytest.mark.parametrize("age, allowed", [(269.0, False), (269.999, False), (270.0, True), (271.0, True)])
+def test_forget_age_boundary(tmp_path, age, allowed):
+    fake = FakeSystem([STEAM])
+    store = _record(tmp_path, fake)
+    mtime = store.path.stat().st_mtime
+    now = lambda: mtime + age  # noqa: E731
+    if allowed:
+        X.forget(store, run=fake.run, sleep=fake.sleep, now=now)
+        assert not store.path.exists()
+    else:
+        with pytest.raises(X.ForgetRefused, match="still starting"):
+            X.forget(store, run=fake.run, sleep=fake.sleep, now=now)
+        assert store.path.exists() and fake.calls == []
+
+
+def test_forget_refuses_a_record_from_the_future(tmp_path):
+    fake = FakeSystem([STEAM])
+    store = _record(tmp_path, fake)
+    mtime = store.path.stat().st_mtime
+    with pytest.raises(X.ForgetRefused):
+        X.forget(store, run=fake.run, sleep=fake.sleep, now=lambda: mtime - 100)
+    assert store.path.exists()
+
+
+@pytest.mark.parametrize("content", [b"", b'{"run_id": "r1", "phase"'])
+def test_forget_clears_an_old_empty_or_corrupt_record(tmp_path, content):
+    fake = FakeSystem([STEAM])
+    store = _record(tmp_path, fake, content, age_s=X.FORGET_MIN_AGE_S + 1)
+    _forget(fake, store)
+    assert not store.path.exists()
+
+
+def test_forget_of_an_old_record_still_refuses_on_a_failed_read(tmp_path):
+    fake = FakeSystem([STEAM])
+    fake.fail_reads(10)
+    store = _record(tmp_path, fake, age_s=X.FORGET_MIN_AGE_S + 1)
+    with pytest.raises(X.ForgetRefused, match="could not be read"):
+        _forget(fake, store)
+    assert store.path.exists()
+
+
+# ------------------------------------------------- Minor 4: a failed phase-"closing" write
+
+
+class _ClosingWriteFails(X.StateStore):
+    def update(self, state):
+        if state.phase == "closing":
+            raise OSError("disk full")
+        super().update(state)
+
+
+def test_a_failed_closing_write_still_closes_the_game(tmp_path):
+    fake, _ = _world(tmp_path)
+    store = _ClosingWriteFails(tmp_path / "state", sleep=fake.sleep, clock=fake.clock)
+    rep = _cycle(fake, store)
+    assert rep.close.closed and rep.close.method == "window-close"
+    assert any("could not be set to phase closing (disk full)" in s for s in rep.close.steps)
+    _assert_game_closed(fake, store, rep)
+
+
+def test_a_failed_closing_write_keeps_the_previous_phase_when_the_close_fails(tmp_path):
+    fake, _ = _world(tmp_path)
+    fake.on_close = FakeSystem._default_hook
+    fake.on_terminate = FakeSystem._default_hook
+    store = _ClosingWriteFails(tmp_path / "state", sleep=fake.sleep, clock=fake.clock)
+    rep = _cycle(fake, store, grace_s=4.0, kill_wait_s=4.0)
+    assert not rep.close.closed
+    assert len(fake.close_calls) == 1                 # the close went ahead
+    assert store.read().phase == "running" and store.read().process == GAME
+
+
+# ------------------------------------------------- Minor 5: a NUL in the command
+
+
+def test_a_nul_in_the_command_is_refused_before_anything_is_started(tmp_path):
+    fake, store = _world(tmp_path)
+    with pytest.raises(ValueError, match="NUL"):
+        _cycle(fake, store, command=["python", "-c", "x\0y"])
+    assert fake.calls == [] and not store.path.exists()

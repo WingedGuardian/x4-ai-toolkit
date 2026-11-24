@@ -9,12 +9,12 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _x4run_fake import FakeSystem, make_proc
+from _x4run_fake import FAKE_GAME_EXE, FAKE_GAME_ROOT, FakeSystem, make_proc
 
 from x4validate import _paths
 from x4validate import _x4run as X
 
-GAME_ROOT = Path("steamroot/steamapps/common/X4 Foundations")
+GAME_ROOT = FAKE_GAME_ROOT
 STEAM = make_proc(900, name="steam.exe", path="S:/steam/steam.exe")
 
 
@@ -146,7 +146,7 @@ def test_the_state_file_exists_before_the_launch_call(tmp_path):
 
 
 def test_the_new_process_is_recorded_with_pid_path_and_start_time(tmp_path):
-    proc = make_proc(2000, path="G:/games/X4/X4.exe", started="2026-11-24T10:01:02.5000000Z")
+    proc = make_proc(2000, path=FAKE_GAME_EXE, started="2026-11-24T10:01:02.5000000Z")
     fake = _fake()
     fake.launch_spawns(proc, after=7)
     store = _store(tmp_path, fake)
@@ -193,21 +193,57 @@ def test_no_game_within_the_timeout_clears_state_and_does_not_retry(tmp_path):
     assert fake.table == [STEAM]
 
 
-@pytest.mark.parametrize("failure", ["oserror", "nonzero"])
-def test_a_failed_launch_call_clears_state_and_is_not_retried(tmp_path, failure):
+def test_a_launch_call_that_cannot_be_made_clears_state_and_is_not_retried(tmp_path):
+    """The ONE definite failure (Ruling 18): steam.exe could not be started, so nothing ran."""
     fake = _fake()
 
     def hook(argv):
-        if failure == "oserror":
-            raise FileNotFoundError("no steam.exe here")
-        return 3, ""
+        raise FileNotFoundError("no steam.exe here")
 
     fake.on_launch = hook
     store = _store(tmp_path, fake)
     with pytest.raises(X.StartRefused, match="launch call") as exc:
         _start(fake, tmp_path, store=store)
-    assert "not retried" in str(exc.value)
+    assert "not retried" in str(exc.value) and "Nothing was started" in str(exc.value)
+    assert exc.value.launch_attempted is False
     assert not store.path.exists()
+    assert len(_launches(fake)) == 1
+    assert len(_reads(fake)) == 2                    # the preflight only: no poll after it
+
+
+def test_a_nonzero_launch_exit_is_unknown_and_keeps_polling(tmp_path):
+    """Ruling 18: what a non-zero forwarder exit means is unmeasured, so it is treated like a
+    timeout: the record is NOT cleared at once and a game that appears is recorded."""
+    proc = make_proc(2000)
+    fake = _fake()
+    store = _store(tmp_path, fake)
+    seen = {}
+
+    def hook(argv):
+        fake.at(fake.now + 5, lambda f: f.table.append(proc))
+        return 3, ""
+
+    def on_read(f, n):
+        if n == 2:                                   # the first poll read after the launch
+            seen["record_after_launch"] = store.path.exists()
+    fake.on_launch = hook
+    fake.on_read = on_read
+    state = _start(fake, tmp_path, store=store)
+    assert seen["record_after_launch"] is True
+    assert state.phase == "running" and state.process == proc
+    assert len(_launches(fake)) == 1
+
+
+def test_a_nonzero_launch_exit_with_no_game_is_attempted_and_says_so(tmp_path):
+    fake = _fake()
+    fake.on_launch = lambda argv: (3, "")
+    store = _store(tmp_path, fake)
+    with pytest.raises(X.StartRefused) as exc:
+        _start(fake, tmp_path, store=store, timeout_s=20)
+    msg = str(exc.value)
+    assert exc.value.launch_attempted is True
+    assert "exited 3" in msg and "may still start the game" in msg
+    assert fake.clock() >= 20                        # it polled to the deadline first
     assert len(_launches(fake)) == 1
 
 
@@ -393,3 +429,92 @@ def test_a_game_root_without_a_steam_root_refuses_before_any_record(tmp_path):
             X.start(shallow, _approval(), store, run=fake.run, sleep=fake.sleep, clock=fake.clock)
     assert fake.calls == []  # not even a read
     assert not store.path.exists() and not store.folder.exists()
+
+
+# ------------------------------------------------- Ruling 18: launch_attempted on every refusal
+
+
+def _refusal(fake, tmp_path, **kw):
+    with pytest.raises(X.StartRefused) as exc:
+        _start(fake, tmp_path, **kw)
+    return exc.value
+
+
+def test_every_refusal_before_the_launch_call_says_no_launch_was_attempted(tmp_path):
+    shallow = FakeSystem([STEAM])
+    with pytest.raises(X.StartRefused) as exc:
+        X.start(Path("X4"), _approval(), _store(tmp_path, shallow), run=shallow.run,
+                sleep=shallow.sleep, clock=shallow.clock)
+    cases = [exc.value]
+    cases.append(_refusal(_fake(make_proc(4242)), tmp_path / "a"))          # X4 already running
+    failing = _fake()
+    failing.fail_reads(10)
+    cases.append(_refusal(failing, tmp_path / "b"))                         # read failed
+    cases.append(_refusal(FakeSystem(), tmp_path / "c"))                    # no Steam
+    assert [c.launch_attempted for c in cases] == [False, False, False, False]
+
+
+def test_every_refusal_after_the_launch_call_says_a_launch_was_attempted(tmp_path):
+    no_game = _fake()
+    two = _fake()
+    two.launch_spawns(make_proc(2000), make_proc(2001, started="2026-11-24T10:00:01.0000000Z"))
+    foreign = _fake()
+    foreign.launch_spawns(make_proc(2000, path="D:/elsewhere/X4.exe"))
+    blind = _fake()
+
+    def blind_launch(argv):
+        blind.fail_reads(1000)
+        return 0, ""
+    blind.on_launch = blind_launch
+    cases = [_refusal(no_game, tmp_path / "a", timeout_s=10),
+             _refusal(two, tmp_path / "b"),
+             _refusal(foreign, tmp_path / "c"),
+             _refusal(blind, tmp_path / "d", timeout_s=10)]
+    assert [c.launch_attempted for c in cases] == [True, True, True, True]
+
+
+def test_the_attribute_is_required_and_keyword_only():
+    with pytest.raises(TypeError):
+        X.StartRefused("no flag")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        X.StartRefused("positional", True)  # type: ignore[misc]
+
+
+# ------------------------------------------------- Ruling 22: only <game_root>/X4.exe is ours
+
+
+def test_an_x4_from_another_folder_is_not_recorded_and_the_record_is_kept(tmp_path):
+    fake = _fake()
+    fake.launch_spawns(make_proc(2000, path="D:/SteamLibrary/steamapps/common/X4 Foundations/X4.exe"))
+    store = _store(tmp_path, fake)
+    with pytest.raises(X.StartRefused) as exc:
+        _start(fake, tmp_path, store=store)
+    msg = str(exc.value)
+    assert "not this game root's" in msg and "pid 2000" in msg and "D:/SteamLibrary" in msg
+    assert exc.value.launch_attempted is True
+    st = store.read()
+    assert st is not None and st.phase == "starting" and st.process is None
+    assert "x4run forget" in msg and "recover with `x4run stop`" not in msg
+
+
+@pytest.mark.parametrize("spelling", [
+    FAKE_GAME_EXE,
+    FAKE_GAME_EXE.upper(),
+    FAKE_GAME_EXE.replace("/", chr(92)),
+    "steamroot/steamapps/common/./X4 Foundations/x4.EXE",
+])
+def test_the_game_roots_own_x4_is_recorded_whatever_its_case_or_separators(tmp_path, spelling):
+    proc = make_proc(2000, path=spelling)
+    fake = _fake()
+    fake.launch_spawns(proc)
+    state = _start(fake, tmp_path)
+    assert state.process == proc                     # recorded exactly as read
+
+
+def test_one_of_ours_plus_a_foreign_one_at_once_is_refused(tmp_path):
+    fake = _fake()
+    fake.launch_spawns(make_proc(2000), make_proc(2001, path="D:/other/X4.exe"))
+    store = _store(tmp_path, fake)
+    with pytest.raises(X.StartRefused, match="appeared at once"):
+        _start(fake, tmp_path, store=store)
+    assert store.read().process is None

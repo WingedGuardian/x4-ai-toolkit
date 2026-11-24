@@ -90,20 +90,20 @@ echo "== package: ${PWD#$WORK/} =="
 echo "== PRECONDITION: the environment must be unresolvable =="
 RESOLVED=$(env "${UNSET[@]}" uv run --frozen python -c "
 from x4validate import _paths
-vals = (_paths.registry(), _paths.game_extensions(), _paths.reference())
+vals = (_paths.registry(), _paths.game_extensions(), _paths.reference(), _paths.game_root())
 print('|'.join('None' if v is None else str(v) for v in vals))" 2>/dev/null | tail -1)
 
-if [ "$RESOLVED" != "None|None|None" ]; then
+if [ "$RESOLVED" != "None|None|None|None" ]; then
   echo >&2
   echo "REFUSING TO RUN: this is not a cold environment." >&2
-  echo "  registry|game_extensions|reference = $RESOLVED" >&2
+  echo "  registry|game_extensions|reference|game_root = $RESOLVED" >&2
   echo >&2
   echo "Something is still resolving X4 paths -- most likely \$X4_TOOLKIT, or a" >&2
   echo "x4-paths.env or a 3.x .claude/x4-paths.env resolving for the cold checkout ($WORK)." >&2
   echo "A green result from here would be meaningless, so it is not offered." >&2
   exit 3
 fi
-echo "   registry=None game_extensions=None reference=None  <- genuinely cold"
+echo "   registry=None game_extensions=None reference=None game_root=None  <- genuinely cold"
 
 echo
 echo "== running the suite as a new user would =="
@@ -161,7 +161,13 @@ cli_case _modlist    main refresh
 cli_case _savecli    main info
 cli_case _livecli    main dump
 cli_case _freshcli   main status
-cli_case _x4runcli   main status
+# x4run: NOT `status`, which needs no configuration (it exits 0 wherever processes can be read,
+# and passed here only because powershell.exe is absent on Linux: the wrong reason). `run` with a
+# full approval reaches the REAL unconfigured refusal, "the game root cannot be resolved", before
+# any process call (tests/test_x4run_cli.py::test_the_cold_matrix_case_reaches_the_real_unconfigured_refusal).
+# The game_root=None precondition above is what makes this safe: with a resolvable game root this
+# line would be a launch request, so the script refuses to run at all.
+cli_case _x4runcli   main run --approved-by cold-matrix --mode menu-only --target none --desktop main --no-ready-check -- x
 
 # x4diff is DELIBERATELY not in the matrix. It compares two mod folders to each
 # other -- `_merge.overlay_root` / `apply_overlay`, no Config, no reference tree --

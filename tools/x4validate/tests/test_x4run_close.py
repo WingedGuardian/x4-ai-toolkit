@@ -6,6 +6,8 @@ fake's virtual clock makes every wait instantaneous.
 """
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 from _x4run_fake import FakeSystem, make_proc
 
@@ -389,7 +391,9 @@ def test_every_call_is_hidden(tmp_path):
     assert fake.close_calls and fake.terminate_calls  # the whole ladder ran
     assert fake.calls
     for c in fake.calls:
-        assert c.creationflags == X.NO_WINDOW == 0x08000000
+        # The module's own flag (0 on a host without CREATE_NO_WINDOW); the literal Windows
+        # value is asserted once, Windows only, in test_x4run_process.py.
+        assert c.creationflags == X.NO_WINDOW == getattr(subprocess, "CREATE_NO_WINDOW", 0)
         assert c.creationflags & 0x00000008 == 0  # never DETACHED_PROCESS
         assert isinstance(c.argv, tuple) and c.argv[0] == "powershell.exe"
         assert not any(k == "shell" and v for k, v in c.kw)
@@ -504,3 +508,22 @@ def test_a_failed_terminate_call_is_recorded_even_if_the_process_then_ends(tmp_p
     failed = [s for s in rep.steps if "terminate request for pid 1000 failed" in s]
     assert len(failed) == 1 and expect in failed[0]
     assert any("although the terminate call failed" in s for s in rep.steps)
+
+
+# ------------------------------------------- Minor 4: a failed phase-"closing" write is not fatal
+
+
+def test_an_oserror_on_the_closing_write_still_closes_with_a_step_note(tmp_path):
+    fake, store, state = _world(tmp_path, REC)
+    fake.close_exits_after(1)
+
+    def refuse(src, dst):
+        raise OSError("locked for good")
+    store._replace = refuse                         # every replace fails (past the retry window)
+    rep = _close(fake, store, state)
+    assert (rep.closed, rep.method) == (True, "window-close")
+    assert [c.argv[-1] for c in fake.close_calls] == ["1000"]
+    assert any("could not be set to phase closing (locked for good)" in s
+               and "close goes ahead" in s for s in rep.steps)
+    assert not store.path.exists()                  # cleared once the exit was confirmed
+

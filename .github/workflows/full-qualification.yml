@@ -785,7 +785,12 @@ jobs:
           #   (cd893037): the ONLY delta on both legs is tests/test_pipe_unref_guard.py +4 (the offline checks that
           #   load the real game's lua51_64.dll and winpipe DLL: Windows-only on ubuntu, no X4_GAME on windows).
           #   ubuntu 495 -> 499, windows 93 -> 97. Ceilings: 499 + 3, 97 + 3.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '502' || '100' }}
+          # 2026-11-24 (x4run, session/x4-driver): DERIVED, not yet READ on CI (the branch was never pushed). The only
+          #   new platform skip is tests/test_x4run_process.py::test_every_read_is_started_hidden (1 test, not
+          #   parametrized: pytest.skip off Windows; the one test that asserts the literal CREATE_NO_WINDOW value).
+          #   `git grep -n skip` over the branch's added/changed test files finds no other skip. ubuntu 499 -> 500,
+          #   windows unchanged at 97. Ceilings: 500 + 3, 97 + 3. Re-READ per file on the first CI run.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '503' || '100' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar

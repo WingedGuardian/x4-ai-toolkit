@@ -31,9 +31,11 @@ later; `terminate_removes()` makes a terminate request remove it at once. Both t
 from the request's LAST argv element, which must be a plain integer (the module under test
 passes the pid as its own argument, never inside the script text), and remove the process
 with that pid from the table. `fake.close_calls` / `fake.terminate_calls` list those calls.
-`script_command(argv, rc=0, timeout=False, exc=None, action=None)` registers the caller's
-command: it answers `rc`, or raises `TimeoutExpired` (`timeout=True`) or `exc`; `action(fake)`, if
-given, runs first (e.g. to let the game exit while the command runs). `on_read`, if set, is `fn(fake, n)` run before the n-th process read (0-based) is answered,
+`script_command(argv, rc=0, timeout=False, exc=None, action=None, out=b"", err=b"")` registers
+the caller's command: it answers `rc`, or raises `TimeoutExpired` (`timeout=True`) or `exc`;
+`action(fake)`, if given, runs first (e.g. to let the game exit while the command runs). `out`
+and `err` are written (bytes) to the `stdout`/`stderr` FILE HANDLES the call was given, as a
+real child would write to them; a call given no such handle writes nothing. `on_read`, if set, is `fn(fake, n)` run before the n-th process read (0-based) is answered,
 so a table can change between two reads. Time-driven
 changes use `at(t, fn)`: `fn(fake)` runs once when the virtual clock reaches `t` (checked on
 every `sleep` and every `run`), e.g. a game process that appears five seconds after launch.
@@ -47,6 +49,7 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 from x4validate._x4run import ProcessInfo
 
@@ -60,7 +63,13 @@ class Call:
     kw: tuple = ()
 
 
-def make_proc(pid: int = 1000, *, name: str = "X4.exe", path: str = "G:/games/X4/X4.exe",
+#: The game root the x4run tests start from. `make_proc`'s default path is its X4.exe, because
+#: `start` records only `<game_root>/X4.exe`.
+FAKE_GAME_ROOT = Path("steamroot/steamapps/common/X4 Foundations")
+FAKE_GAME_EXE = "steamroot/steamapps/common/X4 Foundations/X4.exe"
+
+
+def make_proc(pid: int = 1000, *, name: str = "X4.exe", path: str = FAKE_GAME_EXE,
               started: str = "2026-11-24T10:00:00.0000000Z") -> ProcessInfo:
     """A `ProcessInfo` with sensible defaults, so a test names only what it varies."""
     return ProcessInfo(pid=pid, name=name, path=path, started=started)
@@ -160,10 +169,10 @@ class FakeSystem:
         self.on_terminate = hook
 
     def script_command(self, argv, *, rc: int = 0, timeout: bool = False, exc=None,
-                       action=None) -> None:
+                       action=None, out: bytes = b"", err: bytes = b"") -> None:
         """Register the caller's command (matched by exact argv) and how it ends."""
         self._commands[tuple(str(a) for a in argv)] = dict(rc=rc, timeout=timeout, exc=exc,
-                                                          action=action)
+                                                          action=action, out=out, err=err)
 
     @property
     def command_calls(self) -> list[Call]:
@@ -187,6 +196,10 @@ class FakeSystem:
             spec = self._commands[argv]
             if spec["action"] is not None:
                 spec["action"](self)
+            for key, data in (("stdout", spec["out"]), ("stderr", spec["err"])):
+                fh = kw.get(key)
+                if data and hasattr(fh, "write"):
+                    fh.write(data)
             if spec["timeout"]:
                 raise subprocess.TimeoutExpired(argv, kw.get("timeout") or 0)
             if spec["exc"] is not None:

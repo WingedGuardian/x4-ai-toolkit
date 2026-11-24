@@ -143,6 +143,3 @@ housekeep-session.txt
 .claude/x4fresh-session.txt
 /tools/basex/basex/disposition-x4raw.json
 /tools/basex/basex/disposition-x4eff.json
-
-# x4run driver: the recoverable run-state file (exists only while a game may be running).
-/.x4run/

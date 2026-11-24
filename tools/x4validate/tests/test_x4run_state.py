@@ -311,22 +311,53 @@ def test_clear_with_nothing_to_clear_is_not_an_error(tmp_path):
 # ----------------------------------------------------------------------- state folder
 
 
-def test_state_folder_is_dot_x4run_under_the_toolkit(tmp_path, monkeypatch):
-    monkeypatch.setattr(X._paths, "toolkit_root", lambda: tmp_path)
-    assert X.state_folder() == tmp_path / ".x4run"
+def test_state_folder_honours_the_override(tmp_path):
+    assert X.state_folder(environ={X.STATE_DIR_ENV: str(tmp_path)}, platform="win32") == tmp_path
+    assert X.state_folder(environ={X.STATE_DIR_ENV: str(tmp_path), "LOCALAPPDATA": str(tmp_path / "no")},
+                          platform="linux") == tmp_path
 
 
-def test_state_folder_refuses_when_the_toolkit_cannot_be_resolved(monkeypatch):
-    monkeypatch.setattr(X._paths, "toolkit_root", lambda: None)
-    with pytest.raises(X.StateFolderError, match="X4_TOOLKIT"):
-        X.state_folder()
+def test_state_folder_refuses_a_relative_override():
+    with pytest.raises(X.StateFolderError, match="not an absolute path"):
+        X.state_folder(environ={X.STATE_DIR_ENV: "relative/state"}, platform="linux")
 
 
-def test_the_state_folder_is_gitignored():
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[3]
-    lines = [ln.strip() for ln in (root / ".gitignore").read_text(encoding="utf-8").splitlines()]
-    assert "/.x4run/" in lines
+def test_state_folder_on_windows_is_under_localappdata(tmp_path):
+    got = X.state_folder(environ={"LOCALAPPDATA": str(tmp_path)}, platform="win32")
+    assert got == tmp_path / "x4-toolkit" / "x4run"
+
+
+@pytest.mark.parametrize("env", [{}, {"LOCALAPPDATA": ""}, {"LOCALAPPDATA": "  "},
+                                 {"LOCALAPPDATA": "relative/AppData"}])
+def test_state_folder_on_windows_refuses_without_a_usable_localappdata(env):
+    with pytest.raises(X.StateFolderError, match="LOCALAPPDATA"):
+        X.state_folder(environ=env, platform="win32")
+
+
+def test_state_folder_elsewhere_is_under_the_home_state_dir(tmp_path):
+    got = X.state_folder(environ={"LOCALAPPDATA": str(tmp_path / "ignored")}, platform="linux",
+                         home=lambda: tmp_path)
+    assert got == tmp_path / ".local" / "state" / "x4-toolkit" / "x4run"
+
+
+def test_state_folder_elsewhere_refuses_without_a_home():
+    def no_home():
+        raise RuntimeError("Could not determine home directory.")
+    with pytest.raises(X.StateFolderError, match="no home folder"):
+        X.state_folder(environ={}, platform="linux", home=no_home)
+
+
+def test_state_folder_never_depends_on_the_checkout_or_the_cwd(tmp_path, monkeypatch):
+    """Ruling 20: ONE record per machine. Neither the toolkit root nor the working directory
+    may move it (both were per-checkout before)."""
+    env = {"LOCALAPPDATA": str(tmp_path / "lad")}
+    first = X.state_folder(environ=env, platform="win32", home=lambda: tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(X._paths, "toolkit_root", lambda: tmp_path / "another-checkout")
+    assert X.state_folder(environ=env, platform="win32", home=lambda: tmp_path) == first
+    assert X.state_folder(environ={}, platform="linux", home=lambda: tmp_path) == \
+        X.state_folder(environ={}, platform="linux", home=lambda: tmp_path)
+    assert "x4-toolkit-driver" not in str(first) and ".x4run" not in str(first)
 
 
 def test_dataclasses_are_the_documented_shapes():

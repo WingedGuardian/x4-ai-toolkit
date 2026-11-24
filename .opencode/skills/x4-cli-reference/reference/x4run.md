@@ -18,7 +18,7 @@ options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
 
-x4run: this driver has NOT been run against the real game (built and tested offline, build step 1 of 3); nothing launches X4 until step 2. See docs/x4run.md for what is measured and what is not.
+x4run: this driver has never been run against the real game: treat every result as unverified (built and tested offline, build step 1 of 3). See docs/x4run.md for what is measured and what is not.
 ```
 
 ## `x4run status`
@@ -28,7 +28,7 @@ usage: x4run status [-h]
 
 Print the recorded run (phase, pid, the approval, when it started) or 'no run recorded', and the
 live X4.exe processes. A failed process read prints 'unknown: process read failed', never 'none'.
-Changes nothing.
+Changes nothing. Exit 0, or 2 when the process read failed or the run record could not be read.
 
 options:
   -h, --help  show this help message and exit
@@ -42,7 +42,7 @@ usage: x4run run [-h] --approved-by WHO --mode {menu-only,load-save,new-game} --
                  [--command-timeout SECONDS] [--hold SECONDS]
                  [COMMAND ...]
 
-Start X4 through Steam, wait until it is ready, run COMMAND, then ALWAYS close the game and verify it is gone. Every approval flag is required: the driver records the user's approval but cannot grant it. x4run: this driver has NOT been run against the real game (built and tested offline, build step 1 of 3); nothing launches X4 until step 2.
+Start X4 through Steam, wait until it is ready, run COMMAND, then ALWAYS close the game and verify it is gone. Every approval flag is required: the driver records the user's approval but cannot grant it. x4run: this driver has never been run against the real game: treat every result as unverified (built and tested offline, build step 1 of 3).
 
 positional arguments:
   COMMAND               the command to run once the game is ready, after `--`: an argv list, never
@@ -55,8 +55,8 @@ options:
   --mode {menu-only,load-save,new-game}
                         the approved launch mode
   --target WHAT         the approved save or new game to reach (e.g. 'main menu' for menu-only)
-  --desktop WHERE       the desktop the user approved the game to run on (e.g. 'main' or
-                        'secondary')
+  --desktop WHERE       the desktop the user approved; only 'main' is accepted: the driver cannot
+                        choose a desktop: the game appears on the current desktop and takes focus
   --no-ready-check      treat the game as ready the moment its process appears: the real readiness
                         probe is not wired yet (step 3), so without this flag `run` refuses and
                         starts nothing
@@ -64,10 +64,12 @@ options:
                         how long to wait for the game to become ready (default 300)
   --command-timeout SECONDS
                         how long COMMAND may run before it is killed (default 3600)
-  --hold SECONDS        extra seconds the close waits before it may terminate the game, e.g. while
-                        a crash dump is written (default 0)
+  --hold SECONDS        extra seconds the close waits before it may terminate the game (default 0:
+                        the terminate comes 60 s after the window-close request, which cuts short
+                        a crash dump in progress; use >= 600 when a dump writer such as procdump
+                        is attached)
 
-exit: 0 done; 2 refused, nothing started and no run record left (safe to retry); 1 a game not confirmed closed, or a start that left a run record (a game may be running: see the output), or any other failure
+exit: 0 done; 2 refused before any launch call, nothing started (safe to retry); 1 a launch call was made and no game was recorded (a game may still appear or be running: see the output), a game not confirmed closed, an X4.exe left (or not checkable) after the game closed, or any other failure. Do not start X4 yourself while a run is starting (up to about 3.5 min): the driver cannot tell your game from its own and would close it. The game appears on the current desktop and takes focus. The command's output goes to last-command.out/.err in the state folder.
 ```
 
 ## `x4run stop`
@@ -76,13 +78,15 @@ exit: 0 done; 2 refused, nothing started and no run record left (safe to retry);
 usage: x4run stop [-h] [--hold SECONDS]
 
 Close the game named by the run record: a window-close request, then, only if that same process is
-still there, a terminate request. Only the recorded process is ever touched. 'nothing recorded'
-exits 0.
+still there, a terminate request. Only the recorded process is ever touched. With no record it
+reads the X4.exe list: none running exits 0, any running exits 1 (close it by hand), a failed read
+exits 2.
 
 options:
   -h, --help      show this help message and exit
-  --hold SECONDS  extra seconds to wait before the terminate request, e.g. while a crash dump is
-                  written (default 0)
+  --hold SECONDS  extra seconds to wait before the terminate request (default 0: the terminate
+                  comes 60 s after the window-close request, which cuts short a crash dump in
+                  progress; use >= 600 when a dump writer such as procdump is attached)
 ```
 
 ## `x4run forget`
@@ -90,9 +94,10 @@ options:
 ```text
 usage: x4run forget [-h]
 
-Remove the run record without parsing it (it works on an empty or damaged one), but only after ONE
-successful process read shows no X4.exe running. A failed read or a running X4.exe refuses (exit
-2) and keeps the record.
+Remove the run record without parsing it (it works on an empty or damaged one), but only if it was
+written at least 270 s ago (a younger one may belong to a run that is still starting) and ONE
+successful process read shows no X4.exe running. A young record, a failed read or a running X4.exe
+refuses (exit 2) and keeps the record. With no record it reads the X4.exe list like `stop`.
 
 options:
   -h, --help  show this help message and exit
