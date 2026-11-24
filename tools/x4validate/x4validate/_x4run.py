@@ -14,15 +14,19 @@ an answer (non-zero exit, timeout, no PowerShell, malformed output); an EMPTY LI
 answer and only ever means "the query ran and found none". `_livedump.game_pids` returns
 None for the same split; here it is an exception, so a caller cannot forget to look.
 
-Sections: process, exit (below). Later sections are added to this same file.
+Sections: process, exit, state (below). Later sections are added to this same file.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from . import _paths
 
 #: Flag every child process is started with. 0 where the platform has no such flag, so the
 #: module still imports on a non-Windows host (the logic is tested there through the fake).
@@ -181,3 +185,218 @@ class ExitWatch:
         else:
             self.missed += 1
         return self.missed >= self.misses
+
+
+# ======================================================================= section: state
+
+#: The launch modes a user can approve. One is named in every approval, so an approval for a
+#: menu-only run can never be mistaken for one that loads a save.
+APPROVAL_MODES = ("menu-only", "load-save", "new-game")
+
+#: The phases a recorded run moves through.
+PHASES = ("starting", "running", "closing")
+
+#: The state file's name inside `state_folder()`.
+STATE_FILE = "state.json"
+
+#: Seconds `update`/`clear` keep retrying a `PermissionError` (a just-written file is briefly
+#: locked by scanners on this machine) before giving the real error up.
+REPLACE_RETRY_S = 10.0
+
+#: Seconds between two attempts of that retry.
+REPLACE_PAUSE_S = 0.5
+
+
+class UnapprovedLaunch(ValueError):
+    """A launch was requested without a complete, valid approval record."""
+
+
+class UnfinishedRun(RuntimeError):
+    """A state file already exists: a game may still be running from an earlier run."""
+
+
+class CorruptState(RuntimeError):
+    """The state file exists but cannot be read as a run record. Never treated as 'no run'."""
+
+
+class StateFolderError(RuntimeError):
+    """The state folder cannot be located (the toolkit root is unknown)."""
+
+
+@dataclass(frozen=True)
+class Approval:
+    """The user's approval of ONE next launch, as given in chat and recorded verbatim."""
+
+    approved_by: str
+    mode: str
+    target: str
+    desktop: str
+    recorded_at: str
+
+
+@dataclass
+class RunState:
+    """What the driver knows about the run in flight; present on disk exactly while one is."""
+
+    run_id: str
+    approval: Approval
+    phase: str
+    process: ProcessInfo | None
+    started_at: str
+
+
+def require_approval(a: Approval | None) -> Approval:
+    """`a` itself when every field is non-blank and `mode` is an approved one, else raise."""
+    if a is None:
+        raise UnapprovedLaunch("no approval recorded: the user must approve this specific launch first")
+    for field in ("approved_by", "mode", "target", "desktop", "recorded_at"):
+        v = getattr(a, field)
+        if not isinstance(v, str) or not v.strip():
+            raise UnapprovedLaunch(f"approval field {field!r} is missing or blank")
+    if a.mode not in APPROVAL_MODES:
+        raise UnapprovedLaunch(f"approval mode {a.mode!r} is not one of {', '.join(APPROVAL_MODES)}")
+    return a
+
+
+def state_folder() -> Path:
+    """`<X4_TOOLKIT>/.x4run`, the toolkit root resolved through `_paths`; never a guessed cwd path."""
+    root = _paths.toolkit_root()
+    if root is None:
+        raise StateFolderError(
+            "cannot locate the toolkit root for the x4run state folder: set X4_TOOLKIT "
+            "(or run from an installed toolkit)")
+    return Path(root) / ".x4run"
+
+
+def _str(d: dict, key: str, where: str) -> str:
+    v = d.get(key)
+    if not isinstance(v, str):
+        raise ValueError(f"{where}.{key} is missing or not text")
+    return v
+
+
+def _process_from(d: object) -> ProcessInfo | None:
+    if d is None:
+        return None
+    if not isinstance(d, dict):
+        raise ValueError("process is not an object")
+    pid = d.get("pid")
+    if type(pid) is not int:  # bool is an int subclass: not a PID
+        raise ValueError("process.pid is missing or not an integer")
+    return ProcessInfo(pid=pid, name=_str(d, "name", "process"), path=_str(d, "path", "process"),
+                       started=_str(d, "started", "process"))
+
+
+def _state_from(data: object) -> RunState:
+    if not isinstance(data, dict):
+        raise ValueError(f"top level is {type(data).__name__}, not an object")
+    ap = data.get("approval")
+    if not isinstance(ap, dict):
+        raise ValueError("approval is missing or not an object")
+    approval = Approval(**{k: _str(ap, k, "approval") for k in
+                           ("approved_by", "mode", "target", "desktop", "recorded_at")})
+    if approval.mode not in APPROVAL_MODES:
+        raise ValueError(f"approval.mode {approval.mode!r} is not a known mode")
+    phase = _str(data, "phase", "state")
+    if phase not in PHASES:
+        raise ValueError(f"phase {phase!r} is not one of {', '.join(PHASES)}")
+    return RunState(run_id=_str(data, "run_id", "state"), approval=approval, phase=phase,
+                    process=_process_from(data.get("process")),
+                    started_at=_str(data, "started_at", "state"))
+
+
+def _encode(state: RunState) -> bytes:
+    # Encode FIRST: a failed encode must not leave a truncated file behind.
+    return json.dumps(asdict(state), indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+
+
+class StateStore:
+    """The recoverable run record: ONE file that exists exactly while a game may be running.
+
+    `begin` creates it exclusively (`O_EXCL`), so a second start cannot overwrite the record of
+    a run that may still be alive; `update` replaces it atomically; `read` raises
+    `CorruptState` on anything it cannot parse, because a record that cannot be read is a game
+    that cannot be accounted for; `clear` removes it once the run is accounted for.
+    `sleep`, `clock` and `replace` are injectable so the transient-lock retry is testable.
+    """
+
+    def __init__(self, folder: Path, *, sleep=time.sleep, clock=time.monotonic,
+                 replace=os.replace) -> None:
+        self.folder = Path(folder)
+        self.path = self.folder / STATE_FILE
+        self._sleep, self._clock, self._replace = sleep, clock, replace
+
+    def begin(self, state: RunState) -> None:
+        data = _encode(state)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+        except FileExistsError:
+            raise UnfinishedRun(
+                f"a run record already exists at {self.path}: a game may still be running "
+                f"from an earlier run. Recover with `x4run stop` (never delete the file by hand).") from None
+        try:
+            try:
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(fd, view):]
+            finally:
+                os.close(fd)
+        except BaseException:
+            # We created it, so a half-written record is ours to remove; left behind it
+            # would block every later start as a bogus 'unfinished run'.
+            try:
+                self.path.unlink()
+            except OSError:
+                pass
+            raise
+
+    def _retrying(self, op) -> None:
+        deadline = self._clock() + REPLACE_RETRY_S
+        while True:
+            try:
+                op()
+                return
+            except PermissionError:
+                if self._clock() >= deadline:
+                    raise
+                self._sleep(REPLACE_PAUSE_S)
+
+    def update(self, state: RunState) -> None:
+        if not self.path.exists():
+            raise FileNotFoundError(
+                f"no run record at {self.path}: `begin` must create it before `update`")
+        data = _encode(state)
+        tmp = self.folder / f"{STATE_FILE}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            self._retrying(lambda: self._replace(tmp, self.path))
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+
+    def read(self) -> RunState | None:
+        """The recorded run, or None when there is no file. Anything unreadable raises."""
+        try:
+            raw = self.path.read_bytes()
+        except FileNotFoundError:
+            return None
+        try:
+            return _state_from(json.loads(raw.decode("utf-8")))
+        except (ValueError, TypeError) as exc:  # UnicodeError and JSONDecodeError are ValueErrors
+            raise CorruptState(f"run record {self.path} is unreadable ({exc}); it was left in "
+                               f"place: inspect it, then recover with `x4run stop`") from exc
+
+    def clear(self) -> None:
+        def unlink() -> None:
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                pass
+        self._retrying(unlink)
