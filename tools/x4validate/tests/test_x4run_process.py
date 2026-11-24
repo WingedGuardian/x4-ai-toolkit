@@ -270,3 +270,14 @@ def test_the_recorded_process_is_found_among_others():
 def test_a_miss_threshold_below_one_is_refused(bad):
     with pytest.raises(ValueError):
         X.ExitWatch(make_proc(), misses=bad)
+
+
+def test_exit_watch_is_not_latched_so_observing_must_stop_at_the_first_true():
+    rec = make_proc(1001)
+    w = X.ExitWatch(rec)
+    assert [w.observe([]) for _ in range(3)] == [False, False, True]
+    # a failed read after True cannot lower the count: it stays True
+    assert w.observe(None) is True
+    # ... but a present read after True does, and it returns False again
+    assert w.observe([rec]) is False
+    assert w.observe(None) is False

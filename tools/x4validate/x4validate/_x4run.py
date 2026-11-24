@@ -14,7 +14,7 @@ an answer (non-zero exit, timeout, no PowerShell, malformed output); an EMPTY LI
 answer and only ever means "the query ran and found none". `_livedump.game_pids` returns
 None for the same split; here it is an exception, so a caller cannot forget to look.
 
-Sections: process, exit, state, start (below). Later sections are added to this same file.
+Sections: process, exit, state, start, close (below). Later sections are added to this same file.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ import re
 import subprocess
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -156,8 +156,8 @@ def read_processes(run=subprocess.run, *, name: str = "X4.exe", sleep=time.sleep
 
 # ========================================================================= section: exit
 
-#: Consecutive absent reads that end the watch. One miss is not an exit: a single read can
-#: land between a process list refresh and the game's own relaunch, so three are required.
+#: Consecutive absent reads that end the watch. One miss is not an exit: one read can be
+#: transiently wrong (the cause is unmeasured), so three in a row are required.
 EXIT_MISSES = 3
 
 
@@ -169,6 +169,9 @@ class ExitWatch:
     different process, so it counts as a miss. A failed read (`None`) is the third state: it
     neither counts as a miss nor resets the count, so it can never end the watch and never
     erase the evidence gathered so far.
+
+    Not latched: stop observing once it returns True. A later present read lowers the count
+    and returns False again, while a failed read after True leaves it True.
     """
 
     def __init__(self, recorded: ProcessInfo, misses: int = EXIT_MISSES) -> None:
@@ -597,3 +600,224 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
             f"record keeps phase starting with no process; close the game yourself or recover "
             f"with `x4run stop`.") from exc
     return state
+
+
+# ====================================================================== section: close
+
+#: Seconds the window-close request is given to end the game before it is terminated. The
+#: 2026-11-03 quit freeze showed a close request can be ignored for a long time: this is a
+#: default, not a measurement, and `hold_s` extends it while a crash dump is written.
+CLOSE_GRACE_S = 60.0
+
+#: Seconds to watch for the exit after the terminate request.
+KILL_WAIT_S = 30.0
+
+#: Seconds one close or terminate call may take.
+CLOSE_CALL_TIMEOUT_S = 30
+
+# The pid is a typed parameter passed as its OWN argv element after the script: it is never
+# interpolated into the script text, so no text can reach the script through it. (Verified
+# against the real PowerShell with a read-only script: `-Command "& {param([int]$ProcId) ...}" 123`
+# binds 123 to $ProcId.) Exit 3: no main window to ask. The close and terminate scripts are
+# separate and never both in one call.
+_CLOSE_SCRIPT = (
+    "& { param([int]$ProcId) $ErrorActionPreference='Stop'; "
+    "$p = Get-Process -Id $ProcId; if (-not $p.CloseMainWindow()) { exit 3 } }"
+)
+_TERMINATE_SCRIPT = (
+    "& { param([int]$ProcId) $ErrorActionPreference='Stop'; Stop-Process -Id $ProcId }"
+)
+
+
+@dataclass(frozen=True)
+class CloseReport:
+    """What `close` did. `closed` is True only when the recorded process is confirmed gone.
+
+    `method`: "already-gone" (it was not running; nothing was called), "window-close" (it
+    ended within the grace period), "terminate" (it ended after the terminate request) or
+    "unclosed". `steps` says in order what was done; `remaining` is every X4.exe seen by the
+    last read (unrelated ones too: they are only ever reported).
+    """
+
+    closed: bool
+    method: str
+    steps: tuple[str, ...]
+    remaining: tuple[ProcessInfo, ...]
+
+
+class _Reader:
+    """Reads all X4.exe; `None` for a failed read (the third state), `last` = the last good one."""
+
+    def __init__(self, run, sleep) -> None:
+        self._run, self._sleep = run, sleep
+        self.last: list[ProcessInfo] | None = None
+        self.error = ""
+
+    def __call__(self) -> list[ProcessInfo] | None:
+        try:
+            procs = read_processes(self._run, name=_GAME_EXE, sleep=self._sleep)
+        except ProcessReadError as exc:
+            self.error = str(exc)
+            return None
+        self.last = procs
+        return procs
+
+
+def _ask(run, script: str, pid: int) -> str | None:
+    """One hidden PowerShell call; None if it exited 0, else a short account of what went wrong."""
+    argv = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, str(pid)]
+    try:
+        res = run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                  timeout=CLOSE_CALL_TIMEOUT_S, creationflags=NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        return f"the call timed out after {CLOSE_CALL_TIMEOUT_S} s"
+    except (OSError, UnicodeError) as exc:
+        return f"the call could not be made: {exc}"
+    if res.returncode != 0:
+        return f"the call exited {res.returncode}: {(res.stderr or '').strip()[:200]}"
+    return None
+
+
+def _wait_for_exit(watch: ExitWatch, read, sleep, clock, deadline: float) -> bool:
+    """Poll until `watch` confirms the exit (True) or `deadline` has passed (False).
+
+    A read is always made AFTER the last sleep, so when this returns False the clock is at or
+    past `deadline`. It stops reading the moment `observe` returns True: ExitWatch is not latched.
+    """
+    while True:
+        sleep(max(0.0, min(POLL_INTERVAL_S, deadline - clock())))
+        if watch.observe(read()):
+            return True
+        if clock() >= deadline:
+            return False
+
+
+def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.sleep,
+          clock=time.monotonic, grace_s: float = CLOSE_GRACE_S, kill_wait_s: float = KILL_WAIT_S,
+          hold_s: float = 0.0) -> CloseReport:
+    """Close the RECORDED process, gently first; touch nothing else.
+
+    A failed read, close call or terminate call is reported in the result, never raised; a
+    record the store rejects (`InvalidState`) or cannot write still raises, before any call.
+
+    Order: phase "closing" (a record the store would reject raises `InvalidState` before any
+    call) -> read all X4.exe, twice running (the second read is the start-time re-check right
+    before the request) -> a hidden window-close request for that pid -> watch up to
+    `grace_s + hold_s` -> only if it is still there, one more read, and a hidden terminate
+    request for that pid if it still matches on all four fields -> watch up to `kill_wait_s`
+    -> a last read, whose X4.exe processes are `remaining`.
+
+    Only a process equal to the recorded one on pid, name, path AND start time is ever asked
+    to close or terminated; a read that fails is never "gone" (it makes no call at all if it
+    comes before the request). The terminate is never made before `grace_s + hold_s` has
+    elapsed. `closed` needs `ExitWatch` to confirm the exit; the run record is cleared then
+    and KEPT otherwise. A record with no process (phase "starting") is never closed: it is
+    reported and kept. The remaining gap is the few milliseconds between the last start-time
+    read and the terminate itself.
+    """
+    for label, value in (("grace_s", grace_s), ("kill_wait_s", kill_wait_s), ("hold_s", hold_s)):
+        if not value >= 0:  # also refuses NaN
+            raise ValueError(f"{label} must be a number of seconds >= 0, got {value!r}")
+    t0 = clock()
+    steps: list[str] = []
+
+    def note(msg: str) -> None:
+        steps.append(f"t+{clock() - t0:.0f}s {msg}")
+
+    store.update(replace(state, phase="closing"))  # InvalidState / OSError propagate
+    note("run record set to phase closing")
+    read = _Reader(run, sleep)
+    rec = state.process
+
+    def report(closed: bool, method: str, remaining) -> CloseReport:
+        return CloseReport(closed, method, tuple(steps), tuple(remaining))
+
+    if rec is None:
+        procs = read()
+        note("no process was recorded (the run was still starting): nothing was closed or "
+             "terminated; the run record was KEPT")
+        if procs is None:
+            note(f"the {_GAME_EXE} read failed, so what is running is unknown: {read.error}")
+        return report(False, "unclosed", procs or ())
+    if type(rec.pid) is not int or rec.pid < 1:
+        note(f"the recorded pid {rec.pid!r} is not a positive integer: nothing was closed or "
+             f"terminated; the run record was KEPT")
+        return report(False, "unclosed", ())
+
+    def finish_gone(method: str, remaining) -> CloseReport:
+        note(f"the recorded process (pid {rec.pid}) is gone; {_clear_note(store)}")
+        return report(True, method, remaining)
+
+    def keep(why: str, remaining) -> CloseReport:
+        note(f"{why}; the run record was KEPT (phase closing)")
+        return report(False, "unclosed", remaining)
+
+    # --- 1. find it: present on two reads running (the second is the start-time re-check)
+    watch = ExitWatch(rec)
+    deadline = clock() + max(kill_wait_s, POLL_INTERVAL_S * (EXIT_MISSES + 1))
+    present_reads = 0
+    while True:
+        procs = read()
+        exited = watch.observe(procs)
+        if procs is not None and rec in procs:
+            present_reads += 1
+            if present_reads >= 2:
+                break
+            continue  # re-read at once: the request is made only on a fresh match
+        present_reads = 0
+        if exited:
+            note("the recorded process is not running (confirmed by repeated reads); no close "
+                 "or terminate call was made")
+            return finish_gone("already-gone", read.last or ())
+        if clock() >= deadline:
+            return keep("could not establish whether the recorded process is running "
+                        f"(last read error: {read.error or 'none'}); no close or terminate "
+                        "call was made", read.last or ())
+        sleep(POLL_INTERVAL_S)
+
+    # --- 2. ask the window to close, then give it the grace period (plus any hold)
+    problem = _ask(run, _CLOSE_SCRIPT, rec.pid)
+    note(f"window-close request for pid {rec.pid} " + (f"failed: {problem}" if problem else "sent"))
+    watch = ExitWatch(rec)
+    if _wait_for_exit(watch, read, sleep, clock, clock() + grace_s + hold_s):
+        note(f"the recorded process ended within the grace period ({grace_s + hold_s:g} s)")
+        method = "window-close"
+    else:
+        note(f"still running after {grace_s + hold_s:g} s (grace {grace_s:g} s + hold {hold_s:g} s)")
+        # --- 3. terminate, only the recorded process, only after one more start-time check
+        verdict = ""
+        recheck_deadline = clock() + max(kill_wait_s, POLL_INTERVAL_S * (EXIT_MISSES + 1))
+        while True:
+            procs = read()
+            if watch.observe(procs):
+                verdict = "exited"
+            elif procs is not None:
+                verdict = "present" if rec in procs else "changed"
+            elif clock() >= recheck_deadline:
+                verdict = "unreadable"
+            if verdict:
+                break
+            sleep(POLL_INTERVAL_S)
+        if verdict == "unreadable":
+            return keep("the start-time re-check before the terminate could not be read, so "
+                        "nothing was terminated", read.last or ())
+        method = "window-close"
+        if verdict == "present":
+            problem = _ask(run, _TERMINATE_SCRIPT, rec.pid)
+            note(f"terminate request for pid {rec.pid} " + (f"failed: {problem}" if problem else "sent"))
+            method = "terminate"
+        elif verdict == "changed":
+            note("the recorded process no longer matches on a re-read: nothing was terminated")
+        if verdict != "exited" and not _wait_for_exit(watch, read, sleep, clock, clock() + kill_wait_s):
+            final = read()
+            return keep(f"the recorded process did not end within {kill_wait_s:g} s",
+                        final if final is not None else (read.last or ()))
+
+    # --- 4. a last read: closed only if it agrees (a contradiction is never reported closed)
+    final = read()
+    if final is None:
+        note(f"the final {_GAME_EXE} read failed, so `remaining` is unknown: {read.error}")
+        return finish_gone(method, ())
+    if rec in final:
+        return keep("the recorded process is present again on the final read", final)
+    return finish_gone(method, final)

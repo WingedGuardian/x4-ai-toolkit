@@ -10,18 +10,27 @@ executes anything.
   fake.calls             every call seen: `Call(argv, creationflags, timeout, kw)` (kw: the other keywords, sorted pairs), in order
   fake.table             the process table (a list of `ProcessInfo`); mutate it freely
 
-HOW A CALL IS CLASSIFIED. By argv, in this order: a first element ending `steam.exe` is a
-Steam launch; a PowerShell script mentioning `CloseMainWindow` is a window-close request, one
-mentioning `Stop-Process` (or a `taskkill` argv) is a terminate request; a script mentioning
-`Get-CimInstance` is a process read. Anything else raises, so a test never silently talks to
-a world the fake does not model.
+HOW A CALL IS CLASSIFIED. By argv, independent of any order: a first element ending
+`steam.exe` is a Steam launch; a PowerShell script mentioning `CloseMainWindow` is a
+window-close request, one mentioning `Stop-Process` (or a `taskkill` argv) is a terminate
+request; a script mentioning `Get-CimInstance` is a process read. A call that is two of these
+at once (a script with both `CloseMainWindow` and `Stop-Process`), or none, raises, so a test
+never silently talks to a world the fake does not model.
 
 SCRIPTING. Reads: `fail_reads(n)`, `malformed_reads(n)`, `timeout_reads(n)` queue n bad
 answers (`good_reads(n)` queues n normal ones, to place a bad one later), consumed one per read before the table answers again. Launch, close and terminate
 each call a settable hook (`on_launch`, `on_close`, `on_terminate`) with the argv and return
-a `(returncode, stdout)` pair; the default records the call and changes nothing. A hook may
+a `(returncode, stdout)` pair; the default records the call and changes nothing (so a
+window-close request is IGNORED FOREVER unless scripted otherwise). A hook may
 raise (`OSError`, `subprocess.TimeoutExpired`) to model a call that fails. `launch_spawns(*procs,
-after=s)` scripts a launch after which new game processes appear `s` virtual seconds later. Time-driven
+after=s)` scripts a launch after which new game processes appear `s` virtual seconds later.
+`close_exits_after(s)` makes a window-close request remove that process `s` virtual seconds
+later; `terminate_removes()` makes a terminate request remove it at once. Both take the pid
+from the request's LAST argv element, which must be a plain integer (the module under test
+passes the pid as its own argument, never inside the script text), and remove the process
+with that pid from the table. `fake.close_calls` / `fake.terminate_calls` list those calls.
+`on_read`, if set, is `fn(fake, n)` run before the n-th process read (0-based) is answered,
+so a table can change between two reads. Time-driven
 changes use `at(t, fn)`: `fn(fake)` runs once when the virtual clock reaches `t` (checked on
 every `sleep` and every `run`), e.g. a game process that appears five seconds after launch.
 
@@ -67,6 +76,8 @@ class FakeSystem:
         self.on_launch = self._default_hook
         self.on_close = self._default_hook
         self.on_terminate = self._default_hook
+        self.on_read = None
+        self._reads = 0
 
     # ---------------------------------------------------------------- virtual clock
     def clock(self) -> float:
@@ -119,6 +130,38 @@ class FakeSystem:
     def _default_hook(argv):
         return 0, ""
 
+    @staticmethod
+    def _target_pid(argv) -> int:
+        last = argv[-1] if argv else ""
+        assert last.isdigit(), f"a close/terminate request must end with the pid as its own argument: {argv!r}"
+        return int(last)
+
+    def _remove_pid(self, pid: int) -> None:
+        self.table = [p for p in self.table if p.pid != pid]
+
+    def close_exits_after(self, seconds: float) -> None:
+        """A window-close request makes the targeted process exit `seconds` virtual seconds later."""
+        def hook(argv):
+            pid = self._target_pid(argv)
+            self.at(self.now + seconds, lambda f: f._remove_pid(pid))
+            return 0, ""
+        self.on_close = hook
+
+    def terminate_removes(self) -> None:
+        """A terminate request removes the targeted process at once."""
+        def hook(argv):
+            self._remove_pid(self._target_pid(argv))
+            return 0, ""
+        self.on_terminate = hook
+
+    @property
+    def close_calls(self) -> list[Call]:
+        return [c for c in self.calls if self._classify(c.argv) == "close"]
+
+    @property
+    def terminate_calls(self) -> list[Call]:
+        return [c for c in self.calls if self._classify(c.argv) == "terminate"]
+
     # ---------------------------------------------------------------- the runner
     def run(self, argv, **kw):
         argv = tuple(str(a) for a in argv)
@@ -137,17 +180,24 @@ class FakeSystem:
     def _classify(argv: tuple[str, ...]) -> str:
         exe = argv[0].replace("\\", "/").rsplit("/", 1)[-1].lower() if argv else ""
         text = " ".join(argv)
+        kinds = set()
         if exe == "steam.exe":
-            return "launch"
-        if exe == "taskkill" or exe == "taskkill.exe" or "Stop-Process" in text:
-            return "terminate"
+            kinds.add("launch")
+        if exe in ("taskkill", "taskkill.exe") or "Stop-Process" in text:
+            kinds.add("terminate")
         if "CloseMainWindow" in text:
-            return "close"
+            kinds.add("close")
         if "Get-CimInstance" in text:
-            return "read"
-        raise AssertionError(f"FakeSystem does not model this call: {argv!r}")
+            kinds.add("read")
+        if len(kinds) != 1:
+            raise AssertionError(f"FakeSystem cannot classify this call as exactly one kind "
+                                 f"({sorted(kinds) or 'none'}): {argv!r}")
+        return kinds.pop()
 
     def _answer_read(self, argv, kw):
+        n, self._reads = self._reads, self._reads + 1
+        if self.on_read is not None:
+            self.on_read(self, n)
         step = self._read_script.pop(0) if self._read_script else "table"
         if step == "timeout":
             raise subprocess.TimeoutExpired(argv, kw.get("timeout") or 0)
