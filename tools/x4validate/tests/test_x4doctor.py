@@ -1043,6 +1043,20 @@ def test_a_missing_PowerShell_matcher_is_FAIL(sandbox):
     assert r.status == doc.FAIL and "PowerShell" in r.detail, r
 
 
+def test_a_missing_no_detached_launch_registration_is_FAIL(sandbox):
+    """A customised settings.json keeps its own hooks and never receives the newer group: the files are on disk but the
+    guard is not registered. Doctor must say so, not report OK."""
+    p = sandbox.root / ".claude" / "settings.json"
+    s = json.loads(p.read_text(encoding="utf-8"))
+    kept = [g for g in s["hooks"]["PreToolUse"]
+            if not any("no-detached-launch" in (h.get("command") or "") for h in g.get("hooks") or [])]
+    assert len(kept) == len(s["hooks"]["PreToolUse"]) - 1   # the shipped settings do register it, exactly once
+    s["hooks"]["PreToolUse"] = kept
+    p.write_text(json.dumps(s), encoding="utf-8")
+    r = {r.id: r for r in doc.check_claude(sandbox.ctx())}["claude.wiring"]
+    assert r.status == doc.FAIL and "Monitor" in r.detail and "not registered" in r.detail, r
+
+
 def test_a_wired_script_that_is_MISSING_is_FAIL(sandbox):
     (sandbox.root / ".claude" / "hooks" / "protect-files.sh").unlink()
     r = {r.id: r for r in doc.check_claude(sandbox.ctx())}["claude.wiring"]

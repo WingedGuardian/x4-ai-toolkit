@@ -1066,7 +1066,8 @@ def check_codex(ctx: Ctx) -> list[Check]:
 
 #: PreToolUse matchers the shipped settings.json registers (READ 2026-10-02). Each must be
 #: present, and each wired script must exist.
-CLAUDE_MATCHERS = ("Bash", "PowerShell", "Edit|Write|NotebookEdit")
+CLAUDE_MATCHERS = ("Bash", "PowerShell", "Edit|Write|NotebookEdit",
+                   "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Monitor")   # the last: no-detached-launch.sh
 
 
 def _read_json(p: Path):
@@ -1099,7 +1100,9 @@ def check_claude(ctx: Ctx) -> list[Check]:
                     if not Path(m.group(1)).is_file():
                         absent.append(Path(m.group(1)).name)
         if missing:
-            return FAIL, "PreToolUse has no matcher for %s: those tools run UNGUARDED" % ", ".join(missing)
+            return FAIL, ("PreToolUse has no matcher for %s: that guard is not registered, so those tool calls run "
+                          "without it (a customised settings.json keeps its own hooks: merge the shipped groups in)"
+                          % ", ".join(missing))
         if absent:
             return FAIL, "wired hook script(s) missing: %s -- the hook fails, and Claude runs the tool" % ", ".join(absent)
         return OK, "%d PreToolUse matcher(s), %d wired script(s) present" % (len(pre), n)
