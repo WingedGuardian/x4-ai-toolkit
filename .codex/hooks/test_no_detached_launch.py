@@ -4,6 +4,7 @@ Run: python -m pytest .claude/hooks/test_no_detached_launch.py (the repo pytest 
 this folder's file by name). HOOK_PYTHON="py -3.12" runs the hook under another interpreter than pytest."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -102,7 +103,7 @@ DENY = {
 ALLOW = {
     "prose-docstring": W('"""Windows: a hidden console, never CREATE_NO_WINDOW | DETACHED_PROCESS."""\nx = 1\n'),
     "string-mention": W('msg = "never use DETACHED_PROCESS"\n'),
-    # user 2026-11-24: deliberately visible terminal work is allowed; only detaching (the spam) is refused
+    # deliberately visible terminal work is allowed; only detaching (the spam) is refused
     "visible-new-console": W("Popen(c, creationflags=subprocess.CREATE_NEW_CONSOLE)\n"),
     "visible-new-console-literal": W("Popen(c, creationflags=0x10)\n"),
     "visible-console-startupinfo-none": W("Popen(c, creationflags=CREATE_NEW_CONSOLE, startupinfo=None)\n"),
@@ -265,6 +266,9 @@ def test_reason_is_generic():
     reason = json.loads(run("Write", {"file_path": "x.py", "content": INCIDENT}).stdout)["hookSpecificOutput"][
         "permissionDecisionReason"]
     assert "0x08000000" in reason and "DETACHED" in reason
+    # the public text names no private rule file and carries no date (a re-added incident note must turn this red)
+    assert "CLAUDE.md" not in reason and "No visible helper" not in reason
+    assert not re.search(r"20\d\d-\d\d-\d\d", reason), reason
 
 
 # ---- the bash wrapper (the registered command) ----------------------------------------------------------------------

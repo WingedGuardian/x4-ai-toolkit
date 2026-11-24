@@ -28,6 +28,18 @@ string contents blanked to the same length):
 - a creationflags value holding an integer literal with bit 0x8;
 - Node `detached: true` / `.detached = true` (libuv sets DETACHED_PROCESS on Windows).
 Unreadable input fails OPEN; the refusal is a JSON deny in Claude Code's PreToolUse shape.
+
+Known limits (measured by the 2026-11-24 port review; documented, not fixed here):
+- NOT caught: an inline script after a QUOTED or VARIABLE interpreter (`"$PY" -c ...`, `$PY -c ...`,
+  `& "C:\\...\\python.exe" -c ...`); only a bare interpreter name before -c/-e/-Command is matched.
+- NOT caught: code fed on stdin without a heredoc or here-string (`echo "..." | python -`, `python <<< "..."`,
+  `node -p`).
+- NOT caught: renamed flag constants, code built inside Python string literals, and helpers started with `pythonw`
+  or a `.pyw` (also console-less, so their console children pop windows the same way).
+- Known false positives (rare): code that names the flag as data (a constants table `NAME = 0x8`, a test asserting
+  the flag is absent, a blocklist holding it), a `creationflags=` value computed from a call holding an 8, and an
+  Edit to a shell script judges its whole 400-line window, so a script that already holds a bad launch can refuse
+  an unrelated edit nearby. A refusal names the statement; rewrite it or build the token from parts.
 """
 import io
 import json
