@@ -165,6 +165,20 @@ jobs:
           X4_MAX_TRANSLATOR_SKIPS: ${{ matrix.os == 'windows-latest' && '0' || '3' }}
         run: python .claude/hooks/test_audit0924_hooks.py
 
+      # The no-detached-launch guard: its tests and its mutation gate. pytest's `testpaths` is `tests`, which does
+      # NOT reach .claude/hooks, so the file is named here (a test file left in that folder without a step runs
+      # nowhere: test_python_durable_scope.py is one). `uv run --project` gives it the locked venv's pytest.
+      # The gate runs ~65 mutants on copies, each a full run of the test file (the unmutated copy must pass first).
+      - name: no-detached-launch tests
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: uv run --frozen --project tools/x4validate python -m pytest -q -p no:cacheprovider .claude/hooks/test_no_detached_launch.py
+
+      - name: no-detached-launch mutation gate (every mutant must turn the tests red)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: uv run --frozen --project tools/x4validate python scripts/verify-no-detached-launch.py
+
       - name: Hook E2E probe suite
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: bash
