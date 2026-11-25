@@ -173,7 +173,7 @@ jobs:
       # The no-detached-launch guard: its tests and its mutation gate. pytest's `testpaths` is `tests`, which does
       # NOT reach .claude/hooks, so the file is named here (a test file left in that folder without a step runs
       # nowhere: test_python_durable_scope.py is one). `uv run --project` gives it the locked venv's pytest.
-      # The gate runs 84 mutants on copies, each a full run of the test file (the unmutated copy must pass first).
+      # The gate runs 83 mutants on copies, each a full run of the test file (the unmutated copy must pass first).
       - name: no-detached-launch tests
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: bash

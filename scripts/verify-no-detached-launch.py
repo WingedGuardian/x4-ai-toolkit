@@ -139,7 +139,10 @@ M = [
     ("multiedit-covered", HOOK, '    edits = [inp] if tool == "Edit" else [e for e in (inp.get("edits") or []) if isinstance(e, dict)]',
      '    edits = [inp] if tool == "Edit" else []'),
     ("code-files-only", HOOK, "    if not low.endswith(CODE_FILES):", "    if False:"),
-    ("backslash-paths", HOOK, 'or "").replace("' + BS + BS + '", "/")', 'or "")'),
+    # No "backslash-paths" mutant: the hook turns "\" into "/" in a path (a leftover of the Skyrim copy's
+    # self-path exemption, which this copy does not have), but every use of the path here is an
+    # `endswith` on the extension or an open() that accepts either slash, so removing it changes no
+    # verdict. CI measured it SURVIVING 2026-11-25: an equivalent mutant, not a missing test.
     ("lowercase-ext", HOOK, "    low = path.lower()", "    low = path"),
     # protocol
     ("bom-read", HOOK, 'raw.decode("utf-8-sig", "replace")', 'raw.decode("utf-8", "replace")'),
