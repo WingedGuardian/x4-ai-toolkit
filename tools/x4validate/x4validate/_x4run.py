@@ -406,7 +406,7 @@ class StateStore:
             try:
                 self.path.unlink()
             except OSError:
-                pass
+                pass  # silent-ok: best-effort cleanup of our own half-written file; the original error is re-raised below
             raise
 
     def _retrying(self, op) -> None:
@@ -436,7 +436,7 @@ class StateStore:
             try:
                 tmp.unlink()
             except OSError:
-                pass
+                pass  # silent-ok: best-effort cleanup of our own temp file; the original error is re-raised below
             raise
 
     def read(self) -> RunState | None:
@@ -444,7 +444,7 @@ class StateStore:
         try:
             raw = self.path.read_bytes()
         except FileNotFoundError:
-            return None
+            return None  # silent-ok: an absent record is the defined "no run recorded" answer; unreadable ones raise below
         try:
             return _state_from(json.loads(raw.decode("utf-8")))
         except (ValueError, TypeError) as exc:  # UnicodeError and JSONDecodeError are ValueErrors
@@ -457,7 +457,7 @@ class StateStore:
             try:
                 self.path.unlink()
             except FileNotFoundError:
-                pass
+                pass  # silent-ok: clearing an already-absent record is the goal state; any other error propagates
         self._retrying(unlink)
 
 

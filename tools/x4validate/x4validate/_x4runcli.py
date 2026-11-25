@@ -259,7 +259,7 @@ def _starting_record(store: StateStore) -> bool:
     try:
         state = store.read()
     except (CorruptState, OSError):
-        return False
+        return False  # silent-ok: only selects an extra hint; both callers treat False as "not confirmed closed" / no extra hint, the safe default
     return state is not None and state.process is None
 
 
