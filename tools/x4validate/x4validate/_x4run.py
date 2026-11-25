@@ -285,6 +285,7 @@ def state_folder(*, environ=None, platform: str | None = None, home=None) -> Pat
     per-checkout path: anything that cannot be decided (an unset or relative location) raises
     `StateFolderError`. `environ`, `platform` and `home` are seams for tests.
     """
+    # env-ok: a per-user OS location (%LOCALAPPDATA%) or the explicit $X4RUN_STATE_DIR override, not toolkit configuration, so the config-file layer of `_paths` does not apply
     env = os.environ if environ is None else environ
     plat = sys.platform if platform is None else platform
     override = env.get(STATE_DIR_ENV, "")
@@ -574,8 +575,8 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
         argv = [str(steam_exe(game_root)), "-applaunch", _paths.STEAM_APPID]
     except IndexError:
         raise before_launch(
-            f"cannot find the Steam folder above the game root {str(game_root)!r} (expected "
-            f"<Steam>/steamapps/common/<game>). Refused: nothing was started and no run "
+            f"cannot find the Steam folder above the game root {str(game_root)!r} (the game "
+            f"root must sit three folders below it). Refused: nothing was started and no run "
             f"record was written.") from None
     own_exe = _norm_exe(Path(game_root) / _GAME_EXE)
 

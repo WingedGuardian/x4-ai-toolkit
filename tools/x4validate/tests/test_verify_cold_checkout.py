@@ -61,7 +61,7 @@ set -eu
 case "$*" in
   *"_paths"*)
     if env | grep -q '^X4_'; then echo 'unexpected inherited config' >&2; exit 9; fi
-    if [ "${COLD_WARM_TEST:-}" = 1 ]; then echo 'warm|None|None'; else echo 'None|None|None'; fi
+    if [ "${COLD_WARM_TEST:-}" = 1 ]; then echo 'warm|None|None|None'; else echo 'None|None|None|None'; fi
     ;;
   *"pytest"*)
     if [ "${COLD_ARCHIVE:-}" = 1 ]; then
