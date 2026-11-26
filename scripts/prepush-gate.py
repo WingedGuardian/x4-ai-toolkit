@@ -546,7 +546,9 @@ def main(argv=None) -> int:
         print("   pass record NOT written: " + why_not)
     else:
         write_record(tree0, base_sha, tools, rel, "skipped" if skip_suites else "ran",
-                     reused[0]["tree"] if reused else None, g.seconds, ci_only)
+                     reused[0]["tree"] if reused else None, g.seconds,
+                     # the trail stays complete across reuse: what an earlier record left to CI is still left to CI
+                     sorted(set(ci_only) | set(reused[0].get("ci_only", []) if reused else [])))
     return 0
 
 

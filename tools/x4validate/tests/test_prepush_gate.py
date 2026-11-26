@@ -617,12 +617,12 @@ def test_changed_file_step_reports_durations(recording, capsys):
     assert r.checks[name] is not None, "the step must read pytest's output to name the slow files"
     lines = ["==== slowest 25 durations ====", "10.00s call     tests/test_big.py::test_x",
              "5.00s setup    tests/test_big.py::test_y", "7.50s call     tests/test_mid.py::test_z",
-             "0.01s teardown tests/test_big.py::test_x", "", "5 passed in 30.00s"]
+             "1.00s teardown tests/test_big.py::test_x", "", "5 passed in 30.00s"]
     problems = r.checks[name](subprocess.CompletedProcess(cmd, 0, stdout="\n".join(lines) + "\n", stderr=""))
     assert problems == [], "reporting durations is never a failure"
     out = capsys.readouterr().out
     assert out.index("tests/test_big.py") < out.index("tests/test_mid.py"), out
-    assert "15.0s" in out and "tests/test_big.py" in out, "a file's items add up: 10.00 + 5.00 + 0.01"
+    assert "16.0s" in out and "tests/test_big.py" in out, "a file's items add up: setup, call and teardown"
 
 
 def test_the_ten_slowest_files_are_the_ten_printed():
@@ -708,3 +708,18 @@ def test_ci_only_rows_carry_a_measurement():
         assert (REPO / rel).is_file(), rel
         assert re.search(r"MEASURED 20\d\d-\d\d-\d\d", why), (rel, why)
         assert re.search(r"\b\d[\d,]* ?s\b", why), (rel, why)
+
+
+def test_a_reused_record_carries_its_ci_only_files_forward(recording):
+    """The trail of what CI alone checked stays complete across reuse: a later record names the files an earlier one
+    left to CI too, not only this run's."""
+    gate, r, go, repo = recording
+    _commit(repo, INSTALL_TESTS, "assert True" + chr(10))
+    assert go() == 0
+    first = json.loads(_passes(repo)[-1].read_text(encoding="utf-8"))
+    assert first["ci_only"] == [INSTALL_TESTS]
+    _commit(repo, "docs/note.md")
+    assert go() == 0
+    rec = next(x for x in (json.loads(f.read_text(encoding="utf-8")) for f in _passes(repo)) if x["reused_from"])
+    assert rec["reused_from"] == first["tree"], "the second run reused the first record"
+    assert rec["ci_only"] == [INSTALL_TESTS], rec
