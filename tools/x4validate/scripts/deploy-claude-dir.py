@@ -467,7 +467,11 @@ def budget_report(root: Path) -> list[str]:
 #: The VERIFIER is a guard source too (review I3, 2026-11-16): an uncommitted edit lowering test-hooks.sh's expected
 #: count, or adding an early `exit 0`, would otherwise pass; gitbash.py picks the bash it runs under, modding_harness
 #: is used by the hooks at runtime and copied by the suite, and this script makes the decision.
-GUARD_SOURCES = (".claude/hooks", ".claude/settings.json", ".codex", "agent/guards", "tools/x4_harness",
+#: Every GENERATED guard path the pre-push gate watches (`prepush-gate.py` GUARD_PATHS, intersected with the generator's
+#: OWNED list) is listed too (4.3.1): `.opencode/hooks`, the OpenCode plugin and `tools/agent-harness.py` were missing, so a
+#: dirty edit to them did not stop a deploy. `tests/test_deploy_guard_sources_cover_generated_guards.py` derives the check.
+GUARD_SOURCES = (".claude/hooks", ".claude/settings.json", ".codex", ".opencode/hooks", ".opencode/plugins/x4guard.js",
+                 "agent/guards", "tools/x4_harness", "tools/agent-harness.py",
                  "tools/modding_harness", "scripts/test-hooks.sh", "scripts/gitbash.py",
                  "tools/x4validate/scripts/deploy-claude-dir.py")
 
