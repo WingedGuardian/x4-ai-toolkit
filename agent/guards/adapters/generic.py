@@ -257,7 +257,9 @@ def main(argv=None):
                   "transactions": []}
     except (OSError, ValueError, RecursionError, UnicodeError, TimeoutError) as exc:
         if args.command in release_cli.COMMANDS:
-            # A refused or failed update fetch says why, and fails; nothing installed has changed.
+            # A refused or failed update-check/update-fetch says why, and exits 2 (the core's `exit_code` for a refusal or an
+            # OSError/ValueError): they only read, download aside and unpack aside, so nothing installed has changed, even
+            # when a download dies half way. (1 is for the staged update-apply that fails after it began replacing files.)
             output, exit_status = {"ok": False, "error": str(exc), "installed_changed": False}, 2
         elif args.command in upgrade_cli.COMMANDS:
             output, exit_status = upgrade_cli.failure(args.command, exc, "generic X4 entry failed")

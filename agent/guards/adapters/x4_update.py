@@ -31,14 +31,18 @@ _RELEASE_HEADING = re.compile(r"##[ \t]+(v\d+(?:\.\d+){1,3})(?=[ \t]|$)")
 
 
 def installed_version(root):
-    """The release this install came from: BUILD-INFO's `version=`; else the installed CHANGELOG's FIRST `## ` heading
-    when it reads `vX.Y.Z` (a release installed before 4.3.1 has no BUILD-INFO). None when neither says: a
-    `## Unreleased` first heading, or a git checkout (nothing to compare against, so never ask GitHub)."""
+    """The release this install came from, or None when there is nothing to compare against.
+
+    A git checkout is None whatever else is in it: a development tree is updated with git, and a stray BUILD-INFO
+    (gitignored, so easily left behind by a copy) must not make it look like a release, because the daily check would
+    offer updates and the guarded update would aim at a git working tree. Otherwise BUILD-INFO's `version=`; else the
+    installed CHANGELOG's FIRST `## ` heading when it reads `vX.Y.Z` (a release installed before 4.3.1 has no
+    BUILD-INFO, and a dry-run build's has an empty `version=`). None for a `## Unreleased` first heading."""
+    if (Path(root) / ".git").exists():
+        return None
     version = release.build_info(root).get("version")
     if release.parse_version(version):
         return version
-    if (Path(root) / ".git").exists():
-        return None
     try:
         with (Path(root) / "CHANGELOG.md").open("rb") as stream:
             head = stream.read(64 * 1024).decode("utf-8", "replace")

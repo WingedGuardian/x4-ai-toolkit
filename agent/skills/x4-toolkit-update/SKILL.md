@@ -11,7 +11,7 @@ suggested one.
 
 The commands are subcommands of the toolkit's harness entry; run them from the install folder:
 `python {{TOOLKIT}}/tools/agent-harness.py <command> [--installed-root <folder>]`. Each prints one JSON object and
-sets the exit code (`0` ok, `1` something went wrong after work began, `2` refused before anything changed).
+sets the exit code. `update-check` exits `0` always (offline, off and "no newer release" are results, not errors). `update-fetch` exits `0` when the release was downloaded, verified and unpacked aside, and `2` when it failed for any reason (no newer release, a digest or commit mismatch, a download that died half way): it only reads, downloads and unpacks away from the install, so a `2` always means nothing installed has changed. For the staged commands below: `0` ok, `1` the update failed after it began replacing files (rolled back, or the failed marker was written), `2` refused before anything changed.
 
 ## Which commands exist in this install
 
@@ -30,8 +30,8 @@ hand from the release page (the README's "Updating" section, once present) -- ne
      `MODDING_HARNESS_UPDATE_CHECK=off`, or `{"v": 1, "check": false}` in `.modding-agent-harness/updates.json`).
      Say so; do not turn it on for the user and do not work around it.
    - `status: unreachable` -- GitHub could not be reached. Offline is normal; say so and stop.
-   - `installed: null` -- this install has no release to compare with (a git checkout, or an install with neither a
-     `BUILD-INFO` file nor a release heading in `CHANGELOG.md`). Say so; a checkout is updated with git.
+   - `installed: null` -- this install has no release to compare with: a git checkout (always, even if a stray
+     `BUILD-INFO` sits in it), or an install with neither a `BUILD-INFO` file nor a release heading in `CHANGELOG.md`. Say so; a checkout is updated with git.
    - `update_available: false` -- tell the user they are current.
 2. **Stage it** (`update-stage`; *arrives with the guarded-update commands*). It downloads the release, verifies it
    against the digest GitHub publishes, and builds a review of every file that would change. It installs nothing and

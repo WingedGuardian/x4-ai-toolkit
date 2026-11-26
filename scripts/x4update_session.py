@@ -88,10 +88,39 @@ def background_check(root=TOOLKIT, environ=None, fetch=None, now=None):
         return "failed: " + type(exc).__name__
 
 
+#: A hung `note` (a stuck read of a network drive, a wedged import) must never hold the session's banner, and a hung
+#: `check` must not live on. Seconds; X4_UPDATE_NOTE_TIMEOUT_S overrides `note`'s (the tests' lever).
+NOTE_TIMEOUT_S = 10.0
+CHECK_TIMEOUT_S = 120.0
+
+
+def _arm_watchdog(mode):
+    """Give up (exit 0; for `note`, say so in one line) when this process is still running after its time limit."""
+    import threading
+    limit = CHECK_TIMEOUT_S
+    if mode == "note":
+        limit = NOTE_TIMEOUT_S
+        try:
+            limit = float(os.environ.get("X4_UPDATE_NOTE_TIMEOUT_S", limit))
+        except ValueError:
+            pass
+
+    def give_up():
+        if mode == "note":
+            sys.stdout.write("[x4 update] the update note timed out and was skipped.\n")
+            sys.stdout.flush()
+        os._exit(0)
+    timer = threading.Timer(limit, give_up)
+    timer.daemon = True
+    timer.start()
+
+
 def main(argv):
     if len(argv) != 1 or argv[0] not in ("note", "check"):
         print(__doc__, file=sys.stderr)
         return 2
+    if __name__ == "__main__":
+        _arm_watchdog(argv[0])
     try:
         if argv[0] == "note":
             text = note()

@@ -120,8 +120,23 @@ def test_installed_version_is_none_for_unreleased_a_git_checkout_and_nothing_at_
     assert x4u.installed_version(root) == "4.3.0"                   # control: the same file with the heading first
     (root / ".git").mkdir()
     assert x4u.installed_version(root) is None                      # a checkout: nothing to compare, whatever it reads
-    (root / "BUILD-INFO").write_text("version=4.3.2\n", encoding="utf-8")
-    assert x4u.installed_version(root) == "4.3.2"                   # BUILD-INFO is the release's own word
+
+
+def test_a_git_checkout_is_never_a_release_even_with_a_stray_build_info(tmp_path):
+    """M1 (6b review): BUILD-INFO is gitignored, so a copy can leave one in a development tree. It must not make the tree
+    look like a release (daily checks, update offers, a guarded update aimed at a working tree). The twin: the same files
+    without `.git` ARE that release. `.git` as a FILE (a worktree) counts the same."""
+    root = _install(tmp_path, "4.3.2")
+    assert x4u.installed_version(root) == "4.3.2"                   # twin: a release install reads its BUILD-INFO
+    (root / ".git").mkdir()
+    assert x4u.installed_version(root) is None
+    (root / ".git").rmdir()
+    (root / ".git").write_text("gitdir: ../elsewhere\n", encoding="utf-8")
+    assert x4u.installed_version(root) is None
+    # and none of the update machinery treats it as one
+    assert sess.background_check(root, environ=_clean_env(), fetch=_boom, now=NOW) == "no-release"
+    _cache_newer_unchecked(root)
+    assert sess.note(root, environ={}) == ""
 
 
 # --------------------------------------------------------------------------------------------- the profile ----
@@ -238,6 +253,12 @@ def test_the_off_switch_control_update_check_does_ask_when_nothing_is_off(tmp_pa
 
 
 # ------------------------------------------------------------------------------------- the session-start note ---
+
+def _cache_newer_unchecked(root, version="9.9.9"):
+    """Write a cache that says `version` is out, without going through the profile (a checkout has no installed release)."""
+    release._write_state(root, {"v": 1, "status": "checked", "latest": version, "tag": "v" + version, "asset": None,
+                                "checked_at": NOW})
+
 
 def _cache_newer(root, version="4.4.0", now=NOW):
     state = release.check(root, x4u.PROFILE, fetch=FakeGitHub(version), now=now, environ={})
@@ -399,7 +420,7 @@ STUB = (
 )
 
 
-def _hook_tree(tmp_path, stub=STUB):
+def _hook_tree(tmp_path, stub=STUB, cache=True):
     require_repo("agent/guards/claude-hooks", why="copies the hook source")
     hooks = tmp_path / "proj" / ".claude" / "hooks"
     shutil.copytree(claude_hooks_source(REPO, "the session hooks under test"), hooks)
@@ -407,6 +428,9 @@ def _hook_tree(tmp_path, stub=STUB):
     (toolkit / "scripts").mkdir(parents=True)
     if stub is not None:
         (toolkit / "scripts" / "x4update_session.py").write_text(stub, encoding="utf-8")
+    if cache:                                       # a check has run before: the helper's `note` has something to read
+        (toolkit / ".modding-agent-harness").mkdir()
+        (toolkit / ".modding-agent-harness" / "update-check.json").write_text('{"v": 1}', encoding="utf-8")
     env = dict(os.environ, X4_TOOLKIT=str(toolkit), CLAUDE_PROJECT_DIR=str(tmp_path / "proj"), X4_SWEEP_IN_TESTS="1")
     for key in ("X4_HOUSEKEEP_SWEEP", "X4_FRESH_AUTO", "X4_UPDATE_CHECK", "X4_DEPLOY_DRIFT"):
         env.pop(key, None)
@@ -491,3 +515,113 @@ def test_the_hook_launches_the_background_check_the_way_the_x4fresh_launch_does_
     assert re.search(r'\( "\$_x4_hkpy" "\$\{X4_PYI\[@\]\}" -B "\$UP" check </dev/null >/dev/null 2>&1 & \)', block), block
     for word in ("DETACHED", "nohup", "setsid", "start /b", "Start-Process"):
         assert word not in block, word
+
+
+MARKER_LINE = "TOOLKIT UPDATE NEEDS THE USER"
+
+
+def _marker(toolkit, name="update-failed.json"):
+    path = toolkit / ".modding-agent-harness" / name
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("{}", encoding="utf-8")
+
+
+@needs_bash
+def test_the_helper_is_not_started_for_a_note_when_nothing_has_been_cached_and_no_marker_exists(tmp_path):
+    """L1 (6b review): the extra Python start (about 0.1 s) is only paid when there is something to read."""
+    hooks, toolkit, env = _hook_tree(tmp_path, cache=False)
+    done = _canary(hooks, env)
+    assert done.returncode == 0 and "X4-UPDATE-NOTE-LINE" not in done.stdout.decode("utf-8", "replace")
+    assert not _ran(toolkit, "note", wait=3), "a Python start was paid for nothing"
+    assert _ran(toolkit, "check"), "control: the background check still starts (it writes the first cache)"
+    hooks2, toolkit2, env2 = _hook_tree(tmp_path / "second", cache=False)      # the twin: a marker alone is reason enough
+    _marker(toolkit2)
+    assert "X4-UPDATE-NOTE-LINE" in _canary(hooks2, env2).stdout.decode("utf-8", "replace")
+
+
+@needs_bash
+def test_a_failed_update_line_comes_before_everything_but_the_guards_banner_and_survives_the_output_cap(tmp_path):
+    """M2 (6b review): it used to come last, after the preferences (up to 4 KiB), and the harness keeps only the HEAD of
+    the output, so a maximal preferences block could cut the one line saying the guards may be broken."""
+    hooks, toolkit, env = _hook_tree(tmp_path)
+    _marker(toolkit)
+    shutil.copytree(REPO / "tools" / "modding_harness", tmp_path / "proj" / "tools" / "modding_harness",
+                    ignore=shutil.ignore_patterns("__pycache__"))       # the preferences renderer lives in the shared core
+    (tmp_path / "proj" / "KNOWLEDGEBASE.local.md").write_text("## My preferences\n" + "Keep the local evidence.\n" * 150,
+                                                          encoding="utf-8")
+    env.update(X4_PYTHON=sys.executable, X4_CONFIG=str(tmp_path / "absent.env"), HOME=str(tmp_path / "home"))
+    out = _canary(hooks, env).stdout.decode("utf-8", "replace")
+    assert MARKER_LINE in out and "Keep the local evidence." in out, out[:600]
+    assert out.index(MARKER_LINE) < out.index("Keep the local evidence."), "the marker comes after the preferences"
+    assert out.index(MARKER_LINE) < 600, "the marker is not at the head"
+    # the cap bites hard (preferences alone are 3.7 KB): the head, with the marker, is what survives
+    env["X4_HOOK_MAX_CHARS"] = "1200"
+    capped = _canary(hooks, env).stdout.decode("utf-8", "replace")
+    assert "TRUNCATED" in capped, "control: the cap did not bite, so this proves nothing"
+    assert MARKER_LINE in capped
+    # with the guards off, the GUARDS OFF banner stays first and the marker second
+    env["X4_GUARD"] = "off"
+    env.pop("X4_HOOK_MAX_CHARS")
+    both = _canary(hooks, env).stdout.decode("utf-8", "replace").lstrip()
+    assert both.startswith("[x4 guards] *** GUARDS OFF") and both.index(MARKER_LINE) < both.index("Keep the local evidence.")
+
+
+@needs_bash
+@pytest.mark.parametrize("name", ["update-failed.json", "update-in-flight.json"])
+def test_the_failed_update_line_needs_no_python(tmp_path, name):
+    """L3 (6b review): with no usable Python the helper cannot run, and the marker must still be said (plain file tests)."""
+    hooks, toolkit, env = _hook_tree(tmp_path)
+    env["X4_PYTHON"] = "no_such_python_for_the_session_hook"
+    clean = _canary(hooks, env)
+    assert clean.returncode == 0 and MARKER_LINE not in clean.stdout.decode("utf-8", "replace")      # twin: no marker
+    _marker(toolkit, name)
+    done = _canary(hooks, env)
+    out = done.stdout.decode("utf-8", "replace")
+    assert done.returncode == 0 and MARKER_LINE in out and name in out, out[:800]
+    assert not _ran(toolkit, "note", wait=3), "control: Python really was unavailable"
+
+
+@needs_bash
+def test_a_hung_background_check_never_holds_the_hook(tmp_path):
+    """L2 (6b review): `check` hangs for 25 s; the hook still returns promptly and exits 0 (a plain regex on the `&` would
+    pass for a launch that waits)."""
+    import time
+    hung = STUB + "if mode == 'check':\n    import time\n    time.sleep(25)\n"
+    hooks, toolkit, env = _hook_tree(tmp_path, stub=hung)
+    started = time.monotonic()
+    done = _canary(hooks, env)
+    elapsed = time.monotonic() - started
+    assert done.returncode == 0 and "X4-UPDATE-NOTE-LINE" in done.stdout.decode("utf-8", "replace")
+    assert _ran(toolkit, "check", wait=5), "control: the hanging check was started"
+    assert elapsed < 20, f"the hook waited {elapsed:.1f} s for a hung background check"
+
+
+def test_a_hung_note_gives_up_by_itself_and_says_so(tmp_path):
+    """L2: the helper times `note` out (env X4_UPDATE_NOTE_TIMEOUT_S lowers the limit for the test) and exits 0 with one line."""
+    import time
+    toolkit = tmp_path / "tk"
+    (toolkit / "scripts").mkdir(parents=True)
+    (toolkit / "tools" / "x4_harness").mkdir(parents=True)
+    shutil.copy2(REPO / "scripts" / "x4update_session.py", toolkit / "scripts" / "x4update_session.py")
+    (toolkit / "tools" / "x4_harness" / "x4_update.py").write_text("import time\ntime.sleep(600)\n", encoding="utf-8")
+    env = dict(os.environ, X4_UPDATE_NOTE_TIMEOUT_S="1")
+    started = time.monotonic()
+    done = subprocess.run([sys.executable, "-B", str(toolkit / "scripts" / "x4update_session.py"), "note"],
+                          capture_output=True, env=env, timeout=60)
+    elapsed = time.monotonic() - started
+    assert done.returncode == 0 and elapsed < 30, (done.returncode, elapsed, done.stderr)
+    assert b"timed out" in done.stdout
+
+
+def test_a_failed_download_is_exit_two_nothing_installed_changed(tmp_path, monkeypatch):
+    """L5 (6b review): update-fetch only reads, downloads aside and unpacks aside, so every failure of it, an OSError mid
+    download included, is the core's exit 2 ("refused/failed, nothing installed changed"); the skill says the same."""
+    root = _install(tmp_path, "4.3.0")
+
+    def died(*args, **kwargs):
+        raise OSError("the connection was reset half way through the download")
+    monkeypatch.setattr(release, "fetch", died)
+    code, result = _run_harness(["update-fetch", "--installed-root", str(root)], root, monkeypatch)
+    assert code == 2 and result["ok"] is False and result["installed_changed"] is False
+    skill = (REPO / "agent" / "skills" / "x4-toolkit-update" / "SKILL.md").read_text(encoding="utf-8")
+    assert "`2` when it failed for any reason" in skill and "nothing installed has changed" in skill
