@@ -25,6 +25,9 @@
 /x4-housekeep.json
 # A user's private instruction file for the agent (machine paths, personal rules): never committed.
 CLAUDE.local.md
+# The launcher the installer writes (bin/x4agent, .cmd, .ps1) bakes this machine's absolute install path: per-machine.
+/bin/x4agent
+/bin/x4agent.*
 # 3.x leftovers in .claude/ (still read, deprecated) carry the key too -- and the old
 # template there is no longer the template, so it is not re-included.
 .claude/x4-paths.env

@@ -1,5 +1,7 @@
 # X4 AI Assistant Toolkit
 
+**Start your agent from the install folder** (or with the launcher in `bin/`): an agent loads its guards and instructions from the folder it is started in, so started anywhere else it has no guards and none of the toolkit's knowledge.
+
 An AI-assisted **X4: Foundations** modding environment for coding agents — **Claude Code and
 OpenAI Codex** first-class, **OpenCode** best effort, and any other agent through
 [`ADAPTING.md`](ADAPTING.md). It handles the tedious, error-prone work of modding — coordinated
@@ -569,6 +571,10 @@ agents were not measured. Each skip names its reason: an installed toolkit does 
 `agent/` source, so the tests that read it skip as `REPO-ONLY`. Answer any questions it asks. An agent
 with no adapter is pointed at [`ADAPTING.md`](ADAPTING.md), which shows how to build and prove
 one; until it has one, the toolkit's guards do not protect it.
+
+**The launcher.** The installer writes `bin/x4agent` (and `bin/x4agent.cmd` on Windows): it changes into the install folder and starts the agent you name, from whatever folder your terminal is in, for example `bin/x4agent claude` (also `codex`, `opencode`). `--method global` has no single folder to start in, so it writes none; it also edits no PATH and no shell profile. The files hold this machine's absolute install path, so they are never copied from a source tree. If the installer could not write them it says WARNING and the install still completes: start your agent from the install folder by hand.
+
+**PowerShell note.** The `.ps1` launcher needs local scripts allowed, and PowerShell picks a `.ps1` over a `.cmd` of the same name when you type the bare name (measured: it refuses under the default execution policy, where the `.cmd` runs). So on Windows the installer writes only the bash and `.cmd` launchers by default. From PowerShell run `bin\x4agent.cmd claude`. To have the `.ps1` as well, run `python -I scripts/x4launcher.py --toolkit <install folder> --agents claude --shells bash,cmd,powershell`, then start it with `powershell -ExecutionPolicy Bypass -File bin\x4agent.ps1 claude`.
 
 ### Prerequisites it will check for
 - **bash** — required. Every safety hook and both setup scripts run under it. Linux/macOS have it;

@@ -307,7 +307,7 @@ $X4CopyPrune = @('tools\x4validate\.venv',
 #: destination's own, never copied in and never deleted out), so they live HERE and
 #: not in $X4CopyPrune, whose second meaning would erase a user's built databases
 #: on every upgrade. See X4_KEEP_LOCAL in install.sh.
-$X4KeepLocal = @('tools\basex\basex\.basex','x4-paths.env','x4-housekeep.json','.claude\x4-paths.env','.claude\settings.local.json','.claude\backups','.codex\hooks.json','.codex\config.toml',
+$X4KeepLocal = @('bin\x4agent','bin\x4agent.cmd','bin\x4agent.ps1','tools\basex\basex\.basex','x4-paths.env','x4-housekeep.json','.claude\x4-paths.env','.claude\settings.local.json','.claude\backups','.codex\hooks.json','.codex\config.toml',
                  '.opencode\opencode.jsonc','.claude\.reference-buildid',
                  'tools\basex\basex\data','tools\basex\basex\coverage-x4raw.json',
                  'tools\basex\basex\coverage-x4eff.json','tools\basex\_eff',
@@ -1207,6 +1207,35 @@ function Write-OpenCodeConfig($dest) {
     return
   }
   Write-Host "  $out"
+}
+
+#: The launcher (4.3.1), the twin of write_launcher in install.sh: an agent loads its guards and instructions from the
+#: folder it is STARTED in, so bin\x4agent changes into the install folder and starts the agent. The files bake this
+#: machine's absolute path ($X4KeepLocal). A failure is a WARNING, never INCOMPLETE: the install is sound and the agent
+#: can still be started from the install folder by hand.
+function Write-Launcher($dest) {
+  if ($Method -eq 'global') {
+    Write-Host '  [note] launcher: none for -Method global (a global install has no single folder to start in).'
+    return
+  }
+  if ($DryRun) { Write-Host "  -DryRun: NOT writing the launcher into $dest\bin"; return }
+  $agents = (Get-AgentsLanded) -replace ' ', ''
+  $script = Join-Path (Join-Path $dest 'scripts') 'x4launcher.py'
+  if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
+    Write-Host "  WARNING: no launcher written: scripts\x4launcher.py is missing from $dest. Start your agent from $dest."
+    return
+  }
+  $py = Find-OcPython
+  if (-not $py) {
+    Write-Host "  WARNING: no launcher written: no Python >= 3.10 (set X4_PYTHON). Start your agent from $dest."
+    return
+  }
+  $rest = @($py | Select-Object -Skip 1)
+  $r = Invoke-X4Native $py[0] (@($rest) + @('-I', $script, '--toolkit', $dest, '--agents', $agents)) -MergeStderr
+  foreach ($line in ([string]$r.Out -split "`n")) { if ($line.Trim()) { Write-Host "  $line" } }
+  if ($r.Rc -ne 0) {
+    Write-Host "  WARNING: the launcher was not written (exit $($r.Rc), see above). Start your agent from $dest."
+  }
 }
 
 #: Destination files the copy would overwrite that CANNOT be written.
@@ -2705,6 +2734,9 @@ if ($bash) {
   $failed += 'Git Bash not found (x4validate not wired up): setx X4_BASH "C:\Program Files\Git\bin\bash.exe", then re-run'
 }
 
+# The launcher: a WARNING on failure, so it sits outside the INCOMPLETE accounting below.
+Write-Launcher $Toolkit
+
 if ($failed.Count) {
   Write-Host "`n=== install INCOMPLETE ($Method) ===" -ForegroundColor Yellow
   foreach ($f in $failed) { Write-Host "  failed: $f" -ForegroundColor Yellow }
@@ -2720,6 +2752,9 @@ if ([System.IO.Path]::DirectorySeparatorChar -eq [char]92) { $Toolkit = $Toolkit
 Write-Host "Toolkit: $Toolkit"
 Write-Host ('Agents:  ' + (Get-AgentsLanded))
 Write-Host "Config:  $Toolkit\x4-paths.env  (edit any path here)"
+if ($Method -ne 'global') {
+  Write-Host "Start:   cd `"$Toolkit`" and run your agent there (or: $Toolkit\bin\$(if ($X4OnWindows) { 'x4agent.cmd' } else { 'x4agent' }) claude|codex|opencode)"
+}
 # CODEX RUNS NO HOOK IT HAS NOT REVIEWED, silently (MEASURED, spike 2026-09-30), and the
 # installer must never approve hooks or trust the project for the user (spec section 8).
 if ($Method -ne 'global' -and (Test-CodexSelected)) {

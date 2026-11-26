@@ -249,7 +249,7 @@ X4_COPY_PRUNE="tools/x4validate/.venv tools/x4validate/.pytest_cache tools/basex
 #: `.claude/.reference-buildid` too (FX-G5 / reviewer J2 item 7): THIS machine's finished-unpack
 #: marker, which x4doctor reads as evidence of a MOVED tree -- copied in, a fresh install read
 #: "moved"; pruned, an upgrade would erase the destination's own.
-X4_KEEP_LOCAL="x4-paths.env x4-housekeep.json .claude/x4-paths.env .claude/settings.local.json .claude/backups .claude/.reference-buildid .codex/hooks.json .codex/config.toml .opencode/opencode.jsonc tools/basex/basex/.basex tools/basex/basex/data tools/basex/basex/coverage-x4raw.json tools/basex/basex/coverage-x4eff.json tools/basex/_eff tools/basex/stage-manifest.json tools/x4validate/.perf-baseline.json tools/x4validate/.obtainability-baseline.json tools/x4validate/.claude-md-budget-baseline.json tools/x4validate/.toolkit-usage-baseline.json tools/x4validate/.hook-false-positive-baseline.json tools/x4validate/.instrument-hygiene-baseline.json tools/x4validate/.schema-sweep-baseline.json"
+X4_KEEP_LOCAL="bin/x4agent bin/x4agent.cmd bin/x4agent.ps1 x4-paths.env x4-housekeep.json .claude/x4-paths.env .claude/settings.local.json .claude/backups .claude/.reference-buildid .codex/hooks.json .codex/config.toml .opencode/opencode.jsonc tools/basex/basex/.basex tools/basex/basex/data tools/basex/basex/coverage-x4raw.json tools/basex/basex/coverage-x4eff.json tools/basex/_eff tools/basex/stage-manifest.json tools/x4validate/.perf-baseline.json tools/x4validate/.obtainability-baseline.json tools/x4validate/.claude-md-budget-baseline.json tools/x4validate/.toolkit-usage-baseline.json tools/x4validate/.hook-false-positive-baseline.json tools/x4validate/.instrument-hygiene-baseline.json tools/x4validate/.schema-sweep-baseline.json"
 
 #: THE TRACKED SET, when the source is a git checkout.
 #:
@@ -1305,6 +1305,35 @@ write_opencode_config() {   # DEST
     return 0
   fi
   echo "  $out"
+}
+
+#: The launcher (4.3.1): an agent loads its guards and instructions from the folder it is STARTED in; started
+#: anywhere else it runs with none, and nothing can notice. bin/x4agent changes into the install folder and starts
+#: the agent. scripts/x4launcher.py writes it through the vendored core; it bakes this machine's absolute path, so
+#: the files are per-machine (X4_KEEP_LOCAL). A failure here is a WARNING, never INCOMPLETE: the install itself is
+#: sound, and the agent can still be started from the install folder by hand. install.ps1: Write-Launcher.
+write_launcher() {   # DEST
+  local dest="$1" agents out rc=0
+  if [ "$METHOD" = global ]; then
+    echo "  [note] launcher: none for --method global (a global install has no single folder to start in)."
+    return 0
+  fi
+  if [ "$DRY_RUN" = 1 ]; then echo "  --dry-run: NOT writing the launcher into $dest/bin"; return 0; fi
+  agents="$(_agents_landed | tr -d ' ')"
+  if [ ! -f "$dest/scripts/x4launcher.py" ]; then
+    echo "  WARNING: no launcher written: scripts/x4launcher.py is missing from $dest. Start your agent from $dest."
+    return 0
+  fi
+  if ! _oc_python; then
+    echo "  WARNING: no launcher written: no Python >= 3.10 (set X4_PYTHON). Start your agent from $dest."
+    return 0
+  fi
+  out="$("${X4_OC_PY[@]}" -I "$dest/scripts/x4launcher.py" --toolkit "$dest" --agents "$agents" 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/  /'
+  if [ "$rc" != 0 ]; then
+    echo "  WARNING: the launcher was not written (exit $rc, see above). Start your agent from $dest."
+  fi
+  return 0
 }
 
 X4_CODEX_HOOKS_WRITTEN=0
@@ -2663,6 +2692,9 @@ elif [ "$DO_UNPACK" = 1 ]; then
     || add_failed "bin/unpack-reference.sh"
 fi
 
+# The launcher: a WARNING on failure, so it sits outside the INCOMPLETE accounting below.
+write_launcher "$TOOLKIT"
+
 echo
 # An INCOMPLETE install must not print the success text. install.ps1 has accumulated
 # $failed and exited 1 for a while; install.sh swallowed a failed setup.sh with
@@ -2681,6 +2713,9 @@ echo "=== install complete ($METHOD) ==="
 echo "Toolkit:   $TOOLKIT"
 echo "Agents:    $(_agents_landed)"
 echo "Config:    $TOOLKIT/x4-paths.env  (edit any path here)"
+if [ "$METHOD" != global ]; then
+  echo "Start:     cd \"$TOOLKIT\" and run your agent there (or: $TOOLKIT/bin/x4agent claude|codex|opencode)"
+fi
 # CODEX RUNS NO HOOK IT HAS NOT REVIEWED, and it says nothing when it skips one
 # (MEASURED, spike 2026-09-30). The installer must never approve hooks or trust the
 # project on the user's behalf (spec section 8), so it says what to do instead.
