@@ -1,12 +1,12 @@
 # Capped step-1 gates
 
 The resource policy is the toolkit rule in `agent/instructions/core.md` (unified
-2026-10-19). On the maintainer's workstation an external resource tool enforces it:
-40% total managed CPU, 25% of RAM (8 GiB there) total managed memory, below-normal
-priority, at most eight workers. Admission leaves 20% of RAM and 15% of commit
-available; the system drive keeps min(pagefile, 50 GiB) free, other output drives
-min(5%, 50 GiB). User-directed runs and the game are exempt. Estimate overruns warn; sustained
-pressure throttles and blocks new batches; emergency floors stop only the job tree.
+2026-10-19). On the maintainer's workstation an external resource tool enforces it: a job
+waits only if it would push the machine past 90% CPU, leave under 3 GiB of RAM (20% of RAM while a game
+runs) or under 512 MiB of commit; below-normal priority, at most eight workers. The system
+drive keeps min(pagefile, 50 GiB) free, other output drives min(5%, 50 GiB). User-directed
+runs and the game are exempt. Estimate overruns warn; sustained pressure throttles and blocks
+new batches; emergency floors stop only the job tree.
 The resource tool's `HEADROOM.md` specifies the sample windows and emergency floors.
 `scripts/run-gates.sh --all` explicitly passes `--workers=8` to historical hook
 replay, whose standalone default remains up to 14. Other gate arguments are unchanged.
