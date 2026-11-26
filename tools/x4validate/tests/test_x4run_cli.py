@@ -154,7 +154,7 @@ def test_help_names_every_flag(capsys):
     with pytest.raises(SystemExit):
         cli.main(["--help"])
     top = capsys.readouterr().out
-    assert "never been run against the real game" in top    # the epilog banner
+    assert "run against the real game once (menu only, no save loaded)" in top    # the epilog banner
     assert "treat every result as unverified" in top
     assert "until step 2" not in top                        # the first real run IS step 2
     for name in subs.choices:
@@ -185,11 +185,11 @@ def test_no_ready_check_lets_run_go_ahead_and_the_game_is_closed(tmp_path, capsy
     _assert_all_hidden(fake)
 
 
-def test_run_says_plainly_it_has_not_been_run_against_the_real_game(tmp_path, capsys):
+def test_run_says_plainly_how_little_it_has_been_run(tmp_path, capsys):
     fake, store = _world(tmp_path)
     _main(fake, store, _run_argv("--no-ready-check"))
     out = capsys.readouterr().out
-    assert "never been run against the real game: treat every result as unverified" in out
+    assert "once (menu only, no save loaded): treat every result as unverified" in out
 
 
 def test_an_injected_probe_is_used_instead_of_the_stub(tmp_path):

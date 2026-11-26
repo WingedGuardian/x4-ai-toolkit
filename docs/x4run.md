@@ -130,14 +130,14 @@ files live beside it.
   may belong to a run that is still starting, which has no `X4.exe` yet) and one successful
   read shows no `X4.exe`. Never delete the record file by hand.
 
-## Before the first real launch (step 2)
+## Before you run it
 
 * The game appears on the current (main) desktop and takes focus.
 * Do not start X4 yourself while the run is starting (up to about 3.5 minutes).
 * `--no-ready-check` is required: the real readiness probe is not wired yet. It means the
   command runs the moment `X4.exe` appears, while the game is still loading.
 * `x4live` will not answer at the main menu (the helper arms only after a world loads), so a
-  step-2 pipe check should expect no answer.
+  check that needs the pipe gets no answer at the main menu.
 * Run `x4run run` in the background: an agent's foreground shell call is limited to 10
   minutes, while the driver's own budgets reach about 70 minutes. A killed driver leaves the
   game running with a record that `x4run stop` recovers.
@@ -152,7 +152,7 @@ files live beside it.
 
 ## Measured and unmeasured
 
-Taken from the design; the driver has not been run against the real game.
+What was read beforehand, what one real run has shown, and what is still a guess.
 
 **Read (from files and earlier measurements, not from running this driver):**
 
@@ -170,7 +170,7 @@ Taken from the design; the driver has not been run against the real game.
 **Measured once, outside the driver's own runs:** the process READ (the PowerShell
 `Win32_Process` query) was run for real against `explorer.exe`, `steam.exe` and `X4.exe` (none
 running): the rows parsed and two reads gave identical identities. The close and terminate
-calls have never been run.
+calls had not been run then; the driver run below ran the close, and the terminate has never run.
 
 **Measured by ONE driver run, 2026-11-25 (step 2: menu-only, no save loaded, one machine, one
 modlist, n = 1; treat as a first data point, not a guarantee):**
@@ -194,7 +194,6 @@ modlist, n = 1; treat as a first data point, not a guarantee):**
 
 * autosave on exit while a world is loaded (a world was never loaded);
 * the close request while a world is loaded, or while a crash dump is written;
-
 * whether `steam.exe -applaunch 392160 [args]` appends arguments to the saved launch options;
 * what the `steam.exe -applaunch` forwarder's exit codes mean, and how long the call takes;
 * how to load a named save or start a new game from the command line;
@@ -212,9 +211,9 @@ modlist, n = 1; treat as a first data point, not a guarantee):**
 
 ## The three build steps
 
-1. **Offline** (this step, built): the driver, its command line and its tests, with a scripted
+1. **Offline** (built): the driver, its command line and its tests, with a scripted
    fake as the only process runner. No launch.
-2. **One approved launch, measuring only:** the first real `x4run run`. Start through Steam,
+2. **One approved launch, measuring only** (done 2026-11-25): the first real `x4run run`. Start through Steam,
    reach the main menu, check the pipe, close, verify nothing is left; measures the items
    above. No save is loaded. Needs its own approval.
 3. **A full run:** load a named test save, run `x4live` checks, close; wires the real

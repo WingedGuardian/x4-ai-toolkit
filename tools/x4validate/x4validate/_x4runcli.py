@@ -1,8 +1,8 @@
 r"""`x4run` -- start X4 through Steam, run a command, close X4 again (the command line).
 
-THE DRIVER HAS NEVER BEEN RUN AGAINST THE REAL GAME: treat every result as unverified. It is
-built and tested offline: every test drives `main()` with a scripted fake in place of the
-process runner. The first real `x4run run` is build step 2 and needs its own approval.
+THE DRIVER HAS BEEN RUN AGAINST THE REAL GAME ONCE (2026-11-25, menu only, no save loaded):
+treat every result as unverified. Every test drives `main()` with a scripted fake in place of
+the process runner. A loaded world and the terminate step have never run against the game.
 
 This module is the command line ONLY: argument handling, the approval record's assembly, the
 mapping of outcomes to exit codes and the wording. The logic (preflight, start, the close
@@ -59,8 +59,8 @@ from ._x4run import (
 )
 
 #: Printed on every `run` and in the top-level `--help`.
-BANNER = ("x4run: this driver has never been run against the real game: treat every result as "
-          "unverified (built and tested offline, build step 1 of 3).")
+BANNER = ("x4run: this driver has been run against the real game once (menu only, no save loaded): "
+          "treat every result as unverified (build step 2 of 3 done).")
 
 #: The exception types that are REFUSALS (exit 2) unless they carry the unclosed note.
 REFUSALS = (UnapprovedLaunch, UnfinishedRun, InvalidState, CorruptState, StopCannotRead,

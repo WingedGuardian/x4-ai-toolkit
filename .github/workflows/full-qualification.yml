@@ -821,7 +821,7 @@ jobs:
           #   (cd893037): the ONLY delta on both legs is tests/test_pipe_unref_guard.py +4 (the offline checks that
           #   load the real game's lua51_64.dll and winpipe DLL: Windows-only on ubuntu, no X4_GAME on windows).
           #   ubuntu 495 -> 499, windows 93 -> 97. Ceilings: 499 + 3, 97 + 3.
-          # 2026-11-24 (x4run, session/x4-driver): DERIVED, not yet READ on CI (the branch was never pushed). The only
+          # 2026-11-24 (x4run): DERIVED; the ubuntu leg then passed under this ceiling on PR #26. The only
           #   new platform skip is tests/test_x4run_process.py::test_every_read_is_started_hidden (1 test, not
           #   parametrized: pytest.skip off Windows; the one test that asserts the literal CREATE_NO_WINDOW value).
           #   `git grep -n skip` over the branch's added/changed test files finds no other skip. ubuntu 499 -> 500,
