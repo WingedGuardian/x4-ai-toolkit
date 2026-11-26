@@ -1,12 +1,12 @@
 # Retention: what agent work keeps, and for how long
 
 Backups and evidence are the point of this toolkit, and left alone they eat the disk. Measured on a sibling
-install (the Skyrim VR toolkit's) after six weeks: 44 GiB of agent output, of which about 20 GiB were exact copies of
-bytes already on disk. Very little of it was *old*; it was *repeated*. This page is the policy, shared with the Skyrim
-toolkit; `scripts/x4housekeep.py` implements the parts a tool can.
+toolkit's install after six weeks: 44 GiB of agent output, of which about 20 GiB were exact copies of
+bytes already on disk. Very little of it was *old*; it was *repeated*. This page is the policy, shared with the other
+toolkits built on the shared core; `scripts/x4housekeep.py` implements the parts a tool can.
 
 <!-- shared-policy:begin -->
-## Shared policy (identical in the Skyrim and X4 toolkits -- change both)
+## Shared policy (identical in every toolkit built on the shared core -- change all copies)
 
 ### Certainty before removal
 
