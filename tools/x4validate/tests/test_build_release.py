@@ -399,3 +399,236 @@ def test_a_version_tag_spelled_as_a_full_ref_is_still_checked(tmp_path, ref, hea
         # The VERSION check must be what refused: a later `git archive` failure on the slashed
         # name also exits 2 with REFUSING, which made the first draft of this test pass on the bug.
         assert p.returncode == 2 and "at the ref" in p.stderr, p.stdout + p.stderr
+
+
+# --- 4.3.1 task 6a: the zip the shared core's self-update can ACCEPT -----------------------------
+#
+# The core's `release.fetch` refuses a release zip that does not hold exactly ONE top folder, and
+# then requires a BUILD-INFO inside it whose `version=` is the tag's and whose `commit=` is the commit
+# the tag points at. The v3/v4.0-4.3.0 build (`git archive` with no prefix, no BUILD-INFO) fails both.
+# So a RELEASE build is now `git archive --prefix=X4AI/` plus ONE virtual member `X4AI/BUILD-INFO`
+# (version, full commit), and the proof strips the folder, allows exactly that one extra member and
+# refuses everything else. `--selftest` (v3.0.0) keeps the old no-folder shape: it is the control
+# that the build METHOD still reproduces the published bytes.
+
+TOP = "X4AI/"
+
+
+def _core_release():
+    """The shared core's own `release` module -- the thing that decides whether the zip is accepted."""
+    tools = str(REPO / "tools")
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    from modding_harness import release
+    return release
+
+
+def _commit_of(repo, ref="HEAD"):
+    r = subprocess.run(["git", "-C", str(repo), "rev-parse", ref + "^{commit}"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r.stdout.strip()
+
+
+def _prefixed_zip(repo, ref, dest, info=None, extra=(), prefix=TOP):
+    """A zip shaped like the release build's, composed here with `zipfile` (not by the script's own
+    `--add-virtual-file` call), so the verifier is exercised against INDEPENDENTLY made input."""
+    cmd = ["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C", str(repo), "archive", "--format=zip"]
+    if prefix:
+        cmd.append("--prefix=" + prefix)
+    assert subprocess.run([*cmd, ref, "-o", str(dest)], capture_output=True).returncode == 0
+    with zipfile.ZipFile(dest, "a") as zf:
+        if info is not None:
+            zf.writestr(prefix + "BUILD-INFO", info)
+        for name, data in extra:
+            zf.writestr(name, data)
+    return dest
+
+
+def _run_verifier(verify, repo, archive, ref, mode, version=""):
+    return subprocess.run([sys.executable, str(verify), str(archive), ref, mode, version], cwd=repo,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_a_RELEASE_zip_has_one_top_folder_and_a_BUILD_INFO_naming_the_tag_and_its_commit(tmp_path):
+    """The point of the task, end to end through the REAL script and the REAL core: the zip the script
+    builds for `vX.Y.Z` is accepted by `modding_harness.release._safe_members`, and the BUILD-INFO that
+    unpacks from it parses to the tag's version and the tag's commit -- the two facts `fetch` compares."""
+    _needs(SCRIPT.is_file(), "no scripts/build-release.sh (dev-only script) - not checked")
+    r = _release_repo(tmp_path, "## v4.0.1 - 2026-10-25", "4.0.1")
+    p = subprocess.run([_bash(), "scripts/build-release.sh", "v4.0.1"], cwd=str(r), capture_output=True,
+                       text=True, timeout=120)
+    assert p.returncode == 0, p.stdout + p.stderr
+    built = r / "dist" / "X4.Foundations.AI.Assistant.Toolkit-v4.0.1.zip"
+    release = _core_release()
+    with zipfile.ZipFile(built) as archive:
+        top, files = release._safe_members(archive)           # the core's own acceptance test
+        names = [i.filename for i in archive.infolist()]
+        assert top == "X4AI", top
+        assert all(n.startswith(TOP) for n in names), [n for n in names if not n.startswith(TOP)]
+        assert "BUILD-INFO" in files and "scripts/build-release.sh" in files, sorted(files)
+        assert archive.read(TOP + "BUILD-INFO") == ("version=4.0.1\ncommit=%s\n" % _commit_of(r, "v4.0.1")).encode()
+        archive.extractall(tmp_path / "unpacked")
+    info = release.build_info(tmp_path / "unpacked" / "X4AI")
+    assert release.parse_version(info.get("version")) == (4, 0, 1), info
+    assert info.get("commit") == _commit_of(r, "v4.0.1"), info
+    assert "member set matches the ref exactly" in p.stdout, p.stdout
+
+
+def test_a_DRY_RUN_zip_has_a_BUILD_INFO_with_no_version_so_the_core_cannot_take_it_for_a_release(tmp_path):
+    _needs(SCRIPT.is_file(), "no scripts/build-release.sh (dev-only script) - not checked")
+    r = _release_repo(tmp_path, "## Unreleased", "4.0.0", tag="rc-test")
+    p = subprocess.run([_bash(), "scripts/build-release.sh", "rc-test"], cwd=str(r), capture_output=True,
+                       text=True, timeout=120)
+    assert p.returncode == 0, p.stdout + p.stderr
+    built = r / "dist" / "X4.Foundations.AI.Assistant.Toolkit-rc-test.zip"
+    release = _core_release()
+    with zipfile.ZipFile(built) as archive:
+        release._safe_members(archive)                         # the SHAPE is the same as a release
+        archive.extractall(tmp_path / "unpacked")
+    info = release.build_info(tmp_path / "unpacked" / "X4AI")
+    assert info.get("version") == "" and info.get("build") == "dry-run", info
+    assert release.parse_version(info.get("version")) is None  # so `fetch` refuses it as a version mismatch
+    assert info.get("commit") == _commit_of(r, "rc-test")
+
+
+def test_TWIN_the_core_REFUSES_a_zip_without_the_top_folder(tmp_path):
+    """The twin of the acceptance test above: the pre-4.3.1 build shape, with a BUILD-INFO even, is refused
+    by the very function that accepted the new one -- so the acceptance test could have gone red."""
+    r = _tiny_repo(tmp_path / "t", {"a.txt": "x\n", "b/c.txt": "y\n"})
+    flat = tmp_path / "flat.zip"
+    assert subprocess.run(["git", "-C", str(r), "archive", "--format=zip", "HEAD", "-o", str(flat)],
+                          capture_output=True).returncode == 0
+    with zipfile.ZipFile(flat, "a") as zf:
+        zf.writestr("BUILD-INFO", "version=1.2.3\ncommit=%s\n" % _commit_of(r))
+    release = _core_release()
+    with zipfile.ZipFile(flat) as archive:
+        with pytest.raises(ValueError, match="outside the release zip's one folder|exactly one folder"):
+            release._safe_members(archive)
+    prefixed = _prefixed_zip(r, "HEAD", tmp_path / "ok.zip", info="version=1.2.3\ncommit=x\n")
+    with zipfile.ZipFile(prefixed) as archive:
+        assert release._safe_members(archive)[0] == "X4AI"
+
+
+@pytest.mark.parametrize("case,expect", [
+    ("good", None),                                              # twin: the one shape that is accepted
+    ("extra_member", "IN THE BUNDLE, NOT IN THE REF"),
+    ("second_info_lookalike", "IN THE BUNDLE, NOT IN THE REF"),  # `BUILD-INFO.bak` is not THE one extra member
+    ("nested_info", "IN THE BUNDLE, NOT IN THE REF"),
+    ("wrong_version", "BUILD-INFO IS NOT WHAT THIS BUILD WROTE"),
+    ("wrong_commit", "BUILD-INFO IS NOT WHAT THIS BUILD WROTE"),
+    ("extra_line", "BUILD-INFO IS NOT WHAT THIS BUILD WROTE"),
+    ("missing_info", "MISSING FROM THE BUNDLE"),
+    ("outside_folder", "OUTSIDE THE ONE TOP FOLDER"),
+    ("no_top_folder", "OUTSIDE THE ONE TOP FOLDER"),
+    ("dry_run_info_in_release", "BUILD-INFO IS NOT WHAT THIS BUILD WROTE"),
+])
+def test_the_RELEASE_member_proof_allows_exactly_ONE_extra_member(planted_verifier, case, expect):
+    verify, repo, ref = planted_verifier
+    commit = _commit_of(repo)
+    info = "version=4.3.1\ncommit=%s\n" % commit
+    extra, prefix = (), TOP
+    if case == "extra_member":
+        extra = [(TOP + "NOT_IN_THE_REF.txt", "shipped without review\n")]
+    elif case == "second_info_lookalike":
+        extra = [(TOP + "BUILD-INFO.bak", info)]
+    elif case == "nested_info":
+        extra = [(TOP + "sub/BUILD-INFO", info)]
+    elif case == "wrong_version":
+        info = "version=4.3.0\ncommit=%s\n" % commit
+    elif case == "wrong_commit":
+        info = "version=4.3.1\ncommit=%s\n" % ("0" * 40)
+    elif case == "extra_line":
+        info += "build=hand-made\n"
+    elif case == "missing_info":
+        info = None
+    elif case == "outside_folder":
+        extra = [("stray.txt", "x\n")]
+    elif case == "no_top_folder":
+        prefix, info = "", None
+    elif case == "dry_run_info_in_release":
+        info = "version=\ncommit=%s\nbuild=dry-run\n" % commit
+    archive = _prefixed_zip(repo, ref, Path(repo) / "c.zip", info=info, extra=extra, prefix=prefix)
+    if case == "no_top_folder":
+        with zipfile.ZipFile(archive, "a") as zf:
+            zf.writestr("BUILD-INFO", "version=4.3.1\ncommit=%s\n" % commit)
+    got = _run_verifier(verify, repo, archive, ref, "release", "4.3.1")
+    if expect is None:
+        assert got.returncode == 0, got.stdout + got.stderr
+        assert "member set matches the ref exactly" in got.stdout
+    else:
+        assert got.returncode == 1, got.stdout + got.stderr
+        assert expect in got.stderr, got.stderr
+
+
+def test_the_DRY_RUN_proof_wants_the_dry_run_BUILD_INFO_and_nothing_else(planted_verifier):
+    verify, repo, ref = planted_verifier
+    commit = _commit_of(repo)
+    good = _prefixed_zip(repo, ref, Path(repo) / "d.zip", info="version=\ncommit=%s\nbuild=dry-run\n" % commit)
+    assert _run_verifier(verify, repo, good, ref, "dry-run").returncode == 0
+    # a dry-run zip may NOT carry a version: it would look like a release to the core
+    bad = _prefixed_zip(repo, ref, Path(repo) / "e.zip", info="version=4.3.1\ncommit=%s\nbuild=dry-run\n" % commit)
+    got = _run_verifier(verify, repo, bad, ref, "dry-run")
+    assert got.returncode == 1 and "BUILD-INFO IS NOT WHAT THIS BUILD WROTE" in got.stderr, got.stderr
+
+
+@pytest.mark.parametrize("version", ["", "4.3", "v4.3.1", "4.3.1-rc1"])
+def test_a_RELEASE_proof_refuses_a_version_that_is_not_X_Y_Z(planted_verifier, version):
+    verify, repo, ref = planted_verifier
+    archive = _prefixed_zip(repo, ref, Path(repo) / "v.zip",
+                            info="version=%s\ncommit=%s\n" % (version, _commit_of(repo)))
+    got = _run_verifier(verify, repo, archive, ref, "release", version)
+    assert got.returncode == 1 and "X.Y.Z version" in got.stderr, got.stdout + got.stderr
+
+
+def test_a_TRACKED_BUILD_INFO_at_the_ref_is_REFUSED(tmp_path):
+    """A tree must not vouch for itself: with a BUILD-INFO committed at the ref, the one the build adds
+    would be a SECOND member of that name. Through the verifier (clear message) and through the script."""
+    _needs(SCRIPT.is_file(), "no scripts/build-release.sh (dev-only script) - not checked")
+    r = _release_repo(tmp_path, "## v4.0.1 - 2026-10-25", "4.0.1")
+    (r / "BUILD-INFO").write_text("version=9.9.9\ncommit=" + "1" * 40 + "\n", encoding="utf-8")
+    for a in (["add", "BUILD-INFO"], ["commit", "-qm", "oops"], ["tag", "-f", "v4.0.1"]):
+        assert subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(r), *a],
+                              capture_output=True).returncode == 0, a
+    src = SCRIPT.read_text(encoding="utf-8")
+    body = src[src.index("import subprocess, sys, zipfile"):src.index("\nPY\n")]
+    verify = tmp_path / "verify.py"
+    verify.write_text(body, encoding="utf-8")
+    zipped = tmp_path / "tracked.zip"
+    assert subprocess.run(["git", "-C", str(r), "archive", "--format=zip", "--prefix=X4AI/", "v4.0.1",
+                           "-o", str(zipped)], capture_output=True).returncode == 0
+    got = _run_verifier(verify, str(r), zipped, "v4.0.1", "release", "4.0.1")
+    assert got.returncode == 1 and "BUILD-INFO is tracked" in got.stderr, got.stdout + got.stderr
+    p = subprocess.run([_bash(), "scripts/build-release.sh", "v4.0.1"], cwd=str(r), capture_output=True,
+                       text=True, timeout=120)
+    assert p.returncode == 1 and "not shippable" in p.stderr, p.stdout + p.stderr
+
+
+def test_a_git_that_cannot_add_a_virtual_file_is_a_CANNOT_BUILD_not_a_bad_bundle(tmp_path):
+    """`git archive --add-virtual-file` (git 2.32+) writes BUILD-INFO. A git without it must exit 2 "cannot
+    build" BEFORE building, not produce a zip with no BUILD-INFO and call the bundle corrupt (exit 1)."""
+    _needs(SCRIPT.is_file(), "no scripts/build-release.sh (dev-only script) - not checked")
+    import os
+    import shutil
+    real = shutil.which("git")
+    _needs(real, "no git on PATH - not checked")
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    # A `git` that answers `archive -h` like an old git (no --add-virtual-file) and forwards the rest.
+    (shim_dir / "git").write_text(
+        '#!/bin/sh\n'
+        'a="$@"\n'
+        'case "$a" in *"archive -h"*) echo "usage: git archive [<options>] <tree-ish>"; exit 129 ;; esac\n'
+        'exec "%s" "$@"\n' % Path(real).as_posix(), encoding="utf-8", newline="\n")
+    r = _release_repo(tmp_path, "## v4.0.1 - 2026-10-25", "4.0.1")
+    # Git Bash puts /mingw64/bin first on its own PATH, so a PATH entry from outside never wins; BASH_ENV
+    # runs inside the shell and prepends the shim there.
+    posix = shim_dir.as_posix()
+    if len(posix) > 2 and posix[1] == ":":
+        posix = "/" + posix[0].lower() + posix[2:]
+    (tmp_path / "shim_env.sh").write_text('export PATH="%s:$PATH"\n' % posix, encoding="utf-8", newline="\n")
+    env = dict(os.environ)
+    env["BASH_ENV"] = (tmp_path / "shim_env.sh").as_posix()
+    p = subprocess.run([_bash(), "scripts/build-release.sh", "v4.0.1"], cwd=str(r), env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert p.returncode == 2 and "add-virtual-file" in p.stderr, p.stdout + p.stderr
+    assert not (r / "dist").exists() or not list((r / "dist").glob("*.zip"))
