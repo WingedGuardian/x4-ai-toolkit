@@ -522,11 +522,14 @@ protection is available through `x4refguard`, once explicitly applied and verifi
 
 ### 2. Get the toolkit and run the installer
 Download the latest release zip (from [Releases](https://github.com/WingedGuardian/x4-ai-toolkit/releases)
-or Nexus) and extract it, then run the guided installer. **On Windows, pick a SHORT folder**
-(e.g. `C:\X4AI`): Windows' classic 260-character path limit is reached once the folder's own
-path is longer than about 165 characters, because the deepest file in the toolkit sits 92
-characters below its root -- extracting under a long Downloads or OneDrive path can fail for
-the deepest files (a 2026-10-04 install test hit this with 2 test fixtures).
+or Nexus) and extract it, then run the guided installer from inside the extracted folder. The zip
+holds ONE folder, `X4AI`, so extracting it to `C:\` gives `C:\X4AI` (extracting into `C:\Tools` gives
+`C:\Tools\X4AI`). **On Windows, extract somewhere SHORT:** Windows' classic 260-character path limit
+(259 usable) is reached once the folder you extract into is longer than about 160 characters,
+because the deepest file is 92 characters inside the `X4AI` folder (measured 2026-11-26 over the zip's
+files; the longest is a Codex test fixture under `tools/x4validate/tests/`), and
+`X4AI\` adds 5 more -- extracting under a long Downloads or OneDrive path can fail for the deepest
+files (a 2026-10-04 install test hit this with 2 test fixtures).
 
 ```bash
 bash install.sh          # Linux / macOS / Windows (Git Bash)
