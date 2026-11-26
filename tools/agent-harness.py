@@ -173,8 +173,9 @@ def main(argv=None):
                       "scope": "explicit My preferences section only; unclassified notes remain notes"}
         elif args.command in upgrade_cli.COMMANDS:
             import x4_upgrade_render
+            # X4-NOTES.md is X4's own private notes file: the core names none since a84098c, so it is passed here.
             output = upgrade_cli.handle(args, ROOT, local_files=("x4-paths.env", ".claude/x4-paths.env"),
-                candidate_preparer=x4_upgrade_render.prepare, candidate_validator=x4_upgrade_render.validate,
+                notes_files=("X4-NOTES.md",), candidate_preparer=x4_upgrade_render.prepare, candidate_validator=x4_upgrade_render.validate,
                 generated_paths=(".codex/hooks.json",))
         elif args.command == "coverage":
             output = save_policy.core(ROOT, "telemetry").Telemetry(ROOT).report(args.session_id)
