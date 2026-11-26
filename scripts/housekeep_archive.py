@@ -250,7 +250,8 @@ def archive_folder(src: Path, nas_dir: Path, recycler, extra_keep=(), save_exts=
     keep = keep_local(src, extra_keep)
     record = {"zip": str(target), "files": len(files), "bytes": total, "date": time.strftime("%Y-%m-%d %H:%M"),
               "source_hashes": hashes, "zip_sha256": verified_zip_hash, "directories": directories,
-              "kept_local": sorted(os.path.relpath(k, os.path.normcase(str(src))) for k in keep)}
+              "kept_local": sorted(os.path.relpath(k, os.path.normcase(str(src))) for k in keep),
+              "save_exts": list(save_exts)}
     (src / STUB).write_text(
         "# Archived\n\nThis folder's contents were zipped by housekeep and verified (every member's CRC and hash read "
         "back from the archive copy). Local retirement is a separate step; consult the action receipt "
@@ -432,11 +433,17 @@ def periodic_note(cfg, scanner, now=None):
         len(report['rows']),counts.get('review retirement',0),report['state'])
 
 
-def restore_archive(stub: Path, save_exts=SAVE_EXTS) -> Path:
-    """Extract the zip named in the stub back into its folder. Refuses if any member's path exists with other bytes."""
+def restore_archive(stub: Path, save_exts=None) -> Path:
+    """Extract the zip named in the stub back into its folder. Refuses if any member's path exists with other bytes.
+
+    `save_exts` defaults to the extensions the archive was made with (its record), so every archive a toolkit can
+    make it can also restore; a record from before that key uses SAVE_EXTS. X4's save names and profile subtree
+    are refused whatever the extensions."""
     stub = Path(stub)
     text = stub.read_text(encoding="utf-8")
     record = json.loads(text.rsplit("<!-- ", 1)[1].split(" -->", 1)[0])
+    if save_exts is None:
+        save_exts = tuple(record.get("save_exts", SAVE_EXTS))
     dest = stub.parent
     if record.get('zip_sha256') and _hash(record['zip']) != record['zip_sha256']:
         raise ArchiveError('archive hash no longer matches its receipt')

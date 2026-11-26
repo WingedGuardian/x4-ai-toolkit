@@ -64,10 +64,53 @@ def test_restore_and_scope_take_the_extensions_too(tmp_path):
         assert "save_exts" in inspect.signature(fn).parameters, fn.__name__
 
 
+def _round_trip(tmp_path, save_exts):
+    task = _task(tmp_path, "fixture.ess")
+    rec = ha.archive_folder(task, tmp_path / "nas", None, **({} if save_exts is None else {"save_exts": save_exts}))
+    for victim in rec["victims"]:
+        victim.unlink()
+    return task, ha.restore_archive(task / ha.STUB)
+
+
+def test_an_archive_made_with_x4_extensions_restores_with_them(tmp_path):
+    task, dest = _round_trip(tmp_path, ())
+    assert dest == task and (task / "fixture.ess").read_bytes() == b"fixture"
+
+
+def test_TWIN_an_explicit_default_restore_still_refuses_that_ess(tmp_path):
+    task = _task(tmp_path, "fixture.ess")
+    rec = ha.archive_folder(task, tmp_path / "nas", None, save_exts=())
+    for victim in rec["victims"]:
+        victim.unlink()
+    with pytest.raises(ha.ArchiveError, match="protected save"):
+        ha.restore_archive(task / ha.STUB, ha.SAVE_EXTS)
+
+
+def test_a_record_without_save_exts_restores_with_the_default(tmp_path):
+    task = _task(tmp_path, "notes.txt")
+    rec = ha.archive_folder(task, tmp_path / "nas", None)
+    stub = task / ha.STUB
+    text = stub.read_text(encoding="utf-8")
+    assert '"save_exts": [".ess", ".skse"]' in text
+    stub.write_text(text.replace(', "save_exts": [".ess", ".skse"]', ""), encoding="utf-8")   # a pre-4.3.1 stub
+    for victim in rec["victims"]:
+        victim.unlink()
+    assert ha.restore_archive(stub) == task and (task / "notes.txt").read_bytes() == b"fixture"
+
+
 def test_x4housekeep_passes_x4_extensions_on_every_archiver_call():
+    import ast
     src = (REPO / "scripts" / "x4housekeep.py").read_text(encoding="utf-8")
     assert "X4_SAVE_EXTS = ()" in src
-    for call in ("archive_scope(action, cfg, X4_SAVE_EXTS)", "save_exts=X4_SAVE_EXTS)",
-                 "verify_source(Path(a['path']), rec, X4_SAVE_EXTS)"):
-        assert call in src, call
     assert '.endswith((".ess",".skse"))' not in src
+    seen = {}
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in (
+                "archive_scope", "archive_folder", "verify_source", "review_archives", "restore_archive"):
+            names = [a.id for a in node.args if isinstance(a, ast.Name)] + [
+                k.value.id for k in node.keywords if isinstance(k.value, ast.Name)]
+            seen.setdefault(node.func.attr, []).append("X4_SAVE_EXTS" in names)
+    # Every call, one by one: reverting any single call site must fail this.
+    assert seen.get("archive_scope") == [True, True], seen
+    for name in ("archive_folder", "verify_source", "review_archives"):
+        assert seen.get(name) == [True], (name, seen)
