@@ -1,10 +1,10 @@
 # x4run: start X4, run a check, close X4
 
-> **Status: built and tested offline. It has never been run against the real game: treat
-> every result as unverified.** Every test drives a scripted stand-in for the process runner;
-> nothing in the test suite starts Steam or X4. The first real `x4run run` is build step 2
-> and needs its own approval. Until then, `x4run run` is a tool you can read about, not one
-> with a track record.
+> **Status: built and tested offline, then run against the real game ONCE (2026-11-25, a
+> menu-only measuring run with no save loaded: start, observe, close; see "Measured" below).
+> Treat it as having a track record of one.** Every test drives a scripted stand-in for the
+> process runner; nothing in the test suite starts Steam or X4. A run with a loaded world
+> (build step 3) has never happened and needs its own approval.
 
 `x4run` is a command line (`x4validate/_x4run.py` holds the logic, `_x4runcli.py` the command
 line) that is meant to run one whole cycle without a person at the keyboard: ask Steam to
@@ -130,14 +130,14 @@ files live beside it.
   may belong to a run that is still starting, which has no `X4.exe` yet) and one successful
   read shows no `X4.exe`. Never delete the record file by hand.
 
-## Before the first real launch (step 2)
+## Before you run it
 
 * The game appears on the current (main) desktop and takes focus.
 * Do not start X4 yourself while the run is starting (up to about 3.5 minutes).
 * `--no-ready-check` is required: the real readiness probe is not wired yet. It means the
   command runs the moment `X4.exe` appears, while the game is still loading.
 * `x4live` will not answer at the main menu (the helper arms only after a world loads), so a
-  step-2 pipe check should expect no answer.
+  check that needs the pipe gets no answer at the main menu.
 * Run `x4run run` in the background: an agent's foreground shell call is limited to 10
   minutes, while the driver's own budgets reach about 70 minutes. A killed driver leaves the
   game running with a record that `x4run stop` recovers.
@@ -152,7 +152,7 @@ files live beside it.
 
 ## Measured and unmeasured
 
-Taken from the design; the driver has not been run against the real game.
+What was read beforehand, what one real run has shown, and what is still a guess.
 
 **Read (from files and earlier measurements, not from running this driver):**
 
@@ -170,18 +170,37 @@ Taken from the design; the driver has not been run against the real game.
 **Measured once, outside the driver's own runs:** the process READ (the PowerShell
 `Win32_Process` query) was run for real against `explorer.exe`, `steam.exe` and `X4.exe` (none
 running): the rows parsed and two reads gave identical identities. The close and terminate
-calls have never been run.
+calls had not been run then; the driver run below ran the close, and the terminate has never run.
 
-**Unmeasured (every item is a guess until step 2):**
+**Measured by ONE driver run, 2026-11-25 (step 2: menu-only, no save loaded, one machine, one
+modlist, n = 1; treat as a first data point, not a guarantee):**
 
+* The whole cycle worked end to end: `run` exited 0, `closed: yes (method: window-close)`,
+  `remaining: none`, the run record was removed and no `X4.exe` was left.
+* The driver recorded the new `X4.exe` (the recorded path equalled `<game root>/X4.exe`, so
+  the path comparison needed no `samefile` fallback on this machine). The process appeared
+  about 3 s after the approval was recorded.
+* The window-close request ended the game in 11 s (the grace period is 60 s); the terminate
+  step was not needed. No quit freeze was seen at the main menu.
+* The game window was visible about 10 s after the process appeared (briefly "not
+  responding" while loading), 1680 x 1002 and NOT minimised; it was not the foreground
+  window during the run (the driver does not need focus; it did not steal it here).
+* Startup to the end of the loading log took about 165 s with this modlist, memory reached
+  about 5.9 GB, and a `debug.txt` growing from the first seconds is a usable progress signal.
+* `x4live query probe` at the main menu got no pipe within 15 s (exit 2), as the helper
+  arms only after a world loads: the main menu is NOT a readiness signal for `x4live`.
+
+**Unmeasured (every item is a guess until step 3 or a later run):**
+
+* autosave on exit while a world is loaded (a world was never loaded);
+* the close request while a world is loaded, or while a crash dump is written;
 * whether `steam.exe -applaunch 392160 [args]` appends arguments to the saved launch options;
 * what the `steam.exe -applaunch` forwarder's exit codes mean, and how long the call takes;
 * how to load a named save or start a new game from the command line;
-* how X4 reacts to a normal window-close request, and whether it autosaves on exit;
 * whether X4 renders on a private background desktop;
-* every timeout in the module (60 s close grace, 30 s terminate wait, 180 s start wait) is a
-  default, not a measurement;
-* the real behaviour of the close request and the terminate request on this machine.
+* the terminate request on this machine (the close request sufficed, so it never ran);
+* the 30 s terminate wait and 180 s start wait are defaults: the start was measured at about
+  3 s and the close at 11 s on one run.
 
 ## Non-goals
 
@@ -192,9 +211,9 @@ calls have never been run.
 
 ## The three build steps
 
-1. **Offline** (this step, built): the driver, its command line and its tests, with a scripted
+1. **Offline** (built): the driver, its command line and its tests, with a scripted
    fake as the only process runner. No launch.
-2. **One approved launch, measuring only:** the first real `x4run run`. Start through Steam,
+2. **One approved launch, measuring only** (done 2026-11-25): the first real `x4run run`. Start through Steam,
    reach the main menu, check the pipe, close, verify nothing is left; measures the items
    above. No save is loaded. Needs its own approval.
 3. **A full run:** load a named test save, run `x4live` checks, close; wires the real

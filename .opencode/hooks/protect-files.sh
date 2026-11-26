@@ -294,7 +294,7 @@ esac
 # the toolkit ships into a hook tree, or (b) its hook folder already holds such a file (a helper
 # planted next to the guards). The names are the generator's own output (render_hooks plus the
 # Codex and OpenCode adapters), pinned both ways by tests/test_file_guard_deployed_hooks.py.
-_X4_SHIPPED_HOOK_NAMES="_x4-env.sh backup-before-edit.sh charter.py charter.sh check-reference-version.sh codex-entry.ps1 codex-entry.sh codex_adapter.py codex_trust.py hook_facts.py opencode_adapter.py opencode_config.py patch_paths.py preferences.py profile_approval.py protect-bash.sh protect-files.sh ps_translate.ps1 save-sentinel.sh save_policy.py save_sentinel.py search-scope.sh session-canary.sh settings_guard.py test-protect-bash.sh test_audit0924_hooks.py test_hook_facts.py test_python_durable_scope.py x4_upgrade_render.py x4guard.py x4validate-on-edit.sh"
+_X4_SHIPPED_HOOK_NAMES="_x4-env.sh backup-before-edit.sh charter.py charter.sh check-reference-version.sh codex-entry.ps1 codex-entry.sh codex_adapter.py codex_trust.py hook_facts.py no-detached-launch.py no-detached-launch.sh opencode_adapter.py opencode_config.py patch_paths.py preferences.py profile_approval.py protect-bash.sh protect-files.sh ps_translate.ps1 save-sentinel.sh save_policy.py save_sentinel.py search-scope.sh session-canary.sh settings_guard.py test-protect-bash.sh test_audit0924_hooks.py test_hook_facts.py test_no_detached_launch.py test_python_durable_scope.py x4_upgrade_render.py x4guard.py x4validate-on-edit.sh"
 # x4_hook_root_holds_toolkit PATH: true when a hook folder PATH lies in (its first and its last
 # `.claude/hooks`, `.codex/hooks` or `.opencode/hooks` segment) holds a file of that list. Builtins
 # only; paid only by a path inside a hook tree.

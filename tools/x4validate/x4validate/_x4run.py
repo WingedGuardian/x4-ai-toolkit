@@ -719,8 +719,8 @@ CLOSE_CALL_TIMEOUT_S = 30
 # only if it is an `int` (not a bool) and >= 1, checked before any call, so only digits can
 # be appended, and `[int]$ProcId` binds them. (The binding was checked once, in review, with
 # a harmless read-only stand-in of this wrapper shape: `-Command "& {param([int]$ProcId) ...}"
-# 123` bound 123 to $ProcId. These close and terminate scripts themselves have NEVER been run;
-# only the process READ has been run for real.)
+# 123` bound 123 to $ProcId. The close script has run against the real game once (2026-11-25, at
+# the main menu); the terminate script has NEVER been run.)
 # Exit 3: no main window to ask. The close and terminate scripts are separate and never both
 # in one call.
 _CLOSE_SCRIPT = (

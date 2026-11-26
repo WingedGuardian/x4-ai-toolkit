@@ -18,7 +18,7 @@ options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
 
-x4run: this driver has never been run against the real game: treat every result as unverified (built and tested offline, build step 1 of 3). See docs/x4run.md for what is measured and what is not.
+x4run: this driver has been run against the real game once (menu only, no save loaded): treat every result as unverified (build step 2 of 3 done). See docs/x4run.md for what is measured and what is not.
 ```
 
 ## `x4run status`
@@ -42,7 +42,7 @@ usage: x4run run [-h] --approved-by WHO --mode {menu-only,load-save,new-game} --
                  [--command-timeout SECONDS] [--hold SECONDS]
                  [COMMAND ...]
 
-Start X4 through Steam, wait until it is ready, run COMMAND, then ALWAYS close the game and verify it is gone. Every approval flag is required: the driver records the user's approval but cannot grant it. x4run: this driver has never been run against the real game: treat every result as unverified (built and tested offline, build step 1 of 3).
+Start X4 through Steam, wait until it is ready, run COMMAND, then ALWAYS close the game and verify it is gone. Every approval flag is required: the driver records the user's approval but cannot grant it. x4run: this driver has been run against the real game once (menu only, no save loaded): treat every result as unverified (build step 2 of 3 done).
 
 positional arguments:
   COMMAND               the command to run once the game is ready, after `--`: an argv list, never

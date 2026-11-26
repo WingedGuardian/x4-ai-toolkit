@@ -84,6 +84,11 @@ jobs:
       - name: Install Python 3.13
         run: uv python install 3.13
 
+      # The no-detached-launch tests also run with the hook under 3.10 and 3.12 (HOOK_PYTHON, below). Installing those
+      # here keeps the download out of the tests' 30 s per-hook-call timeout and makes a failed download a setup failure.
+      - name: Install the other hook Pythons (3.10, 3.12)
+        run: uv python install 3.10 3.12
+
       # The vendored BaseX jar had NEVER been executed by CI, on any OS. The 24 BaseX
       # unit tests pass without a JVM because they mock -- test_preflight.py monkeypatches
       # shutil.which and writes a jar that is literally b"not really a jar, but it is a
@@ -164,6 +169,37 @@ jobs:
         env:
           X4_MAX_TRANSLATOR_SKIPS: ${{ matrix.os == 'windows-latest' && '0' || '3' }}
         run: python .claude/hooks/test_audit0924_hooks.py
+
+      # The no-detached-launch guard: its tests and its mutation gate. pytest's `testpaths` is `tests`, which does
+      # NOT reach .claude/hooks, so the file is named here (a test file left in that folder without a step runs
+      # nowhere: test_python_durable_scope.py is one). `uv run --project` gives it the locked venv's pytest.
+      # The gate runs 83 mutants on copies, each a full run of the test file (the unmutated copy must pass first).
+      - name: no-detached-launch tests
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: uv run --frozen --project tools/x4validate python -m pytest -q -p no:cacheprovider .claude/hooks/test_no_detached_launch.py
+
+      # The registered wrapper starts whichever `python` is first on PATH (3.10 on one maintainer machine), and the
+      # hook's tokenizer differs by minor (3.12 splits f-strings into tokens), so the same tests judge the hook under
+      # the other supported minors too. HOOK_PYTHON picks the interpreter the hook runs under; pytest stays on 3.13.
+      - name: no-detached-launch tests (hook under Python 3.10)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        env:
+          HOOK_PYTHON: uv run --no-project --python 3.10 python -I -B
+        run: uv run --frozen --project tools/x4validate python -m pytest -q -p no:cacheprovider .claude/hooks/test_no_detached_launch.py
+
+      - name: no-detached-launch tests (hook under Python 3.12)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        env:
+          HOOK_PYTHON: uv run --no-project --python 3.12 python -I -B
+        run: uv run --frozen --project tools/x4validate python -m pytest -q -p no:cacheprovider .claude/hooks/test_no_detached_launch.py
+
+      - name: no-detached-launch mutation gate (every mutant must turn the tests red)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: uv run --frozen --project tools/x4validate python scripts/verify-no-detached-launch.py
 
       - name: Hook E2E probe suite
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -785,7 +821,7 @@ jobs:
           #   (cd893037): the ONLY delta on both legs is tests/test_pipe_unref_guard.py +4 (the offline checks that
           #   load the real game's lua51_64.dll and winpipe DLL: Windows-only on ubuntu, no X4_GAME on windows).
           #   ubuntu 495 -> 499, windows 93 -> 97. Ceilings: 499 + 3, 97 + 3.
-          # 2026-11-24 (x4run, session/x4-driver): DERIVED, not yet READ on CI (the branch was never pushed). The only
+          # 2026-11-24 (x4run): DERIVED; the ubuntu leg then passed under this ceiling on PR #26. The only
           #   new platform skip is tests/test_x4run_process.py::test_every_read_is_started_hidden (1 test, not
           #   parametrized: pytest.skip off Windows; the one test that asserts the literal CREATE_NO_WINDOW value).
           #   `git grep -n skip` over the branch's added/changed test files finds no other skip. ubuntu 499 -> 500,

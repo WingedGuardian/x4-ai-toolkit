@@ -49,6 +49,17 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-detached-launch.sh\"",
+            "timeout": 30,
+            "statusMessage": "Checking for detached launches..."
+          }
+        ]
       }
     ],
     "PostToolUse": [
