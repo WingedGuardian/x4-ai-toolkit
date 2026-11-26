@@ -39,7 +39,9 @@ tell the user the update has to be done by hand from the release page -- never i
    away from the install, and builds a review of every file that would change. It installs nothing and authorizes
    nothing (`application_authorized: false`). It refuses (exit `2`), changing nothing, when an earlier update left a
    failed or in-flight marker (step 8), when this is a git checkout, or when this install already fails its health
-   check: the error then starts `fix x4doctor first` and names the FAIL rows. Tell the user, have them run
+   check: the error then starts `fix x4doctor first` and names the FAIL rows. The review starts with a line naming
+   what is NOT written (the release's files for agents this install does not have, and `agent/`, `docs/`,
+   `.github/`): an update keeps the install's agent set; adding an agent is the installer's job. Tell the user, have them run
    `python {{TOOLKIT}}/scripts/x4doctor.py`, fix what it FAILs, and stage again. Never work around that refusal: an
    install that is already unhealthy cannot prove a rollback.
 3. **Show the review to the user, verbatim.** Print the whole `review` text from the result; do not summarise it, do
@@ -53,7 +55,9 @@ tell the user the update has to be done by hand from the release page -- never i
    `--accept-guard-changes` only after that yes. The same holds for choosing `candidate` on a file listed under
    "Only if you choose `candidate`".
 6. **Conflicts need the user's choices.** For every file the user changed that the release also changes, the user
-   picks `keep` (theirs), `candidate` (the release's) or, for a hook settings file, `merged_settings`. Write their
+   picks `keep` (theirs), `candidate` (the release's) or, for a hook settings file, `merged_settings`. Each agent's
+   hook settings file always needs a choice, even when unchanged (an apply without one is refused and names it):
+   explain that `merged_settings` keeps the user's own hooks and takes the release's. Write their
    answers as one JSON object (`{"README.md": "keep"}`) to the choices file the review's `next:` block names (beside
    the bundle, outside the install) and pass it as `--choices`. Never pick for them. `x4-paths.env` and `X4-NOTES.md`
    are always kept; an update never replaces them.
@@ -63,9 +67,9 @@ tell the user the update has to be done by hand from the release page -- never i
    if step 5 was answered yes, and `--quiescent` (it states that you asked; it does not stop anything). It runs this
    install's setup and health check first and refuses (exit `2`, `fix setup.sh first` / `fix x4doctor first`) if
    either already fails. Then it replaces the files, runs the new setup and health check, and **rolls back by itself
-   if either fails** (exit `1`). Report its `report` text as it is: applied, rolled back, or failed. After an applied
-   update, tell a Codex user to re-approve the changed hooks in `/hooks` (Codex skips a changed hook until then), and
-   suggest `x4doctor.py` once.
+   if either fails** (exit `1`). Report its `report` text as it is: applied, rolled back, or failed. Its first line
+   tells a Codex user to re-approve the changed hooks in `/hooks` (Codex skips a changed hook until then): say it
+   to the user, and suggest `x4doctor.py` once.
 8. **A failed update is loud, and stays loud.** If the result says `FAIL CLOSED` (it could not be rolled back and
    verified), if the command was interrupted, or if a later session start says `TOOLKIT UPDATE NEEDS THE USER`, the
    guards may be broken or missing. Stop. Tell the user, show them the marker file it names
