@@ -288,6 +288,9 @@ _tracked_copy_set() {
   while IFS= read -r -d '' p; do all+=("$p"); heads="$heads${p%%/*} "; done < <(git -C "$SRC" ls-files -z 2>/dev/null)
   for item in $X4_ITEMS; do
     [ -e "$SRC/$item" ] || continue
+    # An OPTIONAL item (BUILD-INFO) is never tracked, and a stray untracked one in a checkout must not make this
+    # check give up the tracked set and copy everything on disk. Mirror: Get-TrackedCopySet in install.ps1.
+    case " $X4_OPTIONAL_ITEMS " in *" $item "*) continue ;; esac
     case "$heads" in *" $item "*) : ;; *)
       X4_TRACKED_WHY="git tracks nothing under '$item', which is on disk"
       return 1 ;;
@@ -445,6 +448,15 @@ copy_toolkit() {
   recycle_copy_prune "$dest" || return 1
   local tracked=0
   _tracked_copy_set && tracked=1
+  # A STALE BUILD-INFO. It names the release this folder came from (the shared core's self-update reads it), so an
+  # install from a git checkout over a release install, whose source has none, would otherwise keep the OLD release's
+  # file and read as that older version. A generated, shipped file, never a user's: recycled like the prune list, but NOT
+  # in it -- X4_COPY_PRUNE is also what the copy skips, and a release source's BUILD-INFO must travel. A checkout copies
+  # only git's tracked set, which never holds BUILD-INFO, so even a stray one in it is not copied and the old one is stale.
+  # Mirror: install.ps1.
+  if { [ ! -e "$SRC/BUILD-INFO" ] || [ "$tracked" = 1 ]; } && { [ -e "$dest/BUILD-INFO" ] || [ -L "$dest/BUILD-INFO" ]; }; then
+    recycle_installer_paths "$dest/BUILD-INFO" || return 1
+  fi
   if [ "$tracked" = 1 ]; then
     # ANNOUNCED: a step that narrows the data says so.
     echo "  source is a git checkout: copying the ${#X4_TRACKED[@]} file(s) git tracks in the copy set;"

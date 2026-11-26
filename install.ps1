@@ -360,6 +360,9 @@ function Get-TrackedCopySet {
   foreach ($p in $all) { $heads[($p -split '/', 2)[0]] = $true }
   foreach ($i in $X4Items) {
     if (-not (Test-Path -LiteralPath (Join-Path $SRC $i))) { continue }
+    # An OPTIONAL item (BUILD-INFO) is never tracked; a stray untracked one must not make this check give up the tracked
+    # set. Mirror: _tracked_copy_set in install.sh.
+    if ($X4OptionalItems -contains $i) { continue }
     if (-not $heads.ContainsKey($i)) {
       $script:X4TrackedWhy = "git tracks nothing under '$i', which is on disk"
       return $false
@@ -1624,6 +1627,13 @@ function Copy-Toolkit($dest) {
   Recycle-CopyPrune $dest
 
   $tracked = Get-TrackedCopySet
+  # A STALE BUILD-INFO: see the mirror in install.sh (copy_toolkit). Recycled when the source has none, or when it is a
+  # checkout (only git's tracked set is copied, which never holds BUILD-INFO); it is not in $X4CopyPrune, which would also
+  # stop a release source's BUILD-INFO being copied.
+  if ($tracked -or -not (Test-Path -LiteralPath (Join-Path $SRC 'BUILD-INFO'))) {
+    $stale = Join-Path $dest 'BUILD-INFO'
+    if (Test-Path -LiteralPath $stale) { Recycle-InstallerPaths @($stale) }
+  }
   if ($tracked) {
     # ANNOUNCED: a step that narrows the data says so.
     Write-Host ("  source is a git checkout: copying the " + $script:X4Tracked.Count + " file(s) git tracks in the copy set;")

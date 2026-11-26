@@ -1,0 +1,71 @@
+---
+name: x4-toolkit-update
+description: Update the X4 AI Assistant Toolkit itself (not a mod) to its newest GitHub release, or answer "is there a new version". Use when the user says "update the toolkit", "is there a new version of the toolkit", or when the session start said a newer toolkit release is out, or said an update failed or is unfinished. Shows what changes before anything is installed, and asks the user at each step.
+allowed-tools: Bash, Read
+---
+
+Update the toolkit that is installed in this folder. **This is the toolkit, not a mod**: for porting a mod to a newer
+game version use `x4-update-mod`. **Nothing here installs anything by itself.** Every step that changes the installed
+toolkit waits for the user's own word in this conversation, and an update never starts because a session-start line
+suggested one.
+
+The commands are subcommands of the toolkit's harness entry; run them from the install folder:
+`python {{TOOLKIT}}/tools/agent-harness.py <command> [--installed-root <folder>]`. Each prints one JSON object and
+sets the exit code (`0` ok, `1` something went wrong after work began, `2` refused before anything changed).
+
+## Which commands exist in this install
+
+`update-check` and `update-fetch` are in every install that has this skill. The staged, reviewed update below uses
+`update-stage`, `update-apply` and `update-clear-failed`: **these arrive with the guarded-update commands (a later
+step of the same release) and may not be in this install yet.** Run `python {{TOOLKIT}}/tools/agent-harness.py --help`
+and look for them. If they are not listed, say so, stop after step 1, and tell the user the update has to be done by
+hand from the release page (the README's "Updating" section, once present) -- never improvise an install with
+`update-fetch` plus a copy.
+
+## The flow
+
+1. **Is there a newer release?** `update-check` (add `--now` to ignore the once-a-day limit). It reports `installed`,
+   `latest`, `update_available`, `status` and `error`:
+   - `status: off` -- checking is switched off (`X4_UPDATE_CHECK=off`, `X4_HOUSEKEEP_SWEEP=off`,
+     `MODDING_HARNESS_UPDATE_CHECK=off`, or `{"v": 1, "check": false}` in `.modding-agent-harness/updates.json`).
+     Say so; do not turn it on for the user and do not work around it.
+   - `status: unreachable` -- GitHub could not be reached. Offline is normal; say so and stop.
+   - `installed: null` -- this install has no release to compare with (a git checkout, or an install with neither a
+     `BUILD-INFO` file nor a release heading in `CHANGELOG.md`). Say so; a checkout is updated with git.
+   - `update_available: false` -- tell the user they are current.
+2. **Stage it** (`update-stage`; *arrives with the guarded-update commands*). It downloads the release, verifies it
+   against the digest GitHub publishes, and builds a review of every file that would change. It installs nothing and
+   authorizes nothing. It refuses, changing nothing, when an earlier update left a failed marker (step 7), when another
+   update is unfinished, or when this install already fails its own health check (then run `x4doctor`, fix what it
+   FAILs, and stage again).
+3. **Show the review to the user, verbatim.** Print the whole review text from the result; do not summarise it, do
+   not skip the files that look harmless, and do not decide for them what matters. Say which files the user edited
+   themselves and which collide with the new release.
+4. **Ask the user** whether to go ahead. Wait for the answer. "Continue", an earlier "update the toolkit" and a yes to
+   some other question are not the answer to this one.
+5. **Guard changes need a separate, explicit go.** When the result says `requires_guard_accept: true`, the release
+   changes hooks, guards, settings or policy files: the code that protects saves, `reference/` and the game folder.
+   Name those files and ask a second time, in its own message. Pass `--accept-guard-changes` only after that yes.
+6. **Conflicts need the user's choices.** For every file the user changed that the release also changes, the user
+   picks `keep` (theirs), `candidate` (the release's) or, for the settings file, a merged copy. Write their answers to
+   a choices file (JSON, outside the install folder) and pass it as `--choices`. Never pick for them.
+7. **Ask them to close their other agent sessions** (and any editor writing into the install) before applying: the
+   update replaces files those sessions are using. Only when they say it is done, run `update-apply` with the bundle
+   and review SHA-256 the staged result printed, the choices file, `--accept-guard-changes` only if step 5 was
+   answered, and `--quiescent` (it states that you asked; it does not stop anything). It replaces the files, runs the
+   toolkit's setup and health check, and **rolls back by itself if either fails**. Report its result as it is: ok,
+   rolled back, or failed.
+8. **A failed update is loud, and stays loud.** If the result says it could not be rolled back and verified, or a
+   later session start says `TOOLKIT UPDATE NEEDS THE USER`, the guards may be broken or missing. Stop. Tell the
+   user, show them the marker file it names (`.modding-agent-harness/update-failed.json` or
+   `update-in-flight.json`) and do not update, edit guards or trust the hooks until they have read it and fixed the
+   cause. Clear the markers (`update-clear-failed`) only when the user asks you to, after that. Staging refuses until
+   they are cleared.
+
+## Rules
+
+- Never download a release by hand, never unpack one into the install, never copy files over the install: the
+  commands verify the download, unpack it away from the install and keep a rollback journal. A hand copy has none of it.
+- The note at session start is only a suggestion drawn from a cache. Run `update-check` yourself before telling the
+  user what is current.
+- Applying is the user's decision, always: the only thing you may do without asking is step 1.

@@ -3854,3 +3854,57 @@ def test_BUILD_INFO_travels_from_a_RELEASE_source_and_a_checkout_without_one_say
     note = [ln for ln in (r2.stdout + r2.stderr).splitlines() if "not in the source" in ln]
     assert note, "the source is missing real items, so the note must still appear (control)"
     assert not any("BUILD-INFO" in ln for ln in note), note
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1"])
+def test_a_stale_BUILD_INFO_is_removed_when_the_source_has_none_and_replaced_when_it_has_one(installer, tmp_path):
+    """4.3.1 task 6b: BUILD-INFO names the release a folder came from, and the core's self-update reads it. An install
+    from a git checkout (no BUILD-INFO) over a release install used to leave the old file, so the folder read as the
+    OLD release. It is recycled (not deleted) in a step of its own, never via X4_COPY_PRUNE, which would also stop a
+    release source's BUILD-INFO being copied -- that is the control."""
+    old = "version=4.3.0\ncommit=" + "cd" * 20 + "\n"
+    new = "version=4.3.1\ncommit=" + "ab" * 20 + "\n"
+    src = _synthetic_source(tmp_path)
+    (src / "scripts").mkdir()
+    shutil.copy2(ROOT / "scripts" / "x4recycle.py", src / "scripts" / "x4recycle.py")
+    dest = _fresh(tmp_path)
+    (dest / "BUILD-INFO").write_bytes(old.encode("utf-8"))
+    # source WITHOUT BUILD-INFO: the stale one goes (into the recycler), nothing is reported missing for it
+    r = _install(installer, tmp_path, dest, source=src)
+    assert (dest / ".claude").is_dir(), "the copy did not run; this proves nothing: " + (r.stdout + r.stderr)[-1500:]
+    assert not (dest / "BUILD-INFO").exists(), "a stale BUILD-INFO survived an install from a source with none"
+    recycled = pathlib.Path(os.environ["X4_RECYCLE_TEST_BIN"])
+    assert any(p.name.endswith("-BUILD-INFO") and p.read_bytes() == old.encode("utf-8") for p in recycled.iterdir()), \
+        "it was not recycled (recoverable): " + (r.stdout + r.stderr)[-1500:]
+    # control: a source WITH one replaces the old file, so the removal is not a blanket prune of the name
+    (src / "BUILD-INFO").write_bytes(new.encode("utf-8"))
+    (dest / "BUILD-INFO").write_bytes(old.encode("utf-8"))
+    r2 = _install(installer, tmp_path, dest, source=src)
+    assert (dest / "BUILD-INFO").read_bytes() == new.encode("utf-8"), (r2.stdout + r2.stderr)[-1500:]
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1"])
+def test_a_STRAY_untracked_BUILD_INFO_in_a_checkout_keeps_the_TRACKED_SET_and_the_old_one_still_goes(installer, tmp_path):
+    """4.3.1 task 6b. BUILD-INFO is an OPTIONAL copy item that git never tracks (it is gitignored). The check that
+    decides whether a source may be copied as git's tracked set ran over every copy item, so a stray untracked
+    BUILD-INFO made it give up ("git tracks nothing under 'BUILD-INFO'") and copy everything on disk. It must not.
+    And since the tracked set never holds BUILD-INFO, the destination's old one (a release install's) is stale then
+    too and is recycled, though the source has a file of that name."""
+    src = _derived_source(tmp_path, "top")
+    (src / "BUILD-INFO").write_text("version=9.9.9\n", encoding="utf-8")      # untracked, as a stray one is
+    (src / "scripts").mkdir()
+    shutil.copy2(ROOT / "scripts" / "x4recycle.py", src / "scripts" / "x4recycle.py")
+    _git(src, "add", "--", "scripts/x4recycle.py")                                # the recycler is a tracked file
+    _git(src, "commit", "-q", "-m", "recycler")
+    dest = _fresh(tmp_path)
+    old = b"version=4.3.0\n"
+    (dest / "BUILD-INFO").write_bytes(old)
+    r = _install(installer, tmp_path, dest, source=src)
+    out = r.stdout + r.stderr
+    got = _copied(dest)
+    assert _TRACKED in got, "the copy did not run:\n%s" % out[-1500:]
+    assert "tracked" in out.lower() and "git tracks nothing" not in out, \
+        "a stray BUILD-INFO made the installer leave tracked-set mode:\n%s" % out[-1500:]
+    leaked = sorted(set(_DERIVED + (_UNTRACKED,)) & got)
+    assert not leaked, "untracked/derived files travelled from a git source: %s" % leaked
+    assert "BUILD-INFO" not in got, "a stray BUILD-INFO (or the stale one) is in the destination: %s" % sorted(got)
