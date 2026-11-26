@@ -1312,6 +1312,7 @@ write_opencode_config() {   # DEST
 #: the agent. scripts/x4launcher.py writes it through the vendored core; it bakes this machine's absolute path, so
 #: the files are per-machine (X4_KEEP_LOCAL). A failure here is a WARNING, never INCOMPLETE: the install itself is
 #: sound, and the agent can still be started from the install folder by hand. install.ps1: Write-Launcher.
+X4_LAUNCHER_START=""; X4_LAUNCHER_AGENTS=""   # set only when the launcher was written
 write_launcher() {   # DEST
   local dest="$1" agents out rc=0
   if [ "$METHOD" = global ]; then
@@ -1320,6 +1321,10 @@ write_launcher() {   # DEST
   fi
   if [ "$DRY_RUN" = 1 ]; then echo "  --dry-run: NOT writing the launcher into $dest/bin"; return 0; fi
   agents="$(_agents_landed | tr -d ' ')"
+  if [ -z "$agents" ]; then
+    echo "  [note] launcher: no agent target was installed, so there is nothing to start."
+    return 0
+  fi
   if [ ! -f "$dest/scripts/x4launcher.py" ]; then
     echo "  WARNING: no launcher written: scripts/x4launcher.py is missing from $dest. Start your agent from $dest."
     return 0
@@ -1329,9 +1334,14 @@ write_launcher() {   # DEST
     return 0
   fi
   out="$("${X4_OC_PY[@]}" -I "$dest/scripts/x4launcher.py" --toolkit "$dest" --agents "$agents" 2>&1)" || rc=$?
+  out="$(printf '%s' "$out" | tr -d '\r')"
   printf '%s\n' "$out" | sed 's/^/  /'
   if [ "$rc" != 0 ]; then
     echo "  WARNING: the launcher was not written (exit $rc, see above). Start your agent from $dest."
+  else
+    # What the script says it wrote (and for which agents) is what the final banner names, never a fixed text.
+    X4_LAUNCHER_START="$(printf '%s\n' "$out" | sed -n 's/^launcher: start with: //p' | head -n 1)"
+    X4_LAUNCHER_AGENTS="$(printf '%s\n' "$out" | sed -n 's/^launcher: agents: //p' | head -n 1)"
   fi
   return 0
 }
@@ -2714,7 +2724,11 @@ echo "Toolkit:   $TOOLKIT"
 echo "Agents:    $(_agents_landed)"
 echo "Config:    $TOOLKIT/x4-paths.env  (edit any path here)"
 if [ "$METHOD" != global ]; then
-  echo "Start:     cd \"$TOOLKIT\" and run your agent there (or: $TOOLKIT/bin/x4agent claude|codex|opencode)"
+  if [ -n "$X4_LAUNCHER_START" ]; then
+    echo "Start:     cd \"$TOOLKIT\" and run your agent there (or: $X4_LAUNCHER_START $X4_LAUNCHER_AGENTS)"
+  else
+    echo "Start:     cd \"$TOOLKIT\" and run your agent there"
+  fi
 fi
 # CODEX RUNS NO HOOK IT HAS NOT REVIEWED, and it says nothing when it skips one
 # (MEASURED, spike 2026-09-30). The installer must never approve hooks or trust the

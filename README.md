@@ -574,6 +574,8 @@ one; until it has one, the toolkit's guards do not protect it.
 
 **The launcher.** The installer writes `bin/x4agent` (and `bin/x4agent.cmd` on Windows): it changes into the install folder and starts the agent you name, from whatever folder your terminal is in, for example `bin/x4agent claude` (also `codex`, `opencode`). `--method global` has no single folder to start in, so it writes none; it also edits no PATH and no shell profile. The files hold this machine's absolute install path, so they are never copied from a source tree. If the installer could not write them it says WARNING and the install still completes: start your agent from the install folder by hand.
 
+The bash launcher bakes a Windows path when it was installed from Windows, so use it from Git Bash, not WSL. The `.cmd` launcher cannot carry a non-ASCII install path (cmd.exe reads it in the wrong code page): for such a folder the installer writes only the bash launcher and says so, so `cd` into the folder and start your agent there.
+
 **PowerShell note.** The `.ps1` launcher needs local scripts allowed, and PowerShell picks a `.ps1` over a `.cmd` of the same name when you type the bare name (measured: it refuses under the default execution policy, where the `.cmd` runs). So on Windows the installer writes only the bash and `.cmd` launchers by default. From PowerShell run `bin\x4agent.cmd claude`. To have the `.ps1` as well, run `python -I scripts/x4launcher.py --toolkit <install folder> --agents claude --shells bash,cmd,powershell`, then start it with `powershell -ExecutionPolicy Bypass -File bin\x4agent.ps1 claude`.
 
 ### Prerequisites it will check for

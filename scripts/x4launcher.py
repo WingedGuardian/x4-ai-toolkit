@@ -17,7 +17,12 @@ USAGE (run it isolated, `python -I`, so no folder in the way can shadow an impor
                   PowerShell 7, with a `.ps1` and a `.cmd` of the same name in one folder, a bare name picks the
                   `.ps1` (twice of twice), and under the stock execution policy (Restricted) that refuses to
                   run, where the `.cmd` ran every time. So a default `.ps1` would shadow the working launcher.
-  --dry-run       print what would be written and write nothing.
+  --dry-run       print what would be written and write nothing (the folder and names are still validated).
+
+A non-ASCII install path gets no .cmd launcher (cmd.exe would read the UTF-8 file in the OEM code page and name the wrong
+folder): a WARNING says so, and the bash launcher is still written.
+
+Output lines the installers read: `launcher: start with: <file to run>` and `launcher: agents: claude|codex`.
 
 Writes `<DIR>/bin/x4agent`, `x4agent.cmd` (and `x4agent.ps1` when asked for). The files bake an absolute path,
 so they are per-machine (gitignored; the installers' keep-local lists). It refuses to overwrite a file it did not
@@ -74,7 +79,20 @@ def _foreign(core, path):
         return True
 
 
-def run(toolkit, agents, shells, dry_run, out=print):
+def _drop_cmd_for_non_ascii(root, shells, warn):
+    """The core writes the .cmd as UTF-8 without a BOM and cmd.exe reads it in the OEM code page, so a non-ASCII install
+    path (MEASURED by a reviewer with a folder named Muller with an umlaut: 'install folder not found', exit 2) cannot be carried. Refuse
+    to write a launcher that names the wrong folder; the other shells are unaffected."""
+    resolved = str(Path(root).resolve())
+    if "cmd" not in shells or resolved.isascii():
+        return shells
+    warn("WARNING: no .cmd launcher written: the install path is not ASCII (%s), and cmd.exe would read it in the "
+         "wrong code page. cd into the folder, then start the agent there; the bash launcher is unaffected." % (resolved,))
+    return tuple(s for s in shells if s != "cmd")
+
+
+def run(toolkit, agents, shells, dry_run, out=print, warn=None):
+    warn = warn or (lambda text: print(text, file=sys.stderr))
     core = _core()
     table = agent_table(agents)
     if not table:
@@ -82,9 +100,15 @@ def run(toolkit, agents, shells, dry_run, out=print):
         return 0
     root = Path(toolkit)
     bin_dir = root / "bin"
+    # Validate FIRST (folder exists, names and quoting are sound), also on a dry run: a preview must not say
+    # "would write" for a folder the real run refuses.
+    for shell in shells:
+        core.render(root, shell, table, name=NAME)
+    shells = _drop_cmd_for_non_ascii(root, shells, warn)
+    if not shells:
+        raise ValueError("nothing to write: the only requested launcher, .cmd, cannot carry this install path")
     if dry_run:
         for shell in shells:
-            core.render(root, shell, table, name=NAME)          # validates the folder, names and quoting
             target = bin_dir / (NAME + SUFFIX[shell])
             if _foreign(core, target):
                 raise FileExistsError("refusing to overwrite a file this launcher did not write: %s" % (target,))
@@ -94,8 +118,11 @@ def run(toolkit, agents, shells, dry_run, out=print):
     written = core.write(root, bin_dir, table, name=NAME, shells=tuple(shells))
     for path in written:
         out("launcher: wrote %s" % (path,))
-    out("launcher: start an agent from anywhere with  %s <%s>  (it changes into %s first)"
-        % (bin_dir / (NAME + (".cmd" if "cmd" in shells and os.name == "nt" else "")), "|".join(table), root))
+    # The file to run: the .cmd on Windows when one was written (it works from cmd.exe and PowerShell), else the bash one.
+    start = next((p for p in written if p.suffix == ".cmd"), None) if os.name == "nt" else None
+    start = start or next((p for p in written if p.suffix == ""), written[0])
+    out("launcher: start with: %s" % (start,))
+    out("launcher: agents: %s" % "|".join(table))
     return 0
 
 
@@ -107,6 +134,11 @@ def main(argv=None):
                         % ",".join(default_shells()))
     parser.add_argument("--dry-run", action="store_true", help="print what would be written; write nothing")
     args = parser.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):                     # a path with a character the console cannot show must not crash this
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     shells = tuple(s.strip() for s in args.shells.split(",") if s.strip()) or default_shells()
     try:
         bad = [s for s in shells if s not in SUFFIX]

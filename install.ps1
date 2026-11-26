@@ -1213,6 +1213,7 @@ function Write-OpenCodeConfig($dest) {
 #: folder it is STARTED in, so bin\x4agent changes into the install folder and starts the agent. The files bake this
 #: machine's absolute path ($X4KeepLocal). A failure is a WARNING, never INCOMPLETE: the install is sound and the agent
 #: can still be started from the install folder by hand.
+$script:X4LauncherStart = ''; $script:X4LauncherAgents = ''   # set only when the launcher was written
 function Write-Launcher($dest) {
   if ($Method -eq 'global') {
     Write-Host '  [note] launcher: none for -Method global (a global install has no single folder to start in).'
@@ -1220,6 +1221,12 @@ function Write-Launcher($dest) {
   }
   if ($DryRun) { Write-Host "  -DryRun: NOT writing the launcher into $dest\bin"; return }
   $agents = (Get-AgentsLanded) -replace ' ', ''
+  # Nothing to start (and Windows PowerShell 5.1 would drop an empty '--agents' argument, so argparse would fail):
+  # the call is skipped, exactly as install.sh skips it.
+  if (-not $agents) {
+    Write-Host '  [note] launcher: no agent target was installed, so there is nothing to start.'
+    return
+  }
   $script = Join-Path (Join-Path $dest 'scripts') 'x4launcher.py'
   if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
     Write-Host "  WARNING: no launcher written: scripts\x4launcher.py is missing from $dest. Start your agent from $dest."
@@ -1232,9 +1239,16 @@ function Write-Launcher($dest) {
   }
   $rest = @($py | Select-Object -Skip 1)
   $r = Invoke-X4Native $py[0] (@($rest) + @('-I', $script, '--toolkit', $dest, '--agents', $agents)) -MergeStderr
-  foreach ($line in ([string]$r.Out -split "`n")) { if ($line.Trim()) { Write-Host "  $line" } }
+  $lines = @(([string]$r.Out -split "`n") | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_.Trim() })
+  foreach ($line in $lines) { Write-Host "  $line" }
   if ($r.Rc -ne 0) {
     Write-Host "  WARNING: the launcher was not written (exit $($r.Rc), see above). Start your agent from $dest."
+  } else {
+    # What the script says it wrote (and for which agents) is what the final banner names, never a fixed text.
+    foreach ($line in $lines) {
+      if ($line -cmatch '^launcher: start with: (.+)$') { $script:X4LauncherStart = $Matches[1] }
+      elseif ($line -cmatch '^launcher: agents: (.+)$') { $script:X4LauncherAgents = $Matches[1] }
+    }
   }
 }
 
@@ -2753,7 +2767,11 @@ Write-Host "Toolkit: $Toolkit"
 Write-Host ('Agents:  ' + (Get-AgentsLanded))
 Write-Host "Config:  $Toolkit\x4-paths.env  (edit any path here)"
 if ($Method -ne 'global') {
-  Write-Host "Start:   cd `"$Toolkit`" and run your agent there (or: $Toolkit\bin\$(if ($X4OnWindows) { 'x4agent.cmd' } else { 'x4agent' }) claude|codex|opencode)"
+  if ($script:X4LauncherStart) {
+    Write-Host "Start:   cd `"$Toolkit`" and run your agent there (or: $($script:X4LauncherStart) $($script:X4LauncherAgents))"
+  } else {
+    Write-Host "Start:   cd `"$Toolkit`" and run your agent there"
+  }
 }
 # CODEX RUNS NO HOOK IT HAS NOT REVIEWED, silently (MEASURED, spike 2026-09-30), and the
 # installer must never approve hooks or trust the project for the user (spec section 8).
