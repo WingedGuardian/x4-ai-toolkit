@@ -23,6 +23,8 @@
 /x4-paths.env.*
 !/x4-paths.env.example
 /x4-housekeep.json
+# A user's private instruction file for the agent (machine paths, personal rules): never committed.
+CLAUDE.local.md
 # 3.x leftovers in .claude/ (still read, deprecated) carry the key too -- and the old
 # template there is no longer the template, so it is not re-included.
 .claude/x4-paths.env
