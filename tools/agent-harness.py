@@ -129,6 +129,8 @@ def main(argv=None):
     upgrade_cli.add_arguments(sub)
     release_cli = save_policy.core(ROOT, "release")
     release_cli.add_arguments(sub)
+    guarded_cli = save_policy.core(ROOT, "guarded_update")
+    guarded_cli.add_arguments(sub)
     coverage = sub.add_parser("coverage")
     coverage.add_argument("--session-id", required=True)
     sub.add_parser("save-list")
@@ -179,6 +181,23 @@ def main(argv=None):
             output = upgrade_cli.handle(args, ROOT, local_files=("x4-paths.env", ".claude/x4-paths.env"),
                 notes_files=("X4-NOTES.md",), candidate_preparer=x4_upgrade_render.prepare, candidate_validator=x4_upgrade_render.validate,
                 generated_paths=(".codex/hooks.json",))
+        elif args.command in guarded_cli.COMMANDS:
+            # The staged, reviewed update (4.3.1 task 6c): the core's guarded_update with X4's policy (derived from the
+            # INSTALLED deployer and generator), the same notes files and renderer as upgrade-*, and the pre-check that
+            # refuses an install already failing its canary. Exit codes are the core's `exit_code`: 0 ok, 1 the update
+            # did not succeed after work began (or an unexpected error: read update-in-flight.json), 2 refused before
+            # anything changed.
+            import x4_update
+            import x4_upgrade_render
+            try:
+                output = x4_update.guarded_handle(args, ROOT, candidate_preparer=x4_upgrade_render.prepare,
+                                                  candidate_validator=x4_upgrade_render.validate)
+                exit_status = guarded_cli.exit_code(output)
+            except Exception as exc:
+                exit_status = guarded_cli.exit_code(exc)
+                output = {"ok": False, "error": str(exc) or type(exc).__name__, "error_type": type(exc).__name__}
+                if exit_status == 2:
+                    output["installed_changed"] = False
         elif args.command in release_cli.COMMANDS:
             import x4_update
             output = x4_update.handle(args, ROOT)

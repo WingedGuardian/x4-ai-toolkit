@@ -1816,6 +1816,56 @@ def render_text(ctx: Ctx, rows: list[Check], code: int, elapsed: float) -> str:
     return "\n".join(out) + "\n"
 
 
+#: --update-canary (4.3.1 task 6c): the rows the guarded update does NOT judge, and why. Every other row runs: the
+#: toolchain, the roots the guards resolve (a new loader resolving no reference root is a FAIL there, while the
+#: self-test only says UNKNOWN), the guard self-test, parity and the instruction files, the Claude wiring, the Codex hook
+#: definitions and rules, X4_GUARD, x4lock, and the OpenCode plugin and deny rules. What is left out is state the
+#: update does not change, or the user's own step that a correct update makes necessary.
+UPDATE_CANARY_SKIPPED = {
+    "layer2.reference": "the OS-level delete protection of reference/ is machine state no update changes "
+                        "(a plain x4doctor run reports it)",
+    "codex.config": "Codex's own config file, which the toolkit never writes",
+    "codex.trusted": "trusting the folder in Codex is the user's step",
+    "codex.reviewed": "an update that changes a Codex hook definition invalidates Codex's review of it by design: "
+                      "re-approving in /hooks is the user's step after the update, never a reason to roll it back",
+    "opencode.userconfig": "the user's own OpenCode config",
+    "opencode.cli": "informational only: which opencode program is on PATH",
+}
+#: The guard budget for the canary's self-test calls: the guard's 25 s default timed out on a loaded machine in the
+#: pre-push gate's self-test fixtures (4.3.1 task 1), and a timed-out guard is a FAIL row that would roll an update back.
+UPDATE_CANARY_GUARD_TIMEOUT_S = "90"
+
+
+def update_canary(a) -> int:
+    """The guarded update's canary: exit 0 when no row FAILs (TODO and UNKNOWN pass, user decision 2026-11-26), 1 on any
+    FAIL, 2 when nothing answered or the folder holds no agent target. The root is --root, else the current folder
+    (never an ancestor: the core runs this with the install as its working directory). FAIL rows come first."""
+    os.environ.setdefault("X4_GUARD_TIMEOUT_S", UPDATE_CANARY_GUARD_TIMEOUT_S)
+    root = Path(a.root).resolve() if a.root else Path.cwd().resolve()
+    ctx = Ctx(root=root, toolkit=Path(a.toolkit).resolve() if a.toolkit else AUTO)
+    t0 = time.monotonic()
+    rows = collect(ctx, a.agent) if any(ctx.targets.values()) else []
+    elapsed = time.monotonic() - t0
+    skipped = [r for r in rows if r.id in UPDATE_CANARY_SKIPPED]
+    rows = [r for r in rows if r.id not in UPDATE_CANARY_SKIPPED]
+    failed = [r for r in rows if r.status == FAIL]
+    answered = [r for r in rows if r.status in (OK, FAIL, TODO)]
+    code = 1 if failed else (0 if answered else 2)
+    verdict = {0: "PASS -- no row FAILs (TODO and UNKNOWN rows do not fail an update)",
+               1: "FAIL -- %d row(s) FAIL: the guards or their toolchain do not work here" % len(failed),
+               2: "COULD NOT RUN -- nothing answered here (no agent target in %s?); this is not a pass" % root}[code]
+    out = ["x4doctor --update-canary: %s" % verdict,
+           "  root: %s   checked: %d row(s) in %.1fs -- %s" % (
+               root, len(rows), elapsed, ", ".join("%d %s" % (sum(r.status == s for r in rows), s) for s in STATUSES))]
+    w = max([len(r.id) for r in rows] + [10])
+    for r in failed + [r for r in rows if r.status != FAIL]:
+        out.append("  %-7s %-8s %-*s %s" % (r.status, r.target, w, r.id, r.detail))
+    for r in skipped:
+        out.append("  (%s %s: not part of the update canary -- %s)" % (r.id, r.status, UPDATE_CANARY_SKIPPED[r.id]))
+    sys.stdout.write("\n".join(out) + "\n")
+    return code
+
+
 def main(argv=None) -> int:
     if sys.version_info < (3, 10):
         print("x4doctor: COULD NOT RUN -- needs Python >= 3.10 (this is %d.%d)" % sys.version_info[:2])
@@ -1832,10 +1882,15 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true", help="one JSON document on stdout")
     ap.add_argument("--toolkit", metavar="DIR",
                     help="the toolkit to compare and ask (default: the one this doctor lives in)")
+    ap.add_argument("--update-canary", action="store_true",
+                    help="the guarded update's health check: only the guard and toolchain checks, exit 0 unless a "
+                         "row FAILs (TODO and UNKNOWN pass), --root defaults to the current folder")
     try:
         a = ap.parse_args(argv)
     except SystemExit as e:
         return 2 if e.code else 0
+    if a.update_canary:
+        return update_canary(a)
     if a.agent and a.agent not in TARGETS:
         print("x4doctor: COULD NOT RUN -- unknown --agent %r (one of: %s)" % (a.agent, ", ".join(TARGETS)))
         return 2
