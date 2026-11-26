@@ -284,7 +284,6 @@ $X4CopyPrune = @('tools\x4validate\.venv',
                  'scripts\__pycache__',
                  'tools\.pytest_cache',
                  'tools\basex\__pycache__',
-                 'tools\basex\basex\.basex',
                  'tools\x4validate\gates\__pycache__',
                  'tools\x4validate\scripts\__pycache__',
                  'tools\x4validate\tests\__pycache__',
@@ -308,7 +307,7 @@ $X4CopyPrune = @('tools\x4validate\.venv',
 #: destination's own, never copied in and never deleted out), so they live HERE and
 #: not in $X4CopyPrune, whose second meaning would erase a user's built databases
 #: on every upgrade. See X4_KEEP_LOCAL in install.sh.
-$X4KeepLocal = @('x4-paths.env','x4-housekeep.json','.claude\x4-paths.env','.claude\settings.local.json','.claude\backups','.codex\hooks.json','.codex\config.toml',
+$X4KeepLocal = @('tools\basex\basex\.basex','x4-paths.env','x4-housekeep.json','.claude\x4-paths.env','.claude\settings.local.json','.claude\backups','.codex\hooks.json','.codex\config.toml',
                  '.opencode\opencode.jsonc','.claude\.reference-buildid',
                  'tools\basex\basex\data','tools\basex\basex\coverage-x4raw.json',
                  'tools\basex\basex\coverage-x4eff.json','tools\basex\_eff',

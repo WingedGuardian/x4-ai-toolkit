@@ -221,7 +221,7 @@ MISSING=""
 #: .gitignore entry says MACHINE-LOCAL by design because wall-clock differs per
 #: machine, and which the installer then copied to another machine for
 #: perf_guard to compare against a stranger's timings.
-X4_COPY_PRUNE="tools/x4validate/.venv tools/x4validate/.pytest_cache tools/basex/.pytest_cache tools/x4validate/.mutation-probe-pristine .claude/hooks/__pycache__ .claude/hooks/.pytest_cache scripts/__pycache__ tools/.pytest_cache tools/basex/__pycache__ tools/basex/basex/.basex tools/x4validate/gates/__pycache__ tools/x4validate/scripts/__pycache__ tools/x4validate/tests/__pycache__ tools/x4validate/x4validate/__pycache__"
+X4_COPY_PRUNE="tools/x4validate/.venv tools/x4validate/.pytest_cache tools/basex/.pytest_cache tools/x4validate/.mutation-probe-pristine .claude/hooks/__pycache__ .claude/hooks/.pytest_cache scripts/__pycache__ tools/.pytest_cache tools/basex/__pycache__ tools/x4validate/gates/__pycache__ tools/x4validate/scripts/__pycache__ tools/x4validate/tests/__pycache__ tools/x4validate/x4validate/__pycache__"
 
 #: Per-machine files that must NEVER travel from the source: they hold THIS
 #: machine paths and secrets, and the destination copy is the user own.
@@ -249,7 +249,7 @@ X4_COPY_PRUNE="tools/x4validate/.venv tools/x4validate/.pytest_cache tools/basex
 #: `.claude/.reference-buildid` too (FX-G5 / reviewer J2 item 7): THIS machine's finished-unpack
 #: marker, which x4doctor reads as evidence of a MOVED tree -- copied in, a fresh install read
 #: "moved"; pruned, an upgrade would erase the destination's own.
-X4_KEEP_LOCAL="x4-paths.env x4-housekeep.json .claude/x4-paths.env .claude/settings.local.json .claude/backups .claude/.reference-buildid .codex/hooks.json .codex/config.toml .opencode/opencode.jsonc tools/basex/basex/data tools/basex/basex/coverage-x4raw.json tools/basex/basex/coverage-x4eff.json tools/basex/_eff tools/basex/stage-manifest.json tools/x4validate/.perf-baseline.json tools/x4validate/.obtainability-baseline.json tools/x4validate/.claude-md-budget-baseline.json tools/x4validate/.toolkit-usage-baseline.json tools/x4validate/.hook-false-positive-baseline.json tools/x4validate/.instrument-hygiene-baseline.json tools/x4validate/.schema-sweep-baseline.json"
+X4_KEEP_LOCAL="x4-paths.env x4-housekeep.json .claude/x4-paths.env .claude/settings.local.json .claude/backups .claude/.reference-buildid .codex/hooks.json .codex/config.toml .opencode/opencode.jsonc tools/basex/basex/.basex tools/basex/basex/data tools/basex/basex/coverage-x4raw.json tools/basex/basex/coverage-x4eff.json tools/basex/_eff tools/basex/stage-manifest.json tools/x4validate/.perf-baseline.json tools/x4validate/.obtainability-baseline.json tools/x4validate/.claude-md-budget-baseline.json tools/x4validate/.toolkit-usage-baseline.json tools/x4validate/.hook-false-positive-baseline.json tools/x4validate/.instrument-hygiene-baseline.json tools/x4validate/.schema-sweep-baseline.json"
 
 #: THE TRACKED SET, when the source is a git checkout.
 #:
