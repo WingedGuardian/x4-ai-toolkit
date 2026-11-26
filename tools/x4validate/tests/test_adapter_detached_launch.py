@@ -557,3 +557,51 @@ def test_roots_from_an_earlier_call_are_not_used(adapters, box, monkeypatch, tmp
     monkeypatch.setattr(codex.save_policy, "LAST_ROOTS", {"toolkit": str(tk)}, raising=False)       # a stale earlier call
     d, text = codex_run(codex, patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE)))
     assert d == "advise" and f"{NOTE}: ImportError" in text, (d, text)
+
+
+# ------------------------------------------------------------------ review round 2: the REAL read_roots records ---- #
+
+def test_the_real_read_roots_records_the_roots_the_detector_then_uses(adapters, box, monkeypatch, tmp_path):
+    """Only the Bash call is faked (its environment names another toolkit); read_roots itself is the real one.
+    If it stopped recording LAST_ROOTS, a hook-only install would answer NOT judged on every call."""
+    import subprocess as sp
+    import types
+    from codex_testlib import copy_shared_runtime
+    codex, opencode = adapters
+    _tmp, tk = box
+    other = tmp_path / "toolkit-with-the-detector"
+    copy_shared_runtime(other)
+    (tk / "tools" / "modding_harness" / "detached.py").unlink()       # X4_TOOLKIT holds no detector
+    real_run, bash_calls = sp.run, []
+
+    def fake_run(cmd, *args, **kw):
+        if any("x4_emit_guard_roots" in str(part) for part in cmd):   # the root reader's Bash call, and only that
+            bash_calls.append(1)
+            kw["env"] = dict(os.environ, X4_TOOLKIT=str(other))
+        return real_run(cmd, *args, **kw)
+    shim = types.SimpleNamespace(**vars(sp))
+    shim.run = fake_run
+    monkeypatch.setattr(codex.save_policy, "subprocess", shim)
+    d, reason = codex_run(codex, patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE)))
+    assert bash_calls, "the root reader never ran, so this test proved nothing"
+    assert d == "deny" and "no-detached-launch" in reason, (d, reason)
+    assert codex.save_policy.LAST_ROOTS and codex.save_policy.LAST_ROOTS["toolkit"].endswith("toolkit-with-the-detector")
+    v = oc_run(opencode, oc_call(tk, "apply_patch", {"patchText": add_patch("dev/mymod/launch.py", FLAG_LINE)}))
+    assert v["decision"] == "deny" and "no-detached-launch" in v["reason"], v
+
+
+def test_both_adapters_reset_the_recorded_roots_at_the_start_of_a_call(adapters, box, monkeypatch):
+    codex, opencode = adapters
+    _tmp, tk = box
+    seen = []
+
+    def batch(*a, **k):
+        seen.append(codex.save_policy.LAST_ROOTS)          # what the funnel starts from
+        return dict(ALLOW)
+    monkeypatch.setattr(codex.save_policy, "batch", batch)
+    use(monkeypatch, codex, Stub())
+    for run in (lambda: codex_run(codex, patch_payload(tk, add_patch("dev/mymod/launch.py", OK_LINE))),
+                lambda: oc_run(opencode, oc_call(tk, "apply_patch", {"patchText": add_patch("dev/mymod/launch.py", OK_LINE)}))):
+        monkeypatch.setattr(codex.save_policy, "LAST_ROOTS", {"toolkit": "a stale earlier call"}, raising=False)
+        run()
+    assert seen == [None, None], seen

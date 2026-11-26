@@ -130,6 +130,21 @@ def p_detached_guard_off_log(tmp, tk, env, tree):
     return d + ("/logged" if "no-detached-launch would have DENIED" in text else "/unlogged")
 
 
+def p_detached_roots_recorded(tmp, tk, env, tree):
+    """A hook-only install: no X4_TOOLKIT, the toolkit comes from the path config, and ONLY the roots the funnel read
+    name the toolkit that holds the detector. The real read_roots must record them, or no call is ever judged."""
+    from codex_testlib import copy_shared_runtime
+    other = tmp / "other-toolkit"
+    if not other.exists():
+        copy_shared_runtime(other)
+        (other / "dev" / "mymod").mkdir(parents=True)
+    cfg = tmp / "paths.env"
+    cfg.write_text(f"X4_TOOLKIT={other.as_posix()}\n", encoding="utf-8")
+    e = dict(env, X4_CONFIG=str(cfg))
+    e.pop("X4_TOOLKIT")
+    return chain(tree, _detached_patch(other), e)[0]
+
+
 def p_detached_module_missing(tmp, tk, env, tree):
     """No detector on disk: the call must still be judged by the funnel and allowed with a note, never refused."""
     (tk / "tools" / "modding_harness" / "detached.py").unlink(missing_ok=True)   # the mutant run repeats the probe
@@ -195,6 +210,9 @@ MUTANTS = [
      p_detached_inert, "inert/guard"),
     ("detached-guard-off-log-dropped", "codex_adapter.py", "        _log_guard_off(reason)\n", "        pass\n",
      p_detached_guard_off_log, "advise/logged"),
+    ("detached-roots-not-recorded", "save_policy.py",
+     '    global LAST_ROOTS\n    LAST_ROOTS = packet(result.stdout.decode("utf-8") + "{}")[0]\n    return LAST_ROOTS',
+     '    return packet(result.stdout.decode("utf-8") + "{}")[0]', p_detached_roots_recorded, "deny"),
     ("detached-fails-closed", "codex_adapter.py",
      "    except BaseException as e:          # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny",
      "    except KeyError as e:               # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny",
