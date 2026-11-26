@@ -14,6 +14,7 @@ read as a working check (CLAUDE.md #26).
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -220,6 +221,10 @@ def sandbox(tmp_path, monkeypatch):
     copy_shared_runtime(root)
     _env_file(root / "x4-paths.env", X4_TOOLKIT=root, X4_GAME=game, X4_REFERENCE=ref)
     codex_home = tmp_path / "codex-home"
+    # Load-proof (4.3.1): x4guard's own 25 s budget ran out at ~23 s under machine load and read "guards INERT" in three
+    # self-tests that pass alone in 8 s (MEASURED 2026-11-26). 90 s + x4guard's 8 s kill/drain stays under the 120 s
+    # subprocess ceiling of x4doctor._ask_guard.
+    monkeypatch.setenv("X4_GUARD_TIMEOUT_S", "90")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     return Sandbox(root, game, ref, codex_home)
 
@@ -777,6 +782,29 @@ def _sel(sandbox, target="claude"):
 
 def _replace_guard(sandbox, name: str, body: str) -> None:
     (sandbox.root / ".claude" / "hooks" / name).write_bytes(body.encode("utf-8"))
+
+
+def _load_proof_budget(ctx, hooks):
+    """The guard budget the doctor's self-test hands the guards, checked against the subprocess ceiling it runs them
+    under. MEASURED 2026-11-26 (a pre-push gate run, 7,007 s): under machine load three guard self-tests read
+    "guards INERT" because x4guard's own 25 s default budget ran out at ~23 s; each passes alone in 8 s."""
+    env = doc._hook_env(ctx, "claude", hooks)
+    budget = float(env["X4_GUARD_TIMEOUT_S"])
+    ceiling = float(re.search(r"timeout=(\d+)\)", inspect.getsource(doc._ask_guard)).group(1))
+    guard_src = (REPO / "agent" / "guards" / "claude-hooks" / "x4guard.py").read_text(encoding="utf-8")
+    kill_and_drain = sum(float(re.search(r"^%s = (\d+)" % n, guard_src, re.M).group(1))
+                         for n in ("KILL_WAIT_S", "DRAIN_GRACE_S"))
+    assert 60 <= budget, "a budget under a minute is the default's problem again"
+    assert budget + kill_and_drain < ceiling, "x4guard's worst case must end before the doctor's subprocess timeout"
+    return budget
+
+
+def test_guard_budget_in_the_sandbox_is_load_proof(sandbox):
+    _load_proof_budget(sandbox.ctx(), sandbox.root / ".claude" / "hooks")
+
+
+def test_guard_budget_in_the_opencode_root_is_load_proof(oc_root):
+    _load_proof_budget(doc.Ctx(root=oc_root, toolkit=oc_root), oc_root / ".opencode" / "hooks")
 
 
 def test_selftest_all_controls_hold_is_OK(sandbox):
@@ -1355,6 +1383,7 @@ def oc_root(tmp_path, monkeypatch):
     _env_file(root / "x4-paths.env", X4_TOOLKIT=root, X4_GAME=game, X4_REFERENCE=ref)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
+    monkeypatch.setenv("X4_GUARD_TIMEOUT_S", "90")   # load-proof, as in `sandbox`
     r = subprocess.run([sys.executable, str(root / ".opencode" / "hooks" / "opencode_config.py"),
                         "write", "--root", str(root)], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
