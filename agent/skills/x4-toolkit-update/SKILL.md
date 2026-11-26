@@ -15,11 +15,10 @@ sets the exit code. `update-check` exits `0` always (offline, off and "no newer 
 
 ## Which commands exist in this install
 
-`update-check` and `update-fetch` are in every install that has this skill. The staged, reviewed update below uses
-`update-stage`, `update-apply` and `update-clear-failed`: **these arrive with the guarded-update commands (a later
-step of the same release) and may not be in this install yet.** Run `python {{TOOLKIT}}/tools/agent-harness.py --help`
-and look for them. If they are not listed, say so, stop after step 1, and tell the user the update has to be done by
-hand from the release page (the README's "Updating" section, once present) -- never improvise an install with
+`update-check`, `update-fetch`, `update-stage`, `update-apply` and `update-clear-failed` are in every install that has
+this skill (4.3.1 and later). A 4.3.0 install has none of them: its first update is done by hand from the release page.
+If `python {{TOOLKIT}}/tools/agent-harness.py --help` does not list `update-stage`, say so, stop after step 1, and
+tell the user the update has to be done by hand from the release page -- never improvise an install with
 `update-fetch` plus a copy.
 
 ## The flow
@@ -33,34 +32,46 @@ hand from the release page (the README's "Updating" section, once present) -- ne
    - `installed: null` -- this install has no release to compare with: a git checkout (always, even if a stray
      `BUILD-INFO` sits in it), or an install with neither a `BUILD-INFO` file nor a release heading in `CHANGELOG.md`. Say so; a checkout is updated with git.
    - `update_available: false` -- tell the user they are current.
-2. **Stage it** (`update-stage`; *arrives with the guarded-update commands*). It downloads the release, verifies it
-   against the digest GitHub publishes, and builds a review of every file that would change. It installs nothing and
-   authorizes nothing. It refuses, changing nothing, when an earlier update left a failed marker (step 7), when another
-   update is unfinished, or when this install already fails its own health check (then run `x4doctor`, fix what it
-   FAILs, and stage again).
-3. **Show the review to the user, verbatim.** Print the whole review text from the result; do not summarise it, do
+2. **Stage it**: `update-stage`. It first runs this install's own health check (`x4doctor.py --update-canary`), then
+   downloads the release, verifies it against the digest GitHub publishes and the commit its tag points at, unpacks it
+   away from the install, and builds a review of every file that would change. It installs nothing and authorizes
+   nothing (`application_authorized: false`). It refuses (exit `2`), changing nothing, when an earlier update left a
+   failed or in-flight marker (step 8), when this is a git checkout, or when this install already fails its health
+   check: the error then starts `fix x4doctor first` and names the FAIL rows. Tell the user, have them run
+   `python {{TOOLKIT}}/scripts/x4doctor.py`, fix what it FAILs, and stage again. Never work around that refusal: an
+   install that is already unhealthy cannot prove a rollback.
+3. **Show the review to the user, verbatim.** Print the whole `review` text from the result; do not summarise it, do
    not skip the files that look harmless, and do not decide for them what matters. Say which files the user edited
-   themselves and which collide with the new release.
+   themselves (`preserve_collision`) and which collide with the new release.
 4. **Ask the user** whether to go ahead. Wait for the answer. "Continue", an earlier "update the toolkit" and a yes to
    some other question are not the answer to this one.
-5. **Guard changes need a separate, explicit go.** When the result says `requires_guard_accept: true`, the release
-   changes hooks, guards, settings or policy files: the code that protects saves, `reference/` and the game folder.
-   Name those files and ask a second time, in its own message. Pass `--accept-guard-changes` only after that yes.
+5. **Guard changes need a separate, explicit go.** When the result says `requires_guard_accept: true` (the review's
+   `GUARD CHANGES` section), the release changes hooks, guards, settings or policy files: the code that protects
+   saves, `reference/` and the game folder. Name those files and ask a second time, in its own message. Pass
+   `--accept-guard-changes` only after that yes. The same holds for choosing `candidate` on a file listed under
+   "Only if you choose `candidate`".
 6. **Conflicts need the user's choices.** For every file the user changed that the release also changes, the user
-   picks `keep` (theirs), `candidate` (the release's) or, for the settings file, a merged copy. Write their answers to
-   a choices file (JSON, outside the install folder) and pass it as `--choices`. Never pick for them.
+   picks `keep` (theirs), `candidate` (the release's) or, for a hook settings file, `merged_settings`. Write their
+   answers as one JSON object (`{"README.md": "keep"}`) to the choices file the review's `next:` block names (beside
+   the bundle, outside the install) and pass it as `--choices`. Never pick for them. `x4-paths.env` and `X4-NOTES.md`
+   are always kept; an update never replaces them.
 7. **Ask them to close their other agent sessions** (and any editor writing into the install) before applying: the
-   update replaces files those sessions are using. Only when they say it is done, run `update-apply` with the bundle
-   and review SHA-256 the staged result printed, the choices file, `--accept-guard-changes` only if step 5 was
-   answered, and `--quiescent` (it states that you asked; it does not stop anything). It replaces the files, runs the
-   toolkit's setup and health check, and **rolls back by itself if either fails**. Report its result as it is: ok,
-   rolled back, or failed.
-8. **A failed update is loud, and stays loud.** If the result says it could not be rolled back and verified, or a
-   later session start says `TOOLKIT UPDATE NEEDS THE USER`, the guards may be broken or missing. Stop. Tell the
-   user, show them the marker file it names (`.modding-agent-harness/update-failed.json` or
-   `update-in-flight.json`) and do not update, edit guards or trust the hooks until they have read it and fixed the
-   cause. Clear the markers (`update-clear-failed`) only when the user asks you to, after that. Staging refuses until
-   they are cleared.
+   update replaces files those sessions are using. Only when they say it is done, run exactly the `update-apply` line
+   the review's `next:` block printed: the bundle, the review SHA-256, the choices file, `--accept-guard-changes` only
+   if step 5 was answered yes, and `--quiescent` (it states that you asked; it does not stop anything). It runs this
+   install's setup and health check first and refuses (exit `2`, `fix setup.sh first` / `fix x4doctor first`) if
+   either already fails. Then it replaces the files, runs the new setup and health check, and **rolls back by itself
+   if either fails** (exit `1`). Report its `report` text as it is: applied, rolled back, or failed. After an applied
+   update, tell a Codex user to re-approve the changed hooks in `/hooks` (Codex skips a changed hook until then), and
+   suggest `x4doctor.py` once.
+8. **A failed update is loud, and stays loud.** If the result says `FAIL CLOSED` (it could not be rolled back and
+   verified), if the command was interrupted, or if a later session start says `TOOLKIT UPDATE NEEDS THE USER`, the
+   guards may be broken or missing. Stop. Tell the user, show them the marker file it names
+   (`.modding-agent-harness/update-failed.json` or `update-in-flight.json`) and do not update, edit guards or trust
+   the hooks until they have read it and fixed the cause. Clear the markers with `update-clear-failed` only when the
+   user asks you to, after that; it sets them aside as evidence, never deletes them. For an in-flight marker whose
+   process may still be running it refuses; `--force` only when the user is sure that update has ended. Staging and
+   applying refuse until the markers are cleared.
 
 ## Rules
 
