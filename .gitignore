@@ -115,6 +115,11 @@ tools/x4validate/.claude-md-budget-baseline.json
 # a moved tag.
 dist/
 
+# The release zip's BUILD-INFO (version and commit; written by scripts/build-release.sh, copied in by the
+# installers). A tracked one is refused by the build's proof, and a stray one in a checkout is not the
+# maintainer's to commit. Anchored: only the root file.
+/BUILD-INFO
+
 # Nexus release packs are the USER's local artifact, not code: pasted into the Nexus
 # page by hand and deleted locally once posted, every release. Tracked, each deletion
 # left tracked-but-absent files that made control_bytes refuse and held the suite at

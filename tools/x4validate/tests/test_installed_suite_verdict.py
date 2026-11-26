@@ -188,9 +188,13 @@ def test_the_ci_leg_builds_a_real_install_runs_its_suite_and_judges_the_junit():
     job, steps, verdict, args = _installed_copy_job()
     assert "continue-on-error" not in job, "the leg must GATE"
     install = steps["install"]["run"]
-    for must in ("git archive HEAD", "install.sh --method separate", "test ! -e \"$TK/agent\"",
+    # The copy is built from the zip users GET: the release build's dry-run zip (one X4AI/ folder plus a
+    # BUILD-INFO), extracted, then installed from inside X4AI/ -- not from a plain `git archive` tree.
+    for must in ("scripts/build-release.sh HEAD", "unzip", "SRC=\"$SRC/X4AI\"", "$SRC/BUILD-INFO",
+                 "$TK/BUILD-INFO", "install.sh --method separate", "test ! -e \"$TK/agent\"",
                  "test ! -e \"$TK/.git\"", "-name 'test_*.py'", "installed_layout()"):
         assert must in install, must
+    assert "git archive HEAD" not in install, "the leg is back to a tree no user is given"
     suite = steps["suite"]["run"]
     assert "uv run --frozen pytest" in suite and "--junitxml=\"$RUNNER_TEMP/installed-suite.xml\"" in suite
     assert "--junit \"$RUNNER_TEMP/installed-suite.xml\"" in verdict["run"], "judges a different file than the suite wrote"

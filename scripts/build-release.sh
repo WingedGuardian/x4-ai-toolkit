@@ -37,11 +37,12 @@
 # existing member-set and byte checks. `--selftest` rebuilds v3.0.0, which has no folder and no BUILD-INFO,
 # so it keeps the old shape ("legacy" mode): it controls that the METHOD still reproduces published bytes.
 #
-# `git archive --add-virtual-file` (git 2.32+) writes BUILD-INFO; this script already needs git 2.40+ for
-# `check-attr --source`, so that is the effective minimum. A git whose `archive` lacks the option is exit 2.
-# MEASURED (git 2.55.0.windows.5): `--prefix` is NOT applied to a virtual file, whatever the option order,
-# so the virtual path is spelled in full (`X4AI/BUILD-INFO`); a git that did apply it would write
-# X4AI/X4AI/BUILD-INFO and `verify` would refuse the zip rather than ship it.
+# `git archive --add-virtual-file` writes BUILD-INFO. The script asks git itself whether `archive` has the
+# option (exit 2 "cannot build" if not) and does not state which release introduced it; the effective
+# minimum is the git 2.40 this script already needs for `check-attr --source`. git-archive's own
+# documentation says a virtual file's path is not affected by the --prefix option, so the virtual path is
+# spelled in full (`X4AI/BUILD-INFO`); a git that did apply the prefix would write X4AI/X4AI/BUILD-INFO and
+# `verify` would refuse the zip rather than ship it.
 #
 # Exit: 0 built and verified · 1 the archive does not match the ref · 2 cannot build (including a
 # vX.Y.Z ref whose CHANGELOG top heading or pyproject version is not that version)
@@ -336,7 +337,7 @@ fi
 _archive_help="$(git archive -h 2>&1)"
 case "$_archive_help" in
   *add-virtual-file*) ;;   # help prints it as `--[no-]add-virtual-file`
-  *) die "this git's 'archive' has no --add-virtual-file (git 2.32+), so BUILD-INFO cannot be written; update git" ;;
+  *) die "this git's 'archive' has no --add-virtual-file, so BUILD-INFO cannot be written; update git (this script needs 2.40+ anyway)" ;;
 esac
 COMMIT="$(git rev-parse --verify -q "$REF^{commit}")" || die "$REF does not resolve to a commit"
 if printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then

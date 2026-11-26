@@ -126,9 +126,12 @@ def test_a_bundle_that_is_NOT_the_ref_is_REFUSED():
 
 
 def test_the_bundle_carries_the_whole_TRACKED_set_and_no_wrapper_folder():
-    """v3.0.0 shipped the tag's tracked set exactly -- no exclusions, no additions and
-    no top-level wrapper directory. Pinned because an install script that resolves
-    paths relative to the archive root breaks the moment someone adds a wrapper."""
+    """The v3.0.0 asset (rebuilt by `--selftest`) shipped the tag's tracked set exactly -- no
+    exclusions, no additions and no top-level wrapper directory, with install.sh at the archive
+    ROOT. That is the LEGACY shape, pinned so the control keeps reproducing the published bytes.
+    Release builds since 4.3.1 deliberately DO add one wrapper folder, `X4AI/`, plus `X4AI/BUILD-INFO`
+    (the shared core's self-update requires both); the tests below prove that shape, and that
+    the installer is run from inside that folder, so a wrapper no longer breaks anything."""
     _needs(_git("rev-parse", "-q", "--verify", "v3.0.0^{}").returncode == 0,
            "tag v3.0.0 not present in this clone — not checked")
     import tempfile, os
@@ -604,7 +607,7 @@ def test_a_TRACKED_BUILD_INFO_at_the_ref_is_REFUSED(tmp_path):
 
 
 def test_a_git_that_cannot_add_a_virtual_file_is_a_CANNOT_BUILD_not_a_bad_bundle(tmp_path):
-    """`git archive --add-virtual-file` (git 2.32+) writes BUILD-INFO. A git without it must exit 2 "cannot
+    """`git archive --add-virtual-file` writes BUILD-INFO. A git without it must exit 2 "cannot
     build" BEFORE building, not produce a zip with no BUILD-INFO and call the bundle corrupt (exit 1)."""
     _needs(SCRIPT.is_file(), "no scripts/build-release.sh (dev-only script) - not checked")
     import os
@@ -632,3 +635,24 @@ def test_a_git_that_cannot_add_a_virtual_file_is_a_CANNOT_BUILD_not_a_bad_bundle
                        capture_output=True, text=True, timeout=120)
     assert p.returncode == 2 and "add-virtual-file" in p.stderr, p.stdout + p.stderr
     assert not (r / "dist").exists() or not list((r / "dist").glob("*.zip"))
+
+
+def test_a_stray_ROOT_BUILD_INFO_is_gitignored_and_a_nested_one_is_not(tmp_path):
+    """A release extract carries `BUILD-INFO` at its root; copying one into a checkout (or building in one)
+    must not show up as an untracked file to `git add`. `/BUILD-INFO` is ANCHORED: a file of that name
+    deeper in the tree is somebody's own and stays visible (the twin). Asked of git with THIS repo's rules."""
+    r = tmp_path / "r"
+    r.mkdir()
+    assert subprocess.run(["git", "-C", str(r), "init", "-q", "."], capture_output=True).returncode == 0
+    (r / ".gitignore").write_bytes((REPO / ".gitignore").read_bytes())
+    (r / "docs").mkdir()
+
+    def ignored(path):
+        p = subprocess.run(["git", "-C", str(r), "check-ignore", "-q", "--", path], capture_output=True)
+        assert p.returncode in (0, 1), p.stderr
+        return p.returncode == 0
+
+    assert ignored("BUILD-INFO")
+    assert not ignored("docs/BUILD-INFO")          # twin: anchored to the root
+    assert not ignored("BUILD-INFO.md")            # twin: the exact name only
+    assert "/BUILD-INFO" in (REPO / ".gitignore").read_text(encoding="utf-8").splitlines()
