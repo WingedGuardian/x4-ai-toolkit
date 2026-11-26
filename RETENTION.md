@@ -161,6 +161,9 @@ core implements them, so no copy of the policy promises what its code does not d
   as proof of disposability: that one is deleted permanently, since the Recycle Bin frees nothing on the same drive.
   Failure evidence inside a workspace is recycled, never deleted. The checklist names its receipts and how to turn
   the sweep off.
+- **Evidence stays beside the stub:** when a finished task folder is archived, its top-level `README*`, `*.md`,
+  `*.json`, `*.jsonl` and `*.log` files under 1 MiB stay in the folder (they are in the zip too); the rest goes to
+  the Recycle Bin once the archive copy is verified.
 - **Pins:** `report` and `plan` name every pinned folder over `pin_warn_gib` (default 1 GiB), as does the optional
   daily note.
 
