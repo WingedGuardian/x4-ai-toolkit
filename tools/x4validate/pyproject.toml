@@ -18,6 +18,7 @@ x4debug = "x4validate._debugcli:main"
 x4save = "x4validate._savecli:main"
 x4live = "x4validate._livecli:main"
 x4fresh = "x4validate._freshcli:main"
+x4run = "x4validate._x4runcli:main"
 
 [project.optional-dependencies]
 capture = ["Pillow>=13.0,<14"]
