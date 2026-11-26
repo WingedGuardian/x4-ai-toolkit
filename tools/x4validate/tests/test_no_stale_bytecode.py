@@ -130,7 +130,13 @@ def stale_pycs(roots) -> list[str]:
                 continue
             fresh_code = compile(src.read_bytes(), cached_code.co_filename, "exec",
                                  dont_inherit=True)
-            if marshal.dumps(fresh_code) != raw[_HEADER:]:
+            # Compare by VALUE (code-object equality), not by re-marshalled bytes either:
+            # MEASURED 2026-11-25 on CPython 3.13.14, `marshal.dumps(marshal.loads(raw)) != raw`
+            # for an UNCHANGED, correctly cached `_inputs.py` (marshal's back-reference flags
+            # depend on object identity at dump time), so the byte comparison reported two
+            # unchanged files stale in two checkouts and refused every push. Code equality still
+            # separates a same-length mutant (see the planted-file test below).
+            if fresh_code != cached_code:
                 bad.append(
                     f"{src.name}: cached bytecode differs from its source while "
                     f"(mtime={mtime}, size={size}) still match, so CPython would "
