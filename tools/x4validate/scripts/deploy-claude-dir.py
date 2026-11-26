@@ -471,7 +471,7 @@ def budget_report(root: Path) -> list[str]:
 #: OWNED list) is listed too (4.3.1): `.opencode/hooks`, the OpenCode plugin and `tools/agent-harness.py` were missing, so a
 #: dirty edit to them did not stop a deploy. `tests/test_deploy_guard_sources_cover_generated_guards.py` derives the check.
 GUARD_SOURCES = (".claude/hooks", ".claude/settings.json", ".codex", ".opencode/hooks", ".opencode/plugins/x4guard.js",
-                 "agent/guards", "tools/x4_harness", "tools/agent-harness.py",
+                 "agent/guards", "tools/x4_harness", "tools/agent-harness.py", "scripts/x4lock.py",
                  "tools/modding_harness", "scripts/test-hooks.sh", "scripts/gitbash.py",
                  "tools/x4validate/scripts/deploy-claude-dir.py")
 
