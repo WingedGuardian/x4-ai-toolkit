@@ -251,19 +251,21 @@ DETACHED_REASON = ("no-detached-launch: this launches a process DETACHED ({!r}).
 DETACHED_RESERVE_S = 0.5
 
 
-def _detached_roots(deadline: float):
+def _detached_roots():
     """(where, getter) for each place the toolkit root may be, cheapest first; a getter may raise."""
     yield "this install", lambda: HERE.parents[1] if x4guard._deployed() else None
     yield "X4_TOOLKIT", lambda: (save_policy.native(os.environ["X4_TOOLKIT"]) if os.environ.get("X4_TOOLKIT") else None)
-    # A hook-only install (the game root) keeps its tools in the configured toolkit: ask the root reader.
-    yield "the root reader", lambda: save_policy.native(save_policy.read_roots(deadline)["toolkit"])
+    # A hook-only install (the game root) keeps its tools in the configured toolkit, which the funnel's own
+    # root read of THIS call names. Never start Bash again for it (it cost a second start on every judged call).
+    yield "the roots this call read", lambda: (save_policy.native(save_policy.LAST_ROOTS["toolkit"])
+                                               if save_policy.LAST_ROOTS else None)
 
 
 def _detached_module(deadline: float):
     """The vendored core detector, loaded as the adapters load their other core modules (save_policy.core).
     Raises ImportError when no root holds tools/modding_harness/detached.py."""
     tried = []
-    for where, get in _detached_roots(deadline):
+    for where, get in _detached_roots():
         try:
             root = get()
         except (OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
@@ -350,6 +352,25 @@ def _detached_note(verdict: dict, note: str) -> dict:
     return v
 
 
+def _log_guard_off(reason: str) -> None:
+    """The GUARDS-OFF.log record the shell guards write (_x4-env.sh x4_guard_overridden), mirrored: one line
+    `[YYYY-MM-DD HH:MM:SS] <hook> would have DENIED: <reason, CR/LF as spaces, first 300 characters>` in
+    $X4_BACKUPS (else $X4_TOOLKIT/.claude/backups). A guards' check (X4_GUARD_CHECK=1) logs nothing. Best effort:
+    a log that cannot be written never changes the verdict."""
+    if os.environ.get("X4_GUARD_CHECK") == "1":
+        return
+    try:
+        folder = os.environ.get("X4_BACKUPS") or os.path.join(os.environ.get("X4_TOOLKIT") or str(HERE.parents[1]),
+                                                              ".claude", "backups")
+        os.makedirs(folder, exist_ok=True)
+        text = reason.replace(chr(13), " ").replace(chr(10), " ")[:300]
+        line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] no-detached-launch would have DENIED: {text}" + chr(10)
+        with open(os.path.join(folder, "GUARDS-OFF.log"), "a", encoding="utf-8", newline="") as f:
+            f.write(line)
+    except (OSError, ValueError):
+        pass
+
+
 def detached_verdict(verdict: dict, make_items, deadline: float) -> dict:
     """The funnel's VERDICT, refused instead when this call starts a process DETACHED.
 
@@ -373,13 +394,14 @@ def detached_verdict(verdict: dict, make_items, deadline: float) -> dict:
         left = deadline - time.monotonic()
         hit = _bounded_call(lambda: next((h for h in (_detached_hit(det, it, exempt) for it in items) if h), None),
                             left - DETACHED_RESERVE_S)
-    except Exception as e:              # noqa: BLE001 -- the check must never block a call by crashing
+    except BaseException as e:          # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny
         return _detached_note(verdict, f"{DETACHED_NOT_JUDGED}: {type(e).__name__}. Nothing was blocked for it; "
                                        "read the call yourself for a detached launch.")
     if not hit:
         return verdict
     reason = DETACHED_REASON.format(str(hit)[:140])
     if os.environ.get("X4_GUARD") == "off":
+        _log_guard_off(reason)
         return _detached_note(verdict, "X4 GUARDS OFF (X4_GUARD=off at launch): no-detached-launch would have DENIED "
                                        f"this call; it was NOT enforced. Its reason: {reason}")
     return {"decision": "deny", "inert": False, "reason": reason, "context": None}
@@ -494,6 +516,7 @@ def run_backups(ops: list[tuple], base: str, deadline: float) -> dict | None:
 
 
 def pre_tool_use(payload: dict, shell: str, deadline: float) -> dict:
+    save_policy.LAST_ROOTS = None          # the detector reuses only the roots THIS call's funnel reads
     try:
         calls = translate(payload, "pre_tool_use", shell=shell)
     except patch_paths.PatchParseError as e:

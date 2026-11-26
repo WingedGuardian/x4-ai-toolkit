@@ -17,6 +17,9 @@ detector (tools/modding_harness/detached.py) in-process, after the funnel's verd
 as an interpreter, so `"$RG" -e 'creationflags=8' src` is refused by Codex and OpenCode and allowed here; the core
 also reads an interpreter after env / timeout / nohup / an assignment, which this hook does not (limits below).
 Which one Claude Code should use is decided from measurements in 4.4; this file is unchanged until then.
+This hook does NOT read X4_GUARD: with X4_GUARD=off it still refuses (Codex and OpenCode turn their refusal into an
+advisory and log it to GUARDS-OFF.log, like the other guards). Their exemption list (this file, its tests and
+verifier) matches paths case-sensitively.
 
 What is checked:
 - Write / Edit / MultiEdit / NotebookEdit on CODE files. An Edit is judged on the file AFTER the edit (edits applied

@@ -239,7 +239,8 @@ def test_existing_deny_is_kept_and_detector_not_called(adapters, box, monkeypatc
     assert stub.calls, "control: an allowed call never reached the detector, so the check above proved nothing"
 
 
-@pytest.mark.parametrize("exc", [RuntimeError("boom"), RecursionError("deep"), TimeoutError("slow"), ImportError("gone")],
+@pytest.mark.parametrize("exc", [RuntimeError("boom"), RecursionError("deep"), TimeoutError("slow"), ImportError("gone"),
+                                 SystemExit(3), KeyboardInterrupt(), GeneratorExit()],
                          ids=lambda e: type(e).__name__)
 def test_detector_exception_fails_open_with_visible_note(adapters, box, monkeypatch, exc):
     codex, opencode = adapters
@@ -260,7 +261,7 @@ def test_missing_core_detached_module_fails_open_with_visible_note(adapters, box
     monkeypatch.setenv("X4_TOOLKIT", str(empty))      # no tools/modding_harness/detached.py anywhere on the way
     allow = {"decision": "allow", "inert": False, "reason": None, "context": None}
     monkeypatch.setattr(codex.save_policy, "batch", lambda *a, **k: dict(allow))
-    monkeypatch.setattr(codex.save_policy, "read_roots", lambda deadline: {"toolkit": str(empty)})
+    monkeypatch.setattr(codex.save_policy, "LAST_ROOTS", {"toolkit": str(empty)}, raising=False)
     d, text = codex_run(codex, patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE)))
     assert d == "advise" and f"{NOTE}: ImportError" in text, (d, text)
     v = oc_run(opencode, oc_call(tk, "apply_patch", {"patchText": add_patch("dev/mymod/launch.py", FLAG_LINE)}))
@@ -337,3 +338,222 @@ def test_claude_hook_docstring_names_the_codex_and_opencode_wiring():
     assert "NOT wired for\nCodex or OpenCode" not in text and "Codex and OpenCode launches are therefore not checked" not in text
     flat = " ".join(text.split()).lower()
     assert "core detector" in flat and "modding_harness/detached.py" in flat
+
+
+# ------------------------------------------------------------------ review round: every exception class ----------- #
+
+BASE_EXCS = [SystemExit(2), KeyboardInterrupt(), GeneratorExit()]
+ALLOW = {"decision": "allow", "inert": False, "reason": None, "context": None}
+
+
+@pytest.mark.parametrize("exc", BASE_EXCS + [RuntimeError("boom")], ids=lambda e: type(e).__name__)
+def test_an_error_while_reading_the_call_fails_open(adapters, box, monkeypatch, exc):
+    """make_items() is inside the same fail-open as the judging (a SystemExit there became an inert deny)."""
+    codex, opencode = adapters
+    _tmp, tk = box
+    stub = use(monkeypatch, codex, Stub())
+
+    def boom(*a, **k):
+        raise exc
+    monkeypatch.setattr(codex, "detached_items", boom)
+    monkeypatch.setattr(opencode, "detached_items", boom)
+    d, text = codex_run(codex, patch_payload(tk, add_patch("dev/mymod/launch.py", OK_LINE)))
+    assert d == "advise" and f"{NOTE}: {type(exc).__name__}" in text, (d, text)
+    v = oc_run(opencode, oc_call(tk, "apply_patch", {"patchText": add_patch("dev/mymod/launch.py", OK_LINE)}))
+    assert v["decision"] == "advise" and f"{NOTE}: {type(exc).__name__}" in v["context"], v
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("exc", BASE_EXCS, ids=lambda e: type(e).__name__)
+def test_an_error_while_loading_the_detector_fails_open(adapters, box, monkeypatch, exc):
+    codex, _ = adapters
+    _tmp, tk = box
+
+    def boom(deadline):
+        raise exc
+    monkeypatch.setattr(codex, "_detached_module", boom)
+    d, text = codex_run(codex, patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE)))
+    assert d == "advise" and f"{NOTE}: {type(exc).__name__}" in text, (d, text)
+
+
+# ------------------------------------------------------------------ review round: the funnel's other verdicts ----- #
+
+def test_an_ask_and_an_inert_deny_are_kept_and_the_detector_is_not_called(adapters, box, monkeypatch):
+    codex, opencode = adapters
+    _tmp, tk = box
+    stub = use(monkeypatch, codex, Stub(hit="subprocess.Popen(...)"))
+    payload = patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE))
+    for v in ({"decision": "ask", "inert": False, "reason": "ASK-REASON", "context": None},
+              {"decision": "deny", "inert": True, "reason": "X4 GUARD INERT: INERT-REASON", "context": None}):
+        monkeypatch.setattr(codex.save_policy, "batch", lambda *a, _v=v, **k: dict(_v))
+        got = codex.pre_tool_use(payload, "bash", time.monotonic() + 30)
+        assert got["decision"] == v["decision"] and got["inert"] == v["inert"] and v["reason"] in got["reason"], got
+    assert stub.calls == []
+
+
+def test_a_real_ask_from_the_funnel_is_kept(adapters, box, monkeypatch):
+    codex, _ = adapters
+    tmp, tk = box
+    stub = use(monkeypatch, codex, Stub(hit="subprocess.Popen(...)"))
+    d, reason = codex_run(codex, patch_payload(tk, add_patch(str(tmp / "profile" / "launch.py"), FLAG_LINE)))
+    assert d == "ask" and "no-detached-launch" not in reason, (d, reason)
+    assert stub.calls == []
+
+
+def test_a_funnel_advisory_survives_next_to_the_not_judged_note(adapters, box, monkeypatch):
+    codex, opencode = adapters
+    _tmp, tk = box
+    use(monkeypatch, codex, Stub(exc=RuntimeError("boom")))
+    advise = {"decision": "advise", "inert": False, "reason": None, "context": "FUNNEL-ADVICE-TEXT"}
+    monkeypatch.setattr(codex.save_policy, "batch", lambda *a, **k: dict(advise))
+    got = codex.pre_tool_use(patch_payload(tk, add_patch("dev/mymod/launch.py", OK_LINE)), "bash", time.monotonic() + 30)
+    assert got["decision"] == "advise" and "FUNNEL-ADVICE-TEXT" in got["context"] and NOTE in got["context"], got
+    assert got["context"].index(NOTE) < got["context"].index("FUNNEL-ADVICE-TEXT")      # the note leads
+    v = oc_run(opencode, oc_call(tk, "apply_patch", {"patchText": add_patch("dev/mymod/launch.py", OK_LINE)}))
+    assert v["decision"] == "advise" and "FUNNEL-ADVICE-TEXT" in v["context"] and NOTE in v["context"], v
+    use(monkeypatch, codex, Stub())                 # twin: a clean call leaves the advisory exactly as it was
+    got = codex.pre_tool_use(patch_payload(tk, add_patch("dev/mymod/launch.py", OK_LINE)), "bash", time.monotonic() + 30)
+    assert got["context"] == "FUNNEL-ADVICE-TEXT", got
+
+
+def test_write_stdin_lines_are_judged(adapters, box):
+    codex, _ = adapters
+    tmp, tk = box
+    payload = native("bash_powershell", tk / "dev" / "mymod")
+    payload["tool_name"] = "write_stdin"
+    payload["tool_input"] = {"session_id": 1, "chars": "python -c 'opts = dict(creationflags=0x8)'\n"}
+    d, reason = codex_run(codex, payload, "bash")
+    assert d == "deny" and "no-detached-launch" in reason and "creationflags=0x8" in reason, (d, reason)
+    payload["tool_input"] = {"session_id": 1, "chars": "python -c 'opts = dict(creationflags=0x8)'"}      # twin: never submitted
+    assert codex_run(codex, payload, "bash")[0] in ("allow", "advise")
+
+
+def test_opencode_exhausted_budget_skips_with_note(adapters, box, monkeypatch):
+    codex, opencode = adapters
+    _tmp, tk = box
+    stub = use(monkeypatch, codex, Stub(hit="subprocess.Popen(...)"))
+    monkeypatch.setenv("X4_CODEX_BUDGET_S", "2")
+    monkeypatch.setattr(codex.save_policy, "batch", lambda *a, **k: (time.sleep(1.3), dict(ALLOW))[1])
+    v = oc_run(opencode, oc_call(tk, "apply_patch", {"patchText": add_patch("dev/mymod/launch.py", FLAG_LINE)}))
+    assert v["decision"] == "advise" and not v["inert"] and NOTE in v["context"] and "time budget" in v["context"], v
+    assert stub.calls == []
+
+
+def test_a_refused_call_does_not_consume_a_pending_profile_approval(adapters, box, monkeypatch):
+    codex, _ = adapters
+    _tmp, tk = box
+    consumed = []
+    monkeypatch.setattr(codex.save_policy, "batch", lambda *a, **k: dict(ALLOW))
+    monkeypatch.setattr(codex.profile_approval, "prepare", lambda payload, calls, verdict, deadline: (verdict, ("pending",)))
+    monkeypatch.setattr(codex.profile_approval, "consume", lambda pending: consumed.append(pending))
+    payload = patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE))
+    got = codex.pre_tool_use(payload, "bash", time.monotonic() + 30)
+    assert got["decision"] == "deny" and "no-detached-launch" in got["reason"] and consumed == [], (got, consumed)
+    got = codex.pre_tool_use(patch_payload(tk, add_patch("dev/mymod/launch.py", OK_LINE)), "bash", time.monotonic() + 30)
+    assert got["decision"] in ("allow", "advise") and consumed == [("pending",)]      # twin: an allowed call consumes
+
+
+# ------------------------------------------------------------------ review round: GUARDS-OFF.log ------------------- #
+
+def _off_log(tmp):
+    return tmp / "backups" / "GUARDS-OFF.log"
+
+
+def test_guard_off_deny_is_logged_like_the_shell_guards(adapters, box, monkeypatch):
+    import re
+    codex, opencode = adapters
+    tmp, tk = box
+    monkeypatch.setenv("X4_GUARD", "off")
+    d, text = codex_run(codex, patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE)))
+    assert d == "advise", (d, text)
+    lines = _off_log(tmp).read_text(encoding="utf-8").splitlines()
+    rec = [l for l in lines if "no-detached-launch would have DENIED" in l]
+    assert len(rec) == 1 and re.match(r"^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] no-detached-launch would have DENIED: no-detached-launch: ", rec[0]), lines
+    assert "creationflags=0x8" in rec[0] and "\r" not in rec[0] and len(rec[0].split("DENIED: ", 1)[1]) <= 300
+    v = oc_run(opencode, oc_call(tk, "apply_patch", {"patchText": add_patch("dev/mymod/launch.py", FLAG_LINE)}))
+    assert v["decision"] == "advise"
+    assert len([l for l in _off_log(tmp).read_text(encoding="utf-8").splitlines() if "no-detached-launch would have" in l]) == 2
+
+
+def test_guard_off_log_is_skipped_for_a_check_and_when_the_guards_are_on(adapters, box, monkeypatch):
+    codex, _ = adapters
+    tmp, tk = box
+    monkeypatch.setenv("X4_GUARD", "off")
+    monkeypatch.setenv("X4_GUARD_CHECK", "1")          # the guards' own check protocol promises no side effects
+    d, text = codex_run(codex, patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE)))
+    assert d == "advise" and "no-detached-launch" in text and not _off_log(tmp).exists(), (d, text)
+    monkeypatch.delenv("X4_GUARD_CHECK")
+    monkeypatch.delenv("X4_GUARD")                     # twin: guards on, a deny, nothing logged
+    assert codex_run(codex, patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE)))[0] == "deny"
+    assert not _off_log(tmp).exists()
+
+
+def test_an_unwritable_guard_off_log_never_changes_the_verdict(adapters, box, monkeypatch):
+    codex, _ = adapters
+    tmp, tk = box
+    (tmp / "blocker").write_text("a file where the log folder should be", encoding="utf-8")
+    monkeypatch.setenv("X4_BACKUPS", str(tmp / "blocker"))
+    monkeypatch.setenv("X4_GUARD", "off")
+    monkeypatch.setattr(codex.save_policy, "batch", lambda *a, **k: dict(ALLOW))
+    got = codex.pre_tool_use(patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE)), "bash", time.monotonic() + 30)
+    assert got["decision"] == "advise" and "no-detached-launch" in got["context"], got
+
+
+# ------------------------------------------------------------------ review round: no second Bash start ------------- #
+
+def test_the_detector_never_starts_the_root_reader_a_second_time(adapters, box, monkeypatch, tmp_path):
+    """A hook-only install keeps its tools in another toolkit: the detector must reuse the roots the funnel read."""
+    from codex_testlib import copy_shared_runtime
+    codex, opencode = adapters
+    tmp, tk = box
+    other = tmp_path / "other-toolkit"
+    copy_shared_runtime(other)
+    (tk / "tools" / "modding_harness" / "detached.py").unlink()       # X4_TOOLKIT holds no detector
+    real, seen = codex.save_policy.read_roots, []
+
+    def counting(deadline):
+        seen.append(1)
+        roots = dict(real(deadline), toolkit=str(other))              # the roots name the toolkit that has it
+        codex.save_policy.LAST_ROOTS = roots                          # what the real read_roots records
+        return roots
+    monkeypatch.setattr(codex.save_policy, "read_roots", counting)
+    payload = patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE))
+    d, reason = codex_run(codex, payload)
+    assert d == "deny" and "no-detached-launch" in reason, (d, reason)    # the roots-named toolkit's detector ran
+    with_detector = len(seen)
+    assert with_detector >= 1
+    seen.clear()
+    with monkeypatch.context() as m:
+        m.setattr(codex, "detached_verdict", lambda v, make, deadline: v)
+        codex_run(codex, payload)
+    assert with_detector == len(seen), f"the detector started the root reader {with_detector - len(seen)} extra time(s)"
+    seen.clear()
+    v = oc_run(opencode, oc_call(tk, "apply_patch", {"patchText": add_patch("dev/mymod/launch.py", FLAG_LINE)}))
+    assert v["decision"] == "deny" and "no-detached-launch" in v["reason"], v
+    assert len(seen) <= with_detector
+
+
+def test_no_roots_read_in_this_call_means_no_bash_start_and_a_note(adapters, box, monkeypatch, tmp_path):
+    codex, _ = adapters
+    _tmp, tk = box
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("X4_TOOLKIT", str(empty))
+    monkeypatch.setattr(codex.save_policy, "LAST_ROOTS", None, raising=False)
+    started = []
+    monkeypatch.setattr(codex.save_policy, "read_roots", lambda deadline: started.append(1) or {"toolkit": str(tk)})
+    got = codex.detached_verdict(dict(ALLOW), lambda: [("shell", "bash", "echo hi", str(tk))], time.monotonic() + 30)
+    assert got["decision"] == "advise" and f"{NOTE}: ImportError" in got["context"], got
+    assert started == [], "the detector started the root reader itself"
+
+
+def test_roots_from_an_earlier_call_are_not_used(adapters, box, monkeypatch, tmp_path):
+    codex, _ = adapters
+    tmp, tk = box
+    empty = tmp_path / "empty2"
+    empty.mkdir()
+    monkeypatch.setenv("X4_TOOLKIT", str(empty))
+    monkeypatch.setattr(codex.save_policy, "batch", lambda *a, **k: dict(ALLOW))
+    monkeypatch.setattr(codex.save_policy, "LAST_ROOTS", {"toolkit": str(tk)}, raising=False)       # a stale earlier call
+    d, text = codex_run(codex, patch_payload(tk, add_patch("dev/mymod/launch.py", FLAG_LINE)))
+    assert d == "advise" and f"{NOTE}: ImportError" in text, (d, text)

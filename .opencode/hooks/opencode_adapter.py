@@ -178,6 +178,7 @@ def detached_items(p: dict, cwd: str | None) -> list[tuple]:
 
 def pre(p: dict) -> dict:
     deadline = time.monotonic() + core.budget_s()
+    core.save_policy.LAST_ROOTS = None     # the detector reuses only the roots THIS call's funnel reads
     try:
         calls, ops, cwd = translate(p)
     except Unreadable as e:

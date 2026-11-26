@@ -109,9 +109,36 @@ def p_detached_after_refusal(tmp, tk, env, tree):
     return d + ("/detached" if "no-detached-launch" in text else "/guard")
 
 
+def p_detached_ask(tmp, tk, env, tree):
+    """The funnel ASKS (a new file in the user profile); the detector must not replace that."""
+    d, text, _ = chain(tree, _detached_patch(tk, (tmp / "profile" / "launch.py").as_posix()), env)
+    return d + ("/detached" if "no-detached-launch" in text else "/guard")
+
+
+def p_detached_inert(tmp, tk, env, tree):
+    """The funnel answers INERT (a variable interpreter it cannot resolve); the detector must not replace that."""
+    cmd = "& $env:PY -c 'import subprocess; subprocess.Popen(1, creationflags=0x8)'"
+    d, text, _ = chain(tree, native("bash_powershell", tmp, command=cmd), env, shell="powershell")
+    return d + ("/detached" if "no-detached-launch" in text else "/guard")
+
+
+def p_detached_guard_off_log(tmp, tk, env, tree):
+    log = tmp / "backups" / "GUARDS-OFF.log"
+    log.unlink(missing_ok=True)                  # the control run's record must not stand in for the mutant run's
+    d = chain(tree, _detached_patch(tk), dict(env, X4_GUARD="off"))[0]
+    text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    return d + ("/logged" if "no-detached-launch would have DENIED" in text else "/unlogged")
+
+
 def p_detached_module_missing(tmp, tk, env, tree):
     """No detector on disk: the call must still be judged by the funnel and allowed with a note, never refused."""
     (tk / "tools" / "modding_harness" / "detached.py").unlink(missing_ok=True)   # the mutant run repeats the probe
+    return chain(tree, _detached_patch(tk), env)[0]
+
+
+def p_detached_module_exits(tmp, tk, env, tree):
+    """A detector that calls sys.exit while loading: a BaseException, which must still fail open."""
+    (tk / "tools" / "modding_harness" / "detached.py").write_text("raise SystemExit(5)\n", encoding="utf-8")
     return chain(tree, _detached_patch(tk), env)[0]
 
 
@@ -158,13 +185,27 @@ MUTANTS = [
     ("detached-consulted-after-a-refusal", "codex_adapter.py",
      '    if verdict["decision"] not in ("allow", "advise"):\n        return verdict\n    try:',
      "    if False:\n        return verdict\n    try:", p_detached_after_refusal, "deny/guard"),
+    ("detached-consulted-after-an-ask", "codex_adapter.py",
+     '    if verdict["decision"] not in ("allow", "advise"):\n        return verdict\n    try:',
+     '    if verdict["decision"] == "deny" and not verdict.get("inert"):\n        return verdict\n    try:',
+     p_detached_ask, "ask/guard"),
+    ("detached-consulted-after-an-inert-deny", "codex_adapter.py",
+     '    if verdict["decision"] not in ("allow", "advise"):\n        return verdict\n    try:',
+     '    if verdict["decision"] == "deny" and not verdict.get("inert"):\n        return verdict\n    try:',
+     p_detached_inert, "inert/guard"),
+    ("detached-guard-off-log-dropped", "codex_adapter.py", "        _log_guard_off(reason)\n", "        pass\n",
+     p_detached_guard_off_log, "advise/logged"),
     ("detached-fails-closed", "codex_adapter.py",
-     "    except Exception as e:              # noqa: BLE001 -- the check must never block a call by crashing",
-     "    except KeyError as e:               # noqa: BLE001 -- the check must never block a call by crashing",
+     "    except BaseException as e:          # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny",
+     "    except KeyError as e:               # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny",
      p_detached_module_missing, "advise"),
+    ("detached-base-exception-escapes", "codex_adapter.py",
+     "    except BaseException as e:          # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny",
+     "    except Exception as e:              # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny",
+     p_detached_module_exits, "advise"),
     ("detached-guard-off-ignored", "codex_adapter.py",
-     '    if os.environ.get("X4_GUARD") == "off":\n        return _detached_note',
-     '    if False:\n        return _detached_note', p_detached_guard_off, "advise"),
+     '    if os.environ.get("X4_GUARD") == "off":\n        _log_guard_off(reason)',
+     '    if False:\n        _log_guard_off(reason)', p_detached_guard_off, "advise"),
     ("detached-own-exempt-dropped", "codex_adapter.py",
      'DETACHED_OWN_EXEMPT = ("no-detached-launch.py", ', 'DETACHED_OWN_EXEMPT = ("zz-no-such-file.py", ',
      p_detached_own_file, "allow"),
