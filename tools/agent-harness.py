@@ -127,6 +127,8 @@ def main(argv=None):
     notes.add_argument("--reference", required=True, type=Path)
     upgrade_cli = save_policy.core(ROOT, "installation")
     upgrade_cli.add_arguments(sub)
+    release_cli = save_policy.core(ROOT, "release")
+    release_cli.add_arguments(sub)
     coverage = sub.add_parser("coverage")
     coverage.add_argument("--session-id", required=True)
     sub.add_parser("save-list")
@@ -177,6 +179,9 @@ def main(argv=None):
             output = upgrade_cli.handle(args, ROOT, local_files=("x4-paths.env", ".claude/x4-paths.env"),
                 notes_files=("X4-NOTES.md",), candidate_preparer=x4_upgrade_render.prepare, candidate_validator=x4_upgrade_render.validate,
                 generated_paths=(".codex/hooks.json",))
+        elif args.command in release_cli.COMMANDS:
+            import x4_update
+            output = x4_update.handle(args, ROOT)
         elif args.command == "coverage":
             output = save_policy.core(ROOT, "telemetry").Telemetry(ROOT).report(args.session_id)
         elif args.command == "save-lock":
@@ -251,7 +256,10 @@ def main(argv=None):
         output = {"api_version": 1, "decision": "deny", "reason": str(exc), "result": result,
                   "transactions": []}
     except (OSError, ValueError, RecursionError, UnicodeError, TimeoutError) as exc:
-        if args.command in upgrade_cli.COMMANDS:
+        if args.command in release_cli.COMMANDS:
+            # A refused or failed update fetch says why, and fails; nothing installed has changed.
+            output, exit_status = {"ok": False, "error": str(exc), "installed_changed": False}, 2
+        elif args.command in upgrade_cli.COMMANDS:
             output, exit_status = upgrade_cli.failure(args.command, exc, "generic X4 entry failed")
         else:
             if args.command == "notes-preserve":

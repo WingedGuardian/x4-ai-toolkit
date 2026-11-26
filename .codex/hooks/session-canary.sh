@@ -181,6 +181,21 @@ if [ -n "$XF" ] && [ -n "$_x4_hkpy" ] && ! _x4_switch_off "${X4_HOUSEKEEP_SWEEP:
    && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
   ( "$_x4_hkpy" "${X4_PYI[@]}" -B "$XF" "$XF_NOTE" </dev/null >/dev/null 2>&1 & )
 fi
+
+# Toolkit self-update (4.3.1; the core's release check and guarded update). ONLY $X4_TOOLKIT's helper, like the two above.
+# `note` runs every session, whatever is switched off: it reads the cache (no network) and ALWAYS reports a failed or
+# unfinished update, which must be loud even with checks off. `check` then asks GitHub in the background (at most once a
+# day, by itself), started exactly as the x4fresh launcher is: a plain background child of this hook with its output
+# discarded, never given a console of its own to pop up. Under a test harness only with X4_SWEEP_IN_TESTS (the helper
+# refuses a test harness anyway). A crash in either is swallowed: this hook must exit 0 with the rest of its report.
+UP=""
+[ -f "${X4_TOOLKIT:-}/scripts/x4update_session.py" ] && UP="$X4_TOOLKIT/scripts/x4update_session.py"
+if [ -n "$UP" ] && [ -n "$_x4_hkpy" ]; then
+  "$_x4_hkpy" "${X4_PYI[@]}" -B "$UP" note </dev/null 2>/dev/null || :
+  if ! _x4_switch_off "${X4_UPDATE_CHECK:-}" && ! _x4_switch_off "${X4_HOUSEKEEP_SWEEP:-}"      && ! _x4_switch_off "${MODDING_HARNESS_UPDATE_CHECK:-}"      && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
+    ( "$_x4_hkpy" "${X4_PYI[@]}" -B "$UP" check </dev/null >/dev/null 2>&1 & )
+  fi
+fi
 )"
 
 # The canary lives in the toolkit, not beside the hooks: it is a tool, and it needs the
