@@ -17,6 +17,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 STUB = "ARCHIVED.md"
+# Default save extensions: both supported games' (Skyrim). Each toolkit passes its own as `save_exts`; the X4 name
+# and profile clauses in is_save() hold for every caller, so no toolkit ever archives an X4 save it meets.
 SAVE_EXTS = (".ess", ".skse")
 # X4's own save names: the policy's Forever class is "saves and every copy", and a copy is usually not under save/.
 SAVE_NAME = re.compile(r"^(?:save_\d+|quicksave|autosave_\d+)\.xml(?:\.gz)?$")
@@ -29,10 +31,10 @@ class ArchiveError(Exception):
     pass
 
 
-def is_save(path):
-    """Both supported games' saves, plus X4's protected profile subtree."""
+def is_save(path, exts=SAVE_EXTS):
+    """A save by extension (`exts`, the calling toolkit's own), X4's save names, or X4's protected profile subtree."""
     low = str(path).replace('\\','/').lower()
-    return (low.endswith(SAVE_EXTS) or '/egosoft/x4/' in low.rstrip('/')+'/'
+    return (low.endswith(tuple(exts)) or '/egosoft/x4/' in low.rstrip('/')+'/'
             or '/save/' in low and low.endswith(('.xml','.xml.gz'))
             or bool(SAVE_NAME.match(low.rsplit('/',1)[-1])))
 
@@ -49,7 +51,7 @@ def _plain(path):
     return path
 
 
-def _walk(src: Path):
+def _walk(src: Path, save_exts=SAVE_EXTS):
     """Archive proofs must cover the entire source, without following links."""
     def failed(exc):
         raise ArchiveError('unreadable archive source: {}'.format(exc)) from exc
@@ -61,7 +63,7 @@ def _walk(src: Path):
             raise ArchiveError('link/reparse archive root: {}'.format(src))
         if not src.is_dir():
             raise ArchiveError('archive source is not a directory: {}'.format(src))
-        if is_save(src):
+        if is_save(src, save_exts):
             raise ArchiveError('archive source is in a protected save/profile subtree')
         for dp, dirs, files in os.walk(src, onerror=failed):
             for name in dirs + files:
@@ -73,16 +75,16 @@ def _walk(src: Path):
         failed(exc)
 
 
-def _members(src: Path):
+def _members(src: Path, save_exts=SAVE_EXTS):
     out = []
-    for dp, dirs, files in _walk(src):
+    for dp, dirs, files in _walk(src, save_exts):
         if ".git" in dirs or ".git" in files:
             raise ArchiveError("contains a .git entry: a repository is never archived")
         for f in files:
             p = Path(dp) / f
             if fnmatch.fnmatch(f.lower(), 'owned-session*.json') or fnmatch.fnmatch(f.lower(), '*ownership*.json'):
                 raise ArchiveError('ownership receipt lacks qualified release proof: {}'.format(p))
-            if is_save(p):
+            if is_save(p, save_exts):
                 raise ArchiveError("holds a save ({}): saves are never archived".format(p))
             out.append(p)
     return out
@@ -96,16 +98,17 @@ def _hash(path):
     return d.hexdigest()
 
 
-def verify_source(src, record):
+def verify_source(src, record, save_exts=SAVE_EXTS):
     """The local payload still equals the verified archive, including population."""
     src = _plain(src)
     expected = record.get('source_hashes')
     if expected is None:
         raise ArchiveError('archive has no source hash proof')
-    current = {p.relative_to(src).as_posix():_hash(p) for p in _members(src) if p != src/STUB}
+    current = {p.relative_to(src).as_posix():_hash(p) for p in _members(src, save_exts) if p != src/STUB}
     if current != expected:
         raise ArchiveError('source changed after archival; local payload retained')
-    directories = sorted((Path(dp)/d).relative_to(src).as_posix()+'/' for dp, ds, fs in _walk(src) for d in ds)
+    directories = sorted((Path(dp)/d).relative_to(src).as_posix()+'/' for dp, ds, fs in _walk(src, save_exts)
+                         for d in ds)
     if directories != record['directories']:
         raise ArchiveError('source directory population changed')
     if _hash(record['zip']) != record['zip_sha256']:
@@ -149,7 +152,7 @@ def nas_target(nas_dir: Path, name: str) -> Path:
     return t
 
 
-def archive_scope(action, cfg):
+def archive_scope(action, cfg, save_exts=SAVE_EXTS):
     """A plan cannot select new source roots or redirect its configured destination."""
     try:
         src, destination = Path(action['path']), Path(action['nas'])
@@ -169,25 +172,26 @@ def archive_scope(action, cfg):
             return 'archive destination differs from configured archive root/group'
         if archive_root.is_relative_to(src) or src.is_relative_to(archive_root):
             return 'archive source and destination overlap'
-        if is_save(src):
+        if is_save(src, save_exts):
             return 'archive source is a protected save/profile path'
         return ''
     except (KeyError, TypeError, OSError, ArchiveError) as exc:
         return 'archive source/destination scope could not be verified: '+str(exc)
 
 
-def archive_folder(src: Path, nas_dir: Path, recycler, extra_keep=()) -> dict:
+def archive_folder(src: Path, nas_dir: Path, recycler, extra_keep=(), save_exts=SAVE_EXTS) -> dict:
     """Zip `src` into `nas_dir`, verify, write the stub, recycle everything not kept locally. Returns the record."""
     src, nas_dir = _plain(src), _plain(nas_dir)
     if nas_dir.is_relative_to(src) or src.is_relative_to(nas_dir):
         raise ArchiveError('archive source and destination overlap')
-    files = _members(src)
+    files = _members(src, save_exts)
     if not files:
         raise ArchiveError("empty folder")
     if any(p.name == STUB for p in files):
         raise ArchiveError('existing archive stub needs disposition, not another archive')
     hashes = {p.relative_to(src).as_posix():_hash(p) for p in files}
-    directories = sorted((Path(dp)/d).relative_to(src).as_posix()+'/' for dp, ds, fs in _walk(src) for d in ds)
+    directories = sorted((Path(dp)/d).relative_to(src).as_posix()+'/' for dp, ds, fs in _walk(src, save_exts)
+                         for d in ds)
     nas_dir.mkdir(parents=True, exist_ok=True)
     target = nas_target(nas_dir, src.name)
     partial = target.with_name(target.name + ".partial")
@@ -221,7 +225,7 @@ def archive_folder(src: Path, nas_dir: Path, recycler, extra_keep=()) -> dict:
         for p in files:
             if names.get(p.relative_to(src).as_posix()) != p.stat().st_size:
                 raise ArchiveError("NAS copy is missing or short for {}".format(p))
-        if {p.relative_to(src).as_posix():_hash(p) for p in _members(src)} != hashes:
+        if {p.relative_to(src).as_posix():_hash(p) for p in _members(src, save_exts)} != hashes:
             raise ArchiveError('source changed during archival; local payload retained')
         verified_zip_hash = _hash(partial)
         if os.name=='nt':
@@ -257,7 +261,7 @@ def archive_folder(src: Path, nas_dir: Path, recycler, extra_keep=()) -> dict:
         "Restore: `python \"{helper}\" restore \"{stub}\"`\n\n<!-- {js} -->\n".format(
             helper=Path(__file__).resolve(), stub=src / STUB, js=json.dumps(record), **record), encoding="utf-8")
     victims = _victims(src, keep)
-    verify_source(src, record)
+    verify_source(src, record, save_exts)
     record["victims"] = victims
     if recycler is None:                   # the caller batches the recycle of many folders into a few shell calls
         record["recycle_failed"] = {}
@@ -356,14 +360,14 @@ def _retirement_hash(path, deadline, chunk=1024*1024):
     return d.hexdigest()
 
 
-def review_archives(cfg, protect=lambda path: '', now=None):
+def review_archives(cfg, protect=lambda path: '', now=None, save_exts=SAVE_EXTS):
     """Read-only review, including retention=0. Age never supplies retirement proof."""
     root = Path(cfg['archive_root'])
     deadline = time.monotonic() + cfg.get('archive_review_seconds', 15)
     declarations = {os.path.normcase(os.path.abspath(p)): v for p,v in cfg.get('obsolete_items', {}).items()}
     result = dict(state='complete', root=str(root), rows=[], held=[])
     try:
-        for dp, dirs, files in _walk(root):
+        for dp, dirs, files in _walk(root, save_exts):
             if time.monotonic() > deadline:
                 raise TimeoutError('archive review time budget reached')
             for name in files:
@@ -428,7 +432,7 @@ def periodic_note(cfg, scanner, now=None):
         len(report['rows']),counts.get('review retirement',0),report['state'])
 
 
-def restore_archive(stub: Path) -> Path:
+def restore_archive(stub: Path, save_exts=SAVE_EXTS) -> Path:
     """Extract the zip named in the stub back into its folder. Refuses if any member's path exists with other bytes."""
     stub = Path(stub)
     text = stub.read_text(encoding="utf-8")
@@ -445,7 +449,7 @@ def restore_archive(stub: Path) -> Path:
                     or ':' in i.filename):
                 raise ArchiveError('unsafe archive member path')
             p = dest/i.filename
-            if is_save(p):
+            if is_save(p, save_exts):
                 raise ArchiveError('restore would write a protected save/profile path')
             for ancestor in (p, *p.parents):
                 if ancestor.is_symlink() or (ancestor.exists() and getattr(ancestor.lstat(), 'st_file_attributes', 0) & 0x400):

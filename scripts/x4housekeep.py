@@ -78,6 +78,12 @@ STUB_RECORD_MAX_BYTES = 32 << 20  # a stub larger than this is not read to find 
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
+#: X4 saves have no extension of their own: they are known by name and folder (is_save). Passed to the shared
+#: archiver as `save_exts`, so a Skyrim .ess/.skse met in an X4 task folder is an ordinary file here (user ruling
+#: 2026-11-26); the archiver's X4 name and profile clauses still hold.
+X4_SAVE_EXTS = ()
+
+
 def is_save(low: str) -> bool:
     """An X4 save by its path, or anything in the user profile (Documents/Egosoft/X4/<id>/ holds saves, content.xml and
     UI data). `low` is the lower-cased path with forward slashes. A renamed copy has no such name: _holds_savegame
@@ -551,7 +557,7 @@ def is_done(task: Path, idle_days: float, tokens: set, cwds: list, guard) -> str
                 # Legacy receipts have no common release schema. A dead/reused PID, age or an
                 # unqualified `released` field cannot prove that the owner's work is finished.
                 return "holds an ownership receipt without qualified release proof"
-            if is_save(str(Path(dp)/f).replace(chr(92),"/").lower()) or f.lower().endswith((".ess",".skse")):
+            if is_save(str(Path(dp)/f).replace(chr(92),"/").lower()):
                 return "holds a save"
             why = guard.why_protected(os.path.join(dp, f))
             if why in {"save","known-good baseline","audit record","protected_globs"}:
@@ -773,7 +779,7 @@ def archive_selection(cfg, guard, tasks, now, held=None, inventory=None) -> tupl
         action = {"class": "archive", "path": str(t), "bytes": fp[1], "fingerprint": list(fp),
                   "nas": str(Path(cfg["archive_root"]) / label), "idle_days": round(idle, 1),
                   "closed": closed}
-        why = _archive_module().archive_scope(action, cfg)
+        why = _archive_module().archive_scope(action, cfg, X4_SAVE_EXTS)
         if why:
             keep("kept: archive scope ("+why+")",fp[1],from_root)
             continue
@@ -817,7 +823,7 @@ def review_archives(cfg, guard=None):
     except (OSError, ValueError) as exc:
         return dict(state='partial',root=str(root),rows=[],held=[dict(path=str(root),reason=str(exc))])  # silent-ok: reported as partial, with the reason
     return _archive_module().review_archives(dict(cfg,archive_root=str(root)),
-                                             protect=lambda p:archive_protection(guard,p))
+                                             protect=lambda p:archive_protection(guard,p), save_exts=X4_SAVE_EXTS)
 
 
 def _archive_module():
@@ -1434,7 +1440,7 @@ def check(action, cfg, guard: Guard, now: float, memo: _Memo | None = None) -> s
         if p.stat().st_nlink != 1 or c.stat().st_nlink != 1 + memo.links.get(_key(c), 0):
             return "hard-link ownership changed or is unqualified"
     if action["class"] == "archive":
-        why = _archive_module().archive_scope(action, cfg)
+        why = _archive_module().archive_scope(action, cfg, X4_SAVE_EXTS)
         if why:
             return why
         if list(fingerprint(p)) != list(action["fingerprint"]):
@@ -1587,7 +1593,7 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
                 elif cls == "archive":
                     ha = _archive_module()
                     archived.append((a, ha.archive_folder(Path(a["path"]), Path(a["nas"]), None,
-                                                          _kept_extra(guard, a["path"]))))
+                                                          _kept_extra(guard, a["path"]), save_exts=X4_SAVE_EXTS)))
                 else:
                     to_recycle.append(a)
             except Exception as e:          # OSError, or the archive module's ArchiveError: local folder untouched
@@ -1600,7 +1606,7 @@ def apply(plan_doc: dict, cfg, only=None, recycler=None, now: float | None = Non
             ready_archives = []
             for a, rec in archived:
                 try:
-                    ha.verify_source(Path(a['path']), rec)
+                    ha.verify_source(Path(a['path']), rec, X4_SAVE_EXTS)
                     ready_archives.append((a, rec))
                 except (OSError, ValueError, ha.ArchiveError) as exc:
                     print('  REFUSED  archive {} ({})'.format(a['path'], exc))
