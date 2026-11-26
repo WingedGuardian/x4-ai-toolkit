@@ -454,8 +454,14 @@ copy_toolkit() {
   # in it -- X4_COPY_PRUNE is also what the copy skips, and a release source's BUILD-INFO must travel. A checkout copies
   # only git's tracked set, which never holds BUILD-INFO, so even a stray one in it is not copied and the old one is stale.
   # Mirror: install.ps1.
+  # A LINK of that name (even a dangling one) is removed itself, never followed and never handed to the recycler (which
+  # refuses links): a link holds nothing to recover. Mirror: install.ps1 (reparse point).
   if { [ ! -e "$SRC/BUILD-INFO" ] || [ "$tracked" = 1 ]; } && { [ -e "$dest/BUILD-INFO" ] || [ -L "$dest/BUILD-INFO" ]; }; then
-    recycle_installer_paths "$dest/BUILD-INFO" || return 1
+    if [ -L "$dest/BUILD-INFO" ]; then
+      rm -f -- "$dest/BUILD-INFO" || return 1
+    else
+      recycle_installer_paths "$dest/BUILD-INFO" || return 1
+    fi
   fi
   if [ "$tracked" = 1 ]; then
     # ANNOUNCED: a step that narrows the data says so.

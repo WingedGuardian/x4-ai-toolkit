@@ -3908,3 +3908,39 @@ def test_a_STRAY_untracked_BUILD_INFO_in_a_checkout_keeps_the_TRACKED_SET_and_th
     leaked = sorted(set(_DERIVED + (_UNTRACKED,)) & got)
     assert not leaked, "untracked/derived files travelled from a git source: %s" % leaked
     assert "BUILD-INFO" not in got, "a stray BUILD-INFO (or the stale one) is in the destination: %s" % sorted(got)
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1"])
+@pytest.mark.parametrize("target", ["dangling", "real-file", "junction"])
+def test_a_BUILD_INFO_that_is_a_LINK_is_removed_itself_and_never_followed(installer, target, tmp_path):
+    """6b review L6: install.sh tested `-e || -L` while PowerShell's Test-Path calls a dangling link absent, and the
+    recycler refuses links. Both installers now remove a link of that name themselves (a link holds nothing to recover)
+    and never touch what it points at."""
+    src = _synthetic_source(tmp_path)
+    (src / "scripts").mkdir()
+    shutil.copy2(ROOT / "scripts" / "x4recycle.py", src / "scripts" / "x4recycle.py")
+    dest = _fresh(tmp_path)
+    precious = tmp_path / "precious.txt"
+    if target == "real-file":
+        precious.write_text("MINE", encoding="utf-8")
+    if target == "junction":
+        # A directory junction needs no privilege on Windows (a symlink does) and is a reparse point the recycler refuses too.
+        if os.name != "nt":
+            pytest.skip("junctions are Windows-only")
+        precious.mkdir()
+        (precious / "keep.txt").write_text("MINE", encoding="utf-8")
+        made = subprocess.run(["cmd", "/c", "mklink", "/J", str(dest / "BUILD-INFO"), str(precious)],
+                              capture_output=True, text=True)
+        assert made.returncode == 0, made.stdout + made.stderr
+    else:
+        try:
+            os.symlink(precious, dest / "BUILD-INFO")
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip("cannot create a symlink here: %s" % exc)
+    r = _install(installer, tmp_path, dest, source=src)
+    assert (dest / ".claude").is_dir(), "the copy did not run; this proves nothing: " + (r.stdout + r.stderr)[-1500:]
+    assert not os.path.lexists(dest / "BUILD-INFO"), "the link survived: " + (r.stdout + r.stderr)[-1500:]
+    if target == "real-file":
+        assert precious.read_text(encoding="utf-8") == "MINE", "the link's TARGET was touched"
+    if target == "junction":
+        assert (precious / "keep.txt").read_text(encoding="utf-8") == "MINE", "the junction's TARGET was touched"

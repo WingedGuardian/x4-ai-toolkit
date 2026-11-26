@@ -685,3 +685,14 @@ def test_both_installers_leave_OPTIONAL_items_out_of_the_tracked_set_coverage_ch
     ps_skip = ps_fn.index("if ($X4OptionalItems -contains $i) { continue }")
     assert sh_skip < sh_fn.index("git tracks nothing under"), "install.sh checks optional items for tracking"
     assert ps_skip < ps_fn.index("git tracks nothing under"), "install.ps1 checks optional items for tracking"
+
+
+def test_both_installers_remove_a_BUILD_INFO_LINK_themselves_not_through_the_recycler():
+    """6b review L6: the recycler refuses links, install.sh used to test `-e || -L` and PowerShell's Test-Path calls a
+    dangling link absent. Both: a link of that name is removed itself (never followed); anything else is recycled."""
+    sh = SH.read_text(encoding="utf-8")
+    ps = PS1.read_text(encoding="utf-8")
+    assert re.search(r'if \[ -L "\$dest/BUILD-INFO" \]; then\s+rm -f -- "\$dest/BUILD-INFO" \|\| return 1\s+else\s+'
+                     r'recycle_installer_paths "\$dest/BUILD-INFO" \|\| return 1', sh), "install.sh lost its link branch"
+    assert ("[System.IO.File]::GetAttributes($stale)" in ps
+            and "FileAttributes]::ReparsePoint) { Remove-Item -LiteralPath $stale" in ps), "install.ps1 lost its link branch"

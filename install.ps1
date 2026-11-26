@@ -1632,7 +1632,15 @@ function Copy-Toolkit($dest) {
   # stop a release source's BUILD-INFO being copied.
   if ($tracked -or -not (Test-Path -LiteralPath (Join-Path $SRC 'BUILD-INFO'))) {
     $stale = Join-Path $dest 'BUILD-INFO'
-    if (Test-Path -LiteralPath $stale) { Recycle-InstallerPaths @($stale) }
+    # The attributes, not Test-Path: a dangling link reads as absent to Test-Path. A LINK of that name (a reparse point)
+    # is removed itself, never followed and never handed to the recycler (which refuses links): it holds nothing to
+    # recover. Mirror: install.sh.
+    $attrs = $null
+    try { $attrs = [System.IO.File]::GetAttributes($stale) } catch { $attrs = $null }
+    if ($null -ne $attrs) {
+      if ($attrs -band [System.IO.FileAttributes]::ReparsePoint) { Remove-Item -LiteralPath $stale -Force -Confirm:$false }
+      else { Recycle-InstallerPaths @($stale) }
+    }
   }
   if ($tracked) {
     # ANNOUNCED: a step that narrows the data says so.
