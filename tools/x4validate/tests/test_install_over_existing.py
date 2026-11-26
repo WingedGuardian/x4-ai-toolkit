@@ -3828,3 +3828,29 @@ def test_FXB4_every_CI_BASH_install_leg_that_runs_on_Windows_is_ISOLATED_too():
     ps_keys = re.findall(r"\$env:X4_INSTALL_ENV_REGKEY = '(HKCU\\Software\\X4ToolkitTests\\[^']+)'",
                          text)
     assert len(set(keys + ps_keys)) == len(keys + ps_keys), keys + ps_keys
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1"])
+def test_BUILD_INFO_travels_from_a_RELEASE_source_and_a_checkout_without_one_says_nothing(installer, tmp_path):
+    """4.3.1 task 6a: a release zip's BUILD-INFO (version + commit, read by the shared core's self-update) is
+    copied by BOTH installers; a source with none (a git checkout) copies none and does not call it missing.
+    Sandboxed like its neighbours: a synthetic source, a tmp destination, the user environment pinned away."""
+    info = "version=4.3.1\ncommit=" + "ab" * 20 + "\n"
+    src = _synthetic_source(tmp_path)
+    (src / "BUILD-INFO").write_text(info, encoding="utf-8", newline="\n")
+    dest = _fresh(tmp_path)
+    r = _install(installer, tmp_path, dest, source=src)
+    assert (dest / ".claude").is_dir(), "the copy did not run; this proves nothing"
+    assert (dest / "BUILD-INFO").read_bytes() == info.encode("utf-8"), (r.stdout + r.stderr)[-1500:]
+    # the twin: no BUILD-INFO in the source -> none in the destination, and no "not in the source" noise for it
+    src2 = tmp_path / "src2"
+    shutil.copytree(src, src2)
+    (src2 / "BUILD-INFO").unlink()
+    dest2 = tmp_path / "toolkit2"
+    dest2.mkdir()
+    r2 = _install(installer, tmp_path, dest2, source=src2)
+    assert (dest2 / ".claude").is_dir(), "the copy did not run; this proves nothing"
+    assert not (dest2 / "BUILD-INFO").exists()
+    note = [ln for ln in (r2.stdout + r2.stderr).splitlines() if "not in the source" in ln]
+    assert note, "the source is missing real items, so the note must still appear (control)"
+    assert not any("BUILD-INFO" in ln for ln in note), note

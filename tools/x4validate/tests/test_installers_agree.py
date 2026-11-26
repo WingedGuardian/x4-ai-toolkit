@@ -635,3 +635,21 @@ def test_both_installers_PRINT_the_same_refguard_step_and_neither_APPLIES_it():
     assert "print_refguard_step \"$TOOLKIT\"" in sh and "Write-RefguardStep $Toolkit" in ps
     for text, name in ((sh, "install.sh"), (ps, "install.ps1")):
         assert "x4refguard.py' 'apply'" not in text and "x4refguard.py apply\"" not in text, name
+
+
+def test_BUILD_INFO_is_in_BOTH_copy_lists_and_neither_installer_reports_it_MISSING():
+    """4.3.1 task 6a: a release zip carries `BUILD-INFO` (the version and commit the shared core's self-update
+    reads); a git checkout has none, which is right. Both installers must copy it when it is there and stay
+    SILENT when it is not -- an absent BUILD-INFO is not the `[note] not in the source` kind of absence (that
+    note exists for items that SHOULD be there, like the absent mods/ folder that once survived a release)."""
+    assert "BUILD-INFO" in sh_items(), "install.sh does not copy BUILD-INFO from a release source"
+    assert "BUILD-INFO" in ps1_items(), "install.ps1 does not copy BUILD-INFO from a release source"
+    sh = SH.read_text(encoding="utf-8")
+    ps = PS1.read_text(encoding="utf-8")
+    assert 'X4_OPTIONAL_ITEMS="BUILD-INFO"' in sh, "install.sh lost its optional-item list"
+    assert "$X4OptionalItems = @('BUILD-INFO')" in ps, "install.ps1 lost its optional-item list"
+    # the missing-item note must consult the optional list in BOTH installers
+    assert re.search(r'X4_OPTIONAL_ITEMS', sh.split('MISSING="$MISSING $item"')[0][-400:]), \
+        "install.sh names an optional item as missing"
+    assert re.search(r'X4OptionalItems', ps.split("$missing += $i")[0][-400:]), \
+        "install.ps1 names an optional item as missing"

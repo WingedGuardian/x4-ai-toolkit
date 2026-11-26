@@ -468,7 +468,13 @@ function Get-OwnedEnvLinesFromFile($f) {
 #: COMMON to every agent target; each agent's own files live in $X4AgentItems only.
 $X4CopyItems = @('tools','bin','scripts','mods','KNOWLEDGEBASE.md','KNOWLEDGEBASE.local.md.example','README.md',
                  'CHANGELOG.md','LICENSE','setup.sh','install.sh','install.ps1','SETUP_PROMPT.txt','ADAPTING.md','RETENTION.md','x4-housekeep.json.example',
-                 '.gitignore','.gitattributes','x4-paths.env.example')
+                 '.gitignore','.gitattributes','x4-paths.env.example','BUILD-INFO')
+
+#: Items a source MAY lack without that being news -- the mirror of X4_OPTIONAL_ITEMS in install.sh.
+#: BUILD-INFO is written by scripts/build-release.sh into a RELEASE zip (the version and commit the shared
+#: core's self-update reads); a git checkout has none, which is right, so its absence is not a
+#: "[note] not in the source" line (that note exists for items that SHOULD be there).
+$X4OptionalItems = @('BUILD-INFO')
 
 #: PER-AGENT sets -- the mirror of X4_AGENT_ITEMS_* in install.sh (audit F8). `agent\`,
 #: the neutral source, is in NO set: an installed toolkit is runtime-only (decision #9).
@@ -1636,7 +1642,7 @@ function Copy-Toolkit($dest) {
     } else {
       # NAMED, never silently skipped: that silence is how the absent mods/ folder
       # survived a whole release.
-      $missing += $i
+      if ($X4OptionalItems -notcontains $i) { $missing += $i }
     }
   }
   if ($tracked) { Copy-TrackedSet $dest }
