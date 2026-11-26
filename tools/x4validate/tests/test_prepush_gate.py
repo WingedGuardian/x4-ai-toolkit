@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -241,7 +242,7 @@ class Recorder:
     """Gate.step without running anything: names the steps run, fails the ones named in `fail` with its rc."""
 
     def __init__(self):
-        self.ran, self.cmds, self.fail, self.during = [], {}, {}, None
+        self.ran, self.cmds, self.fail, self.during, self.checks = [], {}, {}, None, {}
 
     def install(self, gate, monkeypatch):
         rec = self
@@ -249,6 +250,7 @@ class Recorder:
         def step(self, name, cmd, cwd=None, check=None):
             rec.ran.append(name)
             rec.cmds[name] = cmd
+            rec.checks[name] = check
             if rec.during:
                 rec.during(name)
             rc = next((v for k, v in rec.fail.items() if k in name), 0)
@@ -278,6 +280,7 @@ def recording(checkout, monkeypatch):
     def go(*extra, base_rev=base):
         r.ran.clear()
         r.cmds.clear()
+        r.checks.clear()
         return gate.main(["--root", str(checkout), "--base", base_rev, *extra])
     return gate, r, go, checkout
 
@@ -593,3 +596,115 @@ def test_RED_the_gate_runs_the_shipped_claude_md_floor(recording):
     assert go() == 0
     cmds = [c for c in r.cmds.values() if "gates/claude_md_budget.py" in c]
     assert cmds == [["uv", "run", "--frozen", "python", "gates/claude_md_budget.py", "--shipped"]], r.cmds
+
+
+# ------------------------------------------------------------------ 4.3.1: measure the gate, and leave the slow files to CI
+INSTALL_TESTS = "tools/x4validate/tests/test_install_over_existing.py"
+
+
+def _changed_file_cmd(r):
+    return next(c for n, c in r.cmds.items() if n.startswith("changed-file tests"))
+
+
+def test_changed_file_step_reports_durations(recording, capsys):
+    """MEASURED 2026-11-26: a gate run took 5,396 s and said only "trim this gate": nothing named what to trim. The
+    changed-file pytest step asks for its slowest items, and the gate prints the ten slowest test FILES of the run."""
+    gate, r, go, repo = recording
+    assert go() == 0
+    cmd = _changed_file_cmd(r)
+    assert "--durations=25" in cmd, cmd
+    name = next(n for n in r.checks if n.startswith("changed-file tests"))
+    assert r.checks[name] is not None, "the step must read pytest's output to name the slow files"
+    lines = ["==== slowest 25 durations ====", "10.00s call     tests/test_big.py::test_x",
+             "5.00s setup    tests/test_big.py::test_y", "7.50s call     tests/test_mid.py::test_z",
+             "0.01s teardown tests/test_big.py::test_x", "", "5 passed in 30.00s"]
+    problems = r.checks[name](subprocess.CompletedProcess(cmd, 0, stdout="\n".join(lines) + "\n", stderr=""))
+    assert problems == [], "reporting durations is never a failure"
+    out = capsys.readouterr().out
+    assert out.index("tests/test_big.py") < out.index("tests/test_mid.py"), out
+    assert "15.0s" in out and "tests/test_big.py" in out, "a file's items add up: 10.00 + 5.00 + 0.01"
+
+
+def test_the_ten_slowest_files_are_the_ten_printed():
+    gate = _module()
+    text = "\n".join("{}.00s call     tests/test_f{:02d}.py::t".format(i + 1, i) for i in range(15))
+    top = gate.slowest_files(text, 10)
+    assert [f for f, _ in top] == ["tests/test_f%02d.py" % i for i in range(14, 4, -1)]
+    assert gate.slowest_files("no durations here\n", 10) == []
+
+
+class _Clock:
+    """A clock that moves 7 s per reading, so every step takes exactly 7 s."""
+    now = 1000.0
+
+    def time(self):
+        _Clock.now += 7.0
+        return _Clock.now
+
+    strftime = staticmethod(__import__("time").strftime)
+
+
+def test_pass_record_holds_step_seconds(checkout, monkeypatch):
+    """The record of a passing run says what each step cost, so growth is seen per step and not only as a total."""
+    gate = _module()
+    real = subprocess.run
+
+    def run(cmd, *a, **k):
+        if cmd[0] == "git":
+            return real(cmd, *a, **k)
+        return subprocess.CompletedProcess(cmd, 0, stdout="12 tests collected\n", stderr="")
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    monkeypatch.setattr(gate, "toolchain", lambda: dict(TOOLS))
+    monkeypatch.setattr(gate, "time", _Clock())
+    base = _git(checkout, "rev-parse", "HEAD")
+    _commit(checkout, "tools/x4validate/tests/test_a.py", "assert True\n")
+    assert gate.main(["--root", str(checkout), "--base", base]) == 0
+    rec = json.loads(_passes(checkout)[0].read_text(encoding="utf-8"))
+    secs = rec["step_seconds"]
+    assert any(k.startswith("preflight") for k in secs) and any(k.startswith("changed-file tests") for k in secs), secs
+    assert any("the suite collects" in k for k in secs) and ANCHORS in secs
+    assert len(secs) >= 9 and set(secs.values()) == {7.0}, secs
+
+
+def test_RED_the_selection_version_moved_with_the_ci_only_list():
+    """The CI-only list changes which tests a change selects without changing any rule the gate's bytes show as a
+    selection rule; a record made when those files ran must not excuse a gate that no longer runs them."""
+    assert _module().SELECTION_VERSION >= 2
+
+
+def test_ci_only_tests_are_deselected_and_announced(recording, capsys):
+    gate, r, go, repo = recording
+    _commit(repo, INSTALL_TESTS, "assert True\n")
+    assert go() == 0
+    cmd = _changed_file_cmd(r)
+    assert "tests/test_a.py" in cmd and "tests/test_install_over_existing.py" not in cmd, cmd
+    assert "NOT CHECKED here (CI only): " + INSTALL_TESTS in capsys.readouterr().out
+    rec = json.loads(_passes(repo)[0].read_text(encoding="utf-8"))
+    assert rec["selected_tests"] == ["tests/test_a.py"], "the record names what ran, not what was left to CI"
+    assert rec["ci_only"] == [INSTALL_TESTS]
+
+
+def test_TWIN_a_push_changing_only_a_ci_only_file_runs_no_changed_file_step(recording, capsys):
+    gate, r, go, repo = recording
+    base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, INSTALL_TESTS, "assert True\n")
+    assert go(base_rev=base) == 0
+    assert not any(n.startswith("changed-file tests") for n in r.ran), r.ran
+    assert "NOT CHECKED here (CI only): " + INSTALL_TESTS in capsys.readouterr().out
+
+
+def test_TWIN_a_file_not_on_the_list_is_still_run(recording, capsys):
+    gate, r, go, repo = recording
+    assert go() == 0
+    assert "tests/test_a.py" in _changed_file_cmd(r)
+    assert "CI only" not in capsys.readouterr().out
+
+
+def test_ci_only_rows_carry_a_measurement():
+    """No file is left to CI on a guess: every row names an existing test file and carries a dated, timed measurement."""
+    gate = _module()
+    assert gate.CI_ONLY, "the list is empty: delete this test with it"
+    for rel, why in gate.CI_ONLY:
+        assert (REPO / rel).is_file(), rel
+        assert re.search(r"MEASURED 20\d\d-\d\d-\d\d", why), (rel, why)
+        assert re.search(r"\b\d[\d,]* ?s\b", why), (rel, why)

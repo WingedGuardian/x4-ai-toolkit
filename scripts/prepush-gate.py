@@ -35,7 +35,9 @@ anchor check, the preflight, collection and step 1 run every time. Every skip an
 is printed. `--no-reuse` ignores every record (a passing run still writes one).
 
 BASE defaults to the branch's upstream, else the merge-base with origin/master. Exit 0 = passed, 1 = a step failed,
-2 = could not run. Prints each step's seconds so growth is seen; over 15 minutes it says so.
+2 = could not run. Prints each step's seconds so growth is seen (the pass record keeps them too, and the changed-file
+step names the ten slowest test files); over 15 minutes it says so. CI_ONLY lists the test files left to CI, each with
+its measurement; the run names every one it left out.
 """
 from __future__ import annotations
 
@@ -206,10 +208,54 @@ def deployed_state_args(rel):
     return args
 
 
+#: Test files left to CI: slow or load-sensitive enough that running them at the desk costs more than the CI round
+#: they would save. Deselected from the changed-file step even when the push changes the file itself, and said so on
+#: every run ("NOT CHECKED here (CI only)"): a narrowing step announces itself. Full CI still runs every one. Each
+#: row is (repo-relative file, why) and the why carries a MEASURED date and the seconds, from a recorded run: a file
+#: with no measurement is not added (tests/test_prepush_gate.py checks every row). A change that only this list
+#: excuses (an installer edit, which used to select the installer tests by name) is checked by CI alone.
+CI_ONLY = (
+    ("tools/x4validate/tests/test_install_over_existing.py",
+     "MEASURED 2026-11-11: 2,209 s of the 2,575 s changed-file step in a gate run (two runs took 3,245 s and 3,041 s "
+     "in all); it runs install.sh over scratch installs"),
+)
+
+
+def ci_only_split(files):
+    """(files to run, CI-only files left out) for repo-relative test paths; each one left out is announced."""
+    left = [f for f in files if f in dict(CI_ONLY)]
+    for f in left:
+        print("   NOT CHECKED here (CI only): " + f)
+    return [f for f in files if f not in left], left
+
+
+#: pytest's slowest-items lines: `12.34s call     tests/test_x.py::test_name[param]`.
+_DURATION = re.compile(r"^\s*(\d+(?:\.\d+)?)s\s+(?:setup|call|teardown)\s+(\S+?)::", re.M)
+
+
+def slowest_files(text, n=10):
+    """The `n` slowest test files in a pytest `--durations` listing, [(file, seconds)], their listed items added up."""
+    total = {}
+    for secs, rel in _DURATION.findall(text):
+        total[rel] = total.get(rel, 0.0) + float(secs)
+    return sorted(total.items(), key=lambda kv: (-kv[1], kv[0]))[:n]
+
+
+def durations_check(r):
+    """A step check that only reports: names the ten slowest test files of the run, never fails it."""
+    top = slowest_files(r.stdout)
+    if top:
+        print("   slowest test files (their items among pytest's 25 slowest):")
+        for rel, secs in top:
+            print("     {:8.1f}s  {}".format(secs, rel))
+    return []
+
+
 #: Bump whenever WHICH tests a change selects changes in a way the gate's own bytes would not show (a NOT_A_REFERENCE
-#: row is in this file, so its hash covers it; a rule moved to another file would not be). A record made under another
-#: selection is not reused.
-SELECTION_VERSION = 1
+#: or CI_ONLY row is in this file, so its hash covers it; a rule moved to another file would not be). A record made
+#: under another selection is not reused. 2 (4.3.1): the CI_ONLY list: a record made when those files ran must not
+#: excuse a gate that no longer runs them.
+SELECTION_VERSION = 2
 
 #: What the three hook suites (HOOK_TESTS[1:]) read: a change under one of these since a record runs them again.
 #: A trailing "/" is a folder. The gate itself is listed too, though a changed gate already fails the sha256 match.
@@ -315,14 +361,16 @@ def closest_record(tree, base_sha, tools):
     return best
 
 
-def write_record(tree, base_sha, tools, selected, hook_suites, reused_from):
-    """Atomically, as the run's LAST act. Returns the path, or None (said why)."""
+def write_record(tree, base_sha, tools, selected, hook_suites, reused_from, step_seconds=None, ci_only=()):
+    """Atomically, as the run's LAST act. Returns the path, or None (said why). `step_seconds` is what each step of
+    THIS run took, so growth is seen per step; `ci_only` the selected test files left to CI."""
     folder = passes_dir()
     if folder is None:
         print("   pass record NOT written: git could not name the git directory")
         return None
     rec = {"tree": tree, "head": _git("rev-parse", "HEAD"), **_identity(base_sha, tools), "status": "passed",
-           "selected_tests": selected, "hook_suites": hook_suites, "reused_from": reused_from,
+           "selected_tests": selected, "ci_only": list(ci_only), "hook_suites": hook_suites,
+           "reused_from": reused_from, "step_seconds": dict(step_seconds or {}),
            "written": time.strftime("%Y-%m-%dT%H:%M:%S")}
     path = folder / (tree + ".json")
     try:
@@ -348,6 +396,7 @@ class Gate:
         self.t0 = time.time()
         self.kept = False
         self.last_rc = None
+        self.seconds = {}
 
     def _keep_full_output(self, name, text):
         """The screen shows the last 40 lines. A test failure's traceback fell off that in rc2 and its temp folder went
@@ -380,7 +429,9 @@ class Gate:
             for p in problems:
                 print("   " + p)
             self.failed.append(name)
-        print("   {} in {:.0f}s".format("ok" if ok else "FAILED", time.time() - t), flush=True)
+        elapsed = time.time() - t
+        self.seconds[name] = round(elapsed, 1)
+        print("   {} in {:.0f}s".format("ok" if ok else "FAILED", elapsed), flush=True)
         return ok
 
 
@@ -472,13 +523,14 @@ def main(argv=None) -> int:
         return [] if m else ["no 'N tests collected' line"]
     g.step("the suite collects", ["uv", "run", "--frozen", "python", "-m", "pytest", "--collect-only", "-q",
                                   "-p", "no:cacheprovider", "tests"], cwd=PKG, check=collect_check)
-    files = tests_for(changed)
+    files, ci_only = ci_only_split(tests_for(changed))
     rel = [str(Path(f).relative_to("tools/x4validate").as_posix()) for f in files]
     if rel:
         print("   tests for changed files: " + ", ".join(rel))
+        # --durations=25: a 5,396 s run said only "trim this gate"; durations_check names the files that cost it.
         g.step("changed-file tests ({} files)".format(len(rel)),
                ["uv", "run", "--frozen", "python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
-                *deployed_state_args(rel), *rel], cwd=PKG)
+                "--durations=25", *deployed_state_args(rel), *rel], cwd=PKG, check=durations_check)
     total = time.time() - g.t0
     if g.failed:
         print("prepush-gate: FAILED ({}) in {:.0f}s -- fix before pushing; CI would have gone red on it".format(
@@ -494,7 +546,7 @@ def main(argv=None) -> int:
         print("   pass record NOT written: " + why_not)
     else:
         write_record(tree0, base_sha, tools, rel, "skipped" if skip_suites else "ran",
-                     reused[0]["tree"] if reused else None)
+                     reused[0]["tree"] if reused else None, g.seconds, ci_only)
     return 0
 
 
