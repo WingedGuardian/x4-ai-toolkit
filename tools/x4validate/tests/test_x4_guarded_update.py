@@ -61,18 +61,37 @@ DOWNLOAD = "https://github.com/WingedGuardian/x4-ai-toolkit/releases/download/v{
 SETUP_STUB = (b"#!/bin/bash\n"
               b"[ -z \"${CLAUDE_PROJECT_DIR:-}\" ] || { echo \"CLAUDE_PROJECT_DIR leaked: $CLAUDE_PROJECT_DIR\"; exit 7; }\n"
               b"[ -f ./setup.sh ] || { echo 'not run in the install root'; exit 8; }\n"
+              b"[ \"${UV_FROZEN:-}\" = 1 ] || { echo 'UV_FROZEN is not 1: uv sync could rewrite uv.lock'; exit 6; }\n"
               b"[ ! -f ./.fail-setup ] || { echo 'setup stub told to fail'; exit 1; }\n"
               b"echo setup-ok\n")
 
+#: The installer's lists the way install.sh spells them (the update reads the RELEASE's install.sh).
+FAKE_INSTALL_SH = (b'#!/bin/bash\n'
+                   b'X4_COPY_ITEMS="tools scripts README.md CHANGELOG.md setup.sh install.sh x4-paths.env.example BUILD-INFO"\n'
+                   b'X4_AGENT_ITEMS_claude=".claude CLAUDE.md"\n'
+                   b'X4_AGENT_ITEMS_codex="AGENTS.md .codex .agents"\n'
+                   b'X4_AGENT_ITEMS_generic="AGENTS.md .agents"\n'
+                   b'X4_AGENT_ITEMS_opencode="AGENTS.md .opencode"\n'
+                   b'X4_AGENT_NAMES="claude codex generic opencode"\n'
+                   b'X4_COPY_PRUNE="tools/x4validate/.venv"\n'
+                   b'X4_KEEP_LOCAL="x4-paths.env .claude/x4-paths.env .codex/hooks.json .opencode/opencode.jsonc"\n')
+
 
 def _doctor_stub(version, fail=False):
+    """x4doctor's stand-in: `detect_targets` (the update reads which agents an install holds from it) and a canary."""
     return ("import sys\nfrom pathlib import Path\n"
-            "if '--update-canary' not in sys.argv:\n    sys.exit(9)\n"
-            "if {fail!r} or Path('.fail-canary').exists():\n"
-            "    print('x4doctor --update-canary: FAIL')\n"
-            "    print('  FAIL    claude   guards.selftest.claude  stub {version} says the guards are inert')\n"
-            "    sys.exit(1)\n"
-            "print('x4doctor --update-canary: PASS ({version})')\n").format(fail=fail, version=version).encode()
+            "def detect_targets(root):\n"
+            "    root = Path(root)\n"
+            "    return {{'claude': (root / '.claude' / 'hooks').is_dir(), 'codex': (root / '.codex' / 'hooks').is_dir(),\n"
+            "            'generic': (root / '.agents' / 'skills').is_dir(),\n"
+            "            'opencode': (root / '.opencode' / 'plugins' / 'x4guard.js').is_file()}}\n"
+            "if __name__ == '__main__':\n"
+            "    if '--update-canary' not in sys.argv:\n        sys.exit(9)\n"
+            "    if {fail!r} or Path('.fail-canary').exists():\n"
+            "        print('x4doctor --update-canary: FAIL')\n"
+            "        print('  FAIL    claude   guards.selftest.claude  stub {version} says the guards are inert')\n"
+            "        sys.exit(1)\n"
+            "    print('x4doctor --update-canary: PASS ({version})')\n").format(fail=fail, version=version).encode()
 
 
 def _base_files(version=OLD):
@@ -81,6 +100,7 @@ def _base_files(version=OLD):
         "CHANGELOG.md": ("# Changelog\n\n## v" + version + " - 2026-11-27\n").encode(),
         ".claude/hooks/guard.sh": b"echo guard 4.3.1\n",
         "setup.sh": SETUP_STUB,
+        "install.sh": FAKE_INSTALL_SH,
         "scripts/x4doctor.py": _doctor_stub("4.3.1"),
         DEPLOYER: (REPO / DEPLOYER).read_bytes(),
         GENERATOR: (REPO / GENERATOR).read_bytes(),
@@ -253,9 +273,10 @@ def test_guard_paths_cover_every_deployer_guard_source_and_every_guard_owned_ent
     assert sources and owned
     for entry in (*sources, *owned):
         bare = entry.rstrip("/")
-        assert _is_guard(pol, bare), entry
-        if (REPO / bare).is_dir():
-            assert _is_guard(pol, bare + "/deep/inside/a.py"), entry
+        if entry.endswith("/") or (REPO / bare).is_dir():
+            assert _is_guard(pol, bare + "/a.py") and _is_guard(pol, bare + "/deep/inside/a.py"), entry
+        else:
+            assert _is_guard(pol, bare), entry
     # the selection is not "everything": the instruction and skill trees are not guard code (twin)
     for entry in ("CLAUDE.md", "AGENTS.md", ".claude/skills/", ".agents/skills/", ".opencode/skills/"):
         assert entry in _parse_tuple(REPO / GENERATOR, "OWNED") and not x4u.owned_is_guard(entry), entry
@@ -278,7 +299,7 @@ def test_the_owned_selection_alone_covers_the_hook_trees(tmp_path):
 def test_the_extras_the_brief_names_are_guard_paths():
     pol = x4u.policy(REPO)
     for path in (".codex/hooks.json", ".opencode/opencode.jsonc", "agent/targets/codex/hooks.json.tmpl",
-                 "agent/rules/codex-rules.yaml", "agent/targets", "agent/rules"):
+                 "agent/rules/codex-rules.yaml", "scripts/x4update_session.py", ".claude/settings.local.json.example"):
         assert _is_guard(pol, path), path
     assert not _is_guard(pol, "README.md") and not _is_guard(pol, "tools/x4validate/x4validate/_merge.py")
 
@@ -347,9 +368,43 @@ def test_policy_files_name_setup_the_canary_and_the_derivation_sources(tmp_path)
 def test_setup_and_canary_commands():
     pol = x4u.policy(REPO)
     bash, _ = x4guard.resolve_bash()
-    assert pol.setup[0] == bash and pol.setup[1] == "-c" and "./setup.sh" in pol.setup[2]
-    assert "unset CLAUDE_PROJECT_DIR" in pol.setup[2] and 'exec "$BASH"' in pol.setup[2]
+    assert pol.setup[0] == bash and pol.setup[1] == "-c" and '"$BASH" ./setup.sh' in pol.setup[2]
+    assert pol.setup[3:] == ("x4-update-setup", sys.executable)
+    assert pol.setup[2].startswith("unset CLAUDE_PROJECT_DIR; export UV_FROZEN=1\n")
     assert pol.canary == (sys.executable, "-I", "scripts/x4doctor.py", "--update-canary")
+
+
+OPENCODE_CONFIG_STUB = (b"import os, sys\nfrom pathlib import Path\n"
+                        b"Path(sys.argv[sys.argv.index('--root') + 1], '.oc-rendered').write_text("
+                        b"' '.join(sys.argv[1:]) + '|' + os.environ.get('X4_TOOLKIT', ''), encoding='utf-8')\n")
+
+
+@pytest.mark.parametrize("has_opencode", [True, False])
+def test_setup_re_renders_the_opencode_deny_rules_only_for_an_install_with_opencode(tmp_path, monkeypatch, has_opencode):
+    """6c review F1: .opencode/opencode.jsonc is per-machine, never in a release, and nothing else on the update path
+    renders it. The setup step renders it the way install.sh's write_opencode_config does."""
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    root = _install(tmp_path)
+    _write(root, {".opencode/hooks/opencode_config.py": OPENCODE_CONFIG_STUB})
+    if has_opencode:
+        _write(root, {".opencode/plugins/x4guard.js": b"// plugin\n"})
+    pol = x4u.policy(root)
+    done = guarded.run(pol.setup, root, 120)
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    rendered = root / ".oc-rendered"
+    if not has_opencode:
+        assert not rendered.exists()
+        return
+    args, toolkit = rendered.read_text(encoding="utf-8").split("|")
+    assert args.split()[0] == "write" and Path(args.split()[2]).resolve() == root.resolve(), args
+    assert Path(toolkit).resolve() == root.resolve()
+
+
+def test_a_failing_opencode_render_fails_the_setup_step(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    root = _install(tmp_path)
+    _write(root, {".opencode/plugins/x4guard.js": b"//\n", ".opencode/hooks/opencode_config.py": b"raise SystemExit(3)\n"})
+    assert guarded.run(x4u.policy(root).setup, root, 120).returncode == 3
 
 
 def test_no_git_bash_refuses_the_policy(monkeypatch, tmp_path):
@@ -410,10 +465,14 @@ def test_an_unparseable_source_refuses_the_policy_and_stage(world, monkeypatch, 
     assert fake.calls == [] and _hashes(root) == before
 
 
-def test_a_directory_becomes_itself_and_everything_under_it(tmp_path):
+def test_a_directory_is_everything_under_it_and_never_a_bare_glob(tmp_path):
+    """6c review F5: fnmatch's `*` crosses `/`, so `x/*` is the whole tree; a bare `x` matches no file and only printed
+    a "matched no path" warning in every review."""
     globs = x4u.policy(_install(tmp_path)).guard_paths
-    assert ".claude/hooks" in globs and ".claude/hooks/*" in globs
+    assert ".claude/hooks/*" in globs and ".claude/hooks" not in globs
     assert ".claude/settings.json" in globs and ".claude/settings.json/*" not in globs
+    for glob in x4u.policy(REPO).guard_paths:
+        assert not (REPO / glob).is_dir(), glob
 
 
 def test_the_render_configuration_follows_the_installed_files(tmp_path, monkeypatch):
@@ -592,8 +651,12 @@ def test_a_user_modified_file_with_no_choice_is_refused_and_kept(world, monkeypa
 
 
 def test_a_release_shipping_the_users_path_config_cannot_replace_it(world, monkeypatch):
+    """Two layers: install.sh's KEEP_LOCAL drops it from the update (test below); and should a release's installer
+    ever list it as an item, the notes protection still refuses `candidate`."""
     root, serve = world
-    serve(_new_files(**{"x4-paths.env": b"X4_GAME=\n"}))
+    sh = FAKE_INSTALL_SH.replace(b"x4-paths.env.example BUILD-INFO", b"x4-paths.env.example x4-paths.env BUILD-INFO")
+    sh = sh.replace(b'X4_KEEP_LOCAL="x4-paths.env ', b'X4_KEEP_LOCAL="')
+    serve(_new_files(**{"x4-paths.env": b"X4_GAME=\n", "install.sh": sh}))
     code, staged = _stage(root, monkeypatch)
     assert code == 0
     code, result = _apply(root, monkeypatch, staged, "--quiescent", choices={"x4-paths.env": "candidate"})
@@ -656,8 +719,13 @@ def _staged_direct(root, monkeypatch):
     return staged
 
 
+def _review_policy(root, staged):
+    source = Path(staged["bundle"]).parent / "unpacked"
+    return x4u.review_policy(root, source, x4u.selection(root, source)[0])
+
+
 def _apply_direct(root, staged, run, **kw):
-    pol = x4u.policy(root)
+    pol = _review_policy(root, staged)
     return guarded.apply_update(root, pol, staged["bundle"], staged["review_sha256"], kw.pop("choices", {}),
                                 accept_guard_changes=True, quiescent=True, notes_files=x4u.NOTES_FILES, run=run,
                                 new_policy=pol, candidate_validator=render.validate)
@@ -839,3 +907,238 @@ def test_the_canary_keeps_the_checks_the_brief_names():
             "check_common", "check_opencode"} <= kept
     assert set(doc.UPDATE_CANARY_SKIPPED) == {"layer2.reference", "codex.config", "codex.trusted", "codex.reviewed",
                                               "opencode.userconfig", "opencode.cli"}
+
+
+# ======================================================== 6c review: stage only what this install holds (F1, F2, F4) ==
+
+def test_the_install_selection_is_the_installers_own_lists():
+    """Derived from install.sh, never listed here; test_installers_agree ties install.sh to install.ps1."""
+    require_repo("install.sh", "install.ps1", why="parses both installers")
+    agree = _load("test_installers_agree_for_6c", Path(__file__).with_name("test_installers_agree.py"))
+    items, agents, skip = x4u.install_selection(REPO)
+    assert sorted(items) == sorted(agree.sh_items()) == sorted(agree.ps1_items())
+    assert {k: sorted(v) for k, v in agents.items()} == {k: sorted(v) for k, v in agree.sh_agent_items().items()}
+    assert {k: sorted(v) for k, v in agents.items()} == {k: sorted(v) for k, v in agree.ps1_agent_items().items()}
+    for name in ("x4-paths.env", ".codex/hooks.json", ".opencode/opencode.jsonc", "tools/x4validate/.venv"):
+        assert name in skip, name
+    for neutral in ("agent", "docs", ".github"):
+        assert neutral not in items + [x for v in agents.values() for x in v], neutral
+
+
+@pytest.mark.parametrize("text,why", [(b'X4_COPY_ITEMS="a"\n', "X4_AGENT_NAMES"),
+                                      (FAKE_INSTALL_SH + b'X4_COPY_ITEMS="b"\n', "2 times"),
+                                      (FAKE_INSTALL_SH.replace(b'"tools ', b'"../tools '), "unsafe"),
+                                      (None, "no readable install.sh")])
+def test_an_unreadable_installer_list_refuses_stage(world, monkeypatch, text, why):
+    root, serve = world
+    files = _new_files()
+    if text is None:
+        files.pop("install.sh")
+    else:
+        files["install.sh"] = text
+    serve(files)
+    before = _hashes(root)
+    code, result = _stage(root, monkeypatch)
+    assert code == 2 and why in result["error"], result
+    assert _hashes(root) == before
+
+
+EVERY_AGENT = {".codex/hooks/c.sh": b"echo c\n", ".agents/skills/s/SKILL.md": b"skill\n",
+               ".opencode/plugins/x4guard.js": b"// plugin\n", "AGENTS.md": b"agents\n", "agent/guards/g.py": b"g\n",
+               "docs/d.md": b"d\n", ".github/workflows/w.yml": b"w\n"}
+
+
+def _rows_part(review):
+    """The review below the X4 note (the note names no path)."""
+    return review.split("\n\n", 1)[1]
+
+
+def test_a_claude_only_install_receives_only_its_own_files(world, monkeypatch):
+    root, serve = world
+    serve(_new_files(**EVERY_AGENT))
+    code, staged = _stage(root, monkeypatch)
+    assert code == 0, staged
+    assert staged["agents"] == ["claude"] and staged["not_installed"] == len(EVERY_AGENT)
+    assert staged["requires_guard_accept"] is False, "files this install never receives asked for the guard go"
+    for name in EVERY_AGENT:
+        assert name not in _rows_part(staged["review"]), name
+    code, applied = _apply(root, monkeypatch, staged, "--quiescent")
+    assert code == 0 and applied["ok"] is True, applied
+    for name in EVERY_AGENT:
+        assert not (root / name).exists(), name
+    assert (root / "README.md").read_bytes() == b"readme 4.3.2\n"
+
+
+def test_an_install_with_opencode_receives_the_opencode_files(world, monkeypatch):
+    """The twin: the same release to an install that already has the OpenCode plugin."""
+    root, serve = world
+    _write(root, {".opencode/plugins/x4guard.js": b"// plugin\n"})
+    serve(_new_files(**dict(EVERY_AGENT, **{".opencode/plugins/x4guard.js": b"// plugin 4.3.2\n"})))
+    code, staged = _stage(root, monkeypatch)
+    assert code == 0 and staged["agents"] == ["claude", "opencode"], staged
+    rows = _rows_part(staged["review"])
+    assert staged["requires_guard_accept"] is True and ".opencode/plugins/x4guard.js" in rows
+    assert "AGENTS.md" in rows and "agent/guards/g.py" not in rows and ".codex/hooks/c.sh" not in rows
+
+
+def test_the_core_applies_an_x4_staged_bundle(world, monkeypatch):
+    """apply_update reads only the bundle and meta.json; the X4 stage must write what it checks."""
+    root, serve = world
+    serve(_new_files(**EVERY_AGENT))
+    staged = _staged_direct(root, monkeypatch)
+    meta = json.loads((Path(staged["bundle"]).parent / "meta.json").read_text(encoding="utf-8"))
+    assert meta == {"requires_guard_accept": False, "review_sha256": staged["review_sha256"],
+                    "from_version": OLD, "to_version": NEW}
+    applied = _apply_direct(root, staged, guarded.run)
+    assert applied.ok is True, applied.report
+    assert not (root / "docs").exists() and (root / "README.md").read_bytes() == b"readme 4.3.2\n"
+
+
+def test_a_hook_folder_new_in_the_release_is_a_guard_change(world, monkeypatch):
+    """6c review F4: the installed deployer does not know tools/newguard; the release's does. Its files must be shown as
+    guard diffs, and the apply must judge them the same way (meta.json agrees)."""
+    root, serve = world
+    deployer = (REPO / DEPLOYER).read_text(encoding="utf-8").replace(
+        'GUARD_SOURCES = (', 'GUARD_SOURCES = ("tools/newguard", ', 1).encode("utf-8")
+    serve(_new_files(**{DEPLOYER: deployer, "tools/newguard/g.py": b"print('guard')\n"}))
+    code, staged = _stage(root, monkeypatch)
+    assert code == 0 and staged["requires_guard_accept"] is True, staged
+    guard_part = staged["review"].split("GUARD CHANGES", 1)[1].split("Other changes", 1)[0]
+    assert "tools/newguard/g.py" in guard_part
+    assert not _is_guard(x4u.policy(root), "tools/newguard/g.py"), "control: the installed policy alone misses it"
+    code, result = _apply(root, monkeypatch, staged, "--quiescent")
+    assert code == 2 and "--accept-guard-changes" in result["error"], result
+    code, applied = _apply(root, monkeypatch, staged, "--quiescent", "--accept-guard-changes")
+    assert code == 0 and applied["ok"] is True, applied
+
+
+def test_an_unreadable_release_deployer_widens_nothing_and_refuses_nothing(world, monkeypatch):
+    root, serve = world
+    serve(_new_files(**{DEPLOYER: b"GUARD_SOURCES = compute()\n"}))
+    code, staged = _stage(root, monkeypatch)
+    assert code == 0 and staged["requires_guard_accept"] is True, staged        # the deployer is a policy file
+    assert DEPLOYER in staged["review"]
+
+
+def test_the_apply_report_starts_with_the_codex_re_approval_line(world, monkeypatch):
+    root, serve = world
+    serve()
+    code, staged = _stage(root, monkeypatch)
+    code, applied = _apply(root, monkeypatch, staged, "--quiescent")
+    assert code == 0 and applied["report"].splitlines()[0] == x4u.CODEX_LINE
+    assert "/hooks" in x4u.CODEX_LINE and "skips" in x4u.CODEX_LINE
+
+
+# ============================================== the REAL canary on a post-update tree built from a release-shaped zip ==
+
+def _release_tree():
+    """What the release zip holds: every shipped file (git ls-files minus export-ignore) with its working-tree bytes, so
+    the code under test is what is installed. setup.sh is a stub: the real one runs `uv sync` (network, minutes)."""
+    files = {name: (REPO / name).read_bytes() for name in _shipped(["."]) if (REPO / name).is_file()}
+    files["setup.sh"] = SETUP_STUB
+    return files
+
+
+def _real_install(tmp_path, agents, files):
+    """A toolkit installed the way install.sh does it: its lists, the token and Codex rendering, the deny rules."""
+    items, agent_items, skip = x4u.install_selection(REPO)
+    wanted = items + [item for agent in agents for item in agent_items[agent]]
+    chosen = x4u.select_files(dict.fromkeys(files, "0" * 64), wanted, skip)
+    root = tmp_path / ("install-" + "-".join(agents))
+    _write(root, {name: files[name] for name in chosen})
+    (root / "BUILD-INFO").write_bytes(_build_info(OLD, OLD_COMMIT))
+    shell = "powershell" if os.name == "nt" else "bash"
+    for name, data in render.prepare(root, root, list(chosen), {"v": 1, "agent_shell": shell,
+                                                                 "opencode_shell": shell}).items():
+        (root / name).write_bytes(data)
+    (tmp_path / "game").mkdir(exist_ok=True)
+    (tmp_path / "reference").mkdir(exist_ok=True)
+    (root / "x4-paths.env").write_text("X4_GAME={}\nX4_REFERENCE={}\n".format(
+        (tmp_path / "game").as_posix(), (tmp_path / "reference").as_posix()), encoding="utf-8")
+    if "opencode" in agents:
+        done = subprocess.run([sys.executable, "-B", str(root / ".opencode/hooks/opencode_config.py"), "write", "--root",
+                               str(root)], env=dict(os.environ, X4_TOOLKIT=str(root)), capture_output=True, text=True,
+                              timeout=120)
+        assert done.returncode == 0, done.stderr
+    return root
+
+
+@pytest.fixture
+def release_world(tmp_path, monkeypatch):
+    monkeypatch.setenv("MODDING_HARNESS_UPDATES_DIR", str(tmp_path / "updates"))
+    for key in ("CLAUDE_PROJECT_DIR", "X4_GAME", "X4_REFERENCE", "X4_PROFILE", "X4_MODS", "X4_CONFIG", "X4_GUARD",
+                "X4_UPDATE_CHECK", "X4_HOUSEKEEP_SWEEP", "MODDING_HARNESS_UPDATE_CHECK"):
+        monkeypatch.delenv(key, raising=False)
+    files = _release_tree()
+    new = dict(files, **{"README.md": files["README.md"] + b"\n4.3.2\n"})
+    fake = FakeGitHub(_zip(new, NEW, COMMIT), old_zip=_zip(files, OLD, OLD_COMMIT))
+    original = release.fetch
+    monkeypatch.setattr(release, "fetch", lambda r, p, http=None, environ=None: original(r, p, http=fake,
+                                                                                          environ=environ))
+    return tmp_path, files
+
+
+def _real_canary(root):
+    done = guarded.run((sys.executable, "-I", "scripts/x4doctor.py", "--update-canary"), root, 600)
+    return done.returncode, done.stdout.decode("utf-8", "replace")
+
+
+@pytest.mark.parametrize("agents", [("claude",), ("claude", "codex", "generic", "opencode")])
+def test_the_real_canary_passes_after_a_real_shaped_update(release_world, monkeypatch, agents):
+    """6c review F1: the key test. A release-shaped zip (X4AI/ + BUILD-INFO) of the shipped files, installed the way
+    install.sh installs it, staged and applied through the harness, then the REAL x4doctor --update-canary."""
+    require_repo(".git", "install.sh", why="builds the release tree from git's shipped set")
+    tmp_path, files = release_world
+    root = _real_install(tmp_path, list(agents), files)
+    monkeypatch.setenv("X4_TOOLKIT", str(root))
+    code, out = _real_canary(root)
+    assert code == 0, "control: the fresh install is healthy\n" + out
+    import time
+    started = time.monotonic()
+    code, staged = _stage(root, monkeypatch)
+    print("STAGE-SECONDS %s %.1f" % ("-".join(agents), time.monotonic() - started), file=sys.stderr)
+    assert code == 0, staged
+    accept = ["--accept-guard-changes"] if staged["requires_guard_accept"] else []
+    review = json.loads((Path(staged["bundle"]) / "complete.json").read_text(encoding="utf-8"))
+    rows = {row["path"] for row in review["plan"]["files"]}
+    choices = {name: "merged_settings" for name in review.get("merged_settings_hashes", {}) if name in rows}
+    assert ".claude/settings.json" in choices, "the core asks a settings choice of every install"
+    code, applied = _apply(root, monkeypatch, staged, "--quiescent", *accept, choices=choices)
+    assert code == 0 and applied["ok"] is True, applied.get("report", applied)
+    assert x4u.installed_version(root) == NEW
+    code, out = _real_canary(root)
+    assert code == 0, out
+    if agents == ("claude",):
+        for name in (".opencode", ".codex", ".agents", "AGENTS.md", "agent", "docs", ".github"):
+            assert not (root / name).exists(), name
+
+
+#: The setup step 70a902ca shipped (with F3's UV_FROZEN): setup.sh only, no OpenCode re-render.
+OLD_SETUP = 'unset CLAUDE_PROJECT_DIR; export UV_FROZEN=1; exec "$BASH" ./setup.sh'
+
+
+def test_twin_the_unfiltered_core_stage_fails_the_real_canary_on_a_claude_only_install(release_world, monkeypatch):
+    """The core's own stage_update writes the whole zip: the OpenCode plugin turns x4doctor's OpenCode target on with no
+    deny rules, and the canary FAILs, so the update rolls back. This is F1 as 70a902ca had it."""
+    require_repo(".git", "install.sh", why="builds the release tree from git's shipped set")
+    import dataclasses
+    tmp_path, files = release_world
+    root = _real_install(tmp_path, ["claude"], files)
+    monkeypatch.setenv("X4_TOOLKIT", str(root))
+    pol = x4u.policy(root)
+    pol = dataclasses.replace(pol, setup=(pol.setup[0], "-c", OLD_SETUP))
+    staged = guarded.stage_update(root, x4u.PROFILE, pol, notes_files=x4u.NOTES_FILES,
+                                  candidate_preparer=render.prepare, generated_paths=x4u.GENERATED_PATHS)
+    review = json.loads((Path(staged.bundle) / "complete.json").read_text(encoding="utf-8"))
+    rows = {row["path"] for row in review["plan"]["files"]}
+    choices = {name: "merged_settings" for name in review.get("merged_settings_hashes", {}) if name in rows}
+    before = _hashes(root)
+    applied = guarded.apply_update(root, pol, staged.bundle, staged.review_sha256, choices, accept_guard_changes=True,
+                                   quiescent=True, notes_files=x4u.NOTES_FILES, new_policy=pol,
+                                   candidate_validator=render.validate)
+    assert applied.ok is False and applied.rolled_back is True, applied.report
+    assert "FAILED at canary" in applied.report and "opencode.config" in applied.report, applied.report
+    # The canary's own Python runs leave bytecode behind; the core lists it under "Not restored by rollback".
+    strip = lambda hashes: {k: v for k, v in hashes.items() if "__pycache__/" not in k}
+    assert strip(_hashes(root)) == strip(before)
+    assert not any(k for k in before if "__pycache__/" in k), "control: the fresh install had no bytecode"

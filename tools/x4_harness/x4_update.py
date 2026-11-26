@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path, PurePosixPath
 
 sys.dont_write_bytecode = True
@@ -106,7 +107,9 @@ EXTRA_GUARD = (".codex/hooks.json", ".opencode/opencode.jsonc", "agent/targets/"
                ".claude/settings.local.json.example",
                "scripts/verify-hook-tests.py", "scripts/x4canary.py", "scripts/x4deploydrift.py",
                "scripts/x4conformance.py", "tools/modding-harness.lock.json",
-               "tools/x4validate/scripts/next-blind-spot-id.py")
+               "tools/x4validate/scripts/next-blind-spot-id.py",
+               # run by session-canary.sh; it prints the failed/in-flight update warning (6c review F6)
+               "scripts/x4update_session.py")
 #: What defines setup and the canary (and where the guard list comes from). Only the ones present on the install count.
 POLICY_FILES = ("setup.sh", "scripts/x4doctor.py", "scripts/gitbash.py", "tools/agent-harness.py",
                 "tools/x4_harness/x4_update.py", "tools/x4_harness/x4guard.py", DEPLOYER, GENERATOR)
@@ -116,10 +119,25 @@ POLICY_FILES = ("setup.sh", "scripts/x4doctor.py", "scripts/gitbash.py", "tools/
 NOTES_FILES = ("X4-NOTES.md", "x4-paths.env", ".claude/x4-paths.env")
 GENERATED_PATHS = (".codex/hooks.json",)
 CANARY = ("scripts/x4doctor.py", "--update-canary")
-#: setup.sh roots itself at $CLAUDE_PROJECT_DIR when that is set, and an agent session sets it to ITS project, which is
-#: not always the install. The core runs every step with the install as its working directory, so the variable is
-#: dropped and setup.sh falls back to that. `$BASH` is the bash running this line, never a PATH lookup.
-SETUP_SCRIPT = 'unset CLAUDE_PROJECT_DIR; exec "$BASH" ./setup.sh'
+#: The update's setup step, run by Git Bash with the install as its working directory and this Python as $1.
+#: - setup.sh roots itself at $CLAUDE_PROJECT_DIR when that is set, and an agent session sets it to ITS project, which
+#:   is not always the install: the variable is dropped, so setup.sh falls back to the working directory.
+#: - UV_FROZEN=1: setup.sh's `uv sync` must never rewrite uv.lock (a published file: a rollback would then refuse it).
+#: - OpenCode's deny rules (.opencode/opencode.jsonc) are per-machine and never in a release, so nothing else on the
+#:   update path renders them, and a release that changes them would leave them stale (x4doctor's opencode.config FAILs).
+#:   For an install that HAS OpenCode (its plugin, x4doctor's own target test) they are re-rendered the way install.sh's
+#:   write_opencode_config does: X4_TOOLKIT=<root> python .opencode/hooks/opencode_config.py write --root <root>. After
+#:   a rollback the installed setup runs again, so the restored renderer writes them back.
+#: `$BASH` is the bash running this script, never a PATH lookup; `pwd -W` is the Windows spelling of the root in Git Bash.
+SETUP_SCRIPT = ('unset CLAUDE_PROJECT_DIR; export UV_FROZEN=1\n'
+                '"$BASH" ./setup.sh || exit $?\n'
+                'if [ -f .opencode/plugins/x4guard.js ]; then\n'
+                '  _root="$(pwd -W 2>/dev/null || pwd)"\n'
+                '  X4_TOOLKIT="$_root" "$1" -B .opencode/hooks/opencode_config.py write --root "$_root" || exit $?\n'
+                'fi\n')
+#: The first line of every apply report: Codex runs a changed hook definition only after the user re-approves it.
+CODEX_LINE = ("Codex users: re-approve the changed hooks with /hooks in Codex now. Codex silently skips every changed "
+              "hook until you do, so its guards are off for those hooks.")
 MAX_SOURCE = 4 * 1024 * 1024
 _OWNED_GUARD_NAMES = (".opencode/plugins/x4guard.js", "tools/x4_harness", "tools/agent-harness.py")
 
@@ -198,19 +216,18 @@ def owned_is_guard(entry):
 
 
 def _globs(root, entries):
-    """Each entry as the core's fnmatch globs: a directory is itself and everything under it (`x`, `x/*`), a file is
-    itself. An entry this install lacks (agent/ is not installed) is a file when its name has a suffix, else both."""
+    """Each entry as the core's fnmatch globs: a directory is everything under it (`x/*`; fnmatch's `*` crosses `/`),
+    a file is itself. An entry `root` lacks is a file when its name has a suffix, else a directory."""
     out = []
     for entry in entries:
         bare = entry.rstrip("/")
         path = Path(root) / bare
-        if entry.endswith("/") or path.is_dir():
-            forms = (bare, bare + "/*")
-        elif path.is_file() or PurePosixPath(bare).suffix:
-            forms = (bare,)
+        if entry.endswith("/") or path.is_dir() or not (path.is_file() or PurePosixPath(bare).suffix):
+            form = bare + "/*"
         else:
-            forms = (bare, bare + "/*")
-        out += [form for form in forms if form not in out]
+            form = bare
+        if form not in out:
+            out.append(form)
     return tuple(out)
 
 
@@ -271,7 +288,8 @@ def policy(root):
         return update_review.UpdatePolicy(
             guard_paths=_globs(root, (*sources, *owned, *EXTRA_GUARD)),
             policy_files=tuple(name for name in POLICY_FILES if (root / name).is_file()),
-            setup=(bash, "-c", SETUP_SCRIPT), canary=(sys.executable, "-I", *CANARY), render_config=render_config)
+            setup=(bash, "-c", SETUP_SCRIPT, "x4-update-setup", sys.executable),
+            canary=(sys.executable, "-I", *CANARY), render_config=render_config)
     except ValueError as exc:
         raise _refuse("the guard paths derived from {} and {} are not usable: {}".format(DEPLOYER, GENERATOR, exc))
 
@@ -316,6 +334,172 @@ def precheck(root, pol, steps, run=None):
             "and fix what it reports, then try again; the update changed nothing".format(status, detail, root))
 
 
+#: install.sh's own lists, read from the RELEASE's install.sh (what its installer would copy). install.ps1 holds the
+#: same lists and test_installers_agree ties the two.
+_SH_LISTS = ("X4_COPY_ITEMS", "X4_AGENT_NAMES", "X4_COPY_PRUNE", "X4_KEEP_LOCAL")
+
+
+def _sh_list(text, name):
+    found = re.findall(r'^{}="([^"$`\\]*)"[ \t]*$'.format(re.escape(name)), text, re.M)
+    if len(found) != 1:
+        raise _refuse("the release's install.sh names {} {} times, not once, so what an install holds cannot be "
+                      "read from it".format(name, len(found)))
+    items = found[0].split()
+    for item in items:
+        if item.startswith("/") or "\\" in item or ".." in item.split("/") or re.match(r"[A-Za-z]:", item):
+            raise _refuse("the release's install.sh lists an unsafe path in {}: {!r}".format(name, item))
+    return items
+
+
+def install_selection(source):
+    """(common items, {agent: items}, never-copied paths) from the release's install.sh, as its installer reads them:
+    X4_COPY_ITEMS, X4_AGENT_ITEMS_<name> for each X4_AGENT_NAMES entry, and X4_COPY_PRUNE + X4_KEEP_LOCAL."""
+    path = Path(source) / "install.sh"
+    try:
+        with path.open("rb") as stream:
+            raw = stream.read(MAX_SOURCE + 1)
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _refuse("the release has no readable install.sh ({}), so what an install holds cannot be "
+                      "derived".format(type(exc).__name__))
+    if len(raw) > MAX_SOURCE:
+        raise _refuse("the release's install.sh is larger than {} bytes".format(MAX_SOURCE))
+    text = text.replace("\r\n", "\n")
+    items = _sh_list(text, "X4_COPY_ITEMS")
+    agents = {name: _sh_list(text, "X4_AGENT_ITEMS_" + name) for name in _sh_list(text, "X4_AGENT_NAMES")}
+    skip = _sh_list(text, "X4_COPY_PRUNE") + _sh_list(text, "X4_KEEP_LOCAL")
+    if not items or not agents:
+        raise _refuse("the release's install.sh lists no common or agent items")
+    return items, agents, skip
+
+
+def installed_agents(root):
+    """The agent targets this install has, by x4doctor's own test (`detect_targets`, read from the install's
+    scripts/x4doctor.py): the same answer the canary uses to decide which targets it judges."""
+    import importlib.util
+    path = Path(root) / "scripts" / "x4doctor.py"
+    if not path.is_file():
+        raise _refuse("scripts/x4doctor.py is missing, so the agents this install holds cannot be told")
+    name = "x4doctor_for_update_" + str(abs(hash(str(path))))
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+        found = module.detect_targets(Path(root))
+    except Exception as exc:
+        raise _refuse("scripts/x4doctor.py could not tell which agents this install holds ({}: {})".format(
+            type(exc).__name__, exc))
+    finally:
+        sys.modules.pop(name, None)
+    return sorted(agent for agent, present in found.items() if present)
+
+
+def _under(name, prefixes):
+    return any(name == prefix or name.startswith(prefix.rstrip("/") + "/") for prefix in prefixes)
+
+
+def selection(root, source):
+    """(wanted items, never-copied paths, agents): what install.sh would install into THIS install from `source`, its
+    common items plus the items of the agents the install already has. agent/, docs/ and .github/ are in no list."""
+    items, agent_items, skip = install_selection(source)
+    agents = installed_agents(root)
+    unknown = [agent for agent in agents if agent not in agent_items]
+    if unknown:
+        raise _refuse("this install has agent target(s) the release's installer does not know: {}".format(
+            ", ".join(unknown)))
+    wanted = list(dict.fromkeys([*items, *(item for agent in agents for item in agent_items[agent])]))
+    return wanted, skip, agents
+
+
+def select_files(inventory, wanted, skip):
+    """The part of a {path: sha256} inventory install.sh would copy: under a wanted item, not under a never-copied path."""
+    return {name: digest for name, digest in inventory.items() if _under(name, wanted) and not _under(name, skip)}
+
+
+def review_policy(root, source, wanted=None):
+    """The installed policy, its guard globs WIDENED by the release's own deployer and generator (a hook folder that is
+    new in the release is then guard code too) and narrowed to the items an update can write here (`wanted`), so a
+    glob for a path this install never receives does not print a "matched no path" warning. Only the INSTALLED
+    sources can refuse: a release whose lists cannot be read widens nothing."""
+    import dataclasses
+    pol = policy(root)
+    globs = list(pol.guard_paths)
+    try:
+        sources = _literal(source, DEPLOYER, "GUARD_SOURCES")
+        owned = [entry for entry in _literal(source, GENERATOR, "OWNED") if owned_is_guard(entry)]
+        globs += [glob for glob in _globs(source, (*sources, *owned, *EXTRA_GUARD)) if glob not in globs]
+    except guarded.UpdateRefused:
+        pass
+    if wanted is not None:
+        tops = {item.split("/")[0].casefold() for item in wanted}
+        globs = [glob for glob in globs if glob.split("/")[0].casefold() in tops]
+    return dataclasses.replace(pol, guard_paths=tuple(globs) or pol.guard_paths)
+
+
+def stage(root, *, candidate_preparer=None, http=None):
+    """`guarded_update.stage_update`, with the candidate cut down to what install.sh would install here (6c review F1,
+    F2): the core stages the whole zip, so a Claude-only install would gain the OpenCode plugin (x4doctor then judges
+    an OpenCode target with no deny rules and the canary FAILs: every update rolls back), and every install would gain
+    agent/, docs/ and .github/ as dozens of new "guard" diffs. The renderer cannot drop files (stage_review_bundle
+    accepts bytes only for inventoried or generated names), so the inventories are filtered before staging.
+
+    Everything else is the core's stage_update, step for step, and it writes the same meta.json; apply_update reads
+    only the bundle and meta.json, so the core applies an X4-staged bundle unchanged."""
+    root = Path(root).resolve()
+    if os.path.lexists(root / guarded.FAILED_MARKER):
+        raise guarded.UpdateRefused("an earlier update failed and left {}; read it, fix the cause and clear it before "
+                                    "staging another update".format(guarded.FAILED_MARKER))
+    guarded._refuse_in_flight(root)
+    installation = save_policy.core(ROOT, "installation")
+    upgrade = save_policy.core(ROOT, "upgrade")
+    try:
+        notes = installation.notes_set(NOTES_FILES)
+        fetched = release.fetch(root, PROFILE, **({} if http is None else {"http": http}))
+        source, bundle = Path(fetched["source"]), Path(fetched["bundle"])
+        guarded._discard_earlier_review(bundle.parent)
+        wanted, skip, agents = selection(root, source)
+        candidate = guarded._read_json(fetched["candidate"])
+        previous = guarded._read_json(fetched["previous"]) if fetched["previous"] else None
+        kept = select_files(candidate["files"], wanted, skip)
+        dropped = sorted(set(candidate["files"]) - set(kept))
+        pol = review_policy(root, source, wanted)
+        transform = None
+        if candidate_preparer is not None:
+            config = guarded._read_json(pol.render_config(root))
+            transform = lambda installed, staged, files: candidate_preparer(installed, staged, files, config)
+        upgrade.stage_review_bundle(
+            root, source, bundle, {"v": 1, "files": kept},
+            None if previous is None else {"v": 1, "files": select_files(previous["files"], wanted, skip)},
+            local_files=tuple(sorted(notes)), candidate_transform=transform,
+            generated_paths=GENERATED_PATHS if transform is not None else (),
+            # The core's default is 60 s; staging copies every selected file twice (candidate and rollback), about
+            # 2,500 copies for an all-agent install, which ran past 60 s once under test load (6c review rerun).
+            deadline=time.monotonic() + guarded.TIMEOUT)
+        import hashlib
+        review_sha256 = hashlib.sha256((bundle / "complete.json").read_bytes()).hexdigest()
+        text, requires_accept = update_review.render_review(bundle=bundle, installed_root=root, source=source,
+                                                            policy=pol, review_sha256=review_sha256)
+        meta = {"requires_guard_accept": requires_accept, "review_sha256": review_sha256,
+                "from_version": str(fetched["installed"]), "to_version": str(fetched["version"])}
+        guarded._write_meta(bundle.parent / guarded.META, meta)
+    except guarded.UpdateRefused:
+        raise
+    except ValueError as exc:
+        raise guarded.UpdateRefused(str(exc)) from exc
+    groups = {}
+    for name in dropped:
+        top = name.split("/")[0]
+        groups[top] = groups.get(top, 0) + 1
+    note = ("Not part of this install, so not written: {} file(s) of the release ({}). This install holds: {} "
+            "(the installer's own lists, from the release's install.sh).".format(
+                len(dropped), ", ".join("{} {}".format(top, n) for top, n in sorted(groups.items())) or "none",
+                ", ".join(agents) or "no agent target"))
+    return {"bundle": str(bundle), "review_sha256": review_sha256, "requires_guard_accept": requires_accept,
+            "from_version": meta["from_version"], "to_version": meta["to_version"], "application_authorized": False,
+            "agents": agents, "not_installed": len(dropped), "review": note + "\n\n" + text}
+
+
 def guarded_handle(args, root, *, candidate_preparer=None, candidate_validator=None, run=None):
     """One parsed `update-stage` / `update-apply` / `update-clear-failed` (the harness entry's dispatch), through the
     core's `guarded_update.handle` with this install's policy, notes files and renderer, after the pre-check.
@@ -331,9 +515,21 @@ def guarded_handle(args, root, *, candidate_preparer=None, candidate_validator=N
     pol = policy(installed)
     if not any(os.path.lexists(installed / name) for name in (guarded.FAILED_MARKER, guarded.IN_FLIGHT)):
         precheck(installed, pol, ("canary",) if args.command == "update-stage" else ("setup", "canary"), run=run)
+    if args.command == "update-stage":
+        return stage(installed, candidate_preparer=candidate_preparer)
+    # The apply re-derives the guard decision from complete.json with this policy, so it must be the one the review was
+    # rendered with: the same widening from the release unpacked beside the bundle, the same narrowing to this install.
+    source = Path(args.bundle).resolve().parent / guarded.SOURCE
+    if not source.is_dir():
+        raise _refuse("the release the review was staged from is gone ({}); stage the update again".format(source))
+    wanted, _skip, _agents = selection(installed, source)
+    pol = review_policy(installed, source, wanted)
     # new_policy: the candidate's setup and canary are the same commands at the same paths, which after apply run the
     # NEW setup.sh and x4doctor.py. The core's "old canary" step after a policy-file change runs that same path, so it
     # is a second run of the new canary, not of the old bytes; the old canary does run, on the restored files, after a
     # rollback.
-    return guarded.handle(args, root, PROFILE, pol, notes_files=NOTES_FILES, candidate_preparer=candidate_preparer,
-                          candidate_validator=candidate_validator, generated_paths=GENERATED_PATHS, new_policy=pol)
+    result = guarded.handle(args, root, PROFILE, pol, notes_files=NOTES_FILES, candidate_preparer=candidate_preparer,
+                            candidate_validator=candidate_validator, generated_paths=GENERATED_PATHS, new_policy=pol)
+    if isinstance(result, dict) and isinstance(result.get("report"), str):
+        result["report"] = CODEX_LINE + "\n" + result["report"]
+    return result
