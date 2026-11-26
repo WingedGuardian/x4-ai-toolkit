@@ -21,7 +21,22 @@ from .locking import exclusive
 from .preservation import DEFAULT_RESERVE, protects
 
 LOCAL_ONLY = frozenset((".claude/settings.local.json", ".codex/config.toml", ".opencode/opencode.jsonc",
-                        ".modding-agent-harness/config.json", "KNOWLEDGEBASE.local.md", "X4-NOTES.md"))
+                        ".modding-agent-harness/config.json", ".modding-agent-harness/updates.json",
+                        ".modding-agent-harness/update-failed.json", ".modding-agent-harness/update-in-flight.json",
+                        "KNOWLEDGEBASE.local.md", "CLAUDE.local.md"))
+#: Private notes every toolkit shares: the learned-facts file and a user's private per-project rules file. No toolkit
+#: ships either. A toolkit's own extra notes files (a game's legacy notes name, say) are passed as `notes_files`; the
+#: core names none of them.
+LOCAL_NOTES = frozenset(("KNOWLEDGEBASE.local.md", "CLAUDE.local.md"))
+
+
+def notes_set(notes_files):
+    """The toolkit's extra notes names as a validated set: relative, non-empty strings the upgrade inventory accepts."""
+    notes = tuple(notes_files)
+    if any(not isinstance(name, str) or not name for name in notes):
+        raise ValueError("notes_files must be non-empty relative path strings")
+    upgrade.inventory({"v": 1, "files": dict.fromkeys(notes, "0" * 64)})
+    return frozenset(notes)
 COMMANDS = frozenset(("upgrade-preview", "upgrade-stage", "upgrade-apply", "upgrade-rollback"))
 
 
@@ -59,8 +74,8 @@ def add_arguments(subparsers):
                             help="host/editor writers have been stopped; this flag does not stop them")
 
 
-def handle(args, root, *, local_files=(), review_builder=None, candidate_preparer=None, candidate_validator=None,
-           generated_paths=(), owned_pre_groups=None):
+def handle(args, root, *, local_files=(), notes_files=(), review_builder=None, candidate_preparer=None,
+           candidate_validator=None, generated_paths=(), owned_pre_groups=None):
     from . import transport
     def read(path):
         with Path(path).open("rb") as stream:
@@ -89,7 +104,7 @@ def handle(args, root, *, local_files=(), review_builder=None, candidate_prepare
             transform = lambda installed, staged, files: candidate_preparer(installed, staged, files, config)
         bundle = upgrade.stage_review_bundle(root, args.source, args.destination, read(args.candidate),
             read(args.previous) if args.previous else None, owned_commands=args.owned_command,
-            local_files=(*local_files, *args.local_file),
+            local_files=(*local_files, *notes_set(notes_files), *args.local_file),
             review_builder=review_builder if args.integrate_local_policy else None, candidate_transform=transform,
             generated_paths=generated_paths if transform is not None else (), owned_pre_groups=references)
         return {"bundle": str(args.destination.resolve()), "complete": True, "collisions": bundle["plan"]["collisions"],
@@ -98,9 +113,10 @@ def handle(args, root, *, local_files=(), review_builder=None, candidate_prepare
                 "rendered_files": bundle.get("rendered_files", []), "generated_files": bundle.get("generated_files", [])}
     if args.command == "upgrade-apply":
         return apply(root, args.bundle, args.review_sha256, read(args.choices) if args.choices else {},
-                     quiescent=args.quiescent, review_builder=review_builder, candidate_validator=candidate_validator)
+                     quiescent=args.quiescent, review_builder=review_builder, candidate_validator=candidate_validator,
+                     notes_files=notes_files)
     if args.command == "upgrade-rollback":
-        return rollback(root, args.operation, quiescent=args.quiescent)
+        return rollback(root, args.operation, quiescent=args.quiescent, notes_files=notes_files)
     raise ValueError("not a shared upgrade command")
 
 
@@ -140,13 +156,15 @@ def _writable_target(path):
 
 
 def apply(root, bundle, expected_sha256, choices=None, *, quiescent=False, reserve=DEFAULT_RESERVE, deadline=None,
-          review_builder=None, candidate_validator=None):
+          review_builder=None, candidate_validator=None, notes_files=()):
     """Apply an explicitly selected review; collisions never gain guessed ownership.
 
     choices maps collision paths to keep/candidate. Project settings may select
     merged_settings only when no custom pre-handler needs ordered integration.
     The review SHA binds the exact complete.json; it is not an approval reader.
+    `notes_files` are the toolkit's extra private notes names: kept, never overwritten, never a reason to refuse.
     """
+    notes = notes_set(notes_files)
     deadline = time.monotonic() + 120 if deadline is None else deadline
     root, bundle = Path(root).resolve(), Path(bundle).resolve()
     if quiescent is not True:
@@ -184,7 +202,7 @@ def apply(root, bundle, expected_sha256, choices=None, *, quiescent=False, reser
     for name, expected in local.items():
         if expected is not None and (not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None):
             raise ValueError("invalid local configuration hash")
-    critical = {name: expected for name, expected in local.items() if name not in ("KNOWLEDGEBASE.local.md", "X4-NOTES.md")}
+    critical = {name: expected for name, expected in local.items() if name not in LOCAL_NOTES and name not in notes}
     def check_local(published=()):
         applied = {row["path"]: row["after"] for row in changes if row["path"] in published}
         for name, expected in critical.items():
@@ -243,7 +261,7 @@ def apply(root, bundle, expected_sha256, choices=None, *, quiescent=False, reser
             continue
         if integration is not None and name in integration["sources"]:
             raise ValueError("registered local policy sources must remain unchanged")
-        if name in LOCAL_ONLY and not (selected == "reviewed_settings" and name in integrated):
+        if (name in LOCAL_ONLY or name in notes) and not (selected == "reviewed_settings" and name in integrated):
             raise ValueError("local settings/notes must be retained: " + name)
         if selected == "reviewed_settings":
             if name not in integrated:
@@ -372,13 +390,14 @@ def apply(root, bundle, expected_sha256, choices=None, *, quiescent=False, reser
                     part.unlink()
 
 
-def rollback(root, operation, *, quiescent=False, deadline=None):
+def rollback(root, operation, *, quiescent=False, deadline=None, notes_files=()):
     """Restore prior bytes only while published files still have this operation's identity.
 
     New files are retained in the journal, not discarded. A foreign edit/rename
     refuses the rollback before it changes any target. Partial failures remain
     journalled and old/new evidence is retained for explicit recovery.
     """
+    notes = notes_set(notes_files)
     deadline = time.monotonic() + 120 if deadline is None else deadline
     root = Path(root).resolve()
     if quiescent is not True or re.fullmatch(r"[0-9a-f]{32}", operation or "") is None:
@@ -434,7 +453,7 @@ def rollback(root, operation, *, quiescent=False, deadline=None):
             target = upgrade._entry(root, name)
             stores = (workspace.settings(root)["destination"], root / ".claude/backups", root / ".modding-agent-harness/upgrades")
             reviewed = row.get("reviewed_settings") is True and integrated.get(name) == row["after"]
-            if protects(target, stores, ancestor=True) or name in LOCAL_ONLY and not reviewed:
+            if protects(target, stores, ancestor=True) or (name in LOCAL_ONLY or name in notes) and not reviewed:
                 raise ValueError("rollback cannot write protected recovery data or local configuration")
             current = _current(root, name, deadline)
             if current == row["before"]:
