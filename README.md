@@ -859,6 +859,15 @@ otherwise:
 
 ---
 
+## Updating
+
+For a release install on 4.3.1 or later, tell your agent **“update the toolkit”**. It verifies the GitHub release
+asset and stages a review before making changes. Review the listed changes, approve any guard changes separately,
+and close other agents and editors that are writing to the install before apply. Your `x4-paths.env` and
+`X4-NOTES.md` stay in place. After an update that changes Codex hooks, reopen Codex and review them in `/hooks`.
+
+Use the installer to upgrade from 4.3.0 or earlier to 4.3.1. Update a source checkout through git.
+
 ## Using It
 
 Open your agent in the toolkit folder and just talk. Some examples:

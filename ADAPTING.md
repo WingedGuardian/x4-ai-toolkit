@@ -105,6 +105,16 @@ code, file named), **INFERRED** (reasoned, not run). Write your own findings the
   remain preserved. Installation and rollback both require separate host hook
   review before claiming enforcement.
 
+  For a release install on 4.3.1 or later, `update-check` reads the release status,
+  `update-fetch` verifies the GitHub asset's SHA-256 and unpacks it aside, and
+  `update-stage` builds the review for the targets already installed. Staging
+  authorizes no installation. After the user approves the review, use its exact
+  `update-apply` command with the review hash, choices and `--quiescent`.
+  Pass `--accept-guard-changes` only with separate approval for guard changes.
+  Apply runs setup and the health check and attempts rollback if either fails.
+  A failed rollback or interrupted apply stops updates until the user inspects
+  the marker, addresses the cause and authorizes `update-clear-failed`.
+
   `preferences` renders only the explicit `## My preferences` section from
   `KNOWLEDGEBASE.local.md`, using the shared `modding_harness` bounded parser. Existing
   Claude/Codex session hooks and the OpenCode system transform reinject it;

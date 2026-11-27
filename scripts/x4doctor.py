@@ -287,7 +287,8 @@ def _load(name: str, path: Path):
 def _run(cmd, *, env=None, cwd=None, timeout=60, stdin=None):
     import subprocess
     return subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd,
-                          timeout=timeout, input=stdin, encoding="utf-8", errors="replace")
+                          timeout=timeout, input=stdin, encoding="utf-8", errors="replace",
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
 def guard_dirs(ctx: Ctx) -> list[tuple[str, Path]]:
@@ -1914,4 +1915,8 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    # This command also runs before an update is approved. Keep both its dynamic
+    # imports and its diagnostic child processes from writing bytecode to the install.
+    sys.dont_write_bytecode = True
+    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     raise SystemExit(main())

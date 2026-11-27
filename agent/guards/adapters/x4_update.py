@@ -18,10 +18,9 @@ deployer's `GUARD_SOURCES` and the generator's guard-shaped `OWNED` entries, rea
 `tools/x4validate/scripts/deploy-claude-dir.py` and `gen-agent-trees.py` by parsing the assignments (never importing
 them). Both ship in every install (install.sh copies `tools` whole; neither is export-ignored), and an install has no
 agent/ and no pre-push gate, so these two are the derivable lists an install carries. Either one missing or not a plain
-literal makes the policy raise, so staging refuses (fail closed). `handle` adds a pre-check: the installed canary must
-pass before staging, and the installed setup and canary before applying, or the command refuses with "fix x4doctor
-first". Without it an install that is already unhealthy would apply, fail, roll back, fail the old canary too and lock
-itself with update-failed.json.
+literal makes the policy raise, so staging refuses (fail closed). The installed canary must pass before staging and
+applying. Setup may write files, so only the core runs it, after authorizing and publishing the update or after
+restoring the previous version during rollback.
 """
 from __future__ import annotations
 
@@ -105,7 +104,7 @@ GENERATOR = "tools/x4validate/scripts/gen-agent-trees.py"
 #: (.claude/settings.local.json.example is the seed setup.sh copies into the live settings.local.json: permission rules.)
 EXTRA_GUARD = (".codex/hooks.json", ".opencode/opencode.jsonc", "agent/targets/", "agent/rules/",
                ".claude/settings.local.json.example",
-               "scripts/verify-hook-tests.py", "scripts/x4canary.py", "scripts/x4deploydrift.py",
+               "scripts/verify-hook-tests.py", "scripts/x4canary.py", "scripts/x4deploydrift.py", "scripts/x4refguard.py",
                "scripts/x4conformance.py", "tools/modding-harness.lock.json",
                "tools/x4validate/scripts/next-blind-spot-id.py",
                # run by session-canary.sh; it prints the failed/in-flight update warning (6c review F6)
@@ -123,13 +122,14 @@ CANARY = ("scripts/x4doctor.py", "--update-canary")
 #: - setup.sh roots itself at $CLAUDE_PROJECT_DIR when that is set, and an agent session sets it to ITS project, which
 #:   is not always the install: the variable is dropped, so setup.sh falls back to the working directory.
 #: - UV_FROZEN=1: setup.sh's `uv sync` must never rewrite uv.lock (a published file: a rollback would then refuse it).
+#: - X4_SETUP_KEEP_LOCAL=1: leave existing and intentionally absent local settings and path config alone.
 #: - OpenCode's deny rules (.opencode/opencode.jsonc) are per-machine and never in a release, so nothing else on the
 #:   update path renders them, and a release that changes them would leave them stale (x4doctor's opencode.config FAILs).
 #:   For an install that HAS OpenCode (its plugin, x4doctor's own target test) they are re-rendered the way install.sh's
 #:   write_opencode_config does: X4_TOOLKIT=<root> python .opencode/hooks/opencode_config.py write --root <root>. After
 #:   a rollback the installed setup runs again, so the restored renderer writes them back.
 #: `$BASH` is the bash running this script, never a PATH lookup; `pwd -W` is the Windows spelling of the root in Git Bash.
-SETUP_SCRIPT = ('unset CLAUDE_PROJECT_DIR; export UV_FROZEN=1\n'
+SETUP_SCRIPT = ('unset CLAUDE_PROJECT_DIR; export UV_FROZEN=1 X4_SETUP_KEEP_LOCAL=1\n'
                 '"$BASH" ./setup.sh || exit $?\n'
                 'if [ -f .opencode/plugins/x4guard.js ]; then\n'
                 '  _root="$(pwd -W 2>/dev/null || pwd)"\n'
@@ -301,37 +301,26 @@ def _lines(data):
     return text.splitlines()[-60:]
 
 
-def precheck(root, pol, steps, run=None):
-    """Run the INSTALLED `steps` ("setup", "canary") on the install as it is; refuse at the first that fails.
-
-    After a rollback the core runs the installed setup and canary again and writes update-failed.json when either
-    fails, so an install that already fails one would lock itself on any failed update. This refuses instead, before
-    anything is staged or replaced: "fix x4doctor first" naming the FAIL rows, or "fix setup.sh first"."""
+def precheck(root, pol, run=None):
+    """Verify that the installed canary can certify the previous version if a rollback is needed."""
     import subprocess
     runner = guarded.run if run is None else run
-    for label in steps:
-        argv = pol.setup if label == "setup" else pol.canary
-        try:
-            done = runner(argv, root, guarded.TIMEOUT)
-            ok, status = done.returncode == 0, "exit {}".format(done.returncode)
-            out = _lines(done.stdout) + _lines(done.stderr)
-        except subprocess.TimeoutExpired as exc:
-            ok, status, out = False, "timed out after {} s".format(exc.timeout), _lines(exc.output) + _lines(exc.stderr)
-        except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            ok, status, out = False, "could not start: {}: {}".format(type(exc).__name__, exc), []
-        if ok:
-            continue
-        rows = [line.strip() for line in out if line.split()[:1] == ["FAIL"]]
-        detail = "; ".join(rows) if rows else (" | ".join(out[-5:]) or "(no output)")
-        if label == "canary":
-            raise guarded.UpdateRefused(
-                "fix x4doctor first: this install fails its update canary as it is ({}): {}. Run `python "
-                "scripts/x4doctor.py` in {} and fix every FAIL row, then try again. An install that is already unhealthy "
-                "is never updated, because a failed update could then not prove its rollback; the update changed "
-                "nothing".format(status, detail, root))
-        raise guarded.UpdateRefused(
-            "fix setup.sh first: the installed setup fails on this install as it is ({}): {}. Run `bash setup.sh` in {} "
-            "and fix what it reports, then try again; the update changed nothing".format(status, detail, root))
+    try:
+        done = runner(pol.canary, root, guarded.TIMEOUT)
+        if done.returncode == 0:
+            return
+        status = "exit {}".format(done.returncode)
+        out = _lines(done.stdout) + _lines(done.stderr)
+    except subprocess.TimeoutExpired as exc:
+        status = "timed out after {} s".format(exc.timeout)
+        out = _lines(exc.output) + _lines(exc.stderr)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        status, out = "could not start: {}: {}".format(type(exc).__name__, exc), []
+    rows = [line.strip() for line in out if line.split()[:1] == ["FAIL"]]
+    detail = "; ".join(rows) if rows else (" | ".join(out[-5:]) or "(no output)")
+    raise _refuse(
+        "fix x4doctor first: this install fails its update canary as it is ({}): {}. Run "
+        "`python scripts/x4doctor.py` in {} and fix every FAIL row, then try again".format(status, detail, root))
 
 
 #: install.sh's own lists, read from the RELEASE's install.sh (what its installer would copy). install.ps1 holds the
@@ -514,7 +503,7 @@ def guarded_handle(args, root, *, candidate_preparer=None, candidate_validator=N
                       "BUILD-INFO nor a release heading in CHANGELOG.md); a checkout is updated with git")
     pol = policy(installed)
     if not any(os.path.lexists(installed / name) for name in (guarded.FAILED_MARKER, guarded.IN_FLIGHT)):
-        precheck(installed, pol, ("canary",) if args.command == "update-stage" else ("setup", "canary"), run=run)
+        precheck(installed, pol, run=run)
     if args.command == "update-stage":
         return stage(installed, candidate_preparer=candidate_preparer)
     # The apply re-derives the guard decision from complete.json with this policy, so it must be the one the review was

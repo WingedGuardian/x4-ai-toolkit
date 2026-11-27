@@ -65,8 +65,8 @@ tell the user the update has to be done by hand from the release page -- never i
    update replaces files those sessions are using. Only when they say it is done, run exactly the `update-apply` line
    the review's `next:` block printed: the bundle, the review SHA-256, the choices file, `--accept-guard-changes` only
    if step 5 was answered yes, and `--quiescent` (it states that you asked; it does not stop anything). It runs this
-   install's setup and health check first and refuses (exit `2`, `fix setup.sh first` / `fix x4doctor first`) if
-   either already fails. Then it replaces the files, runs the new setup and health check, and **rolls back by itself
+   installed health check first and refuses (exit `2`, `fix x4doctor first`) if it fails. Once the review and choices
+   pass verification, it replaces the files, runs the new setup and health check, and **rolls back by itself
    if either fails** (exit `1`). Report its `report` text as it is: applied, rolled back, or failed. Its first line
    tells a Codex user to re-approve the changed hooks in `/hooks` (Codex skips a changed hook until then): say it
    to the user, and suggest `x4doctor.py` once.

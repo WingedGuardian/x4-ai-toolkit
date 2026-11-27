@@ -299,7 +299,8 @@ def test_the_owned_selection_alone_covers_the_hook_trees(tmp_path):
 def test_the_extras_the_brief_names_are_guard_paths():
     pol = x4u.policy(REPO)
     for path in (".codex/hooks.json", ".opencode/opencode.jsonc", "agent/targets/codex/hooks.json.tmpl",
-                 "agent/rules/codex-rules.yaml", "scripts/x4update_session.py", ".claude/settings.local.json.example"):
+                 "agent/rules/codex-rules.yaml", "scripts/x4update_session.py", "scripts/x4refguard.py",
+                 ".claude/settings.local.json.example"):
         assert _is_guard(pol, path), path
     assert not _is_guard(pol, "README.md") and not _is_guard(pol, "tools/x4validate/x4validate/_merge.py")
 
@@ -370,7 +371,7 @@ def test_setup_and_canary_commands():
     bash, _ = x4guard.resolve_bash()
     assert pol.setup[0] == bash and pol.setup[1] == "-c" and '"$BASH" ./setup.sh' in pol.setup[2]
     assert pol.setup[3:] == ("x4-update-setup", sys.executable)
-    assert pol.setup[2].startswith("unset CLAUDE_PROJECT_DIR; export UV_FROZEN=1\n")
+    assert pol.setup[2].splitlines()[0] == "unset CLAUDE_PROJECT_DIR; export UV_FROZEN=1 X4_SETUP_KEEP_LOCAL=1"
     assert pol.canary == (sys.executable, "-I", "scripts/x4doctor.py", "--update-canary")
 
 
@@ -598,6 +599,21 @@ def test_a_guard_change_needs_the_separate_go(world, monkeypatch):
     assert (root / ".claude/hooks/guard.sh").read_bytes() == b"echo guard 4.3.2\n"
 
 
+def test_refused_apply_never_runs_setup(world, monkeypatch):
+    root, serve = world
+    serve(_new_files(**{".claude/hooks/guard.sh": b"echo guard 4.3.2\n"}))
+    setup = root / "setup.sh"
+    setup.write_bytes(setup.read_bytes() + b"\nprintf setup-ran > setup-side-effect.txt\n")
+    code, staged = _stage(root, monkeypatch)
+    assert code == 0, staged
+    before = _hashes(root)
+
+    code, refused = _apply(root, monkeypatch, staged, "--quiescent")
+
+    assert code == 2 and "--accept-guard-changes" in refused["error"], refused
+    assert _hashes(root) == before
+
+
 def test_stage_is_refused_when_the_installed_canary_fails(world, monkeypatch):
     root, serve = world
     fake = serve()
@@ -664,15 +680,14 @@ def test_a_release_shipping_the_users_path_config_cannot_replace_it(world, monke
     assert (root / "x4-paths.env").read_bytes() == b"X4_GAME=C:/Games/X4\n"
 
 
-def test_apply_runs_the_installed_setup_first_and_refuses_when_it_fails(world, monkeypatch):
+def test_apply_rolls_back_when_candidate_setup_fails(world, monkeypatch):
     root, serve = world
-    serve()
+    serve(_new_files(**{"setup.sh": SETUP_STUB + b"exit 6\n"}))
     code, staged = _stage(root, monkeypatch)
     assert code == 0
-    (root / ".fail-setup").write_text("", encoding="utf-8")
     before = _hashes(root)
-    code, result = _apply(root, monkeypatch, staged, "--quiescent")
-    assert code == 2 and "fix setup.sh first" in result["error"], result
+    code, result = _apply(root, monkeypatch, staged, "--quiescent", "--accept-guard-changes")
+    assert code == 1 and result["rolled_back"] and "FAILED at setup" in result["report"], result
     assert _hashes(root) == before and not (root / guarded.FAILED_MARKER).exists()
 
 
@@ -1083,6 +1098,23 @@ def _real_canary(root):
     return done.returncode, done.stdout.decode("utf-8", "replace")
 
 
+def test_the_update_canary_writes_no_bytecode(tmp_path, monkeypatch):
+    root = tmp_path / "install"
+    root.mkdir()
+    for rel in ("scripts/x4doctor.py", "scripts/gitbash.py", ".claude/settings.json",
+                ".claude/hooks/_x4-env.sh", ".claude/hooks/x4guard.py"):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((REPO / rel).read_bytes())
+    monkeypatch.setenv("X4_TOOLKIT", str(root))
+    before = _hashes(root)
+
+    _, report = _real_canary(root)
+
+    assert "checked:" in report
+    assert _hashes(root) == before
+
+
 @pytest.mark.parametrize("agents", [("claude",), ("claude", "codex", "generic", "opencode")])
 def test_the_real_canary_passes_after_a_real_shaped_update(release_world, monkeypatch, agents):
     """6c review F1: the key test. A release-shaped zip (X4AI/ + BUILD-INFO) of the shipped files, installed the way
@@ -1138,7 +1170,5 @@ def test_twin_the_unfiltered_core_stage_fails_the_real_canary_on_a_claude_only_i
                                    candidate_validator=render.validate)
     assert applied.ok is False and applied.rolled_back is True, applied.report
     assert "FAILED at canary" in applied.report and "opencode.config" in applied.report, applied.report
-    # The canary's own Python runs leave bytecode behind; the core lists it under "Not restored by rollback".
-    strip = lambda hashes: {k: v for k, v in hashes.items() if "__pycache__/" not in k}
-    assert strip(_hashes(root)) == strip(before)
+    assert _hashes(root) == before
     assert not any(k for k in before if "__pycache__/" in k), "control: the fresh install had no bytecode"
