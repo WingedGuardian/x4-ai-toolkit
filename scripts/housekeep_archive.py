@@ -17,8 +17,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 STUB = "ARCHIVED.md"
-# Default save extensions: both supported games' (Skyrim). Each toolkit passes its own as `save_exts`; the X4 name
-# and profile clauses in is_save() hold for every caller, so no toolkit ever archives an X4 save it meets.
+# These extensions, X4 save names and X4 profile paths are protected for every caller.
+# A toolkit or an archive receipt can supply additional extensions.
 SAVE_EXTS = (".ess", ".skse")
 # X4's own save names: the policy's Forever class is "saves and every copy", and a copy is usually not under save/.
 SAVE_NAME = re.compile(r"^(?:save_\d+|quicksave|autosave_\d+)\.xml(?:\.gz)?$")
@@ -32,9 +32,9 @@ class ArchiveError(Exception):
 
 
 def is_save(path, exts=SAVE_EXTS):
-    """A save by extension (`exts`, the calling toolkit's own), X4's save names, or X4's protected profile subtree."""
+    """A save by built-in or additional extension, X4 save name, or protected X4 profile path."""
     low = str(path).replace('\\','/').lower()
-    return (low.endswith(tuple(exts)) or '/egosoft/x4/' in low.rstrip('/')+'/'
+    return (low.endswith(SAVE_EXTS + tuple(ext.lower() for ext in exts)) or '/egosoft/x4/' in low.rstrip('/')+'/'
             or '/save/' in low and low.endswith(('.xml','.xml.gz'))
             or bool(SAVE_NAME.match(low.rsplit('/',1)[-1])))
 
@@ -80,6 +80,10 @@ def _members(src: Path, save_exts=SAVE_EXTS):
     for dp, dirs, files in _walk(src, save_exts):
         if ".git" in dirs or ".git" in files:
             raise ArchiveError("contains a .git entry: a repository is never archived")
+        for d in dirs:
+            p = Path(dp) / d
+            if is_save(p, save_exts):
+                raise ArchiveError('contains a protected save/profile path: {}'.format(p))
         for f in files:
             p = Path(dp) / f
             if fnmatch.fnmatch(f.lower(), 'owned-session*.json') or fnmatch.fnmatch(f.lower(), '*ownership*.json'):
@@ -436,14 +440,15 @@ def periodic_note(cfg, scanner, now=None):
 def restore_archive(stub: Path, save_exts=None) -> Path:
     """Extract the zip named in the stub back into its folder. Refuses if any member's path exists with other bytes.
 
-    `save_exts` defaults to the extensions the archive was made with (its record), so every archive a toolkit can
-    make it can also restore; a record from before that key uses SAVE_EXTS. X4's save names and profile subtree
-    are refused whatever the extensions."""
+    Caller and receipt extensions add to the built-in protections. A legacy receipt can omit the extension list.
+    An old archive containing a protected path is refused before any member is extracted."""
     stub = Path(stub)
     text = stub.read_text(encoding="utf-8")
     record = json.loads(text.rsplit("<!-- ", 1)[1].split(" -->", 1)[0])
-    if save_exts is None:
-        save_exts = tuple(record.get("save_exts", SAVE_EXTS))
+    recorded_exts = record.get("save_exts", [])
+    if not isinstance(recorded_exts, list) or any(not isinstance(ext, str) or not ext for ext in recorded_exts):
+        raise ArchiveError('invalid save extensions in archive receipt')
+    save_exts = tuple(save_exts or ()) + tuple(recorded_exts)
     dest = stub.parent
     if record.get('zip_sha256') and _hash(record['zip']) != record['zip_sha256']:
         raise ArchiveError('archive hash no longer matches its receipt')

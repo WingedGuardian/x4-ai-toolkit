@@ -1,12 +1,9 @@
-"""The shared archiver takes each toolkit's own save extensions (`save_exts`, user ruling 2026-11-26).
-
-X4 passes none of Skyrim's: a `.ess`/`.skse` met in an X4 task folder is an ordinary file there. The archiver's X4
-clauses (save names, the profile subtree) hold for every caller, so no toolkit archives an X4 save it meets.
-The default stays both games' extensions, so a caller that passes nothing behaves as before.
-"""
+"""The shared archiver always protects built-in save names, extensions and profile paths."""
 import importlib.util
+import json
 import os
 from pathlib import Path
+import zipfile
 
 import pytest
 
@@ -32,16 +29,26 @@ def _task(tmp_path, name):
     return task
 
 
-def test_x4_extensions_archive_a_skyrim_ess_as_an_ordinary_file(tmp_path):
-    task = _task(tmp_path, "fixture.ess")
-    rec = ha.archive_folder(task, tmp_path / "nas", None, save_exts=())
-    assert "fixture.ess" in rec["source_hashes"]
+@pytest.mark.parametrize("name", ["fixture.ESS", "fixture.SkSe"])
+def test_empty_extensions_still_refuse_skyrim_saves(tmp_path, name):
+    task = _task(tmp_path, name)
+    with pytest.raises(ha.ArchiveError, match="holds a save"):
+        ha.archive_folder(task, tmp_path / "nas", None, save_exts=())
+    assert (task / name).read_bytes() == b"fixture"
+    assert not (tmp_path / "nas").exists()
 
 
 def test_TWIN_the_default_still_refuses_a_skyrim_ess(tmp_path):
     task = _task(tmp_path, "fixture.ess")
     with pytest.raises(ha.ArchiveError, match="holds a save"):
         ha.archive_folder(task, tmp_path / "nas", None)
+
+
+def test_archive_refuses_protected_directory_members(tmp_path):
+    task = _task(tmp_path, "ordinary.txt")
+    (task / "protected.SKSE").mkdir()
+    with pytest.raises(ha.ArchiveError, match="protected save/profile path"):
+        ha.archive_folder(task, tmp_path / "nas", None, save_exts=())
 
 
 @pytest.mark.parametrize("name", ["save_001.xml.gz", "quicksave.xml", "autosave_02.xml.gz"])
@@ -51,10 +58,11 @@ def test_x4_save_names_are_refused_whatever_the_extensions(tmp_path, name):
         ha.archive_folder(task, tmp_path / "nas", None, save_exts=())
 
 
-def test_is_save_takes_the_callers_extensions():
+def test_is_save_adds_the_callers_extensions_to_the_built_ins():
     assert ha.is_save("c:/x/a.ess")
-    assert not ha.is_save("c:/x/a.ess", ())
-    assert ha.is_save("c:/x/a.sav", (".sav",))
+    assert ha.is_save("c:/x/a.ess", ())
+    assert ha.is_save("c:/x/a.skse", (".SAV",))
+    assert ha.is_save("c:/x/a.sav", (".SAV",))
     assert ha.is_save("d:/profiles/documents/egosoft/x4/1/content.xml", ())
 
 
@@ -64,26 +72,25 @@ def test_restore_and_scope_take_the_extensions_too(tmp_path):
         assert "save_exts" in inspect.signature(fn).parameters, fn.__name__
 
 
-def _round_trip(tmp_path, save_exts):
-    task = _task(tmp_path, "fixture.ess")
-    rec = ha.archive_folder(task, tmp_path / "nas", None, **({} if save_exts is None else {"save_exts": save_exts}))
-    for victim in rec["victims"]:
-        victim.unlink()
-    return task, ha.restore_archive(task / ha.STUB)
-
-
-def test_an_archive_made_with_x4_extensions_restores_with_them(tmp_path):
-    task, dest = _round_trip(tmp_path, ())
-    assert dest == task and (task / "fixture.ess").read_bytes() == b"fixture"
-
-
-def test_TWIN_an_explicit_default_restore_still_refuses_that_ess(tmp_path):
-    task = _task(tmp_path, "fixture.ess")
-    rec = ha.archive_folder(task, tmp_path / "nas", None, save_exts=())
-    for victim in rec["victims"]:
-        victim.unlink()
+@pytest.mark.parametrize(("name", "recorded", "caller"), [
+    ("fixture.ESS", [], None),
+    ("fixture.SkSe", [".custom"], (".other",)),
+    ("fixture.CUSTOM", [".custom"], (".other",)),
+    ("fixture.other", [".custom"], (".OTHER",)),
+])
+def test_receipt_and_caller_extensions_preserve_the_restore_floor(tmp_path, name, recorded, caller):
+    archive = tmp_path / "old.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("ordinary.txt", b"ordinary")
+        output.writestr(name, b"fixture")
+    task = tmp_path / "task"
+    task.mkdir()
+    stub = task / ha.STUB
+    receipt = json.dumps({"zip": str(archive), "save_exts": recorded})
+    stub.write_text(f"<!-- {receipt} -->", encoding="utf-8")
     with pytest.raises(ha.ArchiveError, match="protected save"):
-        ha.restore_archive(task / ha.STUB, ha.SAVE_EXTS)
+        ha.restore_archive(stub, caller)
+    assert list(task.iterdir()) == [stub]
 
 
 def test_a_record_without_save_exts_restores_with_the_default(tmp_path):

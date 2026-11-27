@@ -78,9 +78,8 @@ STUB_RECORD_MAX_BYTES = 32 << 20  # a stub larger than this is not read to find 
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
-#: X4 saves have no extension of their own: they are known by name and folder (is_save). Passed to the shared
-#: archiver as `save_exts`, so a Skyrim .ess/.skse met in an X4 task folder is an ordinary file here (user ruling
-#: 2026-11-26); the archiver's X4 name and profile clauses still hold.
+#: The shared archiver already protects X4 save names and paths, as well as .ess and .skse.
+#: X4 has no additional save extensions to register.
 X4_SAVE_EXTS = ()
 
 
