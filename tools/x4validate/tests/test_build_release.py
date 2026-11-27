@@ -617,11 +617,13 @@ def test_a_git_that_cannot_add_a_virtual_file_is_a_CANNOT_BUILD_not_a_bad_bundle
     shim_dir = tmp_path / "shim"
     shim_dir.mkdir()
     # A `git` that answers `archive -h` like an old git (no --add-virtual-file) and forwards the rest.
-    (shim_dir / "git").write_text(
+    shim = shim_dir / "git"
+    shim.write_text(
         '#!/bin/sh\n'
         'a="$@"\n'
         'case "$a" in *"archive -h"*) echo "usage: git archive [<options>] <tree-ish>"; exit 129 ;; esac\n'
         'exec "%s" "$@"\n' % Path(real).as_posix(), encoding="utf-8", newline="\n")
+    shim.chmod(0o755)
     r = _release_repo(tmp_path, "## v4.0.1 - 2026-10-25", "4.0.1")
     # Git Bash puts /mingw64/bin first on its own PATH, so a PATH entry from outside never wins; BASH_ENV
     # runs inside the shell and prepends the shim there.

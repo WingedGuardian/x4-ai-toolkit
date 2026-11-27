@@ -615,7 +615,7 @@ def test_a_hung_note_gives_up_by_itself_and_says_so(tmp_path):
 
 def test_a_failed_download_is_exit_two_nothing_installed_changed(tmp_path, monkeypatch):
     """L5 (6b review): update-fetch only reads, downloads aside and unpacks aside, so every failure of it, an OSError mid
-    download included, is the core's exit 2 ("refused/failed, nothing installed changed"); the skill says the same."""
+    download included, is the core's exit 2 ("refused/failed, nothing installed changed")."""
     root = _install(tmp_path, "4.3.0")
 
     def died(*args, **kwargs):
@@ -623,5 +623,3 @@ def test_a_failed_download_is_exit_two_nothing_installed_changed(tmp_path, monke
     monkeypatch.setattr(release, "fetch", died)
     code, result = _run_harness(["update-fetch", "--installed-root", str(root)], root, monkeypatch)
     assert code == 2 and result["ok"] is False and result["installed_changed"] is False
-    skill = (REPO / "agent" / "skills" / "x4-toolkit-update" / "SKILL.md").read_text(encoding="utf-8")
-    assert "`2` when it failed for any reason" in skill and "nothing installed has changed" in skill

@@ -265,7 +265,8 @@ def test_missing_core_detached_module_fails_open_with_visible_note(adapters, box
     _tmp, tk = box
     empty = tmp_path / "no-toolkit"
     empty.mkdir()
-    monkeypatch.setenv("X4_TOOLKIT", str(empty))      # no tools/modding_harness/detached.py anywhere on the way
+    monkeypatch.setattr(codex.x4guard, "_deployed", lambda: False)  # only the separate-toolkit roots under test
+    monkeypatch.setenv("X4_TOOLKIT", str(empty))
     allow = {"decision": "allow", "inert": False, "reason": None, "context": None}
     monkeypatch.setattr(codex.save_policy, "batch", lambda *a, **k: dict(allow))
     monkeypatch.setattr(codex.save_policy, "LAST_ROOTS", {"toolkit": str(empty)}, raising=False)
@@ -562,6 +563,7 @@ def test_no_roots_read_in_this_call_means_no_bash_start_and_a_note(adapters, box
     _tmp, tk = box
     empty = tmp_path / "empty"
     empty.mkdir()
+    monkeypatch.setattr(codex.x4guard, "_deployed", lambda: False)
     monkeypatch.setenv("X4_TOOLKIT", str(empty))
     monkeypatch.setattr(codex.save_policy, "LAST_ROOTS", None, raising=False)
     started = []
@@ -576,6 +578,7 @@ def test_roots_from_an_earlier_call_are_not_used(adapters, box, monkeypatch, tmp
     tmp, tk = box
     empty = tmp_path / "empty2"
     empty.mkdir()
+    monkeypatch.setattr(codex.x4guard, "_deployed", lambda: False)
     monkeypatch.setenv("X4_TOOLKIT", str(empty))
     monkeypatch.setattr(codex.save_policy, "batch", lambda *a, **k: dict(ALLOW))
     monkeypatch.setattr(codex.save_policy, "LAST_ROOTS", {"toolkit": str(tk)}, raising=False)       # a stale earlier call

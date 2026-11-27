@@ -266,7 +266,7 @@ def _is_guard(pol, path):
 
 
 def test_guard_paths_cover_every_deployer_guard_source_and_every_guard_owned_entry():
-    require_repo(DEPLOYER, GENERATOR, why="reads the deployer's and the generator's lists")
+    require_repo(DEPLOYER, GENERATOR, "agent/guards", why="reads the source lists and checks their directory entries")
     pol = x4u.policy(REPO)
     sources = _parse_tuple(REPO / DEPLOYER, "GUARD_SOURCES")
     owned = [e for e in _parse_tuple(REPO / GENERATOR, "OWNED") if x4u.owned_is_guard(e)]
@@ -393,12 +393,12 @@ def test_setup_re_renders_the_opencode_deny_rules_only_for_an_install_with_openc
     done = guarded.run(pol.setup, root, 120)
     assert done.returncode == 0, (done.stdout, done.stderr)
     rendered = root / ".oc-rendered"
-    if not has_opencode:
+    if has_opencode:
+        args, toolkit = rendered.read_text(encoding="utf-8").split("|")
+        assert args.split()[0] == "write" and Path(args.split()[2]).resolve() == root.resolve(), args
+        assert Path(toolkit).resolve() == root.resolve()
+    else:
         assert not rendered.exists()
-        return
-    args, toolkit = rendered.read_text(encoding="utf-8").split("|")
-    assert args.split()[0] == "write" and Path(args.split()[2]).resolve() == root.resolve(), args
-    assert Path(toolkit).resolve() == root.resolve()
 
 
 def test_a_failing_opencode_render_fails_the_setup_step(tmp_path, monkeypatch):
@@ -827,7 +827,8 @@ def test_the_skill_describes_the_staged_flow_as_present():
     assert "arrive with" not in skill and "arrives with" not in skill, "the stage/apply steps are still marked as future"
     for needle in ("update-stage", "update-apply", "update-clear-failed", "verbatim", "--accept-guard-changes",
                    "--choices", "--quiescent", "close their other agent sessions", "fix x4doctor first",
-                   "update-failed.json", "update-in-flight.json", "`2` when it failed for any reason"):
+                   "update-failed.json", "update-in-flight.json", "`2` when it failed for any reason",
+                   "nothing installed has changed"):
         assert needle in skill, needle
 
 
@@ -1032,14 +1033,14 @@ def test_new_codex_definitions_replace_verified_prior_groups_and_keep_user_hooks
     if custom_matcher:
         assert code == 2 and "duplicate PostToolUse commands" in staged["error"], staged
         assert json.loads((root / ".codex/hooks.json").read_bytes()) == installed
-        return
-    assert code == 0 and staged["requires_guard_accept"], staged
-    code, result = _apply(root, monkeypatch, staged, "--quiescent", "--accept-guard-changes",
-                          choices={".codex/hooks.json": "merged_settings"})
-    assert code == 0 and result["ok"], result
-    expected = json.loads(render.render_codex(newer_template, root))
-    expected["hooks"]["SessionStart"].insert(0, custom)
-    assert json.loads((root / ".codex/hooks.json").read_bytes()) == expected
+    else:
+        assert code == 0 and staged["requires_guard_accept"], staged
+        code, result = _apply(root, monkeypatch, staged, "--quiescent", "--accept-guard-changes",
+                              choices={".codex/hooks.json": "merged_settings"})
+        assert code == 0 and result["ok"], result
+        expected = json.loads(render.render_codex(newer_template, root))
+        expected["hooks"]["SessionStart"].insert(0, custom)
+        assert json.loads((root / ".codex/hooks.json").read_bytes()) == expected
 
 
 def test_a_hook_folder_new_in_the_release_is_a_guard_change(world, monkeypatch):
@@ -1113,6 +1114,7 @@ def _real_install(tmp_path, agents, files):
 
 @pytest.fixture
 def release_world(tmp_path, monkeypatch):
+    require_repo(".git", "install.sh", "agent/guards", why="builds the release tree from the toolkit's Git index")
     monkeypatch.setenv("MODDING_HARNESS_UPDATES_DIR", str(tmp_path / "updates"))
     for key in ("CLAUDE_PROJECT_DIR", "X4_GAME", "X4_REFERENCE", "X4_PROFILE", "X4_MODS", "X4_CONFIG", "X4_GUARD",
                 "X4_UPDATE_CHECK", "X4_HOUSEKEEP_SWEEP", "MODDING_HARNESS_UPDATE_CHECK"):
@@ -1152,7 +1154,6 @@ def test_the_update_canary_writes_no_bytecode(tmp_path, monkeypatch):
 def test_the_real_canary_passes_after_a_real_shaped_update(release_world, monkeypatch, agents):
     """6c review F1: the key test. A release-shaped zip (X4AI/ + BUILD-INFO) of the shipped files, installed the way
     install.sh installs it, staged and applied through the harness, then the REAL x4doctor --update-canary."""
-    require_repo(".git", "install.sh", why="builds the release tree from git's shipped set")
     tmp_path, files = release_world
     root = _real_install(tmp_path, list(agents), files)
     monkeypatch.setenv("X4_TOOLKIT", str(root))
@@ -1185,7 +1186,6 @@ OLD_SETUP = 'unset CLAUDE_PROJECT_DIR; export UV_FROZEN=1; exec "$BASH" ./setup.
 def test_twin_the_unfiltered_core_stage_fails_the_real_canary_on_a_claude_only_install(release_world, monkeypatch):
     """The core's own stage_update writes the whole zip: the OpenCode plugin turns x4doctor's OpenCode target on with no
     deny rules, and the canary FAILs, so the update rolls back. This is F1 as 70a902ca had it."""
-    require_repo(".git", "install.sh", why="builds the release tree from git's shipped set")
     import dataclasses
     tmp_path, files = release_world
     root = _real_install(tmp_path, ["claude"], files)

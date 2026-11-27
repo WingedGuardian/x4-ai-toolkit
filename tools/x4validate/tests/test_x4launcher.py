@@ -160,13 +160,17 @@ def test_the_default_launcher_files_are_keep_local_in_both_installers():
         assert "bin" + chr(92) + name in ps, name
 
 
-def test_the_launcher_files_are_gitignored():
+def test_the_launcher_files_are_gitignored(tmp_path):
+    initialized = subprocess.run(["git", "init", "-q"], cwd=tmp_path, creationflags=NO_WINDOW,
+                                 capture_output=True, timeout=60)
+    assert initialized.returncode == 0, initialized.stderr
+    (tmp_path / ".gitignore").write_bytes((ROOT / ".gitignore").read_bytes())
     for name in FILES:
-        r = subprocess.run(["git", "check-ignore", "-q", "bin/" + name], cwd=ROOT, creationflags=NO_WINDOW,
+        r = subprocess.run(["git", "check-ignore", "-q", "bin/" + name], cwd=tmp_path, creationflags=NO_WINDOW,
                            capture_output=True, timeout=60)
         assert r.returncode == 0, name + " is not ignored"
     for tracked in ("bin/xrcat", "bin/unpack-reference.sh"):
-        r = subprocess.run(["git", "check-ignore", "-q", tracked], cwd=ROOT, creationflags=NO_WINDOW,
+        r = subprocess.run(["git", "check-ignore", "-q", tracked], cwd=tmp_path, creationflags=NO_WINDOW,
                            capture_output=True, timeout=60)
         assert r.returncode == 1, tracked + " must stay tracked"
 
