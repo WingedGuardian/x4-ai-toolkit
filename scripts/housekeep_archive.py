@@ -460,6 +460,11 @@ def restore_archive(stub: Path, save_exts=None) -> Path:
             if (relative.is_absolute() or '..' in relative.parts or '\\' in i.filename
                     or ':' in i.filename):
                 raise ArchiveError('unsafe archive member path')
+            if os.name == "nt" and any(
+                part.endswith((" ", ".")) or any(char in part for char in '"<>|?*')
+                for part in relative.parts
+            ):
+                raise ArchiveError("archive member name changes during Windows extraction")
             p = dest/i.filename
             if is_save(p, save_exts):
                 raise ArchiveError('restore would write a protected save/profile path')

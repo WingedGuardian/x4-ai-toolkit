@@ -2,8 +2,9 @@
 import importlib.util
 import json
 import os
-from pathlib import Path
 import zipfile
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -90,6 +91,23 @@ def test_receipt_and_caller_extensions_preserve_the_restore_floor(tmp_path, name
     stub.write_text(f"<!-- {receipt} -->", encoding="utf-8")
     with pytest.raises(ha.ArchiveError, match="protected save"):
         ha.restore_archive(stub, caller)
+    assert list(task.iterdir()) == [stub]
+
+
+@pytest.mark.parametrize("name", ["fixture.ESS.", "fixture.SKSE ", "subfolder /notes.txt", "file?.txt"])
+def test_restore_refuses_names_rewritten_by_windows(tmp_path, monkeypatch, name):
+    archive = tmp_path / "old.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("ordinary.txt", b"ordinary")
+        output.writestr(name, b"fixture")
+    task = tmp_path / "task"
+    task.mkdir()
+    stub = task / ha.STUB
+    receipt = json.dumps({"zip": str(archive), "save_exts": []})
+    stub.write_text(f"<!-- {receipt} -->", encoding="utf-8")
+    monkeypatch.setattr(ha, "os", SimpleNamespace(name="nt"))
+    with pytest.raises(ha.ArchiveError, match="archive member name changes during Windows extraction"):
+        ha.restore_archive(stub)
     assert list(task.iterdir()) == [stub]
 
 
