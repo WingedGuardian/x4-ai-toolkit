@@ -267,7 +267,7 @@ class DoneTest(Base):
 
     def test_save_blocks(self):
         t = self.task()
-        touch(t / "a.skse")
+        touch(t / "save_001.xml.gz")
         self.assertIn("save", self.done(t))
 
     def test_protected_glob_blocks(self):

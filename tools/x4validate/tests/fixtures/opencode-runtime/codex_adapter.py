@@ -29,6 +29,12 @@ Routing (PreToolUse):
                   Codex that does hook it; the gap is disclosed, not closed (DECISIONS #20).
   anything else-> allowed (as Claude Code allows tools it does not hook), name recorded.
 
+No-detached-launch (4.3.1): AFTER the funnel's verdict, and only when that verdict is allow or advise, the
+call is also read by the core detector (tools/modding_harness/detached.py), IN-PROCESS and never through
+x4guard.run_guard: the funnel turns a crashed guard into a DENY, and this check must FAIL OPEN. It fails open
+VISIBLY: any error, a missing detector or an exhausted budget allows the call with an advisory
+"no-detached-launch NOT judged: <reason>". X4_GUARD=off turns its deny into an advisory.
+
 The guards inherit the full hook environment, secrets included (MEASURED): nothing here ever
 logs the environment. Stdlib only; Python >= 3.10.
 """
@@ -39,6 +45,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -228,6 +235,181 @@ def judge(calls: list[tuple], deadline: float, save_qualified=None) -> list[dict
     return out
 
 
+# ------------------------------------------------------------------ no-detached-launch -- #
+
+#: The X4 detector's own files stay editable. Entries are the core's format: "/"-separated path suffixes,
+#: case-sensitive (detached._exempt). They are ADDED to the core's own default, which they must not replace.
+DETACHED_OWN_EXEMPT = ("no-detached-launch.py", "test_no_detached_launch.py", "verify-no-detached-launch.py",
+                       "tests/test_adapter_detached_launch.py")
+DETACHED_NOT_JUDGED = "no-detached-launch NOT judged"
+DETACHED_REASON = ("no-detached-launch: this launches a process DETACHED ({!r}). A detached process "
+                   "has no console, so every console program it starts gets a visible window on the user's desktop "
+                   "(measured: a pop-up every second for a whole headless run). "
+                   "Use creationflags=CREATE_NO_WINDOW (0x08000000), optionally | CREATE_NEW_PROCESS_GROUP "
+                   "(0x200): the child gets a hidden console and still outlives the caller.")
+#: What is left of the adapter's budget for the rest of the call (backups, the profile approval) after the detector.
+DETACHED_RESERVE_S = 0.5
+
+
+def _detached_roots():
+    """(where, getter) for each place the toolkit root may be, cheapest first; a getter may raise."""
+    yield "this install", lambda: HERE.parents[1] if x4guard._deployed() else None
+    yield "X4_TOOLKIT", lambda: (save_policy.native(os.environ["X4_TOOLKIT"]) if os.environ.get("X4_TOOLKIT") else None)
+    # A hook-only install (the game root) keeps its tools in the configured toolkit, which the funnel's own
+    # root read of THIS call names. Never start Bash again for it (it cost a second start on every judged call).
+    yield "the roots this call read", lambda: (save_policy.native(save_policy.LAST_ROOTS["toolkit"])
+                                               if save_policy.LAST_ROOTS else None)
+
+
+def _detached_module(deadline: float):
+    """The vendored core detector, loaded as the adapters load their other core modules (save_policy.core).
+    Raises ImportError when no root holds tools/modding_harness/detached.py."""
+    tried = []
+    for where, get in _detached_roots():
+        try:
+            root = get()
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+            tried.append(f"{where}: {type(e).__name__}")
+            continue
+        if root is not None and (Path(root) / "tools" / "modding_harness" / "detached.py").is_file():
+            return save_policy.core(root, "detached")
+        tried.append(f"{where}: no tools/modding_harness/detached.py")
+    raise ImportError("the core detector tools/modding_harness/detached.py was not found (" + "; ".join(tried) + ")")
+
+
+def detached_exempt(det) -> tuple:
+    return tuple(det.EXEMPT) + DETACHED_OWN_EXEMPT
+
+
+def detached_items(payload: dict, shell: str) -> list[tuple]:
+    """What the detector reads for one Codex call: ("shell", shell, command, cwd), ("patch", text, cwd) or
+    ("file", tool, tool_input, cwd). Called only once the funnel allows the call, so translate() has already
+    read the same text; an error here still fails open, visibly (detached_verdict)."""
+    tool = payload.get("tool_name")
+    ti = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    cwd = os.getcwd()
+    items: list[tuple] = []
+    if tool in SHELL_TOOLS:
+        cmd = ti.get("command")
+        if isinstance(cmd, str):
+            items.append(("shell", shell, cmd, cwd))
+            found = patch_paths.shell_patch(cmd)
+            if found is not None:
+                body, cd = found
+                items.append(("patch", body, _abspath(cd, cwd) if cd else cwd))
+    elif tool in PATCH_TOOLS:
+        text = _patch_text(ti)
+        if isinstance(text, str):
+            items.append(("patch", text, cwd))
+    elif tool in STDIN_TOOLS:
+        chars = ti.get("chars")
+        if isinstance(chars, str) and "\n" in chars.replace("\r", "\n"):
+            for ln in chars.replace("\r\n", "\n").replace("\r", "\n").split("\n")[:-1]:
+                if ln.strip():
+                    items.append(("shell", shell, ln, cwd))
+    return items
+
+
+def _detached_hit(det, item: tuple, exempt: tuple):
+    kind = item[0]
+    if kind == "shell":
+        _, shell, cmd, cwd = item
+        return det.judge("PowerShell" if shell == "powershell" else "Bash", {"command": cmd}, exempt=exempt, cwd=cwd)
+    if kind == "patch":
+        _, text, cwd = item
+        return det.judge_patch(text, cwd=cwd, exempt=exempt)
+    _, tool, tool_input, cwd = item
+    return det.judge(tool, tool_input, exempt=exempt, cwd=cwd)
+
+
+def _bounded_call(fn, seconds: float):
+    """fn() with a time limit: a detector that is slow (not one that pins the interpreter in a regex) is
+    abandoned, so a slow call fails open in the adapter's own budget instead of in the wrapper's kill."""
+    out: dict = {}
+
+    def run():
+        try:
+            out["v"] = fn()
+        except BaseException as e:      # noqa: BLE001 -- handed back to the caller's thread
+            out["e"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(max(0.1, seconds))
+    if t.is_alive():
+        raise TimeoutError("the detector did not finish within the adapter's budget")
+    if "e" in out:
+        raise out["e"]
+    return out.get("v")
+
+
+def _detached_note(verdict: dict, note: str) -> dict:
+    """VERDICT (allow or advise) with NOTE leading its context: an advisory, never silent."""
+    v = dict(verdict)
+    ctx = v.get("context")
+    v["decision"], v["inert"], v["reason"] = "advise", False, None
+    v["context"] = bounded(f"{note}\n\n{ctx}" if ctx else note, [])
+    return v
+
+
+def _log_guard_off(reason: str) -> None:
+    """The GUARDS-OFF.log record the shell guards write (_x4-env.sh x4_guard_overridden), mirrored: one line
+    `[YYYY-MM-DD HH:MM:SS] <hook> would have DENIED: <reason, CR/LF as spaces, first 300 characters>` in
+    $X4_BACKUPS (else $X4_TOOLKIT/.claude/backups). A guards' check (X4_GUARD_CHECK=1) logs nothing. Best effort:
+    a log that cannot be written never changes the verdict."""
+    if os.environ.get("X4_GUARD_CHECK") == "1":
+        return
+    try:
+        folder = os.environ.get("X4_BACKUPS") or os.path.join(os.environ.get("X4_TOOLKIT") or str(HERE.parents[1]),
+                                                              ".claude", "backups")
+        os.makedirs(folder, exist_ok=True)
+        text = reason.replace(chr(13), " ").replace(chr(10), " ")[:300]
+        line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] no-detached-launch would have DENIED: {text}" + chr(10)
+        with open(os.path.join(folder, "GUARDS-OFF.log"), "a", encoding="utf-8", newline="") as f:
+            f.write(line)
+    except (OSError, ValueError):
+        pass
+
+
+def detached_verdict(verdict: dict, make_items, deadline: float) -> dict:
+    """The funnel's VERDICT, refused instead when this call starts a process DETACHED.
+
+    Consulted only for allow/advise: an existing deny, ask or inert deny is kept and the detector is not called.
+    FAILS OPEN, NEVER SILENTLY: any Exception (a missing detector, a parser error, RecursionError, a time-out) or a
+    budget under one second allows the call with an advisory naming what was not judged. X4_GUARD=off turns a
+    refusal into an advisory, as for every other guard. MAKE_ITEMS is called here so that reading the call is
+    inside the same fail-open."""
+    if verdict["decision"] not in ("allow", "advise"):
+        return verdict
+    try:
+        left = deadline - time.monotonic()
+        if left < 1:
+            return _detached_note(verdict, f"{DETACHED_NOT_JUDGED}: the adapter's time budget was spent before this "
+                                           "check. Nothing was blocked for it; read the call yourself for a detached launch.")
+        def judge():
+            items = make_items()
+            if not items:
+                return None
+            det = _detached_module(deadline)
+            exempt = detached_exempt(det)
+            return next((hit for item in items if (hit := _detached_hit(det, item, exempt))), None)
+
+        hit = _bounded_call(judge, left - DETACHED_RESERVE_S)
+        if time.monotonic() >= deadline - DETACHED_RESERVE_S:
+            raise TimeoutError("the detector finished after its deadline")
+    except BaseException as e:          # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny
+        return _detached_note(verdict, f"{DETACHED_NOT_JUDGED}: {type(e).__name__}. Nothing was blocked for it; "
+                                       "read the call yourself for a detached launch.")
+    if not hit:
+        return verdict
+    reason = DETACHED_REASON.format(str(hit)[:140])
+    if os.environ.get("X4_GUARD") == "off":
+        _log_guard_off(reason)
+        return _detached_note(verdict, "X4 GUARDS OFF (X4_GUARD=off at launch): no-detached-launch would have DENIED "
+                                       f"this call; it was NOT enforced. Its reason: {reason}")
+    return {"decision": "deny", "inert": False, "reason": reason, "context": None}
+
+
 def aggregate(verdicts: list[dict]) -> dict:
     """inert deny > deny > ask > advise > allow, reasons joined per path, bounded, directive first."""
     if not verdicts:
@@ -337,6 +519,7 @@ def run_backups(ops: list[tuple], base: str, deadline: float) -> dict | None:
 
 
 def pre_tool_use(payload: dict, shell: str, deadline: float) -> dict:
+    save_policy.LAST_ROOTS = None          # the detector reuses only the roots THIS call's funnel reads
     try:
         calls = translate(payload, "pre_tool_use", shell=shell)
     except patch_paths.PatchParseError as e:
@@ -344,6 +527,8 @@ def pre_tool_use(payload: dict, shell: str, deadline: float) -> dict:
     verdict = save_policy.batch(payload, calls,
         lambda qualified: aggregate(judge(calls, deadline, qualified)), deadline, "codex")
     verdict, pending = profile_approval.prepare(payload, calls, verdict, deadline)
+    # Before the backup and the approval's consumption: a refused call must not spend either.
+    verdict = detached_verdict(verdict, lambda: detached_items(payload, shell), deadline)
     if verdict["decision"] in ("allow", "advise"):
         ops = _ops_for_backup(payload)
         if ops:

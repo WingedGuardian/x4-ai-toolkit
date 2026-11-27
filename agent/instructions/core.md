@@ -139,8 +139,8 @@ evade this policy. Missing preservation or evaluation is a refusal, not permissi
 
 ### General
 - **Delete by certainty.** Delete permanently only what is proven rebuildable now and was marked
-  disposable by its producer at creation (BaseX builders verify and retire caches via `DROP DB` and
-  `scripts/x4basex_artifacts.py`; no backup or recycling; custom unreceipted workspaces stay).
+  disposable by its producer at creation (BaseX: `DROP DB` and `scripts/x4basex_artifacts.py`
+  for caches and stale licences. No backup or recycling. Keep custom unreceipted workspaces).
   Anything that could be the only copy goes to the Recycle Bin / Trash (Windows: `Microsoft.VisualBasic.FileIO.FileSystem` `DeleteFile`/
   `DeleteDirectory` with `SendToRecycleBin`; Linux: `gio trash`; macOS: Finder Trash). Unknown
   value is kept. Any other permanent delete needs the user's OK; a failed recycle never falls back

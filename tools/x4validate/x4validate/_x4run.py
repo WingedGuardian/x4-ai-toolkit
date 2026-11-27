@@ -631,7 +631,7 @@ def _launch_preflight(game_root, steam_path, steam, state_dir, run):
     if len(steam) != 1 or active != {Path(steam_path).resolve()}:
         raise ValueError("the Steam executable above the game folder is not the single running Steam client")
 
-    system = Path(os.environ.get("SystemRoot", "")).anchor
+    system = Path(os.environ.get("SystemRoot", "")).anchor  # env-ok: Windows supplies its own system directory
     if not system:
         raise ValueError("the Windows system volume could not be determined")
     query = ("$ErrorActionPreference='Stop'; "

@@ -101,8 +101,8 @@ DEPLOYER = "tools/x4validate/scripts/deploy-claude-dir.py"
 GENERATOR = "tools/x4validate/scripts/gen-agent-trees.py"
 #: Guard paths neither derivation source names. `.codex/hooks.json` and `.opencode/opencode.jsonc` are the hook
 #: settings rendered per install; agent/targets/ and agent/rules/ are the per-agent hook definitions and the Codex
-#: rules source a release zip carries. The rest are the pre-push gate's guard files that ship: scripts/prepush-gate.py
-#: is export-ignored, so an install cannot read its GUARD_PATHS, and a checkout test binds this tuple to that list.
+#: rules source a release zip carries. The rest are shipped guard files also covered by the checkout-only
+#: pre-push gate. A checkout test binds this tuple to that gate's GUARD_PATHS.
 #: (.claude/settings.local.json.example is the seed setup.sh copies into the live settings.local.json: permission rules.)
 EXTRA_GUARD = (".codex/hooks.json", ".opencode/opencode.jsonc", "agent/targets/", "agent/rules/",
                ".claude/settings.local.json.example",
