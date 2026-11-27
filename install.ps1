@@ -1573,8 +1573,22 @@ function Recycle-CopyPrune($dest) {
   Recycle-InstallerPaths $victims
 }
 
+function Test-BuildInfoPrecheck($dest, $tracked) {
+  $sourceMarker = Get-Item -LiteralPath (Join-Path $SRC 'BUILD-INFO') -Force -ErrorAction SilentlyContinue
+  $destMarker = Get-Item -LiteralPath (Join-Path $dest 'BUILD-INFO') -Force -ErrorAction SilentlyContinue
+  $destLink = $destMarker -and ($destMarker.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+  if (($destMarker -and $destMarker.PSIsContainer -and -not $destLink) -or
+      (-not $tracked -and $sourceMarker -and
+        ($destLink -or $sourceMarker.PSIsContainer -or
+          ($sourceMarker.Attributes -band [System.IO.FileAttributes]::ReparsePoint)))) {
+    throw 'BUILD-INFO must be a regular file when copied or replaced. Inspect the source and destination markers.'
+  }
+}
+
 function Copy-Toolkit($dest) {
   Refuse-IfDryRun 'copying the toolkit into' $dest
+  $tracked = Get-TrackedCopySet
+  Test-BuildInfoPrecheck $dest $tracked
   Test-ProjectSettingsPrecheck $dest
   New-Item -ItemType Directory -Force -Path (Join-Path $dest '.claude') | Out-Null
   $notes = Join-Path $dest 'KNOWLEDGEBASE.md'
@@ -1626,7 +1640,6 @@ function Copy-Toolkit($dest) {
   # install.sh deliberately -- one installer correct by accident is how the two drift.
   Recycle-CopyPrune $dest
 
-  $tracked = Get-TrackedCopySet
   # A STALE BUILD-INFO: see the mirror in install.sh (copy_toolkit). Recycled when the source has none, or when it is a
   # checkout (only git's tracked set is copied, which never holds BUILD-INFO); it is not in $X4CopyPrune, which would also
   # stop a release source's BUILD-INFO being copied.
@@ -2602,6 +2615,7 @@ switch ($Method) {
     if (-not (Test-SameDir $SRC $Toolkit)) {
       Test-ProjectSettingsPrecheck $Toolkit
       Test-LockedTargetsPrecheck $Toolkit
+      Test-BuildInfoPrecheck $Toolkit (Get-TrackedCopySet)
       Show-CopyPlan $Toolkit
       Save-UserAgentsMd $Toolkit        # after every precheck, before the copy
       Save-HUserClaudeMd $Toolkit       # 3.x -> 4.0: same position, same shape
@@ -2638,6 +2652,7 @@ switch ($Method) {
     if (-not (Test-SameDir $SRC $Toolkit)) {
       Test-ProjectSettingsPrecheck $Toolkit
       Test-LockedTargetsPrecheck $Toolkit
+      Test-BuildInfoPrecheck $Toolkit (Get-TrackedCopySet)
       Show-CopyPlan $Toolkit
       Save-UserAgentsMd $Toolkit        # after every precheck, before the copy
       Save-HUserClaudeMd $Toolkit       # 3.x -> 4.0: same position, same shape
@@ -2792,7 +2807,9 @@ Write-Host ('Agents:  ' + (Get-AgentsLanded))
 Write-Host "Config:  $Toolkit\x4-paths.env  (edit any path here)"
 if ($Method -ne 'global') {
   if ($script:X4LauncherStart) {
-    Write-Host "Start:   cd `"$Toolkit`" and run your agent there (or: $($script:X4LauncherStart) $($script:X4LauncherAgents))"
+    Write-Host "Start:   cd `"$Toolkit`" and run your agent there"
+    Write-Host "Launcher: $($script:X4LauncherStart)"
+    Write-Host "Agents:   $($script:X4LauncherAgents -replace '\|', ', ') (pass one name to the launcher)"
   } else {
     Write-Host "Start:   cd `"$Toolkit`" and run your agent there"
   }

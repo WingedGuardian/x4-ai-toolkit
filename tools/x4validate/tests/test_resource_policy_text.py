@@ -28,6 +28,8 @@ def _text(rel: str) -> str:
 @pytest.mark.parametrize("rel", [CORE, HEADROOM])
 def test_states_the_headroom_rule(rel):
     t = _text(rel)
+    if rel == CORE:
+        t = t.split("**Resources:", 1)[1].split("### Iteration snapshots", 1)[0]
     assert "90%" in t and "3 GiB" in t and "512 MiB" in t
 
 

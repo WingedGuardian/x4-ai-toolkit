@@ -41,14 +41,15 @@ def _bin(folder):
 
 
 def test_it_writes_the_launcher_for_the_INSTALLED_agents_only(tk):
+    agent_case = re.compile(r"^  ([a-z]+)\) shift; exec ", re.MULTILINE)
     r = _run(["--toolkit", str(tk), "--agents", "claude"])
     assert r.returncode == 0, r.stderr
     text = (tk / "bin" / "x4agent").read_text(encoding="utf-8")
-    assert "claude" in text and "codex" not in text and "opencode" not in text
+    assert agent_case.findall(text) == ["claude"]
     r = _run(["--toolkit", str(tk), "--agents", "claude,codex,opencode,generic", "--shells", "bash"])
     assert r.returncode == 0, r.stderr
     text = (tk / "bin" / "x4agent").read_text(encoding="utf-8")
-    assert all(a in text for a in ("claude", "codex", "opencode")) and "generic" not in text
+    assert set(agent_case.findall(text)) == {"claude", "codex", "opencode"}
 
 
 def test_the_default_files_never_include_the_ps1_launcher(tk):
@@ -228,16 +229,15 @@ def test_both_banners_name_the_launcher_ONLY_when_one_was_written():
     sh_lines = re.findall(r'^\s*echo "Start:[^\n]*', _sh_text(), re.M)
     ps_lines = re.findall(r"^\s*Write-Host[^\n]*Start:[^\n]*", _ps1_text(), re.M)
     assert len(sh_lines) == 2 and len(ps_lines) == 2, (sh_lines, ps_lines)
-    sh_with = next(x for x in sh_lines if "LAUNCHER" in x)
-    sh_without = next(x for x in sh_lines if "LAUNCHER" not in x)
-    ps_with = next(x for x in ps_lines if "Launcher" in x)
-    ps_without = next(x for x in ps_lines if "Launcher" not in x)
-    assert "$X4_LAUNCHER_START" in sh_with and "$X4_LAUNCHER_AGENTS" in sh_with
-    assert "$script:X4LauncherStart" in ps_with and "$script:X4LauncherAgents" in ps_with
-    for line in (sh_with, sh_without, ps_with, ps_without):
+    for line in sh_lines + ps_lines:
         assert ("$TOOLKIT" in line or "$Toolkit" in line) and "run your agent there" in line
-    for line in (sh_without, ps_without):
         assert "x4agent" not in line and "bin" not in line
+    sh_summary = _sh_text().split('if [ -n "$X4_LAUNCHER_START" ]; then', 1)[1].split("else", 1)[0]
+    ps_summary = _ps1_text().split("if ($script:X4LauncherStart) {", 1)[1].split("} else", 1)[0]
+    assert re.search(r"Launcher:[^\n]*\$X4_LAUNCHER_START", sh_summary)
+    assert re.search(r"Agents:[^\n]*X4_LAUNCHER_AGENTS[^\n]*pass one name", sh_summary)
+    assert re.search(r"Launcher:[^\n]*\$script:X4LauncherStart", ps_summary)
+    assert re.search(r"Agents:[^\n]*\$script:X4LauncherAgents[^\n]*pass one name", ps_summary)
     # the file and agents are decided by the script's own output, so the installers must read exactly those lines
     assert "launcher: start with: " in _sh_func() and "launcher: agents: " in _sh_func()
     assert "launcher: start with: " in _ps1_func() and "launcher: agents: " in _ps1_func()
@@ -461,7 +461,7 @@ def test_the_readme_first_line_says_to_start_the_agent_from_the_install_folder()
     first = next(line for line in lines[1:] if line.strip())
     low = first.lower()
     assert "install folder" in low and "launcher" in low and "bin/" in first
-    assert "no guards" in low and "knowledge" in low
+    assert "project instructions and hooks" in low and "hook approval in `/hooks`" in low
 
 
 def test_the_readme_has_a_short_powershell_note_for_the_launcher():

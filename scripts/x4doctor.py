@@ -1107,6 +1107,11 @@ def check_claude(ctx: Ctx) -> list[Check]:
                           "without it (a customised settings.json keeps its own hooks: merge the shipped groups in)"
                           % ", ".join("%s (matcher %s)" % (_MATCHER_GUARD[m], m) if m in _MATCHER_GUARD else m
                                       for m in missing))
+        detector_command = 'bash "$CLAUDE_PROJECT_DIR/.claude/hooks/no-detached-launch.sh"'
+        if not any(g.get("matcher") in _MATCHER_GUARD and any(
+                h.get("type") == "command" and h.get("command") == detector_command
+                for h in g.get("hooks") or []) for g in pre):
+            return FAIL, "no-detached-launch.sh is not registered in the matching PreToolUse guard group"
         if absent:
             return FAIL, "wired hook script(s) missing: %s -- the hook fails, and Claude runs the tool" % ", ".join(absent)
         return OK, "%d PreToolUse matcher(s), %d wired script(s) present" % (len(pre), n)

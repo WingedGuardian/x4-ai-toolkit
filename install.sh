@@ -404,10 +404,23 @@ recycle_copy_prune() {
   recycle_installer_paths "${victims[@]}"
 }
 
+precheck_build_info() {
+  local dest="$1" tracked="$2"
+  if { [ -e "$dest/BUILD-INFO" ] && [ ! -L "$dest/BUILD-INFO" ] && [ ! -f "$dest/BUILD-INFO" ]; } ||
+     { [ "$tracked" = 0 ] && { [ -L "$SRC/BUILD-INFO" ] ||
+         { [ -e "$SRC/BUILD-INFO" ] && { [ ! -f "$SRC/BUILD-INFO" ] || [ -L "$dest/BUILD-INFO" ]; }; }; }; }; then
+    echo "REFUSING: BUILD-INFO must be a regular file when copied or replaced. Inspect the source and destination markers." >&2
+    return 1
+  fi
+}
+
 copy_toolkit() {
   refuse_if_dry_run "copying the toolkit into" "$1"  # copy_toolkit DEST  — copy tracked toolkit files (never game data / local config)
-  precheck_project_settings "$1"
-  local dest="$1"; mkdir -p "$dest/.claude"
+  local dest="$1" tracked=0
+  _tracked_copy_set && tracked=1
+  precheck_build_info "$dest" "$tracked" || return 1
+  precheck_project_settings "$dest"
+  mkdir -p "$dest/.claude"
   # An UNEDITED KB some release shipped (scripts/shipped-instruction-hashes.txt) is ours to
   # replace: preserving it saved a KNOWLEDGEBASE.pre-4.0-<sha>.md of the toolkit's own text on
   # every upgrade (release review H6). Only a KB that is neither the source's nor a shipped one
@@ -446,8 +459,6 @@ copy_toolkit() {
   # ever ran. A cleanup that only runs after the copy cannot make the copy possible.
   local junk
   recycle_copy_prune "$dest" || return 1
-  local tracked=0
-  _tracked_copy_set && tracked=1
   # A STALE BUILD-INFO. It names the release this folder came from (the shared core's self-update reads it), so an
   # install from a git checkout over a release install, whose source has none, would otherwise keep the OLD release's
   # file and read as that older version. A generated, shipped file, never a user's: recycled like the prune list, but NOT
@@ -2518,6 +2529,9 @@ case "$METHOD" in
     if ! same_dir "$SRC" "$TOOLKIT"; then
       precheck_project_settings "$TOOLKIT"
       precheck_locked_targets "$TOOLKIT"
+      tracked_marker=0
+      _tracked_copy_set && tracked_marker=1
+      precheck_build_info "$TOOLKIT" "$tracked_marker" || exit 1
       announce_copy_plan "$TOOLKIT"
       preserve_user_agents_md "$TOOLKIT"   # after every precheck, before the copy
       preserve_user_claude_md "$TOOLKIT"   # 3.x -> 4.0: same position, same shape
@@ -2563,6 +2577,9 @@ case "$METHOD" in
     if ! same_dir "$SRC" "$TOOLKIT"; then
       precheck_project_settings "$TOOLKIT"
       precheck_locked_targets "$TOOLKIT"
+      tracked_marker=0
+      _tracked_copy_set && tracked_marker=1
+      precheck_build_info "$TOOLKIT" "$tracked_marker" || exit 1
       announce_copy_plan "$TOOLKIT"
       preserve_user_agents_md "$TOOLKIT"   # after every precheck, before the copy
       preserve_user_claude_md "$TOOLKIT"   # 3.x -> 4.0: same position, same shape
@@ -2752,7 +2769,9 @@ echo "Agents:    $(_agents_landed)"
 echo "Config:    $TOOLKIT/x4-paths.env  (edit any path here)"
 if [ "$METHOD" != global ]; then
   if [ -n "$X4_LAUNCHER_START" ]; then
-    echo "Start:     cd \"$TOOLKIT\" and run your agent there (or: $X4_LAUNCHER_START $X4_LAUNCHER_AGENTS)"
+    echo "Start:     cd \"$TOOLKIT\" and run your agent there"
+    echo "Launcher:  $X4_LAUNCHER_START"
+    echo "Agents:    ${X4_LAUNCHER_AGENTS//|/, } (pass one name to the launcher)"
   else
     echo "Start:     cd \"$TOOLKIT\" and run your agent there"
   fi

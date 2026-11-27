@@ -826,7 +826,11 @@ jobs:
           #   parametrized: pytest.skip off Windows; the one test that asserts the literal CREATE_NO_WINDOW value).
           #   `git grep -n skip` over the branch's added/changed test files finds no other skip. ubuntu 499 -> 500,
           #   windows unchanged at 97. Ceilings: 500 + 3, 97 + 3. Re-READ per file on the first CI run.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '503' || '100' }}
+          # 4.3.1 projection from v4.3.0 PR run 44779177446 (500 Ubuntu, 98 Windows):
+          # Ubuntu +18: 11 Codex adapter mutations, 4 launcher, 2 installer junctions, 1 driver.
+          # Windows +1: POSIX launcher. Preserve three slots of slack on Ubuntu.
+          # Reconcile per-test skips on the exact 4.3.1 qualification run.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '521' || '100' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar
@@ -980,6 +984,11 @@ jobs:
     # 2026-11-17 (4.2.0, F124 guard): 1161 READ on 44002746283 (ae3617a0) against 1157 on the green 43793898950
     # (cd893037), per file: the ONLY delta is tests/test_pipe_unref_guard.py +4 (real game DLLs; no install on
     # the runner), the same +4 both `tests` legs itemise. 1161 + 3 = 1164.
+    # 4.3.1 projection from v4.3.0 job 136612436552 (1163 measured):
+    # +55: BaseX wording 4, guard deploy 6, local instructions 2, resource policy 5,
+    # guarded update 6, update 14, Codex mutations 11, launcher 4, installer junctions 2, driver 1.
+    # Maintenance sources, Git metadata, or Windows are absent from this installed Ubuntu lane.
+    # Expected 1218, upper bound 1221. Reconcile per-test skips on the exact qualification run.
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -1064,7 +1073,7 @@ jobs:
           python3 .github/scripts/installed_suite_verdict.py \
             --junit "$RUNNER_TEMP/installed-suite.xml" \
             --root "$RUNNER_TEMP/installed-toolkit" \
-            --min-tests 6000 --min-passed 5300 --max-skips 1164
+            --min-tests 6000 --min-passed 5300 --max-skips 1221
 
   hook-mutation:
     name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/8)

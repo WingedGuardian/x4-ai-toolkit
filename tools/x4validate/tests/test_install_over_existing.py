@@ -3857,6 +3857,26 @@ def test_BUILD_INFO_travels_from_a_RELEASE_source_and_a_checkout_without_one_say
 
 
 @pytest.mark.parametrize("installer", ["sh", "ps1"])
+def test_install_refuses_an_existing_BUILD_INFO_directory(installer, tmp_path):
+    src = _synthetic_source(tmp_path)
+    (src / "CLAUDE.md").write_text("shipped instructions\n", encoding="utf-8")
+    dest = _fresh(tmp_path)
+    marker = dest / "BUILD-INFO"
+    marker.mkdir()
+    (marker / "keep.txt").write_text("MINE", encoding="utf-8")
+    notes = dest / "CLAUDE.md"
+    notes.write_text("local instructions\n", encoding="utf-8")
+
+    result = _install(installer, tmp_path, dest, source=src)
+
+    assert result.returncode != 0
+    assert "BUILD-INFO must be a regular file" in result.stdout + result.stderr
+    assert (marker / "keep.txt").read_text(encoding="utf-8") == "MINE"
+    assert notes.read_text(encoding="utf-8") == "local instructions\n"
+    assert not (dest / ".claude").exists()
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1"])
 def test_a_stale_BUILD_INFO_is_removed_when_the_source_has_none_and_replaced_when_it_has_one(installer, tmp_path):
     """4.3.1 task 6b: BUILD-INFO names the release a folder came from, and the core's self-update reads it. An install
     from a git checkout (no BUILD-INFO) over a release install used to leave the old file, so the folder read as the

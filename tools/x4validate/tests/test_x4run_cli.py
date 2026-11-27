@@ -24,7 +24,7 @@ STEAM = make_proc(900, name="steam.exe", path="S:/steam/steam.exe")
 GAME = make_proc(1000)
 CMD = ["python", "tests/e2e_driver.py", "--flag"]
 APPROVAL = ["--approved-by", "user (chat 2026-11-24)", "--mode", "menu-only",
-            "--target", "main menu", "--desktop", "main"]
+            "--target", "main menu", "--desktop", "main", "--exclusive-launch"]
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +32,10 @@ def _machine_state_in_tmp(tmp_path, monkeypatch):
     """No test here may reach the REAL machine-wide state folder: any `main()` that builds its
     own store gets one under tmp_path."""
     monkeypatch.setenv(X.STATE_DIR_ENV, str(tmp_path / "machine-state"))
+    monkeypatch.delenv("X4_TOOLKIT", raising=False)
+    monkeypatch.setattr(X, "_utc_now", lambda: datetime.fromisoformat("2026-11-24T10:00:00Z"))
+    monkeypatch.setattr(X, "_launch_preflight", lambda *args: None)
+    monkeypatch.setattr(X, "_verify_steam_client", lambda *args: None)
 
 
 def _world(tmp_path, *, steam=True, **command_kw):
@@ -86,7 +90,7 @@ def test_run_without_approval_exits_2_before_any_call(tmp_path, capsys):
         assert ei.value.code == 2, missing
     # a BLANK approval gets past argparse and must be refused by the module, still before any call
     assert _main(fake, store, _run_argv(approval=["--approved-by", "  ", "--mode", "menu-only",
-                                                  "--target", "t", "--desktop", "d"]),
+                                                  "--target", "t", "--desktop", "d", "--exclusive-launch"]),
                  probe=lambda: True) == 2
     assert fake.calls == [], [c.argv for c in fake.calls]
     assert not store.path.exists()
@@ -97,7 +101,7 @@ def test_a_blank_approval_is_refused_as_an_approval_problem_not_as_the_probe_stu
     """The CLI checks the approval FIRST: with no --no-ready-check and no probe, a blank approval
     must be reported as what it is, not hidden behind the later 'not wired yet' refusal."""
     fake, store = _world(tmp_path)
-    blank = ["--approved-by", " ", "--mode", "menu-only", "--target", "t", "--desktop", "d"]
+    blank = ["--approved-by", " ", "--mode", "menu-only", "--target", "t", "--desktop", "d", "--exclusive-launch"]
     assert _main(fake, store, _run_argv(approval=blank)) == 2
     err = capsys.readouterr().err
     assert "approval" in err and "not wired yet" not in err
@@ -221,7 +225,8 @@ def test_the_approval_record_reaches_the_state_file_with_recorded_at_filled(tmp_
 
 def test_an_unknown_mode_is_an_argument_error(tmp_path):
     fake, store = _world(tmp_path)
-    argv = _run_argv(approval=["--approved-by", "u", "--mode", "yolo", "--target", "t", "--desktop", "d"])
+    argv = _run_argv(approval=["--approved-by", "u", "--mode", "yolo", "--target", "t", "--desktop", "d",
+                              "--exclusive-launch"])
     with pytest.raises(SystemExit) as ei:
         _main(fake, store, argv, probe=lambda: True)
     assert ei.value.code == 2 and fake.calls == []
@@ -241,6 +246,17 @@ def test_the_game_root_must_resolve(tmp_path, capsys, monkeypatch):
                   store=store)
     assert rc == 2 and fake.calls == []
     assert "game root" in capsys.readouterr().err
+
+
+def test_an_active_foreign_toolkit_refuses_before_process_access(tmp_path, capsys, monkeypatch):
+    fake, store = _world(tmp_path)
+    monkeypatch.setattr(cli._paths, "_EXPLICIT", None)
+    monkeypatch.setattr(cli._paths, "toolkit_conflict",
+                        lambda: (tmp_path / "current", tmp_path / "foreign"))
+    result = cli.main(_run_argv("--no-ready-check"), run=fake.run, store=store)
+    assert result == 2 and not fake.calls
+    diagnostic = capsys.readouterr().err
+    assert "fix or unset X4_TOOLKIT" in diagnostic and "--toolkit" not in diagnostic
 
 
 # ----------------------------------------------------------------------------- run: refusals and exit codes
@@ -511,7 +527,7 @@ def test_the_cold_matrix_case_reaches_the_real_unconfigured_refusal(capsys, monk
     def no_call(*a, **k):
         raise AssertionError("no process may be read or started")
     argv = ["run", "--approved-by", "cold", "--mode", "menu-only", "--target", "x",
-            "--desktop", "main", "--no-ready-check", "--", "x"]
+            "--desktop", "main", "--exclusive-launch", "--no-ready-check", "--", "x"]
     assert cli.main(argv, run=no_call) == 2
     cap = capsys.readouterr()
     assert "game root cannot be resolved" in cap.err and "Traceback" not in cap.out + cap.err
@@ -773,15 +789,14 @@ def test_the_entry_point_is_registered_and_refuses_unconfigured():
 # ----------------------------------------------------------------------------- fix wave: exit-code truth (Ruling 18)
 
 
-def test_a_start_refused_after_the_launch_call_is_exit_1_even_if_no_record_remains(tmp_path, capsys):
-    """No game by the deadline (a good empty last read): the record is cleared, but a launch call
-    WAS made, so this is not "nothing started, safe to retry"."""
+def test_a_start_refused_after_the_launch_call_keeps_the_record_and_exits_1(tmp_path, capsys):
+    """A clean empty last read still allows a late Steam launch."""
     fake, store = _world(tmp_path)
     fake.on_launch = lambda argv: (0, "")            # Steam accepts; no game appears in time
     rc = _main(fake, store, _run_argv("--no-ready-check"))
     cap = capsys.readouterr()
     assert rc == 1
-    assert not store.path.exists()                   # the old heuristic would have said 2 here
+    assert store.read().process is None
     assert "Steam may still start the game" in cap.err
 
 
@@ -925,7 +940,8 @@ def test_a_run_with_nothing_left_still_exits_0(tmp_path, monkeypatch):
 @pytest.mark.parametrize("desktop", ["secondary", "Main", "main ", "private"])
 def test_a_desktop_other_than_main_is_refused_before_any_call(tmp_path, capsys, desktop):
     fake, store = _world(tmp_path)
-    approval = ["--approved-by", "u", "--mode", "menu-only", "--target", "t", "--desktop", desktop]
+    approval = ["--approved-by", "u", "--mode", "menu-only", "--target", "t", "--desktop", desktop,
+                "--exclusive-launch"]
     assert _main(fake, store, _run_argv("--no-ready-check", approval=approval)) == 2
     err = capsys.readouterr().err
     assert ("the driver cannot choose a desktop: the game appears on the current desktop and "

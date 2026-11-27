@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+from pathlib import Path
 
 import pytest
 from _x4run_fake import FakeSystem, make_proc
@@ -18,7 +19,8 @@ from x4validate import _x4run as X
 
 def _approval(**kw) -> X.Approval:
     base = dict(approved_by="user", mode="menu-only", target="main menu",
-                desktop="secondary desktop", recorded_at="2026-11-24T10:00:00Z")
+                desktop="secondary desktop", recorded_at="2026-11-24T10:00:00Z",
+                exclusive_launch=True)
     base.update(kw)
     return X.Approval(**base)
 
@@ -64,6 +66,11 @@ def test_unapproved_launch_is_a_value_error():
     assert issubclass(X.UnapprovedLaunch, ValueError)
 
 
+def test_exclusive_launch_requires_affirmative_agreement():
+    with pytest.raises(X.UnapprovedLaunch, match="exclusive launch"):
+        X.require_approval(_approval(exclusive_launch=False))
+
+
 # ------------------------------------------------------------------------------- begin
 
 
@@ -101,18 +108,31 @@ def test_begin_creates_the_folder_and_a_failed_write_leaves_no_file(tmp_path, mo
 def test_begin_uses_exclusive_create(tmp_path, monkeypatch):
     flags = []
     real = os.open
+    store = _store(tmp_path)
 
     def spy(path, f, *a, **k):
-        flags.append(f)
+        if Path(path) == store.path:
+            flags.append(f)
         return real(path, f, *a, **k)
 
     monkeypatch.setattr(X.os, "open", spy)
-    _store(tmp_path).begin(_state())
+    store.begin(_state())
     want = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     assert flags and flags[0] & want == want
 
 
 # ------------------------------------------------------------------------------ update
+
+
+def test_a_superseded_run_cannot_update_the_new_record(tmp_path):
+    store = _store(tmp_path)
+    current = _state(run_id="new")
+    store.begin(current)
+
+    with pytest.raises(X.UnfinishedRun, match="different run"):
+        store.update(_state(run_id="previous", phase="closing"))
+
+    assert store.read() == current
 
 
 def test_update_is_atomic_and_round_trips(tmp_path):
@@ -130,7 +150,7 @@ def test_update_is_atomic_and_round_trips(tmp_path):
     assert got.process.started == "2026-11-24T10:00:05.1234567Z"
     assert isinstance(got.approval, X.Approval)
     # no temp file is left beside the state file
-    assert [p.name for p in store.folder.iterdir()] == [store.path.name]
+    assert set(store.folder.iterdir()) == {store.path, store.lock_path}
 
 
 def test_a_failed_replace_leaves_the_previous_content_and_no_temp_file(tmp_path):
@@ -142,7 +162,7 @@ def test_a_failed_replace_leaves_the_previous_content_and_no_temp_file(tmp_path)
         store.update(_state(phase="running", process=make_proc()))
     assert store.path.read_bytes() == before
     assert store.read() == old
-    assert [p.name for p in store.folder.iterdir()] == [store.path.name]
+    assert set(store.folder.iterdir()) == {store.path, store.lock_path}
 
 
 def _always_fail(src, dst):
@@ -181,7 +201,7 @@ def test_update_gives_up_on_a_persistent_PermissionError_after_about_ten_seconds
         store.update(_state(phase="running"))
     assert 9.5 <= fake.now <= 12  # about 10 s of virtual time, then the real error
     assert store.path.read_bytes() == old
-    assert [p.name for p in store.folder.iterdir()] == [store.path.name]
+    assert set(store.folder.iterdir()) == {store.path, store.lock_path}
 
 
 def test_update_without_a_begun_run_refuses_rather_than_creating(tmp_path):
@@ -212,7 +232,7 @@ def test_update_refuses_a_record_read_would_reject_and_keeps_the_old_one(tmp_pat
         store.update(_UNREADABLE[name]())
     assert store.path.read_bytes() == before
     assert store.read() == good  # the live game's process is still readable
-    assert [p.name for p in store.folder.iterdir()] == [store.path.name]
+    assert set(store.folder.iterdir()) == {store.path, store.lock_path}
 
 
 @pytest.mark.parametrize("name", list(_UNREADABLE))
@@ -298,14 +318,14 @@ def test_read_does_not_invent_a_process_when_none_was_recorded(tmp_path):
 def test_clear_removes_it(tmp_path):
     store = _store(tmp_path)
     store.begin(_state())
-    store.clear()
+    store.clear(_state().run_id)
     assert not store.path.exists()
     assert store.read() is None
     store.begin(_state())  # the slot is free again
 
 
 def test_clear_with_nothing_to_clear_is_not_an_error(tmp_path):
-    _store(tmp_path).clear()
+    _store(tmp_path).clear(_state().run_id)
 
 
 # ----------------------------------------------------------------------- state folder
@@ -362,7 +382,7 @@ def test_state_folder_never_depends_on_the_checkout_or_the_cwd(tmp_path, monkeyp
 
 def test_dataclasses_are_the_documented_shapes():
     assert [f.name for f in dataclasses.fields(X.Approval)] == [
-        "approved_by", "mode", "target", "desktop", "recorded_at"]
+        "approved_by", "mode", "target", "desktop", "recorded_at", "exclusive_launch"]
     assert [f.name for f in dataclasses.fields(X.RunState)] == [
         "run_id", "approval", "phase", "process", "started_at"]
     with pytest.raises(dataclasses.FrozenInstanceError):

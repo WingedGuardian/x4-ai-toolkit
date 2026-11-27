@@ -18,7 +18,7 @@ options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
 
-x4run: this driver has been run against the real game once (menu only, no save loaded): treat every result as unverified (build step 2 of 3 done). See docs/x4run.md for what is measured and what is not.
+x4run: an earlier driver build was run against the real game once (menu only, no save loaded): treat every result as unverified (build step 2 of 3 done). See https://github.com/WingedGuardian/x4-ai-toolkit/blob/master/docs/x4run.md.
 ```
 
 ## `x4run status`
@@ -37,12 +37,12 @@ options:
 ## `x4run run`
 
 ```text
-usage: x4run run [-h] --approved-by WHO --mode {menu-only,load-save,new-game} --target WHAT
-                 --desktop WHERE [--no-ready-check] [--ready-timeout SECONDS]
+usage: x4run run [-h] --approved-by WHO --exclusive-launch --mode {menu-only,load-save,new-game}
+                 --target WHAT --desktop WHERE [--no-ready-check] [--ready-timeout SECONDS]
                  [--command-timeout SECONDS] [--hold SECONDS]
                  [COMMAND ...]
 
-Start X4 through Steam, wait until it is ready, run COMMAND, then ALWAYS close the game and verify it is gone. Every approval flag is required: the driver records the user's approval but cannot grant it. x4run: this driver has been run against the real game once (menu only, no save loaded): treat every result as unverified (build step 2 of 3 done).
+Start X4 through Steam, wait until it is ready, run COMMAND, then ALWAYS close the game and verify it is gone. Every approval flag is required: the driver records the user's approval but cannot grant it. x4run: an earlier driver build was run against the real game once (menu only, no save loaded): treat every result as unverified (build step 2 of 3 done).
 
 positional arguments:
   COMMAND               the command to run once the game is ready, after `--`: an argv list, never
@@ -52,6 +52,8 @@ options:
   -h, --help            show this help message and exit
   --approved-by WHO     who approved this specific launch, and where (e.g. 'user, chat
                         2026-11-24'); recorded verbatim, never verified
+  --exclusive-launch    record the user's agreement that nobody else will launch X4 until the
+                        driver records the process or the launch attempt ends
   --mode {menu-only,load-save,new-game}
                         the approved launch mode
   --target WHAT         the approved save or new game to reach (e.g. 'main menu' for menu-only)

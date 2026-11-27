@@ -25,11 +25,13 @@ restoring the previous version during rollback.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import re
 import sys
 import time
+from collections import Counter
 from pathlib import Path, PurePosixPath
 
 sys.dont_write_bytecode = True
@@ -135,7 +137,7 @@ SETUP_SCRIPT = ('unset CLAUDE_PROJECT_DIR; export UV_FROZEN=1 X4_SETUP_KEEP_LOCA
                 '  _root="$(pwd -W 2>/dev/null || pwd)"\n'
                 '  X4_TOOLKIT="$_root" "$1" -B .opencode/hooks/opencode_config.py write --root "$_root" || exit $?\n'
                 'fi\n')
-#: The first line of every apply report: Codex runs a changed hook definition only after the user re-approves it.
+#: First line after a successful apply. A failed rollback must never ask users to trust the resulting hooks.
 CODEX_LINE = ("Codex users: re-approve the changed hooks with /hooks in Codex now. Codex silently skips every changed "
               "hook until you do, so its guards are off for those hooks.")
 MAX_SOURCE = 4 * 1024 * 1024
@@ -426,6 +428,98 @@ def review_policy(root, source, wanted=None):
     return dataclasses.replace(pol, guard_paths=tuple(globs) or pol.guard_paths)
 
 
+def _hook_groups(settings):
+    events = settings.get("hooks", {})
+    if not isinstance(events, dict):
+        raise ValueError("hook settings must contain an object of events")
+    for event, groups in events.items():
+        if not isinstance(groups, list):
+            raise ValueError("hook groups for " + event + " must be a list")
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                raise ValueError("malformed hook group for " + event)
+            for handler in group["hooks"]:
+                if (not isinstance(handler, dict) or any(
+                        key in handler and not isinstance(handler[key], str)
+                        for key in ("command", "commandWindows"))):
+                    raise ValueError("malformed hook handler for " + event)
+    return events
+
+
+def _settings_ownership(root, source, version, previous, upgrade):
+    """Qualify old toolkit groups against the previous release's authenticated inventory."""
+    import x4_upgrade_render as render
+    references = {}
+    installed = {}
+    snapshots = {}
+    verified_commands, custom_commands = set(), set()
+    cache = source.parent.parent / version / guarded.SOURCE
+    for name, authored in ((".claude/settings.json", ".claude/settings.json"),
+                           (".codex/hooks.json", render.TEMPLATE)):
+        local = upgrade._entry(root, name)
+        snapshots[name] = None
+        if not local.is_file():
+            continue
+        raw = render._read(local)
+        current = render._json(raw)
+        snapshots[name] = hashlib.sha256(raw).hexdigest()
+        installed[name] = current
+        known = {}
+        expected = previous.get(authored)
+        if expected:
+            for base in (root, cache):
+                path = base / authored
+                if not path.is_file():
+                    continue
+                raw = render._read(path)
+                if hashlib.sha256(raw).hexdigest() != expected:
+                    continue
+                if name == ".codex/hooks.json":
+                    raw = render.render_codex(raw.decode("utf-8-sig"), root).encode("utf-8")
+                known = render._json(raw).get("hooks", {})
+                break
+        references[name] = known.get("PreToolUse", [])
+        for event, groups in _hook_groups(current).items():
+            if event == "PreToolUse":
+                continue
+            for group in groups:
+                commands = verified_commands if group in known.get(event, []) else custom_commands
+                commands.update(handler[key] for handler in group.get("hooks", [])
+                                for key in ("command", "commandWindows") if isinstance(handler.get(key), str))
+    return references, verified_commands - custom_commands, snapshots, installed
+
+
+def _command_counts(settings):
+    occurrences = Counter()
+    for event, groups in _hook_groups(settings).items():
+        if event == "PreToolUse":
+            continue
+        for group in groups:
+            for handler in group.get("hooks", []):
+                command = handler.get("command")
+                if isinstance(command, str):
+                    occurrences[event, "posix", command] += 1
+                    occurrences[event, "windows", handler.get("commandWindows", command)] += 1
+    return occurrences
+
+
+def _check_settings_ownership(review, bundle, snapshots, installed, upgrade):
+    """The same observed settings must have fed the merge, with no new ambiguous duplicate commands."""
+    observed = review["observed_local_files"]
+    for name, digest in snapshots.items():
+        if observed.get(name) != digest:
+            raise _refuse("native hook settings changed during ownership review: " + name)
+    for name, settings in installed.items():
+        if name not in review["merged_settings_hashes"]:
+            continue
+        old = _command_counts(settings)
+        merged = upgrade.read_settings(bundle, upgrade.PROJECT_SETTINGS[name])
+        for (event, platform, command), count in _command_counts(merged).items():
+            if count > max(1, old[event, platform, command]):
+                raise _refuse("the merge would introduce duplicate {} commands for {} in {}; "
+                              "review the local hook definitions before staging again".format(event, platform, name))
+
+
 def stage(root, *, candidate_preparer=None, http=None):
     """`guarded_update.stage_update`, with the candidate cut down to what install.sh would install here (6c review F1,
     F2): the core stages the whole zip, so a Claude-only install would gain the OpenCode plugin (x4doctor then judges
@@ -457,15 +551,18 @@ def stage(root, *, candidate_preparer=None, http=None):
         if candidate_preparer is not None:
             config = guarded._read_json(pol.render_config(root))
             transform = lambda installed, staged, files: candidate_preparer(installed, staged, files, config)
-        upgrade.stage_review_bundle(
+        references, commands, snapshots, current = _settings_ownership(
+            root, source, fetched["installed"], previous["files"] if previous else {}, upgrade)
+        review = upgrade.stage_review_bundle(
             root, source, bundle, {"v": 1, "files": kept},
             None if previous is None else {"v": 1, "files": select_files(previous["files"], wanted, skip)},
+            owned_pre_groups=references, owned_commands=sorted(commands),
             local_files=tuple(sorted(notes)), candidate_transform=transform,
             generated_paths=GENERATED_PATHS if transform is not None else (),
             # The core's default is 60 s; staging copies every selected file twice (candidate and rollback), about
             # 2,500 copies for an all-agent install, which ran past 60 s once under test load (6c review rerun).
             deadline=time.monotonic() + guarded.TIMEOUT)
-        import hashlib
+        _check_settings_ownership(review, bundle, snapshots, current, upgrade)
         review_sha256 = hashlib.sha256((bundle / "complete.json").read_bytes()).hexdigest()
         text, requires_accept = update_review.render_review(bundle=bundle, installed_root=root, source=source,
                                                             policy=pol, review_sha256=review_sha256)
@@ -519,6 +616,6 @@ def guarded_handle(args, root, *, candidate_preparer=None, candidate_validator=N
     # rollback.
     result = guarded.handle(args, root, PROFILE, pol, notes_files=NOTES_FILES, candidate_preparer=candidate_preparer,
                             candidate_validator=candidate_validator, generated_paths=GENERATED_PATHS, new_policy=pol)
-    if isinstance(result, dict) and isinstance(result.get("report"), str):
+    if isinstance(result, dict) and result.get("ok") is True and isinstance(result.get("report"), str):
         result["report"] = CODEX_LINE + "\n" + result["report"]
     return result

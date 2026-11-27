@@ -386,14 +386,17 @@ def detached_verdict(verdict: dict, make_items, deadline: float) -> dict:
         if left < 1:
             return _detached_note(verdict, f"{DETACHED_NOT_JUDGED}: the adapter's time budget was spent before this "
                                            "check. Nothing was blocked for it; read the call yourself for a detached launch.")
-        items = make_items()
-        if not items:
-            return verdict
-        det = _detached_module(deadline)
-        exempt = detached_exempt(det)
-        left = deadline - time.monotonic()
-        hit = _bounded_call(lambda: next((h for h in (_detached_hit(det, it, exempt) for it in items) if h), None),
-                            left - DETACHED_RESERVE_S)
+        def judge():
+            items = make_items()
+            if not items:
+                return None
+            det = _detached_module(deadline)
+            exempt = detached_exempt(det)
+            return next((hit for item in items if (hit := _detached_hit(det, item, exempt))), None)
+
+        hit = _bounded_call(judge, left - DETACHED_RESERVE_S)
+        if time.monotonic() >= deadline - DETACHED_RESERVE_S:
+            raise TimeoutError("the detector finished after its deadline")
     except BaseException as e:          # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny
         return _detached_note(verdict, f"{DETACHED_NOT_JUDGED}: {type(e).__name__}. Nothing was blocked for it; "
                                        "read the call yourself for a detached launch.")

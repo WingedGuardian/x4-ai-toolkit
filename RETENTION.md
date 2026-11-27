@@ -154,7 +154,7 @@ core implements them, so no copy of the policy promises what its code does not d
   refusal is the only protection there.
 - **Active work:** a configured job ledger (`job_ledger`) is also checked; one that cannot be read is announced and
   does not hold archiving. Backup folders are protected like repositories and saves.
-- **The toolkit temp sweep** is the one exception to rules 6 and 7. Session start launches it detached, with no
+- **The toolkit temp sweep** is the one exception to rules 6 and 7. Session start runs it in the background, with no
   announcement and no approved version, and the next session start reports what it did. It touches only workspaces
   the toolkit's own producer declared disposable when it created them, after the protection, inactivity and in-use
   checks. It moves them to the Recycle Bin, except a workspace whose creation receipt the toolkit's checklist names
@@ -170,7 +170,8 @@ core implements them, so no copy of the policy promises what its code does not d
 ## X4 checklist
 
 - **BaseX generated caches do not need backup generations or recycling.** Use the
-  builders' native `DROP DB` for `x4raw`/`x4eff` and checked permanent disposal via
+  builders' verified swap for `x4raw`/`x4eff`. It uses native `DROP DB` for
+  receipted stale staging databases and retired generations. Use checked permanent disposal via
   `scripts/x4basex_artifacts.py` for generated staging/effective trees and stale
   cache licences. Inputs are checked now. New tree and database generations get
   disposition receipts before creation; database receipts stay outside BaseX's
@@ -240,7 +241,7 @@ python scripts/x4housekeep.py apply plan.json [--only link,gzip]
 ```
 
 `python scripts/x4housekeep.py sweep-temp` runs the temp sweep by hand. The session-start hook runs
-`x4housekeep.py session <hooks>/../housekeep-session.txt` detached and shows that file's line at the next start.
+`x4housekeep.py session <hooks>/../housekeep-session.txt` in the background and shows that file's line at the next start.
 
 `apply` runs the classes in a fixed order (recreatable, build, link, gzip, launch, snapshot, scratch, archive, expire)
 and prints every refusal with its reason. A refusal is not an error to work around: re-run `plan`.

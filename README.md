@@ -1,6 +1,6 @@
 # X4 AI Assistant Toolkit
 
-**Start your agent from the install folder** (or with the launcher in `bin/`): an agent loads its guards and instructions from the folder it is started in, so started anywhere else it has no guards and none of the toolkit's knowledge.
+**Start your agent from the install folder** or use the launcher in `bin/` to pick up this installation's project instructions and hooks. Codex also requires hook approval in `/hooks`.
 
 An AI-assisted **X4: Foundations** modding environment for coding agents — **Claude Code and
 OpenAI Codex** first-class, **OpenCode** best effort, and any other agent through
@@ -296,7 +296,7 @@ for the process runner and **has been run against the real game once, at the mai
 save loaded: treat every result as unverified**. Loading a save, closing with a world loaded and
 the terminate fallback have never run against the game. Every launch needs the user's approval of
 that specific run; the driver records the approval but cannot grant it. See
-[the x4run guide](docs/x4run.md) for the commands, exit codes, recovery steps and what is
+[the x4run guide](https://github.com/WingedGuardian/x4-ai-toolkit/blob/master/docs/x4run.md) for the commands, exit codes, recovery steps and what is
 measured versus unmeasured.
 
 ### Skills & subagents
@@ -866,7 +866,8 @@ asset and stages a review before making changes. Review the listed changes, appr
 and close other agents and editors that are writing to the install before apply. Your `x4-paths.env` and
 `X4-NOTES.md` stay in place. After an update that changes Codex hooks, reopen Codex and review them in `/hooks`.
 
-Use the installer to upgrade from 4.3.0 or earlier to 4.3.1. Update a source checkout through git.
+Use the installer to upgrade from 4.3.0 or earlier to 4.3.1, or to update a release install whose root has
+its own `.git` directory or file. Update a toolkit source checkout through Git.
 
 ## Using It
 

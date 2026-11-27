@@ -365,16 +365,17 @@ def toolkit_notice() -> None:
           file=sys.stderr)
 
 
-def foreign_toolkit_refusal(action: str) -> str | None:
+def foreign_toolkit_refusal(action: str, *, toolkit_flag: bool = True) -> str | None:
     """The refusal for a SYSTEM-CHANGING *action* while $X4_TOOLKIT names a different
     toolkit and no --toolkit was given, else None. Callers print it and exit 2."""
     c = toolkit_conflict()
     if c is None or _EXPLICIT is not None:
         return None
     acting, env = c
+    here = f're-run with --toolkit "{acting}"' if toolkit_flag else "fix or unset X4_TOOLKIT and re-run"
     return (f"REFUSED: `{action}` changes your system, and $X4_TOOLKIT names {env} while "
             f"this tool lives in {acting}. Nothing was changed. To act for THIS toolkit, "
-            f"re-run with --toolkit \"{acting}\"; to act for the other one, run its own copy "
+            f"{here}; to act for the other one, run its own copy "
             f"(or fix X4_TOOLKIT).")
 
 

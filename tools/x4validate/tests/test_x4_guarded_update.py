@@ -206,7 +206,7 @@ def world(tmp_path, monkeypatch):
         new = new_files if new_files is not None else _new_files()
         fake = FakeGitHub(kwargs.pop("new_zip", None) or _zip(new, kwargs.pop("zip_version", NEW),
                                                                 kwargs.pop("zip_commit", COMMIT)),
-                          old_zip=old_zip, **kwargs)
+                          old_zip=kwargs.pop("old_zip", old_zip), **kwargs)
         box["fake"] = fake
         return fake
     monkeypatch.setattr(release, "fetch", lambda r, p, http=None, environ=None: original(
@@ -724,6 +724,7 @@ def test_a_failing_new_canary_rolls_back_byte_exact_exit_one(world, monkeypatch)
     code, applied = _apply(root, monkeypatch, staged, "--quiescent", "--accept-guard-changes")
     assert code == 1 and applied["ok"] is False and applied["rolled_back"] is True, applied
     assert "FAILED at canary" in applied["report"] and "rolled back" in applied["report"]
+    assert not applied["report"].startswith("Codex users:")
     assert _hashes(root) == before, "the rollback is not byte-exact"
     assert not (root / guarded.FAILED_MARKER).exists() and not (root / guarded.IN_FLIGHT).exists()
 
@@ -1007,6 +1008,38 @@ def test_the_core_applies_an_x4_staged_bundle(world, monkeypatch):
     applied = _apply_direct(root, staged, guarded.run)
     assert applied.ok is True, applied.report
     assert not (root / "docs").exists() and (root / "README.md").read_bytes() == b"readme 4.3.2\n"
+
+
+@pytest.mark.parametrize("custom_matcher", [False, True])
+def test_new_codex_definitions_replace_verified_prior_groups_and_keep_user_hooks(world, monkeypatch, custom_matcher):
+    root, serve = world
+    template = (REPO / render.TEMPLATE).read_text(encoding="utf-8")
+    latest = json.loads(template)
+    for groups in latest["hooks"].values():
+        groups[0]["hooks"][0]["timeout"] += 1
+    newer_template = json.dumps(latest)
+    previous_files = {render.TEMPLATE: template.encode(), ".codex/hooks/codex-entry.sh": b"# fixture\n"}
+    old = _zip(dict(_base_files(), **previous_files), OLD, OLD_COMMIT)
+    installed = json.loads(render.render_codex(template, root))
+    custom = {"hooks": [{"type": "command", "command": "echo local color policy"}]}
+    installed["hooks"]["SessionStart"].append(custom)
+    if custom_matcher:
+        installed["hooks"]["PostToolUse"][0]["matcher"] = "^apply_patch$"
+    _write(root, dict(previous_files, **{".codex/hooks.json": json.dumps(installed).encode()}))
+    serve(_new_files(**dict(previous_files, **{render.TEMPLATE: newer_template.encode()})), old_zip=old)
+
+    code, staged = _stage(root, monkeypatch)
+    if custom_matcher:
+        assert code == 2 and "duplicate PostToolUse commands" in staged["error"], staged
+        assert json.loads((root / ".codex/hooks.json").read_bytes()) == installed
+        return
+    assert code == 0 and staged["requires_guard_accept"], staged
+    code, result = _apply(root, monkeypatch, staged, "--quiescent", "--accept-guard-changes",
+                          choices={".codex/hooks.json": "merged_settings"})
+    assert code == 0 and result["ok"], result
+    expected = json.loads(render.render_codex(newer_template, root))
+    expected["hooks"]["SessionStart"].insert(0, custom)
+    assert json.loads((root / ".codex/hooks.json").read_bytes()) == expected
 
 
 def test_a_hook_folder_new_in_the_release_is_a_guard_change(world, monkeypatch):

@@ -2,7 +2,7 @@
 
 The shared funnel (x4guard.run_guard, through codex.judge/aggregate) turns a crashed guard into a DENY. This
 check must FAIL OPEN, so it runs IN-PROCESS in the adapter, after the funnel's verdict, using the vendored core
-detector (tools/modding_harness/detached.py). These tests call the SOURCE adapters in-process
+detector (tools/modding_harness/detached.py). These tests call the adapters in-process
 (codex.handle / opencode.handle), so they see the real funnel, the real detector and the real rendering.
 
 Each decisive clause has a twin showing the clause decided the outcome: a fix that only denied everything, or
@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from codex_testlib import HAS_PWSH, REPO, SANDBOX_KEYS, make_sandbox, native, parse_output
+from _layout import require_repo
 
 SRC = REPO / "agent" / "guards"
 FLAG_LINE = 'subprocess.Popen(["x"], creationflags=0x8)'
@@ -29,13 +30,19 @@ NOTE = "no-detached-launch NOT judged"
 
 @pytest.fixture
 def adapters(monkeypatch):
-    """(codex, opencode) imported fresh from the SOURCE tree; opencode's `core` must be that codex module."""
-    monkeypatch.syspath_prepend(str(SRC / "claude-hooks"))
-    monkeypatch.syspath_prepend(str(SRC / "adapters"))
-    saved = {n: sys.modules.pop(n, None) for n in ("codex", "opencode", "codex_adapter")}
+    """Use the source or shipped adapters. Both must share OpenCode's Codex core."""
+    if SRC.is_dir():
+        monkeypatch.syspath_prepend(str(SRC / "claude-hooks"))
+        monkeypatch.syspath_prepend(str(SRC / "adapters"))
+        codex_name, opencode_name = "codex", "opencode"
+    else:
+        require_repo(".opencode/hooks/opencode_adapter.py", why="checks the installed OpenCode adapter")
+        monkeypatch.syspath_prepend(str(REPO / ".opencode" / "hooks"))
+        codex_name, opencode_name = "codex_adapter", "opencode_adapter"
+    saved = {n: sys.modules.pop(n, None) for n in ("codex", "opencode", "codex_adapter", "opencode_adapter")}
     try:
-        codex = importlib.import_module("codex")
-        opencode = importlib.import_module("opencode")
+        codex = importlib.import_module(codex_name)
+        opencode = importlib.import_module(opencode_name)
         assert opencode.core is codex
         # The backup hook is a sibling of the RENDERED adapter, not of the source one: backups are not under test here.
         monkeypatch.setattr(codex, "run_backups", lambda ops, base, deadline: None)
@@ -334,7 +341,8 @@ def test_exempt_list_extends_the_core_default(adapters, box):
 
 
 def test_claude_hook_docstring_names_the_codex_and_opencode_wiring():
-    text = (SRC / "claude-hooks" / "no-detached-launch.py").read_text(encoding="utf-8")
+    require_repo(".claude/hooks/no-detached-launch.py", why="checks the shipped Claude detector")
+    text = (REPO / ".claude" / "hooks" / "no-detached-launch.py").read_text(encoding="utf-8")
     assert "NOT wired for\nCodex or OpenCode" not in text and "Codex and OpenCode launches are therefore not checked" not in text
     flat = " ".join(text.split()).lower()
     assert "core detector" in flat and "modding_harness/detached.py" in flat
@@ -377,6 +385,22 @@ def test_an_error_while_loading_the_detector_fails_open(adapters, box, monkeypat
 
 
 # ------------------------------------------------------------------ review round: the funnel's other verdicts ----- #
+
+def test_a_result_after_the_detector_deadline_is_discarded(adapters, monkeypatch):
+    from types import SimpleNamespace
+
+    codex, _ = adapters
+    clock = [0]
+    monkeypatch.setattr(codex, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def load(_deadline):
+        clock[0] = 100
+        return Stub(hit="synthetic late hit")
+
+    monkeypatch.setattr(codex, "_detached_module", load)
+    value = codex.detached_verdict(dict(ALLOW), lambda: [("shell", "bash", "echo harmless", ".")], 5)
+    assert value["decision"] == "advise" and NOTE in value["context"], value
+
 
 def test_an_ask_and_an_inert_deny_are_kept_and_the_detector_is_not_called(adapters, box, monkeypatch):
     codex, opencode = adapters

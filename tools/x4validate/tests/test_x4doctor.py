@@ -791,7 +791,7 @@ def _load_proof_budget(ctx, hooks):
     env = doc._hook_env(ctx, "claude", hooks)
     budget = float(env["X4_GUARD_TIMEOUT_S"])
     ceiling = float(re.search(r"timeout=(\d+)\)", inspect.getsource(doc._ask_guard)).group(1))
-    guard_src = (REPO / "agent" / "guards" / "claude-hooks" / "x4guard.py").read_text(encoding="utf-8")
+    guard_src = (hooks / "x4guard.py").read_text(encoding="utf-8")
     kill_and_drain = sum(float(re.search(r"^%s = (\d+)" % n, guard_src, re.M).group(1))
                          for n in ("KILL_WAIT_S", "DRAIN_GRACE_S"))
     assert 60 <= budget, "a budget under a minute is the default's problem again"
@@ -1083,6 +1083,17 @@ def test_a_missing_no_detached_launch_registration_is_FAIL(sandbox):
     p.write_text(json.dumps(s), encoding="utf-8")
     r = {r.id: r for r in doc.check_claude(sandbox.ctx())}["claude.wiring"]
     assert r.status == doc.FAIL and "Monitor" in r.detail and "not registered" in r.detail         and "the no-detached-launch guard group (matcher " in r.detail, r
+
+
+def test_claude_wiring_refuses_an_empty_detector_matcher(sandbox):
+    path = sandbox.root / ".claude/settings.json"
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    for group in settings["hooks"]["PreToolUse"]:
+        if "Monitor" in group.get("matcher", ""):
+            group["hooks"] = []
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    result = {row.id: row for row in doc.check_claude(sandbox.ctx())}["claude.wiring"]
+    assert result.status == doc.FAIL and "no-detached-launch.sh" in result.detail
 
 
 def test_a_wired_script_that_is_MISSING_is_FAIL(sandbox):

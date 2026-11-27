@@ -46,7 +46,8 @@ tell the user the update has to be done by hand from the release page -- never i
    install that is already unhealthy cannot prove a rollback.
 3. **Show the review to the user, verbatim.** Print the whole `review` text from the result; do not summarise it, do
    not skip the files that look harmless, and do not decide for them what matters. Say which files the user edited
-   themselves (`preserve_collision`) and which collide with the new release.
+   themselves (`preserve_collision`) and which collide with the new release. If a guard diff preview is truncated,
+   show the complete diff using the staged candidate (or merged settings) and rollback files before seeking approval.
 4. **Ask the user** whether to go ahead. Wait for the answer. "Continue", an earlier "update the toolkit" and a yes to
    some other question are not the answer to this one.
 5. **Guard changes need a separate, explicit go.** When the result says `requires_guard_accept: true` (the review's
@@ -62,14 +63,13 @@ tell the user the update has to be done by hand from the release page -- never i
    the bundle, outside the install) and pass it as `--choices`. Never pick for them. `x4-paths.env` and `X4-NOTES.md`
    are always kept; an update never replaces them.
 7. **Ask them to close their other agent sessions** (and any editor writing into the install) before applying: the
-   update replaces files those sessions are using. Only when they say it is done, run exactly the `update-apply` line
-   the review's `next:` block printed: the bundle, the review SHA-256, the choices file, `--accept-guard-changes` only
+   update replaces files those sessions are using. Only when they say it is done, run `update-apply` with the reviewed
+   bundle, the review SHA-256, the choices file, the same `--installed-root` if used for staging, and `--accept-guard-changes` only
    if step 5 was answered yes, and `--quiescent` (it states that you asked; it does not stop anything). It runs this
    installed health check first and refuses (exit `2`, `fix x4doctor first`) if it fails. Once the review and choices
    pass verification, it replaces the files, runs the new setup and health check, and **rolls back by itself
-   if either fails** (exit `1`). Report its `report` text as it is: applied, rolled back, or failed. Its first line
-   tells a Codex user to re-approve the changed hooks in `/hooks` (Codex skips a changed hook until then): say it
-   to the user, and suggest `x4doctor.py` once.
+   if either fails** (exit `1`). Report its `report` text as it is: applied, rolled back, or failed. After a
+   successful apply, tell Codex users to review changed hook definitions in `/hooks`.
 8. **A failed update is loud, and stays loud.** If the result says `FAIL CLOSED` (it could not be rolled back and
    verified), if the command was interrupted, or if a later session start says `TOOLKIT UPDATE NEEDS THE USER`, the
    guards may be broken or missing. Stop. Tell the user, show them the marker file it names

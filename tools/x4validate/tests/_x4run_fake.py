@@ -12,8 +12,8 @@ executes anything.
 
 HOW A CALL IS CLASSIFIED. By argv, independent of any order: a first element ending
 `steam.exe` is a Steam launch; a PowerShell script mentioning `CloseMainWindow` is a
-window-close request, one mentioning `Stop-Process` (or a `taskkill` argv) is a terminate
-request; a script mentioning `Get-CimInstance` is a process read. A call that is two of these
+window-close request, one mentioning `.Kill()` or `Stop-Process` is a terminate request.
+A read-only script mentioning `Get-CimInstance` is a process read. A call that is two actions
 at once (a script with both `CloseMainWindow` and `Stop-Process`), or none, raises, so a test
 never silently talks to a world the fake does not model. THE CALLER'S COMMAND is recognised
 first, by EXACT argv equality with one registered through `script_command`; it is logged like
@@ -221,11 +221,11 @@ class FakeSystem:
         kinds = set()
         if exe == "steam.exe":
             kinds.add("launch")
-        if exe in ("taskkill", "taskkill.exe") or "Stop-Process" in text:
+        if exe in ("taskkill", "taskkill.exe") or "Stop-Process" in text or ".Kill()" in text:
             kinds.add("terminate")
         if "CloseMainWindow" in text:
             kinds.add("close")
-        if "Get-CimInstance" in text:
+        if "Get-CimInstance" in text and not kinds:
             kinds.add("read")
         if len(kinds) != 1:
             raise AssertionError(f"FakeSystem cannot classify this call as exactly one kind "
