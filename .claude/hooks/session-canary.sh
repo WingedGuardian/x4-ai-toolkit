@@ -41,6 +41,24 @@ if x4_guards_off; then
   echo "            Unset X4_GUARD and restart the session to turn them back on."
 fi
 
+# A FAILED OR UNFINISHED TOOLKIT UPDATE (4.3.1), second only to the GUARDS OFF banner and printed here, not with the other
+# notes below: those can run past the cap (preferences alone take up to 4 KiB) and the preview keeps only the head, while
+# this one says the guards may be broken. Plain file tests, no Python: the line must not depend on a working interpreter
+# either. The helper called further down adds the marker's details (pid, operation) and the "newer release" line.
+_x4_upd_found=""
+if [ -n "${X4_TOOLKIT:-}" ]; then
+  for _x4_um in update-failed.json update-in-flight.json; do
+    if [ -e "$X4_TOOLKIT/.modding-agent-harness/$_x4_um" ] || [ -L "$X4_TOOLKIT/.modding-agent-harness/$_x4_um" ]; then
+      _x4_upd_found="$_x4_upd_found $_x4_um"
+    fi
+  done
+fi
+if [ -n "$_x4_upd_found" ]; then
+  echo "[x4 update] TOOLKIT UPDATE NEEDS THE USER: $X4_TOOLKIT/.modding-agent-harness/ holds${_x4_upd_found}: a toolkit update"
+  echo "            failed or did not finish, so the guards may be broken or missing. Do not update or trust the hooks;"
+  echo "            tell the user now. They read the file, fix the cause, then clear it with update-clear-failed."
+fi
+
 # AN UNCOMMITTED KNOWLEDGEBASE in this hook's own root (F11, 2026-10-20). MEASURED that day:
 # Codex appended ~1,767 lines to a game root's KNOWLEDGEBASE.md over 2.5 weeks and never
 # committed them -- nothing it read said to, and an uncommitted file has no recovery point.
@@ -180,6 +198,25 @@ XF=""
 if [ -n "$XF" ] && [ -n "$_x4_hkpy" ] && ! _x4_switch_off "${X4_HOUSEKEEP_SWEEP:-}" && ! _x4_switch_off "${X4_FRESH_AUTO:-}" \
    && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
   ( "$_x4_hkpy" "${X4_PYI[@]}" -B "$XF" "$XF_NOTE" </dev/null >/dev/null 2>&1 & )
+fi
+
+# Toolkit self-update (4.3.1; the core's release check and guarded update). ONLY $X4_TOOLKIT's helper, like the two above.
+# `note` reads the cache (no network) and adds the marker's details; it runs whatever is switched off, but only when there
+# is something for it: a failed/unfinished-update marker (printed above already, in shell) or a cache a check has written
+# (one Python start, about 0.1 s). `check` then asks GitHub in the background (at most once a day, by itself), started
+# exactly as the x4fresh launcher is: a plain background child of this hook with its output discarded, never given a
+# console of its own to pop up. Under a test harness only with X4_SWEEP_IN_TESTS (the helper refuses a test harness
+# anyway). A crash or a hang in either is swallowed (the helper times itself out): this hook must exit 0 with the rest of
+# its report.
+UP=""
+[ -f "${X4_TOOLKIT:-}/scripts/x4update_session.py" ] && UP="$X4_TOOLKIT/scripts/x4update_session.py"
+if [ -n "$UP" ] && [ -n "$_x4_hkpy" ]; then
+  if [ -n "$_x4_upd_found" ] || [ -e "$X4_TOOLKIT/.modding-agent-harness/update-check.json" ]; then
+    "$_x4_hkpy" "${X4_PYI[@]}" -B "$UP" note </dev/null 2>/dev/null || :
+  fi
+  if ! _x4_switch_off "${X4_UPDATE_CHECK:-}" && ! _x4_switch_off "${X4_HOUSEKEEP_SWEEP:-}"      && ! _x4_switch_off "${MODDING_HARNESS_UPDATE_CHECK:-}"      && { [ -z "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${X4_SWEEP_IN_TESTS:-}" ]; }; then
+    ( "$_x4_hkpy" "${X4_PYI[@]}" -B "$UP" check </dev/null >/dev/null 2>&1 & )
+  fi
 fi
 )"
 

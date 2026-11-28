@@ -59,7 +59,7 @@ from ._x4run import (
 )
 
 #: Printed on every `run` and in the top-level `--help`.
-BANNER = ("x4run: this driver has been run against the real game once (menu only, no save loaded): "
+BANNER = ("x4run: an earlier driver build was run against the real game once (menu only, no save loaded): "
           "treat every result as unverified (build step 2 of 3 done).")
 
 #: The exception types that are REFUSALS (exit 2) unless they carry the unclosed note.
@@ -113,7 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="x4run",
         description="Start X4 through Steam, run a command, close X4 again, and verify nothing "
                     "is left. A launch needs the user's approval of that specific run.",
-        epilog=BANNER + " See docs/x4run.md for what is measured and what is not.",
+        epilog=BANNER + " See https://github.com/WingedGuardian/x4-ai-toolkit/blob/master/docs/x4run.md.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -142,6 +142,9 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--approved-by", required=True, metavar="WHO",
                     help="who approved this specific launch, and where (e.g. 'user, chat "
                          "2026-11-24'); recorded verbatim, never verified")
+    pr.add_argument("--exclusive-launch", required=True, action="store_true",
+                    help="record the user's agreement that nobody else will launch X4 "
+                         "until the driver records the process or the launch attempt ends")
     pr.add_argument("--mode", required=True, choices=APPROVAL_MODES,
                     help="the approved launch mode")
     pr.add_argument("--target", required=True, metavar="WHAT",
@@ -312,6 +315,7 @@ def _cmd_status(store: StateStore, run, sleep, io: _Io) -> int:
             io.say(f"  approved by: {ap.approved_by}")
             io.say(f"  mode: {ap.mode}; target: {ap.target}; desktop: {ap.desktop}")
             io.say(f"  approval recorded_at: {ap.recorded_at}")
+            io.say(f"  exclusive launch agreement: {'yes' if ap.exclusive_launch else 'unrecorded'}")
     try:
         procs = read_processes(run, name="X4.exe", sleep=sleep)
     except ProcessReadError as exc:
@@ -330,7 +334,8 @@ def _cmd_run(args, command, *, run, sleep, clock, game_root, store, ready_probe,
     io.say(BANNER)
     approval = Approval(approved_by=args.approved_by, mode=args.mode, target=args.target,
                         desktop=args.desktop,
-                        recorded_at=datetime.now(timezone.utc).isoformat())
+                        recorded_at=datetime.now(timezone.utc).isoformat(),
+                        exclusive_launch=args.exclusive_launch)
     try:
         require_approval(approval)      # before ANY process read or call
     except UnapprovedLaunch as exc:
@@ -350,6 +355,12 @@ def _cmd_run(args, command, *, run, sleep, clock, game_root, store, ready_probe,
         io.err(f"x4run: refused: the readiness probe is {NOT_WIRED}; nothing was started. "
                "Pass --no-ready-check to treat the game as ready once its process appears.")
         return 2
+    if game_root is None:
+        refusal = (_paths.foreign_toolkit_refusal("x4run run", toolkit_flag=False)
+                   or _paths.env_root_refusal("x4run run", {}, "game_root"))
+        if refusal:
+            io.err(refusal)
+            return 2
     root = game_root if game_root is not None else _paths.game_root()
     if root is None:
         io.err("x4run: refused: the game root cannot be resolved (set X4_GAME or configure "
@@ -357,6 +368,7 @@ def _cmd_run(args, command, *, run, sleep, clock, game_root, store, ready_probe,
         return 2
     io.say(f"approval: by {approval.approved_by}; mode {approval.mode}; target "
            f"{approval.target}; desktop {approval.desktop}; recorded_at {approval.recorded_at}")
+    io.say(f"launch window: exclusive by agreement. Game folder: {root}")
     try:
         report = run_cycle(root, approval, store, list(command), ready_probe=probe,
                            run=run, sleep=sleep, clock=clock,

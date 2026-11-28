@@ -18,21 +18,25 @@ Sections: process, exit, state, start, close, cycle (below).
 """
 from __future__ import annotations
 
+import base64
 import inspect
 import json
 import math
 import ntpath
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 import uuid
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import local
 
-from . import _paths
+from . import _harness, _paths
 
 #: Flag every child process is started with. 0 where the platform has no such flag, so the
 #: module still imports on a non-Windows host (the logic is tested there through the fake).
@@ -246,6 +250,7 @@ class Approval:
     target: str
     desktop: str
     recorded_at: str
+    exclusive_launch: bool = False
 
 
 @dataclass
@@ -269,6 +274,9 @@ def require_approval(a: Approval | None) -> Approval:
             raise UnapprovedLaunch(f"approval field {field!r} is missing or blank")
     if a.mode not in APPROVAL_MODES:
         raise UnapprovedLaunch(f"approval mode {a.mode!r} is not one of {', '.join(APPROVAL_MODES)}")
+    if a.exclusive_launch is not True:
+        raise UnapprovedLaunch("approval must include an exclusive launch window: nobody else will start X4 "
+                               "until the driver records the new process or the attempt ends")
     return a
 
 
@@ -340,6 +348,10 @@ def _state_from(data: object) -> RunState:
         raise ValueError("approval is missing or not an object")
     approval = Approval(**{k: _str(ap, k, "approval") for k in
                            ("approved_by", "mode", "target", "desktop", "recorded_at")})
+    exclusive = ap.get("exclusive_launch", False)
+    if type(exclusive) is not bool:
+        raise ValueError("approval.exclusive_launch is not a boolean")
+    approval = replace(approval, exclusive_launch=exclusive)
     if approval.mode not in APPROVAL_MODES:
         raise ValueError(f"approval.mode {approval.mode!r} is not a known mode")
     phase = _str(data, "phase", "state")
@@ -369,10 +381,9 @@ def _encode(state: RunState) -> bytes:
 class StateStore:
     """The recoverable run record: ONE file that exists exactly while a game may be running.
 
-    `begin` creates it exclusively (`O_EXCL`), so a second start cannot overwrite the record of
-    a run that may still be alive; `update` replaces it atomically; `read` raises
-    `CorruptState` on anything it cannot parse, because a record that cannot be read is a game
-    that cannot be accounted for; `clear` removes it once the run is accounted for.
+    `begin` creates it exclusively. `update` and `clear` require the current run ID and
+    make the identity check and mutation under the same OS lock used by `begin`.
+    `read` raises `CorruptState` on an unreadable record.
     `sleep`, `clock` and `replace` are injectable so the transient-lock retry is testable.
     """
 
@@ -380,11 +391,35 @@ class StateStore:
                  replace=os.replace) -> None:
         self.folder = Path(folder)
         self.path = self.folder / STATE_FILE
+        self.lock_path = self.path.with_suffix(".lock")
+        self._lock_owner = local()
         self._sleep, self._clock, self._replace = sleep, clock, replace
+
+    @contextmanager
+    def _locked(self):
+        if getattr(self._lock_owner, "active", False):
+            yield
+            return
+        with ExitStack() as stack:
+            try:
+                self.folder.mkdir(parents=True, exist_ok=True)
+                stack.enter_context(_harness.module("locking").exclusive(self.lock_path, wait=0))
+            except TimeoutError as exc:
+                raise UnfinishedRun(f"another driver operation holds {self.lock_path}; let it finish before recovery") from exc
+            except (OSError, _harness.HarnessMissing) as exc:
+                raise UnfinishedRun(f"could not lock the run record at {self.lock_path}: {exc}") from exc
+            self._lock_owner.active = True
+            try:
+                yield
+            finally:
+                self._lock_owner.active = False
 
     def begin(self, state: RunState) -> None:
         data = _encode(state)
-        self.folder.mkdir(parents=True, exist_ok=True)
+        with self._locked():
+            self._begin_locked(data)
+
+    def _begin_locked(self, data: bytes) -> None:
         try:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
         except FileExistsError:
@@ -422,10 +457,14 @@ class StateStore:
                 self._sleep(REPLACE_PAUSE_S)
 
     def update(self, state: RunState) -> None:
-        if not self.path.exists():
-            raise FileNotFoundError(
-                f"no run record at {self.path}: `begin` must create it before `update`")
         data = _encode(state)
+        with self._locked():
+            if not self._current_run_locked(state.run_id):
+                raise FileNotFoundError(
+                    f"no run record at {self.path}: `begin` must create it before `update`")
+            self._replace_locked(data)
+
+    def _replace_locked(self, data: bytes) -> None:
         tmp = self.folder / f"{STATE_FILE}.{os.getpid()}.tmp"
         try:
             with open(tmp, "wb") as fh:
@@ -453,7 +492,20 @@ class StateStore:
                                f"place: inspect it. No game can be read from it, so check for a "
                                f"running X4.exe by hand, then clear it with `x4run forget`") from exc
 
-    def clear(self) -> None:
+    def _current_run_locked(self, run_id: str) -> bool:
+        current = self.read()
+        if current is None:
+            return False
+        if current.run_id != run_id:
+            raise UnfinishedRun(f"a different run now owns the record at {self.path}; it was left in place")
+        return True
+
+    def clear(self, run_id: str) -> None:
+        with self._locked():
+            if self._current_run_locked(run_id):
+                self._clear_locked()
+
+    def _clear_locked(self) -> None:
         def unlink() -> None:
             try:
                 self.path.unlink()
@@ -503,10 +555,12 @@ def steam_exe(game_root: Path) -> Path:
     return Path(game_root).parents[2] / "steam.exe"
 
 
-def _clear_note(store: "StateStore") -> str:
+def _clear_note(store: "StateStore", run_id: str) -> str:
     """Clear the run record; say in one clause what became of it (a failed clear is named)."""
     try:
-        store.clear()
+        store.clear(run_id)
+    except (UnfinishedRun, CorruptState) as exc:
+        return str(exc)
     except OSError as exc:
         return (f"the run record at {store.path} could NOT be removed ({exc}); check for a "
                 f"running X4.exe by hand, then clear it with `x4run forget`")
@@ -535,6 +589,92 @@ def _norm_exe(path) -> str:
     return ntpath.normpath(str(path).replace("/", "\\")).casefold()
 
 
+def _same_executable(first, second) -> bool:
+    if _norm_exe(first) == _norm_exe(second):
+        return True
+    try:
+        return Path(first).resolve(strict=True) == Path(second).resolve(strict=True)
+    except OSError:
+        return False  # silent-ok: the caller reports the process path as unverified and keeps the record
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _steam_registered_roots() -> set[Path]:
+    import winreg
+
+    entry = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App " + _paths.STEAM_APPID
+    roots = set()
+    for view in (winreg.KEY_WOW64_32KEY, winreg.KEY_WOW64_64KEY):
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, entry, 0, winreg.KEY_READ | view)
+        except FileNotFoundError:
+            continue  # silent-ok: the registry view has no entry; the caller requires registration
+        with key:
+            value, _ = winreg.QueryValueEx(key, "InstallLocation")
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise ValueError("Steam's registered X4 installation has no absolute location")
+        roots.add(Path(value).resolve())
+    return roots
+
+
+def _launch_preflight(game_root, steam_path, steam, state_dir, run):
+    """Bind the request to the registered install and the already running client."""
+    if sys.platform != "win32":
+        raise ValueError("Steam launch preflight requires Windows")
+    game = Path(game_root).resolve()
+    if _steam_registered_roots() != {game} or not (game / _GAME_EXE).is_file():
+        raise ValueError("the configured game folder is not the uniquely registered Steam X4 installation")
+    active = {Path(p.path).resolve() for p in steam}
+    if len(steam) != 1 or active != {Path(steam_path).resolve()}:
+        raise ValueError("the Steam executable above the game folder is not the single running Steam client")
+
+    system = Path(os.environ.get("SystemRoot", "")).anchor  # env-ok: Windows supplies its own system directory
+    if not system:
+        raise ValueError("the Windows system volume could not be determined")
+    query = ("$ErrorActionPreference='Stop'; "
+             "$usage = Get-CimInstance Win32_PageFileUsage | "
+             "Where-Object { [IO.Path]::GetPathRoot($_.Name).TrimEnd([char]92) -eq $env:SystemDrive } | "
+             "Measure-Object AllocatedBaseSize -Sum; "
+             "if ($null -eq $usage.Sum) { '0' } else { [long]$usage.Sum }")
+    result = run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query],
+                 capture_output=True, text=True, encoding="utf-8", errors="replace",
+                 timeout=READ_TIMEOUT_S, creationflags=NO_WINDOW)
+    if result.returncode != 0 or not result.stdout.strip().isdecimal():
+        raise ValueError("the system pagefile size could not be read for the free-space check")
+    limit = 50 * 1024**3
+    pagefile = int(result.stdout.strip()) * 1024**2
+    for volume in sorted({system, game.anchor, Path(state_dir).resolve().anchor}, key=str.casefold):
+        capacity = shutil.disk_usage(volume)
+        floor = min(limit, pagefile if pagefile and volume.casefold() == system.casefold()
+                    else capacity.total // 20)
+        if capacity.free < floor:
+            raise ValueError(f"free disk space on {volume} is {capacity.free / 1024**3:.1f} GiB, "
+                             f"below the {floor / 1024**3:.1f} GiB floor")
+
+
+def _verify_steam_client(process: ProcessInfo, run) -> str | None:
+    require_same_session = ("if ($p.SessionId -ne (Get-Process -Id $PID).SessionId) "
+                            "{ throw 'Steam runs in another Windows session' }")
+    return _ask(run, _CHECK_PROCESS + require_same_session + _END_PROCESS_ACTION, process)
+
+
+class _SteamWaitError(RuntimeError):
+    """Steam's process started, and its exit status could not be read."""
+
+
+def _forward_steam(argv, *, timeout, **options):
+    # A timed-out forwarder could have become a Steam client if the active client exited.
+    # Stop waiting without terminating that process.
+    process = subprocess.Popen(argv, **options)
+    try:
+        return subprocess.CompletedProcess(argv, process.wait(timeout=timeout))
+    except OSError as exc:
+        raise _SteamWaitError(str(exc)) from exc
+
+
 def start(game_root: Path, approval: Approval | None, store: StateStore, *,
           run=subprocess.run, sleep=time.sleep, clock=time.monotonic,
           timeout_s: float = START_TIMEOUT_S) -> RunState:
@@ -546,9 +686,8 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
     no process) -> ONE hidden `steam.exe -applaunch <appid>` call -> poll for a new `X4.exe`
     -> record it ("running"). The record exists from before the launch call until the game
     is accounted for, so a crash anywhere after the call leaves something `x4run stop` can
-    recover from. It is removed only where NOTHING is known to have started: the launch call
-    could not be started at all (`OSError`), or the LAST poll read succeeded and saw no game
-    by the deadline (a last read that FAILED keeps it: a game may be running unseen). A
+    recover from. It is removed only if the launch call itself could not be started (`OSError`).
+    A deadline with no visible game keeps the record because Steam may still start it. A
     launch call that TIMES OUT or exits NON-ZERO is unknown, not failed (what the forwarder's
     exit codes mean is unmeasured): it still polls and records a game that appears.
     Any other exit after `begin` (an interrupt, an unexpected error, a failed update) leaves
@@ -578,7 +717,7 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
             f"cannot find the Steam folder above the game root {str(game_root)!r} (the game "
             f"root must sit three folders below it). Refused: nothing was started and no run "
             f"record was written.") from None
-    own_exe = _norm_exe(Path(game_root) / _GAME_EXE)
+    own_exe = Path(game_root) / _GAME_EXE
 
     # A failed read refuses the start (the third state is never "no game"). In particular a
     # game process whose path/start time the driver cannot read (an elevated X4 against a
@@ -595,8 +734,7 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
             f"{_GAME_EXE} is already running (pid {pids}). Refused: nothing was started and no "
             f"run record was written.")
 
-    # The launch call below runs `steam.exe -applaunch`: with no Steam running, that process
-    # would BE the Steam client, which a timeout would then kill. So Steam must already be up.
+    # With no Steam running, `steam.exe -applaunch` may itself become the client.
     try:
         steam = read_processes(run, name=_STEAM_EXE, sleep=sleep)
     except ProcessReadError as exc:
@@ -608,19 +746,31 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
             "Steam is not running: start Steam first; the driver does not start the Steam "
             "client. Refused: nothing was started and no run record was written.")
 
+    try:
+        _launch_preflight(game_root, argv[0], steam, store.folder, run)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        raise before_launch(f"{exc}. Refused: nothing was started and no run record was written.") from exc
+
     state = RunState(run_id=uuid.uuid4().hex, approval=approval, phase="starting", process=None,
-                     started_at=datetime.now(timezone.utc).isoformat())
+                     started_at=_utc_now().isoformat())
     store.begin(state)  # UnfinishedRun (a record exists) propagates unwrapped
+    problem = _verify_steam_client(steam[0], run)
+    if problem:
+        raise before_launch(
+            f"the Steam client changed before the launch request or could not be verified ({problem}); "
+            f"nothing was started and {_clear_note(store, state.run_id)}.")
 
     # Steps below deliberately have no blanket cleanup handler: every path that started
     # NOTHING clears the record explicitly, and every other exit (KeyboardInterrupt included)
     # keeps it, since a game may be starting.
     launch_unknown = ""  # why the launch call's outcome is unknown, if it is
+    requested_at = _utc_now()
+    forward = _forward_steam if run is subprocess.run else run
     try:
         # No captured pipes: a grandchild (Steam's helpers, the game) that inherited a pipe
         # would keep this call blocked until the timeout. Output goes nowhere.
-        res = run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                  timeout=LAUNCH_CALL_TIMEOUT_S, creationflags=NO_WINDOW)
+        res = forward(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                      timeout=LAUNCH_CALL_TIMEOUT_S, creationflags=NO_WINDOW)
         if res.returncode != 0:
             # UNKNOWN, not failed: what a non-zero exit of the forwarder means is unmeasured,
             # and Steam may still start the game. Poll exactly as after a timeout.
@@ -630,12 +780,14 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
         # UNKNOWN, not failed: Steam may well have started the game. Fall through to the
         # normal poll (never a second launch call) so a game that does appear is recorded.
         launch_unknown = f"the launch call timed out after {LAUNCH_CALL_TIMEOUT_S} s"
+    except _SteamWaitError as exc:
+        launch_unknown = f"the Steam forwarder's exit status could not be read ({exc})"
     except OSError as exc:
         # The ONLY definite failure: steam.exe could not be started, so the call never ran
         # and nothing can have been started.
         raise before_launch(
             f"the Steam launch call could not be made ({exc}); it is not retried. Nothing was "
-            f"started, no game was recorded and {_clear_note(store)}.") from exc
+            f"started, no game was recorded and {_clear_note(store, state.run_id)}.") from exc
 
     # The poll gets its OWN full `timeout_s`, counted from when the launch call returned (or
     # timed out), so a slow launch call does not eat into the time the game needs to appear.
@@ -672,7 +824,7 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
             raise after_launch(
                 f"Steam was asked to start the game but no {_GAME_EXE} appeared within "
                 f"{timeout_s:g} s{note}. {why}The launch call was made once and is not retried; "
-                f"no game was recorded and {_clear_note(store)}.")
+                f"the run record was KEPT with no process. {_NO_GAME_RECOVERY}")
 
     listed = "; ".join(f"pid {p.pid} at {p.path}" for p in new)
     if len(new) > 1:
@@ -680,17 +832,30 @@ def start(game_root: Path, approval: Approval | None, store: StateStore, *,
             f"{len(new)} {_GAME_EXE} processes appeared at once ({listed}); which one this "
             f"start launched cannot be told, so none was recorded. The run record was kept "
             f"(phase starting, no process): {_NO_GAME_RECOVERY}")
-    if _norm_exe(new[0].path) != own_exe:
+    if not _same_executable(new[0].path, own_exe):
         raise after_launch(
             f"an {_GAME_EXE} appeared that is not this game root's ({listed}; expected "
             f"{Path(game_root) / _GAME_EXE}), so it is not recognised as the one this start "
             f"launched and was not recorded. The run record was kept (phase starting, no "
             f"process): {_NO_GAME_RECOVERY}")
 
+    try:
+        process_started = datetime.fromisoformat(new[0].started)
+        if process_started.tzinfo is None:
+            raise ValueError("missing time zone")
+    except ValueError as exc:
+        raise after_launch(
+            f"the start time of the new {_GAME_EXE} could not be verified ({listed}): {exc}. "
+            f"The run record was kept with no process: {_NO_GAME_RECOVERY}") from exc
+    if process_started < requested_at:
+        raise after_launch(
+            f"the new {_GAME_EXE} predates the Steam request ({listed}); it was not recorded. "
+            f"The run record was kept with no process: {_NO_GAME_RECOVERY}")
+
     state.process, state.phase = new[0], "running"
     try:
         store.update(state)
-    except (OSError, InvalidState) as exc:
+    except (OSError, InvalidState, UnfinishedRun, CorruptState) as exc:
         raise after_launch(
             f"{_GAME_EXE} started (pid {new[0].pid}) but could not be recorded: {exc}. The run "
             f"record keeps phase starting with no process; close the game yourself. "
@@ -713,23 +878,25 @@ KILL_WAIT_S = 30.0
 #: Seconds one close or terminate call may take.
 CLOSE_CALL_TIMEOUT_S = 30
 
-# The pid is passed as its OWN argv element after a constant script, but PowerShell `-Command`
-# joins the arguments that follow into one command string, so `str(pid)` IS appended to the
-# command text. The safeguard is therefore the value, not the channel: `close` accepts a pid
-# only if it is an `int` (not a bool) and >= 1, checked before any call, so only digits can
-# be appended, and `[int]$ProcId` binds them. (The binding was checked once, in review, with
-# a harmless read-only stand-in of this wrapper shape: `-Command "& {param([int]$ProcId) ...}"
-# 123` bound 123 to $ProcId. The close script has run against the real game once (2026-11-25, at
-# the main menu); the terminate script has NEVER been run.)
-# Exit 3: no main window to ask. The close and terminate scripts are separate and never both
-# in one call.
-_CLOSE_SCRIPT = (
-    "& { param([int]$ProcId) $ErrorActionPreference='Stop'; "
-    "$p = Get-Process -Id $ProcId; if (-not $p.CloseMainWindow()) { exit 3 } }"
+# Windows holds a PID while an open handle refers to the process object.
+# Open the handle before checking identity and retain it through the action.
+# PowerShell -Command joins its trailing argv elements. They contain only base64
+# and decimal digits. The decoded path and other fields are compared as data.
+_CHECK_PROCESS = (
+    "& { param([string]$Encoded,[int]$ProcId) $ErrorActionPreference='Stop'; "
+    "$proof = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Encoded))); "
+    "$p = Get-Process -Id $ProcId; try { "
+    "$handle = $p.SafeHandle; "
+    "if ($handle.IsInvalid -or $p.HasExited) { throw 'recorded process has exited' }; "
+    "$actual = Get-CimInstance Win32_Process -Filter \"ProcessId = $ProcId\"; "
+    "if ($null -eq $actual -or $actual.Name -cne $proof.name -or "
+    "$actual.ExecutablePath -cne $proof.path -or "
+    "$actual.CreationDate.ToUniversalTime().ToString('o') -cne $proof.started) "
+    "{ throw 'recorded process identity changed' }; "
 )
-_TERMINATE_SCRIPT = (
-    "& { param([int]$ProcId) $ErrorActionPreference='Stop'; Stop-Process -Id $ProcId }"
-)
+_END_PROCESS_ACTION = " } finally { $p.Dispose() } }"
+_CLOSE_SCRIPT = _CHECK_PROCESS + "if (-not $p.CloseMainWindow()) { exit 3 }" + _END_PROCESS_ACTION
+_TERMINATE_SCRIPT = _CHECK_PROCESS + "$p.Kill()" + _END_PROCESS_ACTION
 
 
 @dataclass(frozen=True)
@@ -774,9 +941,11 @@ class _Reader:
         return procs
 
 
-def _ask(run, script: str, pid: int) -> str | None:
+def _ask(run, script: str, process: ProcessInfo) -> str | None:
     """One hidden PowerShell call; None if it exited 0, else a short account of what went wrong."""
-    argv = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, str(pid)]
+    proof = {key: getattr(process, key) for key in ("name", "path", "started")}
+    encoded = base64.b64encode(json.dumps(proof).encode("utf-8")).decode("ascii")
+    argv = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, encoded, str(process.pid)]
     try:
         res = run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
                   timeout=CLOSE_CALL_TIMEOUT_S, creationflags=NO_WINDOW)
@@ -833,12 +1002,19 @@ def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.
     to close or terminated; a read that fails is never "gone" (it makes no call at all if it
     comes before the request). The terminate is never made before `grace_s + hold_s` has
     elapsed. `closed` needs `ExitWatch` to confirm the exit; the run record is cleared then
-    and KEPT otherwise. A record with no process (phase "starting") is never closed: it is
-    reported and kept. The remaining gap is the few milliseconds between the last start-time
-    read and the terminate itself.
+    and KEPT otherwise. A record with no process (phase "starting") is reported and kept.
+    The action rechecks identity while holding an open process handle.
     """
     for label, value in (("grace_s", grace_s), ("kill_wait_s", kill_wait_s), ("hold_s", hold_s)):
         _check_seconds(label, value)
+    try:
+        with store._locked():
+            return _close_locked(state, store, run, sleep, clock, grace_s, kill_wait_s, hold_s)
+    except UnfinishedRun as exc:
+        return CloseReport(False, "unclosed", (f"no close or terminate call was made: {exc}",), None)
+
+
+def _close_locked(state, store, run, sleep, clock, grace_s, kill_wait_s, hold_s):
     t0 = clock()
     steps: list[str] = []
 
@@ -848,6 +1024,9 @@ def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.
     try:
         store.update(replace(state, phase="closing"))  # InvalidState propagates, before any call
         note("run record set to phase closing")
+    except (UnfinishedRun, FileNotFoundError, CorruptState) as exc:
+        note(f"the run record's ownership could not be confirmed ({exc}); no close or terminate call was made")
+        return CloseReport(False, "unclosed", tuple(steps), None)
     except OSError as exc:
         # The identity is in memory, so the close goes ahead: leaving the game running because
         # one record write failed is the worse outcome. The record keeps its previous phase.
@@ -878,7 +1057,7 @@ def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.
         return report(False, "unclosed", rem())
 
     def finish_gone(method: str, remaining) -> CloseReport:
-        note(f"the recorded process (pid {rec.pid}) is gone; {_clear_note(store)}")
+        note(f"the recorded process (pid {rec.pid}) is gone; {_clear_note(store, state.run_id)}")
         return report(True, method, remaining)
 
     def keep(why: str, remaining) -> CloseReport:
@@ -909,7 +1088,7 @@ def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.
         sleep(POLL_INTERVAL_S)
 
     # --- 2. ask the window to close, then give it the grace period (plus any hold)
-    problem = _ask(run, _CLOSE_SCRIPT, rec.pid)
+    problem = _ask(run, _CLOSE_SCRIPT, rec)
     note(f"window-close request for pid {rec.pid} " + (f"failed: {problem}" if problem else "sent"))
     watch = ExitWatch(rec)
     terminate_problem = None
@@ -937,7 +1116,7 @@ def close(state: RunState, store: StateStore, *, run=subprocess.run, sleep=time.
                         "nothing was terminated", rem())
         method = "window-close"
         if verdict == "present":
-            terminate_problem = _ask(run, _TERMINATE_SCRIPT, rec.pid)
+            terminate_problem = _ask(run, _TERMINATE_SCRIPT, rec)
             note(f"terminate request for pid {rec.pid} "
                  + (f"failed: {terminate_problem}" if terminate_problem else "sent"))
             method = "terminate"
@@ -1108,8 +1287,16 @@ def run_cycle(game_root: Path, approval: Approval | None, store: StateStore, com
     start failures (`UnapprovedLaunch`, `UnfinishedRun`, `InvalidState`, `CorruptState`)
     propagate unchanged: the caller must see them.
     """
-    _check_command(command)  # before anything is started
+    approval = require_approval(approval)
+    _check_command(command)
     _check_cycle_args(close_kw, ready_timeout_s, command_timeout_s)
+    with store._locked():
+        return _run_cycle_locked(game_root, approval, store, command, ready_probe, run, sleep,
+                                 clock, ready_timeout_s, command_timeout_s, close_kw)
+
+
+def _run_cycle_locked(game_root, approval, store, command, ready_probe, run, sleep,
+                      clock, ready_timeout_s, command_timeout_s, close_kw):
     try:
         state = start(game_root, approval, store, run=run, sleep=sleep, clock=clock)
     except StartRefused as exc:
@@ -1178,9 +1365,10 @@ def run_cycle(game_root: Path, approval: Approval | None, store: StateStore, com
     if not close_report.closed:
         notes.append(_unclosed_note(close_report))
     if opened:
+        out_tail, err_tail = _tail(out_path), _tail(err_path)
         return CycleReport(True, ready, rc, close_report, tuple(notes), launch_attempted=True,
                            command_out_path=out_path, command_err_path=err_path,
-                           command_out_tail=_tail(out_path), command_err_tail=_tail(err_path))
+                           command_out_tail=out_tail, command_err_tail=err_tail)
     return CycleReport(True, ready, rc, close_report, tuple(notes), launch_attempted=True)
 
 
@@ -1231,6 +1419,14 @@ def forget(store: StateStore, *, run=subprocess.run, sleep=time.sleep, now=time.
     any running X4.exe refuses and leaves the file. Returns what was removed.
     """
     try:
+        with store._locked():
+            return _forget_locked(store, run, sleep, now)
+    except UnfinishedRun as exc:
+        raise ForgetRefused(str(exc)) from exc
+
+
+def _forget_locked(store: StateStore, run, sleep, now) -> str:
+    try:
         mtime = store.path.stat().st_mtime
     except FileNotFoundError:
         return f"nothing to forget: there is no run record at {store.path}"
@@ -1260,7 +1456,7 @@ def forget(store: StateStore, *, run=subprocess.run, sleep=time.sleep, now=time.
             f"one) before forgetting. The run record {store.path} was left in place.")
     what = _size_text(store).replace(" that do not form a run record", "")
     try:
-        store.clear()
+        store._clear_locked()
     except OSError as exc:
         raise ForgetRefused(f"the run record {store.path} could not be removed: {exc}") from exc
     return (f"removed the run record {store.path} ({what}) after a read showed no "

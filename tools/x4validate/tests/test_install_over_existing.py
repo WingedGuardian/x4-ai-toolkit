@@ -3828,3 +3828,139 @@ def test_FXB4_every_CI_BASH_install_leg_that_runs_on_Windows_is_ISOLATED_too():
     ps_keys = re.findall(r"\$env:X4_INSTALL_ENV_REGKEY = '(HKCU\\Software\\X4ToolkitTests\\[^']+)'",
                          text)
     assert len(set(keys + ps_keys)) == len(keys + ps_keys), keys + ps_keys
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1"])
+def test_BUILD_INFO_travels_from_a_RELEASE_source_and_a_checkout_without_one_says_nothing(installer, tmp_path):
+    """4.3.1 task 6a: a release zip's BUILD-INFO (version + commit, read by the shared core's self-update) is
+    copied by BOTH installers; a source with none (a git checkout) copies none and does not call it missing.
+    Sandboxed like its neighbours: a synthetic source, a tmp destination, the user environment pinned away."""
+    info = "version=4.3.1\ncommit=" + "ab" * 20 + "\n"
+    src = _synthetic_source(tmp_path)
+    (src / "BUILD-INFO").write_text(info, encoding="utf-8", newline="\n")
+    dest = _fresh(tmp_path)
+    r = _install(installer, tmp_path, dest, source=src)
+    assert (dest / ".claude").is_dir(), "the copy did not run; this proves nothing"
+    assert (dest / "BUILD-INFO").read_bytes() == info.encode("utf-8"), (r.stdout + r.stderr)[-1500:]
+    # the twin: no BUILD-INFO in the source -> none in the destination, and no "not in the source" noise for it
+    src2 = tmp_path / "src2"
+    shutil.copytree(src, src2)
+    (src2 / "BUILD-INFO").unlink()
+    dest2 = tmp_path / "toolkit2"
+    dest2.mkdir()
+    r2 = _install(installer, tmp_path, dest2, source=src2)
+    assert (dest2 / ".claude").is_dir(), "the copy did not run; this proves nothing"
+    assert not (dest2 / "BUILD-INFO").exists()
+    note = [ln for ln in (r2.stdout + r2.stderr).splitlines() if "not in the source" in ln]
+    assert note, "the source is missing real items, so the note must still appear (control)"
+    assert not any("BUILD-INFO" in ln for ln in note), note
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1"])
+def test_install_refuses_an_existing_BUILD_INFO_directory(installer, tmp_path):
+    src = _synthetic_source(tmp_path)
+    (src / "CLAUDE.md").write_text("shipped instructions\n", encoding="utf-8")
+    dest = _fresh(tmp_path)
+    marker = dest / "BUILD-INFO"
+    marker.mkdir()
+    (marker / "keep.txt").write_text("MINE", encoding="utf-8")
+    notes = dest / "CLAUDE.md"
+    notes.write_text("local instructions\n", encoding="utf-8")
+
+    result = _install(installer, tmp_path, dest, source=src)
+
+    assert result.returncode != 0
+    assert "BUILD-INFO must be a regular file" in result.stdout + result.stderr
+    assert (marker / "keep.txt").read_text(encoding="utf-8") == "MINE"
+    assert notes.read_text(encoding="utf-8") == "local instructions\n"
+    assert not (dest / ".claude").exists()
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1"])
+def test_a_stale_BUILD_INFO_is_removed_when_the_source_has_none_and_replaced_when_it_has_one(installer, tmp_path):
+    """4.3.1 task 6b: BUILD-INFO names the release a folder came from, and the core's self-update reads it. An install
+    from a git checkout (no BUILD-INFO) over a release install used to leave the old file, so the folder read as the
+    OLD release. It is recycled (not deleted) in a step of its own, never via X4_COPY_PRUNE, which would also stop a
+    release source's BUILD-INFO being copied -- that is the control."""
+    old = "version=4.3.0\ncommit=" + "cd" * 20 + "\n"
+    new = "version=4.3.1\ncommit=" + "ab" * 20 + "\n"
+    src = _synthetic_source(tmp_path)
+    (src / "scripts").mkdir()
+    shutil.copy2(ROOT / "scripts" / "x4recycle.py", src / "scripts" / "x4recycle.py")
+    dest = _fresh(tmp_path)
+    (dest / "BUILD-INFO").write_bytes(old.encode("utf-8"))
+    # source WITHOUT BUILD-INFO: the stale one goes (into the recycler), nothing is reported missing for it
+    r = _install(installer, tmp_path, dest, source=src)
+    assert (dest / ".claude").is_dir(), "the copy did not run; this proves nothing: " + (r.stdout + r.stderr)[-1500:]
+    assert not (dest / "BUILD-INFO").exists(), "a stale BUILD-INFO survived an install from a source with none"
+    recycled = pathlib.Path(os.environ["X4_RECYCLE_TEST_BIN"])
+    assert any(p.name.endswith("-BUILD-INFO") and p.read_bytes() == old.encode("utf-8") for p in recycled.iterdir()), \
+        "it was not recycled (recoverable): " + (r.stdout + r.stderr)[-1500:]
+    # control: a source WITH one replaces the old file, so the removal is not a blanket prune of the name
+    (src / "BUILD-INFO").write_bytes(new.encode("utf-8"))
+    (dest / "BUILD-INFO").write_bytes(old.encode("utf-8"))
+    r2 = _install(installer, tmp_path, dest, source=src)
+    assert (dest / "BUILD-INFO").read_bytes() == new.encode("utf-8"), (r2.stdout + r2.stderr)[-1500:]
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1"])
+def test_a_STRAY_untracked_BUILD_INFO_in_a_checkout_keeps_the_TRACKED_SET_and_the_old_one_still_goes(installer, tmp_path):
+    """4.3.1 task 6b. BUILD-INFO is an OPTIONAL copy item that git never tracks (it is gitignored). The check that
+    decides whether a source may be copied as git's tracked set ran over every copy item, so a stray untracked
+    BUILD-INFO made it give up ("git tracks nothing under 'BUILD-INFO'") and copy everything on disk. It must not.
+    And since the tracked set never holds BUILD-INFO, the destination's old one (a release install's) is stale then
+    too and is recycled, though the source has a file of that name."""
+    src = _derived_source(tmp_path, "top")
+    (src / "BUILD-INFO").write_text("version=9.9.9\n", encoding="utf-8")      # untracked, as a stray one is
+    (src / "scripts").mkdir()
+    shutil.copy2(ROOT / "scripts" / "x4recycle.py", src / "scripts" / "x4recycle.py")
+    _git(src, "add", "--", "scripts/x4recycle.py")                                # the recycler is a tracked file
+    _git(src, "commit", "-q", "-m", "recycler")
+    dest = _fresh(tmp_path)
+    old = b"version=4.3.0\n"
+    (dest / "BUILD-INFO").write_bytes(old)
+    r = _install(installer, tmp_path, dest, source=src)
+    out = r.stdout + r.stderr
+    got = _copied(dest)
+    assert _TRACKED in got, "the copy did not run:\n%s" % out[-1500:]
+    assert "tracked" in out.lower() and "git tracks nothing" not in out, \
+        "a stray BUILD-INFO made the installer leave tracked-set mode:\n%s" % out[-1500:]
+    leaked = sorted(set(_DERIVED + (_UNTRACKED,)) & got)
+    assert not leaked, "untracked/derived files travelled from a git source: %s" % leaked
+    assert "BUILD-INFO" not in got, "a stray BUILD-INFO (or the stale one) is in the destination: %s" % sorted(got)
+
+
+@pytest.mark.parametrize("installer", ["sh", "ps1"])
+@pytest.mark.parametrize("target", ["dangling", "real-file", "junction"])
+def test_a_BUILD_INFO_that_is_a_LINK_is_removed_itself_and_never_followed(installer, target, tmp_path):
+    """6b review L6: install.sh tested `-e || -L` while PowerShell's Test-Path calls a dangling link absent, and the
+    recycler refuses links. Both installers now remove a link of that name themselves (a link holds nothing to recover)
+    and never touch what it points at."""
+    src = _synthetic_source(tmp_path)
+    (src / "scripts").mkdir()
+    shutil.copy2(ROOT / "scripts" / "x4recycle.py", src / "scripts" / "x4recycle.py")
+    dest = _fresh(tmp_path)
+    precious = tmp_path / "precious.txt"
+    if target == "real-file":
+        precious.write_text("MINE", encoding="utf-8")
+    if target == "junction":
+        # A directory junction needs no privilege on Windows (a symlink does) and is a reparse point the recycler refuses too.
+        if os.name != "nt":
+            pytest.skip("junctions are Windows-only")
+        precious.mkdir()
+        (precious / "keep.txt").write_text("MINE", encoding="utf-8")
+        made = subprocess.run(["cmd", "/c", "mklink", "/J", str(dest / "BUILD-INFO"), str(precious)],
+                              capture_output=True, text=True)
+        assert made.returncode == 0, made.stdout + made.stderr
+    else:
+        try:
+            os.symlink(precious, dest / "BUILD-INFO")
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip("cannot create a symlink here: %s" % exc)
+    r = _install(installer, tmp_path, dest, source=src)
+    assert (dest / ".claude").is_dir(), "the copy did not run; this proves nothing: " + (r.stdout + r.stderr)[-1500:]
+    assert not os.path.lexists(dest / "BUILD-INFO"), "the link survived: " + (r.stdout + r.stderr)[-1500:]
+    if target == "real-file":
+        assert precious.read_text(encoding="utf-8") == "MINE", "the link's TARGET was touched"
+    if target == "junction":
+        assert (precious / "keep.txt").read_text(encoding="utf-8") == "MINE", "the junction's TARGET was touched"

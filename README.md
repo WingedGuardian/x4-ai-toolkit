@@ -1,5 +1,7 @@
 # X4 AI Assistant Toolkit
 
+**Start your agent from the install folder** or use the launcher in `bin/` to pick up this installation's project instructions and hooks. Codex also requires hook approval in `/hooks`.
+
 An AI-assisted **X4: Foundations** modding environment for coding agents — **Claude Code and
 OpenAI Codex** first-class, **OpenCode** best effort, and any other agent through
 [`ADAPTING.md`](ADAPTING.md). It handles the tedious, error-prone work of modding — coordinated
@@ -294,7 +296,7 @@ for the process runner and **has been run against the real game once, at the mai
 save loaded: treat every result as unverified**. Loading a save, closing with a world loaded and
 the terminate fallback have never run against the game. Every launch needs the user's approval of
 that specific run; the driver records the approval but cannot grant it. See
-[the x4run guide](docs/x4run.md) for the commands, exit codes, recovery steps and what is
+[the x4run guide](https://github.com/WingedGuardian/x4-ai-toolkit/blob/master/docs/x4run.md) for the commands, exit codes, recovery steps and what is
 measured versus unmeasured.
 
 ### Skills & subagents
@@ -520,11 +522,14 @@ protection is available through `x4refguard`, once explicitly applied and verifi
 
 ### 2. Get the toolkit and run the installer
 Download the latest release zip (from [Releases](https://github.com/WingedGuardian/x4-ai-toolkit/releases)
-or Nexus) and extract it, then run the guided installer. **On Windows, pick a SHORT folder**
-(e.g. `C:\X4AI`): Windows' classic 260-character path limit is reached once the folder's own
-path is longer than about 165 characters, because the deepest file in the toolkit sits 92
-characters below its root -- extracting under a long Downloads or OneDrive path can fail for
-the deepest files (a 2026-10-04 install test hit this with 2 test fixtures).
+or Nexus) and extract it, then run the guided installer from inside the extracted folder. The zip
+holds ONE folder, `X4AI`, so extracting it to `C:\` gives `C:\X4AI` (extracting into `C:\Tools` gives
+`C:\Tools\X4AI`). **On Windows, extract somewhere SHORT:** Windows' classic 260-character path limit
+(259 usable) is reached once the folder you extract into is longer than about 160 characters,
+because the deepest file is 92 characters inside the `X4AI` folder (measured 2026-11-26 over the zip's
+files; the longest is a Codex test fixture under `tools/x4validate/tests/`), and
+`X4AI\` adds 5 more -- extracting under a long Downloads or OneDrive path can fail for the deepest
+files (a 2026-10-04 install test hit this with 2 test fixtures).
 
 ```bash
 bash install.sh          # Linux / macOS / Windows (Git Bash)
@@ -569,6 +574,12 @@ agents were not measured. Each skip names its reason: an installed toolkit does 
 `agent/` source, so the tests that read it skip as `REPO-ONLY`. Answer any questions it asks. An agent
 with no adapter is pointed at [`ADAPTING.md`](ADAPTING.md), which shows how to build and prove
 one; until it has one, the toolkit's guards do not protect it.
+
+**The launcher.** The installer writes `bin/x4agent` (and `bin/x4agent.cmd` on Windows): it changes into the install folder and starts the agent you name, from whatever folder your terminal is in, for example `bin/x4agent claude` (also `codex`, `opencode`). `--method global` has no single folder to start in, so it writes none; it also edits no PATH and no shell profile. The files hold this machine's absolute install path, so they are never copied from a source tree. If the installer could not write them it says WARNING and the install still completes: start your agent from the install folder by hand.
+
+The bash launcher bakes a Windows path when it was installed from Windows, so use it from Git Bash, not WSL. The `.cmd` launcher cannot carry a non-ASCII install path (cmd.exe reads it in the wrong code page): for such a folder the installer writes only the bash launcher and says so, so `cd` into the folder and start your agent there.
+
+**PowerShell note.** The `.ps1` launcher needs local scripts allowed, and PowerShell picks a `.ps1` over a `.cmd` of the same name when you type the bare name (measured: it refuses under the default execution policy, where the `.cmd` runs). So on Windows the installer writes only the bash and `.cmd` launchers by default. From PowerShell run `bin\x4agent.cmd claude`. To have the `.ps1` as well, run `python -I scripts/x4launcher.py --toolkit <install folder> --agents claude --shells bash,cmd,powershell`, then start it with `powershell -ExecutionPolicy Bypass -File bin\x4agent.ps1 claude`.
 
 ### Prerequisites it will check for
 - **bash** — required. Every safety hook and both setup scripts run under it. Linux/macOS have it;
@@ -847,6 +858,17 @@ otherwise:
 > them in** — the two layouts can coexist, and the installer prints this note too.
 
 ---
+
+## Updating
+
+For a release install on 4.3.1 or later, tell your agent **“update the toolkit”** or run `/x4-toolkit-update` in Claude Code.
+The updater verifies the GitHub release
+asset and stages a review before making changes. Review the listed changes, approve any guard changes separately,
+and close other agents and editors that are writing to the install before apply. Your `x4-paths.env` and
+`X4-NOTES.md` stay in place. After an update that changes Codex hooks, reopen Codex and review them in `/hooks`.
+
+Use the installer to upgrade from 4.3.0 or earlier to 4.3.1, or to update a release install whose root has
+its own `.git` directory or file. Update a toolkit source checkout through Git.
 
 ## Using It
 

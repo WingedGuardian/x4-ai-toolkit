@@ -94,6 +94,81 @@ def p_hung_guard(tmp, tk, env, tree):
     return d + ("/wrapper-killed" if "did not answer" in text else "/adapter-bounded")
 
 
+def _detached_patch(tk, rel="dev/mymod/launch.py"):
+    patch = f'*** Begin Patch\n*** Add File: {rel}\n+import subprocess\n+subprocess.Popen(["x"], creationflags=0x8)\n*** End Patch'
+    return native("apply_patch_add", tk, command=patch)
+
+
+def p_detached_launch(tmp, tk, env, tree):
+    return chain(tree, _detached_patch(tk), env)[0]
+
+
+def p_detached_after_refusal(tmp, tk, env, tree):
+    """The funnel refuses (a write into reference/); the detector must not replace that refusal's reason."""
+    d, text, _ = chain(tree, _detached_patch(tk, "reference/libraries/launch.py"), env)
+    return d + ("/detached" if "no-detached-launch" in text else "/guard")
+
+
+def p_detached_ask(tmp, tk, env, tree):
+    """The funnel ASKS (a new file in the user profile); the detector must not replace that."""
+    d, text, _ = chain(tree, _detached_patch(tk, (tmp / "profile" / "launch.py").as_posix()), env)
+    return d + ("/detached" if "no-detached-launch" in text else "/guard")
+
+
+def p_detached_inert(tmp, tk, env, tree):
+    """The funnel answers INERT (a variable interpreter it cannot resolve); the detector must not replace that."""
+    cmd = "& $env:PY -c 'import subprocess; subprocess.Popen(1, creationflags=0x8)'"
+    d, text, _ = chain(tree, native("bash_powershell", tmp, command=cmd), env, shell="powershell")
+    return d + ("/detached" if "no-detached-launch" in text else "/guard")
+
+
+def p_detached_guard_off_log(tmp, tk, env, tree):
+    log = tmp / "backups" / "GUARDS-OFF.log"
+    log.unlink(missing_ok=True)                  # the control run's record must not stand in for the mutant run's
+    d = chain(tree, _detached_patch(tk), dict(env, X4_GUARD="off"))[0]
+    text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    return d + ("/logged" if "no-detached-launch would have DENIED" in text else "/unlogged")
+
+
+def p_detached_roots_recorded(tmp, tk, env, tree):
+    """A hook-only install: no X4_TOOLKIT, the toolkit comes from the path config, and ONLY the roots the funnel read
+    name the toolkit that holds the detector. The real read_roots must record them, or no call is ever judged."""
+    from codex_testlib import copy_shared_runtime
+    other = tmp / "other-toolkit"
+    if not other.exists():
+        copy_shared_runtime(other)
+        (other / "dev" / "mymod").mkdir(parents=True)
+    cfg = tmp / "paths.env"
+    cfg.write_text(f"X4_TOOLKIT={other.as_posix()}\n", encoding="utf-8")
+    e = dict(env, X4_CONFIG=str(cfg))
+    e.pop("X4_TOOLKIT")
+    return chain(tree, _detached_patch(other), e)[0]
+
+
+def p_detached_module_missing(tmp, tk, env, tree):
+    """No detector on disk: the call must still be judged by the funnel and allowed with a note, never refused."""
+    (tk / "tools" / "modding_harness" / "detached.py").unlink(missing_ok=True)   # the mutant run repeats the probe
+    return chain(tree, _detached_patch(tk), env)[0]
+
+
+def p_detached_module_exits(tmp, tk, env, tree):
+    """A detector that calls sys.exit while loading: a BaseException, which must still fail open."""
+    (tk / "tools" / "modding_harness" / "detached.py").write_text("raise SystemExit(5)\n", encoding="utf-8")
+    return chain(tree, _detached_patch(tk), env)[0]
+
+
+def p_detached_guard_off(tmp, tk, env, tree):
+    return chain(tree, _detached_patch(tk), dict(env, X4_GUARD="off"))[0]
+
+
+def p_detached_own_file(tmp, tk, env, tree):
+    return chain(tree, _detached_patch(tk, "dev/mymod/no-detached-launch.py"), env)[0]
+
+
+def p_detached_core_file(tmp, tk, env, tree):
+    return chain(tree, _detached_patch(tk, "dev/mymod/modding_harness/detached.py"), env)[0]
+
+
 MUTANTS = [
     # id, file, old, new, probe, control verdict
     ("shell-routing-dropped", "codex_adapter.py", 'SHELL = "powershell" if', 'SHELL = "bash" if',
@@ -118,6 +193,43 @@ MUTANTS = [
      p_hung_guard, "inert/adapter-bounded"),
     ("write-stdin-unguarded", "codex_adapter.py", "    if tool in STDIN_TOOLS:\n",
      "    if tool in STDIN_TOOLS:\n        return []\n", p_write_stdin, "deny"),
+    # no-detached-launch (4.3.1): one row per clause of the in-process check
+    ("detached-check-dropped", "codex_adapter.py",
+     "    verdict = detached_verdict(verdict, lambda: detached_items(payload, shell), deadline)\n",
+     "    pass\n", p_detached_launch, "deny"),
+    ("detached-consulted-after-a-refusal", "codex_adapter.py",
+     '    if verdict["decision"] not in ("allow", "advise"):\n        return verdict\n    try:',
+     "    if False:\n        return verdict\n    try:", p_detached_after_refusal, "deny/guard"),
+    ("detached-consulted-after-an-ask", "codex_adapter.py",
+     '    if verdict["decision"] not in ("allow", "advise"):\n        return verdict\n    try:',
+     '    if verdict["decision"] == "deny" and not verdict.get("inert"):\n        return verdict\n    try:',
+     p_detached_ask, "ask/guard"),
+    ("detached-consulted-after-an-inert-deny", "codex_adapter.py",
+     '    if verdict["decision"] not in ("allow", "advise"):\n        return verdict\n    try:',
+     '    if verdict["decision"] == "deny" and not verdict.get("inert"):\n        return verdict\n    try:',
+     p_detached_inert, "inert/guard"),
+    ("detached-guard-off-log-dropped", "codex_adapter.py", "        _log_guard_off(reason)\n", "        pass\n",
+     p_detached_guard_off_log, "advise/logged"),
+    ("detached-roots-not-recorded", "save_policy.py",
+     '    global LAST_ROOTS\n    LAST_ROOTS = packet(result.stdout.decode("utf-8") + "{}")[0]\n    return LAST_ROOTS',
+     '    return packet(result.stdout.decode("utf-8") + "{}")[0]', p_detached_roots_recorded, "deny"),
+    ("detached-fails-closed", "codex_adapter.py",
+     "    except BaseException as e:          # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny",
+     "    except KeyError as e:               # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny",
+     p_detached_module_missing, "advise"),
+    ("detached-base-exception-escapes", "codex_adapter.py",
+     "    except BaseException as e:          # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny",
+     "    except Exception as e:              # noqa: BLE001 -- nothing the check raises may become the wrapper's inert deny",
+     p_detached_module_exits, "advise"),
+    ("detached-guard-off-ignored", "codex_adapter.py",
+     '    if os.environ.get("X4_GUARD") == "off":\n        _log_guard_off(reason)',
+     '    if False:\n        _log_guard_off(reason)', p_detached_guard_off, "advise"),
+    ("detached-own-exempt-dropped", "codex_adapter.py",
+     'DETACHED_OWN_EXEMPT = ("no-detached-launch.py", ', 'DETACHED_OWN_EXEMPT = ("zz-no-such-file.py", ',
+     p_detached_own_file, "allow"),
+    ("detached-core-exempt-replaced", "codex_adapter.py",
+     "    return tuple(det.EXEMPT) + DETACHED_OWN_EXEMPT", "    return DETACHED_OWN_EXEMPT",
+     p_detached_core_file, "allow"),
 ]
 
 

@@ -635,3 +635,64 @@ def test_both_installers_PRINT_the_same_refguard_step_and_neither_APPLIES_it():
     assert "print_refguard_step \"$TOOLKIT\"" in sh and "Write-RefguardStep $Toolkit" in ps
     for text, name in ((sh, "install.sh"), (ps, "install.ps1")):
         assert "x4refguard.py' 'apply'" not in text and "x4refguard.py apply\"" not in text, name
+
+
+def test_BUILD_INFO_is_in_BOTH_copy_lists_and_neither_installer_reports_it_MISSING():
+    """4.3.1 task 6a: a release zip carries `BUILD-INFO` (the version and commit the shared core's self-update
+    reads); a git checkout has none, which is right. Both installers must copy it when it is there and stay
+    SILENT when it is not -- an absent BUILD-INFO is not the `[note] not in the source` kind of absence (that
+    note exists for items that SHOULD be there, like the absent mods/ folder that once survived a release)."""
+    assert "BUILD-INFO" in sh_items(), "install.sh does not copy BUILD-INFO from a release source"
+    assert "BUILD-INFO" in ps1_items(), "install.ps1 does not copy BUILD-INFO from a release source"
+    sh = SH.read_text(encoding="utf-8")
+    ps = PS1.read_text(encoding="utf-8")
+    assert 'X4_OPTIONAL_ITEMS="BUILD-INFO"' in sh, "install.sh lost its optional-item list"
+    assert "$X4OptionalItems = @('BUILD-INFO')" in ps, "install.ps1 lost its optional-item list"
+    # the missing-item note must consult the optional list in BOTH installers
+    assert re.search(r'X4_OPTIONAL_ITEMS', sh.split('MISSING="$MISSING $item"')[0][-400:]), \
+        "install.sh names an optional item as missing"
+    assert re.search(r'X4OptionalItems', ps.split("$missing += $i")[0][-400:]), \
+        "install.ps1 names an optional item as missing"
+
+
+def test_both_installers_remove_a_STALE_BUILD_INFO_in_a_step_of_their_own_before_the_copy():
+    """4.3.1 task 6b: when the source has no BUILD-INFO (a git checkout) the destination's old one (a release
+    install's) is recycled BEFORE the copy loop, in BOTH installers, and the name is in NEITHER prune list: those lists
+    also decide what the copy skips, which would stop a release source's BUILD-INFO travelling."""
+    sh = SH.read_text(encoding="utf-8")
+    ps = PS1.read_text(encoding="utf-8")
+    sh_step = re.search(r'if \{ \[ ! -e "\$SRC/BUILD-INFO" \] \|\| \[ "\$tracked" = 1 \]; \} && \{ \[ -e "\$dest/BUILD-INFO" \].*?\n'
+                        r'\s*recycle_installer_paths "\$dest/BUILD-INFO" \|\| return 1\n\s*fi', sh, re.S)
+    ps_step = re.search(r"if \(\$tracked -or -not \(Test-Path -LiteralPath \(Join-Path \$SRC 'BUILD-INFO'\)\)\) \{.*?"
+                        r"Recycle-InstallerPaths @\(\$stale\)", ps, re.S)
+    assert sh_step, "install.sh lost its stale BUILD-INFO step"
+    assert ps_step, "install.ps1 lost its stale BUILD-INFO step"
+    assert sh.index(sh_step.group(0)) < sh.index("for item in $X4_ITEMS; do", sh.index("copy_toolkit() {")), "install.sh removes it after the copy"
+    assert ps.index(ps_step.group(0)) < ps.index("foreach ($i in $items)", ps.index("function Copy-Toolkit")), "install.ps1 removes it after the copy"
+    assert "BUILD-INFO" not in re.search(r'X4_COPY_PRUNE="([^"]*)"', sh).group(1)
+    assert "BUILD-INFO" not in re.search(r"\$X4CopyPrune = @\((.*?)\)\n", ps, re.S).group(1)
+
+
+def test_both_installers_leave_OPTIONAL_items_out_of_the_tracked_set_coverage_check():
+    """4.3.1 task 6b: BUILD-INFO is never tracked (gitignored), so the check that every copy item on disk is tracked
+    (`git tracks nothing under '<item>'`) must skip OPTIONAL items in BOTH installers; otherwise a stray untracked one
+    in a checkout makes the installer abandon the tracked set and copy everything on disk."""
+    sh = SH.read_text(encoding="utf-8")
+    ps = PS1.read_text(encoding="utf-8")
+    sh_fn = sh[sh.index("_tracked_copy_set() {"):sh.index("copy_tracked_set() {")]
+    ps_fn = ps[ps.index("function Get-TrackedCopySet"):ps.index("function Copy-TrackedSet")]
+    sh_skip = sh_fn.index('case " $X4_OPTIONAL_ITEMS " in *" $item "*) continue ;; esac')
+    ps_skip = ps_fn.index("if ($X4OptionalItems -contains $i) { continue }")
+    assert sh_skip < sh_fn.index("git tracks nothing under"), "install.sh checks optional items for tracking"
+    assert ps_skip < ps_fn.index("git tracks nothing under"), "install.ps1 checks optional items for tracking"
+
+
+def test_both_installers_remove_a_BUILD_INFO_LINK_themselves_not_through_the_recycler():
+    """6b review L6: the recycler refuses links, install.sh used to test `-e || -L` and PowerShell's Test-Path calls a
+    dangling link absent. Both: a link of that name is removed itself (never followed); anything else is recycled."""
+    sh = SH.read_text(encoding="utf-8")
+    ps = PS1.read_text(encoding="utf-8")
+    assert re.search(r'if \[ -L "\$dest/BUILD-INFO" \]; then\s+rm -f -- "\$dest/BUILD-INFO" \|\| return 1\s+else\s+'
+                     r'recycle_installer_paths "\$dest/BUILD-INFO" \|\| return 1', sh), "install.sh lost its link branch"
+    assert ("[System.IO.File]::GetAttributes($stale)" in ps
+            and "FileAttributes]::ReparsePoint) { Remove-Item -LiteralPath $stale" in ps), "install.ps1 lost its link branch"

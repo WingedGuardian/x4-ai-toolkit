@@ -703,16 +703,16 @@ def test_the_doc_states_the_idle_rule_the_code_applies():
 
 def test_the_doc_names_the_session_sweep_as_the_exception_to_rules_6_and_7():
     doc = _retention()
-    rule7 = doc[doc.index("7. **Never unattended"):doc.index("### Where agent output goes")]
-    assert "temp sweep" in rule7.lower() and "detached" in rule7.lower()
+    sweep = doc.split("**The toolkit temp sweep**", 1)[1].split("\n- ", 1)[0]
+    assert "one exception to rules 6 and 7" in sweep and "in the background" in sweep
     assert "Session start sweeps" in doc
 
 
 def test_the_doc_says_what_stays_local_after_archiving():
     doc = _retention()
-    row = next(line for line in doc.splitlines() if line.startswith("| **Finished work**"))
-    for word in ("`.json`", "`.jsonl`", "`.log`", "1 MiB"):
-        assert word in row, word
+    rule = doc.split("**Evidence stays beside the stub:**", 1)[1].split("\n- ", 1)[0]
+    for word in ("`*.json`", "`*.jsonl`", "`*.log`", "1 MiB", "stay in the folder"):
+        assert word in rule, word
 
 
 @pytest.mark.parametrize("cls", hk.CLASSES)

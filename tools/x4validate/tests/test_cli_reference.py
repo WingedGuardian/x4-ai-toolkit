@@ -95,7 +95,7 @@ def test_the_skill_frontmatter_is_a_loadable_skill(expected):
 def test_no_personal_path_or_profile_id_reaches_the_skill(expected):
     """Skills ship to every user and hold no personal paths. MEASURED 2026-09-13: the
     help text names only `$X4_*` variables, so this is expected to stay empty."""
-    bad = re.compile(r"[A-Za-z]:[\\/]|/home/|/Users/|\b\d{8}\b")
+    bad = re.compile(r"\b[A-Za-z]:[\\/]|/home/|/Users/|\b\d{8}\b")
     hits = {k: bad.findall(v) for k, v in expected.items() if bad.search(v)}
     assert hits == {}, hits
 

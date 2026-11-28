@@ -23,6 +23,11 @@
 /x4-paths.env.*
 !/x4-paths.env.example
 /x4-housekeep.json
+# A user's private instruction file for the agent (machine paths, personal rules): never committed.
+CLAUDE.local.md
+# The launcher the installer writes (bin/x4agent, .cmd, .ps1) bakes this machine's absolute install path: per-machine.
+/bin/x4agent
+/bin/x4agent.*
 # 3.x leftovers in .claude/ (still read, deprecated) carry the key too -- and the old
 # template there is no longer the template, so it is not re-included.
 .claude/x4-paths.env
@@ -109,6 +114,11 @@ tools/x4validate/.claude-md-budget-baseline.json
 # committing one would store the same bytes twice and let a stale copy sit beside
 # a moved tag.
 dist/
+
+# The release zip's BUILD-INFO (version and commit; written by scripts/build-release.sh, copied in by the
+# installers). A tracked one is refused by the build's proof, and a stray one in a checkout is not the
+# maintainer's to commit. Anchored: only the root file.
+/BUILD-INFO
 
 # Nexus release packs are the USER's local artifact, not code: pasted into the Nexus
 # page by hand and deleted locally once posted, every release. Tracked, each deletion

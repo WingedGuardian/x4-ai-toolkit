@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 import pytest
 from _x4run_fake import FAKE_GAME_ROOT, FakeSystem, make_proc
@@ -22,9 +23,17 @@ CMD = ["python", "tests/e2e_driver.py", "--flag"]
 _UNSET = object()
 
 
+@pytest.fixture(autouse=True)
+def _wall_clock(monkeypatch):
+    monkeypatch.setattr(X, "_utc_now", lambda: datetime.fromisoformat("2026-11-24T10:00:00Z"))
+    monkeypatch.setattr(X, "_launch_preflight", lambda *args: None)
+    monkeypatch.setattr(X, "_verify_steam_client", lambda *args: None)
+
+
 def _approval() -> X.Approval:
     return X.Approval(approved_by="user", mode="menu-only", target="main menu",
-                      desktop="secondary desktop", recorded_at="2026-11-24T10:00:00Z")
+                      desktop="secondary desktop", recorded_at="2026-11-24T10:00:00Z",
+                      exclusive_launch=True)
 
 
 def _world(tmp_path, **command_kw):
@@ -71,6 +80,24 @@ def test_a_successful_cycle_starts_waits_runs_and_closes(tmp_path):
     assert kinds.index("launch") < kinds.index("command") < kinds.index("close")
     assert kinds.count("command") == 1 and len(_launches(fake)) == 1
     assert rep.notes == ()
+
+
+def test_recovery_cannot_close_a_live_cycle(tmp_path):
+    fake, store = _world(tmp_path)
+    other = X.StateStore(store.folder)
+
+    def probe():
+        calls_before = len(fake.calls)
+        report = X.stop(other, run=fake.run, sleep=fake.sleep, clock=fake.clock)
+        assert report is not None and not report.closed
+        assert "another driver operation" in "\n".join(report.steps)
+        assert len(fake.calls) == calls_before
+        assert store.read().phase == "running"
+        return True
+
+    result = _cycle(fake, store, probe)
+    assert result.ready and result.command_rc == 0
+    _assert_game_closed(fake, store, result)
 
 
 def test_every_call_including_the_callers_command_is_hidden_and_never_a_shell(tmp_path):
@@ -459,7 +486,7 @@ def test_forget_reports_a_record_it_could_not_remove(tmp_path):
 
     def deny():
         raise PermissionError("locked")
-    store.clear = deny
+    store._clear_locked = deny
     with pytest.raises(X.ForgetRefused, match="could not be removed"):
         _forget(fake, store)
     assert store.path.exists()

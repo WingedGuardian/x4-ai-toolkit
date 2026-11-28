@@ -221,7 +221,7 @@ MISSING=""
 #: .gitignore entry says MACHINE-LOCAL by design because wall-clock differs per
 #: machine, and which the installer then copied to another machine for
 #: perf_guard to compare against a stranger's timings.
-X4_COPY_PRUNE="tools/x4validate/.venv tools/x4validate/.pytest_cache tools/basex/.pytest_cache tools/x4validate/.mutation-probe-pristine .claude/hooks/__pycache__ .claude/hooks/.pytest_cache scripts/__pycache__ tools/.pytest_cache tools/basex/__pycache__ tools/basex/basex/.basex tools/x4validate/gates/__pycache__ tools/x4validate/scripts/__pycache__ tools/x4validate/tests/__pycache__ tools/x4validate/x4validate/__pycache__"
+X4_COPY_PRUNE="tools/x4validate/.venv tools/x4validate/.pytest_cache tools/basex/.pytest_cache tools/x4validate/.mutation-probe-pristine .claude/hooks/__pycache__ .claude/hooks/.pytest_cache scripts/__pycache__ tools/.pytest_cache tools/basex/__pycache__ tools/x4validate/gates/__pycache__ tools/x4validate/scripts/__pycache__ tools/x4validate/tests/__pycache__ tools/x4validate/x4validate/__pycache__"
 
 #: Per-machine files that must NEVER travel from the source: they hold THIS
 #: machine paths and secrets, and the destination copy is the user own.
@@ -249,7 +249,7 @@ X4_COPY_PRUNE="tools/x4validate/.venv tools/x4validate/.pytest_cache tools/basex
 #: `.claude/.reference-buildid` too (FX-G5 / reviewer J2 item 7): THIS machine's finished-unpack
 #: marker, which x4doctor reads as evidence of a MOVED tree -- copied in, a fresh install read
 #: "moved"; pruned, an upgrade would erase the destination's own.
-X4_KEEP_LOCAL="x4-paths.env x4-housekeep.json .claude/x4-paths.env .claude/settings.local.json .claude/backups .claude/.reference-buildid .codex/hooks.json .codex/config.toml .opencode/opencode.jsonc tools/basex/basex/data tools/basex/basex/coverage-x4raw.json tools/basex/basex/coverage-x4eff.json tools/basex/_eff tools/basex/stage-manifest.json tools/x4validate/.perf-baseline.json tools/x4validate/.obtainability-baseline.json tools/x4validate/.claude-md-budget-baseline.json tools/x4validate/.toolkit-usage-baseline.json tools/x4validate/.hook-false-positive-baseline.json tools/x4validate/.instrument-hygiene-baseline.json tools/x4validate/.schema-sweep-baseline.json"
+X4_KEEP_LOCAL="bin/x4agent bin/x4agent.cmd bin/x4agent.ps1 x4-paths.env x4-housekeep.json .claude/x4-paths.env .claude/settings.local.json .claude/backups .claude/.reference-buildid .codex/hooks.json .codex/config.toml .opencode/opencode.jsonc tools/basex/basex/.basex tools/basex/basex/data tools/basex/basex/coverage-x4raw.json tools/basex/basex/coverage-x4eff.json tools/basex/_eff tools/basex/stage-manifest.json tools/x4validate/.perf-baseline.json tools/x4validate/.obtainability-baseline.json tools/x4validate/.claude-md-budget-baseline.json tools/x4validate/.toolkit-usage-baseline.json tools/x4validate/.hook-false-positive-baseline.json tools/x4validate/.instrument-hygiene-baseline.json tools/x4validate/.schema-sweep-baseline.json"
 
 #: THE TRACKED SET, when the source is a git checkout.
 #:
@@ -288,6 +288,9 @@ _tracked_copy_set() {
   while IFS= read -r -d '' p; do all+=("$p"); heads="$heads${p%%/*} "; done < <(git -C "$SRC" ls-files -z 2>/dev/null)
   for item in $X4_ITEMS; do
     [ -e "$SRC/$item" ] || continue
+    # An OPTIONAL item (BUILD-INFO) is never tracked, and a stray untracked one in a checkout must not make this
+    # check give up the tracked set and copy everything on disk. Mirror: Get-TrackedCopySet in install.ps1.
+    case " $X4_OPTIONAL_ITEMS " in *" $item "*) continue ;; esac
     case "$heads" in *" $item "*) : ;; *)
       X4_TRACKED_WHY="git tracks nothing under '$item', which is on disk"
       return 1 ;;
@@ -401,10 +404,23 @@ recycle_copy_prune() {
   recycle_installer_paths "${victims[@]}"
 }
 
+precheck_build_info() {
+  local dest="$1" tracked="$2"
+  if { [ -e "$dest/BUILD-INFO" ] && [ ! -L "$dest/BUILD-INFO" ] && [ ! -f "$dest/BUILD-INFO" ]; } ||
+     { [ "$tracked" = 0 ] && { [ -L "$SRC/BUILD-INFO" ] ||
+         { [ -e "$SRC/BUILD-INFO" ] && { [ ! -f "$SRC/BUILD-INFO" ] || [ -L "$dest/BUILD-INFO" ]; }; }; }; }; then
+    echo "REFUSING: BUILD-INFO must be a regular file when copied or replaced. Inspect the source and destination markers." >&2
+    return 1
+  fi
+}
+
 copy_toolkit() {
   refuse_if_dry_run "copying the toolkit into" "$1"  # copy_toolkit DEST  — copy tracked toolkit files (never game data / local config)
-  precheck_project_settings "$1"
-  local dest="$1"; mkdir -p "$dest/.claude"
+  local dest="$1" tracked=0
+  _tracked_copy_set && tracked=1
+  precheck_build_info "$dest" "$tracked" || return 1
+  precheck_project_settings "$dest"
+  mkdir -p "$dest/.claude"
   # An UNEDITED KB some release shipped (scripts/shipped-instruction-hashes.txt) is ours to
   # replace: preserving it saved a KNOWLEDGEBASE.pre-4.0-<sha>.md of the toolkit's own text on
   # every upgrade (release review H6). Only a KB that is neither the source's nor a shipped one
@@ -443,8 +459,21 @@ copy_toolkit() {
   # ever ran. A cleanup that only runs after the copy cannot make the copy possible.
   local junk
   recycle_copy_prune "$dest" || return 1
-  local tracked=0
-  _tracked_copy_set && tracked=1
+  # A STALE BUILD-INFO. It names the release this folder came from (the shared core's self-update reads it), so an
+  # install from a git checkout over a release install, whose source has none, would otherwise keep the OLD release's
+  # file and read as that older version. A generated, shipped file, never a user's: recycled like the prune list, but NOT
+  # in it -- X4_COPY_PRUNE is also what the copy skips, and a release source's BUILD-INFO must travel. A checkout copies
+  # only git's tracked set, which never holds BUILD-INFO, so even a stray one in it is not copied and the old one is stale.
+  # Mirror: install.ps1.
+  # A LINK of that name (even a dangling one) is removed itself, never followed and never handed to the recycler (which
+  # refuses links): a link holds nothing to recover. Mirror: install.ps1 (reparse point).
+  if { [ ! -e "$SRC/BUILD-INFO" ] || [ "$tracked" = 1 ]; } && { [ -e "$dest/BUILD-INFO" ] || [ -L "$dest/BUILD-INFO" ]; }; then
+    if [ -L "$dest/BUILD-INFO" ]; then
+      rm -f -- "$dest/BUILD-INFO" || return 1
+    else
+      recycle_installer_paths "$dest/BUILD-INFO" || return 1
+    fi
+  fi
   if [ "$tracked" = 1 ]; then
     # ANNOUNCED: a step that narrows the data says so.
     echo "  source is a git checkout: copying the ${#X4_TRACKED[@]} file(s) git tracks in the copy set;"
@@ -458,7 +487,10 @@ copy_toolkit() {
   for item in $X4_ITEMS; do
     # NAMED, never silently skipped -- that silence is how the absent mods/ folder
     # survived a whole release.
-    [ -e "$SRC/$item" ] || { MISSING="$MISSING $item"; continue; }
+    if [ ! -e "$SRC/$item" ]; then
+      case " $X4_OPTIONAL_ITEMS " in *" $item "*) ;; *) MISSING="$MISSING $item" ;; esac
+      continue
+    fi
     [ "$tracked" = 1 ] || copy_item "$item" "$dest"
   done
   if [ "$tracked" = 1 ]; then copy_tracked_set "$dest"; fi
@@ -600,7 +632,13 @@ _owned_lines_old() {   # _owned_lines_old CONFIG_FILE
 #: COMMON to every agent target. Each agent's own files are named once more, in its
 #: X4_AGENT_ITEMS_<name> set below, and never here: an item in both lists is an item
 #: two answers can disagree about.
-X4_COPY_ITEMS="tools bin scripts mods KNOWLEDGEBASE.md KNOWLEDGEBASE.local.md.example README.md CHANGELOG.md LICENSE setup.sh install.sh install.ps1 SETUP_PROMPT.txt ADAPTING.md RETENTION.md x4-housekeep.json.example .gitignore .gitattributes x4-paths.env.example"
+X4_COPY_ITEMS="tools bin scripts mods KNOWLEDGEBASE.md KNOWLEDGEBASE.local.md.example README.md CHANGELOG.md LICENSE setup.sh install.sh install.ps1 SETUP_PROMPT.txt ADAPTING.md RETENTION.md x4-housekeep.json.example .gitignore .gitattributes x4-paths.env.example BUILD-INFO"
+
+#: Items a source MAY lack without that being news. BUILD-INFO is written by `scripts/build-release.sh` into a
+#: RELEASE zip (the version and commit the shared core's self-update reads); a git checkout has none, which is
+#: right, so its absence is not a "[note] not in the source" line (that note exists for the items that should
+#: be there, like the absent mods/ folder that once survived a release). Mirror: $X4OptionalItems in install.ps1.
+X4_OPTIONAL_ITEMS="BUILD-INFO"
 
 #: PER-AGENT sets (audit F8: the installers shipped no AGENTS.md at all). `agent/` -- the
 #: neutral source the generator reads -- is in NO set: an installed toolkit is
@@ -1305,6 +1343,45 @@ write_opencode_config() {   # DEST
     return 0
   fi
   echo "  $out"
+}
+
+#: The launcher (4.3.1): an agent loads its guards and instructions from the folder it is STARTED in; started
+#: anywhere else it runs with none, and nothing can notice. bin/x4agent changes into the install folder and starts
+#: the agent. scripts/x4launcher.py writes it through the vendored core; it bakes this machine's absolute path, so
+#: the files are per-machine (X4_KEEP_LOCAL). A failure here is a WARNING, never INCOMPLETE: the install itself is
+#: sound, and the agent can still be started from the install folder by hand. install.ps1: Write-Launcher.
+X4_LAUNCHER_START=""; X4_LAUNCHER_AGENTS=""   # set only when the launcher was written
+write_launcher() {   # DEST
+  local dest="$1" agents out rc=0
+  if [ "$METHOD" = global ]; then
+    echo "  [note] launcher: none for --method global (a global install has no single folder to start in)."
+    return 0
+  fi
+  if [ "$DRY_RUN" = 1 ]; then echo "  --dry-run: NOT writing the launcher into $dest/bin"; return 0; fi
+  agents="$(_agents_landed | tr -d ' ')"
+  if [ -z "$agents" ]; then
+    echo "  [note] launcher: no agent target was installed, so there is nothing to start."
+    return 0
+  fi
+  if [ ! -f "$dest/scripts/x4launcher.py" ]; then
+    echo "  WARNING: no launcher written: scripts/x4launcher.py is missing from $dest. Start your agent from $dest."
+    return 0
+  fi
+  if ! _oc_python; then
+    echo "  WARNING: no launcher written: no Python >= 3.10 (set X4_PYTHON). Start your agent from $dest."
+    return 0
+  fi
+  out="$("${X4_OC_PY[@]}" -I "$dest/scripts/x4launcher.py" --toolkit "$dest" --agents "$agents" 2>&1)" || rc=$?
+  out="$(printf '%s' "$out" | tr -d '\r')"
+  printf '%s\n' "$out" | sed 's/^/  /'
+  if [ "$rc" != 0 ]; then
+    echo "  WARNING: the launcher was not written (exit $rc, see above). Start your agent from $dest."
+  else
+    # What the script says it wrote (and for which agents) is what the final banner names, never a fixed text.
+    X4_LAUNCHER_START="$(printf '%s\n' "$out" | sed -n 's/^launcher: start with: //p' | head -n 1)"
+    X4_LAUNCHER_AGENTS="$(printf '%s\n' "$out" | sed -n 's/^launcher: agents: //p' | head -n 1)"
+  fi
+  return 0
 }
 
 X4_CODEX_HOOKS_WRITTEN=0
@@ -2452,6 +2529,9 @@ case "$METHOD" in
     if ! same_dir "$SRC" "$TOOLKIT"; then
       precheck_project_settings "$TOOLKIT"
       precheck_locked_targets "$TOOLKIT"
+      tracked_marker=0
+      _tracked_copy_set && tracked_marker=1
+      precheck_build_info "$TOOLKIT" "$tracked_marker" || exit 1
       announce_copy_plan "$TOOLKIT"
       preserve_user_agents_md "$TOOLKIT"   # after every precheck, before the copy
       preserve_user_claude_md "$TOOLKIT"   # 3.x -> 4.0: same position, same shape
@@ -2497,6 +2577,9 @@ case "$METHOD" in
     if ! same_dir "$SRC" "$TOOLKIT"; then
       precheck_project_settings "$TOOLKIT"
       precheck_locked_targets "$TOOLKIT"
+      tracked_marker=0
+      _tracked_copy_set && tracked_marker=1
+      precheck_build_info "$TOOLKIT" "$tracked_marker" || exit 1
       announce_copy_plan "$TOOLKIT"
       preserve_user_agents_md "$TOOLKIT"   # after every precheck, before the copy
       preserve_user_claude_md "$TOOLKIT"   # 3.x -> 4.0: same position, same shape
@@ -2663,6 +2746,9 @@ elif [ "$DO_UNPACK" = 1 ]; then
     || add_failed "bin/unpack-reference.sh"
 fi
 
+# The launcher: a WARNING on failure, so it sits outside the INCOMPLETE accounting below.
+write_launcher "$TOOLKIT"
+
 echo
 # An INCOMPLETE install must not print the success text. install.ps1 has accumulated
 # $failed and exited 1 for a while; install.sh swallowed a failed setup.sh with
@@ -2681,6 +2767,15 @@ echo "=== install complete ($METHOD) ==="
 echo "Toolkit:   $TOOLKIT"
 echo "Agents:    $(_agents_landed)"
 echo "Config:    $TOOLKIT/x4-paths.env  (edit any path here)"
+if [ "$METHOD" != global ]; then
+  if [ -n "$X4_LAUNCHER_START" ]; then
+    echo "Start:     cd \"$TOOLKIT\" and run your agent there"
+    echo "Launcher:  $X4_LAUNCHER_START"
+    echo "Agents:    ${X4_LAUNCHER_AGENTS//|/, } (pass one name to the launcher)"
+  else
+    echo "Start:     cd \"$TOOLKIT\" and run your agent there"
+  fi
+fi
 # CODEX RUNS NO HOOK IT HAS NOT REVIEWED, and it says nothing when it skips one
 # (MEASURED, spike 2026-09-30). The installer must never approve hooks or trust the
 # project on the user's behalf (spec section 8), so it says what to do instead.

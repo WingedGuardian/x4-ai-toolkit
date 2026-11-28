@@ -153,22 +153,22 @@ evade this policy. Missing preservation or evaluation is a refusal, not permissi
 
 ### General
 - **Delete by certainty.** Delete permanently only what is proven rebuildable now and was marked
-  disposable by its producer at creation (BaseX caches: the builders' own cleanup and `DROP DB`;
-  never run `scripts/x4basex_artifacts.py` by hand). Anything that could be the only copy goes to
-  the Recycle Bin / Trash (Windows: `Microsoft.VisualBasic.FileIO.FileSystem` `DeleteFile`/
+  disposable by its producer at creation (BaseX: `DROP DB` and `scripts/x4basex_artifacts.py`
+  for caches and stale licences. No backup or recycling. Keep custom unreceipted workspaces).
+  Anything that could be the only copy goes to the Recycle Bin / Trash (Windows: `Microsoft.VisualBasic.FileIO.FileSystem` `DeleteFile`/
   `DeleteDirectory` with `SendToRecycleBin`; Linux: `gio trash`; macOS: Finder Trash). Unknown
   value is kept. Any other permanent delete needs the user's OK; a failed recycle never falls back
   to one. Report what was deleted, recycled and failed. The guards judge a move to the trash
   exactly as a delete.
 - Retention: `RETENTION.md`, `scripts/x4housekeep.py`. `cleanupPeriodDays`: user settings only.
-- **Resources: limit work you start yourself** (test suites, corpus builds, load tests, parallel
-  agents): together at most 40% of CPU and 25% of RAM, low priority, at most eight test workers;
-  load probes idle and time-boxed. The game and work the user directs are exempt. Hard floor: the
-  system drive keeps min(pagefile, 50 GB) free, other drives min(5%, 50 GB). Raise a concern only
-  when a job could reach a floor; never terminate another session's processes.
-  Memory means **physical RAM**: admission leaves 20% available; commit keeps a fixed 512 MiB
-  after reservations (never a percentage). Stop our job below 256 MiB commit or 2 GiB RAM for
-  10 s, or 128 MiB / 1 GiB at once. User-directed work is exempt from shares, not those floors.
+- **Resources: limit work you start yourself** (suites, builds, load tests, agents): wait
+  only if a job would push the machine past 90% CPU, leave under 3 GiB RAM (20% of RAM while a
+  game runs) or under 512 MiB commit; low priority, at most eight test workers; probes idle and
+  time-boxed. The game is exempt; user-directed work is exempt from the limits, not the floors.
+  Floors: the system drive keeps min(pagefile, 50 GB) free, other drives min(5%, 50 GB); stop our
+  job below 256 MiB commit or 2 GiB RAM for 10 s, or 128 MiB / 1 GiB at once (RAM means physical
+  RAM; commit is a fixed margin). Raise a concern only when a job could reach a floor; never
+  terminate another session's processes.
 
 ### Iteration snapshots (standing process)
 Before experimenting on a working state, snapshot it to `.claude\backups\known-good-<name>\`.

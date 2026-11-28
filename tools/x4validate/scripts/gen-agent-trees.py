@@ -570,6 +570,9 @@ def generate(repo: Path) -> dict[str, str]:
     # save_policy.batch imports it for an action whose execution cwd is unknown (K6): without
     # it the generic entry crashed (ModuleNotFoundError) instead of refusing the action.
     out["tools/x4_harness/patch_paths.py"] = _read(src / "guards/adapters/patch_paths.py")
+    # The release profile for the core's self-update (4.3.1): harness-only, never in a hook folder, so the
+    # shipped-hook-name lists do not change.
+    out["tools/x4_harness/x4_update.py"] = _read(src / "guards/adapters/x4_update.py")
     out["tools/x4_harness/codex-hooks.json.tmpl"] = _read(src / CODEX_HOOKS_TEMPLATE)
     out[".claude/settings.json"] = _read(src / "targets" / "claude" / "settings.json")
     return dict(sorted(out.items()))

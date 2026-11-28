@@ -826,7 +826,11 @@ jobs:
           #   parametrized: pytest.skip off Windows; the one test that asserts the literal CREATE_NO_WINDOW value).
           #   `git grep -n skip` over the branch's added/changed test files finds no other skip. ubuntu 499 -> 500,
           #   windows unchanged at 97. Ceilings: 500 + 3, 97 + 3. Re-READ per file on the first CI run.
-          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '503' || '100' }}
+          # 4.3.1 projection from v4.3.0 PR run 44779177446 (500 Ubuntu, 98 Windows):
+          # Ubuntu +18: 11 Codex adapter mutations, 4 launcher, 2 installer junctions, 1 driver.
+          # Windows +1: POSIX launcher. Preserve three slots of slack on Ubuntu.
+          # Reconcile per-test skips on the exact 4.3.1 qualification run.
+          X4_MAX_SKIPS: ${{ matrix.os == 'ubuntu-latest' && '521' || '100' }}
           # No .pyc from CI: a stale cache cannot then masquerade as the source.
           PYTHONDONTWRITEBYTECODE: '1'
         # --extra geometry (4.0.1): without it test_geometry*.py skip whole, and the x4similar
@@ -955,8 +959,8 @@ jobs:
     # (test_file_guard_batch 67 errors, test_generic_file_batch 7, test_instrument_hygiene 22 failed,
     # test_installer_custom_settings 12, test_temp_hygiene 5, test_x4fresh_session 6, ...).
     #
-    # This leg builds the copy the way the README does (git archive, then the REAL install.sh --method
-    # separate, which runs setup.sh and so a fresh `uv sync`), proves it is an install, runs the suite
+    # This leg builds the copy the way the README does (the release build's own zip, extracted, then the REAL
+    # install.sh --method separate, which runs setup.sh and so a fresh `uv sync`), proves it is an install, runs the suite
     # there, and hands the junit file to .github/scripts/installed_suite_verdict.py, which refuses to pass
     # on: any failure or error, an agent/ or .git in the tree, a missing or tiny junit file, too few
     # passes, or more skips than the ceiling. Each clause has a twin in test_installed_suite_verdict.py.
@@ -980,6 +984,11 @@ jobs:
     # 2026-11-17 (4.2.0, F124 guard): 1161 READ on 44002746283 (ae3617a0) against 1157 on the green 43793898950
     # (cd893037), per file: the ONLY delta is tests/test_pipe_unref_guard.py +4 (real game DLLs; no install on
     # the runner), the same +4 both `tests` legs itemise. 1161 + 3 = 1164.
+    # 4.3.1 projection from v4.3.0 job 136612436552 (1163 measured):
+    # +55: BaseX wording 4, guard deploy 6, local instructions 2, resource policy 5,
+    # guarded update 6, update 14, Codex mutations 11, launcher 4, installer junctions 2, driver 1.
+    # Maintenance sources, Git metadata, or Windows are absent from this installed Ubuntu lane.
+    # Expected 1218, upper bound 1221. Reconcile per-test skips on the exact qualification run.
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -1010,7 +1019,7 @@ jobs:
         shell: bash
         run: echo setup complete
 
-      - name: Install a real copy (git archive, then install.sh) and prove it is an install
+      - name: Install a real copy (the release build's zip, then install.sh) and prove it is an install
         id: install
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Linux' }}
         shell: bash
@@ -1021,11 +1030,18 @@ jobs:
           SRC="$RUNNER_TEMP/release-zip"
           TK="$RUNNER_TEMP/installed-toolkit"
           mkdir -p "$SRC"
-          git archive HEAD | tar -x -C "$SRC"
+          # THE ZIP USERS GET: scripts/build-release.sh's dry-run build (one X4AI/ folder plus a BUILD-INFO, proved
+          # against the tracked set by the script itself), extracted, then installed from inside X4AI/.
+          bash scripts/build-release.sh HEAD
+          unzip -q dist/X4.Foundations.AI.Assistant.Toolkit-HEAD.zip -d "$SRC"
+          [ "$(ls -A "$SRC")" = "X4AI" ] || { echo "the zip does not hold exactly one folder, X4AI"; exit 1; }
+          SRC="$SRC/X4AI"
+          test -f "$SRC/BUILD-INFO" || { echo "the zip has no BUILD-INFO"; exit 1; }
           # The premise: the release zip carries agent/ and the install DROPS it. If the zip stopped carrying
           # it there would be nothing to drop and the checks below would prove nothing.
           test -d "$SRC/agent" || { echo "the archive has no agent/: this leg's premise is gone"; exit 1; }
           ( cd "$SRC" && bash install.sh --method separate --toolkit "$TK" --yes --no-env )
+          cmp "$SRC/BUILD-INFO" "$TK/BUILD-INFO" || { echo "the install did not carry BUILD-INFO over"; exit 1; }
           test ! -e "$TK/agent" || { echo "the install carries agent/: it is not runtime-only"; exit 1; }
           test ! -e "$TK/.git" || { echo "the install carries a .git"; exit 1; }
           test -d "$TK/tools/x4validate/.venv" || { echo "no venv: setup.sh did not run"; exit 1; }
@@ -1057,7 +1073,7 @@ jobs:
           python3 .github/scripts/installed_suite_verdict.py \
             --junit "$RUNNER_TEMP/installed-suite.xml" \
             --root "$RUNNER_TEMP/installed-toolkit" \
-            --min-tests 6000 --min-passed 5300 --max-skips 1164
+            --min-tests 6000 --min-passed 5300 --max-skips 1221
 
   hook-mutation:
     name: hook mutation (${{ matrix.os }}, shard ${{ matrix.shard }}/8)

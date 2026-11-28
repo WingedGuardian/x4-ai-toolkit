@@ -6,7 +6,9 @@ launch is only ever a call made to the scripted fake runner.
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from _x4run_fake import FAKE_GAME_EXE, FAKE_GAME_ROOT, FakeSystem, make_proc
@@ -18,6 +20,107 @@ GAME_ROOT = FAKE_GAME_ROOT
 STEAM = make_proc(900, name="steam.exe", path="S:/steam/steam.exe")
 
 
+@pytest.fixture(autouse=True)
+def _wall_clock(monkeypatch):
+    monkeypatch.setattr(X, "_utc_now", lambda: datetime.fromisoformat("2026-11-24T10:00:00Z"))
+
+
+@pytest.fixture
+def launch_admission():
+    return X._launch_preflight
+
+
+@pytest.fixture(autouse=True)
+def _skip_real_launch_preflight(monkeypatch, launch_admission):
+    monkeypatch.setattr(X, "_launch_preflight", lambda *args: None)
+    monkeypatch.setattr(X, "_verify_steam_client", lambda *args: None)
+
+
+@pytest.mark.parametrize(("case", "error"), [
+    ("good", None),
+    ("foreign-X4", "uniquely registered Steam X4"),
+    ("foreign-client", "single running Steam client"),
+    ("low-disk", "below the 4.0 GiB floor"),
+])
+def test_windows_launch_preflight_checks_registered_target_client_and_disk(
+        tmp_path, monkeypatch, launch_admission, case, error):
+    gib = 1024**3
+    game = tmp_path / "x4"
+    game.mkdir()
+    (game / "X4.exe").touch()
+    steam = tmp_path / "steam.exe"
+    client = tmp_path / "other" / "steam.exe" if case == "foreign-client" else steam
+    registered = game.parent if case == "foreign-X4" else game
+    monkeypatch.setattr(X.sys, "platform", "win32")
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    monkeypatch.setattr(X, "_steam_registered_roots", lambda: {registered})
+    monkeypatch.setattr(X.shutil, "disk_usage", lambda _: SimpleNamespace(
+        total=100 * gib, free=(3 if case == "low-disk" else 10) * gib))
+
+    def read_disk_metadata(argv, **kwargs):
+        assert "Win32_PageFileUsage" in argv[-1]
+        assert kwargs["creationflags"] == X.NO_WINDOW
+        return subprocess.CompletedProcess(argv, 0, "4096\n", "")
+
+    args = (game, steam, [make_proc(900, name="steam.exe", path=str(client))],
+            tmp_path / "state", read_disk_metadata)
+    if error is None:
+        launch_admission(*args)
+    else:
+        with pytest.raises(ValueError, match=error):
+            launch_admission(*args)
+
+
+def test_failed_local_launch_preflight_never_asks_steam_to_launch(tmp_path, monkeypatch):
+    def wrong_install(*args):
+        raise ValueError("Steam is registered to a different game folder")
+
+    fake = _fake()
+    store = _store(tmp_path, fake)
+    monkeypatch.setattr(X, "_launch_preflight", wrong_install)
+    with pytest.raises(X.StartRefused, match="different game folder") as caught:
+        _start(fake, tmp_path, store=store)
+    assert not caught.value.launch_attempted
+    assert not store.path.exists()
+    assert not _launches(fake)
+
+
+def test_steam_client_disappearing_after_preflight_blocks_the_launch(tmp_path, monkeypatch):
+    fake = _fake()
+    store = _store(tmp_path, fake)
+    monkeypatch.setattr(X, "_verify_steam_client", lambda *_: "process has exited")
+    with pytest.raises(X.StartRefused, match="Steam client changed") as caught:
+        _start(fake, tmp_path, store=store)
+    assert not caught.value.launch_attempted and not _launches(fake)
+    assert store.read() is None
+
+
+def test_forwarder_timeout_never_terminates_a_possible_new_client(monkeypatch):
+    class Child:
+        def wait(self, timeout):
+            assert timeout == 1
+            raise subprocess.TimeoutExpired("steam.exe", timeout)
+
+    child = Child()
+    monkeypatch.setattr(X.subprocess, "Popen", lambda *a, **k: child)
+    with pytest.raises(subprocess.TimeoutExpired):
+        X._forward_steam(["steam.exe", "-applaunch", "392160"], timeout=1)
+
+
+@pytest.mark.parametrize(("started", "error"), [
+    ("2026-11-24T09:59:59.9999990Z", "predates the Steam request"),
+    ("2026-11-24T10:00:00", "start time .* could not be verified"),
+])
+def test_start_cannot_adopt_a_process_without_a_fresh_birth_time(tmp_path, started, error):
+    fake = _fake()
+    store = _store(tmp_path, fake)
+    fake.launch_spawns(make_proc(2000, started=started))
+    with pytest.raises(X.StartRefused, match=error) as caught:
+        _start(fake, tmp_path, store=store)
+    assert caught.value.launch_attempted
+    assert store.read().process is None
+
+
 def _fake(*procs) -> FakeSystem:
     """A fake world with Steam running (the start's preflight requires it) plus `procs`."""
     return FakeSystem([STEAM, *procs])
@@ -25,7 +128,8 @@ def _fake(*procs) -> FakeSystem:
 
 def _approval(**kw) -> X.Approval:
     base = dict(approved_by="user", mode="menu-only", target="main menu",
-                desktop="secondary desktop", recorded_at="2026-11-24T10:00:00Z")
+                desktop="secondary desktop", recorded_at="2026-11-24T10:00:00Z",
+                exclusive_launch=True)
     base.update(kw)
     return X.Approval(**base)
 
@@ -178,7 +282,7 @@ def test_two_new_processes_refuse_naming_both_and_keep_the_record(tmp_path):
 # --------------------------------------------------------------- failure: nothing started
 
 
-def test_no_game_within_the_timeout_clears_state_and_does_not_retry(tmp_path):
+def test_no_game_within_the_timeout_keeps_state_and_blocks_the_next_launch(tmp_path):
     fake = _fake()
     fake.launch_spawns(make_proc(2000), after=500)  # appears long after the deadline
     store = _store(tmp_path, fake)
@@ -187,10 +291,13 @@ def test_no_game_within_the_timeout_clears_state_and_does_not_retry(tmp_path):
     msg = str(exc.value)
     assert "no X4.exe appeared within 30" in msg and "Steam was asked" in msg
     assert "launch call timed out" not in msg  # that warning is only for a timed-out call
-    assert not store.path.exists()
+    assert store.read().process is None
     assert len(_launches(fake)) == 1  # exactly one launch attempt
     assert 30 <= fake.clock() < 30 + 2 + 2  # it waited out the deadline, not far beyond it
     assert fake.table == [STEAM]
+    with pytest.raises(X.UnfinishedRun):
+        _start(fake, tmp_path, store=store)
+    assert len(_launches(fake)) == 1
 
 
 def test_a_launch_call_that_cannot_be_made_clears_state_and_is_not_retried(tmp_path):
@@ -295,8 +402,8 @@ def test_reads_that_failed_earlier_but_end_with_a_good_empty_read_clear_the_reco
         _start(fake, tmp_path, store=store, timeout_s=20)
     msg = str(exc.value)
     assert "no X4.exe appeared within 20" in msg and "earlier process read(s) failed" in msg
-    assert "KEPT" not in msg
-    assert not store.path.exists()  # the LAST read succeeded and saw no game: nothing started
+    assert "KEPT" in msg
+    assert store.read().process is None
     assert len(_launches(fake)) == 1
 
 
@@ -360,7 +467,7 @@ def test_a_timed_out_launch_call_still_polls_and_records_a_game_that_appears(tmp
     assert len(_launches(fake)) == 1  # never a second launch call
 
 
-def test_a_timed_out_launch_call_with_no_game_clears_the_record_and_warns(tmp_path):
+def test_a_timed_out_launch_call_with_no_game_keeps_the_record_and_warns(tmp_path):
     fake = _fake()
     _timing_out_launch(fake)
     store = _store(tmp_path, fake)
@@ -369,7 +476,7 @@ def test_a_timed_out_launch_call_with_no_game_clears_the_record_and_warns(tmp_pa
     msg = str(exc.value)
     assert "launch call timed out" in msg and "may still start the game" in msg
     assert "check for an X4.exe before starting again" in msg
-    assert not store.path.exists()
+    assert store.read().process is None
     assert len(_launches(fake)) == 1
     assert fake.clock() >= 30  # it waited out the deadline before giving up
 

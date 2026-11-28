@@ -444,6 +444,12 @@ def shell_evidence(payload, roots, *, execution_context=False, ipc=None, deadlin
     return evidence
 
 
+#: The roots the latest read_roots() of THIS process returned (None until one does). The Codex and OpenCode
+#: adapters reset it at the start of a call and the no-detached-launch check reuses it, so that check never
+#: starts a second Bash just to find the toolkit.
+LAST_ROOTS = None
+
+
 def read_roots(deadline):
     import x4guard
     bash, why = x4guard.resolve_bash()
@@ -455,7 +461,9 @@ def read_roots(deadline):
                             timeout=max(.01, deadline - time.monotonic()))
     if result.returncode:
         raise ValueError("protection roots could not be resolved by the Bash backend")
-    return packet(result.stdout.decode("utf-8") + "{}")[0]
+    global LAST_ROOTS
+    LAST_ROOTS = packet(result.stdout.decode("utf-8") + "{}")[0]
+    return LAST_ROOTS
 
 
 def batch(payload, calls, judge, deadline, host, preview=False, helper=False, *, execution_cwd_known=None):

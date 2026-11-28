@@ -24,6 +24,8 @@ Routing (pre):
   edit, write  -> a write of filePath
   apply_patch  -> parse_patch_opencode (OpenCode's grammar, not Codex's): add/update/move_to are writes, delete/move_from are deletes
   anything else-> allow, no guard run (read, glob, grep, webfetch, task, skill, MCP tools ...)
+After the funnel's verdict, and only when it is allow or advise, the call is also read by the core
+no-detached-launch detector (codex.detached_verdict: in-process, fail open with a visible note).
 On allow/advise the backup hook runs for existing edit/write targets and patch update/delete
 ops (Claude Code runs backup-before-edit on Edit/Write). `post` runs the validator hook on each
 written path and only ever advises. Stdlib only; Python >= 3.10.
@@ -147,8 +149,36 @@ def translate(p: dict) -> tuple[list[tuple], list[tuple] | None, str | None]:
     return [], None, None
 
 
+def detached_items(p: dict, cwd: str | None) -> list[tuple]:
+    """What the core detector reads for one OpenCode call (see codex.detached_items for the item shapes). OpenCode's
+    camelCase arguments are mapped to the snake_case keys the detector's judge() reads."""
+    tool, args, base = p["tool"], p["args"], p["directory"]
+    if tool == SHELL_TOOL:
+        cmd = args.get("command")
+        if not isinstance(cmd, str):
+            return []
+        where = cwd or base
+        items = [("shell", p["shell"], cmd, where)]
+        found = patch_paths.shell_patch(cmd)
+        if found is not None:
+            body, cd = found
+            items.append(("patch", body, core._abspath(cd, where) if cd else where))
+        return items
+    if tool in FILE_TOOLS:
+        path = core._abspath(_arg(args, "filePath", tool), base)
+        if tool == "write":
+            return [("file", "Write", {"file_path": path, "content": args.get("content")}, base)]
+        return [("file", "Edit", {"file_path": path, "old_string": args.get("oldString"),
+                                  "new_string": args.get("newString"), "replace_all": bool(args.get("replaceAll"))}, base)]
+    if tool == PATCH_TOOL:
+        text = args.get("patchText")
+        return [("patch", text, base)] if isinstance(text, str) else []
+    return []
+
+
 def pre(p: dict) -> dict:
     deadline = time.monotonic() + core.budget_s()
+    core.save_policy.LAST_ROOTS = None     # the detector reuses only the roots THIS call's funnel reads
     try:
         calls, ops, cwd = translate(p)
     except Unreadable as e:
@@ -167,6 +197,8 @@ def pre(p: dict) -> dict:
             lambda qualified: core.aggregate(core.judge(calls, deadline, qualified)), deadline, "opencode")
     except (OSError, ValueError, TimeoutError) as exc:
         return _inert("save dispatcher could not complete: " + type(exc).__name__)
+    # Before the backup: a refused call must not leave one. Fails open, visibly (never an inert deny).
+    v = core.detached_verdict(v, lambda: detached_items(p, cwd), deadline)
     if v["decision"] in ("allow", "advise") and ops:
         b = core.run_backups(ops, p["directory"], deadline)
         if b is not None:

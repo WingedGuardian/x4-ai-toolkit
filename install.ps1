@@ -284,7 +284,6 @@ $X4CopyPrune = @('tools\x4validate\.venv',
                  'scripts\__pycache__',
                  'tools\.pytest_cache',
                  'tools\basex\__pycache__',
-                 'tools\basex\basex\.basex',
                  'tools\x4validate\gates\__pycache__',
                  'tools\x4validate\scripts\__pycache__',
                  'tools\x4validate\tests\__pycache__',
@@ -308,7 +307,7 @@ $X4CopyPrune = @('tools\x4validate\.venv',
 #: destination's own, never copied in and never deleted out), so they live HERE and
 #: not in $X4CopyPrune, whose second meaning would erase a user's built databases
 #: on every upgrade. See X4_KEEP_LOCAL in install.sh.
-$X4KeepLocal = @('x4-paths.env','x4-housekeep.json','.claude\x4-paths.env','.claude\settings.local.json','.claude\backups','.codex\hooks.json','.codex\config.toml',
+$X4KeepLocal = @('bin\x4agent','bin\x4agent.cmd','bin\x4agent.ps1','tools\basex\basex\.basex','x4-paths.env','x4-housekeep.json','.claude\x4-paths.env','.claude\settings.local.json','.claude\backups','.codex\hooks.json','.codex\config.toml',
                  '.opencode\opencode.jsonc','.claude\.reference-buildid',
                  'tools\basex\basex\data','tools\basex\basex\coverage-x4raw.json',
                  'tools\basex\basex\coverage-x4eff.json','tools\basex\_eff',
@@ -361,6 +360,9 @@ function Get-TrackedCopySet {
   foreach ($p in $all) { $heads[($p -split '/', 2)[0]] = $true }
   foreach ($i in $X4Items) {
     if (-not (Test-Path -LiteralPath (Join-Path $SRC $i))) { continue }
+    # An OPTIONAL item (BUILD-INFO) is never tracked; a stray untracked one must not make this check give up the tracked
+    # set. Mirror: _tracked_copy_set in install.sh.
+    if ($X4OptionalItems -contains $i) { continue }
     if (-not $heads.ContainsKey($i)) {
       $script:X4TrackedWhy = "git tracks nothing under '$i', which is on disk"
       return $false
@@ -469,7 +471,13 @@ function Get-OwnedEnvLinesFromFile($f) {
 #: COMMON to every agent target; each agent's own files live in $X4AgentItems only.
 $X4CopyItems = @('tools','bin','scripts','mods','KNOWLEDGEBASE.md','KNOWLEDGEBASE.local.md.example','README.md',
                  'CHANGELOG.md','LICENSE','setup.sh','install.sh','install.ps1','SETUP_PROMPT.txt','ADAPTING.md','RETENTION.md','x4-housekeep.json.example',
-                 '.gitignore','.gitattributes','x4-paths.env.example')
+                 '.gitignore','.gitattributes','x4-paths.env.example','BUILD-INFO')
+
+#: Items a source MAY lack without that being news -- the mirror of X4_OPTIONAL_ITEMS in install.sh.
+#: BUILD-INFO is written by scripts/build-release.sh into a RELEASE zip (the version and commit the shared
+#: core's self-update reads); a git checkout has none, which is right, so its absence is not a
+#: "[note] not in the source" line (that note exists for items that SHOULD be there).
+$X4OptionalItems = @('BUILD-INFO')
 
 #: PER-AGENT sets -- the mirror of X4_AGENT_ITEMS_* in install.sh (audit F8). `agent\`,
 #: the neutral source, is in NO set: an installed toolkit is runtime-only (decision #9).
@@ -1210,6 +1218,49 @@ function Write-OpenCodeConfig($dest) {
   Write-Host "  $out"
 }
 
+#: The launcher (4.3.1), the twin of write_launcher in install.sh: an agent loads its guards and instructions from the
+#: folder it is STARTED in, so bin\x4agent changes into the install folder and starts the agent. The files bake this
+#: machine's absolute path ($X4KeepLocal). A failure is a WARNING, never INCOMPLETE: the install is sound and the agent
+#: can still be started from the install folder by hand.
+$script:X4LauncherStart = ''; $script:X4LauncherAgents = ''   # set only when the launcher was written
+function Write-Launcher($dest) {
+  if ($Method -eq 'global') {
+    Write-Host '  [note] launcher: none for -Method global (a global install has no single folder to start in).'
+    return
+  }
+  if ($DryRun) { Write-Host "  -DryRun: NOT writing the launcher into $dest\bin"; return }
+  $agents = (Get-AgentsLanded) -replace ' ', ''
+  # Nothing to start (and Windows PowerShell 5.1 would drop an empty '--agents' argument, so argparse would fail):
+  # the call is skipped, exactly as install.sh skips it.
+  if (-not $agents) {
+    Write-Host '  [note] launcher: no agent target was installed, so there is nothing to start.'
+    return
+  }
+  $script = Join-Path (Join-Path $dest 'scripts') 'x4launcher.py'
+  if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
+    Write-Host "  WARNING: no launcher written: scripts\x4launcher.py is missing from $dest. Start your agent from $dest."
+    return
+  }
+  $py = Find-OcPython
+  if (-not $py) {
+    Write-Host "  WARNING: no launcher written: no Python >= 3.10 (set X4_PYTHON). Start your agent from $dest."
+    return
+  }
+  $rest = @($py | Select-Object -Skip 1)
+  $r = Invoke-X4Native $py[0] (@($rest) + @('-I', $script, '--toolkit', $dest, '--agents', $agents)) -MergeStderr
+  $lines = @(([string]$r.Out -split "`n") | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_.Trim() })
+  foreach ($line in $lines) { Write-Host "  $line" }
+  if ($r.Rc -ne 0) {
+    Write-Host "  WARNING: the launcher was not written (exit $($r.Rc), see above). Start your agent from $dest."
+  } else {
+    # What the script says it wrote (and for which agents) is what the final banner names, never a fixed text.
+    foreach ($line in $lines) {
+      if ($line -cmatch '^launcher: start with: (.+)$') { $script:X4LauncherStart = $Matches[1] }
+      elseif ($line -cmatch '^launcher: agents: (.+)$') { $script:X4LauncherAgents = $Matches[1] }
+    }
+  }
+}
+
 #: Destination files the copy would overwrite that CANNOT be written.
 #:
 #: MEASURED 2026-09-07 with one locked hook in the destination: this installer
@@ -1522,8 +1573,22 @@ function Recycle-CopyPrune($dest) {
   Recycle-InstallerPaths $victims
 }
 
+function Test-BuildInfoPrecheck($dest, $tracked) {
+  $sourceMarker = Get-Item -LiteralPath (Join-Path $SRC 'BUILD-INFO') -Force -ErrorAction SilentlyContinue
+  $destMarker = Get-Item -LiteralPath (Join-Path $dest 'BUILD-INFO') -Force -ErrorAction SilentlyContinue
+  $destLink = $destMarker -and ($destMarker.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+  if (($destMarker -and $destMarker.PSIsContainer -and -not $destLink) -or
+      (-not $tracked -and $sourceMarker -and
+        ($destLink -or $sourceMarker.PSIsContainer -or
+          ($sourceMarker.Attributes -band [System.IO.FileAttributes]::ReparsePoint)))) {
+    throw 'BUILD-INFO must be a regular file when copied or replaced. Inspect the source and destination markers.'
+  }
+}
+
 function Copy-Toolkit($dest) {
   Refuse-IfDryRun 'copying the toolkit into' $dest
+  $tracked = Get-TrackedCopySet
+  Test-BuildInfoPrecheck $dest $tracked
   Test-ProjectSettingsPrecheck $dest
   New-Item -ItemType Directory -Force -Path (Join-Path $dest '.claude') | Out-Null
   $notes = Join-Path $dest 'KNOWLEDGEBASE.md'
@@ -1575,7 +1640,21 @@ function Copy-Toolkit($dest) {
   # install.sh deliberately -- one installer correct by accident is how the two drift.
   Recycle-CopyPrune $dest
 
-  $tracked = Get-TrackedCopySet
+  # A STALE BUILD-INFO: see the mirror in install.sh (copy_toolkit). Recycled when the source has none, or when it is a
+  # checkout (only git's tracked set is copied, which never holds BUILD-INFO); it is not in $X4CopyPrune, which would also
+  # stop a release source's BUILD-INFO being copied.
+  if ($tracked -or -not (Test-Path -LiteralPath (Join-Path $SRC 'BUILD-INFO'))) {
+    $stale = Join-Path $dest 'BUILD-INFO'
+    # The attributes, not Test-Path: a dangling link reads as absent to Test-Path. A LINK of that name (a reparse point)
+    # is removed itself, never followed and never handed to the recycler (which refuses links): it holds nothing to
+    # recover. Mirror: install.sh.
+    $attrs = $null
+    try { $attrs = [System.IO.File]::GetAttributes($stale) } catch { $attrs = $null }
+    if ($null -ne $attrs) {
+      if ($attrs -band [System.IO.FileAttributes]::ReparsePoint) { Remove-Item -LiteralPath $stale -Force -Confirm:$false }
+      else { Recycle-InstallerPaths @($stale) }
+    }
+  }
   if ($tracked) {
     # ANNOUNCED: a step that narrows the data says so.
     Write-Host ("  source is a git checkout: copying the " + $script:X4Tracked.Count + " file(s) git tracks in the copy set;")
@@ -1594,7 +1673,7 @@ function Copy-Toolkit($dest) {
     } else {
       # NAMED, never silently skipped: that silence is how the absent mods/ folder
       # survived a whole release.
-      $missing += $i
+      if ($X4OptionalItems -notcontains $i) { $missing += $i }
     }
   }
   if ($tracked) { Copy-TrackedSet $dest }
@@ -2536,6 +2615,7 @@ switch ($Method) {
     if (-not (Test-SameDir $SRC $Toolkit)) {
       Test-ProjectSettingsPrecheck $Toolkit
       Test-LockedTargetsPrecheck $Toolkit
+      Test-BuildInfoPrecheck $Toolkit (Get-TrackedCopySet)
       Show-CopyPlan $Toolkit
       Save-UserAgentsMd $Toolkit        # after every precheck, before the copy
       Save-HUserClaudeMd $Toolkit       # 3.x -> 4.0: same position, same shape
@@ -2572,6 +2652,7 @@ switch ($Method) {
     if (-not (Test-SameDir $SRC $Toolkit)) {
       Test-ProjectSettingsPrecheck $Toolkit
       Test-LockedTargetsPrecheck $Toolkit
+      Test-BuildInfoPrecheck $Toolkit (Get-TrackedCopySet)
       Show-CopyPlan $Toolkit
       Save-UserAgentsMd $Toolkit        # after every precheck, before the copy
       Save-HUserClaudeMd $Toolkit       # 3.x -> 4.0: same position, same shape
@@ -2706,6 +2787,9 @@ if ($bash) {
   $failed += 'Git Bash not found (x4validate not wired up): setx X4_BASH "C:\Program Files\Git\bin\bash.exe", then re-run'
 }
 
+# The launcher: a WARNING on failure, so it sits outside the INCOMPLETE accounting below.
+Write-Launcher $Toolkit
+
 if ($failed.Count) {
   Write-Host "`n=== install INCOMPLETE ($Method) ===" -ForegroundColor Yellow
   foreach ($f in $failed) { Write-Host "  failed: $f" -ForegroundColor Yellow }
@@ -2721,6 +2805,15 @@ if ([System.IO.Path]::DirectorySeparatorChar -eq [char]92) { $Toolkit = $Toolkit
 Write-Host "Toolkit: $Toolkit"
 Write-Host ('Agents:  ' + (Get-AgentsLanded))
 Write-Host "Config:  $Toolkit\x4-paths.env  (edit any path here)"
+if ($Method -ne 'global') {
+  if ($script:X4LauncherStart) {
+    Write-Host "Start:   cd `"$Toolkit`" and run your agent there"
+    Write-Host "Launcher: $($script:X4LauncherStart)"
+    Write-Host "Agents:   $($script:X4LauncherAgents -replace '\|', ', ') (pass one name to the launcher)"
+  } else {
+    Write-Host "Start:   cd `"$Toolkit`" and run your agent there"
+  }
+}
 # CODEX RUNS NO HOOK IT HAS NOT REVIEWED, silently (MEASURED, spike 2026-09-30), and the
 # installer must never approve hooks or trust the project for the user (spec section 8).
 if ($Method -ne 'global' -and (Test-CodexSelected)) {

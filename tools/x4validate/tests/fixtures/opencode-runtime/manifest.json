@@ -7,11 +7,11 @@
     },
     "opencode_adapter.py": {
       "source": ".opencode/hooks/opencode_adapter.py",
-      "sha256": "9711e36fa9309efc33192aaf6eda181acb5ca1ae1af1720ef411b7812bfda1ef"
+      "sha256": "94073255982866d4b59609ab73d8c5002604702883c31b9a0e35d2681c46dbaa"
     },
     "codex_adapter.py": {
       "source": ".opencode/hooks/codex_adapter.py",
-      "sha256": "7ed6b3bc3074bab8785226aec531f24d13335560d3442ff54ce3a5d90b4a6782"
+      "sha256": "17c7d10ce5593a6f0ab70292247baa48cf405e5de12799157e8936f9585fc568"
     },
     "patch_paths.py": {
       "source": ".opencode/hooks/patch_paths.py",

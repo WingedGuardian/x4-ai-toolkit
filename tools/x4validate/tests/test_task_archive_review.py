@@ -75,7 +75,7 @@ def test_protected_archive_stays_despite_obsolete_decision(tmp_path):
 
 def test_interrupted_enumeration_cannot_offer_any_retirement(tmp_path,monkeypatch):
     cfg=config(tmp_path); p=payload(cfg); declare(cfg,p)
-    def broken(root):
+    def broken(root, save_exts=None):
         yield str(p.parent),[],[p.name]
         raise ha.ArchiveError('unreadable other branch')
     monkeypatch.setattr(ha,'_walk',broken)

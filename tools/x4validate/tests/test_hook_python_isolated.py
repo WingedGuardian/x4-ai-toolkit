@@ -339,8 +339,8 @@ def test_every_python_a_hook_script_starts_is_isolated():
                     bad.append(f"{p.relative_to(REPO)}:{n}: {line.strip()[:120]}")
     # EXACT, not a floor (#23): two sites hidden by a too-greedy assignment value read as 30 >= 30.
     # A new interpreter start in a hook script changes this number on purpose.
-    # 33: no-detached-launch.sh adds one start (its `"$X4_PY" "${X4_PYI[@]}" no-detached-launch.py`).
-    assert census == 33, census
+    # 35: no-detached-launch.sh adds one start, and session-canary.sh adds update note and check.
+    assert census == 35, census
     assert not bad, "non-isolated python in a hook script:\n" + "\n".join(bad)
 
 

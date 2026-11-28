@@ -9,9 +9,17 @@ processes through powershell.exe once a second produced a console pop-up every s
 CREATE_NO_WINDOW alone gives the child a hidden console its own children inherit, and the child still outlives the
 caller (measured), so detaching is never needed for that.
 
-Registration. Claude Code only (agent/targets/claude/settings.json, through no-detached-launch.sh). NOT wired for
-Codex or OpenCode: the shared x4guard funnel treats a crashed guard as a DENY, which conflicts with this hook's
-fail-open design, so that needs its own design. Codex and OpenCode launches are therefore not checked.
+Registration. THIS hook is Claude Code only (agent/targets/claude/settings.json, through no-detached-launch.sh).
+Codex and OpenCode (4.3.1) do not run it: the shared x4guard funnel treats a crashed guard as a DENY, which conflicts
+with this hook's fail-open design, so their adapters (agent/guards/adapters/codex.py, opencode.py) consult the CORE
+detector (tools/modding_harness/detached.py) in-process, after the funnel's verdict, and fail open with a visible
+"NOT judged" note. The two detectors can disagree on a few commands. Known: the core reads a variable command word
+as an interpreter, so `"$RG" -e 'creationflags=8' src` is refused by Codex and OpenCode and allowed here; the core
+also reads an interpreter after env / timeout / nohup / an assignment, which this hook does not (limits below).
+Which one Claude Code should use is decided from measurements in 4.4; this file is unchanged until then.
+This hook does NOT read X4_GUARD: with X4_GUARD=off it still refuses (Codex and OpenCode turn their refusal into an
+advisory and log it to GUARDS-OFF.log, like the other guards). Their exemption list (this file, its tests and
+verifier) matches paths case-sensitively.
 
 What is checked:
 - Write / Edit / MultiEdit / NotebookEdit on CODE files. An Edit is judged on the file AFTER the edit (edits applied

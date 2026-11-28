@@ -136,13 +136,19 @@ cli_case() {  # module  function  args...
   out=$(env "${UNSET[@]}" uv run --frozen python -c "
 import sys
 from x4validate import $mod
-sys.exit($mod.$fn(sys.argv[1:]) or 0)" "$@" 2>&1); crc=$?
+def forbid_process(*args, **kwargs):
+    raise AssertionError('cold x4run must not read or start a process')
+options = {'run': forbid_process} if '$mod' == '_x4runcli' else {}
+sys.exit($mod.$fn(sys.argv[1:], **options) or 0)" "$@" 2>&1); crc=$?
 
   if printf '%s' "$out" | grep -q '^Traceback'; then
     echo "   FAIL $mod: traceback instead of a refusal"; MFAIL=$((MFAIL+1)); return
   fi
   if [ "$crc" -ne 2 ]; then
     echo "   FAIL $mod: exit $crc (want 2 = not configured)"; MFAIL=$((MFAIL+1)); return
+  fi
+  if [ "$mod" = _x4runcli ] && ! printf '%s' "$out" | grep -q 'the game root cannot be resolved'; then
+    echo "   FAIL $mod: did not reach the unconfigured game-root refusal"; MFAIL=$((MFAIL+1)); return
   fi
   echo "   ok   $mod: exit 2, no traceback"; MOK=$((MOK+1))
 }
@@ -165,9 +171,9 @@ cli_case _freshcli   main status
 # and passed here only because powershell.exe is absent on Linux: the wrong reason). `run` with a
 # full approval reaches the REAL unconfigured refusal, "the game root cannot be resolved", before
 # any process call (tests/test_x4run_cli.py::test_the_cold_matrix_case_reaches_the_real_unconfigured_refusal).
-# The game_root=None precondition above is what makes this safe: with a resolvable game root this
-# line would be a launch request, so the script refuses to run at all.
-cli_case _x4runcli   main run --approved-by cold-matrix --mode menu-only --target none --desktop main --no-ready-check -- x
+# The injected runner above always refuses process access, including if root resolution
+# changes after the precondition check.
+cli_case _x4runcli   main run --approved-by cold-matrix --exclusive-launch --mode menu-only --target none --desktop main --no-ready-check -- x
 
 # x4diff is DELIBERATELY not in the matrix. It compares two mod folders to each
 # other -- `_merge.overlay_root` / `apply_overlay`, no Config, no reference tree --

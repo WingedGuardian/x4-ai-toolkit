@@ -26,6 +26,24 @@
 #   scripts/build-release.sh <ref>     build dist/X4.Foundations.AI.Assistant.Toolkit-<ref>.zip
 #   scripts/build-release.sh --selftest  rebuild v3.0.0 and assert its known sha256
 #
+# THE SHAPE OF A BUILD (4.3.1). The shared core's self-update (`modding_harness.release.fetch`) accepts a
+# release zip only when it holds exactly ONE top folder and a BUILD-INFO naming the tag's version and the
+# tag's commit. So every build here is `git archive --prefix=X4AI/` (the folder users extract) plus one
+# VIRTUAL member `X4AI/BUILD-INFO`:
+#     vX.Y.Z tag   version=X.Y.Z / commit=<full sha of REF^{commit}>
+#     any other    version= (empty) / commit=<sha> / build=dry-run   -- no version, so `fetch` refuses it
+# and `verify` proves the zip is the ref: every member under X4AI/, the folder stripped, EXACTLY ONE extra
+# member (X4AI/BUILD-INFO, byte for byte what this script wrote), no tracked BUILD-INFO at the ref, and the
+# existing member-set and byte checks. `--selftest` rebuilds v3.0.0, which has no folder and no BUILD-INFO,
+# so it keeps the old shape ("legacy" mode): it controls that the METHOD still reproduces published bytes.
+#
+# `git archive --add-virtual-file` writes BUILD-INFO. The script asks git itself whether `archive` has the
+# option (exit 2 "cannot build" if not) and does not state which release introduced it; the effective
+# minimum is the git 2.40 this script already needs for `check-attr --source`. git-archive's own
+# documentation says a virtual file's path is not affected by the --prefix option, so the virtual path is
+# spelled in full (`X4AI/BUILD-INFO`); a git that did apply the prefix would write X4AI/X4AI/BUILD-INFO and
+# `verify` would refuse the zip rather than ship it.
+#
 # Exit: 0 built and verified · 1 the archive does not match the ref · 2 cannot build (including a
 # vX.Y.Z ref whose CHANGELOG top heading or pyproject version is not that version)
 set -uo pipefail
@@ -62,21 +80,44 @@ done
 # Both directions matter -- a missing file ships a broken toolkit, an extra file ships
 # something nobody reviewed.
 verify() {
-  local zip="$1" ref="$2"
-  "$PY" - "$zip" "$ref" <<'PY'
+  local zip="$1" ref="$2" mode="${3:-legacy}" version="${4:-}"
+  "$PY" - "$zip" "$ref" "$mode" "$version" <<'PY'
 import subprocess, sys, zipfile
-import hashlib, os
+import hashlib, os, re
 os.environ["GIT_ATTR_NOSYSTEM"] = "1"
 GIT = ["git", "-c", "core.attributesFile=" + os.devnull, "-c", "core.autocrlf=false", "-c", "core.eol=lf"]
 zip_path, ref = sys.argv[1], sys.argv[2]
+# MODE. "legacy" = the v3.0.0 shape (no top folder, no BUILD-INFO): only `--selftest` uses it.
+# "release" / "dry-run" = the shape the shared core's self-update fetch accepts: EVERY member under
+# exactly one folder `X4AI/`, plus ONE extra member `X4AI/BUILD-INFO` holding exactly what this
+# script says it wrote (the version, and the full commit of REF^{commit}, which is derived HERE from
+# the ref, never taken from the caller). Any other extra member, a tracked BUILD-INFO and a member
+# outside the folder are refused, like every other member the ref does not track.
+mode = sys.argv[3] if len(sys.argv) > 3 else "legacy"
+version = sys.argv[4] if len(sys.argv) > 4 else ""
+TOP = "X4AI/"
+if mode not in ("legacy", "release", "dry-run"):
+    print("  REFUSING: unknown verify mode " + repr(mode), file=sys.stderr)
+    sys.exit(1)
 z = zipfile.ZipFile(zip_path)
-entries = [i for i in z.infolist() if not i.is_dir()]
+all_entries = z.infolist()
+entries = [i for i in all_entries if not i.is_dir()]
+name_of = {}                      # zip member name -> the path it has once the top folder is stripped
+for i in all_entries:
+    if mode == "legacy":
+        name_of[i.filename] = i.filename
+    elif i.filename.startswith(TOP):
+        name_of[i.filename] = i.filename[len(TOP):]
+    else:
+        print("  MEMBER OUTSIDE THE ONE TOP FOLDER " + TOP + ": " + i.filename, file=sys.stderr)
+        sys.exit(1)
 members = set()
 for entry in entries:
     if entry.filename in members:
         print("  DUPLICATE MEMBER: " + entry.filename, file=sys.stderr)
         sys.exit(1)
     members.add(entry.filename)
+members = {name_of[m] for m in members}
 info = subprocess.check_output([*GIT, "rev-parse", "--git-path", "info/attributes"]).decode().strip()
 if os.path.isfile(info) and os.path.getsize(info):
     print("  REFUSING: machine-local info/attributes can alter the archive", file=sys.stderr)
@@ -90,6 +131,39 @@ if os.path.isfile(info) and os.path.getsize(info):
 out = subprocess.run([*GIT, "ls-tree", "-r", "-z", "--name-only", ref],
                      capture_output=True, check=True).stdout
 tracked = {p.decode("utf-8", "surrogateescape") for p in out.split(b"\x00") if p}
+
+# BUILD-INFO belongs to the BUILD, not to the tree: a tracked one would be a tree vouching for itself
+# (and a second member of the same name in the zip), so the ref must not carry one.
+if mode != "legacy":
+    if "BUILD-INFO" in tracked:
+        print("  REFUSING: BUILD-INFO is tracked at " + ref + "; it is written by the build and a tree "
+              "must not vouch for itself.", file=sys.stderr)
+        sys.exit(1)
+    commit = subprocess.run([*GIT, "rev-parse", "--verify", "-q", ref + "^{commit}"],
+                            capture_output=True, text=True, check=True).stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+        print("  REFUSING: " + ref + " does not resolve to a full commit id", file=sys.stderr)
+        sys.exit(1)
+    if mode == "release":
+        if not re.fullmatch(r"[0-9]+[.][0-9]+[.][0-9]+", version):
+            print("  REFUSING: a release build needs an X.Y.Z version, got " + repr(version), file=sys.stderr)
+            sys.exit(1)
+        expected_info = ("version=%s\ncommit=%s\n" % (version, commit)).encode("ascii")
+    else:
+        # A dry run has NO version, so the core's parse_version gives None and its fetch refuses it.
+        expected_info = ("version=\ncommit=%s\nbuild=dry-run\n" % commit).encode("ascii")
+    if "BUILD-INFO" not in members:
+        print("  MISSING FROM THE BUNDLE: " + TOP + "BUILD-INFO", file=sys.stderr)
+        sys.exit(1)
+    actual_info = z.read(TOP + "BUILD-INFO")
+    if actual_info != expected_info:
+        print("  BUILD-INFO IS NOT WHAT THIS BUILD WROTE: expected %r, found %r" % (expected_info, actual_info),
+              file=sys.stderr)
+        sys.exit(1)
+    # Exactly ONE extra member is allowed, and it has just been checked byte for byte. From here the
+    # member set is compared WITHOUT it, so any other extra member is still IN THE BUNDLE, NOT IN THE REF.
+    members.discard("BUILD-INFO")
+    entries = [e for e in entries if name_of[e.filename] != "BUILD-INFO"]
 
 # EXPORT-IGNORE. `git archive` omits paths marked `export-ignore`, so a plain
 # tracked-set comparison calls every one of them MISSING and refuses a CORRECT
@@ -170,19 +244,19 @@ for index in range(0, len(raw) - 2, 3):
     attributes.setdefault(raw[index].decode("utf-8", "surrogateescape"), {})[raw[index + 1]] = raw[index + 2]
 for entry in entries:
     data = z.read(entry)
-    oid = objects[entry.filename]
+    oid = objects[name_of[entry.filename]]
     algorithm = hashlib.sha1 if len(oid) == 40 else hashlib.sha256
     actual = algorithm(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
     if actual == oid:
         continue
-    attrs = attributes.get(entry.filename, {})
+    attrs = attributes.get(name_of[entry.filename], {})
     text = (attrs.get(b"text") != b"unset" and
             (attrs.get(b"text") in (b"set", b"auto") or attrs.get(b"eol") in (b"lf", b"crlf")))
     original = subprocess.check_output([*GIT, "cat-file", "blob", oid]) if text else None
     if (original is not None and b"\0" not in data and b"\0" not in original and
             data.replace(b"\r\n", b"\n") == original.replace(b"\r\n", b"\n")):
         continue
-    print("  CONTENT DIFFERS FROM THE REF: " + entry.filename, file=sys.stderr)
+    print("  CONTENT DIFFERS FROM THE REF: " + name_of[entry.filename], file=sys.stderr)
     sys.exit(1)
 print("  member bytes match committed objects (declared text line endings normalized)")
 PY
@@ -257,11 +331,30 @@ if [ -n "$(git status --porcelain)" ]; then
   echo "        worth saying out loud in case you expected them to be."
 fi
 
+# The capability is asked of git itself (its own usage text), never inferred from a version number.
+# (Captured first: `archive -h` exits 129 and the script runs under pipefail, so a pipe into grep -q would
+# read as "missing" on every git.)
+_archive_help="$(git archive -h 2>&1)"
+case "$_archive_help" in
+  *add-virtual-file*) ;;   # help prints it as `--[no-]add-virtual-file`
+  *) die "this git's 'archive' has no --add-virtual-file, so BUILD-INFO cannot be written; update git (this script needs 2.40+ anyway)" ;;
+esac
+COMMIT="$(git rev-parse --verify -q "$REF^{commit}")" || die "$REF does not resolve to a commit"
+if printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+  MODE=release; VERSION="${TAG#v}"
+  BUILD_INFO="$(printf 'version=%s\ncommit=%s\n' "$VERSION" "$COMMIT")"
+else
+  MODE=dry-run; VERSION=""
+  BUILD_INFO="$(printf 'version=\ncommit=%s\nbuild=dry-run\n' "$COMMIT")"
+fi
+
 mkdir -p dist || die "cannot create dist/"
 OUT="dist/${NAME_PREFIX}-${TAG}.zip"
-git archive --format=zip "$REF" -o "$OUT" || die "git archive failed"
-echo "built $OUT"
-verify "$OUT" "$REF" || { echo "the bundle does not match $REF — not shippable." >&2; exit 1; }
+# $(...) drops the trailing newline, so the file's final "\n" is added back here.
+git archive --format=zip --prefix=X4AI/ "--add-virtual-file=X4AI/BUILD-INFO:${BUILD_INFO}"$'\n' "$REF" -o "$OUT" \
+  || die "git archive failed"
+echo "built $OUT  ($MODE build, folder X4AI/, BUILD-INFO commit $COMMIT)"
+verify "$OUT" "$REF" "$MODE" "$VERSION" || { echo "the bundle does not match $REF — not shippable." >&2; exit 1; }
 echo "  size   $(wc -c < "$OUT" | tr -d ' ') bytes"
 echo "  sha256 $(sha_of "$OUT")"
 echo

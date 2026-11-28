@@ -6,7 +6,10 @@ fake's virtual clock makes every wait instantaneous.
 """
 from __future__ import annotations
 
+import base64
+import json
 import subprocess
+from dataclasses import replace
 
 import pytest
 from _x4run_fake import FakeSystem, make_proc
@@ -42,7 +45,7 @@ def _close(fake, store, state, **kw):
 
 
 def _reads(fake):
-    return [c for c in fake.calls if "Get-CimInstance" in " ".join(c.argv)]
+    return [c for c in fake.calls if fake._classify(c.argv) == "read"]
 
 
 def _record_time(fake, attr):
@@ -58,6 +61,29 @@ def _record_time(fake, attr):
 
 
 # ------------------------------------------------------------------------------ already gone
+
+
+def test_stale_stop_never_clears_a_newer_run_record(tmp_path):
+    fake, store, current = _world(tmp_path, state=replace(_state(), run_id="new"))
+    result = _close(fake, store, _state())
+
+    assert not result.closed
+    assert fake.calls == []
+    assert store.read() == current
+
+
+def test_close_and_terminate_carry_proof_for_the_handle_check(tmp_path):
+    fake, store, state = _world(tmp_path, REC)
+    fake.terminate_removes()
+    _close(fake, store, state, grace_s=0, kill_wait_s=8)
+
+    for call in (*fake.close_calls, *fake.terminate_calls):
+        script, encoded, pid = call.argv[-3:]
+        assert pid == str(REC.pid)
+        assert json.loads(base64.b64decode(encoded)) == {
+            "name": REC.name, "path": REC.path, "started": REC.started,
+        }
+        assert script.index("$p.SafeHandle") < script.index("Get-CimInstance")
 
 
 def test_already_gone_makes_no_call(tmp_path):
@@ -400,12 +426,12 @@ def test_every_call_is_hidden(tmp_path):
 
 
 def test_the_close_and_terminate_scripts_are_separate_and_take_a_plain_pid():
-    assert "CloseMainWindow" in X._CLOSE_SCRIPT and "Stop-Process" not in X._CLOSE_SCRIPT
-    assert "Stop-Process" in X._TERMINATE_SCRIPT and "CloseMainWindow" not in X._TERMINATE_SCRIPT
+    assert "CloseMainWindow" in X._CLOSE_SCRIPT and ".Kill()" not in X._CLOSE_SCRIPT
+    assert "$p.Kill()" in X._TERMINATE_SCRIPT and "CloseMainWindow" not in X._TERMINATE_SCRIPT
     for script in (X._CLOSE_SCRIPT, X._TERMINATE_SCRIPT):
         assert "[int]$ProcId" in script          # the pid is a typed parameter ...
-        assert not any(ch.isdigit() for ch in script.replace("exit 3", ""))  # ... never a pid in the text
-        assert "-Force" not in script and "taskkill" not in script
+        assert "Get-Process -Id $ProcId" in script
+        assert "Stop-Process" not in script and "taskkill" not in script
 
 
 @pytest.mark.parametrize("bad", [0, -4])
@@ -526,4 +552,3 @@ def test_an_oserror_on_the_closing_write_still_closes_with_a_step_note(tmp_path)
     assert any("could not be set to phase closing (locked for good)" in s
                and "close goes ahead" in s for s in rep.steps)
     assert not store.path.exists()                  # cleared once the exit was confirmed
-

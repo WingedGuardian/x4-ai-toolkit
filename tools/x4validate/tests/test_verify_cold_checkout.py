@@ -86,6 +86,10 @@ case "$*" in
     test "$PYTHONDONTWRITEBYTECODE" = 1
     printf '%s\n' "$root" > "$COLD_TEST_TRACE"
     ;;
+  *"_x4runcli"*)
+    printf '%s\n' 'x4run: refused: the game root cannot be resolved' >&2
+    exit 2
+    ;;
   *) exit 2;;
 esac
 ''', encoding="utf-8", newline="\n")

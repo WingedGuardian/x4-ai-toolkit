@@ -130,7 +130,9 @@ echo
 echo "3) Local settings & path config..."
 LOCAL="$ROOT/.claude/settings.local.json"
 EXAMPLE="$ROOT/.claude/settings.local.json.example"
-if [ ! -d "$ROOT/.claude" ]; then ok "no Claude target here, so no .claude/settings.local.json is needed"
+if [ "${X4_SETUP_KEEP_LOCAL:-0}" = 1 ]; then
+  ok "preserving local settings and path config during toolkit update"
+elif [ ! -d "$ROOT/.claude" ]; then ok "no Claude target here, so no .claude/settings.local.json is needed"
 elif [ -f "$LOCAL" ]; then ok ".claude/settings.local.json in place -- left as it is"
 # VERIFY THE ARTIFACT, not the intention. `cp ...; ok "created ..."` uses `;` not
 # `&&`, so a cp that failed -- or that succeeded INTO A DIRECTORY of that name --
@@ -145,7 +147,7 @@ elif [ -f "$EXAMPLE" ]; then
   fi
 else warn "no settings.local.json.example to copy"; fi
 
-_i_seed_config
+[ "${X4_SETUP_KEEP_LOCAL:-0}" = 1 ] || _i_seed_config
 echo "     For a guided install (game folder / separate dir / global multi-repo) run:  bash install.sh   (or install.ps1 on Windows)"
 
 # --- 4. reference tree (your own game data — never redistributed) ----------

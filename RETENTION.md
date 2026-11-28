@@ -1,12 +1,12 @@
 # Retention: what agent work keeps, and for how long
 
 Backups and evidence are the point of this toolkit, and left alone they eat the disk. Measured on a sibling
-install (the Skyrim VR toolkit's) after six weeks: 44 GiB of agent output, of which about 20 GiB were exact copies of
-bytes already on disk. Very little of it was *old*; it was *repeated*. This page is the policy, shared with the Skyrim
-toolkit; `scripts/x4housekeep.py` implements the parts a tool can.
+toolkit's install after six weeks: 44 GiB of agent output, of which about 20 GiB were exact copies of
+bytes already on disk. Very little of it was *old*; it was *repeated*. This page is the policy, shared with the other
+toolkits built on the shared core; `scripts/x4housekeep.py` implements the parts a tool can.
 
 <!-- shared-policy:begin -->
-## Shared policy (identical in the Skyrim and X4 toolkits -- change both)
+## Shared policy (identical in every toolkit built on the shared core -- change all copies)
 
 ### Certainty before removal
 
@@ -47,7 +47,7 @@ physical allocation. Report permanent deletions, recycling and failures separate
 | **Evidence** | Findings, READMEs, receipts (`.md`, `.json`, `.jsonl`), small logs; every file a project doc links to | Kept. They are small, and docs point at them. |
 | **Recreatable** | A byte-identical copy of a file that is still live (a fixture copy of a game master) | Removed as soon as it is idle: the live file is the copy. |
 | **Build output** | Compiler intermediates inside build folders | Review candidates only. Removal requires an explicit content-bound obsolete decision. Build products and active work remain protected. |
-| **Finished work** | A task folder that is done: no write for `archive_after_days` (default 14; down to `min_idle_days`, default 7, while agent output is over `budget_gib`), no read for `read_veto_hours` (default 48), not named in the instruction file's Live state block, not pinned with `.housekeep-keep`, no save, backup folder or git repository/worktree, no ownership receipt without qualified release proof. A session can mark it done early with `.housekeep-closed`; independent holds still apply. | Zipped to the archive folder, the zip read back and checked, a short `ARCHIVED.md` (with a restore command) left behind, then the bulk recycled. Top-level `README*`, `.md`, `.json`, `.jsonl` and `.log` files under 1 MiB stay local as well as in the zip; every other file then lives only in the zip. The archive is local by default; another drive or a NAS is optional, never assumed. Archive age triggers review only; unique archives stay until explicitly declared obsolete. |
+| **Finished work** | A task folder that is done: no write for 14 days (`archive_after_days`; 7, `min_idle_days`, once agent output is over `budget_gib`), no read for 48 hours, not named in the instruction file's Live state block, not pinned with `.housekeep-keep`, no save or git repository/worktree, no ownership receipt without qualified release proof. A session can mark it done early with `.housekeep-closed`; independent holds still apply. | Zipped to the archive folder, the zip read back and checked, a short `ARCHIVED.md` (with a restore command) left behind, then the bulk recycled. The archive is local by default; another drive or a NAS is optional, never assumed. Archive age triggers review only; unique archives stay until explicitly declared obsolete. |
 | **Duplicate** | The same bytes at several agent-output paths | Stored once: hard links to one read-only copy. Every path keeps working. |
 | **Rolling** | Per-launch logs, snapshot folders, named scratch beds | Compression requires a verified lossless replacement. Snapshots require an identical retained generation. Unique logs and scratch need explicit content-bound obsolete decisions; age alone never deletes them. |
 | **Rolling tool store** | Configured rolling snapshots, including stores under backup folders | Retire only a byte-identical repeated generation after re-proving the retained copy. Newest and distinct generations stay. |
@@ -74,14 +74,12 @@ again. So:
 1. **Report, plan, apply -- never one step.** The plan records each file's hash; apply re-checks it and refuses
    anything that changed.
 2. **Recycle Bin (or Trash) by default.** Permanent eligibility requires both gates above, except same-run scratch.
-   An item too big for the Bin, a network item without a recycling route, a path that really lands elsewhere (through
-   a junction or symlink, or on a SUBST drive), a removable volume, a machine policy that disables recycling, or
-   unknown/disabled Bin capacity stays in place and is reported in-session. Windows' shell destroys a file on a network
-   share silently, so this refusal is the only protection there. Any exact-item permanent-deletion decision belongs to the user; cleanup
+   An item too big for the Bin, a network item without a recycling route, or unknown/disabled Bin capacity stays
+   in place and is reported in-session. Any exact-item permanent-deletion decision belongs to the user; cleanup
    never silently falls back to it. Recycling frees no disk space until the Bin is deliberately emptied.
-3. **Leave active work alone.** Task archival checks whole-task write/read activity, pins, Live state, a configured
-   job ledger (`job_ledger`; one that cannot be read is announced and does not hold archiving), ownership receipts and
-   repository/save/backup-folder protections. Recent reads independently veto archival. If read recording cannot be proven with same-run owned scratch on the same volume, only an explicitly
+3. **Leave active work alone.** Task archival checks whole-task write/read activity, pins, Live state,
+   resource-job ownership, ownership receipts and repository/save protections. Recent reads independently veto
+   archival. If read recording cannot be proven with same-run owned scratch on the same volume, only an explicitly
    closed folder can qualify. A closure bypasses write-age only; it does not bypass the independent hold gates.
 4. **Never touch a git-tracked file**, and never hard-link to a live game file.
 5. **Accounting must sum.** Every scanned byte lands in exactly one row; the row of bytes left alone prints even
@@ -93,14 +91,6 @@ again. So:
    what, which approved version, where the log is -- before it starts. No background service or scheduled task, no
    window or focus change, and no unattended permanent-deletion prompt: an item the bin cannot
    take stays where it is and is reported.
-
-   **The one exception to rules 6 and 7 is the toolkit temp sweep** (above). Session start launches it detached, with no
-   announcement and no approved version, and the next session start reports what it did. It touches only workspaces the
-   toolkit's own producer declared disposable when it created them, after the protection, inactivity and in-use
-   checks. It moves them to the Recycle Bin, except a workspace whose creation receipt the toolkit's checklist names as
-   proof of disposability: that one is deleted permanently, since the Recycle Bin frees nothing on the same drive.
-   Failure evidence inside a workspace is recycled, never deleted. Each toolkit's checklist names its receipts and
-   how to turn the sweep off.
 
 ### Where agent output goes
 
@@ -117,8 +107,7 @@ Cleanup is the second line of defence; writing less is the first:
 - **One build folder per task.** Regenerated outputs overwrite, or keep the newest two.
 - **Close the task.** Keep the README and receipts; retire bulk only after replacement or obsolescence proof, and write
   `.housekeep-closed`. A multi-GB folder that is genuinely needed later gets `.housekeep-keep` and one README line
-  saying why; `report` and `plan` name every pinned folder over `pin_warn_gib` (default 1 GiB), as does the optional
-  daily note.
+  saying why; the daily note names every pinned folder over 1 GiB.
 - **Budget.** Agent output has a size budget (`budget_gib`); over it, finished work is archived oldest first, and
   the optional daily runner reports measured logical growth separately from physical drive usage.
 
@@ -152,10 +141,37 @@ and both shared archive helpers. The local pin tests alone do not prove that the
   `housekeep report` shows its size; removing old sessions is the user's call.
 <!-- shared-policy:end -->
 
+## How this toolkit goes further (X4 only, not yet in the shared policy)
+
+These X4 details refine the shared rules above. They stay out of the shared block until every toolkit on the shared
+core implements them, so no copy of the policy promises what its code does not do.
+
+- **Finished work:** the thresholds are settings: no write for `archive_after_days` (default 14; down to
+  `min_idle_days`, default 7, while agent output is over `budget_gib`) and no read for `read_veto_hours` (default 48).
+- **Recycle-or-stay:** besides the shared cases, an item also stays in place, reported in-session, when its path
+  really lands elsewhere (through a junction or symlink, or on a SUBST drive), when it is on a removable volume, or
+  when a machine policy disables recycling. Windows' shell destroys a file on a network share silently, so this
+  refusal is the only protection there.
+- **Active work:** a configured job ledger (`job_ledger`) is also checked; one that cannot be read is announced and
+  does not hold archiving. Backup folders are protected like repositories and saves.
+- **The toolkit temp sweep** is the one exception to rules 6 and 7. Session start runs it in the background, with no
+  announcement and no approved version, and the next session start reports what it did. It touches only workspaces
+  the toolkit's own producer declared disposable when it created them, after the protection, inactivity and in-use
+  checks. It moves them to the Recycle Bin, except a workspace whose creation receipt the toolkit's checklist names
+  as proof of disposability: that one is deleted permanently, since the Recycle Bin frees nothing on the same drive.
+  Failure evidence inside a workspace is recycled, never deleted. The checklist names its receipts and how to turn
+  the sweep off.
+- **Evidence stays beside the stub:** when a finished task folder is archived, its top-level `README*`, `*.md`,
+  `*.json`, `*.jsonl` and `*.log` files under 1 MiB stay in the folder (they are in the zip too); the rest goes to
+  the Recycle Bin once the archive copy is verified.
+- **Pins:** `report` and `plan` name every pinned folder over `pin_warn_gib` (default 1 GiB), as does the optional
+  daily note.
+
 ## X4 checklist
 
 - **BaseX generated caches do not need backup generations or recycling.** Use the
-  builders' native `DROP DB` for `x4raw`/`x4eff` and checked permanent disposal via
+  builders' verified swap for `x4raw`/`x4eff`. It uses native `DROP DB` for
+  receipted stale staging databases and retired generations. Use checked permanent disposal via
   `scripts/x4basex_artifacts.py` for generated staging/effective trees and stale
   cache licences. Inputs are checked now. New tree and database generations get
   disposition receipts before creation; database receipts stay outside BaseX's
@@ -225,7 +241,7 @@ python scripts/x4housekeep.py apply plan.json [--only link,gzip]
 ```
 
 `python scripts/x4housekeep.py sweep-temp` runs the temp sweep by hand. The session-start hook runs
-`x4housekeep.py session <hooks>/../housekeep-session.txt` detached and shows that file's line at the next start.
+`x4housekeep.py session <hooks>/../housekeep-session.txt` in the background and shows that file's line at the next start.
 
 `apply` runs the classes in a fixed order (recreatable, build, link, gzip, launch, snapshot, scratch, archive, expire)
 and prints every refusal with its reason. A refusal is not an error to work around: re-run `plan`.

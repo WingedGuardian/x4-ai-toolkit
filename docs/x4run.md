@@ -2,21 +2,21 @@
 
 > **Status: built and tested offline, then run against the real game ONCE (2026-11-25, a
 > menu-only measuring run with no save loaded: start, observe, close; see "Measured" below).
-> Treat it as having a track record of one.** Every test drives a scripted stand-in for the
-> process runner; nothing in the test suite starts Steam or X4. A run with a loaded world
+> Treat it as having a track record of one.** Tests fake Steam and X4 process operations.
+> A run with a loaded world
 > (build step 3) has never happened and needs its own approval.
 
 `x4run` is a command line (`x4validate/_x4run.py` holds the logic, `_x4runcli.py` the command
 line) that is meant to run one whole cycle without a person at the keyboard: ask Steam to
 start X4, wait for the game process, let your command run, close the game, and verify that
-no `X4.exe` is left. The design and its reasons are in
-`docs/superpowers/specs/2026-11-24-x4-game-driver-design.md`.
+no `X4.exe` is left. See the
+[game driver design](https://github.com/WingedGuardian/x4-ai-toolkit/blob/master/docs/superpowers/specs/2026-11-24-x4-game-driver-design.md).
 
 ## Commands
 
 ```text
 x4run status                      the recorded run (if any) and the live X4.exe list; read-only
-x4run run --approved-by WHO --mode MODE --target WHAT --desktop main [--no-ready-check] -- COMMAND...
+x4run run --approved-by WHO --exclusive-launch --mode MODE --target WHAT --desktop main [--no-ready-check] -- COMMAND...
 x4run stop                        close the recorded game (the recovery path after a crash)
 x4run forget                      remove the run record, only after a read shows no X4.exe running
 ```
@@ -65,6 +65,10 @@ is real. The record is only as good as the person or agent that fills in `--appr
 blank field, an unknown `--mode` (`menu-only`, `load-save`, `new-game`) or a missing flag is
 refused before any process is read or started.
 
+Each approval includes an exclusive launch window. Pass `--exclusive-launch` after the
+user agrees that nobody else will launch X4 until the driver records the game process or
+the launch attempt ends.
+
 **The desktop line of an approval must say "main".** The driver cannot choose a desktop: the
 game appears on the current desktop and takes focus. `--desktop` accepts only `main`; any
 other value is refused (exit `2`) before any call.
@@ -74,15 +78,21 @@ No launch happens inside a test, and the driver never retries a launch.
 ## What the driver does, in order
 
 1. **Preflight.** Refuses if an `X4.exe` is already running (the user may be playing), if
-   Steam is not running (the driver never starts Steam itself), if a run record already
-   exists, or if a process read fails. A failed read is a third state: it is never
+   Steam is not running in the caller's Windows session, if a run record already
+   exists, or if a process read fails. The folder must match Steam's Windows registration
+   for X4 and be in the library under the running client. The system, game and state
+   volumes must meet the disk-space floors. A failed read is a third state: it is never
    "nothing is running" and never "the game exited".
 2. **Start.** Writes a run record (phase `starting`), makes ONE `steam.exe -applaunch` call,
    polls for the new `X4.exe` (up to 180 s after the call, which itself may take 30 s), and
    records its PID, path and process start time (phase `running`). A launch call that times
    out or exits nonzero is UNKNOWN, not failed (the forwarder's exit codes are unmeasured):
-   the driver keeps polling. **Only `<game root>/X4.exe` is recorded**; a new `X4.exe` from
-   any other folder, or several at once, is refused with the record kept.
+   the driver keeps polling. Keep Steam open during the request. If Steam exits just
+   after the identity check, its executable may initialize a client. The driver stops
+   waiting at its deadline and leaves that process alone. A timeout keeps the starting record because a delayed
+   launch may still arrive. **Only `<game root>/X4.exe` is recorded**; a new `X4.exe` from
+   any other folder, a process born before the request, or several processes at once leave
+   the record in phase starting for manual recovery.
 3. **Ready.** Polls a readiness probe. **The real probe is a stub in this step**, so
    `x4run run` refuses (exit `2`, nothing started) unless `--no-ready-check` is given, which
    treats the game as ready at once. Step 3 wires the real probe.
@@ -92,7 +102,8 @@ No launch happens inside a test, and the driver never retries a launch.
    4 KB of each. A hidden console child's own output is otherwise lost.
 5. **Close, always.** A window-close request on the RECORDED process, a wait, then, only if
    that process is still the recorded one on PID, name, path AND start time, a terminate
-   request, a wait, and a last read. An `X4.exe` the driver did not start is never closed.
+   request, a wait, and a last read. The close helper verifies the recorded identity while
+   holding an open Windows process handle.
    A game is reported closed only when the exit was confirmed by three consecutive absent
    reads and the last read agrees.
 
@@ -103,19 +114,19 @@ terminate comes 60 s after the window-close request, which cuts short a dump sti
 written. Pass `--hold` (at least `600` when a dump writer such as procdump is attached) to
 `run` or `stop` when a dump may be written.
 
-**A game you start yourself during the start window will be closed.** The driver cannot tell
-an `X4.exe` the user starts from the same game folder during its start window (up to about
-3.5 minutes) from its own: it would record it, and close or terminate it at the end of the
-run. Do not start X4 yourself while a run is starting.
+Steam does not report which request caused a new `X4.exe` to appear. The exclusive launch
+agreement protects against recording a game launched by someone else from the same folder.
 
-## The run record: one per machine
+## The run record
 
-The record lives in ONE per-user folder for the whole machine, whichever checkout or worktree
-runs `x4run`: `%LOCALAPPDATA%\x4-toolkit\x4run\state.json` on Windows,
+The record lives in a per-user folder shared by checkouts and worktrees.
+Its default path is `%LOCALAPPDATA%\x4-toolkit\x4run\state.json` on Windows,
 `~/.local/state/x4-toolkit/x4run/state.json` elsewhere, or under `$X4RUN_STATE_DIR` when that
 is set (tests use it). A second `run` from ANY checkout refuses while a record exists, and
 `status`, `stop` and `forget` see the same record from every checkout. The command output
-files live beside it.
+files live beside it. While a live cycle holds the record lock, recovery calls refuse.
+After the driver exits, `stop` can recover a recorded process, including records written
+before the exclusive launch field was added.
 
 ## Reading the result
 
@@ -124,8 +135,9 @@ files live beside it.
   `1`).
 * `closed: NO` means a game may still be running. The run record is kept. Check for a running
   `X4.exe` by hand, then `x4run stop`.
-* A record in phase `starting` names no process, so `x4run stop` can only report it. Check
-  for a running `X4.exe` by hand, then `x4run forget`.
+* A record in phase `starting` names no process, so `x4run stop` can only report it.
+  Verify the Steam request has settled and check for a running `X4.exe` before using
+  `x4run forget`.
 * `x4run forget` removes the record only if its file is at least 270 s old (a younger record
   may belong to a run that is still starting, which has no `X4.exe` yet) and one successful
   read shows no `X4.exe`. Never delete the record file by hand.
@@ -143,9 +155,7 @@ files live beside it.
   game running with a record that `x4run stop` recovers.
 * There is ONE run record per machine now: `status`, `stop` and `forget` work from any
   checkout.
-* `Stop-Process` without `-Force` may prompt before stopping a process not owned by the
-  current user, and under `-NonInteractive` that prompt becomes an error (unmeasured): the
-  close then ends "unclosed", which is safe but needs a by-hand close.
+* A process the driver lacks permission to inspect or close can require a manual close.
 * Any "launch call ... exited" or "timed out" message means "check for an `X4.exe` by hand":
   the forwarder's exit codes and timing are unmeasured.
 * Pass `--hold` (at least 600) if a crash dump may be written.
@@ -172,7 +182,7 @@ What was read beforehand, what one real run has shown, and what is still a guess
 running): the rows parsed and two reads gave identical identities. The close and terminate
 calls had not been run then; the driver run below ran the close, and the terminate has never run.
 
-**Measured by ONE driver run, 2026-11-25 (step 2: menu-only, no save loaded, one machine, one
+**Measured by ONE driver run with the earlier close helper, 2026-11-25 (step 2: menu-only, no save loaded, one machine, one
 modlist, n = 1; treat as a first data point, not a guarantee):**
 
 * The whole cycle worked end to end: `run` exited 0, `closed: yes (method: window-close)`,
@@ -189,6 +199,9 @@ modlist, n = 1; treat as a first data point, not a guarantee):**
   about 5.9 GB, and a `debug.txt` growing from the first seconds is a usable progress signal.
 * `x4live query probe` at the main menu got no pipe within 15 s (exit 2), as the helper
   arms only after a world loads: the main menu is NOT a readiness signal for `x4live`.
+
+The revised PowerShell identity check passed a read-only probe against a local process
+and refused a mismatched identity. That probe sent no close or terminate request.
 
 **Unmeasured (every item is a guess until step 3 or a later run):**
 
@@ -211,8 +224,8 @@ modlist, n = 1; treat as a first data point, not a guarantee):**
 
 ## The three build steps
 
-1. **Offline** (built): the driver, its command line and its tests, with a scripted
-   fake as the only process runner. No launch.
+1. **Offline** (built): the driver, its command line and fake Steam and X4 process tests.
+   A harmless console child exercises real command output capture.
 2. **One approved launch, measuring only** (done 2026-11-25): the first real `x4run run`. Start through Steam,
    reach the main menu, check the pipe, close, verify nothing is left; measures the items
    above. No save is loaded. Needs its own approval.

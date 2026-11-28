@@ -11350,6 +11350,15 @@ The user explicitly included regenerable BaseX output in recoverable removal.
 tests/test_install_over_existing.py::test_the_upgrade_KEEPS_the_recovery_store_and_still_PRUNES_build_artifacts;
 tests/test_basex_build_effective_refuses_empty_reference.py.
 
+> **SUPERSEDED 2026-11-26 (user ruling 2026-10-30, restated):** the Residual line above ("The user
+> explicitly included regenerable BaseX output in recoverable removal") no longer holds. BaseX
+> rebuild products are disposable: the BaseX swap helper drops receipted stale staging databases
+> and retired generations with native `DROP DB`, and `scripts/x4basex_artifacts.py` removes generated staging/effective
+> trees and stale cache licences, with no backup and no Recycle Bin copy. Only known generated
+> slots and producer-receipted workspaces qualify; custom unreceipted workspaces, links and unexpected
+> files stay. Everything else in this entry (baselines, orphans, probes) is unchanged. See
+> RETENTION.md, "BaseX generated caches".
+
 ## F312 - Restore discarded the current destination · **DEFECT (read/measured)** · confidence 98% · FIXED 2026-10-20
 
 READ: scripts/restore-from-backup.sh copied the old snapshot directly over its
@@ -11563,6 +11572,13 @@ and prevents DROP DB under the driver's actual set -e. No JVM or real bin ran.
 
 **RE-DERIVED BY:** tests/test_nexus_transport.py;
 tests/test_audit0924_gates.py; tests/test_audit0924_runtime.py.
+
+> **SUPERSEDED 2026-11-26 (BaseX part only):** the shell seam controls described above (fake-bin
+> recycling before `DROP DB`) belong to the retired recoverable-removal rule for BaseX caches. The
+> swap helper now uses BaseX's native `DROP DB` for the retired generation after publishing its
+> replacement, without backing up or recycling the old database (user
+> ruling 2026-10-30; see the F311 note and RETENTION.md). The Steam findings in this entry are
+> unchanged.
 
 ## F321 - Glued opaque options hid save scope · **DEFECT (measured)** · confidence 98% · FIXED 2026-10-20
 
