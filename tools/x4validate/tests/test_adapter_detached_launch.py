@@ -42,7 +42,11 @@ def adapters(monkeypatch):
     saved = {n: sys.modules.pop(n, None) for n in ("codex", "opencode", "codex_adapter", "opencode_adapter")}
     try:
         codex = importlib.import_module(codex_name)
-        opencode = importlib.import_module(opencode_name)
+        with monkeypatch.context() as imports:
+            if codex_name == "codex":
+                # Other tests may expose generated modules. Select OpenCode's source import here.
+                imports.setitem(sys.modules, "codex_adapter", None)
+            opencode = importlib.import_module(opencode_name)
         assert opencode.core is codex
         # The backup hook is a sibling of the RENDERED adapter, not of the source one: backups are not under test here.
         monkeypatch.setattr(codex, "run_backups", lambda ops, base, deadline: None)
